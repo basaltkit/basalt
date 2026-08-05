@@ -5,8 +5,10 @@ export {
   generate,
   generateResource,
   writeGenerated,
+  registerResourceInApp,
   FileExistsError,
   type GeneratorKind,
   type WriteOptions,
+  type AppRegistration,
 } from './generate.js'
 export { generatorCommands } from './commands.js'

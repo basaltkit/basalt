@@ -4,6 +4,7 @@ import {
   GENERATORS,
   generate,
   generateResource,
+  registerResourceInApp,
   writeGenerated,
   type GeneratorKind,
 } from './generate.js'
@@ -12,11 +13,18 @@ interface MakeSpec {
   command: string
   describe: string
   build: (name: string) => Parameters<typeof writeGenerated>[0]
+  /** After writing, wire the resource's plugin + routes into src/app.ts. */
+  register?: boolean
 }
 
 function specs(): MakeSpec[] {
   return [
-    { command: 'make:resource', describe: 'Generate a full resource vertical', build: generateResource },
+    {
+      command: 'make:resource',
+      describe: 'Generate a full resource vertical',
+      build: generateResource,
+      register: true,
+    },
     ...(Object.keys(GENERATORS) as GeneratorKind[]).map((kind) => ({
       command: `make:${kind}`,
       describe: `Generate a ${kind} file`,
@@ -27,7 +35,8 @@ function specs(): MakeSpec[] {
 
 /**
  * CLI commands: `mach make:resource Project`, `mach make:service Project`, …
- * Options: --dir=<path> (target root), --force (overwrite).
+ * Options: --dir=<path> (target root), --force (overwrite),
+ * --no-register (skip wiring the resource into src/app.ts).
  */
 export function generatorCommands(): CommandDefinition[] {
   return specs().map((spec) =>
@@ -48,6 +57,18 @@ export function generatorCommands(): CommandDefinition[] {
           const written = await writeGenerated(spec.build(name), options)
           io.log(`Generated ${written.length} file(s):`)
           for (const path of written) io.log(`  ${path}`)
+
+          if (spec.register && flags['no-register'] !== true) {
+            const result = await registerResourceInApp(name, options)
+            if (result.registered) {
+              io.log('Wired the plugin + routes into src/app.ts.')
+            } else if (result.reason === 'already registered') {
+              io.log('Already wired into src/app.ts — left it as is.')
+            } else {
+              io.log(`Could not auto-wire src/app.ts (${result.reason}).`)
+              io.log('Add the plugin to `plugins` and the routes to `fastifyPlugin({ routes })` yourself.')
+            }
+          }
           return 0
         } catch (error) {
           if (error instanceof FileExistsError) {
