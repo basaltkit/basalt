@@ -14,6 +14,7 @@ import {
   tsconfigJson,
   type ProjectOptions,
 } from './templates.js'
+import { uiFiles } from './templates-ui.js'
 
 export type { ProjectOptions } from './templates.js'
 
@@ -24,6 +25,8 @@ export interface CreateProjectInput {
   tenancy?: boolean
   auth?: boolean
   billing?: boolean
+  /** Scaffold a web/ frontend (React + shadcn + SDK). Default: false. */
+  ui?: boolean
 }
 
 export interface CreateProjectResult {
@@ -39,6 +42,20 @@ export class TargetNotEmptyError extends Error {
   }
 }
 
+export type PackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun'
+
+/**
+ * Detects the package manager that invoked `npm create` / `npx`, via the
+ * `npm_config_user_agent` env var npm/pnpm/yarn/bun all set. Falls back to npm.
+ */
+export function detectPackageManager(
+  userAgent: string | undefined = process.env['npm_config_user_agent'],
+): PackageManager {
+  const name = userAgent?.split(' ')[0]?.split('/')[0]
+  if (name === 'pnpm' || name === 'yarn' || name === 'bun') return name
+  return 'npm'
+}
+
 /** Generates a ready-to-run Machize app. Does not install dependencies. */
 export async function createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
   const options: ProjectOptions = {
@@ -46,6 +63,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     tenancy: input.tenancy ?? true,
     auth: input.auth ?? true,
     billing: input.billing ?? false,
+    ui: input.ui ?? false,
   }
   const dir = resolve(input.dir ?? input.name)
 
@@ -58,12 +76,13 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     '.env.example': envExample(options),
     '.gitignore': gitignore(),
     'README.md': readme(options),
-    'pnpm-workspace.yaml': pnpmWorkspaceYaml(),
+    'pnpm-workspace.yaml': pnpmWorkspaceYaml(options),
     'src/env.ts': envTs(options),
     'src/app.ts': appTs(options),
     'src/routes.ts': routesTs(options),
     'src/server.ts': serverTs(),
     'tests/app.test.ts': appTest(options),
+    ...(options.ui ? uiFiles(options) : {}),
   }
 
   for (const [path, content] of Object.entries(files)) {

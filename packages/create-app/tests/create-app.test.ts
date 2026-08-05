@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createProject, TargetNotEmptyError } from '../src/index.js'
+import { createProject, detectPackageManager, TargetNotEmptyError } from '../src/index.js'
 
 let root: string
 
@@ -78,6 +78,55 @@ describe('createProject', () => {
     expect(env).not.toContain('APP_SECRET')
   })
 
+  it('scaffolds the web UI with --ui (workspace member + auth-aware App)', async () => {
+    const result = await createProject({ name: 'withui', dir: join(root, 'withui'), ui: true })
+
+    // web files are emitted
+    expect(result.files).toContain('web/package.json')
+    expect(result.files).toContain('web/src/App.tsx')
+    expect(result.files).toContain('web/vite.config.ts')
+
+    // web is a pnpm workspace member so its deps resolve
+    expect(await read(result.dir, 'pnpm-workspace.yaml')).toContain('- web')
+
+    // the web package depends on the SDK + shadcn components
+    const webPkg = JSON.parse(await read(result.dir, 'web/package.json'))
+    expect(webPkg.name).toBe('withui-web')
+    expect(webPkg.dependencies).toHaveProperty('@machize/sdk')
+    expect(webPkg.dependencies).toHaveProperty('@machize/admin-shadcn')
+
+    // with auth, the App ships a login/register gate + the api exposes auth endpoints
+    const app = await read(result.dir, 'web/src/App.tsx')
+    expect(app).toContain('AuthScreen')
+    expect(await read(result.dir, 'web/src/api.ts')).toContain("path: '/auth/login'")
+
+    // without auth, it degrades to a status-only page (no auth endpoints)
+    const noAuth = await createProject({
+      name: 'statusui',
+      dir: join(root, 'statusui'),
+      auth: false,
+      ui: true,
+    })
+    expect(await read(noAuth.dir, 'web/src/App.tsx')).not.toContain('AuthScreen')
+    expect(await read(noAuth.dir, 'web/src/api.ts')).not.toContain('/auth/login')
+  })
+
+  it('omits the web UI by default', async () => {
+    const result = await createProject({ name: 'noui', dir: join(root, 'noui') })
+    expect(result.files.some((f) => f.startsWith('web/'))).toBe(false)
+    expect(await read(result.dir, 'pnpm-workspace.yaml')).not.toContain('- web')
+  })
+
+  it('detects the invoking package manager from npm_config_user_agent', () => {
+    expect(detectPackageManager('pnpm/9.1.0 npm/? node/v22.0.0 darwin arm64')).toBe('pnpm')
+    expect(detectPackageManager('yarn/4.1.0 npm/? node/v22.0.0')).toBe('yarn')
+    expect(detectPackageManager('bun/1.1.0')).toBe('bun')
+    expect(detectPackageManager('npm/10.5.0 node/v22.0.0')).toBe('npm')
+    // unknown or absent agent falls back to npm
+    expect(detectPackageManager('deno/1.40.0')).toBe('npm')
+    expect(detectPackageManager('')).toBe('npm')
+  })
+
   it('refuses to write into a non-empty directory', async () => {
     const dir = join(root, 'busy')
     await createProject({ name: 'busy', dir })
@@ -89,6 +138,23 @@ describe('createProject', () => {
     await expect(createProject({ name: 'x', dir: root })).rejects.toBeInstanceOf(
       TargetNotEmptyError,
     )
+  })
+
+  it('scaffolds a friendly GET / index route (no bare 404 on root)', async () => {
+    const withAuth = await createProject({ name: 'rooted', dir: join(root, 'rooted') })
+    const routes = await read(withAuth.dir, 'src/routes.ts')
+    expect(routes).toContain("url: '/'")
+    expect(routes).toContain("name: 'rooted'")
+    // auth endpoints are advertised in the index when auth is on
+    expect(routes).toContain("'POST /auth/login'")
+
+    const lean = await createProject({ name: 'lean', dir: join(root, 'lean'), auth: false })
+    const leanRoutes = await read(lean.dir, 'src/routes.ts')
+    expect(leanRoutes).toContain("url: '/'")
+    expect(leanRoutes).not.toContain('/auth/login')
+
+    // the generated smoke test exercises the new route
+    expect(await read(withAuth.dir, 'tests/app.test.ts')).toContain("url: '/'")
   })
 
   it('generated test file matches the chosen features', async () => {
