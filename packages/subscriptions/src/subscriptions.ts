@@ -96,6 +96,8 @@ export class Subscriptions {
       ...(plan.trial ? { trialEndsAt: Date.now() + parseDuration(plan.trial) } : {}),
     }
     // Free plans and trials never touch the gateway; paid plans do.
+    // KNOWN LIMITATION (see KNOWN_LIMITATIONS.md #3): trials never create a
+    // gateway subscription, so trial->paid conversion is not wired yet.
     if (this.gateway && typeof price === 'number' && price > 0 && !plan.trial) {
       const { gatewayRef } = await this.gateway.createSubscription({
         billableId,
@@ -205,6 +207,9 @@ export class Subscriptions {
         return Math.max(0, limit - used)
       },
       consume: async (feature: string, amount = 1): Promise<number> => {
+        // KNOWN LIMITATION (see KNOWN_LIMITATIONS.md #2): check-then-increment
+        // is not atomic — concurrent consumes on an async UsageStore can
+        // overshoot the limit. Needs an atomic increment-and-check.
         const plan = await resolve()
         if (!plan || featureLimit(plan.features[feature]) === 0) {
           throw new FeatureUnavailableError(feature)
@@ -224,6 +229,9 @@ export class Subscriptions {
    * never call the gateway.
    */
   async handleWebhook(event: WebhookEvent): Promise<boolean> {
+    // KNOWN LIMITATION (see KNOWN_LIMITATIONS.md #4): dedup is in-memory, so
+    // idempotency does not survive restarts or span multiple instances.
+    // Needs a persisted markProcessed(id) seam.
     if (this.seenWebhooks.has(event.id)) return false
     this.seenWebhooks.add(event.id)
 

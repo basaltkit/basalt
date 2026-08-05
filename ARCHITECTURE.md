@@ -9,6 +9,8 @@
 | **Licença** | MIT |
 | **Stack** | Node.js 22+, TypeScript 5.x, Fastify 5, Prisma, PostgreSQL, Redis, MinIO, BullMQ, Zod, Vitest, TurboRepo, pnpm, Changesets |
 
+> **Dívida técnica conhecida:** itens diferidos que só se manifestam com backends reais (billing atômico, conversão de trial no gateway, idempotência durável de webhook) estão registrados em [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md), com plano de correção e âncoras no código.
+
 ---
 
 ## 1. Visão e Filosofia
