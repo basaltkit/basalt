@@ -6,15 +6,15 @@ The fastest way to start is the project scaffolder. It generates a
 production-shaped app and only includes what you pick — nothing dead ships.
 
 ```bash
-npx create-saas-app my-saas
+npx create-machize-app my-saas
 ```
 
 Flags let you shape the stack:
 
 ```bash
-npx create-saas-app my-saas --no-tenancy   # skip multi-tenancy
-npx create-saas-app my-saas --no-auth      # skip authentication
-npx create-saas-app my-saas --billing      # include subscriptions
+npx create-machize-app my-saas --no-tenancy   # skip multi-tenancy
+npx create-machize-app my-saas --no-auth      # skip authentication
+npx create-machize-app my-saas --billing      # include subscriptions
 ```
 
 Then:

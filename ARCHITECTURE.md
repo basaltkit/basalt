@@ -42,7 +42,7 @@
 ```mermaid
 graph TB
     subgraph L4["Camada 4 — Aplicação do usuário"]
-        APP["app do desenvolvedor<br/>(create-saas-app)"]
+        APP["app do desenvolvedor<br/>(create-machize-app)"]
     end
     subgraph L3["Camada 3 — Produto"]
         DASH["@machize/dashboard"]
@@ -112,7 +112,7 @@ machize/
 │   ├── activity/           # Activity log (inspirado em Spatie)
 │   ├── notifications/      # Notificações multicanal
 │   ├── cli/                # CLI "mach" (inspirado no Artisan)
-│   ├── create-app/         # npx create-saas-app
+│   ├── create-app/         # npx create-machize-app
 │   ├── generator/          # Scaffolding de código
 │   ├── testing/            # Fakes, helpers, factories
 │   ├── sdk/                # Cliente TypeScript type-safe
@@ -679,10 +679,10 @@ mach upgrade                  # codemods entre versões (jscodeshift) — chave 
 
 A CLI é **extensível por plugins**: qualquer pacote (ou o próprio app) registra comandos via `defineCommand()` no core. `mach doctor` e `mach upgrade` são investimento direto em redução de churn — as duas maiores causas de abandono de framework são setup quebrado e majors dolorosos.
 
-### 13.2 `create-saas-app`
+### 13.2 `create-machize-app`
 
 ```
-npx create-saas-app my-saas
+npx create-machize-app my-saas
 ┌ Banco:          PostgreSQL (único no v1 — sem falsas escolhas)
 ├ Tenancy:        shared | schema | database | nenhum
 ├ Auth:           session | jwt | ambos  (+ OAuth providers)
@@ -767,7 +767,7 @@ gantt
 
 | Fase | Entrega | Critério de saída |
 |---|---|---|
-| **1 — MVP** (m1–5) | `create-saas-app` gera API tipada com Prisma + CLI + docs Getting Started | 3 apps reais construídos por early adopters; feedback incorporado |
+| **1 — MVP** (m1–5) | `create-machize-app` gera API tipada com Prisma + CLI + docs Getting Started | 3 apps reais construídos por early adopters; feedback incorporado |
 | **2 — Core** (m6–9) | Infraestrutura completa (queue, events, cache, storage, scheduler) | playground E2E cobrindo todos os pacotes; 1k stars |
 | **3 — Tenancy** (m10–12) | Multi-tenancy shared + schema, CLI de tenant | showcase "SaaS multi-tenant em 1h" (vídeo/artigo) |
 | **4 — Auth** (m13–16) | Auth + permissions + audit | security review externo pago |
