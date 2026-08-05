@@ -32,8 +32,13 @@ export interface BillingGateway {
   readonly name: string
   createSubscription(input: CreateSubscriptionInput): Promise<{ gatewayRef: string }>
   cancelSubscription(gatewayRef: string, options: { atPeriodEnd: boolean }): Promise<void>
-  /** Verifies the signature and translates the payload. Throws WebhookInvalidError. */
-  verifyWebhook(rawBody: string, signature: string | undefined): WebhookEvent
+  /**
+   * Verifies the signature and translates the payload. Throws
+   * WebhookInvalidError on a bad signature. Returns null for a verified event
+   * the gateway doesn't map to a domain event (gateways emit many event types
+   * we don't act on).
+   */
+  verifyWebhook(rawBody: string, signature: string | undefined): WebhookEvent | null
 }
 
 /** Controllable in-process gateway — the test/dev driver. */
