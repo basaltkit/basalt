@@ -4,6 +4,7 @@ import {
   createToken,
   definePlugin,
   ensureMetadata,
+  MachizeError,
   runWithContext,
   type RequestContext,
 } from '@machize/core'
@@ -27,6 +28,17 @@ declare module '@machize/core' {
 
 export const FASTIFY = createToken<FastifyInstance>('fastify')
 
+/**
+ * Runs inside the request context, before validation and the handler.
+ * Plugins register enrichers in the 'http:enrichers' metadata bucket —
+ * tenancy uses this to resolve and attach the current tenant.
+ */
+export type RequestEnricher = (info: {
+  request: FastifyRequest
+  context: RequestContext
+  container: Container
+}) => void | Promise<void>
+
 export interface FastifyPluginOptions {
   routes?: MachizeRoute[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
@@ -45,7 +57,8 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
     },
     boot({ container }) {
       const routes = options.routes ?? []
-      registerRoutes(container.get(FASTIFY), routes, container)
+      const enrichers = ensureMetadata(container).get<RequestEnricher>('http:enrichers')
+      registerRoutes(container.get(FASTIFY), routes, container, enrichers)
       // Expose routes to tooling (CLI `mach routes`, docs generator, SDK).
       const metadata = ensureMetadata(container)
       for (const definition of routes) {
@@ -67,17 +80,22 @@ export function registerRoutes(
   instance: FastifyInstance,
   routes: MachizeRoute[],
   container?: Container,
+  enrichers: RequestEnricher[] = [],
 ): void {
   for (const definition of routes) {
     instance.route({
       method: definition.method,
       url: definition.url,
-      handler: wrapHandler(definition, container),
+      handler: wrapHandler(definition, container, enrichers),
     })
   }
 }
 
-function wrapHandler(definition: MachizeRoute, container?: Container) {
+function wrapHandler(
+  definition: MachizeRoute,
+  container?: Container,
+  enrichers: RequestEnricher[] = [],
+) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const requestId = headerValue(request, 'x-request-id') ?? randomUUID()
     const context: RequestContext = {
@@ -88,6 +106,11 @@ function wrapHandler(definition: MachizeRoute, container?: Container) {
     void reply.header('x-request-id', requestId)
 
     return runWithContext(context, async () => {
+      if (container) {
+        for (const enrich of enrichers) {
+          await enrich({ request, context, container })
+        }
+      }
       const args = {
         body: parsePart('body', definition.body, request.body),
         query: parsePart('query', definition.query, request.query),
@@ -121,8 +144,13 @@ function errorHandler(error: FastifyError | Error, request: FastifyRequest, repl
       error: { code: error.code, message: error.message, part: error.part, issues: error.issues },
     })
   }
-  if (error instanceof HttpError) {
-    return reply.code(error.status).send({ error: { code: error.code, message: error.message } })
+  // Any MachizeError carrying a numeric `status` maps to that HTTP status —
+  // HttpError, tenancy's TENANCY_NOT_RESOLVED (404), auth errors, etc.
+  if (error instanceof MachizeError) {
+    const status = (error as { status?: unknown }).status
+    if (typeof status === 'number') {
+      return reply.code(status).send({ error: { code: error.code, message: error.message } })
+    }
   }
   // unintentional error: log with stack, respond without leaking details
   request.log.error(error)
