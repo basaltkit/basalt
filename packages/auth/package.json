@@ -1,0 +1,37 @@
+{
+  "name": "@machize/auth",
+  "version": "0.0.0",
+  "description": "Authentication for Machize: password hashing, JWT with refresh rotation and reuse detection, sessions, ready-made /auth routes and route guards.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/core": "workspace:*",
+    "@machize/fastify": "workspace:*"
+  },
+  "peerDependencies": {
+    "zod": "^3.24.0 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0",
+    "zod": "^3.24.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
