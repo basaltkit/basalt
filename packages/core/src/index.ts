@@ -1,6 +1,6 @@
 export { createToken, type Token } from './token.js'
 export { Container, type Factory, type Lifetime } from './container.js'
-export { HookBus, type HookHandler, type MachizeHooks } from './hooks.js'
+export { HookBus, type HookHandler, type AnyHookHandler, type MachizeHooks } from './hooks.js'
 export { ctx, tryCtx, runWithContext, type RequestContext } from './context.js'
 export {
   definePlugin,
