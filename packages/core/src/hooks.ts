@@ -14,6 +14,9 @@ export interface MachizeHooks {
 
 export type HookHandler<P> = (payload: P) => void | Promise<void>
 
+/** Receives every hook emission — the audit trail and devtools hang here. */
+export type AnyHookHandler = (hook: string, payload: unknown) => void | Promise<void>
+
 interface Registration {
   handler: HookHandler<unknown>
   priority: number
@@ -21,6 +24,7 @@ interface Registration {
 
 export class HookBus {
   private readonly handlers = new Map<string, Registration[]>()
+  private readonly anyHandlers: AnyHookHandler[] = []
 
   /** Registers a handler. Higher `priority` runs first. Returns an unsubscribe function. */
   on<K extends keyof MachizeHooks & string>(
@@ -44,15 +48,25 @@ export class HookBus {
     }
   }
 
-  /** Runs the handlers in series, in priority order. */
+  /** Subscribes to every hook. Runs after the specific handlers. */
+  onAny(handler: AnyHookHandler): () => void {
+    this.anyHandlers.push(handler)
+    return () => {
+      const index = this.anyHandlers.indexOf(handler)
+      if (index >= 0) this.anyHandlers.splice(index, 1)
+    }
+  }
+
+  /** Runs the handlers in series, in priority order, then the onAny handlers. */
   async emit<K extends keyof MachizeHooks & string>(
     hook: K,
     payload: MachizeHooks[K],
   ): Promise<void> {
-    const list = this.handlers.get(hook)
-    if (!list) return
-    for (const { handler } of [...list]) {
+    for (const { handler } of [...(this.handlers.get(hook) ?? [])]) {
       await handler(payload)
+    }
+    for (const handler of [...this.anyHandlers]) {
+      await handler(hook, payload)
     }
   }
 }
