@@ -119,6 +119,9 @@ describe('createProject', () => {
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
     expect(pkg.dependencies).toHaveProperty('@machize/cli')
     expect(pkg.dependencies).toHaveProperty('@machize/generator')
+    // generator has advanced past 0.1 — its range must not be locked to ^0.1
+    expect(pkg.dependencies['@machize/generator']).toBe('^0.2.0')
+    expect(pkg.dependencies['@machize/cli']).toBe('^0.1.0')
     expect(pkg.scripts.mach).toBe('tsx bin/mach.ts')
 
     const bin = await read(result.dir, 'bin/mach.ts')

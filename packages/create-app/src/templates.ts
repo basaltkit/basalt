@@ -9,8 +9,20 @@ export interface ProjectOptions {
   cli: boolean
 }
 
-/** Kept in sync with the monorepo release line. */
+/** Base release line for @machize/* deps. */
 const MACHIZE_VERSION = '^0.1.0'
+
+/**
+ * Per-package range overrides. In semver 0.x, `^0.1.0` locks the minor, so a
+ * package that has advanced to 0.2+ needs its own range or a fresh app can't
+ * install it. Add an entry when a package crosses a minor.
+ */
+const VERSIONS: Record<string, string> = {
+  '@machize/generator': '^0.2.0',
+}
+
+/** The dependency range for a @machize package (override, else the base line). */
+export const versionOf = (pkg: string): string => VERSIONS[pkg] ?? MACHIZE_VERSION
 
 export function packageJson(options: ProjectOptions): string {
   const dependencies: Record<string, string> = {
@@ -28,6 +40,10 @@ export function packageJson(options: ProjectOptions): string {
   if (options.cli) {
     dependencies['@machize/cli'] = MACHIZE_VERSION
     dependencies['@machize/generator'] = MACHIZE_VERSION
+  }
+  // Apply per-package range overrides (packages past the 0.1 line).
+  for (const pkg of Object.keys(dependencies)) {
+    dependencies[pkg] = versionOf(pkg)
   }
 
   return `${JSON.stringify(
