@@ -9,28 +9,16 @@ needs it, and referenced from the code with
 
 ---
 
-## #2 — Metered `consume()` is check-then-increment (not atomic)
+## #2 — Metered `consume()` is check-then-increment (not atomic) — RESOLVED in 0.1.x
 
-**Where:** `packages/subscriptions/src/subscriptions.ts` — `Subscriptions.features().consume`
-
-**What:** `consume` reads current usage, checks it against the limit, then
-increments — three separate steps. With the synchronous `MemoryUsageStore`
-this is safe. With any asynchronous `UsageStore` (Redis, SQL) two concurrent
-`consume` calls can both read `used = 999` (limit `1000`), both pass the
-check, and both increment → `1001`, exceeding the quota.
-
-**Why deferred:** only reproducible with a real async store, which does not
-exist yet.
-
-**Fix plan:** make consumption atomic. Either
-
-- add an atomic "increment and return new total" to the `UsageStore`
-  contract and check the returned total (rolling back / raising when it
-  overshoots), or
-- use a Redis `INCRBY` + compare, or a SQL `UPDATE ... WHERE used + :n <= :limit`
-  that reports whether a row was affected.
-
-The current `increment` already returns the new total, so the seam is small.
+**Resolution:** the `UsageStore` contract gained an atomic
+`consume(billableId, feature, periodKey, amount, limit)` that increments only
+if the result stays within the limit, returning `{ applied, used }`.
+`MemoryUsageStore` implements it without an `await` between read and write
+(atomic in the event loop); `RedisUsageStore` implements it with a Lua script
+run via `EVAL`, which Redis executes atomically — so concurrent callers can
+never overshoot. `Subscriptions.features().consume` now routes limited features
+through it (unlimited features are just tracked).
 
 ---
 
