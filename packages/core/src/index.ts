@@ -14,6 +14,7 @@ export {
   type CreateAppOptions,
   type LifecyclePhase,
 } from './app.js'
+export { parseDuration, type DurationInput } from './duration.js'
 export {
   MachizeError,
   ContextUnavailableError,

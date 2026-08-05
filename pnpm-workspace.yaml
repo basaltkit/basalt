@@ -4,3 +4,4 @@ packages:
   - "tooling/*"
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true
