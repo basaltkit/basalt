@@ -1,0 +1,14 @@
+import { fileURLToPath } from 'node:url'
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      // @machize/admin only needs randomUUID from crypto in the browser
+      crypto: fileURLToPath(new URL('./src/crypto-shim.ts', import.meta.url)),
+    },
+  },
+  server: { port: 5174 },
+})
