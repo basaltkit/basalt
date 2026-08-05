@@ -1,5 +1,11 @@
 # create-machize
 
+## 0.4.0
+
+### Minor Changes
+
+- New `--cli` flag scaffolds the `mach` CLI entrypoint (`bin/mach.ts`) and wires `@machize/cli` + `@machize/generator`, so a freshly-created app can run code generators and built-in commands out of the box: `pnpm mach make:resource Project` (full schema→repository→service→plugin→routes→test vertical), individual `make:*` generators, plus `mach routes` and `mach schedule:list`. The generated `app.ts` registers `commandsPlugin(generatorCommands())` and a `mach` npm script is added.
+
 ## 0.3.0
 
 ### Minor Changes

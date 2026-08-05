@@ -17,6 +17,7 @@ Options:
   --no-auth       Skip authentication
   --billing       Include subscriptions/billing
   --ui            Scaffold a web/ frontend (React + shadcn + SDK)
+  --cli           Scaffold the 'mach' CLI (code generators + commands)
   --install       Install dependencies after scaffolding
   --git           Initialize a git repository with a first commit
   --pm=<manager>  Package manager: pnpm | npm | yarn | bun (default: auto-detect)
@@ -33,6 +34,7 @@ interface Flags {
   auth: boolean
   billing: boolean
   ui: boolean
+  cli: boolean
   install: boolean
   git: boolean
   yes: boolean
@@ -45,6 +47,7 @@ function parseArgs(argv: string[]): Flags {
     auth: true,
     billing: false,
     ui: false,
+    cli: false,
     install: false,
     git: false,
     yes: false,
@@ -54,6 +57,7 @@ function parseArgs(argv: string[]): Flags {
     else if (token === '--no-auth') flags.auth = false
     else if (token === '--billing') flags.billing = true
     else if (token === '--ui') flags.ui = true
+    else if (token === '--cli') flags.cli = true
     else if (token === '--install') flags.install = true
     else if (token === '--git') flags.git = true
     else if (token === '-y' || token === '--yes') flags.yes = true
@@ -100,6 +104,7 @@ async function promptMissing(flags: Flags): Promise<Flags> {
     flags.auth = await confirm('Authentication?', true)
     flags.billing = await confirm('Subscriptions / billing?', false)
     flags.ui = await confirm('Web UI (React + shadcn)?', false)
+    flags.cli = await confirm("'mach' CLI (code generators)?", false)
     flags.install = await confirm('Install dependencies now?', false)
     flags.git = await confirm('Initialize a git repository?', false)
   } finally {
@@ -125,6 +130,7 @@ try {
     auth: flags.auth,
     billing: flags.billing,
     ui: flags.ui,
+    cli: flags.cli,
   })
   console.log(`\nCreated ${result.options.name} in ${result.dir}\n`)
   for (const file of result.files) console.log(`  ${file}`)

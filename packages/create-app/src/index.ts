@@ -6,6 +6,7 @@ import {
   envExample,
   envTs,
   gitignore,
+  machBin,
   packageJson,
   pnpmWorkspaceYaml,
   readme,
@@ -27,6 +28,8 @@ export interface CreateProjectInput {
   billing?: boolean
   /** Scaffold a web/ frontend (React + shadcn + SDK). Default: false. */
   ui?: boolean
+  /** Scaffold the `mach` CLI entrypoint (code generators + commands). Default: false. */
+  cli?: boolean
 }
 
 export interface CreateProjectResult {
@@ -64,6 +67,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     auth: input.auth ?? true,
     billing: input.billing ?? false,
     ui: input.ui ?? false,
+    cli: input.cli ?? false,
   }
   const dir = resolve(input.dir ?? input.name)
 
@@ -82,6 +86,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     'src/routes.ts': routesTs(options),
     'src/server.ts': serverTs(),
     'tests/app.test.ts': appTest(options),
+    ...(options.cli ? { 'bin/mach.ts': machBin() } : {}),
     ...(options.ui ? uiFiles(options) : {}),
   }
 
