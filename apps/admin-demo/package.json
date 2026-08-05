@@ -10,6 +10,8 @@
   "dependencies": {
     "@machize/admin": "workspace:*",
     "@machize/admin-shadcn": "workspace:*",
+    "@machize/dashboard": "workspace:*",
+    "@machize/subscriptions": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.24.0"
