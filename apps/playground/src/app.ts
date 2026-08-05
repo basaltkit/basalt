@@ -1,10 +1,22 @@
-import { createApp, definePlugin } from '@machize/core'
+import { createApp, definePlugin, tryCtx } from '@machize/core'
 import { configPlugin } from '@machize/config'
 import { EVENTS, eventsPlugin } from '@machize/events'
 import { fastifyPlugin } from '@machize/fastify'
 import { LOGGER, loggerPlugin } from '@machize/logger'
+import {
+  headerResolver,
+  MemoryTenantSource,
+  subdomainResolver,
+  tenancyPlugin,
+} from '@machize/tenancy'
 import { AUDIT, PROJECTS, ProjectRepository } from './domain.js'
 import { projectRoutes } from './routes.js'
+
+/** Seeded tenants — a real app loads them from its database. */
+export const tenants = () =>
+  new MemoryTenantSource()
+    .add({ id: 'acme', name: 'Acme Inc' })
+    .add({ id: 'globex', name: 'Globex Corp' })
 
 /**
  * Application plugin: registers domain services and subscribes the audit
@@ -22,7 +34,8 @@ const playgroundPlugin = definePlugin({
     const logger = container.get(LOGGER)
     const audit = container.get(AUDIT)
     bus.on('project.**', (payload, meta) => {
-      audit.entries.push({ event: meta.name, payload })
+      // tenant comes from the ALS context — the emitter never passes it
+      audit.entries.push({ event: meta.name, payload, tenantId: tryCtx()?.tenant?.id ?? null })
       logger.info({ event: meta.name }, 'audit: event recorded')
     })
   },
@@ -42,6 +55,12 @@ export function buildApp(options: BuildAppOptions = {}) {
         ...(options.pretty ? { pretty: true } : {}),
       }),
       eventsPlugin(),
+      // Resolution order: explicit header first, then subdomain
+      // (acme.localhost works out of the box in dev).
+      tenancyPlugin({
+        source: tenants(),
+        resolvers: [headerResolver(), subdomainResolver({ base: 'localhost' })],
+      }),
       playgroundPlugin,
       fastifyPlugin({ routes: projectRoutes }),
     ],

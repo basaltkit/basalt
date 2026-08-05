@@ -54,6 +54,15 @@ export const projectRoutes = [
 
   route({
     method: 'GET',
+    url: '/tenant',
+    async handler() {
+      const tenant = ctx().tenant
+      return tenant ? { id: tenant.id, name: tenant['name'] ?? null } : { id: null }
+    },
+  }),
+
+  route({
+    method: 'GET',
     url: '/health',
     async handler() {
       return { ok: true, requestId: ctx().requestId }

@@ -38,6 +38,9 @@ importers:
       '@machize/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@machize/tenancy':
+        specifier: workspace:*
+        version: link:../../packages/tenancy
       zod:
         specifier: ^3.24.0
         version: 3.25.76
