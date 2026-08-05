@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { MachizeError, parseDuration, type DurationInput, type HookBus } from '@machize/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
+import { LoginThrottle } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
 import {
   MemoryRefreshTokenStore,
@@ -64,6 +65,8 @@ export interface AuthOptions {
   refreshTtl?: DurationInput
   sessionTtl?: DurationInput
   hooks?: HookBus
+  /** Brute-force lockout. Enabled by default; pass `false` to disable. */
+  loginThrottle?: LoginThrottle | false
 }
 
 export const publicUser = (user: AuthUser): PublicUser => ({ id: user.id, email: user.email })
@@ -78,6 +81,7 @@ export class Auth {
   private readonly refreshTtl: DurationInput
   private readonly sessionTtl: DurationInput
   private readonly hooks: HookBus | undefined
+  private readonly throttle: LoginThrottle | undefined
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -89,6 +93,7 @@ export class Auth {
     this.refreshTtl = options.refreshTtl ?? '30d'
     this.sessionTtl = options.sessionTtl ?? '30d'
     this.hooks = options.hooks
+    this.throttle = options.loginThrottle === false ? undefined : options.loginThrottle ?? new LoginThrottle()
   }
 
   async register(email: string, password: string): Promise<PublicUser> {
@@ -108,13 +113,22 @@ export class Auth {
     return (await this.hasher.verify(password, user.passwordHash)) ? user : null
   }
 
-  /** Credentials → token pair. Emits auth:login / auth:login_failed. */
+  /**
+   * Credentials → token pair. Emits auth:login / auth:login_failed. Locks the
+   * account after too many failures (see {@link LoginThrottle}); a success
+   * clears the counter.
+   */
   async login(email: string, password: string): Promise<{ user: PublicUser; tokens: TokenPair }> {
+    const key = email.toLowerCase()
+    this.throttle?.assertAllowed(key)
+
     const user = await this.attempt(email, password)
     if (!user) {
+      this.throttle?.recordFailure(key)
       await this.hooks?.emit('auth:login_failed', { email })
       throw new InvalidCredentialsError()
     }
+    this.throttle?.reset(key)
     const tokens = await this.issueTokens(user.id)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
     return { user: publicUser(user), tokens }
