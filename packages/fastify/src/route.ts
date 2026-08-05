@@ -19,16 +19,16 @@ export interface MachizeRoute {
   body?: ZodType | undefined
   query?: ZodType | undefined
   params?: ZodType | undefined
-  /** Schemas de resposta por status — alimentam OpenAPI/SDK (Metadata), não validam em runtime. */
+  /** Per-status response schemas — feed OpenAPI/SDK (Metadata), not validated at runtime. */
   response?: Record<number, ZodType> | undefined
-  /** Metadados livres lidos por outros plugins (auth, permissions, rate-limit…). */
+  /** Free-form metadata read by other plugins (auth, permissions, rate-limit…). */
   meta?: Record<string, unknown> | undefined
   handler: (args: HandlerArgs<ZodType, ZodType, ZodType>) => unknown
 }
 
 /**
- * Define uma rota tipada de ponta a ponta: os tipos de body/query/params do
- * handler são INFERIDOS dos schemas Zod — nada de genéricos manuais.
+ * Defines an end-to-end typed route: the handler's body/query/params types
+ * are INFERRED from the Zod schemas — no manual generics.
  */
 export function route<
   B extends ZodType | undefined = undefined,

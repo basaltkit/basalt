@@ -1,7 +1,7 @@
 {
   "name": "@machize/queue",
   "version": "0.0.0",
-  "description": "Filas do Machize sobre BullMQ: jobs declarativos com payload Zod, propagação de contexto (tenant/requestId) para workers e driver sync para testes.",
+  "description": "Machize queues on top of BullMQ: declarative jobs with Zod payloads, context propagation (tenant/requestId) to workers and a sync driver for tests.",
   "license": "MIT",
   "type": "module",
   "exports": {

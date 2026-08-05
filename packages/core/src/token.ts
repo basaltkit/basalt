@@ -1,11 +1,11 @@
 /**
- * Token tipado de injeção de dependência. O parâmetro fantasma `__type`
- * carrega o tipo do serviço em tempo de compilação — nada de reflect-metadata.
+ * Typed dependency-injection token. The phantom parameter `__type`
+ * carries the service type at compile time — no reflect-metadata.
  */
 export interface Token<T> {
   readonly key: symbol
   readonly description: string
-  /** phantom type — nunca existe em runtime */
+  /** phantom type — never exists at runtime */
   readonly __type?: T
 }
 

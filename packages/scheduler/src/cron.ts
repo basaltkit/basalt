@@ -2,7 +2,7 @@ import { MachizeError } from '@machize/core'
 
 export class CronParseError extends MachizeError {
   constructor(expression: string, detail: string) {
-    super('CRON_INVALID', `Expressão cron inválida "${expression}": ${detail}`)
+    super('CRON_INVALID', `Invalid cron expression "${expression}": ${detail}`)
   }
 }
 
@@ -17,7 +17,7 @@ export interface CronFields {
 export function parseCron(expression: string): CronFields {
   const parts = expression.trim().split(/\s+/)
   if (parts.length !== 5) {
-    throw new CronParseError(expression, `esperados 5 campos, recebidos ${parts.length}`)
+    throw new CronParseError(expression, `expected 5 fields, received ${parts.length}`)
   }
   const [minute, hour, dayOfMonth, month, dayOfWeek] = parts as [
     string,
@@ -33,7 +33,7 @@ export function cronToString(fields: CronFields): string {
   return [fields.minute, fields.hour, fields.dayOfMonth, fields.month, fields.dayOfWeek].join(' ')
 }
 
-/** Suporta: asterisco, passos (asterisco/n), valor único, ranges a-b e listas a,b,c. */
+/** Supports: asterisk, steps (asterisk/n), single value, a-b ranges and a,b,c lists. */
 export function fieldMatches(field: string, value: number): boolean {
   if (field === '*') return true
   return field.split(',').some((part) => {
@@ -63,7 +63,7 @@ const WEEKDAYS: Record<string, number> = {
   Sat: 6,
 }
 
-/** Decompõe um instante nos campos de cron, no fuso pedido (default UTC). */
+/** Decomposes an instant into the cron fields, in the requested time zone (default UTC). */
 export function zonedParts(date: Date, timeZone = 'UTC'): ZonedParts {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -80,7 +80,7 @@ export function zonedParts(date: Date, timeZone = 'UTC'): ZonedParts {
   }
   return {
     minute: Number(parts['minute']),
-    // Intl com hour12:false pode emitir 24 para meia-noite
+    // Intl with hour12:false may emit 24 for midnight
     hour: Number(parts['hour']) % 24,
     dayOfMonth: Number(parts['day']),
     month: Number(parts['month']),

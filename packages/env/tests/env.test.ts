@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { defineEnv, EnvValidationError } from '../src/index.js'
 
 describe('defineEnv', () => {
-  it('retorna objeto tipado e congelado com defaults aplicados', () => {
+  it('returns a typed, frozen object with defaults applied', () => {
     const env = defineEnv(
       {
         DATABASE_URL: z.string().url(),
@@ -16,7 +16,7 @@ describe('defineEnv', () => {
     expect(Object.isFrozen(env)).toBe(true)
   })
 
-  it('agrega TODOS os erros num único relatório', () => {
+  it('aggregates ALL errors into a single report', () => {
     try {
       defineEnv(
         {

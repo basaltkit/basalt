@@ -3,7 +3,7 @@ import { pino, type DestinationStream, type Logger as PinoLogger } from 'pino'
 
 export type Logger = PinoLogger<string, boolean>
 
-/** Campos do contexto ALS promovidos automaticamente para todo log. */
+/** ALS context fields automatically promoted onto every log line. */
 const CONTEXT_FIELDS = ['requestId', 'correlationId', 'traceId', 'userId', 'tenantId'] as const
 
 const DEFAULT_REDACT = [
@@ -20,13 +20,13 @@ const DEFAULT_REDACT = [
 
 export interface LoggerOptions {
   level?: string
-  /** Saída legível para dev (requer pino-pretty instalado). Default: false (JSON). */
+  /** Human-readable output for dev (requires pino-pretty installed). Default: false (JSON). */
   pretty?: boolean
-  /** Paths extras de redação, somados aos defaults. */
+  /** Extra redaction paths, added to the defaults. */
   redact?: string[]
-  /** Campos fixos em todo log (ex.: `{ service: 'api' }`). */
+  /** Fixed fields on every log line (e.g. `{ service: 'api' }`). */
   base?: Record<string, unknown>
-  /** Stream de destino — usado em testes para capturar a saída. */
+  /** Destination stream — used in tests to capture the output. */
   destination?: DestinationStream
 }
 
@@ -47,8 +47,8 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 }
 
 /**
- * Extrai campos do contexto ativo. `tenant`/`user` (objetos com `id`)
- * viram `tenantId`/`userId` — sem o dev passar nada nas chamadas de log.
+ * Extracts fields from the active context. `tenant`/`user` (objects with `id`)
+ * become `tenantId`/`userId` — without the dev passing anything in log calls.
  */
 function contextFields(): Record<string, unknown> {
   const context = tryCtx()

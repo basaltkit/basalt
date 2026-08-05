@@ -4,7 +4,7 @@ import { HttpError, route } from '@machize/fastify'
 import { z } from 'zod'
 import { ProjectCreated, ProjectDeleted, PROJECTS, ProjectSchema } from './domain.js'
 
-/** Escopo DI da request atual (criado pelo adaptador Fastify). */
+/** DI scope of the current request (created by the Fastify adapter). */
 const scope = (): Container => ctx().container as Container
 
 export const projectRoutes = [
@@ -35,7 +35,7 @@ export const projectRoutes = [
     params: z.object({ id: z.string() }),
     async handler({ params }) {
       const project = scope().get(PROJECTS).find(params.id)
-      if (!project) throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Projeto não existe')
+      if (!project) throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
       return project
     },
   }),
@@ -46,7 +46,7 @@ export const projectRoutes = [
     params: z.object({ id: z.string() }),
     async handler({ params, reply }) {
       const project = scope().get(PROJECTS).delete(params.id)
-      if (!project) throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Projeto não existe')
+      if (!project) throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
       await scope().get(EVENTS).emit(ProjectDeleted, project)
       return reply.code(204).send()
     },

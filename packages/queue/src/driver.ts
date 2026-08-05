@@ -7,12 +7,12 @@ export interface AddJobOptions {
 
 export type JobExecutor = (jobName: string, data: unknown) => Promise<void>
 
-/** Contrato de driver de fila. BullMQ em produção; sync em testes/dev. */
+/** Queue driver contract. BullMQ in production; sync in tests/dev. */
 export interface QueueDriver {
-  /** Chamado uma vez pelo QueueManager — como executar um job recebido. */
+  /** Called once by the QueueManager — how to execute a received job. */
   setExecutor(executor: JobExecutor): void
   add(queue: string, jobName: string, data: unknown, options: AddJobOptions): Promise<void>
-  /** Inicia um worker para a fila (no driver sync é no-op: add executa inline). */
+  /** Starts a worker for the queue (no-op in the sync driver: add executes inline). */
   startWorker(queue: string, options?: { concurrency?: number }): void
   close(): Promise<void>
 }

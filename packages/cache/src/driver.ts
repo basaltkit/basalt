@@ -1,12 +1,12 @@
-/** Contrato de driver de cache. Todo driver passa na mesma suíte de conformidade. */
+/** Cache driver contract. Every driver passes the same conformance suite. */
 export interface CacheDriver {
-  /** Retorna o valor ou undefined em miss/expirado. */
+  /** Returns the value, or undefined on miss/expired. */
   get(key: string): Promise<unknown>
   set(key: string, value: unknown, ttlMs?: number, tags?: string[]): Promise<void>
   delete(key: string): Promise<boolean>
-  /** Remove todas as chaves que começam com o prefixo. */
+  /** Removes all keys starting with the prefix. */
   flushPrefix(prefix: string): Promise<void>
-  /** Remove todas as chaves associadas a qualquer uma das tags. */
+  /** Removes all keys associated with any of the tags. */
   flushTags(tags: string[]): Promise<void>
   disconnect(): Promise<void>
 }

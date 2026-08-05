@@ -1,6 +1,6 @@
 /**
- * Registro global de hooks do ecossistema. Pacotes adicionam seus hooks
- * tipados via module augmentation:
+ * Global hook registry for the ecosystem. Packages add their typed hooks
+ * via module augmentation:
  *
  * declare module '@machize/core' {
  *   interface MachizeHooks {
@@ -22,7 +22,7 @@ interface Registration {
 export class HookBus {
   private readonly handlers = new Map<string, Registration[]>()
 
-  /** Registra um handler. Maior `priority` executa primeiro. Retorna função de unsubscribe. */
+  /** Registers a handler. Higher `priority` runs first. Returns an unsubscribe function. */
   on<K extends keyof MachizeHooks & string>(
     hook: K,
     handler: HookHandler<MachizeHooks[K]>,
@@ -44,7 +44,7 @@ export class HookBus {
     }
   }
 
-  /** Executa os handlers em série, na ordem de prioridade. */
+  /** Runs the handlers in series, in priority order. */
   async emit<K extends keyof MachizeHooks & string>(
     hook: K,
     payload: MachizeHooks[K],

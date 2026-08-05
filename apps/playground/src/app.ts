@@ -7,8 +7,8 @@ import { AUDIT, PROJECTS, ProjectRepository } from './domain.js'
 import { projectRoutes } from './routes.js'
 
 /**
- * Plugin da aplicação: registra serviços de domínio e assina o listener de
- * auditoria — um wildcard que cobre todos os eventos de projeto.
+ * Application plugin: registers domain services and subscribes the audit
+ * listener — a wildcard covering all project events.
  */
 const playgroundPlugin = definePlugin({
   name: 'playground',
@@ -23,7 +23,7 @@ const playgroundPlugin = definePlugin({
     const audit = container.get(AUDIT)
     bus.on('project.**', (payload, meta) => {
       audit.entries.push({ event: meta.name, payload })
-      logger.info({ event: meta.name }, 'audit: evento registrado')
+      logger.info({ event: meta.name }, 'audit: event recorded')
     })
   },
 })

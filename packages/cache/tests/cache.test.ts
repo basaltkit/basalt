@@ -5,7 +5,7 @@ import { Cache, CACHE, cachePlugin, MemoryCacheDriver } from '../src/index.js'
 const makeCache = (options = {}) => new Cache(new MemoryCacheDriver(), options)
 
 describe('Cache (driver memory)', () => {
-  it('put/get com fallback', async () => {
+  it('put/get with fallback', async () => {
     const cache = makeCache()
     await cache.put('greeting', 'olá')
     expect(await cache.get('greeting')).toBe('olá')
@@ -13,11 +13,11 @@ describe('Cache (driver memory)', () => {
     expect(await cache.get('missing')).toBeUndefined()
   })
 
-  describe('com relógio controlado', () => {
+  describe('with a controlled clock', () => {
     beforeEach(() => vi.useFakeTimers())
     afterEach(() => vi.useRealTimers())
 
-    it('expira valores por TTL', async () => {
+    it('expires values by TTL', async () => {
       const cache = makeCache()
       await cache.put('session', 'abc', '30s')
       expect(await cache.get('session')).toBe('abc')
@@ -26,7 +26,7 @@ describe('Cache (driver memory)', () => {
     })
   })
 
-  it('remember: calcula uma vez e deduplica chamadas concorrentes (stampede)', async () => {
+  it('remember: computes once and deduplicates concurrent calls (stampede)', async () => {
     const cache = makeCache()
     let calls = 0
     const factory = async () => {
@@ -42,10 +42,10 @@ describe('Cache (driver memory)', () => {
     expect([a, b, c]).toEqual(['caro', 'caro', 'caro'])
     expect(calls).toBe(1)
     await cache.remember('expensive', '1h', factory)
-    expect(calls).toBe(1) // agora vem do cache
+    expect(calls).toBe(1) // now served from cache
   })
 
-  it('tags: flush invalida só o grupo', async () => {
+  it('tags: flush invalidates only the group', async () => {
     const cache = makeCache()
     await cache.tags('plans').put('plan:free', { price: 0 })
     await cache.tags('plans').put('plan:pro', { price: 29 })
@@ -57,7 +57,7 @@ describe('Cache (driver memory)', () => {
     expect(await cache.get('untagged')).toBe('fica')
   })
 
-  it('isolamento por tenant automático via contexto', async () => {
+  it('automatic per-tenant isolation via context', async () => {
     const driver = new MemoryCacheDriver()
     const cache = new Cache(driver)
 
@@ -73,7 +73,7 @@ describe('Cache (driver memory)', () => {
     )
     expect(await cache.get('config')).toBe('central')
 
-    // flush do tenant não afeta os demais
+    // flushing a tenant does not affect the others
     await runWithContext({ tenant: { id: 'acme' } }, () => cache.flush())
     expect(
       await runWithContext({ tenant: { id: 'acme' } }, () => cache.get('config')),
@@ -81,7 +81,7 @@ describe('Cache (driver memory)', () => {
     expect(await cache.get('config')).toBe('central')
   })
 
-  it('cachePlugin registra o token e desconecta no shutdown', async () => {
+  it('cachePlugin registers the token and disconnects on shutdown', async () => {
     const app = await createApp({ plugins: [cachePlugin({ driver: 'memory' })] }).boot()
     const cache = app.container.get(CACHE)
     await cache.put('k', 'v')

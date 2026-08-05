@@ -2,8 +2,8 @@ import type { Container } from './container.js'
 import type { HookBus } from './hooks.js'
 
 /**
- * Schema estrutural compatível com Zod (safeParse), sem dependência de runtime.
- * Qualquer validador com a mesma forma funciona.
+ * Structural schema compatible with Zod (safeParse), without a runtime dependency.
+ * Any validator with the same shape works.
  */
 export interface ConfigSchema<T> {
   safeParse(input: unknown): { success: boolean; data?: T; error?: unknown }
@@ -16,17 +16,17 @@ export interface PluginContext<TConfig = unknown> {
 }
 
 export interface MachizePlugin<TConfig = unknown> {
-  /** Nome único, por convenção `machize:<pacote>` ou `app:<nome>` */
+  /** Unique name, by convention `machize:<package>` or `app:<name>` */
   name: string
-  /** Nomes de plugins que precisam registrar/bootar antes deste */
+  /** Names of plugins that must register/boot before this one */
   dependsOn?: string[]
-  /** Valida a fatia de config do plugin no boot — fail fast */
+  /** Validates the plugin's config slice at boot — fail fast */
   configSchema?: ConfigSchema<TConfig>
-  /** Fase 1: registrar bindings no container. Sem side effects de I/O. */
+  /** Phase 1: register bindings in the container. No I/O side effects. */
   register?(context: PluginContext<TConfig>): void | Promise<void>
-  /** Fase 2: conectar, assinar hooks, iniciar recursos. */
+  /** Phase 2: connect, subscribe to hooks, start resources. */
   boot?(context: PluginContext<TConfig>): void | Promise<void>
-  /** Desligamento gracioso, em ordem reversa de boot. */
+  /** Graceful shutdown, in reverse boot order. */
   shutdown?(context: PluginContext<TConfig>): void | Promise<void>
 }
 

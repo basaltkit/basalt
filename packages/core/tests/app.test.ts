@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createApp, createToken, definePlugin } from '../src/index.js'
 
 describe('MachizeApp lifecycle', () => {
-  it('ordena plugins por dependsOn e roda register antes de boot', async () => {
+  it('sorts plugins by dependsOn and runs register before boot', async () => {
     const order: string[] = []
     const a = definePlugin({
       name: 'a',
@@ -20,7 +20,7 @@ describe('MachizeApp lifecycle', () => {
     expect(order).toEqual(['register:b', 'register:a', 'boot:b', 'boot:a'])
   })
 
-  it('shutdown roda em ordem reversa de boot', async () => {
+  it('shutdown runs in reverse boot order', async () => {
     const order: string[] = []
     const mk = (name: string, dependsOn?: string[]) =>
       definePlugin({ name, ...(dependsOn ? { dependsOn } : {}), shutdown: () => void order.push(name) })
@@ -31,18 +31,18 @@ describe('MachizeApp lifecycle', () => {
     expect(app.phase).toBe('stopped')
   })
 
-  it('falha com dependência ausente', () => {
+  it('fails on missing dependency', () => {
     const a = definePlugin({ name: 'a', dependsOn: ['inexistente'] })
-    expect(() => createApp({ plugins: [a] })).toThrowError(/depende de "inexistente"/)
+    expect(() => createApp({ plugins: [a] })).toThrowError(/depends on "inexistente"/)
   })
 
-  it('falha com ciclo de dependência mostrando o caminho', () => {
+  it('fails on dependency cycle showing the path', () => {
     const a = definePlugin({ name: 'a', dependsOn: ['b'] })
     const b = definePlugin({ name: 'b', dependsOn: ['a'] })
     expect(() => createApp({ plugins: [a, b] })).toThrowError(/a -> b -> a|b -> a -> b/)
   })
 
-  it('valida config com schema (fail fast)', async () => {
+  it('validates config with schema (fail fast)', async () => {
     const plugin = definePlugin<{ driver: string }>({
       name: 'machize:cache',
       configSchema: {
@@ -50,7 +50,7 @@ describe('MachizeApp lifecycle', () => {
           const driver = (input as { driver?: unknown } | undefined)?.driver
           return typeof driver === 'string'
             ? { success: true, data: { driver } }
-            : { success: false, error: [{ path: 'driver', message: 'obrigatório' }] }
+            : { success: false, error: [{ path: 'driver', message: 'required' }] }
         },
       },
     })
@@ -64,7 +64,7 @@ describe('MachizeApp lifecycle', () => {
     ).resolves.toBeTruthy()
   })
 
-  it('plugins compartilham o container e recebem config validada', async () => {
+  it('plugins share the container and receive validated config', async () => {
     const VALUE = createToken<string>('value')
     const provider = definePlugin<{ value: string }>({
       name: 'provider',
@@ -85,7 +85,7 @@ describe('MachizeApp lifecycle', () => {
     expect(seen).toBe('ok')
   })
 
-  it('emite hooks de lifecycle', async () => {
+  it('emits lifecycle hooks', async () => {
     const events: string[] = []
     const plugin = definePlugin({
       name: 'p',

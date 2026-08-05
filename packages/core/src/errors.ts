@@ -1,6 +1,6 @@
 /**
- * Erro base de todo o ecossistema. O `code` é estável e faz parte do
- * contrato semver — apps podem fazer branch por código com segurança.
+ * Base error for the whole ecosystem. The `code` is stable and part of the
+ * semver contract — apps can safely branch on codes.
  */
 export class MachizeError extends Error {
   readonly code: string
@@ -16,8 +16,8 @@ export class ContextUnavailableError extends MachizeError {
   constructor() {
     super(
       'CONTEXT_UNAVAILABLE',
-      'ctx() foi chamado fora de um contexto ativo. Envolva a chamada com runWithContext() ' +
-        '(o adaptador HTTP e os workers fazem isso automaticamente).',
+      'ctx() was called outside of an active context. Wrap the call with runWithContext() ' +
+        '(the HTTP adapter and the workers do this automatically).',
     )
   }
 }
@@ -26,15 +26,15 @@ export class UnknownTokenError extends MachizeError {
   constructor(description: string) {
     super(
       'DI_UNKNOWN_TOKEN',
-      `Nenhum provider registrado para o token "${description}". ` +
-        'Registre-o com container.singleton()/scoped()/transient() em algum plugin.',
+      `No provider registered for token "${description}". ` +
+        'Register it with container.singleton()/scoped()/transient() in some plugin.',
     )
   }
 }
 
 export class CircularDependencyError extends MachizeError {
   constructor(chain: string[]) {
-    super('DI_CIRCULAR_DEPENDENCY', `Dependência circular detectada: ${chain.join(' -> ')}`)
+    super('DI_CIRCULAR_DEPENDENCY', `Circular dependency detected: ${chain.join(' -> ')}`)
   }
 }
 
@@ -51,7 +51,7 @@ export class ConfigValidationError extends MachizeError {
   ) {
     super(
       'CONFIG_INVALID',
-      `Configuração inválida para o plugin "${plugin}": ${JSON.stringify(issues, null, 2)}`,
+      `Invalid configuration for plugin "${plugin}": ${JSON.stringify(issues, null, 2)}`,
     )
   }
 }

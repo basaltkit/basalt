@@ -1,6 +1,6 @@
 import { createToken, definePlugin, MachizeError } from '@machize/core'
 
-/** Schema estrutural compatível com Zod — mesma forma do ConfigSchema do core. */
+/** Structural schema compatible with Zod — same shape as core's ConfigSchema. */
 export interface EventSchema<T> {
   safeParse(input: unknown): { success: boolean; data?: T; error?: unknown }
 }
@@ -10,7 +10,7 @@ export class EventValidationError extends MachizeError {
     readonly event: string,
     readonly issues: unknown,
   ) {
-    super('EVENT_INVALID', `Payload inválido para o evento "${event}": ${JSON.stringify(issues)}`)
+    super('EVENT_INVALID', `Invalid payload for event "${event}": ${JSON.stringify(issues)}`)
   }
 }
 
@@ -22,7 +22,7 @@ export interface MachizeEvent<T = void> {
 }
 
 /**
- * Define um evento de domínio tipado:
+ * Defines a typed domain event:
  *
  * export const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))
  */
@@ -37,9 +37,9 @@ export interface EventMeta {
 export type EventHandler<T> = (payload: T, meta: EventMeta) => void | Promise<void>
 
 export interface ListenOptions {
-  /** Maior prioridade executa primeiro. Default: 0 */
+  /** Higher priority runs first. Default: 0 */
   priority?: number
-  /** Remove o listener após a primeira execução. */
+  /** Removes the listener after the first execution. */
   once?: boolean
 }
 
@@ -54,11 +54,11 @@ export class EventBus {
   private registrations: Registration[] = []
 
   /**
-   * Assina um evento tipado ou um padrão string com wildcards:
-   * - `on(OrderCreated, h)` — payload tipado
-   * - `on('order.*', h)` — um segmento curinga
-   * - `on('order.**', h)` ou `on('**', h)` — qualquer sufixo
-   * Retorna função de unsubscribe.
+   * Subscribes to a typed event or a string pattern with wildcards:
+   * - `on(OrderCreated, h)` — typed payload
+   * - `on('order.*', h)` — one wildcard segment
+   * - `on('order.**', h)` or `on('**', h)` — any suffix
+   * Returns an unsubscribe function.
    */
   on<T>(event: MachizeEvent<T>, handler: EventHandler<T>, options?: ListenOptions): () => void
   on(pattern: string, handler: EventHandler<unknown>, options?: ListenOptions): () => void
@@ -84,9 +84,9 @@ export class EventBus {
   }
 
   /**
-   * Emite um evento: valida o payload (se houver schema) e executa os
-   * listeners em série por prioridade. Todos os listeners rodam mesmo se
-   * algum falhar; falhas são agregadas num AggregateError ao final.
+   * Emits an event: validates the payload (if there is a schema) and runs the
+   * listeners in series by priority. All listeners run even if one of them
+   * fails; failures are aggregated into an AggregateError at the end.
    */
   async emit<T>(event: MachizeEvent<T>, ...args: T extends void ? [] : [T]): Promise<void> {
     const payload = validate(event, args[0])
@@ -107,7 +107,7 @@ export class EventBus {
       }
     }
     if (errors.length > 0) {
-      throw new AggregateError(errors, `Falha em ${errors.length} listener(s) de "${event.name}"`)
+      throw new AggregateError(errors, `Failure in ${errors.length} listener(s) of "${event.name}"`)
     }
   }
 
@@ -121,13 +121,13 @@ function validate<T>(event: MachizeEvent<T>, payload: unknown): unknown {
   const result = event.schema.safeParse(payload)
   if (!result.success) {
     const issues =
-      (result.error as { issues?: unknown[] } | undefined)?.issues ?? result.error ?? 'desconhecido'
+      (result.error as { issues?: unknown[] } | undefined)?.issues ?? result.error ?? 'unknown'
     throw new EventValidationError(event.name, issues)
   }
   return result.data
 }
 
-/** `*` casa exatamente um segmento; `**` casa um ou mais segmentos. */
+/** `*` matches exactly one segment; `**` matches one or more segments. */
 function matches(pattern: string, eventName: string): boolean {
   if (pattern === eventName) return true
   const patternSegments = pattern.split('.')

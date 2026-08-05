@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseDuration } from '../src/index.js'
 
 describe('parseDuration', () => {
-  it('converte strings legíveis para milissegundos', () => {
+  it('converts human-readable strings to milliseconds', () => {
     expect(parseDuration('500ms')).toBe(500)
     expect(parseDuration('30s')).toBe(30_000)
     expect(parseDuration('5m')).toBe(300_000)
@@ -10,11 +10,11 @@ describe('parseDuration', () => {
     expect(parseDuration('1.5d')).toBe(129_600_000)
   })
 
-  it('aceita números como milissegundos diretos', () => {
+  it('accepts numbers as direct milliseconds', () => {
     expect(parseDuration(1500)).toBe(1500)
   })
 
-  it('rejeita formatos inválidos com erro tipado', () => {
+  it('rejects invalid formats with a typed error', () => {
     for (const invalid of ['abc', '10x', '-5s', Number.NaN, -1]) {
       try {
         parseDuration(invalid as never)

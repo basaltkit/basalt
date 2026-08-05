@@ -5,19 +5,19 @@ export interface ValidationIssue {
   message: string
 }
 
-/** Falha de validação de body/query/params — vira resposta 400 padronizada. */
+/** Body/query/params validation failure — becomes a standardized 400 response. */
 export class RequestValidationError extends MachizeError {
   constructor(
     readonly part: 'body' | 'query' | 'params',
     readonly issues: ValidationIssue[],
   ) {
-    super('HTTP_VALIDATION', `Validação falhou em ${part}`)
+    super('HTTP_VALIDATION', `Validation failed in ${part}`)
   }
 }
 
 /**
- * Erro HTTP intencional lançável de qualquer camada:
- * `throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Projeto não existe')`
+ * Intentional HTTP error throwable from any layer:
+ * `throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')`
  */
 export class HttpError extends MachizeError {
   constructor(

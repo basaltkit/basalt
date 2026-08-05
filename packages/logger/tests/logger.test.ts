@@ -15,13 +15,13 @@ function capture() {
 }
 
 describe('createLogger', () => {
-  it('emite JSON estruturado com level e mensagem', () => {
+  it('emits structured JSON with level and message', () => {
     const { lines, stream } = capture()
     createLogger({ destination: stream }).info({ pkg: 'core' }, 'boot ok')
     expect(lines[0]).toMatchObject({ msg: 'boot ok', pkg: 'core' })
   })
 
-  it('enriquece com requestId/tenantId/userId do contexto ALS automaticamente', () => {
+  it('automatically enriches with requestId/tenantId/userId from the ALS context', () => {
     const { lines, stream } = capture()
     const logger = createLogger({ destination: stream })
 
@@ -35,7 +35,7 @@ describe('createLogger', () => {
     expect(lines[1]?.['requestId']).toBeUndefined()
   })
 
-  it('redige campos sensíveis por padrão', () => {
+  it('redacts sensitive fields by default', () => {
     const { lines, stream } = capture()
     createLogger({ destination: stream }).info(
       { email: 'a@b.c', password: '123', auth: { token: 'jwt' } },
@@ -46,14 +46,14 @@ describe('createLogger', () => {
     expect(lines[0]?.['email']).toBe('a@b.c')
   })
 
-  it('child logger mantém bindings e contexto', () => {
+  it('child logger keeps bindings and context', () => {
     const { lines, stream } = capture()
     const child = createLogger({ destination: stream }).child({ pkg: 'subscriptions' })
     runWithContext({ requestId: 'req-2' }, () => child.warn('quota baixa'))
     expect(lines[0]).toMatchObject({ pkg: 'subscriptions', requestId: 'req-2' })
   })
 
-  it('respeita o level configurado', () => {
+  it('honors the configured level', () => {
     const { lines, stream } = capture()
     const logger = createLogger({ destination: stream, level: 'warn' })
     logger.info('não aparece')

@@ -8,16 +8,16 @@ export type Factory<T> = (container: Container) => T
 interface Binding<T = unknown> {
   factory: Factory<T>
   lifetime: Lifetime
-  /** container onde o binding foi registrado — dono das instâncias singleton */
+  /** container where the binding was registered — owner of the singleton instances */
   owner: Container
 }
 
 /**
- * Container DI hierárquico.
+ * Hierarchical DI container.
  *
- * - `singleton`: uma instância por aplicação (armazenada no container dono do binding)
- * - `scoped`: uma instância por escopo (ex.: por request), criada no container folha
- * - `transient`: nova instância a cada resolução
+ * - `singleton`: one instance per application (stored in the container that owns the binding)
+ * - `scoped`: one instance per scope (e.g. per request), created in the leaf container
+ * - `transient`: new instance on every resolution
  */
 export class Container {
   private readonly bindings = new Map<symbol, Binding>()
@@ -73,7 +73,7 @@ export class Container {
     }
   }
 
-  /** Cria um escopo filho (ex.: por request). Bindings são herdados; instâncias scoped não. */
+  /** Creates a child scope (e.g. per request). Bindings are inherited; scoped instances are not. */
   createScope(): Container {
     return new Container(this)
   }

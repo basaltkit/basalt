@@ -1,7 +1,7 @@
 {
   "name": "playground",
   "private": true,
-  "description": "App de referência do Machize — integra core, config, env, logger, events e fastify. Serve de E2E vivo da Fase 1.",
+  "description": "Machize reference app — integrates core, config, env, logger, events and fastify. Serves as the living E2E of Phase 1.",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",

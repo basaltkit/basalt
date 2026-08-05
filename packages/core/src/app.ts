@@ -13,7 +13,7 @@ export type LifecyclePhase =
 
 export interface CreateAppOptions {
   plugins?: MachizePlugin<never>[] | MachizePlugin<any>[]
-  /** Config bruta, chaveada pelo nome do plugin (ex.: `{ 'machize:cache': { driver: 'memory' } }`) */
+  /** Raw config, keyed by plugin name (e.g. `{ 'machize:cache': { driver: 'memory' } }`) */
   config?: Record<string, unknown>
 }
 
@@ -41,7 +41,7 @@ export class MachizeApp {
 
   async boot(): Promise<this> {
     if (this.phase !== 'created') {
-      throw new LifecycleError(`boot() chamado na fase "${this.phase}" — só é permitido uma vez.`)
+      throw new LifecycleError(`boot() called in phase "${this.phase}" — it is only allowed once.`)
     }
 
     const contexts: { plugin: MachizePlugin<any>; context: PluginContext<any> }[] = []
@@ -73,7 +73,7 @@ export class MachizeApp {
   async shutdown(): Promise<void> {
     if (this.phase === 'stopped' || this.phase === 'shutting-down') return
     this.phase = 'shutting-down'
-    // ordem reversa de boot; um shutdown que falha não impede os demais
+    // reverse boot order; a failing shutdown does not prevent the others
     const errors: unknown[] = []
     for (const { plugin, context } of [...this.booted].reverse()) {
       try {
@@ -85,7 +85,7 @@ export class MachizeApp {
     await this.hooks.emit('app:shutdown', { app: this })
     this.phase = 'stopped'
     if (errors.length > 0) {
-      throw new AggregateError(errors, 'Falhas durante o shutdown de plugins')
+      throw new AggregateError(errors, 'Failures during plugin shutdown')
     }
   }
 
@@ -102,12 +102,12 @@ export function createApp(options: CreateAppOptions = {}): MachizeApp {
   return new MachizeApp(options)
 }
 
-/** Ordenação topológica por dependsOn, com detecção de ciclo e de dependência ausente. */
+/** Topological sort by dependsOn, with cycle and missing-dependency detection. */
 function sortPlugins(plugins: MachizePlugin<any>[]): MachizePlugin<any>[] {
   const byName = new Map<string, MachizePlugin<any>>()
   for (const plugin of plugins) {
     if (byName.has(plugin.name)) {
-      throw new PluginDependencyError(`Plugin duplicado: "${plugin.name}"`)
+      throw new PluginDependencyError(`Duplicate plugin: "${plugin.name}"`)
     }
     byName.set(plugin.name, plugin)
   }
@@ -120,7 +120,7 @@ function sortPlugins(plugins: MachizePlugin<any>[]): MachizePlugin<any>[] {
     if (visited.has(plugin.name)) return
     if (visiting.has(plugin.name)) {
       throw new PluginDependencyError(
-        `Ciclo de dependência entre plugins: ${[...path, plugin.name].join(' -> ')}`,
+        `Dependency cycle between plugins: ${[...path, plugin.name].join(' -> ')}`,
       )
     }
     visiting.add(plugin.name)
@@ -128,7 +128,7 @@ function sortPlugins(plugins: MachizePlugin<any>[]): MachizePlugin<any>[] {
       const dependency = byName.get(dep)
       if (!dependency) {
         throw new PluginDependencyError(
-          `Plugin "${plugin.name}" depende de "${dep}", que não foi adicionado ao app.`,
+          `Plugin "${plugin.name}" depends on "${dep}", which was not added to the app.`,
         )
       }
       visit(dependency, [...path, plugin.name])
