@@ -565,6 +565,9 @@ importers:
 
   packages/prisma:
     dependencies:
+      '@machize/cli':
+        specifier: workspace:*
+        version: link:../cli
       '@machize/core':
         specifier: workspace:*
         version: link:../core
