@@ -3,6 +3,7 @@ import {
   Container,
   createToken,
   definePlugin,
+  ensureMetadata,
   runWithContext,
   type RequestContext,
 } from '@machize/core'
@@ -19,7 +20,7 @@ import type { MachizeRoute } from './route.js'
 
 declare module '@machize/core' {
   interface RequestContext {
-    /** Escopo DI da request — instâncias `scoped` vivem aqui. */
+    /** Per-request DI scope — `scoped` instances live here. */
     container?: Container
   }
 }
@@ -28,7 +29,7 @@ export const FASTIFY = createToken<FastifyInstance>('fastify')
 
 export interface FastifyPluginOptions {
   routes?: MachizeRoute[]
-  /** Opções repassadas ao construtor do Fastify (logger, trustProxy…). */
+  /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
   fastify?: FastifyServerOptions
 }
 
@@ -43,7 +44,17 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       })
     },
     boot({ container }) {
-      registerRoutes(container.get(FASTIFY), options.routes ?? [], container)
+      const routes = options.routes ?? []
+      registerRoutes(container.get(FASTIFY), routes, container)
+      // Expose routes to tooling (CLI `mach routes`, docs generator, SDK).
+      const metadata = ensureMetadata(container)
+      for (const definition of routes) {
+        metadata.add('http:routes', {
+          method: definition.method,
+          url: definition.url,
+          meta: definition.meta ?? {},
+        })
+      }
     },
     async shutdown({ container }) {
       await container.get(FASTIFY).close()
@@ -51,7 +62,7 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
   })
 }
 
-/** Registra rotas Machize numa instância Fastify (usável também sem o plugin). */
+/** Registers Machize routes on a Fastify instance (also usable without the plugin). */
 export function registerRoutes(
   instance: FastifyInstance,
   routes: MachizeRoute[],
@@ -113,10 +124,10 @@ function errorHandler(error: FastifyError | Error, request: FastifyRequest, repl
   if (error instanceof HttpError) {
     return reply.code(error.status).send({ error: { code: error.code, message: error.message } })
   }
-  // erro não intencional: loga com stack, responde sem vazar detalhes
+  // unintentional error: log with stack, respond without leaking details
   request.log.error(error)
   return reply.code(500).send({
-    error: { code: 'INTERNAL_ERROR', message: 'Erro interno do servidor.' },
+    error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' },
   })
 }
 
