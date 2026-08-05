@@ -74,6 +74,21 @@ describe('StripeBillingGateway — REST calls', () => {
     expect(body.get('customer')).toBe('cus_acme')
     expect(body.get('items[0][price]')).toBe('price_pro_monthly')
     expect(body.get('metadata[billableId]')).toBe('acme')
+    expect(body.get('trial_period_days')).toBeNull() // no trial on this call
+  })
+
+  it('createSubscription passes trial_period_days when a trial is requested', async () => {
+    const { calls, fetchMock } = harness(() => jsonResponse({ id: 'sub_456' }))
+    const gateway = makeGateway(fetchMock)
+
+    await gateway.createSubscription({
+      billableId: 'acme',
+      plan: 'pro',
+      period: 'monthly',
+      price: 29,
+      trialDays: 14,
+    })
+    expect(new URLSearchParams(calls[0]?.body).get('trial_period_days')).toBe('14')
   })
 
   it('cancelSubscription updates at period end vs deletes immediately', async () => {

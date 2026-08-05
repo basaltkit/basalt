@@ -87,26 +87,52 @@ describe('Subscriptions lifecycle', () => {
 })
 
 describe('gateway integration', () => {
-  it('paid plan without trial goes through the gateway; free and trials do not', async () => {
+  const gatewayPlans = definePlans({
+    free: { price: 0, features: {} },
+    pro: { price: 29, features: {} },
+    trial: { price: 29, trial: '7d', features: {} },
+  })
+
+  it('paid plans go through the gateway (with trial_period when the plan has a trial); free does not', async () => {
     const gateway = new FakeBillingGateway()
-    const subscriptions = new Subscriptions({
-      plans: definePlans({
-        free: { price: 0, features: {} },
-        pro: { price: 29, features: {} },
-        trial: { price: 29, trial: '7d', features: {} },
-      }),
-      gateway,
-    })
+    const subscriptions = new Subscriptions({ plans: gatewayPlans, gateway })
 
-    await subscriptions.subscribe('a', 'free')
-    await subscriptions.subscribe('b', 'trial')
-    const paid = await subscriptions.subscribe('c', 'pro', { period: 'monthly' })
+    await subscriptions.subscribe('a', 'free') // free → no gateway
+    const trialing = await subscriptions.subscribe('b', 'trial') // paid + trial → gateway WITH trialDays
+    const paid = await subscriptions.subscribe('c', 'pro', { period: 'monthly' }) // paid → gateway
 
-    expect(gateway.created).toEqual([{ billableId: 'c', plan: 'pro', period: 'monthly', price: 29 }])
-    expect(paid.gatewayRef).toBe('fake_sub_1')
+    expect(gateway.created).toEqual([
+      { billableId: 'b', plan: 'trial', period: 'monthly', price: 29, trialDays: 7 },
+      { billableId: 'c', plan: 'pro', period: 'monthly', price: 29 },
+    ])
+    // the trialing sub is created at the gateway but locally still 'trialing'
+    expect(trialing.status).toBe('trialing')
+    expect(trialing.gatewayRef).toBe('fake_sub_1')
+    expect(paid.gatewayRef).toBe('fake_sub_2')
 
     await subscriptions.cancel('c')
-    expect(gateway.canceled).toEqual([{ gatewayRef: 'fake_sub_1', atPeriodEnd: true }])
+    expect(gateway.canceled).toEqual([{ gatewayRef: 'fake_sub_2', atPeriodEnd: true }])
+  })
+
+  it('gateway-backed trial converts through the webhook, not expireTrials', async () => {
+    vi.useFakeTimers()
+    try {
+      const gateway = new FakeBillingGateway()
+      const subscriptions = new Subscriptions({ plans: gatewayPlans, gateway })
+      await subscriptions.subscribe('acme', 'trial')
+      expect(await subscriptions.onTrial('acme')).toBe(true)
+
+      // trial window passes; expireTrials must NOT settle a gateway-backed trial
+      vi.advanceTimersByTime(8 * 86_400_000)
+      expect(await subscriptions.expireTrials()).toEqual([])
+      expect((await subscriptions.get('acme'))?.status).toBe('trialing')
+
+      // the gateway charges at trial end and sends invoice.paid → active
+      await subscriptions.handleWebhook({ id: 'evt_1', type: 'payment.succeeded', billableId: 'acme' })
+      expect((await subscriptions.get('acme'))?.status).toBe('active')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

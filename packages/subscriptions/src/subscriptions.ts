@@ -100,15 +100,20 @@ export class Subscriptions {
       status: plan.trial ? 'trialing' : 'active',
       ...(plan.trial ? { trialEndsAt: Date.now() + parseDuration(plan.trial) } : {}),
     }
-    // Free plans and trials never touch the gateway; paid plans do.
-    // KNOWN LIMITATION (see KNOWN_LIMITATIONS.md #3): trials never create a
-    // gateway subscription, so trial->paid conversion is not wired yet.
-    if (this.gateway && typeof price === 'number' && price > 0 && !plan.trial) {
+    // Paid plans go through the gateway — with a trial period when the plan
+    // has one, so the gateway runs the trial and drives the trial-end charge
+    // via webhook (invoice.paid → active, invoice.payment_failed → past_due).
+    // Free plans never touch the gateway.
+    if (this.gateway && typeof price === 'number' && price > 0) {
+      const trialDays = plan.trial
+        ? Math.max(1, Math.ceil(parseDuration(plan.trial) / 86_400_000))
+        : undefined
       const { gatewayRef } = await this.gateway.createSubscription({
         billableId,
         plan: planName,
         period,
         price,
+        ...(trialDays !== undefined ? { trialDays } : {}),
       })
       record.gatewayRef = gatewayRef
     }
@@ -268,14 +273,18 @@ export class Subscriptions {
     return true
   }
 
-  /** Maintenance (run from the scheduler): settles expired trials. */
+  /**
+   * Maintenance (run from the scheduler): settles expired local trials.
+   * Gateway-backed trials are settled by the gateway's webhook, not here.
+   */
   async expireTrials(): Promise<SubscriptionRecord[]> {
     const expired: SubscriptionRecord[] = []
     for (const record of await this.store.all()) {
       if (
         record.status === 'trialing' &&
         record.trialEndsAt !== undefined &&
-        record.trialEndsAt <= Date.now()
+        record.trialEndsAt <= Date.now() &&
+        record.gatewayRef === undefined
       ) {
         const price = planPrice(this.plan(record.plan), record.period)
         record.status = typeof price === 'number' && price === 0 ? 'active' : 'past_due'

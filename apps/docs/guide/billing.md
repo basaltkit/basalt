@@ -131,8 +131,8 @@ subscriptionsPlugin({
 })
 ```
 
-::: warning Pre-1.0 note
-Local subscription state is the read model. One billing behavior remains
-deferred until its backend lands: trial→paid conversion through the gateway —
-see KNOWN_LIMITATIONS in the repository.
-:::
+Trials are modeled the way gateways do: for a paid plan with a trial, the
+gateway subscription is created up front with a trial period, and the gateway
+charges at trial end — sending `invoice.paid` (→ active) or
+`invoice.payment_failed` (→ past_due), which the webhook translates to local
+state. `expireTrials` (run from the scheduler) settles only local trials.

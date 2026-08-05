@@ -87,6 +87,9 @@ export class StripeBillingGateway implements BillingGateway {
       customer,
       'items[0][price]': price,
       'metadata[billableId]': input.billableId,
+      ...(input.trialDays !== undefined
+        ? { trial_period_days: String(input.trialDays) }
+        : {}),
     })
     return { gatewayRef: String((created as { id?: string }).id) }
   }
