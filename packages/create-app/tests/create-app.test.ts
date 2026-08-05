@@ -36,6 +36,9 @@ describe('createProject', () => {
 
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
     expect(pkg.name).toBe('my-saas')
+    // Machize deps must point at a real published range, never a placeholder.
+    expect(pkg.dependencies['@machize/core']).toMatch(/^\^0\.\d+\.\d+$/)
+    expect(pkg.dependencies['@machize/core']).not.toBe('^0.0.0')
     expect(pkg.dependencies).toHaveProperty('@machize/tenancy')
     expect(pkg.dependencies).toHaveProperty('@machize/auth')
     expect(pkg.dependencies).not.toHaveProperty('@machize/subscriptions')

@@ -1,6 +1,6 @@
 {
   "name": "create-machize",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Scaffold a production-shaped Machize SaaS app: npx create-machize my-saas [--no-tenancy] [--no-auth] [--billing]",
   "license": "MIT",
   "type": "module",

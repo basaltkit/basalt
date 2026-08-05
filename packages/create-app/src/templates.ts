@@ -6,7 +6,7 @@ export interface ProjectOptions {
 }
 
 /** Kept in sync with the monorepo release line. */
-const MACHIZE_VERSION = '^0.0.0'
+const MACHIZE_VERSION = '^0.1.0'
 
 export function packageJson(options: ProjectOptions): string {
   const dependencies: Record<string, string> = {
