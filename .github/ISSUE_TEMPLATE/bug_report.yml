@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a defect in a Machize package
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A **minimal reproduction** is the most useful
+        thing you can attach — a small repo or a StackBlitz.
+  - type: input
+    id: package
+    attributes:
+      label: Package
+      description: Which package(s)? e.g. @machize/tenancy
+      placeholder: "@machize/..."
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: A link to a minimal repo/StackBlitz, or the smallest snippet that triggers it.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Node version, OS, package manager.
+      placeholder: "Node 22.x, macOS, pnpm 11"
+    validations:
+      required: false

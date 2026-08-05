@@ -1,0 +1,29 @@
+# Code owners for Machize.
+#
+# As the project grows, assign owners per package so reviews route to the
+# people who maintain each area. Until dedicated teams exist, the core team
+# owns everything. Replace @machize/core-team with real GitHub teams/handles.
+
+* @machize/core-team
+
+# Foundation
+/packages/core/        @machize/core-team
+/packages/config/      @machize/core-team
+/packages/env/         @machize/core-team
+/packages/events/      @machize/core-team
+/packages/logger/      @machize/core-team
+
+# Infrastructure
+/packages/fastify/     @machize/core-team
+/packages/prisma/      @machize/core-team
+
+# SaaS domain
+/packages/tenancy/       @machize/core-team
+/packages/auth/          @machize/core-team
+/packages/permissions/   @machize/core-team
+/packages/subscriptions/ @machize/core-team
+
+# Release + governance
+/.github/              @machize/core-team
+/.changeset/           @machize/core-team
+/ARCHITECTURE.md       @machize/core-team
