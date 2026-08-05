@@ -66,4 +66,15 @@ describe('Container', () => {
     container.singleton(B, (c) => ({ a: c.get(A) }))
     expect(() => container.get(A)).toThrowError(/a -> b -> a/)
   })
+
+  it('does not false-positive a cycle for two tokens sharing a description', () => {
+    const container = new Container()
+    // both describe themselves as 'db' but are distinct symbols
+    const primary = createToken<{ role: string }>('db')
+    const replica = createToken<{ role: string }>('db')
+    container.singleton(replica, () => ({ role: 'replica' }))
+    container.singleton(primary, (c) => ({ role: 'primary', fallback: c.get(replica) }))
+    expect(() => container.get(primary)).not.toThrow()
+    expect(container.get(primary).role).toBe('primary')
+  })
 })

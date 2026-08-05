@@ -12,24 +12,32 @@ export class MissingTenantError extends MachizeError {
 
 type QueryArgs = Record<string, unknown>
 
-/** Operations whose `where` receives the tenant filter. */
+/**
+ * Operations whose `where` receives the tenant filter. This includes the
+ * unique-where operations (findUnique/update/delete): since Prisma 5 a
+ * where-unique input accepts extra non-unique fields as additional filters,
+ * so injecting the tenant field narrows the match to the current tenant
+ * (a cross-tenant row simply "isn't found").
+ */
 const WHERE_OPERATIONS = new Set([
   'findMany',
   'findFirst',
   'findFirstOrThrow',
+  'findUnique',
+  'findUniqueOrThrow',
   'count',
   'aggregate',
   'groupBy',
+  'update',
   'updateMany',
+  'delete',
   'deleteMany',
 ])
 
 /**
- * Pure transformation: returns the args scoped to the tenant.
- *
- * Unique-where operations (findUnique, update, delete, upsert) are left
- * untouched in v0 — Prisma requires the exact unique input there. Model them
- * with a composite unique key including the tenant field.
+ * Pure transformation: returns the args scoped to the tenant. Reads and
+ * writes are both covered — a caller cannot escape the current tenant, and
+ * new rows always carry the tenant field.
  */
 export function applyTenantScope(
   operation: string,
@@ -40,9 +48,8 @@ export function applyTenantScope(
   const input = args ?? {}
 
   if (WHERE_OPERATIONS.has(operation)) {
-    const where = (input['where'] as QueryArgs | undefined) ?? {}
     // spread order forces the tenant filter — callers cannot override it
-    return { ...input, where: { ...where, [field]: tenantId } }
+    return scopeWhere(input, tenantId, field)
   }
 
   if (operation === 'create') {
@@ -59,7 +66,22 @@ export function applyTenantScope(
     }
   }
 
+  if (operation === 'upsert') {
+    // filter the match to this tenant AND stamp the created row; the update
+    // branch is left as-is (updating the tenant field would be wrong)
+    const create = (input['create'] as QueryArgs | undefined) ?? {}
+    return {
+      ...scopeWhere(input, tenantId, field),
+      create: { ...create, [field]: tenantId },
+    }
+  }
+
   return input
+}
+
+function scopeWhere(input: QueryArgs, tenantId: string, field: string): QueryArgs {
+  const where = (input['where'] as QueryArgs | undefined) ?? {}
+  return { ...input, where: { ...where, [field]: tenantId } }
 }
 
 export interface TenancyExtensionOptions {
