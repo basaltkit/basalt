@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -9,8 +9,28 @@ import {
   generateResource,
   generatorCommands,
   names,
+  registerResourceInApp,
   writeGenerated,
 } from '../src/index.js'
+
+const SAMPLE_APP = `import { createApp } from '@machize/core'
+import { fastifyPlugin } from '@machize/fastify'
+import { authRoutes } from '@machize/auth'
+import { appRoutes } from './routes.js'
+
+export function buildApp() {
+  return createApp({
+    plugins: [
+      fastifyPlugin({ routes: [...appRoutes, ...authRoutes()] }),
+    ],
+  })
+}
+`
+
+const writeApp = async (root: string, content = SAMPLE_APP) => {
+  await mkdir(join(root, 'src'), { recursive: true })
+  await writeFile(join(root, 'src/app.ts'), content)
+}
 
 describe('names', () => {
   it('derives all casings and pluralizes the last word', () => {
@@ -122,5 +142,94 @@ describe('generatorCommands', () => {
       container: undefined as never,
     })
     expect(bad).toBe(1)
+  })
+})
+
+describe('registerResourceInApp', () => {
+  let root: string
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'machize-gen-reg-'))
+  })
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('wires the plugin import, plugin registration and routes spread into app.ts', async () => {
+    await writeApp(root)
+    const result = await registerResourceInApp('Room', { baseDir: root })
+    expect(result.registered).toBe(true)
+
+    const app = await readFile(join(root, 'src/app.ts'), 'utf8')
+    expect(app).toContain("import { roomPlugin } from './modules/room/room.plugin.js'")
+    expect(app).toContain("import { roomRoutes } from './modules/room/room.routes.js'")
+    expect(app).toContain('roomPlugin,')
+    // plugin sits directly above fastifyPlugin, routes spread into the array
+    expect(app).toMatch(/roomPlugin,\s*\n\s*fastifyPlugin\(/)
+    expect(app).toContain('routes: [...roomRoutes, ...appRoutes, ...authRoutes()]')
+  })
+
+  it('is idempotent — a second call changes nothing', async () => {
+    await writeApp(root)
+    await registerResourceInApp('Room', { baseDir: root })
+    const once = await readFile(join(root, 'src/app.ts'), 'utf8')
+
+    const second = await registerResourceInApp('Room', { baseDir: root })
+    expect(second.registered).toBe(false)
+    expect(second.reason).toBe('already registered')
+    const twice = await readFile(join(root, 'src/app.ts'), 'utf8')
+    expect(twice).toBe(once)
+    expect(twice.match(/roomPlugin,/g)).toHaveLength(1)
+  })
+
+  it('multiple resources coexist', async () => {
+    await writeApp(root)
+    await registerResourceInApp('Room', { baseDir: root })
+    await registerResourceInApp('BlogPost', { baseDir: root })
+    const app = await readFile(join(root, 'src/app.ts'), 'utf8')
+    expect(app).toContain('roomPlugin,')
+    expect(app).toContain('blogPostPlugin,')
+    expect(app).toContain('...roomRoutes')
+    expect(app).toContain('...blogPostRoutes')
+  })
+
+  it('skips gracefully when app.ts is missing or has an unexpected shape', async () => {
+    const missing = await registerResourceInApp('Room', { baseDir: root })
+    expect(missing).toMatchObject({ registered: false, reason: 'src/app.ts not found' })
+
+    await writeApp(root, `export const buildApp = () => 'no fastify here'\n`)
+    const odd = await registerResourceInApp('Room', { baseDir: root })
+    expect(odd.registered).toBe(false)
+    expect(odd.reason).toContain('fastifyPlugin')
+  })
+
+  it('make:resource auto-wires app.ts through the CLI command', async () => {
+    await writeApp(root)
+    const resource = generatorCommands().find((c) => c.name === 'make:resource')!
+    const io = memoryIo()
+    await resource.handle({
+      args: ['Room'],
+      flags: { dir: root },
+      io,
+      app: undefined as never,
+      container: undefined as never,
+    })
+    expect(io.lines.join('\n')).toContain('Wired the plugin + routes into src/app.ts.')
+    const app = await readFile(join(root, 'src/app.ts'), 'utf8')
+    expect(app).toContain('roomPlugin,')
+    expect(app).toContain('...roomRoutes')
+  })
+
+  it('make:resource --no-register leaves app.ts untouched', async () => {
+    await writeApp(root)
+    const resource = generatorCommands().find((c) => c.name === 'make:resource')!
+    await resource.handle({
+      args: ['Room'],
+      flags: { dir: root, 'no-register': true },
+      io: memoryIo(),
+      app: undefined as never,
+      container: undefined as never,
+    })
+    const app = await readFile(join(root, 'src/app.ts'), 'utf8')
+    expect(app).not.toContain('roomPlugin')
   })
 })

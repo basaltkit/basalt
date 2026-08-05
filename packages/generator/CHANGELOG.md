@@ -1,5 +1,11 @@
 # @machize/generator
 
+## 0.2.0
+
+### Minor Changes
+
+- `mach make:resource` now auto-wires the generated resource into `src/app.ts`: it adds the plugin + routes imports, registers the plugin in the `plugins` array, and spreads the routes into `fastifyPlugin({ routes: [...] })`. The wiring is idempotent (re-running never duplicates) and best-effort — if `app.ts` is missing or does not match the expected shape, nothing is changed and manual instructions are printed. Pass `--no-register` to opt out. New exported `registerResourceInApp()` / `AppRegistration`.
+
 ## 0.1.0
 
 ### Minor Changes
