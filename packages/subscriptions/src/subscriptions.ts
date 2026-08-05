@@ -12,9 +12,11 @@ import {
 import {
   MemorySubscriptionStore,
   MemoryUsageStore,
+  MemoryWebhookStore,
   type SubscriptionRecord,
   type SubscriptionStore,
   type UsageStore,
+  type WebhookStore,
 } from './stores.js'
 
 export class NotSubscribedError extends MachizeError {
@@ -46,6 +48,8 @@ export interface SubscriptionsOptions {
   store?: SubscriptionStore
   usage?: UsageStore
   gateway?: BillingGateway
+  /** Webhook dedupe store. Default: in-memory (per-process). */
+  webhooks?: WebhookStore
   /** Plan applied to billables without a subscription (e.g. 'free'). */
   fallbackPlan?: string
   hooks?: HookBus
@@ -61,13 +65,14 @@ export class Subscriptions {
   private readonly gateway: BillingGateway | undefined
   private readonly fallbackPlan: string | undefined
   private readonly hooks: HookBus | undefined
-  private readonly seenWebhooks = new Set<string>()
+  private readonly webhooks: WebhookStore
 
   constructor(options: SubscriptionsOptions) {
     this.plans = options.plans
     this.store = options.store ?? new MemorySubscriptionStore()
     this.usage = options.usage ?? new MemoryUsageStore()
     this.gateway = options.gateway
+    this.webhooks = options.webhooks ?? new MemoryWebhookStore()
     this.fallbackPlan = options.fallbackPlan
     this.hooks = options.hooks
     if (options.fallbackPlan) this.plan(options.fallbackPlan) // fail fast on typos
@@ -233,25 +238,32 @@ export class Subscriptions {
    * never call the gateway.
    */
   async handleWebhook(event: WebhookEvent): Promise<boolean> {
-    // KNOWN LIMITATION (see KNOWN_LIMITATIONS.md #4): dedup is in-memory, so
-    // idempotency does not survive restarts or span multiple instances.
-    // Needs a persisted markProcessed(id) seam.
-    if (this.seenWebhooks.has(event.id)) return false
-    this.seenWebhooks.add(event.id)
+    // Claim the event id durably (Redis SET NX in production). A false claim
+    // means it was already processed — skip.
+    const fresh = await this.webhooks.markProcessed(event.id)
+    if (!fresh) return false
 
-    const record = await this.store.get(event.billableId)
-    if (record) {
-      if (event.type === 'subscription.canceled') {
-        record.status = 'canceled'
-        record.canceledAt = Date.now()
-      } else if (event.type === 'payment.failed') {
-        record.status = 'past_due'
-      } else if (event.type === 'payment.succeeded') {
-        record.status = 'active'
-        record.cancelAtPeriodEnd = false
+    try {
+      const record = await this.store.get(event.billableId)
+      if (record) {
+        if (event.type === 'subscription.canceled') {
+          record.status = 'canceled'
+          record.canceledAt = Date.now()
+        } else if (event.type === 'payment.failed') {
+          record.status = 'past_due'
+        } else if (event.type === 'payment.succeeded') {
+          record.status = 'active'
+          record.cancelAtPeriodEnd = false
+        }
+        await this.store.save(record)
       }
-      await this.store.save(record)
+    } catch (error) {
+      // Persisting the state change failed — release the claim so the
+      // gateway's retry can reprocess instead of being silently deduped.
+      await this.webhooks.release(event.id)
+      throw error
     }
+
     await this.hooks?.emit('billing:webhook', { event })
     return true
   }

@@ -117,11 +117,22 @@ subscriptionsPlugin({
 ```
 
 `RedisUsageStore` does check-and-increment in a single `EVAL` (Lua) round trip,
-so concurrent `consume` calls can never overshoot a quota.
+so concurrent `consume` calls can never overshoot a quota. Pair it with
+`RedisWebhookStore` for webhook idempotency that survives restarts and spans
+instances (`SET NX`):
+
+```ts
+import { RedisUsageStore, RedisWebhookStore } from '@machize/subscriptions'
+
+subscriptionsPlugin({
+  plans,
+  usage: new RedisUsageStore(redis),
+  webhooks: new RedisWebhookStore(redis),
+})
+```
 
 ::: warning Pre-1.0 note
-Local subscription state is the read model. Two billing behaviors remain
-deferred until their backends land: trial→paid conversion through the gateway,
-and durable (multi-instance) webhook idempotency — see KNOWN_LIMITATIONS in the
-repository.
+Local subscription state is the read model. One billing behavior remains
+deferred until its backend lands: trial→paid conversion through the gateway —
+see KNOWN_LIMITATIONS in the repository.
 :::

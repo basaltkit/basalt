@@ -37,6 +37,30 @@ export class MemorySubscriptionStore implements SubscriptionStore {
   }
 }
 
+/**
+ * Deduplicates webhook processing across restarts and instances. `markProcessed`
+ * claims an event id (true = new, process it; false = already seen, skip);
+ * `release` frees the claim so a failed apply can be retried by the gateway.
+ */
+export interface WebhookStore {
+  markProcessed(id: string): Promise<boolean>
+  release(id: string): Promise<void>
+}
+
+export class MemoryWebhookStore implements WebhookStore {
+  private readonly seen = new Set<string>()
+
+  async markProcessed(id: string): Promise<boolean> {
+    if (this.seen.has(id)) return false
+    this.seen.add(id)
+    return true
+  }
+
+  async release(id: string): Promise<void> {
+    this.seen.delete(id)
+  }
+}
+
 export interface UsageConsumeResult {
   /** Whether the increment was applied (false when it would exceed the limit). */
   applied: boolean
