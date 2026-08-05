@@ -1,11 +1,10 @@
 # Known Limitations
 
-Deferred items surfaced by the code review of the initial scaffold. None of
-them bite with the in-memory stores that ship today; each becomes relevant
-when a real backend (Redis, a payment gateway, a SQL `UsageStore`) is wired
-in. They are tracked here so the fix lands together with the backend that
-needs it, and referenced from the code with
-`// KNOWN LIMITATION (see KNOWN_LIMITATIONS.md #N)`.
+Items surfaced by the code review of the initial scaffold. All three have since
+been **resolved in 0.1.x** — this file is kept as the record of what they were
+and how they were fixed. Each concerned behavior that only bites with a real
+backend (Redis, a payment gateway); the fixes landed together with those
+drivers.
 
 ---
 
@@ -22,24 +21,15 @@ through it (unlimited features are just tracked).
 
 ---
 
-## #3 — Trial → paid conversion never reaches the gateway
+## #3 — Trial → paid conversion never reaches the gateway — RESOLVED in 0.1.x
 
-**Where:** `packages/subscriptions/src/subscriptions.ts` — `Subscriptions.subscribe`
-and `Subscriptions.expireTrials`
-
-**What:** `subscribe` skips the gateway when a plan has a trial; `expireTrials`
-only flips the status to `past_due`. Nothing creates the gateway subscription
-at trial end, so a trialing customer who added a card is never charged, and
-one who did not never converts.
-
-**Why deferred:** there is no real gateway driver yet (only `FakeBillingGateway`),
-so the conversion has nothing to talk to.
-
-**Fix plan:** model trials the way real gateways do — create the gateway
-subscription up front with a trial period (Stripe `trial_period_days`,
-Paddle/Lemon equivalents) and let the gateway drive the trial-end charge via
-its webhook, which `handleWebhook` already translates to local state. This
-lands with the Stripe driver (roadmap Phase 5 follow-up).
+**Resolution:** paid plans now create the gateway subscription up front, with a
+trial period when the plan has one (`CreateSubscriptionInput.trialDays` →
+Stripe `trial_period_days`). The gateway runs the trial and charges at its end,
+sending `invoice.paid` (→ active) or `invoice.payment_failed` (→ past_due),
+which `handleWebhook` already translates to local state. `expireTrials` now only
+settles **local** trials (those without a `gatewayRef`); gateway-backed trials
+are settled by the webhook, not the scheduler.
 
 ---
 

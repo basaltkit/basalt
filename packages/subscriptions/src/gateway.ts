@@ -21,6 +21,11 @@ export interface CreateSubscriptionInput {
   plan: string
   period: BillingPeriod
   price: number
+  /**
+   * Trial length in days. When set, the gateway runs the trial and charges at
+   * its end, driving the trial→active/past_due transition via webhook.
+   */
+  trialDays?: number
 }
 
 /**
