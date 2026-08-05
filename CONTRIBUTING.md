@@ -22,6 +22,21 @@ pnpm --filter @machize/core test
 pnpm --filter @machize/core build
 ```
 
+### Integration tests
+
+Database integration tests run against **real PostgreSQL in-process** via
+[pglite](https://github.com/electric-sql/pglite) — no server needed, so
+`pnpm test` covers them everywhere, including CI. They exercise the Postgres
+behaviors tenancy relies on: `CREATE SCHEMA`, per-tenant `search_path` isolation
+and tenant-scoped filtering.
+
+To run a real app (or test against a server Postgres, Redis and MinIO) bring up
+the local stack:
+
+```bash
+docker compose up -d
+```
+
 ## Workflow
 
 1. **Branch** from `main`.

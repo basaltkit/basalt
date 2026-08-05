@@ -30,6 +30,7 @@
     }
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
     "@machize/tsconfig": "workspace:*",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
