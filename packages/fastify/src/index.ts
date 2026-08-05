@@ -4,5 +4,6 @@ export {
   registerRoutes,
   FASTIFY,
   type FastifyPluginOptions,
+  type RequestEnricher,
 } from './adapter.js'
 export { HttpError, RequestValidationError, type ValidationIssue } from './errors.js'
