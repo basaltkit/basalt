@@ -1,6 +1,6 @@
 {
   "name": "@machize/subscriptions",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Billing for Machize, Cashier/Soulbscription-style: declarative plans, subscriptions with trials, feature flags, usage limits, gateway drivers and idempotent webhooks.",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",

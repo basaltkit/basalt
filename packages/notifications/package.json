@@ -1,6 +1,6 @@
 {
   "name": "@machize/notifications",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Multi-channel notifications for Machize: declarative definitions, channel drivers (in-app, mail, custom), per-recipient preferences and queue integration.",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",

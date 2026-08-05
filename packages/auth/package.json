@@ -1,6 +1,6 @@
 {
   "name": "@machize/auth",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Authentication for Machize: password hashing, JWT with refresh rotation and reuse detection, sessions, ready-made /auth routes and route guards.",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",
