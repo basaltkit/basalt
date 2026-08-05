@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createProject, TargetNotEmptyError } from './index.js'
 
-const USAGE = `Usage: npx create-saas-app <name> [options]
+const USAGE = `Usage: npx create-machize-app <name> [options]
 
 Options:
   --dir=<path>    Target directory (default: ./<name>)

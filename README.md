@@ -15,7 +15,7 @@ Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 ## Quick start
 
 ```bash
-npx create-saas-app my-saas   # tenancy + auth by default; --billing to add plans
+npx create-machize-app my-saas   # tenancy + auth by default; --billing to add plans
 cd my-saas && pnpm install && pnpm dev
 ```
 
@@ -54,7 +54,7 @@ cd my-saas && pnpm install && pnpm dev
 
 | Package | Purpose |
 |---|---|
-| `create-saas-app` | Project scaffolder |
+| `create-machize-app` | Project scaffolder |
 | `@machize/testing` | createTestApp, mail/queue fakes, time travel |
 | `@machize/sdk` | Type-safe client inferred from Zod endpoints |
 | `@machize/generator` | `mach make` code scaffolding |

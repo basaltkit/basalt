@@ -42,7 +42,7 @@ works on its own; together they form the framework. Versions move in lockstep.
 
 | Package | Purpose |
 |---|---|
-| `create-saas-app` | Project scaffolder |
+| `create-machize-app` | Project scaffolder |
 | `@machize/testing` | `createTestApp`, mail/queue fakes, time travel |
 | `@machize/sdk` | Type-safe client inferred from Zod endpoint definitions |
 | `@machize/generator` | `mach make` code scaffolding |
