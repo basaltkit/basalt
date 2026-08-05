@@ -9,3 +9,5 @@ generated/
 !.env.example
 .DS_Store
 coverage/
+
+.demo-build/
