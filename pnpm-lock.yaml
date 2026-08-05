@@ -61,6 +61,34 @@ importers:
         specifier: ^3.1.0
         version: 3.2.7(@types/node@22.20.1)(tsx@4.23.5)
 
+  packages/auth:
+    dependencies:
+      '@machize/core':
+        specifier: workspace:*
+        version: link:../core
+      '@machize/fastify':
+        specifier: workspace:*
+        version: link:../fastify
+    devDependencies:
+      '@machize/tsconfig':
+        specifier: workspace:*
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.5)
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+
   packages/cache:
     dependencies:
       '@machize/core':
@@ -272,6 +300,34 @@ importers:
       '@types/nodemailer':
         specifier: ^6.4.17
         version: 6.4.24
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.5)
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+
+  packages/permissions:
+    dependencies:
+      '@machize/core':
+        specifier: workspace:*
+        version: link:../core
+      '@machize/fastify':
+        specifier: workspace:*
+        version: link:../fastify
+    devDependencies:
+      '@machize/tsconfig':
+        specifier: workspace:*
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
       tsup:
         specifier: ^8.4.0
         version: 8.5.1(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)

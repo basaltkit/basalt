@@ -39,6 +39,18 @@ export type RequestEnricher = (info: {
   container: Container
 }) => void | Promise<void>
 
+/**
+ * Runs after enrichers, with access to the route definition (and its `meta`).
+ * Plugins register guards in the 'http:guards' metadata bucket — auth uses
+ * `meta.auth`, permissions uses `meta.can`. A guard rejects by throwing.
+ */
+export type RouteGuard = (info: {
+  route: MachizeRoute
+  request: FastifyRequest
+  context: RequestContext
+  container: Container
+}) => void | Promise<void>
+
 export interface FastifyPluginOptions {
   routes?: MachizeRoute[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
@@ -57,10 +69,11 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
     },
     boot({ container }) {
       const routes = options.routes ?? []
-      const enrichers = ensureMetadata(container).get<RequestEnricher>('http:enrichers')
-      registerRoutes(container.get(FASTIFY), routes, container, enrichers)
-      // Expose routes to tooling (CLI `mach routes`, docs generator, SDK).
       const metadata = ensureMetadata(container)
+      const enrichers = metadata.get<RequestEnricher>('http:enrichers')
+      const guards = metadata.get<RouteGuard>('http:guards')
+      registerRoutes(container.get(FASTIFY), routes, container, enrichers, guards)
+      // Expose routes to tooling (CLI `mach routes`, docs generator, SDK).
       for (const definition of routes) {
         metadata.add('http:routes', {
           method: definition.method,
@@ -81,12 +94,13 @@ export function registerRoutes(
   routes: MachizeRoute[],
   container?: Container,
   enrichers: RequestEnricher[] = [],
+  guards: RouteGuard[] = [],
 ): void {
   for (const definition of routes) {
     instance.route({
       method: definition.method,
       url: definition.url,
-      handler: wrapHandler(definition, container, enrichers),
+      handler: wrapHandler(definition, container, enrichers, guards),
     })
   }
 }
@@ -95,6 +109,7 @@ function wrapHandler(
   definition: MachizeRoute,
   container?: Container,
   enrichers: RequestEnricher[] = [],
+  guards: RouteGuard[] = [],
 ) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const requestId = headerValue(request, 'x-request-id') ?? randomUUID()
@@ -109,6 +124,9 @@ function wrapHandler(
       if (container) {
         for (const enrich of enrichers) {
           await enrich({ request, context, container })
+        }
+        for (const guard of guards) {
+          await guard({ route: definition, request, context, container })
         }
       }
       const args = {

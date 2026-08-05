@@ -5,5 +5,6 @@ export {
   FASTIFY,
   type FastifyPluginOptions,
   type RequestEnricher,
+  type RouteGuard,
 } from './adapter.js'
 export { HttpError, RequestValidationError, type ValidationIssue } from './errors.js'
