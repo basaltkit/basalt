@@ -242,7 +242,7 @@ export function readme(options: ProjectOptions): string {
   ]
   return `# ${options.name}
 
-A SaaS app scaffolded with [Machize](https://github.com/machize/machize).
+A SaaS app scaffolded with [Machize](https://github.com/Zebedeu/machize).
 
 Included: ${features.join(' · ')}.
 
