@@ -1,0 +1,29 @@
+{
+  "name": "playground",
+  "private": true,
+  "description": "App de referência do Machize — integra core, config, env, logger, events e fastify. Serve de E2E vivo da Fase 1.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/config": "workspace:*",
+    "@machize/core": "workspace:*",
+    "@machize/env": "workspace:*",
+    "@machize/events": "workspace:*",
+    "@machize/fastify": "workspace:*",
+    "@machize/logger": "workspace:*",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}
