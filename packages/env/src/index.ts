@@ -40,3 +40,5 @@ export function defineEnv<TShape extends z.ZodRawShape>(
 
   return Object.freeze(result.data)
 }
+
+export { secret, type SecretOptions } from './secret.js'

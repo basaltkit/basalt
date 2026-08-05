@@ -31,3 +31,4 @@ export {
 } from './auth.js'
 export { authPlugin, AUTH, type AuthPluginOptions } from './plugin.js'
 export { authRoutes } from './routes.js'
+export { LoginThrottle, AccountLockedError, type LoginThrottleOptions } from './throttle.js'
