@@ -115,3 +115,36 @@ same pool:
 ```ts
 prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }) })
 ```
+
+## Migrations per tenant
+
+Schema- and database-per-tenant need migrations run for each tenant.
+`migrateTenants` orchestrates it — bounded concurrency, provisioning the schema
+first (schema mode), and a per-tenant report where one failure never aborts the
+rest. Wire it as a `mach tenant:migrate` command:
+
+```ts
+import { tenantMigrateCommand, provisionTenantSchema } from '@machize/prisma'
+import { commandsPlugin } from '@machize/cli'
+
+commandsPlugin([
+  tenantMigrateCommand({
+    tenants: () => tenants.list().then((all) => all.map((t) => t.id)),
+    target: {
+      mode: 'schema',
+      url: env.DATABASE_URL,
+      provision: db, // a client with $executeRawUnsafe — CREATE SCHEMA IF NOT EXISTS
+    },
+  }),
+])
+```
+
+```bash
+mach tenant:migrate
+#  ok   acme (tenant_acme)
+#  FAIL globex (tenant_globex) — <error>
+#  Done: 1 migrated, 1 failed.
+```
+
+The default migrator shells out to `prisma migrate deploy` with each tenant's
+scoped connection URL; pass `migrate` to override it.

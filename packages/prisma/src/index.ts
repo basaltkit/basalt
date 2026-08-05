@@ -23,6 +23,19 @@ export {
   type TenantSchemaOptions,
   type SchemaProvisioner,
 } from './schema.js'
+export {
+  migrateTenants,
+  prismaMigrator,
+  type MigrateTarget,
+  type MigrateFn,
+  type MigrateTenantsOptions,
+  type TenantMigrationResult,
+  type PrismaMigratorOptions,
+} from './migrate.js'
+export {
+  tenantMigrateCommand,
+  type TenantMigrateCommandConfig,
+} from './migrate-command.js'
 
 declare module '@machize/core' {
   interface RequestContext {
