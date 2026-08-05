@@ -19,10 +19,12 @@ Then open **http://localhost:5174**. You get a sidebar dashboard with:
   Add a project (validation runs via the resource's schema) and it appears in
   the table. Toggle light/dark.
 
-## Note on `@machize/dashboard`
+## Browser-safe by design
 
-The headless `@machize/dashboard` package (`computeBillingMetrics`,
-`defineDashboard`) is server-safe but depends on `@machize/subscriptions →
-@machize/fastify` and `node:crypto`, so it isn't meant to be bundled into the
-browser. In a real admin you compute those numbers on the server and fetch them
-from your API. This demo mirrors the shapes inline to stay browser-only.
+This demo uses `@machize/dashboard` (`computeBillingMetrics`, `defineDashboard`)
+directly in the browser — the MRR/ARR you see are computed live by the real
+package, not hardcoded. `@machize/dashboard` imports `@machize/subscriptions`
+type-only (erased at build), so the subscriptions/Fastify/Node runtime never
+enters the bundle. `@machize/admin` and `@machize/admin-shadcn` are likewise
+free of `@machize/core` (no `node:async_hooks`), so the whole UI stack bundles
+cleanly for the browser.

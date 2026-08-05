@@ -11,10 +11,14 @@ import {
   DataTable,
   ResourceForm,
 } from '@machize/admin-shadcn'
-// Note: @machize/dashboard (computeBillingMetrics, defineDashboard) is
-// server-safe but pulls @machize/subscriptions -> @machize/fastify + node:crypto,
-// so it isn't meant for the browser bundle. In a real admin you fetch these
-// numbers from your API. Here we mirror them inline to keep the demo browser-only.
+import {
+  computeBillingMetrics,
+  defineDashboard,
+  metricsSection,
+  resourceSection,
+} from '@machize/dashboard'
+// Types only (erased) — the subscriptions runtime never enters the browser bundle.
+import type { PlanDefinition, SubscriptionRecord } from '@machize/subscriptions'
 
 // --- the resource: one Zod schema drives table + form + validation ---------
 
@@ -55,31 +59,28 @@ const seedProjects: Project[] = [
   { id: '3', name: 'Initech Portal', tenant: 'initech', status: 'active', seats: 40, billable: true },
 ]
 
-// --- the dashboard model: sidebar sections (mirrors defineDashboard.nav) -----
+// --- the dashboard model: sidebar sections, via @machize/dashboard -----------
 
-const dashboard = {
+const dashboard = defineDashboard({
   title: 'Machize Admin',
-  sections: [
-    { key: 'overview', label: 'Overview' },
-    { key: 'projects', label: 'Projects' },
-  ],
-  nav() {
-    return this.sections
-  },
-  section(key: string) {
-    return this.sections.find((s) => s.key === key)
-  },
-}
+  sections: [metricsSection({ label: 'Overview' }), resourceSection(projects, { key: 'projects' })],
+})
 
-// --- billing metrics (mirrors @machize/dashboard's computeBillingMetrics) -----
+// --- billing metrics computed by @machize/dashboard (now browser-safe) --------
 
-const metrics = {
-  mrr: 186, // scale monthly 99 + pro yearly 290/12 + pro monthly 29 ≈ 186
-  arr: 2232,
-  active: 4,
-  trialing: 1,
-  byPlan: { scale: 1, pro: 3, free: 1 } as Record<string, number>,
+const plans: Record<string, PlanDefinition> = {
+  free: { price: 0, features: {} },
+  pro: { price: { monthly: 29, yearly: 290 }, features: {} },
+  scale: { price: { monthly: 99, yearly: 990 }, features: {} },
 }
+const subs: SubscriptionRecord[] = [
+  { billableId: 'acme', plan: 'scale', period: 'monthly', status: 'active' },
+  { billableId: 'globex', plan: 'pro', period: 'yearly', status: 'active' },
+  { billableId: 'initech', plan: 'pro', period: 'monthly', status: 'active' },
+  { billableId: 'umbrella', plan: 'pro', period: 'monthly', status: 'trialing' },
+  { billableId: 'soylent', plan: 'free', period: 'monthly', status: 'active' },
+]
+const metrics = computeBillingMetrics(subs, plans)
 
 export function App() {
   const [active, setActive] = useState('overview')

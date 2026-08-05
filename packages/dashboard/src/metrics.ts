@@ -1,4 +1,14 @@
-import { planPrice, type PlanDefinition, type SubscriptionRecord } from '@machize/subscriptions'
+// Types only — erased at build time. This keeps @machize/dashboard free of a
+// RUNTIME dependency on @machize/subscriptions (which pulls @machize/fastify
+// and @machize/core's AsyncLocalStorage), so the metrics functions are
+// browser-safe. planPrice is inlined below for the same reason.
+import type { BillingPeriod, PlanDefinition, SubscriptionRecord } from '@machize/subscriptions'
+
+/** Numeric monthly/yearly price for a plan, or 'custom'. Mirrors @machize/subscriptions' planPrice. */
+function planPrice(plan: PlanDefinition, period: BillingPeriod): number | 'custom' {
+  if (plan.price === 'custom') return 'custom'
+  return typeof plan.price === 'number' ? plan.price : plan.price[period]
+}
 
 export interface BillingMetrics {
   /** Monthly recurring revenue from active subscriptions (yearly prices ÷ 12). */

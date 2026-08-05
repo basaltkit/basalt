@@ -26,6 +26,12 @@ importers:
       '@machize/admin-shadcn':
         specifier: workspace:*
         version: link:../../packages/admin-shadcn
+      '@machize/dashboard':
+        specifier: workspace:*
+        version: link:../../packages/dashboard
+      '@machize/subscriptions':
+        specifier: workspace:*
+        version: link:../../packages/subscriptions
       react:
         specifier: ^18.3.1
         version: 18.3.1
