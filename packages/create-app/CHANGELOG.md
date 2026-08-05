@@ -1,4 +1,4 @@
-# create-machize-app
+# create-mach
 
 ## 0.1.0
 
@@ -21,7 +21,7 @@
     (plans, trials, feature limits, gateway drivers, idempotent webhooks),
     audit, activity, notifications.
   - **Developer experience**: testing (createTestApp, mail/queue fakes, time
-    travel), create-machize-app, sdk (typed client from Zod endpoints),
+    travel), create-mach, sdk (typed client from Zod endpoints),
     generator (mach make).
   - **Admin/product**: admin and dashboard (headless engines), admin-react
     (React binding).
