@@ -43,21 +43,12 @@ lands with the Stripe driver (roadmap Phase 5 follow-up).
 
 ---
 
-## #4 — Webhook idempotency is per-process
+## #4 — Webhook idempotency is per-process — RESOLVED in 0.1.x
 
-**Where:** `packages/subscriptions/src/subscriptions.ts` — `Subscriptions.handleWebhook`
-(the `seenWebhooks` set)
-
-**What:** processed webhook ids are deduplicated in an in-memory `Set`. Across
-process restarts or with more than one instance, the dedup is lost and an
-event can be reprocessed — despite the method being named idempotent. Swapping
-the `SubscriptionStore` for a database does not help, because there is no seam
-to persist the seen ids.
-
-**Why deferred:** single-process/in-memory is fine for the current scaffold;
-the durable guarantee only matters in a real multi-instance deployment.
-
-**Fix plan:** persist processed event ids. Add a `WebhookStore` (or extend
-`SubscriptionStore`) with `markProcessed(id): boolean` returning whether the id
-was new, backed by Redis `SET NX` or a unique DB column. Consume it at the top
-of `handleWebhook`. Lands with the Redis/DB stores.
+**Resolution:** a `WebhookStore` seam now dedupes processing —
+`markProcessed(id)` claims an event id (true = new) and `release(id)` frees it.
+`handleWebhook` claims the id, applies the change, and releases the claim if
+persistence throws so the gateway's retry can reprocess (rather than being
+silently deduped). `RedisWebhookStore` implements it with `SET key value NX EX`,
+so idempotency holds across restarts and multiple instances; `MemoryWebhookStore`
+is the default for single-process/dev.
