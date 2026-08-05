@@ -71,12 +71,18 @@ export function billingWebhookRoute(gateway: BillingGateway): MachizeRoute {
     url: '/billing/webhook',
     body: z.unknown(),
     async handler({ request, reply }) {
-      const signature = request.headers['x-billing-signature']
+      // Real gateways (Stripe) verify the signature against the UNTOUCHED raw
+      // body — re-serializing a parsed object changes bytes and breaks the
+      // HMAC. Configure a raw-body parser for this route so `request.body`
+      // arrives as a string; we fall back to stringify for the fake/dev path.
+      const rawBody = typeof request.body === 'string' ? request.body : JSON.stringify(request.body)
+      const header = request.headers['stripe-signature'] ?? request.headers['x-billing-signature']
       const event = gateway.verifyWebhook(
-        JSON.stringify(request.body),
-        Array.isArray(signature) ? signature[0] : signature,
+        rawBody,
+        Array.isArray(header) ? header[0] : header,
       )
       const subscriptions = (ctx().container as Container).get(SUBSCRIPTIONS)
+      if (!event) return reply.code(200).send({ received: true, ignored: true })
       const applied = await subscriptions.handleWebhook(event)
       return reply.code(200).send({ received: true, duplicate: !applied })
     },

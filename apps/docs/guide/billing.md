@@ -75,9 +75,35 @@ import { billingWebhookRoute } from '@machize/subscriptions'
 fastifyPlugin({ routes: [...appRoutes, billingWebhookRoute(gateway)] })
 ```
 
+## Stripe
+
+The Stripe driver targets the Stripe REST API directly (no `stripe` SDK
+dependency) and verifies webhook signatures with Node's crypto:
+
+```ts
+import { StripeBillingGateway } from '@machize/subscriptions'
+
+const gateway = new StripeBillingGateway({
+  secretKey: process.env.STRIPE_SECRET,
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  priceId: (plan, period) => PRICE_IDS[plan][period], // your Stripe Price IDs
+  customerId: (tenantId) => lookupStripeCustomer(tenantId),
+})
+```
+
+`createSubscription` stamps `metadata.billableId` on the Stripe subscription, so
+subscription webhooks carry the tenant back to you. Unmapped Stripe event types
+(Stripe emits many) are verified and safely ignored.
+
+::: warning Raw body required
+Stripe verifies the signature against the **untouched** request bytes. Configure
+a raw-body parser for the webhook route so the handler receives the original
+string — re-serializing a parsed object breaks the HMAC.
+:::
+
 ::: warning Pre-1.0 note
 Local state is the read model. A few billing behaviors (atomic metering across a
 real usage store, trial→paid conversion through the gateway, durable webhook
-idempotency) are deferred until the real gateway/Redis drivers land — see
+idempotency) are deferred until the real Redis/usage drivers land — see
 KNOWN_LIMITATIONS in the repository.
 :::

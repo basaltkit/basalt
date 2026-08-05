@@ -27,6 +27,11 @@ export {
   type CreateSubscriptionInput,
 } from './gateway.js'
 export {
+  StripeBillingGateway,
+  StripeRequestError,
+  type StripeGatewayOptions,
+} from './drivers/stripe.js'
+export {
   Subscriptions,
   NotSubscribedError,
   FeatureUnavailableError,
