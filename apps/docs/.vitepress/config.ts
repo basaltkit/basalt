@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitepress'
 
-const github = 'https://github.com/machize/machize'
+const github = 'https://github.com/Zebedeu/machize'
 
 export default defineConfig({
   title: 'Machize',

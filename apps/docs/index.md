@@ -11,7 +11,7 @@ hero:
       link: /guide/getting-started
     - theme: alt
       text: View on GitHub
-      link: https://github.com/machize/machize
+      link: https://github.com/Zebedeu/machize
 
 features:
   - title: Multi-tenancy, first class
