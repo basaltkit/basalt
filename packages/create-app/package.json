@@ -1,0 +1,32 @@
+{
+  "name": "create-saas-app",
+  "version": "0.0.0",
+  "description": "Scaffold a production-shaped Machize SaaS app: npx create-saas-app my-saas [--no-tenancy] [--no-auth] [--billing]",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "create-saas-app": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts src/cli.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
