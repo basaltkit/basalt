@@ -572,6 +572,9 @@ importers:
         specifier: '>=5.0.0'
         version: 7.9.1(typescript@5.9.3)
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.4
+        version: 0.5.4
       '@machize/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
@@ -1081,6 +1084,9 @@ packages:
         optional: true
       search-insights:
         optional: true
+
+  '@electric-sql/pglite@0.5.4':
+    resolution: {integrity: sha512-yYZUyyXrHU7tPlCjwZQJ6hIG9DscdCCn7Uk0mYKwC1FeHX286AbcmFveMiRBEak8e9iPupjsoVImN3yJZVed2g==}
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -3848,6 +3854,8 @@ snapshots:
       search-insights: 2.17.3
     transitivePeerDependencies:
       - '@algolia/client-search'
+
+  '@electric-sql/pglite@0.5.4': {}
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true
