@@ -23,7 +23,8 @@ export class Container {
   private readonly bindings = new Map<symbol, Binding>()
   private readonly singletons = new Map<symbol, unknown>()
   private readonly scopedInstances = new Map<symbol, unknown>()
-  private readonly resolving: string[] = []
+  /** Resolution stack for cycle detection — keyed by token symbol, not description. */
+  private readonly resolving: { key: symbol; description: string }[] = []
 
   constructor(private readonly parent?: Container) {}
 
@@ -52,8 +53,11 @@ export class Container {
     const binding = this.findBinding(token.key)
     if (!binding) throw new UnknownTokenError(token.description)
 
-    if (this.resolving.includes(token.description)) {
-      throw new CircularDependencyError([...this.resolving, token.description])
+    if (this.resolving.some((entry) => entry.key === token.key)) {
+      throw new CircularDependencyError([
+        ...this.resolving.map((entry) => entry.description),
+        token.description,
+      ])
     }
 
     switch (binding.lifetime) {
@@ -79,7 +83,7 @@ export class Container {
   }
 
   private build<T>(token: Token<T>, binding: Binding): unknown {
-    this.resolving.push(token.description)
+    this.resolving.push({ key: token.key, description: token.description })
     try {
       return binding.factory(this)
     } finally {

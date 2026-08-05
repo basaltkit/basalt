@@ -34,10 +34,31 @@ describe('applyTenantScope', () => {
     ).toEqual({ data: [{ name: 'a', tenantId: 't1' }, { name: 'b', tenantId: 't1' }] })
   })
 
-  it('leaves unique-where operations untouched (documented v0 limitation)', () => {
-    const args = { where: { id: 'p1' } }
-    expect(applyTenantScope('findUnique', args, 't1', 'tenantId')).toEqual(args)
-    expect(applyTenantScope('delete', args, 't1', 'tenantId')).toEqual(args)
+  it('scopes unique-where operations via the tenant filter (Prisma 5+ extra fields)', () => {
+    expect(applyTenantScope('findUnique', { where: { id: 'p1' } }, 't1', 'tenantId')).toEqual({
+      where: { id: 'p1', tenantId: 't1' },
+    })
+    expect(
+      applyTenantScope('update', { where: { id: 'p1' }, data: { name: 'x' } }, 't1', 'tenantId'),
+    ).toEqual({ where: { id: 'p1', tenantId: 't1' }, data: { name: 'x' } })
+    expect(applyTenantScope('delete', { where: { id: 'p1' } }, 't1', 'tenantId')).toEqual({
+      where: { id: 'p1', tenantId: 't1' },
+    })
+  })
+
+  it('scopes upsert: where is filtered and the created row is stamped, update untouched', () => {
+    expect(
+      applyTenantScope(
+        'upsert',
+        { where: { id: 'p1' }, create: { name: 'x' }, update: { name: 'y' } },
+        't1',
+        'tenantId',
+      ),
+    ).toEqual({
+      where: { id: 'p1', tenantId: 't1' },
+      create: { name: 'x', tenantId: 't1' },
+      update: { name: 'y' },
+    })
   })
 })
 
