@@ -6,6 +6,7 @@ import {
   tryCtx,
 } from '@machize/core'
 import { TenantClientPool } from './pool.js'
+import { schemaUrl, tenantSchema } from './schema.js'
 
 export {
   tenancyExtension,
@@ -14,6 +15,14 @@ export {
   type TenancyExtensionOptions,
 } from './extension.js'
 export { TenantClientPool, type TenantClientPoolOptions } from './pool.js'
+export {
+  tenantSchema,
+  schemaUrl,
+  provisionTenantSchema,
+  InvalidTenantSchemaError,
+  type TenantSchemaOptions,
+  type SchemaProvisioner,
+} from './schema.js'
 
 declare module '@machize/core' {
   interface RequestContext {
@@ -50,6 +59,20 @@ export interface PrismaPluginOptions<TClient = unknown> {
   client?: TClient
   /** Database-per-tenant mode: factory creating the client for a tenant id. */
   forTenant?: (tenantId: string) => TClient | Promise<TClient>
+  /**
+   * Schema-per-tenant mode: one database, one PostgreSQL schema per tenant.
+   * Each tenant gets a client whose connection URL carries `?schema=<name>`,
+   * so Prisma sets the search_path at connect time (reliable, unlike
+   * per-request search_path switching on a shared pool).
+   */
+  schemaPerTenant?: {
+    /** Base connection URL (the `schema` param is set per tenant). */
+    url: string
+    /** Builds a client from a URL, e.g. `(url) => new PrismaClient({ datasourceUrl: url })`. */
+    createClient: (url: string) => TClient | Promise<TClient>
+    /** Schema name prefix. Default: 'tenant_'. */
+    prefix?: string
+  }
   /** Eviction callback for the per-tenant pool (e.g. client.$disconnect()). */
   destroy?: (client: TClient, tenantId: string) => void | Promise<void>
   /** Max simultaneously open per-tenant clients. Default: 10 */
@@ -60,9 +83,24 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
   return definePlugin({
     name: 'machize:prisma',
     register({ container, hooks }) {
-      const pool = options.forTenant
+      // Schema-per-tenant is sugar over the per-tenant pool: build a client
+      // whose URL carries the tenant's schema.
+      const schemaConfig = options.schemaPerTenant
+      const createTenantClient: ((tenantId: string) => TClient | Promise<TClient>) | undefined =
+        options.forTenant ??
+        (schemaConfig
+          ? (tenantId) =>
+              schemaConfig.createClient(
+                schemaUrl(
+                  schemaConfig.url,
+                  tenantSchema(tenantId, schemaConfig.prefix ? { prefix: schemaConfig.prefix } : {}),
+                ),
+              )
+          : undefined)
+
+      const pool = createTenantClient
         ? new TenantClientPool<TClient>({
-            create: options.forTenant,
+            create: createTenantClient,
             ...(options.destroy ? { destroy: options.destroy } : {}),
             ...(options.max !== undefined ? { max: options.max } : {}),
           })

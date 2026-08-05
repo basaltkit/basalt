@@ -80,7 +80,38 @@ await tenancy.forEach(async (tenant) => {
 
 ## Isolation modes
 
-The default is **shared database** — a `tenantId` column filtered
-automatically by the [`@machize/prisma`](/reference/packages) extension. Migrating
-to schema-per-tenant or database-per-tenant is configuration, not a rewrite: your
-queries stay `ctx().db.user.findMany()` in all three modes.
+Your queries stay `ctx().db.user.findMany()` in all three modes — the mode is
+configuration, not a rewrite.
+
+**Shared database** (default) — a `tenantId` column, filtered automatically by
+the `@machize/prisma` extension:
+
+```ts
+const db = new PrismaClient().$extends(tenancyExtension())
+prismaPlugin({ client: db })
+```
+
+**Schema per tenant** — one database, one PostgreSQL schema per tenant. Each
+tenant gets a client whose connection URL carries `?schema=tenant_<id>`, so
+Prisma sets the search_path at connect time (reliable, unlike per-request
+search_path switching on a shared pool). Bounded by an LRU client pool:
+
+```ts
+prismaPlugin({
+  schemaPerTenant: {
+    url: env.DATABASE_URL,
+    createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+  },
+  max: 25,
+})
+```
+
+Provision a tenant's schema with `provisionTenantSchema(db, tenantSchema(id))`
+and run your migrations against that schema.
+
+**Database per tenant** — a separate database (and client) per tenant, via the
+same pool:
+
+```ts
+prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }) })
+```
