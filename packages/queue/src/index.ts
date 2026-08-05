@@ -23,13 +23,13 @@ export type { QueueDriver, AddJobOptions, JobExecutor } from './driver.js'
 export const QUEUE = createToken<QueueManager>('queue')
 
 export interface QueuePluginOptions {
-  /** Jobs conhecidos por este processo (produtor e/ou worker). */
+  /** Jobs known to this process (producer and/or worker). */
   jobs?: JobDefinition<never>[]
-  /** Conexão Redis → driver BullMQ. Sem conexão → driver sync (dev/teste). */
+  /** Redis connection → BullMQ driver. No connection → sync driver (dev/test). */
   connection?: BullmqDriverOptions['connection']
-  /** Driver customizado — sobrepõe `connection`. */
+  /** Custom driver — overrides `connection`. */
   driver?: QueueDriver
-  /** Filas para iniciar workers neste processo no boot. */
+  /** Queues to start workers for in this process at boot. */
   workers?: { queue: string; concurrency?: number }[]
 }
 

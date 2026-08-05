@@ -8,8 +8,8 @@ async function boot() {
   return { app, server: app.container.get(FASTIFY), audit: app.container.get(AUDIT) }
 }
 
-describe('playground E2E — Fase 1 integrada', () => {
-  it('fluxo completo: criar, listar, buscar, deletar — com auditoria via eventos', async () => {
+describe('playground E2E — Phase 1 integrated', () => {
+  it('full flow: create, list, fetch, delete — with audit via events', async () => {
     const { app, server, audit } = await boot()
 
     const created = await server.inject({
@@ -29,7 +29,7 @@ describe('playground E2E — Fase 1 integrada', () => {
     const deleted = await server.inject({ method: 'DELETE', url: `/projects/${project.id}` })
     expect(deleted.statusCode).toBe(204)
 
-    // o listener wildcard 'project.**' registrou os dois eventos de domínio
+    // the 'project.**' wildcard listener recorded both domain events
     expect(audit.entries.map((entry) => entry.event)).toEqual([
       'project.created',
       'project.deleted',
@@ -39,7 +39,7 @@ describe('playground E2E — Fase 1 integrada', () => {
     await app.shutdown()
   })
 
-  it('validação e erros padronizados atravessam a pilha inteira', async () => {
+  it('validation and standardized errors traverse the whole stack', async () => {
     const { app, server } = await boot()
 
     const invalid = await server.inject({ method: 'POST', url: '/projects', payload: { name: 'ab' } })
@@ -53,7 +53,7 @@ describe('playground E2E — Fase 1 integrada', () => {
     await app.shutdown()
   })
 
-  it('contexto por request: requestId no handler e no header de resposta', async () => {
+  it('per-request context: requestId in the handler and in the response header', async () => {
     const { app, server } = await boot()
     const res = await server.inject({
       method: 'GET',

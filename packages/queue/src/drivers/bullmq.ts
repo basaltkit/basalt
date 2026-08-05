@@ -2,7 +2,7 @@ import { Queue, Worker, type ConnectionOptions } from 'bullmq'
 import type { AddJobOptions, JobExecutor, QueueDriver } from '../driver.js'
 
 export interface BullmqDriverOptions {
-  /** URL Redis (redis://... ou rediss://...) ou opções de conexão do ioredis. */
+  /** Redis URL (redis://... or rediss://...) or ioredis connection options. */
   connection: string | ConnectionOptions
 }
 
@@ -69,7 +69,7 @@ function parseRedisUrl(url: string): ConnectionOptions {
     ...(parsed.password ? { password: parsed.password } : {}),
     ...(parsed.pathname && parsed.pathname !== '/' ? { db: Number(parsed.pathname.slice(1)) } : {}),
     ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
-    // exigido pelo BullMQ para workers
+    // required by BullMQ for workers
     maxRetriesPerRequest: null,
   }
 }

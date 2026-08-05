@@ -1,6 +1,6 @@
 import { MachizeError, type DurationInput } from '@machize/core'
 
-/** Schema estrutural compatível com Zod. */
+/** Structural schema compatible with Zod. */
 export interface JobSchema<T> {
   safeParse(input: unknown): { success: boolean; data?: T; error?: unknown }
 }
@@ -10,7 +10,7 @@ export class JobValidationError extends MachizeError {
     readonly job: string,
     readonly issues: unknown,
   ) {
-    super('JOB_INVALID', `Payload inválido para o job "${job}": ${JSON.stringify(issues)}`)
+    super('JOB_INVALID', `Invalid payload for job "${job}": ${JSON.stringify(issues)}`)
   }
 }
 
@@ -18,8 +18,8 @@ export class JobNotRegisteredError extends MachizeError {
   constructor(job: string) {
     super(
       'QUEUE_JOB_NOT_REGISTERED',
-      `Job "${job}" ainda não foi registrado num QueueManager. ` +
-        'Adicione-o em queuePlugin({ jobs: [...] }) ou chame manager.register(job).',
+      `Job "${job}" has not been registered in a QueueManager yet. ` +
+        'Add it to queuePlugin({ jobs: [...] }) or call manager.register(job).',
     )
   }
 }
@@ -41,9 +41,9 @@ export interface JobDefinition<T = unknown> {
   readonly attempts: number
   readonly backoff?: JobBackoff | undefined
   handle(payload: T): void | Promise<void>
-  /** Enfileira o job — disponível após o registro num QueueManager. */
+  /** Enqueues the job — available after registration in a QueueManager. */
   dispatch(payload: T, options?: DispatchOptions): Promise<void>
-  /** @internal usado pelo QueueManager ao registrar */
+  /** @internal used by the QueueManager when registering */
   __bind(dispatcher: JobDispatcher): void
 }
 
@@ -52,7 +52,7 @@ export interface JobDispatcher {
 }
 
 /**
- * Define um job declarativo:
+ * Defines a declarative job:
  *
  * export const SendWelcomeEmail = defineJob({
  *   name: 'email.welcome',
@@ -95,7 +95,7 @@ export function validatePayload<T>(job: JobDefinition<T>, payload: unknown): T {
   const result = job.schema.safeParse(payload)
   if (!result.success) {
     const issues =
-      (result.error as { issues?: unknown[] } | undefined)?.issues ?? result.error ?? 'desconhecido'
+      (result.error as { issues?: unknown[] } | undefined)?.issues ?? result.error ?? 'unknown'
     throw new JobValidationError(job.name, issues)
   }
   return result.data as T

@@ -1,6 +1,6 @@
 import { MachizeError } from './errors.js'
 
-/** Número em milissegundos ou string legível: '500ms', '30s', '5m', '2h', '7d'. */
+/** Number in milliseconds or a human-readable string: '500ms', '30s', '5m', '2h', '7d'. */
 export type DurationInput = number | string
 
 const UNITS: Record<string, number> = {
@@ -11,11 +11,11 @@ const UNITS: Record<string, number> = {
   d: 86_400_000,
 }
 
-/** Converte uma duração para milissegundos. */
+/** Converts a duration to milliseconds. */
 export function parseDuration(input: DurationInput): number {
   if (typeof input === 'number') {
     if (!Number.isFinite(input) || input < 0) {
-      throw new MachizeError('DURATION_INVALID', `Duração inválida: ${input}`)
+      throw new MachizeError('DURATION_INVALID', `Invalid duration: ${input}`)
     }
     return input
   }
@@ -23,7 +23,7 @@ export function parseDuration(input: DurationInput): number {
   if (!match) {
     throw new MachizeError(
       'DURATION_INVALID',
-      `Duração inválida: "${input}". Use um número em ms ou '500ms', '30s', '5m', '2h', '7d'.`,
+      `Invalid duration: "${input}". Use a number in ms or '500ms', '30s', '5m', '2h', '7d'.`,
     )
   }
   return Number(match[1]) * (UNITS[match[2] as string] as number)

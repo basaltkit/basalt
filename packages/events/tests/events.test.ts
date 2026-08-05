@@ -7,7 +7,7 @@ const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string()
 const AppBooted = defineEvent('app.booted')
 
 describe('EventBus', () => {
-  it('emite evento tipado com payload validado', async () => {
+  it('emits a typed event with a validated payload', async () => {
     const bus = new EventBus()
     const seen: string[] = []
     bus.on(OrderCreated, ({ orderId }) => void seen.push(orderId))
@@ -15,7 +15,7 @@ describe('EventBus', () => {
     expect(seen).toEqual(['o-1'])
   })
 
-  it('rejeita payload inválido com erro tipado antes de chamar listeners', async () => {
+  it('rejects an invalid payload with a typed error before calling listeners', async () => {
     const bus = new EventBus()
     let called = false
     bus.on(OrderCreated, () => void (called = true))
@@ -25,7 +25,7 @@ describe('EventBus', () => {
     expect(called).toBe(false)
   })
 
-  it('suporta eventos sem payload', async () => {
+  it('supports events without payload', async () => {
     const bus = new EventBus()
     let called = false
     bus.on(AppBooted, () => void (called = true))
@@ -33,7 +33,7 @@ describe('EventBus', () => {
     expect(called).toBe(true)
   })
 
-  it('wildcards: * casa um segmento, ** casa qualquer sufixo', async () => {
+  it('wildcards: * matches one segment, ** matches any suffix', async () => {
     const bus = new EventBus()
     const seen: string[] = []
     bus.on('order.*', (_p, meta) => void seen.push(`um:${meta.name}`))
@@ -53,7 +53,7 @@ describe('EventBus', () => {
     ])
   })
 
-  it('executa por prioridade e respeita once/unsubscribe', async () => {
+  it('runs by priority and honors once/unsubscribe', async () => {
     const bus = new EventBus()
     const order: string[] = []
     bus.on(AppBooted, () => void order.push('baixa'), { priority: -1 })
@@ -67,7 +67,7 @@ describe('EventBus', () => {
     expect(order).toEqual(['alta', 'once', 'baixa', 'alta', 'baixa'])
   })
 
-  it('todos os listeners rodam mesmo com falha; erros são agregados', async () => {
+  it('all listeners run even on failure; errors are aggregated', async () => {
     const bus = new EventBus()
     const seen: string[] = []
     bus.on(AppBooted, () => {
@@ -82,7 +82,7 @@ describe('EventBus', () => {
     expect(seen).toEqual(['sobrevivente'])
   })
 
-  it('eventsPlugin registra o bus no container', async () => {
+  it('eventsPlugin registers the bus in the container', async () => {
     const app = await createApp({ plugins: [eventsPlugin()] }).boot()
     const bus = app.container.get(EVENTS)
     let called = false

@@ -6,31 +6,31 @@ describe('ConfigRepository', () => {
   const repo = () =>
     new ConfigRepository({ mail: { from: 'oi@machize.dev', smtp: { port: 587 } } })
 
-  it('lê por dot-path', () => {
+  it('reads by dot-path', () => {
     expect(repo().get('mail.from')).toBe('oi@machize.dev')
     expect(repo().get('mail.smtp.port')).toBe(587)
   })
 
-  it('usa fallback quando ausente e lança sem fallback', () => {
+  it('uses the fallback when missing and throws without a fallback', () => {
     expect(repo().get('mail.replyTo', 'x@y.z')).toBe('x@y.z')
     expect(() => repo().get('mail.replyTo')).toThrowError(/mail\.replyTo/)
   })
 
-  it('has/set criam caminhos intermediários', () => {
+  it('has/set create intermediate paths', () => {
     const config = repo()
     expect(config.has('queue.driver')).toBe(false)
     config.set('queue.driver', 'bullmq')
     expect(config.get('queue.driver')).toBe('bullmq')
   })
 
-  it('merge faz deep merge sem apagar irmãos', () => {
+  it('merge performs a deep merge without erasing siblings', () => {
     const config = repo()
     config.merge({ mail: { smtp: { host: 'smtp.acme.com' } } })
     expect(config.get('mail.smtp.port')).toBe(587)
     expect(config.get('mail.smtp.host')).toBe('smtp.acme.com')
   })
 
-  it('configPlugin registra o repositório no container sem compartilhar o objeto original', async () => {
+  it('configPlugin registers the repository in the container without sharing the original object', async () => {
     const values = { app: { name: 'demo' } }
     const app = await createApp({ plugins: [configPlugin(values)] }).boot()
     const config = app.container.get(CONFIG)

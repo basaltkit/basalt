@@ -17,7 +17,7 @@ const app = await buildApp({
 
 const server = app.container.get(FASTIFY)
 await server.listen({ port: env.PORT, host: env.HOST })
-console.log(`playground pronto em http://${env.HOST}:${env.PORT}`)
+console.log(`playground ready at http://${env.HOST}:${env.PORT}`)
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {

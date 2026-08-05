@@ -14,11 +14,11 @@ export { MemoryCacheDriver } from './drivers/memory.js'
 export { RedisCacheDriver } from './drivers/redis.js'
 
 export interface CacheOptions {
-  /** Prefixo raiz de todas as chaves. Default: 'mach' */
+  /** Root prefix for all keys. Default: 'mach' */
   prefix?: string
   /**
-   * Segmento dinâmico do prefixo, resolvido a cada operação. O default lê
-   * `ctx().tenant.id` — isolamento por tenant automático. Passe `null` para desligar.
+   * Dynamic segment of the prefix, resolved on every operation. The default reads
+   * `ctx().tenant.id` — automatic per-tenant isolation. Pass `null` to disable.
    */
   scope?: (() => string | undefined) | null
 }
@@ -31,7 +31,7 @@ const defaultScope = (): string | undefined => {
 export class Cache {
   private readonly prefix: string
   private readonly scope: (() => string | undefined) | null
-  /** dedupe de factories em voo — stampede protection por processo */
+  /** dedupe of in-flight factories — per-process stampede protection */
   private readonly pending = new Map<string, Promise<unknown>>()
 
   constructor(
@@ -58,8 +58,8 @@ export class Cache {
   }
 
   /**
-   * Cache-aside em uma linha, com stampede protection: chamadas concorrentes
-   * para a mesma chave compartilham UMA execução da factory.
+   * One-line cache-aside, with stampede protection: concurrent calls
+   * for the same key share ONE execution of the factory.
    */
   async remember<T>(key: string, ttl: DurationInput, factory: () => Promise<T> | T): Promise<T> {
     return this.rememberWithTags(key, ttl, factory, [])
@@ -69,12 +69,12 @@ export class Cache {
     return this.driver.delete(this.key(key))
   }
 
-  /** Limpa apenas as chaves deste prefixo/escopo — nunca o Redis inteiro. */
+  /** Clears only the keys under this prefix/scope — never the entire Redis. */
   async flush(): Promise<void> {
     await this.driver.flushPrefix(this.root())
   }
 
-  /** Operações associadas a tags: `cache.tags('plans').flush()` invalida o grupo. */
+  /** Tag-scoped operations: `cache.tags('plans').flush()` invalidates the group. */
   tags(...tags: string[]) {
     const scopedTags = tags.map((tag) => `${this.root()}${tag}`)
     return {
@@ -134,7 +134,7 @@ export const CACHE = createToken<Cache>('cache')
 
 export interface CachePluginOptions extends CacheOptions {
   driver?: 'memory' | 'redis'
-  /** Obrigatório com driver 'redis'. */
+  /** Required with the 'redis' driver. */
   url?: string
 }
 

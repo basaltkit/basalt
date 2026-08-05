@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis'
 import type { CacheDriver } from '../driver.js'
 
-/** Namespace dos sets de tag no Redis, fora do espaço de chaves de valores. */
+/** Namespace for tag sets in Redis, outside the value key space. */
 const TAG_PREFIX = '__tags__:'
 
 export class RedisCacheDriver implements CacheDriver {

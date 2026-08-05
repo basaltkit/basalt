@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ctx, runWithContext, tryCtx } from '../src/index.js'
 
 describe('context (AsyncLocalStorage)', () => {
-  it('ctx() lança erro tipado fora de contexto', () => {
+  it('ctx() throws a typed error outside of a context', () => {
     expect(tryCtx()).toBeUndefined()
     try {
       ctx()
@@ -12,7 +12,7 @@ describe('context (AsyncLocalStorage)', () => {
     }
   })
 
-  it('propaga o contexto através de awaits e funções aninhadas', async () => {
+  it('propagates the context across awaits and nested functions', async () => {
     async function deepService(): Promise<string> {
       await Promise.resolve()
       return ctx().requestId as string
@@ -25,7 +25,7 @@ describe('context (AsyncLocalStorage)', () => {
     expect(result).toBe('req-1')
   })
 
-  it('contextos concorrentes não vazam entre si', async () => {
+  it('concurrent contexts do not leak into each other', async () => {
     const results = await Promise.all(
       ['a', 'b', 'c'].map((id) =>
         runWithContext({ requestId: id }, async () => {

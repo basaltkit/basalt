@@ -19,7 +19,7 @@ const routes = [
     query: z.object({ expand: z.coerce.boolean().default(false) }),
     async handler({ params, query }) {
       if (params.id === 'missing') {
-        throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Projeto não existe')
+        throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
       }
       return { id: params.id, expand: query.expand }
     },
@@ -51,7 +51,7 @@ async function bootServer() {
 }
 
 describe('@machize/fastify', () => {
-  it('valida body com Zod e responde 201 com o handler tipado', async () => {
+  it('validates body with Zod and responds 201 with the typed handler', async () => {
     const { app, server } = await bootServer()
     const res = await server.inject({ method: 'POST', url: '/projects', payload: { name: 'Machize' } })
     expect(res.statusCode).toBe(201)
@@ -59,7 +59,7 @@ describe('@machize/fastify', () => {
     await app.shutdown()
   })
 
-  it('body inválido responde 400 padronizado com issues', async () => {
+  it('invalid body responds with a standardized 400 with issues', async () => {
     const { app, server } = await bootServer()
     const res = await server.inject({ method: 'POST', url: '/projects', payload: { name: 'ab' } })
     expect(res.statusCode).toBe(400)
@@ -70,7 +70,7 @@ describe('@machize/fastify', () => {
     await app.shutdown()
   })
 
-  it('parseia params e query com coerção e defaults', async () => {
+  it('parses params and query with coercion and defaults', async () => {
     const { app, server } = await bootServer()
     const res = await server.inject({ method: 'GET', url: '/projects/p9?expand=true' })
     expect(res.json()).toEqual({ id: 'p9', expand: true })
@@ -79,7 +79,7 @@ describe('@machize/fastify', () => {
     await app.shutdown()
   })
 
-  it('HttpError vira resposta com status e código estável', async () => {
+  it('HttpError becomes a response with a stable status and code', async () => {
     const { app, server } = await bootServer()
     const res = await server.inject({ method: 'GET', url: '/projects/missing' })
     expect(res.statusCode).toBe(404)
@@ -87,7 +87,7 @@ describe('@machize/fastify', () => {
     await app.shutdown()
   })
 
-  it('cria RequestContext por request, propagado até serviços profundos', async () => {
+  it('creates a per-request RequestContext, propagated down to deep services', async () => {
     const { app, server } = await bootServer()
     const res = await server.inject({
       method: 'GET',
@@ -102,7 +102,7 @@ describe('@machize/fastify', () => {
     await app.shutdown()
   })
 
-  it('erro não intencional responde 500 sem vazar a mensagem interna', async () => {
+  it('unintentional error responds 500 without leaking the internal message', async () => {
     const { app, server } = await bootServer()
     const res = await server.inject({ method: 'GET', url: '/boom' })
     expect(res.statusCode).toBe(500)
@@ -111,7 +111,7 @@ describe('@machize/fastify', () => {
     await app.shutdown()
   })
 
-  it('cada request ganha um escopo DI próprio no contexto', async () => {
+  it('each request gets its own DI scope in the context', async () => {
     const SEQ = createToken<{ n: number }>('seq')
     const scoped = route({
       method: 'GET',
@@ -129,7 +129,7 @@ describe('@machize/fastify', () => {
     const first = await server.inject({ method: 'GET', url: '/seq' })
     const second = await server.inject({ method: 'GET', url: '/seq' })
     expect(first.json()).toEqual({ n: 1 })
-    expect(second.json()).toEqual({ n: 1 }) // escopo novo → instância nova
+    expect(second.json()).toEqual({ n: 1 }) // new scope → new instance
     await app.shutdown()
   })
 })

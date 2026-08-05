@@ -1,7 +1,7 @@
 {
   "name": "@machize/cache",
   "version": "0.0.0",
-  "description": "Camada de cache do Machize: drivers Redis e Memory, tags, TTL, stampede protection e isolamento por tenant automático.",
+  "description": "Machize cache layer: Redis and Memory drivers, tags, TTL, stampede protection and automatic per-tenant isolation.",
   "license": "MIT",
   "type": "module",
   "exports": {

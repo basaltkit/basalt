@@ -2,12 +2,12 @@ import { createToken, definePlugin, MachizeError } from '@machize/core'
 
 export class ConfigKeyError extends MachizeError {
   constructor(path: string) {
-    super('CONFIG_KEY_MISSING', `Chave de configuração ausente: "${path}" (sem fallback definido).`)
+    super('CONFIG_KEY_MISSING', `Missing configuration key: "${path}" (no fallback defined).`)
   }
 }
 
 /**
- * Pacotes tipam seus namespaces via module augmentation:
+ * Packages type their namespaces via module augmentation:
  *
  * declare module '@machize/config' {
  *   interface MachizeConfig {
@@ -24,7 +24,7 @@ const MISSING = Symbol('missing')
 export class ConfigRepository {
   constructor(private readonly values: Record<string, unknown> = {}) {}
 
-  /** Acesso por dot-path: `config.get('mail.from')`. Lança se ausente e sem fallback. */
+  /** Dot-path access: `config.get('mail.from')`. Throws if missing and no fallback. */
   get<T = unknown>(path: string, fallback?: T): T {
     const value = resolvePath(this.values, path)
     if (value !== MISSING) return value as T
@@ -49,7 +49,7 @@ export class ConfigRepository {
     target[segments.at(-1) as string] = value
   }
 
-  /** Mescla valores por cima dos atuais (deep merge de objetos planos). */
+  /** Merges values on top of the current ones (deep merge of plain objects). */
   merge(values: Record<string, unknown>): void {
     deepMerge(this.values, values)
   }

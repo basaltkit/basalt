@@ -9,21 +9,21 @@ const GREETER = createToken<Greeter>('greeter')
 const COUNTER = createToken<{ n: number }>('counter')
 
 describe('Container', () => {
-  it('resolve singletons com a mesma instância', () => {
+  it('resolves singletons with the same instance', () => {
     const container = new Container()
     container.singleton(COUNTER, () => ({ n: 0 }))
     container.get(COUNTER).n++
     expect(container.get(COUNTER).n).toBe(1)
   })
 
-  it('resolve transients com instâncias novas', () => {
+  it('resolves transients with fresh instances', () => {
     const container = new Container()
     container.transient(COUNTER, () => ({ n: 0 }))
     container.get(COUNTER).n++
     expect(container.get(COUNTER).n).toBe(0)
   })
 
-  it('scoped: uma instância por escopo, herdando bindings do pai', () => {
+  it('scoped: one instance per scope, inheriting bindings from the parent', () => {
     const root = new Container()
     root.scoped(COUNTER, () => ({ n: 0 }))
     const scopeA = root.createScope()
@@ -33,14 +33,14 @@ describe('Container', () => {
     expect(scopeB.get(COUNTER).n).toBe(0)
   })
 
-  it('singleton registrado no pai é compartilhado entre escopos', () => {
+  it('singleton registered in the parent is shared between scopes', () => {
     const root = new Container()
     root.singleton(COUNTER, () => ({ n: 0 }))
     root.createScope().get(COUNTER).n = 5
     expect(root.createScope().get(COUNTER).n).toBe(5)
   })
 
-  it('injeta dependências via factory com tipos', () => {
+  it('injects dependencies via typed factories', () => {
     const container = new Container()
     const NAME = createToken<string>('name')
     container.singleton(NAME, () => 'Machize')
@@ -48,7 +48,7 @@ describe('Container', () => {
     expect(container.get(GREETER).greet()).toBe('Olá, Machize')
   })
 
-  it('lança erro tipado para token desconhecido', () => {
+  it('throws a typed error for an unknown token', () => {
     const container = new Container()
     expect(() => container.get(GREETER)).toThrowError(/greeter/)
     try {
@@ -58,7 +58,7 @@ describe('Container', () => {
     }
   })
 
-  it('detecta dependência circular com a cadeia no erro', () => {
+  it('detects circular dependency with the chain in the error', () => {
     const container = new Container()
     const A = createToken<unknown>('a')
     const B = createToken<unknown>('b')

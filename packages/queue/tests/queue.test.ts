@@ -20,7 +20,7 @@ const setup = () => {
 }
 
 describe('QueueManager (driver sync)', () => {
-  it('despacha e executa job com payload tipado e validado', async () => {
+  it('dispatches and executes a job with a typed, validated payload', async () => {
     const { manager } = setup()
     const seen: string[] = []
     const SendWelcome = defineJob({
@@ -34,7 +34,7 @@ describe('QueueManager (driver sync)', () => {
     expect(seen).toEqual(['u-1'])
   })
 
-  it('rejeita payload inválido no dispatch, antes de enfileirar', async () => {
+  it('rejects an invalid payload at dispatch, before enqueuing', async () => {
     const { driver, manager } = setup()
     const job = defineJob({
       name: 'strict',
@@ -49,12 +49,12 @@ describe('QueueManager (driver sync)', () => {
     expect(driver.executed).toHaveLength(0)
   })
 
-  it('dispatch sem registro lança erro orientando o dev', async () => {
+  it('dispatch without registration throws an error guiding the dev', async () => {
     const solto = defineJob({ name: 'solto', handle: () => {} })
     await expect(solto.dispatch({})).rejects.toBeInstanceOf(JobNotRegisteredError)
   })
 
-  it('propaga o contexto (requestId/tenant) do dispatch para o handler', async () => {
+  it('propagates the context (requestId/tenant) from dispatch to the handler', async () => {
     const { manager } = setup()
     const observed: Record<string, unknown>[] = []
     const job = defineJob({
@@ -72,7 +72,7 @@ describe('QueueManager (driver sync)', () => {
     expect(observed).toEqual([{ requestId: 'req-7', tenant: { id: 'acme' } }])
   })
 
-  it('honra attempts: reexecuta até ter sucesso', async () => {
+  it('honors attempts: re-executes until it succeeds', async () => {
     const { driver, manager } = setup()
     let calls = 0
     const flaky = defineJob({
@@ -90,7 +90,7 @@ describe('QueueManager (driver sync)', () => {
     expect(driver.executed[0]).toMatchObject({ jobName: 'flaky', attempts: 3 })
   })
 
-  it('esgota attempts e propaga o último erro', async () => {
+  it('exhausts attempts and propagates the last error', async () => {
     const { manager } = setup()
     const doomed = defineJob({
       name: 'doomed',
@@ -103,7 +103,7 @@ describe('QueueManager (driver sync)', () => {
     await expect(doomed.dispatch({})).rejects.toThrowError('permanente')
   })
 
-  it('queuedOn: listener de evento vira job com contexto e validação', async () => {
+  it('queuedOn: event listener becomes a job with context and validation', async () => {
     const { driver, manager } = setup()
     const bus = new EventBus()
     const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))
@@ -118,7 +118,7 @@ describe('QueueManager (driver sync)', () => {
     expect(driver.executed[0]?.jobName).toBe('listener:order.created')
   })
 
-  it('queuePlugin registra manager, vincula jobs e fecha no shutdown', async () => {
+  it('queuePlugin registers the manager, binds jobs and closes on shutdown', async () => {
     const seen: string[] = []
     const job = defineJob({
       name: 'via.plugin',

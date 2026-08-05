@@ -9,13 +9,13 @@ export interface QueuedListenerOptions {
 }
 
 /**
- * A ponte events→queue: o listener vira um job — o emit só enfileira,
- * e o handler roda no worker com retry/backoff do driver e o contexto
- * (tenant/requestId) restaurado.
+ * The events→queue bridge: the listener becomes a job — emit only enqueues,
+ * and the handler runs in the worker with the driver's retry/backoff and the
+ * context (tenant/requestId) restored.
  *
  * queuedOn(bus, queue, OrderCreated, async ({ orderId }) => { ... })
  *
- * Retorna a função de unsubscribe do listener.
+ * Returns the listener's unsubscribe function.
  */
 export function queuedOn<T>(
   bus: EventBus,

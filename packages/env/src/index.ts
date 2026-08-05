@@ -5,19 +5,19 @@ export class EnvValidationError extends MachizeError {
   constructor(readonly report: string[]) {
     super(
       'ENV_INVALID',
-      `Variáveis de ambiente inválidas:\n${report.map((line) => `  - ${line}`).join('\n')}`,
+      `Invalid environment variables:\n${report.map((line) => `  - ${line}`).join('\n')}`,
     )
   }
 }
 
 export interface DefineEnvOptions {
-  /** Fonte das variáveis. Default: process.env */
+  /** Source of the variables. Default: process.env */
   source?: Record<string, string | undefined>
 }
 
 /**
- * Valida e tipa variáveis de ambiente. Agrega TODOS os erros num único
- * relatório em vez de falhar uma variável por vez.
+ * Validates and types environment variables. Aggregates ALL errors into a single
+ * report instead of failing one variable at a time.
  *
  * export const env = defineEnv({
  *   DATABASE_URL: z.string().url(),
@@ -33,7 +33,7 @@ export function defineEnv<TShape extends z.ZodRawShape>(
 
   if (!result.success) {
     const report = result.error.issues.map(
-      (issue) => `${issue.path.join('.') || '(raiz)'}: ${issue.message}`,
+      (issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`,
     )
     throw new EnvValidationError(report)
   }

@@ -1,13 +1,13 @@
 import type { AddJobOptions, JobExecutor, QueueDriver } from '../driver.js'
 
 /**
- * Driver síncrono: executa o job inline no dispatch, honrando `attempts`
- * (retry imediato). É o driver de testes e de dev sem Redis — o equivalente
- * ao queue driver `sync` do Laravel.
+ * Synchronous driver: executes the job inline on dispatch, honoring `attempts`
+ * (immediate retry). It is the driver for tests and Redis-less dev — the
+ * equivalent of Laravel's `sync` queue driver.
  */
 export class SyncQueueDriver implements QueueDriver {
   private executor: JobExecutor | undefined
-  /** histórico de execuções — útil em asserções de teste */
+  /** execution history — useful in test assertions */
   readonly executed: { queue: string; jobName: string; attempts: number }[] = []
 
   setExecutor(executor: JobExecutor): void {
@@ -30,7 +30,7 @@ export class SyncQueueDriver implements QueueDriver {
   }
 
   startWorker(): void {
-    // no-op: add() já executa inline
+    // no-op: add() already executes inline
   }
 
   async close(): Promise<void> {}

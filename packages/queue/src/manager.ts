@@ -17,13 +17,13 @@ export class UnknownJobError extends MachizeError {
   constructor(job: string) {
     super(
       'QUEUE_UNKNOWN_JOB',
-      `Job "${job}" chegou ao worker mas não está registrado neste processo. ` +
-        'Garanta que o worker registra os mesmos jobs do produtor.',
+      `Job "${job}" reached the worker but is not registered in this process. ` +
+        'Make sure the worker registers the same jobs as the producer.',
     )
   }
 }
 
-/** Campos do contexto serializados junto com o payload e restaurados no worker. */
+/** Context fields serialized along with the payload and restored in the worker. */
 const SNAPSHOT_FIELDS = ['requestId', 'correlationId', 'traceId', 'userId', 'tenantId'] as const
 
 interface JobEnvelope {
@@ -62,7 +62,7 @@ export class QueueManager implements JobDispatcher {
     await this.driver.add(job.queue, job.name, envelope, addOptions)
   }
 
-  /** Inicia um worker para a fila. No driver sync é no-op. */
+  /** Starts a worker for the queue. With the sync driver it is a no-op. */
   work(queue = 'default', options: { concurrency?: number } = {}): void {
     this.driver.startWorker(queue, options)
   }
@@ -71,7 +71,7 @@ export class QueueManager implements JobDispatcher {
     await this.driver.close()
   }
 
-  /** Executa um job recebido do driver: valida, restaura o contexto e roda o handler. */
+  /** Executes a job received from the driver: validates, restores the context, runs the handler. */
   private async execute(jobName: string, data: unknown): Promise<void> {
     const job = this.jobs.get(jobName)
     if (!job) throw new UnknownJobError(jobName)
@@ -82,7 +82,7 @@ export class QueueManager implements JobDispatcher {
   }
 }
 
-/** Extrai do contexto atual apenas o que é serializável e útil no worker. */
+/** Extracts from the current context only what is serializable and useful in the worker. */
 function snapshotContext(): RequestContext | undefined {
   const context = tryCtx()
   if (!context) return undefined
