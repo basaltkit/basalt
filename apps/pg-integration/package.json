@@ -1,0 +1,24 @@
+{
+  "name": "pg-integration",
+  "private": true,
+  "type": "module",
+  "description": "Integration harness: exercises @machize/prisma against a real PostgreSQL server (gated on TEST_DATABASE_URL). Not part of the default test run.",
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "db:push": "prisma db push --skip-generate --accept-data-loss",
+    "test:integration": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/core": "workspace:*",
+    "@machize/prisma": "workspace:*",
+    "@prisma/client": "^6.2.0"
+  },
+  "devDependencies": {
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "prisma": "^6.2.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}

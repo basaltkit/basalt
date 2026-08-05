@@ -1,0 +1,18 @@
+// Minimal schema for the PostgreSQL integration harness.
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("TEST_DATABASE_URL")
+}
+
+model Project {
+  id       String @id @default(uuid())
+  tenantId String
+  name     String
+
+  @@index([tenantId])
+}

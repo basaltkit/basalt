@@ -24,18 +24,26 @@ pnpm --filter @machize/core build
 
 ### Integration tests
 
-Database integration tests run against **real PostgreSQL in-process** via
-[pglite](https://github.com/electric-sql/pglite) — no server needed, so
-`pnpm test` covers them everywhere, including CI. They exercise the Postgres
-behaviors tenancy relies on: `CREATE SCHEMA`, per-tenant `search_path` isolation
-and tenant-scoped filtering.
+Two levels of database integration:
 
-To run a real app (or test against a server Postgres, Redis and MinIO) bring up
-the local stack:
+- **In-process (default `pnpm test`)** — `@machize/prisma` runs against real
+  PostgreSQL via [pglite](https://github.com/electric-sql/pglite) (WASM, no
+  server), covering `CREATE SCHEMA`, per-tenant `search_path` isolation and
+  tenant-scoped filtering everywhere, including CI.
+- **Server + real Prisma client (`apps/pg-integration`)** — exercises the
+  `tenancyExtension` end to end through a generated Prisma client against a
+  PostgreSQL server. Gated on `TEST_DATABASE_URL`, so it skips in the default
+  run; the CI `integration` job runs it against a Postgres service. Locally:
 
-```bash
-docker compose up -d
-```
+  ```bash
+  docker compose up -d
+  export TEST_DATABASE_URL=postgresql://machize:machize@localhost:5432/machize
+  pnpm --filter pg-integration prisma:generate
+  pnpm --filter pg-integration db:push
+  pnpm --filter pg-integration test:integration
+  ```
+
+`docker compose up -d` also brings up Redis and MinIO for running a real app.
 
 ## Workflow
 

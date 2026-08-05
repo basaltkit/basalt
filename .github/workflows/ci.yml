@@ -37,3 +37,45 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  integration:
+    name: integration (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: machize
+          POSTGRES_PASSWORD: machize
+          POSTGRES_DB: machize_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U machize"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://machize:machize@localhost:5432/machize_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: Generate Prisma client
+        run: pnpm --filter pg-integration prisma:generate
+
+      - name: Push schema
+        run: pnpm --filter pg-integration db:push
+
+      - name: Integration tests (real PostgreSQL)
+        run: pnpm --filter pg-integration test:integration
