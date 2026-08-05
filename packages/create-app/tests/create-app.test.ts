@@ -7,7 +7,7 @@ import { createProject, TargetNotEmptyError } from '../src/index.js'
 let root: string
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'create-machize-app-'))
+  root = await mkdtemp(join(tmpdir(), 'create-mach-'))
 })
 
 afterEach(async () => {
