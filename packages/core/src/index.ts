@@ -15,6 +15,7 @@ export {
   type LifecyclePhase,
 } from './app.js'
 export { parseDuration, type DurationInput } from './duration.js'
+export { MetadataRegistry, METADATA, ensureMetadata } from './metadata.js'
 export {
   MachizeError,
   ContextUnavailableError,

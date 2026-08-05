@@ -1,4 +1,4 @@
-import { createToken, definePlugin } from '@machize/core'
+import { createToken, definePlugin, ensureMetadata } from '@machize/core'
 import type { JobDefinition } from '@machize/queue'
 import { cronMatches, cronToString, parseCron, type CronFields } from './cron.js'
 
@@ -8,7 +8,7 @@ export type { CronFields, ZonedParts } from './cron.js'
 type Task = () => void | Promise<void>
 
 /**
- * Uma entrada agendada, construída fluentemente:
+ * A scheduled entry, built fluently:
  *
  * schedule.job(ReconcileBilling).daily().at('03:00').timezone('UTC')
  * schedule.call('purge-cache', () => cache.flush()).everyMinute().withoutOverlapping()
@@ -25,7 +25,7 @@ export class ScheduleEntry {
   private noOverlap = false
   private failureHandler: ((error: unknown) => void) | undefined
   private running = false
-  /** contagem de execuções puladas por overlap — visível para observabilidade/testes */
+  /** count of executions skipped due to overlap — visible for observability/tests */
   skippedOverlaps = 0
 
   constructor(
@@ -68,7 +68,7 @@ export class ScheduleEntry {
     return this
   }
 
-  /** Horário 'HH:mm' — combina com daily/weekly/monthly. */
+  /** 'HH:mm' time — combines with daily/weekly/monthly. */
   at(time: string): this {
     const [hour, minute] = time.split(':')
     this.fields.hour = String(Number(hour))
@@ -76,7 +76,7 @@ export class ScheduleEntry {
     return this
   }
 
-  /** Expressão cron crua (5 campos) — escape hatch. */
+  /** Raw cron expression (5 fields) — escape hatch. */
   cron(expression: string): this {
     this.fields = parseCron(expression)
     return this
@@ -95,7 +95,7 @@ export class ScheduleEntry {
     return this
   }
 
-  /** Se a execução anterior ainda estiver rodando, a nova é pulada. */
+  /** If the previous execution is still running, the new one is skipped. */
   withoutOverlapping(): this {
     this.noOverlap = true
     return this
@@ -106,7 +106,7 @@ export class ScheduleEntry {
     return this
   }
 
-  /** Descrição da entrada — consumida por `mach schedule list`. */
+  /** Entry description — consumed by `mach schedule list`. */
   describe(): { name: string; cron: string; timezone: string } {
     return { name: this.name, cron: cronToString(this.fields), timezone: this.tz }
   }
@@ -115,7 +115,7 @@ export class ScheduleEntry {
     return cronMatches(this.fields, date, this.tz)
   }
 
-  /** @internal executa a task com guarda de overlap e tratamento de falha. */
+  /** @internal runs the task with the overlap guard and failure handling. */
   async run(): Promise<void> {
     if (this.noOverlap && this.running) {
       this.skippedOverlaps++
@@ -143,12 +143,12 @@ export class Scheduler {
   private timer: NodeJS.Timeout | undefined
   private interval: NodeJS.Timeout | undefined
 
-  /** Agenda o dispatch de um job do @machize/queue. */
+  /** Schedules the dispatch of a @machize/queue job. */
   job<T>(job: JobDefinition<T>, ...payload: T extends void ? [] : [T]): ScheduleEntry {
     return this.add(new ScheduleEntry(job.name, () => job.dispatch(payload[0] as T)))
   }
 
-  /** Agenda uma função nomeada. */
+  /** Schedules a named function. */
   call(name: string, task: Task): ScheduleEntry {
     return this.add(new ScheduleEntry(name, task))
   }
@@ -158,9 +158,9 @@ export class Scheduler {
   }
 
   /**
-   * Executa as entradas devidas no instante dado. Determinístico — é o que
-   * os testes chamam diretamente e o que o timer chama a cada minuto.
-   * Falhas (sem onFailure) são agregadas; todas as entradas devidas rodam.
+   * Runs the entries due at the given instant. Deterministic — this is what
+   * the tests call directly and what the timer calls every minute.
+   * Failures (without onFailure) are aggregated; all due entries run.
    */
   async tick(date: Date = new Date()): Promise<void> {
     const due = this.entries.filter((entry) => entry.isDue(date))
@@ -175,11 +175,11 @@ export class Scheduler {
       }),
     )
     if (errors.length > 0) {
-      throw new AggregateError(errors, `Falha em ${errors.length} tarefa(s) agendada(s)`)
+      throw new AggregateError(errors, `Failure in ${errors.length} scheduled task(s)`)
     }
   }
 
-  /** Alinha ao próximo minuto e passa a executar tick() a cada 60s. */
+  /** Aligns to the next minute and then runs tick() every 60s. */
   start(): void {
     if (this.timer || this.interval) return
     const msToNextMinute = 60_000 - (Date.now() % 60_000)
@@ -202,8 +202,8 @@ export class Scheduler {
     try {
       await this.tick()
     } catch {
-      // falhas sem onFailure já foram agregadas; aqui apenas evitamos
-      // derrubar o processo — cada entrada deve tratar sua própria falha
+      // failures without onFailure were already aggregated; here we only avoid
+      // bringing down the process — each entry must handle its own failure
     }
   }
 
@@ -216,9 +216,9 @@ export class Scheduler {
 export const SCHEDULER = createToken<Scheduler>('scheduler')
 
 export interface SchedulerPluginOptions {
-  /** Callback que define as agendas — recebe o Scheduler no boot. */
+  /** Callback that defines the schedules — receives the Scheduler at boot. */
   define?: (schedule: Scheduler) => void
-  /** Inicia o timer no boot. Default: true (desligue em testes). */
+  /** Starts the timer at boot. Default: true (turn off in tests). */
   autostart?: boolean
 }
 
@@ -231,6 +231,9 @@ export function schedulerPlugin(options: SchedulerPluginOptions = {}) {
     boot({ container }) {
       const scheduler = container.get(SCHEDULER)
       options.define?.(scheduler)
+      // Expose entries to tooling (CLI `mach schedule:list`).
+      const metadata = ensureMetadata(container)
+      for (const entry of scheduler.list()) metadata.add('schedule:entries', entry)
       if (options.autostart !== false) scheduler.start()
     },
     shutdown({ container }) {
