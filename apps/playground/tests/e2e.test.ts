@@ -53,6 +53,51 @@ describe('playground E2E — Phase 1 integrated', () => {
     await app.shutdown()
   })
 
+  it('multi-tenancy: project data is isolated per tenant', async () => {
+    const { app, server, audit } = await boot()
+    const asTenant = (tenant: string) => ({ 'x-tenant-id': tenant })
+
+    const created = await server.inject({
+      method: 'POST',
+      url: '/projects',
+      headers: asTenant('acme'),
+      payload: { name: 'Acme Project' },
+    })
+    expect(created.statusCode).toBe(201)
+
+    // the same endpoint, three different worlds
+    const acmeList = await server.inject({ method: 'GET', url: '/projects', headers: asTenant('acme') })
+    const globexList = await server.inject({ method: 'GET', url: '/projects', headers: asTenant('globex') })
+    const centralList = await server.inject({ method: 'GET', url: '/projects' })
+    expect(acmeList.json()).toHaveLength(1)
+    expect(globexList.json()).toEqual([])
+    expect(centralList.json()).toEqual([])
+
+    // the audit listener picked the tenant up from the context, not from the caller
+    expect(audit.entries[0]).toMatchObject({ event: 'project.created', tenantId: 'acme' })
+    await app.shutdown()
+  })
+
+  it('multi-tenancy: subdomain resolution and central fallback', async () => {
+    const { app, server } = await boot()
+
+    const viaSubdomain = await server.inject({
+      method: 'GET',
+      url: '/tenant',
+      headers: { host: 'globex.localhost' },
+    })
+    expect(viaSubdomain.json()).toEqual({ id: 'globex', name: 'Globex Corp' })
+
+    // unknown tenant id falls through the resolvers → central context
+    const unknown = await server.inject({
+      method: 'GET',
+      url: '/tenant',
+      headers: { 'x-tenant-id': 'ghost' },
+    })
+    expect(unknown.json()).toEqual({ id: null })
+    await app.shutdown()
+  })
+
   it('per-request context: requestId in the handler and in the response header', async () => {
     const { app, server } = await boot()
     const res = await server.inject({

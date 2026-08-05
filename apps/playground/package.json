@@ -16,6 +16,7 @@
     "@machize/events": "workspace:*",
     "@machize/fastify": "workspace:*",
     "@machize/logger": "workspace:*",
+    "@machize/tenancy": "workspace:*",
     "zod": "^3.24.0"
   },
   "devDependencies": {
