@@ -1,5 +1,11 @@
 # create-machize
 
+## 0.5.0
+
+### Minor Changes
+
+- Generated apps now pin `@machize/generator` at `^0.2.0` so they pick up the `make:resource` auto-wiring (in semver 0.x, `^0.1.0` locks the minor). Added a per-package version override map (`versionOf`) for @machize deps that cross a minor.
+
 ## 0.4.0
 
 ### Minor Changes
