@@ -3,6 +3,8 @@ export interface ProjectOptions {
   tenancy: boolean
   auth: boolean
   billing: boolean
+  /** Scaffold a web/ frontend (React + shadcn + SDK). */
+  ui: boolean
 }
 
 /** Kept in sync with the monorepo release line. */
@@ -161,10 +163,35 @@ export function buildApp(options: BuildAppOptions = {}) {
 }
 
 export function routesTs(options: ProjectOptions): string {
+  const endpoints = [
+    "'GET /'",
+    "'GET /health'",
+    ...(options.auth
+      ? [
+          "'POST /auth/register'",
+          "'POST /auth/login'",
+          "'POST /auth/refresh'",
+          "'POST /auth/logout'",
+          "'GET /auth/me'",
+        ]
+      : []),
+  ]
   return `import { ctx } from '@machize/core'
 import { route } from '@machize/fastify'
 
 export const appRoutes = [
+  // Friendly index so \`GET /\` is never a bare 404 — lists what the API exposes.
+  route({
+    method: 'GET',
+    url: '/',
+    async handler() {
+      return {
+        name: '${options.name}',
+        status: 'ok',
+        endpoints: [${endpoints.join(', ')}],
+      }
+    },
+  }),
   route({
     method: 'GET',
     url: '/health',
@@ -211,6 +238,10 @@ describe('app', () => {
     const app = await buildApp({ logLevel: 'silent' }).boot()
     const server = app.container.get(FASTIFY)
 
+    const index = await server.inject({ method: 'GET', url: '/' })
+    expect(index.statusCode).toBe(200)
+    expect(index.json().name).toBe('${options.name}')
+
     const response = await server.inject({ method: 'GET', url: '/health' })
     expect(response.statusCode).toBe(200)
     expect(response.json().ok).toBe(true)${
@@ -239,6 +270,7 @@ export function readme(options: ProjectOptions): string {
     ...(options.tenancy ? ['multi-tenancy (header + subdomain resolvers)'] : []),
     ...(options.auth ? ['authentication (register/login/refresh/me)'] : []),
     ...(options.billing ? ['subscriptions with plans and feature limits'] : []),
+    ...(options.ui ? ['web UI (React + shadcn/ui on @machize/admin-shadcn + @machize/sdk)'] : []),
   ]
   return `# ${options.name}
 
@@ -250,10 +282,24 @@ Included: ${features.join(' · ')}.
 
 \`\`\`bash
 pnpm install
-pnpm dev        # http://localhost:3000/health
+pnpm dev        # API on http://localhost:3000
 pnpm test
 \`\`\`
+${
+  options.ui
+    ? `
+## Web UI
+
+\`\`\`bash
+pnpm dev                       # terminal 1 — API on :3000
+pnpm --filter ${options.name}-web dev   # terminal 2 — UI on http://localhost:5180
+\`\`\`
+
+Open <http://localhost:5180>. The Vite dev server proxies \`/api\` to the API,
+so there is no CORS to configure${options.auth ? '. Register, then sign in' : ''}.
 `
+    : ''
+}`
 }
 
 export function gitignore(): string {
@@ -269,10 +315,17 @@ dist/
 /**
  * pnpm settings: esbuild's build script is required by tsx;
  * msgpackr-extract (optional native accelerator via BullMQ) is declined —
- * msgpackr falls back to pure JS.
+ * msgpackr falls back to pure JS. With --ui, `web` is a workspace member so
+ * its own dependencies resolve.
  */
-export function pnpmWorkspaceYaml(): string {
-  return `allowBuilds:
+export function pnpmWorkspaceYaml(options: ProjectOptions): string {
+  return `${
+    options.ui
+      ? `packages:
+  - web
+`
+      : ''
+  }allowBuilds:
   esbuild: true
   msgpackr-extract: false
 `

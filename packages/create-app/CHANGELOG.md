@@ -1,5 +1,19 @@
 # create-machize
 
+## 0.3.0
+
+### Minor Changes
+
+- New `--ui` flag scaffolds a `web/` frontend: React + authentic shadcn/ui components (`@machize/admin-shadcn`) talking to the API through the type-safe `@machize/sdk`, with a Vite dev server that proxies `/api` to the backend (no CORS). With auth on it ships a login/register gate and a small dashboard; otherwise a live status page. `web` is wired as a pnpm workspace member so its dependencies resolve.
+
+## 0.2.0
+
+### Minor Changes
+
+- Generated apps now include a friendly `GET /` index route that lists the API's endpoints, so a fresh app no longer answers the root path with a bare 404. The generated smoke test covers it.
+- The CLI became a real create-tool: interactive prompts when run without a name in a terminal, `--install` to install dependencies, `--git` to initialize a repository with a first commit, `--pm=<pnpm|npm|yarn|bun>` plus auto-detection via `npm_config_user_agent`, and `-y/--yes` to accept defaults. Next-steps output is tailored to the detected package manager.
+- New exported helper `detectPackageManager()`.
+
 ## 0.1.1
 
 ### Patch Changes
