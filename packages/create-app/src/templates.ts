@@ -5,6 +5,8 @@ export interface ProjectOptions {
   billing: boolean
   /** Scaffold a web/ frontend (React + shadcn + SDK). */
   ui: boolean
+  /** Scaffold the `mach` CLI entrypoint (code generators + built-in commands). */
+  cli: boolean
 }
 
 /** Kept in sync with the monorepo release line. */
@@ -23,6 +25,10 @@ export function packageJson(options: ProjectOptions): string {
   if (options.tenancy) dependencies['@machize/tenancy'] = MACHIZE_VERSION
   if (options.auth) dependencies['@machize/auth'] = MACHIZE_VERSION
   if (options.billing) dependencies['@machize/subscriptions'] = MACHIZE_VERSION
+  if (options.cli) {
+    dependencies['@machize/cli'] = MACHIZE_VERSION
+    dependencies['@machize/generator'] = MACHIZE_VERSION
+  }
 
   return `${JSON.stringify(
     {
@@ -34,6 +40,7 @@ export function packageJson(options: ProjectOptions): string {
         start: 'tsx src/server.ts',
         test: 'vitest run',
         typecheck: 'tsc --noEmit',
+        ...(options.cli ? { mach: 'tsx bin/mach.ts' } : {}),
       },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
       devDependencies: {
@@ -142,6 +149,12 @@ export function appTs(options: ProjectOptions): string {
       fallbackPlan: 'free',
     })`)
   }
+  if (options.cli) {
+    imports.push(`import { commandsPlugin } from '@machize/cli'`)
+    imports.push(`import { generatorCommands } from '@machize/generator'`)
+    // Registers \`mach make:*\` generators; built-ins (routes, schedule:list) come free.
+    plugins.push(`commandsPlugin(generatorCommands())`)
+  }
   plugins.push(`fastifyPlugin({ routes: ${routesExpression} })`)
 
   return `${imports.join('\n')}
@@ -228,6 +241,21 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 `
 }
 
+export function machBin(): string {
+  return `#!/usr/bin/env node
+import { runCli } from '@machize/cli'
+import { buildApp } from '../src/app.js'
+
+// The 'mach' CLI: boots the app, runs one command, shuts down.
+//   pnpm mach list                    — show available commands
+//   pnpm mach routes                  — list registered HTTP routes
+//   pnpm mach make:resource Project   — generate a full resource vertical
+//   pnpm mach make:service Project    — generate a single artifact (schema/service/…)
+const app = buildApp({ logLevel: 'silent' })
+process.exit(await runCli({ app }))
+`
+}
+
 export function appTest(options: ProjectOptions): string {
   return `import { describe, expect, it } from 'vitest'
 import { FASTIFY } from '@machize/fastify'
@@ -271,6 +299,7 @@ export function readme(options: ProjectOptions): string {
     ...(options.auth ? ['authentication (register/login/refresh/me)'] : []),
     ...(options.billing ? ['subscriptions with plans and feature limits'] : []),
     ...(options.ui ? ['web UI (React + shadcn/ui on @machize/admin-shadcn + @machize/sdk)'] : []),
+    ...(options.cli ? ['`mach` CLI with code generators (`make:*`) and built-in commands'] : []),
   ]
   return `# ${options.name}
 
@@ -286,6 +315,22 @@ pnpm dev        # API on http://localhost:3000
 pnpm test
 \`\`\`
 ${
+  options.cli
+    ? `
+## The \`mach\` CLI
+
+\`\`\`bash
+pnpm mach list                    # available commands
+pnpm mach routes                  # registered HTTP routes
+pnpm mach make:resource Project   # schema → repository → service → plugin → routes → test
+pnpm mach make:service Project    # a single artifact (--force to overwrite)
+\`\`\`
+
+Generated resources land in \`src/modules/<name>/\`. Register the generated
+plugin in \`src/app.ts\` to wire it up.
+`
+    : ''
+}${
   options.ui
     ? `
 ## Web UI

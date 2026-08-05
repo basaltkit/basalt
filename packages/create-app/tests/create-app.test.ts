@@ -111,6 +111,33 @@ describe('createProject', () => {
     expect(await read(noAuth.dir, 'web/src/api.ts')).not.toContain('/auth/login')
   })
 
+  it('scaffolds the mach CLI with --cli (bin + deps + registered commands)', async () => {
+    const result = await createProject({ name: 'withcli', dir: join(root, 'withcli'), cli: true })
+
+    expect(result.files).toContain('bin/mach.ts')
+
+    const pkg = JSON.parse(await read(result.dir, 'package.json'))
+    expect(pkg.dependencies).toHaveProperty('@machize/cli')
+    expect(pkg.dependencies).toHaveProperty('@machize/generator')
+    expect(pkg.scripts.mach).toBe('tsx bin/mach.ts')
+
+    const bin = await read(result.dir, 'bin/mach.ts')
+    expect(bin).toContain("import { runCli } from '@machize/cli'")
+    expect(bin).toContain('runCli({ app })')
+
+    const app = await read(result.dir, 'src/app.ts')
+    expect(app).toContain('commandsPlugin(generatorCommands())')
+    expect(app).toContain("from '@machize/generator'")
+  })
+
+  it('omits the mach CLI by default', async () => {
+    const result = await createProject({ name: 'nocli', dir: join(root, 'nocli') })
+    expect(result.files).not.toContain('bin/mach.ts')
+    const pkg = JSON.parse(await read(result.dir, 'package.json'))
+    expect(pkg.dependencies).not.toHaveProperty('@machize/cli')
+    expect(pkg.scripts).not.toHaveProperty('mach')
+  })
+
   it('omits the web UI by default', async () => {
     const result = await createProject({ name: 'noui', dir: join(root, 'noui') })
     expect(result.files.some((f) => f.startsWith('web/'))).toBe(false)
