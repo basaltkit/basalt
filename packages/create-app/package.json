@@ -1,11 +1,11 @@
 {
-  "name": "create-mach",
+  "name": "create-machize",
   "version": "0.1.0",
-  "description": "Scaffold a production-shaped Machize SaaS app: npx create-mach my-saas [--no-tenancy] [--no-auth] [--billing]",
+  "description": "Scaffold a production-shaped Machize SaaS app: npx create-machize my-saas [--no-tenancy] [--no-auth] [--billing]",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "create-mach": "./dist/cli.js"
+    "create-machize": "./dist/cli.js"
   },
   "exports": {
     ".": {
