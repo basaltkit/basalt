@@ -18,7 +18,13 @@ export {
   type SubscriptionStatus,
   type SubscriptionStore,
   type UsageStore,
+  type UsageConsumeResult,
 } from './stores.js'
+export {
+  RedisUsageStore,
+  type RedisLike,
+  type RedisUsageStoreOptions,
+} from './drivers/redis-usage.js'
 export {
   FakeBillingGateway,
   WebhookInvalidError,

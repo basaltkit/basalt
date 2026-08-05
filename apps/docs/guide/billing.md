@@ -101,9 +101,27 @@ a raw-body parser for the webhook route so the handler receives the original
 string — re-serializing a parsed object breaks the HMAC.
 :::
 
+## Production stores
+
+By default usage counters live in memory. For a real deployment, back them with
+Redis so metering is atomic across processes:
+
+```ts
+import { RedisUsageStore } from '@machize/subscriptions'
+import Redis from 'ioredis'
+
+subscriptionsPlugin({
+  plans,
+  usage: new RedisUsageStore(new Redis(process.env.REDIS_URL)),
+})
+```
+
+`RedisUsageStore` does check-and-increment in a single `EVAL` (Lua) round trip,
+so concurrent `consume` calls can never overshoot a quota.
+
 ::: warning Pre-1.0 note
-Local state is the read model. A few billing behaviors (atomic metering across a
-real usage store, trial→paid conversion through the gateway, durable webhook
-idempotency) are deferred until the real Redis/usage drivers land — see
-KNOWN_LIMITATIONS in the repository.
+Local subscription state is the read model. Two billing behaviors remain
+deferred until their backends land: trial→paid conversion through the gateway,
+and durable (multi-instance) webhook idempotency — see KNOWN_LIMITATIONS in the
+repository.
 :::

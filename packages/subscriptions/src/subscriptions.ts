@@ -207,18 +207,22 @@ export class Subscriptions {
         return Math.max(0, limit - used)
       },
       consume: async (feature: string, amount = 1): Promise<number> => {
-        // KNOWN LIMITATION (see KNOWN_LIMITATIONS.md #2): check-then-increment
-        // is not atomic — concurrent consumes on an async UsageStore can
-        // overshoot the limit. Needs an atomic increment-and-check.
         const plan = await resolve()
-        if (!plan || featureLimit(plan.features[feature]) === 0) {
-          throw new FeatureUnavailableError(feature)
-        }
+        if (!plan) throw new FeatureUnavailableError(feature)
         const limit = featureLimit(plan.features[feature])
+        if (limit === 0) throw new FeatureUnavailableError(feature)
+
         const key = periodKey(plan, feature)
-        const used = await this.usage.get(billableId, feature, key)
-        if (used + amount > limit) throw new QuotaExceededError(feature, Math.max(0, limit - used))
-        return this.usage.increment(billableId, feature, key, amount)
+        // Unlimited features are just tracked; limited ones go through the
+        // store's atomic check-and-increment so a quota is never overshot.
+        if (limit === Number.POSITIVE_INFINITY) {
+          return this.usage.increment(billableId, feature, key, amount)
+        }
+        const result = await this.usage.consume(billableId, feature, key, amount, limit)
+        if (!result.applied) {
+          throw new QuotaExceededError(feature, Math.max(0, limit - result.used))
+        }
+        return result.used
       },
     }
   }
