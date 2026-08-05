@@ -1,6 +1,6 @@
 {
   "name": "@machize/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "The 'mach' command framework for Machize apps: define commands, run them against a booted app, and inspect routes and schedules.",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",
