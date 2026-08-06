@@ -35,3 +35,22 @@ export {
   type Labels,
   type MetricOptions,
 } from './metrics.js'
+export {
+  Tracer,
+  Span,
+  InMemorySpanExporter,
+  OtlpHttpExporter,
+  ConsoleSpanExporter,
+  activeSpan,
+  parseTraceparent,
+  formatTraceparent,
+  toOtlpJson,
+  type SpanContext,
+  type FinishedSpan,
+  type SpanExporter,
+  type SpanKind,
+  type SpanStatus,
+  type AttributeValue,
+  type TracerOptions,
+  type OtlpHttpExporterOptions,
+} from './tracing.js'

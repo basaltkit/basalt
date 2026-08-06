@@ -152,3 +152,15 @@ export function eventsPlugin() {
     },
   })
 }
+export {
+  Outbox,
+  MemoryOutboxStore,
+  outboxPlugin,
+  OUTBOX,
+  type OutboxEntry,
+  type OutboxStore,
+  type OutboxDispatch,
+  type OutboxOptions,
+  type OutboxPluginOptions,
+  type FlushResult,
+} from './outbox.js'
