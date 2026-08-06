@@ -14,7 +14,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
-      { text: '0.1.0', link: `${github}/releases` },
+      { text: '0.5.0', link: `${github}/releases` },
     ],
 
     sidebar: {
@@ -33,6 +33,7 @@ export default defineConfig({
           items: [
             { text: 'Multi-tenancy', link: '/guide/tenancy' },
             { text: 'Authentication', link: '/guide/auth' },
+            { text: 'Teams', link: '/guide/teams' },
             { text: 'Subscriptions', link: '/guide/billing' },
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
@@ -54,6 +55,7 @@ export default defineConfig({
           items: [
             { text: 'Build a notes SaaS (end to end)', link: '/cookbook/notes-saas' },
             { text: 'A multi-tenant SaaS', link: '/cookbook/multi-tenant-saas' },
+            { text: 'Harden accounts & billing', link: '/cookbook/account-lifecycle' },
           ],
         },
       ],
