@@ -1,5 +1,12 @@
 # @machize/express
 
+## 0.5.0
+
+### Patch Changes
+
+- @machize/core@0.5.0
+- @machize/http@0.5.0
+
 ## 0.4.0
 
 ### Minor Changes
