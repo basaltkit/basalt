@@ -19,3 +19,4 @@ export {
   type SecurityHeadersOptions,
 } from './security.js'
 export { healthPlugin, type HealthPluginOptions, type HealthCheck, type HealthReport } from './health.js'
+export { metricsPlugin, METRICS, type MetricsPluginOptions } from './metrics.js'

@@ -25,3 +25,13 @@ export {
   ConfigValidationError,
   LifecycleError,
 } from './errors.js'
+export {
+  MetricsRegistry,
+  Counter,
+  Gauge,
+  Histogram,
+  Metric,
+  DEFAULT_BUCKETS,
+  type Labels,
+  type MetricOptions,
+} from './metrics.js'
