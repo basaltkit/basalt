@@ -1,5 +1,7 @@
 import { Container, createToken, definePlugin, ensureMetadata } from '@machize/core'
 import {
+  HttpServerCollector,
+  HTTP_SERVER,
   runRoute,
   toErrorResponse,
   type HttpReply,
@@ -8,17 +10,43 @@ import {
   type RequestEnricher,
   type RouteGuard,
 } from '@machize/http'
-import { Hono, type Context } from 'hono'
+import { Hono, type Context, type Next } from 'hono'
 
 export const HONO = createToken<Hono<any>>('hono')
+
+async function parseBody(context: Context): Promise<unknown> {
+  const method = context.req.method
+  if (method === 'GET' || method === 'HEAD') return undefined
+  const contentType = context.req.header('content-type') ?? ''
+  try {
+    if (contentType.includes('application/json')) return await context.req.json()
+    if (contentType.includes('form')) return await context.req.parseBody()
+    const text = await context.req.text()
+    return text || undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function toNeutralRequest(context: Context): Promise<HttpRequest> {
+  return {
+    method: context.req.method,
+    url: context.req.url,
+    headers: Object.fromEntries(context.req.raw.headers.entries()),
+    params: context.req.param() as Record<string, string>,
+    query: context.req.query(),
+    body: await parseBody(context),
+    ...(context.req.routePath ? { routePattern: context.req.routePath } : {}),
+    raw: context,
+  }
+}
 
 /** Neutral reply that buffers the response; the handler emits a native Response. */
 class HonoReply implements HttpReply {
   private _status = 200
   private _sent = false
   private _payload: unknown
-  readonly headers = new Map<string, string>()
-  constructor(private readonly context: Context) {}
+  constructor(readonly context: Context) {}
 
   get sent(): boolean {
     return this._sent
@@ -37,7 +65,9 @@ class HonoReply implements HttpReply {
     return this
   }
   header(name: string, value: string): this {
-    this.headers.set(name, value)
+    // Accumulate on the Hono context so headers set in a pre-hook survive to
+    // the final response (a separate reply instance builds it).
+    this.context.header(name, value)
     return this
   }
   send(payload: unknown): this {
@@ -47,23 +77,8 @@ class HonoReply implements HttpReply {
   }
 }
 
-async function parseBody(context: Context): Promise<unknown> {
-  const method = context.req.method
-  if (method === 'GET' || method === 'HEAD') return undefined
-  const contentType = context.req.header('content-type') ?? ''
-  try {
-    if (contentType.includes('application/json')) return await context.req.json()
-    if (contentType.includes('form')) return await context.req.parseBody()
-    const text = await context.req.text()
-    return text || undefined
-  } catch {
-    return undefined
-  }
-}
-
 function toResponse(reply: HonoReply, payload: unknown): Response {
-  const headers = new Headers()
-  for (const [name, value] of reply.headers) headers.set(name, value)
+  const headers = new Headers(reply.context.res?.headers)
   let body: string | null
   if (payload === undefined || payload === null) {
     body = null
@@ -84,18 +99,9 @@ function handlerFor(
   guards: RouteGuard[],
 ) {
   return async (context: Context): Promise<Response> => {
-    const request: HttpRequest = {
-      method: context.req.method,
-      url: context.req.url,
-      headers: Object.fromEntries(context.req.raw.headers.entries()),
-      params: context.req.param() as Record<string, string>,
-      query: context.req.query(),
-      body: await parseBody(context),
-      raw: context,
-    }
     const reply = new HonoReply(context)
     try {
-      const result = await runRoute(definition, request, reply, {
+      const result = await runRoute(definition, await toNeutralRequest(context), reply, {
         ...(container ? { container } : {}),
         enrichers,
         guards,
@@ -136,22 +142,45 @@ export interface HonoPluginOptions {
  * to serve (e.g. `@hono/node-server` or an edge runtime's `fetch` export).
  */
 export function honoPlugin(options: HonoPluginOptions = {}) {
+  const collector = new HttpServerCollector()
   return definePlugin({
     name: 'machize:hono',
     register({ container }) {
       container.singleton(HONO, () => options.app ?? new Hono())
+      container.singleton(HTTP_SERVER, () => collector)
     },
-    boot({ container }) {
+    boot({ container, hooks }) {
       const app = container.get(HONO)
       const routes = options.routes ?? []
       const metadata = ensureMetadata(container)
-      registerRoutes(
-        app,
-        routes,
-        container,
-        metadata.get<RequestEnricher>('http:enrichers'),
-        metadata.get<RouteGuard>('http:guards'),
-      )
+      const enrichers = metadata.get<RequestEnricher>('http:enrichers')
+      const guards = metadata.get<RouteGuard>('http:guards')
+
+      // Mount once edge plugins have registered their hooks/routes.
+      hooks.on('app:booted', () => {
+        if (collector.afterHooks.length) {
+          app.use(async (context: Context, next: Next) => {
+            const start = Date.now()
+            await next()
+            await collector.runAfter(await toNeutralRequest(context), new HonoReply(context), context.res.status, Date.now() - start)
+          })
+        }
+        app.use(async (context: Context, next: Next) => {
+          const reply = new HonoReply(context)
+          if (await collector.runPre(await toNeutralRequest(context), reply)) return toResponse(reply, reply.payload)
+          await next()
+          return undefined
+        })
+        registerRoutes(app, routes, container, enrichers, guards)
+        for (const { method, url, handler } of collector.extraRoutes) {
+          app.on(method, url, async (context: Context) => {
+            const reply = new HonoReply(context)
+            const result = await handler({ request: await toNeutralRequest(context), reply })
+            return toResponse(reply, reply.sent ? reply.payload : result)
+          })
+        }
+      })
+
       for (const definition of routes) {
         metadata.add('http:routes', {
           method: definition.method,
