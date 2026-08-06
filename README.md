@@ -43,6 +43,12 @@ through the plugin lifecycle. See the [Going to Production](https://github.com/Z
 
 ## Packages
 
+`@machize/*` is a **general-purpose backend toolkit** — most packages (HTTP,
+cache, queue, storage, mailer, events, …) work in any Node app. The
+**SaaS-specific** building blocks (tenancy, auth, permissions, subscriptions,
+audit/activity/notifications) are grouped under *SaaS domain* below and carry
+the `saas` keyword on npm.
+
 **Foundation**
 
 | Package | Purpose |

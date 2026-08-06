@@ -42,5 +42,13 @@
     "directory": "packages/subscriptions"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/subscriptions#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "saas",
+    "billing",
+    "subscriptions",
+    "stripe"
+  ]
 }

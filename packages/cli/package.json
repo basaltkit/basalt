@@ -37,5 +37,11 @@
     "directory": "packages/cli"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/cli#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "cli",
+    "commands"
+  ]
 }

@@ -43,5 +43,13 @@
     "directory": "packages/hono"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/hono#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "http",
+    "hono",
+    "adapter",
+    "edge"
+  ]
 }

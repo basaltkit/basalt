@@ -37,5 +37,14 @@
     "directory": "packages/create-app"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/create-app#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "saas",
+    "scaffolding",
+    "create",
+    "starter",
+    "boilerplate"
+  ]
 }

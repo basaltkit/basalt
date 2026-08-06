@@ -48,5 +48,11 @@
     "directory": "packages/admin-react"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/admin-react#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "admin",
+    "react"
+  ]
 }

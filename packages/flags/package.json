@@ -37,5 +37,10 @@
     "directory": "packages/flags"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/flags#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "feature-flags"
+  ]
 }
