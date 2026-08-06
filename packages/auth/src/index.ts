@@ -10,13 +10,18 @@ export {
   MemoryUserSource,
   MemorySessionStore,
   MemoryRefreshTokenStore,
+  MemoryAuthTokenStore,
   type AuthUser,
   type PublicUser,
   type UserSource,
+  type UserPatch,
   type SessionStore,
   type SessionRecord,
   type RefreshTokenStore,
   type RefreshRecord,
+  type AuthTokenStore,
+  type AuthTokenRecord,
+  type AuthTokenPurpose,
 } from './stores.js'
 export {
   Auth,
@@ -26,6 +31,8 @@ export {
   RefreshInvalidError,
   RefreshReusedError,
   AuthRequiredError,
+  AuthTokenInvalidError,
+  UserUpdateUnsupportedError,
   type AuthOptions,
   type TokenPair,
 } from './auth.js'

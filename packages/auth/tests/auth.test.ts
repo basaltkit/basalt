@@ -49,7 +49,7 @@ describe('Auth', () => {
   it('register + login issues verifiable tokens; duplicate email is 409', async () => {
     const auth = makeAuth()
     const user = await auth.register('ada@example.com', 'password123')
-    expect(user).toEqual({ id: user.id, email: 'ada@example.com' })
+    expect(user).toEqual({ id: user.id, email: 'ada@example.com', emailVerified: false })
     await expect(auth.register('ada@example.com', 'x'.repeat(10))).rejects.toBeInstanceOf(
       EmailTakenError,
     )

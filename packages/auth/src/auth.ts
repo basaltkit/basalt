@@ -4,13 +4,17 @@ import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
 import {
+  MemoryAuthTokenStore,
   MemoryRefreshTokenStore,
   MemorySessionStore,
+  type AuthTokenPurpose,
+  type AuthTokenStore,
   type AuthUser,
   type PublicUser,
   type RefreshTokenStore,
   type SessionRecord,
   type SessionStore,
+  type UserPatch,
   type UserSource,
 } from './stores.js'
 
@@ -50,6 +54,22 @@ export class AuthRequiredError extends MachizeError {
   }
 }
 
+/** A verification / reset token was unknown, already used, or expired. */
+export class AuthTokenInvalidError extends MachizeError {
+  readonly status = 400
+  constructor() {
+    super('AUTH_TOKEN_INVALID', 'The link is invalid or has expired. Request a new one.')
+  }
+}
+
+/** The configured UserSource can't be updated (needed for verification/reset). */
+export class UserUpdateUnsupportedError extends MachizeError {
+  readonly status = 500
+  constructor() {
+    super('AUTH_UPDATE_UNSUPPORTED', 'The UserSource does not implement update() — required for this flow.')
+  }
+}
+
 export interface TokenPair {
   accessToken: string
   refreshToken: string
@@ -67,9 +87,19 @@ export interface AuthOptions {
   hooks?: HookBus
   /** Brute-force lockout. Enabled by default; pass `false` to disable. */
   loginThrottle?: LoginThrottle | false
+  /** Store for verification/reset tokens. Default: in-memory. */
+  tokens?: AuthTokenStore
+  /** Email-verification link lifetime. Default 24h. */
+  verificationTtl?: DurationInput
+  /** Password-reset link lifetime. Default 1h. */
+  resetTtl?: DurationInput
 }
 
-export const publicUser = (user: AuthUser): PublicUser => ({ id: user.id, email: user.email })
+export const publicUser = (user: AuthUser): PublicUser => ({
+  id: user.id,
+  email: user.email,
+  emailVerified: user.emailVerified ?? false,
+})
 
 export class Auth {
   readonly users: UserSource
@@ -82,6 +112,9 @@ export class Auth {
   private readonly sessionTtl: DurationInput
   private readonly hooks: HookBus | undefined
   private readonly throttle: LoginThrottle | undefined
+  private readonly tokens: AuthTokenStore
+  private readonly verificationTtl: DurationInput
+  private readonly resetTtl: DurationInput
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -94,6 +127,9 @@ export class Auth {
     this.sessionTtl = options.sessionTtl ?? '30d'
     this.hooks = options.hooks
     this.throttle = options.loginThrottle === false ? undefined : options.loginThrottle ?? new LoginThrottle()
+    this.tokens = options.tokens ?? new MemoryAuthTokenStore()
+    this.verificationTtl = options.verificationTtl ?? '24h'
+    this.resetTtl = options.resetTtl ?? '1h'
   }
 
   async register(email: string, password: string): Promise<PublicUser> {
@@ -178,6 +214,84 @@ export class Auth {
       const user = await this.users.findById(session.userId)
       if (user) await this.hooks?.emit('auth:logout', { user: publicUser(user) })
     }
+  }
+
+  // --- email verification --------------------------------------------------
+
+  /**
+   * Starts email verification: mints a single-use token and emits
+   * `auth:verify_requested` for the app to email. Returns the token (so a
+   * caller can build the link) or null if no account matches — never reveals
+   * whether the email exists.
+   */
+  async requestEmailVerification(email: string): Promise<{ user: PublicUser; token: string } | null> {
+    const user = await this.users.findByEmail(email)
+    if (!user) return null
+    const token = await this.issueOneTimeToken(user.id, 'verify_email', this.verificationTtl)
+    await this.hooks?.emit('auth:verify_requested', { user: publicUser(user), token })
+    return { user: publicUser(user), token }
+  }
+
+  /** Consumes a verification token and marks the user's email verified. */
+  async verifyEmail(token: string): Promise<PublicUser> {
+    const record = await this.consumeToken(token, 'verify_email')
+    const user = await this.updateUser(record.userId, { emailVerified: true })
+    await this.hooks?.emit('auth:email_verified', { user: publicUser(user) })
+    return publicUser(user)
+  }
+
+  // --- password reset ------------------------------------------------------
+
+  /**
+   * Starts a password reset: mints a single-use token and emits
+   * `auth:password_reset_requested`. Returns null when no account matches, so
+   * the caller always responds 200 (no account enumeration).
+   */
+  async requestPasswordReset(email: string): Promise<{ user: PublicUser; token: string } | null> {
+    const user = await this.users.findByEmail(email)
+    if (!user) return null
+    const token = await this.issueOneTimeToken(user.id, 'reset_password', this.resetTtl)
+    await this.hooks?.emit('auth:password_reset_requested', { user: publicUser(user), token })
+    return { user: publicUser(user), token }
+  }
+
+  /**
+   * Consumes a reset token, sets the new password, and revokes every existing
+   * session/refresh token for the user (a reset logs everyone else out).
+   */
+  async resetPassword(token: string, newPassword: string): Promise<PublicUser> {
+    const record = await this.consumeToken(token, 'reset_password')
+    const user = await this.updateUser(record.userId, {
+      passwordHash: await this.hasher.hash(newPassword),
+    })
+    await this.refreshTokens.revokeAllForUser?.(user.id)
+    await this.hooks?.emit('auth:password_reset', { user: publicUser(user) })
+    return publicUser(user)
+  }
+
+  // --- token helpers -------------------------------------------------------
+
+  private async issueOneTimeToken(userId: string, purpose: AuthTokenPurpose, ttl: DurationInput): Promise<string> {
+    await this.tokens.deleteForUser(userId, purpose) // one live token per purpose
+    const token = randomBytes(32).toString('base64url')
+    await this.tokens.create({ token, userId, purpose, expiresAt: Date.now() + parseDuration(ttl) })
+    return token
+  }
+
+  private async consumeToken(token: string, purpose: AuthTokenPurpose) {
+    const record = await this.tokens.find(token)
+    if (!record || record.purpose !== purpose || record.usedAt !== undefined || Date.now() >= record.expiresAt) {
+      throw new AuthTokenInvalidError()
+    }
+    await this.tokens.markUsed(token)
+    return record
+  }
+
+  private async updateUser(id: string, patch: UserPatch): Promise<AuthUser> {
+    if (!this.users.update) throw new UserUpdateUnsupportedError()
+    const user = await this.users.update(id, patch)
+    if (!user) throw new AuthTokenInvalidError() // user vanished between issue and consume
+    return user
   }
 
   private async issueTokens(userId: string, familyId: string = randomUUID()): Promise<TokenPair> {
