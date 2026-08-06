@@ -4,7 +4,10 @@ import type { BillingPeriod } from '../plans.js'
 import {
   WebhookInvalidError,
   type BillingGateway,
+  type CheckoutInput,
   type CreateSubscriptionInput,
+  type PortalInput,
+  type SwapInput,
   type WebhookEvent,
 } from '../gateway.js'
 
@@ -104,6 +107,46 @@ export class StripeBillingGateway implements BillingGateway {
     }
   }
 
+  async createCheckoutSession(input: CheckoutInput): Promise<{ url: string; id: string }> {
+    const customer = await this.options.customerId(input.billableId)
+    const created = await this.request('POST', '/v1/checkout/sessions', {
+      mode: 'subscription',
+      customer,
+      'line_items[0][price]': this.options.priceId(input.plan, input.period),
+      'line_items[0][quantity]': '1',
+      success_url: input.successUrl,
+      cancel_url: input.cancelUrl,
+      'subscription_data[metadata][billableId]': input.billableId,
+      ...(input.trialDays !== undefined
+        ? { 'subscription_data[trial_period_days]': String(input.trialDays) }
+        : {}),
+    })
+    return { url: String((created as { url?: string }).url), id: String((created as { id?: string }).id) }
+  }
+
+  async createPortalSession(input: PortalInput): Promise<{ url: string }> {
+    const customer = await this.options.customerId(input.billableId)
+    const created = await this.request('POST', '/v1/billing_portal/sessions', {
+      customer,
+      return_url: input.returnUrl,
+    })
+    return { url: String((created as { url?: string }).url) }
+  }
+
+  async swapSubscription(gatewayRef: string, input: SwapInput): Promise<void> {
+    // Stripe updates a subscription by its item id, so fetch the current item first.
+    const sub = (await this.request('GET', `/v1/subscriptions/${gatewayRef}`)) as {
+      items?: { data?: Array<{ id?: string }> }
+    }
+    const itemId = sub.items?.data?.[0]?.id
+    if (!itemId) throw new StripeRequestError(500, 'subscription has no line item to update')
+    await this.request('POST', `/v1/subscriptions/${gatewayRef}`, {
+      'items[0][id]': itemId,
+      'items[0][price]': this.options.priceId(input.plan, input.period),
+      proration_behavior: input.prorationBehavior ?? 'create_prorations',
+    })
+  }
+
   verifyWebhook(rawBody: string, signature: string | undefined): WebhookEvent | null {
     if (!signature) throw new WebhookInvalidError()
 
@@ -137,11 +180,15 @@ export class StripeBillingGateway implements BillingGateway {
     if (!type || !event.id) return null
     const billableId = this.resolveBillableId(event)
     if (!billableId) return null
-    return { id: event.id, type, billableId }
+    // Invoice events carry the subscription id in `subscription`; subscription
+    // events carry it in `id`. Either lets us learn a Checkout-created ref.
+    const obj = event.data?.object as { subscription?: string; id?: string } | undefined
+    const gatewayRef = obj?.subscription ?? obj?.id
+    return { id: event.id, type, billableId, ...(gatewayRef ? { gatewayRef } : {}) }
   }
 
   private async request(
-    method: 'POST' | 'DELETE',
+    method: 'GET' | 'POST' | 'DELETE',
     path: string,
     body?: Record<string, string>,
   ): Promise<unknown> {

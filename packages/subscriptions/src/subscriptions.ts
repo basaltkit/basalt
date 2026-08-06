@@ -43,6 +43,14 @@ export class QuotaExceededError extends MachizeError {
   }
 }
 
+/** A billing action needs a gateway (or gateway capability) that isn't configured. */
+export class GatewayUnsupportedError extends MachizeError {
+  readonly status = 501
+  constructor(capability: string) {
+    super('BILLING_GATEWAY_UNSUPPORTED', `The billing gateway does not support "${capability}".`)
+  }
+}
+
 export interface SubscriptionsOptions {
   plans: Plans
   store?: SubscriptionStore
@@ -122,6 +130,48 @@ export class Subscriptions {
     return record
   }
 
+  /**
+   * Starts a hosted Checkout flow for a paid plan. Records the intended
+   * subscription locally as `incomplete` — it becomes `active` when the
+   * gateway confirms payment via webhook (`payment.succeeded`). Returns the
+   * URL to redirect the customer to.
+   */
+  async checkout(
+    billableId: string,
+    planName: string,
+    options: { period?: BillingPeriod; successUrl: string; cancelUrl: string },
+  ): Promise<{ url: string }> {
+    const plan = this.plan(planName)
+    if (!this.gateway?.createCheckoutSession) throw new GatewayUnsupportedError('checkout')
+    const period = options.period ?? 'monthly'
+    const trialDays = plan.trial
+      ? Math.max(1, Math.ceil(parseDuration(plan.trial) / 86_400_000))
+      : undefined
+
+    const session = await this.gateway.createCheckoutSession({
+      billableId,
+      plan: planName,
+      period,
+      successUrl: options.successUrl,
+      cancelUrl: options.cancelUrl,
+      ...(trialDays !== undefined ? { trialDays } : {}),
+    })
+
+    const record: SubscriptionRecord = { billableId, plan: planName, period, status: 'incomplete' }
+    await this.store.save(record)
+    await this.hooks?.emit('billing:checkout_started', { billableId, plan: planName, url: session.url })
+    return { url: session.url }
+  }
+
+  /**
+   * Opens a Customer Portal session for self-service billing (update card,
+   * change plan, cancel). Returns the URL to redirect the customer to.
+   */
+  async portal(billableId: string, options: { returnUrl: string }): Promise<{ url: string }> {
+    if (!this.gateway?.createPortalSession) throw new GatewayUnsupportedError('portal')
+    return this.gateway.createPortalSession({ billableId, returnUrl: options.returnUrl })
+  }
+
   async get(billableId: string): Promise<SubscriptionRecord | null> {
     return this.store.get(billableId)
   }
@@ -143,11 +193,31 @@ export class Subscriptions {
     )
   }
 
-  async swap(billableId: string, planName: string): Promise<SubscriptionRecord> {
+  /**
+   * Changes the plan on an active subscription. When the subscription is
+   * gateway-backed, the change is pushed to the gateway with proration so the
+   * customer is credited/charged the mid-cycle difference (pass
+   * `{ prorate: false }` to switch at the next renewal with no immediate
+   * settlement).
+   */
+  async swap(
+    billableId: string,
+    planName: string,
+    options: { prorate?: boolean } = {},
+  ): Promise<SubscriptionRecord> {
     const record = await this.store.get(billableId)
     if (!record || !this.isActive(record)) throw new NotSubscribedError()
     this.plan(planName)
     const from = record.plan
+
+    if (record.gatewayRef && this.gateway?.swapSubscription) {
+      await this.gateway.swapSubscription(record.gatewayRef, {
+        plan: planName,
+        period: record.period,
+        prorationBehavior: options.prorate === false ? 'none' : 'create_prorations',
+      })
+    }
+
     record.plan = planName
     await this.store.save(record)
     await this.hooks?.emit('billing:swapped', { subscription: record, from })
@@ -251,6 +321,9 @@ export class Subscriptions {
     try {
       const record = await this.store.get(event.billableId)
       if (record) {
+        // Learn the gateway subscription id from the first event that carries
+        // it — a Checkout-created subscription has no local ref until now.
+        if (event.gatewayRef && !record.gatewayRef) record.gatewayRef = event.gatewayRef
         if (event.type === 'subscription.canceled') {
           record.status = 'canceled'
           record.canceledAt = Date.now()
