@@ -1,5 +1,42 @@
 # @machize/fastify
 
+## 0.3.0
+
+### Minor Changes
+
+- 4846bc1: `idempotencyPlugin`: safe retries for mutating requests. When a client sends an
+  `Idempotency-Key`, the first response is cached and replayed for repeats with
+  the same key (scoped by method + route), so a network retry never performs the
+  operation twice. In-flight duplicates get `409 IDEMPOTENCY_CONFLICT`; `5xx`
+  responses are not cached so real failures stay retryable. Pluggable store
+  (in-memory default).
+- 8a0ccbc: Observability (M2):
+
+  - `@machize/core`: zero-dependency metrics primitives — `Counter`, `Gauge`, `Histogram` and a `MetricsRegistry` that renders the Prometheus text exposition format (labels, cumulative buckets, sum/count).
+  - `@machize/fastify`: `metricsPlugin` exposes a Prometheus `/metrics` endpoint and auto-instruments HTTP requests (`http_requests_total`, `http_request_duration_seconds`, `http_requests_in_flight`), labelling by route template to keep cardinality bounded. The registry is resolvable via the `METRICS` token for app metrics.
+
+- b405334: OpenAPI (M3): `openapiPlugin` serves an OpenAPI 3.0 document generated from the
+  app's registered routes and their Zod schemas — no duplicate annotations. Adds
+  `generateOpenApi()` and a minimal `zodToJsonSchema()` (common Zod subset →
+  JSON Schema). Point Swagger UI / Redoc at `/openapi.json`.
+- 7b92e25: Reliability & tracing:
+
+  - `@machize/events`: transactional **outbox** for at-least-once delivery to external systems — `Outbox`, `MemoryOutboxStore`, `outboxPlugin` (capture domain events tenant-scoped, relay on an interval with retry/backoff and a dead-letter ceiling).
+  - `@machize/core`: dependency-free **distributed tracing** — W3C trace-context (`parseTraceparent`/`formatTraceparent`), `Tracer`/`Span`, and an **OTLP/HTTP JSON exporter** that talks to any OpenTelemetry collector (`OtlpHttpExporter`), plus `ConsoleSpanExporter`/`InMemorySpanExporter`.
+  - `@machize/fastify`: `tracingPlugin` — continues an inbound trace, records a server span per request (labelled by route template) with HTTP attributes and status, echoes `traceparent`, and exports.
+
+- 94a01eb: Production hardening (M1 — secure by default):
+
+  - `@machize/fastify`: new `securityPlugin` (rate limiting with a pluggable store, CORS with allow-listing + preflight, and secure response headers — HSTS, nosniff, frame-deny, referrer-policy, COOP), and `healthPlugin` with distinct `/livez` (liveness) and `/readyz` (readiness, runs dependency checks → 503 when any fails).
+  - `@machize/env`: new `secret()` schema — fail-closed in production (required, rejects placeholder-looking values, enforces a minimum length) while keeping a `devDefault` for local runs.
+  - `@machize/auth`: brute-force lockout on `login()` via `LoginThrottle` (enabled by default, per-email rolling window, cleared on success; `loginThrottle: false` to disable).
+
+### Patch Changes
+
+- Updated dependencies [8a0ccbc]
+- Updated dependencies [7b92e25]
+  - @machize/core@0.3.0
+
 ## 0.1.0
 
 ### Minor Changes
