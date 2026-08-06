@@ -37,5 +37,12 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/express"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/express#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues"
 }
