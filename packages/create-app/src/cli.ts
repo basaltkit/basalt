@@ -84,10 +84,17 @@ function run(command: string, args: string[], cwd: string): Promise<boolean> {
   })
 }
 
+/** Cleanly abort on Ctrl+C instead of dumping a Node AbortError stack trace. */
+function cancel(): never {
+  stdout.write('\nCancelled.\n')
+  process.exit(130) // 128 + SIGINT
+}
+
 /** Prompts for anything missing — only in a TTY and when --yes was not passed. */
 async function promptMissing(flags: Flags): Promise<Flags> {
   if (flags.yes || flags.name !== undefined || !stdin.isTTY) return flags
   const rl = createInterface({ input: stdin, output: stdout })
+  rl.on('SIGINT', cancel) // Ctrl+C during a prompt
   try {
     const ask = async (question: string, fallback: string): Promise<string> => {
       const answer = (await rl.question(`${question} `)).trim()
@@ -107,6 +114,10 @@ async function promptMissing(flags: Flags): Promise<Flags> {
     flags.cli = await confirm("'mach' CLI (code generators)?", false)
     flags.install = await confirm('Install dependencies now?', false)
     flags.git = await confirm('Initialize a git repository?', false)
+  } catch (error) {
+    // readline/promises rejects the pending question with an AbortError on Ctrl+C.
+    if ((error as NodeJS.ErrnoException).code === 'ABORT_ERR') cancel()
+    throw error
   } finally {
     rl.close()
   }
@@ -120,7 +131,13 @@ if (!flags.name) {
   process.exit(1)
 }
 
-const pm = flags.pm ?? detectPackageManager()
+let pm = flags.pm ?? detectPackageManager()
+// The web/ frontend is a pnpm workspace member (pnpm-workspace.yaml); npm,
+// yarn and bun can't install or run it, so --ui projects are pnpm-only.
+if (flags.ui && pm !== 'pnpm') {
+  console.log(`Note: --ui projects are pnpm workspaces — using pnpm instead of ${pm}.`)
+  pm = 'pnpm'
+}
 
 try {
   const result = await createProject({
