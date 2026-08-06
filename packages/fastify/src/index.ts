@@ -28,3 +28,10 @@ export {
   type OpenApiInfo,
   type RouteLike,
 } from './openapi.js'
+export {
+  idempotencyPlugin,
+  MemoryIdempotencyStore,
+  type IdempotencyPluginOptions,
+  type IdempotencyStore,
+  type IdempotencyRecord,
+} from './idempotency.js'
