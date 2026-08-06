@@ -17,6 +17,8 @@ export interface HttpRequest {
   query: unknown
   body: unknown
   ip?: string
+  /** Matched route template (e.g. `/users/:id`), when the adapter knows it. */
+  routePattern?: string
   raw: unknown
 }
 

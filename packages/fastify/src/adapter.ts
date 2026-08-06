@@ -1,5 +1,7 @@
 import { Container, createToken, definePlugin, ensureMetadata } from '@machize/core'
 import {
+  HttpServerCollector,
+  HTTP_SERVER,
   runRoute,
   toErrorResponse,
   type HttpReply,
@@ -37,6 +39,7 @@ export interface FastifyPluginOptions {
 }
 
 export function fastifyPlugin(options: FastifyPluginOptions = {}) {
+  const collector = new HttpServerCollector()
   return definePlugin({
     name: 'machize:fastify',
     register({ container }) {
@@ -45,13 +48,17 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
         instance.setErrorHandler(errorHandler)
         return instance
       })
+      container.singleton(HTTP_SERVER, () => collector)
     },
-    boot({ container }) {
+    boot({ container, hooks }) {
       const routes = options.routes ?? []
       const metadata = ensureMetadata(container)
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
-      registerRoutes(container.get(FASTIFY), routes, container, enrichers, guards)
+      const instance = container.get(FASTIFY)
+      registerRoutes(instance, routes, container, enrichers, guards)
+      // Mount edge-plugin hooks/routes once every plugin has registered them.
+      hooks.on('app:booted', () => mountCollector(instance, collector))
       // Expose routes to tooling (CLI `mach routes`, OpenAPI, SDK). The Zod
       // schemas ride along so the OpenAPI generator needs no duplicate wiring.
       for (const definition of routes) {
@@ -89,27 +96,61 @@ export function registerRoutes(
   }
 }
 
+function toNeutralRequest(request: FastifyRequest): HttpRequest {
+  return {
+    method: request.method,
+    url: request.url,
+    headers: request.headers,
+    params: (request.params ?? {}) as Record<string, string>,
+    query: request.query,
+    body: request.body,
+    ip: request.ip,
+    ...(request.routeOptions?.url ? { routePattern: request.routeOptions.url } : {}),
+    raw: request,
+  }
+}
+
 function wrapHandler(
   definition: MachizeRoute,
   container?: Container,
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
 ) {
-  return async (request: FastifyRequest, reply: FastifyReply) => {
-    const httpRequest: HttpRequest = {
-      method: request.method,
-      url: request.url,
-      headers: request.headers,
-      params: (request.params ?? {}) as Record<string, string>,
-      query: request.query,
-      body: request.body,
-      ip: request.ip,
-      raw: request,
-    }
-    return runRoute(definition, httpRequest, reply as unknown as HttpReply, {
+  return async (request: FastifyRequest, reply: FastifyReply) =>
+    runRoute(definition, toNeutralRequest(request), reply as unknown as HttpReply, {
       ...(container ? { container } : {}),
       enrichers,
       guards,
+    })
+}
+
+/** Applies edge-plugin hooks and routes (from the collector) to the Fastify instance. */
+function mountCollector(instance: FastifyInstance, collector: HttpServerCollector): void {
+  for (const hook of collector.preHooks) {
+    instance.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+      await hook({ request: toNeutralRequest(request), reply: reply as unknown as HttpReply })
+      if (reply.sent) return reply
+      return undefined
+    })
+  }
+  for (const hook of collector.afterHooks) {
+    instance.addHook('onResponse', async (request: FastifyRequest, reply: FastifyReply) => {
+      await hook({
+        request: toNeutralRequest(request),
+        reply: reply as unknown as HttpReply,
+        statusCode: reply.statusCode,
+        durationMs: reply.elapsedTime,
+      })
+    })
+  }
+  for (const { method, url, handler } of collector.extraRoutes) {
+    instance.route({
+      method,
+      url,
+      handler: async (request: FastifyRequest, reply: FastifyReply) => {
+        const result = await handler({ request: toNeutralRequest(request), reply: reply as unknown as HttpReply })
+        return reply.sent ? undefined : result
+      },
     })
   }
 }

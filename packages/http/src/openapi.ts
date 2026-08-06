@@ -1,35 +1,33 @@
 import { definePlugin, ensureMetadata } from '@machize/core'
-import type { FastifyInstance } from 'fastify'
 import type { ZodTypeAny } from 'zod'
-import { FASTIFY } from './adapter.js'
+import { HTTP_SERVER } from './server.js'
 
- 
-type JsonSchema = Record<string, any>
+type JsonSchema = Record<string, unknown>
 
 /**
  * Minimal Zod → JSON Schema (OpenAPI 3.0 dialect) covering the subset used in
- * route definitions. Unknown types degrade to `{}` (any) rather than throwing,
- * so documentation generation never breaks a boot.
+ * route definitions. Unknown types degrade to `{}` rather than throwing.
  */
 export function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
-  const def: any = (schema as any)?._def
+  const def = (schema as { _def?: Record<string, unknown> })?._def as Record<string, unknown> | undefined
   if (!def) return {}
-  switch (def.typeName) {
+  const anyDef = def as Record<string, unknown> & { typeName: string; checks?: { kind: string; value?: unknown; regex?: RegExp }[] }
+  switch (anyDef.typeName) {
     case 'ZodString': {
       const out: JsonSchema = { type: 'string' }
-      for (const check of def.checks ?? []) {
+      for (const check of anyDef.checks ?? []) {
         if (check.kind === 'email') out.format = 'email'
         else if (check.kind === 'url') out.format = 'uri'
         else if (check.kind === 'uuid') out.format = 'uuid'
         else if (check.kind === 'min') out.minLength = check.value
         else if (check.kind === 'max') out.maxLength = check.value
-        else if (check.kind === 'regex') out.pattern = String(check.regex.source)
+        else if (check.kind === 'regex') out.pattern = String(check.regex?.source)
       }
       return out
     }
     case 'ZodNumber': {
       const out: JsonSchema = { type: 'number' }
-      for (const check of def.checks ?? []) {
+      for (const check of anyDef.checks ?? []) {
         if (check.kind === 'int') out.type = 'integer'
         else if (check.kind === 'min') out.minimum = check.value
         else if (check.kind === 'max') out.maximum = check.value
@@ -41,21 +39,20 @@ export function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
     case 'ZodDate':
       return { type: 'string', format: 'date-time' }
     case 'ZodLiteral':
-      return { const: def.value }
+      return { const: (def as { value: unknown }).value }
     case 'ZodEnum':
-      return { type: 'string', enum: def.values }
+      return { type: 'string', enum: (def as { values: unknown[] }).values }
     case 'ZodNativeEnum':
-      return { enum: Object.values(def.values) }
+      return { enum: Object.values((def as { values: object }).values) }
     case 'ZodArray':
-      return { type: 'array', items: zodToJsonSchema(def.type) }
+      return { type: 'array', items: zodToJsonSchema((def as { type: ZodTypeAny }).type) }
     case 'ZodObject': {
-      const shape = def.shape()
+      const shape = (def as { shape: () => Record<string, ZodTypeAny> }).shape()
       const properties: JsonSchema = {}
       const required: string[] = []
       for (const [key, value] of Object.entries(shape)) {
-        const child = value as ZodTypeAny
-        properties[key] = zodToJsonSchema(child)
-        if (!isOptional(child)) required.push(key)
+        properties[key] = zodToJsonSchema(value)
+        if (!isOptional(value)) required.push(key)
       }
       const out: JsonSchema = { type: 'object', properties }
       if (required.length) out.required = required
@@ -63,22 +60,28 @@ export function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
     }
     case 'ZodOptional':
     case 'ZodNullable':
-      return { ...zodToJsonSchema(def.innerType), ...(def.typeName === 'ZodNullable' ? { nullable: true } : {}) }
+      return {
+        ...zodToJsonSchema((def as { innerType: ZodTypeAny }).innerType),
+        ...(anyDef.typeName === 'ZodNullable' ? { nullable: true } : {}),
+      }
     case 'ZodDefault':
-      return { ...zodToJsonSchema(def.innerType), default: def.defaultValue() }
+      return {
+        ...zodToJsonSchema((def as { innerType: ZodTypeAny }).innerType),
+        default: (def as { defaultValue: () => unknown }).defaultValue(),
+      }
     case 'ZodEffects':
-      return zodToJsonSchema(def.schema)
+      return zodToJsonSchema((def as { schema: ZodTypeAny }).schema)
     case 'ZodUnion':
-      return { anyOf: def.options.map((option: ZodTypeAny) => zodToJsonSchema(option)) }
+      return { anyOf: (def as { options: ZodTypeAny[] }).options.map((option) => zodToJsonSchema(option)) }
     case 'ZodRecord':
-      return { type: 'object', additionalProperties: zodToJsonSchema(def.valueType) }
+      return { type: 'object', additionalProperties: zodToJsonSchema((def as { valueType: ZodTypeAny }).valueType) }
     default:
       return {}
   }
 }
 
 function isOptional(schema: ZodTypeAny): boolean {
-  const name = (schema as any)?._def?.typeName
+  const name = (schema as { _def?: { typeName?: string } })?._def?.typeName
   return name === 'ZodOptional' || name === 'ZodDefault'
 }
 
@@ -98,31 +101,31 @@ export interface RouteLike {
   response?: Record<number, ZodTypeAny>
 }
 
-/** `/users/:id` → `/users/{id}` (OpenAPI path templating). */
 const toOpenApiPath = (url: string): string => url.replace(/:([A-Za-z0-9_]+)/g, '{$1}')
 
 /** Builds an OpenAPI 3.0 document from Machize route definitions. */
 export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSchema {
-  const paths: JsonSchema = {}
+  const paths: Record<string, Record<string, unknown>> = {}
   let usesAuth = false
 
   for (const route of routes) {
     const path = toOpenApiPath(route.url)
     const method = route.method.toLowerCase()
     const operation: JsonSchema = { responses: {} }
+    const responses = operation.responses as Record<string, unknown>
 
     const parameters: JsonSchema[] = []
     if (route.params) {
       const schema = zodToJsonSchema(route.params)
-      for (const [name, prop] of Object.entries(schema.properties ?? {})) {
+      for (const [name, prop] of Object.entries((schema.properties as JsonSchema) ?? {})) {
         parameters.push({ name, in: 'path', required: true, schema: prop })
       }
     }
     if (route.query) {
       const schema = zodToJsonSchema(route.query)
-      const required = new Set<string>(schema.required ?? [])
-      for (const [name, prop] of Object.entries(schema.properties ?? {})) {
-        parameters.push({ name, in: 'query', required: required.has(name), schema: prop })
+      const req = new Set<string>((schema.required as string[]) ?? [])
+      for (const [name, prop] of Object.entries((schema.properties as JsonSchema) ?? {})) {
+        parameters.push({ name, in: 'query', required: req.has(name), schema: prop })
       }
     }
     if (parameters.length) operation.parameters = parameters
@@ -134,15 +137,14 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSch
       }
     }
 
-    const responses = route.response ?? {}
-    const statuses = Object.keys(responses)
+    const statuses = Object.keys(route.response ?? {})
     if (statuses.length === 0) {
-      operation.responses['200'] = { description: 'OK' }
+      responses['200'] = { description: 'OK' }
     } else {
       for (const status of statuses) {
-        operation.responses[status] = {
+        responses[status] = {
           description: 'OK',
-          content: { 'application/json': { schema: zodToJsonSchema(responses[Number(status)]!) } },
+          content: { 'application/json': { schema: zodToJsonSchema(route.response![Number(status)]!) } },
         }
       }
     }
@@ -170,29 +172,18 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSch
 
 export interface OpenApiPluginOptions {
   info: OpenApiInfo
-  /** Document path. Default '/openapi.json'. */
   path?: string
-  /** Provide routes explicitly; otherwise read from the http:routes metadata. */
   routes?: RouteLike[]
 }
 
-/**
- * Serves an OpenAPI 3.0 document generated from the app's registered routes and
- * their Zod schemas — no duplicate annotations. Point Swagger UI / Redoc at it.
- */
+/** Serves an OpenAPI 3.0 document from the registered routes (any adapter). */
 export function openapiPlugin(options: OpenApiPluginOptions) {
   return definePlugin({
     name: 'machize:openapi',
-    dependsOn: ['machize:fastify'],
     boot({ container }) {
-      const app: FastifyInstance = container.get(FASTIFY)
       const routes = options.routes ?? ensureMetadata(container).get<RouteLike>('http:routes')
       const document = generateOpenApi(routes, options.info)
-      app.route({
-        method: 'GET',
-        url: options.path ?? '/openapi.json',
-        handler: async () => document,
-      })
+      container.get(HTTP_SERVER).addRoute('GET', options.path ?? '/openapi.json', () => document)
     },
   })
 }

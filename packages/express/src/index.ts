@@ -1,5 +1,7 @@
 import { Container, createToken, definePlugin, ensureMetadata } from '@machize/core'
 import {
+  HttpServerCollector,
+  HTTP_SERVER,
   runRoute,
   toErrorResponse,
   type HttpReply,
@@ -8,9 +10,23 @@ import {
   type RequestEnricher,
   type RouteGuard,
 } from '@machize/http'
-import express, { type Express, type Request, type Response } from 'express'
+import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
 export const EXPRESS = createToken<Express>('express')
+
+function toNeutralRequest(req: Request): HttpRequest {
+  return {
+    method: req.method,
+    url: req.originalUrl,
+    headers: req.headers,
+    params: req.params as Record<string, string>,
+    query: req.query,
+    body: req.body,
+    ...(req.ip ? { ip: req.ip } : {}),
+    ...(req.route?.path ? { routePattern: String(req.route.path) } : {}),
+    raw: req,
+  }
+}
 
 /** Neutral reply backed by an Express `res`. */
 class ExpressReply implements HttpReply {
@@ -45,26 +61,18 @@ class ExpressReply implements HttpReply {
   }
 }
 
-function handlerFor(
+type Register = (path: string, handler: (req: Request, res: Response) => unknown) => void
+
+function machizeHandler(
   definition: MachizeRoute,
   container: Container | undefined,
   enrichers: RequestEnricher[],
   guards: RouteGuard[],
 ) {
   return async (req: Request, res: Response): Promise<void> => {
-    const request: HttpRequest = {
-      method: req.method,
-      url: req.originalUrl,
-      headers: req.headers,
-      params: req.params as Record<string, string>,
-      query: req.query,
-      body: req.body,
-      ...(req.ip ? { ip: req.ip } : {}),
-      raw: req,
-    }
     const reply = new ExpressReply(res)
     try {
-      const result = await runRoute(definition, request, reply, {
+      const result = await runRoute(definition, toNeutralRequest(req), reply, {
         ...(container ? { container } : {}),
         enrichers,
         guards,
@@ -85,10 +93,9 @@ export function registerRoutes(
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
 ): void {
-  type Register = (path: string, handler: (req: Request, res: Response) => unknown) => void
   const router = app as unknown as Record<string, Register>
   for (const definition of routes) {
-    router[definition.method.toLowerCase()]!(definition.url, handlerFor(definition, container, enrichers, guards))
+    router[definition.method.toLowerCase()]!(definition.url, machizeHandler(definition, container, enrichers, guards))
   }
 }
 
@@ -99,10 +106,12 @@ export interface ExpressPluginOptions {
 }
 
 /**
- * Runs Machize on Express. The same routes, enrichers and guards you register
- * for Fastify work unchanged — resolve `EXPRESS` for the app to `listen()`.
+ * Runs Machize on Express. The same routes, enrichers, guards and edge plugins
+ * you register for Fastify work unchanged — resolve `EXPRESS` for the app to
+ * `listen()`.
  */
 export function expressPlugin(options: ExpressPluginOptions = {}) {
+  const collector = new HttpServerCollector()
   return definePlugin({
     name: 'machize:express',
     register({ container }) {
@@ -111,18 +120,43 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
         app.use(express.json())
         return app
       })
+      container.singleton(HTTP_SERVER, () => collector)
     },
-    boot({ container }) {
+    boot({ container, hooks }) {
       const app = container.get(EXPRESS)
       const routes = options.routes ?? []
       const metadata = ensureMetadata(container)
-      registerRoutes(
-        app,
-        routes,
-        container,
-        metadata.get<RequestEnricher>('http:enrichers'),
-        metadata.get<RouteGuard>('http:guards'),
-      )
+      const enrichers = metadata.get<RequestEnricher>('http:enrichers')
+      const guards = metadata.get<RouteGuard>('http:guards')
+      const router = app as unknown as Record<string, Register>
+
+      // Mount everything once edge plugins have registered their hooks/routes,
+      // in the order Express needs: after-hooks → pre-hooks → routes.
+      hooks.on('app:booted', () => {
+        if (collector.afterHooks.length) {
+          app.use((req: Request, res: Response, next: NextFunction) => {
+            const start = Date.now()
+            res.on('finish', () => {
+              void collector.runAfter(toNeutralRequest(req), new ExpressReply(res), res.statusCode, Date.now() - start)
+            })
+            next()
+          })
+        }
+        app.use(async (req: Request, res: Response, next: NextFunction) => {
+          const reply = new ExpressReply(res)
+          if (await collector.runPre(toNeutralRequest(req), reply)) return
+          next()
+        })
+        registerRoutes(app, routes, container, enrichers, guards)
+        for (const { method, url, handler } of collector.extraRoutes) {
+          router[method.toLowerCase()]!(url, async (req: Request, res: Response) => {
+            const reply = new ExpressReply(res)
+            const result = await handler({ request: toNeutralRequest(req), reply })
+            if (!reply.sent) reply.send(result)
+          })
+        }
+      })
+
       for (const definition of routes) {
         metadata.add('http:routes', {
           method: definition.method,
