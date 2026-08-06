@@ -20,6 +20,8 @@ declare module '@machize/core' {
     /** Password reset requested — the app emails the token as a link. */
     'auth:password_reset_requested': { user: PublicUser; token: string }
     'auth:password_reset': { user: PublicUser }
+    'auth:mfa_enabled': { user: PublicUser }
+    'auth:mfa_disabled': { user: PublicUser }
   }
 }
 

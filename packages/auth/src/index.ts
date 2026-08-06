@@ -12,6 +12,7 @@ export {
   MemoryRefreshTokenStore,
   MemoryAuthTokenStore,
   MemoryApiKeyStore,
+  MemoryMfaStore,
   type AuthUser,
   type PublicUser,
   type UserSource,
@@ -27,6 +28,8 @@ export {
   type ApiKeyRecord,
   type ApiKeyInfo,
   type ApiKeyFilter,
+  type MfaStore,
+  type MfaRecord,
 } from './stores.js'
 export {
   Auth,
@@ -38,9 +41,23 @@ export {
   AuthRequiredError,
   AuthTokenInvalidError,
   UserUpdateUnsupportedError,
+  MfaRequiredError,
+  MfaInvalidCodeError,
+  MfaNotEnrolledError,
   type AuthOptions,
   type TokenPair,
 } from './auth.js'
+export {
+  base32Encode,
+  base32Decode,
+  generateTotpSecret,
+  totp,
+  verifyTotp,
+  otpauthUri,
+  type TotpOptions,
+  type VerifyTotpOptions,
+  type OtpauthUriInput,
+} from './totp.js'
 export { authPlugin, AUTH, type AuthPluginOptions } from './plugin.js'
 export {
   ApiKeys,
@@ -51,5 +68,5 @@ export {
   type ApiKeyContext,
 } from './apikeys.js'
 export { apiKeysPlugin, API_KEYS, type ApiKeysPluginOptions } from './apikeys-plugin.js'
-export { authRoutes, apiKeyRoutes } from './routes.js'
+export { authRoutes, apiKeyRoutes, mfaRoutes } from './routes.js'
 export { LoginThrottle, AccountLockedError, type LoginThrottleOptions } from './throttle.js'
