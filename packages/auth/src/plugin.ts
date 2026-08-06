@@ -14,6 +14,12 @@ declare module '@machize/core' {
     'auth:login': { user: PublicUser }
     'auth:login_failed': { email: string }
     'auth:logout': { user: PublicUser }
+    /** Email verification requested — the app emails the token as a link. */
+    'auth:verify_requested': { user: PublicUser; token: string }
+    'auth:email_verified': { user: PublicUser }
+    /** Password reset requested — the app emails the token as a link. */
+    'auth:password_reset_requested': { user: PublicUser; token: string }
+    'auth:password_reset': { user: PublicUser }
   }
 }
 
