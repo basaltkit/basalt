@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import type { ZodTypeAny } from 'zod'
 import { FASTIFY } from './adapter.js'
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 type JsonSchema = Record<string, any>
 
 /**

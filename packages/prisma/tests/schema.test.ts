@@ -76,9 +76,9 @@ describe('prismaPlugin schema-per-tenant mode', () => {
       ],
     }).boot()
 
-    const enricher = app.container.get(METADATA).get<Function>('http:enrichers')[0] as (info: {
-      context: Record<string, unknown>
-    }) => Promise<void>
+    const enricher = app.container
+      .get(METADATA)
+      .get<(info: { context: Record<string, unknown> }) => Promise<void>>('http:enrichers')[0]!
 
     const acme: Record<string, unknown> = { tenant: { id: 'acme' } }
     const globex: Record<string, unknown> = { tenant: { id: 'globex' } }

@@ -31,7 +31,7 @@ describe('LoginThrottle', () => {
   })
 
   it('is keyed case-insensitively by email', async () => {
-    let now = 0
+    const now = 0
     const throttle = new LoginThrottle({ maxAttempts: 2, windowMs: 60_000, clock: () => now })
     const auth = await seededAuth(throttle)
     await expect(auth.login('USER@example.com', 'wrong')).rejects.toBeInstanceOf(InvalidCredentialsError)

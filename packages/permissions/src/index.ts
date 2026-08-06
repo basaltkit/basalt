@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata, MachizeError, tryCtx } from '@machize/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx } from '@machize/core'
 import type { RouteGuard } from '@machize/fastify'
 import { AuthRequiredGuardError } from './errors.js'
 

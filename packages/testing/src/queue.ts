@@ -63,7 +63,7 @@ export interface FakeQueue {
   /** Every dispatch, in order — payload and context snapshot included. */
   dispatched: CapturedJob[]
   assertDispatched(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test boundary
+     
     job: JobDefinition<any> | string,
     predicate?: (captured: CapturedJob) => boolean,
   ): CapturedJob
@@ -72,7 +72,7 @@ export interface FakeQueue {
   drain(): Promise<number>
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- test boundary
+ 
 export function fakeQueue(options: { jobs?: JobDefinition<any>[] } = {}): FakeQueue {
   const driver = new CapturingQueueDriver()
   const plugin = queuePlugin({

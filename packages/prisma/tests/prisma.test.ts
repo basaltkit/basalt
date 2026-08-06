@@ -142,9 +142,9 @@ describe('prismaPlugin', () => {
   it('shared mode: enricher attaches the client; db() reads it', async () => {
     const fakeClient = { name: 'shared' }
     const app = await createApp({ plugins: [prismaPlugin({ client: fakeClient })] }).boot()
-    const enricher = app.container.get(METADATA).get<Function>('http:enrichers')[0] as (info: {
-      context: Record<string, unknown>
-    }) => Promise<void>
+    const enricher = app.container
+      .get(METADATA)
+      .get<(info: { context: Record<string, unknown> }) => Promise<void>>('http:enrichers')[0]!
 
     const context: Record<string, unknown> = {}
     await enricher({ context })
@@ -161,9 +161,9 @@ describe('prismaPlugin', () => {
     const app = await createApp({
       plugins: [prismaPlugin({ forTenant: (tenantId) => ({ tenantId }) })],
     }).boot()
-    const enricher = app.container.get(METADATA).get<Function>('http:enrichers')[0] as (info: {
-      context: Record<string, unknown>
-    }) => Promise<void>
+    const enricher = app.container
+      .get(METADATA)
+      .get<(info: { context: Record<string, unknown> }) => Promise<void>>('http:enrichers')[0]!
 
     const acme: Record<string, unknown> = { tenant: { id: 'acme' } }
     const globex: Record<string, unknown> = { tenant: { id: 'globex' } }

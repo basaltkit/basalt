@@ -5,7 +5,7 @@ import { MemoryOutboxStore, Outbox, OUTBOX, outboxPlugin } from '../src/index.js
 
 describe('Outbox', () => {
   it('publishes pending entries and marks them delivered', async () => {
-    let clock = 1000
+    const clock = 1000
     const outbox = new Outbox(new MemoryOutboxStore(), { now: () => clock })
     await outbox.enqueue('invoice.paid', { id: 'in_1' }, 'acme')
     await outbox.enqueue('invoice.paid', { id: 'in_2' })

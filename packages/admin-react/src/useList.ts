@@ -26,7 +26,6 @@ export function useList<T>(source: AdminDataSource<T>, params?: ListParams): Use
       setLoading(false)
     }
     // params is captured via `key` to avoid identity churn
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, key])
 
   useEffect(() => {
