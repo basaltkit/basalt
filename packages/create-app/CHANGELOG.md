@@ -1,5 +1,13 @@
 # create-machize
 
+## 0.5.2
+
+### Patch Changes
+
+- 4926a63: Exit cleanly on Ctrl+C during the interactive prompts. Previously aborting a
+  prompt dumped a raw Node `AbortError` stack trace; now it prints "Cancelled."
+  and exits with code 130.
+
 ## 0.5.0
 
 ### Minor Changes
@@ -30,7 +38,7 @@
 
 ### Patch Changes
 
-- Fix generated apps depending on @machize/* at the ^0.0.0 placeholder; now ^0.1.0 (the published range).
+- Fix generated apps depending on @machize/\* at the ^0.0.0 placeholder; now ^0.1.0 (the published range).
 
 ## 0.1.0
 

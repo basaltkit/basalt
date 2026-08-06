@@ -10,16 +10,14 @@ export interface ProjectOptions {
 }
 
 /** Base release line for @machize/* deps. */
-const MACHIZE_VERSION = '^0.1.0'
+const MACHIZE_VERSION = '^0.4.0'
 
 /**
- * Per-package range overrides. In semver 0.x, `^0.1.0` locks the minor, so a
- * package that has advanced to 0.2+ needs its own range or a fresh app can't
- * install it. Add an entry when a package crosses a minor.
+ * Per-package range overrides. In semver 0.x, `^0.4.0` locks the minor, so a
+ * package that advances past the base line needs its own range or a fresh app
+ * can't install it. Add an entry when a package crosses a minor.
  */
-const VERSIONS: Record<string, string> = {
-  '@machize/generator': '^0.2.0',
-}
+const VERSIONS: Record<string, string> = {}
 
 /** The dependency range for a @machize package (override, else the base line). */
 export const versionOf = (pkg: string): string => VERSIONS[pkg] ?? MACHIZE_VERSION
@@ -32,7 +30,7 @@ export function packageJson(options: ProjectOptions): string {
     '@machize/events': MACHIZE_VERSION,
     '@machize/fastify': MACHIZE_VERSION,
     '@machize/logger': MACHIZE_VERSION,
-    zod: '^3.24.0',
+    zod: '^4.0.0',
   }
   if (options.tenancy) dependencies['@machize/tenancy'] = MACHIZE_VERSION
   if (options.auth) dependencies['@machize/auth'] = MACHIZE_VERSION
@@ -41,14 +39,17 @@ export function packageJson(options: ProjectOptions): string {
     dependencies['@machize/cli'] = MACHIZE_VERSION
     dependencies['@machize/generator'] = MACHIZE_VERSION
   }
-  // Apply per-package range overrides (packages past the 0.1 line).
+  // Apply per-package range overrides. Only @machize/* packages: versionOf
+  // falls back to MACHIZE_VERSION, which would clobber third-party ranges
+  // (this once rewrote zod's range to the @machize base line).
   for (const pkg of Object.keys(dependencies)) {
-    dependencies[pkg] = versionOf(pkg)
+    if (pkg.startsWith('@machize/')) dependencies[pkg] = versionOf(pkg)
   }
 
   return `${JSON.stringify(
     {
       name: options.name,
+      version: '0.1.0',
       private: true,
       type: 'module',
       scripts: {
@@ -60,7 +61,7 @@ export function packageJson(options: ProjectOptions): string {
       },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
       devDependencies: {
-        '@machize/testing': MACHIZE_VERSION,
+        '@machize/testing': versionOf('@machize/testing'),
         '@types/node': '^22.15.0',
         'pino-pretty': '^13.0.0',
         tsx: '^4.19.0',
