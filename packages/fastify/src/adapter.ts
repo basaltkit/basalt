@@ -1,13 +1,13 @@
-import { randomUUID } from 'node:crypto'
+import { Container, createToken, definePlugin, ensureMetadata } from '@machize/core'
 import {
-  Container,
-  createToken,
-  definePlugin,
-  ensureMetadata,
-  MachizeError,
-  runWithContext,
-  type RequestContext,
-} from '@machize/core'
+  runRoute,
+  toErrorResponse,
+  type HttpReply,
+  type HttpRequest,
+  type MachizeRoute,
+  type RequestEnricher,
+  type RouteGuard,
+} from '@machize/http'
 import Fastify, {
   type FastifyError,
   type FastifyInstance,
@@ -15,9 +15,11 @@ import Fastify, {
   type FastifyRequest,
   type FastifyServerOptions,
 } from 'fastify'
-import type { ZodType } from 'zod'
-import { RequestValidationError, type ValidationIssue } from './errors.js'
-import type { MachizeRoute } from './route.js'
+
+// The request pipeline (validation, enrichers, guards, error mapping) lives in
+// @machize/http, shared with the Express and Hono adapters. This module only
+// adapts Fastify's request/reply to the neutral shape.
+export type { RequestEnricher, RouteGuard } from '@machize/http'
 
 declare module '@machize/core' {
   interface RequestContext {
@@ -27,29 +29,6 @@ declare module '@machize/core' {
 }
 
 export const FASTIFY = createToken<FastifyInstance>('fastify')
-
-/**
- * Runs inside the request context, before validation and the handler.
- * Plugins register enrichers in the 'http:enrichers' metadata bucket —
- * tenancy uses this to resolve and attach the current tenant.
- */
-export type RequestEnricher = (info: {
-  request: FastifyRequest
-  context: RequestContext
-  container: Container
-}) => void | Promise<void>
-
-/**
- * Runs after enrichers, with access to the route definition (and its `meta`).
- * Plugins register guards in the 'http:guards' metadata bucket — auth uses
- * `meta.auth`, permissions uses `meta.can`. A guard rejects by throwing.
- */
-export type RouteGuard = (info: {
-  route: MachizeRoute
-  request: FastifyRequest
-  context: RequestContext
-  container: Container
-}) => void | Promise<void>
 
 export interface FastifyPluginOptions {
   routes?: MachizeRoute[]
@@ -117,72 +96,27 @@ function wrapHandler(
   guards: RouteGuard[] = [],
 ) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const requestId = headerValue(request, 'x-request-id') ?? randomUUID()
-    const context: RequestContext = {
-      requestId,
-      correlationId: headerValue(request, 'x-correlation-id') ?? requestId,
-      ...(container ? { container: container.createScope() } : {}),
+    const httpRequest: HttpRequest = {
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      params: (request.params ?? {}) as Record<string, string>,
+      query: request.query,
+      body: request.body,
+      ip: request.ip,
+      raw: request,
     }
-    void reply.header('x-request-id', requestId)
-
-    return runWithContext(context, async () => {
-      if (container) {
-        for (const enrich of enrichers) {
-          await enrich({ request, context, container })
-        }
-        for (const guard of guards) {
-          await guard({ route: definition, request, context, container })
-        }
-      }
-      const args = {
-        body: parsePart('body', definition.body, request.body),
-        query: parsePart('query', definition.query, request.query),
-        params: parsePart('params', definition.params, request.params),
-        request,
-        reply,
-      }
-      return definition.handler(args as Parameters<MachizeRoute['handler']>[0])
+    return runRoute(definition, httpRequest, reply as unknown as HttpReply, {
+      ...(container ? { container } : {}),
+      enrichers,
+      guards,
     })
   }
-}
-
-function parsePart(
-  part: 'body' | 'query' | 'params',
-  schema: ZodType | undefined,
-  input: unknown,
-): unknown {
-  if (!schema) return undefined
-  const result = schema.safeParse(input)
-  if (result.success) return result.data
-  const issues: ValidationIssue[] = result.error.issues.map((issue) => ({
-    path: issue.path.join('.'),
-    message: issue.message,
-  }))
-  throw new RequestValidationError(part, issues)
 }
 
 function errorHandler(error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) {
-  if (error instanceof RequestValidationError) {
-    return reply.code(400).send({
-      error: { code: error.code, message: error.message, part: error.part, issues: error.issues },
-    })
-  }
-  // Any MachizeError carrying a numeric `status` maps to that HTTP status —
-  // HttpError, tenancy's TENANCY_NOT_RESOLVED (404), auth errors, etc.
-  if (error instanceof MachizeError) {
-    const status = (error as { status?: unknown }).status
-    if (typeof status === 'number') {
-      return reply.code(status).send({ error: { code: error.code, message: error.message } })
-    }
-  }
-  // unintentional error: log with stack, respond without leaking details
-  request.log.error(error)
-  return reply.code(500).send({
-    error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' },
-  })
-}
-
-function headerValue(request: FastifyRequest, name: string): string | undefined {
-  const value = request.headers[name]
-  return Array.isArray(value) ? value[0] : value
+  const { status, body } = toErrorResponse(error)
+  // unintentional errors: log with stack, respond without leaking details
+  if (status === 500) request.log.error(error)
+  return reply.code(status).send(body)
 }

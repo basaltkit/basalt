@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@machize/core": "workspace:*",
+    "@machize/http": "workspace:*",
     "fastify": "^5.3.0"
   },
   "peerDependencies": {

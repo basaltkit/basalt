@@ -25,6 +25,7 @@ export default defineConfig({
             { text: 'Introduction', link: '/guide/getting-started' },
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Core Concepts', link: '/guide/concepts' },
+            { text: 'HTTP Adapters', link: '/guide/adapters' },
           ],
         },
         {

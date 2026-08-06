@@ -1,4 +1,11 @@
-export { route, type MachizeRoute, type HandlerArgs, type HttpMethod } from './route.js'
+export {
+  route,
+  type MachizeRoute,
+  type HandlerArgs,
+  type HttpMethod,
+  type HttpRequest,
+  type HttpReply,
+} from './route.js'
 export {
   fastifyPlugin,
   registerRoutes,
