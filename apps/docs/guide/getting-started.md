@@ -43,5 +43,11 @@ await app.container.get(FASTIFY).listen({ port: 3000 })
 The route's `params` type is inferred from the Zod schema — the handler is fully
 typed, and the same schema can feed OpenAPI and the [SDK client](/reference/packages).
 
+::: tip Not on Fastify?
+The same `route` runs unchanged on **Express** and **Hono** — swap
+`fastifyPlugin` for `expressPlugin` or `honoPlugin`. See
+[HTTP Adapters](/guide/adapters) for complete examples.
+:::
+
 Ready to build something real? [Install Machize](/guide/installation) or jump to
 the [multi-tenant SaaS cookbook](/cookbook/multi-tenant-saas).
