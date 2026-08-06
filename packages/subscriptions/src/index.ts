@@ -38,6 +38,9 @@ export {
   type BillingGateway,
   type WebhookEvent,
   type CreateSubscriptionInput,
+  type CheckoutInput,
+  type PortalInput,
+  type SwapInput,
 } from './gateway.js'
 export {
   StripeBillingGateway,
@@ -49,11 +52,14 @@ export {
   NotSubscribedError,
   FeatureUnavailableError,
   QuotaExceededError,
+  GatewayUnsupportedError,
   type SubscriptionsOptions,
 } from './subscriptions.js'
 export {
   subscriptionsPlugin,
   billingWebhookRoute,
+  billingRoutes,
   SUBSCRIPTIONS,
   type SubscriptionsPluginOptions,
+  type BillingRoutesOptions,
 } from './plugin.js'

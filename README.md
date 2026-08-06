@@ -77,7 +77,7 @@ the `saas` keyword on npm.
 | `@machize/auth` | Password hashing, JWT with refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
 | `@machize/permissions` | Roles, wildcard permissions, policies, tenant scoping |
 | `@machize/teams` | Multi-user tenants — roles, email invitations, membership management, `teamRole` guard |
-| `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks |
+| `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks, hosted Checkout & Customer Portal, proration |
 | `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
 | `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |

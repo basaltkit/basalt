@@ -1,6 +1,6 @@
 import type { BillingPeriod } from './plans.js'
 
-export type SubscriptionStatus = 'active' | 'trialing' | 'past_due' | 'canceled'
+export type SubscriptionStatus = 'active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete'
 
 export interface SubscriptionRecord {
   /** The billable entity — the tenant id by convention. */
