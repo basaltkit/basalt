@@ -30,13 +30,24 @@ The generated project boots an app with typed routes, structured logging, a
 health check and — unless you opted out — multi-tenancy (header and subdomain
 resolvers) and authentication.
 
-## Add to an existing app
+## Choose an HTTP adapter
 
-Machize packages work incrementally. To add multi-tenancy to an existing
-Fastify app, install just the pieces you need:
+Your routes are written once and run on any of three adapters — pick the one for
+your stack (see [HTTP Adapters](/guide/adapters)):
 
 ```bash
-pnpm add @machize/core @machize/fastify @machize/tenancy
+pnpm add @machize/core @machize/http @machize/fastify fastify          # Fastify
+pnpm add @machize/core @machize/http @machize/express express          # Express
+pnpm add @machize/core @machize/http @machize/hono hono @hono/node-server  # Hono
+```
+
+## Add to an existing app
+
+Machize packages work incrementally. To add multi-tenancy to an existing app,
+install just the pieces you need — it works the same on any adapter:
+
+```bash
+pnpm add @machize/core @machize/tenancy
 ```
 
 Every package publishes ESM with types and follows the same plugin contract, so

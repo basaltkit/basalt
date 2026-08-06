@@ -61,6 +61,97 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 
 :::
 
+## Complete example — Express
+
+Install the adapter and Express:
+
+```bash
+pnpm add @machize/core @machize/http @machize/express express
+```
+
+`src/app.ts` — wire your plugins and routes (this is identical for every
+adapter except the last line):
+
+```ts
+import { createApp } from '@machize/core'
+import { expressPlugin } from '@machize/express'
+import { headerResolver, MemoryTenantSource, tenancyPlugin } from '@machize/tenancy'
+import { healthPlugin, metricsPlugin, securityPlugin } from '@machize/http'
+import { routes } from './routes.js'
+
+export function buildApp() {
+  return createApp({
+    plugins: [
+      tenancyPlugin({ source: new MemoryTenantSource(), resolvers: [headerResolver()] }),
+      securityPlugin({ rateLimit: { limit: 300, windowMs: 60_000 }, headers: true }),
+      healthPlugin({ checks: { db: () => ({ ok: true }) } }),
+      metricsPlugin(),
+      expressPlugin({ routes }), // ← the only adapter-specific line
+    ],
+  })
+}
+```
+
+`src/server.ts` — boot, listen, and shut down cleanly:
+
+```ts
+import { EXPRESS } from '@machize/express'
+import { buildApp } from './app.js'
+
+const app = await buildApp().boot()
+const server = app.container.get(EXPRESS).listen(3000, () => console.log('http://localhost:3000'))
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => server.close(async () => { await app.shutdown(); process.exit(0) }))
+}
+```
+
+`expressPlugin` adds `express.json()` for you. To integrate into an existing
+Express app, pass it in: `expressPlugin({ app: myExistingApp, routes })`.
+
+## Complete example — Hono
+
+Install the adapter, Hono, and (for Node) the Node server:
+
+```bash
+pnpm add @machize/core @machize/http @machize/hono hono @hono/node-server
+```
+
+`src/app.ts` is the same as above with `honoPlugin({ routes })` in place of
+`expressPlugin({ routes })`. Then serve it on Node:
+
+```ts
+// src/server.ts
+import { serve } from '@hono/node-server'
+import { HONO } from '@machize/hono'
+import { buildApp } from './app.js'
+
+const app = await buildApp().boot()
+serve({ fetch: app.container.get(HONO).fetch, port: 3000 }, (info) =>
+  console.log(`http://localhost:${info.port}`),
+)
+```
+
+### Bun, Deno, Cloudflare Workers, edge
+
+Hono runs on any runtime — export the app's `fetch` and let the platform serve it:
+
+```ts
+// Bun / Deno / Cloudflare Workers entry
+import { HONO } from '@machize/hono'
+import { buildApp } from './app.js'
+
+const app = await buildApp().boot()
+export default { fetch: app.container.get(HONO).fetch }
+```
+
+::: warning Edge runtimes
+The HTTP core, routes, tenancy, auth, permissions and the security/metrics/tracing
+edge plugins run on the edge. Node-only infrastructure — `@machize/queue`
+(BullMQ), `@machize/prisma`, local file `@machize/storage` — is not available in
+Workers/Deno-deploy; use HTTP-based drivers there.
+:::
+
 ## How it works
 
 - **`@machize/http`** defines the neutral `HttpRequest` / `HttpReply` and the
