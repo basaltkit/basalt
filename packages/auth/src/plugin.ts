@@ -45,7 +45,8 @@ export function authPlugin(options: AuthPluginOptions) {
           typeof header === 'string' && header.startsWith('Bearer ')
             ? header.slice('Bearer '.length)
             : undefined
-        if (bearer) {
+        // `mk_`-prefixed bearers are API keys — left to apiKeysPlugin.
+        if (bearer && !bearer.startsWith('mk_')) {
           const claims = auth.verifyAccess(bearer)
           const user = await auth.users.findById(claims.sub)
           if (user) context.user = publicUser(user)

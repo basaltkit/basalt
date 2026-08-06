@@ -96,6 +96,89 @@ export class MemoryAuthTokenStore implements AuthTokenStore {
   }
 }
 
+// --- API keys ---------------------------------------------------------------
+
+/**
+ * A stored API key. The plaintext key is never persisted — only its SHA-256
+ * `hash` (for O(1) lookup) and a short `prefix` (for display in listings).
+ */
+export interface ApiKeyRecord {
+  id: string
+  /** Human label, e.g. "CI pipeline". */
+  name: string
+  /** Visible portion shown in listings, e.g. `mk_live_ab12cd`. */
+  prefix: string
+  /** SHA-256 of the full presented key. */
+  hash: string
+  /** Owning tenant, when created inside a tenant context. */
+  tenantId?: string
+  /** User who created the key, when created by a logged-in user. */
+  userId?: string
+  /** Granted scopes; `*` means all. */
+  scopes: string[]
+  createdAt: number
+  lastUsedAt?: number
+  revokedAt?: number
+}
+
+/** What a listing exposes — never the hash. */
+export type ApiKeyInfo = Omit<ApiKeyRecord, 'hash'>
+
+export interface ApiKeyFilter {
+  tenantId?: string
+  userId?: string
+}
+
+export interface ApiKeyStore {
+  create(record: ApiKeyRecord): Promise<void>
+  findByHash(hash: string): Promise<ApiKeyRecord | null>
+  findById(id: string): Promise<ApiKeyRecord | null>
+  /** Active (non-revoked) keys matching the filter. */
+  list(filter: ApiKeyFilter): Promise<ApiKeyRecord[]>
+  touch(id: string, at: number): Promise<void>
+  revoke(id: string, at: number): Promise<void>
+}
+
+export class MemoryApiKeyStore implements ApiKeyStore {
+  private readonly records = new Map<string, ApiKeyRecord>()
+
+  async create(record: ApiKeyRecord): Promise<void> {
+    this.records.set(record.id, record)
+  }
+
+  async findByHash(hash: string): Promise<ApiKeyRecord | null> {
+    for (const record of this.records.values()) {
+      if (record.hash === hash) return record
+    }
+    return null
+  }
+
+  async findById(id: string): Promise<ApiKeyRecord | null> {
+    return this.records.get(id) ?? null
+  }
+
+  async list(filter: ApiKeyFilter): Promise<ApiKeyRecord[]> {
+    const out: ApiKeyRecord[] = []
+    for (const record of this.records.values()) {
+      if (record.revokedAt !== undefined) continue
+      if (filter.tenantId !== undefined && record.tenantId !== filter.tenantId) continue
+      if (filter.userId !== undefined && record.userId !== filter.userId) continue
+      out.push(record)
+    }
+    return out
+  }
+
+  async touch(id: string, at: number): Promise<void> {
+    const record = this.records.get(id)
+    if (record) record.lastUsedAt = at
+  }
+
+  async revoke(id: string, at: number): Promise<void> {
+    const record = this.records.get(id)
+    if (record) record.revokedAt = at
+  }
+}
+
 export interface SessionRecord {
   id: string
   userId: string
