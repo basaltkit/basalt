@@ -11,6 +11,7 @@ export {
   MemorySessionStore,
   MemoryRefreshTokenStore,
   MemoryAuthTokenStore,
+  MemoryApiKeyStore,
   type AuthUser,
   type PublicUser,
   type UserSource,
@@ -22,6 +23,10 @@ export {
   type AuthTokenStore,
   type AuthTokenRecord,
   type AuthTokenPurpose,
+  type ApiKeyStore,
+  type ApiKeyRecord,
+  type ApiKeyInfo,
+  type ApiKeyFilter,
 } from './stores.js'
 export {
   Auth,
@@ -37,5 +42,14 @@ export {
   type TokenPair,
 } from './auth.js'
 export { authPlugin, AUTH, type AuthPluginOptions } from './plugin.js'
-export { authRoutes } from './routes.js'
+export {
+  ApiKeys,
+  ScopeRequiredError,
+  scopesSatisfy,
+  type ApiKeysOptions,
+  type IssueApiKeyInput,
+  type ApiKeyContext,
+} from './apikeys.js'
+export { apiKeysPlugin, API_KEYS, type ApiKeysPluginOptions } from './apikeys-plugin.js'
+export { authRoutes, apiKeyRoutes } from './routes.js'
 export { LoginThrottle, AccountLockedError, type LoginThrottleOptions } from './throttle.js'

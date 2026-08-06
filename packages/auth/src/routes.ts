@@ -1,11 +1,13 @@
-import { ctx, type Container } from '@machize/core'
+import { ctx, MachizeError, type Container } from '@machize/core'
 import { route, type MachizeRoute } from '@machize/fastify'
 import { z } from 'zod'
 import { AUTH } from './plugin.js'
+import { API_KEYS } from './apikeys-plugin.js'
 
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8) })
 
 const auth = () => (ctx().container as Container).get(AUTH)
+const apiKeys = () => (ctx().container as Container).get(API_KEYS)
 
 /**
  * Ready-made auth routes — register them in fastifyPlugin({ routes }):
@@ -104,6 +106,74 @@ export function authRoutes(): MachizeRoute[] {
       async handler({ body }) {
         await auth().resetPassword(body.token, body.password)
         return { ok: true }
+      },
+    }),
+  ]
+}
+
+class ApiKeyForbiddenError extends MachizeError {
+  readonly status = 404
+  constructor() {
+    super('AUTH_APIKEY_NOT_FOUND', 'API key not found.')
+  }
+}
+
+/**
+ * CRUD routes for API keys, all requiring a logged-in user (`meta.auth`). Keys
+ * are scoped to the caller's tenant (`ctx().tenant`) and user; a caller only
+ * ever sees or revokes keys within that scope. Register alongside
+ * {@link authRoutes} and pair with `apiKeysPlugin`.
+ */
+export function apiKeyRoutes(): MachizeRoute[] {
+  // `tenant` is set by @machize/tenancy when present; read it without a hard
+  // dependency on that package's type augmentation.
+  const scope = (): { tenantId?: string; userId?: string } => {
+    const c = ctx() as { tenant?: { id: string }; user?: { id: string } }
+    return {
+      ...(c.tenant ? { tenantId: c.tenant.id } : {}),
+      ...(c.user ? { userId: c.user.id } : {}),
+    }
+  }
+
+  return [
+    route({
+      method: 'POST',
+      url: '/apikeys',
+      meta: { auth: true },
+      body: z.object({
+        name: z.string().min(1).max(100),
+        scopes: z.array(z.string().min(1)).optional(),
+      }),
+      async handler({ body, reply }) {
+        const { record, key } = await apiKeys().issue({ ...body, ...scope() })
+        // `key` is returned exactly once — it is never retrievable again.
+        return reply.code(201).send({ ...record, key })
+      },
+    }),
+
+    route({
+      method: 'GET',
+      url: '/apikeys',
+      meta: { auth: true },
+      async handler() {
+        return apiKeys().list(scope())
+      },
+    }),
+
+    route({
+      method: 'DELETE',
+      url: '/apikeys/:id',
+      meta: { auth: true },
+      params: z.object({ id: z.string() }),
+      async handler({ params, reply }) {
+        const record = await apiKeys().get(params.id)
+        const { tenantId, userId } = scope()
+        // Only expose/act on keys within the caller's scope; otherwise 404.
+        if (!record || record.tenantId !== tenantId || record.userId !== userId) {
+          throw new ApiKeyForbiddenError()
+        }
+        await apiKeys().revoke(params.id)
+        return reply.code(204).send()
       },
     }),
   ]
