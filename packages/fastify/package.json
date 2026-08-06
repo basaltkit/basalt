@@ -43,5 +43,12 @@
     "directory": "packages/fastify"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/fastify#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "http",
+    "fastify",
+    "adapter"
+  ]
 }

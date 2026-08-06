@@ -47,5 +47,12 @@
     "directory": "packages/prisma"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/prisma#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "prisma",
+    "multi-tenant",
+    "database"
+  ]
 }

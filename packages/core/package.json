@@ -34,5 +34,13 @@
     "directory": "packages/core"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/core#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "dependency-injection",
+    "plugins",
+    "backend",
+    "asynclocalstorage"
+  ]
 }

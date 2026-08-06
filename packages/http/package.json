@@ -41,5 +41,12 @@
     "directory": "packages/http"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/http#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "http",
+    "router",
+    "zod"
+  ]
 }

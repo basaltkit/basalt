@@ -42,5 +42,10 @@
     "directory": "packages/testing"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/testing#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "testing"
+  ]
 }

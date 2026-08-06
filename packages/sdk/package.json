@@ -38,5 +38,12 @@
     "directory": "packages/sdk"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/sdk#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "sdk",
+    "type-safe",
+    "client"
+  ]
 }

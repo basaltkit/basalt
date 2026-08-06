@@ -40,5 +40,11 @@
     "directory": "packages/mailer"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/mailer#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "mailer",
+    "email"
+  ]
 }
