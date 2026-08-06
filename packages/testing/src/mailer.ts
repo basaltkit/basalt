@@ -20,7 +20,7 @@ export interface FakeMailer {
   /** Everything "sent", in order. */
   sent: ResolvedMail[]
   assertSent(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test boundary
+     
     mail: MailDefinition<any> | string,
     predicate?: (message: ResolvedMail) => boolean,
   ): ResolvedMail
