@@ -35,3 +35,4 @@ export {
   type IdempotencyStore,
   type IdempotencyRecord,
 } from './idempotency.js'
+export { tracingPlugin, TRACER, type TracingPluginOptions } from './tracing.js'
