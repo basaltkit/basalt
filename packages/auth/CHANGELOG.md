@@ -1,5 +1,14 @@
 # @machize/auth
 
+## 0.4.0
+
+### Patch Changes
+
+- Updated dependencies [ed43e86]
+- Updated dependencies [3e26f2a]
+  - @machize/fastify@0.4.0
+  - @machize/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
