@@ -13,7 +13,7 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "turbo run build && changeset publish",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage --config vitest.coverage.config.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.0",

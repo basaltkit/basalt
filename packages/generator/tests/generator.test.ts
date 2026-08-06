@@ -80,6 +80,29 @@ describe('generateResource', () => {
     expect(service.path).toBe('src/modules/project/project.service.ts')
     expect(service.content).toContain('PROJECT_SERVICE')
   })
+
+  it('--prisma generates a Prisma-backed repository, model and plugin wiring', () => {
+    const files = generateResource('BlogPost', { prisma: true })
+    const paths = files.map((f) => f.path)
+    expect(paths).toContain('src/modules/blog-post/blog-post.prisma')
+
+    const repo = files.find((f) => f.path.endsWith('.repository.ts'))!.content
+    expect(repo).toContain('class PrismaBlogPostRepository')
+    expect(repo).toContain("import { db } from '@machize/prisma'")
+    expect(repo).toContain('db<PrismaClient>().blogPost')
+    expect(repo).not.toContain('InMemory')
+
+    const plugin = files.find((f) => f.path.endsWith('.plugin.ts'))!.content
+    expect(plugin).toContain('new PrismaBlogPostRepository()')
+
+    const model = files.find((f) => f.path.endsWith('.prisma'))!.content
+    expect(model).toContain('model BlogPost {')
+
+    // default (no --prisma) stays in-memory, no .prisma file
+    const memory = generateResource('BlogPost')
+    expect(memory.map((f) => f.path).some((p) => p.endsWith('.prisma'))).toBe(false)
+    expect(memory.find((f) => f.path.endsWith('.repository.ts'))!.content).toContain('InMemory')
+  })
 })
 
 describe('writeGenerated', () => {

@@ -8,6 +8,7 @@ export {
   registerResourceInApp,
   FileExistsError,
   type GeneratorKind,
+  type GeneratorOptions,
   type WriteOptions,
   type AppRegistration,
 } from './generate.js'
