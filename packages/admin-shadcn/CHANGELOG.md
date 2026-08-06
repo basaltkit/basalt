@@ -1,5 +1,11 @@
 # @machize/admin-shadcn
 
+## 0.5.0
+
+### Patch Changes
+
+- @machize/admin@0.5.0
+
 ## 0.4.0
 
 ### Patch Changes

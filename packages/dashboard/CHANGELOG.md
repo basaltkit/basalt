@@ -1,5 +1,13 @@
 # @machize/dashboard
 
+## 0.5.0
+
+### Patch Changes
+
+- Updated dependencies [ec514e5]
+  - @machize/subscriptions@0.5.0
+  - @machize/admin@0.5.0
+
 ## 0.4.0
 
 ### Patch Changes
