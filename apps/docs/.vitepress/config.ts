@@ -12,7 +12,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Cookbook', link: '/cookbook/multi-tenant-saas' },
+      { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
       { text: '0.1.0', link: `${github}/releases` },
     ],
@@ -51,7 +51,10 @@ export default defineConfig({
       '/cookbook/': [
         {
           text: 'Cookbook',
-          items: [{ text: 'A multi-tenant SaaS', link: '/cookbook/multi-tenant-saas' }],
+          items: [
+            { text: 'Build a notes SaaS (end to end)', link: '/cookbook/notes-saas' },
+            { text: 'A multi-tenant SaaS', link: '/cookbook/multi-tenant-saas' },
+          ],
         },
       ],
       '/reference/': [
