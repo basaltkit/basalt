@@ -1,7 +1,7 @@
 {
-  "name": "@machize/fastify",
+  "name": "@machize/http",
   "version": "0.3.0",
-  "description": "Official Machize HTTP adapter on top of Fastify: Zod-typed routes, per-request context via AsyncLocalStorage and standardized errors.",
+  "description": "Framework-neutral HTTP core for Machize: typed routes, request pipeline (validation, enrichers, guards), and error mapping — shared by the Fastify, Express and Hono adapters.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,12 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/http": "workspace:*",
-    "fastify": "^5.3.0"
+    "@machize/core": "workspace:*"
   },
   "peerDependencies": {
-    "zod": "^3.24.0 || ^4.0.0"
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@machize/tsconfig": "workspace:*",
