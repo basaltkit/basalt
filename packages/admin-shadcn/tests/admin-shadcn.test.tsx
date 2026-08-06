@@ -9,7 +9,8 @@ afterEach(cleanup)
 describe('cn', () => {
   it('merges classes and resolves Tailwind conflicts (last wins)', () => {
     expect(cn('px-2', 'px-4')).toBe('px-4')
-    expect(cn('text-sm', false && 'hidden', 'font-medium')).toBe('text-sm font-medium')
+    const maybe: string | false = false
+    expect(cn('text-sm', maybe && 'hidden', 'font-medium')).toBe('text-sm font-medium')
   })
 })
 

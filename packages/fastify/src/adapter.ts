@@ -16,7 +16,7 @@ import Fastify, {
   type FastifyServerOptions,
 } from 'fastify'
 import type { ZodType } from 'zod'
-import { HttpError, RequestValidationError, type ValidationIssue } from './errors.js'
+import { RequestValidationError, type ValidationIssue } from './errors.js'
 import type { MachizeRoute } from './route.js'
 
 declare module '@machize/core' {
