@@ -74,10 +74,25 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 - The handler's `request` / `reply` are the neutral types; reach the underlying
   framework object via `request.raw` when you truly need it.
 
-## What's adapter-specific
+## Edge plugins are neutral too
 
-The edge plugins that hook the server directly — `securityPlugin`,
-`metricsPlugin`, `healthPlugin`, `idempotencyPlugin`, `tracingPlugin`,
-`openapiPlugin` — currently target `@machize/fastify`. Your **routes and domain
-logic** are fully portable today; if you need those edge features on Express or
-Hono, they can be added as native middleware for now.
+The edge plugins target a neutral `HttpServer` (the `HTTP_SERVER` token, which
+every adapter provides), so they run on **all three** frameworks unchanged:
+`securityPlugin`, `metricsPlugin`, `healthPlugin`, `tracingPlugin` and
+`openapiPlugin`. Add them to `plugins: [...]` next to any adapter.
+
+```ts
+createApp({
+  plugins: [
+    expressPlugin({ routes }),          // or fastifyPlugin / honoPlugin
+    securityPlugin({ rateLimit, cors, headers: true }),
+    healthPlugin({ checks }),
+    metricsPlugin(),
+    tracingPlugin({ exporter }),
+    openapiPlugin({ info }),
+  ],
+})
+```
+
+The one exception is **`idempotencyPlugin`**, which intercepts the response
+body — that remains Fastify-specific for now.

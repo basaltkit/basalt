@@ -15,26 +15,39 @@ export {
   type RouteGuard,
 } from './adapter.js'
 export { HttpError, RequestValidationError, type ValidationIssue } from './errors.js'
+
+// The edge plugins are framework-neutral (see @machize/http); re-exported so
+// `import { securityPlugin } from '@machize/fastify'` keeps working.
 export {
   securityPlugin,
   MemoryRateLimitStore,
+  healthPlugin,
+  metricsPlugin,
+  METRICS,
+  tracingPlugin,
+  TRACER,
+  openapiPlugin,
+  generateOpenApi,
+  zodToJsonSchema,
+  HTTP_SERVER,
   type SecurityPluginOptions,
   type RateLimitOptions,
   type RateLimitResult,
   type RateLimitStore,
   type CorsOptions,
   type SecurityHeadersOptions,
-} from './security.js'
-export { healthPlugin, type HealthPluginOptions, type HealthCheck, type HealthReport } from './health.js'
-export { metricsPlugin, METRICS, type MetricsPluginOptions } from './metrics.js'
-export {
-  openapiPlugin,
-  generateOpenApi,
-  zodToJsonSchema,
+  type HealthPluginOptions,
+  type HealthCheck,
+  type HealthReport,
+  type MetricsPluginOptions,
+  type TracingPluginOptions,
   type OpenApiPluginOptions,
   type OpenApiInfo,
   type RouteLike,
-} from './openapi.js'
+  type HttpServer,
+} from '@machize/http'
+
+// Idempotency needs to capture the response body, which is Fastify-specific.
 export {
   idempotencyPlugin,
   MemoryIdempotencyStore,
@@ -42,4 +55,3 @@ export {
   type IdempotencyStore,
   type IdempotencyRecord,
 } from './idempotency.js'
-export { tracingPlugin, TRACER, type TracingPluginOptions } from './tracing.js'

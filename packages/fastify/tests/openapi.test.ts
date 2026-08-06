@@ -12,7 +12,7 @@ describe('zodToJsonSchema', () => {
   })
 
   it('objects mark required vs optional/default', () => {
-    const schema = zodToJsonSchema(z.object({ a: z.string(), b: z.string().optional(), c: z.number().default(1) }))
+    const schema = zodToJsonSchema(z.object({ a: z.string(), b: z.string().optional(), c: z.number().default(1) })) as any
     expect(schema.type).toBe('object')
     expect(schema.required).toEqual(['a'])
     expect(schema.properties.c.default).toBe(1)
@@ -33,7 +33,7 @@ describe('generateOpenApi', () => {
         },
       ],
       { title: 'Test API', version: '1.0.0' },
-    )
+    ) as any
     expect(doc.openapi).toBe('3.0.3')
     // path templating
     expect(doc.paths['/users/{id}']).toBeDefined()
