@@ -1,5 +1,17 @@
 # @machize/subscriptions
 
+## 0.3.0
+
+### Patch Changes
+
+- Updated dependencies [4846bc1]
+- Updated dependencies [8a0ccbc]
+- Updated dependencies [b405334]
+- Updated dependencies [7b92e25]
+- Updated dependencies [94a01eb]
+  - @machize/fastify@0.3.0
+  - @machize/core@0.3.0
+
 ## 0.1.0
 
 ### Minor Changes

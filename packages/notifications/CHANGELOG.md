@@ -1,5 +1,14 @@
 # @machize/notifications
 
+## 0.3.0
+
+### Patch Changes
+
+- Updated dependencies [8a0ccbc]
+- Updated dependencies [7b92e25]
+  - @machize/core@0.3.0
+  - @machize/mailer@0.3.0
+
 ## 0.1.0
 
 ### Minor Changes
