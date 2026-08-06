@@ -12,7 +12,9 @@ it is on by default — this page is about making the deliberate choices.
 - [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST`.
 - [ ] **Health probes wired** — `healthPlugin({ checks })` for `/livez` + `/readyz`.
 - [ ] **Metrics scraped** — `metricsPlugin()` at `/metrics`.
+- [ ] **Tracing exported** — `tracingPlugin({ exporter })` (OTLP).
 - [ ] **API documented** — `openapiPlugin({ info })`.
+- [ ] **External delivery is reliable** — `outboxPlugin` / `webhooksPlugin`.
 - [ ] **Real database** — swap in-memory stores for `@machize/prisma`.
 - [ ] **Migrations run per tenant** — `migrateTenants()` / `mach` command.
 - [ ] **CI green** — build, typecheck, coverage gate, `pnpm audit`, CodeQL.
@@ -95,10 +97,25 @@ The repo ships GitHub Actions that gate every PR:
 - **Release** — changesets open a version PR and publish to npm with
   **provenance** on merge.
 
+## Reliability
+
+- **Outbox** (`@machize/events`) — write events to a durable store, relay them to
+  external systems with retries and a dead-letter ceiling. At-least-once
+  delivery that survives crashes. See [Webhooks](/guide/webhooks).
+- **Webhooks** (`@machize/webhooks`) — signed outbound delivery with backoff,
+  per-tenant subscriptions, auto-dispatched from domain events.
+- **Feature flags** (`@machize/flags`) — per-tenant/user targeting and
+  deterministic rollouts for safe, gradual releases.
+
+## Quality gates
+
+`pnpm lint` (ESLint), `pnpm typecheck`, and `pnpm test:coverage` (V8, enforced
+thresholds) all run in CI, alongside `pnpm audit`, CodeQL and a Postgres
+integration job. Versions move in [lockstep](https://github.com/Zebedeu/machize/blob/main/VERSIONING.md)
+across `@machize/*`, so one range covers the whole toolkit.
+
 ## Roadmap
 
-Shipping next, tracked on the [milestones](https://github.com/Zebedeu/machize):
-outbound **webhooks** with signed delivery, an **events outbox** for
-at-least-once delivery to external systems, **feature flags** with per-tenant
-targeting, first-class **OpenTelemetry** tracing export, and the 1.0
-versioning policy (lockstep internal versions to end the `^0.x` minor footgun).
+Toward `1.0`: settling the API surface, first-class OpenTelemetry **metrics**
+export (traces already export via OTLP), and more persistence adapters. Track
+progress on the [repository](https://github.com/Zebedeu/machize).
