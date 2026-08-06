@@ -35,6 +35,15 @@ export default defineConfig({
             { text: 'Subscriptions', link: '/guide/billing' },
           ],
         },
+        {
+          text: 'Production',
+          items: [
+            { text: 'Going to Production', link: '/guide/production' },
+            { text: 'Security', link: '/guide/security' },
+            { text: 'Observability', link: '/guide/observability' },
+            { text: 'OpenAPI', link: '/guide/openapi' },
+          ],
+        },
       ],
       '/cookbook/': [
         {

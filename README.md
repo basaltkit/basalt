@@ -15,9 +15,28 @@ Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 ## Quick start
 
 ```bash
-npx create-machize my-saas   # tenancy + auth by default; --billing to add plans
+npx create-machize my-saas   # tenancy + auth by default
 cd my-saas && pnpm install && pnpm dev
 ```
+
+Flags: `--billing` (plans), `--ui` (React + shadcn frontend), `--cli` (the
+`mach` generator entrypoint), `--install`, `--git`.
+
+## Production-ready by default
+
+Secure and observable out of the box — every piece is zero-dependency and opt-in
+through the plugin lifecycle. See the [Going to Production](https://github.com/Zebedeu/machize/blob/main/apps/docs/guide/production.md) guide.
+
+| Concern | How |
+|---|---|
+| Edge protection | `securityPlugin` — rate limiting, CORS, secure headers |
+| Secrets | `secret()` env schema — fail-closed in production |
+| Brute force | `@machize/auth` login lockout, on by default |
+| Safe retries | `idempotencyPlugin` — `Idempotency-Key` for mutations |
+| Health | `healthPlugin` — `/livez` liveness vs `/readyz` readiness |
+| Metrics | `metricsPlugin` — Prometheus `/metrics`, auto-instrumented |
+| API docs | `openapiPlugin` — OpenAPI 3.0 from your Zod schemas |
+| Supply chain | CI `pnpm audit`, CodeQL, Dependabot, npm provenance |
 
 ## Packages
 
