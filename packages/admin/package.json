@@ -38,5 +38,11 @@
     "directory": "packages/admin"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/admin#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "admin",
+    "headless"
+  ]
 }

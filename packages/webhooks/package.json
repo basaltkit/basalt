@@ -38,5 +38,11 @@
     "directory": "packages/webhooks"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/webhooks#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "webhooks",
+    "hmac"
+  ]
 }

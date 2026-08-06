@@ -44,5 +44,12 @@
     "directory": "packages/express"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/express#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "http",
+    "express",
+    "adapter"
+  ]
 }

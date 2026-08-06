@@ -39,5 +39,11 @@
     "directory": "packages/scheduler"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/scheduler#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "scheduler",
+    "cron"
+  ]
 }

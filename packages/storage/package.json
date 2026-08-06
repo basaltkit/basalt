@@ -39,5 +39,12 @@
     "directory": "packages/storage"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/storage#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "storage",
+    "s3",
+    "minio"
+  ]
 }

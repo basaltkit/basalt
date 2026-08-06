@@ -37,5 +37,11 @@
     "directory": "packages/config"
   },
   "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/config#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues"
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "config",
+    "configuration"
+  ]
 }
