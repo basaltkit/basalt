@@ -1,7 +1,7 @@
 {
-  "name": "@machize/fastify",
+  "name": "@machize/express",
   "version": "0.3.0",
-  "description": "Official Machize HTTP adapter on top of Fastify: Zod-typed routes, per-request context via AsyncLocalStorage and standardized errors.",
+  "description": "Express adapter for Machize: run the same typed routes, enrichers and guards on Express that you would on Fastify or Hono.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -20,15 +20,16 @@
   },
   "dependencies": {
     "@machize/core": "workspace:*",
-    "@machize/http": "workspace:*",
-    "fastify": "^5.3.0"
+    "@machize/http": "workspace:*"
   },
   "peerDependencies": {
-    "zod": "^3.24.0 || ^4.0.0"
+    "express": "^4.19.0 || ^5.0.0"
   },
   "devDependencies": {
     "@machize/tsconfig": "workspace:*",
+    "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",
+    "express": "^5.1.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",

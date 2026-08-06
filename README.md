@@ -56,7 +56,8 @@ through the plugin lifecycle. See the [Going to Production](https://github.com/Z
 
 | Package | Purpose |
 |---|---|
-| `@machize/fastify` | HTTP adapter — typed routes, enrichers, guards |
+| `@machize/http` | Framework-neutral HTTP core — typed routes, pipeline, error mapping |
+| `@machize/fastify` · `@machize/express` · `@machize/hono` | HTTP adapters — the same routes run on any of them |
 | `@machize/prisma` | Tenant-scoping client extension, per-tenant client pool |
 | `@machize/cache` · `@machize/queue` · `@machize/scheduler` | Redis cache, BullMQ jobs, fluent cron |
 | `@machize/storage` · `@machize/mailer` | S3/MinIO/local storage, typed mail |
