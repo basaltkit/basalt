@@ -73,12 +73,17 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
       registerRoutes(container.get(FASTIFY), routes, container, enrichers, guards)
-      // Expose routes to tooling (CLI `mach routes`, docs generator, SDK).
+      // Expose routes to tooling (CLI `mach routes`, OpenAPI, SDK). The Zod
+      // schemas ride along so the OpenAPI generator needs no duplicate wiring.
       for (const definition of routes) {
         metadata.add('http:routes', {
           method: definition.method,
           url: definition.url,
           meta: definition.meta ?? {},
+          body: definition.body,
+          query: definition.query,
+          params: definition.params,
+          response: definition.response,
         })
       }
     },

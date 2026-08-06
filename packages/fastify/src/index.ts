@@ -20,3 +20,11 @@ export {
 } from './security.js'
 export { healthPlugin, type HealthPluginOptions, type HealthCheck, type HealthReport } from './health.js'
 export { metricsPlugin, METRICS, type MetricsPluginOptions } from './metrics.js'
+export {
+  openapiPlugin,
+  generateOpenApi,
+  zodToJsonSchema,
+  type OpenApiPluginOptions,
+  type OpenApiInfo,
+  type RouteLike,
+} from './openapi.js'
