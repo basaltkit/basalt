@@ -35,5 +35,12 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/auth"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/auth#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues"
 }

@@ -30,5 +30,12 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/activity"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/activity#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues"
 }

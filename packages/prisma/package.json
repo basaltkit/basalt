@@ -40,5 +40,12 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/prisma"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/prisma#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues"
 }
