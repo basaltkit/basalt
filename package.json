@@ -12,11 +12,13 @@
     "dev": "turbo run dev",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "turbo run build && changeset publish"
+    "release": "turbo run build && changeset publish",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.0",
     "turbo": "^2.5.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "@vitest/coverage-v8": "^3.1.0"
   }
 }
