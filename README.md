@@ -35,8 +35,11 @@ through the plugin lifecycle. See the [Going to Production](https://github.com/Z
 | Safe retries | `idempotencyPlugin` — `Idempotency-Key` for mutations |
 | Health | `healthPlugin` — `/livez` liveness vs `/readyz` readiness |
 | Metrics | `metricsPlugin` — Prometheus `/metrics`, auto-instrumented |
+| Tracing | `tracingPlugin` — W3C trace-context, OTLP export (no OTel SDK) |
 | API docs | `openapiPlugin` — OpenAPI 3.0 from your Zod schemas |
-| Supply chain | CI `pnpm audit`, CodeQL, Dependabot, npm provenance |
+| Reliable delivery | `outboxPlugin` (at-least-once) + `webhooksPlugin` (signed) |
+| Quality gates | CI lint (ESLint), coverage thresholds, `pnpm audit`, CodeQL |
+| Supply chain | Dependabot, npm provenance, lockstep versioning |
 
 ## Packages
 
