@@ -18,6 +18,7 @@ declare module '@machize/core' {
     'billing:canceled': { subscription: SubscriptionRecord }
     'billing:trial_expired': { subscription: SubscriptionRecord }
     'billing:webhook': { event: WebhookEvent }
+    'billing:checkout_started': { billableId: string; plan: string; url: string }
   }
 }
 
@@ -58,6 +59,60 @@ export function subscriptionsPlugin(options: SubscriptionsPluginOptions) {
       ensureMetadata(container).add('http:guards', guard)
     },
   })
+}
+
+const billable = (): string => {
+  const id = (ctx() as { tenant?: { id: string } }).tenant?.id
+  if (!id) throw new NotSubscribedError()
+  return id
+}
+const subscriptions = (): Subscriptions => (ctx().container as Container).get(SUBSCRIPTIONS)
+
+export interface BillingRoutesOptions {
+  /** Where Stripe returns the customer after Checkout. */
+  successUrl: string
+  cancelUrl: string
+  /** Where the Customer Portal returns the customer. Default: successUrl. */
+  portalReturnUrl?: string
+}
+
+/**
+ * Hosted billing routes for the current tenant: `POST /billing/checkout`
+ * (subscribe via the gateway's hosted page) and `POST /billing/portal`
+ * (self-service management). Both return `{ url }` to redirect to. The
+ * success/cancel/return URLs are configured here; the request body may
+ * override them per call.
+ */
+export function billingRoutes(options: BillingRoutesOptions): MachizeRoute[] {
+  const portalReturn = options.portalReturnUrl ?? options.successUrl
+  return [
+    route({
+      method: 'POST',
+      url: '/billing/checkout',
+      body: z.object({
+        plan: z.string(),
+        period: z.enum(['monthly', 'yearly']).optional(),
+        successUrl: z.string().url().optional(),
+        cancelUrl: z.string().url().optional(),
+      }),
+      async handler({ body }) {
+        return subscriptions().checkout(billable(), body.plan, {
+          successUrl: body.successUrl ?? options.successUrl,
+          cancelUrl: body.cancelUrl ?? options.cancelUrl,
+          ...(body.period !== undefined ? { period: body.period } : {}),
+        })
+      },
+    }),
+
+    route({
+      method: 'POST',
+      url: '/billing/portal',
+      body: z.object({ returnUrl: z.string().url().optional() }).optional(),
+      async handler({ body }) {
+        return subscriptions().portal(billable(), { returnUrl: body?.returnUrl ?? portalReturn })
+      },
+    }),
+  ]
 }
 
 /**
