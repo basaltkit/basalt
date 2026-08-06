@@ -67,6 +67,8 @@ through the plugin lifecycle. See the [Going to Production](https://github.com/Z
 | `@machize/auth` | Password hashing, JWT with refresh rotation, sessions |
 | `@machize/permissions` | Roles, wildcard permissions, policies, tenant scoping |
 | `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks |
+| `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
+| `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
 | `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
 
 **Developer experience & product**

@@ -1,0 +1,34 @@
+{
+  "name": "@machize/flags",
+  "version": "0.1.0",
+  "description": "Feature flags for Machize: context-aware evaluation with per-tenant/user targeting and deterministic percentage rollouts.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
