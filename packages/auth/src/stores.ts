@@ -179,6 +179,38 @@ export class MemoryApiKeyStore implements ApiKeyStore {
   }
 }
 
+// --- MFA (TOTP) -------------------------------------------------------------
+
+/**
+ * Per-user MFA state. `secret` is the base32 TOTP secret; `recoveryCodes`
+ * holds SHA-256 hashes of single-use backup codes (never the plaintext).
+ */
+export interface MfaRecord {
+  secret: string
+  enabled: boolean
+  recoveryCodes: string[]
+}
+
+export interface MfaStore {
+  get(userId: string): Promise<MfaRecord | null>
+  set(userId: string, record: MfaRecord): Promise<void>
+  delete(userId: string): Promise<void>
+}
+
+export class MemoryMfaStore implements MfaStore {
+  private readonly records = new Map<string, MfaRecord>()
+
+  async get(userId: string): Promise<MfaRecord | null> {
+    return this.records.get(userId) ?? null
+  }
+  async set(userId: string, record: MfaRecord): Promise<void> {
+    this.records.set(userId, record)
+  }
+  async delete(userId: string): Promise<void> {
+    this.records.delete(userId)
+  }
+}
+
 export interface SessionRecord {
   id: string
   userId: string

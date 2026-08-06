@@ -74,7 +74,7 @@ the `saas` keyword on npm.
 | Package | Purpose |
 |---|---|
 | `@machize/tenancy` | Multi-tenancy — resolvers, per-request context, hooks |
-| `@machize/auth` | Password hashing, JWT with refresh rotation, sessions, email verification, password reset, API keys |
+| `@machize/auth` | Password hashing, JWT with refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
 | `@machize/permissions` | Roles, wildcard permissions, policies, tenant scoping |
 | `@machize/teams` | Multi-user tenants — roles, email invitations, membership management, `teamRole` guard |
 | `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks |

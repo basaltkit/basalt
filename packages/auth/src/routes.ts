@@ -31,9 +31,9 @@ export function authRoutes(): MachizeRoute[] {
     route({
       method: 'POST',
       url: '/auth/login',
-      body: credentials,
+      body: credentials.extend({ mfaCode: z.string().optional() }),
       async handler({ body }) {
-        const { user, tokens } = await auth().login(body.email, body.password)
+        const { user, tokens } = await auth().login(body.email, body.password, body.mfaCode)
         return { user, ...tokens }
       },
     }),
@@ -173,6 +173,67 @@ export function apiKeyRoutes(): MachizeRoute[] {
           throw new ApiKeyForbiddenError()
         }
         await apiKeys().revoke(params.id)
+        return reply.code(204).send()
+      },
+    }),
+  ]
+}
+
+class MfaAuthRequiredError extends MachizeError {
+  readonly status = 401
+  constructor() {
+    super('AUTH_REQUIRED', 'Authentication required.')
+  }
+}
+const currentUserId = (): string => {
+  const id = ctx().user?.id
+  if (!id) throw new MfaAuthRequiredError()
+  return id
+}
+
+/**
+ * MFA (TOTP) self-service routes, all requiring a logged-in user: enroll,
+ * activate (returns one-time recovery codes), status, and disable. Register
+ * alongside {@link authRoutes} and enable MFA at login via the optional
+ * `mfaCode` field on `POST /auth/login`.
+ */
+export function mfaRoutes(): MachizeRoute[] {
+  return [
+    route({
+      method: 'POST',
+      url: '/auth/mfa/enroll',
+      meta: { auth: true },
+      async handler() {
+        return auth().enrollMfa(currentUserId())
+      },
+    }),
+
+    route({
+      method: 'POST',
+      url: '/auth/mfa/activate',
+      meta: { auth: true },
+      body: z.object({ code: z.string().min(6) }),
+      async handler({ body }) {
+        return auth().activateMfa(currentUserId(), body.code)
+      },
+    }),
+
+    route({
+      method: 'GET',
+      url: '/auth/mfa/status',
+      meta: { auth: true },
+      async handler() {
+        return auth().mfaStatus(currentUserId())
+      },
+    }),
+
+    route({
+      method: 'POST',
+      url: '/auth/mfa/disable',
+      meta: { auth: true },
+      body: z.object({ code: z.string().min(6) }),
+      async handler({ body, reply }) {
+        await auth().disableMfa(currentUserId(), body.code)
         return reply.code(204).send()
       },
     }),
