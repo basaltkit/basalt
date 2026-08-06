@@ -1,15 +1,18 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { MachizeError, parseDuration, type DurationInput, type HookBus } from '@machize/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
+import { generateTotpSecret, otpauthUri, verifyTotp } from './totp.js'
 import {
   MemoryAuthTokenStore,
+  MemoryMfaStore,
   MemoryRefreshTokenStore,
   MemorySessionStore,
   type AuthTokenPurpose,
   type AuthTokenStore,
   type AuthUser,
+  type MfaStore,
   type PublicUser,
   type RefreshTokenStore,
   type SessionRecord,
@@ -70,6 +73,30 @@ export class UserUpdateUnsupportedError extends MachizeError {
   }
 }
 
+/** Credentials were correct but the account has MFA — a code is required. */
+export class MfaRequiredError extends MachizeError {
+  readonly status = 401
+  constructor() {
+    super('AUTH_MFA_REQUIRED', 'A multi-factor authentication code is required.')
+  }
+}
+
+/** The supplied MFA (or recovery) code was wrong. */
+export class MfaInvalidCodeError extends MachizeError {
+  readonly status = 401
+  constructor() {
+    super('AUTH_MFA_INVALID', 'The authentication code is incorrect.')
+  }
+}
+
+/** An MFA action needed an enrollment that doesn't exist. */
+export class MfaNotEnrolledError extends MachizeError {
+  readonly status = 400
+  constructor() {
+    super('AUTH_MFA_NOT_ENROLLED', 'No MFA enrollment is in progress for this account.')
+  }
+}
+
 export interface TokenPair {
   accessToken: string
   refreshToken: string
@@ -93,6 +120,10 @@ export interface AuthOptions {
   verificationTtl?: DurationInput
   /** Password-reset link lifetime. Default 1h. */
   resetTtl?: DurationInput
+  /** Store for MFA (TOTP) enrollment state. Default: in-memory. */
+  mfa?: MfaStore
+  /** Issuer name shown in authenticator apps. Default 'Machize'. */
+  mfaIssuer?: string
 }
 
 export const publicUser = (user: AuthUser): PublicUser => ({
@@ -115,6 +146,8 @@ export class Auth {
   private readonly tokens: AuthTokenStore
   private readonly verificationTtl: DurationInput
   private readonly resetTtl: DurationInput
+  private readonly mfa: MfaStore
+  private readonly mfaIssuer: string
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -130,6 +163,8 @@ export class Auth {
     this.tokens = options.tokens ?? new MemoryAuthTokenStore()
     this.verificationTtl = options.verificationTtl ?? '24h'
     this.resetTtl = options.resetTtl ?? '1h'
+    this.mfa = options.mfa ?? new MemoryMfaStore()
+    this.mfaIssuer = options.mfaIssuer ?? 'Machize'
   }
 
   async register(email: string, password: string): Promise<PublicUser> {
@@ -153,8 +188,17 @@ export class Auth {
    * Credentials → token pair. Emits auth:login / auth:login_failed. Locks the
    * account after too many failures (see {@link LoginThrottle}); a success
    * clears the counter.
+   *
+   * When the account has MFA enabled, `mfaCode` (a TOTP or recovery code) is
+   * required: a correct password with a missing code throws
+   * {@link MfaRequiredError} (without counting as a failed attempt), and a
+   * wrong code throws {@link MfaInvalidCodeError}.
    */
-  async login(email: string, password: string): Promise<{ user: PublicUser; tokens: TokenPair }> {
+  async login(
+    email: string,
+    password: string,
+    mfaCode?: string,
+  ): Promise<{ user: PublicUser; tokens: TokenPair }> {
     const key = email.toLowerCase()
     this.throttle?.assertAllowed(key)
 
@@ -164,6 +208,15 @@ export class Auth {
       await this.hooks?.emit('auth:login_failed', { email })
       throw new InvalidCredentialsError()
     }
+
+    if (await this.isMfaEnabled(user.id)) {
+      if (!mfaCode) throw new MfaRequiredError() // password was correct — not a failure
+      if (!(await this.verifyMfaCode(user.id, mfaCode))) {
+        this.throttle?.recordFailure(key)
+        throw new MfaInvalidCodeError()
+      }
+    }
+
     this.throttle?.reset(key)
     const tokens = await this.issueTokens(user.id)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
@@ -267,6 +320,88 @@ export class Auth {
     await this.refreshTokens.revokeAllForUser?.(user.id)
     await this.hooks?.emit('auth:password_reset', { user: publicUser(user) })
     return publicUser(user)
+  }
+
+  // --- MFA (TOTP) ----------------------------------------------------------
+
+  async isMfaEnabled(userId: string): Promise<boolean> {
+    return (await this.mfa.get(userId))?.enabled ?? false
+  }
+
+  async mfaStatus(userId: string): Promise<{ enabled: boolean; pending: boolean }> {
+    const record = await this.mfa.get(userId)
+    return { enabled: record?.enabled ?? false, pending: record !== null && !record.enabled }
+  }
+
+  /**
+   * Begins MFA enrollment: generates a fresh secret (not yet active) and
+   * returns it plus an `otpauth://` URI to render as a QR code. Call
+   * {@link activateMfa} with a code from the app to switch it on.
+   */
+  async enrollMfa(userId: string): Promise<{ secret: string; otpauthUri: string }> {
+    const user = await this.users.findById(userId)
+    if (!user) throw new AuthRequiredError()
+    const secret = generateTotpSecret()
+    await this.mfa.set(userId, { secret, enabled: false, recoveryCodes: [] })
+    return {
+      secret,
+      otpauthUri: otpauthUri({ secret, account: user.email, issuer: this.mfaIssuer }),
+    }
+  }
+
+  /**
+   * Confirms enrollment by checking a code against the pending secret, enables
+   * MFA, and returns freshly generated single-use recovery codes (shown once).
+   */
+  async activateMfa(userId: string, code: string): Promise<{ recoveryCodes: string[] }> {
+    const record = await this.mfa.get(userId)
+    if (!record || record.enabled) throw new MfaNotEnrolledError()
+    if (!verifyTotp(record.secret, code)) throw new MfaInvalidCodeError()
+
+    const recoveryCodes = Array.from({ length: 10 }, () => this.generateRecoveryCode())
+    await this.mfa.set(userId, {
+      secret: record.secret,
+      enabled: true,
+      recoveryCodes: recoveryCodes.map((c) => this.hashRecoveryCode(c)),
+    })
+    const user = await this.users.findById(userId)
+    if (user) await this.hooks?.emit('auth:mfa_enabled', { user: publicUser(user) })
+    return { recoveryCodes }
+  }
+
+  /** Turns MFA off. Requires a valid current code (or recovery code). */
+  async disableMfa(userId: string, code: string): Promise<void> {
+    if (!(await this.isMfaEnabled(userId))) throw new MfaNotEnrolledError()
+    if (!(await this.verifyMfaCode(userId, code))) throw new MfaInvalidCodeError()
+    await this.mfa.delete(userId)
+    const user = await this.users.findById(userId)
+    if (user) await this.hooks?.emit('auth:mfa_disabled', { user: publicUser(user) })
+  }
+
+  /**
+   * Verifies a TOTP code or, failing that, a single-use recovery code (which
+   * is consumed on success). Returns false unless MFA is enabled.
+   */
+  async verifyMfaCode(userId: string, code: string): Promise<boolean> {
+    const record = await this.mfa.get(userId)
+    if (!record || !record.enabled) return false
+    if (verifyTotp(record.secret, code)) return true
+
+    const hash = this.hashRecoveryCode(code)
+    const index = record.recoveryCodes.indexOf(hash)
+    if (index === -1) return false
+    record.recoveryCodes.splice(index, 1) // consume it
+    await this.mfa.set(userId, record)
+    return true
+  }
+
+  private generateRecoveryCode(): string {
+    const raw = randomBytes(5).toString('hex') // 10 hex chars
+    return `${raw.slice(0, 5)}-${raw.slice(5)}`
+  }
+
+  private hashRecoveryCode(code: string): string {
+    return createHash('sha256').update(code.replace(/-/g, '').toLowerCase()).digest('hex')
   }
 
   // --- token helpers -------------------------------------------------------
