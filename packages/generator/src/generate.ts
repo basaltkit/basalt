@@ -3,13 +3,17 @@ import { dirname, join, resolve } from 'node:path'
 import { names, type Names } from './names.js'
 import {
   pluginFile,
+  prismaModelFile,
   repositoryFile,
   routesFile,
   schemaFile,
   serviceFile,
   testFile,
   type GeneratedFile,
+  type GeneratorOptions,
 } from './templates.js'
+
+export type { GeneratorOptions } from './templates.js'
 
 /** The kinds of artifact the generator can emit individually. */
 export const GENERATORS = {
@@ -23,19 +27,22 @@ export const GENERATORS = {
 
 export type GeneratorKind = keyof typeof GENERATORS
 
+const GENERATOR_FNS = GENERATORS as Record<GeneratorKind, (n: Names, options?: GeneratorOptions) => GeneratedFile>
+
 /** Generates a single artifact for a resource name. */
-export function generate(kind: GeneratorKind, name: string): GeneratedFile {
-  return GENERATORS[kind](names(name))
+export function generate(kind: GeneratorKind, name: string, options: GeneratorOptions = {}): GeneratedFile {
+  return GENERATOR_FNS[kind](names(name), options)
 }
 
 /** Generates the full resource vertical (schema → repository → service → plugin → routes → test). */
-export function generateResource(name: string): GeneratedFile[] {
+export function generateResource(name: string, options: GeneratorOptions = {}): GeneratedFile[] {
   const n: Names = names(name)
   return [
     schemaFile(n),
-    repositoryFile(n),
+    repositoryFile(n, options),
+    ...(options.prisma ? [prismaModelFile(n)] : []),
     serviceFile(n),
-    pluginFile(n),
+    pluginFile(n, options),
     routesFile(n),
     testFile(n),
   ]

@@ -6,6 +6,11 @@ export interface GeneratedFile {
   content: string
 }
 
+export interface GeneratorOptions {
+  /** Generate a Prisma-backed repository (and a schema.prisma model) instead of in-memory. */
+  prisma?: boolean
+}
+
 const dir = (n: Names) => `src/modules/${n.kebab}`
 
 export function schemaFile(n: Names): GeneratedFile {
@@ -31,22 +36,64 @@ export type Update${n.pascal}Input = z.infer<typeof Update${n.pascal}Schema>
   }
 }
 
-export function repositoryFile(n: Names): GeneratedFile {
-  return {
-    path: `${dir(n)}/${n.kebab}.repository.ts`,
-    content: `import { randomUUID } from 'node:crypto'
-import { createToken } from '@machize/core'
-import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from './${n.kebab}.schema.js'
-
-export interface ${n.pascal}Repository {
+const repositoryInterface = (n: Names): string => `export interface ${n.pascal}Repository {
   list(): Promise<${n.pascal}[]>
   find(id: string): Promise<${n.pascal} | null>
   create(input: Create${n.pascal}Input): Promise<${n.pascal}>
   update(id: string, input: Update${n.pascal}Input): Promise<${n.pascal} | null>
   delete(id: string): Promise<boolean>
+}`
+
+function prismaRepository(n: Names): string {
+  return `import { createToken } from '@machize/core'
+import { db } from '@machize/prisma'
+import type { PrismaClient } from '@prisma/client'
+import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from './${n.kebab}.schema.js'
+
+${repositoryInterface(n)}
+
+/** Prisma-backed. Requires prismaPlugin configured and a \`${n.pascal}\` model in schema.prisma. */
+export class Prisma${n.pascal}Repository implements ${n.pascal}Repository {
+  private get records() {
+    return db<PrismaClient>().${n.camel}
+  }
+
+  list() {
+    return this.records.findMany()
+  }
+
+  find(id: string) {
+    return this.records.findUnique({ where: { id } })
+  }
+
+  create(input: Create${n.pascal}Input) {
+    return this.records.create({ data: input })
+  }
+
+  update(id: string, input: Update${n.pascal}Input) {
+    return this.records.update({ where: { id }, data: input }).catch(() => null)
+  }
+
+  delete(id: string) {
+    return this.records
+      .delete({ where: { id } })
+      .then(() => true)
+      .catch(() => false)
+  }
 }
 
-/** In-memory implementation — swap for a Prisma-backed one when ready. */
+export const ${n.constant}_REPOSITORY = createToken<${n.pascal}Repository>('${n.kebab}.repository')
+`
+}
+
+function memoryRepository(n: Names): string {
+  return `import { randomUUID } from 'node:crypto'
+import { createToken } from '@machize/core'
+import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from './${n.kebab}.schema.js'
+
+${repositoryInterface(n)}
+
+/** In-memory implementation — pass --prisma to generate a Prisma-backed one. */
 export class InMemory${n.pascal}Repository implements ${n.pascal}Repository {
   private readonly items = new Map<string, ${n.pascal}>()
 
@@ -78,7 +125,13 @@ export class InMemory${n.pascal}Repository implements ${n.pascal}Repository {
 }
 
 export const ${n.constant}_REPOSITORY = createToken<${n.pascal}Repository>('${n.kebab}.repository')
-`,
+`
+}
+
+export function repositoryFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
+  return {
+    path: `${dir(n)}/${n.kebab}.repository.ts`,
+    content: options.prisma ? prismaRepository(n) : memoryRepository(n),
   }
 }
 
@@ -118,23 +171,38 @@ export const ${n.constant}_SERVICE = createToken<${n.pascal}Service>('${n.kebab}
   }
 }
 
-export function pluginFile(n: Names): GeneratedFile {
+export function pluginFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
+  const repoClass = options.prisma ? `Prisma${n.pascal}Repository` : `InMemory${n.pascal}Repository`
   return {
     path: `${dir(n)}/${n.kebab}.plugin.ts`,
     content: `import { definePlugin } from '@machize/core'
-import { ${n.constant}_REPOSITORY, InMemory${n.pascal}Repository } from './${n.kebab}.repository.js'
+import { ${n.constant}_REPOSITORY, ${repoClass} } from './${n.kebab}.repository.js'
 import { ${n.constant}_SERVICE, ${n.pascal}Service } from './${n.kebab}.service.js'
 
 export const ${n.camel}Plugin = definePlugin({
   name: 'app:${n.kebab}',
   register({ container }) {
-    container.singleton(${n.constant}_REPOSITORY, () => new InMemory${n.pascal}Repository())
+    container.singleton(${n.constant}_REPOSITORY, () => new ${repoClass}())
     container.singleton(
       ${n.constant}_SERVICE,
       (c) => new ${n.pascal}Service(c.get(${n.constant}_REPOSITORY)),
     )
   },
 })
+`,
+  }
+}
+
+/** Prisma model block to paste into schema.prisma (emitted with --prisma). */
+export function prismaModelFile(n: Names): GeneratedFile {
+  return {
+    path: `${dir(n)}/${n.kebab}.prisma`,
+    content: `// Add this model to your schema.prisma, then run \`prisma migrate dev\`.
+model ${n.pascal} {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+}
 `,
   }
 }

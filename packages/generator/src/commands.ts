@@ -7,12 +7,13 @@ import {
   registerResourceInApp,
   writeGenerated,
   type GeneratorKind,
+  type GeneratorOptions,
 } from './generate.js'
 
 interface MakeSpec {
   command: string
   describe: string
-  build: (name: string) => Parameters<typeof writeGenerated>[0]
+  build: (name: string, options: GeneratorOptions) => Parameters<typeof writeGenerated>[0]
   /** After writing, wire the resource's plugin + routes into src/app.ts. */
   register?: boolean
 }
@@ -22,13 +23,13 @@ function specs(): MakeSpec[] {
     {
       command: 'make:resource',
       describe: 'Generate a full resource vertical',
-      build: generateResource,
+      build: (name, options) => generateResource(name, options),
       register: true,
     },
     ...(Object.keys(GENERATORS) as GeneratorKind[]).map((kind) => ({
       command: `make:${kind}`,
       describe: `Generate a ${kind} file`,
-      build: (name: string) => [generate(kind, name)],
+      build: (name: string, options: GeneratorOptions) => [generate(kind, name, options)],
     })),
   ]
 }
@@ -36,6 +37,7 @@ function specs(): MakeSpec[] {
 /**
  * CLI commands: `mach make:resource Project`, `mach make:service Project`, …
  * Options: --dir=<path> (target root), --force (overwrite),
+ * --prisma (Prisma-backed repository + schema.prisma model),
  * --no-register (skip wiring the resource into src/app.ts).
  */
 export function generatorCommands(): CommandDefinition[] {
@@ -46,15 +48,16 @@ export function generatorCommands(): CommandDefinition[] {
       async handle({ args, flags, io }) {
         const name = args[0]
         if (!name) {
-          io.error(`Usage: mach ${spec.command} <Name> [--dir=<path>] [--force]`)
+          io.error(`Usage: mach ${spec.command} <Name> [--dir=<path>] [--force] [--prisma]`)
           return 1
         }
         const options = {
           ...(typeof flags['dir'] === 'string' ? { baseDir: flags['dir'] } : {}),
           force: flags['force'] === true,
         }
+        const genOptions: GeneratorOptions = { prisma: flags['prisma'] === true }
         try {
-          const written = await writeGenerated(spec.build(name), options)
+          const written = await writeGenerated(spec.build(name, genOptions), options)
           io.log(`Generated ${written.length} file(s):`)
           for (const path of written) io.log(`  ${path}`)
 
