@@ -68,9 +68,41 @@ healthPlugin({
 { "status": "unavailable", "checks": { "db": { "ok": false, "detail": "primary" }, "redis": { "ok": true } } }
 ```
 
+## Distributed tracing — `tracingPlugin`
+
+Zero-dependency tracing that speaks W3C trace-context and exports OTLP to any
+OpenTelemetry collector — no OTel SDK required.
+
+```ts
+import { tracingPlugin } from '@machize/fastify'
+import { OtlpHttpExporter } from '@machize/core'
+
+tracingPlugin({
+  serviceName: 'acme-api',
+  exporter: new OtlpHttpExporter({ url: 'http://otel-collector:4318' }),
+})
+```
+
+Per request it continues an inbound `traceparent` (or starts a new trace),
+records a **server span** labelled by route template with HTTP attributes and
+status, echoes `traceparent` on the response, and exports the finished span.
+Resolve the `TRACER` token to wrap your own work in spans:
+
+```ts
+import { TRACER } from '@machize/fastify'
+
+const tracer = container.get(TRACER)
+await tracer.inSpan(tracer.startSpan('charge.capture', { kind: 'client' }), async () => {
+  await gateway.capture(...)
+})
+```
+
+For local development, swap in `ConsoleSpanExporter`; in tests,
+`InMemorySpanExporter` collects spans for assertions.
+
 ## Request correlation
 
-Every request already carries a `requestId` and `correlationId` in the
+Every request also carries a `requestId` and `correlationId` in the
 [context](/guide/concepts) and structured logs (`@machize/logger`). Propagate
 the incoming `x-request-id` / `x-correlation-id` headers across services to
 trace a call end to end.
