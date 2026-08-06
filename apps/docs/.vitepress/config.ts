@@ -33,6 +33,8 @@ export default defineConfig({
             { text: 'Multi-tenancy', link: '/guide/tenancy' },
             { text: 'Authentication', link: '/guide/auth' },
             { text: 'Subscriptions', link: '/guide/billing' },
+            { text: 'Feature Flags', link: '/guide/feature-flags' },
+            { text: 'Webhooks', link: '/guide/webhooks' },
           ],
         },
         {
