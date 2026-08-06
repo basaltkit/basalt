@@ -1,0 +1,56 @@
+{
+  "name": "@machize/teams",
+  "version": "0.4.0",
+  "description": "Teams for Machize: multi-user tenants with roles, email invitations (accept/revoke), membership management and a teamRole route guard.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/core": "workspace:*",
+    "@machize/fastify": "workspace:*"
+  },
+  "peerDependencies": {
+    "zod": "^3.24.0 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@machize/auth": "workspace:*",
+    "@machize/tenancy": "workspace:*",
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0",
+    "zod": "^3.24.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/teams"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/teams#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "saas",
+    "teams",
+    "invitations",
+    "rbac"
+  ]
+}
