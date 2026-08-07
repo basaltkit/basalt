@@ -1,6 +1,6 @@
 {
   "name": "@machize/mailer",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Mail layer for Machize: typed declarative mails with Zod, SMTP/log/memory drivers, tenant-aware sender and queue integration.",
   "license": "MIT",
   "type": "module",
