@@ -69,6 +69,21 @@ describe('runRoute', () => {
     expect(reply.headers.get('x-request-id')).toBeTruthy()
   })
 
+  it('adopts an inbound x-correlation-id (array header) as the correlation id', async () => {
+    const def = route({
+      method: 'GET',
+      url: '/x',
+      async handler() {
+        return { cid: tryCtx()?.correlationId }
+      },
+    })
+    const reply = new CaptureReply()
+    const result = await runRoute(def, makeRequest({ headers: { 'x-correlation-id': ['corr-123'] } }), reply, {
+      container: new Container(),
+    })
+    expect((result as { cid?: string }).cid).toBe('corr-123')
+  })
+
   it('throws RequestValidationError on bad input (→ 400 via toErrorResponse)', async () => {
     const def = route({
       method: 'POST',
