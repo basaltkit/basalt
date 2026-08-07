@@ -96,6 +96,21 @@ search is constrained with a `tenantId` filter** — the same isolation guarante
 as the in-memory driver. Your `filterable` fields are declared as Meilisearch
 filterable attributes automatically.
 
+## Already on Postgres?
+
+If you'd rather not run a separate search service, `@machize/search-postgres`
+uses Postgres' native full-text search (`tsvector` / `ts_rank`) — bring your
+`pg` client:
+
+```ts
+import { PostgresSearchDriver } from '@machize/search-postgres'
+searchPlugin({ driver: new PostgresSearchDriver({ client: pgPool }), indexes: [/* … */] })
+```
+
+It creates one GIN-indexed table for all indexes, feeds the searchable fields
+into `to_tsvector`, ranks with `ts_rank`, and constrains every query to the
+tenant — the same isolation guarantee, no extra infrastructure.
+
 ## Filters and paging
 
 ```ts
