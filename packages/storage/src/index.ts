@@ -100,6 +100,8 @@ export const STORAGE = createToken<Storage>('storage')
 export type DiskConfig =
   | ({ driver: 'local'; root: string } & DiskOptions)
   | ({ driver: 's3' } & S3DriverOptions & DiskOptions)
+  /** A custom driver instance — e.g. `@machize/storage-gcs`, `-azure`. */
+  | ({ driver: StorageDriver } & DiskOptions)
 
 export interface StoragePluginOptions {
   disks: Record<string, DiskConfig>
@@ -116,9 +118,11 @@ export function storagePlugin(options: StoragePluginOptions) {
         const storage = new Storage(options.default)
         for (const [name, config] of Object.entries(options.disks)) {
           const driver: StorageDriver =
-            config.driver === 'local'
-              ? new LocalStorageDriver({ root: config.root })
-              : new S3StorageDriver(config)
+            typeof config.driver !== 'string'
+              ? config.driver
+              : config.driver === 'local'
+                ? new LocalStorageDriver({ root: config.root })
+                : new S3StorageDriver(config as S3DriverOptions)
           drivers.push(driver)
           storage.add(
             new Disk(name, driver, config.scope !== undefined ? { scope: config.scope } : {}),

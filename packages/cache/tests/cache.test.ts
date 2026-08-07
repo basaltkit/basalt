@@ -88,4 +88,12 @@ describe('Cache (driver memory)', () => {
     expect(await cache.get('k')).toBe('v')
     await app.shutdown()
   })
+
+  it('cachePlugin accepts a custom CacheDriver instance', async () => {
+    const driver = new MemoryCacheDriver()
+    const app = await createApp({ plugins: [cachePlugin({ driver })] }).boot()
+    await app.container.get(CACHE).put('k', 1)
+    expect(await driver.get('mach:k')).toBe(1) // wrote through the provided instance
+    await app.shutdown()
+  })
 })

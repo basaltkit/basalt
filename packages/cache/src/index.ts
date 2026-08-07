@@ -133,7 +133,8 @@ export class Cache {
 export const CACHE = createToken<Cache>('cache')
 
 export interface CachePluginOptions extends CacheOptions {
-  driver?: 'memory' | 'redis'
+  /** 'memory' (default), 'redis' (needs `url`), or a custom `CacheDriver` instance. */
+  driver?: 'memory' | 'redis' | CacheDriver
   /** Required with the 'redis' driver. */
   url?: string
 }
@@ -145,9 +146,11 @@ export function cachePlugin(options: CachePluginOptions = {}) {
     register({ container }) {
       container.singleton(CACHE, () => {
         driver =
-          options.driver === 'redis'
-            ? RedisCacheDriver.fromUrl(options.url as string)
-            : new MemoryCacheDriver()
+          typeof options.driver === 'object'
+            ? options.driver
+            : options.driver === 'redis'
+              ? RedisCacheDriver.fromUrl(options.url as string)
+              : new MemoryCacheDriver()
         return new Cache(driver, options)
       })
     },
