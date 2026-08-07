@@ -1,6 +1,6 @@
 {
   "name": "@machize/admin",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Headless admin kit for Machize: derive table columns, form fields and validation from Zod schemas, plus a framework-agnostic data-source contract. The engine any React admin renders.",
   "license": "MIT",
   "type": "module",

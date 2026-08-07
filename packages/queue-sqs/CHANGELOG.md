@@ -1,5 +1,11 @@
 # @machize/queue-sqs
 
+## 0.11.0
+
+### Patch Changes
+
+- @machize/queue@0.11.0
+
 ## 0.10.0
 
 ### Patch Changes
