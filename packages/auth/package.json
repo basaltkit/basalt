@@ -1,6 +1,6 @@
 {
   "name": "@machize/auth",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "Authentication for Machize: password hashing, JWT with refresh rotation and reuse detection, sessions, ready-made /auth routes and route guards.",
   "license": "MIT",
   "type": "module",

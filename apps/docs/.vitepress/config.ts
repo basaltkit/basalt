@@ -4,7 +4,7 @@ const github = 'https://github.com/Zebedeu/machize'
 
 export default defineConfig({
   title: 'Machize',
-  description: 'The Laravel-grade toolkit for building SaaS on Node.js.',
+  description: 'The complete toolkit for building SaaS on Node.js.',
   lang: 'en-US',
   // Served at the domain root (Cloudflare Pages / Netlify / Vercel), so base is '/'.
   cleanUrls: true,
@@ -15,7 +15,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
-      { text: '0.23.0', link: `${github}/releases` },
+      { text: '0.25.0', link: `${github}/releases` },
     ],
 
     sidebar: {
@@ -63,6 +63,7 @@ export default defineConfig({
         {
           text: 'Production',
           items: [
+            { text: 'Persistence & durable stores', link: '/guide/persistence' },
             { text: 'Going to Production', link: '/guide/production' },
             { text: 'Security', link: '/guide/security' },
             { text: 'Observability', link: '/guide/observability' },

@@ -7,9 +7,10 @@ route to the client.
 
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: 0.23.0 — 53 packages, all published to npm.** The architecture is
-> stable and every package is tested, but APIs may still change before 1.0 and
-> some stores ship in-memory (swap in the DB/cloud drivers). See
+> **Status: 0.25.0 — 54 packages, all published to npm.** The architecture is
+> stable and every package is tested, but APIs may still change before 1.0.
+> In-memory stores are the dev default; durable backends are landing —
+> `@machize/auth-sqlite` now persists all six auth stores. See
 > [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) and the full design in
 > [ARCHITECTURE.md](./ARCHITECTURE.md).
 
