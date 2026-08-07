@@ -1,0 +1,83 @@
+// Reference schema for @machize/auth-prisma.
+//
+// Copy these models into your app's schema.prisma (or import them), run
+// `prisma migrate dev`, and pass the generated client to `prismaAuthStores()`.
+// Targets PostgreSQL — `scopes` and `recoveryCodes` use native scalar lists
+// (`String[]`). On a database without scalar-list support (e.g. SQLite), model
+// those two fields as `Json` and adapt, or use @machize/auth-sqlite instead.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AuthUser {
+  id            String  @id
+  email         String  @unique
+  passwordHash  String
+  emailVerified Boolean @default(false)
+
+  @@map("auth_users")
+}
+
+model AuthSession {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model AuthRefreshToken {
+  token     String    @id
+  familyId  String
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([familyId])
+  @@index([userId])
+  @@map("auth_refresh_tokens")
+}
+
+model AuthToken {
+  token     String    @id
+  userId    String
+  purpose   String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([userId, purpose])
+  @@map("auth_tokens")
+}
+
+model AuthApiKey {
+  id         String    @id
+  name       String
+  prefix     String
+  hash       String    @unique
+  tenantId   String?
+  userId     String?
+  scopes     String[]
+  createdAt  DateTime
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("auth_api_keys")
+}
+
+model AuthMfa {
+  userId        String   @id
+  secret        String
+  enabled       Boolean  @default(false)
+  recoveryCodes String[]
+
+  @@map("auth_mfa")
+}

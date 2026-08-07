@@ -1,6 +1,6 @@
 {
   "name": "@machize/api-keys-ui",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "A self-contained HTML page to manage @machize/auth API keys: create (show once), list and revoke — zero dependencies, no build.",
   "license": "MIT",
   "type": "module",

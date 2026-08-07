@@ -71,6 +71,43 @@ multiple instances that must share session state? Point sessions/refresh tokens
 at Redis and keep users in your primary database — the contracts make that a
 per-store choice.
 
+## Auth on Postgres/MySQL — `@machize/auth-prisma`
+
+When your app already runs on a real database, [`@machize/auth-prisma`](/reference/packages)
+gives you the same six auth stores backed by **Prisma**. You bring a generated
+`PrismaClient` whose schema includes the `Auth*` models (the package ships a
+reference `schema.prisma`); the stores only touch those delegates, so they layer
+onto your existing client without owning your schema or connection.
+
+```ts
+import { authPlugin, apiKeysPlugin } from '@machize/auth'
+import { prismaAuthStores } from '@machize/auth-prisma'
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient()
+const s = prismaAuthStores(prisma)   // pass your client directly, no cast
+
+createApp({
+  plugins: [
+    authPlugin({ secret, users: s.users, sessions: s.sessions,
+                 refreshTokens: s.refreshTokens, tokens: s.tokens, mfa: s.mfa }),
+    apiKeysPlugin({ store: s.apiKeys, users: s.users }),
+  ],
+})
+```
+
+Copy the reference models into your `schema.prisma`, `prisma migrate`, and go.
+For **database-per-tenant**, pair it with [`@machize/prisma`](/reference/packages):
+resolve the per-tenant client from the request context and build the stores over
+it, so each tenant's auth data lives in its own database or schema.
+
+::: tip Which one?
+`@machize/auth-sqlite` for a single node with zero dependencies;
+`@machize/auth-prisma` when you already run Postgres/MySQL or need multiple
+instances to share one database. Both implement the identical store contracts,
+so switching is a one-line change.
+:::
+
 ## Redis-backed stores
 
 Several packages already ship Redis implementations for the state that benefits
@@ -101,9 +138,10 @@ class PrismaUserSource implements UserSource {
 }
 ```
 
-`@machize/auth-sqlite` is a compact, fully-tested reference for all six auth
-stores — copy its shape when you build one for Postgres, MySQL, or your ORM of
-choice. The same approach applies to every other store contract in the toolkit.
+`@machize/auth-sqlite` and `@machize/auth-prisma` are compact, fully-tested
+references for all six auth stores — read either when you build one for another
+database or ORM. The same approach applies to every other store contract in the
+toolkit.
 
 ## What to do before going to production
 
