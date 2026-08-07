@@ -4,8 +4,8 @@ Machize is a batteries-included toolkit for building SaaS applications on
 Node.js. It is not another HTTP framework — Fastify already does that well. It
 fills the layer between the server and a finished SaaS product: **tenancy,
 billing, auth, permissions, audit, queues, notifications** — integrated with
-the coherence Laravel brings to PHP, and TypeScript inference from the route to
-the client.
+an end-to-end coherence rare on Node.js, and TypeScript inference from the route
+to the client.
 
 ## Why Machize
 
