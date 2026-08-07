@@ -57,6 +57,7 @@ export default defineConfig({
             { text: 'Comments', link: '/guide/comments' },
             { text: 'Internationalization', link: '/guide/i18n' },
             { text: 'Data exports', link: '/guide/exports' },
+            { text: 'Self-contained UIs', link: '/guide/admin-pages' },
           ],
         },
         {
