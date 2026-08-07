@@ -1,0 +1,213 @@
+import type {
+  AddJobOptions,
+  DriverCapabilities,
+  JobExecutor,
+  QueueDriver,
+} from '@machize/queue'
+
+/** The subset of a kafkajs client this driver uses. */
+export interface KafkaClient {
+  producer(): KafkaProducer
+  consumer(config: { groupId: string }): KafkaConsumer
+}
+
+export interface KafkaProducer {
+  connect(): Promise<void>
+  send(record: {
+    topic: string
+    messages: { value: string; headers?: Record<string, string> }[]
+  }): Promise<unknown>
+  disconnect(): Promise<void>
+}
+
+export interface KafkaMessage {
+  value: Uint8Array | string | null
+  headers?: Record<string, Uint8Array | string | undefined>
+}
+
+export interface KafkaConsumer {
+  connect(): Promise<void>
+  subscribe(subscription: { topic: string; fromBeginning?: boolean }): Promise<void>
+  run(config: {
+    eachMessage: (payload: { topic: string; message: KafkaMessage }) => Promise<void>
+    partitionsConsumedConcurrently?: number
+  }): Promise<void>
+  disconnect(): Promise<void>
+}
+
+const HEADER = {
+  job: 'x-machize-job',
+  attempt: 'x-machize-attempt',
+  attempts: 'x-machize-attempts',
+} as const
+
+export interface KafkaDriverOptions {
+  brokers: string[]
+  clientId?: string
+  /** Consumer group used by workers. Default 'machize-queue'. */
+  groupId?: string
+  /** Suffix for the retry topic. Default '.retry'. */
+  retrySuffix?: string
+  /** Suffix for the dead-letter topic. Default '.dead'. */
+  deadSuffix?: string
+  /** Injectable client — defaults to kafkajs. Tests pass a fake. */
+  client?: KafkaClient
+}
+
+const defaultClient = async (options: KafkaDriverOptions): Promise<KafkaClient> => {
+  // Opaque specifier keeps kafkajs an optional peer dependency (runtime-resolved).
+  const specifier = 'kafkajs'
+  const mod = (await import(specifier)) as {
+    Kafka: new (config: { clientId: string; brokers: string[] }) => KafkaClient
+  }
+  return new mod.Kafka({ clientId: options.clientId ?? 'machize', brokers: options.brokers })
+}
+
+/**
+ * Kafka driver for `@machize/queue`. Kafka is a log, not a task queue, so this
+ * driver is deliberately honest about what it can't do:
+ *
+ * - `delayed` and `priority` are NOT supported (Kafka has neither). With the
+ *   queue's `onUnsupported: 'throw'` policy a delayed/priority dispatch fails
+ *   loudly; with the default 'warn' it logs and proceeds without them.
+ * - `retries` are supported via a retry topic (`<topic>.retry`) the worker also
+ *   consumes; exhausted jobs go to `<topic>.dead`. There is no backoff delay
+ *   (Kafka can't defer a message), so `backoff` is not supported either.
+ *
+ * Worker concurrency is bounded by the topic's partition count, not the
+ * `concurrency` number (passed through as `partitionsConsumedConcurrently`).
+ */
+export class KafkaQueueDriver implements QueueDriver {
+  readonly name = 'kafka'
+  readonly capabilities: DriverCapabilities = {
+    delayed: false,
+    priority: false,
+    retries: true,
+    backoff: false,
+  }
+
+  private executor: JobExecutor | undefined
+  private clientPromise: Promise<KafkaClient> | undefined
+  private producerPromise: Promise<KafkaProducer> | undefined
+  private readonly consumers: KafkaConsumer[] = []
+  private readonly groupId: string
+  private readonly retrySuffix: string
+  private readonly deadSuffix: string
+
+  constructor(private readonly options: KafkaDriverOptions) {
+    this.groupId = options.groupId ?? 'machize-queue'
+    this.retrySuffix = options.retrySuffix ?? '.retry'
+    this.deadSuffix = options.deadSuffix ?? '.dead'
+  }
+
+  setExecutor(executor: JobExecutor): void {
+    this.executor = executor
+  }
+
+  async add(queue: string, jobName: string, data: unknown, options: AddJobOptions): Promise<void> {
+    // delay/priority are unsupported (see capabilities); the QueueManager has
+    // already applied its onUnsupported policy, so they are simply not encoded.
+    void options
+    const producer = await this.producer()
+    await producer.send({
+      topic: queue,
+      messages: [
+        {
+          value: JSON.stringify(data),
+          headers: {
+            [HEADER.job]: jobName,
+            [HEADER.attempt]: '1',
+            [HEADER.attempts]: String(options.attempts),
+          },
+        },
+      ],
+    })
+  }
+
+  startWorker(queue: string, options: { concurrency?: number } = {}): void {
+    void (async () => {
+      const consumer = (await this.client()).consumer({ groupId: this.groupId })
+      this.consumers.push(consumer)
+      await consumer.connect()
+      await consumer.subscribe({ topic: queue, fromBeginning: false })
+      await consumer.subscribe({ topic: this.retryTopic(queue), fromBeginning: false })
+      await consumer.run({
+        eachMessage: ({ message }) => this.handle(queue, message),
+        ...(options.concurrency !== undefined ? { partitionsConsumedConcurrently: options.concurrency } : {}),
+      })
+    })()
+  }
+
+  async close(): Promise<void> {
+    const producer = await this.producerPromise?.catch(() => undefined)
+    await producer?.disconnect()
+    await Promise.all(this.consumers.map((consumer) => consumer.disconnect()))
+  }
+
+  // --- internals -----------------------------------------------------------
+
+  private async handle(queue: string, message: KafkaMessage): Promise<void> {
+    if (message.value === null) return
+    const headers = decodeHeaders(message.headers)
+    const jobName = headers[HEADER.job] ?? ''
+    const value = asString(message.value)
+
+    try {
+      await this.executor?.(jobName, JSON.parse(value))
+    } catch {
+      const attempt = Number(headers[HEADER.attempt] ?? 1)
+      const attempts = Number(headers[HEADER.attempts] ?? 1)
+      const producer = await this.producer()
+      if (attempt < attempts) {
+        await producer.send({
+          topic: this.retryTopic(queue),
+          messages: [{ value, headers: { ...headers, [HEADER.attempt]: String(attempt + 1) } }],
+        })
+      } else {
+        await producer.send({ topic: this.deadTopic(queue), messages: [{ value, headers }] })
+      }
+    }
+    // Offsets auto-commit after eachMessage resolves — a re-routed failure is
+    // considered handled so the same message is not redelivered by Kafka.
+  }
+
+  private client(): Promise<KafkaClient> {
+    if (!this.clientPromise) {
+      this.clientPromise = this.options.client
+        ? Promise.resolve(this.options.client)
+        : defaultClient(this.options)
+    }
+    return this.clientPromise
+  }
+
+  private producer(): Promise<KafkaProducer> {
+    if (!this.producerPromise) {
+      this.producerPromise = (async () => {
+        const producer = (await this.client()).producer()
+        await producer.connect()
+        return producer
+      })()
+    }
+    return this.producerPromise
+  }
+
+  private retryTopic(queue: string): string {
+    return `${queue}${this.retrySuffix}`
+  }
+  private deadTopic(queue: string): string {
+    return `${queue}${this.deadSuffix}`
+  }
+}
+
+const asString = (value: Uint8Array | string): string =>
+  typeof value === 'string' ? value : new TextDecoder().decode(value)
+
+const decodeHeaders = (
+  headers: Record<string, Uint8Array | string | undefined> | undefined,
+): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (value !== undefined) out[key] = asString(value)
+  }
+  return out
+}

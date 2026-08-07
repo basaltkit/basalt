@@ -1,0 +1,51 @@
+{
+  "name": "@machize/queue-kafka",
+  "version": "0.6.0",
+  "description": "Kafka driver for @machize/queue: produce/consume jobs with retry and dead-letter topics (no delayed delivery or priority — Kafka has neither).",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/queue": "workspace:*"
+  },
+  "peerDependencies": {
+    "kafkajs": "^2.0.0"
+  },
+  "devDependencies": {
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/queue-kafka"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/queue-kafka#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "queue",
+    "kafka",
+    "kafkajs"
+  ]
+}
