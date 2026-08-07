@@ -1,6 +1,6 @@
 {
   "name": "@machize/sdk",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Type-safe HTTP client for Machize APIs: endpoints defined with Zod drive an inferred client with typed errors and transparent token refresh. Frontend-friendly (only Zod).",
   "license": "MIT",
   "type": "module",
