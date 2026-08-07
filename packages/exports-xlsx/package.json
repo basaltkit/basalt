@@ -1,6 +1,6 @@
 {
   "name": "@machize/exports-xlsx",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "XLSX formatter for @machize/exports — writes a valid single-sheet .xlsx (Office Open XML) with a built-in ZIP writer. Zero dependencies.",
   "license": "MIT",
   "type": "module",

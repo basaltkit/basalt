@@ -1,5 +1,11 @@
 # @machize/logger
 
+## 0.22.0
+
+### Patch Changes
+
+- @machize/core@0.22.0
+
 ## 0.21.0
 
 ### Patch Changes
