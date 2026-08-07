@@ -1,5 +1,11 @@
 # @machize/admin-react
 
+## 0.13.0
+
+### Patch Changes
+
+- @machize/admin@0.13.0
+
 ## 0.12.0
 
 ### Patch Changes

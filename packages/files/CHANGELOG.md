@@ -1,5 +1,13 @@
 # @machize/files
 
+## 0.13.0
+
+### Patch Changes
+
+- @machize/core@0.13.0
+- @machize/fastify@0.13.0
+- @machize/storage@0.13.0
+
 ## 0.12.0
 
 ### Minor Changes
