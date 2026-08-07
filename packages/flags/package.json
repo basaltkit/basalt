@@ -1,6 +1,6 @@
 {
   "name": "@machize/flags",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Feature flags for Machize: context-aware evaluation with per-tenant/user targeting and deterministic percentage rollouts.",
   "license": "MIT",
   "type": "module",
