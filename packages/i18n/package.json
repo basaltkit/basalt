@@ -1,0 +1,49 @@
+{
+  "name": "@machize/i18n",
+  "version": "0.13.0",
+  "description": "Internationalization for Machize: context-resolved locale (per user/tenant), typed message catalogs with interpolation and plurals, and Intl-based formatting. Zero dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/i18n"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/i18n#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "saas",
+    "i18n",
+    "internationalization",
+    "intl"
+  ]
+}
