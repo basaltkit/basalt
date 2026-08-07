@@ -1,5 +1,12 @@
 # @machize/cache-tiered
 
+## 0.24.0
+
+### Patch Changes
+
+- Updated dependencies [be55f2d]
+  - @machize/cache@0.24.0
+
 ## 0.23.0
 
 ### Minor Changes

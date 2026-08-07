@@ -1,5 +1,12 @@
 # @machize/api-keys-ui
 
+## 0.24.0
+
+### Patch Changes
+
+- @machize/core@0.24.0
+- @machize/fastify@0.24.0
+
 ## 0.23.0
 
 ### Patch Changes

@@ -1,5 +1,20 @@
 # @machize/cache
 
+## 0.24.0
+
+### Minor Changes
+
+- be55f2d: `cachePlugin` and `storagePlugin` now accept a custom driver **instance**, not just a built-in shortcut.
+
+  - `cachePlugin({ driver })` accepts `'memory'`, `'redis'`, **or a `CacheDriver` instance** — so `@machize/cache-tiered` (and any custom driver) plugs in directly.
+  - A disk in `storagePlugin({ disks })` accepts `{ driver: 'local'|'s3', … }` **or `{ driver: <StorageDriver instance> }`** — so `@machize/storage-gcs`, `@machize/storage-azure` and custom drivers plug in directly.
+
+  Both changes are backward compatible (the string shortcuts still work).
+
+### Patch Changes
+
+- @machize/core@0.24.0
+
 ## 0.23.0
 
 ### Patch Changes

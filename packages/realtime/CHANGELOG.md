@@ -1,5 +1,11 @@
 # @machize/realtime
 
+## 0.24.0
+
+### Patch Changes
+
+- @machize/core@0.24.0
+
 ## 0.23.0
 
 ### Patch Changes

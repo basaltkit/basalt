@@ -1,5 +1,12 @@
 # @machize/storage-gcs
 
+## 0.24.0
+
+### Patch Changes
+
+- Updated dependencies [be55f2d]
+  - @machize/storage@0.24.0
+
 ## 0.23.0
 
 ### Patch Changes

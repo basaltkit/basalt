@@ -1,5 +1,12 @@
 # @machize/prisma
 
+## 0.24.0
+
+### Patch Changes
+
+- @machize/cli@0.24.0
+- @machize/core@0.24.0
+
 ## 0.23.0
 
 ### Patch Changes
