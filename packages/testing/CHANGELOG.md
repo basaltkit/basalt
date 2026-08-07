@@ -1,5 +1,14 @@
 # @machize/testing
 
+## 0.8.1
+
+### Patch Changes
+
+- @machize/core@0.8.1
+- @machize/fastify@0.8.1
+- @machize/mailer@0.8.1
+- @machize/queue@0.8.1
+
 ## 0.8.0
 
 ### Patch Changes
