@@ -1,5 +1,12 @@
 # @machize/dashboard
 
+## 0.9.0
+
+### Patch Changes
+
+- @machize/admin@0.9.0
+- @machize/subscriptions@0.9.0
+
 ## 0.8.1
 
 ### Patch Changes
