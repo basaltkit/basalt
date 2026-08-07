@@ -1,5 +1,12 @@
 # @machize/prisma
 
+## 0.8.1
+
+### Patch Changes
+
+- @machize/cli@0.8.1
+- @machize/core@0.8.1
+
 ## 0.8.0
 
 ### Patch Changes
