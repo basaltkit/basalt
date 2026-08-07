@@ -1,5 +1,11 @@
 # @machize/search
 
+## 0.15.0
+
+### Patch Changes
+
+- @machize/core@0.15.0
+
 ## 0.14.0
 
 ### Patch Changes
