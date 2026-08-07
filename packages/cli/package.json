@@ -1,6 +1,6 @@
 {
   "name": "@machize/cli",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "The 'mach' command framework for Machize apps: define commands, run them against a booted app, and inspect routes and schedules.",
   "license": "MIT",
   "type": "module",
