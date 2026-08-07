@@ -1,6 +1,6 @@
 {
   "name": "@machize/queue-sqs",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Amazon SQS driver for @machize/queue: native delayed delivery, app-level retries with backoff and a dead-letter queue (no priority — SQS has none).",
   "license": "MIT",
   "type": "module",
