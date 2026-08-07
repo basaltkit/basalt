@@ -93,6 +93,7 @@ the `saas` keyword on npm.
 | `@machize/exports` | Data exports — typed definitions → CSV/TSV/JSON/NDJSON, pluggable formatters, async via queue |
 | `@machize/audit-viewer` | Read-only audit-trail browser — tenant-scoped filters, pagination, stats, self-contained HTML page |
 | `@machize/api-keys-ui` | Self-contained page to create/list/revoke `@machize/auth` API keys — zero deps, no build |
+| `@machize/teams-ui` | Self-contained page to manage `@machize/teams` — invitations & members, zero deps, no build |
 
 **Developer experience & product**
 
