@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { createApp, ctx, runWithContext } from '@machize/core'
 import { defineEvent, EventBus } from '@machize/events'
 import {
+  BullmqQueueDriver,
   defineJob,
   JobNotRegisteredError,
   JobValidationError,
@@ -11,6 +12,8 @@ import {
   queuedOn,
   queuePlugin,
   SyncQueueDriver,
+  UnsupportedJobOptionError,
+  type QueueDriver,
 } from '../src/index.js'
 
 const setup = () => {
@@ -18,6 +21,59 @@ const setup = () => {
   const manager = new QueueManager(driver)
   return { driver, manager }
 }
+
+describe('driver capabilities (compatibility check)', () => {
+  const delayed = defineJob({ name: 'delayed', handle: () => {} })
+  const retrying = defineJob({ name: 'retrying', attempts: 3, handle: () => {} })
+
+  it('declares capabilities per backend', () => {
+    expect(new SyncQueueDriver().capabilities).toEqual({ delayed: false, priority: false, retries: true, backoff: false })
+    expect(new BullmqQueueDriver({ connection: 'redis://localhost:6379' }).capabilities).toEqual({
+      delayed: true,
+      priority: true,
+      retries: true,
+      backoff: true,
+    })
+  })
+
+  it("throws on an unsupported option when policy is 'throw'", async () => {
+    const manager = new QueueManager(new SyncQueueDriver(), { onUnsupported: 'throw' })
+    manager.register(delayed)
+    await expect(manager.dispatch(delayed, undefined, { delay: '5m' })).rejects.toBeInstanceOf(UnsupportedJobOptionError)
+    await expect(manager.dispatch(delayed, undefined, { priority: 1 })).rejects.toBeInstanceOf(UnsupportedJobOptionError)
+  })
+
+  it("warns once (not throws) by default, and still enqueues", async () => {
+    const warnings: string[] = []
+    const driver = new SyncQueueDriver()
+    const manager = new QueueManager(driver, { warn: (m) => warnings.push(m) }) // default policy 'warn'
+    manager.register(delayed)
+
+    await manager.dispatch(delayed, undefined, { delay: '5m' })
+    await manager.dispatch(delayed, undefined, { delay: '5m' })
+    expect(warnings).toHaveLength(1) // deduped per job+feature
+    expect(warnings[0]).toContain('does not support')
+    expect(driver.executed).toHaveLength(2) // ran anyway
+  })
+
+  it('allows options the driver does support (sync honors retries)', async () => {
+    const manager = new QueueManager(new SyncQueueDriver(), { onUnsupported: 'throw' })
+    manager.register(retrying)
+    await expect(manager.dispatch(retrying, undefined)).resolves.toBeUndefined()
+  })
+
+  it('a driver without declared capabilities is assumed capable (back-compat)', async () => {
+    const legacy: QueueDriver = {
+      setExecutor() {},
+      async add() {},
+      startWorker() {},
+      async close() {},
+    }
+    const manager = new QueueManager(legacy, { onUnsupported: 'throw' })
+    manager.register(delayed)
+    await expect(manager.dispatch(delayed, undefined, { delay: '5m' })).resolves.toBeUndefined()
+  })
+})
 
 describe('QueueManager (driver sync)', () => {
   it('dispatches and executes a job with a typed, validated payload', async () => {

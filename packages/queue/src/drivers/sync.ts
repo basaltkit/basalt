@@ -6,6 +6,10 @@ import type { AddJobOptions, JobExecutor, QueueDriver } from '../driver.js'
  * equivalent of Laravel's `sync` queue driver.
  */
 export class SyncQueueDriver implements QueueDriver {
+  readonly name = 'sync'
+  // Runs inline on dispatch: retries are honored (immediately), but there is no
+  // deferred delivery and no ordering, so delayed/priority are not supported.
+  readonly capabilities = { delayed: false, priority: false, retries: true, backoff: false }
   private executor: JobExecutor | undefined
   /** execution history — useful in test assertions */
   readonly executed: { queue: string; jobName: string; attempts: number }[] = []
