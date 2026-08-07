@@ -88,6 +88,7 @@ the `saas` keyword on npm.
 | `@machize/realtime-client` | Browser client for `@machize/realtime` — subscribe channels over WS/SSE, auto-reconnect, zero deps |
 | `@machize/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch (prod) drivers, auto-sync from events |
 | `@machize/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, signed URLs, scan hooks |
+| `@machize/comments` | Per-resource comment threads — @mentions, resolve/reopen, tenant-scoped, events for realtime & notifications |
 
 **Developer experience & product**
 
