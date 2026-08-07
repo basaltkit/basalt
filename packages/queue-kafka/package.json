@@ -1,6 +1,6 @@
 {
   "name": "@machize/queue-kafka",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Kafka driver for @machize/queue: produce/consume jobs with retry and dead-letter topics (no delayed delivery or priority — Kafka has neither).",
   "license": "MIT",
   "type": "module",
