@@ -109,4 +109,14 @@ describe('storagePlugin', () => {
     expect(() => storage.disk('missing')).toThrowError(/Unknown disk/)
     await app.shutdown()
   })
+
+  it('accepts a custom StorageDriver instance', async () => {
+    const driver = new LocalStorageDriver({ root })
+    const app = await createApp({
+      plugins: [storagePlugin({ default: 'd', disks: { d: { driver, scope: null } } })],
+    }).boot()
+    await app.container.get(STORAGE).disk().put('custom.txt', 'yes')
+    expect((await driver.get('custom.txt')).toString()).toBe('yes') // wrote through the instance
+    await app.shutdown()
+  })
 })

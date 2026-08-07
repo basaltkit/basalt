@@ -38,7 +38,14 @@ export default defineConfig({
             { text: 'Subscriptions', link: '/guide/billing' },
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
+          ],
+        },
+        {
+          text: 'Data & infrastructure',
+          items: [
             { text: 'Queues & Jobs', link: '/guide/queues' },
+            { text: 'Storage', link: '/guide/storage' },
+            { text: 'Caching', link: '/guide/caching' },
           ],
         },
         {
