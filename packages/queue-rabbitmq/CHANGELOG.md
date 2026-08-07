@@ -1,5 +1,12 @@
 # @machize/queue-rabbitmq
 
+## 0.8.1
+
+### Patch Changes
+
+- 8ef02f4: Add package READMEs. The three queue-driver packages were published without a README (npm showed "This package does not have a README"). Each now documents installation (including the peer dependency), a quick start, how the backend maps retries/backoff/delay and dead-lettering, its honest capability profile, and an options reference.
+  - @machize/queue@0.8.1
+
 ## 0.8.0
 
 ### Patch Changes

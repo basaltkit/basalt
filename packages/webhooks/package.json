@@ -1,6 +1,6 @@
 {
   "name": "@machize/webhooks",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Outbound webhooks for Machize: signed delivery with retries and backoff, per-tenant subscriptions, and automatic dispatch from domain events.",
   "license": "MIT",
   "type": "module",
