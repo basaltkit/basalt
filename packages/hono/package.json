@@ -1,6 +1,6 @@
 {
   "name": "@machize/hono",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Hono adapter for Machize: run the same typed routes, enrichers and guards on Hono (Node, Bun, Deno, edge) as on Fastify or Express.",
   "license": "MIT",
   "type": "module",

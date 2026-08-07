@@ -1,5 +1,14 @@
 # @machize/scheduler
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies [f155979]
+- Updated dependencies [f2e8298]
+  - @machize/queue@0.6.0
+  - @machize/core@0.6.0
+
 ## 0.5.1
 
 ### Patch Changes
