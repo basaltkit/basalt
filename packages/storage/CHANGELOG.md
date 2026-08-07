@@ -1,5 +1,11 @@
 # @machize/storage
 
+## 0.8.0
+
+### Patch Changes
+
+- @machize/core@0.8.0
+
 ## 0.7.0
 
 ### Patch Changes
