@@ -1,7 +1,0 @@
----
-'@machize/exports': minor
----
-
-New package: `@machize/exports` — data exports and reporting.
-
-`defineExport<T>({ name, columns })` declares a typed export (each column has a `header` and a `value(row)`), and `Exports.run(def, data, format)` renders it to a file, returning `{ content, contentType, filename, format, rowCount }`. Native formatters — `csv`, `tsv` (RFC-4180 quoting, CRLF, ISO dates), `json`, `ndjson` — need no dependencies; a pluggable `ExportFormatter` seam lets XLSX/PDF drivers register via `exportsPlugin({ formatters })`. `run` accepts an array or an `AsyncIterable`, so rows can be streamed from the database, and it's pure/synchronous by design — run it inside a `@machize/queue` job and store the result with `@machize/files`/`@machize/storage` for large reports. Fully unit-tested — escaping, every native format, async iterables, custom formatters, and the plugin.
