@@ -1,5 +1,13 @@
 # @machize/audit-viewer
 
+## 0.17.0
+
+### Patch Changes
+
+- @machize/audit@0.17.0
+- @machize/core@0.17.0
+- @machize/fastify@0.17.0
+
 ## 0.16.0
 
 ### Minor Changes
