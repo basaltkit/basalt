@@ -1,5 +1,11 @@
 # @machize/generator
 
+## 0.18.0
+
+### Patch Changes
+
+- @machize/cli@0.18.0
+
 ## 0.17.0
 
 ### Patch Changes
