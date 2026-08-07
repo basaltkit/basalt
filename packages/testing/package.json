@@ -1,6 +1,6 @@
 {
   "name": "@machize/testing",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Testing kit for Machize apps: createTestApp with user/tenant impersonation, mail and queue fakes with assertions, and time travel.",
   "license": "MIT",
   "type": "module",

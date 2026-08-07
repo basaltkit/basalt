@@ -1,6 +1,6 @@
 {
   "name": "@machize/scheduler",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Fluent Machize scheduler: schedule.job(X).daily().at('03:00'), timezones, withoutOverlapping and @machize/queue integration.",
   "license": "MIT",
   "type": "module",
