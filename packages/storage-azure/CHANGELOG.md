@@ -1,5 +1,11 @@
 # @machize/storage-azure
 
+## 0.22.0
+
+### Patch Changes
+
+- @machize/storage@0.22.0
+
 ## 0.21.0
 
 ### Minor Changes
