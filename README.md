@@ -89,6 +89,7 @@ the `saas` keyword on npm.
 | `@machize/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch (prod) drivers, auto-sync from events |
 | `@machize/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, signed URLs, scan hooks |
 | `@machize/comments` | Per-resource comment threads — @mentions, resolve/reopen, tenant-scoped, events for realtime & notifications |
+| `@machize/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting, zero deps |
 
 **Developer experience & product**
 
