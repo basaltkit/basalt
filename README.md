@@ -85,6 +85,7 @@ the `saas` keyword on npm.
 | `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
 | `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
 | `@machize/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
+| `@machize/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch (prod) drivers, auto-sync from events |
 
 **Developer experience & product**
 
