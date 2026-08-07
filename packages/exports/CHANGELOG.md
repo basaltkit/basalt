@@ -1,5 +1,11 @@
 # @machize/exports
 
+## 0.16.0
+
+### Patch Changes
+
+- @machize/core@0.16.0
+
 ## 0.15.0
 
 ### Minor Changes
