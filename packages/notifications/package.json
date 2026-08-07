@@ -1,6 +1,6 @@
 {
   "name": "@machize/notifications",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Multi-channel notifications for Machize: declarative definitions, channel drivers (in-app, mail, custom), per-recipient preferences and queue integration.",
   "license": "MIT",
   "type": "module",
