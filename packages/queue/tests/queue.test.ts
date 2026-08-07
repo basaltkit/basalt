@@ -182,7 +182,7 @@ describe('QueueManager (driver sync)', () => {
       handle: ({ v }) => void seen.push(v),
     })
     const app = await createApp({
-      plugins: [queuePlugin({ jobs: [job as never] })],
+      plugins: [queuePlugin({ jobs: [job] })], // typed job, no cast needed
     }).boot()
 
     await job.dispatch({ v: 'ok' })

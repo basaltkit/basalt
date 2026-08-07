@@ -30,7 +30,7 @@ export const QUEUE = createToken<QueueManager>('queue')
 
 export interface QueuePluginOptions {
   /** Jobs known to this process (producer and/or worker). */
-  jobs?: JobDefinition<never>[]
+  jobs?: JobDefinition<unknown>[]
   /** Redis connection → BullMQ driver. No connection → sync driver (dev/test). */
   connection?: BullmqDriverOptions['connection']
   /** Custom driver — overrides `connection`. */
