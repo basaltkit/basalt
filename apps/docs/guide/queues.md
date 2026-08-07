@@ -1,0 +1,180 @@
+# Queues & jobs
+
+`@machize/queue` runs work in the background through a small, driver-agnostic
+core. You define typed jobs, dispatch them from anywhere, and workers process
+them — on Redis (BullMQ) in production, inline in dev/test, or on RabbitMQ,
+Kafka, or Amazon SQS through a driver package. The backend is one line to swap;
+your jobs never change.
+
+[[toc]]
+
+## Define a job
+
+```ts
+import { defineJob } from '@machize/queue'
+import { z } from 'zod'
+
+export const SendWelcome = defineJob({
+  name: 'send-welcome',
+  queue: 'welcome',                 // which queue/worker handles it (default 'default')
+  schema: z.object({ userId: z.string() }),
+  attempts: 3,                      // retry up to 3 times
+  backoff: { type: 'exponential', delay: '30s' },
+  async handle({ userId }) {
+    // ... do the work
+  },
+})
+```
+
+The `schema` makes the payload type-safe end to end — `handle`'s argument and
+`dispatch`'s payload are both inferred from it, and the payload is validated on
+dispatch.
+
+## Register it
+
+```ts
+import { queuePlugin } from '@machize/queue'
+
+queuePlugin({
+  connection: process.env.REDIS_URL,     // → BullMQ driver. Omit for the sync driver.
+  jobs: [SendWelcome],                    // jobs this process produces and/or runs
+  workers: [{ queue: 'welcome', concurrency: 5 }], // start a worker for this queue
+})
+```
+
+A worker's `queue` **must match** a job's `queue`, or the job lands in the
+backend but nothing consumes it.
+
+## Dispatch
+
+```ts
+import { ctx } from '@machize/core'
+import { QUEUE } from '@machize/queue'
+
+await ctx().container.get(QUEUE).dispatch(SendWelcome, { userId: 'u-1' })
+
+// or straight off the job (once it's registered):
+await SendWelcome.dispatch({ userId: 'u-1' }, { delay: '5m', priority: 5 })
+```
+
+`dispatch` returns as soon as the job is enqueued. Request context
+(`requestId`, `tenantId`, …) is captured and restored inside the worker.
+
+## Drivers
+
+The backend is chosen by the driver. `connection` picks BullMQ; pass a `driver`
+to use another backend.
+
+| Driver | Package | `delayed` | `priority` | `retries` | `backoff` |
+| --- | --- | :---: | :---: | :---: | :---: |
+| **BullMQ** (Redis) | `@machize/queue` | ✅ | ✅ | ✅ | ✅ |
+| **RabbitMQ** | `@machize/queue-rabbitmq` | ✅ | ✅ | ✅ | ✅ |
+| **Amazon SQS** | `@machize/queue-sqs` | ✅ (≤15 min) | ❌ | ✅ | ✅ |
+| **Kafka** | `@machize/queue-kafka` | ❌ | ❌ | ✅ | ❌ |
+| **Sync** (dev/test) | `@machize/queue` | ❌ | ❌ | ✅ | ❌ |
+
+```ts
+import { RabbitmqQueueDriver } from '@machize/queue-rabbitmq'
+queuePlugin({ driver: new RabbitmqQueueDriver({ url: process.env.AMQP_URL! }), jobs, workers })
+
+import { SqsQueueDriver } from '@machize/queue-sqs'
+queuePlugin({ driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q] }), jobs, workers })
+
+import { KafkaQueueDriver } from '@machize/queue-kafka'
+queuePlugin({ driver: new KafkaQueueDriver({ brokers: ['localhost:9092'] }), jobs, workers })
+```
+
+## Capability checks
+
+Backends differ — Kafka has no message priority, SQS caps delays at 15 minutes,
+the sync driver runs inline. Rather than silently drop an option a backend can't
+honor, each driver declares its `capabilities` and the queue checks every
+dispatch against them.
+
+```ts
+queuePlugin({
+  driver: new KafkaQueueDriver({ brokers }),
+  onUnsupported: 'throw', // 'warn' (default) · 'throw' · 'ignore'
+})
+
+// a delayed job on Kafka:
+await Job.dispatch(payload, { delay: '5m' })
+//  onUnsupported: 'warn'  → logs once, runs immediately
+//  onUnsupported: 'throw' → throws UnsupportedJobOptionError
+//  onUnsupported: 'ignore'→ silently proceeds (legacy)
+```
+
+Use `'throw'` in production for a hard guarantee; the default `'warn'` never
+breaks a dev run but never hides a dropped option either.
+
+## Writing a driver
+
+A driver is any object implementing the `QueueDriver` seam — four methods and
+an optional capability declaration:
+
+```ts
+import type { QueueDriver, DriverCapabilities, JobExecutor, AddJobOptions } from '@machize/queue'
+
+export class MyQueueDriver implements QueueDriver {
+  readonly name = 'my-backend'
+  // Declare what the backend honors. Omit it and the driver is assumed fully
+  // capable (back-compat) — but then nothing is checked, so prefer declaring it.
+  readonly capabilities: DriverCapabilities = { delayed: false, priority: false, retries: true, backoff: false }
+
+  private executor: JobExecutor | undefined
+
+  // The QueueManager calls this once, handing you how to run a received job.
+  setExecutor(executor: JobExecutor): void {
+    this.executor = executor
+  }
+
+  // Enqueue. `options` carries attempts/backoff/delayMs/priority — honor what
+  // your `capabilities` claim; the QueueManager has already applied its
+  // onUnsupported policy for the rest.
+  async add(queue: string, jobName: string, data: unknown, options: AddJobOptions): Promise<void> {
+    // publish { jobName, data, options } to your backend
+  }
+
+  // Start consuming `queue`. For each received job call
+  // `this.executor(jobName, data)`; on success remove it, on failure retry or
+  // dead-letter per your backend's model.
+  startWorker(queue: string, options?: { concurrency?: number }): void {
+    // consume → await this.executor?.(jobName, data)
+  }
+
+  async close(): Promise<void> {
+    // disconnect producers/consumers
+  }
+}
+```
+
+Then plug it in:
+
+```ts
+queuePlugin({ driver: new MyQueueDriver(), jobs, workers })
+```
+
+**Guidance for a faithful driver:**
+
+- **Be honest in `capabilities`.** If the backend can't defer a message, set
+  `delayed: false` — the compatibility check turns a silent drop into a loud
+  one. The bundled drivers are a reference: [`@machize/queue-rabbitmq`][rmq]
+  (delay + retries via a dead-letter queue), [`@machize/queue-sqs`][sqs]
+  (native delay, no priority), [`@machize/queue-kafka`][kafka] (a log, so no
+  delay/priority; retries via a retry topic).
+- **Carry retry state in the message.** `attempts`/`backoff` come from `add`;
+  stamp the current attempt into message metadata so the worker knows when to
+  retry versus dead-letter.
+- **Make the client injectable.** Each bundled driver takes an injectable
+  connector (`connect`/`client`/`api`), so its retry and dead-letter logic is
+  unit-tested without a running broker. Do the same and your driver is testable
+  in CI.
+
+[rmq]: https://github.com/Zebedeu/machize/tree/main/packages/queue-rabbitmq
+[sqs]: https://github.com/Zebedeu/machize/tree/main/packages/queue-sqs
+[kafka]: https://github.com/Zebedeu/machize/tree/main/packages/queue-kafka
+
+## See also
+
+- [Notes SaaS cookbook](/cookbook/notes-saas) — queues wired into a real app
+  (BullMQ + Redis, mailer off the request).

@@ -38,6 +38,7 @@ export default defineConfig({
             { text: 'Subscriptions', link: '/guide/billing' },
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
+            { text: 'Queues & Jobs', link: '/guide/queues' },
           ],
         },
         {
