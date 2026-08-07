@@ -1,6 +1,6 @@
 {
   "name": "@machize/realtime-client",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "Browser client for @machize/realtime: subscribe to per-tenant channels over WebSocket or SSE, route events, and auto-reconnect. Zero dependencies.",
   "license": "MIT",
   "type": "module",

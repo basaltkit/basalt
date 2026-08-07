@@ -1,6 +1,6 @@
 {
   "name": "@machize/config",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "Namespaced, typed configuration for Machize, with dot-path access and container integration.",
   "license": "MIT",
   "type": "module",

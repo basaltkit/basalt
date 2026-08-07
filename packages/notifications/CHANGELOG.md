@@ -1,5 +1,12 @@
 # @machize/notifications
 
+## 0.18.0
+
+### Patch Changes
+
+- @machize/core@0.18.0
+- @machize/mailer@0.18.0
+
 ## 0.17.0
 
 ### Patch Changes

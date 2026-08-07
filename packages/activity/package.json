@@ -1,6 +1,6 @@
 {
   "name": "@machize/activity",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "User-facing activity log for Machize, Spatie Activitylog-style: fluent builder, causer/tenant from context and queryable feeds.",
   "license": "MIT",
   "type": "module",
