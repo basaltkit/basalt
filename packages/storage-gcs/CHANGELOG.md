@@ -1,5 +1,11 @@
 # @machize/storage-gcs
 
+## 0.23.0
+
+### Patch Changes
+
+- @machize/storage@0.23.0
+
 ## 0.22.0
 
 ### Patch Changes

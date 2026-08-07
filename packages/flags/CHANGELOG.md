@@ -1,5 +1,11 @@
 # @machize/flags
 
+## 0.23.0
+
+### Patch Changes
+
+- @machize/core@0.23.0
+
 ## 0.22.0
 
 ### Patch Changes

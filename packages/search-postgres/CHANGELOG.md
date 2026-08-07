@@ -1,5 +1,11 @@
 # @machize/search-postgres
 
+## 0.23.0
+
+### Patch Changes
+
+- @machize/search@0.23.0
+
 ## 0.22.0
 
 ### Minor Changes
