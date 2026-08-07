@@ -1,5 +1,13 @@
 # @machize/files
 
+## 0.17.0
+
+### Patch Changes
+
+- @machize/core@0.17.0
+- @machize/fastify@0.17.0
+- @machize/storage@0.17.0
+
 ## 0.16.0
 
 ### Patch Changes

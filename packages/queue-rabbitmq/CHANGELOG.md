@@ -1,5 +1,11 @@
 # @machize/queue-rabbitmq
 
+## 0.17.0
+
+### Patch Changes
+
+- @machize/queue@0.17.0
+
 ## 0.16.0
 
 ### Patch Changes
