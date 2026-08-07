@@ -5,7 +5,7 @@ import {
   tryCtx,
   type RequestContext,
 } from '@machize/core'
-import type { AddJobOptions, QueueDriver } from './driver.js'
+import type { AddJobOptions, DriverCapabilities, QueueDriver } from './driver.js'
 import {
   validatePayload,
   type DispatchOptions,
@@ -23,6 +23,44 @@ export class UnknownJobError extends MachizeError {
   }
 }
 
+/** A job used an option the active driver doesn't support (with policy 'throw'). */
+export class UnsupportedJobOptionError extends MachizeError {
+  readonly status = 500
+  constructor(driver: string, job: string, features: string[]) {
+    super(
+      'QUEUE_UNSUPPORTED_OPTION',
+      `The "${driver}" queue driver does not support ${features.join(', ')} ` +
+        `(job "${job}"). Use a driver that supports it, remove the option, or ` +
+        `set queuePlugin({ onUnsupported: 'warn' | 'ignore' }).`,
+    )
+  }
+}
+
+/**
+ * What to do when a dispatch uses an option the driver can't honor:
+ * - `throw`: raise {@link UnsupportedJobOptionError} (strict; recommended in prod)
+ * - `warn`: log once per job+feature and proceed (default — never silent)
+ * - `ignore`: proceed silently (legacy behavior)
+ */
+export type UnsupportedPolicy = 'throw' | 'warn' | 'ignore'
+
+/** Maps a dispatch's options to the capability each one requires. */
+const requiredCapabilities = (options: AddJobOptions): (keyof DriverCapabilities)[] => {
+  const needed: (keyof DriverCapabilities)[] = []
+  if (options.delayMs !== undefined && options.delayMs > 0) needed.push('delayed')
+  if (options.priority !== undefined) needed.push('priority')
+  if (options.attempts > 1) needed.push('retries')
+  if (options.backoff && options.attempts > 1) needed.push('backoff')
+  return needed
+}
+
+const FEATURE_LABELS: Record<keyof DriverCapabilities, string> = {
+  delayed: 'delayed jobs (delay)',
+  priority: 'priority',
+  retries: 'retries (attempts > 1)',
+  backoff: 'retry backoff',
+}
+
 /** Context fields serialized along with the payload and restored in the worker. */
 const SNAPSHOT_FIELDS = ['requestId', 'correlationId', 'traceId', 'userId', 'tenantId'] as const
 
@@ -31,11 +69,50 @@ interface JobEnvelope {
   context?: RequestContext | undefined
 }
 
+export interface QueueManagerOptions {
+  /** Reaction when a job uses an option the driver can't honor. Default 'warn'. */
+  onUnsupported?: UnsupportedPolicy
+  /** Sink for 'warn' diagnostics. Default console.warn. */
+  warn?: (message: string) => void
+}
+
 export class QueueManager implements JobDispatcher {
   private readonly jobs = new Map<string, JobDefinition<never>>()
+  private readonly onUnsupported: UnsupportedPolicy
+  private readonly warn: (message: string) => void
+  private readonly warned = new Set<string>()
 
-  constructor(private readonly driver: QueueDriver) {
+  constructor(
+    private readonly driver: QueueDriver,
+    options: QueueManagerOptions = {},
+  ) {
+    this.onUnsupported = options.onUnsupported ?? 'warn'
+    this.warn = options.warn ?? ((message) => console.warn(message))
     driver.setExecutor((jobName, data) => this.execute(jobName, data))
+  }
+
+  /**
+   * Checks the dispatch's options against the driver's declared capabilities.
+   * A driver that omits `capabilities` is assumed fully capable (back-compat).
+   */
+  private assertSupported(jobName: string, options: AddJobOptions): void {
+    const caps = this.driver.capabilities
+    if (!caps || this.onUnsupported === 'ignore') return
+
+    const missing = requiredCapabilities(options).filter((cap) => !caps[cap])
+    if (missing.length === 0) return
+
+    const driverName = this.driver.name ?? 'queue'
+    const features = missing.map((cap) => FEATURE_LABELS[cap])
+    if (this.onUnsupported === 'throw') throw new UnsupportedJobOptionError(driverName, jobName, features)
+
+    const key = `${jobName}:${missing.join(',')}`
+    if (this.warned.has(key)) return // warn once per job+feature combination
+    this.warned.add(key)
+    this.warn(
+      `[machize/queue] The "${driverName}" driver does not support ${features.join(', ')} — ` +
+        `job "${jobName}" will run without it.`,
+    )
   }
 
   register(job: JobDefinition<never> | JobDefinition<unknown>): this {
@@ -59,6 +136,7 @@ export class QueueManager implements JobDispatcher {
       delayMs: options.delay === undefined ? undefined : parseDuration(options.delay),
       priority: options.priority,
     }
+    this.assertSupported(job.name, addOptions)
     await this.driver.add(job.queue, job.name, envelope, addOptions)
   }
 

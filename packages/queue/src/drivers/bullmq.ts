@@ -7,6 +7,8 @@ export interface BullmqDriverOptions {
 }
 
 export class BullmqQueueDriver implements QueueDriver {
+  readonly name = 'bullmq'
+  readonly capabilities = { delayed: true, priority: true, retries: true, backoff: true }
   private readonly connection: ConnectionOptions
   private readonly queues = new Map<string, Queue>()
   private readonly workers: Worker[] = []
