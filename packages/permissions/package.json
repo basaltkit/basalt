@@ -1,6 +1,6 @@
 {
   "name": "@machize/permissions",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Authorization for Machize, Spatie-style: roles, permissions with wildcards, policies, tenant scoping, super admin and route guards.",
   "license": "MIT",
   "type": "module",

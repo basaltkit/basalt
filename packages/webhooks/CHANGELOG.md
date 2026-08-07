@@ -1,5 +1,12 @@
 # @machize/webhooks
 
+## 0.13.0
+
+### Patch Changes
+
+- @machize/core@0.13.0
+- @machize/events@0.13.0
+
 ## 0.12.0
 
 ### Patch Changes

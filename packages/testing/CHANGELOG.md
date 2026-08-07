@@ -1,5 +1,14 @@
 # @machize/testing
 
+## 0.13.0
+
+### Patch Changes
+
+- @machize/core@0.13.0
+- @machize/fastify@0.13.0
+- @machize/mailer@0.13.0
+- @machize/queue@0.13.0
+
 ## 0.12.0
 
 ### Patch Changes
