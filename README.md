@@ -91,6 +91,7 @@ the `saas` keyword on npm.
 | `@machize/comments` | Per-resource comment threads — @mentions, resolve/reopen, tenant-scoped, events for realtime & notifications |
 | `@machize/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting, zero deps |
 | `@machize/exports` | Data exports — typed definitions → CSV/TSV/JSON/NDJSON, pluggable formatters, async via queue |
+| `@machize/exports-xlsx` | XLSX formatter for `@machize/exports` — a valid .xlsx with a built-in ZIP writer, zero deps |
 | `@machize/audit-viewer` | Read-only audit-trail browser — tenant-scoped filters, pagination, stats, self-contained HTML page |
 | `@machize/api-keys-ui` | Self-contained page to create/list/revoke `@machize/auth` API keys — zero deps, no build |
 | `@machize/teams-ui` | Self-contained page to manage `@machize/teams` — invitations & members, zero deps, no build |
