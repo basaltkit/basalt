@@ -66,6 +66,7 @@ the `saas` keyword on npm.
 | `@machize/fastify` · `@machize/express` · `@machize/hono` | HTTP adapters — the same routes run on any of them |
 | `@machize/prisma` | Tenant-scoping client extension, per-tenant client pool |
 | `@machize/cache` · `@machize/queue` · `@machize/scheduler` | Redis cache, BullMQ jobs (pluggable driver + capability checks), fluent cron |
+| `@machize/cache-tiered` | Multi-level cache driver for `@machize/cache` — in-process near cache in front of Redis, zero deps |
 | `@machize/queue-rabbitmq` | RabbitMQ driver for `@machize/queue` — AMQP jobs with retries, backoff, delay, priority |
 | `@machize/queue-kafka` | Kafka driver for `@machize/queue` — produce/consume with retry + dead-letter topics |
 | `@machize/queue-sqs` | Amazon SQS driver for `@machize/queue` — native delay, retries with backoff, dead-letter queue |
