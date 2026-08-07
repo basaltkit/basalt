@@ -6,6 +6,7 @@ export default defineConfig({
   title: 'Machize',
   description: 'The Laravel-grade toolkit for building SaaS on Node.js.',
   lang: 'en-US',
+  // Served at the domain root (Cloudflare Pages / Netlify / Vercel), so base is '/'.
   cleanUrls: true,
   lastUpdated: true,
 

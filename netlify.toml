@@ -1,0 +1,10 @@
+# Netlify config for the Machize docs (VitePress).
+# Connect the repo in the Netlify UI, or deploy the built folder with the CLI
+# (see apps/docs/DEPLOY.md).
+[build]
+  command = "pnpm --filter docs docs:build"
+  publish = "apps/docs/.vitepress/dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NPM_FLAGS = "--version" # let corepack/pnpm drive install

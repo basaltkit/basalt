@@ -1,11 +1,11 @@
 name: Docs
 
+# The repo is private and GitHub Pages is not available on the current plan, so
+# the docs are hosted on a static host (Cloudflare Pages / Netlify / Vercel) —
+# see apps/docs/DEPLOY.md. This workflow is retained for a future switch to
+# Pages (make the repo public, then re-add the `push` trigger) and only runs on
+# demand.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/docs/**"
-      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
@@ -31,6 +31,9 @@ jobs:
       - name: Build docs
         run: pnpm --filter docs docs:build
       - uses: actions/configure-pages@v5
+        with:
+          # Create the Pages site on first run so deploy doesn't 404.
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: apps/docs/.vitepress/dist
