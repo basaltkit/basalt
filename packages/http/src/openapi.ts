@@ -180,9 +180,26 @@ export interface OpenApiPluginOptions {
 export function openapiPlugin(options: OpenApiPluginOptions) {
   return definePlugin({
     name: 'machize:openapi',
-    boot({ container }) {
-      const routes = options.routes ?? ensureMetadata(container).get<RouteLike>('http:routes')
-      const document = generateOpenApi(routes, options.info)
+    boot({ container, hooks }) {
+      const metadata = ensureMetadata(container)
+      // Placeholder until routes are collected — see the app:booted handler.
+      let document: JsonSchema = {
+        openapi: '3.0.3',
+        info: {
+          title: options.info.title,
+          version: options.info.version,
+          ...(options.info.description ? { description: options.info.description } : {}),
+        },
+        paths: {},
+      }
+      // Adapters publish `http:routes` during their own boot phase, so building
+      // the document here would depend on plugin order. Defer to app:booted —
+      // by then every plugin has registered its routes, and the server has not
+      // started listening yet, so no request can observe the placeholder.
+      hooks.on('app:booted', () => {
+        const routes = options.routes ?? metadata.get<RouteLike>('http:routes')
+        document = generateOpenApi(routes, options.info)
+      })
       container.get(HTTP_SERVER).addRoute('GET', options.path ?? '/openapi.json', () => document)
     },
   })

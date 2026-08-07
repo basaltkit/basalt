@@ -70,4 +70,19 @@ describe('openapiPlugin', () => {
     expect(doc.paths['/things'].post.requestBody).toBeDefined()
     await app.shutdown()
   })
+
+  it('is order-independent: works even when registered before the adapter', async () => {
+    const routes = [route({ method: 'GET', url: '/health', async handler() { return { ok: true } } })]
+    // openapiPlugin BEFORE fastifyPlugin — the adapter publishes http:routes in
+    // its own boot phase, so this used to yield an empty `paths`. The document
+    // is now built on app:booted, after every plugin has registered its routes.
+    const app = await createApp({
+      plugins: [openapiPlugin({ info: { title: 'Early', version: '1.0.0' } }), fastifyPlugin({ routes })],
+    }).boot()
+    const server = app.container.get(FASTIFY)
+
+    const doc = JSON.parse((await server.inject({ method: 'GET', url: '/openapi.json' })).body)
+    expect(Object.keys(doc.paths)).toContain('/health')
+    await app.shutdown()
+  })
 })
