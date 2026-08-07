@@ -15,7 +15,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
-      { text: '0.5.0', link: `${github}/releases` },
+      { text: '0.23.0', link: `${github}/releases` },
     ],
 
     sidebar: {
@@ -39,8 +39,17 @@ export default defineConfig({
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
             { text: 'Queues & Jobs', link: '/guide/queues' },
+          ],
+        },
+        {
+          text: 'Capabilities',
+          items: [
             { text: 'Realtime', link: '/guide/realtime' },
             { text: 'Search', link: '/guide/search' },
+            { text: 'File uploads', link: '/guide/files' },
+            { text: 'Comments', link: '/guide/comments' },
+            { text: 'Internationalization', link: '/guide/i18n' },
+            { text: 'Data exports', link: '/guide/exports' },
           ],
         },
         {

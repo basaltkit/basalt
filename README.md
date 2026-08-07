@@ -7,10 +7,11 @@ route to the client.
 
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: 0.1.0 — early preview.** The architecture is in place and every
-> package is tested, but APIs may change before 1.0 and several stores ship
-> in-memory. See [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) and the full
-> design in [ARCHITECTURE.md](./ARCHITECTURE.md).
+> **Status: 0.23.0 — 53 packages, all published to npm.** The architecture is
+> stable and every package is tested, but APIs may still change before 1.0 and
+> some stores ship in-memory (swap in the DB/cloud drivers). See
+> [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) and the full design in
+> [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Quick start
 
@@ -116,7 +117,7 @@ the `saas` keyword on npm.
 ```bash
 pnpm install
 pnpm build       # turbo, topological
-pnpm test        # 210 tests across 28 suites
+pnpm test        # 1000+ tests across 86 suites
 pnpm typecheck
 ```
 
