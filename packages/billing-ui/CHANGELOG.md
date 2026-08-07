@@ -1,5 +1,13 @@
 # @machize/billing-ui
 
+## 0.20.0
+
+### Patch Changes
+
+- @machize/core@0.20.0
+- @machize/fastify@0.20.0
+- @machize/subscriptions@0.20.0
+
 ## 0.19.0
 
 ### Minor Changes
