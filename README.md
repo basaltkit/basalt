@@ -65,7 +65,8 @@ the `saas` keyword on npm.
 | `@machize/http` | Framework-neutral HTTP core — typed routes, pipeline, error mapping |
 | `@machize/fastify` · `@machize/express` · `@machize/hono` | HTTP adapters — the same routes run on any of them |
 | `@machize/prisma` | Tenant-scoping client extension, per-tenant client pool |
-| `@machize/cache` · `@machize/queue` · `@machize/scheduler` | Redis cache, BullMQ jobs, fluent cron |
+| `@machize/cache` · `@machize/queue` · `@machize/scheduler` | Redis cache, BullMQ jobs (pluggable driver + capability checks), fluent cron |
+| `@machize/queue-rabbitmq` | RabbitMQ driver for `@machize/queue` — AMQP jobs with retries, backoff, delay, priority |
 | `@machize/storage` · `@machize/mailer` | S3/MinIO/local storage, typed mail |
 | `@machize/cli` | The `mach` command framework |
 
