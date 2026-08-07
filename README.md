@@ -92,6 +92,7 @@ the `saas` keyword on npm.
 | `@machize/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting, zero deps |
 | `@machize/exports` | Data exports — typed definitions → CSV/TSV/JSON/NDJSON, pluggable formatters, async via queue |
 | `@machize/audit-viewer` | Read-only audit-trail browser — tenant-scoped filters, pagination, stats, self-contained HTML page |
+| `@machize/api-keys-ui` | Self-contained page to create/list/revoke `@machize/auth` API keys — zero deps, no build |
 
 **Developer experience & product**
 
