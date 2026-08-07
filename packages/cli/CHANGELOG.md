@@ -1,5 +1,11 @@
 # @machize/cli
 
+## 0.13.0
+
+### Patch Changes
+
+- @machize/core@0.13.0
+
 ## 0.12.0
 
 ### Patch Changes
