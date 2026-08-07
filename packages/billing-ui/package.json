@@ -1,0 +1,53 @@
+{
+  "name": "@machize/billing-ui",
+  "version": "0.18.0",
+  "description": "A self-contained HTML page for @machize/subscriptions: show the current plan and available plans, subscribe/switch via hosted Checkout, and manage billing via the Customer Portal. Zero dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@machize/core": "workspace:*",
+    "@machize/fastify": "workspace:*",
+    "@machize/subscriptions": "workspace:*"
+  },
+  "devDependencies": {
+    "@machize/auth": "workspace:*",
+    "@machize/tenancy": "workspace:*",
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0",
+    "zod": "^3.24.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/billing-ui"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/billing-ui#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "saas",
+    "billing",
+    "ui"
+  ]
+}
