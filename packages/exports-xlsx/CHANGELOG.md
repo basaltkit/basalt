@@ -1,5 +1,11 @@
 # @machize/exports-xlsx
 
+## 0.21.0
+
+### Patch Changes
+
+- @machize/exports@0.21.0
+
 ## 0.20.0
 
 ### Minor Changes

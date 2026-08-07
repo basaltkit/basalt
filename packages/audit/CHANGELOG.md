@@ -1,5 +1,12 @@
 # @machize/audit
 
+## 0.21.0
+
+### Patch Changes
+
+- @machize/core@0.21.0
+- @machize/events@0.21.0
+
 ## 0.20.0
 
 ### Patch Changes

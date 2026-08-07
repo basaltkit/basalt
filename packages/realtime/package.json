@@ -1,6 +1,6 @@
 {
   "name": "@machize/realtime",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Realtime for Machize: server-to-client push over WebSocket/SSE with per-tenant channels, presence, an events bridge, and a pluggable backplane (in-memory or Redis pub/sub).",
   "license": "MIT",
   "type": "module",

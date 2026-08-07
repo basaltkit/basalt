@@ -1,5 +1,11 @@
 # @machize/queue-kafka
 
+## 0.21.0
+
+### Patch Changes
+
+- @machize/queue@0.21.0
+
 ## 0.20.0
 
 ### Patch Changes
