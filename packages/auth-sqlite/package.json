@@ -1,7 +1,7 @@
 {
-  "name": "@machize/scheduler",
+  "name": "@machize/auth-sqlite",
   "version": "0.25.0",
-  "description": "Fluent Machize scheduler: schedule.job(X).daily().at('03:00'), timezones, withoutOverlapping and @machize/queue integration.",
+  "description": "Durable, SQLite-backed implementations of every @machize/auth store (users, sessions, refresh tokens, one-time tokens, API keys, MFA) built on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -13,22 +13,24 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/queue": "workspace:*"
+  "peerDependencies": {
+    "@machize/auth": "workspace:*"
   },
   "devDependencies": {
+    "@machize/auth": "workspace:*",
     "@machize/tsconfig": "workspace:*",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0",
-    "zod": "^3.24.0"
+    "vitest": "^3.1.0"
   },
   "publishConfig": {
     "access": "public"
@@ -36,14 +38,16 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zebedeu/machize.git",
-    "directory": "packages/scheduler"
+    "directory": "packages/auth-sqlite"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/scheduler#readme",
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/auth-sqlite#readme",
   "bugs": "https://github.com/Zebedeu/machize/issues",
   "keywords": [
     "machize",
     "typescript",
-    "scheduler",
-    "cron"
+    "auth",
+    "sqlite",
+    "sessions",
+    "store"
   ]
 }
