@@ -1,5 +1,11 @@
 # @machize/config
 
+## 0.14.0
+
+### Patch Changes
+
+- @machize/core@0.14.0
+
 ## 0.13.0
 
 ### Patch Changes
