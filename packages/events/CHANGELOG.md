@@ -1,5 +1,11 @@
 # @machize/events
 
+## 0.11.0
+
+### Patch Changes
+
+- @machize/core@0.11.0
+
 ## 0.10.0
 
 ### Patch Changes
