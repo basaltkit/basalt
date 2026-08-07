@@ -22,7 +22,7 @@
     "@machize/core": "workspace:*"
   },
   "peerDependencies": {
-    "zod": "^3.24.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@machize/tsconfig": "workspace:*",
@@ -30,7 +30,7 @@
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
-    "zod": "^3.24.0"
+    "zod": "^4.4.3"
   },
   "publishConfig": {
     "access": "public"

@@ -12,7 +12,7 @@
   "dependencies": {
     "@machize/core": "workspace:*",
     "@machize/prisma": "workspace:*",
-    "@prisma/client": "^6.2.0"
+    "@prisma/client": "^7.9.1"
   },
   "devDependencies": {
     "@machize/tsconfig": "workspace:*",

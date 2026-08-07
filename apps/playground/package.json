@@ -17,7 +17,7 @@
     "@machize/fastify": "workspace:*",
     "@machize/logger": "workspace:*",
     "@machize/tenancy": "workspace:*",
-    "zod": "^3.24.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@machize/tsconfig": "workspace:*",
