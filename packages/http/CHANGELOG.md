@@ -1,5 +1,11 @@
 # @machize/http
 
+## 0.12.0
+
+### Patch Changes
+
+- @machize/core@0.12.0
+
 ## 0.11.0
 
 ### Patch Changes
