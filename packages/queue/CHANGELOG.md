@@ -1,5 +1,12 @@
 # @machize/queue
 
+## 0.20.0
+
+### Patch Changes
+
+- @machize/core@0.20.0
+- @machize/events@0.20.0
+
 ## 0.19.0
 
 ### Patch Changes
