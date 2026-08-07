@@ -84,6 +84,7 @@ the `saas` keyword on npm.
 | `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
 | `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
+| `@machize/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
 
 **Developer experience & product**
 
