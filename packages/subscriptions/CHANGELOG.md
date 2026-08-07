@@ -1,5 +1,12 @@
 # @machize/subscriptions
 
+## 0.8.0
+
+### Patch Changes
+
+- @machize/core@0.8.0
+- @machize/fastify@0.8.0
+
 ## 0.7.0
 
 ### Patch Changes
