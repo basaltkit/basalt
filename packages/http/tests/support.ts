@@ -36,13 +36,14 @@ export class FakeReply implements HttpReply {
 }
 
 /** Boots an app that provides a shared HttpServerCollector as HTTP_SERVER,
- *  so neutral edge plugins can be tested without any framework adapter. */
-export async function bootWith(collector: HttpServerCollector, plugins: MachizePlugin[]): Promise<void> {
+ *  so neutral edge plugins can be tested without any framework adapter.
+ *  Returns the booted app (call `.shutdown()` to run shutdown hooks). */
+export function bootWith(collector: HttpServerCollector, plugins: MachizePlugin[]) {
   const provider = definePlugin({
     name: 'test:http-server',
     register({ container }) {
       container.singleton(HTTP_SERVER, () => collector)
     },
   })
-  await createApp({ plugins: [provider, ...plugins] }).boot()
+  return createApp({ plugins: [provider, ...plugins] }).boot()
 }
