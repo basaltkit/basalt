@@ -1,6 +1,6 @@
 {
   "name": "@machize/admin-react",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "React binding for @machize/admin: DataTable and ResourceForm rendered from Zod-derived view models, plus data-source hooks.",
   "license": "MIT",
   "type": "module",
