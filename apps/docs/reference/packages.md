@@ -50,6 +50,7 @@ works on its own; together they form the framework. Versions move in lockstep
 | `@machize/tenancy` | Resolvers, per-request tenant context, lifecycle hooks |
 | `@machize/auth` | Password hashing, JWT + refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
 | `@machize/auth-sqlite` | Durable SQLite (`node:sqlite`) backend for every `@machize/auth` store — survives restarts, zero deps |
+| `@machize/auth-prisma` | Prisma backend for every `@machize/auth` store — Postgres/MySQL, ships a reference schema, pass your `PrismaClient` |
 | `@machize/permissions` | Roles, wildcard permissions, policies, tenant scoping, super admin |
 | `@machize/teams` | Multi-user tenants — roles, email invitations, membership, `teamRole` guard |
 | `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, hosted Checkout & Portal, proration |

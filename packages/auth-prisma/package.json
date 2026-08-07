@@ -1,27 +1,30 @@
 {
-  "name": "@machize/generator",
+  "name": "@machize/auth-prisma",
   "version": "0.26.0",
-  "description": "Code scaffolding for Machize apps (mach make): generates a full resource vertical — schema, repository, service, DI plugin, typed routes and test.",
+  "description": "Prisma-backed implementations of every @machize/auth store (users, sessions, refresh tokens, one-time tokens, API keys, MFA) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./schema.prisma": "./prisma/schema.prisma"
   },
   "files": [
-    "dist"
+    "dist",
+    "prisma"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@machize/cli": "workspace:*"
+  "peerDependencies": {
+    "@machize/auth": "workspace:*"
   },
   "devDependencies": {
+    "@machize/auth": "workspace:*",
     "@machize/tsconfig": "workspace:*",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
@@ -34,14 +37,16 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zebedeu/machize.git",
-    "directory": "packages/generator"
+    "directory": "packages/auth-prisma"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/generator#readme",
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/auth-prisma#readme",
   "bugs": "https://github.com/Zebedeu/machize/issues",
   "keywords": [
     "machize",
     "typescript",
-    "codegen",
-    "scaffolding"
+    "auth",
+    "prisma",
+    "postgresql",
+    "store"
   ]
 }
