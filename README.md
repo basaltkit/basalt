@@ -68,6 +68,7 @@ the `saas` keyword on npm.
 | `@machize/cache` · `@machize/queue` · `@machize/scheduler` | Redis cache, BullMQ jobs (pluggable driver + capability checks), fluent cron |
 | `@machize/queue-rabbitmq` | RabbitMQ driver for `@machize/queue` — AMQP jobs with retries, backoff, delay, priority |
 | `@machize/queue-kafka` | Kafka driver for `@machize/queue` — produce/consume with retry + dead-letter topics |
+| `@machize/queue-sqs` | Amazon SQS driver for `@machize/queue` — native delay, retries with backoff, dead-letter queue |
 | `@machize/storage` · `@machize/mailer` | S3/MinIO/local storage, typed mail |
 | `@machize/cli` | The `mach` command framework |
 
