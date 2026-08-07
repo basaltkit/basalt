@@ -39,6 +39,8 @@ export default defineConfig({
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
             { text: 'Queues & Jobs', link: '/guide/queues' },
+            { text: 'Realtime', link: '/guide/realtime' },
+            { text: 'Search', link: '/guide/search' },
           ],
         },
         {
