@@ -1,5 +1,17 @@
 # create-machize
 
+## 1.0.0
+
+### Major Changes
+
+- Generate 1.0 apps and ship ready-made auth flows. The @machize/* dependency
+  range is now `^1.0.0` (was `^0.4.0`/`^0.1.0`, which pinned very old packages).
+  With `--auth`, the backend wires `mfaRoutes()` alongside `authRoutes()`, and the
+  `--ui` frontend now ships the full standard flows out of the box: sign in with a
+  TOTP challenge, register, forgot-password, reset-password (via the emailed
+  `?token` link), and a dashboard that manages two-factor (enroll → secret/otpauth
+  → activate → recovery codes → disable).
+
 ## 0.5.2
 
 ### Patch Changes

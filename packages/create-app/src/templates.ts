@@ -10,7 +10,7 @@ export interface ProjectOptions {
 }
 
 /** Base release line for @machize/* deps. */
-const MACHIZE_VERSION = '^0.4.0'
+const MACHIZE_VERSION = '^1.0.0'
 
 /**
  * Per-package range overrides. In semver 0.x, `^0.4.0` locks the minor, so a
@@ -147,14 +147,18 @@ export function appTs(options: ProjectOptions): string {
     })`)
   }
   if (options.auth) {
-    imports.push(`import { authPlugin, authRoutes, MemoryUserSource } from '@machize/auth'`)
+    imports.push(`import { authPlugin, authRoutes, mfaRoutes, MemoryUserSource } from '@machize/auth'`)
     imports.push(`import { env } from './env.js'`)
     plugins.push(`authPlugin({
-      // Replace MemoryUserSource with your database-backed source.
+      // Replace MemoryUserSource with your database-backed source (e.g.
+      // @machize/auth-sqlite or @machize/auth-prisma). The default in-memory
+      // MFA store is enough for the ready-made TOTP flow below.
       users: new MemoryUserSource(),
       secret: env.APP_SECRET,
     })`)
-    routesExpression = '[...appRoutes, ...authRoutes()]'
+    // authRoutes(): register, login, logout, refresh, me, email verification and
+    // password recovery. mfaRoutes(): TOTP enroll/activate/status/disable.
+    routesExpression = '[...appRoutes, ...authRoutes(), ...mfaRoutes()]'
   }
   if (options.billing) {
     imports.push(`import { definePlans, subscriptionsPlugin } from '@machize/subscriptions'`)
