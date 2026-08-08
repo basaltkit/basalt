@@ -1,6 +1,6 @@
 {
   "name": "@machize/cache-tiered",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Multi-level (tiered) cache driver for @machize/cache — an in-process near cache in front of a far cache (Redis), with read backfill and write/invalidation fan-out. Zero dependencies.",
   "license": "MIT",
   "type": "module",

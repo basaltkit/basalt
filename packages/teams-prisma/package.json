@@ -1,6 +1,6 @@
 {
   "name": "@machize/teams-prisma",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Prisma-backed implementations of the @machize/teams stores (memberships, invitations) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",

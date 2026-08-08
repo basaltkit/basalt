@@ -1,0 +1,12 @@
+# @machize/permissions-sqlite
+
+## 0.30.0
+
+### Minor Changes
+
+- Initial release. Durable, SQLite-backed implementation of the
+  `@machize/permissions` `AccessStore` (role assignments and permission grants,
+  scoped), on Node's built-in `node:sqlite`, with zero external dependencies.
+  Writes are `INSERT OR IGNORE` (grants are sets). `sqliteAccessStore(location)`
+  returns the store named to drop straight into `permissionsPlugin`. The
+  single-node counterpart to `@machize/permissions-prisma`.

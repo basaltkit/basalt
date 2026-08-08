@@ -1,6 +1,6 @@
 {
   "name": "@machize/audit-viewer",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Read-only viewer for the @machize/audit trail: tenant-scoped, filterable, paginated queries with aggregate stats, plus a self-contained HTML browser.",
   "license": "MIT",
   "type": "module",

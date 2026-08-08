@@ -1,0 +1,39 @@
+// Reference schema for @machize/permissions-prisma.
+// Copy these models into your app's schema.prisma, migrate, and pass the client
+// to `prismaAccessStore()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model PermUserRole {
+  scope  String
+  userId String
+  role   String
+
+  @@id([scope, userId, role])
+  @@map("perm_user_roles")
+}
+
+model PermUserPermission {
+  scope      String
+  userId     String
+  permission String
+
+  @@id([scope, userId, permission])
+  @@map("perm_user_permissions")
+}
+
+model PermRolePermission {
+  scope      String
+  role       String
+  permission String
+
+  @@id([scope, role, permission])
+  @@map("perm_role_permissions")
+}

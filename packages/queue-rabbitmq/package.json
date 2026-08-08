@@ -1,6 +1,6 @@
 {
   "name": "@machize/queue-rabbitmq",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "RabbitMQ driver for @machize/queue: AMQP jobs with retries, backoff, delayed delivery and priority via dead-letter queues.",
   "license": "MIT",
   "type": "module",
