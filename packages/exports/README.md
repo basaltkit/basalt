@@ -1,20 +1,20 @@
 # @machize/exports
 
-Exportação de dados para o Machize: transforma definições de export **tipadas** em ficheiros **CSV / TSV / JSON / NDJSON** (nativo, **zero dependências**), através de uma costura de *formatters* onde XLSX/PDF se ligam depois. Pensado para correr **assíncrono** com o `@machize/queue` e guardar o resultado com o `@machize/files`/`@machize/storage`. Precisas deste módulo quando os utilizadores exportam dados ou geram relatórios.
+Data export for Machize: turns **typed** export definitions into **CSV / TSV / JSON / NDJSON** files (native, **zero dependencies**), through a formatter seam where XLSX/PDF plug in later. Designed to run **asynchronously** with `@machize/queue` and store the result with `@machize/files`/`@machize/storage`. You need this module when users export data or generate reports.
 
-## O que este módulo resolve
+## What this module solves
 
-Exportar bem envolve: mapear registos para colunas, escapar corretamente (vírgulas, aspas, quebras de linha), suportar vários formatos, e — para grandes volumes — correr fora do pedido. Este módulo dá-te definições de export tipadas, formatters nativos com escaping correto (RFC 4180), e uma costura para adicionar formatos (XLSX, PDF) sem mudar as definições.
+Exporting well involves: mapping records to columns, escaping correctly (commas, quotes, line breaks), supporting multiple formats, and — for large volumes — running outside the request. This module gives you typed export definitions, native formatters with correct escaping (RFC 4180), and a seam for adding formats (XLSX, PDF) without changing the definitions.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/exports
 ```
 
-Depende apenas do `@machize/core`. Os formatos CSV/TSV/JSON/NDJSON não precisam de nada.
+Only depends on `@machize/core`. The CSV/TSV/JSON/NDJSON formats need nothing else.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -23,9 +23,9 @@ import { exportsPlugin, EXPORTS, defineExport } from '@machize/exports'
 const usersExport = defineExport<{ name: string; email: string; joinedAt: Date }>({
   name: 'users',
   columns: [
-    { header: 'Nome', value: (u) => u.name },
+    { header: 'Name', value: (u) => u.name },
     { header: 'Email', value: (u) => u.email },
-    { header: 'Aderiu', value: (u) => u.joinedAt },
+    { header: 'Joined', value: (u) => u.joinedAt },
   ],
 })
 
@@ -36,17 +36,17 @@ const result = await exports.run(usersExport, users, 'csv')
 // { content: Buffer, contentType: 'text/csv', filename: 'users.csv', format, rowCount }
 ```
 
-As datas viram ISO; os campos com vírgula/aspas/quebras são citados corretamente.
+Dates become ISO; fields with commas/quotes/line breaks are quoted correctly.
 
-## Grandes volumes: assíncrono via queue + storage
+## Large volumes: asynchronous via queue + storage
 
-`run` é síncrono e puro. Para relatórios grandes, corre-o num **job** e guarda o ficheiro:
+`run` is synchronous and pure. For large reports, run it inside a **job** and store the file:
 
 ```ts
 const GenerateReport = defineJob<{ tenantId: string; requestedBy: string }>({
   name: 'reports.users', queue: 'reports',
   async handle({ tenantId, requestedBy }) {
-    const rows = queryUsers(tenantId)                 // uma AsyncIterable também serve
+    const rows = queryUsers(tenantId)                 // an AsyncIterable also works
     const { content, filename, contentType } = await exports.run(usersExport, rows, 'csv')
     const file = await files.upload(content, { name: filename, contentType, tenantId, uploadedBy: requestedBy })
     await notifications.to(requestedBy).send('report.ready', { fileId: file.id })
@@ -54,44 +54,44 @@ const GenerateReport = defineJob<{ tenantId: string; requestedBy: string }>({
 })
 ```
 
-`run` aceita um array **ou** uma `AsyncIterable`, por isso podes fazer *stream* dos registos da base de dados sem os carregar todos em memória de uma vez.
+`run` accepts either an array **or** an `AsyncIterable`, so you can stream records from the database without loading them all into memory at once.
 
-## Formatos
+## Formats
 
-| Formato | Content-Type | Extensão |
+| Format | Content-Type | Extension |
 |---|---|---|
 | `csv` | `text/csv` | `.csv` |
 | `tsv` | `text/tab-separated-values` | `.tsv` |
 | `json` | `application/json` | `.json` |
 | `ndjson` | `application/x-ndjson` | `.ndjson` |
 
-### Adicionar um formato (XLSX, PDF…)
+### Adding a format (XLSX, PDF…)
 
-Um formatter implementa `render(headers, rows) → Buffer`. Traz a tua biblioteca e regista-o:
+A formatter implements `render(headers, rows) → Buffer`. Bring your own library and register it:
 
 ```ts
 const xlsx: ExportFormatter = {
   format: 'xlsx',
   contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   extension: 'xlsx',
-  render: (headers, rows) => buildXlsx(headers, rows), // com a lib à tua escolha
+  render: (headers, rows) => buildXlsx(headers, rows), // with the library of your choice
 }
 exportsPlugin({ formatters: [xlsx] })
 ```
 
-## Referência da API
+## API reference
 
-| API | Descrição |
+| API | Description |
 |---|---|
-| `defineExport<T>({ name, columns })` | Define um export tipado; cada coluna tem `header` e `value(row)`. |
-| `exportsPlugin({ formatters? })` | Regista o token `EXPORTS` com os formatos nativos + os teus. |
-| `EXPORTS` | Token DI → o serviço `Exports`. |
-| `exports.run(def, data, format)` | Renderiza; devolve `{ content, contentType, filename, format, rowCount }`. |
-| `exports.formats()` | Formatos disponíveis. |
-| `csvFormatter`, `tsvFormatter`, `jsonFormatter`, `ndjsonFormatter` | Formatters nativos. |
+| `defineExport<T>({ name, columns })` | Defines a typed export; each column has `header` and `value(row)`. |
+| `exportsPlugin({ formatters? })` | Registers the `EXPORTS` token with the native formats plus yours. |
+| `EXPORTS` | DI token → the `Exports` service. |
+| `exports.run(def, data, format)` | Renders; returns `{ content, contentType, filename, format, rowCount }`. |
+| `exports.formats()` | Available formats. |
+| `csvFormatter`, `tsvFormatter`, `jsonFormatter`, `ndjsonFormatter` | Native formatters. |
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/queue`** — corre exports grandes fora do pedido.
-- **`@machize/files` / `@machize/storage`** — guarda o ficheiro gerado (com URL assinado para download).
-- **`@machize/notifications`** — avisa quando o relatório está pronto.
+- **`@machize/queue`** — runs large exports outside the request.
+- **`@machize/files` / `@machize/storage`** — stores the generated file (with a signed URL for download).
+- **`@machize/notifications`** — notifies when the report is ready.

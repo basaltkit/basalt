@@ -1,28 +1,28 @@
 # @machize/hono
 
-Adaptador do Machize para [Hono](https://hono.dev): as mesmas rotas tipadas, enrichers e guards que usarias no Fastify ou no Express, a correr em Hono — em Node.js, Bun, Deno ou plataformas *edge* (Cloudflare Workers, Vercel Edge, …). Precisas dele quando queres levar a tua API Machize para fora do Node clássico ou quando já usas Hono.
+The Machize adapter for [Hono](https://hono.dev): the same typed routes, enrichers, and guards you'd use with Fastify or Express, running on Hono — on Node.js, Bun, Deno, or *edge* platforms (Cloudflare Workers, Vercel Edge, …). You need this when you want to take your Machize API outside classic Node, or when you're already using Hono.
 
-## O que este módulo resolve
+## What this module solves
 
-O [Hono](https://hono.dev) é um framework web pequeno e muito rápido, construído sobre as APIs web standard (`Request`/`Response` do `fetch`). Por isso corre em quase todo o lado: Node.js, Bun, Deno e nos *edge runtimes* — servidores que executam o teu código em centenas de localizações perto dos utilizadores. Mas, tal como os outros frameworks, o Hono por si só não valida dados nem padroniza erros.
+[Hono](https://hono.dev) is a small, very fast web framework built on top of standard web APIs (`fetch`'s `Request`/`Response`). Because of that, it runs almost everywhere: Node.js, Bun, Deno, and *edge runtimes* — servers that execute your code in hundreds of locations close to users. But, like other frameworks, Hono on its own doesn't validate data or standardize errors.
 
-Este módulo liga o Hono ao Machize. As **rotas** (endereço + método HTTP, ex.: `POST /echo`) definem-se com a função `route()` do `@machize/http`, com esquemas [Zod](https://zod.dev) que validam o corpo, a query e os parâmetros do URL — e dão os tipos TypeScript de borla. O adaptador converte cada pedido do Hono para o formato neutro do Machize, corre o pipeline partilhado (validação, *enrichers* — funções que enriquecem o contexto do pedido — e *guards* — funções que podem recusá-lo, ex.: autenticação) e devolve respostas com erros em formato estável.
+This module connects Hono to Machize. **Routes** (a path + HTTP method, e.g. `POST /echo`) are defined with the `route()` function from `@machize/http`, with [Zod](https://zod.dev) schemas that validate the body, query, and URL parameters — and give you TypeScript types for free. The adapter converts each Hono request into Machize's neutral format, runs the shared pipeline (validation, *enrichers* — functions that enrich the request context — and *guards* — functions that can reject it, e.g. authentication), and returns responses with errors in a stable format.
 
-O ganho principal é a **portabilidade**: uma rota escrita aqui corre sem alterações no `@machize/fastify` e no `@machize/express`; e os plugins de borda neutros (segurança, saúde, métricas, tracing, OpenAPI) do `@machize/http` funcionam no Hono tal e qual.
+The main benefit is **portability**: a route written here runs unchanged on `@machize/fastify` and `@machize/express`; and the neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@machize/http` work on Hono exactly the same way.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/hono @machize/core @machize/http hono zod
 ```
 
-O `hono` (versão 4+) é *peer dependency* — instala-lo tu. Para servir em Node.js precisas ainda de `pnpm add @hono/node-server`; em Bun, Deno ou edge não é preciso nada extra.
+`hono` (version 4+) is a *peer dependency* — you install it. To serve on Node.js you also need `pnpm add @hono/node-server`; on Bun, Deno, or edge nothing extra is needed.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-**Passo 1** — instala os pacotes (comando acima, mais `@hono/node-server` se estiveres em Node).
+**Step 1** — install the packages (command above, plus `@hono/node-server` if you're on Node).
 
-**Passo 2** — cria um ficheiro `server.ts`:
+**Step 2** — create a `server.ts` file:
 
 ```ts
 import { serve } from '@hono/node-server'
@@ -31,33 +31,33 @@ import { route } from '@machize/http'
 import { HONO, honoPlugin } from '@machize/hono'
 import { z } from 'zod'
 
-// 1. Definir uma rota: método, URL, validação e handler (a função que responde).
+// 1. Define a route: method, URL, validation, and handler (the function that responds).
 const echo = route({
   method: 'POST',
   url: '/echo',
-  body: z.object({ n: z.number() }), // o corpo tem de ter um número n
+  body: z.object({ n: z.number() }), // the body must have a number n
   async handler({ body, reply }) {
-    // body.n já está validado e tipado como number
+    // body.n is already validated and typed as number
     return reply.code(201).send({ doubled: body.n * 2 })
   },
 })
 
-// 2. Criar a app Machize com o plugin Hono e arrancar.
+// 2. Create the Machize app with the Hono plugin and boot it.
 const app = await createApp({ plugins: [honoPlugin({ routes: [echo] })] }).boot()
 
-// 3. Obter a app Hono do contentor e servi-la em Node.
+// 3. Get the Hono app from the container and serve it on Node.
 serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
-console.log('A ouvir em http://localhost:3000')
+console.log('Listening on http://localhost:3000')
 ```
 
-**Passo 3** — executa e testa:
+**Step 3** — run it and test:
 
 ```bash
 npx tsx server.ts
 curl -X POST http://localhost:3000/echo \
   -H 'content-type: application/json' \
   -d '{"n":21}'
-# → {"doubled":42}   (estado 201)
+# → {"doubled":42}   (status 201)
 
 curl -X POST http://localhost:3000/echo \
   -H 'content-type: application/json' \
@@ -65,16 +65,16 @@ curl -X POST http://localhost:3000/echo \
 # → 400 {"error":{"code":"HTTP_VALIDATION","part":"body","issues":[...]}}
 ```
 
-**Num edge runtime** (Cloudflare Workers, Bun, Deno) exportas o `fetch` em vez de chamar `serve`:
+**On an edge runtime** (Cloudflare Workers, Bun, Deno) you export `fetch` instead of calling `serve`:
 
 ```ts
 const app = await createApp({ plugins: [honoPlugin({ routes: [echo] })] }).boot()
-export default app.container.get(HONO) // o runtime chama .fetch por ti
+export default app.container.get(HONO) // the runtime calls .fetch for you
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Rotas com parâmetros, query e erros
+### Routes with params, query, and errors
 
 ```ts
 import { HttpError, route } from '@machize/http'
@@ -82,7 +82,7 @@ import { z } from 'zod'
 
 const hello = route({
   method: 'GET',
-  url: '/hello/:name', // :name é um parâmetro dinâmico do URL
+  url: '/hello/:name', // :name is a dynamic URL parameter
   params: z.object({ name: z.string() }),
   async handler({ params }) {
     return { hello: params.name }
@@ -93,42 +93,42 @@ const boom = route({
   method: 'GET',
   url: '/boom',
   async handler() {
-    // Erro intencional: vira uma resposta 418 com um código estável
+    // Intentional error: becomes a 418 response with a stable code
     throw new HttpError(418, 'TEAPOT', "I'm a teapot")
   },
 })
 ```
 
-Erros inesperados respondem `500` com `{ error: { code: 'INTERNAL_ERROR', ... } }` — o mesmo formato dos outros adaptadores, sem expor detalhes internos.
+Unexpected errors respond with `500` and `{ error: { code: 'INTERNAL_ERROR', ... } }` — the same format as the other adapters, without exposing internal details.
 
-### Corpo do pedido: o que o adaptador interpreta
+### Request body: what the adapter interprets
 
-O adaptador lê o corpo consoante o `Content-Type`: `application/json` → objeto JSON; formulários (`form`) → `parseBody()` do Hono; outro texto → string; corpo vazio ou inválido → `undefined` (a validação Zod trata do resto). Pedidos `GET`/`HEAD` nunca têm corpo.
+The adapter reads the body based on `Content-Type`: `application/json` → JSON object; forms (`form`) → Hono's `parseBody()`; other text → string; empty or invalid body → `undefined` (Zod validation handles the rest). `GET`/`HEAD` requests never have a body.
 
-### Enrichers e guards (autenticação, tenancy, …)
+### Enrichers and guards (authentication, tenancy, …)
 
-Plugins registam estas funções nos "buckets" de metadados do contentor; o adaptador aplica-as a todas as rotas. Exemplo real (dos testes do pacote):
+Plugins register these functions in the container's metadata "buckets"; the adapter applies them to every route. Real example (from the package's tests):
 
 ```ts
 import { createApp, definePlugin, ensureMetadata, tryCtx } from '@machize/core'
 import { HttpError, route, type RequestEnricher, type RouteGuard } from '@machize/http'
 import { HONO, honoPlugin } from '@machize/hono'
 
-// Enricher: anexa o tenant ao contexto do pedido.
+// Enricher: attaches the tenant to the request context.
 const enricher: RequestEnricher = ({ request, context }) => {
   const tenant = request.headers['x-tenant-id']
   if (typeof tenant === 'string') (context as { tenant?: unknown }).tenant = { id: tenant }
 }
 
-// Guard: recusa o pedido lançando um erro; lê o meta da rota.
+// Guard: rejects the request by throwing an error; reads the route's meta.
 const guard: RouteGuard = ({ route: def, request }) => {
   if (def.meta?.['auth'] && !request.headers['authorization']) {
-    throw new HttpError(401, 'AUTH_REQUIRED', 'Autenticação obrigatória.')
+    throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required.')
   }
 }
 
-const meuPlugin = definePlugin({
-  name: 'meu:http',
+const myPlugin = definePlugin({
+  name: 'my:http',
   register({ container }) {
     const metadata = ensureMetadata(container)
     metadata.add('http:enrichers', enricher)
@@ -139,21 +139,21 @@ const meuPlugin = definePlugin({
 const secure = route({
   method: 'GET',
   url: '/secure',
-  meta: { auth: true }, // o guard lê isto
+  meta: { auth: true }, // the guard reads this
   async handler() {
     const tenant = (tryCtx() as { tenant?: { id: string } })?.tenant?.id ?? null
     return { ok: true, tenant }
   },
 })
 
-const app = await createApp({ plugins: [meuPlugin, honoPlugin({ routes: [secure] })] }).boot()
+const app = await createApp({ plugins: [myPlugin, honoPlugin({ routes: [secure] })] }).boot()
 ```
 
-Sem `Authorization` → `401 AUTH_REQUIRED`; com `x-tenant-id: acme` o handler vê `tenant: 'acme'` através do contexto do pedido.
+Without `Authorization` → `401 AUTH_REQUIRED`; with `x-tenant-id: acme` the handler sees `tenant: 'acme'` through the request context.
 
-### Plugins de borda neutros
+### Neutral edge plugins
 
-Importam-se do `@machize/http` e funcionam no Hono sem alterações:
+Imported from `@machize/http` and work on Hono without changes:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -165,20 +165,20 @@ const ping = route({ method: 'GET', url: '/ping', async handler() { return { pon
 const app = await createApp({
   plugins: [
     honoPlugin({ routes: [ping] }),
-    securityPlugin({ rateLimit: { limit: 100, windowMs: 60_000 } }), // cabeçalhos seguros + 429 acima do limite
-    healthPlugin({ checks: { db: () => ({ ok: true }) } }),          // GET /livez e /readyz
+    securityPlugin({ rateLimit: { limit: 100, windowMs: 60_000 } }), // secure headers + 429 above limit
+    healthPlugin({ checks: { db: () => ({ ok: true }) } }),          // GET /livez and /readyz
     metricsPlugin(),                                                  // GET /metrics (Prometheus)
   ],
 }).boot()
 ```
 
-Todas as opções destes plugins estão documentadas no README do [`@machize/http`](../http/README.md).
+All options for these plugins are documented in the [`@machize/http`](../http/README.md) README.
 
-> Em edge runtimes distribuídos, lembra-te de que os stores em memória (rate limit, métricas) vivem por instância — usa stores partilhados (ex.: Redis/KV) quando precisares de valores globais.
+> On distributed edge runtimes, remember that in-memory stores (rate limit, metrics) live per instance — use shared stores (e.g. Redis/KV) when you need global values.
 
-### Testar sem abrir portas
+### Testing without opening ports
 
-Como o Hono fala `fetch`, testar é chamar `hono.fetch` com um `Request` normal — é assim que os testes deste pacote funcionam:
+Since Hono speaks `fetch`, testing means calling `hono.fetch` with a normal `Request` — that's how this package's own tests work:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -194,9 +194,9 @@ console.log(res.status, await res.json()) // 200 { pong: true }
 await app.shutdown()
 ```
 
-### Avançado: `registerRoutes()` sem o plugin
+### Advanced: `registerRoutes()` without the plugin
 
-Monta rotas Machize numa app Hono existente, sem ciclo de vida Machize:
+Mount Machize routes onto an existing Hono app, without the Machize lifecycle:
 
 ```ts
 import { Hono } from 'hono'
@@ -205,63 +205,63 @@ import { registerRoutes } from '@machize/hono'
 
 const app = new Hono()
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
-registerRoutes(app, [ping]) // container, enrichers e guards são opcionais
+registerRoutes(app, [ping]) // container, enrichers, and guards are optional
 export default app
 ```
 
-Neste modo os erros continuam padronizados (cada handler embrulha `toErrorResponse`), mas não há edge plugins nem registo das rotas para OpenAPI/CLI.
+In this mode errors are still standardized (each handler wraps `toErrorResponse`), but there are no edge plugins and no route registration for OpenAPI/CLI.
 
-## Referência da API
+## API reference
 
-### `honoPlugin(options?)` → plugin Machize (`machize:hono`)
+### `honoPlugin(options?)` → Machize plugin (`machize:hono`)
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `routes` | `MachizeRoute[]` | Não | `[]` | Rotas (criadas com `route()` do `@machize/http`) a montar. |
-| `app` | `Hono` | Não | `new Hono()` | Trazes a tua app Hono; caso contrário é criada uma nova. |
+| `routes` | `MachizeRoute[]` | No | `[]` | Routes (created with `route()` from `@machize/http`) to mount. |
+| `app` | `Hono` | No | `new Hono()` | Bring your own Hono app; otherwise a new one is created. |
 
-Comportamento: regista a app Hono no token `HONO` e um `HttpServerCollector` no token `HTTP_SERVER`. No evento `app:booted` monta, por ordem: middleware de *after-hooks* (métricas/tracing, medindo a duração), middleware de *pre-hooks* (segurança/CORS/rate limit; se um deles responder, a rota não corre), as rotas Machize e as rotas extra dos edge plugins (`/livez`, `/metrics`, `/openapi.json`, …). Publica as rotas no bucket de metadados `'http:routes'` para OpenAPI/CLI/SDK.
+Behavior: registers the Hono app on the `HONO` token and an `HttpServerCollector` on the `HTTP_SERVER` token. On the `app:booted` event it mounts, in order: *after-hooks* middleware (metrics/tracing, measuring duration), *pre-hooks* middleware (security/CORS/rate limit; if one of these responds, the route doesn't run), the Machize routes, and the extra edge plugin routes (`/livez`, `/metrics`, `/openapi.json`, …). Publishes the routes to the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
-> Nota: este plugin não tem passo de `shutdown` próprio — parar o servidor (`serve` do `@hono/node-server`, etc.) é responsabilidade tua.
+> Note: this plugin has no `shutdown` step of its own — stopping the server (`serve` from `@hono/node-server`, etc.) is your responsibility.
 
 ### `HONO`
 
-Token de injeção de dependências (`Token<Hono>`): `app.container.get(HONO)` devolve a app Hono — usa `hono.fetch` para servir (Node via `@hono/node-server`, ou exporta-a num edge runtime) e para testes.
+Dependency injection token (`Token<Hono>`): `app.container.get(HONO)` returns the Hono app — use `hono.fetch` to serve (on Node via `@hono/node-server`, or export it in an edge runtime) and for testing.
 
 ### `registerRoutes(app, routes, container?, enrichers?, guards?)`
 
-| Parâmetro | Tipo | Obrigatório? | Default | Descrição |
+| Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `app` | `Hono` | Sim | — | App Hono onde montar. |
-| `routes` | `MachizeRoute[]` | Sim | — | Rotas a montar (via `app.on(method, url, handler)`). |
-| `container` | `Container` | Não | — | Contentor DI; sem ele não há scope por pedido nem enrichers/guards. |
-| `enrichers` | `RequestEnricher[]` | Não | `[]` | Funções que enriquecem o contexto antes dos guards. |
-| `guards` | `RouteGuard[]` | Não | `[]` | Funções que podem rejeitar o pedido (lançando um erro). |
+| `app` | `Hono` | Yes | — | Hono app to mount onto. |
+| `routes` | `MachizeRoute[]` | Yes | — | Routes to mount (via `app.on(method, url, handler)`). |
+| `container` | `Container` | No | — | DI container; without it there's no per-request scope or enrichers/guards. |
+| `enrichers` | `RequestEnricher[]` | No | `[]` | Functions that enrich the context before the guards. |
+| `guards` | `RouteGuard[]` | No | `[]` | Functions that can reject the request (by throwing an error). |
 
-### O que importar de onde
+### What to import from where
 
-Este pacote exporta apenas `honoPlugin`, `registerRoutes`, `HONO` e `HonoPluginOptions`. Tudo o resto — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, tipos como `RequestEnricher`/`RouteGuard` — importa-se do **`@machize/http`**.
+This package only exports `honoPlugin`, `registerRoutes`, `HONO`, and `HonoPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@machize/http`**.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"`Cannot find module 'hono'`."** O Hono é *peer dependency*: `pnpm add hono`.
+**"`Cannot find module 'hono'`."** Hono is a *peer dependency*: `pnpm add hono`.
 
-**"Em Node, nada responde."** O Hono não abre portas sozinho em Node — precisas de `@hono/node-server`: `serve({ fetch: hono.fetch, port: 3000 })`.
+**"Nothing responds on Node."** Hono doesn't open ports on its own on Node — you need `@hono/node-server`: `serve({ fetch: hono.fetch, port: 3000 })`.
 
-**"Tentei `import { route } from '@machize/hono'` e falhou."** A função `route()` não é exportada por este pacote — importa-a de `@machize/http` (é neutra de propósito: a mesma rota corre em Fastify e Express).
+**"I tried `import { route } from '@machize/hono'` and it failed."** The `route()` function isn't exported by this package — import it from `@machize/http` (it's neutral by design: the same route runs on Fastify and Express).
 
-**"O `body` chega `undefined`."** Envia o cabeçalho `Content-Type: application/json`; sem ele o adaptador não interpreta o corpo como JSON. Nota também que `GET`/`HEAD` nunca têm corpo.
+**"`body` arrives as `undefined`."** Send the `Content-Type: application/json` header; without it the adapter doesn't parse the body as JSON. Also note that `GET`/`HEAD` never have a body.
 
-**"400 `HTTP_VALIDATION` num GET com query correta."** Na query tudo chega como texto — usa `z.coerce.number()` / `z.coerce.boolean()` nos esquemas.
+**"400 `HTTP_VALIDATION` on a GET with a correct query."** In the query, everything arrives as text — use `z.coerce.number()` / `z.coerce.boolean()` in your schemas.
 
-**"Os edge plugins não respondem (`/metrics` dá 404)."** São montados no evento `app:booted`: garante que chamas `await createApp({...}).boot()` antes de servir, e que o `honoPlugin` está na lista de plugins (é ele que regista o `HTTP_SERVER`).
+**"The edge plugins don't respond (`/metrics` returns 404)."** They're mounted on the `app:booted` event: make sure you call `await createApp({...}).boot()` before serving, and that `honoPlugin` is in the plugins list (it's the one that registers `HTTP_SERVER`).
 
-**"O rate limit reinicia do nada no edge."** Cada instância edge tem a sua memória; o `MemoryRateLimitStore` não é partilhado entre localizações. Implementa `RateLimitStore` sobre um armazenamento partilhado.
+**"The rate limit resets out of nowhere on edge."** Each edge instance has its own memory; `MemoryRateLimitStore` isn't shared across locations. Implement `RateLimitStore` on top of shared storage.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — o `honoPlugin` é um plugin Machize (`definePlugin`) no ciclo de vida `createApp → boot`; usa o `Container` (tokens `HONO`, `HTTP_SERVER`), os buckets de metadados e o contexto por pedido (`ctx()`/`tryCtx()`).
-- **`@machize/http`** — fornece `route()`, o pipeline `runRoute()` (validação, enrichers, guards), `toErrorResponse()` e os edge plugins. Este adaptador converte o `Context` do Hono no `HttpRequest`/`HttpReply` neutro e transforma o resultado num `Response` web standard.
-- **`@machize/fastify` / `@machize/express`** — adaptadores irmãos: as mesmas rotas, enrichers, guards e edge plugins correm em qualquer um sem alterações; mudar de framework (ou de runtime — Node → edge) é mudar de plugin.
-- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — registam guards/enrichers em `'http:guards'`/`'http:enrichers'` e leem o `meta` das rotas (ex.: `meta: { auth: true }`); este adaptador aplica-os automaticamente.
-- **`@machize/sdk` e a CLI** — consomem o bucket `'http:routes'` (rotas + esquemas Zod) que este plugin publica.
+- **`@machize/core`** — `honoPlugin` is a Machize plugin (`definePlugin`) in the `createApp → boot` lifecycle; uses the `Container` (tokens `HONO`, `HTTP_SERVER`), the metadata buckets, and the per-request context (`ctx()`/`tryCtx()`).
+- **`@machize/http`** — provides `route()`, the `runRoute()` pipeline (validation, enrichers, guards), `toErrorResponse()`, and the edge plugins. This adapter converts Hono's `Context` into the neutral `HttpRequest`/`HttpReply` and turns the result into a standard web `Response`.
+- **`@machize/fastify` / `@machize/express`** — sibling adapters: the same routes, enrichers, guards, and edge plugins run on any of them without changes; switching frameworks (or runtime — Node → edge) is just switching the plugin.
+- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — register guards/enrichers on `'http:guards'`/`'http:enrichers'` and read the routes' `meta` (e.g. `meta: { auth: true }`); this adapter applies them automatically.
+- **`@machize/sdk` and the CLI** — consume the `'http:routes'` bucket (routes + Zod schemas) that this plugin publishes.

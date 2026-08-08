@@ -1,34 +1,34 @@
 # @machize/storage
 
-Camada de armazenamento de ficheiros do Machize: guarda, lê e apaga ficheiros (uploads, relatórios, imagens, faturas…) com a mesma API, quer estejam no disco local, quer num serviço na nuvem compatível com S3 (AWS S3, MinIO, Cloudflare R2). Precisas deste módulo sempre que a tua aplicação lida com ficheiros.
+Machize's file storage layer: stores, reads and deletes files (uploads, reports, images, invoices…) with the same API, whether they live on local disk or in an S3-compatible cloud service (AWS S3, MinIO, Cloudflare R2). You need this module whenever your application deals with files.
 
-## O que este módulo resolve
+## What this module solves
 
-Guardar ficheiros parece simples até precisares de mudar de sítio: em desenvolvimento queres uma pasta no teu computador; em produção queres um serviço de **object storage** (armazenamento de objetos — serviços como o AWS S3 que guardam ficheiros num **bucket**, uma espécie de "pasta na nuvem" com nome único). Sem uma camada de abstração, o código fica cheio de `fs.writeFile` num sítio e chamadas ao SDK da AWS noutro.
+Storing files seems simple until you need to change where they live: in development you want a folder on your machine; in production you want an **object storage** service (services like AWS S3 that store files in a **bucket**, a kind of uniquely-named "folder in the cloud"). Without an abstraction layer, the code ends up full of `fs.writeFile` in one place and AWS SDK calls in another.
 
-Este módulo define um contrato único (`StorageDriver`) com dois **drivers** (implementações intercambiáveis): `local` (sistema de ficheiros) e `s3` (qualquer serviço compatível com S3). O teu código fala sempre com um **`Disk`** — um "disco" com nome (ex.: `uploads`, `invoices`) — e trocar de driver é só mudar configuração, nunca código.
+This module defines a single contract (`StorageDriver`) with two interchangeable **drivers**: `local` (filesystem) and `s3` (any S3-compatible service). Your code always talks to a **`Disk`** — a named "disk" (e.g. `uploads`, `invoices`) — and switching drivers is just a configuration change, never a code change.
 
-Também resolve dois problemas importantes de aplicações SaaS: **isolamento por tenant** (cada cliente/organização só vê os seus próprios ficheiros, guardados automaticamente sob `tenants/<id>/…`) e **URLs temporários assinados** (links de download que expiram — ex.: "este link para o PDF é válido durante 15 minutos" — sem tornar o bucket público). O driver local ainda bloqueia *path traversal* (tentativas de escapar da pasta raiz com `../`).
+It also solves two important problems in SaaS applications: **tenant isolation** (each customer/organization only sees its own files, automatically stored under `tenants/<id>/…`) and **temporary signed URLs** (download links that expire — e.g. "this link to the PDF is valid for 15 minutes" — without making the bucket public). The local driver also blocks *path traversal* (attempts to escape the root folder with `../`).
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/storage
 ```
 
-Depende de `@machize/core` e já inclui o SDK da AWS (`@aws-sdk/client-s3`) — não precisas de instalar mais nada, mesmo que só uses o driver local.
+Depends on `@machize/core` and already includes the AWS SDK (`@aws-sdk/client-s3`) — you don't need to install anything else, even if you only use the local driver.
 
-## Começar em 5 minutos
+## Getting started in 5 minutes
 
-1. **Regista o plugin** com pelo menos um disco. Começa pelo driver `local`, que só precisa de uma pasta.
-2. **Obtém o `Storage`** através do token `STORAGE` e escolhe um disco.
-3. **Guarda e lê ficheiros.**
+1. **Register the plugin** with at least one disk. Start with the `local` driver, which only needs a folder.
+2. **Get `Storage`** via the `STORAGE` token and pick a disk.
+3. **Store and read files.**
 
 ```ts
 import { createApp } from '@machize/core'
 import { STORAGE, storagePlugin } from '@machize/storage'
 
-// 1. Um disco chamado 'uploads', guardado na pasta ./storage do projeto
+// 1. A disk called 'uploads', stored in the project's ./storage folder
 const app = await createApp({
   plugins: [
     storagePlugin({
@@ -40,21 +40,21 @@ const app = await createApp({
   ],
 }).boot()
 
-// 2. Obtém o serviço de storage e o disco por omissão
+// 2. Get the storage service and the default disk
 const storage = app.container.get(STORAGE)
-const disk = storage.disk() // 'uploads', porque é o default
+const disk = storage.disk() // 'uploads', because it's the default
 
-// 3. Escreve, lê, verifica e apaga
-await disk.put('docs/bemvindo.txt', 'Olá!')
-const conteudo = await disk.get('docs/bemvindo.txt') // Buffer
-console.log(conteudo.toString())                     // 'Olá!'
-console.log(await disk.exists('docs/bemvindo.txt'))  // true
-await disk.delete('docs/bemvindo.txt')
+// 3. Write, read, check and delete
+await disk.put('docs/welcome.txt', 'Hello!')
+const content = await disk.get('docs/welcome.txt') // Buffer
+console.log(content.toString())                      // 'Hello!'
+console.log(await disk.exists('docs/welcome.txt'))   // true
+await disk.delete('docs/welcome.txt')
 
 await app.shutdown()
 ```
 
-Para produção com S3/MinIO, muda apenas a configuração do disco:
+For production with S3/MinIO, just change the disk's configuration:
 
 ```ts
 storagePlugin({
@@ -62,9 +62,9 @@ storagePlugin({
   disks: {
     uploads: {
       driver: 's3',
-      bucket: 'a-minha-app',
+      bucket: 'my-app',
       region: 'eu-west-1',
-      // Para MinIO ou outro serviço compatível com S3:
+      // For MinIO or another S3-compatible service:
       // endpoint: 'http://localhost:9000',
       credentials: { accessKeyId: '…', secretAccessKey: '…' },
     },
@@ -72,42 +72,42 @@ storagePlugin({
 })
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Escrever e ler ficheiros
+### Writing and reading files
 
 ```ts
 import { Disk, LocalStorageDriver } from '@machize/storage'
 
 const disk = new Disk('uploads', new LocalStorageDriver({ root: './storage' }), { scope: null })
 
-// Aceita strings e Buffers; as pastas intermédias são criadas automaticamente
-await disk.put('docs/leia-me.txt', 'olá')
+// Accepts strings and Buffers; intermediate folders are created automatically
+await disk.put('docs/read-me.txt', 'hello')
 await disk.put('img/pixel.bin', Buffer.from([1, 2, 3]))
 
-// No driver S3 podes indicar o tipo de conteúdo (Content-Type)
-await disk.put('relatorio.pdf', pdfBuffer, { contentType: 'application/pdf' })
+// On the S3 driver you can specify the content type (Content-Type)
+await disk.put('report.pdf', pdfBuffer, { contentType: 'application/pdf' })
 
-// get devolve sempre um Buffer (bytes crus); converte para texto se precisares
-const texto = (await disk.get('docs/leia-me.txt')).toString()
+// get always returns a Buffer (raw bytes); convert to text if needed
+const text = (await disk.get('docs/read-me.txt')).toString()
 ```
 
-### Listar, verificar e apagar
+### Listing, checking and deleting
 
 ```ts
 await disk.put('a/1.txt', 'x')
 await disk.put('a/b/2.txt', 'y')
 
-await disk.list('a')          // ['a/1.txt', 'a/b/2.txt'] — recursivo, ordenado
-await disk.list()             // todos os ficheiros do disco (dentro do scope atual)
+await disk.list('a')          // ['a/1.txt', 'a/b/2.txt'] — recursive, sorted
+await disk.list()             // all files on the disk (within the current scope)
 await disk.exists('a/1.txt')  // true
-await disk.delete('a/1.txt')  // true (existia e foi apagado)
-await disk.delete('a/1.txt')  // false (já não existia)
+await disk.delete('a/1.txt')  // true (existed and was deleted)
+await disk.delete('a/1.txt')  // false (no longer existed)
 ```
 
-### Vários discos com nomes
+### Multiple named disks
 
-Podes declarar quantos discos quiseres — por exemplo, uploads públicos num bucket e faturas noutro:
+You can declare as many disks as you want — for example, public uploads in one bucket and invoices in another:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -119,31 +119,31 @@ const app = await createApp({
       default: 'uploads',
       disks: {
         uploads: { driver: 'local', root: './storage/uploads' },
-        invoices: { driver: 's3', bucket: 'faturas-empresa', region: 'eu-west-1' },
+        invoices: { driver: 's3', bucket: 'company-invoices', region: 'eu-west-1' },
       },
     }),
   ],
 }).boot()
 
 const storage = app.container.get(STORAGE)
-await storage.disk().put('avatar.png', imagem)              // disco default ('uploads')
-await storage.disk('invoices').put('2026/01.pdf', fatura)   // disco pelo nome
+await storage.disk().put('avatar.png', image)                // default disk ('uploads')
+await storage.disk('invoices').put('2026/01.pdf', invoice)   // disk by name
 ```
 
-### URLs temporários (downloads seguros)
+### Temporary URLs (secure downloads)
 
-Um **URL assinado** é um link com uma assinatura criptográfica e um prazo de validade — permite dar acesso a um ficheiro privado sem expor o bucket. Só o driver `s3` suporta esta funcionalidade:
+A **signed URL** is a link with a cryptographic signature and an expiration — it lets you grant access to a private file without exposing the bucket. Only the `s3` driver supports this feature:
 
 ```ts
-// Válido durante 15 minutos; depois disso o link deixa de funcionar
+// Valid for 15 minutes; after that the link stops working
 const url = await storage.disk('invoices').temporaryUrl('2026/01.pdf', '15m')
 ```
 
-O prazo aceita milissegundos ou strings como `'500ms'`, `'30s'`, `'15m'`, `'2h'`, `'7d'`. No driver `local` esta chamada lança `TemporaryUrlUnsupportedError`.
+The expiration accepts milliseconds or strings like `'500ms'`, `'30s'`, `'15m'`, `'2h'`, `'7d'`. On the `local` driver this call throws `TemporaryUrlUnsupportedError`.
 
-### Isolamento automático por tenant
+### Automatic tenant isolation
 
-Tal como na cache, cada operação lê o tenant do contexto do pedido e prefixa os caminhos com `tenants/<id>/`. Cada tenant tem a sua área privada sem escreveres uma linha extra:
+Just like the cache, every operation reads the tenant from the request context and prefixes paths with `tenants/<id>/`. Each tenant gets its own private area with no extra code:
 
 ```ts
 import { runWithContext } from '@machize/core'
@@ -151,130 +151,130 @@ import { Disk, LocalStorageDriver } from '@machize/storage'
 
 const disk = new Disk('uploads', new LocalStorageDriver({ root: './storage' }))
 
-await runWithContext({ tenant: { id: 'acme' } }, () => disk.put('logo.png', 'logo-da-acme'))
-await runWithContext({ tenant: { id: 'globex' } }, () => disk.put('logo.png', 'logo-da-globex'))
-await disk.put('logo.png', 'logo-central') // fora de qualquer tenant
+await runWithContext({ tenant: { id: 'acme' } }, () => disk.put('logo.png', 'acme-logo'))
+await runWithContext({ tenant: { id: 'globex' } }, () => disk.put('logo.png', 'globex-logo'))
+await disk.put('logo.png', 'central-logo') // outside any tenant
 
-// Cada tenant lê o SEU logo.png:
+// Each tenant reads ITS OWN logo.png:
 //   acme   → tenants/acme/logo.png
 //   globex → tenants/globex/logo.png
-//   sem tenant → logo.png
+//   no tenant → logo.png
 ```
 
-Nos pedidos HTTP normais não precisas de `runWithContext` — o framework coloca o tenant no contexto por ti. Para desativar, configura o disco com `scope: null`.
+In normal HTTP requests you don't need `runWithContext` — the framework puts the tenant in the context for you. To disable it, configure the disk with `scope: null`.
 
-## Referência da API
+## API reference
 
 ### `class Disk`
 
 `new Disk(name: string, driver: StorageDriver, options?: DiskOptions)`
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `put` | `put(path: string, content: Buffer \| string, options?: PutOptions): Promise<void>` | Escreve um ficheiro (cria pastas intermédias). |
-| `get` | `get(path: string): Promise<Buffer>` | Lê um ficheiro; lança `StorageFileNotFoundError` se não existir. |
-| `exists` | `exists(path: string): Promise<boolean>` | Verifica se o ficheiro existe. |
-| `delete` | `delete(path: string): Promise<boolean>` | Apaga; `true` se existia. |
-| `list` | `list(prefix?: string): Promise<string[]>` | Lista caminhos sob o prefixo (recursivo, ordenado). Default do prefixo: `''`. |
-| `temporaryUrl` | `temporaryUrl(path: string, expiresIn: DurationInput): Promise<string>` | URL pré-assinado; lança `TemporaryUrlUnsupportedError` se o driver não suportar. |
+| `put` | `put(path: string, content: Buffer \| string, options?: PutOptions): Promise<void>` | Writes a file (creates intermediate folders). |
+| `get` | `get(path: string): Promise<Buffer>` | Reads a file; throws `StorageFileNotFoundError` if it doesn't exist. |
+| `exists` | `exists(path: string): Promise<boolean>` | Checks whether the file exists. |
+| `delete` | `delete(path: string): Promise<boolean>` | Deletes; `true` if it existed. |
+| `list` | `list(prefix?: string): Promise<string[]>` | Lists paths under the prefix (recursive, sorted). Prefix defaults to `''`. |
+| `temporaryUrl` | `temporaryUrl(path: string, expiresIn: DurationInput): Promise<string>` | Pre-signed URL; throws `TemporaryUrlUnsupportedError` if the driver doesn't support it. |
 
 #### `DiskOptions`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `scope` | `(() => string \| undefined) \| null` | Não | lê `ctx().tenant.id` → `tenants/<id>` | Prefixo dinâmico de caminho, resolvido em cada operação. `null` desativa. |
+| `scope` | `(() => string \| undefined) \| null` | No | reads `ctx().tenant.id` → `tenants/<id>` | Dynamic path prefix, resolved on each operation. `null` disables it. |
 
 #### `PutOptions`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `contentType` | `string` | Não | — | Content-Type do ficheiro (usado pelo driver `s3`; ignorado pelo `local`). |
+| `contentType` | `string` | No | — | File's Content-Type (used by the `s3` driver; ignored by `local`). |
 
 ### `class Storage`
 
 `new Storage(defaultDisk?: string)`
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `add` | `add(disk: Disk): this` | Regista um disco (encadeável). |
-| `disk` | `disk(name?: string): Disk` | Devolve o disco pelo nome; sem argumento devolve o default (ou o primeiro registado). Lança `UnknownDiskError` se não existir. |
+| `add` | `add(disk: Disk): this` | Registers a disk (chainable). |
+| `disk` | `disk(name?: string): Disk` | Returns the disk by name; with no argument returns the default (or the first registered one). Throws `UnknownDiskError` if it doesn't exist. |
 
 ### `storagePlugin(options: StoragePluginOptions)`
 
-Regista o `Storage` no contentor sob o token `STORAGE` e desconecta todos os drivers no `shutdown`.
+Registers `Storage` in the container under the `STORAGE` token and disconnects all drivers on `shutdown`.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `disks` | `Record<string, DiskConfig>` | Sim | — | Mapa nome-do-disco → configuração. |
-| `default` | `string` | Não | primeiro disco registado | Disco devolvido por `storage.disk()` sem argumento. |
+| `disks` | `Record<string, DiskConfig>` | Yes | — | Map of disk name → configuration. |
+| `default` | `string` | No | first registered disk | Disk returned by `storage.disk()` with no argument. |
 
 #### `DiskConfig`
 
-Uma de duas formas (ambas aceitam também `scope` de `DiskOptions`):
+One of two forms (both also accept `scope` from `DiskOptions`):
 
-- `{ driver: 'local', root: string }` — `root` é a pasta raiz no sistema de ficheiros.
-- `{ driver: 's3', ...S3DriverOptions }` — ver abaixo.
+- `{ driver: 'local', root: string }` — `root` is the root folder on the filesystem.
+- `{ driver: 's3', ...S3DriverOptions }` — see below.
 
 ### `STORAGE`
 
-Token de injeção de dependências: `app.container.get(STORAGE)` devolve o `Storage`.
+Dependency injection token: `app.container.get(STORAGE)` returns the `Storage`.
 
-### `class S3StorageDriver` (Avançado)
+### `class S3StorageDriver` (Advanced)
 
-`new S3StorageDriver(options: S3DriverOptions)` — funciona com AWS S3, MinIO, Cloudflare R2 e outros serviços compatíveis.
+`new S3StorageDriver(options: S3DriverOptions)` — works with AWS S3, MinIO, Cloudflare R2 and other compatible services.
 
 #### `S3DriverOptions`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `bucket` | `string` | Sim | — | Nome do bucket. |
-| `region` | `string` | Não | `'us-east-1'` | Região AWS. |
-| `endpoint` | `string` | Não | — | Endpoint personalizado — define isto para usar MinIO/R2. |
-| `credentials` | `{ accessKeyId: string; secretAccessKey: string }` | Não | credenciais do ambiente AWS | Credenciais explícitas. |
-| `forcePathStyle` | `boolean` | Não | `true` quando há `endpoint`, senão `false` | URLs no formato `http://host/bucket/chave` (exigido pelo MinIO). |
+| `bucket` | `string` | Yes | — | Bucket name. |
+| `region` | `string` | No | `'us-east-1'` | AWS region. |
+| `endpoint` | `string` | No | — | Custom endpoint — set this to use MinIO/R2. |
+| `credentials` | `{ accessKeyId: string; secretAccessKey: string }` | No | credentials from the AWS environment | Explicit credentials. |
+| `forcePathStyle` | `boolean` | No | `true` when there's an `endpoint`, otherwise `false` | URLs in the form `http://host/bucket/key` (required by MinIO). |
 
-### `class LocalStorageDriver` (Avançado)
+### `class LocalStorageDriver` (Advanced)
 
-`new LocalStorageDriver(options: { root: string })` — guarda no sistema de ficheiros, com `root` resolvido para caminho absoluto. Rejeita caminhos que tentem sair da raiz (lança `StorageInvalidPathError`). Não suporta `temporaryUrl`.
+`new LocalStorageDriver(options: { root: string })` — stores on the filesystem, with `root` resolved to an absolute path. Rejects paths that try to escape the root (throws `StorageInvalidPathError`). Doesn't support `temporaryUrl`.
 
-### `interface StorageDriver` (Avançado)
+### `interface StorageDriver` (Advanced)
 
-Contrato para criares o teu próprio driver: `name` (string legível, usada nos erros), `put`, `get`, `exists`, `delete`, `list`, `temporaryUrl?` (opcional, recebe o prazo em milissegundos) e `disconnect`.
+Contract for building your own driver: `name` (readable string, used in errors), `put`, `get`, `exists`, `delete`, `list`, `temporaryUrl?` (optional, receives the expiration in milliseconds) and `disconnect`.
 
-### Erros exportados
+### Exported errors
 
-| Classe | Código | Quando acontece |
+| Class | Code | When it happens |
 |---|---|---|
-| `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` de um ficheiro que não existe. |
-| `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | Caminho tenta sair da raiz do disco (`../…`). |
-| `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `storage.disk('nome')` de um disco não declarado. |
-| `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` num driver sem suporte (ex.: `local`). |
+| `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` on a file that doesn't exist. |
+| `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | Path tries to escape the disk's root (`../…`). |
+| `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `storage.disk('name')` for a disk that isn't declared. |
+| `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` on a driver without support (e.g. `local`). |
 
-Todos estendem `MachizeError` de `@machize/core` e têm uma propriedade `code` com o código acima.
+All extend `MachizeError` from `@machize/core` and have a `code` property with the code above.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**`get` lança `STORAGE_FILE_NOT_FOUND` mas eu acabei de gravar o ficheiro.**
-Quase de certeza que gravaste e leste em contextos de tenant diferentes: com o scope por omissão, o mesmo `logo.png` vive em `tenants/acme/logo.png` para um tenant e em `logo.png` fora de tenant. Confirma o contexto ou usa `scope: null`.
+**`get` throws `STORAGE_FILE_NOT_FOUND` but I just saved the file.**
+You most likely wrote and read in different tenant contexts: with the default scope, the same `logo.png` lives at `tenants/acme/logo.png` for one tenant and at `logo.png` outside any tenant. Check the context or use `scope: null`.
 
-**`STORAGE_INVALID_PATH` ao usar `../` no caminho.**
-É intencional: o driver local bloqueia qualquer caminho que saia da pasta raiz — é uma proteção de segurança contra *path traversal*. Usa sempre caminhos relativos dentro do disco.
+**`STORAGE_INVALID_PATH` when using `../` in the path.**
+This is intentional: the local driver blocks any path that escapes the root folder — it's a security protection against *path traversal*. Always use relative paths within the disk.
 
-**`Unknown disk "x"` ao chamar `storage.disk('x')`.**
-O disco tem de ser declarado em `storagePlugin({ disks: { x: … } })`. Verifica o nome (é sensível a maiúsculas/minúsculas).
+**`Unknown disk "x"` when calling `storage.disk('x')`.**
+The disk must be declared in `storagePlugin({ disks: { x: … } })`. Check the name (it's case-sensitive).
 
-**`temporaryUrl` falha com "does not support temporary URLs".**
-O driver `local` não consegue gerar URLs assinados — isso é uma funcionalidade do S3. Em desenvolvimento, serve os ficheiros por uma rota da tua aplicação, ou usa MinIO localmente com um disco `s3`.
+**`temporaryUrl` fails with "does not support temporary URLs".**
+The `local` driver can't generate signed URLs — that's an S3 feature. In development, serve files through a route in your application, or use MinIO locally with an `s3` disk.
 
-**Com MinIO recebo erros de ligação ou de bucket.**
-Define `endpoint: 'http://localhost:9000'` (ou o teu endereço). O `forcePathStyle` passa automaticamente a `true` quando há endpoint — não precisas de o definir. Confirma que o bucket já existe no MinIO.
+**With MinIO I get connection or bucket errors.**
+Set `endpoint: 'http://localhost:9000'` (or your address). `forcePathStyle` automatically becomes `true` when there's an endpoint — you don't need to set it. Confirm the bucket already exists in MinIO.
 
-**`get` devolve um `Buffer`, eu queria texto/JSON.**
-Um `Buffer` são bytes crus. Converte: `buffer.toString()` para texto, `JSON.parse(buffer.toString())` para JSON.
+**`get` returns a `Buffer`, I wanted text/JSON.**
+A `Buffer` is raw bytes. Convert it: `buffer.toString()` for text, `JSON.parse(buffer.toString())` for JSON.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — fornece o `createApp`, o contentor, o contexto de pedido (de onde vem o isolamento por tenant), o `parseDuration` dos prazos e a classe base `MachizeError`.
-- **`@machize/tenancy`** — com o plugin de tenancy a identificar o tenant de cada pedido, os discos isolam os ficheiros por tenant automaticamente.
-- **`@machize/http` / `@machize/express` / `@machize/fastify` / `@machize/hono`** — nas rotas de upload/download, obténs o `Storage` do contentor e usas `disk.put`/`disk.get`/`disk.temporaryUrl`.
-- **`@machize/prisma`** — padrão comum: guardar o ficheiro num disco e o caminho/metadados na base de dados.
+- **`@machize/core`** — provides `createApp`, the container, the request context (from which tenant isolation comes), `parseDuration` for expirations, and the `MachizeError` base class.
+- **`@machize/tenancy`** — with the tenancy plugin identifying each request's tenant, disks isolate files per tenant automatically.
+- **`@machize/http` / `@machize/express` / `@machize/fastify` / `@machize/hono`** — in upload/download routes, get `Storage` from the container and use `disk.put`/`disk.get`/`disk.temporaryUrl`.
+- **`@machize/prisma`** — a common pattern: store the file on a disk and its path/metadata in the database.

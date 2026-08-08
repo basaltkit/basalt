@@ -1,61 +1,61 @@
 # @machize/fastify
 
-Adaptador oficial do Machize para [Fastify](https://fastify.dev): pega nas rotas tipadas do Machize e serve-as num servidor Fastify, com contexto por pedido, erros padronizados e um plugin de idempotência. Precisas dele quando queres construir uma API HTTP em Node.js com o Machize usando o Fastify como motor.
+Official Machize adapter for [Fastify](https://fastify.dev): takes Machize's typed routes and serves them on a Fastify server, with per-request context, standardized errors and an idempotency plugin. You need this when you want to build an HTTP API in Node.js with Machize using Fastify as the engine.
 
-## O que este módulo resolve
+## What this module solves
 
-Um servidor HTTP é o programa que recebe **pedidos HTTP** (as mensagens que um browser ou uma app enviam, como "dá-me o utilizador 42") e devolve respostas. O [Fastify](https://fastify.dev) é um dos servidores mais rápidos do ecossistema Node.js — mas, sozinho, não valida dados, não tipa os handlers e cada projeto inventa o seu formato de erros.
+An HTTP server is the program that receives **HTTP requests** (the messages a browser or an app sends, like "give me user 42") and returns responses. [Fastify](https://fastify.dev) is one of the fastest servers in the Node.js ecosystem — but, on its own, it doesn't validate data, doesn't type the handlers, and every project invents its own error format.
 
-Este módulo liga o Fastify ao Machize. Defines cada **rota** (um endereço + método, ex.: `POST /projects`) com a função `route()` e esquemas [Zod](https://zod.dev); o adaptador trata do resto: valida o corpo, a query e os parâmetros do URL, cria um contexto por pedido (com `requestId` acessível em qualquer ponto do código, mesmo em funções profundas, via `ctx()`), e converte erros em respostas JSON com um formato estável — sem nunca expor mensagens internas num `500`.
+This module connects Fastify to Machize. You define each **route** (an address + method, e.g. `POST /projects`) with the `route()` function and [Zod](https://zod.dev) schemas; the adapter handles the rest: it validates the body, query and URL parameters, creates a per-request context (with `requestId` accessible anywhere in the code, even in deeply nested functions, via `ctx()`), and converts errors into JSON responses with a stable format — never exposing internal messages on a `500`.
 
-Como a definição de rotas é neutra (vem do `@machize/http`), o mesmo código de rotas corre também nos adaptadores Express e Hono. E os plugins de borda (segurança, saúde, métricas, tracing, OpenAPI) são re-exportados aqui por conveniência. O extra exclusivo deste adaptador é o `idempotencyPlugin`: repetições seguras de pedidos que alteram dados (ex.: nunca cobrar um cartão duas vezes).
+Since route definitions are neutral (they come from `@machize/http`), the same route code also runs on the Express and Hono adapters. And the edge plugins (security, health, metrics, tracing, OpenAPI) are re-exported here for convenience. The extra piece exclusive to this adapter is `idempotencyPlugin`: safe retries of requests that mutate data (e.g. never charging a card twice).
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/fastify @machize/core zod
 ```
 
-O Fastify já vem como dependência deste pacote — não precisas de o instalar à parte. O `zod` (versão 3 ou 4) é *peer dependency*.
+Fastify already comes as a dependency of this package — you don't need to install it separately. `zod` (version 3 or 4) is a *peer dependency*.
 
-## Começar em 5 minutos
+## Getting started in 5 minutes
 
-**Passo 1** — instala os pacotes (comando acima).
+**Step 1** — install the packages (command above).
 
-**Passo 2** — cria um ficheiro `server.ts` com uma rota e o arranque do servidor:
+**Step 2** — create a `server.ts` file with a route and the server startup:
 
 ```ts
 import { createApp } from '@machize/core'
 import { FASTIFY, fastifyPlugin, route } from '@machize/fastify'
 import { z } from 'zod'
 
-// 1. Definir a rota: método, URL, validação e handler (a função que responde).
+// 1. Define the route: method, URL, validation and handler (the function that responds).
 const createProject = route({
   method: 'POST',
   url: '/projects',
-  body: z.object({ name: z.string().min(3) }), // o corpo tem de ter um name com 3+ letras
+  body: z.object({ name: z.string().min(3) }), // the body must have a name with 3+ letters
   async handler({ body, reply }) {
-    // body.name já está validado e tipado como string
+    // body.name is already validated and typed as string
     return reply.code(201).send({ id: 'p1', name: body.name })
   },
 })
 
-// 2. Criar a app Machize com o plugin Fastify e arrancar.
+// 2. Create the Machize app with the Fastify plugin and start it.
 const app = await createApp({ plugins: [fastifyPlugin({ routes: [createProject] })] }).boot()
 
-// 3. Obter a instância Fastify do contentor e pôr a ouvir numa porta.
+// 3. Get the Fastify instance from the container and start listening on a port.
 await app.container.get(FASTIFY).listen({ port: 3000 })
-console.log('A ouvir em http://localhost:3000')
+console.log('Listening on http://localhost:3000')
 ```
 
-**Passo 3** — executa e testa:
+**Step 3** — run and test:
 
 ```bash
 npx tsx server.ts
 curl -X POST http://localhost:3000/projects \
   -H 'content-type: application/json' \
   -d '{"name":"Machize"}'
-# → {"id":"p1","name":"Machize"}   (estado 201)
+# → {"id":"p1","name":"Machize"}   (status 201)
 
 curl -X POST http://localhost:3000/projects \
   -H 'content-type: application/json' \
@@ -63,11 +63,11 @@ curl -X POST http://localhost:3000/projects \
 # → 400 {"error":{"code":"HTTP_VALIDATION","part":"body","issues":[...]}}
 ```
 
-**Passo 4** — para desligar com limpeza (fecha o Fastify): `await app.shutdown()`.
+**Step 4** — for a clean shutdown (closes Fastify): `await app.shutdown()`.
 
-## Guia de utilização
+## Usage guide
 
-### Rotas tipadas com params, query e erros
+### Typed routes with params, query and errors
 
 ```ts
 import { HttpError, route } from '@machize/fastify'
@@ -75,48 +75,48 @@ import { z } from 'zod'
 
 const getProject = route({
   method: 'GET',
-  url: '/projects/:id', // :id é um parâmetro dinâmico
+  url: '/projects/:id', // :id is a dynamic parameter
   params: z.object({ id: z.string() }),
-  // Na query string tudo chega como texto; z.coerce converte
+  // In the query string everything arrives as text; z.coerce converts it
   query: z.object({ expand: z.coerce.boolean().default(false) }),
   async handler({ params, query }) {
     if (params.id === 'missing') {
-      // Erro intencional: vira 404 com um código estável
-      throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Projeto não encontrado')
+      // Intentional error: becomes a 404 with a stable code
+      throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
     }
     return { id: params.id, expand: query.expand }
   },
 })
 ```
 
-Erros não intencionais (`throw new Error('segredo')`) respondem `500` com `INTERNAL_ERROR` — a mensagem interna é registada no log do Fastify, mas nunca enviada ao cliente.
+Unintentional errors (`throw new Error('secret')`) respond with `500` and `INTERNAL_ERROR` — the internal message is logged in Fastify's log, but never sent to the client.
 
-### Contexto por pedido (`ctx()`)
+### Per-request context (`ctx()`)
 
-Cada pedido corre dentro de um contexto (via `AsyncLocalStorage` do Node): em qualquer função, por mais funda que seja, podes ler o `requestId` sem o passares de argumento em argumento.
+Each request runs inside a context (via Node's `AsyncLocalStorage`): in any function, no matter how deeply nested, you can read the `requestId` without passing it down as an argument.
 
 ```ts
 import { createApp, ctx } from '@machize/core'
 import { fastifyPlugin, route } from '@machize/fastify'
 
-async function servicoProfundo(): Promise<string> {
-  return ctx().requestId as string // o mesmo id do pedido em curso
+async function deepService(): Promise<string> {
+  return ctx().requestId as string // the same id as the current request
 }
 
 const whoami = route({
   method: 'GET',
   url: '/whoami',
   async handler() {
-    return { requestId: ctx().requestId, viaService: await servicoProfundo() }
+    return { requestId: ctx().requestId, viaService: await deepService() }
   },
 })
 ```
 
-Se o cliente enviar o cabeçalho `x-request-id`, esse valor é usado; caso contrário é gerado um UUID. A resposta devolve sempre `x-request-id`. Cada pedido recebe também um *scope* próprio do contentor de dependências (`ctx().container`) — instâncias registadas como `scoped` são novas por pedido.
+If the client sends the `x-request-id` header, that value is used; otherwise a UUID is generated. The response always returns `x-request-id`. Each request also gets its own dependency container *scope* (`ctx().container`) — instances registered as `scoped` are new per request.
 
-### Idempotência — `idempotencyPlugin()` (exclusivo do Fastify)
+### Idempotency — `idempotencyPlugin()` (Fastify-exclusive)
 
-Idempotência significa: repetir o mesmo pedido não repete o efeito. Quando o cliente envia o cabeçalho `Idempotency-Key`, a primeira resposta fica guardada; qualquer repetição com a mesma chave recebe **a mesma resposta**, sem executar o handler outra vez — uma nova tentativa de rede nunca cobra um cartão duas vezes.
+Idempotency means: repeating the same request doesn't repeat its effect. When the client sends the `Idempotency-Key` header, the first response is stored; any repeat with the same key receives **the same response**, without running the handler again — a network retry never charges a card twice.
 
 ```ts
 import { createApp } from '@machize/core'
@@ -143,18 +143,18 @@ curl -X POST http://localhost:3000/charge \
   -H 'content-type: application/json' \
   -H 'idempotency-key: abc-123' \
   -d '{"amount":10}'
-# Repete o mesmo comando: mesma resposta, com o cabeçalho Idempotent-Replayed: true
+# Repeat the same command: same response, with the Idempotent-Replayed: true header
 ```
 
-Regras (verificadas nos testes do pacote):
-- Repetição enquanto o primeiro pedido ainda está em curso → `409 IDEMPOTENCY_CONFLICT`.
-- Respostas `>= 500` **não** são guardadas — falhas genuínas continuam a poder ser repetidas.
-- As chaves são isoladas por método + rota: a mesma chave em dois endpoints não colide.
-- Pedidos sem o cabeçalho não são afetados.
+Rules (verified in the package's tests):
+- A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
+- Responses `>= 500` are **not** stored — genuine failures can still be retried.
+- Keys are isolated by method + route: the same key on two endpoints doesn't collide.
+- Requests without the header are unaffected.
 
-### Plugins de borda (segurança, saúde, métricas, tracing, OpenAPI)
+### Edge plugins (security, health, metrics, tracing, OpenAPI)
 
-São neutros (vivem no `@machize/http`) mas re-exportados aqui — podes importar tudo de `@machize/fastify`:
+They're neutral (they live in `@machize/http`) but re-exported here — you can import everything from `@machize/fastify`:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -175,20 +175,20 @@ const app = await createApp({
   plugins: [
     fastifyPlugin({ routes: [ping] }),
     securityPlugin({ cors: { origin: ['https://app.example.com'] }, rateLimit: { limit: 100, windowMs: 60_000 } }),
-    healthPlugin({ checks: { db: () => ({ ok: true }) } }), // GET /livez e /readyz
+    healthPlugin({ checks: { db: () => ({ ok: true }) } }), // GET /livez and /readyz
     metricsPlugin(),                                        // GET /metrics (Prometheus)
-    tracingPlugin({ serviceName: 'minha-api' }),            // spans + cabeçalho traceparent
-    openapiPlugin({ info: { title: 'A Minha API', version: '1.0.0' } }), // GET /openapi.json
+    tracingPlugin({ serviceName: 'my-api' }),                // spans + traceparent header
+    openapiPlugin({ info: { title: 'My API', version: '1.0.0' } }), // GET /openapi.json
   ],
 }).boot()
 await app.container.get(FASTIFY).listen({ port: 3000 })
 ```
 
-A documentação detalhada de cada um (todas as opções) está no README do [`@machize/http`](../http/README.md).
+Detailed documentation for each one (all options) is in the [`@machize/http`](../http/README.md) README.
 
-### Avançado: `registerRoutes()` sem o plugin
+### Advanced: `registerRoutes()` without the plugin
 
-Se já tens um servidor Fastify e só queres montar rotas Machize nele:
+If you already have a Fastify server and just want to mount Machize routes on it:
 
 ```ts
 import Fastify from 'fastify'
@@ -196,78 +196,78 @@ import { registerRoutes, route } from '@machize/fastify'
 
 const instance = Fastify()
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
-registerRoutes(instance, [ping]) // container, enrichers e guards são opcionais
+registerRoutes(instance, [ping]) // container, enrichers and guards are optional
 await instance.listen({ port: 3000 })
 ```
 
-Nota: sem o plugin não há tratamento de erros padronizado (o `setErrorHandler` é instalado pelo `fastifyPlugin`), nem edge plugins, nem registo das rotas para OpenAPI/CLI.
+Note: without the plugin there's no standardized error handling (`setErrorHandler` is installed by `fastifyPlugin`), no edge plugins, and routes aren't registered for OpenAPI/CLI.
 
-### Opções do Fastify (logger, trustProxy, …)
+### Fastify options (logger, trustProxy, …)
 
 ```ts
 fastifyPlugin({
   routes,
-  fastify: { logger: true, trustProxy: true }, // passado tal e qual ao construtor Fastify()
+  fastify: { logger: true, trustProxy: true }, // passed as-is to the Fastify() constructor
 })
 ```
 
-## Referência da API
+## API reference
 
-### `fastifyPlugin(options?)` → plugin Machize (`machize:fastify`)
+### `fastifyPlugin(options?)` → Machize plugin (`machize:fastify`)
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `routes` | `MachizeRoute[]` | Não | `[]` | Rotas (criadas com `route()`) a registar. |
-| `fastify` | `FastifyServerOptions` | Não | `{}` | Opções passadas ao construtor `Fastify()` (logger, trustProxy, …). |
+| `routes` | `MachizeRoute[]` | No | `[]` | Routes (created with `route()`) to register. |
+| `fastify` | `FastifyServerOptions` | No | `{}` | Options passed to the `Fastify()` constructor (logger, trustProxy, …). |
 
-Comportamento: regista a instância Fastify no token `FASTIFY` e um `HttpServerCollector` no token `HTTP_SERVER`; no boot lê enrichers/guards dos buckets de metadados (`'http:enrichers'`, `'http:guards'`), regista as rotas, publica-as no bucket `'http:routes'` (para OpenAPI/CLI/SDK) e monta os hooks dos edge plugins no evento `app:booted`. No `shutdown` fecha o Fastify (`close()`).
+Behavior: registers the Fastify instance under the `FASTIFY` token and an `HttpServerCollector` under the `HTTP_SERVER` token; on boot it reads enrichers/guards from the metadata buckets (`'http:enrichers'`, `'http:guards'`), registers the routes, publishes them on the `'http:routes'` bucket (for OpenAPI/CLI/SDK) and mounts the edge plugins' hooks on the `app:booted` event. On `shutdown` it closes Fastify (`close()`).
 
 ### `FASTIFY`
 
-Token de injeção de dependências (`Token<FastifyInstance>`): `app.container.get(FASTIFY)` devolve a instância Fastify para `listen()`, `inject()` (testes) ou configuração extra.
+Dependency injection token (`Token<FastifyInstance>`): `app.container.get(FASTIFY)` returns the Fastify instance for `listen()`, `inject()` (tests) or extra configuration.
 
 ### `registerRoutes(instance, routes, container?, enrichers?, guards?)`
 
-| Parâmetro | Tipo | Obrigatório? | Default | Descrição |
+| Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `instance` | `FastifyInstance` | Sim | — | Servidor Fastify onde montar. |
-| `routes` | `MachizeRoute[]` | Sim | — | Rotas a montar. |
-| `container` | `Container` | Não | — | Contentor DI; sem ele não há scope por pedido nem enrichers/guards. |
-| `enrichers` | `RequestEnricher[]` | Não | `[]` | Funções que enriquecem o contexto antes dos guards. |
-| `guards` | `RouteGuard[]` | Não | `[]` | Funções que podem rejeitar o pedido (lançando um erro). |
+| `instance` | `FastifyInstance` | Yes | — | Fastify server to mount on. |
+| `routes` | `MachizeRoute[]` | Yes | — | Routes to mount. |
+| `container` | `Container` | No | — | DI container; without it there's no per-request scope or enrichers/guards. |
+| `enrichers` | `RequestEnricher[]` | No | `[]` | Functions that enrich the context before the guards. |
+| `guards` | `RouteGuard[]` | No | `[]` | Functions that can reject the request (by throwing an error). |
 
-### `idempotencyPlugin(options?)` → plugin Machize (`machize:idempotency`, depende de `machize:fastify`)
+### `idempotencyPlugin(options?)` → Machize plugin (`machize:idempotency`, depends on `machize:fastify`)
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `store` | `IdempotencyStore` | Não | `new MemoryIdempotencyStore(ttlMs)` | Onde guardar as respostas. |
-| `header` | `string` | Não | `'idempotency-key'` | Cabeçalho que transporta a chave. |
-| `methods` | `string[]` | Não | `['POST']` | Métodos protegidos. |
-| `ttlMs` | `number` | Não | `86_400_000` (24 h) | Tempo de retenção de cada registo. |
+| `store` | `IdempotencyStore` | No | `new MemoryIdempotencyStore(ttlMs)` | Where to store responses. |
+| `header` | `string` | No | `'idempotency-key'` | Header carrying the key. |
+| `methods` | `string[]` | No | `['POST']` | Protected methods. |
+| `ttlMs` | `number` | No | `86_400_000` (24 h) | Retention time for each record. |
 
-`IdempotencyStore` (interface): `get(key)` → `IdempotencyRecord | 'pending' | undefined`; `setPending(key)`; `complete(key, record)`; `release(key)`. `IdempotencyRecord` = `{ status: number; body: string; contentType?: string }`. `MemoryIdempotencyStore(ttlMs?, clock?)` é a implementação em memória; para cluster, implementa a interface sobre Redis.
+`IdempotencyStore` (interface): `get(key)` → `IdempotencyRecord | 'pending' | undefined`; `setPending(key)`; `complete(key, record)`; `release(key)`. `IdempotencyRecord` = `{ status: number; body: string; contentType?: string }`. `MemoryIdempotencyStore(ttlMs?, clock?)` is the in-memory implementation; for a cluster, implement the interface over Redis.
 
-### Re-exports de `@machize/http`
+### Re-exports from `@machize/http`
 
-Para conveniência (e retrocompatibilidade), este pacote re-exporta: `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `MemoryRateLimitStore`, `healthPlugin`, `metricsPlugin` + `METRICS`, `tracingPlugin` + `TRACER`, `openapiPlugin`, `generateOpenApi`, `zodToJsonSchema`, `HTTP_SERVER` e os tipos associados (`MachizeRoute`, `HandlerArgs`, `HttpMethod`, `HttpRequest`, `HttpReply`, `ValidationIssue`, `RequestEnricher`, `RouteGuard`, opções dos plugins, …). Consulta o README do `@machize/http` para as tabelas de opções.
+For convenience (and backward compatibility), this package re-exports: `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `MemoryRateLimitStore`, `healthPlugin`, `metricsPlugin` + `METRICS`, `tracingPlugin` + `TRACER`, `openapiPlugin`, `generateOpenApi`, `zodToJsonSchema`, `HTTP_SERVER` and the associated types (`MachizeRoute`, `HandlerArgs`, `HttpMethod`, `HttpRequest`, `HttpReply`, `ValidationIssue`, `RequestEnricher`, `RouteGuard`, plugin options, …). See the `@machize/http` README for the option tables.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"`app.container.get(FASTIFY)` falha."** Só depois do `boot()`: `const app = await createApp({...}).boot()`. Confirma também que o `fastifyPlugin` está na lista de `plugins`.
+**"`app.container.get(FASTIFY)` fails."** Only works after `boot()`: `const app = await createApp({...}).boot()`. Also confirm that `fastifyPlugin` is in the `plugins` list.
 
-**"Recebo 400 `HTTP_VALIDATION` num GET com query."** Na query string tudo chega como texto (`"true"`, `"42"`). Usa `z.coerce.boolean()` / `z.coerce.number()` no esquema.
+**"I get a 400 `HTTP_VALIDATION` on a GET with query."** In the query string everything arrives as text (`"true"`, `"42"`). Use `z.coerce.boolean()` / `z.coerce.number()` in the schema.
 
-**"O corpo chega `undefined`."** O cliente tem de enviar `Content-Type: application/json`; sem esse cabeçalho o Fastify não interpreta o JSON.
+**"The body arrives as `undefined`."** The client must send `Content-Type: application/json`; without that header Fastify doesn't parse the JSON.
 
-**"O idempotencyPlugin dá erro no boot."** Declara `dependsOn: ['machize:fastify']` — precisa do `fastifyPlugin` registado na mesma app.
+**"idempotencyPlugin throws an error on boot."** It declares `dependsOn: ['machize:fastify']` — it needs `fastifyPlugin` registered in the same app.
 
-**"Os edge plugins (metrics, health, …) não respondem."** Os hooks/rotas deles são montados no evento `app:booted` — garante que chamas `boot()` e que o `fastifyPlugin` está presente (é ele que regista o `HTTP_SERVER`).
+**"The edge plugins (metrics, health, …) don't respond."** Their hooks/routes are mounted on the `app:booted` event — make sure you call `boot()` and that `fastifyPlugin` is present (it's the one that registers `HTTP_SERVER`).
 
-**"Como testo sem abrir uma porta?"** Usa o `inject()` do Fastify: `await app.container.get(FASTIFY).inject({ method: 'GET', url: '/ping' })` — é assim que os testes deste pacote funcionam.
+**"How do I test without opening a port?"** Use Fastify's `inject()`: `await app.container.get(FASTIFY).inject({ method: 'GET', url: '/ping' })` — that's how this package's own tests work.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — o `fastifyPlugin` é um plugin Machize (`definePlugin`): vive no ciclo de vida `createApp → boot → shutdown`, usa o `Container` (tokens `FASTIFY` e `HTTP_SERVER`) e cria o `RequestContext` por pedido que alimenta `ctx()`/`tryCtx()`.
-- **`@machize/http`** — todo o pipeline (validação, enrichers, guards, mapeamento de erros) vem daqui; este adaptador só converte o pedido/resposta do Fastify no formato neutro e chama `runRoute()`. As rotas definidas com `route()` correm sem alterações nos adaptadores Express e Hono.
-- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — registam guards e enrichers nos buckets `'http:guards'`/`'http:enrichers'`, que este adaptador aplica a todas as rotas; leem o `meta` da rota (ex.: `meta: { auth: true }`).
-- **`@machize/sdk` e a CLI (`mach routes`)** — leem as rotas publicadas no bucket `'http:routes'` (com os esquemas Zod) para gerar clientes e documentação, sem configuração duplicada.
+- **`@machize/core`** — `fastifyPlugin` is a Machize plugin (`definePlugin`): it lives in the `createApp → boot → shutdown` lifecycle, uses the `Container` (tokens `FASTIFY` and `HTTP_SERVER`) and creates the per-request `RequestContext` that feeds `ctx()`/`tryCtx()`.
+- **`@machize/http`** — the entire pipeline (validation, enrichers, guards, error mapping) comes from here; this adapter only converts Fastify's request/response into the neutral format and calls `runRoute()`. Routes defined with `route()` run unchanged on the Express and Hono adapters.
+- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — register guards and enrichers on the `'http:guards'`/`'http:enrichers'` buckets, which this adapter applies to all routes; they read the route's `meta` (e.g. `meta: { auth: true }`).
+- **`@machize/sdk` and the CLI (`mach routes`)** — read the routes published on the `'http:routes'` bucket (with the Zod schemas) to generate clients and documentation, with no duplicated configuration.

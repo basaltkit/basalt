@@ -1,36 +1,36 @@
 # @machize/http
 
-Núcleo HTTP neutro do Machize: define rotas tipadas, valida os dados dos pedidos e trata erros de forma padronizada — o mesmo código funciona depois em Fastify, Express ou Hono. Precisas dele sempre que quiseres definir rotas ou usar os plugins de segurança, saúde, métricas, tracing e OpenAPI.
+Machize's neutral HTTP core: defines typed routes, validates request data, and handles errors in a standardized way — the same code then works on Fastify, Express, or Hono. You need it whenever you want to define routes or use the security, health, metrics, tracing, and OpenAPI plugins.
 
-## O que este módulo resolve
+## What this module solves
 
-Quando crias uma API (um servidor que responde a **pedidos HTTP** — as mensagens que um browser ou uma app enviam pela internet), normalmente escolhes um framework como o Fastify, o Express ou o Hono. O problema: cada um tem a sua própria maneira de definir **rotas** (os endereços a que o servidor responde, como `GET /users/:id`), de validar dados e de tratar erros. Se um dia mudares de framework, tens de reescrever tudo.
+When you build an API (a server that responds to **HTTP requests** — the messages a browser or an app sends over the internet), you typically choose a framework like Fastify, Express, or Hono. The problem: each one has its own way of defining **routes** (the addresses the server responds to, like `GET /users/:id`), validating data, and handling errors. If you ever switch frameworks, you have to rewrite everything.
 
-O `@machize/http` resolve isso: defines cada rota **uma única vez**, com a função `route()`, num formato neutro que não depende de nenhum framework. Depois, um **adaptador** (`@machize/fastify`, `@machize/express` ou `@machize/hono`) pega nessas rotas e liga-as ao framework escolhido. A validação dos dados é feita com [Zod](https://zod.dev) — uma biblioteca que descreve a forma dos dados (ex.: "o campo `name` é texto com pelo menos 3 letras") e os tipos TypeScript são deduzidos automaticamente.
+`@machize/http` solves this: you define each route **once**, with the `route()` function, in a neutral format that doesn't depend on any framework. Then an **adapter** (`@machize/fastify`, `@machize/express`, or `@machize/hono`) takes those routes and connects them to the chosen framework. Data validation is done with [Zod](https://zod.dev) — a library that describes the shape of data (e.g. "the `name` field is text with at least 3 letters") — and TypeScript types are inferred automatically.
 
-Além das rotas, este módulo traz **plugins de borda** (edge plugins) prontos a usar em qualquer adaptador: cabeçalhos de segurança, limite de pedidos (rate limiting), CORS, sondas de saúde (`/livez`, `/readyz`), métricas Prometheus (`/metrics`), tracing distribuído e geração de documentação OpenAPI.
+Besides routes, this module brings ready-to-use **edge plugins** for any adapter: security headers, rate limiting, CORS, health probes (`/livez`, `/readyz`), Prometheus metrics (`/metrics`), distributed tracing, and OpenAPI documentation generation.
 
-> **Nota**: na prática quase nunca usas o `@machize/http` sozinho — instalas também um adaptador. Este README explica os blocos que todos os adaptadores partilham.
+> **Note**: in practice you almost never use `@machize/http` alone — you also install an adapter. This README covers the building blocks all adapters share.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/http zod
 ```
 
-O `zod` é uma *peer dependency* (o módulo usa-o mas deixa-te escolher a versão). Precisas também de um adaptador para servir os pedidos, por exemplo `pnpm add @machize/fastify`.
+`zod` is a *peer dependency* (the module uses it but lets you choose the version). You'll also need an adapter to serve requests, e.g. `pnpm add @machize/fastify`.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-Vamos definir uma rota tipada e servi-la com o adaptador Fastify.
+Let's define a typed route and serve it with the Fastify adapter.
 
-**Passo 1** — instala os pacotes:
+**Step 1** — install the packages:
 
 ```bash
 pnpm add @machize/core @machize/http @machize/fastify zod
 ```
 
-**Passo 2** — cria um ficheiro `server.ts`:
+**Step 2** — create a `server.ts` file:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -38,35 +38,35 @@ import { route } from '@machize/http'
 import { FASTIFY, fastifyPlugin } from '@machize/fastify'
 import { z } from 'zod'
 
-// Uma rota: método + URL + validação + handler (a função que responde).
+// A route: method + URL + validation + handler (the function that responds).
 const hello = route({
   method: 'GET',
-  url: '/hello/:name', // :name é um parâmetro dinâmico do URL
+  url: '/hello/:name', // :name is a dynamic URL parameter
   params: z.object({ name: z.string() }),
   async handler({ params }) {
-    // params.name já vem validado e tipado como string
-    return { message: `Olá, ${params.name}!` }
+    // params.name arrives already validated and typed as string
+    return { message: `Hello, ${params.name}!` }
   },
 })
 
 const app = await createApp({ plugins: [fastifyPlugin({ routes: [hello] })] }).boot()
 await app.container.get(FASTIFY).listen({ port: 3000 })
-console.log('A ouvir em http://localhost:3000')
+console.log('Listening on http://localhost:3000')
 ```
 
-**Passo 3** — executa e testa:
+**Step 3** — run and test:
 
 ```bash
 npx tsx server.ts
-curl http://localhost:3000/hello/mundo
-# → {"message":"Olá, mundo!"}
+curl http://localhost:3000/hello/world
+# → {"message":"Hello, world!"}
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Definir rotas com `route()`
+### Defining routes with `route()`
 
-A função `route()` recebe um objeto de configuração e devolve uma definição de rota. Os tipos de `body`, `query` e `params` no handler são **inferidos** dos esquemas Zod — não escreves tipos à mão.
+The `route()` function takes a configuration object and returns a route definition. The `body`, `query`, and `params` types in the handler are **inferred** from the Zod schemas — you don't write types by hand.
 
 ```ts
 import { route, HttpError } from '@machize/http'
@@ -75,9 +75,9 @@ import { z } from 'zod'
 const createProject = route({
   method: 'POST',
   url: '/projects',
-  body: z.object({ name: z.string().min(3) }), // corpo do pedido (JSON)
+  body: z.object({ name: z.string().min(3) }), // request body (JSON)
   async handler({ body, reply }) {
-    // reply permite controlar o estado HTTP e os cabeçalhos
+    // reply lets you control the HTTP status and headers
     return reply.code(201).send({ id: 'p1', name: body.name })
   },
 })
@@ -88,36 +88,36 @@ const getProject = route({
   params: z.object({ id: z.string() }),
   query: z.object({ expand: z.coerce.boolean().default(false) }),
   async handler({ params, query }) {
-    if (params.id === 'inexistente') {
-      throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Projeto não encontrado')
+    if (params.id === 'nonexistent') {
+      throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
     }
     return { id: params.id, expand: query.expand }
   },
 })
 ```
 
-Se a validação falhar, o cliente recebe automaticamente um `400` padronizado:
+If validation fails, the client automatically receives a standardized `400`:
 
 ```json
 { "error": { "code": "HTTP_VALIDATION", "message": "Validation failed in body", "part": "body", "issues": [{ "path": "name", "message": "..." }] } }
 ```
 
-### Lançar erros com `HttpError`
+### Throwing errors with `HttpError`
 
-Em qualquer camada do código podes lançar um erro HTTP intencional; o adaptador converte-o na resposta certa, sem expor detalhes internos:
+At any layer of the code you can throw an intentional HTTP error; the adapter converts it into the right response, without exposing internal details:
 
 ```ts
 import { HttpError } from '@machize/http'
 
-throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Projeto não encontrado')
-// → resposta 404 com { error: { code: 'PROJECT_NOT_FOUND', message: '...' } }
+throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
+// → 404 response with { error: { code: 'PROJECT_NOT_FOUND', message: '...' } }
 ```
 
-Erros não intencionais (um `throw new Error(...)` qualquer) tornam-se num `500` genérico com o código `INTERNAL_ERROR` — a mensagem interna nunca chega ao cliente.
+Unintentional errors (any `throw new Error(...)`) become a generic `500` with the `INTERNAL_ERROR` code — the internal message never reaches the client.
 
-### Plugin de segurança — `securityPlugin()`
+### Security plugin — `securityPlugin()`
 
-Aplica três proteções de borda em qualquer adaptador: cabeçalhos seguros, CORS e rate limiting (limitar quantos pedidos cada cliente pode fazer num intervalo de tempo).
+Applies three edge protections to any adapter: secure headers, CORS, and rate limiting (limiting how many requests each client can make in a time window).
 
 ```ts
 import { createApp } from '@machize/core'
@@ -130,209 +130,209 @@ const app = await createApp({
   plugins: [
     fastifyPlugin({ routes: [ping] }),
     securityPlugin({
-      // Cabeçalhos seguros ligados por omissão (HSTS, X-Frame-Options: DENY, etc.)
+      // Secure headers on by default (HSTS, X-Frame-Options: DENY, etc.)
       headers: true,
-      // CORS: só este domínio pode chamar a API a partir de um browser
+      // CORS: only this domain can call the API from a browser
       cors: { origin: ['https://app.example.com'], credentials: true },
-      // Máximo de 100 pedidos por minuto por endereço IP
+      // Max 100 requests per minute per IP address
       rateLimit: { limit: 100, windowMs: 60_000 },
     }),
   ],
 }).boot()
 ```
 
-Quando o limite é excedido, o cliente recebe `429` com o código `RATE_LIMITED` e o cabeçalho `Retry-After`. O armazenamento por omissão é em memória (`MemoryRateLimitStore`); para vários servidores em cluster, implementa a interface `RateLimitStore` sobre Redis e passa-a em `rateLimit.store`.
+When the limit is exceeded, the client receives `429` with the `RATE_LIMITED` code and the `Retry-After` header. The default storage is in memory (`MemoryRateLimitStore`); for multiple servers in a cluster, implement the `RateLimitStore` interface on top of Redis and pass it in `rateLimit.store`.
 
-### Sondas de saúde — `healthPlugin()`
+### Health probes — `healthPlugin()`
 
-Cria duas rotas ao estilo Kubernetes:
+Creates two Kubernetes-style routes:
 
-- `GET /livez` — "o processo está vivo?" Responde sempre `200`, sem tocar em dependências.
-- `GET /readyz` — "está pronto para receber tráfego?" Corre todas as verificações; se alguma falhar responde `503` com o detalhe de cada uma.
+- `GET /livez` — "is the process alive?" Always responds `200`, without touching any dependency.
+- `GET /readyz` — "is it ready to receive traffic?" Runs all checks; if any fails, responds `503` with the detail for each one.
 
 ```ts
 import { healthPlugin } from '@machize/http'
 
 healthPlugin({
   checks: {
-    db: async () => ({ ok: true, detail: 'ligada' }),
-    // Se a função lançar um erro, conta como { ok: false } com a mensagem do erro
+    db: async () => ({ ok: true, detail: 'connected' }),
+    // If the function throws an error, it counts as { ok: false } with the error message
   },
 })
 ```
 
-### Métricas Prometheus — `metricsPlugin()`
+### Prometheus metrics — `metricsPlugin()`
 
-Serve `GET /metrics` em formato Prometheus e instrumenta automaticamente todos os pedidos HTTP (contador, histograma de duração e pedidos em curso), etiquetados pelo **template** da rota (`/users/:id`, não `/users/42`, para manter a cardinalidade controlada).
+Serves `GET /metrics` in Prometheus format and automatically instruments all HTTP requests (counter, duration histogram, and in-flight requests), labeled by the route's **template** (`/users/:id`, not `/users/42`, to keep cardinality under control).
 
 ```ts
 import { METRICS, metricsPlugin } from '@machize/http'
 
-// nos plugins da app:
+// in the app's plugins:
 metricsPlugin()
 
-// noutro sítio do código, para métricas próprias:
+// elsewhere in the code, for your own metrics:
 const registry = app.container.get(METRICS)
 registry.counter('jobs_processed_total').inc()
 ```
 
-### Tracing distribuído — `tracingPlugin()`
+### Distributed tracing — `tracingPlugin()`
 
-Regista um *span* de servidor por pedido (um registo de "esta operação demorou X ms"), continua um `traceparent` W3C recebido, devolve o cabeçalho `traceparent` na resposta e exporta os spans periodicamente.
+Records a server *span* per request (a record of "this operation took X ms"), continues a received W3C `traceparent`, returns the `traceparent` header in the response, and exports spans periodically.
 
 ```ts
 import { tracingPlugin } from '@machize/http'
 import { OtlpHttpExporter } from '@machize/core'
 
 tracingPlugin({
-  serviceName: 'minha-api',
+  serviceName: 'my-api',
   exporter: new OtlpHttpExporter({ url: 'http://localhost:4318/v1/traces' }),
 })
 ```
 
-### Documentação OpenAPI — `openapiPlugin()`
+### OpenAPI documentation — `openapiPlugin()`
 
-Gera um documento OpenAPI 3.0 a partir das rotas registadas (incluindo os esquemas Zod) e serve-o em `GET /openapi.json`:
+Generates an OpenAPI 3.0 document from the registered routes (including the Zod schemas) and serves it at `GET /openapi.json`:
 
 ```ts
 import { openapiPlugin } from '@machize/http'
 
-openapiPlugin({ info: { title: 'A Minha API', version: '1.0.0' } })
+openapiPlugin({ info: { title: 'My API', version: '1.0.0' } })
 ```
 
-Rotas com `meta: { auth: true }` ficam marcadas com segurança `bearerAuth` no documento. O campo `response` da rota (esquemas por código de estado) alimenta as respostas documentadas.
+Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document. The route's `response` field (schemas per status code) feeds the documented responses.
 
-### Avançado: `runRoute()` e o pipeline
+### Advanced: `runRoute()` and the pipeline
 
-Os adaptadores usam `runRoute()` para executar cada pedido: cria o contexto do pedido (`requestId`, `correlationId`, um *scope* do contentor de dependências), corre os **enrichers** (funções que enriquecem o contexto, ex.: resolver o tenant), depois os **guards** (funções que podem rejeitar o pedido, ex.: autenticação — rejeitam lançando um erro), valida `body`/`query`/`params` e por fim chama o handler. Só precisas disto se fores escrever o teu próprio adaptador.
+Adapters use `runRoute()` to execute each request: it creates the request context (`requestId`, `correlationId`, a scope from the dependency container), runs the **enrichers** (functions that enrich the context, e.g. resolving the tenant), then the **guards** (functions that can reject the request, e.g. authentication — they reject by throwing an error), validates `body`/`query`/`params`, and finally calls the handler. You only need this if you're writing your own adapter.
 
 ```ts
 import { Container } from '@machize/core'
 import { route, runRoute, toErrorResponse } from '@machize/http'
 
-const resultado = await runRoute(definicao, pedidoNeutro, respostaNeutra, {
+const result = await runRoute(definition, neutralRequest, neutralReply, {
   container: new Container(),
   enrichers: [],
   guards: [],
 })
 ```
 
-## Referência da API
+## API reference
 
 ### `route(config)` → `MachizeRoute`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `method` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE' \| 'HEAD' \| 'OPTIONS'` | Sim | — | Método HTTP. |
-| `url` | `string` | Sim | — | Caminho, com parâmetros `:nome`. |
-| `body` | `ZodType` | Não | `undefined` | Esquema do corpo do pedido; validado em runtime. |
-| `query` | `ZodType` | Não | `undefined` | Esquema da query string; validado em runtime. |
-| `params` | `ZodType` | Não | `undefined` | Esquema dos parâmetros do URL; validado em runtime. |
-| `response` | `Record<number, ZodType>` | Não | `undefined` | Esquemas de resposta por estado — só para OpenAPI/SDK, não validados em runtime. |
-| `meta` | `Record<string, unknown>` | Não | `undefined` | Metadados livres lidos por outros plugins (ex.: `auth`, permissões). |
-| `handler` | `(args) => unknown` | Sim | — | Recebe `{ body, query, params, request, reply }`; o valor devolvido é enviado como resposta (JSON), salvo se já respondeste com `reply.send()`. |
+| `method` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE' \| 'HEAD' \| 'OPTIONS'` | Yes | — | HTTP method. |
+| `url` | `string` | Yes | — | Path, with `:name` parameters. |
+| `body` | `ZodType` | No | `undefined` | Request body schema; validated at runtime. |
+| `query` | `ZodType` | No | `undefined` | Query string schema; validated at runtime. |
+| `params` | `ZodType` | No | `undefined` | URL parameters schema; validated at runtime. |
+| `response` | `Record<number, ZodType>` | No | `undefined` | Response schemas per status — only for OpenAPI/SDK, not validated at runtime. |
+| `meta` | `Record<string, unknown>` | No | `undefined` | Free-form metadata read by other plugins (e.g. `auth`, permissions). |
+| `handler` | `(args) => unknown` | Yes | — | Receives `{ body, query, params, request, reply }`; the returned value is sent as the response (JSON), unless you've already responded with `reply.send()`. |
 
-### Erros
+### Errors
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `HttpError(status, code, message)` | Erro HTTP intencional lançável de qualquer camada; vira resposta com esse `status`. |
-| `RequestValidationError` | Lançado pelo pipeline quando a validação falha; vira `400` com `part` e `issues`. |
-| `ValidationIssue` | Tipo `{ path: string; message: string }`. |
+| `HttpError(status, code, message)` | Intentional HTTP error, throwable from any layer; becomes a response with that `status`. |
+| `RequestValidationError` | Thrown by the pipeline when validation fails; becomes `400` with `part` and `issues`. |
+| `ValidationIssue` | Type `{ path: string; message: string }`. |
 
-### Pipeline (Avançado — usado pelos adaptadores)
+### Pipeline (Advanced — used by adapters)
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `runRoute(definition, request, reply, pipeline?)` | Executa o pipeline completo de um pedido; devolve o valor do handler. |
-| `toErrorResponse(error)` → `ErrorResponse` | Converte qualquer erro em `{ status, body }` padronizado. |
-| `RequestEnricher` | `(info: { request, context, container }) => void \| Promise<void>` — corre antes dos guards. Regista-se no bucket de metadados `'http:enrichers'`. |
-| `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejeita lançando. Bucket `'http:guards'`. |
+| `runRoute(definition, request, reply, pipeline?)` | Executes a request's full pipeline; returns the handler's value. |
+| `toErrorResponse(error)` → `ErrorResponse` | Converts any error into a standardized `{ status, body }`. |
+| `RequestEnricher` | `(info: { request, context, container }) => void \| Promise<void>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. |
+| `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |
 | `RoutePipeline` | `{ container?, enrichers?, guards? }`. |
 
-### Servidor neutro (Avançado — usado pelos adaptadores e edge plugins)
+### Neutral server (Advanced — used by adapters and edge plugins)
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `HTTP_SERVER` | Token DI da superfície neutra `HttpServer` que cada adaptador regista. |
+| `HTTP_SERVER` | DI token for the neutral `HttpServer` surface that each adapter registers. |
 | `HttpServer` | `use(preHook)`, `after(afterHook)`, `addRoute(method, url, handler)`. |
-| `HttpServerCollector` | Implementação que acumula hooks/rotas para o adaptador montar no arranque (`runPre`, `runAfter`). |
-| `PreHook` / `AfterHook` / `SimpleHandler` | Tipos dos hooks e das rotas autónomas. |
+| `HttpServerCollector` | Implementation that accumulates hooks/routes for the adapter to mount at startup (`runPre`, `runAfter`). |
+| `PreHook` / `AfterHook` / `SimpleHandler` | Types for hooks and standalone routes. |
 
 ### `securityPlugin(options?)`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `headers` | `SecurityHeadersOptions \| boolean` | Não | `true` | Cabeçalhos seguros. `false` desliga. |
-| `cors` | `CorsOptions \| false` | Não | desligado | CORS + resposta a preflight `OPTIONS` (204). |
-| `rateLimit` | `RateLimitOptions \| false` | Não | desligado | Rate limiting com cabeçalhos `X-RateLimit-*`. |
+| `headers` | `SecurityHeadersOptions \| boolean` | No | `true` | Secure headers. `false` turns it off. |
+| `cors` | `CorsOptions \| false` | No | off | CORS + response to `OPTIONS` preflight (204). |
+| `rateLimit` | `RateLimitOptions \| false` | No | off | Rate limiting with `X-RateLimit-*` headers. |
 
-`SecurityHeadersOptions`: `hsts` (default ligado, `max-age=15552000; includeSubDomains`), `contentTypeOptions` (default `true` → `nosniff`), `frameOptions` (default `'DENY'`), `referrerPolicy` (default `'no-referrer'`), `crossOriginOpenerPolicy` (default `'same-origin'`), `contentSecurityPolicy` (default desligado).
+`SecurityHeadersOptions`: `hsts` (default on, `max-age=15552000; includeSubDomains`), `contentTypeOptions` (default `true` → `nosniff`), `frameOptions` (default `'DENY'`), `referrerPolicy` (default `'no-referrer'`), `crossOriginOpenerPolicy` (default `'same-origin'`), `contentSecurityPolicy` (default off).
 
-`CorsOptions`: `origin` (`boolean | string | string[] | (origin) => boolean`; default reflete qualquer origem), `methods` (default `GET, POST, PUT, PATCH, DELETE, OPTIONS`), `allowedHeaders`, `exposedHeaders`, `credentials`, `maxAge` (default `600`).
+`CorsOptions`: `origin` (`boolean | string | string[] | (origin) => boolean`; default reflects any origin), `methods` (default `GET, POST, PUT, PATCH, DELETE, OPTIONS`), `allowedHeaders`, `exposedHeaders`, `credentials`, `maxAge` (default `600`).
 
 `RateLimitOptions`:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `limit` | `number` | Sim | — | Máximo de pedidos por janela. |
-| `windowMs` | `number` | Sim | — | Duração da janela em milissegundos. |
-| `store` | `RateLimitStore` | Não | `new MemoryRateLimitStore()` | Armazenamento dos contadores. |
-| `key` | `(request) => string` | Não | IP do cliente | Chave de agregação (ex.: por utilizador). |
-| `skip` | `(request) => boolean` | Não | — | Devolve `true` para isentar o pedido. |
+| `limit` | `number` | Yes | — | Maximum requests per window. |
+| `windowMs` | `number` | Yes | — | Window duration in milliseconds. |
+| `store` | `RateLimitStore` | No | `new MemoryRateLimitStore()` | Storage for the counters. |
+| `key` | `(request) => string` | No | client IP | Aggregation key (e.g. per user). |
+| `skip` | `(request) => boolean` | No | — | Returns `true` to exempt the request. |
 
-`MemoryRateLimitStore(clock?)` implementa `RateLimitStore` (`hit(key, limit, windowMs)` → `RateLimitResult { allowed, limit, remaining, resetAt, retryAfterMs }`; `reset(key)`).
+`MemoryRateLimitStore(clock?)` implements `RateLimitStore` (`hit(key, limit, windowMs)` → `RateLimitResult { allowed, limit, remaining, resetAt, retryAfterMs }`; `reset(key)`).
 
 ### `healthPlugin(options?)`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `checks` | `Record<string, HealthCheck>` | Não | `{}` | Verificações; `HealthCheck` devolve `{ ok, detail? }` (ou promessa). |
-| `livePath` | `string` | Não | `'/livez'` | Caminho da sonda de vida. |
-| `readyPath` | `string` | Não | `'/readyz'` | Caminho da sonda de prontidão. |
+| `checks` | `Record<string, HealthCheck>` | No | `{}` | Checks; `HealthCheck` returns `{ ok, detail? }` (or a promise). |
+| `livePath` | `string` | No | `'/livez'` | Path for the liveness probe. |
+| `readyPath` | `string` | No | `'/readyz'` | Path for the readiness probe. |
 
 ### `metricsPlugin(options?)`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `path` | `string` | Não | `'/metrics'` | Caminho do endpoint Prometheus. |
-| `registry` | `MetricsRegistry` | Não | novo registry | Registry partilhado (também exposto no token `METRICS`). |
-| `instrumentHttp` | `boolean` | Não | `true` | Instrumenta pedidos (`http_requests_total`, `http_request_duration_seconds`, `http_requests_in_flight`). |
+| `path` | `string` | No | `'/metrics'` | Path for the Prometheus endpoint. |
+| `registry` | `MetricsRegistry` | No | new registry | Shared registry (also exposed on the `METRICS` token). |
+| `instrumentHttp` | `boolean` | No | `true` | Instruments requests (`http_requests_total`, `http_request_duration_seconds`, `http_requests_in_flight`). |
 
 ### `tracingPlugin(options?)`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `serviceName` | `string` | Não | default do `Tracer` | Nome do serviço nos spans. |
-| `exporter` | `SpanExporter` | Não | — | Destino dos spans (ex.: `OtlpHttpExporter`, `InMemorySpanExporter` do `@machize/core`). |
-| `tracer` | `Tracer` | Não | criado internamente | Tracer próprio (ignora `exporter`/`serviceName`). |
-| `flushIntervalMs` | `number` | Não | `5000` | Intervalo de exportação. O tracer também é exposto no token `TRACER`. |
+| `serviceName` | `string` | No | `Tracer` default | Service name in the spans. |
+| `exporter` | `SpanExporter` | No | — | Destination for the spans (e.g. `OtlpHttpExporter`, `InMemorySpanExporter` from `@machize/core`). |
+| `tracer` | `Tracer` | No | created internally | Your own tracer (ignores `exporter`/`serviceName`). |
+| `flushIntervalMs` | `number` | No | `5000` | Export interval. The tracer is also exposed on the `TRACER` token. |
 
 ### `openapiPlugin(options)` / `generateOpenApi(routes, info)` / `zodToJsonSchema(schema)`
 
-| Opção (`OpenApiPluginOptions`) | Tipo | Obrigatório? | Default | Descrição |
+| Option (`OpenApiPluginOptions`) | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `info` | `OpenApiInfo` (`{ title, version, description? }`) | Sim | — | Metadados do documento. |
-| `path` | `string` | Não | `'/openapi.json'` | Onde servir o documento. |
-| `routes` | `RouteLike[]` | Não | rotas do bucket `'http:routes'` | Rotas a documentar. |
+| `info` | `OpenApiInfo` (`{ title, version, description? }`) | Yes | — | Document metadata. |
+| `path` | `string` | No | `'/openapi.json'` | Where to serve the document. |
+| `routes` | `RouteLike[]` | No | routes from the `'http:routes'` bucket | Routes to document. |
 
-`generateOpenApi(routes, info)` devolve o documento OpenAPI 3.0.3 como objeto. `zodToJsonSchema(schema)` (Avançado) converte um subconjunto de Zod em JSON Schema; tipos desconhecidos degradam para `{}` sem lançar erro.
+`generateOpenApi(routes, info)` returns the OpenAPI 3.0.3 document as an object. `zodToJsonSchema(schema)` (Advanced) converts a subset of Zod into JSON Schema; unknown types degrade to `{}` without throwing.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"Defini rotas mas nada responde."** O `@machize/http` não abre portas de rede — precisa de um adaptador (`@machize/fastify`, `@machize/express` ou `@machize/hono`) que ligue as rotas a um servidor real.
+**"I defined routes but nothing responds."** `@machize/http` doesn't open network ports — it needs an adapter (`@machize/fastify`, `@machize/express`, or `@machize/hono`) to connect the routes to a real server.
 
-**"A resposta é 400 com `HTTP_VALIDATION` e eu enviei os dados certos."** Vê o array `issues` na resposta: indica o campo (`path`) e o motivo. Em `query` e `params` tudo chega como texto — usa `z.coerce.number()` / `z.coerce.boolean()` para converter.
+**"The response is 400 with `HTTP_VALIDATION` and I sent the right data."** Check the `issues` array in the response: it indicates the field (`path`) and the reason. In `query` and `params` everything arrives as text — use `z.coerce.number()` / `z.coerce.boolean()` to convert.
 
-**"O rate limit não funciona com vários servidores."** O `MemoryRateLimitStore` vive na memória de cada processo. Implementa `RateLimitStore` sobre Redis e passa em `rateLimit.store`.
+**"Rate limiting doesn't work with multiple servers."** `MemoryRateLimitStore` lives in each process's memory. Implement `RateLimitStore` on top of Redis and pass it in `rateLimit.store`.
 
-**"O meu erro personalizado sai como 500 genérico."** Só `HttpError` (ou um `MachizeError` com propriedade numérica `status`) mapeia para o estado que escolheste; qualquer outro erro vira `INTERNAL_ERROR` de propósito, para não expor detalhes internos.
+**"My custom error comes out as a generic 500."** Only `HttpError` (or a `MachizeError` with a numeric `status` property) maps to the status you chose; any other error becomes `INTERNAL_ERROR` on purpose, to avoid exposing internal details.
 
-**"`/readyz` responde 503."** Alguma verificação devolveu `ok: false` ou lançou um erro; o corpo da resposta traz o detalhe por verificação em `checks`.
+**"`/readyz` responds 503."** Some check returned `ok: false` or threw an error; the response body carries the detail per check in `checks`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — fornece a base que este módulo usa: `createApp`/plugins (`definePlugin`), contentor de injeção de dependências (`Container`, tokens), contexto por pedido (`ctx()`/`runWithContext`), `MetricsRegistry`, `Tracer` e `MachizeError`.
-- **`@machize/fastify` / `@machize/express` / `@machize/hono`** — os adaptadores: convertem o pedido nativo do framework no `HttpRequest`/`HttpReply` neutro, chamam `runRoute()` e registam um `HttpServer` no token `HTTP_SERVER` para os edge plugins deste módulo funcionarem em qualquer um deles sem alterações.
-- **Plugins de funcionalidade** (`@machize/auth`, `@machize/tenancy`, `@machize/permissions`, …) — integram-se pelo pipeline: registam *enrichers* no bucket de metadados `'http:enrichers'` e *guards* em `'http:guards'`, e leem o `meta` das rotas (ex.: `meta: { auth: true }`).
-- **Ferramentas** (CLI `mach routes`, OpenAPI, `@machize/sdk`) — leem as rotas expostas pelos adaptadores no bucket `'http:routes'`, com os esquemas Zod incluídos.
+- **`@machize/core`** — provides the foundation this module uses: `createApp`/plugins (`definePlugin`), the dependency-injection container (`Container`, tokens), the per-request context (`ctx()`/`runWithContext`), `MetricsRegistry`, `Tracer`, and `MachizeError`.
+- **`@machize/fastify` / `@machize/express` / `@machize/hono`** — the adapters: they convert the framework's native request into the neutral `HttpRequest`/`HttpReply`, call `runRoute()`, and register an `HttpServer` on the `HTTP_SERVER` token so this module's edge plugins work on any of them without changes.
+- **Feature plugins** (`@machize/auth`, `@machize/tenancy`, `@machize/permissions`, …) — integrate through the pipeline: register *enrichers* in the `'http:enrichers'` metadata bucket and *guards* in `'http:guards'`, and read the routes' `meta` (e.g. `meta: { auth: true }`).
+- **Tooling** (CLI `mach routes`, OpenAPI, `@machize/sdk`) — read the routes exposed by the adapters in the `'http:routes'` bucket, including the Zod schemas.

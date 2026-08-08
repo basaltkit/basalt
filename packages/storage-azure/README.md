@@ -1,16 +1,16 @@
 # @machize/storage-azure
 
-Driver de **Azure Blob Storage** para o [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): guarda ficheiros no Azure Blob sem mudar o código da app. Precisas deste módulo quando corres no Azure e queres Blob Storage em vez de S3, GCS ou disco local.
+An **Azure Blob Storage** driver for [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): stores files in Azure Blob without changing your app code. You need this module when you run on Azure and want Blob Storage instead of S3, GCS, or local disk.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/storage-azure @azure/storage-blob
 ```
 
-O `@azure/storage-blob` é uma **peer dependency**.
+`@azure/storage-blob` is a **peer dependency**.
 
-## Uso
+## Usage
 
 ```ts
 import { storagePlugin } from '@machize/storage'
@@ -25,17 +25,17 @@ storagePlugin({
 })
 ```
 
-Implementa o contrato `StorageDriver` — `put`, `get`, `exists`, `delete`, `list` e **URLs assinados** (SAS via `temporaryUrl`). O isolamento por tenant é automático via `Disk`.
+Implements the `StorageDriver` contract — `put`, `get`, `exists`, `delete`, `list`, and **signed URLs** (SAS via `temporaryUrl`). Per-tenant isolation is automatic via `Disk`.
 
-## Testável sem cloud
+## Testable without the cloud
 
-O container é **injetável**, por isso a lógica do driver testa-se com um fake — sem Azure:
+The container is **injectable**, so the driver logic can be tested with a fake — no Azure needed:
 
 ```ts
 new AzureBlobStorageDriver({ container: 'c', client: fakeContainer })
 ```
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/storage`** — este é um driver desse pacote; a API (`Disk`, `storagePlugin`) vem de lá.
-- Drivers irmãos: `S3StorageDriver` (no core) e [`@machize/storage-gcs`](https://www.npmjs.com/package/@machize/storage-gcs).
+- **`@machize/storage`** — this is a driver for that package; the API (`Disk`, `storagePlugin`) comes from there.
+- Sibling drivers: `S3StorageDriver` (in core) and [`@machize/storage-gcs`](https://www.npmjs.com/package/@machize/storage-gcs).

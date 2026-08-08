@@ -1,26 +1,26 @@
 # @machize/testing
 
-Kit de testes para aplicações Machize: arranca a aplicação em memória com `createTestApp`, faz pedidos HTTP fingindo utilizadores e tenants, substitui o correio e a fila por versões falsas com asserções, e viaja no tempo. Precisas dele sempre que quiseres escrever testes automáticos da tua aplicação sem servidores, bases de dados ou serviços externos reais.
+Testing kit for Machize applications: boots the application in memory with `createTestApp`, makes HTTP requests impersonating users and tenants, replaces mail and queue with fake versions that support assertions, and travels through time. You need it whenever you want to write automated tests for your application without real servers, databases, or external services.
 
-## O que este módulo resolve
+## What this module solves
 
-Testar uma aplicação web "a sério" é trabalhoso: teria de se arrancar o servidor num porto, autenticar um utilizador verdadeiro, esperar por e-mails reais e aguardar dias para ver uma subscrição expirar. Nada disto é prático num teste automático, que deve correr em milissegundos e sempre com o mesmo resultado.
+Testing a "real" web application is a lot of work: you'd have to start the server on a port, authenticate a real user, wait for real emails, and wait days to see a subscription expire. None of this is practical in an automated test, which should run in milliseconds and always produce the same result.
 
-Este pacote resolve o problema com quatro ferramentas. O `createTestApp` arranca a tua aplicação e injeta os pedidos HTTP diretamente no servidor Fastify, sem rede — e deixa-te "fingir" que o pedido vem de um utilizador ou tenant específico (`actingAs` / `asTenant`), sem passar pelo login. Um **fake** (objeto falso que substitui um serviço real durante os testes) de correio, `fakeMailer`, grava os e-mails em vez de os enviar; outro de filas, `fakeQueue`, captura os trabalhos (jobs) em vez de os executar — ambos com asserções ao estilo Laravel (`assertSent`, `assertDispatched`). Por fim, `time` desloca o relógio (`time.travel('15d')`) para testares expirações e prazos sem esperar.
+This package solves the problem with four tools. `createTestApp` boots your application and injects HTTP requests directly into the Fastify server, without the network — and lets you "pretend" the request comes from a specific user or tenant (`actingAs` / `asTenant`), without going through login. A mail **fake** (a fake object that replaces a real service during tests), `fakeMailer`, records emails instead of sending them; a queue fake, `fakeQueue`, captures jobs instead of running them — both with Laravel-style assertions (`assertSent`, `assertDispatched`). Finally, `time` shifts the clock (`time.travel('15d')`) so you can test expirations and deadlines without waiting.
 
-Tudo funciona em qualquer executor de testes (Vitest, Jest, node:test…), porque nada aqui depende do executor.
+Everything works with any test runner (Vitest, Jest, node:test…), because nothing here depends on the runner.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add -D @machize/testing
 ```
 
-> Nota: depende de `@machize/core`, `@machize/fastify`, `@machize/mailer`, `@machize/queue` e `fastify`. Os projetos criados com `create-machize` já trazem `@machize/testing` nas `devDependencies`.
+> Note: it depends on `@machize/core`, `@machize/fastify`, `@machize/mailer`, `@machize/queue`, and `fastify`. Projects created with `create-machize` already include `@machize/testing` in `devDependencies`.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. Cria uma rota simples e um teste. Em `tests/health.test.ts`:
+1. Create a simple route and a test. In `tests/health.test.ts`:
 
 ```typescript
 import { describe, expect, it } from 'vitest'
@@ -36,7 +36,7 @@ const health = route({
 })
 
 describe('health', () => {
-  it('responde 200 com ok: true', async () => {
+  it('responds 200 with ok: true', async () => {
     const app = await createTestApp({
       plugins: [fastifyPlugin({ routes: [health] })],
     })
@@ -45,39 +45,39 @@ describe('health', () => {
     expect(response.statusCode).toBe(200)
     expect(response.json()).toEqual({ ok: true })
 
-    await app.shutdown() // desliga sempre a app no fim
+    await app.shutdown() // always shut down the app at the end
   })
 })
 ```
 
-2. Corre o teste:
+2. Run the test:
 
 ```bash
 pnpm vitest run
 ```
 
-Não há porto, nem rede, nem servidor a arrancar à parte — o pedido é injetado diretamente no Fastify (mecanismo `inject` do próprio Fastify).
+There's no port, no network, no separate server starting up — the request is injected directly into Fastify (Fastify's own `inject` mechanism).
 
-## Guia de utilização
+## Usage guide
 
-### Pedidos HTTP fluentes
+### Fluent HTTP requests
 
-O `TestApp` tem um método por verbo HTTP. Nos verbos com corpo (`post`, `put`, `patch`), o segundo argumento é o payload:
+`TestApp` has one method per HTTP verb. For verbs with a body (`post`, `put`, `patch`), the second argument is the payload:
 
 ```typescript
-const created = await app.post('/projects', { name: 'Primeiro' })
+const created = await app.post('/projects', { name: 'First' })
 expect(created.statusCode).toBe(201)
 const id = created.json().id
 
-await app.patch(`/projects/${id}`, { name: 'Renomeado' })
+await app.patch(`/projects/${id}`, { name: 'Renamed' })
 await app.delete(`/projects/${id}`)
 ```
 
-A resposta é uma `LightMyRequestResponse` do Fastify: usa `.statusCode`, `.json()`, `.body`, `.headers`.
+The response is a Fastify `LightMyRequestResponse`: use `.statusCode`, `.json()`, `.body`, `.headers`.
 
-### Fingir utilizadores e tenants (impersonação)
+### Faking users and tenants (impersonation)
 
-O `createTestApp` acrescenta automaticamente um plugin de teste que lê os cabeçalhos especiais `x-test-user` / `x-test-tenant` e preenche `ctx().user` / `ctx().tenant` — o mesmo contexto que a tua aplicação usa em produção. **Nunca registes este mecanismo numa aplicação real.**
+`createTestApp` automatically adds a test plugin that reads the special `x-test-user` / `x-test-tenant` headers and populates `ctx().user` / `ctx().tenant` — the same context your application uses in production. **Never register this mechanism in a real application.**
 
 ```typescript
 import { ctx } from '@machize/core'
@@ -95,21 +95,21 @@ const whoami = route({
 
 const app = await createTestApp({ plugins: [fastifyPlugin({ routes: [whoami] })] })
 
-// defaults para todos os pedidos seguintes (encadeável)
+// defaults for every subsequent request (chainable)
 app.actingAs({ id: 'u1', email: 'ada@example.com' }).asTenant('acme')
-const eu = await app.get('/whoami')
+const me = await app.get('/whoami')
 // → { user: { id: 'u1', email: 'ada@example.com' }, tenant: { id: 'acme' } }
 
-// override só para um pedido
-const outro = await app.get('/whoami', { tenant: 'globex' })
+// override for a single request only
+const other = await app.get('/whoami', { tenant: 'globex' })
 // → tenant: { id: 'globex' }
 
 await app.shutdown()
 ```
 
-### Correio falso com asserções — `fakeMailer`
+### Fake mail with assertions — `fakeMailer`
 
-Grava os e-mails "enviados" em memória em vez de os enviar:
+Records "sent" emails in memory instead of sending them:
 
 ```typescript
 import { describe, expect, it } from 'vitest'
@@ -120,11 +120,11 @@ import { createTestApp, fakeMailer } from '@machize/testing'
 const WelcomeEmail = defineMail({
   name: 'welcome',
   schema: z.object({ name: z.string() }),
-  subject: ({ name }) => `Bem-vindo, ${name}!`,
-  text: ({ name }) => `Olá ${name}`,
+  subject: ({ name }) => `Welcome, ${name}!`,
+  text: ({ name }) => `Hello ${name}`,
 })
 
-it('envia o e-mail de boas-vindas', async () => {
+it('sends the welcome email', async () => {
   const mail = fakeMailer()
   const app = await createTestApp({ plugins: [mail.plugin] })
 
@@ -133,17 +133,17 @@ it('envia o e-mail de boas-vindas', async () => {
   await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com' })
 
   const sent = mail.assertSent(WelcomeEmail, (m) => m.to.includes('ada@example.com'))
-  expect(sent.subject).toBe('Bem-vindo, Ada!')
+  expect(sent.subject).toBe('Welcome, Ada!')
 
   await app.shutdown()
 })
 ```
 
-`assertSent` devolve a primeira mensagem correspondente (para verificares assunto, destinatários, etc.) e lança `MailAssertionError` se nada corresponder; `assertNothingSent` lança se algo tiver sido enviado. O array `mail.sent` tem tudo, por ordem.
+`assertSent` returns the first matching message (so you can check the subject, recipients, etc.) and throws `MailAssertionError` if nothing matches; `assertNothingSent` throws if anything was sent. The `mail.sent` array has everything, in order.
 
-### Fila falsa — `fakeQueue`
+### Fake queue — `fakeQueue`
 
-Captura os despachos de jobs **sem os executar**; `drain()` corre o acumulado pelos handlers reais:
+Captures job dispatches **without running them**; `drain()` runs the accumulated jobs through the real handlers:
 
 ```typescript
 import { expect, it } from 'vitest'
@@ -154,10 +154,10 @@ import { createTestApp, fakeQueue } from '@machize/testing'
 const SendWelcome = defineJob({
   name: 'email.welcome',
   schema: z.object({ userId: z.string() }),
-  handle: ({ userId }) => console.log('a processar', userId),
+  handle: ({ userId }) => console.log('processing', userId),
 })
 
-it('despacha o job de boas-vindas', async () => {
+it('dispatches the welcome job', async () => {
   const queue = fakeQueue({ jobs: [SendWelcome] })
   const app = await createTestApp({ plugins: [queue.plugin] })
 
@@ -167,145 +167,145 @@ it('despacha o job de boas-vindas', async () => {
   expect(captured.queue).toBe('default')
   expect(captured.payload).toEqual({ userId: 'u-1' })
 
-  // até aqui nada foi executado; agora corre os handlers reais:
+  // nothing has run yet; now run the real handlers:
   expect(await queue.drain()).toBe(1)
 
   await app.shutdown()
 })
 ```
 
-### Viagem no tempo — `time`
+### Time travel — `time`
 
-Desloca o "agora" (`Date.now()` e `new Date()` sem argumentos) sem depender do executor de testes. Datas explícitas (`new Date('2026-01-01')`) não são afetadas.
+Shifts "now" (`Date.now()` and `new Date()` with no arguments) without depending on the test runner. Explicit dates (`new Date('2026-01-01')`) aren't affected.
 
 ```typescript
 import { afterEach, expect, it } from 'vitest'
 import { time } from '@machize/testing'
 
-afterEach(() => time.restore()) // chama SEMPRE no afterEach
+afterEach(() => time.restore()) // ALWAYS call this in afterEach
 
-it('o trial expira após 15 dias', () => {
-  time.travel('15d')                        // avança 15 dias (acumulável)
-  time.travelTo(new Date('2030-06-01'))     // ou fixa uma data concreta
+it('the trial expires after 15 days', () => {
+  time.travel('15d')                        // advances 15 days (accumulates)
+  time.travelTo(new Date('2030-06-01'))     // or pin an exact date
   expect(new Date().toISOString().slice(0, 10)).toBe('2030-06-01')
 })
 ```
 
-O formato da duração (`'15d'`, `'2h'`, …) é o `DurationInput` de `@machize/core` (`parseDuration`).
+The duration format (`'15d'`, `'2h'`, …) is `@machize/core`'s `DurationInput` (`parseDuration`).
 
-## Referência da API
+## API reference
 
-Exportado a partir de `@machize/testing`:
+Exported from `@machize/testing`:
 
 ### `createTestApp(options?): Promise<TestApp>`
 
-Cria a aplicação com `createApp` (as mesmas `CreateAppOptions` de `@machize/core`), antepõe o plugin de impersonação, faz `boot()` e devolve um `TestApp`.
+Creates the application with `createApp` (the same `CreateAppOptions` as `@machize/core`), prepends the impersonation plugin, calls `boot()`, and returns a `TestApp`.
 
-| Parâmetro | Tipo | Obrigatório? | Default | Descrição |
+| Parameter | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `options` | `CreateAppOptions` | Não | `{}` | Opções de `createApp`; os teus `plugins` são acrescentados depois do plugin de impersonação |
+| `options` | `CreateAppOptions` | No | `{}` | Options for `createApp`; your `plugins` are added after the impersonation plugin |
 
-### Classe `TestApp`
+### `TestApp` class
 
-| Membro | Assinatura | Descrição |
+| Member | Signature | Description |
 | --- | --- | --- |
-| `app` | `MachizeApp` | A aplicação subjacente |
-| `container` | `Container` (getter) | Contentor de dependências — `app.container.get(TOKEN)` |
-| `server` | `FastifyInstance` (getter) | O servidor Fastify (token `FASTIFY`) |
-| `actingAs(user)` | `(user: TestActor) => this` | Define o utilizador default dos próximos pedidos |
-| `asTenant(tenant)` | `(tenant: string \| { id: string }) => this` | Define o tenant default dos próximos pedidos |
-| `request(method, url, options?)` | `Promise<LightMyRequestResponse>` | Pedido genérico |
-| `get(url, options?)` | idem | GET |
-| `post(url, payload?, options?)` | idem | POST com corpo |
-| `put(url, payload?, options?)` | idem | PUT com corpo |
-| `patch(url, payload?, options?)` | idem | PATCH com corpo |
-| `delete(url, options?)` | idem | DELETE |
-| `shutdown()` | `Promise<void>` | Desliga a aplicação (chama no fim de cada teste) |
+| `app` | `MachizeApp` | The underlying application |
+| `container` | `Container` (getter) | Dependency container — `app.container.get(TOKEN)` |
+| `server` | `FastifyInstance` (getter) | The Fastify server (token `FASTIFY`) |
+| `actingAs(user)` | `(user: TestActor) => this` | Sets the default user for subsequent requests |
+| `asTenant(tenant)` | `(tenant: string \| { id: string }) => this` | Sets the default tenant for subsequent requests |
+| `request(method, url, options?)` | `Promise<LightMyRequestResponse>` | Generic request |
+| `get(url, options?)` | same | GET |
+| `post(url, payload?, options?)` | same | POST with body |
+| `put(url, payload?, options?)` | same | PUT with body |
+| `patch(url, payload?, options?)` | same | PATCH with body |
+| `delete(url, options?)` | same | DELETE |
+| `shutdown()` | `Promise<void>` | Shuts down the application (call at the end of every test) |
 
 `TestActor`: `{ id: string; email?: string; [key: string]: unknown }`.
 
 `TestRequestOptions`:
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `payload` | `unknown` | Não | — | Corpo do pedido |
-| `headers` | `Record<string, string>` | Não | — | Cabeçalhos extra |
-| `user` | `TestActor` | Não | default de `actingAs` | Utilizador só para este pedido |
-| `tenant` | `string \| { id: string; … }` | Não | default de `asTenant` | Tenant só para este pedido |
+| `payload` | `unknown` | No | — | Request body |
+| `headers` | `Record<string, string>` | No | — | Extra headers |
+| `user` | `TestActor` | No | `actingAs` default | User for this request only |
+| `tenant` | `string \| { id: string; … }` | No | `asTenant` default | Tenant for this request only |
 
 ### `fakeMailer(options?): FakeMailer`
 
-| Parâmetro | Tipo | Obrigatório? | Default | Descrição |
+| Parameter | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `options` | `MailerOptions` | Não | `{ from: 'test@machize.dev' }` | Opções do `Mailer` real (remetente, etc.) |
+| `options` | `MailerOptions` | No | `{ from: 'test@machize.dev' }` | Options for the real `Mailer` (sender, etc.) |
 
 `FakeMailer`:
 
-| Membro | Tipo | Descrição |
+| Member | Type | Description |
 | --- | --- | --- |
-| `plugin` | plugin Machize | Regista o mailer falso — passa em `createTestApp({ plugins: [mail.plugin, …] })` |
-| `sent` | `ResolvedMail[]` | Tudo o que foi "enviado", por ordem |
-| `assertSent(mail, predicate?)` | `(MailDefinition \| string, (m: ResolvedMail) => boolean) => ResolvedMail` | Devolve a primeira correspondência; lança `MailAssertionError` se nenhuma |
-| `assertNothingSent()` | `() => void` | Lança `MailAssertionError` se algo foi enviado |
+| `plugin` | Machize plugin | Registers the fake mailer — pass it in `createTestApp({ plugins: [mail.plugin, …] })` |
+| `sent` | `ResolvedMail[]` | Everything "sent", in order |
+| `assertSent(mail, predicate?)` | `(MailDefinition \| string, (m: ResolvedMail) => boolean) => ResolvedMail` | Returns the first match; throws `MailAssertionError` if none |
+| `assertNothingSent()` | `() => void` | Throws `MailAssertionError` if anything was sent |
 
-`FAKE_MAILER` — token `createToken<FakeMailer>('testing:mailer')`. *(Avançado.)*
+`FAKE_MAILER` — token `createToken<FakeMailer>('testing:mailer')`. *(Advanced.)*
 
 ### `fakeQueue(options?): FakeQueue`
 
-| Parâmetro | Tipo | Obrigatório? | Default | Descrição |
+| Parameter | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `options.jobs` | `JobDefinition[]` | Não | — | Jobs a registar no `queuePlugin` (necessário para `drain()` executar os handlers) |
+| `options.jobs` | `JobDefinition[]` | No | — | Jobs to register in `queuePlugin` (required for `drain()` to run the handlers) |
 
 `FakeQueue`:
 
-| Membro | Tipo | Descrição |
+| Member | Type | Description |
 | --- | --- | --- |
-| `plugin` | `queuePlugin(...)` | Regista a fila falsa na aplicação de teste |
-| `dispatched` | `CapturedJob[]` | Todos os despachos, por ordem |
-| `assertDispatched(job, predicate?)` | `(JobDefinition \| string, (c: CapturedJob) => boolean) => CapturedJob` | Devolve a primeira correspondência; lança `QueueAssertionError` se nenhuma |
-| `assertNothingDispatched()` | `() => void` | Lança `QueueAssertionError` se algo foi despachado |
-| `drain()` | `() => Promise<number>` | Executa o acumulado pelos handlers reais; devolve quantos correram |
+| `plugin` | `queuePlugin(...)` | Registers the fake queue in the test application |
+| `dispatched` | `CapturedJob[]` | All dispatches, in order |
+| `assertDispatched(job, predicate?)` | `(JobDefinition \| string, (c: CapturedJob) => boolean) => CapturedJob` | Returns the first match; throws `QueueAssertionError` if none |
+| `assertNothingDispatched()` | `() => void` | Throws `QueueAssertionError` if anything was dispatched |
+| `drain()` | `() => Promise<number>` | Runs the accumulated jobs through the real handlers; returns how many ran |
 
 `CapturedJob`: `{ queue: string; job: string; payload: unknown; context: unknown; options: AddJobOptions }`.
 
 ### `time`
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 | --- | --- | --- |
-| `time.travel(duration)` | `(duration: DurationInput) => void` | Avança o relógio (acumula com chamadas anteriores) |
-| `time.travelTo(date)` | `(date: Date) => void` | Fixa o "agora" numa data concreta |
-| `time.restore()` | `() => void` | Desfaz o patch e repõe o offset a zero — chama sempre em `afterEach` |
+| `time.travel(duration)` | `(duration: DurationInput) => void` | Advances the clock (accumulates with previous calls) |
+| `time.travelTo(date)` | `(date: Date) => void` | Pins "now" to an exact date |
+| `time.restore()` | `() => void` | Undoes the patch and resets the offset to zero — always call in `afterEach` |
 
-### Erros
+### Errors
 
-- `MailAssertionError` — código `TEST_MAIL_ASSERTION` (estende `MachizeError`).
-- `QueueAssertionError` — código `TEST_QUEUE_ASSERTION` (estende `MachizeError`).
+- `MailAssertionError` — code `TEST_MAIL_ASSERTION` (extends `MachizeError`).
+- `QueueAssertionError` — code `TEST_QUEUE_ASSERTION` (extends `MachizeError`).
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**O teste fica pendurado e o Vitest não termina.**
-Faltou `await app.shutdown()` no fim do teste. A aplicação mantém recursos abertos até ser desligada.
+**The test hangs and Vitest doesn't finish.**
+You're missing `await app.shutdown()` at the end of the test. The application keeps resources open until it's shut down.
 
-**`ctx().user` vem sempre `undefined` nos handlers.**
-Confirma que criaste a app com `createTestApp` (é ele que instala a impersonação) e que chamaste `actingAs(...)` antes do pedido — ou passaste `{ user: ... }` nas opções desse pedido. A impersonação funciona por enriquecedores de pedido do `@machize/fastify`; precisa do `fastifyPlugin` registado.
+**`ctx().user` always comes back `undefined` in handlers.**
+Make sure you created the app with `createTestApp` (it's the one that installs impersonation) and that you called `actingAs(...)` before the request — or passed `{ user: ... }` in that request's options. Impersonation works through `@machize/fastify` request enrichers; it needs `fastifyPlugin` registered.
 
 **`Expected mail "welcome" to have been sent. Sent: (nothing)`**
-O código não chegou a enviar o e-mail, ou o `Mailer` usado não é o falso. Garante que `mail.plugin` está na lista `plugins` de `createTestApp` **antes** de resolveres `MAILER` do contentor.
+The code never actually sent the email, or the `Mailer` used isn't the fake one. Make sure `mail.plugin` is in `createTestApp`'s `plugins` list **before** you resolve `MAILER` from the container.
 
-**O `drain()` devolve 0 ou os handlers não correm.**
-Passa os jobs ao criar a fila falsa: `fakeQueue({ jobs: [MeuJob] })`. Sem o registo, o executor não sabe que handler chamar.
+**`drain()` returns 0 or the handlers don't run.**
+Pass the jobs when creating the fake queue: `fakeQueue({ jobs: [MyJob] })`. Without the registration, the runner doesn't know which handler to call.
 
-**Uma viagem no tempo "contaminou" os testes seguintes.**
-O patch do `Date` é global. Chama `time.restore()` em `afterEach` — mesmo que só um teste viaje no tempo.
+**A time travel "contaminated" subsequent tests.**
+The `Date` patch is global. Call `time.restore()` in `afterEach` — even if only one test travels in time.
 
-**Posso usar `actingAs` em produção?**
-Não. O plugin de impersonação lê cabeçalhos (`x-test-user`) sem qualquer validação — é exclusivamente para testes e só existe dentro de `createTestApp`.
+**Can I use `actingAs` in production?**
+No. The impersonation plugin reads headers (`x-test-user`) without any validation — it's exclusively for tests and only exists inside `createTestApp`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — `createTestApp` embrulha `createApp`; `time` usa `parseDuration`; os erros estendem `MachizeError`.
-- **`@machize/fastify`** — os pedidos são injetados no `FastifyInstance` (token `FASTIFY`); a impersonação é um `RequestEnricher` registado no balde `http:enrichers`.
-- **`@machize/mailer`** — `fakeMailer` regista um `Mailer` real com o `MemoryMailDriver`, sob o mesmo token `MAILER` que a aplicação usa.
-- **`@machize/queue`** — `fakeQueue` usa o `queuePlugin` real com um driver que captura em vez de executar.
-- **`@machize/generator`** — os testes gerados por `mach make:resource` usam `createTestApp` deste pacote.
-- **`create-machize`** — os projetos novos incluem `@machize/testing` nas `devDependencies` e um teste de arranque pronto a correr.
+- **`@machize/core`** — `createTestApp` wraps `createApp`; `time` uses `parseDuration`; the errors extend `MachizeError`.
+- **`@machize/fastify`** — requests are injected into the `FastifyInstance` (token `FASTIFY`); impersonation is a `RequestEnricher` registered in the `http:enrichers` bucket.
+- **`@machize/mailer`** — `fakeMailer` registers a real `Mailer` with `MemoryMailDriver`, under the same `MAILER` token the application uses.
+- **`@machize/queue`** — `fakeQueue` uses the real `queuePlugin` with a driver that captures instead of running.
+- **`@machize/generator`** — tests generated by `mach make:resource` use `createTestApp` from this package.
+- **`create-machize`** — new projects include `@machize/testing` in `devDependencies` and a ready-to-run startup test.

@@ -1,26 +1,26 @@
 # @machize/sdk
 
-Cliente HTTP com tipos seguros para APIs Machize: descreves os endpoints uma vez com Zod e obténs um cliente onde cada chamada tem os tipos certos de entrada e saída, erros estruturados e renovação automática do token de sessão. Precisas dele no frontend (React, Vue, etc.) ou em qualquer código que chame a tua API.
+Type-safe HTTP client for Machize APIs: describe your endpoints once with Zod and get a client where every call has the right input/output types, structured errors, and automatic session-token refresh. You need this on the frontend (React, Vue, etc.) or in any code that calls your API.
 
-## O que este módulo resolve
+## What this module solves
 
-Um **SDK** (Software Development Kit) é, aqui, uma biblioteca-cliente: em vez de escreveres `fetch('https://api...')` à mão em todo o lado — montando URLs, cabeçalhos e `JSON.stringify` — chamas funções com nomes claros, como `api.projects.create({ body: { name: 'X' } })`.
+An **SDK** (Software Development Kit) here means a client library: instead of writing `fetch('https://api...')` by hand everywhere — assembling URLs, headers, and `JSON.stringify` — you call functions with clear names, like `api.projects.create({ body: { name: 'X' } })`.
 
-O problema clássico dos clientes escritos à mão é o **desalinhamento entre cliente e servidor**: o backend muda um campo, o frontend continua a assumir o formato antigo, e o erro só aparece em produção. Este pacote resolve isso com uma única fonte de verdade: cada endpoint é descrito com `endpoint(...)` usando **schemas Zod** (Zod é uma biblioteca de validação que também gera tipos TypeScript). O TypeScript infere daí os tipos de entrada e saída — não escreves tipos à mão — e, em tempo de execução, a resposta do servidor é validada contra o schema: se não corresponder, recebes um erro claro (`CLIENT_RESPONSE_MISMATCH`) em vez de dados silenciosamente errados.
+The classic problem with hand-written clients is **client/server drift**: the backend changes a field, the frontend keeps assuming the old shape, and the error only shows up in production. This package fixes that with a single source of truth: each endpoint is described with `endpoint(...)` using **Zod schemas** (Zod is a validation library that also generates TypeScript types). TypeScript infers the input and output types from that — you never write types by hand — and, at runtime, the server's response is validated against the schema: if it doesn't match, you get a clear error (`CLIENT_RESPONSE_MISMATCH`) instead of silently wrong data.
 
-O cliente trata ainda da autenticação por token **Bearer** (o token vai no cabeçalho `Authorization`), incluindo o padrão de renovação: quando o servidor responde 401 (token expirado), chama a tua função `refresh` uma vez e repete o pedido com o token novo — de forma transparente para quem chamou. O pacote é amigo do browser: a única dependência é o Zod (nem sequer depende de `@machize/core`).
+The client also handles **Bearer** token authentication (the token goes in the `Authorization` header), including the refresh pattern: when the server responds 401 (expired token), it calls your `refresh` function once and retries the request with the new token — transparently to the caller. The package is browser-friendly: its only dependency is Zod (it doesn't even depend on `@machize/core`).
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/sdk zod
 ```
 
-> O Zod é uma *peer dependency* (aceita `^3.24.0` ou `^4.0.0`) — tens de o instalar tu. O cliente usa o `fetch` global (browsers e Node 18+); noutros ambientes passa a tua implementação em `options.fetch`.
+> Zod is a *peer dependency* (`^3.24.0` or `^4.0.0` are supported) — you have to install it yourself. The client uses the global `fetch` (browsers and Node 18+); on other runtimes, pass your own implementation via `options.fetch`.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. Descreve a API num ficheiro partilhável, por exemplo `src/api.ts`:
+1. Describe the API in a shareable file, for example `src/api.ts`:
 
 ```typescript
 import { z } from 'zod'
@@ -47,7 +47,7 @@ export const api = {
 }
 ```
 
-2. Cria o cliente e usa-o:
+2. Create the client and use it:
 
 ```typescript
 import { createClient } from '@machize/sdk'
@@ -55,24 +55,24 @@ import { api } from './api.js'
 
 const client = createClient(api, { baseUrl: 'https://api.example.com' })
 
-const novo = await client.projects.create({ body: { name: 'Machize' } })
-console.log(novo.id) // tipado: { id: string; name: string }
+const newProject = await client.projects.create({ body: { name: 'Machize' } })
+console.log(newProject.id) // typed: { id: string; name: string }
 
-const um = await client.projects.get({ params: { id: novo.id } })
-const todos = await client.projects.list()
+const one = await client.projects.get({ params: { id: newProject.id } })
+const all = await client.projects.list()
 ```
 
-3. Repara: o cliente espelha a forma do objeto `api` (`client.projects.create`, …), os argumentos são verificados pelo TypeScript e a resposta vem já validada.
+3. Notice: the client mirrors the shape of the `api` object (`client.projects.create`, …), the arguments are checked by TypeScript, and the response comes back already validated.
 
-## Guia de utilização
+## Usage guide
 
-### Corpo, parâmetros de caminho e query string
+### Body, path parameters, and query string
 
-Cada chamada aceita um objeto com até três partes, conforme o endpoint declarar:
+Each call accepts an object with up to three parts, depending on what the endpoint declares:
 
-- `body` — o corpo JSON do pedido (schema `body`);
-- `params` — valores para os marcadores `:nome` no caminho (schema `params`); são codificados com `encodeURIComponent`;
-- `query` — pares para a query string `?a=1&b=2` (schema `query`); `undefined`/`null` são omitidos e arrays repetem a chave.
+- `body` — the request's JSON body (`body` schema);
+- `params` — values for the `:name` placeholders in the path (`params` schema); encoded with `encodeURIComponent`;
+- `query` — pairs for the `?a=1&b=2` query string (`query` schema); `undefined`/`null` are omitted and arrays repeat the key.
 
 ```typescript
 import { z } from 'zod'
@@ -92,9 +92,9 @@ await client.search({ query: { limit: 10, tag: ['a', 'b'] } })
 // → GET /projects?limit=10&tag=a&tag=b
 ```
 
-Endpoints sem `body`, `query` nem `params` chamam-se sem argumento: `await client.ping()`.
+Endpoints without `body`, `query`, or `params` are called with no argument: `await client.ping()`.
 
-### Autenticação com token e renovação automática
+### Token authentication with automatic refresh
 
 ```typescript
 import { createClient } from '@machize/sdk'
@@ -105,10 +105,10 @@ let refreshToken: string | undefined
 
 const client = createClient(api, {
   baseUrl: 'https://api.example.com',
-  getToken: () => accessToken, // vai em Authorization: Bearer <token>
+  getToken: () => accessToken, // sent as Authorization: Bearer <token>
   refresh: async () => {
-    // chamado UMA vez quando um pedido leva 401; devolve o token novo,
-    // ou null para desistir (o 401 é então lançado a quem chamou)
+    // called ONCE when a request gets a 401; returns the new token,
+    // or null to give up (the 401 is then thrown to the caller)
     if (!refreshToken) return null
     const response = await fetch('https://api.example.com/auth/refresh', {
       method: 'POST',
@@ -124,39 +124,39 @@ const client = createClient(api, {
 })
 ```
 
-Fluxo: pedido → 401 → `refresh()` → repete o pedido com o token novo. Se a repetição voltar a dar 401, o erro é lançado (não há ciclo infinito).
+Flow: request → 401 → `refresh()` → retry the request with the new token. If the retry gets a 401 again, the error is thrown (no infinite loop).
 
-### Tratar erros
+### Handling errors
 
-Qualquer resposta não-2xx (e qualquer resposta que falhe o schema `result`) lança `MachizeClientError`:
+Any non-2xx response (and any response that fails the `result` schema) throws `MachizeClientError`:
 
 ```typescript
 import { MachizeClientError } from '@machize/sdk'
 
 try {
-  await client.projects.get({ params: { id: 'fantasma' } })
+  await client.projects.get({ params: { id: 'ghost' } })
 } catch (error) {
   if (error instanceof MachizeClientError) {
     console.log(error.status)  // 404
-    console.log(error.code)    // 'PROJECT_NOT_FOUND' (código estável do servidor)
+    console.log(error.code)    // 'PROJECT_NOT_FOUND' (stable server code)
     console.log(error.message) // 'Project not found'
-    console.log(error.details) // corpo completo da resposta
+    console.log(error.details) // the full response body
   }
 }
 ```
 
-O `code` vem de `body.error.code` (a convenção de erros das APIs Machize); sem ele, é `'HTTP_ERROR'`. Respostas 204 (sem conteúdo) resolvem para `undefined`.
+`code` comes from `body.error.code` (the Machize APIs' error convention); without it, it's `'HTTP_ERROR'`. 204 (no content) responses resolve to `undefined`.
 
-### Testar com um `fetch` falso
+### Testing with a fake `fetch`
 
-Não precisas de servidor — injeta um `fetch` de mentira (exemplo real da suite de testes):
+You don't need a server — inject a fake `fetch` (a real example from the test suite):
 
 ```typescript
 import { expect, it } from 'vitest'
 import { createClient } from '@machize/sdk'
 import { api } from './api.js'
 
-it('cria um projeto', async () => {
+it('creates a project', async () => {
   const fetchMock: typeof fetch = async () =>
     new Response(JSON.stringify({ id: 'p1', name: 'Machize' }), {
       status: 201,
@@ -169,87 +169,87 @@ it('cria um projeto', async () => {
 })
 ```
 
-## Referência da API
+## API reference
 
-Exportado a partir de `@machize/sdk`:
+Exported from `@machize/sdk`:
 
 ### `endpoint(spec): Endpoint`
 
-Descreve um endpoint. Devolve o objeto tal e qual, com os tipos genéricos capturados para a inferência.
+Describes an endpoint. Returns the object as-is, with generic types captured for inference.
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `method` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE'` | Sim | — | Verbo HTTP |
-| `path` | `string` | Sim | — | Caminho com marcadores `:param`, ex.: `/projects/:id` |
-| `body` | `ZodType` | Não | — | Schema do corpo do pedido |
-| `query` | `ZodType` | Não | — | Schema da query string |
-| `params` | `ZodType` | Não | — | Schema dos parâmetros de caminho |
-| `result` | `ZodType` | Não | — | Schema da resposta de sucesso — validado no cliente para apanhar desalinhamentos |
+| `method` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE'` | Yes | — | HTTP verb |
+| `path` | `string` | Yes | — | Path with `:param` placeholders, e.g. `/projects/:id` |
+| `body` | `ZodType` | No | — | Request body schema |
+| `query` | `ZodType` | No | — | Query string schema |
+| `params` | `ZodType` | No | — | Path parameters schema |
+| `result` | `ZodType` | No | — | Success response schema — validated client-side to catch drift |
 
 ### `createClient(endpoints, options): Client<T>`
 
-Constrói o cliente a partir de uma árvore de endpoints (objetos aninhados a qualquer profundidade). Cada folha `Endpoint` torna-se uma função `async`; cada ramo torna-se um objeto. Lança `Error` se não houver `fetch` disponível e não passares um.
+Builds the client from a tree of endpoints (nested objects at any depth). Each `Endpoint` leaf becomes an `async` function; each branch becomes an object. Throws `Error` if no `fetch` is available and you didn't pass one.
 
 `ClientOptions`:
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `baseUrl` | `string` | Sim | — | Raiz da API, ex.: `'https://api.example.com'` (barra final é tolerada) |
-| `fetch` | `typeof fetch` | Não | `globalThis.fetch` | Implementação de fetch |
-| `headers` | `Record<string, string>` | Não | — | Cabeçalhos enviados em todos os pedidos (antes da autenticação) |
-| `getToken` | `() => string \| undefined \| Promise<string \| undefined>` | Não | — | Token atual — anexado como `Authorization: Bearer` |
-| `refresh` | `() => Promise<string \| null>` | Não | — | Chamado uma vez num 401 para obter token novo; `null` desiste e o 401 é lançado |
+| `baseUrl` | `string` | Yes | — | API root, e.g. `'https://api.example.com'` (trailing slash is tolerated) |
+| `fetch` | `typeof fetch` | No | `globalThis.fetch` | fetch implementation |
+| `headers` | `Record<string, string>` | No | — | Headers sent on every request (before authentication) |
+| `getToken` | `() => string \| undefined \| Promise<string \| undefined>` | No | — | Current token — attached as `Authorization: Bearer` |
+| `refresh` | `() => Promise<string \| null>` | No | — | Called once on a 401 to get a new token; `null` gives up and the 401 is thrown |
 
 ### `MachizeClientError`
 
-Erro lançado para qualquer resposta não-2xx ou resposta que falhe o schema `result`. Sem dependências (não estende `MachizeError`) para se manter leve no browser.
+Error thrown for any non-2xx response or a response that fails the `result` schema. No dependencies (doesn't extend `MachizeError`) to stay lightweight in the browser.
 
-| Propriedade | Tipo | Descrição |
+| Property | Type | Description |
 | --- | --- | --- |
-| `status` | `number` | Código HTTP da resposta |
-| `code` | `string` | Código estável do servidor (`body.error.code`), `'HTTP_ERROR'` se ausente, ou `'CLIENT_RESPONSE_MISMATCH'` quando a resposta falha o schema `result` |
-| `message` | `string` | Mensagem do servidor (ou `statusText`) |
-| `details` | `unknown` | Corpo da resposta (ou o `ZodError`, no caso de mismatch) |
+| `status` | `number` | The response's HTTP status code |
+| `code` | `string` | Stable server code (`body.error.code`), `'HTTP_ERROR'` if absent, or `'CLIENT_RESPONSE_MISMATCH'` when the response fails the `result` schema |
+| `message` | `string` | Server message (or `statusText`) |
+| `details` | `unknown` | The response body (or the `ZodError`, in case of a mismatch) |
 
-### Tipos utilitários
+### Utility types
 
-| Tipo | Descrição |
+| Type | Description |
 | --- | --- |
-| `Endpoint<B, Q, P, R>` | A forma de um endpoint (genéricos: body, query, params, result) |
-| `EndpointTree` | Mapa aninhado de endpoints, espelhado pelo cliente |
-| `EndpointInput<E>` | O objeto de entrada da chamada — `body` usa o tipo de *input* do schema (podes omitir campos com default), `query`/`params` usam o tipo de *output* |
-| `EndpointOutput<E>` | O tipo devolvido — o *output* do schema `result` (ou `unknown` sem `result`) |
-| `Client<T>` | O tipo do cliente gerado a partir da árvore `T` |
+| `Endpoint<B, Q, P, R>` | The shape of an endpoint (generics: body, query, params, result) |
+| `EndpointTree` | Nested map of endpoints, mirrored by the client |
+| `EndpointInput<E>` | The call's input object — `body` uses the schema's *input* type (you can omit fields with a default), `query`/`params` use the *output* type |
+| `EndpointOutput<E>` | The return type — the `result` schema's *output* (or `unknown` without `result`) |
+| `Client<T>` | The type of the client generated from tree `T` |
 | `HttpMethod` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE'` |
 | `FetchLike` | `typeof fetch` |
-| `ClientOptions` | Descrito acima |
+| `ClientOptions` | Described above |
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
 **`No fetch implementation available — pass options.fetch.`**
-O ambiente não tem `fetch` global (Node < 18, alguns bundlers antigos). Passa uma implementação: `createClient(api, { baseUrl, fetch: minhaImplementacao })`.
+The environment has no global `fetch` (Node < 18, some older bundlers). Pass an implementation: `createClient(api, { baseUrl, fetch: myImplementation })`.
 
-**Erro com `code: 'CLIENT_RESPONSE_MISMATCH'`.**
-A resposta do servidor não corresponde ao schema `result` do endpoint — o cliente e o servidor estão dessincronizados (por exemplo, o backend deixou de devolver um campo). Atualiza o schema no cliente ou corrige o servidor; `error.details` contém o `ZodError` com os campos em falta.
+**Error with `code: 'CLIENT_RESPONSE_MISMATCH'`.**
+The server's response doesn't match the endpoint's `result` schema — the client and server are out of sync (for example, the backend stopped returning a field). Update the schema on the client or fix the server; `error.details` contains the `ZodError` with the missing fields.
 
-**O pedido dá 401 e o `refresh` nunca é chamado.**
-O `refresh` só corre se estiver definido em `ClientOptions` e apenas no primeiro 401 de cada pedido. Confirma que o passaste ao `createClient`.
+**The request gets a 401 and `refresh` is never called.**
+`refresh` only runs if it's defined in `ClientOptions`, and only on the first 401 of each request. Confirm you passed it to `createClient`.
 
-**O `refresh` é chamado mas o pedido falha na mesma com 401.**
-O cliente repete o pedido **uma** vez com o token novo; se voltar a dar 401, lança o erro (proteção contra ciclos). Verifica se o token devolvido por `refresh` é mesmo válido — e devolve `null` quando não conseguires renovar (por exemplo, sessão terminada).
+**`refresh` is called but the request still fails with 401.**
+The client retries the request **once** with the new token; if it gets a 401 again, it throws the error (protection against loops). Check whether the token returned by `refresh` is actually valid — and return `null` when you can't refresh it (for example, an expired session).
 
-**Os parâmetros de caminho aparecem por substituir no URL (`/projects/:id`).**
-Passa-os em `params`, não em `query`: `client.projects.get({ params: { id: 'p1' } })`, e o nome tem de coincidir com o marcador do `path`.
+**Path parameters show up unreplaced in the URL (`/projects/:id`).**
+Pass them in `params`, not `query`: `client.projects.get({ params: { id: 'p1' } })`, and the name has to match the placeholder in `path`.
 
-**Recebi `undefined` em vez de dados.**
-Respostas 204 (No Content) resolvem para `undefined` por definição — típico de endpoints DELETE.
+**I got `undefined` instead of data.**
+204 (No Content) responses resolve to `undefined` by design — typical of DELETE endpoints.
 
-**Posso usar isto num backend Node?**
-Sim — funciona em qualquer sítio com `fetch` (Node 18+ inclui-o). É útil para chamar uma API Machize a partir de outra.
+**Can I use this in a Node backend?**
+Yes — it works anywhere with `fetch` (Node 18+ includes it). It's useful for calling a Machize API from another one.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/fastify`** — o par natural do outro lado: as rotas do servidor também são descritas com Zod, e o formato de erro `{ error: { code, message } }` do `HttpError` é exatamente o que o SDK mapeia para `MachizeClientError.code`.
-- **`@machize/auth`** — os endpoints `POST /auth/login` e `POST /auth/refresh` do backend fornecem os tokens que ligas a `getToken`/`refresh`.
-- **`create-machize`** — com a flag `--ui`, o frontend gerado (`web/src/api.ts`) já usa `endpoint` + `createClient` deste pacote, incluindo a renovação de token quando a autenticação está ativa.
-- **`@machize/core`** — deliberadamente **não** é dependência: o SDK só depende do Zod, para poder correr no browser sem arrastar o framework.
+- **`@machize/fastify`** — the natural counterpart on the other side: server routes are also described with Zod, and the `{ error: { code, message } }` error format from `HttpError` is exactly what the SDK maps to `MachizeClientError.code`.
+- **`@machize/auth`** — the backend's `POST /auth/login` and `POST /auth/refresh` endpoints supply the tokens you wire up to `getToken`/`refresh`.
+- **`create-machize`** — with the `--ui` flag, the generated frontend (`web/src/api.ts`) already uses `endpoint` + `createClient` from this package, including token refresh when authentication is enabled.
+- **`@machize/core`** — deliberately **not** a dependency: the SDK only depends on Zod, so it can run in the browser without pulling in the framework.

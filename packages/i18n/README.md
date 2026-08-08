@@ -1,20 +1,20 @@
 # @machize/i18n
 
-Internacionalização para o Machize: **locale resolvido do contexto** (por utilizador/tenant), **catálogos de mensagens tipados** com interpolação e plurais, e **formatação** (números, moeda, datas, tempo relativo, listas) via `Intl` nativo. **Zero dependências**. Precisas deste módulo quando a tua aplicação serve utilizadores em várias línguas/regiões.
+Internationalization for Machize: **locale resolved from context** (per user/tenant), **typed message catalogs** with interpolation and plurals, and **formatting** (numbers, currency, dates, relative time, lists) via native `Intl`. **Zero dependencies**. You need this module when your application serves users in multiple languages/regions.
 
-## O que este módulo resolve
+## What this module solves
 
-Num pedido, quem responde precisa de saber em que língua falar — e isso normalmente é o locale do utilizador (ou do tenant). Este módulo resolve o locale automaticamente do contexto do pedido, traduz mensagens tipadas (com `{parâmetros}` e plurais corretos por língua), e formata números/datas/moeda com as regras da região — tudo com o `Intl` que já vem no runtime.
+In a request, whoever is responding needs to know what language to speak — and that's usually the user's (or tenant's) locale. This module automatically resolves the locale from the request context, translates typed messages (with `{parameters}` and correct plurals per language), and formats numbers/dates/currency with the region's rules — all using the `Intl` already built into the runtime.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/i18n
 ```
 
-Depende apenas do `@machize/core`. Sem catálogos externos nem serviços — as mensagens vivem em código.
+Depends only on `@machize/core`. No external catalogs or services — messages live in code.
 
-## Começar em 5 minutos
+## Getting started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -35,30 +35,30 @@ const app = await createApp({
 
 const i18n = app.container.get(I18N)
 
-// locale explícito
+// explicit locale
 i18n.in('pt').t('greeting', { name: 'Ada' }) // 'Olá Ada'
 i18n.in('en').t('notes', { count: 3 })        // '3 notes'
 ```
 
-Dentro de um pedido, `i18n.t(...)` usa o locale do **contexto** — sem passares nada:
+Inside a request, `i18n.t(...)` uses the **context's** locale — no need to pass anything:
 
 ```ts
-i18n.t('greeting', { name: user.name }) // usa ctx().user.locale (ou tenant.locale)
+i18n.t('greeting', { name: user.name }) // uses ctx().user.locale (or tenant.locale)
 ```
 
-## Locale do contexto
+## Locale from context
 
-Por omissão, o locale vem de `ctx().user.locale` e, em alternativa, `ctx().tenant.locale` — bastando que guardes um campo `locale` nesses registos. Fornece uma resolução própria se preferires:
+By default, the locale comes from `ctx().user.locale` and, as a fallback, `ctx().tenant.locale` — it's enough to store a `locale` field on those records. Provide your own resolution if you prefer:
 
 ```ts
 i18nPlugin({ locales, defaultLocale: 'en', resolveLocale: () => ctx().user?.preferredLocale })
 ```
 
-Um pedido de `pt-BR` sem catálogo `pt-BR` **negoceia** para `pt` (a língua base); se também não existir, cai no `defaultLocale`. A formatação usa o locale pedido (ex.: datas em `pt-BR`).
+A request for `pt-BR` without a `pt-BR` catalog **negotiates** down to `pt` (the base language); if that doesn't exist either, it falls back to `defaultLocale`. Formatting uses the requested locale (e.g. dates in `pt-BR`).
 
-## Plurais
+## Plurals
 
-Uma mensagem pode ser um objeto de formas plurais (categorias CLDR: `one`, `other`, `few`, `many`…), escolhidas por `Intl.PluralRules` a partir de `count`:
+A message can be an object of plural forms (CLDR categories: `one`, `other`, `few`, `many`…), chosen by `Intl.PluralRules` based on `count`:
 
 ```ts
 const en = defineMessages({ items: { one: '{count} item', other: '{count} items' } })
@@ -66,9 +66,9 @@ i18n.in('en').t('items', { count: 1 }) // '1 item'
 i18n.in('en').t('items', { count: 5 }) // '5 items'
 ```
 
-## Formatação (Intl)
+## Formatting (Intl)
 
-Cada `t` vem acompanhado de formatadores no mesmo locale:
+Every `t` comes with formatters in the same locale:
 
 ```ts
 const l = i18n.in('en')
@@ -79,29 +79,29 @@ l.relativeTime(-1, 'day')      // '1 day ago'
 l.list(['a', 'b', 'c'])        // 'a, b, and c'
 ```
 
-## Referência da API
+## API reference
 
 ### `defineMessages(catalog)`
 
-Fixa os tipos de um catálogo (`{ chave: string | formasPlurais }`) para autocompletar em `t`.
+Fixes the types of a catalog (`{ key: string | pluralForms }`) for autocompletion in `t`.
 
 ### `i18nPlugin({ locales, defaultLocale, resolveLocale? })`
 
-Regista o token `I18N`. `locales` é `{ [locale]: catálogo }`.
+Registers the `I18N` token. `locales` is `{ [locale]: catalog }`.
 
 ### `class I18n` / `Translator`
 
-| Membro | Descrição |
+| Member | Description |
 |---|---|
-| `locale()` | O locale resolvido para o pedido atual. |
-| `in(locale)` | Um `Translator` fixado a um locale. |
-| `t(key, params?)` | Traduz no locale atual. |
-| `n` · `currency` · `date` · `relativeTime` · `list` | Formatação via `Intl` no locale atual. |
+| `locale()` | The locale resolved for the current request. |
+| `in(locale)` | A `Translator` fixed to a locale. |
+| `t(key, params?)` | Translates in the current locale. |
+| `n` · `currency` · `date` · `relativeTime` · `list` | Formatting via `Intl` in the current locale. |
 
-> Nota: pelo token `I18N`, o tipo genérico do catálogo é apagado. Importa a instância criada com `defineMessages` diretamente do teu módulo para manter os nomes/tipos das chaves.
+> Note: through the `I18N` token, the catalog's generic type is erased. Import the instance created with `defineMessages` directly from your module to keep the key names/types.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — fornece o contexto de pedido de onde vem o locale.
-- **`@machize/auth` / `@machize/tenancy`** — colocam `user`/`tenant` no contexto; guarda um `locale` neles para resolução automática.
-- **`@machize/mailer` / `@machize/notifications`** — traduz o conteúdo de emails/notificações no locale do destinatário.
+- **`@machize/core`** — provides the request context from which the locale comes.
+- **`@machize/auth` / `@machize/tenancy`** — put `user`/`tenant` in the context; store a `locale` on them for automatic resolution.
+- **`@machize/mailer` / `@machize/notifications`** — translate email/notification content in the recipient's locale.

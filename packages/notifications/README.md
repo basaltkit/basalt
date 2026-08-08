@@ -1,26 +1,26 @@
 # @machize/notifications
 
-Notificações multi-canal para o framework Machize: define uma notificação uma vez e entrega-a por email, dentro da aplicação (o "sininho") ou por canais personalizados (SMS, push, etc.). Precisas deste módulo quando queres avisar utilizadores de que algo aconteceu — "fatura paga", "novo comentário", "subscrição a expirar".
+Multi-channel notifications for the Machize framework: define a notification once and deliver it by email, in-app (the "bell"), or through custom channels (SMS, push, etc.). You need this module when you want to let users know something happened — "invoice paid", "new comment", "subscription expiring".
 
-## O que este módulo resolve
+## What this module solves
 
-Quando algo importante acontece na tua aplicação, normalmente queres avisar o utilizador em mais do que um sítio: um email na caixa de correio e um aviso dentro da própria aplicação, por exemplo. Sem uma camada de notificações, acabas com código de envio espalhado por todo o lado, cada sítio com a sua formatação, e sem forma de o utilizador dizer "não me mandem SMS".
+When something important happens in your application, you usually want to notify the user in more than one place: an email in their inbox and an alert inside the application itself, for example. Without a notifications layer, you end up with sending code scattered everywhere, each place with its own formatting, and no way for the user to say "don't send me SMS".
 
-Este módulo introduz o conceito de **notificação declarativa**: com `defineNotification` descreves o nome, os dados (validados com um *schema*, tipicamente [Zod](https://zod.dev)), os **canais** por onde deve sair (um canal é um meio de entrega: `mail`, `inApp`, `sms`, ...) e, para cada canal, uma função que transforma os dados na mensagem certa para esse canal (assunto e texto para email; título e corpo para o feed in-app).
+This module introduces the concept of a **declarative notification**: with `defineNotification` you describe the name, the data (validated with a *schema*, typically [Zod](https://zod.dev)), the **channels** it should go out through (a channel is a delivery medium: `mail`, `inApp`, `sms`, ...), and, for each channel, a function that turns the data into the right message for that channel (subject and text for email; title and body for the in-app feed).
 
-O `Notifier` trata do resto: valida os dados, respeita as preferências do destinatário (opt-out por canal), entrega em todos os canais pedidos e devolve um relatório do que foi enviado, falhou ou foi ignorado. Uma falha num canal nunca impede os outros. Inclui um canal **in-app** pronto a usar (feed de notificações com contagem de não lidas e "marcar como lida") e uma ponte automática para o **@machize/mailer**.
+`Notifier` handles the rest: it validates the data, respects the recipient's preferences (per-channel opt-out), delivers on all requested channels, and returns a report of what was sent, failed, or skipped. A failure on one channel never blocks the others. It includes a ready-to-use **in-app** channel (notification feed with unread count and "mark as read") and an automatic bridge to **@machize/mailer**.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/notifications
 ```
 
-O pacote depende de `@machize/mailer` (a ponte de email vem incluída). Para validação de dados, instala também `zod`.
+The package depends on `@machize/mailer` (the email bridge is included). For data validation, also install `zod`.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. **Define uma notificação.** `channels` diz por onde sai; `via` diz como se apresenta em cada canal:
+1. **Define a notification.** `channels` says where it goes out; `via` says how it's presented on each channel:
 
 ```ts
 // src/notifications/invoice-paid.ts
@@ -32,13 +32,13 @@ export const InvoicePaid = defineNotification({
   schema: z.object({ number: z.string() }),
   channels: ['mail', 'inApp'],
   via: {
-    mail: ({ number }) => ({ subject: `Fatura ${number} paga`, text: `A fatura ${number} foi confirmada.` }),
-    inApp: ({ number }) => ({ title: 'Fatura paga', body: `#${number} confirmada`, data: { number } }),
+    mail: ({ number }) => ({ subject: `Invoice ${number} paid`, text: `Invoice ${number} has been confirmed.` }),
+    inApp: ({ number }) => ({ title: 'Invoice paid', body: `#${number} confirmed`, data: { number } }),
   },
 })
 ```
 
-2. **Regista os plugins.** Ao registar o mailer antes, o canal `mail` é ligado automaticamente; o canal `inApp` vem ativo por omissão (com armazenamento em memória):
+2. **Register the plugins.** By registering the mailer first, the `mail` channel is wired up automatically; the `inApp` channel is active by default (with in-memory storage):
 
 ```ts
 // src/app.ts
@@ -48,13 +48,13 @@ import { notificationsPlugin } from '@machize/notifications'
 
 const app = await createApp({
   plugins: [
-    mailerPlugin({ driver: 'log', from: 'noreply@aminhaapp.com' }),
+    mailerPlugin({ driver: 'log', from: 'noreply@myapp.com' }),
     notificationsPlugin(),
   ],
 }).boot()
 ```
 
-3. **Notifica alguém.** O destinatário é qualquer objeto com `id` (e `email` se usares o canal de email) — o tipo `Notifiable`:
+3. **Notify someone.** The recipient is any object with `id` (and `email` if you use the email channel) — the `Notifiable` type:
 
 ```ts
 import { NOTIFIER } from '@machize/notifications'
@@ -68,31 +68,31 @@ console.log(report)
 // { sent: [{ channel: 'mail' }, { channel: 'inApp' }], failed: [], skipped: [] }
 ```
 
-4. **Lê o feed in-app** (para mostrar o "sininho" na interface):
+4. **Read the in-app feed** (to show the "bell" in the UI):
 
 ```ts
 import { IN_APP } from '@machize/notifications'
 
 const inApp = app.container.get(IN_APP)
 console.log(await inApp.unreadCount('u1'))     // 1
-console.log(await inApp.list('u1'))            // notificações, mais recentes primeiro
+console.log(await inApp.list('u1'))            // notifications, most recent first
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Preferências do destinatário (opt-out)
+### Recipient preferences (opt-out)
 
-O destinatário pode desligar canais com `channelPreferences`. Canais desligados aparecem em `skipped` no relatório:
+The recipient can turn off channels with `channelPreferences`. Disabled channels appear in `skipped` on the report:
 
 ```ts
 const bruno = { id: 'u2', email: 'bruno@example.com', channelPreferences: { mail: false } }
 const report = await notifier.notify(bruno, InvoicePaid, { number: 'INV-8' })
-// report.skipped === ['mail'] — só recebe in-app
+// report.skipped === ['mail'] — only receives in-app
 ```
 
-### Canais dinâmicos por destinatário
+### Dynamic channels per recipient
 
-`channels` pode ser uma função que decide os canais consoante o destinatário e os dados:
+`channels` can be a function that decides the channels based on the recipient and the data:
 
 ```ts
 import { defineNotification } from '@machize/notifications'
@@ -107,33 +107,33 @@ const Ping = defineNotification({
 })
 ```
 
-### Criar um canal personalizado (SMS, push, ...)
+### Creating a custom channel (SMS, push, ...)
 
-Um canal é um objeto com `name` e `send`. O helper `channel()` cria um inline:
+A channel is an object with `name` and `send`. The `channel()` helper creates one inline:
 
 ```ts
 import { channel, notificationsPlugin } from '@machize/notifications'
 
 const sms = channel('sms', async (recipient, message, info) => {
-  // message é o que a função via.sms da notificação devolveu
-  await oMeuFornecedorDeSms.enviar(recipient['phone'] as string, (message as { text: string }).text)
+  // message is whatever the notification's via.sms function returned
+  await mySmsProvider.send(recipient['phone'] as string, (message as { text: string }).text)
 })
 
 notificationsPlugin({ channels: [sms] })
 ```
 
-Depois basta a notificação incluir `'sms'` em `channels` e definir `via.sms`.
+Then the notification just needs to include `'sms'` in `channels` and define `via.sms`.
 
-### Notificar vários destinatários
+### Notifying multiple recipients
 
 ```ts
 const reports = await notifier.notifyMany([ada, bruno], InvoicePaid, { number: 'INV-9' })
-// um DeliveryReport por destinatário, pela mesma ordem
+// one DeliveryReport per recipient, in the same order
 ```
 
-### Enviar em segundo plano (fila)
+### Sending in the background (queue)
 
-Tal como no mailer, `useQueue` faz o `notify()` entregar cada `Delivery` (unidade já renderizada) a um despachante; o worker chama `deliver()`:
+Just like the mailer, `useQueue` makes `notify()` hand each `Delivery` (an already-rendered unit) off to a dispatcher; the worker calls `deliver()`:
 
 ```ts
 import type { Delivery } from '@machize/notifications'
@@ -146,108 +146,108 @@ const SendNotification = defineJob({
 notifier.useQueue((delivery) => SendNotification.dispatch(delivery))
 ```
 
-`deliver()` lança em caso de falha, para a fila poder repetir.
+`deliver()` throws on failure, so the queue can retry.
 
-### Reagir a envios e falhas (hooks)
+### Reacting to sends and failures (hooks)
 
-O plugin declara dois hooks globais no `HookBus` do Machize:
+The plugin declares two global hooks on Machize's `HookBus`:
 
 ```ts
-app.hooks.on('notification:sent', ({ notification, channel, recipientId }) => { /* métricas */ })
-app.hooks.on('notification:failed', ({ notification, channel, recipientId, error }) => { /* alertar */ })
+app.hooks.on('notification:sent', ({ notification, channel, recipientId }) => { /* metrics */ })
+app.hooks.on('notification:failed', ({ notification, channel, recipientId, error }) => { /* alert */ })
 ```
 
-## Referência da API
+## API reference
 
 ### `defineNotification<T>(definition): NotificationDefinition<T>`
 
-| Campo | Tipo | Obrigatório? | Descrição |
+| Field | Type | Required? | Description |
 |---|---|---|---|
-| `name` | `string` | Sim | Identificador único da notificação |
-| `schema` | `NotificationSchema<T>` | Não | Schema com `safeParse` (compatível com Zod) |
-| `channels` | `string[] \| ((recipient, data) => string[])` | Sim | Canais de entrega, fixos ou por destinatário |
-| `via` | `Record<string, (data, recipient) => unknown>` | Sim | Renderizador por canal — devolve a mensagem desse canal |
+| `name` | `string` | Yes | Unique notification identifier |
+| `schema` | `NotificationSchema<T>` | No | Schema with `safeParse` (Zod-compatible) |
+| `channels` | `string[] \| ((recipient, data) => string[])` | Yes | Delivery channels, fixed or per recipient |
+| `via` | `Record<string, (data, recipient) => unknown>` | Yes | Per-channel renderer — returns that channel's message |
 
-Formatos de mensagem esperados pelos canais incluídos: `via.mail` deve devolver `MailChannelMessage` (`{ subject, text?, html? }`); `via.inApp` deve devolver `InAppMessage` (`{ title, body?, data? }`).
+Message formats expected by the included channels: `via.mail` should return `MailChannelMessage` (`{ subject, text?, html? }`); `via.inApp` should return `InAppMessage` (`{ title, body?, data? }`).
 
 ### `interface Notifiable`
 
-| Campo | Tipo | Obrigatório? | Descrição |
+| Field | Type | Required? | Description |
 |---|---|---|---|
-| `id` | `string` | Sim | Identificador do destinatário |
-| `email` | `string` | Não | Necessário para o canal `mail` |
-| `channelPreferences` | `Record<string, boolean>` | Não | `{ sms: false }` desliga o canal `sms` |
-| *(outros)* | `unknown` | Não | Campos extra (telefone, tokens push, ...) ficam disponíveis nos canais |
+| `id` | `string` | Yes | Recipient identifier |
+| `email` | `string` | No | Required for the `mail` channel |
+| `channelPreferences` | `Record<string, boolean>` | No | `{ sms: false }` disables the `sms` channel |
+| *(other)* | `unknown` | No | Extra fields (phone, push tokens, ...) are available to channels |
 
 ### `class Notifier`
 
-`new Notifier(options: NotifierOptions)` — `options.channels: NotificationChannel[]` (obrigatório), `options.hooks?: HookBus`.
+`new Notifier(options: NotifierOptions)` — `options.channels: NotificationChannel[]` (required), `options.hooks?: HookBus`.
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `notify` | `notify(recipient, definition, data?) => Promise<DeliveryReport>` | Valida, renderiza e entrega em todos os canais; falhas por canal ficam no relatório |
-| `notifyMany` | `notifyMany(recipients[], definition, data?) => Promise<DeliveryReport[]>` | `notify` em série para vários destinatários |
-| `deliver` | `deliver(delivery: Delivery) => Promise<void>` | Envia uma entrega renderizada pelo respetivo canal; lança em caso de falha |
-| `useQueue` | `useQueue(dispatch) => this` | Redireciona as entregas para um despachante (fila) |
+| `notify` | `notify(recipient, definition, data?) => Promise<DeliveryReport>` | Validates, renders, and delivers on all channels; per-channel failures land in the report |
+| `notifyMany` | `notifyMany(recipients[], definition, data?) => Promise<DeliveryReport[]>` | `notify` in series for multiple recipients |
+| `deliver` | `deliver(delivery: Delivery) => Promise<void>` | Sends an already-rendered delivery via its channel; throws on failure |
+| `useQueue` | `useQueue(dispatch) => this` | Redirects deliveries to a dispatcher (queue) |
 
 `DeliveryReport`: `{ sent: { channel }[], failed: { channel, error }[], skipped: string[] }`.
 `Delivery`: `{ notification, channel, recipient, message }`.
 
 ### `notificationsPlugin(options?: NotificationsPluginOptions)`
 
-Regista `NOTIFIER` (e `IN_APP` quando o canal in-app está ativo). Se o `MAILER` estiver no contentor, adiciona automaticamente o `MailChannel`.
+Registers `NOTIFIER` (and `IN_APP` when the in-app channel is active). If `MAILER` is in the container, automatically adds the `MailChannel`.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `channels` | `NotificationChannel[]` | Não | `[]` | Canais extra (sms, push, personalizados) |
-| `inApp` | `InAppStore \| false` | Não | `MemoryInAppStore` | Armazenamento in-app; `false` desativa o canal |
+| `channels` | `NotificationChannel[]` | No | `[]` | Extra channels (sms, push, custom) |
+| `inApp` | `InAppStore \| false` | No | `MemoryInAppStore` | In-app storage; `false` disables the channel |
 
-### Canal in-app
+### In-app channel
 
-`InAppStore` (interface a implementar para persistência em base de dados):
+`InAppStore` (interface to implement for database persistence):
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `append` | `(record: InAppNotification) => Promise<void>` | Guarda uma notificação |
-| `list` | `(recipientId, { unreadOnly?, limit? }?) => Promise<InAppNotification[]>` | Lista (mais recentes primeiro) |
-| `markRead` | `(recipientId, id) => Promise<boolean>` | Marca como lida; `false` se não existir ou já lida |
-| `unreadCount` | `(recipientId) => Promise<number>` | Total por ler |
+| `append` | `(record: InAppNotification) => Promise<void>` | Stores a notification |
+| `list` | `(recipientId, { unreadOnly?, limit? }?) => Promise<InAppNotification[]>` | Lists (most recent first) |
+| `markRead` | `(recipientId, id) => Promise<boolean>` | Marks as read; `false` if it doesn't exist or is already read |
+| `unreadCount` | `(recipientId) => Promise<number>` | Total unread |
 
 `InAppNotification`: `{ id, recipientId, notification, title, body?, data?, readAt?, at }`.
 
-### Outros exports
+### Other exports
 
-| Export | Tipo | Descrição |
+| Export | Type | Description |
 |---|---|---|
-| `NOTIFIER` / `IN_APP` | tokens | Chaves do `Notifier` e do `InAppStore` no contentor |
-| `channel(name, send)` | função | Cria um canal personalizado inline |
-| `InAppChannel` / `MailChannel` | classes | Canais incluídos (`new MailChannel(mailer)` para ligar manualmente) |
-| `MemoryInAppStore` | classe | Store in-app em memória (dev/testes) |
-| `NotificationValidationError` | erro | `NOTIFICATION_INVALID` — dados não passam no schema |
-| `UnknownChannelError` | erro | `NOTIFICATION_UNKNOWN_CHANNEL` — canal pedido sem driver registado |
-| `MissingRendererError` | erro | `NOTIFICATION_MISSING_RENDERER` — canal pedido sem `via.<canal>` |
-| `RecipientEmailMissingError` | erro | `NOTIFICATION_EMAIL_MISSING` — destinatário sem `email` no canal mail |
-| `NotificationChannel` | tipo (Avançado) | Contrato de driver de canal: `{ name, send(recipient, message, info) }` |
-| `NotificationSchema<T>` | tipo (Avançado) | Contrato estrutural de schema (`safeParse`) |
+| `NOTIFIER` / `IN_APP` | tokens | Container keys for `Notifier` and `InAppStore` |
+| `channel(name, send)` | function | Creates a custom channel inline |
+| `InAppChannel` / `MailChannel` | classes | Included channels (`new MailChannel(mailer)` to wire manually) |
+| `MemoryInAppStore` | class | In-memory in-app store (dev/testing) |
+| `NotificationValidationError` | error | `NOTIFICATION_INVALID` — data doesn't pass the schema |
+| `UnknownChannelError` | error | `NOTIFICATION_UNKNOWN_CHANNEL` — requested channel has no registered driver |
+| `MissingRendererError` | error | `NOTIFICATION_MISSING_RENDERER` — requested channel has no `via.<channel>` |
+| `RecipientEmailMissingError` | error | `NOTIFICATION_EMAIL_MISSING` — recipient has no `email` for the mail channel |
+| `NotificationChannel` | type (Advanced) | Channel driver contract: `{ name, send(recipient, message, info) }` |
+| `NotificationSchema<T>` | type (Advanced) | Structural schema contract (`safeParse`) |
 
-## Erros comuns e soluções (FAQ)
+## Common issues and solutions (FAQ)
 
-**`UnknownChannelError`** — A notificação pede um canal (ex.: `sms`) que não foi registado no `Notifier`/plugin. Regista o driver em `notificationsPlugin({ channels: [...] })`. Nota: este erro interrompe o `notify()` — é um erro de configuração, não de entrega.
+**`UnknownChannelError`** — The notification requests a channel (e.g. `sms`) that wasn't registered with `Notifier`/plugin. Register the driver in `notificationsPlugin({ channels: [...] })`. Note: this error interrupts `notify()` — it's a configuration error, not a delivery error.
 
-**`MissingRendererError`** — A notificação lista um canal em `channels` mas não tem a função correspondente em `via`. Adiciona `via.<canal>`.
+**`MissingRendererError`** — The notification lists a channel in `channels` but has no corresponding function in `via`. Add `via.<channel>`.
 
-**O canal `mail` aparece em `failed` com `NOTIFICATION_EMAIL_MISSING`** — O destinatário não tem `email`. Ou garante o email, ou usa `channels` dinâmicos para excluir o canal quando falta.
+**The `mail` channel appears in `failed` with `NOTIFICATION_EMAIL_MISSING`** — The recipient has no `email`. Either ensure the email is present, or use dynamic `channels` to exclude the channel when it's missing.
 
-**O email não sai mas o in-app funciona** — O `MailChannel` só é ligado automaticamente se o `mailerPlugin` estiver registado (idealmente antes do `notificationsPlugin`). Verifica a lista de plugins.
+**Email doesn't go out but in-app works** — `MailChannel` is only wired automatically if `mailerPlugin` is registered (ideally before `notificationsPlugin`). Check the plugin list.
 
-**As notificações in-app desaparecem ao reiniciar** — O `MemoryInAppStore` vive em memória. Em produção, implementa `InAppStore` sobre a tua base de dados e passa-o em `notificationsPlugin({ inApp: minhaStore })`.
+**In-app notifications disappear on restart** — `MemoryInAppStore` lives in memory. In production, implement `InAppStore` over your database and pass it via `notificationsPlugin({ inApp: myStore })`.
 
-**Com `useQueue` nada é entregue** — O `notify()` só enfileira; o worker tem de chamar `notifier.deliver(delivery)`.
+**With `useQueue` nothing gets delivered** — `notify()` only enqueues; the worker must call `notifier.deliver(delivery)`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **@machize/core** — contentor de dependências (tokens `NOTIFIER`/`IN_APP`) e `HookBus` (hooks `notification:sent`/`notification:failed`).
-- **@machize/mailer** — o `MailChannel` converte a mensagem do canal `mail` num email e envia-o pelo `Mailer` registado, herdando o remetente por tenant e a fila do mailer.
-- **@machize/queue** — combina com `useQueue` para entregas em segundo plano com retries.
-- **@machize/subscriptions** — os hooks de faturação (`billing:subscribed`, `billing:trial_expired`, ...) são o sítio típico para chamar `notifier.notify(...)`.
-- **@machize/webhooks** — enquanto este módulo avisa *utilizadores*, o de webhooks avisa *outros sistemas* (por HTTP); usam-se em conjunto para o mesmo evento de domínio.
+- **@machize/core** — dependency container (`NOTIFIER`/`IN_APP` tokens) and `HookBus` (hooks `notification:sent`/`notification:failed`).
+- **@machize/mailer** — `MailChannel` converts the `mail` channel's message into an email and sends it through the registered `Mailer`, inheriting the per-tenant sender and the mailer's queue.
+- **@machize/queue** — combine with `useQueue` for background delivery with retries.
+- **@machize/subscriptions** — billing hooks (`billing:subscribed`, `billing:trial_expired`, ...) are the typical place to call `notifier.notify(...)`.
+- **@machize/webhooks** — while this module notifies *users*, the webhooks module notifies *other systems* (via HTTP); they're often used together for the same domain event.

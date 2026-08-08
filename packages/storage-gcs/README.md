@@ -1,16 +1,16 @@
 # @machize/storage-gcs
 
-Driver de **Google Cloud Storage** para o [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): guarda ficheiros no GCS sem mudar o código da app. Precisas deste módulo quando corres no Google Cloud e queres GCS em vez de S3 ou disco local.
+**Google Cloud Storage** driver for [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): stores files on GCS without changing your app's code. You need this module when you run on Google Cloud and want GCS instead of S3 or local disk.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/storage-gcs @google-cloud/storage
 ```
 
-O `@google-cloud/storage` é uma **peer dependency**. Credenciais pela cadeia padrão do GCP (ADC, `keyFilename`, service account).
+`@google-cloud/storage` is a **peer dependency**. Credentials follow GCP's standard chain (ADC, `keyFilename`, service account).
 
-## Uso
+## Usage
 
 ```ts
 import { storagePlugin } from '@machize/storage'
@@ -21,17 +21,17 @@ storagePlugin({
 })
 ```
 
-Implementa o contrato `StorageDriver` — `put`, `get`, `exists`, `delete`, `list` e **URLs assinados** (`temporaryUrl`). Como todos os discos do Machize, o isolamento por tenant é automático via `Disk`.
+Implements the `StorageDriver` contract — `put`, `get`, `exists`, `delete`, `list`, and **signed URLs** (`temporaryUrl`). Like all Machize disks, per-tenant isolation is automatic via `Disk`.
 
-## Testável sem cloud
+## Testable without the cloud
 
-O cliente (bucket) é **injetável**, por isso a lógica do driver testa-se com um fake — sem GCS:
+The client (bucket) is **injectable**, so the driver's logic can be tested with a fake — no GCS required:
 
 ```ts
 new GcsStorageDriver({ bucket: 'b', client: fakeBucket })
 ```
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/storage`** — este é um driver desse pacote; a API (`Disk`, `storagePlugin`) vem de lá.
-- Drivers irmãos: `S3StorageDriver` (no core) e [`@machize/storage-azure`](https://www.npmjs.com/package/@machize/storage-azure).
+- **`@machize/storage`** — this is a driver for that package; the API (`Disk`, `storagePlugin`) comes from there.
+- Sibling drivers: `S3StorageDriver` (in core) and [`@machize/storage-azure`](https://www.npmjs.com/package/@machize/storage-azure).

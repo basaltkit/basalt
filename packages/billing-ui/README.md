@@ -1,20 +1,20 @@
 # @machize/billing-ui
 
-Página HTML self-contained de **subscrição** para o [`@machize/subscriptions`](https://www.npmjs.com/package/@machize/subscriptions): mostra o plano atual e os planos disponíveis, permite **subscrever/trocar** (Checkout hospedado) e **gerir a faturação** (Customer Portal) — **zero dependências, sem build**. Precisas deste módulo quando queres uma página de "planos & faturação" pronta a usar.
+A self-contained HTML **subscription** page for [`@machize/subscriptions`](https://www.npmjs.com/package/@machize/subscriptions): shows the current plan and the available plans, lets users **subscribe/switch** (hosted Checkout) and **manage billing** (Customer Portal) — **zero dependencies, no build step**. You need this module when you want a ready-to-use "plans & billing" page.
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/subscriptions` já trata dos planos, do Checkout e do Portal. Este módulo é a **UI**: uma página que lê o estado atual da subscrição, apresenta os planos em cartões, e liga os botões ao Checkout (subscrever/trocar) e ao Customer Portal (gerir cartão/cancelar).
+`@machize/subscriptions` already handles plans, Checkout, and the Portal. This module is the **UI**: a page that reads the current subscription state, presents the plans as cards, and wires the buttons to Checkout (subscribe/switch) and the Customer Portal (manage card/cancel).
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/billing-ui @machize/subscriptions
 ```
 
-Depende do `@machize/core`, `@machize/fastify` e `@machize/subscriptions`.
+Depends on `@machize/core`, `@machize/fastify`, and `@machize/subscriptions`.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -40,35 +40,35 @@ const app = await createApp({
 }).boot()
 ```
 
-Abre **`/billing/ui`** (autenticado). A página mostra o plano atual (com estado e trial), lista os planos e liga os botões ao Checkout/Portal.
+Open **`/billing/ui`** (authenticated). The page shows the current plan (with status and trial), lists the plans, and wires the buttons to Checkout/Portal.
 
-## Rotas
+## Routes
 
-`billingUiRoutes({ plans, path?, apiBase?, title?, headers? })` adiciona:
+`billingUiRoutes({ plans, path?, apiBase?, title?, headers? })` adds:
 
-| Rota | Descrição |
+| Route | Description |
 |---|---|
-| `GET /billing/ui` | A página HTML. |
-| `GET /billing/info` | `{ subscription, plans }` para o tenant atual. |
+| `GET /billing/ui` | The HTML page. |
+| `GET /billing/info` | `{ subscription, plans }` for the current tenant. |
 
-O Checkout e o Portal (`POST /billing/checkout`, `/billing/portal`) vêm do `billingRoutes()` do `@machize/subscriptions` — monta-os também.
+Checkout and the Portal (`POST /billing/checkout`, `/billing/portal`) come from `billingRoutes()` in `@machize/subscriptions` — mount those as well.
 
-## Tenancy e autenticação
+## Tenancy and authentication
 
-A página faz `fetch` same-origin (assume sessão autenticada). Para **tenancy por header**, injeta o header:
+The page performs a same-origin `fetch` (assumes an authenticated session). For **header-based tenancy**, inject the header:
 
 ```ts
 billingUiRoutes({ plans, headers: { 'x-tenant-id': 'acme' } })
 ```
 
-Apps por subdomínio não precisam de nada.
+Subdomain-based apps need nothing extra.
 
-## Referência da API
+## API reference
 
-- `billingUiRoutes({ plans, path?, apiBase?, title?, headers? })` — as rotas (`plans` é o mesmo objeto que deste ao `subscriptionsPlugin`).
-- `billingPageHtml(options)` — o HTML como string, para servires à tua maneira.
+- `billingUiRoutes({ plans, path?, apiBase?, title?, headers? })` — the routes (`plans` is the same object you gave to `subscriptionsPlugin`).
+- `billingPageHtml(options)` — the HTML as a string, for serving it your own way.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/subscriptions`** — planos, Checkout, Portal, estado da subscrição.
-- **`@machize/tenancy` / `@machize/auth`** — resolvem o tenant e o utilizador.
+- **`@machize/subscriptions`** — plans, Checkout, Portal, subscription state.
+- **`@machize/tenancy` / `@machize/auth`** — resolve the tenant and the user.

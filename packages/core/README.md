@@ -1,79 +1,79 @@
 # @machize/core
 
-A fundação do framework Machize: o "motor" que arranca a tua aplicação, liga as peças umas às outras (plugins), guarda os serviços partilhados (container) e mantém o contexto de cada pedido. Precisas dele sempre que crias uma aplicação Machize — todos os outros pacotes `@machize/*` assentam neste.
+The foundation of the Machize framework: the "engine" that boots your application, wires the pieces together (plugins), holds the shared services (container), and maintains the context of each request. You need this whenever you create a Machize application — every other `@machize/*` package builds on top of it.
 
-## O que este módulo resolve
+## What this module solves
 
-Quando uma aplicação cresce, passa a ter muitas peças: base de dados, e-mail, filas de trabalho, autenticação, etc. Sem organização, cada peça liga-se às outras "à mão" e torna-se difícil saber por que ordem devem arrancar, como partilham objetos entre si e como se desligam corretamente quando a aplicação termina. O `@machize/core` resolve exatamente isso.
+As an application grows, it accumulates many pieces: database, email, job queues, authentication, etc. Without organization, each piece gets wired to the others "by hand", and it becomes hard to know in what order they should start, how they share objects with each other, and how they shut down correctly when the application terminates. `@machize/core` solves exactly that.
 
-A ideia central é o **plugin**: um pequeno módulo com um nome (por exemplo `machize:cache`) que sabe registar os seus serviços, arrancar e desligar-se. A aplicação (`createApp`) recebe uma lista de plugins, ordena-os automaticamente pelas dependências declaradas e executa o ciclo de vida completo: registar → arrancar → (mais tarde) desligar, pela ordem certa.
+The central idea is the **plugin**: a small module with a name (for example `machize:cache`) that knows how to register its services, start up, and shut down. The application (`createApp`) receives a list of plugins, automatically orders them by their declared dependencies, and runs the full lifecycle: register → boot → (later) shutdown, in the right order.
 
-Para os plugins partilharem serviços sem se conhecerem diretamente, existe o **container de injeção de dependências** (em inglês *dependency injection*, ou DI): uma "caixa" onde um plugin coloca um serviço identificado por um **token** (uma chave com tipo) e qualquer outro plugin o vai buscar por esse token. O pacote inclui ainda: **hooks** (avisos internos entre plugins), **contexto por pedido** (dados como o `requestId` disponíveis em qualquer ponto do código), **métricas** no formato Prometheus e **tracing** (rastreio de operações) compatível com OpenTelemetry — tudo sem dependências externas.
+For plugins to share services without knowing about each other directly, there's the **dependency injection container** (DI for short): a "box" where one plugin places a service identified by a **token** (a typed key) and any other plugin retrieves it by that token. The package also includes: **hooks** (internal notifications between plugins), **per-request context** (data like `requestId` available anywhere in the code), **metrics** in Prometheus format, and **tracing** (operation tracking) compatible with OpenTelemetry — all with no external dependencies.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/core
 ```
 
-Requisitos: Node.js (usa `node:async_hooks` e `node:crypto`) e TypeScript. O pacote é ESM (`"type": "module"`).
+Requirements: Node.js (uses `node:async_hooks` and `node:crypto`) and TypeScript. The package is ESM (`"type": "module"`).
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-Vamos criar uma aplicação com dois plugins: um fornece um serviço de saudação e o outro usa-o.
+Let's create an application with two plugins: one provides a greeting service, and the other uses it.
 
-1. Cria um token para identificar o serviço.
-2. Cria um plugin que regista o serviço no container.
-3. Cria um segundo plugin que depende do primeiro e usa o serviço.
-4. Arranca a aplicação.
+1. Create a token to identify the service.
+2. Create a plugin that registers the service in the container.
+3. Create a second plugin that depends on the first and uses the service.
+4. Boot the application.
 
 ```ts
 import { createApp, createToken, definePlugin } from '@machize/core'
 
-// 1. O token é a "etiqueta com tipo" do serviço no container.
+// 1. The token is the service's "typed label" in the container.
 interface Greeter {
   greet(name: string): string
 }
 const GREETER = createToken<Greeter>('greeter')
 
-// 2. Plugin que fornece o serviço (fase register: só regista, sem I/O).
+// 2. Plugin that provides the service (register phase: registration only, no I/O).
 const greeterPlugin = definePlugin({
   name: 'app:greeter',
   register({ container }) {
     container.singleton(GREETER, () => ({
-      greet: (name) => `Olá, ${name}!`,
+      greet: (name) => `Hello, ${name}!`,
     }))
   },
 })
 
-// 3. Plugin que consome o serviço (fase boot: já pode usar tudo).
+// 3. Plugin that consumes the service (boot phase: everything is available).
 const helloPlugin = definePlugin({
   name: 'app:hello',
-  dependsOn: ['app:greeter'], // garante a ordem de arranque
+  dependsOn: ['app:greeter'], // ensures boot order
   boot({ container }) {
     console.log(container.get(GREETER).greet('Machize'))
   },
 })
 
-// 4. Arranque e paragem.
+// 4. Boot and shutdown.
 const app = await createApp({ plugins: [greeterPlugin, helloPlugin] }).boot()
-// ... a aplicação corre ...
+// ... the application runs ...
 await app.shutdown()
 ```
 
-Ao correr, imprime `Olá, Machize!`. Repara que a ordem no array não importa: o `dependsOn` garante que `app:greeter` regista e arranca antes de `app:hello`.
+When run, it prints `Hello, Machize!`. Note that the order in the array doesn't matter: `dependsOn` ensures `app:greeter` registers and boots before `app:hello`.
 
-## Guia de utilização
+## Usage guide
 
-### Plugins e ciclo de vida
+### Plugins and lifecycle
 
-Um plugin é um objeto simples com um nome e até três funções de ciclo de vida, todas opcionais:
+A plugin is a simple object with a name and up to three lifecycle functions, all optional:
 
-- `register(context)` — fase 1: colocar serviços no container. Sem efeitos externos (sem ligações de rede, sem ficheiros).
-- `boot(context)` — fase 2: ligar a bases de dados, subscrever hooks, iniciar recursos.
-- `shutdown(context)` — desligar de forma limpa. Corre pela **ordem inversa** do arranque; se um plugin falhar ao desligar, os restantes desligam na mesma e os erros são agregados num `AggregateError`.
+- `register(context)` — phase 1: place services in the container. No external effects (no network connections, no files).
+- `boot(context)` — phase 2: connect to databases, subscribe to hooks, start resources.
+- `shutdown(context)` — shut down cleanly. Runs in **reverse order** of startup; if a plugin fails to shut down, the rest still shut down and the errors are aggregated into an `AggregateError`.
 
-O `context` recebido em cada fase tem três campos: `container`, `hooks` e `config` (a fatia de configuração do plugin, já validada — ver abaixo).
+The `context` received at each phase has three fields: `container`, `hooks`, and `config` (the plugin's configuration slice, already validated — see below).
 
 ```ts
 import { definePlugin } from '@machize/core'
@@ -81,20 +81,20 @@ import { definePlugin } from '@machize/core'
 const dbPlugin = definePlugin({
   name: 'app:db',
   register({ container }) {
-    /* registar bindings */
+    /* register bindings */
   },
   async boot() {
-    /* ligar à base de dados */
+    /* connect to the database */
   },
   async shutdown() {
-    /* fechar a ligação */
+    /* close the connection */
   },
 })
 ```
 
-### Configuração validada por plugin
+### Validated per-plugin configuration
 
-Cada plugin pode declarar um `configSchema` (um "schema" é uma descrição do formato esperado dos dados, para validação). Qualquer objeto com um método `safeParse` serve — os schemas da biblioteca [Zod](https://zod.dev) são compatíveis. No arranque, a fatia `config[nomeDoPlugin]` é validada; se falhar, o `boot()` lança `ConfigValidationError` imediatamente (falha cedo, antes de a aplicação servir pedidos).
+Each plugin can declare a `configSchema` (a "schema" is a description of the expected data shape, for validation). Any object with a `safeParse` method works — schemas from the [Zod](https://zod.dev) library are compatible. At startup, the `config[pluginName]` slice is validated; if it fails, `boot()` immediately throws `ConfigValidationError` (fail fast, before the application serves requests).
 
 ```ts
 import { createApp, definePlugin } from '@machize/core'
@@ -104,23 +104,23 @@ const cachePlugin = definePlugin<{ driver: string }>({
   name: 'machize:cache',
   configSchema: z.object({ driver: z.string() }),
   boot({ config }) {
-    console.log(`Cache com driver: ${config.driver}`) // config já tipada e validada
+    console.log(`Cache with driver: ${config.driver}`) // config already typed and validated
   },
 })
 
 await createApp({
   plugins: [cachePlugin],
-  config: { 'machize:cache': { driver: 'memory' } }, // chaveado pelo nome do plugin
+  config: { 'machize:cache': { driver: 'memory' } }, // keyed by plugin name
 }).boot()
 ```
 
-### Container de injeção de dependências
+### Dependency injection container
 
-O container guarda "receitas" (*factories*: funções que criam o serviço) associadas a tokens. Há três tempos de vida (`Lifetime`):
+The container holds "recipes" (*factories*: functions that create the service) associated with tokens. There are three lifetimes (`Lifetime`):
 
-- `singleton` — uma única instância para toda a aplicação (é o valor por omissão).
-- `scoped` — uma instância por âmbito (por exemplo, por pedido HTTP), criada com `createScope()`.
-- `transient` — uma instância nova em cada `get()`.
+- `singleton` — a single instance for the whole application (the default).
+- `scoped` — one instance per scope (for example, per HTTP request), created with `createScope()`.
+- `transient` — a fresh instance on every `get()`.
 
 ```ts
 import { Container, createToken } from '@machize/core'
@@ -130,42 +130,42 @@ const NAME = createToken<string>('name')
 
 const container = new Container()
 container.singleton(NAME, () => 'Machize')
-// A factory recebe o container — é assim que se injetam dependências:
+// The factory receives the container — that's how dependencies are injected:
 container.singleton(COUNTER, (c) => ({ n: c.get(NAME).length }))
 
 console.log(container.get(COUNTER).n) // 7
 
-// Âmbitos (por exemplo, um por pedido):
+// Scopes (for example, one per request):
 container.scoped(COUNTER, () => ({ n: 0 }))
 const scopeA = container.createScope()
 const scopeB = container.createScope()
-scopeA.get(COUNTER).n = 10 // não afeta o scopeB
+scopeA.get(COUNTER).n = 10 // does not affect scopeB
 ```
 
-O container deteta ciclos (A precisa de B que precisa de A) e lança `CircularDependencyError` com a cadeia completa; um token não registado lança `UnknownTokenError`.
+The container detects cycles (A needs B which needs A) and throws `CircularDependencyError` with the full chain; an unregistered token throws `UnknownTokenError`.
 
-### Hooks (avisos entre plugins)
+### Hooks (notifications between plugins)
 
-O `HookBus` permite que um plugin anuncie acontecimentos ("hooks") e outros reajam, sem se importarem uns aos outros. A própria aplicação emite `app:registered`, `app:booted` e `app:shutdown`.
+`HookBus` lets one plugin announce events ("hooks") and others react, without knowing about each other. The application itself emits `app:registered`, `app:booted`, and `app:shutdown`.
 
 ```ts
 import { HookBus } from '@machize/core'
 
 const hooks = new HookBus()
 
-// Handler com prioridade: valores maiores correm primeiro (por omissão 0).
+// Handler with priority: higher values run first (default 0).
 const off = hooks.on('app:booted', ({ app }) => {
-  console.log('A aplicação arrancou!')
+  console.log('The application has booted!')
 }, { priority: 10 })
 
-// Ouve TODAS as emissões (útil para auditoria/devtools); corre depois dos específicos.
+// Listens to ALL emissions (useful for auditing/devtools); runs after specific handlers.
 hooks.onAny((hook, payload) => console.log(`hook: ${hook}`))
 
 await hooks.emit('app:booted', { app })
-off() // cancelar a subscrição
+off() // cancel the subscription
 ```
 
-Pacotes podem acrescentar hooks tipados via *module augmentation* (Avançado):
+Packages can add typed hooks via *module augmentation* (Advanced):
 
 ```ts
 declare module '@machize/core' {
@@ -175,45 +175,45 @@ declare module '@machize/core' {
 }
 ```
 
-### Contexto por pedido (`ctx`)
+### Per-request context (`ctx`)
 
-O contexto transporta dados de um pedido (como `requestId`) por toda a pilha de chamadas, mesmo através de `await`, sem passares argumentos manualmente. Usa `AsyncLocalStorage` do Node.
+The context carries request data (like `requestId`) through the whole call stack, even across `await`s, without manually passing arguments. Uses Node's `AsyncLocalStorage`.
 
 ```ts
 import { ctx, runWithContext, tryCtx } from '@machize/core'
 
-async function servicoProfundo(): Promise<string> {
-  // funciona a qualquer profundidade, sem receber o id por parâmetro:
+async function deepService(): Promise<string> {
+  // works at any depth, without receiving the id as a parameter:
   return ctx().requestId as string
 }
 
-const resultado = await runWithContext({ requestId: 'req-1' }, async () => {
-  return servicoProfundo()
+const result = await runWithContext({ requestId: 'req-1' }, async () => {
+  return deepService()
 })
-console.log(resultado) // 'req-1'
+console.log(result) // 'req-1'
 
-// Fora de um contexto ativo: ctx() lança ContextUnavailableError; tryCtx() devolve undefined.
+// Outside an active context: ctx() throws ContextUnavailableError; tryCtx() returns undefined.
 console.log(tryCtx()) // undefined
 ```
 
-Contextos concorrentes não se misturam: cada `runWithContext` tem o seu.
+Concurrent contexts don't mix: each `runWithContext` has its own.
 
-### Durações legíveis
+### Human-readable durations
 
 ```ts
 import { parseDuration } from '@machize/core'
 
-parseDuration('30s')  // 30000 (milissegundos)
+parseDuration('30s')  // 30000 (milliseconds)
 parseDuration('1.5d') // 129600000
-parseDuration(1500)   // 1500 (números passam diretamente)
-// 'abc', '-5s', NaN → lança MachizeError com code 'DURATION_INVALID'
+parseDuration(1500)   // 1500 (numbers pass through directly)
+// 'abc', '-5s', NaN → throws MachizeError with code 'DURATION_INVALID'
 ```
 
-Unidades aceites: `ms`, `s`, `m`, `h`, `d`.
+Accepted units: `ms`, `s`, `m`, `h`, `d`.
 
-### Métricas (formato Prometheus)
+### Metrics (Prometheus format)
 
-Contadores, medidores e histogramas que se exportam em texto no formato do [Prometheus](https://prometheus.io) (um sistema popular de monitorização) — o suficiente para um endpoint `/metrics`.
+Counters, gauges, and histograms that export as text in [Prometheus](https://prometheus.io) format (a popular monitoring system) — enough for a `/metrics` endpoint.
 
 ```ts
 import { MetricsRegistry } from '@machize/core'
@@ -221,15 +221,15 @@ import { MetricsRegistry } from '@machize/core'
 const registry = new MetricsRegistry()
 
 const requests = registry.counter('http_requests_total', {
-  help: 'Total de pedidos HTTP',
+  help: 'Total HTTP requests',
   labelNames: ['method'],
 })
 requests.inc({ method: 'GET' })
 requests.inc({ method: 'GET' })
 
 const inFlight = registry.gauge('in_flight')
-inFlight.inc() // sobe
-inFlight.dec() // desce
+inFlight.inc() // goes up
+inFlight.dec() // goes down
 inFlight.set(42)
 
 const duration = registry.histogram('request_duration_seconds', {
@@ -237,157 +237,157 @@ const duration = registry.histogram('request_duration_seconds', {
 })
 duration.observe(0.2)
 
-console.log(registry.render()) // texto pronto para o endpoint /metrics
+console.log(registry.render()) // text ready for the /metrics endpoint
 ```
 
-Pedir uma métrica com o mesmo nome devolve sempre a mesma instância. Contadores rejeitam incrementos negativos.
+Requesting a metric with the same name always returns the same instance. Counters reject negative increments.
 
-### Tracing (rastreio distribuído)
+### Tracing (distributed tracing)
 
-*Tracing* é registar quanto tempo demorou cada operação (um *span*) e como se encadeiam entre serviços. A implementação segue a norma W3C `traceparent` e exporta para qualquer coletor OpenTelemetry via OTLP/HTTP — sem instalar o SDK da OpenTelemetry.
+*Tracing* means recording how long each operation (a *span*) took and how they chain across services. The implementation follows the W3C `traceparent` standard and exports to any OpenTelemetry collector via OTLP/HTTP — without installing the OpenTelemetry SDK.
 
 ```ts
 import { ConsoleSpanExporter, Tracer } from '@machize/core'
 
 const tracer = new Tracer({
-  serviceName: 'a-minha-api',
-  exporter: new ConsoleSpanExporter(), // imprime um resumo por span
+  serviceName: 'my-api',
+  exporter: new ConsoleSpanExporter(), // prints a summary per span
 })
 
 const span = tracer.startSpan('GET /users', { kind: 'server' })
 await tracer.inSpan(span, async () => {
-  // spans criados aqui dentro tornam-se filhos automaticamente
+  // spans created inside here automatically become children
   const child = tracer.startSpan('db.query')
   child.setAttribute('db.table', 'users')
   child.end()
 })
-// inSpan termina o span, e marca status 'error' se a função lançar
+// inSpan ends the span, and marks status 'error' if the function throws
 ```
 
-Para produção, usa o `OtlpHttpExporter` (envia para `http://<coletor>:4318/v1/traces` em lotes) e, para continuar um trace vindo de outro serviço, `parseTraceparent(headers['traceparent'])` como `parent` do span.
+For production, use `OtlpHttpExporter` (sends to `http://<collector>:4318/v1/traces` in batches) and, to continue a trace coming from another service, pass `parseTraceparent(headers['traceparent'])` as the span's `parent`.
 
-## Referência da API
+## API reference
 
 ### `createToken<T>(description)` / `Token<T>`
 
-Cria um token de DI tipado. O tipo `T` só existe em tempo de compilação (não há reflexão em runtime). Dois tokens com a mesma descrição são **diferentes** (cada um tem o seu `symbol`).
+Creates a typed DI token. The type `T` only exists at compile time (there is no runtime reflection). Two tokens with the same description are **different** (each has its own `symbol`).
 
 ### `Container`
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `register(token, factory, lifetime?)` | Regista uma factory. `lifetime` por omissão: `'singleton'`. Devolve `this`. |
-| `singleton(token, factory)` | Atalho para `register(..., 'singleton')`. |
-| `scoped(token, factory)` | Uma instância por âmbito (criada no container folha). |
-| `transient(token, factory)` | Instância nova a cada resolução. |
-| `get(token)` | Resolve o serviço. Lança `UnknownTokenError` ou `CircularDependencyError`. |
-| `has(token)` | `true` se existir binding (aqui ou no container pai). |
-| `createScope()` | Cria um container filho: herda bindings, não herda instâncias `scoped`. |
+| `register(token, factory, lifetime?)` | Registers a factory. `lifetime` defaults to: `'singleton'`. Returns `this`. |
+| `singleton(token, factory)` | Shortcut for `register(..., 'singleton')`. |
+| `scoped(token, factory)` | One instance per scope (created in the leaf container). |
+| `transient(token, factory)` | A fresh instance on every resolution. |
+| `get(token)` | Resolves the service. Throws `UnknownTokenError` or `CircularDependencyError`. |
+| `has(token)` | `true` if a binding exists (here or in the parent container). |
+| `createScope()` | Creates a child container: inherits bindings, does not inherit `scoped` instances. |
 
 `Factory<T>` = `(container: Container) => T`. `Lifetime` = `'singleton' | 'scoped' | 'transient'`.
 
 ### `definePlugin(plugin)` / `MachizePlugin<TConfig>`
 
-`definePlugin` apenas devolve o objeto com tipagem — é açúcar para autocompletar.
+`definePlugin` simply returns the object with typing — it's syntactic sugar for autocompletion.
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | sim | — | Nome único; convenção `machize:<pacote>` ou `app:<nome>`. |
-| `dependsOn` | `string[]` | não | `[]` | Plugins que registam/arrancam antes deste. |
-| `configSchema` | `ConfigSchema<TConfig>` | não | — | Objeto com `safeParse` (compatível com Zod); valida a fatia de config. |
-| `register` | `(ctx) => void \| Promise<void>` | não | — | Fase 1: registar bindings, sem I/O. |
-| `boot` | `(ctx) => void \| Promise<void>` | não | — | Fase 2: ligar recursos, subscrever hooks. |
-| `shutdown` | `(ctx) => void \| Promise<void>` | não | — | Desligar; corre por ordem inversa. |
+| `name` | `string` | yes | — | Unique name; convention `machize:<package>` or `app:<name>`. |
+| `dependsOn` | `string[]` | no | `[]` | Plugins that register/boot before this one. |
+| `configSchema` | `ConfigSchema<TConfig>` | no | — | Object with `safeParse` (Zod-compatible); validates the config slice. |
+| `register` | `(ctx) => void \| Promise<void>` | no | — | Phase 1: register bindings, no I/O. |
+| `boot` | `(ctx) => void \| Promise<void>` | no | — | Phase 2: connect resources, subscribe to hooks. |
+| `shutdown` | `(ctx) => void \| Promise<void>` | no | — | Shut down; runs in reverse order. |
 
 `PluginContext<TConfig>` = `{ container, hooks, config }`.
 
 ### `createApp(options)` / `MachizeApp`
 
-| Opção (`CreateAppOptions`) | Tipo | Obrigatório? | Default | Descrição |
+| Option (`CreateAppOptions`) | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `plugins` | `MachizePlugin[]` | não | `[]` | Plugins; ordenados topologicamente por `dependsOn`. |
-| `config` | `Record<string, unknown>` | não | `{}` | Config em bruto, chaveada pelo nome de cada plugin. |
+| `plugins` | `MachizePlugin[]` | no | `[]` | Plugins; topologically ordered by `dependsOn`. |
+| `config` | `Record<string, unknown>` | no | `{}` | Raw config, keyed by each plugin's name. |
 
-Membros de `MachizeApp`: `container`, `hooks`, `phase` (`LifecyclePhase` = `'created' | 'registering' | 'booting' | 'ready' | 'shutting-down' | 'stopped'`), `boot()` (só pode ser chamado uma vez; senão lança `LifecycleError`) e `shutdown()` (idempotente). Hooks emitidos: `app:registered`, `app:booted`, `app:shutdown`.
+Members of `MachizeApp`: `container`, `hooks`, `phase` (`LifecyclePhase` = `'created' | 'registering' | 'booting' | 'ready' | 'shutting-down' | 'stopped'`), `boot()` (can only be called once; otherwise throws `LifecycleError`), and `shutdown()` (idempotent). Emitted hooks: `app:registered`, `app:booted`, `app:shutdown`.
 
 ### `HookBus`
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `on(hook, handler, { priority? })` | Subscreve; `priority` maior corre primeiro (default 0). Devolve função para cancelar. |
-| `onAny(handler)` | Recebe `(hook, payload)` de todas as emissões, depois dos específicos. |
-| `emit(hook, payload)` | Executa os handlers **em série** por prioridade; `await`-a cada um. |
+| `on(hook, handler, { priority? })` | Subscribes; higher `priority` runs first (default 0). Returns a function to cancel. |
+| `onAny(handler)` | Receives `(hook, payload)` from every emission, after the specific handlers. |
+| `emit(hook, payload)` | Runs handlers **in series** by priority; `await`s each one. |
 
-### Contexto
+### Context
 
-| Função | Descrição |
+| Function | Description |
 |---|---|
-| `ctx()` | Contexto ativo (`RequestContext`); lança `ContextUnavailableError` fora de um âmbito. |
-| `tryCtx()` | Contexto ativo ou `undefined`. |
-| `runWithContext(context, fn)` | Executa `fn` com o contexto ativo (propaga por `await`s e callbacks). |
+| `ctx()` | The active context (`RequestContext`); throws `ContextUnavailableError` outside a scope. |
+| `tryCtx()` | The active context, or `undefined`. |
+| `runWithContext(context, fn)` | Runs `fn` with the active context (propagates across `await`s and callbacks). |
 
-`RequestContext` tem `requestId?`, `correlationId?` e aceita chaves extra (extensível por *module augmentation*).
+`RequestContext` has `requestId?`, `correlationId?`, and accepts extra keys (extensible via *module augmentation*).
 
 ### `parseDuration(input)`
 
-`DurationInput` = `number | string`. Converte para milissegundos; lança `MachizeError` (`DURATION_INVALID`) se inválido.
+`DurationInput` = `number | string`. Converts to milliseconds; throws `MachizeError` (`DURATION_INVALID`) if invalid.
 
-### Erros
+### Errors
 
-Todos estendem `MachizeError`, que tem um `code` estável (podes fazer `if (error.code === '...')` com segurança):
+All extend `MachizeError`, which has a stable `code` (you can safely do `if (error.code === '...')`):
 
-| Classe | `code` |
+| Class | `code` |
 |---|---|
 | `ContextUnavailableError` | `CONTEXT_UNAVAILABLE` |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` |
 | `CircularDependencyError` | `DI_CIRCULAR_DEPENDENCY` |
 | `PluginDependencyError` | `PLUGIN_DEPENDENCY` |
-| `ConfigValidationError` (campos `plugin`, `issues`) | `CONFIG_INVALID` |
+| `ConfigValidationError` (fields `plugin`, `issues`) | `CONFIG_INVALID` |
 | `LifecycleError` | `LIFECYCLE` |
 
-### Métricas
+### Metrics
 
 - `MetricsRegistry`: `counter(name, options?)`, `gauge(name, options?)`, `histogram(name, options? & { buckets? })`, `render()`.
-- `MetricOptions`: `help?` (default: o próprio nome), `labelNames?` (default `[]`).
-- `Counter.inc(labels?, value?)` — `value` default 1, nunca negativo.
+- `MetricOptions`: `help?` (default: the name itself), `labelNames?` (default `[]`).
+- `Counter.inc(labels?, value?)` — `value` defaults to 1, never negative.
 - `Gauge.set(value, labels?)`, `inc(labels?, value?)`, `dec(labels?, value?)`.
-- `Histogram.observe(value, labels?)`; `buckets` default `DEFAULT_BUCKETS` (`[0.005 … 10]` segundos).
-- `Metric` (classe abstrata) e `Labels` = `Record<string, string>`.
+- `Histogram.observe(value, labels?)`; `buckets` default `DEFAULT_BUCKETS` (`[0.005 … 10]` seconds).
+- `Metric` (abstract class) and `Labels` = `Record<string, string>`.
 
 ### Tracing
 
 - `Tracer(options?)` — `TracerOptions`: `exporter?`, `serviceName?` (default `'machize'`), `sampled?` (default `true`), `clock?` (default `Date.now`), `idGenerator?`.
-- `tracer.startSpan(name, { parent?, kind?, attributes? })` — `kind` default `'internal'`; sem `parent`, usa o span ativo como pai.
-- `tracer.inSpan(span, fn)` — ativa o span, marca `error` se `fn` lançar, termina-o sempre.
-- `tracer.forceFlush()` — força o envio do exportador.
-- `Span`: `setAttribute(key, value)`, `setStatus(status, message?)`, `end()` (idempotente).
-- `activeSpan()` — o span em curso ou `undefined`.
-- `parseTraceparent(header)` / `formatTraceparent(context)` — cabeçalho W3C.
-- Exportadores (`SpanExporter`): `InMemorySpanExporter` (testes), `ConsoleSpanExporter` (dev), `OtlpHttpExporter` (`OtlpHttpExporterOptions`: `url` obrigatório, `serviceName?`, `headers?`, `maxBatch?` default 100, `fetchImpl?`). O envio é *best-effort*: falhas de rede nunca quebram o pedido.
-- `toOtlpJson(spans, serviceName)` (Avançado) — serializa para o formato OTLP/JSON.
-- Tipos: `SpanContext`, `FinishedSpan`, `SpanKind`, `SpanStatus`, `AttributeValue`.
+- `tracer.startSpan(name, { parent?, kind?, attributes? })` — `kind` defaults to `'internal'`; without `parent`, uses the active span as parent.
+- `tracer.inSpan(span, fn)` — activates the span, marks `error` if `fn` throws, always ends it.
+- `tracer.forceFlush()` — forces the exporter to send.
+- `Span`: `setAttribute(key, value)`, `setStatus(status, message?)`, `end()` (idempotent).
+- `activeSpan()` — the current span, or `undefined`.
+- `parseTraceparent(header)` / `formatTraceparent(context)` — W3C header.
+- Exporters (`SpanExporter`): `InMemorySpanExporter` (tests), `ConsoleSpanExporter` (dev), `OtlpHttpExporter` (`OtlpHttpExporterOptions`: `url` required, `serviceName?`, `headers?`, `maxBatch?` default 100, `fetchImpl?`). Sending is *best-effort*: network failures never break the request.
+- `toOtlpJson(spans, serviceName)` (Advanced) — serializes to OTLP/JSON format.
+- Types: `SpanContext`, `FinishedSpan`, `SpanKind`, `SpanStatus`, `AttributeValue`.
 
-### Metadados (Avançado)
+### Metadata (Advanced)
 
-`MetadataRegistry` (`add(bucket, entry)`, `get(bucket)`, `bucketNames()`), token `METADATA` e `ensureMetadata(container)` — registo central do que cada plugin declarou (rotas, comandos, agendamentos), lido por ferramentas (CLI, docs) sem importarem o pacote produtor.
+`MetadataRegistry` (`add(bucket, entry)`, `get(bucket)`, `bucketNames()`), the `METADATA` token, and `ensureMetadata(container)` — a central registry of what each plugin declared (routes, commands, schedules), read by tooling (CLI, docs) without importing the producing package.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"No provider registered for token …" (`DI_UNKNOWN_TOKEN`)** — Fizeste `container.get(TOKEN)` mas nenhum plugin registou esse token. Verifica se o plugin que o fornece está na lista de `plugins` e se o consumidor tem `dependsOn` para ele.
+**"No provider registered for token …" (`DI_UNKNOWN_TOKEN`)** — You called `container.get(TOKEN)` but no plugin registered that token. Check that the plugin providing it is in the `plugins` list and that the consumer has `dependsOn` pointing to it.
 
-**"ctx() was called outside of an active context" (`CONTEXT_UNAVAILABLE`)** — Chamaste `ctx()` fora de `runWithContext`. Embrulha o ponto de entrada (handler HTTP, worker) com `runWithContext({...}, fn)` ou usa `tryCtx()` quando um contexto é opcional.
+**"ctx() was called outside of an active context" (`CONTEXT_UNAVAILABLE`)** — You called `ctx()` outside `runWithContext`. Wrap the entry point (HTTP handler, worker) with `runWithContext({...}, fn)`, or use `tryCtx()` when a context is optional.
 
-**"boot() called in phase …" (`LIFECYCLE`)** — `boot()` só pode ser chamado uma vez por aplicação. Cria uma nova app com `createApp()` se precisares de arrancar de novo (útil em testes).
+**"boot() called in phase …" (`LIFECYCLE`)** — `boot()` can only be called once per application. Create a new app with `createApp()` if you need to boot again (useful in tests).
 
-**"Plugin X depends on Y, which was not added to the app" (`PLUGIN_DEPENDENCY`)** — Falta adicionar o plugin `Y` ao array `plugins`. O mesmo erro aparece para plugins duplicados e ciclos (`a -> b -> a`).
+**"Plugin X depends on Y, which was not added to the app" (`PLUGIN_DEPENDENCY`)** — Plugin `Y` is missing from the `plugins` array. The same error appears for duplicate plugins and for cycles (`a -> b -> a`).
 
-**"Invalid configuration for plugin …" (`CONFIG_INVALID`)** — A fatia `config['nome-do-plugin']` não passou no `configSchema`. Confirma que a chave no objeto `config` é exatamente o `name` do plugin.
+**"Invalid configuration for plugin …" (`CONFIG_INVALID`)** — The `config['plugin-name']` slice didn't pass `configSchema`. Confirm the key in the `config` object exactly matches the plugin's `name`.
 
-**Dois tokens "iguais" comportam-se como diferentes** — É intencional: cada `createToken` cria um `symbol` novo. Exporta o token de um módulo partilhado e importa-o em todo o lado, em vez de o recriares.
+**Two "equal" tokens behave as different ones** — This is intentional: each `createToken` creates a new `symbol`. Export the token from a shared module and import it everywhere, instead of recreating it.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/config`** — fornece o `configPlugin`, que regista um `ConfigRepository` no container do core através do token `CONFIG`.
-- **`@machize/env`** — usa o `MachizeError` do core para o seu `EnvValidationError`; costuma ser o primeiro passo antes de montares o objeto `config` que passas ao `createApp`.
-- **`@machize/events`** — fornece o `eventsPlugin` (bus de eventos no token `EVENTS`) e o `outboxPlugin`; ambos são plugins do core e o outbox usa `tryCtx()` para ler o tenant do contexto.
-- Qualquer pacote do ecossistema estende os tipos `MachizeHooks` e `RequestContext` via *module augmentation* para acrescentar hooks e campos de contexto tipados.
+- **`@machize/config`** — provides `configPlugin`, which registers a `ConfigRepository` in the core container via the `CONFIG` token.
+- **`@machize/env`** — uses core's `MachizeError` for its `EnvValidationError`; usually the first step before assembling the `config` object you pass to `createApp`.
+- **`@machize/events`** — provides `eventsPlugin` (an event bus on the `EVENTS` token) and `outboxPlugin`; both are core plugins, and the outbox uses `tryCtx()` to read the tenant from the context.
+- Any package in the ecosystem extends the `MachizeHooks` and `RequestContext` types via *module augmentation* to add typed hooks and context fields.
