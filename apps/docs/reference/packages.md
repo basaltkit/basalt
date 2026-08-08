@@ -2,7 +2,7 @@
 
 Machize is a set of small, focused packages under the `@machize/*` scope. Each
 works on its own; together they form the framework. Versions move in lockstep
-(currently **0.23.0**, 53 packages).
+(currently **0.31.0**, 69 packages).
 
 ## Foundation
 
@@ -94,7 +94,7 @@ Dependency-free HTML pages served over your existing JSON routes.
 | `create-machize` | Project scaffolder |
 | `@machize/cli` · `@machize/generator` | The `mach` command framework and `mach make` scaffolding |
 | `@machize/testing` | `createTestApp`, mail/queue fakes, time travel |
-| `@machize/admin` · `@machize/dashboard` · `@machize/admin-react` | Headless admin/dashboard engines + React binding |
+| `@machize/admin` · `@machize/dashboard` · `@machize/admin-react` · `@machize/admin-shadcn` | Headless admin/dashboard engines + React and shadcn/ui bindings |
 
 ## The dependency rule
 
