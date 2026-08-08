@@ -1,6 +1,6 @@
 {
   "name": "@machize/comments-prisma",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Prisma-backed implementation of the @machize/comments CommentStore — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",

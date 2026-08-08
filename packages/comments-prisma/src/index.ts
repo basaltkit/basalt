@@ -129,6 +129,24 @@ export interface PrismaCommentsStores {
  * commentsPlugin({ store: c.store })
  * ```
  */
+// Fail fast with an actionable message when the Prisma client lacks the models
+// this package needs (the alternative is a cryptic "reading 'create' of undefined").
+function ensureModel(client: unknown, delegate: string, pkg: string): void {
+  let value: unknown
+  try {
+    value = (client as Record<string, unknown>)[delegate]
+  } catch {
+    return // lazy/proxy client (e.g. database-per-tenant) — validated at first use
+  }
+  if (value == null) {
+    throw new Error(
+      `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
+        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+    )
+  }
+}
+
 export function prismaCommentsStore(client: PrismaCommentsClient): PrismaCommentsStores {
+  ensureModel(client, 'comment', '@machize/comments-prisma')
   return { store: new PrismaCommentStore(client) }
 }

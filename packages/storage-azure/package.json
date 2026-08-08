@@ -1,6 +1,6 @@
 {
   "name": "@machize/storage-azure",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Azure Blob Storage driver for @machize/storage — put/get/list/delete/SAS URLs over @azure/storage-blob, with an injectable client for testing.",
   "license": "MIT",
   "type": "module",

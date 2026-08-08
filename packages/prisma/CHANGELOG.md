@@ -1,5 +1,11 @@
 # @machize/prisma
 
+## 1.0.4
+
+### Patch Changes
+
+- Add the `mach prisma:sync` command — discovers installed @machize/*-prisma packages and merges their models into your prisma/schema.prisma (interactive by default; --yes/--all non-interactive, --only=, --push/--migrate, --schema=). Exports prismaSyncCommand + extractSchemaBlocks.
+
 ## 1.0.0
 
 ### Major Changes

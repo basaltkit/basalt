@@ -1,6 +1,6 @@
 {
   "name": "@machize/queue",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Machize queues on top of BullMQ: declarative jobs with Zod payloads, context propagation (tenant/requestId) to workers and a sync driver for tests.",
   "license": "MIT",
   "type": "module",

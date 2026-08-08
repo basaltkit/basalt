@@ -36,6 +36,11 @@ export {
   tenantMigrateCommand,
   type TenantMigrateCommandConfig,
 } from './migrate-command.js'
+export {
+  prismaSyncCommand,
+  extractSchemaBlocks,
+  type PrismaSyncCommandOptions,
+} from './sync-command.js'
 
 declare module '@machize/core' {
   interface RequestContext {
