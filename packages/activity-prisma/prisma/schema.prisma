@@ -1,0 +1,28 @@
+// Reference schema for @machize/activity-prisma.
+// Copy this model into your app's schema.prisma, migrate, and pass the client
+// to `prismaActivityStore()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model ActivityRecord {
+  id          String   @id
+  log         String
+  description String
+  subjectType String?
+  subjectId   String?
+  causerId    String?
+  tenantId    String?
+  properties  String?
+  at          DateTime
+
+  @@index([tenantId, at])
+  @@index([subjectType, subjectId])
+  @@map("activity_records")
+}

@@ -1,0 +1,7 @@
+# @machize/audit-sqlite
+
+## 0.29.0
+
+### Minor Changes
+
+- Initial release. Durable, SQLite-backed implementation of the @machize/audit `AuditStore` (append-only, with the event wildcard), on Node's built-in `node:sqlite`, with zero external dependencies. `sqliteAuditStore(location)` returns the store named to drop straight into `auditPlugin`. The single-node counterpart to `@machize/audit-prisma`.

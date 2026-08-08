@@ -1,0 +1,26 @@
+// Reference schema for @machize/audit-prisma.
+// Copy this model into your app's schema.prisma, migrate, and pass the client
+// to `prismaAuditStore()`. Append-only by contract.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AuditEntry {
+  id        String   @id
+  source    String
+  event     String
+  payload   String?
+  actorId   String?
+  tenantId  String?
+  requestId String?
+  at        DateTime
+
+  @@index([tenantId, at])
+  @@map("audit_entries")
+}

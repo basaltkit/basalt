@@ -1,6 +1,6 @@
 {
   "name": "@machize/subscriptions-prisma",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Prisma-backed implementations of the @machize/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
