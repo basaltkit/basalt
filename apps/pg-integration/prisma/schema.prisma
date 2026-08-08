@@ -16,3 +16,225 @@ model Project {
 
   @@index([tenantId])
 }
+
+// --- store models (for @machize/*-prisma integration tests) ---
+
+
+model AuthUser {
+  id            String  @id
+  email         String  @unique
+  passwordHash  String
+  emailVerified Boolean @default(false)
+
+  @@map("auth_users")
+}
+
+model AuthSession {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model AuthRefreshToken {
+  token     String    @id
+  familyId  String
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([familyId])
+  @@index([userId])
+  @@map("auth_refresh_tokens")
+}
+
+model AuthToken {
+  token     String    @id
+  userId    String
+  purpose   String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([userId, purpose])
+  @@map("auth_tokens")
+}
+
+model AuthApiKey {
+  id         String    @id
+  name       String
+  prefix     String
+  hash       String    @unique
+  tenantId   String?
+  userId     String?
+  scopes     String[]
+  createdAt  DateTime
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("auth_api_keys")
+}
+
+model AuthMfa {
+  userId        String   @id
+  secret        String
+  enabled       Boolean  @default(false)
+  recoveryCodes String[]
+
+  @@map("auth_mfa")
+}
+
+
+model TeamMembership {
+  tenantId  String
+  userId    String
+  role      String
+  createdAt DateTime
+
+  @@id([tenantId, userId])
+  @@map("team_memberships")
+}
+
+model TeamInvitation {
+  id         String    @id
+  tenantId   String
+  email      String
+  role       String
+  token      String    @unique
+  invitedBy  String?
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId, email])
+  @@map("team_invitations")
+}
+
+
+model Subscription {
+  billableId        String    @id
+  plan              String
+  period            String
+  status            String
+  trialEndsAt       DateTime?
+  cancelAtPeriodEnd Boolean?
+  canceledAt        DateTime?
+  gatewayRef        String?
+
+  @@map("subscriptions")
+}
+
+model UsageCounter {
+  billableId String
+  feature    String
+  periodKey  String
+  value      Int    @default(0)
+
+  @@id([billableId, feature, periodKey])
+  @@map("usage_counters")
+}
+
+model WebhookEvent {
+  id     String   @id
+  seenAt DateTime @default(now())
+
+  @@map("webhook_events")
+}
+
+
+model Comment {
+  tenantId     String
+  id           String
+  resourceType String
+  resourceId   String
+  parentId     String?
+  authorId     String
+  body         String
+  mentions     String[]
+  resolvedAt   DateTime?
+  resolvedBy   String?
+  editedAt     DateTime?
+  createdAt    DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId, resourceType, resourceId])
+  @@map("comments")
+}
+
+
+model AuditEntry {
+  id        String   @id
+  source    String
+  event     String
+  payload   String?
+  actorId   String?
+  tenantId  String?
+  requestId String?
+  at        DateTime
+
+  @@index([tenantId, at])
+  @@map("audit_entries")
+}
+
+
+model ActivityRecord {
+  id          String   @id
+  log         String
+  description String
+  subjectType String?
+  subjectId   String?
+  causerId    String?
+  tenantId    String?
+  properties  String?
+  at          DateTime
+
+  @@index([tenantId, at])
+  @@index([subjectType, subjectId])
+  @@map("activity_records")
+}
+
+
+model InAppNotification {
+  id           String    @id
+  recipientId  String
+  notification String
+  title        String
+  body         String?
+  data         String?
+  readAt       DateTime?
+  at           DateTime
+
+  @@index([recipientId, at])
+  @@map("in_app_notifications")
+}
+
+
+model PermUserRole {
+  scope  String
+  userId String
+  role   String
+
+  @@id([scope, userId, role])
+  @@map("perm_user_roles")
+}
+
+model PermUserPermission {
+  scope      String
+  userId     String
+  permission String
+
+  @@id([scope, userId, permission])
+  @@map("perm_user_permissions")
+}
+
+model PermRolePermission {
+  scope      String
+  role       String
+  permission String
+
+  @@id([scope, role, permission])
+  @@map("perm_role_permissions")
+}

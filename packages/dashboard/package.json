@@ -1,6 +1,6 @@
 {
   "name": "@machize/dashboard",
-  "version": "0.31.0",
+  "version": "0.32.0",
   "description": "Headless admin dashboard model for Machize: billing metrics (MRR/ARR/churn), queue/audit summaries and a section registry binding admin resources to the SDK.",
   "license": "MIT",
   "type": "module",

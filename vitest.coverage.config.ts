@@ -15,11 +15,14 @@ export default defineConfig({
       reporter: ['text-summary', 'lcov'],
       include: ['packages/*/src/**/*.ts'],
       exclude: ['**/*.test.ts', '**/dist/**', '**/*.d.ts', '**/index.ts'],
+      // Floor set just under the actual aggregate (stmts/lines ~92%, branches
+      // ~88%, funcs ~90% as of 0.31.0) so CI protects the coverage we have
+      // without flaking on a normal PR. Ratchet up as coverage improves.
       thresholds: {
-        statements: 70,
-        functions: 70,
-        lines: 70,
-        branches: 60,
+        statements: 90,
+        functions: 87,
+        lines: 90,
+        branches: 85,
       },
     },
   },
