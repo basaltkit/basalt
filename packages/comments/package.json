@@ -1,6 +1,6 @@
 {
   "name": "@machize/comments",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Comments for Machize: per-resource threads with @mentions and resolve/reopen, tenant-scoped, emitting events that bridge to realtime and notifications.",
   "license": "MIT",
   "type": "module",

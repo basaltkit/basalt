@@ -1,5 +1,13 @@
 # @machize/notifications-sqlite
 
+## 1.0.2
+
+### Patch Changes
+
+- Add `PRAGMA busy_timeout = 5000` so a write waits for a competing writer's
+  lock (up to 5s) instead of throwing `database is locked` immediately. Prevents
+  spurious 500s under dev auto-reload (`tsx watch`) or concurrent writers.
+
 ## 1.0.1
 
 ### Patch Changes
