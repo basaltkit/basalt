@@ -1,5 +1,11 @@
 # @machize/fastify
 
+## 1.0.3
+
+### Patch Changes
+
+- Fix a 500 (`INTERNAL_ERROR`) on a POST with `content-type: application/json` and an empty body — the default JSON parser threw on the empty payload, which broke bodiless endpoints (e.g. MFA enroll) called from a client that always sends a JSON content-type. Empty bodies now parse as `undefined`; malformed JSON still errors.
+
 ## 1.0.0
 
 ### Major Changes

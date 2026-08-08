@@ -32,6 +32,36 @@ declare module '@machize/core' {
 
 export const FASTIFY = createToken<FastifyInstance>('fastify')
 
+class FastifyReplyAdapter implements HttpReply {
+  constructor(private readonly reply: FastifyReply) {}
+
+  get sent(): boolean {
+    return this.reply.sent
+  }
+
+  get statusCode(): number {
+    return this.reply.statusCode
+  }
+
+  get raw(): unknown {
+    return this.reply
+  }
+
+  code(status: number): this {
+    this.reply.code(status)
+    return this
+  }
+
+  header(name: string, value: string): this {
+    this.reply.header(name, value)
+    return this
+  }
+
+  send(payload: unknown): this {
+    this.reply.send(payload)
+    return this
+  }
+}
 export interface FastifyPluginOptions {
   routes?: MachizeRoute[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
@@ -46,6 +76,24 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       container.singleton(FASTIFY, () => {
         const instance = Fastify(options.fastify ?? {})
         instance.setErrorHandler(errorHandler)
+        // Fastify's default JSON parser throws on an empty body — but a POST to a
+        // bodiless route (e.g. an @machize/sdk call with no payload) still sends
+        // `content-type: application/json` with an empty body, which surfaced as a
+        // 500. Treat an empty body as "no body" (undefined); keep strict parsing
+        // (and a 400) for actual malformed JSON.
+        instance.addContentTypeParser(
+          'application/json',
+          { parseAs: 'string' },
+          (_request: FastifyRequest, body: string, done: (err: Error | null, value?: unknown) => void) => {
+            if (body.trim() === '') return done(null, undefined)
+            try {
+              done(null, JSON.parse(body))
+            } catch (error) {
+              ;(error as FastifyError).statusCode = 400
+              done(error as Error)
+            }
+          },
+        )
         return instance
       })
       container.singleton(HTTP_SERVER, () => collector)
@@ -99,7 +147,7 @@ export function registerRoutes(
 function toNeutralRequest(request: FastifyRequest): HttpRequest {
   return {
     method: request.method,
-    url: request.url,
+    url: request.originalUrl,
     headers: request.headers,
     params: (request.params ?? {}) as Record<string, string>,
     query: request.query,
@@ -112,18 +160,37 @@ function toNeutralRequest(request: FastifyRequest): HttpRequest {
 
 function wrapHandler(
   definition: MachizeRoute,
-  container?: Container,
-  enrichers: RequestEnricher[] = [],
-  guards: RouteGuard[] = [],
+  container: Container | undefined,
+  enrichers: RequestEnricher[],
+  guards: RouteGuard[],
 ) {
-  return async (request: FastifyRequest, reply: FastifyReply) =>
-    runRoute(definition, toNeutralRequest(request), reply as unknown as HttpReply, {
-      ...(container ? { container } : {}),
-      enrichers,
-      guards,
-    })
-}
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const neutralReply = new FastifyReplyAdapter(reply)
 
+    try {
+      const result = await runRoute(
+        definition,
+        toNeutralRequest(request),
+        neutralReply,
+        {
+          ...(container ? { container } : {}),
+          enrichers,
+          guards,
+        },
+      )
+
+      if (!neutralReply.sent) {
+        neutralReply.send(result)
+      }
+    } catch (error) {
+      const { status, body } = toErrorResponse(error)
+
+      if (!reply.sent) {
+        reply.code(status).send(body)
+      }
+    }
+  }
+}
 /** Applies edge-plugin hooks and routes (from the collector) to the Fastify instance. */
 function mountCollector(instance: FastifyInstance, collector: HttpServerCollector): void {
   for (const hook of collector.preHooks) {

@@ -1,6 +1,6 @@
 {
   "name": "@machize/env",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Typed environment variable validation with Zod — fails at boot with an aggregated report.",
   "license": "MIT",
   "type": "module",

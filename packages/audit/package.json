@@ -1,6 +1,6 @@
 {
   "name": "@machize/audit",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Append-only audit trail for Machize: automatically records lifecycle hooks and domain events, enriched with actor/tenant/request from the context.",
   "license": "MIT",
   "type": "module",
