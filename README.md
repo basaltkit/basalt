@@ -1,6 +1,6 @@
 # Machize
 
-**The Laravel-grade toolkit for building SaaS on Node.js.** Batteries-included,
+**The complete toolkit for building SaaS on Node.js.** Batteries-included,
 self-hosted, no vendor lock-in — tenancy, auth, billing, permissions, queues,
 storage and audit, integrated end to end, with TypeScript inference from the
 route to the client.
