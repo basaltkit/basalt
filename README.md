@@ -7,7 +7,7 @@ route to the client.
 
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: 1.0.2 — 69 packages, all published to npm. 🎉** The public API is
+> **Status: 1.0.3 — 69 packages, all published to npm. 🎉** The public API is
 > stable and covered by [semantic versioning](https://machize-docs.pages.dev/guide/versioning):
 > breaking changes only in a new major, features in a minor, fixes in a patch.
 > In-memory stores are the dev default; every stateful domain has a durable

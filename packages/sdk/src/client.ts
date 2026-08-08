@@ -67,8 +67,13 @@ async function request(
   const url = buildUrl(options.baseUrl, endpoint.path, input.params, input.query)
 
   const token = overrideToken ?? (await options.getToken?.())
+  // Only declare a JSON content-type when there is actually a body — a request
+  // with no body (e.g. a POST to a bodiless endpoint) that still sends
+  // `content-type: application/json` makes a strict server try to parse an empty
+  // body and fail.
+  const hasBody = input.body !== undefined
   const headers: Record<string, string> = {
-    'content-type': 'application/json',
+    ...(hasBody ? { 'content-type': 'application/json' } : {}),
     ...options.headers,
     ...(token ? { authorization: `Bearer ${token}` } : {}),
   }
@@ -76,7 +81,7 @@ async function request(
   const response = await doFetch(url, {
     method: endpoint.method,
     headers,
-    ...(input.body !== undefined ? { body: JSON.stringify(input.body) } : {}),
+    ...(hasBody ? { body: JSON.stringify(input.body) } : {}),
   })
 
   // Transparent refresh: one retry with a fresh token on a first 401.

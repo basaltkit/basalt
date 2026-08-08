@@ -1,6 +1,6 @@
 {
   "name": "@machize/teams",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Teams for Machize: multi-user tenants with roles, email invitations (accept/revoke), membership management and a teamRole route guard.",
   "license": "MIT",
   "type": "module",
