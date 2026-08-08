@@ -42,3 +42,22 @@ persistence throws so the gateway's retry can reprocess (rather than being
 silently deduped). `RedisWebhookStore` implements it with `SET key value NX EX`,
 so idempotency holds across restarts and multiple instances; `MemoryWebhookStore`
 is the default for single-process/dev.
+
+---
+
+## #5 — Several domain stores shipped in-memory only — RESOLVED in 0.25.0–0.30.0
+
+**Resolution:** every stateful domain now has a durable backend behind the same
+store contract, so in-memory is the dev default rather than a ceiling. Auth,
+teams, subscriptions, permissions, comments, audit, activity and notifications
+each ship an `@machize/<domain>-sqlite` (Node's built-in `node:sqlite`,
+zero-dependency, single-node) and an `@machize/<domain>-prisma` (PostgreSQL/MySQL)
+package — 18 store packages in all. Cache, usage metering and webhook idempotency
+already had Redis backends; queues, search and storage have production drivers;
+feature flags are stateless by design. Switching a store is a one-line change
+because the contract is unchanged. See the [Persistence guide][p] and the
+[Database-per-tenant guide][dpt]; remaining 1.0 work is tracked in
+[RELEASE_1.0_CHECKLIST.md](./RELEASE_1.0_CHECKLIST.md).
+
+[p]: https://machize-docs.pages.dev/guide/persistence
+[dpt]: https://machize-docs.pages.dev/guide/database-per-tenant
