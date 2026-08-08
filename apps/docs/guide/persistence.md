@@ -156,6 +156,34 @@ the durable **subscription record** (which had no non-memory backend) and let yo
 persist all three in your primary database instead.
 :::
 
+## Comments, audit, activity & notifications
+
+The content and observability stores follow the same two-backend pattern — one
+store each, SQLite for a single node and Prisma for a shared database:
+
+| Domain | Store | SQLite | Prisma |
+| --- | --- | --- | --- |
+| Comments | `CommentStore` | `sqliteCommentsStore()` | `prismaCommentsStore(prisma)` |
+| Audit trail | `AuditStore` (append-only) | `sqliteAuditStore()` | `prismaAuditStore(prisma)` |
+| Activity feed | `ActivityStore` | `sqliteActivityStore()` | `prismaActivityStore(prisma)` |
+| In-app notifications | `InAppStore` | `sqliteInAppStore()` | `prismaInAppStore(prisma)` |
+
+```ts
+import { auditPlugin } from '@machize/audit'
+import { sqliteAuditStore } from '@machize/audit-sqlite'          // single-node
+// import { prismaAuditStore } from '@machize/audit-prisma'       // Postgres/MySQL
+
+auditPlugin({ store: sqliteAuditStore('./data/audit.db').store })
+```
+
+Each returns `{ store }` (SQLite also exposes the shared `db`) named for its
+plugin: `commentsPlugin({ store })`, `auditPlugin({ store })`,
+`activityPlugin({ store })`, `notificationsPlugin({ inApp: store })`. Queries keep
+the in-memory semantics — newest-first, tenant/recipient scoping, the audit
+event-wildcard, unread filtering — now durable. JSON payloads (audit `payload`,
+activity `properties`, notification `data`) are stored as text and round-trip
+unchanged.
+
 ## Redis-backed stores
 
 Several packages already ship Redis implementations for the state that benefits

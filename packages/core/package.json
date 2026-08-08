@@ -1,6 +1,6 @@
 {
   "name": "@machize/core",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Foundation of the Machize ecosystem: token-based DI container, plugin system, lifecycle, hooks and context via AsyncLocalStorage.",
   "license": "MIT",
   "type": "module",
