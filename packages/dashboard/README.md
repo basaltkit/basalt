@@ -1,62 +1,62 @@
 # @machize/dashboard
 
-Modelo "headless" (sem interface gráfica) de um painel de administração completo: métricas de faturação (MRR, ARR, churn), resumos de filas de trabalho e de auditoria, e um registo de secções que organiza os recursos numa navegação. Precisas dele quando queres montar o painel de gestão de um produto SaaS — a página "Overview" com números, a lista de recursos na barra lateral, o estado das filas.
+"Headless" (no graphical interface) model of a complete admin panel: billing metrics (MRR, ARR, churn), job queue and audit summaries, and a section registry that organizes resources into navigation. You need it when you want to assemble the management panel for a SaaS product — the "Overview" page with numbers, the resource list in the sidebar, queue status.
 
-## O que este módulo resolve
+## What this module solves
 
-Quando geres um produto por subscrição (um **SaaS** — software vendido como serviço, pago mensal ou anualmente), há perguntas que fazes todos os dias: quanto estamos a faturar por mês? Quantos clientes ativos, em período experimental, em atraso? Quantos cancelaram? Calcular estes números à mão, a partir da lista de subscrições, é chato e fácil de errar (por exemplo: um plano anual de 300 € vale 25 €/mês de receita recorrente, não 300 €).
+When you run a subscription product (a **SaaS** — software sold as a service, paid monthly or yearly), there are questions you ask every day: how much are we billing per month? How many customers are active, on trial, past due? How many canceled? Calculating these numbers by hand from the subscription list is tedious and easy to get wrong (for example: a 300 € annual plan is worth 25 €/month of recurring revenue, not 300 €).
 
-Este pacote traz esses cálculos prontos e testados: `computeBillingMetrics` transforma uma lista de subscrições e o catálogo de planos em MRR (receita mensal recorrente), ARR (receita anual) e contagens por estado e por plano; `churnRate` calcula a taxa de cancelamento; `summarizeQueue` e `summarizeAudit` resumem o estado das filas de trabalho e o registo de auditoria.
+This package brings those calculations ready-made and tested: `computeBillingMetrics` turns a list of subscriptions and the plan catalog into MRR (monthly recurring revenue), ARR (annual revenue) and counts by status and by plan; `churnRate` calculates the cancellation rate; `summarizeQueue` and `summarizeAudit` summarize job queue status and the audit log.
 
-A segunda metade do pacote é estrutural: `defineDashboard` e as funções `*Section` deixam-te declarar as secções do teu painel ("Overview", "Projects", "Audit Log", "Queues") num único objeto navegável — a "shell" visual (React ou outra) lê `dashboard.nav()` para desenhar a barra lateral e `dashboard.section(key)` para saber o que mostrar em cada página. Tal como o `@machize/admin`, este pacote não desenha nada: só produz os modelos. E é seguro usar no browser — importa apenas **tipos** do `@machize/subscriptions`, sem código de servidor.
+The second half of the package is structural: `defineDashboard` and the `*Section` functions let you declare your panel's sections ("Overview", "Projects", "Audit Log", "Queues") in a single navigable object — the visual "shell" (React or otherwise) reads `dashboard.nav()` to draw the sidebar and `dashboard.section(key)` to know what to show on each page. Like `@machize/admin`, this package doesn't render anything: it only produces the models. And it's safe to use in the browser — it imports only **types** from `@machize/subscriptions`, no server code.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/dashboard
 ```
 
-> Traz `@machize/admin` e `@machize/subscriptions` como dependências. Na prática vais querer também o `@machize/subscriptions` diretamente (para `definePlans`) e o `zod` se definires recursos.
+> Brings `@machize/admin` and `@machize/subscriptions` as dependencies. In practice you'll also want `@machize/subscriptions` directly (for `definePlans`) and `zod` if you define resources.
 
-## Começar em 5 minutos
+## Getting started in 5 minutes
 
-Vamos calcular as métricas de faturação de um SaaS fictício e montar a estrutura do painel.
+Let's calculate the billing metrics for a fictional SaaS and assemble the panel structure.
 
-**Passo 1 — Define o catálogo de planos** (com `@machize/subscriptions`):
+**Step 1 — Define the plan catalog** (with `@machize/subscriptions`):
 
 ```ts
 import { definePlans } from '@machize/subscriptions'
 
 const plans = definePlans({
   free: { price: 0, features: {} },
-  pro: { price: { monthly: 30, yearly: 300 }, features: {} }, // 30 €/mês ou 300 €/ano
-  scale: { price: 'custom', features: {} },                    // preço negociado
+  pro: { price: { monthly: 30, yearly: 300 }, features: {} }, // 30 €/month or 300 €/year
+  scale: { price: 'custom', features: {} },                    // negotiated price
 })
 ```
 
-**Passo 2 — Calcula as métricas** a partir das subscrições (vindas da tua base de dados ou API):
+**Step 2 — Calculate the metrics** from the subscriptions (coming from your database or API):
 
 ```ts
 import { computeBillingMetrics, churnRate } from '@machize/dashboard'
 import type { SubscriptionRecord } from '@machize/subscriptions'
 
 const subscriptions: SubscriptionRecord[] = [
-  { billableId: 'a', plan: 'pro', period: 'monthly', status: 'active' },   // +30 €/mês
-  { billableId: 'b', plan: 'pro', period: 'yearly', status: 'active' },    // 300/12 = +25 €/mês
+  { billableId: 'a', plan: 'pro', period: 'monthly', status: 'active' },   // +30 €/month
+  { billableId: 'b', plan: 'pro', period: 'yearly', status: 'active' },    // 300/12 = +25 €/month
   { billableId: 'c', plan: 'pro', period: 'monthly', status: 'trialing' }, // trial → 0 €
   { billableId: 'd', plan: 'free', period: 'monthly', status: 'active' },  // +0 €
 ]
 
 const metrics = computeBillingMetrics(subscriptions, plans)
-console.log(metrics.mrr)    // 55       (receita mensal recorrente)
+console.log(metrics.mrr)    // 55       (monthly recurring revenue)
 console.log(metrics.arr)    // 660      (mrr × 12)
 console.log(metrics.active) // 3
 console.log(metrics.byPlan) // { pro: 3, free: 1 }
 
-console.log(churnRate(5, 100)) // 0.05 → perdemos 5% dos clientes no período
+console.log(churnRate(5, 100)) // 0.05 → we lost 5% of customers in the period
 ```
 
-**Passo 3 — Declara a estrutura do painel:**
+**Step 3 — Declare the panel structure:**
 
 ```ts
 import { z } from 'zod'
@@ -77,15 +77,15 @@ const projects = defineResource({
 const dashboard = defineDashboard({
   title: 'Machize Admin',
   sections: [
-    metricsSection({ icon: 'gauge' }),        // página "Overview" com os números
-    resourceSection(projects, { icon: 'folder' }), // CRUD de projetos
-    auditSection(),                            // registo de auditoria
-    queueSection(),                            // estado das filas
+    metricsSection({ icon: 'gauge' }),        // "Overview" page with the numbers
+    resourceSection(projects, { icon: 'folder' }), // project CRUD
+    auditSection(),                            // audit log
+    queueSection(),                            // queue status
   ],
 })
 ```
 
-**Passo 4 — Usa o modelo na tua interface:**
+**Step 4 — Use the model in your interface:**
 
 ```ts
 console.log(dashboard.title) // 'Machize Admin'
@@ -96,21 +96,21 @@ console.log(dashboard.nav())
 //   { key: 'audit', label: 'Audit Log' },
 //   { key: 'queues', label: 'Queues' },
 // ]
-// → desenha a barra lateral com isto; em cada página:
-const secao = dashboard.section('projects')
-// secao.kind === 'resource' e secao.resource é o Resource → desenha um DataTable
+// → draw the sidebar with this; on each page:
+const section = dashboard.section('projects')
+// section.kind === 'resource' and section.resource is the Resource → draw a DataTable
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Métricas de faturação — `computeBillingMetrics`
+### Billing metrics — `computeBillingMetrics`
 
-Recebe um "snapshot" (fotografia do momento) das subscrições e o catálogo de planos. Regras importantes, fiéis ao código:
+Takes a "snapshot" of the subscriptions and the plan catalog. Important rules, faithful to the code:
 
-- **MRR** conta apenas subscrições `active` com preço numérico. Preços anuais são divididos por 12.
-- Trials (`trialing`), planos `custom` e planos desconhecidos contribuem **0** para o MRR (ainda não são receita recorrente), mas contam nas contagens.
-- `byPlan` conta subscrições por plano em **todos** os estados.
-- Valores arredondados a 2 casas decimais; `arr = mrr × 12`.
+- **MRR** only counts `active` subscriptions with a numeric price. Annual prices are divided by 12.
+- Trials (`trialing`), `custom` plans and unknown plans contribute **0** to MRR (they're not recurring revenue yet), but they do count in the counts.
+- `byPlan` counts subscriptions by plan across **all** statuses.
+- Values are rounded to 2 decimal places; `arr = mrr × 12`.
 
 ```ts
 import { computeBillingMetrics } from '@machize/dashboard'
@@ -119,22 +119,22 @@ const m = computeBillingMetrics(subscriptions, plans)
 // m: { mrr, arr, active, trialing, pastDue, canceled, byPlan }
 ```
 
-No ecrã, isto costuma virar uma fila de cartões: "MRR 55 €", "ARR 660 €", "Ativos 3", "Trials 1".
+On screen, this usually turns into a row of cards: "MRR 55 €", "ARR 660 €", "Active 3", "Trials 1".
 
-### Taxa de cancelamento — `churnRate`
+### Churn rate — `churnRate`
 
-Clientes perdidos a dividir pelos clientes no início do período. Devolve uma fração entre 0 e 1 (multiplica por 100 para percentagem). Protegida contra divisão por zero:
+Customers lost divided by customers at the start of the period. Returns a fraction between 0 and 1 (multiply by 100 for a percentage). Protected against division by zero:
 
 ```ts
 import { churnRate } from '@machize/dashboard'
 
-churnRate(5, 100) // 0.05  (5 %)
-churnRate(3, 0)   // 0     (não havia clientes no início)
+churnRate(5, 100) // 0.05  (5%)
+churnRate(3, 0)   // 0     (there were no customers at the start)
 ```
 
-### Resumo de filas — `summarizeQueue`
+### Queue summary — `summarizeQueue`
 
-Uma **fila de trabalho** (queue) é onde a aplicação guarda tarefas para executar em segundo plano (enviar emails, gerar relatórios…). Cada tarefa está num estado: à espera, ativa, concluída, falhada, adiada. Esta função preenche os estados em falta com 0, soma o total e marca a fila como saudável quando não há falhas:
+A **job queue** is where the application stores tasks to run in the background (sending emails, generating reports…). Each task is in a state: waiting, active, completed, failed, delayed. This function fills in missing states with 0, sums the total, and marks the queue as healthy when there are no failures:
 
 ```ts
 import { summarizeQueue } from '@machize/dashboard'
@@ -144,11 +144,11 @@ summarizeQueue({ waiting: 2, active: 1, failed: 3 })
 //   total: 6, healthy: false }   ← healthy = failed === 0
 ```
 
-No ecrã: um cartão por fila, com o total e um indicador verde (`healthy: true`) ou vermelho.
+On screen: one card per queue, with the total and a green (`healthy: true`) or red indicator.
 
-### Resumo de auditoria — `summarizeAudit`
+### Audit summary — `summarizeAudit`
 
-Um **registo de auditoria** (audit log) guarda "quem fez o quê": cada entrada tem um nome de evento (ex.: `auth:login`). Esta função agrupa e conta por evento, do mais frequente para o menos (empates por ordem alfabética):
+An **audit log** stores "who did what": each entry has an event name (e.g. `auth:login`). This function groups and counts by event, from most frequent to least (ties broken alphabetically):
 
 ```ts
 import { summarizeAudit } from '@machize/dashboard'
@@ -161,119 +161,119 @@ summarizeAudit([
 // [ { event: 'auth:login', count: 2 }, { event: 'billing:subscribed', count: 1 } ]
 ```
 
-Aceita qualquer array de objetos com `event: string` — as entradas do `@machize/audit` servem diretamente.
+Accepts any array of objects with `event: string` — entries from `@machize/audit` work directly.
 
-### Estrutura do painel — `defineDashboard` e as secções
+### Panel structure — `defineDashboard` and sections
 
-Quatro construtores de secção, todos a devolver um objeto `Section`:
+Four section builders, all returning a `Section` object:
 
-| Construtor | `kind` | `key` default | `label` default |
+| Builder | `kind` | default `key` | default `label` |
 |---|---|---|---|
 | `metricsSection(options?)` | `'metrics'` | `'overview'` | `'Overview'` |
 | `resourceSection(resource, options?)` | `'resource'` | `resource.name` | `resource.label` |
 | `auditSection(options?)` | `'audit'` | `'audit'` | `'Audit Log'` |
 | `queueSection(options?)` | `'queue'` | `'queues'` | `'Queues'` |
 
-Todos aceitam `{ key?, label?, icon? }` (o `resourceSection` aceita `{ key?, icon? }` — o label vem sempre do recurso). O `icon` é apenas uma dica textual para a interface (ex.: o nome de um ícone lucide como `'gauge'`); este pacote não desenha ícones. Também podes construir uma `Section` à mão com `kind: 'custom'` para páginas tuas.
+All accept `{ key?, label?, icon? }` (`resourceSection` accepts `{ key?, icon? }` — the label always comes from the resource). `icon` is just a textual hint for the UI (e.g. the name of a lucide icon like `'gauge'`); this package doesn't render icons. You can also build a `Section` by hand with `kind: 'custom'` for your own pages.
 
-A shell visual percorre as secções e escolhe o que desenhar por `kind`: `metrics` → cartões com `computeBillingMetrics`; `resource` → `DataTable`/`ResourceForm` (de `@machize/admin-react` ou `@machize/admin-shadcn`) sobre `section.resource`; `audit` → lista com `summarizeAudit`; `queue` → cartões com `summarizeQueue`.
+The visual shell walks through the sections and chooses what to render by `kind`: `metrics` → cards with `computeBillingMetrics`; `resource` → `DataTable`/`ResourceForm` (from `@machize/admin-react` or `@machize/admin-shadcn`) over `section.resource`; `audit` → list with `summarizeAudit`; `queue` → cards with `summarizeQueue`.
 
-## Referência da API
+## API reference
 
 ### `computeBillingMetrics(subscriptions, plans): BillingMetrics`
 
-| Parâmetro | Tipo | Obrigatório? | Descrição |
+| Parameter | Type | Required? | Description |
 |---|---|---|---|
-| `subscriptions` | `SubscriptionRecord[]` (de `@machize/subscriptions`) | Sim | Snapshot das subscrições (`{ billableId, plan, period, status, … }`). |
-| `plans` | `Record<string, PlanDefinition>` | Sim | Catálogo de planos (ex.: resultado de `definePlans`). |
+| `subscriptions` | `SubscriptionRecord[]` (from `@machize/subscriptions`) | Yes | Snapshot of subscriptions (`{ billableId, plan, period, status, … }`). |
+| `plans` | `Record<string, PlanDefinition>` | Yes | Plan catalog (e.g. the result of `definePlans`). |
 
 `BillingMetrics`:
 
-| Campo | Tipo | Descrição |
+| Field | Type | Description |
 |---|---|---|
-| `mrr` | `number` | Receita mensal recorrente das subscrições ativas (anuais ÷ 12), 2 casas decimais. |
+| `mrr` | `number` | Monthly recurring revenue from active subscriptions (annual ÷ 12), 2 decimal places. |
 | `arr` | `number` | `mrr × 12`. |
-| `active` | `number` | Subscrições com estado `active`. |
-| `trialing` | `number` | Em período experimental. |
-| `pastDue` | `number` | Com pagamento em atraso (`past_due`). |
-| `canceled` | `number` | Canceladas. |
-| `byPlan` | `Record<string, number>` | Contagem por plano, todos os estados. |
+| `active` | `number` | Subscriptions with `active` status. |
+| `trialing` | `number` | On trial. |
+| `pastDue` | `number` | With overdue payment (`past_due`). |
+| `canceled` | `number` | Canceled. |
+| `byPlan` | `Record<string, number>` | Count by plan, all statuses. |
 
 ### `churnRate(canceledInPeriod, activeAtStart): number`
 
-| Parâmetro | Tipo | Descrição |
+| Parameter | Type | Description |
 |---|---|---|
-| `canceledInPeriod` | `number` | Clientes perdidos no período. |
-| `activeAtStart` | `number` | Clientes ativos no início. |
+| `canceledInPeriod` | `number` | Customers lost in the period. |
+| `activeAtStart` | `number` | Customers active at the start. |
 
-Devolve fração em `[0, 1]`, 2 casas decimais; `0` se `activeAtStart <= 0`.
+Returns a fraction in `[0, 1]`, 2 decimal places; `0` if `activeAtStart <= 0`.
 
 ### `summarizeQueue(counts): QueueSummary`
 
-`QueueCounts` (entrada — tudo opcional, default 0): `waiting?`, `active?`, `completed?`, `failed?`, `delayed?` (todos `number`).
+`QueueCounts` (input — everything optional, default 0): `waiting?`, `active?`, `completed?`, `failed?`, `delayed?` (all `number`).
 
-`QueueSummary` (saída): os cinco contadores preenchidos, mais `total: number` (soma) e `healthy: boolean` (`failed === 0`).
+`QueueSummary` (output): the five counters filled in, plus `total: number` (sum) and `healthy: boolean` (`failed === 0`).
 
 ### `summarizeAudit(entries): { event: string; count: number }[]`
 
-| Parâmetro | Tipo | Descrição |
+| Parameter | Type | Description |
 |---|---|---|
-| `entries` | `{ event: string }[]` | Entradas de auditoria (qualquer objeto com `event`). |
+| `entries` | `{ event: string }[]` | Audit entries (any object with `event`). |
 
-Devolve contagens por evento, ordenadas por frequência descendente e depois alfabeticamente.
+Returns counts per event, sorted by descending frequency and then alphabetically.
 
 ### `defineDashboard(config): Dashboard`
 
 `DashboardConfig`:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `title` | `string` | Não | `'Admin'` | Título do painel. |
-| `sections` | `Section[]` | Sim | — | Secções, pela ordem de navegação. |
+| `title` | `string` | No | `'Admin'` | Panel title. |
+| `sections` | `Section[]` | Yes | — | Sections, in navigation order. |
 
-Classe `Dashboard`:
+`Dashboard` class:
 
-| Membro | Assinatura | Descrição |
+| Member | Signature | Description |
 |---|---|---|
-| `title` | `string` | Título. |
-| `sections` | `Section[]` | Todas as secções. |
-| `section(key)` | `(key: string) => Section \| undefined` | Procura uma secção pela `key`. |
-| `nav()` | `() => { key, label, icon? }[]` | Modelo da barra lateral. |
+| `title` | `string` | Title. |
+| `sections` | `Section[]` | All sections. |
+| `section(key)` | `(key: string) => Section \| undefined` | Looks up a section by `key`. |
+| `nav()` | `() => { key, label, icon? }[]` | Sidebar model. |
 
-### `Section` (tipo)
+### `Section` (type)
 
-| Campo | Tipo | Obrigatório? | Descrição |
+| Field | Type | Required? | Description |
 |---|---|---|---|
-| `key` | `string` | Sim | Identificador único (usado em rotas/navegação). |
-| `label` | `string` | Sim | Texto apresentado. |
-| `kind` | `SectionKind` = `'metrics' \| 'resource' \| 'audit' \| 'queue' \| 'custom'` | Sim | Diz à interface o que desenhar. |
-| `resource` | `Resource` (de `@machize/admin`) | Não | Presente nas secções `resource`. |
-| `icon` | `string` | Não | Dica de ícone para a interface (ex.: nome lucide). |
+| `key` | `string` | Yes | Unique identifier (used in routes/navigation). |
+| `label` | `string` | Yes | Displayed text. |
+| `kind` | `SectionKind` = `'metrics' \| 'resource' \| 'audit' \| 'queue' \| 'custom'` | Yes | Tells the UI what to render. |
+| `resource` | `Resource` (from `@machize/admin`) | No | Present on `resource` sections. |
+| `icon` | `string` | No | Icon hint for the UI (e.g. lucide name). |
 
 ### `resourceSection(resource, options?)`, `metricsSection(options?)`, `auditSection(options?)`, `queueSection(options?)`
 
-Construtores de `Section` — defaults na tabela do guia acima. `options` é sempre opcional.
+`Section` builders — defaults in the table in the guide above. `options` is always optional.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"O MRR deu 0 mas tenho subscrições."** Verifica três coisas: (1) o `status` tem de ser exatamente `'active'` — trials não contam; (2) o nome do plano na subscrição tem de existir no catálogo passado (plano desconhecido soma 0 silenciosamente); (3) planos `price: 'custom'` somam 0 por definição.
+**"MRR came out 0 but I have subscriptions."** Check three things: (1) `status` must be exactly `'active'` — trials don't count; (2) the plan name on the subscription must exist in the catalog you passed (an unknown plan silently adds 0); (3) `price: 'custom'` plans add 0 by design.
 
-**"Uma subscrição anual de 300 € só somou 25 € ao MRR."** Correto: MRR é receita **mensal** — o preço anual é dividido por 12 (`300 / 12 = 25`).
+**"A 300 € annual subscription only added 25 € to MRR."** Correct: MRR is **monthly** revenue — the annual price is divided by 12 (`300 / 12 = 25`).
 
-**"O `churnRate` devolve 0.05 e eu esperava 5."** Devolve uma fração, não percentagem. Multiplica por 100 para mostrar `5 %`.
+**"`churnRate` returns 0.05 and I expected 5."** It returns a fraction, not a percentage. Multiply by 100 to show `5%`.
 
-**"`healthy` está `false` mas as tarefas falhadas são antigas."** `healthy` é simplesmente `failed === 0`. Limpa/reprocessa a dead-letter da fila para o indicador voltar a verde.
+**"`healthy` is `false` but the failed jobs are old."** `healthy` is simply `failed === 0`. Clear/reprocess the queue's dead letters for the indicator to go green again.
 
-**"`dashboard.section('...')` devolve `undefined`."** A `key` não corresponde. Lembra-te dos defaults: `metricsSection` → `'overview'`, `auditSection` → `'audit'`, `queueSection` → `'queues'`, `resourceSection` → o `name` do recurso. Passa `{ key: '...' }` para controlar.
+**"`dashboard.section('...')` returns `undefined`."** The `key` doesn't match. Remember the defaults: `metricsSection` → `'overview'`, `auditSection` → `'audit'`, `queueSection` → `'queues'`, `resourceSection` → the resource's `name`. Pass `{ key: '...' }` to control it.
 
-**"Posso usar este pacote no browser?"** Sim. Do `@machize/subscriptions` só importa **tipos** (apagados na compilação), por isso não arrasta código de servidor — as funções de métricas são seguras no frontend.
+**"Can I use this package in the browser?"** Yes. From `@machize/subscriptions` it only imports **types** (erased at compile time), so it doesn't pull in server code — the metrics functions are safe on the frontend.
 
-**"Duas secções com a mesma `key`."** O `section(key)` devolve a primeira encontrada. Dá `key`s únicas (ex.: `resourceSection(projects, { key: 'projects-arquivados' })`).
+**"Two sections with the same `key`."** `section(key)` returns the first one found. Give unique `key`s (e.g. `resourceSection(projects, { key: 'projects-archived' })`).
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/admin`** — fornece o tipo `Resource` que as `resourceSection` transportam; a interface desenha cada uma com os view models do admin.
-- **`@machize/admin-react` / `@machize/admin-shadcn`** — as camadas visuais: lêem `dashboard.nav()` para a barra lateral e, por secção, usam `DataTable`/`ResourceForm` (secções `resource`), cartões (`Card`/`Badge` do admin-shadcn) para `metrics` e `queue`, e listas para `audit`.
-- **`@machize/subscriptions`** — origem dos tipos `SubscriptionRecord`, `PlanDefinition` e `BillingPeriod`, e do `definePlans` que produz o catálogo passado a `computeBillingMetrics`.
-- **`@machize/queue` e `@machize/audit`** — as fontes naturais dos números: passa os contadores da fila a `summarizeQueue` e as entradas de auditoria a `summarizeAudit`.
-- **`@machize/sdk`** — no frontend, os dados (subscrições, contadores, auditoria) chegam via cliente tipado do SDK e são resumidos aqui antes de ir para o ecrã.
+- **`@machize/admin`** — provides the `Resource` type that `resourceSection`s carry; the UI renders each one with the admin's view models.
+- **`@machize/admin-react` / `@machize/admin-shadcn`** — the visual layers: they read `dashboard.nav()` for the sidebar and, per section, use `DataTable`/`ResourceForm` (`resource` sections), cards (`Card`/`Badge` from admin-shadcn) for `metrics` and `queue`, and lists for `audit`.
+- **`@machize/subscriptions`** — source of the `SubscriptionRecord`, `PlanDefinition` and `BillingPeriod` types, and of `definePlans` which produces the catalog passed to `computeBillingMetrics`.
+- **`@machize/queue` and `@machize/audit`** — the natural sources of the numbers: pass the queue counters to `summarizeQueue` and the audit entries to `summarizeAudit`.
+- **`@machize/sdk`** — on the frontend, the data (subscriptions, counters, audit) arrives via the SDK's typed client and is summarized here before going to the screen.

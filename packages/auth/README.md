@@ -1,30 +1,30 @@
 # @machize/auth
 
-Autenticação completa para aplicações Machize: registo e login de utilizadores, tokens JWT com renovação segura, sessões, verificação de email, recuperação de palavra-passe, autenticação de dois fatores (MFA/TOTP) e chaves de API — tudo com rotas HTTP prontas a usar.
+Complete authentication for Machize applications: user registration and login, JWT tokens with secure renewal, sessions, email verification, password recovery, two-factor authentication (MFA/TOTP), and API keys — all with ready-to-use HTTP routes.
 
-Precisas deste módulo sempre que a tua aplicação tiver utilizadores que fazem login.
+You need this module whenever your application has users who log in.
 
-## O que este módulo resolve
+## What this module solves
 
-Quando uma aplicação tem contas de utilizadores, precisa de responder a duas perguntas em cada pedido: "quem és tu?" (autenticação) e "como provas isso?". Fazer isto à mão é difícil e perigoso — guardar palavras-passe de forma segura, gerar e validar **tokens** (pequenos "bilhetes" digitais que provam a identidade sem enviar a palavra-passe em cada pedido), impedir ataques de força bruta, etc.
+When an application has user accounts, it needs to answer two questions on every request: "who are you?" (authentication) and "how do you prove it?". Doing this by hand is difficult and dangerous — storing passwords securely, generating and validating **tokens** (small digital "tickets" that prove identity without sending the password on every request), preventing brute-force attacks, and so on.
 
-O `@machize/auth` trata de tudo isto por ti. As palavras-passe nunca são guardadas em texto simples — só uma versão irreversivelmente baralhada (**hash**, com o algoritmo scrypt). O login devolve um par de tokens: um **access token** (JWT de curta duração, 15 minutos por omissão, que acompanha cada pedido) e um **refresh token** (de longa duração, 30 dias, usado apenas para obter um novo access token). Se um refresh token for usado duas vezes — sinal típico de roubo — toda a "família" de tokens é revogada automaticamente.
+`@machize/auth` handles all of this for you. Passwords are never stored in plain text — only an irreversibly scrambled version (**hash**, using the scrypt algorithm). Login returns a pair of tokens: an **access token** (short-lived JWT, 15 minutes by default, sent with every request) and a **refresh token** (long-lived, 30 days, used only to obtain a new access token). If a refresh token is used twice — a typical sign of theft — the entire token "family" is automatically revoked.
 
-Inclui ainda, sem instalar mais nada: bloqueio de conta após demasiadas tentativas falhadas, verificação de email e recuperação de palavra-passe por links de utilização única, MFA por aplicação autenticadora (Google Authenticator, etc.) com códigos de recuperação, e chaves de API para acesso programático (scripts, integrações).
+It also includes, with nothing extra to install: account lockout after too many failed attempts, email verification and password recovery via single-use links, MFA via authenticator app (Google Authenticator, etc.) with recovery codes, and API keys for programmatic access (scripts, integrations).
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/auth
 ```
 
-Requisitos: `@machize/core` e `@machize/fastify` (instalados automaticamente como dependências) e `zod` (peer dependency — instala com `pnpm add zod`).
+Requirements: `@machize/core` and `@machize/fastify` (installed automatically as dependencies) and `zod` (peer dependency — install with `pnpm add zod`).
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-Passo a passo para teres registo e login a funcionar:
+Step by step to get registration and login working:
 
-1. **Cria a aplicação** com o plugin de auth e as rotas prontas:
+1. **Create the application** with the auth plugin and the ready-made routes:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -34,61 +34,61 @@ import { authPlugin, authRoutes, MemoryUserSource } from '@machize/auth'
 const app = await createApp({
   plugins: [
     authPlugin({
-      users: new MemoryUserSource(), // em produção: a tua base de dados
-      secret: process.env.AUTH_SECRET!, // segredo que assina os tokens
+      users: new MemoryUserSource(), // in production: your database
+      secret: process.env.AUTH_SECRET!, // secret that signs the tokens
     }),
     fastifyPlugin({ routes: authRoutes() }),
   ],
 }).boot()
 ```
 
-2. **Regista um utilizador** (a rota `POST /auth/register` já existe):
+2. **Register a user** (the `POST /auth/register` route already exists):
 
 ```bash
 curl -X POST http://localhost:3000/auth/register \
   -H 'content-type: application/json' \
-  -d '{"email":"ada@exemplo.com","password":"palavrasecreta1"}'
+  -d '{"email":"ada@example.com","password":"secretpassword1"}'
 ```
 
-3. **Faz login** e recebe os tokens:
+3. **Log in** and receive the tokens:
 
 ```bash
 curl -X POST http://localhost:3000/auth/login \
   -H 'content-type: application/json' \
-  -d '{"email":"ada@exemplo.com","password":"palavrasecreta1"}'
+  -d '{"email":"ada@example.com","password":"secretpassword1"}'
 # → { "user": {...}, "accessToken": "...", "refreshToken": "..." }
 ```
 
-4. **Usa o access token** para aceder a rotas protegidas:
+4. **Use the access token** to reach protected routes:
 
 ```bash
 curl http://localhost:3000/auth/me \
-  -H 'authorization: Bearer O_ACCESS_TOKEN_AQUI'
+  -H 'authorization: Bearer YOUR_ACCESS_TOKEN_HERE'
 ```
 
-5. **Protege as tuas próprias rotas** com `meta: { auth: true }`:
+5. **Protect your own routes** with `meta: { auth: true }`:
 
 ```ts
 import { ctx } from '@machize/core'
 import { route } from '@machize/fastify'
 
-const minhaRota = route({
+const myRoute = route({
   method: 'GET',
-  url: '/painel',
-  meta: { auth: true }, // sem login → 401 AUTH_REQUIRED
+  url: '/dashboard',
+  meta: { auth: true }, // not logged in → 401 AUTH_REQUIRED
   async handler() {
-    return { ola: ctx().user?.email }
+    return { hello: ctx().user?.email }
   },
 })
 ```
 
-> **Nota:** `MemoryUserSource` guarda os utilizadores em memória — perfeito para experimentar, mas tudo desaparece quando o processo reinicia. Em produção, implementa a interface `UserSource` sobre a tua base de dados (ver abaixo).
+> **Note:** `MemoryUserSource` stores users in memory — great for experimenting, but everything disappears when the process restarts. In production, implement the `UserSource` interface over your database (see below).
 
-## Guia de utilização
+## Usage guide
 
-### Ligar à tua base de dados (UserSource)
+### Connecting to your database (UserSource)
 
-O módulo não impõe nenhuma base de dados. Forneces um objeto que cumpre a interface `UserSource`:
+The module doesn't impose any database. You provide an object that fulfills the `UserSource` interface:
 
 ```ts
 import type { UserSource, AuthUser, UserPatch } from '@machize/auth'
@@ -97,56 +97,56 @@ const users: UserSource = {
   async findByEmail(email) { /* SELECT ... WHERE email = ? */ return null },
   async findById(id) { /* SELECT ... WHERE id = ? */ return null },
   async create(data) {
-    // data = { email, passwordHash } — o hash já vem calculado
-    return { id: 'novo-id', ...data } as AuthUser
+    // data = { email, passwordHash } — the hash is already computed
+    return { id: 'new-id', ...data } as AuthUser
   },
-  // Opcional, mas obrigatório para verificação de email e reset de password:
+  // Optional, but required for email verification and password reset:
   async update(id, patch: UserPatch) { /* UPDATE ... */ return null },
 }
 ```
 
-### Registo, login e logout (por código)
+### Register, login, and logout (by code)
 
-Todas as operações também estão disponíveis programaticamente através da classe `Auth`:
+All operations are also available programmatically through the `Auth` class:
 
 ```ts
 import { Auth, MemoryUserSource } from '@machize/auth'
 
-const auth = new Auth({ users: new MemoryUserSource(), secret: 'um-segredo-forte' })
+const auth = new Auth({ users: new MemoryUserSource(), secret: 'a-strong-secret' })
 
-const user = await auth.register('ada@exemplo.com', 'palavrasecreta1')
-const { tokens } = await auth.login('ada@exemplo.com', 'palavrasecreta1')
-const renovados = await auth.refresh(tokens.refreshToken) // novo par de tokens
-await auth.revoke(renovados.refreshToken) // logout: invalida a família de tokens
+const user = await auth.register('ada@example.com', 'secretpassword1')
+const { tokens } = await auth.login('ada@example.com', 'secretpassword1')
+const renewed = await auth.refresh(tokens.refreshToken) // new token pair
+await auth.revoke(renewed.refreshToken) // logout: invalidates the token family
 ```
 
-### Proteger rotas
+### Protecting routes
 
-O `authPlugin` regista automaticamente:
+`authPlugin` automatically registers:
 
-- Um **enricher** que lê o header `Authorization: Bearer <jwt>` ou `x-session-id` e coloca o utilizador em `ctx().user` (do tipo `PublicUser` — nunca inclui o hash da palavra-passe).
-- Um **guard** que rejeita com 401 qualquer rota com `meta: { auth: true }` sem utilizador autenticado.
+- An **enricher** that reads the `Authorization: Bearer <jwt>` or `x-session-id` header and places the user in `ctx().user` (of type `PublicUser` — never includes the password hash).
+- A **guard** that rejects with 401 any route with `meta: { auth: true }` without an authenticated user.
 
-Um pedido sem credenciais fica anónimo (não dá erro); um token inválido explícito dá 401.
+A request with no credentials stays anonymous (no error); an explicit invalid token returns 401.
 
-### Recuperar a palavra-passe
+### Password recovery
 
-O fluxo tem dois passos. O módulo gera um **token de utilização única** (válido 1 hora por omissão) e emite um hook — a tua aplicação envia o email com o link:
+The flow has two steps. The module generates a **single-use token** (valid for 1 hour by default) and emits a hook — your application sends the email with the link:
 
 ```ts
-// 1. Escuta o hook e envia o email (fazes isto uma vez, no arranque)
+// 1. Listen to the hook and send the email (do this once, at startup)
 app.hooks.on('auth:password_reset_requested', async ({ user, token }) => {
-  await enviarEmail(user.email, `https://app.exemplo.com/reset?token=${token}`)
+  await sendEmail(user.email, `https://app.example.com/reset?token=${token}`)
 })
 ```
 
-As rotas prontas: `POST /auth/password/forgot` (body `{ email }` — responde sempre 200, para não revelar se o email existe) e `POST /auth/password/reset` (body `{ token, password }`). Após o reset, **todas as sessões e refresh tokens do utilizador são revogados**.
+Ready-made routes: `POST /auth/password/forgot` (body `{ email }` — always responds 200, so as not to reveal whether the email exists) and `POST /auth/password/reset` (body `{ token, password }`). After the reset, **all of the user's sessions and refresh tokens are revoked**.
 
-A verificação de email funciona da mesma forma: hook `auth:verify_requested`, rotas `POST /auth/verify/request` e `POST /auth/verify` (token válido 24 horas por omissão).
+Email verification works the same way: hook `auth:verify_requested`, routes `POST /auth/verify/request` and `POST /auth/verify` (token valid for 24 hours by default).
 
-### MFA — autenticação de dois fatores (TOTP)
+### MFA — two-factor authentication (TOTP)
 
-**TOTP** é o código de 6 dígitos gerado por aplicações como o Google Authenticator. Regista as rotas:
+**TOTP** is the 6-digit code generated by apps like Google Authenticator. Register the routes:
 
 ```ts
 import { authRoutes, mfaRoutes } from '@machize/auth'
@@ -155,16 +155,16 @@ import { fastifyPlugin } from '@machize/fastify'
 fastifyPlugin({ routes: [...authRoutes(), ...mfaRoutes()] })
 ```
 
-Fluxo (todas as rotas exigem login):
+Flow (all routes require login):
 
-1. `POST /auth/mfa/enroll` → devolve `{ secret, otpauthUri }`; mostra o `otpauthUri` como código QR.
-2. `POST /auth/mfa/activate` com `{ code }` (código da app) → ativa e devolve `{ recoveryCodes }` — 10 códigos de recuperação de utilização única, **mostrados uma única vez**.
-3. A partir daí, `POST /auth/login` exige o campo extra `mfaCode` (código TOTP ou um código de recuperação). Password certa sem código → erro `AUTH_MFA_REQUIRED`.
-4. `GET /auth/mfa/status` e `POST /auth/mfa/disable` (com `{ code }`) completam o ciclo.
+1. `POST /auth/mfa/enroll` → returns `{ secret, otpauthUri }`; show the `otpauthUri` as a QR code.
+2. `POST /auth/mfa/activate` with `{ code }` (code from the app) → activates and returns `{ recoveryCodes }` — 10 single-use recovery codes, **shown only once**.
+3. From then on, `POST /auth/login` requires the extra `mfaCode` field (TOTP code or a recovery code). Correct password without a code → `AUTH_MFA_REQUIRED` error.
+4. `GET /auth/mfa/status` and `POST /auth/mfa/disable` (with `{ code }`) complete the cycle.
 
-### Chaves de API
+### API keys
 
-Para acesso programático (scripts, CI, integrações) sem login interativo. Uma chave tem o formato `mk_live_...`, é mostrada **uma única vez** ao ser criada e só o seu hash SHA-256 fica guardado.
+For programmatic access (scripts, CI, integrations) without interactive login. A key has the format `mk_live_...`, is shown **only once** when created, and only its SHA-256 hash is stored.
 
 ```ts
 import { createApp } from '@machize/core'
@@ -177,15 +177,15 @@ const users = new MemoryUserSource()
 const app = await createApp({
   plugins: [
     authPlugin({ users, secret: process.env.AUTH_SECRET! }),
-    apiKeysPlugin({ users }), // autentica chaves e aplica scopes
+    apiKeysPlugin({ users }), // authenticates keys and enforces scopes
     fastifyPlugin({
       routes: [
         ...authRoutes(),
         ...apiKeyRoutes(), // POST/GET /apikeys, DELETE /apikeys/:id
         route({
           method: 'GET',
-          url: '/relatorios',
-          meta: { scopes: ['reports:read'] }, // exige uma chave com este scope
+          url: '/reports',
+          meta: { scopes: ['reports:read'] }, // requires a key with this scope
           async handler() { return { ok: true } },
         }),
       ],
@@ -194,11 +194,11 @@ const app = await createApp({
 }).boot()
 ```
 
-A chave apresenta-se no header `Authorization: Bearer mk_live_...` ou `x-api-key`. Um **scope** é uma permissão granular da chave (ex.: `reports:read`); `*` significa todos. Após autenticar, `ctx().apiKey` contém `{ id, scopes, tenantId?, userId? }`.
+The key is presented in the `Authorization: Bearer mk_live_...` or `x-api-key` header. A **scope** is a granular permission on the key (e.g. `reports:read`); `*` means all. After authenticating, `ctx().apiKey` contains `{ id, scopes, tenantId?, userId? }`.
 
-### Bloqueio por força bruta (LoginThrottle)
+### Brute-force lockout (LoginThrottle)
 
-Ativo por omissão: 5 tentativas falhadas por email numa janela de 15 minutos → erro `AUTH_LOCKED` (HTTP 429). Um login bem-sucedido limpa o contador.
+Active by default: 5 failed attempts per email within a 15-minute window → `AUTH_LOCKED` error (HTTP 429). A successful login clears the counter.
 
 ```ts
 import { authPlugin, LoginThrottle, MemoryUserSource } from '@machize/auth'
@@ -207,129 +207,129 @@ authPlugin({
   users: new MemoryUserSource(),
   secret: process.env.AUTH_SECRET!,
   loginThrottle: new LoginThrottle({ maxAttempts: 3, windowMs: 10 * 60_000 }),
-  // ou loginThrottle: false para desativar (não recomendado)
+  // or loginThrottle: false to disable (not recommended)
 })
 ```
 
-### Hooks (eventos)
+### Hooks (events)
 
-A aplicação pode reagir a eventos de autenticação: `auth:registered`, `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
+The application can react to authentication events: `auth:registered`, `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
 
-## Referência da API
+## API reference
 
-### `authPlugin(options)` e classe `Auth`
+### `authPlugin(options)` and the `Auth` class
 
-Opções (`AuthOptions` / `AuthPluginOptions` — o plugin aceita as mesmas menos `hooks`):
+Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same minus `hooks`):
 
-| Nome | Tipo | Obrigatório? | Default | Descrição |
+| Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `users` | `UserSource` | Sim | — | De onde vêm os utilizadores (a tua BD). |
-| `secret` | `string` | Sim | — | Segredo que assina os JWT (HS256). |
-| `hasher` | `PasswordHasher` | Não | `ScryptPasswordHasher` | Algoritmo de hash de palavras-passe. |
-| `sessions` | `SessionStore` | Não | `MemorySessionStore` | Armazenamento de sessões. |
-| `refreshTokens` | `RefreshTokenStore` | Não | `MemoryRefreshTokenStore` | Armazenamento de refresh tokens. |
-| `accessTtl` | `DurationInput` | Não | `'15m'` | Validade do access token. |
-| `refreshTtl` | `DurationInput` | Não | `'30d'` | Validade do refresh token. |
-| `sessionTtl` | `DurationInput` | Não | `'30d'` | Validade das sessões. |
-| `loginThrottle` | `LoginThrottle \| false` | Não | ativo (5/15min) | Bloqueio anti força bruta; `false` desativa. |
-| `tokens` | `AuthTokenStore` | Não | `MemoryAuthTokenStore` | Tokens de verificação/reset. |
-| `verificationTtl` | `DurationInput` | Não | `'24h'` | Validade do link de verificação de email. |
-| `resetTtl` | `DurationInput` | Não | `'1h'` | Validade do link de reset de password. |
-| `mfa` | `MfaStore` | Não | `MemoryMfaStore` | Estado de MFA por utilizador. |
-| `mfaIssuer` | `string` | Não | `'Machize'` | Nome mostrado na app autenticadora. |
-| `hooks` | `HookBus` | Não | — | Só na classe `Auth`; o plugin injeta-o. |
+| `users` | `UserSource` | Yes | — | Where users come from (your DB). |
+| `secret` | `string` | Yes | — | Secret that signs the JWTs (HS256). |
+| `hasher` | `PasswordHasher` | No | `ScryptPasswordHasher` | Password hashing algorithm. |
+| `sessions` | `SessionStore` | No | `MemorySessionStore` | Session storage. |
+| `refreshTokens` | `RefreshTokenStore` | No | `MemoryRefreshTokenStore` | Refresh token storage. |
+| `accessTtl` | `DurationInput` | No | `'15m'` | Access token validity. |
+| `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
+| `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
+| `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
+| `tokens` | `AuthTokenStore` | No | `MemoryAuthTokenStore` | Verification/reset tokens. |
+| `verificationTtl` | `DurationInput` | No | `'24h'` | Email verification link validity. |
+| `resetTtl` | `DurationInput` | No | `'1h'` | Password reset link validity. |
+| `mfa` | `MfaStore` | No | `MemoryMfaStore` | Per-user MFA state. |
+| `mfaIssuer` | `string` | No | `'Machize'` | Name shown in the authenticator app. |
+| `hooks` | `HookBus` | No | — | Only on the `Auth` class; the plugin injects it. |
 
-Métodos da classe `Auth`:
+`Auth` class methods:
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `register(email, password)` | Cria a conta; lança `EmailTakenError` se o email já existir. |
-| `login(email, password, mfaCode?)` | Devolve `{ user, tokens }`; aplica throttle e MFA. |
-| `attempt(email, password)` | Verifica credenciais sem efeitos secundários; `null` se falhar. |
-| `refresh(refreshToken)` | Novo par de tokens; deteta reutilização e revoga a família. |
-| `revoke(refreshToken)` | Logout para clientes com tokens. |
-| `verifyAccess(accessToken)` | Valida o JWT e devolve os claims. |
-| `createSession(userId)` / `sessionUser(sessionId)` / `logout(sessionId)` | Sessões por cookie/header. |
-| `requestEmailVerification(email)` / `verifyEmail(token)` | Verificação de email. |
-| `requestPasswordReset(email)` / `resetPassword(token, novaPassword)` | Recuperação de password. |
-| `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | Ciclo de vida do MFA. |
-| `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | Estado e verificação de MFA. |
+| `register(email, password)` | Creates the account; throws `EmailTakenError` if the email already exists. |
+| `login(email, password, mfaCode?)` | Returns `{ user, tokens }`; applies throttle and MFA. |
+| `attempt(email, password)` | Checks credentials without side effects; `null` on failure. |
+| `refresh(refreshToken)` | New token pair; detects reuse and revokes the family. |
+| `revoke(refreshToken)` | Logout for token-based clients. |
+| `verifyAccess(accessToken)` | Validates the JWT and returns the claims. |
+| `createSession(userId)` / `sessionUser(sessionId)` / `logout(sessionId)` | Cookie/header-based sessions. |
+| `requestEmailVerification(email)` / `verifyEmail(token)` | Email verification. |
+| `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
+| `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
+| `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | MFA state and verification. |
 
-### Rotas prontas
+### Ready-made routes
 
-- `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. São rotas normais — podes omitir ou substituir qualquer uma.
-- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (todas exigem login; limitadas ao tenant/utilizador atual).
+- `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them.
+- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (all require login; scoped to the current tenant/user).
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
 
-### `apiKeysPlugin(options)` e classe `ApiKeys`
+### `apiKeysPlugin(options)` and the `ApiKeys` class
 
-Opções (`ApiKeysPluginOptions`):
+Options (`ApiKeysPluginOptions`):
 
-| Nome | Tipo | Obrigatório? | Default | Descrição |
+| Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `store` | `ApiKeyStore` | Não | `MemoryApiKeyStore` | Armazenamento das chaves. |
-| `header` | `string` | Não | `'x-api-key'` | Header alternativo ao Bearer. |
-| `users` | `UserSource` | Não | — | Se dado, uma chave com `userId` também preenche `ctx().user`. |
-| `now` | `() => number` | Não | `Date.now` | Relógio injetável (testes). |
+| `store` | `ApiKeyStore` | No | `MemoryApiKeyStore` | Key storage. |
+| `header` | `string` | No | `'x-api-key'` | Alternative header to Bearer. |
+| `users` | `UserSource` | No | — | If given, a key with `userId` also populates `ctx().user`. |
+| `now` | `() => number` | No | `Date.now` | Injectable clock (tests). |
 
-Métodos de `ApiKeys`: `issue(input)` (devolve `{ record, key }` — a chave em texto simples só aqui), `verify(presented)`, `list(filter)`, `get(id)`, `revoke(id)`. Auxiliar `scopesSatisfy(granted, required)`.
+`ApiKeys` methods: `issue(input)` (returns `{ record, key }` — the plain-text key only appears here), `verify(presented)`, `list(filter)`, `get(id)`, `revoke(id)`. Helper `scopesSatisfy(granted, required)`.
 
-### Utilitários exportados
+### Exported utilities
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `signJwt(claims, { secret, expiresIn? })` / `verifyJwt(token, secret)` | JWT HS256 sem dependências. Avançado. |
-| `ScryptPasswordHasher` / `PasswordHasher` | Hash de palavras-passe (scrypt, memory-hard). Avançado. |
-| `LoginThrottle` (`maxAttempts` def. 5, `windowMs` def. 15 min, `clock`) | Anti força bruta. |
-| `generateTotpSecret`, `totp`, `verifyTotp`, `otpauthUri`, `base32Encode`, `base32Decode` | Primitivas TOTP (RFC 6238). Avançado. |
-| `publicUser(user)` | Converte `AuthUser` → `PublicUser` (remove o hash). |
-| `AUTH`, `API_KEYS` | Tokens de injeção: `container.get(AUTH)` devolve a instância `Auth`. |
-| Stores em memória | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore` — dev/testes. |
+| `signJwt(claims, { secret, expiresIn? })` / `verifyJwt(token, secret)` | Dependency-free HS256 JWT. Advanced. |
+| `ScryptPasswordHasher` / `PasswordHasher` | Password hashing (scrypt, memory-hard). Advanced. |
+| `LoginThrottle` (`maxAttempts` def. 5, `windowMs` def. 15 min, `clock`) | Anti brute-force. |
+| `generateTotpSecret`, `totp`, `verifyTotp`, `otpauthUri`, `base32Encode`, `base32Decode` | TOTP primitives (RFC 6238). Advanced. |
+| `publicUser(user)` | Converts `AuthUser` → `PublicUser` (removes the hash). |
+| `AUTH`, `API_KEYS` | Injection tokens: `container.get(AUTH)` returns the `Auth` instance. |
+| In-memory stores | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore` — dev/testing. |
 
-### Erros exportados
+### Exported errors
 
-| Erro | Código | HTTP |
+| Error | Code | HTTP |
 |---|---|---|
 | `InvalidCredentialsError` | `AUTH_INVALID_CREDENTIALS` | 401 |
 | `EmailTakenError` | `AUTH_EMAIL_TAKEN` | 409 |
 | `RefreshInvalidError` / `RefreshReusedError` | `AUTH_REFRESH_INVALID` / `AUTH_REFRESH_REUSED` | 401 |
 | `AuthRequiredError` | `AUTH_REQUIRED` | 401 |
 | `TokenInvalidError` / `TokenExpiredError` | `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` | 401 |
-| `AuthTokenInvalidError` (links de verificação/reset) | `AUTH_TOKEN_INVALID` | 400 |
+| `AuthTokenInvalidError` (verification/reset links) | `AUTH_TOKEN_INVALID` | 400 |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 |
 | `MfaRequiredError` / `MfaInvalidCodeError` / `MfaNotEnrolledError` | `AUTH_MFA_*` | 401/401/400 |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 |
 
-## Erros comuns e soluções (FAQ)
+## Common issues and solutions (FAQ)
 
-**"Os utilizadores desaparecem quando reinicio o servidor."** Estás a usar `MemoryUserSource` (e stores em memória). Implementa `UserSource` (e os outros stores) sobre a tua base de dados.
+**"Users disappear when I restart the server."** You're using `MemoryUserSource` (and in-memory stores). Implement `UserSource` (and the other stores) over your database.
 
-**"401 AUTH_TOKEN_EXPIRED pouco depois do login."** O access token dura 15 minutos por desenho. O cliente deve chamar `POST /auth/refresh` com o refresh token para obter um novo par — não aumentes o `accessTtl` para valores longos.
+**"401 AUTH_TOKEN_EXPIRED shortly after login."** The access token lasts 15 minutes by design. The client should call `POST /auth/refresh` with the refresh token to get a new pair — don't increase `accessTtl` to long values.
 
-**"401 AUTH_REFRESH_REUSED."** O mesmo refresh token foi usado duas vezes. Cada refresh devolve um token novo que substitui o anterior; guarda sempre o mais recente. Se acontecer sem bug no cliente, pode indicar roubo do token — o utilizador terá de fazer login de novo (comportamento intencional).
+**"401 AUTH_REFRESH_REUSED."** The same refresh token was used twice. Each refresh returns a new token that replaces the previous one; always keep the most recent one. If this happens without a client bug, it may indicate token theft — the user will need to log in again (intentional behavior).
 
-**"AUTH_UPDATE_UNSUPPORTED ao verificar email / reset."** O teu `UserSource` não implementa o método opcional `update()`. Ele é obrigatório para estes dois fluxos.
+**"AUTH_UPDATE_UNSUPPORTED on email verification / reset."** Your `UserSource` doesn't implement the optional `update()` method. It's required for these two flows.
 
-**"O email com o link nunca é enviado."** O módulo não envia emails — emite os hooks `auth:verify_requested` e `auth:password_reset_requested` com o token; a tua aplicação escuta-os e envia o email.
+**"The email with the link is never sent."** The module doesn't send emails — it emits the `auth:verify_requested` and `auth:password_reset_requested` hooks with the token; your application listens to them and sends the email.
 
-**"429 AUTH_LOCKED nos testes."** O throttle está ativo por omissão. Nos testes passa `loginThrottle: false`.
+**"429 AUTH_LOCKED in tests."** The throttle is active by default. In tests, pass `loginThrottle: false`.
 
-**"A minha chave de API não funciona no authPlugin."** Correto: bearers com prefixo `mk_` são ignorados pelo `authPlugin` e tratados pelo `apiKeysPlugin` — regista os dois.
+**"My API key doesn't work with authPlugin."** Correct: bearers prefixed with `mk_` are ignored by `authPlugin` and handled by `apiKeysPlugin` — register both.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **@machize/core** — fornece a app, o container, o contexto de pedido (`ctx()`) e os hooks; o auth coloca `ctx().user` e `ctx().apiKey`.
-- **@machize/fastify** — o adaptador HTTP que executa os enrichers/guards e serve as rotas prontas.
-- **@machize/permissions** — responde a "o que podes fazer?"; o seu guard `meta.can` usa o `ctx().user` que o auth define.
-- **@machize/tenancy** — define `ctx().tenant`; as chaves de API criadas dentro de um tenant ficam limitadas a esse tenant.
-- **@machize/teams** — o guard `meta.teamRole` combina o `ctx().user` (auth) com o `ctx().tenant` (tenancy).
+- **@machize/core** — provides the app, the container, the request context (`ctx()`), and hooks; auth sets `ctx().user` and `ctx().apiKey`.
+- **@machize/fastify** — the HTTP adapter that runs the enrichers/guards and serves the ready-made routes.
+- **@machize/permissions** — answers "what can you do?"; its `meta.can` guard uses the `ctx().user` that auth sets.
+- **@machize/tenancy** — defines `ctx().tenant`; API keys created within a tenant are scoped to that tenant.
+- **@machize/teams** — the `meta.teamRole` guard combines `ctx().user` (auth) with `ctx().tenant` (tenancy).
 
-## Boas práticas de segurança
+## Security best practices
 
-- **O `secret` é a chave do cofre.** Usa um valor longo e aleatório (ex.: `openssl rand -base64 48`), guarda-o numa variável de ambiente e nunca o metas no código nem no git. Se ele fugir, qualquer pessoa pode forjar tokens.
-- **Usa HTTPS sempre.** Tokens em texto simples numa ligação sem cifra podem ser intercetados.
-- **Não aumentes o `accessTtl`.** Tokens de acesso curtos limitam o estrago de um token roubado; a renovação via refresh token já dá comodidade ao utilizador.
-- **Mostra a chave de API e os códigos de recuperação uma única vez** — é assim que o módulo funciona; não os guardes em texto simples do teu lado.
-- **Não desativa o `loginThrottle` em produção** e mantém as respostas "sempre 200" nas rotas de forgot/verify (já vêm assim), para não revelar que emails têm conta.
-- **Em cluster (várias máquinas)**, usa stores partilhados (base de dados/Redis) em vez dos `Memory*`, senão sessões e bloqueios não são partilhados entre processos.
+- **The `secret` is the vault's key.** Use a long, random value (e.g. `openssl rand -base64 48`), store it in an environment variable, and never put it in code or in git. If it leaks, anyone can forge tokens.
+- **Always use HTTPS.** Plain-text tokens on an unencrypted connection can be intercepted.
+- **Don't increase `accessTtl`.** Short access tokens limit the damage from a stolen token; renewal via refresh token already provides convenience for the user.
+- **Show the API key and recovery codes only once** — that's how the module works; don't store them in plain text on your side.
+- **Don't disable `loginThrottle` in production**, and keep the "always 200" responses on the forgot/verify routes (already the default), so as not to reveal which emails have an account.
+- **In a cluster (multiple machines)**, use shared stores (database/Redis) instead of the `Memory*` ones, or sessions and lockouts won't be shared across processes.

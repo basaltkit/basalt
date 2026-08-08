@@ -1,52 +1,52 @@
 # @machize/queue
 
-Filas de trabalho (queues) para aplicações Machize: define "jobs" (tarefas) declarativos com validação Zod, executa-os em segundo plano com BullMQ/Redis em produção, e de forma síncrona em desenvolvimento e testes — sem mudares uma linha de código.
+Job queues for Machize applications: define declarative "jobs" with Zod validation, run them in the background with BullMQ/Redis in production, and synchronously in development and tests — without changing a line of code.
 
-Precisas deste módulo quando tens trabalho que **não deve bloquear o pedido do utilizador**: enviar e-mails, gerar relatórios, processar imagens, sincronizar dados, etc.
+You need this module when you have work that **must not block the user's request**: sending emails, generating reports, processing images, syncing data, etc.
 
 ---
 
-## O que este módulo resolve
+## What this module solves
 
-Uma **fila (queue)** é uma lista de espera de tarefas. Em vez de fazeres o trabalho pesado imediatamente (e obrigares o utilizador a esperar), colocas a tarefa na fila e respondes logo. Um **worker** (trabalhador) — um processo que pode estar noutra máquina — vai buscar as tarefas à fila e executa-as, uma a uma ou várias em paralelo. Cada tarefa individual chama-se um **job**.
+A **queue** is a waiting list of tasks. Instead of doing the heavy work immediately (and making the user wait), you put the task on the queue and respond right away. A **worker** — a process that may live on another machine — pulls tasks off the queue and runs them, one at a time or several in parallel. Each individual task is called a **job**.
 
-Este módulo dá-te três coisas que normalmente terias de construir à mão:
+This module gives you three things you'd normally have to build by hand:
 
-1. **Jobs declarativos e seguros** — defines cada job uma vez com `defineJob` (nome, esquema de validação, número de tentativas) e depois chamas `MeuJob.dispatch(dados)` em qualquer ponto da aplicação. Os dados são validados com Zod *antes* de entrarem na fila, por isso dados inválidos nunca chegam ao worker.
-2. **Propagação de contexto** — informação do pedido atual (`requestId`, `tenantId`, `userId`, etc.) viaja automaticamente junto com o job e é restaurada dentro do worker. Os teus logs e verificações de tenant funcionam no worker como funcionavam no pedido HTTP.
-3. **Dois drivers intercambiáveis** — em produção usa o **BullMQ** (sobre Redis, com retries e atrasos reais); em desenvolvimento e testes usa o driver **sync**, que executa o job imediatamente, no mesmo processo, sem precisares de Redis instalado.
+1. **Declarative, type-safe jobs** — you define each job once with `defineJob` (name, validation schema, number of attempts) and then call `MyJob.dispatch(data)` anywhere in the application. Data is validated with Zod *before* entering the queue, so invalid data never reaches the worker.
+2. **Context propagation** — information from the current request (`requestId`, `tenantId`, `userId`, etc.) automatically travels along with the job and is restored inside the worker. Your logs and tenant checks work in the worker the same way they did in the HTTP request.
+3. **Two interchangeable drivers** — in production, use **BullMQ** (over Redis, with real retries and delays); in development and tests, use the **sync** driver, which runs the job immediately, in the same process, without needing Redis installed.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/queue
 ```
 
-O pacote depende de `@machize/core` e `@machize/events` (instalados automaticamente). Para produção precisas também de um servidor **Redis** acessível (o BullMQ guarda lá as filas). Para desenvolvimento e testes não precisas de nada.
+The package depends on `@machize/core` and `@machize/events` (installed automatically). For production you also need an accessible **Redis** server (BullMQ stores the queues there). For development and tests you need nothing.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-Passo a passo para teres um job a funcionar:
+Step by step to get a job working:
 
-**1. Define o job** (num ficheiro próprio, ex.: `src/jobs/send-welcome-email.ts`):
+**1. Define the job** (in its own file, e.g. `src/jobs/send-welcome-email.ts`):
 
 ```ts
 import { defineJob } from '@machize/queue'
 import { z } from 'zod'
 
 export const SendWelcomeEmail = defineJob({
-  name: 'email.welcome',                       // nome único do job
-  schema: z.object({ userId: z.string() }),    // formato dos dados (validado)
-  attempts: 3,                                 // tenta até 3 vezes se falhar
-  backoff: { type: 'exponential', delay: '30s' }, // espera crescente entre tentativas
+  name: 'email.welcome',                       // unique job name
+  schema: z.object({ userId: z.string() }),    // shape of the data (validated)
+  attempts: 3,                                 // retry up to 3 times on failure
+  backoff: { type: 'exponential', delay: '30s' }, // growing wait time between attempts
   async handle({ userId }) {
-    // o trabalho em si — corre no worker
-    console.log(`A enviar e-mail de boas-vindas ao utilizador ${userId}`)
+    // the actual work — runs on the worker
+    console.log(`Sending welcome email to user ${userId}`)
   },
 })
 ```
 
-**2. Regista o plugin na aplicação** (ex.: `src/app.ts`):
+**2. Register the plugin in the application** (e.g. `src/app.ts`):
 
 ```ts
 import { createApp } from '@machize/core'
@@ -57,31 +57,31 @@ const app = await createApp({
   plugins: [
     queuePlugin({
       jobs: [SendWelcomeEmail],
-      // sem `connection` → driver sync: executa logo, sem Redis (ideal em dev)
+      // no `connection` → sync driver: runs immediately, no Redis needed (ideal for dev)
     }),
   ],
 }).boot()
 ```
 
-**3. Despacha o job onde precisares:**
+**3. Dispatch the job wherever you need it:**
 
 ```ts
 await SendWelcomeEmail.dispatch({ userId: 'u-123' })
 ```
 
-Pronto. Em dev o `handle` corre imediatamente. Quando quiseres o comportamento real de produção, acrescenta a ligação ao Redis e os workers:
+Done. In dev, `handle` runs immediately. When you want real production behavior, add the Redis connection and the workers:
 
 ```ts
 queuePlugin({
   jobs: [SendWelcomeEmail],
-  connection: 'redis://localhost:6379',        // ativa o driver BullMQ
-  workers: [{ queue: 'default', concurrency: 5 }], // este processo processa a fila
+  connection: 'redis://localhost:6379',        // activates the BullMQ driver
+  workers: [{ queue: 'default', concurrency: 5 }], // this process processes the queue
 })
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Definir um job com `defineJob`
+### Defining a job with `defineJob`
 
 ```ts
 import { defineJob } from '@machize/queue'
@@ -90,34 +90,34 @@ import { z } from 'zod'
 export const GenerateInvoice = defineJob({
   name: 'billing.invoice',
   schema: z.object({ orderId: z.string() }),
-  queue: 'billing',      // fila dedicada (por omissão: 'default')
+  queue: 'billing',      // dedicated queue (default: 'default')
   attempts: 5,
   backoff: { type: 'fixed', delay: '1m' },
   async handle({ orderId }) {
-    // gerar a fatura…
+    // generate the invoice…
   },
 })
 ```
 
-O `schema` é opcional mas recomendado: valida os dados **duas vezes** — no `dispatch` (antes de entrar na fila) e no worker (antes de executar). Um payload inválido lança `JobValidationError` logo no `dispatch`, sem sujar a fila.
+`schema` is optional but recommended: it validates the data **twice** — on `dispatch` (before entering the queue) and on the worker (before running). An invalid payload throws `JobValidationError` right at `dispatch`, without polluting the queue.
 
-### Despachar com atraso ou prioridade
+### Dispatching with delay or priority
 
 ```ts
 import { GenerateInvoice } from './jobs/generate-invoice.js'
 
-// executa daqui a 10 minutos
+// runs 10 minutes from now
 await GenerateInvoice.dispatch({ orderId: 'o-1' }, { delay: '10m' })
 
-// prioridade (número menor = mais prioritário, semântica BullMQ)
+// priority (lower number = higher priority, BullMQ semantics)
 await GenerateInvoice.dispatch({ orderId: 'o-2' }, { priority: 1 })
 ```
 
-Nota: com o driver sync o `delay` é ignorado — o job executa imediatamente.
+Note: with the sync driver, `delay` is ignored — the job runs immediately.
 
-### Propagação de contexto (tenant, requestId…)
+### Context propagation (tenant, requestId…)
 
-Se despachares um job dentro de um pedido com contexto ativo (`runWithContext` do `@machize/core`, normalmente feito pelo middleware HTTP), os campos `requestId`, `correlationId`, `traceId`, `userId`, `tenantId` — e `tenant.id` / `user.id` — são fotografados e restaurados dentro do `handle`:
+If you dispatch a job inside a request with active context (`runWithContext` from `@machize/core`, usually done by HTTP middleware), the fields `requestId`, `correlationId`, `traceId`, `userId`, `tenantId` — and `tenant.id` / `user.id` — are captured and restored inside `handle`:
 
 ```ts
 import { ctx, runWithContext } from '@machize/core'
@@ -126,7 +126,7 @@ import { defineJob, QueueManager, SyncQueueDriver } from '@machize/queue'
 const job = defineJob({
   name: 'ctx.probe',
   handle: () => {
-    // dentro do worker, o contexto original está disponível
+    // inside the worker, the original context is available
     console.log(ctx().requestId, ctx()['tenant'])
   },
 })
@@ -137,12 +137,12 @@ manager.register(job)
 await runWithContext({ requestId: 'req-7', tenant: { id: 'acme', name: 'Acme' } }, () =>
   job.dispatch({}),
 )
-// no handle: requestId = 'req-7', tenant = { id: 'acme' }  (só o id é serializado)
+// inside handle: requestId = 'req-7', tenant = { id: 'acme' }  (only the id is serialized)
 ```
 
-### Transformar um listener de eventos num job: `queuedOn`
+### Turning an event listener into a job: `queuedOn`
 
-Se usas `@machize/events`, o `queuedOn` faz a ponte eventos→fila: o `emit` apenas coloca o job na fila, e o handler corre no worker com retries e contexto restaurado.
+If you use `@machize/events`, `queuedOn` bridges events→queue: `emit` just puts the job on the queue, and the handler runs on the worker with retries and restored context.
 
 ```ts
 import { EventBus, defineEvent } from '@machize/events'
@@ -154,24 +154,24 @@ const manager = new QueueManager(new SyncQueueDriver())
 const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))
 
 const unsubscribe = queuedOn(bus, manager, OrderCreated, async ({ orderId }) => {
-  // corre no worker, com retry/backoff do driver
+  // runs on the worker, with the driver's retry/backoff
 }, { queue: 'orders', attempts: 3 })
 
 await bus.emit(OrderCreated, { orderId: 'o-1' })
-// o job criado chama-se 'listener:order.created'
+// the created job is named 'listener:order.created'
 ```
 
-`queuedOn` devolve a função para cancelar a subscrição.
+`queuedOn` returns the function to cancel the subscription.
 
-### Produtor e worker em processos separados (produção)
+### Producer and worker in separate processes (production)
 
-Um processo pode só **produzir** (fazer `dispatch`) e outro só **consumir** (correr workers). Ambos têm de registar os **mesmos jobs** (o worker precisa do `handle`):
+One process can only **produce** (call `dispatch`) and another only **consume** (run workers). Both must register the **same jobs** (the worker needs the `handle`):
 
 ```ts
-// processo API (só produz)
+// API process (produces only)
 queuePlugin({ jobs: [SendWelcomeEmail, GenerateInvoice], connection: process.env.REDIS_URL! })
 
-// processo worker (consome)
+// worker process (consumes)
 queuePlugin({
   jobs: [SendWelcomeEmail, GenerateInvoice],
   connection: process.env.REDIS_URL!,
@@ -182,9 +182,9 @@ queuePlugin({
 })
 ```
 
-Se um job chegar a um worker que não o registou, é lançado `UnknownJobError`.
+If a job reaches a worker that hasn't registered it, `UnknownJobError` is thrown.
 
-### Uso manual sem plugin (ex.: em testes)
+### Manual use without a plugin (e.g. in tests)
 
 ```ts
 import { QueueManager, SyncQueueDriver, defineJob } from '@machize/queue'
@@ -199,121 +199,121 @@ await job.dispatch({})
 console.log(driver.executed) // [{ queue: 'default', jobName: 'demo', attempts: 1 }]
 ```
 
-O `SyncQueueDriver` guarda o histórico em `driver.executed` — muito útil em asserções de teste.
+`SyncQueueDriver` keeps a history in `driver.executed` — very handy for test assertions.
 
-## Referência da API
+## API reference
 
 ### `defineJob<T>(config): JobDefinition<T>`
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | Sim | — | Nome único do job (ex.: `'email.welcome'`). |
-| `schema` | `JobSchema<T>` (compatível com Zod) | Não | — | Valida o payload no dispatch e no worker. |
-| `queue` | `string` | Não | `'default'` | Nome da fila onde o job entra. |
-| `attempts` | `number` | Não | `1` | Número máximo de tentativas em caso de falha. |
-| `backoff` | `JobBackoff` | Não | — | Estratégia de espera entre tentativas. |
-| `handle` | `(payload: T) => void \| Promise<void>` | Sim | — | A função que faz o trabalho (corre no worker). |
+| `name` | `string` | Yes | — | Unique job name (e.g. `'email.welcome'`). |
+| `schema` | `JobSchema<T>` (Zod-compatible) | No | — | Validates the payload on dispatch and on the worker. |
+| `queue` | `string` | No | `'default'` | Name of the queue the job goes into. |
+| `attempts` | `number` | No | `1` | Maximum number of attempts on failure. |
+| `backoff` | `JobBackoff` | No | — | Wait strategy between attempts. |
+| `handle` | `(payload: T) => void \| Promise<void>` | Yes | — | The function that does the work (runs on the worker). |
 
-O objeto devolvido (`JobDefinition<T>`) expõe:
+The returned object (`JobDefinition<T>`) exposes:
 
-- `dispatch(payload, options?)` — coloca o job na fila. Lança `JobNotRegisteredError` se o job ainda não foi registado num `QueueManager`.
-- `name`, `schema`, `queue`, `attempts`, `backoff`, `handle` — os valores configurados.
-- `__bind(dispatcher)` — **Avançado/interno**: usado pelo `QueueManager` ao registar.
+- `dispatch(payload, options?)` — puts the job on the queue. Throws `JobNotRegisteredError` if the job hasn't yet been registered with a `QueueManager`.
+- `name`, `schema`, `queue`, `attempts`, `backoff`, `handle` — the configured values.
+- `__bind(dispatcher)` — **Advanced/internal**: used by `QueueManager` on registration.
 
 ### `DispatchOptions`
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `delay` | `DurationInput` (ex.: `'30s'`, `'10m'`, ou ms) | Não | sem atraso | Atrasa a execução (apenas driver BullMQ). |
-| `priority` | `number` | Não | — | Prioridade BullMQ (menor = mais prioritário). |
+| `delay` | `DurationInput` (e.g. `'30s'`, `'10m'`, or ms) | No | no delay | Delays execution (BullMQ driver only). |
+| `priority` | `number` | No | — | BullMQ priority (lower = higher priority). |
 
 ### `JobBackoff`
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `type` | `'exponential' \| 'fixed'` | Sim | — | Espera crescente ou constante entre tentativas. |
-| `delay` | `DurationInput` | Sim | — | Espera base (ex.: `'30s'`). |
+| `type` | `'exponential' \| 'fixed'` | Yes | — | Growing or constant wait between attempts. |
+| `delay` | `DurationInput` | Yes | — | Base wait (e.g. `'30s'`). |
 
 ### `queuePlugin(options?: QueuePluginOptions)`
 
-Plugin Machize que regista um `QueueManager` no contentor sob o token `QUEUE`, arranca workers no `boot` e fecha tudo no `shutdown`.
+Machize plugin that registers a `QueueManager` in the container under the `QUEUE` token, starts workers on `boot`, and closes everything on `shutdown`.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `jobs` | `JobDefinition[]` | Não | `[]` | Jobs conhecidos por este processo (produtor e/ou worker). |
-| `connection` | `string \| ConnectionOptions` | Não | — | URL Redis (`redis://…` ou `rediss://…`) ou opções ioredis. Com valor → driver BullMQ; sem valor → driver sync. |
-| `driver` | `QueueDriver` | Não | — | Driver personalizado — tem precedência sobre `connection`. |
-| `workers` | `{ queue: string; concurrency?: number }[]` | Não | `[]` | Filas cujos workers arrancam neste processo no boot. |
+| `jobs` | `JobDefinition[]` | No | `[]` | Jobs known to this process (producer and/or worker). |
+| `connection` | `string \| ConnectionOptions` | No | — | Redis URL (`redis://…` or `rediss://…`) or ioredis options. With a value → BullMQ driver; without one → sync driver. |
+| `driver` | `QueueDriver` | No | — | Custom driver — takes precedence over `connection`. |
+| `workers` | `{ queue: string; concurrency?: number }[]` | No | `[]` | Queues whose workers start in this process on boot. |
 
 ```ts
 import { QUEUE } from '@machize/queue'
-const manager = app.container.get(QUEUE) // obter o QueueManager do contentor
+const manager = app.container.get(QUEUE) // get the QueueManager from the container
 ```
 
-### `class QueueManager` — implementa `JobDispatcher`
+### `class QueueManager` — implements `JobDispatcher`
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `constructor` | `new QueueManager(driver: QueueDriver)` | Cria o gestor sobre um driver. |
-| `register` | `(job) => this` | Regista um job e liga-lhe o `dispatch`. |
-| `dispatch` | `<T>(job, payload: T, options?: DispatchOptions) => Promise<void>` | Valida e coloca o job na fila. Auto-regista o job se ainda não estiver. |
-| `work` | `(queue = 'default', { concurrency? }?) => void` | Arranca um worker para a fila (no-op no driver sync). |
-| `close` | `() => Promise<void>` | Fecha workers e ligações. |
+| `constructor` | `new QueueManager(driver: QueueDriver)` | Creates the manager over a driver. |
+| `register` | `(job) => this` | Registers a job and wires its `dispatch`. |
+| `dispatch` | `<T>(job, payload: T, options?: DispatchOptions) => Promise<void>` | Validates and puts the job on the queue. Auto-registers the job if not registered yet. |
+| `work` | `(queue = 'default', { concurrency? }?) => void` | Starts a worker for the queue (no-op on the sync driver). |
+| `close` | `() => Promise<void>` | Closes workers and connections. |
 
 ### `queuedOn<T>(bus, manager, event, handler, options?): () => void`
 
-Cria a ponte evento→job. Devolve a função de cancelamento da subscrição.
+Creates the event→job bridge. Returns the subscription cancel function.
 
 `QueuedListenerOptions`:
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `queue` | `string` | Não | `'default'` | Fila do job criado. |
-| `attempts` | `number` | Não | `1` | Tentativas do job. |
-| `backoff` | `JobBackoff` | Não | — | Backoff do job. |
+| `queue` | `string` | No | `'default'` | Queue for the created job. |
+| `attempts` | `number` | No | `1` | Job attempts. |
+| `backoff` | `JobBackoff` | No | — | Job backoff. |
 
 ### Drivers
 
-- **`class SyncQueueDriver`** — executa inline no `dispatch`, honra `attempts` (retry imediato). Propriedade pública `executed: { queue, jobName, attempts }[]` com o histórico de execuções. Para testes e dev sem Redis.
-- **`class BullmqQueueDriver`** — produção sobre Redis. `new BullmqQueueDriver({ connection })`, onde `connection` é URL Redis ou opções ioredis (`BullmqDriverOptions`). Jobs completos são limpos (mantém 1000); jobs falhados ficam guardados.
-- **`interface QueueDriver`** (Avançado) — contrato para drivers personalizados: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, `close()`. Tipos auxiliares: `AddJobOptions`, `JobExecutor`.
+- **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry). Public property `executed: { queue, jobName, attempts }[]` with the execution history. For testing and dev without Redis.
+- **`class BullmqQueueDriver`** — production over Redis. `new BullmqQueueDriver({ connection })`, where `connection` is a Redis URL or ioredis options (`BullmqDriverOptions`). Completed jobs are cleaned up (keeps 1000); failed jobs are kept.
+- **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, `close()`. Helper types: `AddJobOptions`, `JobExecutor`.
 
-### Erros exportados
+### Exported errors
 
-| Classe | Código | Quando ocorre |
+| Class | Code | When it occurs |
 |---|---|---|
-| `JobValidationError` | `JOB_INVALID` | Payload não passa no `schema` (tem `.job` e `.issues`). |
-| `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `dispatch` antes de registar o job num manager. |
-| `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | O job chegou ao worker mas não está registado nesse processo. |
+| `JobValidationError` | `JOB_INVALID` | Payload doesn't pass the `schema` (has `.job` and `.issues`). |
+| `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `dispatch` before registering the job with a manager. |
+| `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | The job reached the worker but isn't registered in that process. |
 
 ### Token
 
-- `QUEUE: Token<QueueManager>` — token de injeção para obter o manager do contentor.
+- `QUEUE: Token<QueueManager>` — injection token to get the manager from the container.
 
-## Erros comuns e soluções (FAQ)
+## Common issues and solutions (FAQ)
 
-**"Job X has not been registered in a QueueManager yet" ao fazer `dispatch`.**
-O job não foi passado em `queuePlugin({ jobs: [...] })` nem registado com `manager.register(job)`. Acrescenta-o à lista de jobs do plugin.
+**"Job X has not been registered in a QueueManager yet" on `dispatch`.**
+The job wasn't passed in `queuePlugin({ jobs: [...] })` nor registered with `manager.register(job)`. Add it to the plugin's job list.
 
 **"Job X reached the worker but is not registered in this process".**
-O processo worker não conhece esse job. Produtor e worker têm de registar a **mesma** lista de jobs.
+The worker process doesn't know that job. Producer and worker must register the **same** list of jobs.
 
-**O job nunca executa em produção.**
-Verifica se algum processo arrancou workers para a fila certa: `queuePlugin({ workers: [{ queue: 'default' }] })` ou `manager.work('default')`. Verifica também que a fila (`queue`) do job coincide com a do worker.
+**The job never runs in production.**
+Check whether any process started workers for the right queue: `queuePlugin({ workers: [{ queue: 'default' }] })` or `manager.work('default')`. Also check that the job's `queue` matches the worker's.
 
 **`JobValidationError: Invalid payload…`**
-Os dados passados ao `dispatch` não respeitam o `schema`. O erro inclui `issues` com o detalhe do Zod. Isto é intencional — protege a fila de dados corrompidos.
+The data passed to `dispatch` doesn't match the `schema`. The error includes `issues` with Zod's details. This is intentional — it protects the queue from corrupted data.
 
-**Em dev, o `delay` não funciona.**
-O driver sync executa sempre imediatamente. Atrasos, backoff temporizado e prioridade só têm efeito real com o driver BullMQ (com `connection`).
+**In dev, `delay` doesn't work.**
+The sync driver always runs immediately. Delays, timed backoff, and priority only have a real effect with the BullMQ driver (with `connection`).
 
-**Preciso de Redis para correr os testes?**
-Não. Sem `connection`, o plugin usa o `SyncQueueDriver`. Podes também instanciar o driver diretamente e inspecionar `driver.executed`.
+**Do I need Redis to run the tests?**
+No. Without `connection`, the plugin uses `SyncQueueDriver`. You can also instantiate the driver directly and inspect `driver.executed`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — fornece `createApp`/`definePlugin` (o `queuePlugin` é um plugin core), o contexto ALS (`runWithContext`/`ctx`) que é propagado para os workers, `parseDuration` (formatos `'30s'`, `'10m'`) e a classe base `MachizeError`.
-- **`@machize/events`** — via `queuedOn`, qualquer evento de domínio pode passar a ser processado em segundo plano com retries.
-- **`@machize/scheduler`** — `schedule.job(MeuJob, payload)` agenda o `dispatch` de um job desta fila em horários cron (ex.: reconciliação diária às 03:00).
-- **`@machize/logger`** — como o contexto é restaurado no worker, os logs escritos dentro de `handle` saem automaticamente com `requestId`/`tenantId` do pedido original.
-- **`@machize/audit`** e **`@machize/activity`** — registos feitos dentro de um `handle` herdam o mesmo contexto (ator, tenant), mantendo o rasto coerente entre pedido e worker.
+- **`@machize/core`** — provides `createApp`/`definePlugin` (`queuePlugin` is a core plugin), the ALS context (`runWithContext`/`ctx`) propagated to workers, `parseDuration` (formats `'30s'`, `'10m'`), and the base `MachizeError` class.
+- **`@machize/events`** — via `queuedOn`, any domain event can be processed in the background with retries.
+- **`@machize/scheduler`** — `schedule.job(MyJob, payload)` schedules a `dispatch` for a job from this queue on cron schedules (e.g. daily reconciliation at 03:00).
+- **`@machize/logger`** — since context is restored on the worker, logs written inside `handle` automatically carry `requestId`/`tenantId` from the original request.
+- **`@machize/audit`** and **`@machize/activity`** — records made inside a `handle` inherit the same context (actor, tenant), keeping the trail consistent between the request and the worker.

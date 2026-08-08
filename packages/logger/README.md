@@ -1,34 +1,34 @@
 # @machize/logger
 
-Logging estruturado para aplicações Machize, construído sobre o [pino](https://getpino.io): cada linha de log sai em JSON, enriquecida automaticamente com o contexto do pedido (`requestId`, `tenantId`, `userId`) e com dados sensíveis (passwords, tokens) censurados por omissão.
+Structured logging for Machize applications, built on top of [pino](https://getpino.io): every log line is emitted as JSON, automatically enriched with the request context (`requestId`, `tenantId`, `userId`), with sensitive data (passwords, tokens) redacted by default.
 
-Precisas deste módulo assim que quiseres perceber o que a tua aplicação anda a fazer — em desenvolvimento e, sobretudo, em produção.
+You need this module as soon as you want to understand what your application is doing — in development, and especially in production.
 
 ---
 
-## O que este módulo resolve
+## What this module solves
 
-Um **log** é o diário da aplicação: cada acontecimento relevante ("utilizador entrou", "pagamento falhou") é escrito numa linha. Com `console.log` essas linhas são texto solto, difícil de pesquisar. O **logging estruturado** escreve cada linha como JSON — um formato com campos (`{"level":30,"msg":"login ok","userId":"u-9"}`) que ferramentas como Datadog, Loki ou CloudWatch conseguem filtrar e agregar.
+A **log** is the application's diary: every relevant event ("user logged in", "payment failed") is written as a line. With `console.log`, those lines are loose text, hard to search. **Structured logging** writes each line as JSON — a format with fields (`{"level":30,"msg":"login ok","userId":"u-9"}`) that tools like Datadog, Loki, or CloudWatch can filter and aggregate.
 
-O problema seguinte é a **correlação**: quando dez pedidos correm ao mesmo tempo, como sabes que linhas pertencem ao mesmo pedido? Este módulo lê o contexto ativo da aplicação (o "request context" do `@machize/core`, guardado em AsyncLocalStorage) e acrescenta **automaticamente** `requestId`, `correlationId`, `traceId`, `userId` e `tenantId` a cada linha — sem tu passares nada nas chamadas de log. Se o contexto tiver objetos `tenant`/`user` com `id`, eles tornam-se `tenantId`/`userId`.
+The next problem is **correlation**: when ten requests run at the same time, how do you know which lines belong to which request? This module reads the application's active context (the `@machize/core` "request context", stored in AsyncLocalStorage) and **automatically** adds `requestId`, `correlationId`, `traceId`, `userId`, and `tenantId` to every line — without you passing anything in your log calls. If the context has `tenant`/`user` objects with an `id`, they become `tenantId`/`userId`.
 
-Por fim, a **segurança**: é demasiado fácil despejar uma password ou um token para os logs por acidente. Por omissão, campos como `password`, `token`, `secret` e `authorization` (a qualquer profundidade de um nível: `*.password`, etc.) são substituídos por `[REDACTED]`.
+Finally, **security**: it's far too easy to accidentally dump a password or token into the logs. By default, fields like `password`, `token`, `secret`, and `authorization` (at any nesting depth: `*.password`, etc.) are replaced with `[REDACTED]`.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/logger
 ```
 
-Depende de `@machize/core` e `pino`. Para saída legível em desenvolvimento (`pretty: true`), instala também o `pino-pretty`:
+Depends on `@machize/core` and `pino`. For readable output in development (`pretty: true`), also install `pino-pretty`:
 
 ```bash
 pnpm add -D pino-pretty
 ```
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-**1. Regista o plugin:**
+**1. Register the plugin:**
 
 ```ts
 import { createApp } from '@machize/core'
@@ -39,74 +39,74 @@ const app = await createApp({
 }).boot()
 ```
 
-**2. Obtém o logger do contentor e usa-o:**
+**2. Get the logger from the container and use it:**
 
 ```ts
 const logger = app.container.get(LOGGER)
 
-logger.info('aplicação arrancou')
-logger.info({ port: 3000 }, 'servidor a ouvir')      // campos extra + mensagem
-logger.warn({ quota: 0.9 }, 'quota quase esgotada')
-logger.error({ err: new Error('boom') }, 'falhou')
+logger.info('application started')
+logger.info({ port: 3000 }, 'server listening')      // extra fields + message
+logger.warn({ quota: 0.9 }, 'quota almost exhausted')
+logger.error({ err: new Error('boom') }, 'failed')
 ```
 
-Saída (JSON, uma linha por chamada):
+Output (JSON, one line per call):
 
 ```json
-{"level":30,"time":1754500000000,"msg":"servidor a ouvir","port":3000}
+{"level":30,"time":1754500000000,"msg":"server listening","port":3000}
 ```
 
-**3. Dentro de um pedido com contexto, os campos aparecem sozinhos:**
+**3. Inside a request with context, the fields appear on their own:**
 
 ```ts
 import { runWithContext } from '@machize/core'
 
 runWithContext({ requestId: 'req-1', tenant: { id: 't-acme' }, user: { id: 'u-9' } }, () => {
-  logger.info('dentro do pedido')
-  // → {"msg":"dentro do pedido","requestId":"req-1","tenantId":"t-acme","userId":"u-9",...}
+  logger.info('inside the request')
+  // → {"msg":"inside the request","requestId":"req-1","tenantId":"t-acme","userId":"u-9",...}
 })
 ```
 
-(Numa aplicação real é o middleware HTTP que faz o `runWithContext` por ti.)
+(In a real application, it's the HTTP middleware that does the `runWithContext` for you.)
 
-## Guia de utilização
+## Usage guide
 
-### Criar um logger sem plugin
+### Creating a logger without the plugin
 
-`createLogger` devolve um logger pino normal — usa-o em scripts, testes ou fora do contentor:
+`createLogger` returns a plain pino logger — use it in scripts, tests, or outside the container:
 
 ```ts
 import { createLogger } from '@machize/logger'
 
 const logger = createLogger({ level: 'debug', base: { service: 'api' } })
-logger.debug('a arrancar')
+logger.debug('starting')
 ```
 
-### Níveis de log
+### Log levels
 
-Os níveis do pino, do mais falador ao mais grave: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. A opção `level` define o mínimo emitido — com `level: 'warn'`, chamadas `info` e `debug` são descartadas:
+Pino's levels, from chattiest to most severe: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. The `level` option sets the minimum emitted — with `level: 'warn'`, `info` and `debug` calls are dropped:
 
 ```ts
 import { createLogger } from '@machize/logger'
 
 const logger = createLogger({ level: 'warn' })
-logger.info('não aparece')
-logger.warn('aparece')
+logger.info('does not appear')
+logger.warn('appears')
 ```
 
-### Saída legível em desenvolvimento
+### Readable output in development
 
 ```ts
 import { createLogger } from '@machize/logger'
 
-const logger = createLogger({ pretty: true }) // requer pino-pretty instalado
+const logger = createLogger({ pretty: true }) // requires pino-pretty to be installed
 ```
 
-Em produção deixa `pretty` desligado — o JSON é o formato que os agregadores esperam.
+In production, leave `pretty` off — JSON is the format aggregators expect.
 
-### Censura (redaction) de dados sensíveis
+### Redacting sensitive data
 
-Por omissão são censurados: `password`, `*.password`, `token`, `*.token`, `secret`, `*.secret`, `authorization`, `*.authorization`, `headers.authorization`. Podes acrescentar caminhos:
+By default, these are redacted: `password`, `*.password`, `token`, `*.token`, `secret`, `*.secret`, `authorization`, `*.authorization`, `headers.authorization`. You can add more paths:
 
 ```ts
 import { createLogger } from '@machize/logger'
@@ -116,23 +116,23 @@ logger.info({ email: 'a@b.c', password: '123', auth: { token: 'jwt' } }, 'login'
 // → {"msg":"login","email":"a@b.c","password":"[REDACTED]","auth":{"token":"[REDACTED]"}}
 ```
 
-Nota: os caminhos extra **somam-se** aos default, não os substituem.
+Note: the extra paths are **added to** the defaults, not replacing them.
 
-### Child loggers (sub-loggers por módulo)
+### Child loggers (per-module sub-loggers)
 
-Um *child logger* herda a configuração e acrescenta campos fixos — útil para identificar o módulo:
+A *child logger* inherits the configuration and adds fixed fields — useful for identifying the module:
 
 ```ts
 const subscriptionsLogger = logger.child({ pkg: 'subscriptions' })
-subscriptionsLogger.warn('quota baixa')
-// → {"msg":"quota baixa","pkg":"subscriptions", ...contexto ativo...}
+subscriptionsLogger.warn('low quota')
+// → {"msg":"low quota","pkg":"subscriptions", ...active context...}
 ```
 
-O enriquecimento de contexto continua a funcionar nos child loggers.
+Context enrichment still works on child loggers.
 
-### Capturar a saída em testes
+### Capturing output in tests
 
-A opção `destination` aceita qualquer stream com `write(msg)` — nos testes, captura as linhas e faz asserções:
+The `destination` option accepts any stream with `write(msg)` — in tests, capture the lines and assert on them:
 
 ```ts
 import { createLogger } from '@machize/logger'
@@ -146,67 +146,67 @@ logger.info({ pkg: 'core' }, 'boot ok')
 // lines[0] → { msg: 'boot ok', pkg: 'core', ... }
 ```
 
-## Referência da API
+## API reference
 
 ### `createLogger(options?: LoggerOptions): Logger`
 
-Cria um logger pino com contexto automático e redaction. `Logger` é um alias do logger pino (`PinoLogger<string, boolean>`) — tens toda a API pino: `info/warn/error/debug/trace/fatal`, `child()`, `flush()`, etc.
+Creates a pino logger with automatic context enrichment and redaction. `Logger` is an alias for the pino logger (`PinoLogger<string, boolean>`) — you get the full pino API: `info/warn/error/debug/trace/fatal`, `child()`, `flush()`, etc.
 
 `LoggerOptions`:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `level` | `string` | Não | `'info'` | Nível mínimo emitido (`trace`…`fatal`). |
-| `pretty` | `boolean` | Não | `false` (JSON) | Saída colorida e legível para dev — requer `pino-pretty` instalado. |
-| `redact` | `string[]` | Não | `[]` | Caminhos de censura **extra**, somados aos default. Censor: `[REDACTED]`. |
-| `base` | `Record<string, unknown>` | Não | `{}` | Campos fixos em todas as linhas (ex.: `{ service: 'api' }`). Nota: o default `{}` remove os campos `pid`/`hostname` que o pino normalmente inclui. |
-| `destination` | `DestinationStream` | Não | stdout | Stream de destino — usado em testes para capturar a saída. |
+| `level` | `string` | No | `'info'` | Minimum level emitted (`trace`…`fatal`). |
+| `pretty` | `boolean` | No | `false` (JSON) | Colorized, readable output for dev — requires `pino-pretty` to be installed. |
+| `redact` | `string[]` | No | `[]` | **Extra** redaction paths, added to the defaults. Redactor: `[REDACTED]`. |
+| `base` | `Record<string, unknown>` | No | `{}` | Fixed fields on every line (e.g. `{ service: 'api' }`). Note: the default `{}` removes the `pid`/`hostname` fields that pino normally includes. |
+| `destination` | `DestinationStream` | No | stdout | Destination stream — used in tests to capture output. |
 
-Campos de contexto promovidos automaticamente para cada linha (quando existe contexto ativo): `requestId`, `correlationId`, `traceId`, `userId`, `tenantId`; e ainda `tenant.id` → `tenantId`, `user.id` → `userId` (sem sobrepor valores já presentes no contexto).
+Context fields automatically promoted onto every line (when there's an active context): `requestId`, `correlationId`, `traceId`, `userId`, `tenantId`; plus `tenant.id` → `tenantId`, `user.id` → `userId` (without overwriting values already present in the context).
 
 ### `loggerPlugin(options?: LoggerOptions)`
 
-Plugin Machize: regista `createLogger(options)` como singleton no token `LOGGER`; no `shutdown` chama `logger.flush()` para escoar buffers. Aceita exatamente as mesmas opções que `createLogger`.
+Machize plugin: registers `createLogger(options)` as a singleton on the `LOGGER` token; on `shutdown`, calls `logger.flush()` to drain buffers. Accepts exactly the same options as `createLogger`.
 
 ```ts
 import { LOGGER, loggerPlugin } from '@machize/logger'
-// registo:  plugins: [loggerPlugin({ level: 'info' })]
-// obtenção: const logger = app.container.get(LOGGER)
+// register:  plugins: [loggerPlugin({ level: 'info' })]
+// retrieve:  const logger = app.container.get(LOGGER)
 ```
 
 ### Exports
 
-| Export | Tipo | Descrição |
+| Export | Type | Description |
 |---|---|---|
-| `createLogger` | função | Cria um logger. |
-| `loggerPlugin` | função | Plugin para `createApp`. |
-| `LOGGER` | `Token<Logger>` | Token de injeção do logger no contentor. |
-| `Logger` | tipo | Alias do logger pino. |
-| `LoggerOptions` | tipo | Opções (tabela acima). |
+| `createLogger` | function | Creates a logger. |
+| `loggerPlugin` | function | Plugin for `createApp`. |
+| `LOGGER` | `Token<Logger>` | Injection token for the logger in the container. |
+| `Logger` | type | Alias for the pino logger. |
+| `LoggerOptions` | type | Options (table above). |
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**Ativei `pretty: true` e rebentou com "unable to determine transport target for pino-pretty".**
-O `pino-pretty` não está instalado. Corre `pnpm add -D pino-pretty`, ou remove `pretty` (produção deve usar JSON).
+**I enabled `pretty: true` and it crashed with "unable to determine transport target for pino-pretty".**
+`pino-pretty` isn't installed. Run `pnpm add -D pino-pretty`, or remove `pretty` (production should use JSON).
 
-**As linhas não trazem `requestId`/`tenantId`.**
-Esses campos só existem quando há **contexto ativo** — código a correr dentro de `runWithContext(...)` (normalmente o middleware HTTP trata disso). Fora de um pedido, é normal não aparecerem.
+**Lines don't have `requestId`/`tenantId`.**
+Those fields only exist when there's an **active context** — code running inside `runWithContext(...)` (normally handled by the HTTP middleware). Outside a request, it's expected that they won't appear.
 
-**O meu `logger.info(...)` não imprime nada.**
-O nível está acima da chamada (ex.: `level: 'warn'` descarta `info`). Baixa o `level` ou sobe a severidade da chamada.
+**My `logger.info(...)` doesn't print anything.**
+The level is set above the call (e.g. `level: 'warn'` drops `info`). Lower the `level`, or raise the severity of the call.
 
-**Vejo `[REDACTED]` num campo que não é sensível.**
-O nome do campo coincide com um caminho default (ex.: qualquer `token` de topo ou `*.token`). Renomeia o campo (ex.: `inviteTokenId`) — os defaults não são removíveis via opções, apenas acrescentáveis.
+**I see `[REDACTED]` on a field that isn't sensitive.**
+The field name matches a default path (e.g. any top-level `token` or `*.token`). Rename the field (e.g. `inviteTokenId`) — the defaults can't be removed via options, only added to.
 
-**Qual é a diferença entre `logger.info('msg')` e `logger.info({ a: 1 }, 'msg')`?**
-Convenção pino: o **primeiro** argumento pode ser um objeto de campos extra; a mensagem vem a seguir. `logger.info('msg', { a: 1 })` está errado — o objeto seria interpolado na mensagem.
+**What's the difference between `logger.info('msg')` and `logger.info({ a: 1 }, 'msg')`?**
+Pino convention: the **first** argument can be an object of extra fields; the message comes after. `logger.info('msg', { a: 1 })` is wrong — the object would be interpolated into the message.
 
-**Perdi logs no fim do processo.**
-Termina a aplicação com `app.shutdown()` — o plugin chama `flush()` no shutdown.
+**I lost logs at the end of the process.**
+Shut down the application with `app.shutdown()` — the plugin calls `flush()` on shutdown.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — fonte do contexto (AsyncLocalStorage via `runWithContext`/`tryCtx`) que enriquece cada linha; o `loggerPlugin` usa `definePlugin`/`createToken` do core.
-- **`@machize/queue`** — a fila propaga o contexto do pedido para os workers; logs escritos dentro de um `handle` de job saem com o `requestId`/`tenantId` do pedido que o despachou — correlação ponta a ponta.
-- **`@machize/scheduler`** — usa o logger dentro das tarefas agendadas e dos handlers `onFailure` para rasto das execuções periódicas.
-- **`@machize/audit` / `@machize/activity`** — papéis diferentes: o logger é diagnóstico técnico (efémero, para operadores); a auditoria e a atividade são registos de negócio (persistentes, para compliance e para o utilizador final). Usa os três em conjunto.
+- **`@machize/core`** — the source of the context (AsyncLocalStorage via `runWithContext`/`tryCtx`) that enriches every line; `loggerPlugin` uses `definePlugin`/`createToken` from core.
+- **`@machize/queue`** — the queue propagates the request context to workers; logs written inside a job's `handle` come out with the `requestId`/`tenantId` of the request that dispatched it — end-to-end correlation.
+- **`@machize/scheduler`** — uses the logger inside scheduled tasks and `onFailure` handlers to trace periodic runs.
+- **`@machize/audit` / `@machize/activity`** — different roles: the logger is technical diagnostics (ephemeral, for operators); audit and activity are business records (persistent, for compliance and for the end user). Use all three together.

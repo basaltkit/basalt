@@ -1,20 +1,20 @@
 # @machize/cache-tiered
 
-Driver de cache **multi-nível (tiered)** para o [`@machize/cache`](https://www.npmjs.com/package/@machize/cache): põe uma *near cache* em processo à frente de uma *far cache* partilhada (Redis), cortando round-trips de rede nas chaves quentes. **Zero dependências** — compõe os drivers que já tens. Precisas deste módulo quando o mesmo dado é lido muitas vezes por pedido/instância e queres evitar ir ao Redis de cada vez.
+**Multi-level (tiered)** cache driver for [`@machize/cache`](https://www.npmjs.com/package/@machize/cache): puts an in-process *near cache* in front of a shared *far cache* (Redis), cutting network round-trips on hot keys. **Zero dependencies** — it composes the drivers you already have. You need this module when the same data is read many times per request/instance and you want to avoid hitting Redis every time.
 
-## O que este módulo resolve
+## What this module solves
 
-Um acesso ao Redis é rápido, mas é rede. Se uma chave é lida centenas de vezes, uma cache em memória (L1) à frente do Redis (L2) elimina quase todas essas idas à rede — mantendo o Redis como fonte partilhada entre instâncias. Este driver faz isso implementando o **mesmo contrato `CacheDriver`**: leituras curto-circuitam na primeira camada com hit e **preenchem** as camadas mais rápidas; escritas e invalidações **espalham-se** por todas.
+A Redis access is fast, but it's still network. If a key is read hundreds of times, an in-memory cache (L1) in front of Redis (L2) eliminates almost all of those network round-trips — while keeping Redis as the shared source across instances. This driver does that by implementing the **same `CacheDriver` contract**: reads short-circuit at the first layer with a hit and **backfill** the faster layers; writes and invalidations **fan out** to all of them.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/cache-tiered @machize/cache
 ```
 
-Sem dependências de runtime além do `@machize/cache`.
+No runtime dependencies beyond `@machize/cache`.
 
-## Uso
+## Usage
 
 ```ts
 import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@machize/cache'
@@ -23,30 +23,30 @@ import { TieredCacheDriver } from '@machize/cache-tiered'
 cachePlugin({
   driver: new TieredCacheDriver({
     layers: [new MemoryCacheDriver(), RedisCacheDriver.fromUrl(process.env.REDIS_URL!)],
-    backfillTtlMs: 30_000, // a L1 guarda no máximo 30s um valor vindo do Redis
+    backfillTtlMs: 30_000, // L1 keeps a value coming from Redis for at most 30s
   }),
 })
 ```
 
-Tudo o resto (`cache.remember`, tags, `flush`) funciona igual — o `TieredCacheDriver` é transparente.
+Everything else (`cache.remember`, tags, `flush`) works the same — `TieredCacheDriver` is transparent.
 
-## Como funciona
+## How it works
 
-- **`get`** — percorre as camadas (rápida → lenta); ao primeiro hit, devolve e **preenche** as camadas mais rápidas que falharam (com `backfillTtlMs`, já que o TTL restante não é conhecido na camada lenta).
-- **`set`** — escreve em **todas** as camadas com o mesmo TTL e tags.
-- **`delete` / `flushPrefix` / `flushTags`** — espalham-se por todas as camadas.
-- **Sem lacunas** — o que as tuas camadas suportam (tags, flush por prefixo), este driver suporta, por delegação.
+- **`get`** — walks the layers (fast → slow); on the first hit, returns it and **backfills** the faster layers that missed (with `backfillTtlMs`, since the remaining TTL isn't known at the slow layer).
+- **`set`** — writes to **all** layers with the same TTL and tags.
+- **`delete` / `flushPrefix` / `flushTags`** — fan out to all layers.
+- **No gaps** — whatever your layers support (tags, flush by prefix), this driver supports, by delegation.
 
-> Coerência entre instâncias: invalidações locais só limpam a L1 **desta** instância. Para invalidar a L1 de todos os nós, dispara a invalidação a partir de um evento partilhado (ou usa um `backfillTtlMs` curto para limitar a janela de dados obsoletos).
+> Cross-instance consistency: local invalidations only clear the L1 of **this** instance. To invalidate L1 across all nodes, trigger the invalidation from a shared event (or use a short `backfillTtlMs` to limit the window of stale data).
 
-## Opções
+## Options
 
-| Opção | Default | Descrição |
+| Option | Default | Description |
 |---|---|---|
-| `layers` | — (obrigatório) | Camadas ordenadas da mais rápida para a mais lenta, ex.: `[memory, redis]`. |
-| `backfillTtlMs` | `60000` | TTL aplicado ao preencher uma camada rápida a partir de um hit lento. `null` = sem expiração. |
+| `layers` | — (required) | Layers ordered from fastest to slowest, e.g. `[memory, redis]`. |
+| `backfillTtlMs` | `60000` | TTL applied when backfilling a fast layer from a slow hit. `null` = no expiration. |
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/cache`** — este é um driver desse pacote; a API (`Cache`, `cachePlugin`, `remember`, tags) vem de lá.
-- Compõe-se com `MemoryCacheDriver` e `RedisCacheDriver` (do core do cache).
+- **`@machize/cache`** — this is a driver for that package; the API (`Cache`, `cachePlugin`, `remember`, tags) comes from there.
+- Composes with `MemoryCacheDriver` and `RedisCacheDriver` (from cache core).

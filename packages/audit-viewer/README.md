@@ -1,20 +1,20 @@
 # @machize/audit-viewer
 
-Visualizador **só de leitura** do rasto de auditoria do [`@machize/audit`](https://www.npmjs.com/package/@machize/audit): consultas **por tenant**, filtráveis e paginadas, com **estatísticas** agregadas, e uma **página HTML** self-contained para navegar. Precisas deste módulo quando queres dar a administradores (ou a ti) uma forma de rever quem fez o quê — para suporte, conformidade ou depuração.
+**Read-only** viewer for the audit trail produced by [`@machize/audit`](https://www.npmjs.com/package/@machize/audit): **per-tenant**, filterable and paginated queries, with aggregated **statistics**, and a self-contained **HTML page** to browse it. You need this module when you want to give admins (or yourself) a way to review who did what — for support, compliance, or debugging.
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/audit` grava um rasto *append-only* (imutável) de tudo o que acontece. Este módulo é a lente para o ler: filtrar por evento/ator/período/origem, paginar, ver totais e distribuições — e uma página pronta a abrir no browser. Nunca escreve nem altera o rasto.
+`@machize/audit` writes an *append-only* (immutable) trail of everything that happens. This module is the lens for reading it: filter by event/actor/period/source, paginate, view totals and distributions — plus a page ready to open in the browser. It never writes to or alters the trail.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/audit-viewer @machize/audit
 ```
 
-Depende do `@machize/core`, `@machize/audit` e `@machize/fastify`. Requer o `auditPlugin` registado (é de lá que vem o rasto).
+Depends on `@machize/core`, `@machize/audit`, and `@machize/fastify`. Requires the `auditPlugin` to be registered (that's where the trail comes from).
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -30,53 +30,53 @@ const app = await createApp({
   ],
 }).boot()
 
-// programaticamente
+// programmatically
 const viewer = app.container.get(AUDIT_VIEWER)
 const page = await viewer.page({ tenantId: 'acme', event: 'auth:**', limit: 50 })
 const stats = await viewer.stats({ tenantId: 'acme' })
 ```
 
-## Rotas
+## Routes
 
-`auditViewerRoutes()` (todas exigem login — junta o teu *guard* de admin por cima):
+`auditViewerRoutes()` (all require login — add your own admin *guard* on top):
 
-| Rota | Descrição |
+| Route | Description |
 |---|---|
-| `GET /audit?event=&actorId=&source=&since=&until=&limit=&offset=` | Página de entradas (mais recentes primeiro) + `total`. |
-| `GET /audit/stats?…` | Agregados: por evento, por ator, por origem, linha temporal. |
-| `GET /audit/:id` | Uma entrada. |
-| `GET /audit/view` | Página HTML para navegar (filtros + tabela + paginação). |
+| `GET /audit?event=&actorId=&source=&since=&until=&limit=&offset=` | Page of entries (most recent first) + `total`. |
+| `GET /audit/stats?…` | Aggregates: by event, by actor, by source, timeline. |
+| `GET /audit/:id` | A single entry. |
+| `GET /audit/view` | HTML page for browsing (filters + table + pagination). |
 
-Todas são **isoladas por tenant** (o tenant vem do contexto do pedido).
+All are **tenant-isolated** (the tenant comes from the request context).
 
-## A página HTML
+## The HTML page
 
-`GET /audit/view` serve uma página vanilla (sem build, sem dependências) que chama as rotas JSON e mostra uma tabela filtrável com paginação. Personaliza o título/base:
+`GET /audit/view` serves a vanilla page (no build step, no dependencies) that calls the JSON routes and shows a filterable table with pagination. Customize the title/base path:
 
 ```ts
-auditViewerRoutes({ title: 'Auditoria — Acme', apiBase: '/admin' })
+auditViewerRoutes({ title: 'Audit — Acme', apiBase: '/admin' })
 ```
 
-## Referência da API
+## API reference
 
 ### `auditViewerPlugin({ bucketMs?, topN? })`
 
-Regista o token `AUDIT_VIEWER`. `bucketMs` é o tamanho do balde da linha temporal (default 1 dia); `topN` limita as tabelas por-evento/ator (default 20).
+Registers the `AUDIT_VIEWER` token. `bucketMs` is the timeline bucket size (default 1 day); `topN` limits the per-event/actor tables (default 20).
 
 ### `class AuditViewer`
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
 | `page(query)` | `{ entries, total, limit, offset }`. |
 | `stats(query)` | `{ total, byEvent, byActor, bySource, timeline }`. |
-| `get(id, tenantId?)` | Uma entrada, ou `null`. |
+| `get(id, tenantId?)` | A single entry, or `null`. |
 
-`ViewerQuery`: `event` (wildcard), `actorId`, `tenantId`, `source` (`hook`/`event`/`manual`), `since`, `until`, `limit`, `offset`. Sem `tenantId`, usa `ctx().tenant.id` (senão `AuditTenantRequiredError`).
+`ViewerQuery`: `event` (wildcard), `actorId`, `tenantId`, `source` (`hook`/`event`/`manual`), `since`, `until`, `limit`, `offset`. Without `tenantId`, it uses `ctx().tenant.id` (otherwise `AuditTenantRequiredError`).
 
-> Nota: o filtro extra (source/until) e a agregação são feitos em memória sobre o resultado do `Audit.trail`. Para rastos muito grandes, usa um `AuditStore` com consulta rica na base de dados.
+> Note: the extra filtering (source/until) and the aggregation happen in memory over the result of `Audit.trail`. For very large trails, use an `AuditStore` with rich database querying.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/audit`** — a fonte imutável do rasto (este módulo só lê).
-- **`@machize/permissions`** — adiciona um *guard* (`meta.can: 'audit:read'`) para restringir a admins.
-- **`@machize/exports`** — exporta o resultado de uma consulta para CSV para relatórios de conformidade.
+- **`@machize/audit`** — the immutable source of the trail (this module only reads it).
+- **`@machize/permissions`** — adds a *guard* (`meta.can: 'audit:read'`) to restrict access to admins.
+- **`@machize/exports`** — exports a query's result to CSV for compliance reports.

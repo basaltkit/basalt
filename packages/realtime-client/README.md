@@ -1,78 +1,78 @@
 # @machize/realtime-client
 
-Cliente de **browser** para o [`@machize/realtime`](https://www.npmjs.com/package/@machize/realtime): subscreve canais, recebe eventos em tempo real por **WebSocket** ou **SSE**, e reconecta sozinho. **Zero dependências** — usa o `WebSocket`/`EventSource` nativos do browser.
+A **browser** client for [`@machize/realtime`](https://www.npmjs.com/package/@machize/realtime): subscribes to channels, receives real-time events over **WebSocket** or **SSE**, and reconnects on its own. **Zero dependencies** — uses the browser's native `WebSocket`/`EventSource`.
 
-## O que este módulo resolve
+## What this module solves
 
-Do lado do servidor, o `@machize/realtime` empurra eventos para canais por tenant. Este pacote é a outra metade: o que corre no **navegador** (ou em qualquer runtime com `WebSocket`) para ouvir esses eventos e atualizar a UI ao vivo — com reconexão automática e re-subscrição transparente.
+On the server side, `@machize/realtime` pushes events to per-tenant channels. This package is the other half: what runs in the **browser** (or any runtime with `WebSocket`) to listen for those events and update the UI live — with automatic reconnection and transparent re-subscription.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/realtime-client
 ```
 
-Sem dependências. Em ambientes sem `WebSocket`/`EventSource` global (Node antigo, testes) injeta a implementação.
+No dependencies. In environments without a global `WebSocket`/`EventSource` (old Node, tests), inject the implementation.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
 ```ts
 import { createRealtimeClient } from '@machize/realtime-client'
 
-const client = createRealtimeClient({ url: 'wss://api.exemplo.com/realtime' })
+const client = createRealtimeClient({ url: 'wss://api.example.com/realtime' })
 
 client.channel('notes').on('created', (note) => {
-  // atualizar a UI com a nota nova
+  // update the UI with the new note
 })
 client.channel('notes').on('deleted', ({ id }) => {
-  // remover da UI
+  // remove it from the UI
 })
 
-client.on('open', () => console.log('ligado'))
-client.on('close', () => console.log('desligado (a reconectar…)'))
+client.on('open', () => console.log('connected'))
+client.on('close', () => console.log('disconnected (reconnecting…)'))
 
 client.connect()
 ```
 
-Registar um handler com `channel(name).on(event, ...)` **subscreve automaticamente** o canal. Quando a ligação abre (ou reabre), o cliente re-subscreve todos os canais ativos.
+Registering a handler with `channel(name).on(event, ...)` **automatically subscribes** to the channel. When the connection opens (or reopens), the client re-subscribes to all active channels.
 
 ## API
 
 ### `createRealtimeClient(options)`
 
-| Opção | Tipo | Default | Descrição |
+| Option | Type | Default | Description |
 |---|---|---|---|
-| `url` | `string` | — | Endpoint do servidor (`wss://…` ou `https://…/sse`). |
-| `transport` | `'websocket' \| 'sse'` | `'websocket'` | Mecanismo de ligação. |
-| `WebSocketImpl` / `EventSourceImpl` | ctor | globais | Implementação injetável (testes / não-browser). |
-| `reconnect` | `false \| { minDelayMs?, maxDelayMs? }` | `{}` | Reconexão com backoff exponencial. `false` desliga. |
+| `url` | `string` | — | Server endpoint (`wss://…` or `https://…/sse`). |
+| `transport` | `'websocket' \| 'sse'` | `'websocket'` | Connection mechanism. |
+| `WebSocketImpl` / `EventSourceImpl` | ctor | globals | Injectable implementation (tests / non-browser). |
+| `reconnect` | `false \| { minDelayMs?, maxDelayMs? }` | `{}` | Reconnection with exponential backoff. `false` disables it. |
 
-Devolve um `RealtimeClient`:
+Returns a `RealtimeClient`:
 
-| Membro | Descrição |
+| Member | Description |
 |---|---|
-| `connect()` | Abre a ligação. |
-| `close()` | Fecha (e desliga a reconexão). |
-| `channel(name)` | Devolve um `Channel`. |
-| `on('open' \| 'close' \| 'error', handler)` | Eventos de ciclo de vida. Devolve uma função para remover. |
-| `connected` | `boolean` — estado atual. |
+| `connect()` | Opens the connection. |
+| `close()` | Closes it (and disables reconnection). |
+| `channel(name)` | Returns a `Channel`. |
+| `on('open' \| 'close' \| 'error', handler)` | Lifecycle events. Returns a function to remove it. |
+| `connected` | `boolean` — current state. |
 
 ### `Channel`
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `on(event, handler)` | Ouve um evento (subscreve o canal). Devolve uma função para remover. |
-| `off(event, handler?)` | Remove um handler (ou todos os do evento). |
-| `subscribe()` / `unsubscribe()` | Controla a subscrição do canal manualmente. |
+| `on(event, handler)` | Listens for an event (subscribes to the channel). Returns a function to remove it. |
+| `off(event, handler?)` | Removes a handler (or all handlers for the event). |
+| `subscribe()` / `unsubscribe()` | Manually controls the channel subscription. |
 
 ## WebSocket vs SSE
 
-- **WebSocket** (recomendado) — bidirecional; o cliente envia comandos `{ type: 'subscribe' \| 'unsubscribe', channel }` e recebe mensagens `{ channel, event, data }`.
-- **SSE** — só recebe. As subscrições são decididas pelo servidor (pela URL/utilizador autenticado). O cliente ouve por nome de evento e encaminha por canal.
+- **WebSocket** (recommended) — bidirectional; the client sends `{ type: 'subscribe' \| 'unsubscribe', channel }` commands and receives `{ channel, event, data }` messages.
+- **SSE** — receive-only. Subscriptions are decided by the server (based on the URL/authenticated user). The client listens by event name and routes by channel.
 
-### Lado do servidor (WebSocket)
+### Server side (WebSocket)
 
-O `@machize/realtime` decide as subscrições via `hub.subscribe(...)`. Interpreta os comandos do cliente no teu handler WebSocket:
+`@machize/realtime` decides subscriptions via `hub.subscribe(...)`. Interpret the client's commands in your WebSocket handler:
 
 ```ts
 socket.on('message', (raw) => {
@@ -82,8 +82,8 @@ socket.on('message', (raw) => {
 })
 ```
 
-(Autoriza sempre no servidor a que canais um cliente pode subscrever — nunca confies no cliente.)
+(Always authorize on the server which channels a client can subscribe to — never trust the client.)
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/realtime`** — o servidor que empurra os eventos que este cliente recebe. O formato das mensagens é partilhado (`{ channel, event, data }`).
+- **`@machize/realtime`** — the server that pushes the events this client receives. The message format is shared (`{ channel, event, data }`).

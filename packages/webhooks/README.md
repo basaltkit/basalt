@@ -1,24 +1,24 @@
 # @machize/webhooks
 
-Webhooks de saída para o framework Machize: entrega eventos da tua aplicação a URLs de outros sistemas, com assinatura criptográfica, retries automáticos e subscrições por tenant. Precisas deste módulo quando os *teus clientes* (ou outros serviços) querem ser avisados por HTTP quando algo acontece na tua aplicação.
+Outbound webhooks for the Machize framework: deliver events from your application to other systems' URLs, with cryptographic signing, automatic retries and per-tenant subscriptions. You need this module when *your customers* (or other services) want to be notified over HTTP when something happens in your application.
 
-## O que este módulo resolve
+## What this module solves
 
-Um **webhook** é uma "chamada de volta" por HTTP: em vez de outro sistema andar constantemente a perguntar "já há novidades?", é a tua aplicação que faz um pedido `POST` ao URL desse sistema no momento em que algo acontece (ex.: "fatura paga"). É assim que serviços como o Stripe ou o GitHub notificam as aplicações dos seus utilizadores — este módulo dá-te o mesmo, mas na direção de saída: a tua aplicação a notificar terceiros.
+A **webhook** is an HTTP "callback": instead of another system constantly asking "anything new?", your application makes a `POST` request to that system's URL the moment something happens (e.g. "invoice paid"). This is how services like Stripe or GitHub notify their users' applications — this module gives you the same thing, but outbound: your application notifying third parties.
 
-Fazer isto à mão parece um simples `fetch`, mas os problemas aparecem depressa: o servidor de destino pode estar em baixo (é preciso repetir com intervalo crescente), o destinatário precisa de garantir que o pedido vem mesmo de ti (assinatura HMAC — um código calculado com um segredo partilhado que prova a origem e detecta adulteração), cada cliente quer subscrever só alguns eventos, e num SaaS multi-tenant cada tenant só pode receber os seus próprios eventos.
+Doing this by hand looks like a simple `fetch`, but the problems show up fast: the destination server may be down (you need retries with growing intervals), the recipient needs to be sure the request really came from you (HMAC signing — a code computed with a shared secret that proves origin and detects tampering), each customer wants to subscribe to only some events, and in a multi-tenant SaaS each tenant should only receive its own events.
 
-O módulo divide isto em três peças: o **store** (onde vivem as subscrições — em memória por omissão, base de dados em produção), o **deliverer** (faz o `POST` assinado com retries e backoff exponencial) e o **manager** (junta os dois: ao despachar um evento, encontra os endpoints subscritos e entrega a cada um). Opcionalmente, liga-se ao `@machize/events` para despachar automaticamente eventos de domínio.
+The module splits this into three pieces: the **store** (where subscriptions live — in-memory by default, database in production), the **deliverer** (makes the signed `POST` with retries and exponential backoff) and the **manager** (ties the two together: when dispatching an event, it finds the subscribed endpoints and delivers to each one). Optionally, it hooks into `@machize/events` to automatically dispatch domain events.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/webhooks
 ```
 
-## Começar em 5 minutos
+## Getting started in 5 minutes
 
-1. **Regista o plugin** na aplicação:
+1. **Register the plugin** in the application:
 
 ```ts
 // src/app.ts
@@ -27,12 +27,12 @@ import { webhooksPlugin } from '@machize/webhooks'
 
 const app = await createApp({
   plugins: [
-    webhooksPlugin({ secret: 'whsec_o_meu_segredo' }),
+    webhooksPlugin({ secret: 'whsec_my_secret' }),
   ],
 }).boot()
 ```
 
-2. **Regista um endpoint** (uma subscrição: o URL de destino e os eventos que quer receber):
+2. **Register an endpoint** (a subscription: the destination URL and the events it wants to receive):
 
 ```ts
 import { WEBHOOKS } from '@machize/webhooks'
@@ -40,13 +40,13 @@ import { WEBHOOKS } from '@machize/webhooks'
 const webhooks = app.container.get(WEBHOOKS)
 
 await webhooks.register({
-  url: 'https://cliente.example.com/hooks',
-  events: ['invoice.*'],        // todos os eventos que começam por "invoice."
-  tenantId: 'acme',             // opcional: só eventos deste tenant
+  url: 'https://client.example.com/hooks',
+  events: ['invoice.*'],        // all events starting with "invoice."
+  tenantId: 'acme',             // optional: only events for this tenant
 })
 ```
 
-3. **Despacha um evento.** Cada endpoint subscrito recebe um `POST` com JSON assinado:
+3. **Dispatch an event.** Each subscribed endpoint receives a `POST` with signed JSON:
 
 ```ts
 const results = await webhooks.dispatch('invoice.paid', { amount: 42 }, 'acme')
@@ -54,7 +54,7 @@ console.log(results)
 // [{ endpointId: '...', ok: true, status: 200, attempts: 1 }]
 ```
 
-4. **O que o destinatário recebe** — um `POST` com estes cabeçalhos e corpo:
+4. **What the recipient receives** — a `POST` with these headers and body:
 
 ```
 content-type: application/json
@@ -64,48 +64,48 @@ x-machize-signature: t=1712345678,v1=<hmac-sha256>
 {"event":"invoice.paid","data":{"amount":42},"sentAt":"2026-08-07T10:00:00.000Z"}
 ```
 
-5. **O destinatário verifica a assinatura** com `verifySignature` (mesmo esquema do Stripe: HMAC-SHA256 sobre `timestamp.corpo`, com rejeição de timestamps antigos para impedir *replays*):
+5. **The recipient verifies the signature** with `verifySignature` (the same scheme as Stripe: HMAC-SHA256 over `timestamp.body`, rejecting old timestamps to prevent *replays*):
 
 ```ts
 import { verifySignature } from '@machize/webhooks'
 
-// num handler HTTP do lado do destinatário:
-const valido = verifySignature(headerAssinatura, corpoBrutoDaRequisicao, 'whsec_o_meu_segredo')
-if (!valido) {
-  // rejeitar com 400
+// in an HTTP handler on the recipient's side:
+const valid = verifySignature(signatureHeader, rawRequestBody, 'whsec_my_secret')
+if (!valid) {
+  // reject with 400
 }
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Padrões de eventos
+### Event patterns
 
-Cada endpoint subscreve uma lista de padrões (`events`):
+Each endpoint subscribes to a list of patterns (`events`):
 
-- `'invoice.paid'` — só esse evento exato;
-- `'invoice.*'` — qualquer evento que comece por `invoice.`;
-- `'*'` — todos os eventos.
+- `'invoice.paid'` — only that exact event;
+- `'invoice.*'` — any event starting with `invoice.`;
+- `'*'` — all events.
 
-Podes testar um padrão com `matchesEvent(['invoice.*'], 'invoice.paid') // true`.
+You can test a pattern with `matchesEvent(['invoice.*'], 'invoice.paid') // true`.
 
-### Subscrições por tenant
+### Per-tenant subscriptions
 
-Num SaaS, cada tenant (cliente da tua plataforma) regista os seus endpoints com o seu `tenantId`. Ao despachar com `dispatch(event, data, tenantId)`, só recebem os endpoints desse tenant e os endpoints sem `tenantId` (globais). Um endpoint do tenant `acme` nunca recebe eventos do tenant `globex`.
+In a SaaS, each tenant (customer of your platform) registers its endpoints with its own `tenantId`. When dispatching with `dispatch(event, data, tenantId)`, only that tenant's endpoints and endpoints without a `tenantId` (global) receive it. An endpoint from tenant `acme` never receives events from tenant `globex`.
 
-### Gerir endpoints
+### Managing endpoints
 
 ```ts
 const endpoint = await webhooks.register({ url: 'https://x.example.com/h', events: ['*'] })
-await webhooks.list()          // todos os endpoints
-await webhooks.list('acme')    // só os do tenant "acme"
+await webhooks.list()          // all endpoints
+await webhooks.list('acme')    // only tenant "acme"'s
 await webhooks.unregister(endpoint.id)
 ```
 
-Para desativar temporariamente sem apagar, guarda o endpoint com `active: false`.
+To temporarily disable without deleting, save the endpoint with `active: false`.
 
-### Despacho automático a partir de eventos de domínio
+### Automatic dispatch from domain events
 
-Com `@machize/events` registado, passa `events` ao plugin e todos os eventos de domínio que correspondam aos padrões são despachados automaticamente — com o tenant lido do contexto do pedido e em modo *fire-and-forget* (quem emite o evento nunca fica bloqueado à espera do HTTP):
+With `@machize/events` registered, pass `events` to the plugin and every domain event matching the patterns is dispatched automatically — with the tenant read from the request context and in *fire-and-forget* mode (whoever emits the event never blocks waiting for the HTTP call):
 
 ```ts
 import { createApp } from '@machize/core'
@@ -121,16 +121,16 @@ const app = await createApp({
 
 const InvoicePaid = defineEvent<{ amount: number }>('invoice.paid')
 await app.container.get(EVENTS).emit(InvoicePaid, { amount: 42 })
-// → entregue a todos os endpoints subscritos a "invoice.*"
+// → delivered to all endpoints subscribed to "invoice.*"
 ```
 
-### Retries e falhas
+### Retries and failures
 
-O deliverer repete apenas falhas transitórias — erros de rede, timeouts e respostas `5xx` — com *backoff exponencial* (espera que duplica a cada tentativa: 500 ms, 1 s, 2 s, ...). Respostas `4xx` são erro do cliente e **não** são repetidas. O resultado de cada entrega é um `DeliveryResult` com `ok`, `status`, `attempts` e `error`.
+The deliverer only retries transient failures — network errors, timeouts and `5xx` responses — with *exponential backoff* (a wait that doubles each attempt: 500 ms, 1 s, 2 s, ...). `4xx` responses are client errors and are **not** retried. The result of each delivery is a `DeliveryResult` with `ok`, `status`, `attempts` and `error`.
 
-### Store persistente
+### Persistent store
 
-O `MemoryWebhookStore` perde tudo ao reiniciar. Em produção, implementa a interface `WebhookStore` sobre a tua base de dados e passa-a ao plugin:
+`MemoryWebhookStore` loses everything on restart. In production, implement the `WebhookStore` interface over your database and pass it to the plugin:
 
 ```ts
 import { webhooksPlugin, type WebhookStore, type WebhookEndpoint, matchesEvent } from '@machize/webhooks'
@@ -145,91 +145,91 @@ class DbWebhookStore implements WebhookStore {
 webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 ```
 
-## Referência da API
+## API reference
 
 ### `class WebhookManager`
 
-`new WebhookManager(store: WebhookStore, deliverer: WebhookDeliverer)` — normalmente obtido via token `WEBHOOKS`.
+`new WebhookManager(store: WebhookStore, deliverer: WebhookDeliverer)` — normally obtained via the `WEBHOOKS` token.
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `register` | `(endpoint: Omit<WebhookEndpoint,'id'> & { id?: string }) => Promise<WebhookEndpoint>` | Cria uma subscrição (id gerado se omitido) |
-| `unregister` | `(id: string) => Promise<void>` | Remove uma subscrição |
-| `list` | `(tenantId?: string) => Promise<WebhookEndpoint[]>` | Lista subscrições, opcionalmente por tenant |
-| `dispatch` | `(event: string, data: unknown, tenantId?: string) => Promise<DeliveryResult[]>` | Entrega a todos os endpoints subscritos ao evento |
+| `register` | `(endpoint: Omit<WebhookEndpoint,'id'> & { id?: string }) => Promise<WebhookEndpoint>` | Creates a subscription (id generated if omitted) |
+| `unregister` | `(id: string) => Promise<void>` | Removes a subscription |
+| `list` | `(tenantId?: string) => Promise<WebhookEndpoint[]>` | Lists subscriptions, optionally by tenant |
+| `dispatch` | `(event: string, data: unknown, tenantId?: string) => Promise<DeliveryResult[]>` | Delivers to all endpoints subscribed to the event |
 
 ### `interface WebhookEndpoint`
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `id` | `string` | Sim (gerado) | UUID | Identificador da subscrição |
-| `url` | `string` | Sim | — | URL de destino do `POST` |
-| `events` | `string[]` | Sim | — | Padrões: exato, prefixo (`invoice.*`) ou `*` |
-| `tenantId` | `string` | Não | — | Restringe a um tenant; omitido = recebe de todos |
-| `secret` | `string` | Não | segredo do deliverer | Segredo de assinatura deste endpoint |
-| `active` | `boolean` | Não | `true` | `false` desativa sem apagar |
+| `id` | `string` | Yes (generated) | UUID | Subscription identifier |
+| `url` | `string` | Yes | — | Destination URL for the `POST` |
+| `events` | `string[]` | Yes | — | Patterns: exact, prefix (`invoice.*`) or `*` |
+| `tenantId` | `string` | No | — | Restricts to a tenant; omitted = receives from all |
+| `secret` | `string` | No | deliverer's secret | This endpoint's signing secret |
+| `active` | `boolean` | No | `true` | `false` disables without deleting |
 
 ### `webhooksPlugin(options?: WebhooksPluginOptions)`
 
-Regista o `WebhookManager` sob o token `WEBHOOKS`. Estende `WebhookDelivererOptions` com:
+Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDelivererOptions` with:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `store` | `WebhookStore` | Não | `MemoryWebhookStore` | Onde vivem as subscrições |
-| `deliverer` | `WebhookDeliverer` | Não | novo, com as opções dadas | Entregador personalizado |
-| `events` | `string[]` | Não | `[]` | Padrões de eventos de domínio a despachar automaticamente (requer `@machize/events`) |
+| `store` | `WebhookStore` | No | `MemoryWebhookStore` | Where subscriptions live |
+| `deliverer` | `WebhookDeliverer` | No | new one, with the given options | Custom deliverer |
+| `events` | `string[]` | No | `[]` | Domain event patterns to dispatch automatically (requires `@machize/events`) |
 
 ### `class WebhookDeliverer`
 
-`new WebhookDeliverer(options?: WebhookDelivererOptions)`. Método: `deliver(endpoint, event, data) => Promise<DeliveryResult>`.
+`new WebhookDeliverer(options?: WebhookDelivererOptions)`. Method: `deliver(endpoint, event, data) => Promise<DeliveryResult>`.
 
 `WebhookDelivererOptions`:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `secret` | `string` | Não | — | Segredo de assinatura por omissão (o `secret` do endpoint sobrepõe-no) |
-| `maxRetries` | `number` | Não | `3` | Repetições depois da primeira tentativa |
-| `backoffMs` | `number` | Não | `500` | Espera base em ms, duplicada por tentativa |
-| `timeoutMs` | `number` | Não | `10000` | Timeout por tentativa em ms |
-| `fetchImpl` | `typeof fetch` | Não | `fetch` global | (Avançado) fetch injetável, para testes |
-| `sleep` | `(ms) => Promise<void>` | Não | `setTimeout` | (Avançado) espera injetável, para testes |
-| `now` | `() => number` | Não | relógio real | (Avançado) relógio em segundos, para testes |
+| `secret` | `string` | No | — | Default signing secret (the endpoint's `secret` overrides it) |
+| `maxRetries` | `number` | No | `3` | Retries after the first attempt |
+| `backoffMs` | `number` | No | `500` | Base wait in ms, doubled per attempt |
+| `timeoutMs` | `number` | No | `10000` | Timeout per attempt in ms |
+| `fetchImpl` | `typeof fetch` | No | global `fetch` | (Advanced) injectable fetch, for tests |
+| `sleep` | `(ms) => Promise<void>` | No | `setTimeout` | (Advanced) injectable wait, for tests |
+| `now` | `() => number` | No | real clock | (Advanced) clock in seconds, for tests |
 
 `DeliveryResult`: `{ endpointId: string, ok: boolean, status?: number, attempts: number, error?: string }`.
 
-### Funções de assinatura
+### Signature functions
 
-| Função | Assinatura | Descrição |
+| Function | Signature | Description |
 |---|---|---|
-| `signPayload` | `(body: string, secret: string, timestampSeconds: number) => string` | Gera o cabeçalho `t=<unix>,v1=<hmac-sha256>` |
-| `verifySignature` | `(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds?) => boolean` | Verifica em tempo constante; rejeita timestamps fora da tolerância |
-| `matchesEvent` | `(patterns: string[], event: string) => boolean` | Testa se um evento corresponde aos padrões |
+| `signPayload` | `(body: string, secret: string, timestampSeconds: number) => string` | Generates the `t=<unix>,v1=<hmac-sha256>` header |
+| `verifySignature` | `(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds?) => boolean` | Verifies in constant time; rejects timestamps outside the tolerance |
+| `matchesEvent` | `(patterns: string[], event: string) => boolean` | Tests whether an event matches the patterns |
 
-### Outros exports
+### Other exports
 
-| Export | Tipo | Descrição |
+| Export | Type | Description |
 |---|---|---|
-| `WEBHOOKS` | token | Chave do `WebhookManager` no contentor |
-| `MemoryWebhookStore` | classe | Store em memória (dev/testes) |
-| `WebhookStore` | tipo (Avançado) | Contrato para stores persistentes |
+| `WEBHOOKS` | token | Key for `WebhookManager` in the container |
+| `MemoryWebhookStore` | class | In-memory store (dev/tests) |
+| `WebhookStore` | type (Advanced) | Contract for persistent stores |
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**O destinatário diz que a assinatura é inválida** — Ele tem de verificar o HMAC sobre o **corpo bruto** do pedido, byte a byte. Se fizer `JSON.parse` e voltar a serializar, os bytes mudam e a verificação falha. Confirma também que ambos os lados usam o mesmo segredo.
+**The recipient says the signature is invalid** — They need to verify the HMAC over the **raw body** of the request, byte for byte. If they `JSON.parse` and re-serialize, the bytes change and verification fails. Also confirm both sides use the same secret.
 
-**`verifySignature` devolve `false` com tudo aparentemente certo** — Verifica o relógio: a assinatura expira após `toleranceSeconds` (300 s por omissão). Relógios dessincronizados entre servidores causam rejeições.
+**`verifySignature` returns `false` even though everything looks right** — Check the clock: the signature expires after `toleranceSeconds` (300s by default). Out-of-sync clocks between servers cause rejections.
 
-**A entrega falhou com `ok: false` e `status: 4xx` sem retries** — Comportamento correto: `4xx` significa erro do lado do destinatário (URL errado, autenticação), e repetir não resolveria. Só `5xx` e erros de rede são repetidos.
+**Delivery failed with `ok: false` and `status: 4xx` with no retries** — Correct behavior: `4xx` means an error on the recipient's side (wrong URL, authentication), and retrying wouldn't fix it. Only `5xx` and network errors are retried.
 
-**As subscrições desaparecem ao reiniciar a aplicação** — Estás no `MemoryWebhookStore` (o predefinido). Em produção implementa `WebhookStore` sobre a base de dados.
+**Subscriptions disappear when the application restarts** — You're on `MemoryWebhookStore` (the default). In production, implement `WebhookStore` over your database.
 
-**Configurei `events` no plugin mas nada é despachado** — O despacho automático requer o `eventsPlugin()` de `@machize/events` registado (o plugin declara essa dependência). Confirma também que os padrões em `events` cobrem os nomes dos eventos emitidos, e que existe pelo menos um endpoint subscrito.
+**I configured `events` on the plugin but nothing is dispatched** — Automatic dispatch requires `eventsPlugin()` from `@machize/events` to be registered (the plugin declares that dependency). Also confirm the patterns in `events` cover the emitted event names, and that at least one endpoint is subscribed.
 
-**O `dispatch` automático não filtra por tenant** — O tenant é lido do contexto do pedido (`ctx().tenant.id`). Fora de um pedido (ex.: num job), não há tenant no contexto e o evento vai também para endpoints globais; nesse caso despacha manualmente com `webhooks.dispatch(evento, dados, tenantId)`.
+**Automatic `dispatch` doesn't filter by tenant** — The tenant is read from the request context (`ctx().tenant.id`). Outside a request (e.g. in a job), there's no tenant in the context and the event also goes to global endpoints; in that case, dispatch manually with `webhooks.dispatch(event, data, tenantId)`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **@machize/core** — contentor (token `WEBHOOKS`), `definePlugin` e o contexto de pedido de onde vem o `tenantId` no despacho automático.
-- **@machize/events** — a origem dos eventos de domínio; com a opção `events`, o plugin subscreve o bus e converte eventos internos em webhooks de saída.
-- **@machize/subscriptions** — sentido oposto: o subscriptions *recebe* webhooks (do Stripe); este módulo *envia* webhooks aos teus clientes. Um padrão comum é reencaminhar os hooks `billing:*` como webhooks de saída.
-- **@machize/notifications** — complementar: notifications avisa pessoas, webhooks avisa máquinas.
+- **@machize/core** — the container (`WEBHOOKS` token), `definePlugin` and the request context from which `tenantId` comes during automatic dispatch.
+- **@machize/events** — the source of domain events; with the `events` option, the plugin subscribes to the bus and converts internal events into outbound webhooks.
+- **@machize/subscriptions** — the opposite direction: subscriptions *receives* webhooks (from Stripe); this module *sends* webhooks to your customers. A common pattern is forwarding `billing:*` hooks as outbound webhooks.
+- **@machize/notifications** — complementary: notifications alerts people, webhooks alerts machines.

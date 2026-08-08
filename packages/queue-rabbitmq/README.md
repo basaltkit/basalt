@@ -1,24 +1,24 @@
 # @machize/queue-rabbitmq
 
-Driver de **RabbitMQ** para o [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): executa os teus jobs sobre AMQP em vez de Redis/BullMQ, sem mudares uma linha do código dos jobs. Precisas deste pacote quando a tua infraestrutura de mensagens já é o RabbitMQ (ou quando queres um message broker dedicado, com routing e dead-lettering nativos).
+**RabbitMQ** driver for [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): runs your jobs over AMQP instead of Redis/BullMQ, without changing a single line of your job code. You need this package when your messaging infrastructure is already RabbitMQ (or when you want a dedicated message broker, with native routing and dead-lettering).
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/queue` define **jobs** (tarefas em segundo plano) de forma abstrata e escolhe o backend através de um *driver*. Por omissão usa o BullMQ (Redis). Este pacote fornece um driver alternativo que fala com o **RabbitMQ**: os jobs são publicados em filas AMQP duráveis, os workers consomem-nas, e as tentativas/atrasos usam uma *delay queue* com dead-lettering por TTL.
+`@machize/queue` defines **jobs** (background tasks) abstractly and picks the backend via a *driver*. By default it uses BullMQ (Redis). This package provides an alternative driver that talks to **RabbitMQ**: jobs are published to durable AMQP queues, workers consume them, and retries/delays use a *delay queue* with TTL-based dead-lettering.
 
-Tudo o resto — `defineJob`, `dispatch`, os workers, a propagação de contexto — continua exatamente igual. Só trocas o driver.
+Everything else — `defineJob`, `dispatch`, workers, context propagation — stays exactly the same. You just swap the driver.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/queue-rabbitmq amqplib
 ```
 
-O `amqplib` é uma **peer dependency** (instala-o tu): assim quem usa outro driver não arrasta o cliente RabbitMQ. Precisas também de um servidor RabbitMQ acessível.
+`amqplib` is a **peer dependency** (you install it yourself): that way, anyone using a different driver doesn't pull in the RabbitMQ client. You'll also need an accessible RabbitMQ server.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-Define os jobs como sempre (com `@machize/queue`) e passa o driver ao `queuePlugin`:
+Define jobs as always (with `@machize/queue`) and pass the driver to `queuePlugin`:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -31,7 +31,7 @@ const SendWelcome = defineJob<{ email: string }>({
   attempts: 3,
   backoff: { type: 'exponential', delay: '10s' },
   async handle({ email }) {
-    // ... enviar o e-mail
+    // ... send the email
   },
 })
 
@@ -41,7 +41,7 @@ const app = await createApp({
       driver: new RabbitmqQueueDriver({ url: process.env.AMQP_URL! }),
       jobs: [SendWelcome],
       workers: [{ queue: 'emails', concurrency: 10 }],
-      onUnsupported: 'throw', // opcional: falha se um job pedir algo que o driver não faz
+      onUnsupported: 'throw', // optional: fail if a job requests something the driver can't do
     }),
   ],
 }).boot()
@@ -49,44 +49,44 @@ const app = await createApp({
 await SendWelcome.dispatch({ email: 'ada@acme.test' })
 ```
 
-## Como funciona
+## How it works
 
-Para cada fila `q`, o driver declara três filas AMQP duráveis:
+For each queue `q`, the driver declares three durable AMQP queues:
 
-- **`q`** — a fila principal (com `x-max-priority`, para suportar prioridade).
-- **`q.delay`** — buffer de atraso/retry: as mensagens expiram após o seu TTL e fazem *dead-letter* de volta para `q`. É assim que se implementam o `delay` e o `backoff` entre tentativas.
-- **`q.dead`** — a *dead-letter queue*: para onde vão os jobs que esgotaram as tentativas.
+- **`q`** — the main queue (with `x-max-priority`, to support priority).
+- **`q.delay`** — the delay/retry buffer: messages expire after their TTL and get *dead-lettered* back to `q`. This is how `delay` and `backoff` between attempts are implemented.
+- **`q.dead`** — the *dead-letter queue*: where jobs that exhausted their attempts end up.
 
-O número da tentativa viaja nos headers da mensagem (`x-machize-attempt`), por isso o worker sabe quando deve voltar a tentar (via `q.delay`) ou desistir (via `q.dead`).
+The attempt number travels in the message headers (`x-machize-attempt`), so the worker knows whether it should retry (via `q.delay`) or give up (via `q.dead`).
 
-### Capacidades
+### Capabilities
 
-| Capacidade | Suportada | Como |
+| Capability | Supported | How |
 |---|:---:|---|
-| `delayed` (entrega atrasada) | ✅ | `q.delay` com TTL por mensagem |
-| `priority` | ✅ | `x-max-priority` na fila |
-| `retries` | ✅ | re-publicação com contador de tentativas |
-| `backoff` | ✅ | TTL na `q.delay` (fixo ou exponencial) |
+| `delayed` (delayed delivery) | ✅ | `q.delay` with a per-message TTL |
+| `priority` | ✅ | `x-max-priority` on the queue |
+| `retries` | ✅ | re-publishing with an attempt counter |
+| `backoff` | ✅ | TTL on `q.delay` (fixed or exponential) |
 
-O driver declara estas `capabilities`, por isso, combinado com `onUnsupported`, um job que peça algo não suportado **falha alto** em vez de ser silenciosamente ignorado.
+The driver declares these `capabilities`, so, combined with `onUnsupported`, a job that requests something unsupported **fails loudly** instead of being silently ignored.
 
-## Referência da API
+## API reference
 
 ### `new RabbitmqQueueDriver(options)`
 
-| Opção | Tipo | Default | Descrição |
+| Option | Type | Default | Description |
 |---|---|---|---|
-| `url` | `string` | — (obrigatório) | URL AMQP, ex.: `amqp://user:pass@host:5672`. |
-| `maxPriority` | `number` | `10` | Nível máximo de prioridade (`x-max-priority`). |
-| `connect` | `(url) => Promise<AmqpConnection>` | amqplib | Conector injetável — usado nos testes para não precisar de broker. |
+| `url` | `string` | — (required) | AMQP URL, e.g. `amqp://user:pass@host:5672`. |
+| `maxPriority` | `number` | `10` | Maximum priority level (`x-max-priority`). |
+| `connect` | `(url) => Promise<AmqpConnection>` | amqplib | Injectable connector — used in tests so no broker is needed. |
 
-Implementa o contrato `QueueDriver` do `@machize/queue` (`add`, `startWorker`, `setExecutor`, `close`, `capabilities`).
+Implements the `QueueDriver` contract from `@machize/queue` (`add`, `startWorker`, `setExecutor`, `close`, `capabilities`).
 
-## Ressalva importante
+## Important caveat
 
-A `q.delay` usa **TTL por mensagem**, e o RabbitMQ só liberta uma mensagem quando ela chega à *cabeça* da fila (head-of-line blocking). Para atrasos muito variados em grande escala, uma mensagem com TTL longo pode bloquear as que estão atrás. Se precisares de atrasos mistos com alta cadência, considera o [RabbitMQ Delayed Message Exchange plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange) — o modelo do driver mantém-se, muda só o mecanismo de atraso.
+`q.delay` uses a **per-message TTL**, and RabbitMQ only releases a message once it reaches the *head* of the queue (head-of-line blocking). For widely varying delays at large scale, a message with a long TTL can block the ones behind it. If you need mixed delays at high throughput, consider the [RabbitMQ Delayed Message Exchange plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange) — the driver's model stays the same, only the delay mechanism changes.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/queue`** — este é um driver desse pacote; toda a API de jobs vem de lá.
-- Ver também os drivers irmãos: [`@machize/queue-kafka`](https://www.npmjs.com/package/@machize/queue-kafka) e [`@machize/queue-sqs`](https://www.npmjs.com/package/@machize/queue-sqs), e o guia [Queues & Jobs](https://github.com/Zebedeu/machize) para escrever o teu próprio driver.
+- **`@machize/queue`** — this is a driver for that package; the entire job API comes from there.
+- See also the sibling drivers: [`@machize/queue-kafka`](https://www.npmjs.com/package/@machize/queue-kafka) and [`@machize/queue-sqs`](https://www.npmjs.com/package/@machize/queue-sqs), and the [Queues & Jobs](https://github.com/Zebedeu/machize) guide for writing your own driver.

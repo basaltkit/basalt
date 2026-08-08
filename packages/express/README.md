@@ -1,28 +1,28 @@
 # @machize/express
 
-Adaptador do Machize para [Express](https://expressjs.com): as mesmas rotas tipadas, enrichers e guards que usarias no Fastify ou no Hono, a correr num servidor Express. Precisas dele quando já usas Express (ou queres o seu enorme ecossistema de middleware) e queres a validação, o contexto por pedido e os erros padronizados do Machize.
+Machize adapter for [Express](https://expressjs.com): the same typed routes, enrichers, and guards you'd use in Fastify or Hono, running on an Express server. You need it when you already use Express (or want its huge middleware ecosystem) and want Machize's validation, per-request context, and standardized errors.
 
-## O que este módulo resolve
+## What this module solves
 
-O [Express](https://expressjs.com) é o servidor HTTP mais conhecido do Node.js — o programa que recebe **pedidos HTTP** (mensagens como "cria este projeto") e devolve respostas. Mas o Express, por si só, não valida dados, não tipa nada em TypeScript e cada projeto inventa o seu próprio formato de erros.
+[Express](https://expressjs.com) is Node.js's best-known HTTP server — the program that receives **HTTP requests** (messages like "create this project") and returns responses. But Express, by itself, doesn't validate data, doesn't type anything in TypeScript, and every project invents its own error format.
 
-Este módulo liga o Express ao Machize. As **rotas** (endereço + método, ex.: `POST /echo`) definem-se com a função `route()` do `@machize/http`, num formato neutro com esquemas [Zod](https://zod.dev) para validação. O adaptador converte cada pedido do Express para esse formato neutro, corre o pipeline partilhado (validação, *enrichers* — funções que enriquecem o contexto do pedido, como resolver o tenant — e *guards* — funções que podem recusar o pedido, como autenticação) e converte erros em respostas JSON com formato estável.
+This module connects Express to Machize. **Routes** (address + method, e.g. `POST /echo`) are defined with the `route()` function from `@machize/http`, in a neutral format with [Zod](https://zod.dev) schemas for validation. The adapter converts each Express request into that neutral format, runs the shared pipeline (validation, *enrichers* — functions that enrich the request context, like resolving the tenant — and *guards* — functions that can reject the request, like authentication), and converts errors into JSON responses with a stable format.
 
-O ponto forte: **portabilidade**. Uma rota escrita para este adaptador corre sem alterar uma linha no `@machize/fastify` e no `@machize/hono`. E os plugins de borda neutros (segurança, saúde, métricas, tracing, OpenAPI) do `@machize/http` funcionam aqui tal e qual.
+The strong point: **portability**. A route written for this adapter runs unchanged on `@machize/fastify` and `@machize/hono`. And the neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@machize/http` work here exactly the same.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/express @machize/core @machize/http express zod
 ```
 
-O `express` (versão 4.19+ ou 5) é *peer dependency* — instala-lo tu. O `zod` é necessário para os esquemas das rotas.
+`express` (version 4.19+ or 5) is a peer dependency — install it yourself. `zod` is required for the route schemas.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-**Passo 1** — instala os pacotes (comando acima).
+**Step 1** — install the packages (command above).
 
-**Passo 2** — cria um ficheiro `server.ts`:
+**Step 2** — create a `server.ts` file:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -30,33 +30,33 @@ import { route } from '@machize/http'
 import { EXPRESS, expressPlugin } from '@machize/express'
 import { z } from 'zod'
 
-// 1. Definir uma rota: método, URL, validação e handler (a função que responde).
+// 1. Define a route: method, URL, validation, and handler (the function that responds).
 const echo = route({
   method: 'POST',
   url: '/echo',
-  body: z.object({ n: z.number() }), // o corpo tem de ter um número n
+  body: z.object({ n: z.number() }), // the body must have a number n
   async handler({ body, reply }) {
-    // body.n já está validado e tipado como number
+    // body.n is already validated and typed as number
     return reply.code(201).send({ doubled: body.n * 2 })
   },
 })
 
-// 2. Criar a app Machize com o plugin Express e arrancar.
+// 2. Create the Machize app with the Express plugin and start it.
 const app = await createApp({ plugins: [expressPlugin({ routes: [echo] })] }).boot()
 
-// 3. Obter a app Express do contentor e pôr a ouvir numa porta.
+// 3. Get the Express app from the container and have it listen on a port.
 app.container.get(EXPRESS).listen(3000)
-console.log('A ouvir em http://localhost:3000')
+console.log('Listening on http://localhost:3000')
 ```
 
-**Passo 3** — executa e testa:
+**Step 3** — run and test:
 
 ```bash
 npx tsx server.ts
 curl -X POST http://localhost:3000/echo \
   -H 'content-type: application/json' \
   -d '{"n":21}'
-# → {"doubled":42}   (estado 201)
+# → {"doubled":42}   (status 201)
 
 curl -X POST http://localhost:3000/echo \
   -H 'content-type: application/json' \
@@ -64,11 +64,11 @@ curl -X POST http://localhost:3000/echo \
 # → 400 {"error":{"code":"HTTP_VALIDATION","part":"body","issues":[...]}}
 ```
 
-> O plugin já ativa `express.json()` por ti — não precisas de configurar o parsing de JSON.
+> The plugin already enables `express.json()` for you — you don't need to configure JSON parsing.
 
-## Guia de utilização
+## Usage guide
 
-### Rotas com parâmetros, query e erros
+### Routes with params, query, and errors
 
 ```ts
 import { HttpError, route } from '@machize/http'
@@ -76,7 +76,7 @@ import { z } from 'zod'
 
 const hello = route({
   method: 'GET',
-  url: '/hello/:name', // :name é um parâmetro dinâmico do URL
+  url: '/hello/:name', // :name is a dynamic URL parameter
   params: z.object({ name: z.string() }),
   async handler({ params }) {
     return { hello: params.name }
@@ -87,17 +87,17 @@ const boom = route({
   method: 'GET',
   url: '/boom',
   async handler() {
-    // Erro intencional: vira uma resposta 418 com um código estável
+    // Intentional error: turns into a 418 response with a stable code
     throw new HttpError(418, 'TEAPOT', "I'm a teapot")
   },
 })
 ```
 
-O formato de erro é idêntico ao dos outros adaptadores: `{ error: { code, message, ... } }`. Erros inesperados respondem `500` com `INTERNAL_ERROR`, sem expor detalhes internos.
+The error format is identical to the other adapters: `{ error: { code, message, ... } }`. Unexpected errors respond with `500` and `INTERNAL_ERROR`, without exposing internal details.
 
-### Enrichers e guards (autenticação, tenancy, …)
+### Enrichers and guards (authentication, tenancy, …)
 
-Plugins registam estas funções nos "buckets" de metadados do contentor; o adaptador aplica-as a todas as rotas. Exemplo real (dos testes do pacote) — um enricher tipo tenancy e um guard tipo auth:
+Plugins register these functions in the container's metadata "buckets"; the adapter applies them to every route. Real example (from the package's tests) — a tenancy-style enricher and an auth-style guard:
 
 ```ts
 import { createApp, definePlugin, ensureMetadata, tryCtx } from '@machize/core'
@@ -105,21 +105,21 @@ import { HttpError, route, type RequestEnricher, type RouteGuard } from '@machiz
 import { EXPRESS, expressPlugin } from '@machize/express'
 import { z } from 'zod'
 
-// Enricher: corre antes de tudo e anexa o tenant ao contexto do pedido.
+// Enricher: runs before everything else and attaches the tenant to the request context.
 const enricher: RequestEnricher = ({ request, context }) => {
   const tenant = request.headers['x-tenant-id']
   if (typeof tenant === 'string') (context as { tenant?: unknown }).tenant = { id: tenant }
 }
 
-// Guard: recusa o pedido lançando um erro. Lê o meta da rota.
+// Guard: rejects the request by throwing an error. Reads the route's meta.
 const guard: RouteGuard = ({ route: def, request }) => {
   if (def.meta?.['auth'] && !request.headers['authorization']) {
-    throw new HttpError(401, 'AUTH_REQUIRED', 'Autenticação obrigatória.')
+    throw new HttpError(401, 'AUTH_REQUIRED', 'Authentication required.')
   }
 }
 
-const meuPlugin = definePlugin({
-  name: 'meu:http',
+const myPlugin = definePlugin({
+  name: 'my:http',
   register({ container }) {
     const metadata = ensureMetadata(container)
     metadata.add('http:enrichers', enricher)
@@ -130,22 +130,22 @@ const meuPlugin = definePlugin({
 const secure = route({
   method: 'GET',
   url: '/secure',
-  meta: { auth: true }, // o guard lê isto
+  meta: { auth: true }, // the guard reads this
   async handler() {
     const tenant = (tryCtx() as { tenant?: { id: string } })?.tenant?.id ?? null
     return { ok: true, tenant }
   },
 })
 
-const app = await createApp({ plugins: [meuPlugin, expressPlugin({ routes: [secure] })] }).boot()
+const app = await createApp({ plugins: [myPlugin, expressPlugin({ routes: [secure] })] }).boot()
 app.container.get(EXPRESS).listen(3000)
 ```
 
-Sem `Authorization` → `401 AUTH_REQUIRED`; com o cabeçalho `x-tenant-id: acme` o handler vê `tenant: 'acme'` via contexto.
+Without `Authorization` → `401 AUTH_REQUIRED`; with the `x-tenant-id: acme` header the handler sees `tenant: 'acme'` via context.
 
-### Plugins de borda neutros
+### Neutral edge plugins
 
-Importam-se do `@machize/http` e funcionam no Express sem alterações:
+Imported from `@machize/http` and work on Express without changes:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -157,33 +157,33 @@ const ping = route({ method: 'GET', url: '/ping', async handler() { return { pon
 const app = await createApp({
   plugins: [
     expressPlugin({ routes: [ping] }),
-    securityPlugin({ rateLimit: { limit: 100, windowMs: 60_000 } }), // cabeçalhos seguros + 429 acima do limite
-    healthPlugin({ checks: { db: () => ({ ok: true }) } }),          // GET /livez e /readyz
+    securityPlugin({ rateLimit: { limit: 100, windowMs: 60_000 } }), // secure headers + 429 above the limit
+    healthPlugin({ checks: { db: () => ({ ok: true }) } }),          // GET /livez and /readyz
     metricsPlugin(),                                                  // GET /metrics (Prometheus)
   ],
 }).boot()
 app.container.get(EXPRESS).listen(3000)
 ```
 
-Todas as opções destes plugins estão documentadas no README do [`@machize/http`](../http/README.md).
+All the options for these plugins are documented in the [`@machize/http`](../http/README.md) README.
 
-### Trazer a tua própria app Express
+### Bring your own Express app
 
-Se já tens uma app Express com middleware próprio, passa-a ao plugin:
+If you already have an Express app with your own middleware, pass it to the plugin:
 
 ```ts
 import express from 'express'
 import { expressPlugin } from '@machize/express'
 
-const minhaApp = express()
-// ... middleware teu aqui ...
-expressPlugin({ app: minhaApp, routes: [] })
-// Nota: o plugin adiciona express.json() na mesma.
+const myApp = express()
+// ... your middleware here ...
+expressPlugin({ app: myApp, routes: [] })
+// Note: the plugin still adds express.json().
 ```
 
-### Avançado: `registerRoutes()` sem o plugin
+### Advanced: `registerRoutes()` without the plugin
 
-Monta rotas Machize numa app Express diretamente, sem ciclo de vida Machize:
+Mount Machize routes on an Express app directly, without the Machize lifecycle:
 
 ```ts
 import express from 'express'
@@ -191,63 +191,63 @@ import { route } from '@machize/http'
 import { registerRoutes } from '@machize/express'
 
 const app = express()
-app.use(express.json()) // sem o plugin, o parsing de JSON é responsabilidade tua
+app.use(express.json()) // without the plugin, JSON parsing is your responsibility
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
-registerRoutes(app, [ping]) // container, enrichers e guards são opcionais
+registerRoutes(app, [ping]) // container, enrichers, and guards are optional
 app.listen(3000)
 ```
 
-Neste modo cada handler já trata os próprios erros (o wrapper responde com `toErrorResponse`), mas não há edge plugins nem registo de rotas para OpenAPI/CLI.
+In this mode each handler already handles its own errors (the wrapper responds with `toErrorResponse`), but there are no edge plugins or route registration for OpenAPI/CLI.
 
-## Referência da API
+## API reference
 
-### `expressPlugin(options?)` → plugin Machize (`machize:express`)
+### `expressPlugin(options?)` → Machize plugin (`machize:express`)
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `routes` | `MachizeRoute[]` | Não | `[]` | Rotas (criadas com `route()` do `@machize/http`) a montar. |
-| `app` | `Express` | Não | `express()` novo | Trazes a tua app Express; em ambos os casos `express.json()` é adicionado. |
+| `routes` | `MachizeRoute[]` | No | `[]` | Routes (created with `route()` from `@machize/http`) to mount. |
+| `app` | `Express` | No | new `express()` | Bring your own Express app; either way, `express.json()` is added. |
 
-Comportamento: regista a app Express no token `EXPRESS` e um `HttpServerCollector` no token `HTTP_SERVER`. No evento `app:booted` monta tudo pela ordem que o Express exige: middleware de *after-hooks* (métricas/tracing, via `res.on('finish')`) → middleware de *pre-hooks* (segurança/CORS/rate limit; se um deles responder, a rota não corre) → rotas Machize → rotas extra dos edge plugins (`/livez`, `/metrics`, …). Publica as rotas no bucket de metadados `'http:routes'` para OpenAPI/CLI/SDK.
+Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, via `res.on('finish')`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Machize routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
-> Nota: ao contrário do `fastifyPlugin`, este plugin não tem passo de `shutdown` — fechar o servidor HTTP devolvido por `listen()` é responsabilidade tua.
+> Note: unlike `fastifyPlugin`, this plugin has no `shutdown` step — closing the HTTP server returned by `listen()` is your responsibility.
 
 ### `EXPRESS`
 
-Token de injeção de dependências (`Token<Express>`): `app.container.get(EXPRESS)` devolve a app Express para chamares `listen(porta)` ou adicionares middleware.
+Dependency-injection token (`Token<Express>`): `app.container.get(EXPRESS)` returns the Express app so you can call `listen(port)` or add middleware.
 
 ### `registerRoutes(app, routes, container?, enrichers?, guards?)`
 
-| Parâmetro | Tipo | Obrigatório? | Default | Descrição |
+| Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `app` | `Express` | Sim | — | App Express onde montar. |
-| `routes` | `MachizeRoute[]` | Sim | — | Rotas a montar. |
-| `container` | `Container` | Não | — | Contentor DI; sem ele não há scope por pedido nem enrichers/guards. |
-| `enrichers` | `RequestEnricher[]` | Não | `[]` | Funções que enriquecem o contexto antes dos guards. |
-| `guards` | `RouteGuard[]` | Não | `[]` | Funções que podem rejeitar o pedido (lançando um erro). |
+| `app` | `Express` | Yes | — | Express app to mount on. |
+| `routes` | `MachizeRoute[]` | Yes | — | Routes to mount. |
+| `container` | `Container` | No | — | DI container; without it there's no per-request scope or enrichers/guards. |
+| `enrichers` | `RequestEnricher[]` | No | `[]` | Functions that enrich the context before the guards. |
+| `guards` | `RouteGuard[]` | No | `[]` | Functions that can reject the request (by throwing an error). |
 
-### O que importar de onde
+### What to import from where
 
-Este pacote exporta apenas `expressPlugin`, `registerRoutes`, `EXPRESS` e `ExpressPluginOptions`. Tudo o resto — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, tipos como `RequestEnricher`/`RouteGuard` — importa-se do **`@machize/http`**.
+This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `ExpressPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@machize/http`**.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"`Cannot find module 'express'`."** O Express é *peer dependency*: `pnpm add express`.
+**"`Cannot find module 'express'`."** Express is a peer dependency: `pnpm add express`.
 
-**"O `body` chega `undefined` no handler."** O cliente tem de enviar o cabeçalho `Content-Type: application/json`; sem ele o `express.json()` não interpreta o corpo.
+**"`body` arrives `undefined` in the handler."** The client has to send the `Content-Type: application/json` header; without it `express.json()` won't parse the body.
 
-**"Tentei `import { route } from '@machize/express'` e falhou."** A função `route()` não é exportada por este pacote — importa-a de `@machize/http` (é neutra de propósito: a mesma rota corre em Fastify e Hono).
+**"I tried `import { route } from '@machize/express'` and it failed."** The `route()` function isn't exported from this package — import it from `@machize/http` (it's neutral on purpose: the same route runs on Fastify and Hono).
 
-**"400 `HTTP_VALIDATION` num GET com query correta."** Na query do Express tudo chega como texto — usa `z.coerce.number()` / `z.coerce.boolean()` nos esquemas.
+**"400 `HTTP_VALIDATION` on a GET with a correct query."** In Express's query everything arrives as text — use `z.coerce.number()` / `z.coerce.boolean()` in your schemas.
 
-**"Os edge plugins não respondem (`/metrics` dá 404)."** São montados no evento `app:booted`: garante que chamas `await createApp({...}).boot()` antes de `listen()` e que o `expressPlugin` está na lista de plugins (é ele que regista o `HTTP_SERVER`).
+**"The edge plugins don't respond (`/metrics` gives 404)."** They're mounted on the `app:booted` event: make sure you call `await createApp({...}).boot()` before `listen()` and that `expressPlugin` is in the plugin list (it's the one that registers `HTTP_SERVER`).
 
-**"Como fecho o servidor num teste?"** Guarda o retorno de `listen()`: `const server = app.container.get(EXPRESS).listen(0)` e no fim `server.close()` seguido de `await app.shutdown()`.
+**"How do I close the server in a test?"** Keep the return value of `listen()`: `const server = app.container.get(EXPRESS).listen(0)` and at the end `server.close()` followed by `await app.shutdown()`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — o `expressPlugin` é um plugin Machize (`definePlugin`) no ciclo de vida `createApp → boot`; usa o `Container` (tokens `EXPRESS`, `HTTP_SERVER`), os buckets de metadados e o contexto por pedido (`ctx()`/`tryCtx()`), que fica disponível em qualquer profundidade do código.
-- **`@machize/http`** — fornece `route()`, o pipeline `runRoute()` (validação, enrichers, guards), `toErrorResponse()` e os edge plugins. Este adaptador limita-se a converter `Request`/`Response` do Express no `HttpRequest`/`HttpReply` neutro.
-- **`@machize/fastify` / `@machize/hono`** — adaptadores irmãos: as mesmas rotas, enrichers, guards e edge plugins correm em qualquer um deles sem alterações; trocar de framework é trocar de plugin.
-- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — registam guards/enrichers em `'http:guards'`/`'http:enrichers'` e leem o `meta` das rotas (ex.: `meta: { auth: true }`); este adaptador aplica-os automaticamente.
-- **`@machize/sdk` e a CLI** — consomem o bucket `'http:routes'` (rotas + esquemas Zod) que este plugin publica.
+- **`@machize/core`** — `expressPlugin` is a Machize plugin (`definePlugin`) in the `createApp → boot` lifecycle; it uses the `Container` (tokens `EXPRESS`, `HTTP_SERVER`), the metadata buckets, and the per-request context (`ctx()`/`tryCtx()`), available at any depth of the code.
+- **`@machize/http`** — provides `route()`, the `runRoute()` pipeline (validation, enrichers, guards), `toErrorResponse()`, and the edge plugins. This adapter simply converts Express's `Request`/`Response` into the neutral `HttpRequest`/`HttpReply`.
+- **`@machize/fastify` / `@machize/hono`** — sibling adapters: the same routes, enrichers, guards, and edge plugins run on any of them unchanged; switching frameworks is just switching plugins.
+- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — register guards/enrichers in `'http:guards'`/`'http:enrichers'` and read the routes' `meta` (e.g. `meta: { auth: true }`); this adapter applies them automatically.
+- **`@machize/sdk` and the CLI** — consume the `'http:routes'` bucket (routes + Zod schemas) that this plugin publishes.

@@ -1,107 +1,107 @@
 # @machize/config
 
-Configuração central e organizada por espaços de nomes para aplicações Machize, com leitura por "caminho com pontos" (`config.get('mail.from')`). Precisas dele quando queres um único sítio para guardar e consultar as definições da tua aplicação (endereços, portas, opções de serviços).
+Central, namespace-organized configuration for Machize applications, with dot-path reads (`config.get('mail.from')`). You need this when you want a single place to store and query your application's settings (addresses, ports, service options).
 
-## O que este módulo resolve
+## What this module solves
 
-Quase todas as aplicações têm definições: o remetente dos e-mails, a porta do servidor SMTP, o driver da fila de trabalhos, etc. Sem um sistema, estas definições ficam espalhadas por constantes, ficheiros soltos e objetos passados de mão em mão — e ninguém sabe onde está o valor "verdadeiro".
+Almost every application has settings: the sender for emails, the SMTP server port, the job queue driver, etc. Without a system, these settings end up scattered across constants, loose files, and objects passed hand to hand — and nobody knows where the "true" value lives.
 
-O `@machize/config` dá-te um repositório único: o `ConfigRepository`. Colocas lá um objeto com todas as definições, organizado por áreas (`mail`, `queue`, `app`, …), e depois lês qualquer valor com um caminho simples separado por pontos, como `mail.smtp.port`. Se pedires uma chave que não existe e não deres um valor de recurso (*fallback*), o repositório lança um erro claro em vez de devolver `undefined` silenciosamente — apanhas o problema cedo.
+`@machize/config` gives you a single repository: `ConfigRepository`. You put an object with all the settings into it, organized by area (`mail`, `queue`, `app`, …), and then read any value with a simple dot-separated path, like `mail.smtp.port`. If you request a key that doesn't exist and don't provide a fallback value, the repository throws a clear error instead of silently returning `undefined` — you catch the problem early.
 
-O pacote inclui ainda o `configPlugin`, que liga o repositório à aplicação Machize (do `@machize/core`): o repositório fica registado no *container* (a "caixa" de serviços partilhados) e qualquer plugin o pode ir buscar através do token `CONFIG`.
+The package also includes `configPlugin`, which wires the repository into the Machize application (from `@machize/core`): the repository gets registered in the *container* (the "box" of shared services) and any plugin can fetch it via the `CONFIG` token.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/config
 ```
 
-O pacote depende de `@machize/core` (instalado automaticamente como dependência).
+The package depends on `@machize/core` (installed automatically as a dependency).
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. Define as tuas configurações num objeto normal.
-2. Adiciona o `configPlugin` à aplicação.
-3. Lê valores em qualquer plugin através do token `CONFIG`.
+1. Define your configuration as a plain object.
+2. Add `configPlugin` to the application.
+3. Read values in any plugin via the `CONFIG` token.
 
 ```ts
 import { createApp, definePlugin } from '@machize/core'
 import { CONFIG, configPlugin } from '@machize/config'
 
-// 1. As definições da aplicação, organizadas por áreas:
-const definicoes = {
-  app: { name: 'a-minha-app' },
-  mail: { from: 'oi@machize.dev', smtp: { port: 587 } },
+// 1. The application's settings, organized by area:
+const settings = {
+  app: { name: 'my-app' },
+  mail: { from: 'hi@machize.dev', smtp: { port: 587 } },
 }
 
-// 2. Um plugin qualquer que lê a configuração:
+// 2. A plugin that reads the configuration:
 const mailPlugin = definePlugin({
   name: 'app:mail',
-  dependsOn: ['machize:config'], // garante que a config regista primeiro
+  dependsOn: ['machize:config'], // ensures config registers first
   boot({ container }) {
     const config = container.get(CONFIG)
-    console.log(config.get('mail.from'))            // 'oi@machize.dev'
+    console.log(config.get('mail.from'))            // 'hi@machize.dev'
     console.log(config.get('mail.smtp.port'))       // 587
     console.log(config.get('mail.replyTo', 'n/a'))  // 'n/a' (fallback)
   },
 })
 
-// 3. Arranca a aplicação com o plugin de configuração:
+// 3. Boot the application with the config plugin:
 await createApp({
-  plugins: [configPlugin(definicoes), mailPlugin],
+  plugins: [configPlugin(settings), mailPlugin],
 }).boot()
 ```
 
-Nota: o `configPlugin` faz uma cópia profunda (`structuredClone`) do objeto que lhe passas — alterações posteriores no repositório não afetam o objeto original, e vice-versa.
+Note: `configPlugin` makes a deep copy (`structuredClone`) of the object you pass it — later changes to the repository don't affect the original object, and vice versa.
 
-## Guia de utilização
+## Usage guide
 
-### Usar o `ConfigRepository` diretamente (sem aplicação)
+### Using `ConfigRepository` directly (without an application)
 
-Podes usar o repositório sozinho, por exemplo em scripts ou testes:
+You can use the repository on its own, e.g. in scripts or tests:
 
 ```ts
 import { ConfigRepository } from '@machize/config'
 
 const config = new ConfigRepository({
-  mail: { from: 'oi@machize.dev', smtp: { port: 587 } },
+  mail: { from: 'hi@machize.dev', smtp: { port: 587 } },
 })
 
-config.get('mail.from')          // 'oi@machize.dev'
+config.get('mail.from')          // 'hi@machize.dev'
 config.has('queue.driver')       // false
-config.get('mail.replyTo', 'x')  // 'x' — fallback quando a chave falta
-config.get('mail.replyTo')       // lança ConfigKeyError (sem fallback)
+config.get('mail.replyTo', 'x')  // 'x' — fallback when the key is missing
+config.get('mail.replyTo')       // throws ConfigKeyError (no fallback)
 ```
 
-### Escrever e fundir valores
+### Writing and merging values
 
-`set` cria os níveis intermédios automaticamente; `merge` faz uma fusão profunda (*deep merge*) sem apagar as chaves vizinhas:
+`set` creates intermediate levels automatically; `merge` does a deep merge without erasing sibling keys:
 
 ```ts
 import { ConfigRepository } from '@machize/config'
 
 const config = new ConfigRepository({
-  mail: { from: 'oi@machize.dev', smtp: { port: 587 } },
+  mail: { from: 'hi@machize.dev', smtp: { port: 587 } },
 })
 
-// set: cria 'queue' e depois 'queue.driver'
+// set: creates 'queue' and then 'queue.driver'
 config.set('queue.driver', 'bullmq')
 config.get('queue.driver') // 'bullmq'
 
-// merge: acrescenta 'host' sem apagar 'port'
+// merge: adds 'host' without erasing 'port'
 config.merge({ mail: { smtp: { host: 'smtp.acme.com' } } })
-config.get('mail.smtp.port') // 587 — continua lá
+config.get('mail.smtp.port') // 587 — still there
 config.get('mail.smtp.host') // 'smtp.acme.com'
 
-// all(): o objeto completo (só leitura por convenção)
+// all(): the full object (read-only by convention)
 console.log(config.all())
 ```
 
-Atenção: no `merge`, arrays e valores simples são **substituídos**, não fundidos — só objetos simples são fundidos em profundidade.
+Note: in `merge`, arrays and plain values are **replaced**, not merged — only plain objects are deep-merged.
 
-### Tipar os teus espaços de nomes (Avançado)
+### Typing your namespaces (Advanced)
 
-Pacotes e aplicações podem declarar o formato do seu espaço de nomes através de *module augmentation* (uma técnica do TypeScript para estender interfaces de outro módulo):
+Packages and applications can declare the shape of their namespace via *module augmentation* (a TypeScript technique for extending interfaces from another module):
 
 ```ts
 declare module '@machize/config' {
@@ -111,56 +111,56 @@ declare module '@machize/config' {
 }
 ```
 
-Isto documenta e tipa o namespace `mail` para quem usar a interface `MachizeConfig`.
+This documents and types the `mail` namespace for anyone using the `MachizeConfig` interface.
 
-## Referência da API
+## API reference
 
 ### `ConfigRepository`
 
-`new ConfigRepository(values?)` — `values` é o objeto inicial (default `{}`). O objeto é usado tal e qual (sem cópia); se quiseres isolamento, passa uma cópia ou usa o `configPlugin`.
+`new ConfigRepository(values?)` — `values` is the initial object (default `{}`). The object is used as-is (no copy); if you want isolation, pass a copy or use `configPlugin`.
 
-| Método | Parâmetros | Devolve | Descrição |
+| Method | Parameters | Returns | Description |
 |---|---|---|---|
-| `get<T>(path, fallback?)` | `path: string`, `fallback?: T` | `T` | Lê por caminho com pontos. Sem a chave **e** sem fallback, lança `ConfigKeyError`. O fallback conta mesmo que seja `undefined` (basta passares o 2.º argumento). |
-| `has(path)` | `path: string` | `boolean` | `true` se o caminho existir. |
-| `set(path, value)` | `path: string`, `value: unknown` | `void` | Escreve, criando níveis intermédios se necessário. |
-| `merge(values)` | `values: Record<string, unknown>` | `void` | Fusão profunda de objetos simples por cima dos valores atuais. |
-| `all()` | — | `Readonly<Record<string, unknown>>` | Todos os valores. |
+| `get<T>(path, fallback?)` | `path: string`, `fallback?: T` | `T` | Reads by dot path. Without the key **and** without a fallback, throws `ConfigKeyError`. The fallback counts even if it's `undefined` (you just need to pass the 2nd argument). |
+| `has(path)` | `path: string` | `boolean` | `true` if the path exists. |
+| `set(path, value)` | `path: string`, `value: unknown` | `void` | Writes, creating intermediate levels as needed. |
+| `merge(values)` | `values: Record<string, unknown>` | `void` | Deep merge of plain objects on top of the current values. |
+| `all()` | — | `Readonly<Record<string, unknown>>` | All values. |
 
 ### `configPlugin(values?)`
 
-| Parâmetro | Tipo | Obrigatório? | Default | Descrição |
+| Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `values` | `Record<string, unknown>` | não | `{}` | Valores iniciais; são clonados com `structuredClone`. |
+| `values` | `Record<string, unknown>` | No | `{}` | Initial values; cloned with `structuredClone`. |
 
-Devolve um plugin Machize com `name: 'machize:config'` que, na fase `register`, regista um `ConfigRepository` como *singleton* no container sob o token `CONFIG`.
+Returns a Machize plugin with `name: 'machize:config'` that, during the `register` phase, registers a `ConfigRepository` as a *singleton* in the container under the `CONFIG` token.
 
 ### `CONFIG`
 
-Token de injeção de dependências (`Token<ConfigRepository>`) para obter o repositório: `container.get(CONFIG)`.
+Dependency injection token (`Token<ConfigRepository>`) to obtain the repository: `container.get(CONFIG)`.
 
 ### `ConfigKeyError`
 
-Erro lançado por `get()` sem fallback. Estende `MachizeError` do core, com `code: 'CONFIG_KEY_MISSING'` e mensagem que inclui o caminho em falta.
+Error thrown by `get()` without a fallback. Extends core's `MachizeError`, with `code: 'CONFIG_KEY_MISSING'` and a message that includes the missing path.
 
-### `MachizeConfig` (Avançado)
+### `MachizeConfig` (Advanced)
 
-Interface vazia extensível por *module augmentation* para tipar espaços de nomes (ver acima).
+Empty interface, extensible via *module augmentation*, for typing namespaces (see above).
 
-## Erros comuns e soluções (FAQ)
+## Common issues and solutions (FAQ)
 
-**"Missing configuration key: …" (`CONFIG_KEY_MISSING`)** — Pediste uma chave que não existe e não deste fallback. Ou defines o valor no objeto inicial, ou passas um segundo argumento: `config.get('mail.replyTo', 'valor-por-omissao')`.
+**"Missing configuration key: …" (`CONFIG_KEY_MISSING`)** — You requested a key that doesn't exist and didn't provide a fallback. Either set the value in the initial object, or pass a second argument: `config.get('mail.replyTo', 'default-value')`.
 
-**`get` devolve `undefined` em vez de lançar erro** — Provavelmente passaste `undefined` explicitamente como fallback: `get(path, undefined)` conta como "tem fallback" (a verificação é pelo número de argumentos). Chama `get(path)` só com um argumento para obteres o erro.
+**`get` returns `undefined` instead of throwing an error** — You probably passed `undefined` explicitly as the fallback: `get(path, undefined)` counts as "has a fallback" (the check is based on the number of arguments). Call `get(path)` with just one argument to get the error.
 
-**O `merge` apagou o meu array/valor** — O `merge` só funde objetos simples; arrays e primitivos são substituídos por inteiro. Se precisares de acrescentar a um array, lê-o com `get`, altera-o e grava com `set`.
+**`merge` erased my array/value** — `merge` only deep-merges plain objects; arrays and primitives are replaced entirely. If you need to append to an array, read it with `get`, modify it, and write it back with `set`.
 
-**Alterei a config mas o objeto original não mudou (ou vice-versa)** — Com o `configPlugin`, os valores são clonados no arranque; é o comportamento esperado. Usa `container.get(CONFIG)` como única fonte de verdade depois do arranque.
+**I changed the config but the original object didn't change (or vice versa)** — With `configPlugin`, values are cloned at startup; this is expected behavior. Use `container.get(CONFIG)` as the single source of truth after startup.
 
-**`container.get(CONFIG)` lança `DI_UNKNOWN_TOKEN`** — O `configPlugin` não foi adicionado à aplicação, ou o teu plugin correu antes dele. Adiciona `configPlugin(...)` a `plugins` e declara `dependsOn: ['machize:config']` no plugin consumidor.
+**`container.get(CONFIG)` throws `DI_UNKNOWN_TOKEN`** — `configPlugin` wasn't added to the application, or your plugin ran before it. Add `configPlugin(...)` to `plugins` and declare `dependsOn: ['machize:config']` on the consuming plugin.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — é a base: o `configPlugin` é um plugin do core, o `CONFIG` é um token do container do core, e o `ConfigKeyError` estende `MachizeError`. Nota: isto é diferente do `configSchema` dos plugins do core — o `configSchema` valida a fatia de config **de um plugin** no arranque; o `@machize/config` é um repositório de leitura/escrita para **toda** a aplicação.
-- **`@machize/env`** — combinação típica: valida as variáveis de ambiente com `defineEnv` e usa esses valores para construir o objeto que passas ao `configPlugin` (ambiente → configuração).
-- **`@machize/events`** — não há ligação direta, mas ambos seguem o mesmo padrão: um plugin que regista um serviço singleton no container (`EVENTS` / `CONFIG`).
+- **`@machize/core`** — the foundation: `configPlugin` is a core plugin, `CONFIG` is a core container token, and `ConfigKeyError` extends `MachizeError`. Note: this is different from core plugins' `configSchema` — `configSchema` validates **one plugin's** config slice at startup; `@machize/config` is a read/write repository for **the whole** application.
+- **`@machize/env`** — typical combination: validate environment variables with `defineEnv` and use those values to build the object you pass to `configPlugin` (environment → configuration).
+- **`@machize/events`** — no direct link, but both follow the same pattern: a plugin that registers a singleton service in the container (`EVENTS` / `CONFIG`).

@@ -1,30 +1,30 @@
 # @machize/mailer
 
-Camada de email do framework Machize: define emails tipados uma vez e envia-os por SMTP, para a consola (desenvolvimento) ou para memória (testes). Precisas deste módulo sempre que a tua aplicação tiver de enviar emails — boas-vindas, faturas, recuperação de palavra-passe, etc.
+Email layer for the Machize framework: define typed emails once and send them via SMTP, to the console (development), or to memory (tests). You need this module whenever your application has to send emails — welcome messages, invoices, password recovery, etc.
 
-## O que este módulo resolve
+## What this module solves
 
-Enviar um email parece simples, mas na prática há vários problemas escondidos: garantir que os dados usados no texto do email estão corretos (não queres enviar "Olá undefined"), não repetir o endereço do remetente em todo o lado, conseguir testar sem enviar emails a sério, e não bloquear a aplicação enquanto o servidor de email responde.
+Sending an email seems simple, but in practice there are several hidden problems: making sure the data used in the email text is correct (you don't want to send "Hello undefined"), not repeating the sender address everywhere, being able to test without sending real emails, and not blocking the application while the mail server responds.
 
-Este módulo resolve isso com o conceito de **email tipado**: descreves cada email uma única vez com `defineMail` — o nome, os dados de que precisa (validados com um *schema*, ou seja, uma descrição formal do formato dos dados, normalmente feita com a biblioteca [Zod](https://zod.dev)), o assunto e o corpo. Depois, para enviar, chamas `mailer.send(...)` com os dados e o destinatário. Se os dados estiverem errados, o envio falha imediatamente com um erro claro, antes de qualquer email sair.
+This module solves that with the concept of a **typed email**: you describe each email once with `defineMail` — the name, the data it needs (validated with a *schema*, i.e. a formal description of the data shape, usually built with the [Zod](https://zod.dev) library), the subject, and the body. Then, to send it, you call `mailer.send(...)` with the data and the recipient. If the data is wrong, sending fails immediately with a clear error, before any email goes out.
 
-O envio real é feito por um **driver** (o componente que sabe falar com o mundo exterior). Há três incluídos: `smtp` (envio real através de um servidor de email, via nodemailer), `log` (escreve o email na consola — ideal em desenvolvimento) e `memory` (guarda os emails num array — ideal em testes). Podes trocar de driver sem mudar uma linha do resto do código.
+The actual sending is done by a **driver** (the component that knows how to talk to the outside world). Three are included: `smtp` (real sending through a mail server, via nodemailer), `log` (writes the email to the console — ideal for development), and `memory` (stores emails in an array — ideal for testing). You can switch drivers without changing a single line of the rest of the code.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/mailer
 ```
 
-Se quiseres validar os dados dos emails (recomendado), instala também o Zod:
+If you want to validate email data (recommended), also install Zod:
 
 ```bash
 pnpm add zod
 ```
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. **Define um email** com `defineMail`. O `schema` descreve os dados; `subject`, `text` e `html` são funções que recebem esses dados e devolvem o texto:
+1. **Define an email** with `defineMail`. The `schema` describes the data; `subject`, `text`, and `html` are functions that receive that data and return text:
 
 ```ts
 // src/mails/welcome.ts
@@ -34,13 +34,13 @@ import { z } from 'zod'
 export const WelcomeEmail = defineMail({
   name: 'welcome',
   schema: z.object({ name: z.string() }),
-  subject: ({ name }) => `Bem-vindo, ${name}!`,
-  text: ({ name }) => `Olá ${name}`,
-  html: ({ name }) => `<h1>Olá ${name}</h1>`,
+  subject: ({ name }) => `Welcome, ${name}!`,
+  text: ({ name }) => `Hello ${name}`,
+  html: ({ name }) => `<h1>Hello ${name}</h1>`,
 })
 ```
 
-2. **Regista o plugin** na tua aplicação Machize. Em desenvolvimento usa o driver `log` (o predefinido), que só imprime na consola:
+2. **Register the plugin** on your Machize application. In development, use the `log` driver (the default), which just prints to the console:
 
 ```ts
 // src/app.ts
@@ -49,12 +49,12 @@ import { mailerPlugin } from '@machize/mailer'
 
 const app = await createApp({
   plugins: [
-    mailerPlugin({ driver: 'log', from: 'noreply@aminhaapp.com' }),
+    mailerPlugin({ driver: 'log', from: 'noreply@myapp.com' }),
   ],
 }).boot()
 ```
 
-3. **Envia o email.** Obtém o `Mailer` a partir do contentor da aplicação através do token `MAILER` (um *token* é a "chave" com que pedes um serviço registado ao contentor de dependências do Machize):
+3. **Send the email.** Get the `Mailer` from the application container via the `MAILER` token (a *token* is the "key" you use to request a registered service from the Machize dependency container):
 
 ```ts
 import { MAILER } from '@machize/mailer'
@@ -64,69 +64,69 @@ const mailer = app.container.get(MAILER)
 await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com' })
 ```
 
-4. Vais ver na consola algo como:
+4. You'll see something like this in the console:
 
 ```
-[mail] welcome → ada@example.com | Bem-vindo, Ada!
-Olá Ada
+[mail] welcome → ada@example.com | Welcome, Ada!
+Hello Ada
 ```
 
-5. **Em produção**, troca apenas a configuração do plugin para SMTP:
+5. **In production**, just switch the plugin configuration to SMTP:
 
 ```ts
 mailerPlugin({
   driver: 'smtp',
-  smtp: { url: 'smtps://utilizador:password@smtp.exemplo.com:465' },
-  from: 'noreply@aminhaapp.com',
+  smtp: { url: 'smtps://user:password@smtp.example.com:465' },
+  from: 'noreply@myapp.com',
 })
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Definir emails (templates)
+### Defining emails (templates)
 
-Um "template de email" é aqui uma definição em código: nome + schema + funções de renderização. Emails sem dados também são possíveis (omite o `schema` e ignora o parâmetro):
+An "email template" here is a definition in code: name + schema + rendering functions. Emails without data are also possible (omit the `schema` and skip the parameter):
 
 ```ts
 import { defineMail } from '@machize/mailer'
 
 const Ping = defineMail({ name: 'ping', subject: () => 'Ping', text: () => 'pong' })
 
-// Envio de um email sem dados: só passas o envelope
+// Sending an email without data: you only pass the envelope
 await mailer.send(Ping, { to: 'a@b.c' })
 ```
 
-### O envelope (destinatários e remetente)
+### The envelope (recipients and sender)
 
-O **envelope** é o conjunto de endereços do envio. Só o `to` é obrigatório; `from` pode vir do envelope ou da configuração do `Mailer`:
+The **envelope** is the set of addresses for the send. Only `to` is required; `from` can come from the envelope or from the `Mailer` configuration:
 
 ```ts
 await mailer.send(WelcomeEmail, { name: 'Ada' }, {
   to: ['ada@example.com', 'grace@example.com'],
-  cc: 'chefe@example.com',
-  bcc: ['auditoria@example.com'],
-  replyTo: 'suporte@aminhaapp.com',
-  from: 'especial@aminhaapp.com', // opcional — sobrepõe o default
+  cc: 'boss@example.com',
+  bcc: ['audit@example.com'],
+  replyTo: 'support@myapp.com',
+  from: 'special@myapp.com', // optional — overrides the default
 })
 ```
 
-Se faltar `to` ou `from`, é lançado um `MailIncompleteError` (código `MAIL_INCOMPLETE`).
+If `to` or `from` is missing, a `MailIncompleteError` is thrown (code `MAIL_INCOMPLETE`).
 
-### Remetente por tenant (multi-inquilino)
+### Sender per tenant (multi-tenant)
 
-Numa aplicação SaaS multi-tenant (vários clientes na mesma aplicação), cada cliente pode querer o seu próprio remetente. A opção `from` aceita uma função, avaliada em cada envio. O helper `tenantFrom` lê `ctx().tenant.mailFrom` do contexto do pedido:
+In a multi-tenant SaaS application (several customers on the same application), each customer may want its own sender. The `from` option accepts a function, evaluated on each send. The `tenantFrom` helper reads `ctx().tenant.mailFrom` from the request context:
 
 ```ts
 import { mailerPlugin, tenantFrom } from '@machize/mailer'
 
-mailerPlugin({ driver: 'smtp', smtp: { url: process.env.SMTP_URL! }, from: tenantFrom('fallback@aminhaapp.com') })
+mailerPlugin({ driver: 'smtp', smtp: { url: process.env.SMTP_URL! }, from: tenantFrom('fallback@myapp.com') })
 ```
 
-Dentro de um pedido cujo contexto tenha `tenant.mailFrom`, esse endereço é usado; fora disso, usa-se o fallback.
+Inside a request whose context has `tenant.mailFrom`, that address is used; otherwise, the fallback is used.
 
-### Enviar em segundo plano (fila)
+### Sending in the background (queue)
 
-Por omissão, `send()` envia imediatamente (bloqueia até o driver terminar). Com `useQueue`, o `send()` passa a entregar a mensagem já renderizada a um despachante — tipicamente um job de `@machize/queue` — e o worker chama `deliver()`:
+By default, `send()` sends immediately (blocks until the driver finishes). With `useQueue`, `send()` instead delivers the already-rendered message to a dispatcher — typically a `@machize/queue` job — and the worker calls `deliver()`:
 
 ```ts
 import { defineJob } from '@machize/queue'
@@ -136,9 +136,9 @@ const SendMail = defineJob({ name: 'mailer.send', handle: (m: ResolvedMail) => m
 mailer.useQueue((m) => SendMail.dispatch(m))
 ```
 
-### Testar sem enviar nada
+### Testing without sending anything
 
-O `MemoryMailDriver` guarda tudo o que "enviaste":
+`MemoryMailDriver` stores everything you "sent":
 
 ```ts
 import { Mailer, MemoryMailDriver } from '@machize/mailer'
@@ -149,22 +149,22 @@ const mailer = new Mailer(driver, { from: 'noreply@test.dev' })
 await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com' })
 
 console.log(driver.sent.length)            // 1
-console.log(driver.ofMail('welcome')[0])   // a mensagem resolvida
+console.log(driver.ofMail('welcome')[0])   // the resolved message
 ```
 
-## Referência da API
+## API reference
 
 ### `defineMail<T>(definition): MailDefinition<T>`
 
-Cria uma definição de email tipada. Campos de `MailDefinition<T>`:
+Creates a typed email definition. `MailDefinition<T>` fields:
 
-| Campo | Tipo | Obrigatório? | Descrição |
+| Field | Type | Required? | Description |
 |---|---|---|---|
-| `name` | `string` | Sim | Identificador único do email |
-| `schema` | `MailSchema<T>` | Não | Schema com `safeParse` (compatível com Zod) para validar os dados |
-| `subject` | `(data: T) => string` | Sim | Gera o assunto |
-| `text` | `(data: T) => string` | Não | Gera o corpo em texto simples |
-| `html` | `(data: T) => string` | Não | Gera o corpo em HTML |
+| `name` | `string` | Yes | Unique identifier for the email |
+| `schema` | `MailSchema<T>` | No | Schema with `safeParse` (compatible with Zod) to validate the data |
+| `subject` | `(data: T) => string` | Yes | Generates the subject |
+| `text` | `(data: T) => string` | No | Generates the plain-text body |
+| `html` | `(data: T) => string` | No | Generates the HTML body |
 
 ### `class Mailer`
 
@@ -172,68 +172,68 @@ Cria uma definição de email tipada. Campos de `MailDefinition<T>`:
 
 `MailerOptions`:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `from` | `string \| (() => string \| undefined)` | Não | — | Remetente por omissão; a função é avaliada em cada envio |
-| `replyTo` | `string` | Não | — | Endereço de resposta por omissão |
+| `from` | `string \| (() => string \| undefined)` | No | — | Default sender; the function is evaluated on each send |
+| `replyTo` | `string` | No | — | Default reply-to address |
 
-Métodos:
+Methods:
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `send` | `send(mail, data?, envelope) => Promise<void>` | Valida, renderiza e envia (ou coloca na fila). Com emails sem dados, o segundo argumento é logo o envelope |
-| `deliver` | `deliver(message: ResolvedMail) => Promise<void>` | Envia uma mensagem já resolvida diretamente pelo driver (usado por workers de fila) |
-| `resolve` | `resolve(mail, data, envelope) => ResolvedMail` | Renderiza sem enviar (testes/pré-visualização) |
-| `useQueue` | `useQueue(dispatch) => this` | Redireciona `send()` para um despachante (fila) |
+| `send` | `send(mail, data?, envelope) => Promise<void>` | Validates, renders, and sends (or queues). For emails without data, the second argument is directly the envelope |
+| `deliver` | `deliver(message: ResolvedMail) => Promise<void>` | Sends an already-resolved message directly through the driver (used by queue workers) |
+| `resolve` | `resolve(mail, data, envelope) => ResolvedMail` | Renders without sending (tests/preview) |
+| `useQueue` | `useQueue(dispatch) => this` | Redirects `send()` to a dispatcher (queue) |
 
 ### `mailerPlugin(options?: MailerPluginOptions)`
 
-Regista um `Mailer` singleton no contentor sob o token `MAILER`. `MailerPluginOptions` estende `MailerOptions` com:
+Registers a singleton `Mailer` in the container under the token `MAILER`. `MailerPluginOptions` extends `MailerOptions` with:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `driver` | `'smtp' \| 'log' \| 'memory'` | Não | `'log'` | Driver de envio |
-| `smtp` | `SmtpDriverOptions` | Sim, se `driver: 'smtp'` | — | `{ url: 'smtp(s)://user:pass@host:porta' }` |
-| `sink` | `(line: string) => void` | Não | `console.log` | Destino das linhas do driver `log` |
+| `driver` | `'smtp' \| 'log' \| 'memory'` | No | `'log'` | Sending driver |
+| `smtp` | `SmtpDriverOptions` | Yes, if `driver: 'smtp'` | — | `{ url: 'smtp(s)://user:pass@host:port' }` |
+| `sink` | `(line: string) => void` | No | `console.log` | Destination for the `log` driver's lines |
 
 ### Drivers
 
-Todos implementam `MailDriver` (`name`, `send(message)`, `disconnect()`):
+All implement `MailDriver` (`name`, `send(message)`, `disconnect()`):
 
-| Driver | Uso | Notas |
+| Driver | Use | Notes |
 |---|---|---|
-| `SmtpMailDriver` | Produção | `new SmtpMailDriver({ url })`, envia via nodemailer |
-| `LogMailDriver` | Desenvolvimento | `new LogMailDriver(sink?)`, imprime a mensagem |
-| `MemoryMailDriver` | Testes | Propriedade `sent: ResolvedMail[]` e método `ofMail(name)` |
+| `SmtpMailDriver` | Production | `new SmtpMailDriver({ url })`, sends via nodemailer |
+| `LogMailDriver` | Development | `new LogMailDriver(sink?)`, prints the message |
+| `MemoryMailDriver` | Testing | `sent: ResolvedMail[]` property and `ofMail(name)` method |
 
-### Outros exports
+### Other exports
 
-| Export | Tipo | Descrição |
+| Export | Type | Description |
 |---|---|---|
-| `MAILER` | token | Chave do `Mailer` no contentor |
-| `tenantFrom(fallback?)` | função | Remetente dinâmico que lê `ctx().tenant.mailFrom` |
-| `Envelope` | tipo | `{ to, from?, cc?, bcc?, replyTo? }` |
-| `ResolvedMail` | tipo | Mensagem final: `{ mail, to[], from, cc[], bcc[], replyTo?, subject, text?, html? }` |
-| `MailValidationError` | erro | Código `MAIL_INVALID` — dados não passam no schema |
-| `MailIncompleteError` | erro | Código `MAIL_INCOMPLETE` — falta `to` ou `from` |
-| `MailSchema<T>` | tipo (Avançado) | Contrato estrutural de schema (`safeParse`) |
-| `MailDriver` | tipo (Avançado) | Contrato para escrever o teu próprio driver |
+| `MAILER` | token | Key for the `Mailer` in the container |
+| `tenantFrom(fallback?)` | function | Dynamic sender that reads `ctx().tenant.mailFrom` |
+| `Envelope` | type | `{ to, from?, cc?, bcc?, replyTo? }` |
+| `ResolvedMail` | type | Final message: `{ mail, to[], from, cc[], bcc[], replyTo?, subject, text?, html? }` |
+| `MailValidationError` | error | Code `MAIL_INVALID` — data doesn't pass the schema |
+| `MailIncompleteError` | error | Code `MAIL_INCOMPLETE` — missing `to` or `from` |
+| `MailSchema<T>` | type (Advanced) | Structural schema contract (`safeParse`) |
+| `MailDriver` | type (Advanced) | Contract for writing your own driver |
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"Mail has no sender" (`MAIL_INCOMPLETE`)** — Não configuraste `from` no `mailerPlugin`/`Mailer` nem o passaste no envelope. Define um remetente por omissão.
+**"Mail has no sender" (`MAIL_INCOMPLETE`)** — You didn't configure `from` in `mailerPlugin`/`Mailer`, nor pass it in the envelope. Set a default sender.
 
-**"Mail has no recipient" (`MAIL_INCOMPLETE`)** — O `to` do envelope está vazio (`[]`) ou em falta. Passa pelo menos um endereço.
+**"Mail has no recipient" (`MAIL_INCOMPLETE`)** — The envelope's `to` is empty (`[]`) or missing. Pass at least one address.
 
-**`MailValidationError` (`MAIL_INVALID`)** — Os dados passados ao `send()` não correspondem ao `schema` do email (ex.: número onde era esperado texto). O erro inclui os `issues` do Zod a indicar o campo errado.
+**`MailValidationError` (`MAIL_INVALID`)** — The data passed to `send()` doesn't match the email's `schema` (e.g. a number where text was expected). The error includes the Zod `issues` pointing to the offending field.
 
-**Os emails não chegam em desenvolvimento** — Provavelmente estás com o driver `log` (o predefinido), que só imprime na consola. É intencional; usa `driver: 'smtp'` para envio real.
+**Emails aren't arriving in development** — You're probably on the `log` driver (the default), which only prints to the console. This is intentional; use `driver: 'smtp'` for real sending.
 
-**Configurei `useQueue` e nada é enviado** — Com fila ativa, `send()` só entrega ao despachante; é o worker que tem de chamar `mailer.deliver(mensagem)`.
+**I set up `useQueue` and nothing gets sent** — With the queue active, `send()` only delivers to the dispatcher; it's the worker that has to call `mailer.deliver(message)`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **@machize/core** — fornece `createApp`, o contentor de dependências onde o `MAILER` fica registado e o contexto (`ctx`) usado por `tenantFrom`.
-- **@machize/notifications** — quando o mailer está registado, o plugin de notificações cria automaticamente o canal `mail`, que envia emails através deste módulo (herdando fila e remetente por tenant).
-- **@machize/queue** — combina com `useQueue` para enviar emails em segundo plano com retries.
-- **@machize/subscriptions** — os hooks de faturação (ex.: `billing:trial_expired`) são um ponto natural para disparar emails definidos aqui.
+- **@machize/core** — provides `createApp`, the dependency container where `MAILER` is registered, and the context (`ctx`) used by `tenantFrom`.
+- **@machize/notifications** — when the mailer is registered, the notifications plugin automatically creates the `mail` channel, which sends emails through this module (inheriting queueing and per-tenant sender).
+- **@machize/queue** — combine with `useQueue` to send emails in the background with retries.
+- **@machize/subscriptions** — billing hooks (e.g. `billing:trial_expired`) are a natural place to trigger emails defined here.

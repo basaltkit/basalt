@@ -1,26 +1,26 @@
 # @machize/generator
 
-Gerador de código ("scaffolding") para aplicações Machize: os comandos `mach make:*` criam por ti todos os ficheiros de um recurso — schema, repositório, serviço, plugin, rotas HTTP e teste — já interligados e a compilar. Precisas dele sempre que fores adicionar uma nova "entidade" à aplicação (Projetos, Clientes, Faturas…) e não quiseres escrever o mesmo esqueleto à mão.
+Code generator ("scaffolding") for Machize applications: the `mach make:*` commands create all the files for a resource for you — schema, repository, service, plugin, HTTP routes, and test — already wired together and compiling. You need this whenever you're adding a new "entity" to the application (Projects, Customers, Invoices…) and don't want to write the same skeleton by hand.
 
-## O que este módulo resolve
+## What this module solves
 
-**Scaffolding** (ou "gerar andaimes") é a prática de criar automaticamente os ficheiros repetitivos de uma funcionalidade nova. Numa aplicação bem organizada, cada recurso (por exemplo "Project") costuma precisar sempre das mesmas peças: um **schema** (a descrição validada dos dados, feita com Zod), um **repositório** (a camada que guarda e lê os dados), um **serviço** (a lógica de negócio), um **plugin** (que regista tudo no contentor de dependências), as **rotas HTTP** (os endpoints REST) e um **teste**.
+**Scaffolding** is the practice of automatically creating the repetitive files for a new feature. In a well-organized application, each resource (e.g. "Project") usually needs the same set of pieces every time: a **schema** (the validated description of the data, built with Zod), a **repository** (the layer that stores and reads the data), a **service** (the business logic), a **plugin** (which registers everything in the dependency container), **HTTP routes** (the REST endpoints), and a **test**.
 
-Escrever estas seis peças à mão para cada recurso é lento e propenso a erros de nomes — basta trocar `blogPost` por `blogpost` num sítio e nada compila. O gerador deriva todas as variações do nome de uma só vez (`BlogPost`, `blogPost`, `blog-post`, `blog-posts`, `BLOG_POST`) e usa-as de forma consistente em todos os ficheiros.
+Writing these six pieces by hand for every resource is slow and prone to naming mistakes — swap `blogPost` for `blogpost` in one spot and nothing compiles. The generator derives all the name variations at once (`BlogPost`, `blogPost`, `blog-post`, `blog-posts`, `BLOG_POST`) and uses them consistently across all files.
 
-Além de gerar os ficheiros, o `make:resource` ainda liga o recurso novo ao `src/app.ts` automaticamente (importa o plugin e as rotas e insere-os nos sítios certos) e, com `--prisma`, gera um repositório ligado à base de dados via Prisma em vez da versão em memória.
+Besides generating the files, `make:resource` also wires the new resource into `src/app.ts` automatically (imports the plugin and routes and inserts them in the right places) and, with `--prisma`, generates a repository connected to the database via Prisma instead of the in-memory version.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/generator
 ```
 
-> Nota: depende de `@machize/cli` (o framework de comandos `mach`). O código gerado usa `@machize/core`, `@machize/fastify`, `zod` e — nos testes gerados — `@machize/testing`, por isso convém tê-los no projeto. Se criaste o projeto com `create-machize --cli`, está tudo pronto.
+> Note: depends on `@machize/cli` (the `mach` command framework). The generated code uses `@machize/core`, `@machize/fastify`, `zod`, and — in the generated tests — `@machize/testing`, so it's worth having them in the project. If you created the project with `create-machize --cli`, everything is already set up.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. Garante que a tua aplicação regista os comandos do gerador. Em `src/app.ts`:
+1. Make sure your application registers the generator's commands. In `src/app.ts`:
 
 ```typescript
 import { createApp } from '@machize/core'
@@ -39,15 +39,15 @@ export function buildApp() {
 }
 ```
 
-2. Garante que tens o executável `mach` (criado automaticamente pelo `create-machize --cli`; ver o README do `@machize/cli` se não tiveres).
+2. Make sure you have the `mach` executable (created automatically by `create-machize --cli`; see the `@machize/cli` README if you don't have it).
 
-3. Gera um recurso completo:
+3. Generate a complete resource:
 
 ```bash
 pnpm mach make:resource Project
 ```
 
-4. Vê o que foi criado:
+4. See what was created:
 
 ```
 Generated 6 file(s):
@@ -60,55 +60,55 @@ Generated 6 file(s):
 Wired the plugin + routes into src/app.ts.
 ```
 
-5. Corre os testes e experimenta os endpoints:
+5. Run the tests and try out the endpoints:
 
 ```bash
-pnpm test          # o teste gerado cobre criar/listar/obter/atualizar/apagar
+pnpm test          # the generated test covers create/list/get/update/delete
 pnpm dev           # GET/POST /projects, GET/PATCH/DELETE /projects/:id
 ```
 
-## Guia de utilização
+## Usage guide
 
-### `mach make:resource <Nome>` — o recurso completo
+### `mach make:resource <Name>` — the complete resource
 
-Gera a "vertical" inteira: schema → repositório → serviço → plugin → rotas → teste. Por omissão, o repositório é **em memória** (os dados perdem-se ao reiniciar — ótimo para começar) e o recurso é ligado ao `src/app.ts` automaticamente.
+Generates the entire "vertical slice": schema → repository → service → plugin → routes → test. By default, the repository is **in-memory** (data is lost on restart — great for getting started) and the resource is automatically wired into `src/app.ts`.
 
 ```bash
 pnpm mach make:resource BlogPost
 ```
 
-O nome pode vir em qualquer formato — `BlogPost`, `blog-post`, `blog post` — o gerador normaliza. Os endpoints usam o plural em kebab-case: `/blog-posts`.
+The name can be given in any format — `BlogPost`, `blog-post`, `blog post` — the generator normalizes it. Endpoints use the plural in kebab-case: `/blog-posts`.
 
-Opções (comuns a todos os comandos `make:*`, salvo indicação):
+Options (common to all `make:*` commands, unless noted):
 
-| Flag | O que faz |
+| Flag | What it does |
 | --- | --- |
-| `--dir=<caminho>` | Raiz do projeto onde escrever (default: diretório atual) |
-| `--force` | Substitui ficheiros existentes em vez de recusar |
-| `--prisma` | Gera um repositório ligado ao Prisma + um modelo para o `schema.prisma` |
-| `--no-register` | (só `make:resource`) Não mexe no `src/app.ts` |
+| `--dir=<path>` | Project root to write to (default: current directory) |
+| `--force` | Overwrites existing files instead of refusing |
+| `--prisma` | Generates a repository connected to Prisma + a model for `schema.prisma` |
+| `--no-register` | (only `make:resource`) Doesn't touch `src/app.ts` |
 
-### `--prisma` — persistência real com base de dados
+### `--prisma` — real persistence with a database
 
 ```bash
 pnpm mach make:resource BlogPost --prisma
 ```
 
-Em vez do repositório em memória, gera `PrismaBlogPostRepository` (que usa `db()` de `@machize/prisma`) e um ficheiro extra `src/modules/blog-post/blog-post.prisma` com o bloco de modelo para copiares para o teu `schema.prisma`. Depois corre `prisma migrate dev`.
+Instead of the in-memory repository, generates `PrismaBlogPostRepository` (which uses `db()` from `@machize/prisma`) and an extra file `src/modules/blog-post/blog-post.prisma` with the model block to copy into your `schema.prisma`. Then run `prisma migrate dev`.
 
-### Ligação automática ao `src/app.ts`
+### Automatic wiring into `src/app.ts`
 
-Depois de escrever os ficheiros, o `make:resource` tenta:
+After writing the files, `make:resource` tries to:
 
-1. adicionar os `import` do plugin e das rotas a seguir ao último import;
-2. inserir `blogPostPlugin,` imediatamente antes de `fastifyPlugin(`;
-3. espalhar `...blogPostRoutes, ` no início do array `fastifyPlugin({ routes: [...] })`.
+1. add the plugin and routes `import`s after the last import;
+2. insert `blogPostPlugin,` immediately before `fastifyPlugin(`;
+3. spread `...blogPostRoutes, ` at the start of the `fastifyPlugin({ routes: [...] })` array.
 
-É **idempotente** (correr duas vezes não duplica nada) e **tudo-ou-nada**: se o `src/app.ts` não existir, já estiver ligado, ou não tiver a forma `fastifyPlugin({ routes: [...] })`, não altera nada e explica porquê — nesse caso fazes a ligação à mão.
+It is **idempotent** (running it twice doesn't duplicate anything) and **all-or-nothing**: if `src/app.ts` doesn't exist, is already wired, or doesn't have the shape `fastifyPlugin({ routes: [...] })`, it changes nothing and explains why — in that case, wire it up by hand.
 
-### Gerar apenas uma peça: `make:schema`, `make:repository`, …
+### Generating just one piece: `make:schema`, `make:repository`, …
 
-Cada tipo de artefacto tem o seu comando:
+Each artifact type has its own command:
 
 ```bash
 pnpm mach make:schema Invoice        # src/modules/invoice/invoice.schema.ts
@@ -119,126 +119,126 @@ pnpm mach make:routes Invoice        # src/modules/invoice/invoice.routes.ts
 pnpm mach make:test Invoice          # tests/invoice.test.ts
 ```
 
-Sem nome, qualquer comando imprime a utilização e devolve o código 1:
+Without a name, any command prints usage and returns exit code 1:
 
 ```
 Usage: mach make:resource <Name> [--dir=<path>] [--force] [--prisma]
 ```
 
-### Usar o gerador como biblioteca (Avançado)
+### Using the generator as a library (Advanced)
 
-Podes gerar ficheiros por programa, sem passar pela CLI:
+You can generate files programmatically, without going through the CLI:
 
 ```typescript
 import { generateResource, writeGenerated, registerResourceInApp } from '@machize/generator'
 
 const files = generateResource('BlogPost', { prisma: false })
-const written = await writeGenerated(files, { baseDir: '/caminho/do/projeto' })
-console.log(written) // caminhos relativos, ordenados
+const written = await writeGenerated(files, { baseDir: '/path/to/project' })
+console.log(written) // relative paths, sorted
 
-const result = await registerResourceInApp('BlogPost', { baseDir: '/caminho/do/projeto' })
-console.log(result.registered) // true se ligou ao src/app.ts
+const result = await registerResourceInApp('BlogPost', { baseDir: '/path/to/project' })
+console.log(result.registered) // true if it wired into src/app.ts
 ```
 
-## Referência da API
+## API reference
 
-Exportado a partir de `@machize/generator`:
+Exported from `@machize/generator`:
 
 ### `names(input: string): Names`
 
-Deriva todas as variações de um nome. Lança `Error` se não conseguir extrair palavras do input.
+Derives all variations of a name. Throws `Error` if it can't extract words from the input.
 
-| Campo de `Names` | Exemplo (`blog-post`) | Uso |
+| `Names` field | Example (`blog-post`) | Used for |
 | --- | --- | --- |
-| `raw` | `blog-post` | Input original |
-| `pascal` | `BlogPost` | Nomes de classes e tipos |
-| `camel` | `blogPost` | Variáveis e identificadores |
-| `kebab` | `blog-post` | Nomes de ficheiros e pastas |
-| `pluralKebab` | `blog-posts` | Caminhos das rotas |
-| `constant` | `BLOG_POST` | Tokens e códigos de erro |
+| `raw` | `blog-post` | Original input |
+| `pascal` | `BlogPost` | Class and type names |
+| `camel` | `blogPost` | Variables and identifiers |
+| `kebab` | `blog-post` | File and folder names |
+| `pluralKebab` | `blog-posts` | Route paths |
+| `constant` | `BLOG_POST` | Tokens and error codes |
 
-A pluralização é inglesa e simplificada (`company` → `companies`, `box` → `boxes`, resto → `+s`).
+Pluralization is English and simplified (`company` → `companies`, `box` → `boxes`, otherwise → `+s`).
 
 ### `generate(kind, name, options?): GeneratedFile`
 
-Gera **um** artefacto. `kind` é um `GeneratorKind`: `'schema' | 'repository' | 'service' | 'plugin' | 'routes' | 'test'`.
+Generates **one** artifact. `kind` is a `GeneratorKind`: `'schema' | 'repository' | 'service' | 'plugin' | 'routes' | 'test'`.
 
 ### `generateResource(name, options?): GeneratedFile[]`
 
-Gera a vertical completa. Com `options.prisma: true` acrescenta o ficheiro `.prisma` e troca o repositório para a versão Prisma.
+Generates the complete vertical slice. With `options.prisma: true`, adds the `.prisma` file and swaps the repository for the Prisma version.
 
 `GeneratorOptions`:
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `prisma` | `boolean` | Não | `false` | Repositório Prisma (+ modelo `schema.prisma`) em vez de em memória |
+| `prisma` | `boolean` | No | `false` | Prisma repository (+ `schema.prisma` model) instead of in-memory |
 
-`GeneratedFile`: `{ path: string; content: string }` — o caminho é relativo à raiz do projeto.
+`GeneratedFile`: `{ path: string; content: string }` — the path is relative to the project root.
 
 ### `writeGenerated(files, options?): Promise<string[]>`
 
-Escreve os ficheiros no disco (cria as pastas necessárias). Devolve os caminhos escritos, ordenados. Se algum ficheiro já existir e `force` for falso, lança `FileExistsError` **antes** de escrever qualquer coisa.
+Writes the files to disk (creates the necessary folders). Returns the written paths, sorted. If any file already exists and `force` is false, throws `FileExistsError` **before** writing anything.
 
 `WriteOptions`:
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `baseDir` | `string` | Não | `process.cwd()` | Raiz do projeto contra a qual os caminhos são resolvidos |
-| `force` | `boolean` | Não | `false` | Substituir ficheiros existentes |
+| `baseDir` | `string` | No | `process.cwd()` | Project root paths are resolved against |
+| `force` | `boolean` | No | `false` | Overwrite existing files |
 
 ### `registerResourceInApp(name, options?): Promise<AppRegistration>`
 
-Liga um recurso gerado ao `src/app.ts` (imports + plugin + spread das rotas). Nunca lança por causa da forma do ficheiro — reporta o motivo.
+Wires a generated resource into `src/app.ts` (imports + plugin + routes spread). Never throws because of the file's shape — it reports the reason instead.
 
 `AppRegistration`:
 
-| Campo | Tipo | Descrição |
+| Field | Type | Description |
 | --- | --- | --- |
-| `registered` | `boolean` | `true` se alterou o ficheiro |
-| `reason` | `string?` | Quando não regista: `'src/app.ts not found'`, `'already registered'` ou `'app.ts does not use fastifyPlugin({ routes: [...] })'` |
-| `appPath` | `string` | Caminho absoluto do `src/app.ts` considerado |
+| `registered` | `boolean` | `true` if it changed the file |
+| `reason` | `string?` | When not registered: `'src/app.ts not found'`, `'already registered'`, or `'app.ts does not use fastifyPlugin({ routes: [...] })'` |
+| `appPath` | `string` | Absolute path of the `src/app.ts` considered |
 
 ### `generatorCommands(): CommandDefinition[]`
 
-Devolve os comandos `make:resource` e `make:<kind>` (um por cada `GeneratorKind`) prontos a registar com `commandsPlugin` de `@machize/cli`.
+Returns the `make:resource` and `make:<kind>` commands (one per `GeneratorKind`) ready to register with `commandsPlugin` from `@machize/cli`.
 
-### `GENERATORS` (Avançado)
+### `GENERATORS` (Advanced)
 
-Mapa `kind → função geradora` (`{ schema, repository, service, plugin, routes, test }`). `GeneratorKind` é `keyof typeof GENERATORS`.
+Map of `kind → generator function` (`{ schema, repository, service, plugin, routes, test }`). `GeneratorKind` is `keyof typeof GENERATORS`.
 
 ### `FileExistsError`
 
-Erro lançado por `writeGenerated` quando há conflitos sem `force`. Tem a propriedade `paths: string[]` com os ficheiros em conflito.
+Error thrown by `writeGenerated` when there are conflicts without `force`. Has a `paths: string[]` property with the conflicting files.
 
-### Tipos exportados
+### Exported types
 
-`Names`, `GeneratedFile`, `GeneratorKind`, `GeneratorOptions`, `WriteOptions`, `AppRegistration` — descritos acima.
+`Names`, `GeneratedFile`, `GeneratorKind`, `GeneratorOptions`, `WriteOptions`, `AppRegistration` — described above.
 
-## Erros comuns e soluções (FAQ)
+## Common issues and solutions (FAQ)
 
 **`Refusing to overwrite existing files (use force to replace): …`**
-O gerador nunca substitui ficheiros por omissão. Se queres mesmo regenerar, acrescenta `--force` (na CLI) ou `{ force: true }` (na API). Atenção: perdes as alterações manuais nesses ficheiros.
+The generator never overwrites files by default. If you really want to regenerate, add `--force` (in the CLI) or `{ force: true }` (in the API). Warning: you'll lose manual changes to those files.
 
 **`Could not auto-wire src/app.ts (app.ts does not use fastifyPlugin({ routes: [...] })).`**
-A ligação automática só reconhece a forma `fastifyPlugin({ routes: [...] })` em `src/app.ts`. Se reorganizaste o ficheiro, faz a ligação à mão: importa `<nome>Plugin` e `<nome>Routes` do módulo gerado, adiciona o plugin à lista `plugins` e espalha as rotas (`...<nome>Routes`) no array `routes`.
+Automatic wiring only recognizes the `fastifyPlugin({ routes: [...] })` shape in `src/app.ts`. If you reorganized the file, wire it up by hand: import `<name>Plugin` and `<name>Routes` from the generated module, add the plugin to the `plugins` list, and spread the routes (`...<name>Routes`) into the `routes` array.
 
-**Gerei com `--prisma` mas dá erro `blogPost` não existe no PrismaClient.**
-O repositório Prisma assume um modelo com o nome PascalCase (`model BlogPost`) no teu `schema.prisma`. Copia o conteúdo do ficheiro `.prisma` gerado para o `schema.prisma`, corre `prisma migrate dev` e volta a gerar o cliente Prisma.
+**I generated with `--prisma` but get an error that `blogPost` doesn't exist on PrismaClient.**
+The Prisma repository assumes a model with the PascalCase name (`model BlogPost`) in your `schema.prisma`. Copy the generated `.prisma` file's contents into `schema.prisma`, run `prisma migrate dev`, and regenerate the Prisma client.
 
-**Os dados desaparecem quando reinicio o servidor.**
-É o comportamento esperado do repositório em memória (o default). Para persistência real, gera com `--prisma` ou implementa tu a interface `<Nome>Repository` e regista-a no plugin.
+**Data disappears when I restart the server.**
+This is the expected behavior of the in-memory repository (the default). For real persistence, generate with `--prisma` or implement the `<Name>Repository` interface yourself and register it in the plugin.
 
-**`Usage: mach make:resource <Name> …` e código de saída 1.**
-Faltou o nome do recurso: `pnpm mach make:resource Project`.
+**`Usage: mach make:resource <Name> …` and exit code 1.**
+The resource name is missing: `pnpm mach make:resource Project`.
 
-**Corri `make:resource` duas vezes e o `app.ts` não mudou à segunda.**
-Correto — a ligação é idempotente. A mensagem `Already wired into src/app.ts — left it as is.` confirma que nada foi duplicado.
+**I ran `make:resource` twice and `app.ts` didn't change the second time.**
+Correct — wiring is idempotent. The message `Already wired into src/app.ts — left it as is.` confirms nothing was duplicated.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/cli`** — dependência direta: `generatorCommands()` devolve `CommandDefinition[]` para registares com `commandsPlugin`; é o que faz os `make:*` aparecerem no `mach`.
-- **`@machize/core`** — o código gerado usa `createToken`, `definePlugin` e `ctx` do núcleo do framework.
-- **`@machize/fastify`** — as rotas geradas usam `route(...)` e `HttpError`; a ligação automática procura `fastifyPlugin({ routes: [...] })` no `app.ts`.
-- **`@machize/prisma`** — com `--prisma`, o repositório gerado usa `db()` deste pacote.
-- **`@machize/testing`** — o teste gerado usa `createTestApp` para exercitar o CRUD completo.
-- **`create-machize`** — com `--cli`, o projeto novo já vem com `@machize/generator` instalado e os comandos registados.
+- **`@machize/cli`** — direct dependency: `generatorCommands()` returns `CommandDefinition[]` to register with `commandsPlugin`; this is what makes `make:*` appear in `mach`.
+- **`@machize/core`** — the generated code uses `createToken`, `definePlugin`, and `ctx` from the framework core.
+- **`@machize/fastify`** — generated routes use `route(...)` and `HttpError`; automatic wiring looks for `fastifyPlugin({ routes: [...] })` in `app.ts`.
+- **`@machize/prisma`** — with `--prisma`, the generated repository uses `db()` from this package.
+- **`@machize/testing`** — the generated test uses `createTestApp` to exercise the full CRUD.
+- **`create-machize`** — with `--cli`, the new project already comes with `@machize/generator` installed and the commands registered.

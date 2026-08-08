@@ -1,30 +1,30 @@
 # @machize/audit
 
-Trilho de auditoria (audit trail) para aplicações Machize: regista automaticamente, num histórico imutável, quem fez o quê e quando — a partir dos hooks do ciclo de vida, dos eventos de domínio e de registos manuais.
+Audit trail for Machize applications: automatically records, in an immutable history, who did what and when — from lifecycle hooks, domain events, and manual records.
 
-Precisas deste módulo quando tens de conseguir responder a perguntas como "quem entrou nesta conta?", "quem alterou este plano de faturação?" — por razões de segurança, suporte ou conformidade legal (compliance).
+You need this module when you have to be able to answer questions like "who logged into this account?" or "who changed this billing plan?" — for security, support, or compliance reasons.
 
 ---
 
-## O que este módulo resolve
+## What this module solves
 
-**Auditoria** é o registo sistemático de ações relevantes num sistema: logins, alterações de faturação, mudanças de permissões. Ao contrário dos logs técnicos (que são para programadores e podem ser apagados), o trilho de auditoria é um registo de negócio: **append-only** (só se acrescenta, nunca se altera nem apaga) e enriquecido com o **ator** (quem fez), o **tenant** (a que organização pertence) e o **pedido** (requestId) — tudo capturado automaticamente do contexto ativo no momento do registo.
+**Auditing** is the systematic recording of relevant actions in a system: logins, billing changes, permission changes. Unlike technical logs (which are for developers and can be deleted), the audit trail is a business record: **append-only** (only added to, never altered or deleted) and enriched with the **actor** (who did it), the **tenant** (which organization it belongs to), and the **request** (requestId) — all captured automatically from the active context at record time.
 
-A parte trabalhosa da auditoria é lembrarmo-nos de registar em todo o lado. Este módulo resolve isso ligando-se ao que a aplicação já emite: os **hooks** de ciclo de vida do `@machize/core` (ex.: `auth:login`, `billing:subscribed`) e os **eventos de domínio** do `@machize/events` (ex.: `order.created`). Escolhes com padrões wildcard o que fica registado — por omissão, toda a atividade de `auth`, `billing`, `tenancy` e `permission` (hooks) e **todos** os eventos.
+The tedious part of auditing is remembering to record everywhere. This module solves that by hooking into what the application already emits: the `@machize/core` lifecycle **hooks** (e.g. `auth:login`, `billing:subscribed`) and the `@machize/events` **domain events** (e.g. `order.created`). You choose what gets recorded using wildcard patterns — by default, all `auth`, `billing`, `tenancy`, and `permission` activity (hooks) and **all** events.
 
-Cada entrada é congelada (`Object.freeze`) — nem por engano o código consegue adulterar o histórico em memória. Para consultar, usas `audit.trail()` com filtros por evento (com wildcards), tenant, ator e data.
+Each entry is frozen (`Object.freeze`) — code can't tamper with the in-memory history, even by accident. To query, use `audit.trail()` with filters on event (with wildcards), tenant, actor, and date.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/audit
 ```
 
-Depende de `@machize/core` e `@machize/events`. O armazenamento por omissão é em memória (`MemoryAuditStore`) — para produção deves fornecer um `AuditStore` persistente (ver "Store personalizado").
+Depends on `@machize/core` and `@machize/events`. The default storage is in-memory (`MemoryAuditStore`) — for production you should provide a persistent `AuditStore` (see "Custom store").
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-**1. Regista o plugin (junto com o de eventos, se o usares):**
+**1. Register the plugin (along with the events plugin, if you use it):**
 
 ```ts
 import { createApp } from '@machize/core'
@@ -36,14 +36,14 @@ const app = await createApp({
 }).boot()
 ```
 
-**2. A partir daqui, os hooks e eventos relevantes ficam registados sozinhos.** Por exemplo, quando o módulo de autenticação emite o hook `auth:login`, nasce uma entrada de auditoria com o ator e o tenant do contexto.
+**2. From here on, relevant hooks and events get recorded on their own.** For example, when the auth module emits the `auth:login` hook, an audit entry is created with the actor and tenant from context.
 
-**3. Consulta o trilho:**
+**3. Query the trail:**
 
 ```ts
 const audit = app.container.get(AUDIT)
 
-const trail = await audit.trail()               // tudo, mais recente primeiro
+const trail = await audit.trail()               // everything, most recent first
 const logins = await audit.trail({ event: 'auth:**' })
 console.log(logins[0])
 // {
@@ -53,40 +53,40 @@ console.log(logins[0])
 // }
 ```
 
-**4. Regista manualmente o que os hooks não cobrem:**
+**4. Manually record what hooks don't cover:**
 
 ```ts
 await audit.record('data.export', { format: 'csv' })
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Captura automática de hooks
+### Automatic hook capture
 
-Por omissão são gravados os hooks que casem com `auth:**`, `billing:**`, `tenancy:**` ou `permission:**`. Podes trocar a lista:
+By default, hooks matching `auth:**`, `billing:**`, `tenancy:**`, or `permission:**` are recorded. You can replace the list:
 
 ```ts
 import { auditPlugin } from '@machize/audit'
 
 auditPlugin({
-  hooks: ['auth:**', 'billing:**', 'api-keys:**'], // substitui os defaults
+  hooks: ['auth:**', 'billing:**', 'api-keys:**'], // replaces the defaults
 })
 ```
 
-O enriquecimento vem do contexto ativo: `ctx().user.id` → `actorId`, `ctx().tenant.id` → `tenantId`, `ctx().requestId` → `requestId`.
+Enrichment comes from the active context: `ctx().user.id` → `actorId`, `ctx().tenant.id` → `tenantId`, `ctx().requestId` → `requestId`.
 
-### Captura automática de eventos de domínio
+### Automatic domain event capture
 
-Se o contentor tiver um `EventBus` (`@machize/events` registado), o plugin subscreve `**` e grava os eventos que casem com os padrões. Por omissão grava **tudo**; afina ou desliga:
+If the container has an `EventBus` (`@machize/events` registered), the plugin subscribes to `**` and records events that match the patterns. By default it records **everything**; you can narrow or disable it:
 
 ```ts
-auditPlugin({ events: ['order.**', 'invoice.**'] }) // só estes
-auditPlugin({ events: [] })                          // desliga a captura de eventos
+auditPlugin({ events: ['order.**', 'invoice.**'] }) // only these
+auditPlugin({ events: [] })                          // disable event capture
 ```
 
-### Registos manuais
+### Manual records
 
-Para ações que nenhum hook/evento cobre:
+For actions that no hook/event covers:
 
 ```ts
 import { runWithContext } from '@machize/core'
@@ -97,25 +97,25 @@ await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, async () =>
 })
 ```
 
-`record` devolve a entrada criada (já congelada).
+`record` returns the created entry (already frozen).
 
-### Consultar o trilho
+### Querying the trail
 
-`trail(query)` devolve as entradas **mais recentes primeiro**:
+`trail(query)` returns entries **most recent first**:
 
 ```ts
-await audit.trail({ event: 'auth:**' })         // wildcard sobre o nome
-await audit.trail({ tenantId: 'acme' })          // só de um tenant
-await audit.trail({ actorId: 'u1' })             // só de um utilizador
-await audit.trail({ since: Date.now() - 86_400_000 }) // últimas 24h
-await audit.trail({ limit: 50 })                 // no máximo 50
+await audit.trail({ event: 'auth:**' })         // wildcard over the name
+await audit.trail({ tenantId: 'acme' })          // only for one tenant
+await audit.trail({ actorId: 'u1' })             // only for one user
+await audit.trail({ since: Date.now() - 86_400_000 }) // last 24h
+await audit.trail({ limit: 50 })                 // at most 50
 ```
 
-Os padrões de evento suportam segmentos separados por `:` (hooks) ou `.` (eventos): `*` casa um segmento, `**` casa um ou mais. Ex.: `auth:*` casa `auth:login`; `order.**` casa `order.created` e `order.item.added`; `**` casa tudo.
+Event patterns support segments separated by `:` (hooks) or `.` (events): `*` matches one segment, `**` matches one or more. E.g.: `auth:*` matches `auth:login`; `order.**` matches `order.created` and `order.item.added`; `**` matches everything.
 
-### Store personalizado (produção)
+### Custom store (production)
 
-O `MemoryAuditStore` perde tudo quando o processo termina. Em produção implementa `AuditStore` sobre a tua base de dados — o contrato é append-only (sem update nem delete):
+`MemoryAuditStore` loses everything when the process ends. In production, implement `AuditStore` over your database — the contract is append-only (no update or delete):
 
 ```ts
 import type { AuditEntry, AuditQuery, AuditStore } from '@machize/audit'
@@ -123,10 +123,10 @@ import { auditPlugin } from '@machize/audit'
 
 class SqlAuditStore implements AuditStore {
   async append(entry: AuditEntry): Promise<void> {
-    // INSERT na tabela audit_entries…
+    // INSERT into the audit_entries table…
   }
   async query(query: AuditQuery): Promise<AuditEntry[]> {
-    // SELECT com filtros, ORDER BY at DESC, LIMIT…
+    // SELECT with filters, ORDER BY at DESC, LIMIT…
     return []
   }
 }
@@ -134,64 +134,64 @@ class SqlAuditStore implements AuditStore {
 auditPlugin({ store: new SqlAuditStore() })
 ```
 
-## Referência da API
+## API reference
 
 ### `auditPlugin(options?: AuditPluginOptions)`
 
-Regista um `Audit` (singleton, token `AUDIT`), liga-se a **todos** os hooks (`hooks.onAny`) filtrando pelos padrões, e no `boot` subscreve o `EventBus` (se existir no contentor) para gravar eventos.
+Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hooks.onAny`) filtering by the patterns, and on `boot` subscribes to the `EventBus` (if present in the container) to record events.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `store` | `AuditStore` | Não | `new MemoryAuditStore()` | Onde as entradas são guardadas. |
-| `hooks` | `string[]` | Não | `['auth:**', 'billing:**', 'tenancy:**', 'permission:**']` | Padrões de hooks gravados automaticamente (substitui os defaults). |
-| `events` | `string[]` | Não | `['**']` (tudo) | Padrões de eventos do EventBus gravados. `[]` desliga. |
+| `store` | `AuditStore` | No | `new MemoryAuditStore()` | Where entries are stored. |
+| `hooks` | `string[]` | No | `['auth:**', 'billing:**', 'tenancy:**', 'permission:**']` | Hook patterns recorded automatically (replaces the defaults). |
+| `events` | `string[]` | No | `['**']` (everything) | EventBus event patterns recorded. `[]` disables it. |
 
 ### `class Audit`
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `constructor` | `new Audit(store: AuditStore)` | Cria a fachada sobre um store. |
-| `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Entrada manual (`source: 'manual'`), enriquecida do contexto. Devolve a entrada. |
-| `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Consulta, mais recente primeiro. |
-| `capture` | `(source: 'hook' \| 'event', event, payload) => Promise<void>` | **Avançado/interno**: usado pelas escutas do plugin. |
+| `constructor` | `new Audit(store: AuditStore)` | Creates the facade over a store. |
+| `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. Returns the entry. |
+| `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Query, most recent first. |
+| `capture` | `(source: 'hook' \| 'event', event, payload) => Promise<void>` | **Advanced/internal**: used by the plugin's listeners. |
 
-### `interface AuditEntry` (todos os campos `readonly`)
+### `interface AuditEntry` (all fields `readonly`)
 
-| Campo | Tipo | Descrição |
+| Field | Type | Description |
 |---|---|---|
-| `id` | `string` | UUID gerado no registo. |
-| `source` | `'hook' \| 'event' \| 'manual'` | Origem da entrada. |
-| `event` | `string` | Nome do hook/evento/ação. |
-| `payload` | `unknown` | Dados associados. |
-| `actorId` | `string \| undefined` | `ctx().user.id` no momento do registo. |
-| `tenantId` | `string \| undefined` | `ctx().tenant.id` no momento do registo. |
+| `id` | `string` | UUID generated at record time. |
+| `source` | `'hook' \| 'event' \| 'manual'` | Origin of the entry. |
+| `event` | `string` | Name of the hook/event/action. |
+| `payload` | `unknown` | Associated data. |
+| `actorId` | `string \| undefined` | `ctx().user.id` at record time. |
+| `tenantId` | `string \| undefined` | `ctx().tenant.id` at record time. |
 | `requestId` | `string \| undefined` | `ctx().requestId`. |
-| `at` | `number` | Timestamp (`Date.now()`, milissegundos). |
+| `at` | `number` | Timestamp (`Date.now()`, milliseconds). |
 
 ### `interface AuditQuery`
 
-| Campo | Tipo | Obrigatório? | Default | Descrição |
+| Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `event` | `string` | Não | todos | Padrão wildcard sobre o nome (ex.: `'auth:**'`). |
-| `tenantId` | `string` | Não | todos | Filtra por tenant. |
-| `actorId` | `string` | Não | todos | Filtra por ator. |
-| `since` | `number` | Não | desde sempre | Só entradas com `at >= since`. |
-| `limit` | `number` | Não | sem limite | Máximo de resultados. |
+| `event` | `string` | No | all | Wildcard pattern over the name (e.g. `'auth:**'`). |
+| `tenantId` | `string` | No | all | Filters by tenant. |
+| `actorId` | `string` | No | all | Filters by actor. |
+| `since` | `number` | No | since forever | Only entries with `at >= since`. |
+| `limit` | `number` | No | no limit | Maximum number of results. |
 
 ### `interface AuditStore`
 
-Contrato de armazenamento, **append-only por contrato** (sem update/delete):
+Storage contract, **append-only by contract** (no update/delete):
 
 - `append(entry: AuditEntry): Promise<void>`
-- `query(query: AuditQuery): Promise<AuditEntry[]>` — deve devolver mais recente primeiro e aplicar os filtros/limit.
+- `query(query: AuditQuery): Promise<AuditEntry[]>` — must return most recent first and apply filters/limit.
 
 ### `class MemoryAuditStore`
 
-Implementação em memória do `AuditStore` (congela cada entrada; filtra e inverte na consulta). Ideal para dev e testes; não persiste.
+In-memory implementation of `AuditStore` (freezes each entry; filters and reverses on query). Ideal for dev and tests; does not persist.
 
 ### `patternMatches(pattern: string, name: string): boolean`
 
-Matcher de wildcards sobre segmentos `:` e `.` — exportado para reutilização. `*` = um segmento; `**` = um ou mais; `'**'` casa tudo.
+Wildcard matcher over `:` and `.` segments — exported for reuse. `*` = one segment; `**` = one or more; `'**'` matches everything.
 
 ```ts
 import { patternMatches } from '@machize/audit'
@@ -205,30 +205,30 @@ patternMatches('auth:**', 'billing:paid')    // false
 
 - `AUDIT: Token<Audit>` — `app.container.get(AUDIT)`.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**As entradas têm `actorId`/`tenantId` vazios.**
-Não havia contexto ativo no momento do registo. Garante que o código corre dentro de `runWithContext({ user, tenant }, …)` — em HTTP, é o middleware que o estabelece.
+**Entries come back with empty `actorId`/`tenantId`.**
+There was no active context at record time. Make sure the code runs inside `runWithContext({ user, tenant }, …)` — in HTTP, this is established by the middleware.
 
-**Os eventos de domínio não estão a ser gravados.**
-Ou o `eventsPlugin()` não está registado (o `auditPlugin` só subscreve o bus se `container.has(EVENTS)`), ou passaste `events: []`, ou os padrões não casam com os nomes dos eventos.
+**Domain events aren't being recorded.**
+Either `eventsPlugin()` isn't registered (`auditPlugin` only subscribes to the bus if `container.has(EVENTS)`), or you passed `events: []`, or the patterns don't match the event names.
 
-**Um hook meu não aparece no trilho.**
-Os defaults só cobrem `auth/billing/tenancy/permission`. Passa `hooks: [...]` com os teus padrões — atenção que a lista **substitui** os defaults, por isso inclui também os que queres manter.
+**One of my hooks doesn't show up in the trail.**
+The defaults only cover `auth/billing/tenancy/permission`. Pass `hooks: [...]` with your own patterns — note that the list **replaces** the defaults, so include the ones you want to keep too.
 
-**Perdi o histórico depois de reiniciar.**
-O `MemoryAuditStore` é volátil. Em produção implementa `AuditStore` sobre a base de dados.
+**I lost the history after restarting.**
+`MemoryAuditStore` is volatile. In production, implement `AuditStore` over a database.
 
-**Posso editar ou apagar uma entrada?**
-Não — o contrato é append-only e as entradas são congeladas. É uma característica, não uma limitação: é o que dá valor probatório ao trilho.
+**Can I edit or delete an entry?**
+No — the contract is append-only and entries are frozen. This is a feature, not a limitation: it's what gives the trail evidentiary value.
 
-**Qual a diferença entre `:` e `.` nos nomes?**
-Convenção: hooks de ciclo de vida usam `:` (`auth:login`); eventos de domínio usam `.` (`order.created`). O `patternMatches` trata ambos como separadores de segmentos.
+**What's the difference between `:` and `.` in names?**
+Convention: lifecycle hooks use `:` (`auth:login`); domain events use `.` (`order.created`). `patternMatches` treats both as segment separators.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — os hooks de ciclo de vida (`hooks.onAny`) são a primeira fonte de captura; o contexto ALS (`tryCtx`) fornece ator/tenant/requestId; o plugin usa `definePlugin`/`createToken`.
-- **`@machize/events`** — segunda fonte de captura: qualquer evento de domínio emitido no `EventBus` pode ficar no trilho (padrões `events`).
-- **`@machize/activity`** — módulo irmão com foco diferente: a **atividade** é o feed "human-friendly" para mostrar ao utilizador ("Maria publicou o projeto"); a **auditoria** é o registo de segurança/compliance automático e imutável.
-- **`@machize/logger`** — os logs são diagnóstico técnico efémero; a auditoria é registo de negócio duradouro. Usa ambos.
-- **`@machize/queue`** — como o contexto viaja para os workers, entradas registadas dentro de um job mantêm o ator/tenant do pedido original.
+- **`@machize/core`** — lifecycle hooks (`hooks.onAny`) are the primary capture source; the ALS context (`tryCtx`) supplies actor/tenant/requestId; the plugin uses `definePlugin`/`createToken`.
+- **`@machize/events`** — secondary capture source: any domain event emitted on the `EventBus` can land in the trail (`events` patterns).
+- **`@machize/activity`** — sibling module with a different focus: **activity** is the "human-friendly" feed shown to the user ("Maria published the project"); **audit** is the automatic, immutable security/compliance record.
+- **`@machize/logger`** — logs are ephemeral technical diagnostics; audit is durable business record. Use both.
+- **`@machize/queue`** — since context travels to workers, entries recorded inside a job retain the actor/tenant of the original request.

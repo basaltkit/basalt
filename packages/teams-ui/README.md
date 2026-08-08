@@ -1,20 +1,20 @@
 # @machize/teams-ui
 
-Página HTML self-contained para **gerir uma equipa** do [`@machize/teams`](https://www.npmjs.com/package/@machize/teams): convidar/revogar convites e listar/mudar-role/remover membros — **zero dependências, sem build**. Precisas deste módulo quando queres dar aos administradores um ecrã de gestão de equipa sem construíres a UI do zero.
+Self-contained HTML page for **managing a team** in [`@machize/teams`](https://www.npmjs.com/package/@machize/teams): invite/revoke invitations and list/change-role/remove members — **zero dependencies, no build step**. You need this module when you want to give admins a team management screen without building the UI from scratch.
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/teams` já expõe as rotas de convites e membros. Este módulo é a **UI** por cima: uma página com um formulário de convite, a lista de convites pendentes (com revogar), e a lista de membros (com dropdown de role e remover) — tudo isolado por tenant.
+`@machize/teams` already exposes the invitation and member routes. This module is the **UI** on top of it: a page with an invitation form, the list of pending invitations (with revoke), and the member list (with a role dropdown and remove) — all isolated by tenant.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/teams-ui
 ```
 
-Depende do `@machize/core` e `@machize/fastify`. Requer o `teamsPlugin` + `teamRoutes` do `@machize/teams` montados.
+Depends on `@machize/core` and `@machize/fastify`. Requires `teamsPlugin` + `teamRoutes` from `@machize/teams` to be mounted.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -29,37 +29,37 @@ const app = await createApp({
     fastifyPlugin({
       routes: [
         ...teamRoutes(),     // /team/invites*, /team/members*
-        ...teamsUiRoutes(),  // GET /team/ui  ← a página
+        ...teamsUiRoutes(),  // GET /team/ui  ← the page
       ],
     }),
   ],
 }).boot()
 ```
 
-Abre **`/team/ui`** (autenticado como admin da equipa) para gerir convites e membros.
+Open **`/team/ui`** (authenticated as a team admin) to manage invitations and members.
 
-## Tenancy e autenticação
+## Tenancy and authentication
 
-A página faz `fetch` same-origin, por isso assume que a sessão do browser está autenticada. Para **tenancy por subdomínio**, o tenant é resolvido automaticamente. Para **tenancy por header**, injeta o header:
+The page performs same-origin `fetch` calls, so it assumes the browser session is authenticated. For **subdomain-based tenancy**, the tenant is resolved automatically. For **header-based tenancy**, inject the header:
 
 ```ts
 teamsUiRoutes({ headers: { 'x-tenant-id': 'acme' } })
 ```
 
-As ações de gestão (convidar, mudar role, remover) exigem `teamRole: 'admin'` nas rotas do `@machize/teams` — protege a própria página com um guard de admin se quiseres.
+Management actions (invite, change role, remove) require `teamRole: 'admin'` on the `@machize/teams` routes — protect the page itself with an admin guard if you want.
 
-## Referência da API
+## API reference
 
 ### `teamsUiRoutes({ path?, apiBase?, title?, roles?, headers? })`
 
-Devolve a rota que serve a página. `path` (default `/team/ui`), `apiBase` (default same-origin), `title`, `roles` (default `owner`/`admin`/`member`), `headers` (extra por pedido).
+Returns the route that serves the page. `path` (default `/team/ui`), `apiBase` (default same-origin), `title`, `roles` (default `owner`/`admin`/`member`), `headers` (extra per request).
 
 ### `teamsPageHtml(options)`
 
-Devolve o HTML da página como string, para servires à tua maneira.
+Returns the page's HTML as a string, for serving it your own way.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/teams`** — fornece as rotas de convites/membros que esta página consome.
-- **`@machize/tenancy` / `@machize/auth`** — resolvem o tenant e o utilizador do contexto.
-- **`@machize/permissions`** — adiciona um *guard* à rota da página para restringir a admins.
+- **`@machize/teams`** — provides the invitation/member routes this page consumes.
+- **`@machize/tenancy` / `@machize/auth`** — resolve the tenant and user from context.
+- **`@machize/permissions`** — add a *guard* to the page's route to restrict it to admins.

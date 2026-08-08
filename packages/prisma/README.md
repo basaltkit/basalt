@@ -1,88 +1,88 @@
 # @machize/prisma
 
-Integração do Machize com o Prisma: liga a tua aplicação à base de dados de forma multi-tenant — cada cliente (tenant) só vê os seus próprios dados, automaticamente. Precisas deste módulo quando a tua aplicação SaaS usa Prisma e serve vários clientes com dados isolados entre si.
+Machize's integration with Prisma: connects your application to the database in a multi-tenant way — each customer (tenant) automatically sees only their own data. You need this module when your SaaS application uses Prisma and serves multiple customers with data isolated from each other.
 
-## O que este módulo resolve
+## What this module solves
 
-O **Prisma** é um **ORM** (*Object-Relational Mapper*): uma biblioteca que te deixa falar com a base de dados escrevendo código TypeScript (`db.project.findMany()`) em vez de SQL à mão. Numa aplicação **multi-tenant** (vários clientes/organizações — os **tenants** — na mesma aplicação) surge o problema central: como garantir que o cliente "acme" nunca vê os dados do cliente "globex"?
+**Prisma** is an **ORM** (*Object-Relational Mapper*): a library that lets you talk to the database by writing TypeScript code (`db.project.findMany()`) instead of raw SQL. In a **multi-tenant** application (several customers/organizations — the **tenants** — in the same application) a central problem arises: how do you guarantee that customer "acme" never sees customer "globex"'s data?
 
-Este módulo suporta as três estratégias clássicas de isolamento e trata do trabalho chato de cada uma:
+This module supports the three classic isolation strategies and handles the tedious work for each:
 
-1. **Base de dados partilhada** — todos os tenants na mesma base de dados, cada linha com uma coluna `tenantId`. A extensão `tenancyExtension()` intercepta **todas** as consultas e injeta o filtro do tenant atual: é impossível o código da aplicação esquecer-se do `where: { tenantId }` ou tentar fugir dele.
-2. **Schema por tenant** (PostgreSQL) — uma base de dados, mas cada tenant tem o seu próprio *schema* (um "compartimento" com as suas próprias tabelas). O módulo deriva nomes de schema seguros, constrói URLs de ligação com o schema certo e cria os schemas quando preciso.
-3. **Base de dados por tenant** — isolamento máximo: cada tenant tem a sua própria base de dados. O módulo gere um **pool LRU** de clientes Prisma (mantém abertos só os N mais recentes, fecha os restantes) para as ligações não explodirem.
+1. **Shared database** — all tenants in the same database, each row with a `tenantId` column. The `tenancyExtension()` extension intercepts **every** query and injects the current tenant's filter: it's impossible for application code to forget the `where: { tenantId }` or try to bypass it.
+2. **Schema per tenant** (PostgreSQL) — one database, but each tenant has its own *schema* (a "compartment" with its own tables). The module derives safe schema names, builds connection URLs with the right schema, and creates schemas when needed.
+3. **Database per tenant** — maximum isolation: each tenant has its own database. The module manages an **LRU pool** of Prisma clients (keeps only the N most recent ones open, closes the rest) so connections don't explode.
 
-Em qualquer modo, o `prismaPlugin` coloca o cliente certo no contexto de cada pedido — o código da aplicação escreve apenas `db<PrismaClient>().project.findMany()` sem saber (nem querer saber) qual a estratégia por trás. Há ainda ferramentas para **migrações** (aplicar alterações de estrutura da base de dados) tenant a tenant, incluindo um comando de CLI pronto a usar.
+In any mode, `prismaPlugin` puts the right client into each request's context — application code just writes `db<PrismaClient>().project.findMany()` without knowing (or needing to know) which strategy is behind it. There are also tools for **migrations** (applying database structure changes) tenant by tenant, including a ready-to-use CLI command.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/prisma
 ```
 
-Depende de `@machize/core` e `@machize/cli`. O Prisma em si é uma *peer dependency* opcional — instala-o no teu projeto se ainda não o tiveres:
+Depends on `@machize/core` and `@machize/cli`. Prisma itself is an optional *peer dependency* — install it in your project if you don't already have it:
 
 ```bash
-pnpm add @prisma/client   # requer versão >= 5.0.0
+pnpm add @prisma/client   # requires version >= 5.0.0
 pnpm add -D prisma
 ```
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-O caminho mais comum: base de dados partilhada com coluna `tenantId`.
+The most common path: shared database with a `tenantId` column.
 
-1. **Adiciona a coluna `tenantId`** aos modelos do teu `schema.prisma`:
+1. **Add the `tenantId` column** to the models in your `schema.prisma`:
 
 ```prisma
 model Project {
   id       String @id @default(cuid())
   name     String
-  tenantId String   // a coluna que isola os tenants
+  tenantId String   // the column that isolates tenants
 
   @@index([tenantId])
 }
 ```
 
-2. **Cria o cliente Prisma com a extensão de tenancy** e regista o plugin:
+2. **Create the Prisma client with the tenancy extension** and register the plugin:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
 import { createApp } from '@machize/core'
 import { prismaPlugin, tenancyExtension } from '@machize/prisma'
 
-// O cliente partilhado: cada consulta é filtrada pelo tenant do contexto atual
+// The shared client: every query is filtered by the current context's tenant
 const prisma = new PrismaClient().$extends(tenancyExtension())
 
 const app = await createApp({
   plugins: [
     prismaPlugin({ client: prisma }),
-    // ...os teus outros plugins (http, tenancy, etc.)
+    // ...your other plugins (http, tenancy, etc.)
   ],
 }).boot()
 ```
 
-3. **Usa `db()` em qualquer ponto do código de um pedido** — o cliente já vem do contexto:
+3. **Use `db()` anywhere in a request's code** — the client already comes from the context:
 
 ```ts
 import { db } from '@machize/prisma'
 import type { PrismaClient } from '@prisma/client'
 
-// Dentro de um handler HTTP (o tenant já foi identificado pelo framework):
-const projetos = await db<PrismaClient>().project.findMany()
-// → SELECT ... WHERE tenantId = '<tenant do pedido>' — sem escreveres o filtro
+// Inside an HTTP handler (the tenant has already been identified by the framework):
+const projects = await db<PrismaClient>().project.findMany()
+// → SELECT ... WHERE tenantId = '<request's tenant>' — without you writing the filter
 ```
 
-É tudo: as leituras são filtradas pelo tenant, as criações são carimbadas com o `tenantId` certo, e nem por engano um pedido toca em dados de outro tenant.
+That's it: reads are filtered by tenant, creates are stamped with the right `tenantId`, and no request ever accidentally touches another tenant's data.
 
-## Guia de utilização
+## Usage guide
 
-### Modo 1 — Base de dados partilhada (`tenancyExtension`)
+### Mode 1 — Shared database (`tenancyExtension`)
 
-A extensão cobre todas as operações de todos os modelos:
+The extension covers every operation on every model:
 
-- **Leituras e escritas com `where`** (`findMany`, `findFirst`, `findUnique`, `count`, `aggregate`, `groupBy`, `update`, `updateMany`, `delete`, `deleteMany`): o filtro `tenantId` é **forçado** — mesmo que o código passe `where: { tenantId: 'outro' }`, o filtro do tenant atual ganha.
-- **Criações** (`create`, `createMany`, `createManyAndReturn`): o `tenantId` é carimbado nos dados.
-- **`upsert`**: o `where` é filtrado e o ramo `create` é carimbado; o ramo `update` fica intacto.
+- **Reads and writes with `where`** (`findMany`, `findFirst`, `findUnique`, `count`, `aggregate`, `groupBy`, `update`, `updateMany`, `delete`, `deleteMany`): the `tenantId` filter is **forced** — even if the code passes `where: { tenantId: 'other' }`, the current tenant's filter wins.
+- **Creates** (`create`, `createMany`, `createManyAndReturn`): `tenantId` is stamped onto the data.
+- **`upsert`**: the `where` is filtered and the `create` branch is stamped; the `update` branch is left untouched.
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -90,19 +90,19 @@ import { tenancyExtension } from '@machize/prisma'
 
 const prisma = new PrismaClient().$extends(
   tenancyExtension({
-    tenantField: 'tenantId',      // nome da coluna (default: 'tenantId')
-    onMissingTenant: 'bypass',    // sem tenant no contexto: 'bypass' (default) corre sem filtro
-                                  // — útil para contexto administrativo/central;
-                                  // 'error' lança MissingTenantError — isolamento estrito
+    tenantField: 'tenantId',      // column name (default: 'tenantId')
+    onMissingTenant: 'bypass',    // no tenant in context: 'bypass' (default) runs without a filter
+                                  // — useful for administrative/central context;
+                                  // 'error' throws MissingTenantError — strict isolation
   }),
 )
 ```
 
-Nota sobre `findUnique`/`update`/`delete`: desde o Prisma 5, o `where` único aceita campos extra como filtros adicionais — o módulo injeta aí o `tenantId`, pelo que uma linha de outro tenant simplesmente "não é encontrada".
+Note on `findUnique`/`update`/`delete`: since Prisma 5, the unique `where` accepts extra fields as additional filters — the module injects `tenantId` there, so a row from another tenant simply "isn't found".
 
-### Modo 2 — Schema por tenant (PostgreSQL)
+### Mode 2 — Schema per tenant (PostgreSQL)
 
-Cada tenant tem um schema próprio (`tenant_acme`, `tenant_globex`, …) na mesma base de dados. O cliente de cada tenant liga-se com `?schema=<nome>` no URL — é o Prisma que define o `search_path` na ligação (a forma fiável de fazer isto):
+Each tenant has its own schema (`tenant_acme`, `tenant_globex`, …) in the same database. Each tenant's client connects with `?schema=<name>` in the URL — Prisma is what sets the `search_path` on connection (the reliable way to do this):
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -113,31 +113,31 @@ const app = await createApp({
   plugins: [
     prismaPlugin({
       schemaPerTenant: {
-        url: process.env.DATABASE_URL!, // URL base; o parâmetro ?schema= é posto por tenant
+        url: process.env.DATABASE_URL!, // base URL; the ?schema= parameter is set per tenant
         createClient: (url) => new PrismaClient({ datasourceUrl: url }),
         prefix: 'tenant_',              // default: 'tenant_'
       },
-      destroy: (client) => client.$disconnect(), // fecha clientes quando saem do pool
-      max: 10,                                    // máximo de clientes abertos em simultâneo
+      destroy: (client) => client.$disconnect(), // closes clients when they leave the pool
+      max: 10,                                    // max clients open at once
     }),
   ],
 }).boot()
 ```
 
-O nome do schema é derivado com `tenantSchema(tenantId)`: minúsculas, só `[a-z0-9_]`, máximo 63 carateres — ids inválidos lançam `InvalidTenantSchemaError`. Para criar o schema de um tenant novo:
+The schema name is derived with `tenantSchema(tenantId)`: lowercase, `[a-z0-9_]` only, max 63 characters — invalid ids throw `InvalidTenantSchemaError`. To create a new tenant's schema:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
 import { provisionTenantSchema, tenantSchema } from '@machize/prisma'
 
-const admin = new PrismaClient() // ligação administrativa
+const admin = new PrismaClient() // administrative connection
 const schema = tenantSchema('acme')          // 'tenant_acme'
 await provisionTenantSchema(admin, schema)   // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
 
-### Modo 3 — Base de dados por tenant (`forTenant`)
+### Mode 3 — Database per tenant (`forTenant`)
 
-Isolamento máximo: dás uma função que cria o cliente para um id de tenant, e o módulo gere o pool:
+Maximum isolation: you provide a function that creates the client for a tenant id, and the module manages the pool:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -148,32 +148,32 @@ const app = await createApp({
   plugins: [
     prismaPlugin({
       forTenant: (tenantId) =>
-        new PrismaClient({ datasourceUrl: urlDaBaseDeDados(tenantId) }),
+        new PrismaClient({ datasourceUrl: databaseUrlFor(tenantId) }),
       destroy: (client) => client.$disconnect(),
-      max: 10, // só os 10 tenants mais recentemente ativos ficam com cliente aberto
+      max: 10, // only the 10 most recently active tenants keep an open client
     }),
   ],
 }).boot()
 ```
 
-O pool é **LRU** (*least recently used*): quando o limite é excedido, o cliente do tenant há mais tempo sem uso é fechado (via `destroy`). Tenants ativos reutilizam sempre o mesmo cliente.
+The pool is **LRU** (*least recently used*): when the limit is exceeded, the tenant client that's gone longest without use is closed (via `destroy`). Active tenants always reuse the same client.
 
-Podes combinar `client` (para o contexto central, sem tenant) com `forTenant`/`schemaPerTenant` (para pedidos com tenant) no mesmo plugin.
+You can combine `client` (for the central, tenant-less context) with `forTenant`/`schemaPerTenant` (for requests with a tenant) in the same plugin.
 
-### `db()` — o cliente do contexto atual
+### `db()` — the current context's client
 
 ```ts
 import { db } from '@machize/prisma'
 import type { PrismaClient } from '@prisma/client'
 
-const projetos = await db<PrismaClient>().project.findMany()
+const projects = await db<PrismaClient>().project.findMany()
 ```
 
-Funciona dentro de um pedido HTTP ou de `tenancy.run()`/workers (o plugin escuta o hook `tenancy:switched`). Fora de qualquer contexto lança `DbUnavailableError`. O genérico `<PrismaClient>` é só para o TypeScript — passa o tipo do teu cliente (incluindo o tipo estendido, se usares `$extends`).
+Works inside an HTTP request or `tenancy.run()`/workers (the plugin listens to the `tenancy:switched` hook). Outside any context it throws `DbUnavailableError`. The `<PrismaClient>` generic is just for TypeScript — pass your client's type (including the extended type, if you use `$extends`).
 
-### Migrações multi-tenant (`migrateTenants`)
+### Multi-tenant migrations (`migrateTenants`)
 
-Uma **migração** aplica alterações de estrutura (novas tabelas, colunas…) à base de dados. Nos modos 2 e 3 tens de a correr para **cada** tenant. O `migrateTenants` orquestra isso com concorrência limitada, e um tenant que falhe não impede os restantes:
+A **migration** applies structural changes (new tables, columns…) to the database. In modes 2 and 3 you have to run it for **every** tenant. `migrateTenants` orchestrates this with limited concurrency, and one tenant failing doesn't block the rest:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -181,25 +181,25 @@ import { migrateTenants } from '@machize/prisma'
 
 const admin = new PrismaClient()
 
-const resultados = await migrateTenants({
+const results = await migrateTenants({
   tenants: ['acme', 'globex', 'initech'],
   target: {
-    mode: 'schema',                  // ou { mode: 'database', urlFor: (id) => url }
+    mode: 'schema',                  // or { mode: 'database', urlFor: (id) => url }
     url: process.env.DATABASE_URL!,
-    provision: admin,                // cria o schema antes de migrar, se não existir
+    provision: admin,                // creates the schema before migrating, if it doesn't exist
   },
-  concurrency: 5,                    // default: 5 tenants em paralelo
-  onResult: (r) => console.log(r.tenantId, r.ok ? 'ok' : `FALHOU: ${r.error}`),
+  concurrency: 5,                    // default: 5 tenants in parallel
+  onResult: (r) => console.log(r.tenantId, r.ok ? 'ok' : `FAILED: ${r.error}`),
 })
 
-const falhados = resultados.filter((r) => !r.ok)
+const failed = results.filter((r) => !r.ok)
 ```
 
-Por omissão cada tenant é migrado com `prismaMigrator()`, que executa `npx prisma migrate deploy` com o URL do tenant como `DATABASE_URL` (requer o CLI do Prisma instalado).
+By default each tenant is migrated with `prismaMigrator()`, which runs `npx prisma migrate deploy` with the tenant's URL as `DATABASE_URL` (requires the Prisma CLI to be installed).
 
-### Comando de CLI `tenant:migrate`
+### `tenant:migrate` CLI command
 
-Versão pronta para a linha de comandos — regista-o com o `commandsPlugin` de `@machize/cli`:
+A ready-to-use command-line version — register it with `@machize/cli`'s `commandsPlugin`:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -210,7 +210,7 @@ const app = createApp({
   plugins: [
     commandsPlugin([
       tenantMigrateCommand({
-        tenants: async () => listarIdsDeTenants(), // vai buscar os ids onde quiseres
+        tenants: async () => listTenantIds(), // fetch the ids from wherever you like
         target: { mode: 'schema', url: process.env.DATABASE_URL! },
       }),
     ]),
@@ -218,84 +218,84 @@ const app = createApp({
 })
 ```
 
-Correr `mach tenant:migrate` imprime um relatório por tenant (`ok`/`FAIL`) e termina com código de saída diferente de zero se algum tenant falhou — ideal para pipelines de CI/CD.
+Running `mach tenant:migrate` prints a report per tenant (`ok`/`FAIL`) and exits with a non-zero code if any tenant failed — ideal for CI/CD pipelines.
 
-## Referência da API
+## API reference
 
 ### `prismaPlugin(options: PrismaPluginOptions<TClient>)`
 
-Regista o(s) cliente(s) no contentor (`DB`, `DB_POOL`), anexa o cliente ao contexto de cada pedido HTTP e de cada `tenancy.run()`, e no `shutdown` fecha o pool e chama `$disconnect()` no cliente partilhado.
+Registers the client(s) in the container (`DB`, `DB_POOL`), attaches the client to the context of every HTTP request and every `tenancy.run()`, and on `shutdown` closes the pool and calls `$disconnect()` on the shared client.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `client` | `TClient` | Não* | — | Modo partilhado: um cliente para todos (tipicamente com `$extends(tenancyExtension())`). Também usado como cliente do contexto sem tenant nos outros modos. |
-| `forTenant` | `(tenantId: string) => TClient \| Promise<TClient>` | Não* | — | Modo base-de-dados-por-tenant: fábrica de clientes. |
-| `schemaPerTenant` | `{ url: string; createClient: (url: string) => TClient \| Promise<TClient>; prefix?: string }` | Não* | `prefix: 'tenant_'` | Modo schema-por-tenant: URL base + fábrica a partir do URL com `?schema=`. |
-| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | Não | — | Chamado quando um cliente sai do pool (ex.: `client.$disconnect()`). |
-| `max` | `number` | Não | `10` | Máximo de clientes por-tenant abertos em simultâneo. |
+| `client` | `TClient` | No* | — | Shared mode: one client for everyone (typically with `$extends(tenancyExtension())`). Also used as the client for the tenant-less context in the other modes. |
+| `forTenant` | `(tenantId: string) => TClient \| Promise<TClient>` | No* | — | Database-per-tenant mode: client factory. |
+| `schemaPerTenant` | `{ url: string; createClient: (url: string) => TClient \| Promise<TClient>; prefix?: string }` | No* | `prefix: 'tenant_'` | Schema-per-tenant mode: base URL + factory from the URL with `?schema=`. |
+| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | — | Called when a client leaves the pool (e.g. `client.$disconnect()`). |
+| `max` | `number` | No | `10` | Max per-tenant clients open at once. |
 
-\* Usa pelo menos uma das três: `client`, `forTenant` ou `schemaPerTenant` (`forTenant` tem prioridade sobre `schemaPerTenant`).
+\* Use at least one of the three: `client`, `forTenant`, or `schemaPerTenant` (`forTenant` takes priority over `schemaPerTenant`).
 
 ### `db<T>()`
 
-`db<T = unknown>(): T` — devolve o cliente de base de dados do contexto atual. Lança `DbUnavailableError` (código `DB_UNAVAILABLE`) fora de um pedido/`tenancy.run()` com o plugin configurado.
+`db<T = unknown>(): T` — returns the database client for the current context. Throws `DbUnavailableError` (code `DB_UNAVAILABLE`) outside a request/`tenancy.run()` with the plugin configured.
 
 ### `tenancyExtension(options?: TenancyExtensionOptions)`
 
-Extensão de cliente Prisma (`prisma.$extends(...)`) que limita todas as consultas ao tenant do contexto.
+Prisma client extension (`prisma.$extends(...)`) that scopes every query to the context's tenant.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `tenantField` | `string` | Não | `'tenantId'` | Nome da coluna com o id do tenant. |
-| `getTenantId` | `() => string \| undefined` | Não | lê `ctx().tenant.id` | Como obter o tenant atual. |
-| `onMissingTenant` | `'bypass' \| 'error'` | Não | `'bypass'` | Sem tenant no contexto: `'bypass'` corre sem filtro (contexto central/admin); `'error'` lança `MissingTenantError`. |
+| `tenantField` | `string` | No | `'tenantId'` | Name of the column holding the tenant id. |
+| `getTenantId` | `() => string \| undefined` | No | reads `ctx().tenant.id` | How to get the current tenant. |
+| `onMissingTenant` | `'bypass' \| 'error'` | No | `'bypass'` | No tenant in context: `'bypass'` runs without a filter (central/admin context); `'error'` throws `MissingTenantError`. |
 
-### `applyTenantScope(operation, args, tenantId, field)` (Avançado)
+### `applyTenantScope(operation, args, tenantId, field)` (Advanced)
 
-`applyTenantScope(operation: string, args: Record<string, unknown> | undefined, tenantId: string, field: string): Record<string, unknown>` — a transformação pura usada pela extensão; útil para testes ou integrações próprias.
+`applyTenantScope(operation: string, args: Record<string, unknown> | undefined, tenantId: string, field: string): Record<string, unknown>` — the pure transformation used by the extension; useful for tests or your own integrations.
 
-### `class TenantClientPool<TClient>` (Avançado)
+### `class TenantClientPool<TClient>` (Advanced)
 
-`new TenantClientPool(options: TenantClientPoolOptions<TClient>)` — pool LRU de clientes por tenant.
+`new TenantClientPool(options: TenantClientPoolOptions<TClient>)` — LRU pool of per-tenant clients.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `create` | `(tenantId: string) => TClient \| Promise<TClient>` | Sim | — | Cria o cliente de um tenant. |
-| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | Não | — | Chamado na eviction. |
-| `max` | `number` | Não | `10` | Máximo de clientes abertos (mínimo 1). |
+| `create` | `(tenantId: string) => TClient \| Promise<TClient>` | Yes | — | Creates a tenant's client. |
+| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | — | Called on eviction. |
+| `max` | `number` | No | `10` | Max clients open (minimum 1). |
 
-| Membro | Assinatura | Descrição |
+| Member | Signature | Description |
 |---|---|---|
-| `get` | `get(tenantId: string): Promise<TClient>` | Devolve/cria o cliente do tenant; promove-o a mais-recente; despeja o mais antigo acima de `max`. |
-| `has` | `has(tenantId: string): boolean` | O tenant tem cliente no pool? |
-| `size` | `get size(): number` | Número de clientes abertos. |
-| `destroyAll` | `destroyAll(): Promise<void>` | Fecha todos os clientes. |
+| `get` | `get(tenantId: string): Promise<TClient>` | Returns/creates the tenant's client; promotes it to most-recently-used; evicts the oldest above `max`. |
+| `has` | `has(tenantId: string): boolean` | Does the tenant have a client in the pool? |
+| `size` | `get size(): number` | Number of open clients. |
+| `destroyAll` | `destroyAll(): Promise<void>` | Closes all clients. |
 
-### Utilitários de schema
+### Schema utilities
 
-| Export | Assinatura | Descrição |
+| Export | Signature | Description |
 |---|---|---|
-| `tenantSchema` | `tenantSchema(tenantId: string, options?: { prefix?: string }): string` | Deriva um identificador de schema PostgreSQL seguro (`prefix` default `'tenant_'`; minúsculas, `[a-z0-9_]`, máx. 63 carateres). Lança `InvalidTenantSchemaError`. |
-| `schemaUrl` | `schemaUrl(baseUrl: string, schema: string): string` | Devolve o URL de ligação com o parâmetro `?schema=` definido. |
-| `provisionTenantSchema` | `provisionTenantSchema(client: SchemaProvisioner, schema: string): Promise<void>` | Executa `CREATE SCHEMA IF NOT EXISTS` (nome validado antes de interpolar). |
-| `SchemaProvisioner` | `{ $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number> }` | Interface satisfeita por um `PrismaClient`. |
+| `tenantSchema` | `tenantSchema(tenantId: string, options?: { prefix?: string }): string` | Derives a safe PostgreSQL schema identifier (`prefix` default `'tenant_'`; lowercase, `[a-z0-9_]`, max 63 characters). Throws `InvalidTenantSchemaError`. |
+| `schemaUrl` | `schemaUrl(baseUrl: string, schema: string): string` | Returns the connection URL with the `?schema=` parameter set. |
+| `provisionTenantSchema` | `provisionTenantSchema(client: SchemaProvisioner, schema: string): Promise<void>` | Runs `CREATE SCHEMA IF NOT EXISTS` (name validated before interpolating). |
+| `SchemaProvisioner` | `{ $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number> }` | Interface satisfied by a `PrismaClient`. |
 
 ### `migrateTenants(options: MigrateTenantsOptions)`
 
-Devolve `Promise<TenantMigrationResult[]>` — um resultado por tenant, na mesma ordem.
+Returns `Promise<TenantMigrationResult[]>` — one result per tenant, in the same order.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `tenants` | `string[]` | Sim | — | Ids dos tenants a migrar. |
-| `target` | `MigrateTarget` | Sim | — | Como derivar o alvo de cada tenant (ver abaixo). |
-| `migrate` | `MigrateFn` | Não | `prismaMigrator()` | Executa a migração de um tenant. |
-| `concurrency` | `number` | Não | `5` | Máximo de tenants migrados em paralelo. |
-| `onResult` | `(result: TenantMigrationResult) => void` | Não | — | Chamado à medida que cada tenant termina. |
+| `tenants` | `string[]` | Yes | — | Ids of the tenants to migrate. |
+| `target` | `MigrateTarget` | Yes | — | How to derive each tenant's target (see below). |
+| `migrate` | `MigrateFn` | No | `prismaMigrator()` | Runs a tenant's migration. |
+| `concurrency` | `number` | No | `5` | Max tenants migrated in parallel. |
+| `onResult` | `(result: TenantMigrationResult) => void` | No | — | Called as each tenant finishes. |
 
-`MigrateTarget` é uma de duas formas:
+`MigrateTarget` is one of two shapes:
 
-- `{ mode: 'schema', url: string, prefix?: string, provision?: SchemaProvisioner }` — schema por tenant; com `provision`, cria o schema antes de migrar.
-- `{ mode: 'database', urlFor: (tenantId: string) => string }` — base de dados por tenant.
+- `{ mode: 'schema', url: string, prefix?: string, provision?: SchemaProvisioner }` — schema per tenant; with `provision`, creates the schema before migrating.
+- `{ mode: 'database', urlFor: (tenantId: string) => string }` — database per tenant.
 
 `TenantMigrationResult`: `{ tenantId: string; url: string; schema?: string; ok: boolean; error?: string }`.
 
@@ -303,64 +303,64 @@ Devolve `Promise<TenantMigrationResult[]>` — um resultado por tenant, na mesma
 
 ### `prismaMigrator(options?: PrismaMigratorOptions)`
 
-Migrador por omissão: executa `npx prisma migrate deploy` num processo filho, com o URL do tenant como `DATABASE_URL`.
+Default migrator: runs `npx prisma migrate deploy` in a child process, with the tenant's URL as `DATABASE_URL`.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `schemaPath` | `string` | Não | localização por omissão do Prisma | Caminho para o `schema.prisma` (`--schema`). |
-| `env` | `Record<string, string>` | Não | — | Variáveis de ambiente extra para o processo filho. |
+| `schemaPath` | `string` | No | Prisma's default location | Path to `schema.prisma` (`--schema`). |
+| `env` | `Record<string, string>` | No | — | Extra environment variables for the child process. |
 
 ### `tenantMigrateCommand(config: TenantMigrateCommandConfig)`
 
-Devolve um `CommandDefinition` (`@machize/cli`) chamado `tenant:migrate`.
+Returns a `CommandDefinition` (`@machize/cli`) named `tenant:migrate`.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `tenants` | `() => string[] \| Promise<string[]>` | Sim | — | Resolve os ids a migrar. |
-| `target` | `MigrateTarget` | Sim | — | Alvo das migrações. |
-| `migrate` | `MigrateFn` | Não | `prismaMigrator()` | Migrador alternativo. |
-| `concurrency` | `number` | Não | `5` | Paralelismo. |
+| `tenants` | `() => string[] \| Promise<string[]>` | Yes | — | Resolves the ids to migrate. |
+| `target` | `MigrateTarget` | Yes | — | Migration target. |
+| `migrate` | `MigrateFn` | No | `prismaMigrator()` | Alternative migrator. |
+| `concurrency` | `number` | No | `5` | Parallelism. |
 
-### Tokens e erros
+### Tokens and errors
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `DB` | Token do cliente partilhado no contentor. (Avançado) |
-| `DB_POOL` | Token do `TenantClientPool` no contentor. (Avançado) |
-| `DbUnavailableError` | Código `DB_UNAVAILABLE` — `db()` fora de contexto. |
-| `MissingTenantError` | Código `PRISMA_TENANT_MISSING` — consulta sem tenant com `onMissingTenant: 'error'`. |
-| `InvalidTenantSchemaError` | Código `PRISMA_INVALID_SCHEMA` — id de tenant sem identificador de schema válido. |
+| `DB` | Token for the shared client in the container. (Advanced) |
+| `DB_POOL` | Token for the `TenantClientPool` in the container. (Advanced) |
+| `DbUnavailableError` | Code `DB_UNAVAILABLE` — `db()` outside context. |
+| `MissingTenantError` | Code `PRISMA_TENANT_MISSING` — query without a tenant with `onMissingTenant: 'error'`. |
+| `InvalidTenantSchemaError` | Code `PRISMA_INVALID_SCHEMA` — tenant id without a valid schema identifier. |
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
 **`DB_UNAVAILABLE: No database client in the current context`.**
-Chamaste `db()` fora de um pedido HTTP ou de `tenancy.run()`, ou o `prismaPlugin` não está registado. Em scripts/jobs, corre o código dentro de `tenancy.run()` (ou usa diretamente o teu `PrismaClient`).
+You called `db()` outside an HTTP request or `tenancy.run()`, or `prismaPlugin` isn't registered. In scripts/jobs, run the code inside `tenancy.run()` (or use your `PrismaClient` directly).
 
-**`PRISMA_TENANT_MISSING` numa consulta.**
-Configuraste `onMissingTenant: 'error'` e a consulta correu sem tenant no contexto. Ou identificas o tenant antes (plugin de tenancy / `tenancy.run()`), ou usas `'bypass'` para permitir consultas centrais sem filtro.
+**`PRISMA_TENANT_MISSING` on a query.**
+You configured `onMissingTenant: 'error'` and the query ran without a tenant in context. Either identify the tenant beforehand (tenancy plugin / `tenancy.run()`), or use `'bypass'` to allow central queries without a filter.
 
-**Passei `where: { tenantId: 'outro' }` e "não funcionou".**
-É mesmo assim: a extensão força o filtro do tenant atual por cima do que o código passar — é essa a garantia de isolamento. Para operações entre tenants usa um cliente sem a extensão (contexto administrativo).
+**I passed `where: { tenantId: 'other' }` and "it didn't work".**
+That's expected: the extension forces the current tenant's filter over whatever the code passes — that's the isolation guarantee. For cross-tenant operations use a client without the extension (administrative context).
 
-**As criações falham por falta de `tenantId` / ou os dados "desaparecem".**
-No modo partilhado, todos os modelos consultados via extensão precisam da coluna `tenantId` (ou do nome que definires em `tenantField`). Linhas criadas fora do contexto do tenant certo ficam invisíveis nas consultas desse tenant.
+**Creates fail for missing `tenantId` / or the data "disappears".**
+In shared mode, every model queried through the extension needs the `tenantId` column (or whatever name you set in `tenantField`). Rows created outside the right tenant's context become invisible in that tenant's queries.
 
-**Schema-por-tenant: mudar o schema por pedido na mesma ligação não funciona?**
-Correto — alternar o `search_path` por pedido num pool partilhado não é fiável com o Prisma. Por isso este módulo cria **um cliente por tenant** com `?schema=` no URL; o `search_path` fica definido ao ligar.
+**Schema-per-tenant: switching schema per request on the same connection doesn't work?**
+Correct — switching `search_path` per request on a shared pool isn't reliable with Prisma. That's why this module creates **one client per tenant** with `?schema=` in the URL; `search_path` is set at connection time.
 
-**`PRISMA_INVALID_SCHEMA` para um id de tenant.**
-O id não gera um identificador PostgreSQL válido (ex.: só símbolos, ou nome acima de 63 carateres com o prefixo). Usa ids simples (letras minúsculas, números, `_`) ou um `prefix` mais curto.
+**`PRISMA_INVALID_SCHEMA` for a tenant id.**
+The id doesn't produce a valid PostgreSQL identifier (e.g. only symbols, or name over 63 characters with the prefix). Use simple ids (lowercase letters, numbers, `_`) or a shorter `prefix`.
 
-**Demasiadas ligações à base de dados no modo por-tenant.**
-Ajusta `max` no `prismaPlugin` (default 10) e garante que passas `destroy: (client) => client.$disconnect()` — sem isso, os clientes despejados do pool ficam com a ligação aberta.
+**Too many database connections in per-tenant mode.**
+Adjust `max` on `prismaPlugin` (default 10) and make sure you pass `destroy: (client) => client.$disconnect()` — without it, clients evicted from the pool keep their connection open.
 
-**`prismaMigrator` falha com "command not found" ou não encontra o schema.**
-Precisa do CLI do Prisma disponível (`pnpm add -D prisma`) e, se o `schema.prisma` não estiver no sítio habitual, passa `schemaPath`.
+**`prismaMigrator` fails with "command not found" or can't find the schema.**
+It needs the Prisma CLI available (`pnpm add -D prisma`), and if `schema.prisma` isn't in the usual place, pass `schemaPath`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — fornece o `createApp`, o contentor, os hooks e o contexto de pedido; este módulo acrescenta `ctx().db` ao `RequestContext`.
-- **`@machize/tenancy`** — é quem identifica o tenant de cada pedido e emite `tenancy:switched`; sem tenant no contexto, a extensão faz *bypass* (ou lança erro, conforme configurado) e o plugin usa o cliente central.
-- **`@machize/cli`** — o `tenantMigrateCommand` é um comando `defineCommand` registado via `commandsPlugin` e executado com o binário `mach`.
-- **`@machize/http` / `@machize/express` / `@machize/fastify` / `@machize/hono`** — o plugin regista um *enricher* HTTP que anexa o cliente ao contexto de cada pedido, para o `db()` funcionar nos handlers.
-- **`@machize/cache`** — combina `db()` com `cache.remember(...)` para acelerar consultas caras, com isolamento por tenant coerente nos dois módulos.
+- **`@machize/core`** — provides `createApp`, the container, the hooks, and the request context; this module adds `ctx().db` to `RequestContext`.
+- **`@machize/tenancy`** — identifies each request's tenant and emits `tenancy:switched`; without a tenant in context, the extension bypasses (or throws, depending on configuration) and the plugin uses the central client.
+- **`@machize/cli`** — `tenantMigrateCommand` is a `defineCommand` command registered via `commandsPlugin` and run with the `mach` binary.
+- **`@machize/http` / `@machize/express` / `@machize/fastify` / `@machize/hono`** — the plugin registers an HTTP *enricher* that attaches the client to each request's context, so `db()` works in handlers.
+- **`@machize/cache`** — combines `db()` with `cache.remember(...)` to speed up expensive queries, with consistent per-tenant isolation across both modules.

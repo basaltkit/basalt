@@ -1,40 +1,40 @@
 # @machize/permissions
 
-Autorização para aplicações Machize: papéis (roles), permissões com wildcards, políticas por recurso, super admin e proteção de rotas — ao estilo do Spatie Permissions do Laravel.
+Authorization for Machize applications: roles, wildcard permissions, resource-based policies, super admin, and route protection — in the style of Laravel's Spatie Permissions.
 
-Precisas deste módulo quando diferentes utilizadores podem fazer coisas diferentes na tua aplicação (ex.: só administradores apagam projetos).
+You need this module when different users can do different things in your application (e.g. only admins can delete projects).
 
-## O que este módulo resolve
+## What this module solves
 
-Autenticação (saber *quem* é o utilizador) não chega: falta a **autorização** — decidir *o que* esse utilizador pode fazer. Escrever `if (user.isAdmin)` espalhado pelo código torna-se rapidamente incontrolável. Este módulo centraliza essas decisões num único sítio, o **Gate** ("portão"), a quem perguntas: "este utilizador pode `projects:delete`?".
+Authentication (knowing *who* the user is) isn't enough: you also need **authorization** — deciding *what* that user can do. Scattering `if (user.isAdmin)` throughout the code quickly becomes unmanageable. This module centralizes those decisions in one place, the **Gate**, which you ask: "can this user do `projects:delete`?".
 
-Os blocos de construção são: **permissões** (etiquetas como `projects:delete`, com suporte a wildcards — `projects:*` cobre todas as ações de projetos e `*` cobre tudo), **papéis/roles** (conjuntos de permissões com nome, como `admin`, atribuídos a utilizadores), e **políticas** (regras contextuais sobre um recurso concreto, ex.: "só o dono do projeto pode editá-lo").
+The building blocks are: **permissions** (labels like `projects:delete`, with wildcard support — `projects:*` covers all project actions and `*` covers everything), **roles** (named sets of permissions, like `admin`, assigned to users), and **policies** (contextual rules about a specific resource, e.g. "only the project owner can edit it").
 
-Tudo é **scoped por tenant** por omissão: uma permissão dada dentro do tenant "acme" não vale no tenant "globex". Grants no âmbito `global` valem em todo o lado. As atribuições vivem num `AccessStore` — em memória para desenvolvimento, na tua base de dados em produção.
+Everything is **scoped per tenant** by default: a permission granted within the "acme" tenant doesn't apply in the "globex" tenant. Grants in the `global` scope apply everywhere. Assignments live in an `AccessStore` — in memory for development, in your database in production.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/permissions
 ```
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. **Cria um store e concede permissões:**
+1. **Create a store and grant permissions:**
 
 ```ts
 import { Gate, MemoryAccessStore, GLOBAL_SCOPE } from '@machize/permissions'
 
 const store = new MemoryAccessStore()
 
-// O papel "admin" pode tudo em projetos e ler faturação (âmbito global)
+// The "admin" role can do everything on projects and read billing (global scope)
 await store.grantToRole('admin', ['projects:*', 'billing:read'], GLOBAL_SCOPE)
 
-// A Ada é admin
+// Ada is an admin
 await store.assignRole('user-ada', 'admin', GLOBAL_SCOPE)
 ```
 
-2. **Cria o Gate e pergunta:**
+2. **Create the Gate and ask it:**
 
 ```ts
 const gate = new Gate({ store })
@@ -44,14 +44,14 @@ await gate.can({ id: 'user-ada' }, 'billing:write')   // false
 await gate.hasRole({ id: 'user-ada' }, 'admin')       // true
 ```
 
-3. **Ou exige a permissão (lança erro 403 se faltar):**
+3. **Or require the permission (throws a 403 error if missing):**
 
 ```ts
 await gate.authorize({ id: 'user-ada' }, 'projects:delete') // ok
-await gate.authorize({ id: 'outro' }, 'projects:delete')    // lança PermissionDeniedError
+await gate.authorize({ id: 'other-user' }, 'projects:delete') // throws PermissionDeniedError
 ```
 
-4. **Numa aplicação HTTP, protege rotas com `meta.can`:**
+4. **In an HTTP application, protect routes with `meta.can`:**
 
 ```ts
 import { createApp } from '@machize/core'
@@ -63,14 +63,14 @@ await store.grantToUser('user-ada', ['projects:delete'], 'global')
 
 const app = await createApp({
   plugins: [
-    // ... plugin de autenticação que define ctx().user (ex.: @machize/auth)
+    // ... an authentication plugin that sets ctx().user (e.g. @machize/auth)
     permissionsPlugin({ store }),
     fastifyPlugin({
       routes: [
         route({
           method: 'DELETE',
           url: '/projects/:id',
-          meta: { can: 'projects:delete' }, // sem a permissão → 403
+          meta: { can: 'projects:delete' }, // without the permission → 403
           async handler() { return { deleted: true } },
         }),
       ],
@@ -79,49 +79,49 @@ const app = await createApp({
 }).boot()
 ```
 
-Sem utilizador autenticado a rota devolve 401 (`AUTH_REQUIRED`); com utilizador sem a permissão devolve 403 (`PERMISSION_DENIED`).
+Without an authenticated user, the route returns 401 (`AUTH_REQUIRED`); with a user lacking the permission, it returns 403 (`PERMISSION_DENIED`).
 
-## Guia de utilização
+## Usage guide
 
-### Permissões com wildcards
+### Wildcard permissions
 
-Uma permissão é uma string; por convenção `recurso:ação`. A correspondência é feita por `permissionMatches(concedida, pedida)`:
+A permission is a string; by convention `resource:action`. Matching is done with `permissionMatches(granted, requested)`:
 
-- `projects:delete` cobre exatamente `projects:delete`;
-- `projects:*` cobre `projects:delete`, `projects:read`, … (mas **não** `projects:sub:deep` — o número de segmentos tem de coincidir);
-- `*` cobre tudo.
+- `projects:delete` covers exactly `projects:delete`;
+- `projects:*` covers `projects:delete`, `projects:read`, … (but **not** `projects:sub:deep` — the number of segments must match);
+- `*` covers everything.
 
-### Papéis (roles)
+### Roles
 
-Um papel agrupa permissões e é atribuído a utilizadores dentro de um âmbito (scope):
+A role groups permissions and is assigned to users within a scope:
 
 ```ts
 import { MemoryAccessStore } from '@machize/permissions'
 
 const store = new MemoryAccessStore()
 await store.grantToRole('editor', ['articles:read', 'articles:write'], 'acme')
-await store.assignRole('user-bob', 'editor', 'acme') // só vale no tenant acme
+await store.assignRole('user-bob', 'editor', 'acme') // only applies in the acme tenant
 await store.removeRole('user-bob', 'editor', 'acme')
 ```
 
-Também podes dar permissões diretamente a um utilizador com `grantToUser(userId, permissions, scope)`.
+You can also grant permissions directly to a user with `grantToUser(userId, permissions, scope)`.
 
-### Âmbito por tenant (scope)
+### Per-tenant scope
 
-Quando o Gate verifica, procura os grants em **dois** âmbitos: o âmbito atual e o `GLOBAL_SCOPE` (`'global'`). O âmbito atual, por omissão, é o `ctx().tenant.id` definido pelo `@machize/tenancy` — ou `global` se não houver tenant. Podes substituir com a opção `scope`:
+When the Gate checks, it looks for grants in **two** scopes: the current scope and `GLOBAL_SCOPE` (`'global'`). The current scope, by default, is `ctx().tenant.id` set by `@machize/tenancy` — or `global` if there's no tenant. You can override it with the `scope` option:
 
 ```ts
 import { Gate, MemoryAccessStore } from '@machize/permissions'
 
 const gate = new Gate({
   store: new MemoryAccessStore(),
-  scope: () => 'o-meu-ambito', // avançado: âmbito personalizado
+  scope: () => 'my-scope', // advanced: custom scope
 })
 ```
 
-### Políticas (regras sobre um recurso concreto)
+### Policies (rules about a specific resource)
 
-Uma **política** decide olhando para o objeto em causa — por exemplo, "só o dono edita". Quando chamas `can()` com um terceiro argumento (o recurso) e existe uma política para `recurso:ação`, é a política que decide (os grants não são consultados):
+A **policy** decides by looking at the object in question — for example, "only the owner can edit." When you call `can()` with a third argument (the resource) and a policy exists for `resource:action`, the policy decides (grants are not consulted):
 
 ```ts
 import { Gate, MemoryAccessStore, definePolicy } from '@machize/permissions'
@@ -133,15 +133,15 @@ const ProjectPolicy = definePolicy<Project>('project', {
 })
 
 const gate = new Gate({ store: new MemoryAccessStore(), policies: [ProjectPolicy as never] })
-// ou depois: gate.register(ProjectPolicy as never)
+// or later: gate.register(ProjectPolicy as never)
 
 await gate.can({ id: 'u9' }, 'project:update', { ownerId: 'u9' })    // true
-await gate.can({ id: 'u9' }, 'project:update', { ownerId: 'outro' }) // false
+await gate.can({ id: 'u9' }, 'project:update', { ownerId: 'other-user' }) // false
 ```
 
 ### Super admin
 
-Uma função que, quando devolve `true` para um utilizador, autoriza tudo (equivalente ao `Gate::before` do Laravel):
+A function that, when it returns `true` for a user, authorizes everything (equivalent to Laravel's `Gate::before`):
 
 ```ts
 import { Gate, MemoryAccessStore } from '@machize/permissions'
@@ -151,12 +151,12 @@ const gate = new Gate({
   superAdmin: (user) => user['owner'] === true,
 })
 
-await gate.can({ id: 'x', owner: true }, 'qualquer:coisa') // true, sempre
+await gate.can({ id: 'x', owner: true }, 'any:thing') // true, always
 ```
 
-### Usar o Gate dentro de handlers
+### Using the Gate inside handlers
 
-O plugin regista o Gate no container sob o token `GATE`:
+The plugin registers the Gate in the container under the `GATE` token:
 
 ```ts
 import { ctx, type Container } from '@machize/core'
@@ -166,75 +166,75 @@ const gate = (ctx().container as Container).get(GATE)
 await gate.authorize(ctx().user!, 'billing:write')
 ```
 
-## Referência da API
+## API reference
 
 ### `Gate` / `permissionsPlugin(options)`
 
-Opções (`GateOptions` = `PermissionsPluginOptions`):
+Options (`GateOptions` = `PermissionsPluginOptions`):
 
-| Nome | Tipo | Obrigatório? | Default | Descrição |
+| Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `store` | `AccessStore` | Sim | — | Onde vivem os grants (a tua BD em produção). |
-| `superAdmin` | `(user) => boolean \| Promise<boolean>` | Não | — | Curto-circuito: `true` autoriza tudo. |
-| `scope` | `() => string` | Não | `ctx().tenant.id` ou `'global'` | Âmbito atual das verificações. |
-| `policies` | `Policy<never>[]` | Não | `[]` | Políticas registadas à partida. |
+| `store` | `AccessStore` | Yes | — | Where grants live (your DB in production). |
+| `superAdmin` | `(user) => boolean \| Promise<boolean>` | No | — | Shortcut: `true` authorizes everything. |
+| `scope` | `() => string` | No | `ctx().tenant.id` or `'global'` | Current scope for checks. |
+| `policies` | `Policy<never>[]` | No | `[]` | Policies registered upfront. |
 
-Métodos do `Gate`:
+`Gate` methods:
 
-| Método | Devolve | Descrição |
+| Method | Returns | Description |
 |---|---|---|
-| `can(user, permission, resource?)` | `Promise<boolean>` | Verifica; com recurso e política aplicável, a política decide. |
-| `authorize(user, permission, resource?)` | `Promise<void>` | Como `can`, mas lança `PermissionDeniedError` (403). |
-| `hasRole(user, role)` | `Promise<boolean>` | O utilizador tem o papel (no âmbito atual ou global)? |
-| `register(policy)` | `this` | Regista uma política depois da construção. |
+| `can(user, permission, resource?)` | `Promise<boolean>` | Checks; with a resource and an applicable policy, the policy decides. |
+| `authorize(user, permission, resource?)` | `Promise<void>` | Like `can`, but throws `PermissionDeniedError` (403). |
+| `hasRole(user, role)` | `Promise<boolean>` | Does the user have the role (in the current scope or global)? |
+| `register(policy)` | `this` | Registers a policy after construction. |
 
-### Interface `AccessStore`
+### `AccessStore` interface
 
-Implementa isto sobre a tua base de dados. `scope` é o id do tenant ou `GLOBAL_SCOPE`:
+Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOPE`:
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `getUserRoles(userId, scope)` | Papéis do utilizador no âmbito. |
-| `getUserPermissions(userId, scope)` | Permissões diretas do utilizador. |
-| `getRolePermissions(role, scope)` | Permissões de um papel. |
-| `assignRole(userId, role, scope)` / `removeRole(...)` | Atribuir/retirar papel. |
-| `grantToRole(role, permissions, scope)` | Dar permissões a um papel. |
-| `grantToUser(userId, permissions, scope)` | Dar permissões diretas. |
+| `getUserRoles(userId, scope)` | The user's roles in the scope. |
+| `getUserPermissions(userId, scope)` | The user's direct permissions. |
+| `getRolePermissions(role, scope)` | A role's permissions. |
+| `assignRole(userId, role, scope)` / `removeRole(...)` | Assign/remove a role. |
+| `grantToRole(role, permissions, scope)` | Grant permissions to a role. |
+| `grantToUser(userId, permissions, scope)` | Grant direct permissions. |
 
-`MemoryAccessStore` é a implementação em memória (dev/testes).
+`MemoryAccessStore` is the in-memory implementation (dev/tests).
 
-### Outros exports
+### Other exports
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `permissionMatches(granted, requested)` | Correspondência com wildcards. |
-| `definePolicy<T>(resource, checks)` | Cria uma `Policy<T>` (checks: `(user, resource) => boolean \| Promise<boolean>`). |
-| `GLOBAL_SCOPE` | A string `'global'`. |
-| `GATE` | Token de injeção do Gate no container. |
-| `PolicyUser` | Tipo mínimo de utilizador: `{ id: string; [key: string]: unknown }`. |
-| `Policy`, `PolicyCheck` | Tipos das políticas. Avançado. |
+| `permissionMatches(granted, requested)` | Wildcard matching. |
+| `definePolicy<T>(resource, checks)` | Creates a `Policy<T>` (checks: `(user, resource) => boolean \| Promise<boolean>`). |
+| `GLOBAL_SCOPE` | The string `'global'`. |
+| `GATE` | DI token for the Gate in the container. |
+| `PolicyUser` | Minimal user type: `{ id: string; [key: string]: unknown }`. |
+| `Policy`, `PolicyCheck` | Policy types. Advanced. |
 | `PermissionDeniedError` | `PERMISSION_DENIED`, HTTP 403. |
-| `AuthRequiredGuardError` | `AUTH_REQUIRED`, HTTP 401 — rota `meta.can` sem utilizador. |
+| `AuthRequiredGuardError` | `AUTH_REQUIRED`, HTTP 401 — a `meta.can` route without a user. |
 
-### Guard de rotas
+### Route guard
 
-O `permissionsPlugin` regista um guard: qualquer rota com `meta: { can: 'alguma:permissao' }` exige um `ctx().user` (senão 401) com essa permissão (senão 403). O guard só aceita uma string única em `meta.can`.
+`permissionsPlugin` registers a guard: any route with `meta: { can: 'some:permission' }` requires a `ctx().user` (otherwise 401) with that permission (otherwise 403). The guard only accepts a single string in `meta.can`.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"403 PERMISSION_DENIED mas eu dei a permissão."** Verifica o **âmbito**: um grant no scope `'acme'` só vale quando o pedido corre no tenant `acme`. Se queres que valha em todo o lado, usa `GLOBAL_SCOPE`.
+**"403 PERMISSION_DENIED but I granted the permission."** Check the **scope**: a grant in the `'acme'` scope only applies when the request runs in the `acme` tenant. If you want it to apply everywhere, use `GLOBAL_SCOPE`.
 
-**"401 AUTH_REQUIRED numa rota com meta.can."** O guard precisa de `ctx().user` — regista antes um plugin de autenticação (ex.: `@machize/auth`) e envia credenciais no pedido.
+**"401 AUTH_REQUIRED on a route with meta.can."** The guard needs `ctx().user` — register an authentication plugin first (e.g. `@machize/auth`) and send credentials in the request.
 
-**"`projects:*` não cobre `projects:sub:deep`."** Intencional: o wildcard cobre um segmento; o número de segmentos tem de coincidir. Usa `projects:sub:*` ou `*`.
+**"`projects:*` doesn't cover `projects:sub:deep`."** Intentional: the wildcard covers one segment; the number of segments must match. Use `projects:sub:*` or `*`.
 
-**"A política não é chamada."** A política só decide quando passas o **recurso** como terceiro argumento de `can`/`authorize`, e o nome da permissão tem de ser `recurso:ação` com o mesmo nome de recurso da política. O guard `meta.can` não passa recursos — para políticas, chama o Gate dentro do handler.
+**"The policy isn't being called."** A policy only decides when you pass the **resource** as the third argument to `can`/`authorize`, and the permission name must be `resource:action` with the same resource name as the policy. The `meta.can` guard doesn't pass resources — for policies, call the Gate inside the handler.
 
-**"Os grants desaparecem ao reiniciar."** `MemoryAccessStore` vive em memória. Implementa `AccessStore` sobre a tua base de dados.
+**"Grants disappear on restart."** `MemoryAccessStore` lives in memory. Implement `AccessStore` on top of your database.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **@machize/auth** — autentica e define `ctx().user`, que o guard `meta.can` consome. Auth = quem és; permissions = o que podes.
-- **@machize/tenancy** — define `ctx().tenant`; o Gate usa-o como âmbito por omissão, isolando permissões por tenant.
-- **@machize/teams** — pode espelhar as pertenças de equipa como papéis: o `MemoryAccessStore` (ou o teu `AccessStore`) satisfaz a interface `RoleAssigner` do teams, e assim "ser admin da equipa acme" torna-se automaticamente o papel `admin` no scope `acme`.
-- **@machize/core / @machize/fastify** — container, contexto e execução dos guards HTTP.
+- **@machize/auth** — authenticates and sets `ctx().user`, which the `meta.can` guard consumes. Auth = who you are; permissions = what you can do.
+- **@machize/tenancy** — sets `ctx().tenant`; the Gate uses it as the default scope, isolating permissions per tenant.
+- **@machize/teams** — can mirror team memberships as roles: `MemoryAccessStore` (or your own `AccessStore`) satisfies teams' `RoleAssigner` interface, so "being an admin of the acme team" automatically becomes the `admin` role in the `acme` scope.
+- **@machize/core / @machize/fastify** — container, context, and execution of the HTTP guards.

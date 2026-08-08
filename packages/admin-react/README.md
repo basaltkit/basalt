@@ -1,28 +1,28 @@
 # @machize/admin-react
 
-Componentes React prontos a usar para o motor `@machize/admin`: uma tabela (`DataTable`) e um formulário (`ResourceForm`) gerados automaticamente a partir dos teus schemas Zod, mais um hook (`useList`) para carregar dados. Precisas dele quando queres pôr um painel de administração no ecrã com React, sem escrever tabelas e formulários à mão.
+Ready-to-use React components for the `@machize/admin` engine: a table (`DataTable`) and a form (`ResourceForm`) generated automatically from your Zod schemas, plus a hook (`useList`) for loading data. You need this when you want to put an admin panel on screen with React, without writing tables and forms by hand.
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/admin` (o "motor") sabe **o que** mostrar — colunas, campos, validação — mas não desenha nada. Este pacote é a **camada React**: transforma esses modelos em elementos visíveis. Um **componente React** é uma função que devolve o que aparece no ecrã (escrito em JSX/TSX, uma sintaxe parecida com HTML dentro de TypeScript); as **props** são os parâmetros que passas ao componente para o configurar.
+`@machize/admin` (the "engine") knows **what** to show — columns, fields, validation — but doesn't render anything. This package is the **React layer**: it turns those models into visible elements. A **React component** is a function that returns what appears on screen (written in JSX/TSX, an HTML-like syntax inside TypeScript); **props** are the parameters you pass to the component to configure it.
 
-Na prática: defines um recurso uma vez (por exemplo "projetos", com o seu schema Zod) e este pacote dá-te de imediato uma tabela com cabeçalhos legíveis e células formatadas (booleanos como "Yes/No", datas como `2026-08-07`), e um formulário com o input certo para cada tipo de campo — caixa de texto para texto, *checkbox* para verdadeiro/falso, lista pendente (`<select>`) para enums, input numérico para números — já com validação e mensagens de erro por campo.
+In practice: you define a resource once (e.g. "projects", with its Zod schema) and this package immediately gives you a table with readable headers and formatted cells (booleans as "Yes/No", dates as `2026-08-07`), and a form with the right input for each field type — text box for text, *checkbox* for true/false, dropdown (`<select>`) for enums, numeric input for numbers — already with validation and per-field error messages.
 
-Importante: os componentes deste pacote produzem **HTML puro, sem estilos** (`<table>`, `<form>`, `<input>`…). É de propósito — aplicas o CSS que quiseres. Se preferes componentes já bonitos com Tailwind/shadcn, usa o pacote irmão `@machize/admin-shadcn`, que tem exatamente as mesmas props.
+Important: the components in this package produce **plain, unstyled HTML** (`<table>`, `<form>`, `<input>`…). This is intentional — you apply whatever CSS you want. If you prefer already-styled components with Tailwind/shadcn, use the sibling package `@machize/admin-shadcn`, which has exactly the same props.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/admin-react @machize/admin zod
 ```
 
-> Requisitos: `react` >= 18 (peer dependency — instala-lo tu no teu projeto). O `@machize/admin` vem como dependência direta, mas precisas do `zod` para escrever os schemas.
+> Requirements: `react` >= 18 (peer dependency — you install it in your project). `@machize/admin` comes as a direct dependency, but you need `zod` to write the schemas.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-Vamos montar um mini-painel de projetos: uma lista e um formulário de criação.
+Let's build a mini project dashboard: a list and a creation form.
 
-**Passo 1 — Define o recurso** (lógica pura, sem React — podes pôr num ficheiro `resources.ts`):
+**Step 1 — Define the resource** (pure logic, no React — you can put it in a `resources.ts` file):
 
 ```ts
 // resources.ts
@@ -44,7 +44,7 @@ export const projects = defineResource({
   columns: ['name', 'status', 'archived'],
 })
 
-// Fonte de dados em memória, só para experimentar:
+// In-memory data source, just for experimenting:
 export const source = memoryDataSource<{
   id: string
   name: string
@@ -53,7 +53,7 @@ export const source = memoryDataSource<{
 }>([{ id: 'p1', name: 'Apollo', status: 'draft', archived: false }])
 ```
 
-**Passo 2 — Cria o ecrã** com os três exports principais:
+**Step 2 — Create the screen** with the three main exports:
 
 ```tsx
 // ProjectsPage.tsx
@@ -61,11 +61,11 @@ import { DataTable, ResourceForm, useList } from '@machize/admin-react'
 import { projects, source } from './resources'
 
 export function ProjectsPage() {
-  // useList carrega a lista quando o componente aparece no ecrã
+  // useList loads the list when the component appears on screen
   const { data, loading, error, reload } = useList(source)
 
-  if (loading) return <p>A carregar…</p>
-  if (error) return <p>Algo correu mal.</p>
+  if (loading) return <p>Loading…</p>
+  if (error) return <p>Something went wrong.</p>
 
   return (
     <div>
@@ -74,15 +74,15 @@ export function ProjectsPage() {
       <DataTable
         resource={projects}
         rows={data}
-        onRowClick={(row) => console.log('clicaste em', row)}
+        onRowClick={(row) => console.log('clicked', row)}
       />
 
-      <h2>Novo projeto</h2>
+      <h2>New project</h2>
       <ResourceForm
         resource={projects}
         onSubmit={async (values) => {
-          await source.create(values) // grava
-          await reload()              // recarrega a tabela
+          await source.create(values) // save
+          await reload()              // reload the table
         }}
       />
     </div>
@@ -90,13 +90,13 @@ export function ProjectsPage() {
 }
 ```
 
-**Passo 3 — O que vês no ecrã:** uma tabela com cabeçalhos "Name", "Status", "Archived" (a coluna booleana mostra "Yes"/"No"), e por baixo um formulário com uma caixa de texto "Name", um `<select>` "Status" com as opções `draft`/`published` e um botão "Save". Se escreveres um nome com menos de 3 letras e carregares em "Save", aparece a mensagem de erro debaixo do campo e nada é gravado.
+**Step 3 — What you see on screen:** a table with headers "Name", "Status", "Archived" (the boolean column shows "Yes"/"No"), and below it a form with a "Name" text box, a "Status" `<select>` with the `draft`/`published` options, and a "Save" button. If you type a name with fewer than 3 letters and click "Save", the error message appears below the field and nothing is saved.
 
-## Guia de utilização
+## Usage guide
 
-### `DataTable` — tabela derivada do schema
+### `DataTable` — schema-derived table
 
-Desenha as linhas de um recurso numa `<table>`. As colunas vêm de `resource.columns()` e cada célula é formatada por tipo com `formatCell`.
+Renders a resource's rows into a `<table>`. Columns come from `resource.columns()` and each cell is formatted by type with `formatCell`.
 
 ```tsx
 import { DataTable } from '@machize/admin-react'
@@ -105,18 +105,18 @@ import { projects } from './resources'
 <DataTable
   resource={projects}
   rows={[{ id: 'p1', name: 'Apollo', status: 'draft', archived: true }]}
-  emptyLabel="Sem registos"                 // mostrado quando rows está vazio
-  onRowClick={(row) => abrirDetalhe(row)}   // torna as linhas clicáveis
+  emptyLabel="No records"                   // shown when rows is empty
+  onRowClick={(row) => openDetail(row)}     // makes rows clickable
 />
 ```
 
-No ecrã: cabeçalho `Name | Status | Archived`, uma linha `Apollo | draft | Yes`. Sem linhas, aparece uma única célula com `emptyLabel` a ocupar toda a largura.
+On screen: header `Name | Status | Archived`, one row `Apollo | draft | Yes`. With no rows, a single cell with `emptyLabel` spans the full width.
 
-### `ResourceForm` — formulário gerado e validado
+### `ResourceForm` — generated and validated form
 
-Formulário **controlado** (o React guarda os valores enquanto escreves) gerado de `resource.formFields(mode)`. Ao submeter, valida com `resource.validate(values, mode)`; com erros, mostra uma mensagem por campo (elemento com `role="alert"`) e **não** chama `onSubmit`; sem erros, chama `onSubmit` com os dados já validados e convertidos pelo Zod.
+**Controlled** form (React holds the values as you type) generated from `resource.formFields(mode)`. On submit, it validates with `resource.validate(values, mode)`; on errors, it shows a message per field (element with `role="alert"`) and **does not** call `onSubmit`; without errors, it calls `onSubmit` with the data already validated and converted by Zod.
 
-Criar:
+Create:
 
 ```tsx
 import { ResourceForm } from '@machize/admin-react'
@@ -128,50 +128,50 @@ import { projects, source } from './resources'
 />
 ```
 
-Editar (modo `update`, com valores iniciais):
+Edit (`update` mode, with initial values):
 
 ```tsx
 <ResourceForm
   resource={projects}
   mode="update"
   initialValues={{ name: 'Apollo', status: 'draft' }}
-  submitLabel="Guardar alterações"
+  submitLabel="Save changes"
   onSubmit={async (values) => { await source.update('p1', values) }}
 />
 ```
 
-Inputs gerados por tipo de campo:
+Inputs generated per field type:
 
-| Tipo do campo | Elemento no ecrã | Valor entregue |
+| Field type | Screen element | Delivered value |
 |---|---|---|
 | `string` | `<input type="text">` | `string` |
-| `number` | `<input type="number">` | `number` (ou `undefined` se vazio) |
+| `number` | `<input type="number">` | `number` (or `undefined` if empty) |
 | `boolean` | `<input type="checkbox">` | `boolean` |
-| `date` | `<input type="date">` | `string` (ex.: `'2026-08-07'`) |
-| `enum` | `<select>` com as opções | `string` |
+| `date` | `<input type="date">` | `string` (e.g. `'2026-08-07'`) |
+| `enum` | `<select>` with the options | `string` |
 | `unknown` | `<input type="text">` | `string` |
 
-### `useList` — carregar uma lista de dados
+### `useList` — load a list of data
 
-Um **hook** é uma função especial do React (começa por `use`) que dá superpoderes a um componente — aqui, carregar dados de um `AdminDataSource` quando o componente aparece, com estado de carregamento, erro e recarga manual.
+A **hook** is a special React function (starts with `use`) that gives a component superpowers — here, loading data from an `AdminDataSource` when the component mounts, with loading state, error, and manual reload.
 
 ```tsx
 import { useList } from '@machize/admin-react'
 import { source } from './resources'
 
-function Lista() {
+function List() {
   const { data, loading, error, reload } = useList(source, { page: 1, pageSize: 20, search: 'apo' })
-  // data: linhas carregadas; loading: true enquanto pede;
-  // error: o erro lançado pela fonte (ou null); reload(): volta a pedir.
-  return loading ? <p>…</p> : <button onClick={() => void reload()}>Recarregar ({data.length})</button>
+  // data: loaded rows; loading: true while fetching;
+  // error: the error thrown by the source (or null); reload(): fetches again.
+  return loading ? <p>…</p> : <button onClick={() => void reload()}>Reload ({data.length})</button>
 }
 ```
 
-Nota: os `params` são comparados por conteúdo (via `JSON.stringify`), por isso podes passar um objeto novo em cada render sem provocar pedidos em ciclo.
+Note: `params` are compared by content (via `JSON.stringify`), so you can pass a new object on every render without triggering a request loop.
 
-### `formatCell` — formatar um valor para apresentação
+### `formatCell` — format a value for display
 
-Usada internamente pelo `DataTable`; exportada para usares nas tuas próprias tabelas.
+Used internally by `DataTable`; exported for use in your own tables.
 
 ```ts
 import { formatCell } from '@machize/admin-react'
@@ -183,77 +183,77 @@ formatCell(null, 'string')                     // ''
 formatCell(42, 'number')                       // '42'
 ```
 
-## Referência da API
+## API reference
 
-### `DataTable` (componente)
+### `DataTable` (component)
 
-| Prop | Tipo | Obrigatório? | Default | Descrição |
+| Prop | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `resource` | `Resource` | Sim | — | O recurso (de `defineResource`) que define as colunas. |
-| `rows` | `Record<string, unknown>[]` | Sim | — | As linhas a mostrar. |
-| `onRowClick` | `(row) => void` | Não | — | Chamado com a linha clicada. |
-| `emptyLabel` | `string` | Não | `'No records'` | Texto quando não há linhas. |
+| `resource` | `Resource` | Yes | — | The resource (from `defineResource`) that defines the columns. |
+| `rows` | `Record<string, unknown>[]` | Yes | — | The rows to display. |
+| `onRowClick` | `(row) => void` | No | — | Called with the clicked row. |
+| `emptyLabel` | `string` | No | `'No records'` | Text shown when there are no rows. |
 
-A chave de cada linha é `row[resource.idField]` (ou o índice, se faltar).
+Each row's key is `row[resource.idField]` (or the index, if missing).
 
-### `ResourceForm` (componente)
+### `ResourceForm` (component)
 
-| Prop | Tipo | Obrigatório? | Default | Descrição |
+| Prop | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `resource` | `Resource` | Sim | — | O recurso que define campos e validação. |
-| `initialValues` | `Record<string, unknown>` | Não | `{}` | Valores pré-preenchidos. |
-| `mode` | `'create' \| 'update'` | Não | `'create'` | Escolhe o schema de validação. |
-| `onSubmit` | `(data) => void \| Promise<void>` | Sim | — | Recebe os dados validados/convertidos pelo Zod. |
-| `submitLabel` | `string` | Não | `'Save'` | Texto do botão. |
+| `resource` | `Resource` | Yes | — | The resource that defines fields and validation. |
+| `initialValues` | `Record<string, unknown>` | No | `{}` | Pre-filled values. |
+| `mode` | `'create' \| 'update'` | No | `'create'` | Chooses the validation schema. |
+| `onSubmit` | `(data) => void \| Promise<void>` | Yes | — | Receives the data validated/converted by Zod. |
+| `submitLabel` | `string` | No | `'Save'` | Button text. |
 
-Acessibilidade: o `<form>` tem `aria-label` `"<label do recurso> form"`; cada erro é um `<span role="alert" data-field="<nome>">`.
+Accessibility: the `<form>` has `aria-label` `"<resource label> form"`; each error is a `<span role="alert" data-field="<name>">`.
 
 ### `useList(source, params?)` (hook)
 
-| Parâmetro | Tipo | Obrigatório? | Descrição |
+| Parameter | Type | Required? | Description |
 |---|---|---|---|
-| `source` | `AdminDataSource<T>` | Sim | Fonte de dados (de `@machize/admin`). |
-| `params` | `ListParams` (`{ page?, pageSize?, search? }`) | Não | Parâmetros de listagem. |
+| `source` | `AdminDataSource<T>` | Yes | Data source (from `@machize/admin`). |
+| `params` | `ListParams` (`{ page?, pageSize?, search? }`) | No | Listing parameters. |
 
-Devolve `UseListResult<T>`:
+Returns `UseListResult<T>`:
 
-| Campo | Tipo | Descrição |
+| Field | Type | Description |
 |---|---|---|
-| `data` | `T[]` | Linhas carregadas (`[]` inicialmente). |
-| `loading` | `boolean` | `true` durante o pedido (começa a `true`). |
-| `error` | `unknown` | Erro lançado por `source.list` (ou `null`). |
-| `reload` | `() => Promise<void>` | Repete o pedido manualmente. |
+| `data` | `T[]` | Loaded rows (`[]` initially). |
+| `loading` | `boolean` | `true` while the request is in flight (starts as `true`). |
+| `error` | `unknown` | Error thrown by `source.list` (or `null`). |
+| `reload` | `() => Promise<void>` | Repeats the request manually. |
 
-### `formatCell(value, type): string` (função)
+### `formatCell(value, type): string` (function)
 
-| Parâmetro | Tipo | Descrição |
+| Parameter | Type | Description |
 |---|---|---|
-| `value` | `unknown` | O valor da célula. |
-| `type` | `FieldType` | Tipo do campo (de `@machize/admin`). |
+| `value` | `unknown` | The cell's value. |
+| `type` | `FieldType` | Field type (from `@machize/admin`). |
 
-`null`/`undefined` → `''`; `boolean` → `'Yes'`/`'No'`; `date` → `AAAA-MM-DD` (ou `String(value)` se a data for inválida); restantes → `String(value)`.
+`null`/`undefined` → `''`; `boolean` → `'Yes'`/`'No'`; `date` → `YYYY-MM-DD` (or `String(value)` if the date is invalid); everything else → `String(value)`.
 
-### Tipos exportados
+### Exported types
 
-`DataTableProps`, `ResourceFormProps`, `UseListResult<T>` — as formas descritas nas tabelas acima.
+`DataTableProps`, `ResourceFormProps`, `UseListResult<T>` — the shapes described in the tables above.
 
-## Erros comuns e soluções (FAQ)
+## Common issues and solutions (FAQ)
 
-**"A tabela/formulário aparece sem qualquer estilo."** É o comportamento esperado — este pacote emite HTML puro. Estiliza com o teu CSS (ex.: `table { … }`) ou usa `@machize/admin-shadcn` para ter componentes já estilizados.
+**"The table/form appears with no styling at all."** This is expected behavior — this package emits plain HTML. Style it with your own CSS (e.g. `table { … }`) or use `@machize/admin-shadcn` for already-styled components.
 
-**"O `onSubmit` nunca é chamado."** A validação falhou. Procura no ecrã as mensagens por baixo dos campos (elementos `role="alert"`). Confirma o `mode`: em `update` valida com `updateSchema` (ou `createSchema` em fallback).
+**"`onSubmit` is never called."** Validation failed. Look on screen for the messages below the fields (`role="alert"` elements). Check the `mode`: in `update` it validates with `updateSchema` (or `createSchema` as a fallback).
 
-**"O campo de data devolve texto, não `Date`."** O `<input type="date">` do browser produz uma string `'AAAA-MM-DD'`. Se o teu schema exigir `z.date()`, usa `z.coerce.date()` no schema de input para o Zod converter automaticamente.
+**"The date field returns text, not `Date`."** The browser's `<input type="date">` produces a `'YYYY-MM-DD'` string. If your schema requires `z.date()`, use `z.coerce.date()` in the input schema so Zod converts it automatically.
 
-**"O `useList` pede os dados em ciclo infinito."** Os `params` são estabilizados por conteúdo, mas o `source` é comparado por identidade. Cria a fonte de dados **fora** do componente (ou com `useMemo`) — se criares `memoryDataSource(...)` dentro do corpo do componente, cada render cria uma fonte nova e dispara novo pedido.
+**"`useList` fetches data in an infinite loop."** `params` are stabilized by content, but `source` is compared by identity. Create the data source **outside** the component (or with `useMemo`) — if you create `memoryDataSource(...)` inside the component body, every render creates a new source and triggers a new request.
 
-**"Alterei `initialValues` e o formulário não atualizou."** Os valores iniciais só são lidos na montagem (é um formulário controlado com estado interno). Para editar outro registo, remonta o componente com uma `key` diferente: `<ResourceForm key={row.id} … />`.
+**"I changed `initialValues` and the form didn't update."** Initial values are only read on mount (it's a controlled form with internal state). To edit a different record, remount the component with a different `key`: `<ResourceForm key={row.id} … />`.
 
-**"Erro sobre versões de React / hooks inválidos."** Garante uma única cópia de `react` >= 18 no projeto (é peer dependency).
+**"Error about React versions / invalid hooks."** Make sure there's a single copy of `react` >= 18 in the project (it's a peer dependency).
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/admin`** — o motor por baixo: `DataTable` usa `tableView`, `ResourceForm` usa `formView` + `resource.validate`, e `useList` consome qualquer `AdminDataSource`. Defines recursos lá; desenha-los aqui.
-- **`@machize/admin-shadcn`** — alternativa visual com estilo shadcn/ui (Tailwind). O `DataTable` e o `ResourceForm` de lá têm as **mesmas props** — trocar de pacote é trocar o import.
-- **`@machize/dashboard`** — organiza vários recursos em secções navegáveis; usa estes componentes para desenhar cada secção de recurso.
-- **`@machize/sdk`** — implementa `AdminDataSource` sobre o cliente tipado do SDK para ligares estes componentes a um backend Machize real.
+- **`@machize/admin`** — the engine underneath: `DataTable` uses `tableView`, `ResourceForm` uses `formView` + `resource.validate`, and `useList` consumes any `AdminDataSource`. You define resources there; render them here.
+- **`@machize/admin-shadcn`** — visual alternative styled with shadcn/ui (Tailwind). Its `DataTable` and `ResourceForm` have the **same props** — switching packages is just switching the import.
+- **`@machize/dashboard`** — organizes several resources into navigable sections; uses these components to render each resource section.
+- **`@machize/sdk`** — implements `AdminDataSource` over the SDK's typed client so you can wire these components to a real Machize backend.

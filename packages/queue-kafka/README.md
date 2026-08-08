@@ -1,22 +1,22 @@
 # @machize/queue-kafka
 
-Driver de **Apache Kafka** para o [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): executa os teus jobs produzindo e consumindo mensagens em tópicos Kafka, sem mudares o código dos jobs. Precisas deste pacote quando a tua plataforma de dados já assenta em Kafka e queres processar trabalho em segundo plano sobre a mesma infraestrutura.
+**Apache Kafka** driver for [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): runs your jobs by producing and consuming messages on Kafka topics, without changing your job code. You need this package when your data platform is already built on Kafka and you want to process background work on the same infrastructure.
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/queue` define **jobs** de forma abstrata e escolhe o backend por um *driver*. Este pacote fornece um driver que fala com o **Kafka**: os jobs são produzidos num tópico e consumidos por um *consumer group*.
+`@machize/queue` defines **jobs** in an abstract way and picks the backend via a *driver*. This package provides a driver that talks to **Kafka**: jobs are produced to a topic and consumed by a *consumer group*.
 
-`defineJob`, `dispatch`, os workers e a propagação de contexto continuam iguais — só trocas o driver.
+`defineJob`, `dispatch`, the workers and context propagation all stay the same — you only swap the driver.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/queue-kafka kafkajs
 ```
 
-O `kafkajs` é uma **peer dependency**. Precisas de um cluster Kafka acessível.
+`kafkajs` is a **peer dependency**. You need a reachable Kafka cluster.
 
-## Começar em 5 minutos
+## Getting started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -28,7 +28,7 @@ const IndexDocument = defineJob<{ id: string }>({
   queue: 'indexing',
   attempts: 3,
   async handle({ id }) {
-    // ... indexar
+    // ... index it
   },
 })
 
@@ -45,53 +45,53 @@ const app = await createApp({
 await IndexDocument.dispatch({ id: 'doc-1' })
 ```
 
-## Honestidade sobre o Kafka
+## Being honest about Kafka
 
-O Kafka é um **log distribuído**, não uma *task queue* — e o driver é deliberadamente honesto sobre isso nas suas `capabilities`:
+Kafka is a **distributed log**, not a *task queue* — and the driver is deliberately honest about that in its `capabilities`:
 
-| Capacidade | Suportada | Porquê |
+| Capability | Supported | Why |
 |---|:---:|---|
-| `delayed` (entrega atrasada) | ❌ | O Kafka não adia mensagens. |
-| `priority` | ❌ | O Kafka não tem prioridade de mensagens. |
-| `retries` | ✅ | Via um *retry topic* que o worker também consome. |
-| `backoff` | ❌ | Sem atraso entre tentativas (o Kafka não defere). |
+| `delayed` (delayed delivery) | ❌ | Kafka doesn't delay messages. |
+| `priority` | ❌ | Kafka has no message priority. |
+| `retries` | ✅ | Via a *retry topic* that the worker also consumes. |
+| `backoff` | ❌ | No delay between attempts (Kafka doesn't defer). |
 
-Como o driver **declara** isto, um job que peça `delay` ou `priority` é apanhado pela política `onUnsupported` do `@machize/queue`:
+Since the driver **declares** this, a job that requests `delay` or `priority` is caught by `@machize/queue`'s `onUnsupported` policy:
 
 ```ts
 queuePlugin({ driver: new KafkaQueueDriver({ brokers }), onUnsupported: 'throw' })
-await Job.dispatch(payload, { delay: '5m' }) // → lança UnsupportedJobOptionError
-// com onUnsupported: 'warn' (default) → avisa uma vez e corre já
+await Job.dispatch(payload, { delay: '5m' }) // → throws UnsupportedJobOptionError
+// with onUnsupported: 'warn' (default) → warns once and runs immediately
 ```
 
-> Se o que precisas é de *streaming*/pub-sub (e não jobs com retry/atraso), o encaixe natural no Machize costuma ser o `@machize/events`, não o `@machize/queue`.
+> If what you need is *streaming*/pub-sub (rather than jobs with retry/delay), the natural fit in Machize is usually `@machize/events`, not `@machize/queue`.
 
-## Como funciona
+## How it works
 
-Para cada fila `t`:
+For each queue `t`:
 
-- **`t`** — o tópico principal onde os jobs são produzidos.
-- **`t.retry`** — tópico de re-tentativa que o worker também subscreve; um job falhado é re-produzido aqui com o contador de tentativas incrementado.
-- **`t.dead`** — tópico de dead-letter para jobs que esgotaram as tentativas.
+- **`t`** — the main topic where jobs are produced.
+- **`t.retry`** — retry topic that the worker also subscribes to; a failed job is re-produced here with the attempt counter incremented.
+- **`t.dead`** — dead-letter topic for jobs that exhausted their attempts.
 
-A concorrência do worker é passada a `partitionsConsumedConcurrently` — o paralelismo real é limitado pelo **número de partições** do tópico, não por um número arbitrário.
+The worker's concurrency is passed as `partitionsConsumedConcurrently` — actual parallelism is limited by the topic's **number of partitions**, not an arbitrary number.
 
-## Referência da API
+## API reference
 
 ### `new KafkaQueueDriver(options)`
 
-| Opção | Tipo | Default | Descrição |
+| Option | Type | Default | Description |
 |---|---|---|---|
-| `brokers` | `string[]` | — (obrigatório) | Lista de brokers, ex.: `['localhost:9092']`. |
-| `clientId` | `string` | `'machize'` | Client id do Kafka. |
-| `groupId` | `string` | `'machize-queue'` | Consumer group dos workers. |
-| `retrySuffix` | `string` | `'.retry'` | Sufixo do tópico de re-tentativa. |
-| `deadSuffix` | `string` | `'.dead'` | Sufixo do tópico de dead-letter. |
-| `client` | `KafkaClient` | kafkajs | Cliente injetável — usado nos testes sem broker. |
+| `brokers` | `string[]` | — (required) | List of brokers, e.g. `['localhost:9092']`. |
+| `clientId` | `string` | `'machize'` | Kafka client id. |
+| `groupId` | `string` | `'machize-queue'` | Workers' consumer group. |
+| `retrySuffix` | `string` | `'.retry'` | Suffix for the retry topic. |
+| `deadSuffix` | `string` | `'.dead'` | Suffix for the dead-letter topic. |
+| `client` | `KafkaClient` | kafkajs | Injectable client — used in tests without a broker. |
 
-Implementa o contrato `QueueDriver` do `@machize/queue`.
+Implements the `QueueDriver` contract from `@machize/queue`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/queue`** — este é um driver desse pacote; a API de jobs vem de lá.
-- Drivers irmãos: [`@machize/queue-rabbitmq`](https://www.npmjs.com/package/@machize/queue-rabbitmq) e [`@machize/queue-sqs`](https://www.npmjs.com/package/@machize/queue-sqs).
+- **`@machize/queue`** — this is a driver for that package; the jobs API comes from there.
+- Sibling drivers: [`@machize/queue-rabbitmq`](https://www.npmjs.com/package/@machize/queue-rabbitmq) and [`@machize/queue-sqs`](https://www.npmjs.com/package/@machize/queue-sqs).

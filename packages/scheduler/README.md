@@ -1,30 +1,30 @@
 # @machize/scheduler
 
-Agendador de tarefas para aplicações Machize: define, com uma API fluente e legível (`daily().at('03:00')`), tarefas que correm automaticamente em horários certos — backups, relatórios, limpezas, faturação.
+Task scheduler for Machize applications: define, with a fluent, readable API (`daily().at('03:00')`), tasks that run automatically at set times — backups, reports, cleanups, billing.
 
-Precisas deste módulo sempre que quiseres que algo aconteça **num horário**, e não em resposta a um pedido do utilizador.
+You need this module whenever you want something to happen **on a schedule**, rather than in response to a user request.
 
 ---
 
-## O que este módulo resolve
+## What this module solves
 
-Muitas aplicações precisam de trabalho periódico: apagar sessões expiradas todas as noites, enviar um resumo semanal ao domingo, fechar a faturação no dia 1 de cada mês. A forma tradicional de o fazer é o **cron** — um formato de 5 campos (`minuto hora dia-do-mês mês dia-da-semana`, ex.: `0 3 * * *` = "todos os dias às 03:00") que é poderoso mas fácil de escrever mal.
+Many applications need periodic work: deleting expired sessions every night, sending a weekly summary on Sunday, closing billing on the 1st of each month. The traditional way to do this is **cron** — a 5-field format (`minute hour day-of-month month day-of-week`, e.g. `0 3 * * *` = "every day at 03:00") that is powerful but easy to get wrong.
 
-Este módulo deixa-te declarar os horários em código legível — `schedule.call('backup', fazerBackup).daily().at('03:00')` — sem decorares a sintaxe cron (embora também a aceite como "escape hatch"). O agendador acorda **uma vez por minuto**, verifica que entradas estão "devidas" nesse minuto e executa-as.
+This module lets you declare schedules in readable code — `schedule.call('backup', doBackup).daily().at('03:00')` — without memorizing cron syntax (though it also accepts it as an "escape hatch"). The scheduler wakes up **once a minute**, checks which entries are "due" that minute, and runs them.
 
-Além disso trata dos problemas chatos: **fusos horários** (agenda às 03:00 de Lisboa ou de São Paulo, não do servidor), **sobreposição** (se a execução anterior ainda estiver a decorrer, salta a nova com `withoutOverlapping()`), **falhas** (handler `onFailure` por entrada; sem ele, o erro é agregado sem derrubar o processo) e **testabilidade** (o método `tick(data)` é determinístico — nos testes chamas-lo com uma data fixa, sem esperar por relógios).
+It also handles the annoying problems: **timezones** (schedule at 03:00 in Lisbon or São Paulo, not the server's), **overlap** (if the previous run is still in progress, skip the new one with `withoutOverlapping()`), **failures** (`onFailure` handler per entry; without it, the error is aggregated without crashing the process) and **testability** (the `tick(data)` method is deterministic — in tests you call it with a fixed date, with no need to wait on real clocks).
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/scheduler
 ```
 
-Depende de `@machize/core` e integra-se (opcionalmente) com `@machize/queue`.
+Depends on `@machize/core` and integrates (optionally) with `@machize/queue`.
 
-## Começar em 5 minutos
+## Getting started in 5 minutes
 
-**1. Regista o plugin e define os agendamentos** (ex.: `src/app.ts`):
+**1. Register the plugin and define the schedules** (e.g. `src/app.ts`):
 
 ```ts
 import { createApp } from '@machize/core'
@@ -34,13 +34,13 @@ const app = await createApp({
   plugins: [
     schedulerPlugin({
       define: (schedule) => {
-        // todos os minutos
-        schedule.call('heartbeat', () => console.log('ainda vivo'))
+        // every minute
+        schedule.call('heartbeat', () => console.log('still alive'))
 
-        // todos os dias às 03:00 UTC
+        // every day at 03:00 UTC
         schedule
           .call('backup', async () => {
-            // fazer o backup…
+            // do the backup…
           })
           .daily()
           .at('03:00')
@@ -50,9 +50,9 @@ const app = await createApp({
 }).boot()
 ```
 
-**2. Não há passo 2.** No `boot`, o plugin chama o teu `define`, e o temporizador interno arranca sozinho (alinha ao próximo minuto e depois verifica a cada 60 segundos). No `shutdown` da aplicação, o temporizador para.
+**2. There's no step 2.** On `boot`, the plugin calls your `define`, and the internal timer starts on its own (it aligns to the next minute and then checks every 60 seconds). On application `shutdown`, the timer stops.
 
-Para veres o que está agendado:
+To see what's scheduled:
 
 ```ts
 import { SCHEDULER } from '@machize/scheduler'
@@ -62,11 +62,11 @@ console.log(app.container.get(SCHEDULER).list())
 //  { name: 'backup',    cron: '0 3 * * *', timezone: 'UTC' }]
 ```
 
-## Guia de utilização
+## Usage guide
 
-### Frequências fluentes
+### Fluent frequencies
 
-Cada método devolve a própria entrada, por isso encadeiam-se:
+Each method returns the entry itself, so they can be chained:
 
 ```ts
 import { Scheduler } from '@machize/scheduler'
@@ -75,70 +75,70 @@ const schedule = new Scheduler()
 
 schedule.call('a', task).everyMinute()          // * * * * *
 schedule.call('b', task).everyMinutes(15)       // */15 * * * *
-schedule.call('c', task).hourly()               // 0 * * * *   (ao minuto 0)
-schedule.call('d', task).daily()                // 0 0 * * *   (meia-noite)
+schedule.call('c', task).hourly()               // 0 * * * *   (at minute 0)
+schedule.call('d', task).daily()                // 0 0 * * *   (midnight)
 schedule.call('e', task).daily().at('03:30')    // 30 3 * * *
-schedule.call('f', task).weekly()               // 0 0 * * 0   (domingo à meia-noite)
+schedule.call('f', task).weekly()               // 0 0 * * 0   (Sunday at midnight)
 schedule.call('g', task).weekly().sundays().at('08:00') // 0 8 * * 0
-schedule.call('h', task).monthly().at('00:30')  // 30 0 1 * *  (dia 1 do mês)
-schedule.call('i', task).mondays().at('09:00')  // dias da semana: sundays()…saturdays()
+schedule.call('h', task).monthly().at('00:30')  // 30 0 1 * *  (the 1st of the month)
+schedule.call('i', task).mondays().at('09:00')  // days of the week: sundays()…saturdays()
 ```
 
-`at('HH:mm')` combina com `daily()`/`weekly()`/`monthly()` — define a hora e o minuto.
+`at('HH:mm')` combines with `daily()`/`weekly()`/`monthly()` — it sets the hour and minute.
 
-### Expressão cron direta
+### Direct cron expression
 
-Quando o fluente não chega, passa cron cru (5 campos; suporta `*`, passos `*/n`, intervalos `a-b` e listas `a,b,c`):
+When the fluent API isn't enough, pass raw cron (5 fields; supports `*`, `*/n` steps, `a-b` ranges and `a,b,c` lists):
 
 ```ts
-// a cada 15 minutos, das 9h às 17h, de segunda a sexta
-schedule.call('sync', sincronizar).cron('*/15 9-17 * * 1-5')
+// every 15 minutes, from 9am to 5pm, Monday to Friday
+schedule.call('sync', sync).cron('*/15 9-17 * * 1-5')
 ```
 
-Uma expressão inválida lança `CronParseError` (código `CRON_INVALID`).
+An invalid expression throws `CronParseError` (code `CRON_INVALID`).
 
-### Fusos horários
+### Timezones
 
-Por omissão os horários são interpretados em **UTC**. Usa `timezone()` com um nome IANA:
+By default, times are interpreted in **UTC**. Use `timezone()` with an IANA name:
 
 ```ts
 schedule
-  .call('relatorio', gerarRelatorio)
+  .call('report', generateReport)
   .daily()
   .at('03:00')
-  .timezone('America/Sao_Paulo') // 03:00 em São Paulo = 06:00 UTC
+  .timezone('America/Sao_Paulo') // 03:00 in São Paulo = 06:00 UTC
 ```
 
-### Evitar sobreposição: `withoutOverlapping()`
+### Avoiding overlap: `withoutOverlapping()`
 
-Se uma tarefa demora mais do que o intervalo entre execuções, a nova execução é **saltada** enquanto a anterior decorre:
+If a task takes longer than the interval between runs, the new run is **skipped** while the previous one is in progress:
 
 ```ts
 const entry = schedule
-  .call('importacao-lenta', importarTudo)
+  .call('slow-import', importEverything)
   .everyMinute()
   .withoutOverlapping()
 
-// entry.skippedOverlaps conta as execuções saltadas (observabilidade/testes)
+// entry.skippedOverlaps counts the skipped runs (observability/tests)
 ```
 
-### Tratar falhas: `onFailure()`
+### Handling failures: `onFailure()`
 
 ```ts
 schedule
-  .call('fragil', tarefaQuePodefalhar)
+  .call('fragile', taskThatMightFail)
   .hourly()
   .onFailure((error) => {
-    console.error('tarefa falhou', error)
+    console.error('task failed', error)
   })
 ```
 
-- **Com** `onFailure`: o erro é entregue ao handler e não se propaga.
-- **Sem** `onFailure`: no `tick()` manual, os erros das entradas devidas são agregados num `AggregateError` (todas as entradas devidas correm na mesma). No modo automático (timer), a falha é engolida para não derrubar o processo — por isso, em produção, define sempre `onFailure` (ou usa `schedule.job(...)`, ver abaixo, e deixa os retries para a fila).
+- **With** `onFailure`: the error is delivered to the handler and doesn't propagate.
+- **Without** `onFailure`: on manual `tick()`, errors from due entries are aggregated into an `AggregateError` (all due entries run in the same call). In automatic mode (timer), the failure is swallowed so as not to crash the process — so in production, always set `onFailure` (or use `schedule.job(...)`, see below, and leave retries to the queue).
 
-### Agendar jobs da fila: `schedule.job()`
+### Scheduling queue jobs: `schedule.job()`
 
-Em vez de executar a tarefa no processo do agendador, podes agendar o **dispatch** de um job `@machize/queue` — o trabalho pesado corre no worker, com retries e contexto:
+Instead of running the task in the scheduler's own process, you can schedule the **dispatch** of an `@machize/queue` job — the heavy lifting runs on the worker, with retries and context:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -149,7 +149,7 @@ import { z } from 'zod'
 const ReconcileBilling = defineJob({
   name: 'billing.reconcile',
   schema: z.object({ mode: z.string() }),
-  async handle({ mode }) { /* reconciliar… */ },
+  async handle({ mode }) { /* reconcile… */ },
 })
 
 const app = await createApp({
@@ -164,11 +164,11 @@ const app = await createApp({
 }).boot()
 ```
 
-A entrada fica com o nome do job (`billing.reconcile`). Se o job não recebe payload (`T = void`), chama-se apenas `schedule.job(MeuJob)`.
+The entry is named after the job (`billing.reconcile`). If the job takes no payload (`T = void`), just call `schedule.job(MyJob)`.
 
-### Testar de forma determinística
+### Testing deterministically
 
-`tick(date)` executa tudo o que está devido nesse instante exato — sem timers reais:
+`tick(date)` runs everything due at that exact instant — no real timers involved:
 
 ```ts
 import { Scheduler } from '@machize/scheduler'
@@ -177,91 +177,91 @@ const scheduler = new Scheduler()
 let runs = 0
 scheduler.call('backup', () => void runs++).daily().at('03:00')
 
-await scheduler.tick(new Date('2026-08-05T10:15:00Z')) // não é 03:00 → não corre
-await scheduler.tick(new Date('2026-08-05T03:00:00Z')) // corre
+await scheduler.tick(new Date('2026-08-05T10:15:00Z')) // not 03:00 → doesn't run
+await scheduler.tick(new Date('2026-08-05T03:00:00Z')) // runs
 console.log(runs) // 1
 ```
 
-Nos testes com o plugin, passa `autostart: false` para o timer não arrancar.
+In tests with the plugin, pass `autostart: false` so the timer doesn't start.
 
-## Referência da API
+## API reference
 
 ### `schedulerPlugin(options?: SchedulerPluginOptions)`
 
-Regista um `Scheduler` (singleton) no token `SCHEDULER`; no `boot` chama `define`, publica as entradas nos metadados do contentor (chave `schedule:entries`, consumida pela CLI `mach schedule:list`) e arranca o timer; no `shutdown` chama `stop()`.
+Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it calls `define`, publishes the entries to the container's metadata (key `schedule:entries`, consumed by the `mach schedule:list` CLI) and starts the timer; on `shutdown` it calls `stop()`.
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `define` | `(schedule: Scheduler) => void` | Não | — | Callback onde declaras os agendamentos (recebe o Scheduler no boot). |
-| `autostart` | `boolean` | Não | `true` | Arranca o timer no boot. Desliga em testes. |
+| `define` | `(schedule: Scheduler) => void` | No | — | Callback where you declare the schedules (receives the Scheduler at boot). |
+| `autostart` | `boolean` | No | `true` | Starts the timer at boot. Turn off in tests. |
 
 ### `class Scheduler`
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `call` | `(name: string, task: () => void \| Promise<void>) => ScheduleEntry` | Agenda uma função com um nome. |
-| `job` | `<T>(job: JobDefinition<T>, payload?) => ScheduleEntry` | Agenda o `dispatch` de um job `@machize/queue` (payload obrigatório se o job o exigir). |
-| `list` | `() => { name, cron, timezone }[]` | Descreve todas as entradas. |
-| `tick` | `(date?: Date) => Promise<void>` | Executa as entradas devidas nesse instante (default: agora). Agrega falhas sem `onFailure` em `AggregateError`. |
-| `start` | `() => void` | Alinha ao próximo minuto e depois faz `tick()` a cada 60 s. Idempotente. |
-| `stop` | `() => void` | Para os temporizadores. |
+| `call` | `(name: string, task: () => void \| Promise<void>) => ScheduleEntry` | Schedules a function with a name. |
+| `job` | `<T>(job: JobDefinition<T>, payload?) => ScheduleEntry` | Schedules the `dispatch` of an `@machize/queue` job (payload required if the job needs one). |
+| `list` | `() => { name, cron, timezone }[]` | Describes all entries. |
+| `tick` | `(date?: Date) => Promise<void>` | Runs the entries due at that instant (default: now). Aggregates failures without `onFailure` into an `AggregateError`. |
+| `start` | `() => void` | Aligns to the next minute and then `tick()`s every 60s. Idempotent. |
+| `stop` | `() => void` | Stops the timers. |
 
-### `class ScheduleEntry` (devolvida por `call`/`job`)
+### `class ScheduleEntry` (returned by `call`/`job`)
 
-Métodos de frequência (todos devolvem `this`): `everyMinute()`, `everyMinutes(n)`, `hourly()`, `daily()`, `weekly()`, `monthly()`, `at('HH:mm')`, `cron(expression)`, `sundays()`, `mondays()`, `tuesdays()`, `wednesdays()`, `thursdays()`, `fridays()`, `saturdays()`.
+Frequency methods (all return `this`): `everyMinute()`, `everyMinutes(n)`, `hourly()`, `daily()`, `weekly()`, `monthly()`, `at('HH:mm')`, `cron(expression)`, `sundays()`, `mondays()`, `tuesdays()`, `wednesdays()`, `thursdays()`, `fridays()`, `saturdays()`.
 
-| Método/propriedade | Tipo | Default | Descrição |
+| Method/property | Type | Default | Description |
 |---|---|---|---|
-| `timezone(tz)` | `(tz: string) => this` | `'UTC'` | Fuso IANA em que o horário é interpretado. |
-| `withoutOverlapping()` | `() => this` | desligado | Salta a execução se a anterior ainda decorre. |
-| `onFailure(handler)` | `((error: unknown) => void) => this` | — | Recebe o erro em vez de o propagar. |
-| `describe()` | `() => { name, cron, timezone }` | — | Descrição da entrada. |
-| `isDue(date)` | `(date: Date) => boolean` | — | A entrada está devida neste instante? |
-| `skippedOverlaps` | `number` | `0` | Contador de execuções saltadas por sobreposição. |
-| `run()` | `() => Promise<void>` | — | **Avançado/interno**: executa com guarda de overlap e tratamento de falha. |
+| `timezone(tz)` | `(tz: string) => this` | `'UTC'` | IANA timezone in which the time is interpreted. |
+| `withoutOverlapping()` | `() => this` | off | Skips the run if the previous one is still in progress. |
+| `onFailure(handler)` | `((error: unknown) => void) => this` | — | Receives the error instead of propagating it. |
+| `describe()` | `() => { name, cron, timezone }` | — | Description of the entry. |
+| `isDue(date)` | `(date: Date) => boolean` | — | Is the entry due at this instant? |
+| `skippedOverlaps` | `number` | `0` | Counter of runs skipped due to overlap. |
+| `run()` | `() => Promise<void>` | — | **Advanced/internal**: runs with overlap guard and failure handling. |
 
-Sem qualquer método de frequência, a entrada corre **todos os minutos** (campos cron iniciais são `* * * * *`).
+Without any frequency method, the entry runs **every minute** (initial cron fields are `* * * * *`).
 
-### Utilitários cron (Avançado)
+### Cron utilities (Advanced)
 
-Exportados para tooling e testes; normalmente não precisas deles:
+Exported for tooling and tests; you don't usually need them:
 
-| Export | Assinatura | Descrição |
+| Export | Signature | Description |
 |---|---|---|
-| `parseCron` | `(expression: string) => CronFields` | Divide uma expressão de 5 campos; lança `CronParseError` se inválida. |
-| `cronMatches` | `(fields: CronFields, date: Date, timeZone?: string) => boolean` | O instante corresponde à expressão (no fuso dado)? |
-| `fieldMatches` | `(field: string, value: number) => boolean` | Um campo (`*`, `*/n`, `a-b`, `a,b,c`, valor) aceita o número? |
-| `zonedParts` | `(date: Date, timeZone = 'UTC') => ZonedParts` | Decompõe o instante em minuto/hora/dia/mês/dia-da-semana no fuso. |
-| `CronParseError` | classe (`MachizeError`, código `CRON_INVALID`) | Expressão cron inválida. |
-| `CronFields`, `ZonedParts` | tipos | Campos cron como strings; partes numéricas do instante. |
+| `parseCron` | `(expression: string) => CronFields` | Splits a 5-field expression; throws `CronParseError` if invalid. |
+| `cronMatches` | `(fields: CronFields, date: Date, timeZone?: string) => boolean` | Does the instant match the expression (in the given timezone)? |
+| `fieldMatches` | `(field: string, value: number) => boolean` | Does a field (`*`, `*/n`, `a-b`, `a,b,c`, value) accept the number? |
+| `zonedParts` | `(date: Date, timeZone = 'UTC') => ZonedParts` | Breaks the instant down into minute/hour/day/month/day-of-week in the timezone. |
+| `CronParseError` | class (`MachizeError`, code `CRON_INVALID`) | Invalid cron expression. |
+| `CronFields`, `ZonedParts` | types | Cron fields as strings; numeric parts of the instant. |
 
 ### Token
 
-- `SCHEDULER: Token<Scheduler>` — para obter o Scheduler do contentor: `app.container.get(SCHEDULER)`.
+- `SCHEDULER: Token<Scheduler>` — to get the Scheduler from the container: `app.container.get(SCHEDULER)`.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**A minha tarefa `daily().at('03:00')` corre à hora errada.**
-Os horários são UTC por omissão. Acrescenta `.timezone('Europe/Lisbon')` (ou o teu fuso IANA).
+**My `daily().at('03:00')` task runs at the wrong time.**
+Times are UTC by default. Add `.timezone('Europe/Lisbon')` (or your IANA timezone).
 
 **`CronParseError: expected 5 fields`.**
-O `cron()` só aceita o formato clássico de 5 campos (`min hora dia mês dia-semana`). Formatos de 6 campos (com segundos) não são suportados.
+`cron()` only accepts the classic 5-field format (`min hour day month day-of-week`). 6-field formats (with seconds) are not supported.
 
-**A tarefa corre duas vezes (dois servidores).**
-O agendador corre em cada processo onde o plugin arranca. Se tens várias réplicas, ativa o scheduler só numa (ex.: variável de ambiente) ou agenda `schedule.job(...)` com jobs idempotentes.
+**The task runs twice (two servers).**
+The scheduler runs in every process where the plugin starts. If you have multiple replicas, enable the scheduler on only one (e.g. via an environment variable) or schedule `schedule.job(...)` with idempotent jobs.
 
-**Uma tarefa falhou e não vi nada.**
-No modo automático, falhas sem `onFailure` são silenciadas para não derrubar o processo. Define `onFailure` em cada entrada (ou faz log lá dentro).
+**A task failed and I didn't see anything.**
+In automatic mode, failures without `onFailure` are silenced so as not to crash the process. Set `onFailure` on each entry (or log inside it).
 
-**Preciso de precisão ao segundo.**
-Não é possível — a resolução é o minuto (o `tick` corre a cada 60 s), como no cron clássico.
+**I need second-level precision.**
+Not possible — the resolution is the minute (the `tick` runs every 60s), just like classic cron.
 
-**Nos testes, o processo não termina.**
-Passa `autostart: false` ao plugin, ou chama `scheduler.stop()`. (Os timers usam `unref()`, por isso normalmente não seguram o processo, mas em testes convém não os arrancar.)
+**In tests, the process doesn't exit.**
+Pass `autostart: false` to the plugin, or call `scheduler.stop()`. (The timers use `unref()`, so they usually don't hold the process open, but in tests it's best not to start them.)
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — o `schedulerPlugin` é um plugin core (register/boot/shutdown); as entradas são publicadas no registo de metadados do contentor (`ensureMetadata` → chave `schedule:entries`) para a CLI `mach schedule:list`; `CronParseError` estende `MachizeError`.
-- **`@machize/queue`** — `schedule.job(MeuJob, payload)` agenda o *dispatch* de um job: o agendador só coloca na fila; a execução, retries e contexto ficam a cargo da fila e dos workers. É o padrão recomendado para tarefas pesadas ou críticas.
-- **`@machize/logger`** — usa o logger dentro das tarefas/`onFailure` para teres rasto estruturado das execuções.
-- **`@machize/audit` / `@machize/activity`** — tarefas agendadas podem registar entradas de auditoria ou atividade (ex.: `audit.record('maintenance.run')`) para deixares rasto do trabalho automático.
+- **`@machize/core`** — `schedulerPlugin` is a core plugin (register/boot/shutdown); entries are published to the container's metadata registry (`ensureMetadata` → key `schedule:entries`) for the `mach schedule:list` CLI; `CronParseError` extends `MachizeError`.
+- **`@machize/queue`** — `schedule.job(MyJob, payload)` schedules a job's *dispatch*: the scheduler only enqueues it; execution, retries and context are handled by the queue and its workers. This is the recommended pattern for heavy or critical tasks.
+- **`@machize/logger`** — use the logger inside tasks/`onFailure` to get structured traces of the runs.
+- **`@machize/audit` / `@machize/activity`** — scheduled tasks can record audit or activity entries (e.g. `audit.record('maintenance.run')`) to leave a trail of the automated work.

@@ -1,26 +1,26 @@
 # @machize/admin-shadcn
 
-Componentes React com o estilo **shadcn/ui** para o motor `@machize/admin`: primitivas visuais (Button, Input, Table, Card, Badge…) e versões já estilizadas do `DataTable` e do `ResourceForm`. Precisas dele quando queres um painel de administração bonito "out of the box", com Tailwind CSS — é o pacote que o scaffold `create-machize --ui` usa.
+React components styled with **shadcn/ui** for the `@machize/admin` engine: visual primitives (Button, Input, Table, Card, Badge…) plus already-styled versions of `DataTable` and `ResourceForm`. You need this when you want a good-looking admin panel "out of the box", with Tailwind CSS — it's the package the `create-machize --ui` scaffold uses.
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/admin-react` gera tabelas e formulários corretos mas em HTML puro, sem estilo. Este pacote dá o passo seguinte: os mesmos componentes, com o aspeto do **shadcn/ui** — um conjunto de componentes muito popular no ecossistema React, construído sobre **Tailwind CSS** (uma forma de estilizar escrevendo classes utilitárias como `rounded-md` ou `text-sm` diretamente nos elementos).
+`@machize/admin-react` generates correct tables and forms, but in plain, unstyled HTML. This package takes the next step: the same components, with the look of **shadcn/ui** — a very popular component set in the React ecosystem, built on top of **Tailwind CSS** (a way of styling by writing utility classes like `rounded-md` or `text-sm` directly on elements).
 
-Além do `DataTable` e do `ResourceForm` estilizados, o pacote exporta as próprias primitivas shadcn — `Button`, `Input`, `Label`, `Table`, `Card`, `Badge` — para construíres o resto do teu painel (cabeçalhos, cartões de métricas, botões de ação) com o mesmo visual, sem teres de copiar os ficheiros do shadcn para o teu projeto.
+Besides the styled `DataTable` and `ResourceForm`, the package exports the shadcn primitives themselves — `Button`, `Input`, `Label`, `Table`, `Card`, `Badge` — so you can build the rest of your panel (headers, metric cards, action buttons) with the same look, without copying shadcn's files into your project.
 
-Uma nota importante: as classes Tailwind só produzem cores e espaçamentos se a tua aplicação tiver o **Tailwind CSS configurado** com as variáveis de tema do shadcn (cores como `--primary`, `--border`, etc.). O scaffold `create-machize --ui` trata disso por ti; se estiveres a integrar à mão, vê a secção de instalação.
+An important note: Tailwind classes only produce colors and spacing if your app has **Tailwind CSS configured** with shadcn's theme variables (colors like `--primary`, `--border`, etc.). The `create-machize --ui` scaffold takes care of this for you; if you're integrating by hand, see the installation section.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/admin-shadcn @machize/admin zod
 ```
 
-Requisitos:
+Requirements:
 
-1. **`react` >= 18** (peer dependency — instalada por ti).
-2. **Tailwind CSS** configurado no teu projeto, com o tema shadcn (as variáveis CSS `--background`, `--primary`, `--destructive`, etc. — vê [ui.shadcn.com/docs/installation](https://ui.shadcn.com/docs/installation)).
-3. No `tailwind.config`, inclui os ficheiros deste pacote no `content`, para o Tailwind gerar as classes usadas cá dentro:
+1. **`react` >= 18** (peer dependency — you install it).
+2. **Tailwind CSS** configured in your project, with the shadcn theme (the CSS variables `--background`, `--primary`, `--destructive`, etc. — see [ui.shadcn.com/docs/installation](https://ui.shadcn.com/docs/installation)).
+3. In `tailwind.config`, include this package's files in `content`, so Tailwind generates the classes used here:
 
 ```js
 // tailwind.config.js
@@ -28,17 +28,17 @@ export default {
   content: [
     './index.html',
     './src/**/*.{ts,tsx}',
-    './node_modules/@machize/admin-shadcn/dist/**/*.js', // ← importante
+    './node_modules/@machize/admin-shadcn/dist/**/*.js', // ← important
   ],
-  // ... resto da configuração shadcn (cores, radius, etc.)
+  // ... rest of the shadcn config (colors, radius, etc.)
 }
 ```
 
-> Atalho: `pnpm create machize minha-app --ui` gera um projeto completo (API + frontend Vite/React) com tudo isto já configurado.
+> Shortcut: `pnpm create machize my-app --ui` generates a complete project (API + Vite/React frontend) with all of this already configured.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-**Passo 1 — Define o recurso** (igual ao `@machize/admin` — a lógica é partilhada):
+**Step 1 — Define the resource** (same as `@machize/admin` — the logic is shared):
 
 ```ts
 // resources.ts
@@ -68,12 +68,12 @@ export const source = memoryDataSource<{
 }>([{ id: 'p1', name: 'Apollo', status: 'draft', archived: false }])
 ```
 
-**Passo 2 — Monta a página** com os componentes estilizados:
+**Step 2 — Build the page** with the styled components:
 
 ```tsx
 // ProjectsPage.tsx
 import { useState } from 'react'
-import { useList } from '@machize/admin-react' // hook de dados (opcional mas prático)
+import { useList } from '@machize/admin-react' // data hook (optional but handy)
 import {
   Button,
   Card,
@@ -87,9 +87,9 @@ import { projects, source } from './resources'
 
 export function ProjectsPage() {
   const { data, loading, reload } = useList(source)
-  const [aCriar, setACriar] = useState(false)
+  const [toCreate, setToCreate] = useState(false)
 
-  if (loading) return <p>A carregar…</p>
+  if (loading) return <p>Loading…</p>
 
   return (
     <Card>
@@ -97,33 +97,33 @@ export function ProjectsPage() {
         <CardTitle>{projects.label}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Button onClick={() => setACriar((v) => !v)}>Novo projeto</Button>
+        <Button onClick={() => setToCreate((v) => !v)}>New project</Button>
 
-        {aCriar ? (
+        {toCreate ? (
           <ResourceForm
             resource={projects}
             onSubmit={async (values) => {
               await source.create(values)
-              setACriar(false)
+              setToCreate(false)
               await reload()
             }}
           />
         ) : null}
 
-        <DataTable resource={projects} rows={data} emptyLabel="Sem projetos" />
+        <DataTable resource={projects} rows={data} emptyLabel="No projects" />
       </CardContent>
     </Card>
   )
 }
 ```
 
-**Passo 3 — O que vês no ecrã:** um cartão com cantos arredondados e sombra, o título "Projects", um botão primário "Novo projeto", e a tabela shadcn — cabeçalhos discretos, linhas com *hover*, e a coluna booleana "Archived" mostrada como uma **badge** (etiqueta colorida): "Yes" com fundo primário, "No" com fundo secundário. O formulário aparece com inputs arredondados, labels alinhadas e mensagens de erro a vermelho (`text-destructive`).
+**Step 3 — What you see on screen:** a card with rounded corners and a shadow, the title "Projects", a primary "New project" button, and the shadcn table — subtle headers, rows with *hover*, and the boolean "Archived" column shown as a **badge** (a colored tag): "Yes" with a primary background, "No" with a secondary background. The form appears with rounded inputs, aligned labels, and error messages in red (`text-destructive`).
 
-## Guia de utilização
+## Usage guide
 
-### `DataTable` — tabela shadcn derivada do schema
+### `DataTable` — a shadcn table derived from the schema
 
-Mesmas props do `DataTable` de `@machize/admin-react`; muda a apresentação: usa as primitivas `Table*`, células booleanas viram `Badge` ("Yes" = variante `default`, "No" = `secondary`), datas formatadas `AAAA-MM-DD`, e com `onRowClick` as linhas ganham `cursor-pointer`.
+Same props as the `DataTable` from `@machize/admin-react`; only the presentation changes: it uses the `Table*` primitives, boolean cells become `Badge` ("Yes" = `default` variant, "No" = `secondary`), dates formatted as `YYYY-MM-DD`, and with `onRowClick` rows get `cursor-pointer`.
 
 ```tsx
 import { DataTable } from '@machize/admin-shadcn'
@@ -133,13 +133,13 @@ import { projects } from './resources'
   resource={projects}
   rows={[{ id: 'p1', name: 'Apollo', status: 'draft', archived: true }]}
   onRowClick={(row) => console.log(row)}
-  emptyLabel="Sem registos"
+  emptyLabel="No records"
 />
 ```
 
-### `ResourceForm` — formulário shadcn gerado e validado
+### `ResourceForm` — a generated, validated shadcn form
 
-Mesmo comportamento do `ResourceForm` de `@machize/admin-react` (formulário controlado, valida ao submeter, mostra erros por campo, só chama `onSubmit` com dados válidos), com visual shadcn: `Label` + `Input` estilizados, `<select>` com o mesmo estilo dos inputs, erros em `text-destructive`, botão `Button` primário.
+Same behavior as the `ResourceForm` from `@machize/admin-react` (a controlled form, validates on submit, shows per-field errors, only calls `onSubmit` with valid data), with shadcn visuals: styled `Label` + `Input`, `<select>` matching the input style, errors in `text-destructive`, primary `Button`.
 
 ```tsx
 import { ResourceForm } from '@machize/admin-shadcn'
@@ -149,42 +149,42 @@ import { projects, source } from './resources'
   resource={projects}
   mode="update"
   initialValues={{ name: 'Apollo', status: 'draft' }}
-  submitLabel="Guardar"
+  submitLabel="Save"
   onSubmit={async (values) => { await source.update('p1', values) }}
 />
 ```
 
-Inputs por tipo de campo: `string`/`unknown` → `Input` de texto; `number` → `Input` numérico; `date` → `Input` de data; `boolean` → checkbox; `enum` → `<select>` estilizado com as opções.
+Inputs per field type: `string`/`unknown` → text `Input`; `number` → numeric `Input`; `date` → date `Input`; `boolean` → checkbox; `enum` → styled `<select>` with the options.
 
-### Primitivas shadcn
+### shadcn primitives
 
-Todas aceitam as props HTML normais do elemento correspondente (incluindo `className` para acrescentares classes Tailwind, fundidas com `cn`).
+All accept the corresponding element's normal HTML props (including `className` to add Tailwind classes, merged via `cn`).
 
-**`Button`** — botão com variantes visuais:
+**`Button`** — button with visual variants:
 
 ```tsx
 import { Button } from '@machize/admin-shadcn'
 
-<Button>Guardar</Button>
-<Button variant="destructive" size="sm">Apagar</Button>
-<Button variant="outline">Cancelar</Button>
+<Button>Save</Button>
+<Button variant="destructive" size="sm">Delete</Button>
+<Button variant="outline">Cancel</Button>
 <Button asChild variant="link">
-  <a href="/docs">Documentação</a>  {/* asChild: aplica o estilo ao filho */}
+  <a href="/docs">Documentation</a>  {/* asChild: applies the style to the child */}
 </Button>
 ```
 
-**`Input` e `Label`** — campo de texto e etiqueta:
+**`Input` and `Label`** — text field and label:
 
 ```tsx
 import { Input, Label } from '@machize/admin-shadcn'
 
 <div className="space-y-2">
   <Label htmlFor="email">Email</Label>
-  <Input id="email" type="email" placeholder="tu@exemplo.com" />
+  <Input id="email" type="email" placeholder="you@example.com" />
 </div>
 ```
 
-**`Table` e família** — tabela composta à mão (quando o `DataTable` automático não chega):
+**`Table` and family** — a hand-composed table (when the automatic `DataTable` isn't enough):
 
 ```tsx
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@machize/admin-shadcn'
@@ -192,8 +192,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 <Table>
   <TableHeader>
     <TableRow>
-      <TableHead>Nome</TableHead>
-      <TableHead>Estado</TableHead>
+      <TableHead>Name</TableHead>
+      <TableHead>Status</TableHead>
     </TableRow>
   </TableHeader>
   <TableBody>
@@ -205,7 +205,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 </Table>
 ```
 
-**`Card` e família** — cartão com cabeçalho e conteúdo:
+**`Card` and family** — card with header and content:
 
 ```tsx
 import { Card, CardContent, CardHeader, CardTitle } from '@machize/admin-shadcn'
@@ -218,109 +218,109 @@ import { Card, CardContent, CardHeader, CardTitle } from '@machize/admin-shadcn'
 </Card>
 ```
 
-**`Badge`** — etiqueta pequena de estado:
+**`Badge`** — small status tag:
 
 ```tsx
 import { Badge } from '@machize/admin-shadcn'
 
-<Badge>Ativo</Badge>
-<Badge variant="secondary">Rascunho</Badge>
-<Badge variant="destructive">Em atraso</Badge>
+<Badge>Active</Badge>
+<Badge variant="secondary">Draft</Badge>
+<Badge variant="destructive">Overdue</Badge>
 <Badge variant="outline">Beta</Badge>
 ```
 
-**`cn`** — utilitário para juntar classes Tailwind sem conflitos (o último ganha):
+**`cn`** — utility to merge Tailwind classes without conflicts (the last one wins):
 
 ```ts
 import { cn } from '@machize/admin-shadcn'
 
 cn('px-2', 'px-4')                        // 'px-4'
-cn('text-sm', condicao && 'font-bold')    // junta condicionalmente
+cn('text-sm', condition && 'font-bold')   // merges conditionally
 ```
 
-## Referência da API
+## API reference
 
-### `DataTable` (componente)
+### `DataTable` (component)
 
-| Prop | Tipo | Obrigatório? | Default | Descrição |
+| Prop | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `resource` | `Resource` | Sim | — | Recurso de `defineResource` (define as colunas). |
-| `rows` | `Record<string, unknown>[]` | Sim | — | Linhas a mostrar. |
-| `onRowClick` | `(row) => void` | Não | — | Torna as linhas clicáveis (`cursor-pointer`). |
-| `emptyLabel` | `string` | Não | `'No records'` | Texto centrado quando não há linhas. |
+| `resource` | `Resource` | Yes | — | Resource from `defineResource` (defines the columns). |
+| `rows` | `Record<string, unknown>[]` | Yes | — | Rows to display. |
+| `onRowClick` | `(row) => void` | No | — | Makes rows clickable (`cursor-pointer`). |
+| `emptyLabel` | `string` | No | `'No records'` | Centered text shown when there are no rows. |
 
-### `ResourceForm` (componente)
+### `ResourceForm` (component)
 
-| Prop | Tipo | Obrigatório? | Default | Descrição |
+| Prop | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `resource` | `Resource` | Sim | — | Recurso (campos + validação). |
-| `initialValues` | `Record<string, unknown>` | Não | `{}` | Valores pré-preenchidos. |
-| `mode` | `'create' \| 'update'` | Não | `'create'` | Escolhe o schema de validação. |
-| `onSubmit` | `(data) => void \| Promise<void>` | Sim | — | Recebe dados validados pelo Zod. |
-| `submitLabel` | `string` | Não | `'Save'` | Texto do botão. |
+| `resource` | `Resource` | Yes | — | Resource (fields + validation). |
+| `initialValues` | `Record<string, unknown>` | No | `{}` | Pre-filled values. |
+| `mode` | `'create' \| 'update'` | No | `'create'` | Selects the validation schema. |
+| `onSubmit` | `(data) => void \| Promise<void>` | Yes | — | Receives data validated by Zod. |
+| `submitLabel` | `string` | No | `'Save'` | Button text. |
 
-### `Button` (componente)
+### `Button` (component)
 
-Estende `ButtonHTMLAttributes<HTMLButtonElement>` mais:
+Extends `ButtonHTMLAttributes<HTMLButtonElement>` plus:
 
-| Prop | Tipo | Obrigatório? | Default | Descrição |
+| Prop | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `variant` | `'default' \| 'destructive' \| 'outline' \| 'secondary' \| 'ghost' \| 'link'` | Não | `'default'` | Estilo visual. |
-| `size` | `'default' \| 'sm' \| 'lg' \| 'icon'` | Não | `'default'` | Tamanho. |
-| `asChild` | `boolean` | Não | `false` | Aplica o estilo ao elemento filho (via Radix Slot) em vez de renderizar um `<button>`. |
+| `variant` | `'default' \| 'destructive' \| 'outline' \| 'secondary' \| 'ghost' \| 'link'` | No | `'default'` | Visual style. |
+| `size` | `'default' \| 'sm' \| 'lg' \| 'icon'` | No | `'default'` | Size. |
+| `asChild` | `boolean` | No | `false` | Applies the style to the child element (via Radix Slot) instead of rendering a `<button>`. |
 
-`buttonVariants({ variant?, size? })` (Avançado) — devolve a string de classes, para estilizares outros elementos como botões.
+`buttonVariants({ variant?, size? })` (Advanced) — returns the class string, for styling other elements as buttons.
 
-### `Badge` (componente)
+### `Badge` (component)
 
-Estende `HTMLAttributes<HTMLDivElement>` mais:
+Extends `HTMLAttributes<HTMLDivElement>` plus:
 
-| Prop | Tipo | Obrigatório? | Default | Descrição |
+| Prop | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `variant` | `'default' \| 'secondary' \| 'destructive' \| 'outline'` | Não | `'default'` | Estilo visual. |
+| `variant` | `'default' \| 'secondary' \| 'destructive' \| 'outline'` | No | `'default'` | Visual style. |
 
-`badgeVariants({ variant? })` (Avançado) — devolve a string de classes.
+`badgeVariants({ variant? })` (Advanced) — returns the class string.
 
-### Primitivas restantes
+### Remaining primitives
 
-| Export | Renderiza | Props |
+| Export | Renders | Props |
 |---|---|---|
-| `Input` | `<input>` estilizado | `InputProps` = `InputHTMLAttributes<HTMLInputElement>` |
-| `Label` | `<label>` estilizado | `LabelProps` = `LabelHTMLAttributes<HTMLLabelElement>` |
-| `Table` | `<table>` num contentor com scroll horizontal | atributos HTML de `<table>` |
-| `TableHeader` / `TableBody` | `<thead>` / `<tbody>` | atributos HTML da secção |
-| `TableRow` | `<tr>` com hover | atributos HTML de `<tr>` |
-| `TableHead` / `TableCell` | `<th>` / `<td>` | atributos HTML da célula |
-| `Card` / `CardHeader` / `CardTitle` / `CardContent` | `<div>`s estilizados | `HTMLAttributes<HTMLDivElement>` |
+| `Input` | Styled `<input>` | `InputProps` = `InputHTMLAttributes<HTMLInputElement>` |
+| `Label` | Styled `<label>` | `LabelProps` = `LabelHTMLAttributes<HTMLLabelElement>` |
+| `Table` | `<table>` in a horizontally-scrollable container | HTML attributes of `<table>` |
+| `TableHeader` / `TableBody` | `<thead>` / `<tbody>` | HTML attributes of the section |
+| `TableRow` | `<tr>` with hover | HTML attributes of `<tr>` |
+| `TableHead` / `TableCell` | `<th>` / `<td>` | HTML attributes of the cell |
+| `Card` / `CardHeader` / `CardTitle` / `CardContent` | Styled `<div>`s | `HTMLAttributes<HTMLDivElement>` |
 
-Todos aceitam `className` e reencaminham `ref` (exceto `Badge`, que é uma função simples).
+All accept `className` and forward `ref` (except `Badge`, which is a plain function).
 
-### `cn(...inputs): string` (função)
+### `cn(...inputs): string` (function)
 
-Junta classes condicionais (`clsx`) e resolve conflitos Tailwind (`tailwind-merge`). Aceita strings, arrays, objetos `{ classe: condicao }`, `false`/`undefined` (ignorados).
+Merges conditional classes (`clsx`) and resolves Tailwind conflicts (`tailwind-merge`). Accepts strings, arrays, `{ class: condition }` objects, `false`/`undefined` (ignored).
 
-### Tipos exportados
+### Exported types
 
 `DataTableProps`, `ResourceFormProps`, `ButtonProps`, `InputProps`, `LabelProps`, `BadgeProps`.
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"Os componentes aparecem sem cores/estilo."** Duas causas habituais: (1) o Tailwind não está a analisar os ficheiros deste pacote — acrescenta `'./node_modules/@machize/admin-shadcn/dist/**/*.js'` ao `content` do `tailwind.config`; (2) faltam as variáveis de tema shadcn (`--primary`, `--border`, …) no teu CSS global — segue o guia de instalação do shadcn/ui ou usa o scaffold `create-machize --ui`.
+**"The components appear without colors/styling."** Two common causes: (1) Tailwind isn't scanning this package's files — add `'./node_modules/@machize/admin-shadcn/dist/**/*.js'` to `content` in `tailwind.config`; (2) the shadcn theme variables (`--primary`, `--border`, …) are missing from your global CSS — follow the shadcn/ui installation guide or use the `create-machize --ui` scaffold.
 
-**"O botão fica com fundo transparente/estranho."** As cores vêm das variáveis CSS do tema shadcn. Sem `--primary` e companhia definidas em `:root`, as classes `bg-primary` etc. não têm valor.
+**"The button has a transparent/odd background."** Colors come from the shadcn theme's CSS variables. Without `--primary` and friends defined on `:root`, classes like `bg-primary` have no value.
 
-**"`asChild` dá erro `React.Children.only`."** Com `asChild`, o `Button` exige exatamente **um** elemento filho (ex.: um único `<a>`). Vem do Radix Slot.
+**"`asChild` throws a `React.Children.only` error."** With `asChild`, `Button` requires exactly **one** child element (e.g., a single `<a>`). This comes from Radix Slot.
 
-**"O `onSubmit` do `ResourceForm` não dispara."** A validação falhou — procura o texto vermelho por baixo do campo (`role="alert"`). O comportamento é idêntico ao de `@machize/admin-react`.
+**"`ResourceForm`'s `onSubmit` doesn't fire."** Validation failed — look for red text below the field (`role="alert"`). Behavior is identical to `@machize/admin-react`.
 
-**"Alterei `initialValues` e o formulário não mudou."** Os valores iniciais só são lidos na montagem. Remonta com `key` diferente: `<ResourceForm key={registo.id} … />`.
+**"I changed `initialValues` and the form didn't update."** Initial values are only read on mount. Remount with a different `key`: `<ResourceForm key={record.id} … />`.
 
-**"Quero um hook para carregar dados — não vejo `useList` aqui."** O `useList` vive em `@machize/admin-react` (este pacote só traz componentes visuais). Podes usar os dois pacotes em conjunto sem problema.
+**"I want a hook to load data — I don't see `useList` here."** `useList` lives in `@machize/admin-react` (this package only ships visual components). You can use both packages together without issue.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/admin`** — o motor headless: este pacote desenha os view models `tableView`/`formView` e valida com `resource.validate`. Os recursos definem-se lá.
-- **`@machize/admin-react`** — a versão sem estilos dos mesmos `DataTable`/`ResourceForm` (props idênticas), mais o hook `useList` e o `formatCell`. Trocar entre os dois pacotes é trocar o import.
-- **`@machize/dashboard`** — define as secções e métricas de um painel; usa estas primitivas (`Card`, `Badge`, `DataTable`) para as apresentar.
-- **`@machize/sdk`** — o cliente HTTP tipado; no frontend gerado pelo scaffold, os dados chegam via SDK e são mostrados com estes componentes.
-- **`create-machize --ui`** — o scaffold do Machize gera um frontend Vite + React já configurado com Tailwind, o tema shadcn e este pacote a falar com a API através do `@machize/sdk` (projetos `--ui` usam workspaces pnpm).
+- **`@machize/admin`** — the headless engine: this package renders the `tableView`/`formView` view models and validates with `resource.validate`. Resources are defined there.
+- **`@machize/admin-react`** — the unstyled version of the same `DataTable`/`ResourceForm` (identical props), plus the `useList` hook and `formatCell`. Switching between the two packages is just switching the import.
+- **`@machize/dashboard`** — defines a panel's sections and metrics; uses these primitives (`Card`, `Badge`, `DataTable`) to display them.
+- **`@machize/sdk`** — the typed HTTP client; in the frontend generated by the scaffold, data arrives via the SDK and is shown with these components.
+- **`create-machize --ui`** — the Machize scaffold generates a Vite + React frontend already configured with Tailwind, the shadcn theme, and this package talking to the API through `@machize/sdk` (`--ui` projects use pnpm workspaces).
