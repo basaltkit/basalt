@@ -1,6 +1,6 @@
 {
   "name": "@machize/auth-sqlite",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Durable, SQLite-backed implementations of every @machize/auth store (users, sessions, refresh tokens, one-time tokens, API keys, MFA) built on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",

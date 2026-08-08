@@ -167,6 +167,7 @@ store each, SQLite for a single node and Prisma for a shared database:
 | Audit trail | `AuditStore` (append-only) | `sqliteAuditStore()` | `prismaAuditStore(prisma)` |
 | Activity feed | `ActivityStore` | `sqliteActivityStore()` | `prismaActivityStore(prisma)` |
 | In-app notifications | `InAppStore` | `sqliteInAppStore()` | `prismaInAppStore(prisma)` |
+| Permissions | `AccessStore` | `sqliteAccessStore()` | `prismaAccessStore(prisma)` |
 
 ```ts
 import { auditPlugin } from '@machize/audit'
@@ -183,6 +184,11 @@ the in-memory semantics — newest-first, tenant/recipient scoping, the audit
 event-wildcard, unread filtering — now durable. JSON payloads (audit `payload`,
 activity `properties`, notification `data`) are stored as text and round-trip
 unchanged.
+
+`@machize/permissions` follows the same shape: `permissionsPlugin({ store })`
+takes the durable `AccessStore` (role assignments and grants, scoped), so RBAC
+state survives a restart too. `@machize/flags` needs no backend — feature flags
+are declared in code and evaluated deterministically, with nothing to persist.
 
 ## Redis-backed stores
 
