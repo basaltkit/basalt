@@ -53,6 +53,7 @@ works on its own; together they form the framework. Versions move in lockstep
 | `@machize/auth-prisma` | Prisma backend for every `@machize/auth` store — Postgres/MySQL, ships a reference schema, pass your `PrismaClient` |
 | `@machize/permissions` | Roles, wildcard permissions, policies, tenant scoping, super admin |
 | `@machize/teams` | Multi-user tenants — roles, email invitations, membership, `teamRole` guard |
+| `@machize/teams-sqlite` · `@machize/teams-prisma` | Durable backends for the `@machize/teams` stores — SQLite (`node:sqlite`, zero-dep) and Prisma (Postgres/MySQL) |
 | `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, hosted Checkout & Portal, proration |
 | `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |

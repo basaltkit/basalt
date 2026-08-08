@@ -15,7 +15,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
-      { text: '0.26.0', link: `${github}/releases` },
+      { text: '0.27.0', link: `${github}/releases` },
     ],
 
     sidebar: {
