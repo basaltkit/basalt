@@ -1,0 +1,53 @@
+{
+  "name": "@machize/permissions-sqlite",
+  "version": "0.30.0",
+  "description": "Durable, SQLite-backed implementation of the @machize/permissions AccessStore, on Node's built-in node:sqlite. Zero external dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@machize/permissions": "workspace:*"
+  },
+  "devDependencies": {
+    "@machize/permissions": "workspace:*",
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/permissions-sqlite"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/permissions-sqlite#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "permissions",
+    "rbac",
+    "sqlite",
+    "store"
+  ]
+}
