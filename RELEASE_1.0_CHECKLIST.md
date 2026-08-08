@@ -45,12 +45,10 @@ Nothing here is hard; it's the deliberate work of committing to the surface.
 - [x] READMEs for all store packages — the `subscriptions-`, `comments-`,
       `audit-`, `activity-`, `notifications-` × `{sqlite,prisma}` packages now
       have English READMEs (alongside `auth-*`, `teams-*`, `permissions-*`).
-- [ ] **Translate 53 package READMEs from Portuguese to English.** The docs site
-      and every `*-sqlite`/`*-prisma` store README are English, but the base
-      package READMEs (core, auth, cache, prisma, tenancy, … — see the list in
-      project memory `package-readmes-are-portuguese`) are Portuguese. A 1.0 with
-      a single documentation language should standardize on English. **Scheduled
-      — not started.**
+- [x] **Documentation is single-language (English).** All 53 formerly-Portuguese
+      base package READMEs were translated to English — prose and code examples —
+      so the docs site, guides, and every package README now read English.
+      (`@machize/i18n` keeps its intentional `pt`-locale demo strings.)
 - [ ] A short **"0.x → 1.0" upgrade note** — ideally "nothing to do", to be
       confirmed by the API review above.
 
