@@ -97,9 +97,10 @@ createApp({
 ```
 
 Copy the reference models into your `schema.prisma`, `prisma migrate`, and go.
-For **database-per-tenant**, pair it with [`@machize/prisma`](/reference/packages):
-resolve the per-tenant client from the request context and build the stores over
-it, so each tenant's auth data lives in its own database or schema.
+For **database-per-tenant** — every domain isolated in its own database or schema
+with no per-store tenant filtering — pair it with `@machize/prisma` and route the
+stores through the active tenant's client. That end-to-end setup has its own
+guide: [Database-per-tenant](/guide/database-per-tenant).
 
 ::: tip Which one?
 `@machize/auth-sqlite` for a single node with zero dependencies;
