@@ -1,6 +1,6 @@
 {
   "name": "@machize/permissions-prisma",
-  "version": "0.32.0",
+  "version": "1.0.0",
   "description": "Prisma-backed implementation of the @machize/permissions AccessStore — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",

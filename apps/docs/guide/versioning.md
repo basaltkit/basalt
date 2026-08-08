@@ -7,18 +7,16 @@ it without surprises.
 
 ## Semantic versioning
 
-Every `@machize/*` package follows [semver](https://semver.org). While the
-ecosystem is **pre-1.0** (`0.x`), the API is stable in practice and each release
-is tested, but minor versions may still make small breaking changes as the
-surface is finalized — pin a version if that matters to you. Once **1.0** ships,
-the guarantee is the usual one: breaking changes only in a new **major**, new
-features in a **minor**, fixes in a **patch**.
+Every `@machize/*` package follows [semver](https://semver.org). As of **1.0**,
+the public API is **stable**: breaking changes only in a new **major**, new
+features in a **minor**, and fixes in a **patch**. You can depend on a `^1`
+range and get features and fixes without breakage until the next major.
 
 ## Lockstep versions
 
 The packages are released **in lockstep**: every `@machize/*` package shares the
 same version and is published together (via Changesets, `fixed: [["@machize/*"]]`).
-So `@machize/auth@0.31.0` is built and tested against `@machize/core@0.31.0` —
+So `@machize/auth@1.0.0` is built and tested against `@machize/core@1.0.0` —
 keep them on the same version. The `create-machize` scaffolder versions
 independently.
 
@@ -41,9 +39,9 @@ guesswork.
 If you don't use the `*-sqlite` packages, Node 22+ is enough; those are the only
 packages that require 22.5+.
 
-## Deprecation policy (from 1.0)
+## Deprecation policy
 
-Once 1.0 ships, nothing in the public API is removed without warning:
+Now that 1.0 has shipped, nothing in the public API is removed without warning:
 
 1. A symbol slated for removal is marked `@deprecated` in its JSDoc, with the
    replacement named, in a **minor** release.
@@ -54,23 +52,19 @@ Once 1.0 ships, nothing in the public API is removed without warning:
 `@internal`, or not exported from the package entry point, is not covered by this
 policy and may change at any time.
 
-## Upgrading 0.x → 1.0
+## Upgrading from 0.x
 
-The road to 1.0 is [tracked in the repo](https://github.com/Zebedeu/machize/blob/main/RELEASE_1.0_CHECKLIST.md).
-The intent is that **1.0 is a stability commitment, not a rewrite** — the API you
-use at the latest `0.x` is the API you'll have at `1.0`. When 1.0 is cut, the
-release notes will list any breaking change explicitly; if this note still says
-so, none are expected beyond what the checklist's API review may surface. To be
-ready:
+**1.0 is a stability commitment, not a rewrite** — it's functionally identical to
+`0.32.0`, with no breaking changes. Moving from any recent `0.x`:
 
-- Move off any symbol already marked `@deprecated` in your current version.
-- Pin to a single `@machize/*` version across your dependencies (they release in
-  lockstep).
-- If you use the durable stores, you're already on the 1.0 shape — the store
-  contracts are frozen and won't change at 1.0.
+- Bump every `@machize/*` dependency to `1.0.0` together (they release in
+  lockstep) and pin a `^1` range going forward.
+- If you're on the durable stores, nothing changes — the store contracts were
+  already at their 1.0 shape and are now frozen.
+- That's it. From here, `^1` gets you features and fixes without breakage.
 
 ## Security & supported versions
 
-Pre-1.0, security fixes land on the latest published minor — upgrade to the
-newest `0.x` to receive them. See [SECURITY.md](https://github.com/Zebedeu/machize/blob/main/SECURITY.md)
+Security fixes land on the latest `1.x` minor — upgrade to the newest `1.x` to
+receive them. See [SECURITY.md](https://github.com/Zebedeu/machize/blob/main/SECURITY.md)
 for the disclosure process.

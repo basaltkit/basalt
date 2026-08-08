@@ -5,7 +5,8 @@ and will change only under semver. This checklist tracks what that promise needs
 It's honest about what's done and what isn't — items are only checked when they're
 actually true in the tree.
 
-Current: **0.32.0 · 69 packages · 102 test suites · CI green.**
+**🎉 1.0.0 shipped.** All 69 packages are published at `1.0.0`. This checklist
+is kept as the record of how we got here — every gate below is met.
 
 ---
 
@@ -25,17 +26,16 @@ ceiling.
 - [x] Flags — stateless by design (declared in code); no backend needed
 - [x] Database-per-tenant wiring documented end-to-end
 
-## 2. API stability — the actual 1.0 gate — ☐ maintainer sign-off left
+## 2. API stability — the actual 1.0 gate — ✅ done
 
-The mechanical work is done; what remains is the maintainer's intent sign-off.
+The mechanical work was done and the maintainer signed off the surface at 1.0.
 
 - [x] **Mechanical API-surface pass** — every package's entry-point exports were
       scanned: no internal symbols leak (the only `_`-shaped exports are intended
       DI tokens/constants like `DB_POOL`, `IN_APP`, `API_KEYS`). Nothing marked
       `@internal` is exported.
-- [ ] **Final maintainer sign-off** — a human confirms every top-level export is
-      *intended* as contract and freezes the surface. This is judgment, not
-      mechanics; it's the last gate before cutting 1.0.
+- [x] **Final maintainer sign-off** — the public surface was accepted as the
+      contract and frozen at 1.0. Changes now follow semver.
 - [x] **Naming consistency** verified across the store factories
       (`sqlite<Domain>Store(s)` / `prisma<Domain>Store(s)`) and `Prisma<Domain>Client`
       surfaces. One deliberate variance to keep in mind: single-store domains are
@@ -82,16 +82,15 @@ The mechanical work is done; what remains is the maintainer's intent sign-off.
       concurrent first-touch; fixed by seeding with `createMany({ skipDuplicates })`
       (the typed in-memory fake couldn't surface it).
 
-## 5. Versioning & release — ☐ one deliberate cut
+## 5. Versioning & release — ✅ done
 
 - [x] Lockstep releases via changesets (`fixed: [["@machize/*"]]`); automated
       publish on merge (`release.yml`, npm provenance).
-- [ ] **The 1.0 cut is a one-way door.** Note: with the `fixed` group on 0.x, a
-      single `minor` changeset graduates the whole group `0.32.0 → 1.0.0`
-      automatically (see `changesets-fixed-group-graduates-to-1.0` in project
-      memory). So "going 1.0" is mechanically one changeset — do it only once §2
-      is signed off, not by accident.
-- [ ] Tag a **`1.0.0` announcement** (blog/README) stating the stability promise.
+- [x] **The 1.0 cut landed.** The whole `@machize/*` group graduated
+      `0.32.0 → 1.0.0` in lockstep and published to npm — functionally identical to
+      0.32.0, marking the stability commitment.
+- [x] **`1.0.0` announcement** — the README status and every package CHANGELOG
+      state the stability promise; the [Versioning guide](https://machize-docs.pages.dev/guide/versioning) documents it.
 
 ## 6. Runtime & compatibility — ✅ done
 
@@ -114,17 +113,8 @@ The mechanical work is done; what remains is the maintainer's intent sign-off.
 
 ---
 
-## Definition of done for 1.0
+## Done
 
-Only two things remain:
-
-1. **§2 maintainer API sign-off** — a human confirms the public surface is the
-   contract we commit to. Everything mechanical (naming consistency, no leaked
-   internals, deprecation policy, coverage, Node policy, upgrade note, real-DB
-   integration) is done.
-2. **The cut itself** — land the single `minor` changeset that graduates the
-   group to `1.0.0`, then tag the announcement.
-
-Sections 1, 3, 4, 6 and 7 (persistence, docs, testing/CI, runtime policy,
-security/governance) are complete as of 0.32.0. What's left is the deliberate act
-of committing to the surface — not more features.
+All gates are met and **1.0.0 is published**. Post-1.0, changes follow semantic
+versioning: breaking changes only in a new major, features in a minor, fixes in a
+patch. This file now stands as the record of the road to 1.0, not a to-do list.
