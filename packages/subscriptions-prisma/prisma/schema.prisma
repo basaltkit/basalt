@@ -1,0 +1,43 @@
+// Reference schema for @machize/subscriptions-prisma.
+//
+// Copy these models into your app's schema.prisma, run `prisma migrate dev`,
+// and pass the generated client to `prismaSubscriptionsStores()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Subscription {
+  billableId        String    @id
+  plan              String
+  period            String
+  status            String
+  trialEndsAt       DateTime?
+  cancelAtPeriodEnd Boolean?
+  canceledAt        DateTime?
+  gatewayRef        String?
+
+  @@map("subscriptions")
+}
+
+model UsageCounter {
+  billableId String
+  feature    String
+  periodKey  String
+  value      Int    @default(0)
+
+  @@id([billableId, feature, periodKey])
+  @@map("usage_counters")
+}
+
+model WebhookEvent {
+  id     String   @id
+  seenAt DateTime @default(now())
+
+  @@map("webhook_events")
+}

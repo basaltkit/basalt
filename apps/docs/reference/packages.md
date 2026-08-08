@@ -55,6 +55,7 @@ works on its own; together they form the framework. Versions move in lockstep
 | `@machize/teams` | Multi-user tenants — roles, email invitations, membership, `teamRole` guard |
 | `@machize/teams-sqlite` · `@machize/teams-prisma` | Durable backends for the `@machize/teams` stores — SQLite (`node:sqlite`, zero-dep) and Prisma (Postgres/MySQL) |
 | `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, hosted Checkout & Portal, proration |
+| `@machize/subscriptions-sqlite` · `@machize/subscriptions-prisma` | Durable backends for the subscription, usage (atomic `consume`) and webhook stores — SQLite (zero-dep) and Prisma (Postgres/MySQL) |
 | `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
 | `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
