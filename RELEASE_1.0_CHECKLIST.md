@@ -42,9 +42,15 @@ Nothing here is hard; it's the deliberate work of committing to the surface.
 
 - [x] Guides for every capability, driver, self-contained UI, persistence, and
       database-per-tenant; full 68-package reference catalog; docs deployed.
-- [ ] **READMEs for 10 store packages** still missing: the `subscriptions-`,
-      `comments-`, `audit-`, `activity-`, `notifications-` × `{sqlite,prisma}`
-      packages. (`auth-*`, `teams-*`, `permissions-*` have them.)
+- [x] READMEs for all store packages — the `subscriptions-`, `comments-`,
+      `audit-`, `activity-`, `notifications-` × `{sqlite,prisma}` packages now
+      have English READMEs (alongside `auth-*`, `teams-*`, `permissions-*`).
+- [ ] **Translate 53 package READMEs from Portuguese to English.** The docs site
+      and every `*-sqlite`/`*-prisma` store README are English, but the base
+      package READMEs (core, auth, cache, prisma, tenancy, … — see the list in
+      project memory `package-readmes-are-portuguese`) are Portuguese. A 1.0 with
+      a single documentation language should standardize on English. **Scheduled
+      — not started.**
 - [ ] A short **"0.x → 1.0" upgrade note** — ideally "nothing to do", to be
       confirmed by the API review above.
 

@@ -1,0 +1,53 @@
+# @machize/notifications-sqlite
+
+Durable, **SQLite-backed** implementation of the
+[`@machize/notifications`](https://github.com/Zebedeu/machize/tree/main/packages/notifications)
+`InAppStore` — the in-app notification inbox — built on Node's built-in
+[`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
+dependencies.**
+
+Swap it in for the in-memory store and the inbox survives a restart — no ORM, no
+migration tool, no service. The single-node reference backend; the production
+(Postgres/MySQL) counterpart is
+[`@machize/notifications-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/notifications-prisma).
+
+```bash
+pnpm add @machize/notifications-sqlite   # peer: @machize/notifications
+```
+
+> Requires **Node 22.5+**. Stable and flag-free on Node 24; on 22.x run with
+> `--experimental-sqlite`.
+
+## Use it
+
+`@machize/notifications` takes the in-app store as the `inApp` channel option:
+
+```ts
+import { notificationsPlugin } from '@machize/notifications'
+import { sqliteInAppStore } from '@machize/notifications-sqlite'
+
+const n = sqliteInAppStore('./data/notifications.db')   // ':memory:' by default
+
+const app = await createApp({
+  plugins: [notificationsPlugin({ inApp: n.store, mailer })],
+}).boot()
+```
+
+`SqliteInAppStore` is also exported and takes a `DatabaseSync`, so it can share a
+handle with the other `*-sqlite` stores. `openNotificationsDatabase()` and
+`migrate()` are exported too.
+
+## Notes
+
+- One `in_app_notifications` table, indexed by recipient.
+- `list()` returns **newest-first**, with `unreadOnly` and `limit`, matching the
+  in-memory store; `unreadCount()` counts unread.
+- `markRead()` marks only an existing, still-unread notification (a
+  `WHERE … read_at IS NULL` guard), so it's idempotent and reports whether it
+  actually changed anything.
+- `data` is stored as JSON text and round-trips unchanged.
+- `node:sqlite` is synchronous; the methods stay `async` to honor the contract.
+
+## License
+
+MIT
