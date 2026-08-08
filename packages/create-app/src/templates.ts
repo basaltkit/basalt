@@ -38,6 +38,8 @@ export function packageJson(options: ProjectOptions): string {
   if (options.cli) {
     dependencies['@machize/cli'] = MACHIZE_VERSION
     dependencies['@machize/generator'] = MACHIZE_VERSION
+    // Powers `mach prisma:sync` — merges @machize/*-prisma models into the schema.
+    dependencies['@machize/prisma'] = MACHIZE_VERSION
   }
   // Apply per-package range overrides. Only @machize/* packages: versionOf
   // falls back to MACHIZE_VERSION, which would clobber third-party ranges
@@ -173,8 +175,11 @@ export function appTs(options: ProjectOptions): string {
   if (options.cli) {
     imports.push(`import { commandsPlugin } from '@machize/cli'`)
     imports.push(`import { generatorCommands } from '@machize/generator'`)
-    // Registers \`mach make:*\` generators; built-ins (routes, schedule:list) come free.
-    plugins.push(`commandsPlugin(generatorCommands())`)
+    imports.push(`import { prismaSyncCommand } from '@machize/prisma'`)
+    // \`mach make:*\` generators + \`mach prisma:sync\` (merges the models any
+    // @machize/*-prisma store needs into prisma/schema.prisma). Built-ins
+    // (routes, schedule:list) come free.
+    plugins.push(`commandsPlugin([...generatorCommands(), prismaSyncCommand()])`)
   }
   plugins.push(`fastifyPlugin({ routes: ${routesExpression} })`)
 
@@ -394,5 +399,9 @@ export function pnpmWorkspaceYaml(options: ProjectOptions): string {
   }allowBuilds:
   esbuild: true
   msgpackr-extract: false
+# @machize/* releases in lockstep, often within hours — exclude the scope from
+# pnpm's minimumReleaseAge policy so \`pnpm up\` is never blocked on a fresh release.
+minimumReleaseAgeExclude:
+  - '@machize/*'
 `
 }
