@@ -1,5 +1,15 @@
 # @machize/subscriptions-prisma
 
+## 0.32.0
+
+### Patch Changes
+
+- Fix a concurrency bug in `UsageStore.consume`/`increment`: the counter row was
+  seeded with `upsert`, which races to INSERT and fails with Prisma `P2002` under
+  concurrent first-touch on a real database. Now seeded with
+  `createMany({ skipDuplicates: true })`, so concurrent callers are safe. Surfaced
+  by the new PostgreSQL integration tests.
+
 ## 0.28.0
 
 ### Minor Changes

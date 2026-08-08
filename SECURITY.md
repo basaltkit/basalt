@@ -2,9 +2,10 @@
 
 ## Supported versions
 
-Machize is pre-1.0 (currently `0.1.x`). Until 1.0, security fixes land on the
-latest published minor. Once 1.0 ships, each major receives 12 months of
-security fixes after its successor is released.
+Machize is pre-1.0 (currently `0.31.x`). Until 1.0, security fixes land on the
+latest published minor — there is one release line, so upgrade to the newest
+`0.x` to receive them. Once 1.0 ships, each major receives 12 months of security
+fixes after its successor is released.
 
 ## Reporting a vulnerability
 

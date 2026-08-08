@@ -7,7 +7,7 @@ route to the client.
 
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: 0.31.0 — 69 packages, all published to npm.** The architecture is
+> **Status: 0.32.0 — 69 packages, all published to npm.** The architecture is
 > stable and every package is tested, but APIs may still change before 1.0.
 > In-memory stores are the dev default; every stateful domain now has a durable
 > backend — auth, teams, subscriptions, permissions, comments, audit, activity

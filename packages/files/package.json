@@ -1,6 +1,6 @@
 {
   "name": "@machize/files",
-  "version": "0.31.0",
+  "version": "0.32.0",
   "description": "File uploads for Machize: validation (type/size), per-tenant storage quota, metadata records, signed URLs, and hooks (antivirus/thumbnails) over @machize/storage.",
   "license": "MIT",
   "type": "module",
