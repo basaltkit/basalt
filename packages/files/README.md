@@ -1,20 +1,20 @@
 # @machize/files
 
-Pipeline de **uploads** para o Machize, sobre o [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): valida (tipo/tamanho), aplica **quota por tenant**, guarda os bytes, grava metadados, e dispara **hooks** (antivírus, thumbnails). Precisas deste módulo quando os utilizadores enviam ficheiros — anexos, avatares, documentos — e queres fazê-lo com segurança e isolamento por tenant.
+**Upload** pipeline for Machize, built on top of [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): validates (type/size), enforces **per-tenant quota**, stores the bytes, records metadata, and fires **hooks** (antivirus, thumbnails). You need this module when users upload files — attachments, avatars, documents — and you want to do it safely and with tenant isolation.
 
-## O que este módulo resolve
+## What this module solves
 
-Guardar um upload "à mão" envolve validar o tipo/tamanho, escrever no armazenamento no sítio certo (isolado por tenant), registar metadados (nome, tamanho, checksum, quem enviou), controlar a quota do plano, e desencadear pós-processamento (análise antivírus, miniaturas). Este módulo faz tudo isso numa chamada, deixando o pós-processamento para hooks.
+Saving an upload "by hand" involves validating type/size, writing to storage in the right place (isolated per tenant), recording metadata (name, size, checksum, who uploaded it), enforcing the plan's quota, and triggering post-processing (antivirus scanning, thumbnails). This module does all of that in one call, leaving post-processing to hooks.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/files @machize/storage
 ```
 
-Depende do `@machize/core`, `@machize/storage` e `@machize/fastify` (rotas). Configura um disco no `@machize/storage` (local em dev, S3/GCS em produção).
+Depends on `@machize/core`, `@machize/storage`, and `@machize/fastify` (routes). Configure a disk in `@machize/storage` (local in dev, S3/GCS in production).
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -23,88 +23,88 @@ import { fastifyPlugin } from '@machize/fastify'
 
 const app = await createApp({
   plugins: [
-    // ... storagePlugin({ disks: { uploads: ... } }) e tenancyPlugin
+    // ... storagePlugin({ disks: { uploads: ... } }) and tenancyPlugin
     filesPlugin({
-      disk: 'uploads',                         // nome do disco (ou uma instância Disk)
+      disk: 'uploads',                         // disk name (or a Disk instance)
       validate: { maxSize: 5_000_000, allowedTypes: ['image/*', 'application/pdf'] },
-      maxTotalBytes: 1_000_000_000,            // quota por tenant (1 GB)
+      maxTotalBytes: 1_000_000_000,            // per-tenant quota (1 GB)
     }),
     fastifyPlugin({ routes: [...fileRoutes()] }),
   ],
 }).boot()
 
 const files = app.container.get(FILES)
-const record = await files.upload(buffer, { name: 'contrato.pdf', contentType: 'application/pdf', tenantId: 'acme', uploadedBy: 'u1' })
+const record = await files.upload(buffer, { name: 'contract.pdf', contentType: 'application/pdf', tenantId: 'acme', uploadedBy: 'u1' })
 ```
 
-O upload valida, verifica a quota, escreve os bytes **isolados por tenant**, grava os metadados (incluindo `checksum` SHA-256) e emite `file:uploaded`.
+The upload validates, checks the quota, writes the bytes **isolated per tenant**, records the metadata (including a SHA-256 `checksum`), and emits `file:uploaded`.
 
-## Receber um upload por HTTP
+## Receiving an upload over HTTP
 
-O upload em si é *multipart* (específico do adapter), por isso não há uma rota pronta. No teu handler, lê o ficheiro e chama o serviço:
+The upload itself is *multipart* (adapter-specific), so there's no ready-made route for it. In your handler, read the file and call the service:
 
 ```ts
-// exemplo Fastify com @fastify/multipart
+// example with Fastify and @fastify/multipart
 app.post('/upload', async (req) => {
   const part = await req.file()
   const buffer = await part.toBuffer()
   return files.upload(buffer, { name: part.filename, contentType: part.mimetype })
-  // tenantId vem do contexto do pedido (tenancy)
+  // tenantId comes from the request context (tenancy)
 })
 ```
 
-As restantes operações têm rotas prontas via `fileRoutes()`:
+The other operations have ready-made routes via `fileRoutes()`:
 
-| Rota | Descrição |
+| Route | Description |
 |---|---|
-| `GET /files` | Lista os ficheiros do tenant atual. |
-| `GET /files/:id` | Metadados de um ficheiro. |
-| `POST /files/:id/url` `{ expiresIn? }` | URL assinado temporário. |
-| `DELETE /files/:id` | Apaga bytes + metadados. |
+| `GET /files` | Lists the current tenant's files. |
+| `GET /files/:id` | A file's metadata. |
+| `POST /files/:id/url` `{ expiresIn? }` | Temporary signed URL. |
+| `DELETE /files/:id` | Deletes bytes + metadata. |
 
-## Pós-processamento com hooks
+## Post-processing with hooks
 
-O padrão típico: ao `file:uploaded`, despacha um job (com o `@machize/queue`) que analisa/processa o ficheiro e depois chama `markScanned`:
+The typical pattern: on `file:uploaded`, dispatch a job (with `@machize/queue`) that scans/processes the file and then calls `markScanned`:
 
 ```ts
 hooks.on('file:uploaded', ({ file }) => ScanFile.dispatch({ tenantId: file.tenantId, id: file.id }))
 
-// no job, depois de analisar:
-await files.markScanned(id, { clean: true }, tenantId) // emite file:scanned
+// in the job, after scanning:
+await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 ```
 
-## Referência da API
+## API reference
 
 ### `filesPlugin(options)`
 
-| Opção | Tipo | Descrição |
+| Option | Type | Description |
 |---|---|---|
-| `disk` | `Disk \| string` | Instância `Disk` ou nome de um disco do `@machize/storage`. |
-| `validate` | `{ maxSize?, allowedTypes? }` | Limite de tamanho e tipos permitidos (`image/*` aceita wildcard). |
-| `maxTotalBytes` | `number` | Quota total por tenant. |
-| `checkQuota` | `(tenantId, size) => void` | Verificação de quota personalizada (ex.: ligar ao `@machize/subscriptions`). Lança para recusar. |
-| `store` | `FileStore` | Persistência de metadados. Default: em memória. |
+| `disk` | `Disk \| string` | A `Disk` instance or the name of a `@machize/storage` disk. |
+| `validate` | `{ maxSize?, allowedTypes? }` | Size limit and allowed types (`image/*` accepts wildcards). |
+| `maxTotalBytes` | `number` | Total quota per tenant. |
+| `checkQuota` | `(tenantId, size) => void` | Custom quota check (e.g. hook into `@machize/subscriptions`). Throw to reject. |
+| `store` | `FileStore` | Metadata persistence. Default: in-memory. |
 
-Regista o token `FILES`.
+Registers the `FILES` token.
 
 ### `class Files`
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `upload(content, input)` | Valida, aplica quota, guarda, grava metadados, emite `file:uploaded`. |
+| `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. |
 | `download(id, tenantId?)` | `{ record, content }`. |
-| `temporaryUrl(id, expiresIn, tenantId?)` | URL assinado. |
-| `get(id, tenantId?)` · `list(tenantId?)` | Metadados. |
-| `delete(id, tenantId?)` | Apaga bytes + metadados; emite `file:deleted`. |
-| `markScanned(id, result, tenantId?)` | Marca como analisado; emite `file:scanned`. |
+| `temporaryUrl(id, expiresIn, tenantId?)` | Signed URL. |
+| `get(id, tenantId?)` · `list(tenantId?)` | Metadata. |
+| `delete(id, tenantId?)` | Deletes bytes + metadata; emits `file:deleted`. |
+| `markScanned(id, result, tenantId?)` | Marks as scanned; emits `file:scanned`. |
 
-Sem `tenantId` explícito, usa `ctx().tenant.id`; sem tenant, lança `FileTenantRequiredError`. O acesso ao armazenamento corre no contexto do tenant resolvido, por isso os ficheiros ficam isolados mesmo a partir de um job em segundo plano.
+Without an explicit `tenantId`, it uses `ctx().tenant.id`; without a tenant, it throws `FileTenantRequiredError`. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
 
-Erros: `FileTooLargeError` (413), `FileTypeNotAllowedError` (415), `StorageQuotaExceededError` (402), `FileNotFoundError` (404).
+Errors: `FileTooLargeError` (413), `FileTypeNotAllowedError` (415), `StorageQuotaExceededError` (402), `FileNotFoundError` (404).
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/storage`** — onde os bytes ficam (local/S3/GCS), com isolamento por tenant.
-- **`@machize/subscriptions`** — liga `checkQuota` a `features(tenant).consume(...)` para quota por plano.
-- **`@machize/queue`** — processa `file:uploaded` fora do pedido (antivírus, miniaturas).
-- **`@machize/tenancy`** — fornece o tenant do contexto.
+- **`@machize/storage`** — where the bytes live (local/S3/GCS), with tenant isolation.
+- **`@machize/subscriptions`** — hook `checkQuota` into `features(tenant).consume(...)` for plan-based quotas.
+- **`@machize/queue`** — processes `file:uploaded` outside the request (antivirus, thumbnails).
+- **`@machize/tenancy`** — supplies the tenant from the context.

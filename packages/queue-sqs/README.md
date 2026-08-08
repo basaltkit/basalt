@@ -1,24 +1,24 @@
 # @machize/queue-sqs
 
-Driver de **Amazon SQS** para o [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): executa os teus jobs sobre filas SQS geridas pela AWS, sem mudares o código dos jobs. Precisas deste pacote quando corres na AWS e queres uma fila serverless, sem manter Redis nem um broker.
+**Amazon SQS** driver for [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): runs your jobs on AWS-managed SQS queues, without changing your job code. You need this package when you run on AWS and want a serverless queue, with no Redis or broker to maintain.
 
-## O que este módulo resolve
+## What this module solves
 
-O `@machize/queue` define **jobs** de forma abstrata e escolhe o backend por um *driver*. Este pacote fornece um driver que fala com o **SQS**: os jobs são enviados para uma fila SQS e recebidos por *long-polling*.
+`@machize/queue` defines **jobs** abstractly and chooses the backend via a *driver*. This package provides a driver that talks to **SQS**: jobs are sent to an SQS queue and received via *long-polling*.
 
-`defineJob`, `dispatch`, os workers e a propagação de contexto continuam iguais — só trocas o driver.
+`defineJob`, `dispatch`, the workers, and context propagation all stay the same — you only swap the driver.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/queue-sqs @aws-sdk/client-sqs
 ```
 
-O `@aws-sdk/client-sqs` (AWS SDK v3) é uma **peer dependency**. As credenciais são resolvidas pela cadeia padrão da AWS (variáveis de ambiente, perfil, IAM role…).
+`@aws-sdk/client-sqs` (AWS SDK v3) is a **peer dependency**. Credentials are resolved through the standard AWS chain (environment variables, profile, IAM role…).
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-O SQS identifica filas por **URL**, por isso passas um resolver `queueUrl` que mapeia o nome da fila (e da sua dead-letter queue) para o URL SQS:
+SQS identifies queues by **URL**, so you pass a `queueUrl` resolver that maps a queue name (and its dead-letter queue) to the SQS URL:
 
 ```ts
 import { createApp } from '@machize/core'
@@ -36,7 +36,7 @@ const SendWelcome = defineJob<{ email: string }>({
   attempts: 3,
   backoff: { type: 'exponential', delay: '30s' },
   async handle({ email }) {
-    // ... enviar
+    // ... send it
   },
 })
 
@@ -53,41 +53,41 @@ const app = await createApp({
 await SendWelcome.dispatch({ email: 'ada@acme.test' }, { delay: '2m' })
 ```
 
-## Capacidades — perfil do SQS
+## Capabilities — SQS profile
 
-| Capacidade | Suportada | Notas |
+| Capability | Supported | Notes |
 |---|:---:|---|
-| `delayed` (entrega atrasada) | ✅ | `DelaySeconds` nativo, **até 15 minutos** |
-| `priority` | ❌ | O SQS não tem prioridade de mensagens |
-| `retries` | ✅ | Re-envio com contador de tentativas |
-| `backoff` | ✅ | `DelaySeconds` entre tentativas (limitado a 15 min) |
+| `delayed` (delayed delivery) | ✅ | Native `DelaySeconds`, **up to 15 minutes** |
+| `priority` | ❌ | SQS has no message priority |
+| `retries` | ✅ | Redelivery with an attempt counter |
+| `backoff` | ✅ | `DelaySeconds` between attempts (capped at 15 min) |
 
-Um `delay` acima de **900 s (15 min)** lança `SqsDelayTooLongError` em vez de o truncar silenciosamente. E como o driver declara `priority: false`, um dispatch com prioridade é apanhado pela política `onUnsupported` do `@machize/queue`.
+A `delay` above **900s (15 min)** throws `SqsDelayTooLongError` instead of silently truncating it. And since the driver declares `priority: false`, a dispatch with priority is caught by `@machize/queue`'s `onUnsupported` policy.
 
-## Como funciona
+## How it works
 
-- O job é enviado para a fila `emails` com atributos (`x-machize-job`, `x-machize-attempt`, `x-machize-attempts`).
-- O worker faz *long-poll* (`ReceiveMessage`), executa o handler, e apaga a mensagem (`DeleteMessage`) em caso de sucesso.
-- Em caso de falha: se ainda há tentativas, re-envia com `DelaySeconds` (o backoff, limitado a 15 min) e apaga a original; se esgotou, envia para a **dead-letter queue** `emails-dead` (sufixo configurável) e apaga a original.
+- The job is sent to the `emails` queue with attributes (`x-machize-job`, `x-machize-attempt`, `x-machize-attempts`).
+- The worker long-polls (`ReceiveMessage`), runs the handler, and deletes the message (`DeleteMessage`) on success.
+- On failure: if attempts remain, it redelivers with `DelaySeconds` (the backoff, capped at 15 min) and deletes the original; if attempts are exhausted, it sends the message to the **dead-letter queue** `emails-dead` (configurable suffix) and deletes the original.
 
-> Deves criar as filas SQS (principal e dead-letter) previamente e mapeá-las no resolver `queueUrl` — incluindo a `<fila><deadSuffix>`.
+> You must create the SQS queues (main and dead-letter) beforehand and map them in the `queueUrl` resolver — including the `<queue><deadSuffix>`.
 
-## Referência da API
+## API reference
 
 ### `new SqsQueueDriver(options)`
 
-| Opção | Tipo | Default | Descrição |
+| Option | Type | Default | Description |
 |---|---|---|---|
-| `queueUrl` | `(queue: string) => string` | — (obrigatório) | Mapeia um nome de fila para o seu URL SQS. Tem de resolver também a dead-letter queue. |
-| `region` | `string` | (SDK) | Região AWS. |
-| `deadSuffix` | `string` | `'-dead'` | Sufixo para o nome da dead-letter queue. |
-| `waitTimeSeconds` | `number` | `20` | Duração do long-poll. |
-| `visibilityTimeout` | `number` | `30` | Visibility timeout enquanto a mensagem é processada. |
-| `api` | `SqsApi` | AWS SDK | API injetável — usada nos testes sem AWS. |
+| `queueUrl` | `(queue: string) => string` | — (required) | Maps a queue name to its SQS URL. Must also resolve the dead-letter queue. |
+| `region` | `string` | (SDK) | AWS region. |
+| `deadSuffix` | `string` | `'-dead'` | Suffix for the dead-letter queue name. |
+| `waitTimeSeconds` | `number` | `20` | Long-poll duration. |
+| `visibilityTimeout` | `number` | `30` | Visibility timeout while the message is being processed. |
+| `api` | `SqsApi` | AWS SDK | Injectable API — used in tests without AWS. |
 
-Constantes/erros exportados: `SQS_MAX_DELAY_SECONDS` (900) e `SqsDelayTooLongError`.
+Exported constants/errors: `SQS_MAX_DELAY_SECONDS` (900) and `SqsDelayTooLongError`.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/queue`** — este é um driver desse pacote; a API de jobs vem de lá.
-- Drivers irmãos: [`@machize/queue-rabbitmq`](https://www.npmjs.com/package/@machize/queue-rabbitmq) e [`@machize/queue-kafka`](https://www.npmjs.com/package/@machize/queue-kafka).
+- **`@machize/queue`** — this is a driver for that package; the jobs API comes from there.
+- Sibling drivers: [`@machize/queue-rabbitmq`](https://www.npmjs.com/package/@machize/queue-rabbitmq) and [`@machize/queue-kafka`](https://www.npmjs.com/package/@machize/queue-kafka).

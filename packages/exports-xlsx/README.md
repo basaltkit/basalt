@@ -1,22 +1,22 @@
 # @machize/exports-xlsx
 
-Formatter **XLSX** para o [`@machize/exports`](https://www.npmjs.com/package/@machize/exports): escreve um `.xlsx` válido (Office Open XML) — **zero dependências**. Trás o teu próprio escritor de Excel sem arrastar bibliotecas pesadas. Precisas deste módulo quando os utilizadores querem exportar para Excel, não só CSV.
+**XLSX** formatter for [`@machize/exports`](https://www.npmjs.com/package/@machize/exports): writes a valid `.xlsx` (Office Open XML) — **zero dependencies**. Bring your own Excel writer without dragging in heavy libraries. You need this module when users want to export to Excel, not just CSV.
 
-## O que este módulo resolve
+## What this module solves
 
-O `.xlsx` é, no fundo, um ZIP de ficheiros XML. Em vez de depender de uma biblioteca grande (`exceljs`, `xlsx`), este pacote escreve o ZIP (método STORE + CRC32) e o SpreadsheetML à mão — um único ficheiro `.xlsx` de uma folha, com cabeçalhos, strings e números. Encaixa na costura de *formatters* do `@machize/exports`.
+`.xlsx` is, at its core, a ZIP of XML files. Instead of relying on a large library (`exceljs`, `xlsx`), this package writes the ZIP (STORE method + CRC32) and the SpreadsheetML by hand — a single-sheet `.xlsx` file, with headers, strings, and numbers. It plugs into `@machize/exports`'s *formatter* pipeline.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/exports-xlsx @machize/exports
 ```
 
-Sem dependências de runtime além do `@machize/exports` (só para o tipo do formatter).
+No runtime dependencies beyond `@machize/exports` (only for the formatter type).
 
-## Uso
+## Usage
 
-Regista o formatter no `@machize/exports` e usa o formato `'xlsx'`:
+Register the formatter with `@machize/exports` and use the `'xlsx'` format:
 
 ```ts
 import { exportsPlugin, defineExport } from '@machize/exports'
@@ -27,29 +27,29 @@ exportsPlugin({ formatters: [xlsxFormatter] })
 const usersExport = defineExport<{ name: string; joinedAt: Date }>({
   name: 'users',
   columns: [
-    { header: 'Nome', value: (u) => u.name },
-    { header: 'Aderiu', value: (u) => u.joinedAt },
+    { header: 'Name', value: (u) => u.name },
+    { header: 'Joined', value: (u) => u.joinedAt },
   ],
 })
 
 const { content, filename, contentType } = await exports.run(usersExport, users, 'xlsx')
-// content: Buffer (um .xlsx), filename: 'users.xlsx',
+// content: Buffer (an .xlsx), filename: 'users.xlsx',
 // contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ```
 
-Ou usa o formatter diretamente:
+Or use the formatter directly:
 
 ```ts
-const buffer = xlsxFormatter.render(['Nome', 'Preço'], [['Ada', 29], ['Bob', 0]])
+const buffer = xlsxFormatter.render(['Name', 'Price'], [['Ada', 29], ['Bob', 0]])
 ```
 
-## Detalhes
+## Details
 
-- **Números** viram células numéricas; **datas** viram texto ISO; tudo o resto vira *inline string* (com escaping XML). Células vazias para `null`/`undefined`.
-- Uma folha (`Sheet1`). O ZIP usa o método **STORE** (sem compressão) — legal e aberto por Excel/LibreOffice sem problema.
-- O `Buffer` produzido passa `unzip -t` (CRCs corretos) e abre em Excel/LibreOffice/Google Sheets.
+- **Numbers** become numeric cells; **dates** become ISO text; everything else becomes an *inline string* (with XML escaping). `null`/`undefined` produce empty cells.
+- One sheet (`Sheet1`). The ZIP uses the **STORE** method (no compression) — valid and opens fine in Excel/LibreOffice.
+- The produced `Buffer` passes `unzip -t` (correct CRCs) and opens in Excel/LibreOffice/Google Sheets.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/exports`** — este é um *formatter* desse pacote; a definição do export vem de lá.
-- **`@machize/queue` + `@machize/files`** — gera o `.xlsx` num job e guarda-o para download (relatórios grandes).
+- **`@machize/exports`** — this is a *formatter* for that package; the export definition comes from there.
+- **`@machize/queue` + `@machize/files`** — generate the `.xlsx` in a job and store it for download (large reports).

@@ -1,20 +1,20 @@
 # @machize/search-postgres
 
-Driver de **pesquisa full-text em PostgreSQL** para o [`@machize/search`](https://www.npmjs.com/package/@machize/search): usa `tsvector`/`tsquery`/`ts_rank` do Postgres, com isolamento por tenant. Precisas deste módulo quando já tens Postgres e queres pesquisa relevante **sem** um serviço externo (Meilisearch/Elastic).
+**PostgreSQL full-text search** driver for [`@machize/search`](https://www.npmjs.com/package/@machize/search): uses Postgres's `tsvector`/`tsquery`/`ts_rank`, with tenant isolation. You need this module when you already have Postgres and want relevant search **without** an external service (Meilisearch/Elastic).
 
-## O que este módulo resolve
+## What this module solves
 
-Muitos SaaS já correm em Postgres. O Postgres tem full-text search a sério (stemming, ranking) via `tsvector`. Este driver liga o `@machize/search` a isso: uma tabela indexada por (index, tenant, id), `tsvector` com índice GIN, e pesquisas `ts_rank` sempre restringidas ao tenant.
+Many SaaS apps already run on Postgres. Postgres has real full-text search (stemming, ranking) via `tsvector`. This driver connects `@machize/search` to that: a table indexed by (index, tenant, id), a `tsvector` with a GIN index, and `ts_rank` searches always scoped to the tenant.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/search-postgres @machize/search pg
 ```
 
-O `pg` é o cliente que passas ao driver (uma `Pool` ou `Client`).
+`pg` is the client you pass to the driver (a `Pool` or `Client`).
 
-## Uso
+## Usage
 
 ```ts
 import { Pool } from 'pg'
@@ -29,31 +29,31 @@ searchPlugin({
 })
 ```
 
-`register` (chamado pelo `searchPlugin` no arranque) cria a tabela `machize_search` e o índice GIN. O `index`/`search`/`remove`/`clear` funcionam como em qualquer driver do `@machize/search`.
+`register` (called by `searchPlugin` at boot) creates the `machize_search` table and the GIN index. `index`/`search`/`remove`/`clear` work like any other `@machize/search` driver.
 
-## Como funciona
+## How it works
 
-- **Uma tabela** para todos os índices: `(idx, tenant_id, id, document jsonb, tsv tsvector)`, com índice GIN em `tsv`.
-- Ao indexar, os campos pesquisáveis do documento alimentam `to_tsvector(<language>, …)` (default `english`, com stemming).
-- Ao pesquisar, `tsv @@ plainto_tsquery(...)` filtra e `ts_rank` ordena; **todas** as queries têm `tenant_id = $tenant`, por isso os resultados nunca vazam entre tenants. Os `filters` viram condições `document->>'campo' = $valor` (ou `= ANY(...)` para arrays).
+- **One table** for all indexes: `(idx, tenant_id, id, document jsonb, tsv tsvector)`, with a GIN index on `tsv`.
+- When indexing, the document's searchable fields feed `to_tsvector(<language>, …)` (default `english`, with stemming).
+- When searching, `tsv @@ plainto_tsquery(...)` filters and `ts_rank` orders; **every** query has `tenant_id = $tenant`, so results never leak between tenants. `filters` become `document->>'field' = $value` conditions (or `= ANY(...)` for arrays).
 
-## Testável sem base de dados
+## Testable without a database
 
-O cliente `pg` é **injetável**, por isso a construção do SQL testa-se com um fake — sem Postgres:
+The `pg` client is **injectable**, so SQL construction can be tested with a fake — no Postgres needed:
 
 ```ts
 new PostgresSearchDriver({ client: fakePgClient })
 ```
 
-## Opções
+## Options
 
-| Opção | Default | Descrição |
+| Option | Default | Description |
 |---|---|---|
-| `client` | — (obrigatório) | `Pool`/`Client` do `pg` já ligado. |
-| `table` | `machize_search` | Tabela partilhada por todos os índices. |
-| `language` | `english` | Configuração de text-search (stemming/stop-words). |
+| `client` | — (required) | Already-connected `pg` `Pool`/`Client`. |
+| `table` | `machize_search` | Table shared by all indexes. |
+| `language` | `english` | Text-search configuration (stemming/stop-words). |
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/search`** — este é um driver desse pacote; a API (`defineIndex`, `search`, sincronização por hooks) vem de lá.
-- Drivers irmãos: `MemorySearchDriver` (dev) e `MeilisearchDriver` (no core do search).
+- **`@machize/search`** — this is a driver for that package; the API (`defineIndex`, `search`, hook-based sync) comes from there.
+- Sibling drivers: `MemorySearchDriver` (dev) and `MeilisearchDriver` (in search core).

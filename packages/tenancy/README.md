@@ -1,26 +1,26 @@
 # @machize/tenancy
 
-Multi-tenancy para aplicações Machize: identifica automaticamente a que cliente (tenant) pertence cada pedido — por subdomínio, domínio próprio, header ou rota — e disponibiliza-o em `ctx().tenant` em toda a aplicação.
+Multi-tenancy for Machize applications: automatically identifies which customer (tenant) each request belongs to — by subdomain, custom domain, header, or route — and makes it available at `ctx().tenant` throughout the application.
 
-Precisas deste módulo quando a mesma aplicação serve vários clientes/organizações com dados separados (o modelo típico de um SaaS).
+You need this module when the same application serves multiple customers/organizations with separate data (the typical SaaS model).
 
-## O que este módulo resolve
+## What this module solves
 
-**Multi-tenancy** significa que uma única instalação da aplicação serve vários "inquilinos" (**tenants**) — empresas, equipas ou organizações — cada um com os seus dados, como um prédio onde cada fração tem a sua chave. O desafio é: quando chega um pedido HTTP, como é que a aplicação sabe a que tenant pertence? E como garantir que o código que corre a seguir "sabe" sempre em que tenant está, sem passar esse valor de função em função?
+**Multi-tenancy** means a single application deployment serves several "tenants" — companies, teams, or organizations — each with its own data, like a building where each unit has its own key. The challenge is: when an HTTP request arrives, how does the application know which tenant it belongs to? And how do you ensure the code that runs afterward always "knows" which tenant it's in, without passing that value from function to function?
 
-Este módulo resolve as duas partes. Primeiro, os **resolvers**: pequenas funções que olham para o pedido e identificam o tenant — pelo subdomínio (`acme.minhaapp.com` → tenant `acme`), por um domínio próprio do cliente (`app.acme.com`), por um header (`x-tenant-id`) ou por um parâmetro de rota (`/t/acme/...`). Podes combinar vários: o primeiro que encontrar um tenant existente ganha.
+This module solves both parts. First, the **resolvers**: small functions that look at the request and identify the tenant — by subdomain (`acme.myapp.com` → tenant `acme`), by a customer's own domain (`app.acme.com`), by a header (`x-tenant-id`), or by a route parameter (`/t/acme/...`). You can combine several: the first one to find an existing tenant wins.
 
-Segundo, o **contexto**: uma vez resolvido, o tenant fica em `ctx().tenant` (usando AsyncLocalStorage do Node — um "fio invisível" que acompanha cada pedido), acessível em qualquer handler, serviço ou hook sem passar argumentos. Também podes correr código "como" um tenant fora de um pedido HTTP (jobs, migrações) com `tenancy.run()` e iterar todos os tenants com `tenancy.forEach()`.
+Second, the **context**: once resolved, the tenant is placed in `ctx().tenant` (using Node's AsyncLocalStorage — an "invisible thread" that follows each request), accessible in any handler, service, or hook without passing arguments. You can also run code "as" a tenant outside an HTTP request (jobs, migrations) with `tenancy.run()`, and iterate over all tenants with `tenancy.forEach()`.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/tenancy
 ```
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. **Define de onde vêm os tenants** (em produção, a tua base de dados; para experimentar, memória):
+1. **Define where tenants come from** (in production, your database; for experimenting, memory):
 
 ```ts
 import { MemoryTenantSource } from '@machize/tenancy'
@@ -30,7 +30,7 @@ const source = new MemoryTenantSource()
   .add({ id: 'globex', name: 'Globex' })
 ```
 
-2. **Regista o plugin com um resolver:**
+2. **Register the plugin with a resolver:**
 
 ```ts
 import { createApp, ctx } from '@machize/core'
@@ -43,7 +43,7 @@ const app = await createApp({
   plugins: [
     tenancyPlugin({
       source,
-      resolvers: [headerResolver()], // lê o header x-tenant-id
+      resolvers: [headerResolver()], // reads the x-tenant-id header
     }),
     fastifyPlugin({
       routes: [
@@ -60,61 +60,61 @@ const app = await createApp({
 }).boot()
 ```
 
-3. **Testa:**
+3. **Test it:**
 
 ```bash
 curl http://localhost:3000/whoami -H 'x-tenant-id: acme'
 # → { "tenant": "acme" }
 
 curl http://localhost:3000/whoami
-# → { "tenant": null }  (pedido sem tenant — permitido, porque required é false)
+# → { "tenant": null }  (request with no tenant — allowed, because required is false)
 ```
 
-4. **Para exigir sempre um tenant**, passa `required: true` — pedidos não resolvidos recebem 404 `TENANCY_NOT_RESOLVED`.
+4. **To always require a tenant**, pass `required: true` — unresolved requests get a 404 `TENANCY_NOT_RESOLVED`.
 
-## Guia de utilização
+## Usage guide
 
-### Escolher o resolver
+### Choosing the resolver
 
 ```ts
 import {
   subdomainResolver, domainResolver, headerResolver, routeResolver,
 } from '@machize/tenancy'
 
-// acme.minhaapp.com → tenant "acme" (ignora www, o domínio base e sub-subdomínios)
-subdomainResolver({ base: 'minhaapp.com' })
+// acme.myapp.com → tenant "acme" (ignores www, the base domain, and nested subdomains)
+subdomainResolver({ base: 'myapp.com' })
 
-// Domínio próprio do cliente: app.acme.com → source.findByDomain('app.acme.com')
+// Customer's own domain: app.acme.com → source.findByDomain('app.acme.com')
 domainResolver()
 
-// Header HTTP (default x-tenant-id; personalizável)
+// HTTP header (default x-tenant-id; customizable)
 headerResolver({ header: 'x-org' })
 
-// Parâmetro de rota: /t/:tenant/... (default 'tenant')
+// Route parameter: /t/:tenant/... (default 'tenant')
 routeResolver({ param: 'tenant' })
 ```
 
-Podes passar vários em `resolvers: [...]` — são tentados por ordem e o primeiro cuja referência corresponder a um tenant **existente** na source ganha (uma referência a um tenant desconhecido passa ao seguinte).
+You can pass several in `resolvers: [...]` — they're tried in order, and the first whose reference matches an **existing** tenant in the source wins (a reference to an unknown tenant falls through to the next one).
 
-### Ligar à tua base de dados (TenantSource)
+### Connecting to your database (TenantSource)
 
 ```ts
 import type { TenantSource, Tenant } from '@machize/tenancy'
 
 const source: TenantSource = {
   async find(id) { /* SELECT ... WHERE id = ? */ return null },
-  // Opcional — obrigatório para domainResolver():
+  // Optional — required for domainResolver():
   async findByDomain(domain) { /* SELECT ... WHERE domain = ? */ return null },
-  // Opcional — obrigatório para tenancy.forEach():
+  // Optional — required for tenancy.forEach():
   async list() { return [] },
 }
 ```
 
-O tipo `Tenant` só exige `id: string`; acrescenta os campos que quiseres (`name`, `plan`, `domains`, …). Nota: o `findByDomain` do `MemoryTenantSource` procura no campo `domains: string[]` do tenant.
+The `Tenant` type only requires `id: string`; add whatever fields you want (`name`, `plan`, `domains`, …). Note: `MemoryTenantSource`'s `findByDomain` looks up the tenant's `domains: string[]` field.
 
-### Correr código como um tenant (jobs, scripts)
+### Running code as a tenant (jobs, scripts)
 
-Fora de um pedido HTTP não há resolver — usa a facade `Tenancy`:
+Outside an HTTP request there's no resolver — use the `Tenancy` facade:
 
 ```ts
 import { TENANCY } from '@machize/tenancy'
@@ -122,103 +122,103 @@ import { ctx } from '@machize/core'
 
 const tenancy = app.container.get(TENANCY)
 
-// Corre a função com ctx().tenant = acme (contexto exterior preservado e restaurado)
+// Runs the function with ctx().tenant = acme (outer context preserved and restored)
 await tenancy.run('acme', async () => {
   console.log(ctx().tenant?.id) // 'acme'
 })
 
-// Manutenção em massa: visita todos os tenants, cada um no seu contexto,
-// com concorrência limitada (default 5)
+// Bulk maintenance: visits every tenant, each in its own context,
+// with limited concurrency (default 5)
 await tenancy.forEach(
-  async (tenant) => { /* ex.: correr migrações do tenant */ },
+  async (tenant) => { /* e.g. run the tenant's migrations */ },
   { concurrency: 2 },
 )
 ```
 
-`run()` aceita o objeto `Tenant` ou o `id` (que é carregado da source; se não existir lança `TenantNotFoundError`).
+`run()` accepts either the `Tenant` object or the `id` (which is loaded from the source; if it doesn't exist, it throws `TenantNotFoundError`).
 
-### Reagir a mudanças de tenant (hook)
+### Reacting to tenant changes (hook)
 
-Sempre que a execução entra num contexto de tenant (num pedido HTTP resolvido ou via `run`), o hook `tenancy:switched` dispara:
+Whenever execution enters a tenant context (in a resolved HTTP request or via `run`), the `tenancy:switched` hook fires:
 
 ```ts
 app.hooks.on('tenancy:switched', ({ tenant }) => {
-  console.log('a trabalhar para o tenant', tenant.id)
+  console.log('working for tenant', tenant.id)
 })
 ```
 
-## Referência da API
+## API reference
 
 ### `tenancyPlugin(options)`
 
-| Nome | Tipo | Obrigatório? | Default | Descrição |
+| Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `source` | `TenantSource` | Sim | — | De onde se carregam os tenants. |
-| `resolvers` | `TenantResolver[]` | Sim | — | Tentados por ordem; o primeiro que carregar um tenant ganha. |
-| `required` | `boolean` | Não | `false` | `true` → pedido sem tenant recebe 404 `TENANCY_NOT_RESOLVED`. |
+| `source` | `TenantSource` | Yes | — | Where tenants are loaded from. |
+| `resolvers` | `TenantResolver[]` | Yes | — | Tried in order; the first one that loads a tenant wins. |
+| `required` | `boolean` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. |
 
-O plugin regista a facade no container sob o token `TENANCY` e um enricher HTTP que resolve o tenant de cada pedido, o coloca em `ctx().tenant` e emite `tenancy:switched`.
+The plugin registers the facade in the container under the `TENANCY` token, and an HTTP enricher that resolves the tenant for each request, places it in `ctx().tenant`, and emits `tenancy:switched`.
 
-### Classe `Tenancy`
+### `Tenancy` class
 
-Construtor: `new Tenancy(source, resolvers, hooks?)` (normalmente criada pelo plugin).
+Constructor: `new Tenancy(source, resolvers, hooks?)` (normally created by the plugin).
 
-| Método | Devolve | Descrição |
+| Method | Returns | Description |
 |---|---|---|
-| `current()` | `Tenant \| undefined` | Tenant do contexto ativo. |
-| `find(id)` | `Promise<Tenant \| null>` | Procura na source. |
-| `resolve(request)` | `Promise<Tenant \| null>` | Corre os resolvers sobre `{ headers?, params?, url? }`. |
-| `run(tenantOrId, fn)` | `Promise<T>` | Executa `fn` com `ctx().tenant` definido; emite `tenancy:switched`. |
-| `forEach(fn, { concurrency? })` | `Promise<void>` | `fn` por cada tenant (requer `source.list`); concorrência default 5. |
+| `current()` | `Tenant \| undefined` | The tenant of the active context. |
+| `find(id)` | `Promise<Tenant \| null>` | Looks it up in the source. |
+| `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }`. |
+| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched`. |
+| `forEach(fn, { concurrency? })` | `Promise<void>` | Runs `fn` for each tenant (requires `source.list`); default concurrency 5. |
 
 ### Resolvers
 
-| Função | Opções | Devolve |
+| Function | Options | Returns |
 |---|---|---|
-| `subdomainResolver(options)` | `base: string` (obrigatório) | `{ id: subdominio }`; ignora `www`, o domínio base, subdomínios aninhados e a porta. |
-| `domainResolver()` | — | `{ domain: host }`; requer `source.findByDomain`. |
-| `headerResolver(options?)` | `header?: string` (default `'x-tenant-id'`) | `{ id: valorDoHeader }`. |
+| `subdomainResolver(options)` | `base: string` (required) | `{ id: subdomain }`; ignores `www`, the base domain, nested subdomains, and the port. |
+| `domainResolver()` | — | `{ domain: host }`; requires `source.findByDomain`. |
+| `headerResolver(options?)` | `header?: string` (default `'x-tenant-id'`) | `{ id: headerValue }`. |
 | `routeResolver(options?)` | `param?: string` (default `'tenant'`) | `{ id: params[param] }`. |
 
-Um `TenantResolver` é `(request: ResolutionRequest) => TenantRef | null | Promise<...>`, onde `TenantRef` é `{ id: string }` ou `{ domain: string }`. Podes escrever o teu — é só uma função. (Avançado.)
+A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promise<...>`, where `TenantRef` is `{ id: string }` or `{ domain: string }`. You can write your own — it's just a function. (Advanced.)
 
-### Tipos e erros
+### Types and errors
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
 | `Tenant` | `{ id: string; [key: string]: unknown }`. |
-| `TenantSource` | `find` (obrigatório), `findByDomain?`, `list?`. |
-| `MemoryTenantSource` | Source em memória com `.add(tenant)` encadeável — dev/testes. |
-| `ResolutionRequest`, `TenantRef`, `TenantResolver` | Tipos dos resolvers. Avançado. |
-| `TENANCY` | Token de injeção: `container.get(TENANCY)` → `Tenancy`. |
-| `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED`, HTTP 404 — pedido sem tenant com `required: true`. |
-| `TenantNotFoundError` | `TENANT_NOT_FOUND` — id inexistente passado a `run()`. |
+| `TenantSource` | `find` (required), `findByDomain?`, `list?`. |
+| `MemoryTenantSource` | In-memory source with a chainable `.add(tenant)` — dev/tests. |
+| `ResolutionRequest`, `TenantRef`, `TenantResolver` | Resolver types. Advanced. |
+| `TENANCY` | Injection token: `container.get(TENANCY)` → `Tenancy`. |
+| `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED`, HTTP 404 — a request with no tenant when `required: true`. |
+| `TenantNotFoundError` | `TENANT_NOT_FOUND` — a nonexistent id passed to `run()`. |
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**"`ctx().tenant` está sempre `undefined`."** Confere: (1) o `tenancyPlugin` está registado **antes** de leres o contexto; (2) o pedido traz mesmo o que o resolver espera (header certo, subdomínio certo); (3) o tenant existe na source — um resolver que identifica um id desconhecido é ignorado.
+**"`ctx().tenant` is always `undefined`."** Check: (1) `tenancyPlugin` is registered **before** you read the context; (2) the request actually carries what the resolver expects (correct header, correct subdomain); (3) the tenant exists in the source — a resolver that identifies an unknown id is ignored.
 
-**"404 TENANCY_NOT_RESOLVED em pedidos que deviam passar."** Tens `required: true` e nenhum resolver conseguiu carregar um tenant. Para rotas "centrais" (landing page, registo) usa `required: false` e trata a ausência de tenant no handler.
+**"404 TENANCY_NOT_RESOLVED on requests that should pass."** You have `required: true` and no resolver managed to load a tenant. For "central" routes (landing page, sign-up) use `required: false` and handle the absence of a tenant in the handler.
 
-**"O subdomainResolver não apanha `a.b.minhaapp.com`."** Intencional: só aceita um único nível de subdomínio; `www` e o domínio base também são ignorados.
+**"subdomainResolver doesn't catch `a.b.myapp.com`."** Intentional: it only accepts a single level of subdomain; `www` and the base domain are also ignored.
 
-**"O domainResolver devolve sempre null."** A tua `TenantSource` precisa de implementar `findByDomain`. No `MemoryTenantSource`, o tenant tem de ter o campo `domains: ['app.acme.com']`.
+**"domainResolver always returns null."** Your `TenantSource` needs to implement `findByDomain`. In `MemoryTenantSource`, the tenant must have the `domains: ['app.acme.com']` field.
 
-**"tenancy.forEach() lança TenantNotFoundError."** A tua source não implementa o método opcional `list()` — ele é obrigatório para o `forEach`.
+**"tenancy.forEach() throws TenantNotFoundError."** Your source doesn't implement the optional `list()` method — it's required for `forEach`.
 
-**"Os tenants desaparecem ao reiniciar."** `MemoryTenantSource` vive em memória; implementa `TenantSource` sobre a tua base de dados.
+**"Tenants disappear on restart."** `MemoryTenantSource` lives in memory; implement `TenantSource` on top of your database.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **@machize/core** — fornece o contexto por pedido (`ctx()`, AsyncLocalStorage) onde o tenant é colocado, e o bus de hooks (`tenancy:switched`).
-- **@machize/fastify** — executa o enricher que resolve o tenant em cada pedido HTTP.
-- **@machize/auth** — independente, mas complementar: auth diz *quem* é o utilizador, tenancy diz *onde* (em que organização) o pedido decorre. As chaves de API criadas num tenant ficam limitadas a ele.
-- **@machize/permissions** — usa `ctx().tenant.id` como âmbito por omissão: permissões concedidas num tenant não valem noutro.
-- **@machize/teams** — as equipas são os membros de um tenant; as rotas de equipa exigem `ctx().tenant` definido por este módulo.
+- **@machize/core** — provides the per-request context (`ctx()`, AsyncLocalStorage) where the tenant is placed, and the hook bus (`tenancy:switched`).
+- **@machize/fastify** — runs the enricher that resolves the tenant on each HTTP request.
+- **@machize/auth** — independent, but complementary: auth says *who* the user is, tenancy says *where* (in which organization) the request is happening. API keys created within a tenant are scoped to it.
+- **@machize/permissions** — uses `ctx().tenant.id` as the default scope: permissions granted in one tenant don't apply in another.
+- **@machize/teams** — teams are the members of a tenant; team routes require `ctx().tenant` to be set by this module.
 
-## Boas práticas de segurança
+## Security best practices
 
-- **Nunca confies num header de tenant vindo do browser em produção.** O `headerResolver` é ótimo para desenvolvimento e para tráfego interno, mas um utilizador pode enviar `x-tenant-id: outro-cliente` à mão. Em produção, prefere `subdomainResolver`/`domainResolver` (o DNS é controlado por ti) e valida sempre que o utilizador autenticado **pertence** ao tenant resolvido (o guard `teamRole` do `@machize/teams` faz isso).
-- **Isola os dados por tenant nas queries.** Este módulo identifica o tenant; cabe ao teu código usar `ctx().tenant.id` em todas as consultas à base de dados. Uma query sem filtro de tenant é uma fuga de dados entre clientes.
-- **Usa `required: true` nas áreas de aplicação** para que um pedido mal encaminhado falhe alto (404) em vez de correr sem tenant e tocar em dados globais.
-- **Cuidado com os domínios próprios:** só aceites um domínio em `findByDomain` depois de o cliente provar que o controla (ex.: registo DNS), senão alguém pode apontar um domínio para a tua aplicação e fazer-se passar por outro tenant.
+- **Never trust a tenant header coming from the browser in production.** `headerResolver` is great for development and internal traffic, but a user can manually send `x-tenant-id: another-customer`. In production, prefer `subdomainResolver`/`domainResolver` (DNS is under your control) and always verify that the authenticated user **belongs** to the resolved tenant (the `teamRole` guard from `@machize/teams` does this).
+- **Isolate tenant data in your queries.** This module identifies the tenant; it's up to your code to use `ctx().tenant.id` in every database query. A query without a tenant filter is a data leak between customers.
+- **Use `required: true` in application areas** so that a misrouted request fails loudly (404) instead of running with no tenant and touching global data.
+- **Be careful with custom domains:** only accept a domain in `findByDomain` after the customer has proven they control it (e.g. a DNS record), otherwise someone could point a domain at your application and impersonate another tenant.

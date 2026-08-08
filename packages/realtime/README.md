@@ -1,27 +1,27 @@
 # @machize/realtime
 
-Comunicação em tempo real para o Machize: **push do servidor para o cliente** por WebSocket ou SSE, com **canais por tenant**, **presença** (quem está online) e uma **ponte de eventos** que liga os hooks de domínio da tua app diretamente aos clientes ligados. Precisas deste módulo quando queres atualizações ao vivo — notificações, feeds, dashboards, colaboração — sem o cliente andar a fazer *polling*.
+Real-time communication for Machize: **server-to-client push** over WebSocket or SSE, with **per-tenant channels**, **presence** (who's online), and an **event bridge** that connects your app's domain hooks directly to connected clients. You need this module when you want live updates — notifications, feeds, dashboards, collaboration — without the client polling.
 
-## O que este módulo resolve
+## What this module solves
 
-Numa aplicação normal o cliente pergunta ("há novidades?") repetidamente. Com realtime, é o **servidor que avisa** o cliente no instante em que algo acontece. Este módulo dá-te isso de forma:
+In a typical application the client keeps asking ("anything new?") repeatedly. With realtime, it's the **server that notifies** the client the instant something happens. This module gives you that in a way that is:
 
-- **Neutra de framework** — o núcleo (hub, canais, presença) não conhece sockets; os transportes (WebSocket/SSE) são finos e ligam-se ao teu adapter (Fastify/Express/Hono).
-- **Multi-tenant** — os canais são isolados por tenant: `to('acme').channel('notes')` nunca entrega a clientes de outro tenant.
-- **Multi-instância** — com o *backplane* de Redis, um `emit` numa instância chega aos clientes ligados a **qualquer** instância.
-- **Testável sem servidor** — o núcleo testa-se com conexões falsas; não precisas de abrir sockets.
+- **Framework-neutral** — the core (hub, channels, presence) knows nothing about sockets; the transports (WebSocket/SSE) are thin and connect to your adapter (Fastify/Express/Hono).
+- **Multi-tenant** — channels are isolated per tenant: `to('acme').channel('notes')` never delivers to another tenant's clients.
+- **Multi-instance** — with the Redis *backplane*, an `emit` on one instance reaches clients connected to **any** instance.
+- **Testable without a server** — the core is tested with fake connections; you don't need to open sockets.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/realtime
 ```
 
-Depende apenas de `@machize/core`. Para multi-instância precisas de um Redis (o cliente é injetado — normalmente `ioredis`).
+Depends only on `@machize/core`. For multi-instance you need a Redis (the client is injected — typically `ioredis`).
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-### 1. Regista o plugin
+### 1. Register the plugin
 
 ```ts
 import { createApp } from '@machize/core'
@@ -32,23 +32,23 @@ const app = await createApp({
 }).boot()
 ```
 
-### 2. Liga um cliente (transporte)
+### 2. Connect a client (transport)
 
-O núcleo fala com **conexões** (`Connection`). Constróis uma a partir do socket/resposta do teu adapter e registas no hub. Exemplo com WebSocket:
+The core talks to **connections** (`Connection`). You build one from your adapter's socket/response and register it in the hub. WebSocket example:
 
 ```ts
 import { REALTIME_HUB, websocketConnection } from '@machize/realtime'
 
-// no handler de upgrade WebSocket do teu adapter, com o utilizador já autenticado:
+// in your adapter's WebSocket upgrade handler, with the user already authenticated:
 const hub = app.container.get(REALTIME_HUB)
 const conn = websocketConnection({ tenantId: tenant.id, userId: user.id }, socket)
 hub.register(conn)
-hub.subscribe(conn.id, 'notes') // subscreve os canais a que este cliente tem acesso
+hub.subscribe(conn.id, 'notes') // subscribe to the channels this client has access to
 
 socket.on('close', () => hub.unregister(conn.id))
 ```
 
-Com **SSE** é igual, mas fornecendo como escrever na resposta (neutro de framework):
+It's the same with **SSE**, but you provide how to write to the response (framework-neutral):
 
 ```ts
 import { sseConnection } from '@machize/realtime'
@@ -63,17 +63,17 @@ hub.subscribe(conn.id, 'notes')
 reply.raw.on('close', () => hub.unregister(conn.id))
 ```
 
-### 3. Emite do servidor
+### 3. Emit from the server
 
 ```ts
 const realtime = app.container.get(REALTIME)
-await realtime.to('acme').channel('notes').emit('created', { id: 1, title: 'Olá' })
-// todos os clientes do tenant 'acme' subscritos a 'notes' recebem o evento
+await realtime.to('acme').channel('notes').emit('created', { id: 1, title: 'Hello' })
+// every client of tenant 'acme' subscribed to 'notes' receives the event
 ```
 
-## Ponte de eventos (hooks → push)
+## Event bridge (hooks → push)
 
-Em vez de chamar `emit` à mão, liga um hook de domínio a um canal. Sempre que o hook dispara, o payload é empurrado para os clientes — sem tocar no código que emite o evento:
+Instead of calling `emit` by hand, connect a domain hook to a channel. Whenever the hook fires, the payload is pushed to clients — without touching the code that emits the event:
 
 ```ts
 import { realtimePlugin, bridgeRule } from '@machize/realtime'
@@ -81,30 +81,30 @@ import { realtimePlugin, bridgeRule } from '@machize/realtime'
 realtimePlugin({
   bridge: [
     bridgeRule({
-      hook: 'note:created',            // um hook declarado na tua app
-      tenant: (p) => p.tenantId,        // a que tenant entregar (undefined → ignora)
-      channel: 'notes',                 // ou uma função (p) => `notes:${p.folderId}`
+      hook: 'note:created',            // a hook declared in your app
+      tenant: (p) => p.tenantId,        // which tenant to deliver to (undefined → skips)
+      channel: 'notes',                 // or a function (p) => `notes:${p.folderId}`
       event: 'created',
-      data: (p) => p.note,              // opcional; por omissão envia o payload todo
+      data: (p) => p.note,              // optional; defaults to sending the whole payload
     }),
   ],
 })
 ```
 
-O `bridgeRule` valida os tipos contra o payload do hook, por isso `p` tem o tipo certo.
+`bridgeRule` validates the types against the hook's payload, so `p` has the right type.
 
-## Presença
+## Presence
 
 ```ts
-realtime.to('acme').channel('notes').presence() // → ['user-1', 'user-7']  (ids únicos online)
-realtime.to('acme').channel('notes').count()    // → nº de conexões
+realtime.to('acme').channel('notes').presence() // → ['user-1', 'user-7']  (unique online ids)
+realtime.to('acme').channel('notes').count()    // → number of connections
 ```
 
-A presença conta as conexões **desta instância**. Em multi-instância, cada nó conhece os seus clientes locais — para uma visão global agregada, some as instâncias (ou publique join/leave pelo backplane; enhancement futuro).
+Presence counts connections **on this instance**. In multi-instance setups, each node knows only its local clients — for an aggregated global view, sum across instances (or publish join/leave over the backplane; a future enhancement).
 
-## Multi-instância com Redis
+## Multi-instance with Redis
 
-Passa um `RedisBackplane` para que um `emit` numa instância chegue aos clientes de todas. Fornece **dois** clientes Redis (um em modo subscribe não pode publicar):
+Pass a `RedisBackplane` so an `emit` on one instance reaches clients on all of them. Provide **two** Redis clients (a client in subscribe mode can't publish):
 
 ```ts
 import Redis from 'ioredis'
@@ -115,45 +115,45 @@ realtimePlugin({
 })
 ```
 
-O `emit` faz `PUBLISH`; o Redis entrega a **todas** as instâncias subscritas (incluindo a de origem), e cada hub entrega às suas conexões locais — o mesmo caminho serve um nó ou muitos.
+`emit` does a `PUBLISH`; Redis delivers to **all** subscribed instances (including the origin one), and each hub delivers to its local connections — the same path serves one node or many.
 
-## Referência da API
+## API reference
 
 ### `realtimePlugin(options?)`
 
-| Opção | Tipo | Default | Descrição |
+| Option | Type | Default | Description |
 |---|---|---|---|
-| `backplane` | `RealtimeBackplane` | `MemoryBackplane` | Fan-out entre instâncias. |
-| `bridge` | `BridgeRule[]` | `[]` | Regras hook → canal (usa `bridgeRule(...)`). |
+| `backplane` | `RealtimeBackplane` | `MemoryBackplane` | Fan-out across instances. |
+| `bridge` | `BridgeRule[]` | `[]` | Hook → channel rules (use `bridgeRule(...)`). |
 
-Regista os tokens `REALTIME` (`Realtime`) e `REALTIME_HUB` (`RealtimeHub`).
+Registers the `REALTIME` (`Realtime`) and `REALTIME_HUB` (`RealtimeHub`) tokens.
 
 ### `class Realtime`
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `to(tenantId).channel(name).emit(event, data?)` | Publica um evento no canal do tenant. |
-| `to(tenantId).channel(name).presence()` | Ids de utilizador online (local). |
-| `to(tenantId).channel(name).count()` | Nº de conexões (local). |
+| `to(tenantId).channel(name).emit(event, data?)` | Publishes an event on the tenant's channel. |
+| `to(tenantId).channel(name).presence()` | Online user ids (local). |
+| `to(tenantId).channel(name).count()` | Number of connections (local). |
 
 ### `class RealtimeHub`
 
 `register(conn)` · `unregister(connId)` · `subscribe(connId, channel)` · `unsubscribe(connId, channel)` · `publish(tenantId, channel, event, data)` · `presence(tenantId, channel)` · `count(tenantId, channel)` · `start()` · `close()`.
 
-### Transportes
+### Transports
 
-- `websocketConnection(meta, socket)` — de qualquer socket `ws`-like (`send`/`close`).
-- `sseConnection(meta, { write, end })` — SSE; tu forneces como escrever/terminar.
-- `sseFrame(message)` — formata uma mensagem como frame SSE.
+- `websocketConnection(meta, socket)` — from any `ws`-like socket (`send`/`close`).
+- `sseConnection(meta, { write, end })` — SSE; you provide how to write/end.
+- `sseFrame(message)` — formats a message as an SSE frame.
 
 ### Backplanes
 
-- `MemoryBackplane` — processo único (default).
+- `MemoryBackplane` — single process (default).
 - `RedisBackplane({ publisher, subscriber, channel? })` — Redis pub/sub (`channel` default `'machize:realtime'`).
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — fornece `createApp`, tokens, e o barramento de hooks que a ponte de eventos consome.
-- **`@machize/events`** — emite eventos de domínio; a `bridge` transforma-os em push.
-- **`@machize/notifications`** — padrão comum: notificação persistida **e** empurrada ao vivo pelo mesmo evento.
-- **`@machize/tenancy` / `@machize/auth`** — de onde vêm o `tenantId`/`userId` que atribuis a cada conexão.
+- **`@machize/core`** — provides `createApp`, tokens, and the hook bus the event bridge consumes.
+- **`@machize/events`** — emits domain events; the `bridge` turns them into push.
+- **`@machize/notifications`** — common pattern: notification persisted **and** pushed live by the same event.
+- **`@machize/tenancy` / `@machize/auth`** — where the `tenantId`/`userId` you assign to each connection come from.

@@ -1,26 +1,26 @@
 # @machize/subscriptions
 
-Faturação para o framework Machize, ao estilo Laravel Cashier/Soulbscription: planos declarativos, subscrições com período experimental, funcionalidades com limites de utilização, integração com Stripe e webhooks idempotentes. Precisas deste módulo quando a tua aplicação SaaS cobra mensalidades e limita funcionalidades por plano.
+Billing for the Machize framework, in the style of Laravel Cashier/Soulbscription: declarative plans, subscriptions with a trial period, features with usage limits, Stripe integration, and idempotent webhooks. You need this module when your SaaS application charges monthly fees and limits features by plan.
 
-## O que este módulo resolve
+## What this module solves
 
-Num SaaS típico vendes **planos** (ex.: Free, Pro, Enterprise): um plano é um pacote com um preço e um conjunto de **funcionalidades** — coisas que o cliente pode ou não fazer, e em que quantidade (3 projetos no Free, 50 no Pro; 1000 chamadas à API por mês). Uma **subscrição** é a ligação entre um cliente e um plano, com um estado (ativa, em período experimental, pagamento em atraso, cancelada).
+In a typical SaaS you sell **plans** (e.g. Free, Pro, Enterprise): a plan is a package with a price and a set of **features** — things the customer can or can't do, and in what quantity (3 projects on Free, 50 on Pro; 1000 API calls per month). A **subscription** is the link between a customer and a plan, with a status (active, trialing, past due, canceled).
 
-Implementar isto à mão é traiçoeiro: períodos experimentais que expiram, mudanças de plano a meio do mês (com *proration* — o acerto proporcional do valor), limites mensais que têm de reiniciar, e a sincronização com o processador de pagamentos (o *gateway*, ex.: Stripe), que comunica por **webhooks** — pedidos HTTP que o gateway envia à tua aplicação quando um pagamento acontece ou falha. Esses webhooks chegam repetidos e fora de ordem, e processá-los duas vezes corrompe o estado.
+Implementing this by hand is treacherous: trial periods that expire, mid-month plan changes (with *proration* — the proportional adjustment of the amount), monthly limits that need to reset, and syncing with the payment processor (the *gateway*, e.g. Stripe), which communicates via **webhooks** — HTTP requests the gateway sends to your application when a payment succeeds or fails. Those webhooks arrive duplicated and out of order, and processing them twice corrupts the state.
 
-Este módulo dá-te tudo isso pronto: defines os planos em código (`definePlans`), geres o ciclo de vida (`subscribe`, `checkout`, `swap`, `cancel`, `resume`), verificas e consomes funcionalidades (`features(...).can/consume`, com quotas atómicas que nunca são ultrapassadas mesmo com pedidos concorrentes) e processas webhooks de forma **idempotente** (cada evento é aplicado uma única vez, mesmo que chegue dez vezes). O estado local é a "fonte de leitura": verificar uma funcionalidade nunca faz chamadas ao Stripe.
+This module gives you all of that ready to go: you define plans in code (`definePlans`), manage the lifecycle (`subscribe`, `checkout`, `swap`, `cancel`, `resume`), check and consume features (`features(...).can/consume`, with atomic quotas that are never exceeded even under concurrent requests), and process webhooks **idempotently** (each event is applied exactly once, even if it arrives ten times). The local state is the "source of read truth": checking a feature never makes calls to Stripe.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/subscriptions
 ```
 
-O pacote depende de `@machize/core` e `@machize/fastify` (para as rotas e guards HTTP) e tem `zod` como *peer dependency*.
+The package depends on `@machize/core` and `@machize/fastify` (for HTTP routes and guards) and has `zod` as a *peer dependency*.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
-1. **Define os planos.** `price: 0` é grátis; um objeto dá preços mensal/anual; `'custom'` é "fale connosco". As funcionalidades podem ser: booleano (liga/desliga), número (saldo vitalício), `meter(n)` (quota que reinicia todos os meses) ou `Infinity` (ilimitado):
+1. **Define the plans.** `price: 0` is free; an object gives monthly/yearly prices; `'custom'` is "talk to us". Features can be: boolean (on/off), number (lifetime balance), `meter(n)` (quota that resets every month), or `Infinity` (unlimited):
 
 ```ts
 // src/billing/plans.ts
@@ -30,14 +30,14 @@ export const plans = definePlans({
   free: { price: 0, features: { projects: 3, api: false } },
   pro: {
     price: { monthly: 29, yearly: 290 },
-    trial: '14d', // período experimental de 14 dias
+    trial: '14d', // 14-day trial period
     features: { projects: 50, api: true, 'api.requests': meter(1000) },
   },
   scale: { price: 'custom', features: { projects: Number.POSITIVE_INFINITY, api: true } },
 })
 ```
 
-2. **Cria o serviço** (sem gateway, para já — tudo funciona localmente):
+2. **Create the service** (no gateway yet — everything works locally):
 
 ```ts
 // src/billing/subscriptions.ts
@@ -46,20 +46,20 @@ import { plans } from './plans.js'
 
 export const subscriptions = new Subscriptions({
   plans,
-  fallbackPlan: 'free', // plano aplicado a quem não tem subscrição
+  fallbackPlan: 'free', // plan applied to those without a subscription
 })
 ```
 
-3. **Subscreve um cliente.** O `billableId` é o identificador de quem paga — por convenção, o id do tenant:
+3. **Subscribe a customer.** `billableId` is the identifier of who pays — by convention, the tenant's id:
 
 ```ts
 const record = await subscriptions.subscribe('acme', 'pro')
-console.log(record.status)                       // 'trialing' (o plano tem trial)
+console.log(record.status)                       // 'trialing' (the plan has a trial)
 console.log(await subscriptions.subscribed('acme')) // true
 console.log(await subscriptions.onTrial('acme'))    // true
 ```
 
-4. **Verifica e consome funcionalidades:**
+4. **Check and consume features:**
 
 ```ts
 const features = subscriptions.features('acme')
@@ -67,90 +67,90 @@ const features = subscriptions.features('acme')
 console.log(await features.can('api'))            // true
 console.log(await features.remaining('projects')) // 50
 
-await features.consume('projects', 2)             // regista a criação de 2 projetos
+await features.consume('projects', 2)             // records the creation of 2 projects
 console.log(await features.remaining('projects')) // 48
 ```
 
-5. Quando o limite se esgota, `consume` lança `QuotaExceededError`; uma funcionalidade desligada no plano lança `FeatureUnavailableError`. Basta apanhar estes erros para mostrar "faça upgrade".
+5. When the limit runs out, `consume` throws `QuotaExceededError`; a feature that's off in the plan throws `FeatureUnavailableError`. Just catch these errors to show an "upgrade" prompt.
 
-## Guia de utilização
+## Usage guide
 
-### Definir planos
+### Defining plans
 
-Cada plano (`PlanDefinition`) tem:
+Each plan (`PlanDefinition`) has:
 
-| Campo | Tipo | Obrigatório? | Descrição |
+| Field | Type | Required? | Description |
 |---|---|---|---|
-| `price` | `number \| { monthly, yearly } \| 'custom'` | Sim | `0` = grátis; número = mesmo preço nos dois períodos; `'custom'` = vendas |
-| `trial` | `DurationInput` (ex.: `'14d'`) | Não | Duração do período experimental |
-| `features` | `Record<string, FeatureValue>` | Sim | `boolean` (flag) · `number` (saldo vitalício) · `meter(n)` (quota mensal) · `Infinity` (ilimitado) |
+| `price` | `number \| { monthly, yearly } \| 'custom'` | Yes | `0` = free; a number = same price in both periods; `'custom'` = sales |
+| `trial` | `DurationInput` (e.g. `'14d'`) | No | Trial period duration |
+| `features` | `Record<string, FeatureValue>` | Yes | `boolean` (flag) · `number` (lifetime balance) · `meter(n)` (monthly quota) · `Infinity` (unlimited) |
 
-Os contadores de `meter(n)` reiniciam a cada mês de calendário (bucket `YYYY-MM`); os saldos numéricos são vitalícios.
+`meter(n)` counters reset every calendar month (bucket `YYYY-MM`); numeric balances are lifetime.
 
-### Subscrever
+### Subscribing
 
 ```ts
-await subscriptions.subscribe('acme', 'pro')                        // mensal (default)
-await subscriptions.subscribe('acme', 'pro', { period: 'yearly' })  // anual
+await subscriptions.subscribe('acme', 'pro')                        // monthly (default)
+await subscriptions.subscribe('acme', 'pro', { period: 'yearly' })  // yearly
 ```
 
-- Plano com `trial` → estado `trialing` até ao fim do período experimental.
-- Com um gateway configurado, planos **pagos** são criados também no gateway (com o trial em dias, se existir); planos grátis nunca tocam no gateway.
-- Alternativa recomendada em produção: **Checkout** (o cliente introduz o cartão numa página alojada pelo gateway):
+- A plan with `trial` → `trialing` status until the trial period ends.
+- With a gateway configured, **paid** plans are also created in the gateway (with the trial in days, if any); free plans never touch the gateway.
+- Recommended alternative in production: **Checkout** (the customer enters their card on a page hosted by the gateway):
 
 ```ts
 const { url } = await subscriptions.checkout('acme', 'pro', {
-  successUrl: 'https://app.exemplo.com/obrigado',
-  cancelUrl: 'https://app.exemplo.com/precos',
+  successUrl: 'https://app.example.com/thank-you',
+  cancelUrl: 'https://app.example.com/pricing',
 })
-// redireciona o cliente para `url`; a subscrição fica 'incomplete'
-// e passa a 'active' quando o webhook payment.succeeded chegar
+// redirect the customer to `url`; the subscription becomes 'incomplete'
+// and switches to 'active' when the payment.succeeded webhook arrives
 ```
 
-### Mudar de plano (swap)
+### Changing plans (swap)
 
 ```ts
-await subscriptions.swap('acme', 'scale')                    // com proration (acerto imediato)
-await subscriptions.swap('acme', 'scale', { prorate: false }) // muda só na próxima renovação
+await subscriptions.swap('acme', 'scale')                    // with proration (immediate adjustment)
+await subscriptions.swap('acme', 'scale', { prorate: false }) // only changes at the next renewal
 ```
 
-Exige uma subscrição ativa (senão `NotSubscribedError`). Se a subscrição estiver ligada ao gateway, a mudança é empurrada para lá com o comportamento de proration escolhido.
+Requires an active subscription (otherwise `NotSubscribedError`). If the subscription is linked to the gateway, the change is pushed there with the chosen proration behavior.
 
-### Cancelar e retomar
+### Canceling and resuming
 
 ```ts
-await subscriptions.cancel('acme')                        // no fim do período (default) — continua ativa até lá
-await subscriptions.resume('acme')                        // arrepende-se antes do fim: anula o cancelamento
-await subscriptions.cancel('acme', { atPeriodEnd: false }) // imediato: status 'canceled' já
+await subscriptions.cancel('acme')                        // at the end of the period (default) — stays active until then
+await subscriptions.resume('acme')                        // change your mind before the end: undoes the cancellation
+await subscriptions.cancel('acme', { atPeriodEnd: false }) // immediate: status 'canceled' right away
 ```
 
-### Portal do cliente (autosserviço)
+### Customer portal (self-service)
 
 ```ts
-const { url } = await subscriptions.portal('acme', { returnUrl: 'https://app.exemplo.com/conta' })
-// redireciona para `url` — o cliente atualiza o cartão, muda de plano ou cancela sozinho
+const { url } = await subscriptions.portal('acme', { returnUrl: 'https://app.example.com/account' })
+// redirect to `url` — the customer updates their card, changes plan, or cancels on their own
 ```
 
-### Funcionalidades: a API `features(billableId)`
+### Features: the `features(billableId)` API
 
-| Método | Devolve | Descrição |
+| Method | Returns | Description |
 |---|---|---|
-| `can(feature)` | `Promise<boolean>` | O plano dá acesso (limite > 0)? |
-| `limit(feature)` | `Promise<number>` | Limite normalizado (`false`→0, `true`→`Infinity`) |
-| `usage(feature)` | `Promise<number>` | Consumo no período atual |
-| `remaining(feature)` | `Promise<number>` | Quanto ainda pode consumir |
-| `consume(feature, amount = 1)` | `Promise<number>` | Regista consumo atomicamente; lança `QuotaExceededError` se ultrapassar, `FeatureUnavailableError` se não houver acesso |
+| `can(feature)` | `Promise<boolean>` | Does the plan grant access (limit > 0)? |
+| `limit(feature)` | `Promise<number>` | Normalized limit (`false`→0, `true`→`Infinity`) |
+| `usage(feature)` | `Promise<number>` | Consumption in the current period |
+| `remaining(feature)` | `Promise<number>` | How much is still left to consume |
+| `consume(feature, amount = 1)` | `Promise<number>` | Records consumption atomically; throws `QuotaExceededError` if exceeded, `FeatureUnavailableError` if there's no access |
 
-Quem não tem subscrição ativa usa o `fallbackPlan` (se definido); sem fallback, não tem acesso a nada.
+Anyone without an active subscription uses the `fallbackPlan` (if defined); without a fallback, they have no access to anything.
 
-### Períodos experimentais
+### Trial periods
 
-- Trials **locais** (sem gateway): corre `expireTrials()` periodicamente (ex.: a partir do scheduler). Plano grátis → `active`; plano pago → `past_due`.
-- Trials **geridos pelo gateway**: o gateway cobra no fim do trial e o webhook faz a transição (`payment.succeeded` → `active`, `payment.failed` → `past_due`). O `expireTrials()` ignora-os de propósito.
+- **Local** trials (no gateway): run `expireTrials()` periodically (e.g. from the scheduler). Free plan → `active`; paid plan → `past_due`.
+- **Gateway-managed** trials: the gateway charges at the end of the trial and the webhook makes the transition (`payment.succeeded` → `active`, `payment.failed` → `past_due`). `expireTrials()` deliberately ignores them.
 
-### Gateway Stripe
+### Stripe gateway
 
-O driver fala diretamente com a API REST do Stripe (sem SDK). Tens de lhe dizer como mapear os teus planos para *Price IDs* do Stripe e como obter o *Customer ID* de cada billable:
+The driver talks directly to the Stripe REST API (no SDK). You need to tell it how to map your plans to Stripe *Price IDs* and how to get the *Customer ID* for each billable:
 
 ```ts
 import { StripeBillingGateway, Subscriptions } from '@machize/subscriptions'
@@ -162,23 +162,23 @@ const gateway = new StripeBillingGateway({
   priceId: (plan, period) => ({
     pro: { monthly: 'price_pro_m', yearly: 'price_pro_y' },
   })[plan]![period],
-  customerId: async (billableId) => obterOuCriarStripeCustomer(billableId),
+  customerId: async (billableId) => getOrCreateStripeCustomer(billableId),
 })
 
 export const subscriptions = new Subscriptions({ plans, gateway, fallbackPlan: 'free' })
 ```
 
-Para desenvolvimento e testes existe o `FakeBillingGateway`, que regista todas as chamadas em arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`) e aceita a assinatura de webhook `'valid'`.
+For development and testing there's `FakeBillingGateway`, which records all calls in arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`) and accepts the webhook signature `'valid'`.
 
-### Webhooks do gateway
+### Gateway webhooks
 
-`handleWebhook(event)` aplica um `WebhookEvent` já traduzido para termos de domínio: `subscription.canceled` → `canceled`, `payment.failed` → `past_due`, `payment.succeeded` → `active`. O processamento é idempotente por `event.id` (devolve `false` para duplicados) e, se gravar o estado falhar, o id é libertado para o retry do gateway poder reprocessar.
+`handleWebhook(event)` applies a `WebhookEvent` already translated into domain terms: `subscription.canceled` → `canceled`, `payment.failed` → `past_due`, `payment.succeeded` → `active`. Processing is idempotent by `event.id` (returns `false` for duplicates), and if saving the state fails, the id is released so the gateway's retry can reprocess it.
 
-Em HTTP, usa a rota pronta (secção seguinte) — a verificação de assinatura é feita pelo driver do gateway.
+Over HTTP, use the ready-made route (next section) — signature verification is handled by the gateway driver.
 
-### Integração HTTP (plugin, guards e rotas)
+### HTTP integration (plugin, guards, and routes)
 
-O `subscriptionsPlugin` regista o serviço no contentor (token `SUBSCRIPTIONS`) e adiciona **guards** de rota: com `meta: { subscribed: true | 'plano' }` a rota exige subscrição ativa (senão HTTP 402); com `meta: { feature: 'api' }` exige a funcionalidade (senão HTTP 403). O billable é o tenant do contexto do pedido.
+`subscriptionsPlugin` registers the service in the container (token `SUBSCRIPTIONS`) and adds route **guards**: with `meta: { subscribed: true | 'plan' }`, the route requires an active subscription (otherwise HTTP 402); with `meta: { feature: 'api' }`, it requires the feature (otherwise HTTP 403). The billable is the tenant from the request context.
 
 ```ts
 import { createApp } from '@machize/core'
@@ -193,25 +193,25 @@ import { gateway } from './billing/gateway.js'
 
 const app = await createApp({
   plugins: [
-    // ... o teu plugin de tenancy, que coloca context.tenant ...
+    // ... your tenancy plugin, which sets context.tenant ...
     subscriptionsPlugin({ plans, fallbackPlan: 'free', gateway }),
     fastifyPlugin({
       routes: [
         route({
           method: 'GET',
           url: '/reports',
-          meta: { subscribed: 'pro' },   // exige o plano "pro"
+          meta: { subscribed: 'pro' },   // requires the "pro" plan
           async handler() { return { ok: true } },
         }),
         route({
           method: 'GET',
           url: '/api-data',
-          meta: { feature: 'api' },      // exige a funcionalidade "api"
+          meta: { feature: 'api' },      // requires the "api" feature
           async handler() { return { data: [] } },
         }),
         ...billingRoutes({
-          successUrl: 'https://app.exemplo.com/obrigado',
-          cancelUrl: 'https://app.exemplo.com/precos',
+          successUrl: 'https://app.example.com/thank-you',
+          cancelUrl: 'https://app.example.com/pricing',
         }),
         billingWebhookRoute(gateway),
       ],
@@ -220,17 +220,17 @@ const app = await createApp({
 }).boot()
 ```
 
-Rotas criadas:
+Routes created:
 
-- `POST /billing/checkout` — corpo `{ plan, period?, successUrl?, cancelUrl? }`, devolve `{ url }` para redirecionar;
-- `POST /billing/portal` — corpo opcional `{ returnUrl? }`, devolve `{ url }`;
-- `POST /billing/webhook` — endpoint para o gateway; devolve 200 com `{ received, duplicate }`.
+- `POST /billing/checkout` — body `{ plan, period?, successUrl?, cancelUrl? }`, returns `{ url }` to redirect to;
+- `POST /billing/portal` — optional body `{ returnUrl? }`, returns `{ url }`;
+- `POST /billing/webhook` — endpoint for the gateway; returns 200 with `{ received, duplicate }`.
 
-Importante: o Stripe verifica a assinatura sobre o **corpo bruto** do pedido. Configura um parser de raw body para a rota do webhook, para `request.body` chegar como string.
+Important: Stripe verifies the signature over the request's **raw body**. Configure a raw-body parser for the webhook route, so `request.body` arrives as a string.
 
-### Produção: stores Redis
+### Production: Redis stores
 
-Os stores em memória são por processo. Em produção:
+In-memory stores are per-process. In production:
 
 ```ts
 import { Redis } from 'ioredis'
@@ -241,134 +241,134 @@ const redis = new Redis(process.env.REDIS_URL!)
 
 export const subscriptions = new Subscriptions({
   plans,
-  usage: new RedisUsageStore(redis),      // quotas atómicas via script Lua (EVAL)
-  webhooks: new RedisWebhookStore(redis), // dedupe durável via SET NX EX
-  // store: implementa SubscriptionStore sobre a tua base de dados
+  usage: new RedisUsageStore(redis),      // atomic quotas via a Lua script (EVAL)
+  webhooks: new RedisWebhookStore(redis), // durable dedupe via SET NX EX
+  // store: implement SubscriptionStore over your database
 })
 ```
 
-O `SubscriptionStore` (as subscrições em si) deve viver na tua base de dados — implementa `get/save/all`.
+`SubscriptionStore` (the subscriptions themselves) should live in your database — implement `get/save/all`.
 
-### Hooks de domínio
+### Domain hooks
 
-O plugin emite hooks no `HookBus` do Machize: `billing:subscribed`, `billing:checkout_started`, `billing:swapped`, `billing:canceled`, `billing:trial_expired`, `billing:webhook`. Usa-os para enviar emails/notificações:
+The plugin emits hooks on Machize's `HookBus`: `billing:subscribed`, `billing:checkout_started`, `billing:swapped`, `billing:canceled`, `billing:trial_expired`, `billing:webhook`. Use them to send emails/notifications:
 
 ```ts
 app.hooks.on('billing:trial_expired', ({ subscription }) => {
-  // ex.: notifier.notify(...) ou mailer.send(...)
+  // e.g.: notifier.notify(...) or mailer.send(...)
 })
 ```
 
-## Referência da API
+## API reference
 
-### Planos
+### Plans
 
-| Export | Assinatura | Descrição |
+| Export | Signature | Description |
 |---|---|---|
-| `definePlans` | `<T extends Plans>(plans: T) => T` | Declara o catálogo de planos (preserva os tipos) |
-| `meter` | `(limit: number) => Meter` | Funcionalidade medida com reinício mensal |
-| `planPrice` | `(plan, period) => number \| 'custom'` | Preço de um plano num período |
-| `featureLimit` | `(value?) => number` | Limite normalizado (`false`→0, `true`→`Infinity`) |
-| `isMeter` | `(value?) => value is Meter` | (Avançado) testa se um valor é um meter |
-| `UnknownPlanError` | erro | `BILLING_UNKNOWN_PLAN` — plano não definido |
+| `definePlans` | `<T extends Plans>(plans: T) => T` | Declares the plan catalog (preserves types) |
+| `meter` | `(limit: number) => Meter` | Metered feature with a monthly reset |
+| `planPrice` | `(plan, period) => number \| 'custom'` | A plan's price for a period |
+| `featureLimit` | `(value?) => number` | Normalized limit (`false`→0, `true`→`Infinity`) |
+| `isMeter` | `(value?) => value is Meter` | (Advanced) tests whether a value is a meter |
+| `UnknownPlanError` | error | `BILLING_UNKNOWN_PLAN` — undefined plan |
 
 ### `class Subscriptions`
 
 `new Subscriptions(options: SubscriptionsOptions)`:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `plans` | `Plans` | Sim | — | Catálogo de planos |
-| `store` | `SubscriptionStore` | Não | `MemorySubscriptionStore` | Persistência das subscrições |
-| `usage` | `UsageStore` | Não | `MemoryUsageStore` | Contadores de consumo |
-| `gateway` | `BillingGateway` | Não | — | Processador de pagamentos |
-| `webhooks` | `WebhookStore` | Não | `MemoryWebhookStore` | Dedupe de webhooks (Redis em produção) |
-| `fallbackPlan` | `string` | Não | — | Plano de quem não tem subscrição (valida no arranque) |
-| `hooks` | `HookBus` | Não | — | Bus de hooks (o plugin passa-o automaticamente) |
+| `plans` | `Plans` | Yes | — | Plan catalog |
+| `store` | `SubscriptionStore` | No | `MemorySubscriptionStore` | Subscription persistence |
+| `usage` | `UsageStore` | No | `MemoryUsageStore` | Consumption counters |
+| `gateway` | `BillingGateway` | No | — | Payment processor |
+| `webhooks` | `WebhookStore` | No | `MemoryWebhookStore` | Webhook dedupe (Redis in production) |
+| `fallbackPlan` | `string` | No | — | Plan for those without a subscription (validated at startup) |
+| `hooks` | `HookBus` | No | — | Hook bus (the plugin passes it automatically) |
 
-Métodos:
+Methods:
 
-| Método | Assinatura | Descrição |
+| Method | Signature | Description |
 |---|---|---|
-| `plan` | `(name) => PlanDefinition` | Obtém um plano; lança `UnknownPlanError` |
-| `subscribe` | `(billableId, plan, { period? }?) => Promise<SubscriptionRecord>` | Cria a subscrição (gateway só para planos pagos) |
-| `checkout` | `(billableId, plan, { period?, successUrl, cancelUrl }) => Promise<{ url }>` | Sessão de Checkout alojado; grava estado `incomplete` |
-| `portal` | `(billableId, { returnUrl }) => Promise<{ url }>` | Sessão do Customer Portal |
-| `get` | `(billableId) => Promise<SubscriptionRecord \| null>` | Lê a subscrição |
-| `subscribed` | `(billableId, plan?) => Promise<boolean>` | Ativa (ou em trial válido), opcionalmente num plano específico |
-| `onTrial` | `(billableId) => Promise<boolean>` | Está em período experimental? |
-| `swap` | `(billableId, plan, { prorate? }?) => Promise<SubscriptionRecord>` | Muda de plano (proration por default) |
-| `cancel` | `(billableId, { atPeriodEnd? }?) => Promise<SubscriptionRecord>` | Cancela (no fim do período por default) |
-| `resume` | `(billableId) => Promise<SubscriptionRecord>` | Anula um cancelamento agendado |
-| `features` | `(billableId) => { can, limit, usage, remaining, consume }` | API de funcionalidades (ver acima) |
-| `handleWebhook` | `(event: WebhookEvent) => Promise<boolean>` | Aplica um evento idempotentemente; `false` = duplicado |
-| `expireTrials` | `() => Promise<SubscriptionRecord[]>` | Liquida trials locais expirados (correr no scheduler) |
+| `plan` | `(name) => PlanDefinition` | Gets a plan; throws `UnknownPlanError` |
+| `subscribe` | `(billableId, plan, { period? }?) => Promise<SubscriptionRecord>` | Creates the subscription (gateway only for paid plans) |
+| `checkout` | `(billableId, plan, { period?, successUrl, cancelUrl }) => Promise<{ url }>` | Hosted Checkout session; saves `incomplete` state |
+| `portal` | `(billableId, { returnUrl }) => Promise<{ url }>` | Customer Portal session |
+| `get` | `(billableId) => Promise<SubscriptionRecord \| null>` | Reads the subscription |
+| `subscribed` | `(billableId, plan?) => Promise<boolean>` | Active (or in a valid trial), optionally on a specific plan |
+| `onTrial` | `(billableId) => Promise<boolean>` | Is it in a trial period? |
+| `swap` | `(billableId, plan, { prorate? }?) => Promise<SubscriptionRecord>` | Changes plan (proration by default) |
+| `cancel` | `(billableId, { atPeriodEnd? }?) => Promise<SubscriptionRecord>` | Cancels (at the end of the period by default) |
+| `resume` | `(billableId) => Promise<SubscriptionRecord>` | Undoes a scheduled cancellation |
+| `features` | `(billableId) => { can, limit, usage, remaining, consume }` | Features API (see above) |
+| `handleWebhook` | `(event: WebhookEvent) => Promise<boolean>` | Applies an event idempotently; `false` = duplicate |
+| `expireTrials` | `() => Promise<SubscriptionRecord[]>` | Settles expired local trials (run it in the scheduler) |
 
-`SubscriptionRecord`: `{ billableId, plan, period, status, trialEndsAt?, cancelAtPeriodEnd?, canceledAt?, gatewayRef? }` com `status ∈ 'active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete'`.
+`SubscriptionRecord`: `{ billableId, plan, period, status, trialEndsAt?, cancelAtPeriodEnd?, canceledAt?, gatewayRef? }` with `status ∈ 'active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete'`.
 
-Erros (todos com `code` e `status` HTTP): `NotSubscribedError` (`BILLING_SUBSCRIPTION_REQUIRED`, 402), `FeatureUnavailableError` (`BILLING_FEATURE_UNAVAILABLE`, 403), `QuotaExceededError` (`BILLING_QUOTA_EXCEEDED`, 402), `GatewayUnsupportedError` (`BILLING_GATEWAY_UNSUPPORTED`, 501).
+Errors (all with `code` and HTTP `status`): `NotSubscribedError` (`BILLING_SUBSCRIPTION_REQUIRED`, 402), `FeatureUnavailableError` (`BILLING_FEATURE_UNAVAILABLE`, 403), `QuotaExceededError` (`BILLING_QUOTA_EXCEEDED`, 402), `GatewayUnsupportedError` (`BILLING_GATEWAY_UNSUPPORTED`, 501).
 
 ### Gateways
 
-`BillingGateway` (Avançado — contrato para escrever um driver de gateway): `name`, `createSubscription`, `cancelSubscription`, `verifyWebhook` e, opcionais, `createCheckoutSession`, `createPortalSession`, `swapSubscription`. O `verifyWebhook(rawBody, signature)` valida a assinatura (lança `WebhookInvalidError`, `BILLING_WEBHOOK_INVALID`, 400) e traduz o payload num `WebhookEvent` — `{ id, type, billableId, gatewayRef? }` com `type ∈ 'subscription.canceled' | 'payment.failed' | 'payment.succeeded'` — ou `null` para eventos verificados mas irrelevantes.
+`BillingGateway` (Advanced — the contract for writing a gateway driver): `name`, `createSubscription`, `cancelSubscription`, `verifyWebhook`, and, optionally, `createCheckoutSession`, `createPortalSession`, `swapSubscription`. `verifyWebhook(rawBody, signature)` validates the signature (throws `WebhookInvalidError`, `BILLING_WEBHOOK_INVALID`, 400) and translates the payload into a `WebhookEvent` — `{ id, type, billableId, gatewayRef? }` with `type ∈ 'subscription.canceled' | 'payment.failed' | 'payment.succeeded'` — or `null` for events that are verified but irrelevant.
 
 `StripeGatewayOptions`:
 
-| Opção | Tipo | Obrigatório? | Default | Descrição |
+| Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `secretKey` | `string` | Sim | — | Chave secreta da API Stripe |
-| `webhookSecret` | `string` | Sim | — | Segredo do endpoint (`whsec_...`) |
-| `priceId` | `(plan, period) => string` | Sim | — | Mapeia plano+período → Stripe Price ID |
-| `customerId` | `(billableId) => string \| Promise<string>` | Sim | — | Obtém/garante o Stripe Customer ID |
-| `resolveBillableId` | `(event) => string \| undefined` | Não | lê `metadata.billableId` | (Avançado) extrai o billable de um evento |
-| `tolerance` | `number` | Não | `300` | Tolerância do timestamp do webhook (segundos) |
-| `fetch` / `now` / `apiBase` | — | Não | globais | (Avançado) injeções para testes |
+| `secretKey` | `string` | Yes | — | Stripe API secret key |
+| `webhookSecret` | `string` | Yes | — | Endpoint secret (`whsec_...`) |
+| `priceId` | `(plan, period) => string` | Yes | — | Maps plan+period → Stripe Price ID |
+| `customerId` | `(billableId) => string \| Promise<string>` | Yes | — | Gets/ensures the Stripe Customer ID |
+| `resolveBillableId` | `(event) => string \| undefined` | No | reads `metadata.billableId` | (Advanced) extracts the billable from an event |
+| `tolerance` | `number` | No | `300` | Webhook timestamp tolerance (seconds) |
+| `fetch` / `now` / `apiBase` | — | No | globals | (Advanced) injections for tests |
 
-Erro específico: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, com `httpStatus`).
+Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`).
 
-`FakeBillingGateway` — gateway de teste/desenvolvimento; regista chamadas em `created`, `canceled`, `checkouts`, `portals`, `swaps` e aceita apenas a assinatura `'valid'` em `verifyWebhook`.
+`FakeBillingGateway` — a test/development gateway; records calls in `created`, `canceled`, `checkouts`, `portals`, `swaps`, and only accepts the `'valid'` signature in `verifyWebhook`.
 
 ### Stores
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `SubscriptionStore` (Avançado) | `get/save/all` — implementa sobre a tua BD; `MemorySubscriptionStore` incluído |
-| `UsageStore` (Avançado) | `get/increment/consume` — `consume` tem de ser atómico; `MemoryUsageStore` incluído |
-| `WebhookStore` (Avançado) | `markProcessed(id)` (claim; `true` = novo) / `release(id)`; `MemoryWebhookStore` incluído |
-| `RedisUsageStore` | `new RedisUsageStore(redis, { prefix? = 'mach:usage', ttlSeconds? = 60 dias })` — quotas atómicas via EVAL |
-| `RedisWebhookStore` | `new RedisWebhookStore(redis, { prefix? = 'mach:webhook', ttlSeconds? = 7 dias })` — dedupe durável via SET NX EX |
-| `RedisLike` / `RedisWebhookClient` | (Avançado) superfícies mínimas compatíveis com ioredis — injeta o teu cliente |
+| `SubscriptionStore` (Advanced) | `get/save/all` — implement over your DB; `MemorySubscriptionStore` included |
+| `UsageStore` (Advanced) | `get/increment/consume` — `consume` must be atomic; `MemoryUsageStore` included |
+| `WebhookStore` (Advanced) | `markProcessed(id)` (claim; `true` = new) / `release(id)`; `MemoryWebhookStore` included |
+| `RedisUsageStore` | `new RedisUsageStore(redis, { prefix? = 'mach:usage', ttlSeconds? = 60 days })` — atomic quotas via EVAL |
+| `RedisWebhookStore` | `new RedisWebhookStore(redis, { prefix? = 'mach:webhook', ttlSeconds? = 7 days })` — durable dedupe via SET NX EX |
+| `RedisLike` / `RedisWebhookClient` | (Advanced) minimal surfaces compatible with ioredis — inject your own client |
 
-### Plugin e rotas HTTP
+### Plugin and HTTP routes
 
-| Export | Descrição |
+| Export | Description |
 |---|---|
-| `SUBSCRIPTIONS` | Token do serviço no contentor |
-| `subscriptionsPlugin(options)` | Regista o serviço e os guards `meta.subscribed`/`meta.feature`; `options` = `SubscriptionsOptions` sem `hooks` |
-| `billingRoutes({ successUrl, cancelUrl, portalReturnUrl? })` | Rotas `POST /billing/checkout` e `POST /billing/portal` para o tenant atual |
-| `billingWebhookRoute(gateway)` | Rota `POST /billing/webhook` — assinatura verificada pelo driver, processamento idempotente |
+| `SUBSCRIPTIONS` | Service token in the container |
+| `subscriptionsPlugin(options)` | Registers the service and the `meta.subscribed`/`meta.feature` guards; `options` = `SubscriptionsOptions` without `hooks` |
+| `billingRoutes({ successUrl, cancelUrl, portalReturnUrl? })` | Routes `POST /billing/checkout` and `POST /billing/portal` for the current tenant |
+| `billingWebhookRoute(gateway)` | Route `POST /billing/webhook` — signature verified by the driver, idempotent processing |
 
-## Erros comuns e soluções (FAQ)
+## Common errors and solutions (FAQ)
 
-**HTTP 402 `BILLING_SUBSCRIPTION_REQUIRED` numa rota com guard** — O tenant do pedido não tem subscrição ativa (ou não há tenant no contexto). Verifica o plugin de tenancy e se o cliente subscreveu.
+**HTTP 402 `BILLING_SUBSCRIPTION_REQUIRED` on a guarded route** — The request's tenant doesn't have an active subscription (or there's no tenant in the context). Check the tenancy plugin and whether the customer has subscribed.
 
-**`QuotaExceededError` inesperado** — O limite do plano esgotou-se no período atual. Lembra-te: `meter(n)` reinicia por mês de calendário; um `number` simples é um saldo vitalício que nunca reinicia.
+**Unexpected `QuotaExceededError`** — The plan's limit ran out for the current period. Remember: `meter(n)` resets by calendar month; a plain `number` is a lifetime balance that never resets.
 
-**O webhook do Stripe devolve sempre 400 `BILLING_WEBHOOK_INVALID`** — Quase sempre é o corpo bruto: o Stripe assina os bytes exatos e qualquer re-serialização parte o HMAC. Configura raw body na rota do webhook e confirma o `webhookSecret`. Verifica também relógios (tolerância de 5 minutos).
+**The Stripe webhook always returns 400 `BILLING_WEBHOOK_INVALID`** — It's almost always the raw body: Stripe signs the exact bytes, and any re-serialization breaks the HMAC. Configure raw body on the webhook route and confirm the `webhookSecret`. Also check clock skew (5-minute tolerance).
 
-**Depois do Checkout a subscrição fica `incomplete` para sempre** — O webhook `payment.succeeded` nunca chegou. Confirma que o endpoint `/billing/webhook` está acessível ao Stripe e que os eventos `invoice.paid`/`invoice.payment_succeeded` estão ativados no endpoint do Stripe.
+**After Checkout, the subscription stays `incomplete` forever** — The `payment.succeeded` webhook never arrived. Confirm the `/billing/webhook` endpoint is reachable by Stripe and that the `invoice.paid`/`invoice.payment_succeeded` events are enabled on the Stripe endpoint.
 
-**`GatewayUnsupportedError` ao chamar `checkout`/`portal`** — Não configuraste `gateway`, ou o driver não implementa essa capacidade. Passa um `StripeBillingGateway` (ou `FakeBillingGateway` em dev).
+**`GatewayUnsupportedError` when calling `checkout`/`portal`** — You didn't configure `gateway`, or the driver doesn't implement that capability. Pass a `StripeBillingGateway` (or `FakeBillingGateway` in dev).
 
-**Trials pagos nunca passam a `active`** — Trials com gateway são convertidos pelo webhook do gateway, não pelo `expireTrials()`. Sem gateway, tens mesmo de correr `expireTrials()` num scheduler (e um trial de plano pago local termina em `past_due`, porque não há forma de cobrar).
+**Paid trials never move to `active`** — Gateway-backed trials are converted by the gateway's webhook, not by `expireTrials()`. Without a gateway, you really do need to run `expireTrials()` in a scheduler (and a local paid-plan trial ends up in `past_due`, because there's no way to charge).
 
-**Quotas ultrapassadas com tráfego concorrente em produção** — Estás com o `MemoryUsageStore` em vários processos: cada processo tem o seu contador. Usa `RedisUsageStore`, cujo script Lua garante o check-and-increment atómico entre instâncias.
+**Quotas exceeded under concurrent traffic in production** — You're running `MemoryUsageStore` across multiple processes: each process has its own counter. Use `RedisUsageStore`, whose Lua script guarantees an atomic check-and-increment across instances.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **@machize/core** — `createApp`, contentor (token `SUBSCRIPTIONS`), contexto do pedido (de onde vem o tenant/billable) e `HookBus` (hooks `billing:*`).
-- **@machize/fastify** — as rotas (`billingRoutes`, `billingWebhookRoute`) e os guards `meta.subscribed`/`meta.feature` assentam no plugin HTTP.
-- **@machize/mailer** e **@machize/notifications** — subscreve os hooks `billing:*` para enviar emails/notificações ("o teu trial expirou", "pagamento falhou").
-- **@machize/webhooks** — direção oposta: este módulo *recebe* webhooks do gateway; o `@machize/webhooks` *envia* webhooks aos teus clientes (podes reencaminhar eventos `billing:*` para lá).
-- **@machize/scheduler** — o sítio natural para correr `expireTrials()` periodicamente.
-- **@machize/queue** — processamento assíncrono das reações aos hooks de faturação.
+- **@machize/core** — `createApp`, the container (token `SUBSCRIPTIONS`), the request context (where the tenant/billable comes from), and `HookBus` (`billing:*` hooks).
+- **@machize/fastify** — the routes (`billingRoutes`, `billingWebhookRoute`) and the `meta.subscribed`/`meta.feature` guards rest on the HTTP plugin.
+- **@machize/mailer** and **@machize/notifications** — subscribe to the `billing:*` hooks to send emails/notifications ("your trial has expired", "payment failed").
+- **@machize/webhooks** — the opposite direction: this module *receives* webhooks from the gateway; `@machize/webhooks` *sends* webhooks to your customers (you can forward `billing:*` events there).
+- **@machize/scheduler** — the natural place to run `expireTrials()` periodically.
+- **@machize/queue** — asynchronous processing of reactions to billing hooks.

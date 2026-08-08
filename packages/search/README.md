@@ -1,25 +1,25 @@
 # @machize/search
 
-Pesquisa full-text (texto integral) para o Machize: indexa e pesquisa documentos **por tenant**, com uma API tipada e um driver intercambiável — **em memória** para desenvolvimento/testes e **Meilisearch** para produção. Precisas deste módulo quando queres dar aos utilizadores uma caixa de pesquisa rápida e relevante sobre os seus dados (notas, projetos, clientes…).
+Full-text search for Machize: indexes and searches documents **per tenant**, with a typed API and an interchangeable driver — **in-memory** for development/testing and **Meilisearch** for production. You need this module when you want to give users a fast, relevant search box over their data (notes, projects, customers…).
 
-## O que este módulo resolve
+## What this module solves
 
-Pesquisar bem é mais do que um `WHERE ... LIKE '%texto%'`: precisas de **relevância** (os melhores resultados primeiro), correspondência por **prefixo**, e **isolamento por tenant** (o cliente A nunca vê dados do cliente B). Este módulo dá-te isso com:
+Searching well is more than a `WHERE ... LIKE '%text%'`: you need **relevance** (the best results first), **prefix** matching, and **tenant isolation** (customer A never sees customer B's data). This module gives you that with:
 
-- **Índices tipados** — declaras uma vez que campos são pesquisáveis e filtráveis.
-- **Isolamento por tenant garantido** — todas as pesquisas são forçadas ao `tenantId`; um resultado nunca "vaza" entre tenants.
-- **Driver intercambiável** — `MemorySearchDriver` (sem serviços, para dev/test) e `MeilisearchDriver` (produção). O teu código não muda ao trocar.
-- **Indexação automática** — liga hooks de domínio (criado/atualizado/apagado) e o índice mantém-se sozinho.
+- **Typed indexes** — declare once which fields are searchable and filterable.
+- **Guaranteed tenant isolation** — every search is scoped to `tenantId`; a result never "leaks" between tenants.
+- **Interchangeable driver** — `MemorySearchDriver` (no services, for dev/test) and `MeilisearchDriver` (production). Your code doesn't change when you switch.
+- **Automatic indexing** — hooks into domain events (created/updated/deleted) and the index keeps itself up to date.
 
-## Instalação
+## Installation
 
 ```bash
 pnpm add @machize/search
 ```
 
-Depende apenas de `@machize/core`. O `MemorySearchDriver` funciona sem nada instalado; para produção aponta o `MeilisearchDriver` a um servidor Meilisearch.
+Depends only on `@machize/core`. `MemorySearchDriver` works with nothing installed; for production, point `MeilisearchDriver` at a Meilisearch server.
 
-## Começar em 5 minutos
+## Get started in 5 minutes
 
 ```ts
 import { createApp } from '@machize/core'
@@ -35,18 +35,18 @@ const app = await createApp({
 
 const search = app.container.get(SEARCH)
 
-// indexar (o documento traz o tenantId)
-await search.index('notes', { id: '1', tenantId: 'acme', title: 'Olá mundo', body: 'primeira nota', folder: 'inbox' })
+// index (the document carries the tenantId)
+await search.index('notes', { id: '1', tenantId: 'acme', title: 'Hello world', body: 'first note', folder: 'inbox' })
 
-// pesquisar (o tenant vem do contexto do pedido, ou passas explicitamente)
-const result = await search.search('notes', 'olá', { tenantId: 'acme', filters: { folder: 'inbox' } })
+// search (the tenant comes from the request context, or you pass it explicitly)
+const result = await search.search('notes', 'hello', { tenantId: 'acme', filters: { folder: 'inbox' } })
 console.log(result.hits) // [{ id: '1', score, document }]
 console.log(result.total)
 ```
 
-## Indexação automática (hooks → índice)
+## Automatic indexing (hooks → index)
 
-Em vez de indexar à mão em cada sítio, liga os eventos de domínio ao índice — e ele mantém-se sozinho:
+Instead of indexing by hand everywhere, wire domain events to the index — and it keeps itself up to date:
 
 ```ts
 import { searchPlugin, defineIndex, syncRule } from '@machize/search'
@@ -55,7 +55,7 @@ searchPlugin({
   indexes: [defineIndex({ name: 'notes', fields: ['title', 'body'] })],
   sync: [
     syncRule({
-      hook: 'note:created', // ou note:updated
+      hook: 'note:created', // or note:updated
       index: 'notes',
       document: (p) => ({ id: p.note.id, tenantId: p.tenantId, title: p.note.title, body: p.note.body }),
     }),
@@ -68,13 +68,13 @@ searchPlugin({
 })
 ```
 
-O `syncRule` valida os tipos contra o payload do hook. Devolve `null` no `document`/`remove` para saltar um evento.
+`syncRule` type-checks against the hook's payload. Return `null` from `document`/`remove` to skip an event.
 
-## Como funciona a relevância (driver em memória)
+## How relevance works (in-memory driver)
 
-O `MemorySearchDriver` tokeniza os campos pesquisáveis e pontua por **frequência do termo** com correspondência de **prefixo** (`qui` encontra `quick`). Exige que **todos** os termos da query estejam presentes (semântica AND), ordena por pontuação, e só pesquisa os campos declarados em `fields`. É determinístico e suficiente para desenvolvimento; em produção o Meilisearch dá relevância a sério (typo-tolerance, stemming, etc.).
+`MemorySearchDriver` tokenizes the searchable fields and scores by **term frequency** with **prefix** matching (`qui` matches `quick`). It requires **all** query terms to be present (AND semantics), sorts by score, and only searches the fields declared in `fields`. It's deterministic and good enough for development; in production Meilisearch provides real relevance (typo-tolerance, stemming, etc.).
 
-## Produção com Meilisearch
+## Production with Meilisearch
 
 ```ts
 import { searchPlugin, MeilisearchDriver, defineIndex } from '@machize/search'
@@ -85,42 +85,42 @@ searchPlugin({
 })
 ```
 
-O driver fala diretamente com a REST API do Meilisearch (sem SDK). Cada documento recebe uma chave primária composta (`_pk`), por isso ids nunca colidem entre tenants; e **cada pesquisa é filtrada por `tenantId`**, garantindo o isolamento. `defineIndex(...).filterable` é declarado automaticamente como atributo filtrável no Meilisearch.
+The driver talks directly to Meilisearch's REST API (no SDK). Each document gets a composite primary key (`_pk`), so ids never collide across tenants; and **every search is filtered by `tenantId`**, guaranteeing isolation. `defineIndex(...).filterable` is automatically declared as a filterable attribute in Meilisearch.
 
-## Referência da API
+## API reference
 
 ### `searchPlugin(options?)`
 
-| Opção | Tipo | Default | Descrição |
+| Option | Type | Default | Description |
 |---|---|---|---|
-| `driver` | `SearchDriver` | `MemorySearchDriver` | Backend de pesquisa. |
-| `indexes` | `IndexDefinition[]` | `[]` | Índices a registar no arranque. |
-| `sync` | `SyncRule[]` | `[]` | Regras hook → índice (usa `syncRule(...)`). |
+| `driver` | `SearchDriver` | `MemorySearchDriver` | Search backend. |
+| `indexes` | `IndexDefinition[]` | `[]` | Indexes to register on startup. |
+| `sync` | `SyncRule[]` | `[]` | Hook → index rules (use `syncRule(...)`). |
 
-Regista o token `SEARCH` (`Search`).
+Registers the `SEARCH` token (`Search`).
 
 ### `class Search`
 
-| Método | Descrição |
+| Method | Description |
 |---|---|
-| `index(indexName, document)` | Indexa/atualiza um documento (traz `id` e `tenantId`). |
-| `bulk(indexName, documents)` | Indexa vários. |
-| `remove(indexName, id, tenantId?)` | Remove um documento (tenant do contexto se omitido). |
-| `search(indexName, q, options?)` | Pesquisa. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`. |
+| `index(indexName, document)` | Indexes/updates a document (carries `id` and `tenantId`). |
+| `bulk(indexName, documents)` | Indexes several. |
+| `remove(indexName, id, tenantId?)` | Removes a document (tenant from context if omitted). |
+| `search(indexName, q, options?)` | Searches. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`. |
 
-Sem `tenantId` explícito, `search`/`remove` usam `ctx().tenant.id`; se não houver tenant, lançam `TenantRequiredError`.
+Without an explicit `tenantId`, `search`/`remove` use `ctx().tenant.id`; if there's no tenant, they throw `TenantRequiredError`.
 
 ### `defineIndex({ name, fields, filterable? })`
 
-Declara um índice: `fields` são pesquisáveis (full-text), `filterable` são usáveis em `filters` (`tenantId` é sempre filtrável).
+Declares an index: `fields` are searchable (full-text), `filterable` are usable in `filters` (`tenantId` is always filterable).
 
 ### Drivers
 
-- `MemorySearchDriver` — em processo, dev/test.
-- `MeilisearchDriver({ host, apiKey?, fetch? })` — produção; `fetch` injetável para testes.
+- `MemorySearchDriver` — in-process, dev/test.
+- `MeilisearchDriver({ host, apiKey?, fetch? })` — production; `fetch` is injectable for tests.
 
-## Como se liga aos outros módulos
+## How it connects to other modules
 
-- **`@machize/core`** — `createApp`, tokens, hooks (que a sincronização automática consome) e o contexto de onde vem o `tenantId`.
-- **`@machize/tenancy`** — coloca o `tenant` no contexto; com ele ativo, `search.search('notes', q)` já sabe o tenant.
-- **`@machize/events`** — emite os eventos de domínio que alimentam a `sync`.
+- **`@machize/core`** — `createApp`, tokens, hooks (which automatic sync consumes), and the context `tenantId` comes from.
+- **`@machize/tenancy`** — places `tenant` in the context; with it active, `search.search('notes', q)` already knows the tenant.
+- **`@machize/events`** — emits the domain events that feed `sync`.
