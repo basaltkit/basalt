@@ -7,13 +7,13 @@ route to the client.
 
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: 0.32.0 — 69 packages, all published to npm.** The architecture is
-> stable and every package is tested, but APIs may still change before 1.0.
-> In-memory stores are the dev default; every stateful domain now has a durable
+> **Status: 1.0.0 — 69 packages, all published to npm. 🎉** The public API is
+> stable and covered by [semantic versioning](https://machize-docs.pages.dev/guide/versioning):
+> breaking changes only in a new major, features in a minor, fixes in a patch.
+> In-memory stores are the dev default; every stateful domain has a durable
 > backend — auth, teams, subscriptions, permissions, comments, audit, activity
 > and notifications persist via SQLite (`*-sqlite`, single-node, zero-dep) or
-> Prisma (`*-prisma`, Postgres/MySQL). The road to a stable 1.0 is tracked in
-> [RELEASE_1.0_CHECKLIST.md](./RELEASE_1.0_CHECKLIST.md). See
+> Prisma (`*-prisma`, Postgres/MySQL). See
 > [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) and the full design in
 > [ARCHITECTURE.md](./ARCHITECTURE.md).
 

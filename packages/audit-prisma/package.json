@@ -1,6 +1,6 @@
 {
   "name": "@machize/audit-prisma",
-  "version": "0.32.0",
+  "version": "1.0.0",
   "description": "Prisma-backed implementation of the @machize/audit AuditStore (append-only trail) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",

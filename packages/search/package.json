@@ -1,6 +1,6 @@
 {
   "name": "@machize/search",
-  "version": "0.32.0",
+  "version": "1.0.0",
   "description": "Full-text search for Machize: tenant-scoped indexing and querying with a pluggable driver (in-memory for dev/test, Meilisearch for production) and automatic sync from domain events.",
   "license": "MIT",
   "type": "module",
