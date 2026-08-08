@@ -71,7 +71,7 @@ Nothing here is hard; it's the deliberate work of committing to the surface.
 - [x] Lockstep releases via changesets (`fixed: [["@machize/*"]]`); automated
       publish on merge (`release.yml`, npm provenance).
 - [ ] **The 1.0 cut is a one-way door.** Note: with the `fixed` group on 0.x, a
-      single `minor` changeset graduates the whole group `0.30.0 → 1.0.0`
+      single `minor` changeset graduates the whole group `0.31.0 → 1.0.0`
       automatically (see `changesets-fixed-group-graduates-to-1.0` in project
       memory). So "going 1.0" is mechanically one changeset — do it only once §2
       is signed off, not by accident.
