@@ -5,7 +5,7 @@ and will change only under semver. This checklist tracks what that promise needs
 It's honest about what's done and what isn't — items are only checked when they're
 actually true in the tree.
 
-Current: **0.30.0 · 68 packages · 102 test suites · CI green.**
+Current: **0.31.0 · 69 packages · 102 test suites · CI green.**
 
 ---
 
@@ -41,7 +41,8 @@ Nothing here is hard; it's the deliberate work of committing to the surface.
 ## 3. Documentation — ☐ nearly there
 
 - [x] Guides for every capability, driver, self-contained UI, persistence, and
-      database-per-tenant; full 68-package reference catalog; docs deployed.
+      database-per-tenant; full 69-package reference catalog; docs deployed and
+      refreshed to 0.31.0 (no stale counts, no Laravel framing).
 - [x] READMEs for all store packages — the `subscriptions-`, `comments-`,
       `audit-`, `activity-`, `notifications-` × `{sqlite,prisma}` packages now
       have English READMEs (alongside `auth-*`, `teams-*`, `permissions-*`).
@@ -97,7 +98,7 @@ Nothing here is hard; it's the deliberate work of committing to the surface.
 ## Definition of done for 1.0
 
 1. §2 API review complete and the surface frozen.
-2. §3 the 10 missing READMEs written; upgrade note published.
+2. §3 the "0.x → 1.0" upgrade note published (all READMEs and translation done).
 3. §4 coverage floor raised; `*-prisma` stores covered by Postgres integration.
 4. §6 Node policy documented.
 5. Then, and only then, land the single `minor` changeset that cuts `1.0.0`.

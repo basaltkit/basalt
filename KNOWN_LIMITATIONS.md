@@ -1,10 +1,13 @@
 # Known Limitations
 
-Items surfaced by the code review of the initial scaffold. All three have since
-been **resolved in 0.1.x** — this file is kept as the record of what they were
-and how they were fixed. Each concerned behavior that only bites with a real
-backend (Redis, a payment gateway); the fixes landed together with those
-drivers.
+Items surfaced by code review as the ecosystem matured. **All are resolved** —
+this file is kept as the record of what they were and how they were fixed, not
+a list of open issues. #2–#4 (fixed in 0.1.x) concerned behavior that only bites
+with a real backend (Redis, a payment gateway) and landed with those drivers;
+#5 (fixed across 0.25.0–0.31.0) was the broader "stores ship in-memory only"
+limitation, now closed by durable SQLite/Prisma backends for every stateful
+domain. There are no open limitations tracked here — forward-looking work toward
+a stable 1.0 lives in [RELEASE_1.0_CHECKLIST.md](./RELEASE_1.0_CHECKLIST.md).
 
 ---
 
@@ -45,7 +48,7 @@ is the default for single-process/dev.
 
 ---
 
-## #5 — Several domain stores shipped in-memory only — RESOLVED in 0.25.0–0.30.0
+## #5 — Several domain stores shipped in-memory only — RESOLVED in 0.25.0–0.31.0
 
 **Resolution:** every stateful domain now has a durable backend behind the same
 store contract, so in-memory is the dev default rather than a ceiling. Auth,
