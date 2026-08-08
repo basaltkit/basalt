@@ -5,6 +5,8 @@ export interface CommandIo {
   log(message: string): void
   error(message: string): void
   table(rows: Record<string, unknown>[]): void
+  /** Ask a yes/no question. Resolves true only on an explicit yes. */
+  confirm(question: string): Promise<boolean>
 }
 
 export interface CommandContext {

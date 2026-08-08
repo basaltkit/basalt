@@ -1,6 +1,6 @@
 {
   "name": "@machize/audit-sqlite",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Durable, SQLite-backed implementation of the @machize/audit AuditStore (append-only trail), on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",

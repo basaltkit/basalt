@@ -89,6 +89,24 @@ export interface PrismaPermissionsStores {
  * permissionsPlugin({ store: p.store })
  * ```
  */
+// Fail fast with an actionable message when the Prisma client lacks the models
+// this package needs (the alternative is a cryptic "reading 'create' of undefined").
+function ensureModel(client: unknown, delegate: string, pkg: string): void {
+  let value: unknown
+  try {
+    value = (client as Record<string, unknown>)[delegate]
+  } catch {
+    return // lazy/proxy client (e.g. database-per-tenant) — validated at first use
+  }
+  if (value == null) {
+    throw new Error(
+      `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
+        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+    )
+  }
+}
+
 export function prismaAccessStore(client: PrismaPermissionsClient): PrismaPermissionsStores {
+  ensureModel(client, 'permUserRole', '@machize/permissions-prisma')
   return { store: new PrismaAccessStore(client) }
 }

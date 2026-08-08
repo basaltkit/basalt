@@ -1,3 +1,4 @@
+import { createInterface } from 'node:readline/promises'
 import type { CommandIo } from './command.js'
 
 /** Renders rows as an aligned text table (no external dependencies). */
@@ -24,18 +25,34 @@ export function consoleIo(): CommandIo {
     log: (message) => console.log(message),
     error: (message) => console.error(message),
     table: (rows) => console.log(renderTable(rows)),
+    confirm: async (question) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout })
+      try {
+        const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase()
+        return answer === 'y' || answer === 'yes'
+      } finally {
+        rl.close()
+      }
+    },
   }
 }
 
-/** In-memory IO for tests. */
-export function memoryIo(): CommandIo & { lines: string[]; errors: string[] } {
+/**
+ * In-memory IO for tests. `answers` feeds `confirm()` in order (defaults to yes
+ * once the queue is drained), so a test can drive an interactive command.
+ */
+export function memoryIo(
+  options: { answers?: boolean[] } = {},
+): CommandIo & { lines: string[]; errors: string[] } {
   const lines: string[] = []
   const errors: string[] = []
+  const answers = [...(options.answers ?? [])]
   return {
     lines,
     errors,
     log: (message) => void lines.push(message),
     error: (message) => void errors.push(message),
     table: (rows) => void lines.push(renderTable(rows)),
+    confirm: async () => answers.shift() ?? true,
   }
 }

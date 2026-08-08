@@ -1,5 +1,11 @@
 # @machize/activity-prisma
 
+## 1.0.4
+
+### Patch Changes
+
+- Fail fast with an actionable error when the Prisma client is missing the models this package needs (previously a cryptic "reading create of undefined") — points to `mach prisma:sync` or the reference schema. Lazy/proxy clients (database-per-tenant) are tolerated.
+
 ## 1.0.0
 
 ### Major Changes

@@ -330,3 +330,14 @@ describe('prismaAuthStores', () => {
     expect(s.mfa).toBeInstanceOf(PrismaMfaStore)
   })
 })
+
+describe('prismaAuthStores guard', () => {
+  it('throws an actionable error when the client lacks the Auth models', () => {
+    expect(() => prismaAuthStores({} as never)).toThrow(/authUser/)
+    expect(() => prismaAuthStores({} as never)).toThrow(/prisma:sync/)
+  })
+  it('tolerates a lazy/proxy client (database-per-tenant)', () => {
+    const proxy = new Proxy({}, { get() { throw new Error('no context') } }) as never
+    expect(() => prismaAuthStores(proxy)).not.toThrow()
+  })
+})
