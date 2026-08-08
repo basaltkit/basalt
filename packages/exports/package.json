@@ -1,6 +1,6 @@
 {
   "name": "@machize/exports",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Data exports for Machize: render typed export definitions to CSV/TSV/JSON/NDJSON (native, zero-dep) through a pluggable formatter seam, designed to run async via @machize/queue.",
   "license": "MIT",
   "type": "module",

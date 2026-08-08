@@ -1,4 +1,9 @@
-import { DatabaseSync } from 'node:sqlite'
+// esbuild strips the `node:` prefix from a static `node:sqlite` import — it's a
+// newer builtin it doesn't recognize — and emits a broken `from "sqlite"`. Load
+// it through an opaque specifier so the bundler leaves it exactly as written.
+const sqliteSpecifier = 'node:sqlite'
+const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
+type DatabaseSync = InstanceType<typeof DatabaseSync>
 import type { AccessStore } from '@machize/permissions'
 
 /**

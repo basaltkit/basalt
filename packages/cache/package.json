@@ -1,6 +1,6 @@
 {
   "name": "@machize/cache",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Machize cache layer: Redis and Memory drivers, tags, TTL, stampede protection and automatic per-tenant isolation.",
   "license": "MIT",
   "type": "module",

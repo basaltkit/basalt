@@ -1,5 +1,14 @@
 # @machize/comments-sqlite
 
+## 1.0.1
+
+### Patch Changes
+
+- Fix a runtime crash when consumed from the published package: the bundler
+  stripped the `node:` prefix from the `node:sqlite` import, emitting a broken
+  `from "sqlite"` that failed with `ERR_MODULE_NOT_FOUND: Cannot find package 'sqlite'`.
+  The builtin is now loaded through an opaque specifier the bundler leaves intact.
+
 ## 1.0.0
 
 ### Major Changes
