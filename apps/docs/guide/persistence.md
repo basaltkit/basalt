@@ -128,6 +128,34 @@ the `Team*` models from the bundled reference schema). Same "which one?" trade-o
 as auth: SQLite for a single node, Prisma when you already run a database or need
 to share it across instances. They can share one handle with the auth stores.
 
+## Subscriptions — `@machize/subscriptions-sqlite` / `@machize/subscriptions-prisma`
+
+Billing has three stores — the **subscription** record, **usage** counters, and
+**webhook** idempotency — and both durable backends implement all three:
+
+```ts
+import { subscriptionsPlugin } from '@machize/subscriptions'
+import { sqliteSubscriptionsStores } from '@machize/subscriptions-sqlite'   // single-node
+// import { prismaSubscriptionsStores } from '@machize/subscriptions-prisma' // Postgres/MySQL
+
+const s = sqliteSubscriptionsStores('./data/billing.db')
+subscriptionsPlugin({ plans, store: s.store, usage: s.usage, webhooks: s.webhooks })
+```
+
+The metered `consume()` is **atomic** in both: SQLite runs it in a
+`BEGIN IMMEDIATE` transaction with a `RETURNING` guard; Prisma uses a conditional
+`updateMany` that the database's row lock serializes. So a plan quota is never
+overshot under concurrency — the same guarantee the Redis Lua store gives, now
+without needing Redis. Webhook idempotency survives restarts and multiple
+instances (a unique-id claim), so a redelivered event is processed once.
+
+::: tip Already on Redis?
+`@machize/subscriptions` still ships `RedisUsageStore` and `RedisWebhookStore` —
+use those if Redis is already your shared store. The SQLite/Prisma backends add
+the durable **subscription record** (which had no non-memory backend) and let you
+persist all three in your primary database instead.
+:::
+
 ## Redis-backed stores
 
 Several packages already ship Redis implementations for the state that benefits

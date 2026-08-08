@@ -1,0 +1,53 @@
+{
+  "name": "@machize/subscriptions-sqlite",
+  "version": "0.28.0",
+  "description": "Durable, SQLite-backed implementations of the @machize/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) built on Node's built-in node:sqlite. Zero external dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@machize/subscriptions": "workspace:*"
+  },
+  "devDependencies": {
+    "@machize/subscriptions": "workspace:*",
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/subscriptions-sqlite"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/subscriptions-sqlite#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "subscriptions",
+    "billing",
+    "sqlite",
+    "store"
+  ]
+}

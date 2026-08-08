@@ -1,6 +1,6 @@
 {
   "name": "@machize/subscriptions",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "description": "Billing for Machize, Cashier/Soulbscription-style: declarative plans, subscriptions with trials, feature flags, usage limits, gateway drivers and idempotent webhooks.",
   "license": "MIT",
   "type": "module",
