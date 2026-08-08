@@ -1,6 +1,6 @@
 {
   "name": "@machize/subscriptions-sqlite",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Durable, SQLite-backed implementations of the @machize/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) built on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",

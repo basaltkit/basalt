@@ -35,6 +35,9 @@ export function openTeamsDatabase(location = ':memory:'): DatabaseSync {
 /** Idempotent schema — safe to run on every open. */
 export function migrate(db: DatabaseSync): void {
   db.exec('PRAGMA journal_mode = WAL')
+  // Wait up to 5s for a competing writer's lock instead of throwing
+  // 'database is locked' immediately — smooths over dev reloads / concurrency.
+  db.exec('PRAGMA busy_timeout = 5000')
   db.exec(`
     CREATE TABLE IF NOT EXISTS team_memberships (
       tenant_id  TEXT NOT NULL,
