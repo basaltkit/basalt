@@ -46,6 +46,7 @@ export default defineConfig({
             { text: 'Queues & Jobs', link: '/guide/queues' },
             { text: 'Storage', link: '/guide/storage' },
             { text: 'Caching', link: '/guide/caching' },
+            { text: 'Database-per-tenant', link: '/guide/database-per-tenant' },
           ],
         },
         {
