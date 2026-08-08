@@ -1,6 +1,6 @@
 {
   "name": "@machize/tenancy",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Multi-tenancy for Machize: pluggable tenant resolvers (subdomain, domain, header, route), tenant context via AsyncLocalStorage and lifecycle hooks.",
   "license": "MIT",
   "type": "module",

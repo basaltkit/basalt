@@ -1,6 +1,6 @@
 {
   "name": "@machize/events",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Machize event bus: domain events typed with Zod, prioritized listeners, wildcards and container integration.",
   "license": "MIT",
   "type": "module",

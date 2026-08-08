@@ -1,6 +1,6 @@
 {
   "name": "@machize/http",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Framework-neutral HTTP core for Machize: typed routes, request pipeline (validation, enrichers, guards), and error mapping — shared by the Fastify, Express and Hono adapters.",
   "license": "MIT",
   "type": "module",

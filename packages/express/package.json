@@ -1,6 +1,6 @@
 {
   "name": "@machize/express",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Express adapter for Machize: run the same typed routes, enrichers and guards on Express that you would on Fastify or Hono.",
   "license": "MIT",
   "type": "module",
