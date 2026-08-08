@@ -12,7 +12,8 @@ Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 > In-memory stores are the dev default; every stateful domain now has a durable
 > backend — auth, teams, subscriptions, permissions, comments, audit, activity
 > and notifications persist via SQLite (`*-sqlite`, single-node, zero-dep) or
-> Prisma (`*-prisma`, Postgres/MySQL). See
+> Prisma (`*-prisma`, Postgres/MySQL). The road to a stable 1.0 is tracked in
+> [RELEASE_1.0_CHECKLIST.md](./RELEASE_1.0_CHECKLIST.md). See
 > [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) and the full design in
 > [ARCHITECTURE.md](./ARCHITECTURE.md).
 
