@@ -96,7 +96,21 @@ createApp({
 })
 ```
 
-Copy the reference models into your `schema.prisma`, `prisma migrate`, and go.
+Don't hand-copy the models — run **`mach prisma:sync`**. It discovers every
+installed `@machize/*-prisma` package and merges the models they need into your
+`prisma/schema.prisma` (interactive by default; `--yes` adds them all,
+`--only=auth,teams` restricts, `--push` applies immediately):
+
+```bash
+pnpm mach prisma:sync --push        # add missing models + create the tables
+```
+
+It's idempotent and never touches your own models. And if you wire a `*-prisma`
+store before its models exist, the store now fails fast with a clear message
+naming the missing model and pointing you here — no more cryptic
+`reading 'create' of undefined`.
+
+Otherwise, copy the reference models into your `schema.prisma`, `prisma migrate`, and go.
 For **database-per-tenant** — every domain isolated in its own database or schema
 with no per-store tenant filtering — pair it with `@machize/prisma` and route the
 stores through the active tenant's client. That end-to-end setup has its own
