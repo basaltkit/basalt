@@ -1,6 +1,6 @@
 {
   "name": "@machize/generator",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Code scaffolding for Machize apps (mach make): generates a full resource vertical — schema, repository, service, DI plugin, typed routes and test.",
   "license": "MIT",
   "type": "module",

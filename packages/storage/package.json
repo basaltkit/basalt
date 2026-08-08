@@ -1,6 +1,6 @@
 {
   "name": "@machize/storage",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Object storage layer for Machize: MinIO/S3 and local drivers under one contract, automatic tenant isolation, and temporary signed URLs.",
   "license": "MIT",
   "type": "module",

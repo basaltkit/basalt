@@ -1,6 +1,6 @@
 {
   "name": "@machize/fastify",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Official Machize HTTP adapter on top of Fastify: Zod-typed routes, per-request context via AsyncLocalStorage and standardized errors.",
   "license": "MIT",
   "type": "module",
