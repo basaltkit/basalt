@@ -1,6 +1,6 @@
 {
   "name": "@machize/auth-prisma",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Prisma-backed implementations of every @machize/auth store (users, sessions, refresh tokens, one-time tokens, API keys, MFA) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",

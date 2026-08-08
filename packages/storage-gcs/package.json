@@ -1,6 +1,6 @@
 {
   "name": "@machize/storage-gcs",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Google Cloud Storage driver for @machize/storage — put/get/list/delete/signed URLs over @google-cloud/storage, with an injectable client for testing.",
   "license": "MIT",
   "type": "module",

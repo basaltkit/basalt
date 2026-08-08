@@ -1,5 +1,11 @@
 # @machize/sdk
 
+## 1.0.3
+
+### Patch Changes
+
+- Do not send `content-type: application/json` on requests with no body — a bodiless POST claiming a JSON content-type made strict servers try to parse an empty payload and fail with a 500.
+
 ## 1.0.0
 
 ### Major Changes
