@@ -1,6 +1,6 @@
 {
   "name": "create-machize",
-  "version": "0.5.2",
+  "version": "1.0.0",
   "description": "Scaffold a production-shaped Machize SaaS app: npm create machize my-saas [--billing] [--ui] [--cli] [--install] [--git]",
   "license": "MIT",
   "type": "module",
