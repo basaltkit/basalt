@@ -46,17 +46,14 @@ function makeFakeClient(): PrismaSubscriptionsClient {
         const { billableId, feature, periodKey } = where.billableId_feature_periodKey
         return usage.get(ukey(billableId, feature, periodKey)) ?? null
       },
-      async upsert({ where, create, update }) {
-        const { billableId, feature, periodKey } = where.billableId_feature_periodKey
-        const k = ukey(billableId, feature, periodKey)
-        const existing = usage.get(k)
-        if (existing) {
-          if (update.value?.increment !== undefined) existing.value += update.value.increment
-          return existing
+      async createMany({ data }) {
+        // seed rows, skipDuplicates — mirrors Prisma's concurrency-safe insert
+        let count = 0
+        for (const row of data) {
+          const k = ukey(row.billableId, row.feature, row.periodKey)
+          if (!usage.has(k)) { usage.set(k, { ...row } as UsageRow); count++ }
         }
-        const row = { ...create } as UsageRow
-        usage.set(k, row)
-        return row
+        return { count }
       },
       async updateMany({ where, data }) {
         const row = usage.get(ukey(where.billableId, where.feature, where.periodKey))
@@ -159,13 +156,14 @@ describe('PrismaUsageStore', () => {
     const raced: PrismaSubscriptionsClient = {
       ...client,
       usageCounter: {
-        upsert: async () => ({ billableId: 'a', feature: 'f', periodKey: 'p', value: 0 }),
+        createMany: async () => ({ count: 1 }),
         updateMany: async () => ({ count: 0 }),
         findUnique: async () => null,
       },
     }
     const store = new PrismaUsageStore(raced)
     expect(await store.consume('a', 'f', 'p', 1, 5)).toEqual({ applied: false, used: 0 })
+    expect(await store.increment('a', 'f', 'p', 1)).toBe(0) // read-back also tolerates a missing row
   })
 })
 

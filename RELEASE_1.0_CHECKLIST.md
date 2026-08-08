@@ -5,7 +5,7 @@ and will change only under semver. This checklist tracks what that promise needs
 It's honest about what's done and what isn't — items are only checked when they're
 actually true in the tree.
 
-Current: **0.31.0 · 69 packages · 102 test suites · CI green.**
+Current: **0.32.0 · 69 packages · 102 test suites · CI green.**
 
 ---
 
@@ -25,24 +25,32 @@ ceiling.
 - [x] Flags — stateless by design (declared in code); no backend needed
 - [x] Database-per-tenant wiring documented end-to-end
 
-## 2. API stability — the actual 1.0 gate — ☐ pending
+## 2. API stability — the actual 1.0 gate — ☐ maintainer sign-off left
 
-Nothing here is hard; it's the deliberate work of committing to the surface.
+The mechanical work is done; what remains is the maintainer's intent sign-off.
 
-- [ ] **Public-API review per package** — confirm every top-level export is
-      intended as contract; hide internals (or mark `@internal`). What's exported
-      at 1.0 is what we support.
-- [ ] **Naming-consistency pass** across the store factories
-      (`sqlite<Domain>Store(s)` / `prisma<Domain>Store(s)`) and the `Prisma*Client`
-      surfaces — they follow a pattern today; verify no drift before freezing it.
-- [ ] **Deprecation policy** written down (how a symbol gets retired post-1.0).
+- [x] **Mechanical API-surface pass** — every package's entry-point exports were
+      scanned: no internal symbols leak (the only `_`-shaped exports are intended
+      DI tokens/constants like `DB_POOL`, `IN_APP`, `API_KEYS`). Nothing marked
+      `@internal` is exported.
+- [ ] **Final maintainer sign-off** — a human confirms every top-level export is
+      *intended* as contract and freezes the surface. This is judgment, not
+      mechanics; it's the last gate before cutting 1.0.
+- [x] **Naming consistency** verified across the store factories
+      (`sqlite<Domain>Store(s)` / `prisma<Domain>Store(s)`) and `Prisma<Domain>Client`
+      surfaces. One deliberate variance to keep in mind: single-store domains are
+      named after their contract (`sqliteInAppStore`, `sqliteAccessStore`) rather
+      than the domain — consistent within itself, worth a glance at freeze time.
+- [x] **Deprecation policy** written — see the
+      [Versioning & compatibility guide](https://machize-docs.pages.dev/guide/versioning):
+      `@deprecated` in a minor, works through the major, removed only in the next.
 - [x] No `@experimental` / `@deprecated` / TODO debt in `src` (1 marker total).
 
-## 3. Documentation — ☐ nearly there
+## 3. Documentation — ✅ done
 
 - [x] Guides for every capability, driver, self-contained UI, persistence, and
       database-per-tenant; full 69-package reference catalog; docs deployed and
-      refreshed to 0.31.0 (no stale counts, no Laravel framing).
+      refreshed to 0.32.0 (no stale counts, no Laravel framing).
 - [x] READMEs for all store packages — the `subscriptions-`, `comments-`,
       `audit-`, `activity-`, `notifications-` × `{sqlite,prisma}` packages now
       have English READMEs (alongside `auth-*`, `teams-*`, `permissions-*`).
@@ -50,59 +58,73 @@ Nothing here is hard; it's the deliberate work of committing to the surface.
       base package READMEs were translated to English — prose and code examples —
       so the docs site, guides, and every package README now read English.
       (`@machize/i18n` keeps its intentional `pt`-locale demo strings.)
-- [ ] A short **"0.x → 1.0" upgrade note** — ideally "nothing to do", to be
-      confirmed by the API review above.
+- [x] A short **"0.x → 1.0" upgrade note** — published in the
+      [Versioning & compatibility guide](https://machize-docs.pages.dev/guide/versioning)
+      ("1.0 is a stability commitment, not a rewrite"), to be confirmed final by
+      the maintainer API sign-off above.
 
-## 4. Testing & CI — ☐ raise the bar
+## 4. Testing & CI — ✅ done
 
 - [x] CI: build + typecheck + test on a Node matrix, lint, supply-chain audit
       (`pnpm audit --audit-level=high`), and a Postgres integration job.
 - [x] Coverage gate enforced in CI.
-- [ ] **Raise coverage thresholds** — the gate is 70% statements / 60% branches,
-      but most packages already sit at 100%. Ratchet the floor up so it protects
-      what we actually have.
-- [ ] **Real Postgres integration tests for the `*-prisma` stores** — the
-      `pg-integration` app already spins up Postgres and generates a client in CI;
-      today it only exercises tenancy. Add store round-trips there so the Prisma
-      backends are verified against a real database, not just the typed fake.
+- [x] **Coverage thresholds raised** — the CI gate went from 70/60 to
+      **90% statements · 90% lines · 87% functions · 85% branches**, set just under
+      the actual aggregate (stmts/lines ~92%, branches ~88%, funcs ~90%) so it
+      protects what we have without flaking.
+- [x] **Real Postgres integration tests for the `*-prisma` stores** — added
+      `apps/pg-integration/tests/stores.integration.test.ts`: every `*-prisma`
+      store round-trips against a real PostgreSQL 16 (compound ids, `String[]`
+      columns, `createMany({ skipDuplicates })`, and the atomic concurrent
+      `consume`). Runs in the CI `integration (postgres)` job. **This found a real
+      concurrency bug** — `subscriptions-prisma`'s `consume`/`increment` seeded the
+      counter with `upsert`, which races to INSERT and fails with P2002 under
+      concurrent first-touch; fixed by seeding with `createMany({ skipDuplicates })`
+      (the typed in-memory fake couldn't surface it).
 
 ## 5. Versioning & release — ☐ one deliberate cut
 
 - [x] Lockstep releases via changesets (`fixed: [["@machize/*"]]`); automated
       publish on merge (`release.yml`, npm provenance).
 - [ ] **The 1.0 cut is a one-way door.** Note: with the `fixed` group on 0.x, a
-      single `minor` changeset graduates the whole group `0.31.0 → 1.0.0`
+      single `minor` changeset graduates the whole group `0.32.0 → 1.0.0`
       automatically (see `changesets-fixed-group-graduates-to-1.0` in project
       memory). So "going 1.0" is mechanically one changeset — do it only once §2
       is signed off, not by accident.
 - [ ] Tag a **`1.0.0` announcement** (blog/README) stating the stability promise.
 
-## 6. Runtime & compatibility — ☐ state the policy
+## 6. Runtime & compatibility — ✅ done
 
 - [x] ESM-only, documented.
 - [x] `node:sqlite` packages declare `engines.node >= 22.5.0` (flag-free on 24).
-- [ ] **Write the Node support policy** into the docs (minimum version, what's
-      tested in CI, the `--experimental-sqlite` caveat on 22.x) so 1.0 users know
-      the contract.
+- [x] **Node support policy documented** — the
+      [Versioning & compatibility guide](https://machize-docs.pages.dev/guide/versioning)
+      states Node 22+ (CI tests 22 & 24), the `*-sqlite` packages' 22.5+ /
+      `--experimental-sqlite` caveat, ESM-only, and the lockstep versioning rule.
 
-## 7. Security & governance — ✅ mostly there
+## 7. Security & governance — ✅ done
 
 - [x] `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE` present.
 - [x] Secrets never persisted in clear — API keys stored as SHA-256 hash +
       prefix; MFA recovery codes hashed upstream; the durable stores preserve this.
 - [x] Supply-chain audit in CI.
-- [ ] Confirm `SECURITY.md`'s disclosure contact/process is current before 1.0.
+- [x] `SECURITY.md` disclosure process confirmed current (GitHub private
+      vulnerability reporting + `security@machize.dev`); refreshed the stale
+      "currently 0.1.x" supported-versions line to `0.31.x`.
 
 ---
 
 ## Definition of done for 1.0
 
-1. §2 API review complete and the surface frozen.
-2. §3 the "0.x → 1.0" upgrade note published (all READMEs and translation done).
-3. §4 coverage floor raised; `*-prisma` stores covered by Postgres integration.
-4. §6 Node policy documented.
-5. Then, and only then, land the single `minor` changeset that cuts `1.0.0`.
+Only two things remain:
 
-Everything above §2 (persistence, the bulk of docs, CI, governance) is already
-true today. What remains is the discipline of committing to the surface — not
-more features.
+1. **§2 maintainer API sign-off** — a human confirms the public surface is the
+   contract we commit to. Everything mechanical (naming consistency, no leaked
+   internals, deprecation policy, coverage, Node policy, upgrade note, real-DB
+   integration) is done.
+2. **The cut itself** — land the single `minor` changeset that graduates the
+   group to `1.0.0`, then tag the announcement.
+
+Sections 1, 3, 4, 6 and 7 (persistence, docs, testing/CI, runtime policy,
+security/governance) are complete as of 0.32.0. What's left is the deliberate act
+of committing to the surface — not more features.

@@ -53,7 +53,7 @@ export interface PrismaSubscriptionsClient {
   }
   usageCounter: {
     findUnique(a: any): Promise<PUsage | null>
-    upsert(a: any): Promise<PUsage>
+    createMany(a: any): Promise<{ count: number }>
     updateMany(a: any): Promise<{ count: number }>
   }
   webhookEvent: {
@@ -147,12 +147,19 @@ export class PrismaUsageStore implements UsageStore {
   }
 
   async increment(billableId: string, feature: string, periodKey: string, amount: number): Promise<number> {
-    const r = await this.client.usageCounter.upsert({
-      where: usageWhere(billableId, feature, periodKey),
-      create: { billableId, feature, periodKey, value: amount },
-      update: { value: { increment: amount } },
+    // Seed with a concurrency-safe createMany (skipDuplicates) rather than an
+    // upsert — two concurrent upserts of the same new row both miss and race to
+    // INSERT, failing with P2002 on a real database.
+    await this.client.usageCounter.createMany({
+      data: [{ billableId, feature, periodKey, value: 0 }],
+      skipDuplicates: true,
     })
-    return r.value
+    await this.client.usageCounter.updateMany({
+      where: { billableId, feature, periodKey },
+      data: { value: { increment: amount } },
+    })
+    const row = await this.client.usageCounter.findUnique({ where: usageWhere(billableId, feature, periodKey) })
+    return row?.value ?? 0
   }
 
   async consume(
@@ -162,14 +169,14 @@ export class PrismaUsageStore implements UsageStore {
     amount: number,
     limit: number,
   ): Promise<UsageConsumeResult> {
-    // Ensure the counter row exists (idempotent), then increment only while the
-    // guard holds. The conditional updateMany is a single locked UPDATE, so
-    // concurrent callers re-check the guard against the committed value and can
-    // never push usage past the limit.
-    await this.client.usageCounter.upsert({
-      where: usageWhere(billableId, feature, periodKey),
-      create: { billableId, feature, periodKey, value: 0 },
-      update: {},
+    // Ensure the counter row exists (idempotent and concurrency-safe via
+    // skipDuplicates — a plain upsert races to INSERT and fails with P2002 under
+    // concurrent first-touch), then increment only while the guard holds. The
+    // conditional updateMany is a single locked UPDATE, so concurrent callers
+    // re-check the guard against the committed value and can never overshoot.
+    await this.client.usageCounter.createMany({
+      data: [{ billableId, feature, periodKey, value: 0 }],
+      skipDuplicates: true,
     })
     const { count } = await this.client.usageCounter.updateMany({
       where: { billableId, feature, periodKey, value: { lte: limit - amount } },

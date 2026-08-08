@@ -100,6 +100,54 @@ importers:
         specifier: ^6.2.0
         version: 6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3)
     devDependencies:
+      '@machize/activity':
+        specifier: workspace:*
+        version: link:../../packages/activity
+      '@machize/activity-prisma':
+        specifier: workspace:*
+        version: link:../../packages/activity-prisma
+      '@machize/audit':
+        specifier: workspace:*
+        version: link:../../packages/audit
+      '@machize/audit-prisma':
+        specifier: workspace:*
+        version: link:../../packages/audit-prisma
+      '@machize/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@machize/auth-prisma':
+        specifier: workspace:*
+        version: link:../../packages/auth-prisma
+      '@machize/comments':
+        specifier: workspace:*
+        version: link:../../packages/comments
+      '@machize/comments-prisma':
+        specifier: workspace:*
+        version: link:../../packages/comments-prisma
+      '@machize/notifications':
+        specifier: workspace:*
+        version: link:../../packages/notifications
+      '@machize/notifications-prisma':
+        specifier: workspace:*
+        version: link:../../packages/notifications-prisma
+      '@machize/permissions':
+        specifier: workspace:*
+        version: link:../../packages/permissions
+      '@machize/permissions-prisma':
+        specifier: workspace:*
+        version: link:../../packages/permissions-prisma
+      '@machize/subscriptions':
+        specifier: workspace:*
+        version: link:../../packages/subscriptions
+      '@machize/subscriptions-prisma':
+        specifier: workspace:*
+        version: link:../../packages/subscriptions-prisma
+      '@machize/teams':
+        specifier: workspace:*
+        version: link:../../packages/teams
+      '@machize/teams-prisma':
+        specifier: workspace:*
+        version: link:../../packages/teams-prisma
       '@machize/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig

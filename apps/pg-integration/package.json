@@ -19,6 +19,22 @@
     "@types/node": "^22.15.0",
     "prisma": "^6.2.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0"
+    "vitest": "^3.1.0",
+    "@machize/auth": "workspace:*",
+    "@machize/auth-prisma": "workspace:*",
+    "@machize/teams": "workspace:*",
+    "@machize/teams-prisma": "workspace:*",
+    "@machize/subscriptions": "workspace:*",
+    "@machize/subscriptions-prisma": "workspace:*",
+    "@machize/comments": "workspace:*",
+    "@machize/comments-prisma": "workspace:*",
+    "@machize/audit": "workspace:*",
+    "@machize/audit-prisma": "workspace:*",
+    "@machize/activity": "workspace:*",
+    "@machize/activity-prisma": "workspace:*",
+    "@machize/notifications": "workspace:*",
+    "@machize/notifications-prisma": "workspace:*",
+    "@machize/permissions": "workspace:*",
+    "@machize/permissions-prisma": "workspace:*"
   }
 }

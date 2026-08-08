@@ -15,7 +15,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
-      { text: '0.31.0', link: `${github}/releases` },
+      { text: '0.32.0', link: `${github}/releases` },
     ],
 
     sidebar: {
@@ -65,6 +65,7 @@ export default defineConfig({
           text: 'Production',
           items: [
             { text: 'Persistence & durable stores', link: '/guide/persistence' },
+            { text: 'Versioning & compatibility', link: '/guide/versioning' },
             { text: 'Going to Production', link: '/guide/production' },
             { text: 'Security', link: '/guide/security' },
             { text: 'Observability', link: '/guide/observability' },
