@@ -1,6 +1,6 @@
 {
   "name": "@machize/search-postgres",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "PostgreSQL full-text search driver for @machize/search — tsvector/tsquery/ts_rank, tenant-scoped, with an injectable pg client for testing.",
   "license": "MIT",
   "type": "module",

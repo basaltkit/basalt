@@ -1,0 +1,26 @@
+// Reference schema for @machize/notifications-prisma.
+// Copy this model into your app's schema.prisma, migrate, and pass the client
+// to `prismaInAppStore()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model InAppNotification {
+  id           String    @id
+  recipientId  String
+  notification String
+  title        String
+  body         String?
+  data         String?
+  readAt       DateTime?
+  at           DateTime
+
+  @@index([recipientId, at])
+  @@map("in_app_notifications")
+}

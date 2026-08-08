@@ -1,0 +1,31 @@
+// Reference schema for @machize/comments-prisma.
+// Copy this model into your app's schema.prisma, migrate, and pass the client
+// to `prismaCommentsStore()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Comment {
+  tenantId     String
+  id           String
+  resourceType String
+  resourceId   String
+  parentId     String?
+  authorId     String
+  body         String
+  mentions     String[]
+  resolvedAt   DateTime?
+  resolvedBy   String?
+  editedAt     DateTime?
+  createdAt    DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId, resourceType, resourceId])
+  @@map("comments")
+}

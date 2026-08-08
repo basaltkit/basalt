@@ -59,6 +59,8 @@ works on its own; together they form the framework. Versions move in lockstep
 | `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
 | `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
+| `@machize/comments-sqlite` · `@machize/comments-prisma` | Durable backends for the `@machize/comments` CommentStore |
+| `@machize/audit-sqlite` · `@machize/audit-prisma` · `@machize/activity-sqlite` · `@machize/activity-prisma` · `@machize/notifications-sqlite` · `@machize/notifications-prisma` | Durable SQLite/Prisma backends for the audit, activity and in-app notification stores |
 
 ## Capabilities
 

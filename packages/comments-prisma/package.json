@@ -1,0 +1,52 @@
+{
+  "name": "@machize/comments-prisma",
+  "version": "0.29.0",
+  "description": "Prisma-backed implementation of the @machize/comments CommentStore — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema.prisma": "./prisma/schema.prisma"
+  },
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@machize/comments": "workspace:*"
+  },
+  "devDependencies": {
+    "@machize/comments": "workspace:*",
+    "@machize/tsconfig": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/machize.git",
+    "directory": "packages/comments-prisma"
+  },
+  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/comments-prisma#readme",
+  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "keywords": [
+    "machize",
+    "typescript",
+    "comments",
+    "prisma",
+    "store",
+    "postgresql"
+  ]
+}
