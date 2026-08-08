@@ -1,6 +1,6 @@
 {
   "name": "@machize/admin-shadcn",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "shadcn/ui-styled React components for @machize/admin: Button/Input/Table/Card/Badge primitives and styled DataTable/ResourceForm rendering the Zod-derived view models.",
   "license": "MIT",
   "type": "module",

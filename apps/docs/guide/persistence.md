@@ -108,6 +108,26 @@ instances to share one database. Both implement the identical store contracts,
 so switching is a one-line change.
 :::
 
+## Teams — `@machize/teams-sqlite` / `@machize/teams-prisma`
+
+`@machize/teams` keeps memberships and invitations behind the same kind of store
+contract, and ships the same two durable backends — so team rosters and pending
+invitations survive a restart too:
+
+```ts
+import { teamsPlugin } from '@machize/teams'
+import { sqliteTeamsStores } from '@machize/teams-sqlite'   // single-node, zero-dep
+// import { prismaTeamsStores } from '@machize/teams-prisma' // Postgres/MySQL
+
+const t = sqliteTeamsStores('./data/teams.db')
+teamsPlugin({ memberships: t.memberships, invitations: t.invitations })
+```
+
+`prismaTeamsStores(prisma)` is the drop-in Prisma equivalent (bring a client with
+the `Team*` models from the bundled reference schema). Same "which one?" trade-off
+as auth: SQLite for a single node, Prisma when you already run a database or need
+to share it across instances. They can share one handle with the auth stores.
+
 ## Redis-backed stores
 
 Several packages already ship Redis implementations for the state that benefits
