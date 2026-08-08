@@ -15,7 +15,10 @@ it is on by default — this page is about making the deliberate choices.
 - [ ] **Tracing exported** — `tracingPlugin({ exporter })` (OTLP).
 - [ ] **API documented** — `openapiPlugin({ info })`.
 - [ ] **External delivery is reliable** — `outboxPlugin` / `webhooksPlugin`.
-- [ ] **Real database** — swap in-memory stores for `@machize/prisma`.
+- [ ] **Real database** — put your domain data on `@machize/prisma`, and swap the
+      framework's in-memory stores (auth, teams, subscriptions, permissions,
+      comments, audit, activity, notifications) for their durable
+      [`*-sqlite` / `*-prisma`](/guide/persistence) backends.
 - [ ] **Migrations run per tenant** — `migrateTenants()` / `mach` command.
 - [ ] **CI green** — build, typecheck, coverage gate, `pnpm audit`, CodeQL.
 
@@ -71,6 +74,16 @@ production, `@machize/prisma` offers three tenancy strategies — the domain cod
 A built-in LRU `TenantClientPool` keeps connection counts bounded, and
 `migrateTenants()` runs migrations across every tenant. Generate a
 Prisma-backed resource with `mach make:resource Invoice --prisma`.
+
+`@machize/prisma` is for **your** domain data. The framework's own stateful
+domains — auth, teams, subscriptions, permissions, comments, audit, activity and
+notifications — also default to in-memory and each has a durable backend to swap
+in: `@machize/<domain>-sqlite` (single-node, `node:sqlite`, zero deps) or
+`@machize/<domain>-prisma` (Postgres/MySQL). It's a one-line change per store
+because the contract is unchanged. See the
+[Persistence guide](/guide/persistence) for the catalog, and
+[Database-per-tenant](/guide/database-per-tenant) to route those stores through
+the active tenant's client.
 
 ## Graceful shutdown
 
