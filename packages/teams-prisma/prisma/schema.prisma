@@ -1,0 +1,38 @@
+// Reference schema for @machize/teams-prisma.
+//
+// Copy these models into your app's schema.prisma, run `prisma migrate dev`,
+// and pass the generated client to `prismaTeamsStores()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model TeamMembership {
+  tenantId  String
+  userId    String
+  role      String
+  createdAt DateTime
+
+  @@id([tenantId, userId])
+  @@map("team_memberships")
+}
+
+model TeamInvitation {
+  id         String    @id
+  tenantId   String
+  email      String
+  role       String
+  token      String    @unique
+  invitedBy  String?
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId, email])
+  @@map("team_invitations")
+}
