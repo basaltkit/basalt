@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@machize/core": "workspace:^",
-    "nodemailer": "^6.10.0"
+    "nodemailer": "^9.0.5"
   },
   "devDependencies": {
     "@machize/tsconfig": "workspace:^",
