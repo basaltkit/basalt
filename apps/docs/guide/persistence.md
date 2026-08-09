@@ -233,7 +233,7 @@ auth — SQLite for a single node, Prisma when you already run a database.
 
 ## Events outbox — `@basaltkit/events-sqlite` / `@basaltkit/events-prisma`
 
-The [transactional outbox](/guide/events) writes each domain event to a durable
+The transactional outbox writes each domain event to a durable
 store, then a relay delivers it to the outside world (webhooks, Kafka…) and marks
 it published — delivery is **at-least-once and survives a crash**. That guarantee
 only holds if the store is durable, yet `@basaltkit/events` defaults to
