@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@machize/core": "workspace:^",
-    "ioredis": "^5.6.0"
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "@machize/tsconfig": "workspace:^",
