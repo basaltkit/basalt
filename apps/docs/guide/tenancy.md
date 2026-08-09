@@ -32,8 +32,79 @@ Other resolvers: `domainResolver()` (custom domains via `source.findByDomain`)
 and `routeResolver({ param: 'tenant' })` (`/t/:tenant/...`). Any async
 `(request) => tenantId | null` works as a custom resolver.
 
-`MemoryTenantSource` is for development and tests — in production you implement
-the `TenantSource` contract over your database.
+`MemoryTenantSource` is for development and tests. In production use a durable
+`TenantSource` (below) — or implement the contract over your own database.
+
+## Creating tenants
+
+A tenant is just a record in your `TenantSource` — `{ id, ...anything }`. How you
+create one depends on the backend.
+
+### In dev — `MemoryTenantSource`
+
+Seed them inline; the `add()` calls chain. Lost on restart, so dev/tests only:
+
+```ts
+const tenants = new MemoryTenantSource()
+  .add({ id: 'acme', name: 'Acme Inc' })
+  .add({ id: 'globex', name: 'Globex', domains: ['app.globex.com'] })
+
+tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'basalt.app' })] })
+```
+
+### Durably — `@basaltkit/tenancy-sqlite` / `-prisma`
+
+For production, don't hand-roll the contract — a durable `TenantSource` persists
+tenants across a restart. Both ship `save`/`find`/`findByDomain`/`list`/`remove`:
+
+```ts
+import { sqliteTenantSource } from '@basaltkit/tenancy-sqlite'   // single node, zero-dep
+// import { prismaTenantSource } from '@basaltkit/tenancy-prisma' // Postgres/MySQL
+
+const tenants = sqliteTenantSource('./data/tenants.db')
+
+// save() is an upsert — create or update a tenant. Any extra field round-trips.
+await tenants.save({ id: 'acme', name: 'Acme Inc', plan: 'pro', domains: ['app.acme.com'] })
+
+tenancyPlugin({
+  source: tenants,
+  resolvers: [subdomainResolver({ base: 'basalt.app' }), domainResolver()],
+})
+```
+
+`save` replaces the tenant's custom-domain set; a domain already owned by another
+tenant is rejected (routing must be unambiguous). See [Persistence](/guide/persistence).
+
+### At sign-up — provision a tenant on demand
+
+A real SaaS creates tenants when a customer signs up. Do it in a service/route:
+persist the record, then (for schema- or database-per-tenant) provision its
+storage, and optionally seed it — all inside the new tenant's context.
+
+```ts
+import { ctx } from '@basaltkit/core'
+import { TENANCY } from '@basaltkit/tenancy'
+import { provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
+
+export async function createTenant(input: { id: string; name: string; domains?: string[] }) {
+  // 1. persist the tenant (shared-database mode stops here)
+  await tenants.save(input)
+
+  // 2. schema-per-tenant only: create its schema, then migrate it
+  await provisionTenantSchema(db, tenantSchema(input.id))
+  //    …run migrations against tenant_<id> (or the `basalt tenant:migrate` command below)
+
+  // 3. optionally seed starter data *inside* the new tenant
+  await app.container.get(TENANCY).run(input.id, async () => {
+    await ctx().db.setting.create({ data: { key: 'onboarded', value: 'true' } })
+  })
+
+  return input
+}
+```
+
+Expose it as an admin-guarded route (`POST /tenants`); the `subdomainResolver` /
+`domainResolver` route the new tenant's traffic the moment the record exists.
 
 ## Reading the tenant
 
