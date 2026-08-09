@@ -1,6 +1,6 @@
 {
   "name": "@machize/scheduler",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Fluent Machize scheduler: schedule.job(X).daily().at('03:00'), timezones, withoutOverlapping and @machize/queue integration.",
   "license": "MIT",
   "type": "module",
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/queue": "workspace:*"
+    "@machize/core": "workspace:^",
+    "@machize/queue": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

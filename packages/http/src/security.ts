@@ -10,10 +10,14 @@ export interface RateLimitResult {
   retryAfterMs: number
 }
 
-/** Backing store for the rate limiter (default in-memory; swap Redis for a cluster). */
+/**
+ * Backing store for the rate limiter (default in-memory; swap `RedisRateLimitStore`
+ * to share limits across instances). Methods may be sync or async — the limiter
+ * awaits them — so an in-process store stays synchronous while a Redis one doesn't.
+ */
 export interface RateLimitStore {
-  hit(key: string, limit: number, windowMs: number): RateLimitResult
-  reset(key: string): void
+  hit(key: string, limit: number, windowMs: number): RateLimitResult | Promise<RateLimitResult>
+  reset(key: string): void | Promise<void>
 }
 
 export class MemoryRateLimitStore implements RateLimitStore {
@@ -130,7 +134,7 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
   return definePlugin({
     name: 'machize:security',
     boot({ container }) {
-      container.get(HTTP_SERVER).use(({ request, reply }) => {
+      container.get(HTTP_SERVER).use(async ({ request, reply }) => {
         if (headers) applyHeaders(reply, headers)
 
         if (cors) {
@@ -146,7 +150,7 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
         }
 
         if (rateLimit && store && !rateLimit.skip?.(request)) {
-          const result = store.hit(rateLimit.key?.(request) ?? clientIp(request), rateLimit.limit, rateLimit.windowMs)
+          const result = await store.hit(rateLimit.key?.(request) ?? clientIp(request), rateLimit.limit, rateLimit.windowMs)
           reply.header('X-RateLimit-Limit', String(result.limit))
           reply.header('X-RateLimit-Remaining', String(result.remaining))
           reply.header('X-RateLimit-Reset', String(Math.ceil(result.resetAt / 1000)))

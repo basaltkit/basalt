@@ -1,6 +1,6 @@
 {
   "name": "@machize/api-keys-ui",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "A self-contained HTML page to manage @machize/auth API keys: create (show once), list and revoke — zero dependencies, no build.",
   "license": "MIT",
   "type": "module",
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/fastify": "workspace:*"
+    "@machize/core": "workspace:^",
+    "@machize/fastify": "workspace:^"
   },
   "devDependencies": {
-    "@machize/auth": "workspace:*",
-    "@machize/tenancy": "workspace:*",
-    "@machize/tsconfig": "workspace:*",
+    "@machize/auth": "workspace:^",
+    "@machize/tenancy": "workspace:^",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

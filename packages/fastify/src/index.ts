@@ -55,3 +55,8 @@ export {
   type IdempotencyStore,
   type IdempotencyRecord,
 } from './idempotency.js'
+export {
+  RedisIdempotencyStore,
+  type RedisLike,
+  type RedisIdempotencyStoreOptions,
+} from './drivers/redis-idempotency.js'

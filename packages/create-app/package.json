@@ -1,6 +1,6 @@
 {
   "name": "create-machize",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Scaffold a production-shaped Machize SaaS app: npm create machize my-saas [--billing] [--ui] [--cli] [--install] [--git]",
   "license": "MIT",
   "type": "module",
@@ -22,7 +22,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

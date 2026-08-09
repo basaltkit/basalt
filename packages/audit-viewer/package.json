@@ -1,6 +1,6 @@
 {
   "name": "@machize/audit-viewer",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Read-only viewer for the @machize/audit trail: tenant-scoped, filterable, paginated queries with aggregate stats, plus a self-contained HTML browser.",
   "license": "MIT",
   "type": "module",
@@ -19,17 +19,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/audit": "workspace:*",
-    "@machize/fastify": "workspace:*"
+    "@machize/core": "workspace:^",
+    "@machize/audit": "workspace:^",
+    "@machize/fastify": "workspace:^"
   },
   "peerDependencies": {
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@machize/auth": "workspace:*",
-    "@machize/tenancy": "workspace:*",
-    "@machize/tsconfig": "workspace:*",
+    "@machize/auth": "workspace:^",
+    "@machize/tenancy": "workspace:^",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

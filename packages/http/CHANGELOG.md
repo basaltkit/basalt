@@ -1,5 +1,17 @@
 # @machize/http
 
+## 1.0.5
+
+### Minor Changes
+
+- Add `RedisRateLimitStore` — a Redis-backed `RateLimitStore` so a rate limit is
+  shared across every instance and survives a restart (the in-memory store is
+  per-process and resets on reboot). The window is a fixed counter incremented
+  atomically in one round trip (INCR + first-hit PEXPIRE), so concurrent callers
+  can't overshoot. Inject any ioredis-compatible client — no new dependency.
+- `RateLimitStore.hit`/`reset` may now return a promise; the security plugin
+  awaits them. Existing synchronous stores are unaffected.
+
 ## 1.0.0
 
 ### Major Changes

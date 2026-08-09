@@ -1,6 +1,6 @@
 {
   "name": "@machize/env",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Typed environment variable validation with Zod — fails at boot with an aggregated report.",
   "license": "MIT",
   "type": "module",
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*"
+    "@machize/core": "workspace:^"
   },
   "peerDependencies": {
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

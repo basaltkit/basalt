@@ -1,6 +1,6 @@
 {
   "name": "@machize/express",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Express adapter for Machize: run the same typed routes, enrichers and guards on Express that you would on Fastify or Hono.",
   "license": "MIT",
   "type": "module",
@@ -19,14 +19,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/http": "workspace:*"
+    "@machize/core": "workspace:^",
+    "@machize/http": "workspace:^"
   },
   "peerDependencies": {
     "express": "^4.19.0 || ^5.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",
     "express": "^5.1.0",

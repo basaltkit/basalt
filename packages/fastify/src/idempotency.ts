@@ -8,14 +8,18 @@ export interface IdempotencyRecord {
   contentType?: string
 }
 
-/** Persists idempotency outcomes. Default in-memory; swap Redis for a cluster. */
+/**
+ * Persists idempotency outcomes. Default in-memory; swap `RedisIdempotencyStore`
+ * to share replays across instances. Methods may be sync or async — the plugin
+ * awaits them — so the in-process store stays synchronous while a Redis one doesn't.
+ */
 export interface IdempotencyStore {
   /** A completed record, the string 'pending' for an in-flight request, or undefined. */
-  get(key: string): IdempotencyRecord | 'pending' | undefined
-  setPending(key: string): void
-  complete(key: string, record: IdempotencyRecord): void
+  get(key: string): IdempotencyRecord | 'pending' | undefined | Promise<IdempotencyRecord | 'pending' | undefined>
+  setPending(key: string): void | Promise<void>
+  complete(key: string, record: IdempotencyRecord): void | Promise<void>
   /** Release a reservation so the client can retry (e.g. after a 5xx). */
-  release(key: string): void
+  release(key: string): void | Promise<void>
 }
 
 export class MemoryIdempotencyStore implements IdempotencyStore {
@@ -90,7 +94,7 @@ export function idempotencyPlugin(options: IdempotencyPluginOptions = {}) {
         const scoped = `${request.method}:${request.routeOptions?.url ?? request.url}:${key}`
         ;(request as unknown as Record<symbol, string>)[KEY] = scoped
 
-        const existing = store.get(scoped)
+        const existing = await store.get(scoped)
         if (existing === 'pending') {
           return reply.code(409).send({
             error: {
@@ -104,7 +108,7 @@ export function idempotencyPlugin(options: IdempotencyPluginOptions = {}) {
           void reply.header('Idempotent-Replayed', 'true')
           return reply.code(existing.status).send(existing.body)
         }
-        store.setPending(scoped)
+        await store.setPending(scoped)
         return undefined
       })
 
@@ -113,11 +117,11 @@ export function idempotencyPlugin(options: IdempotencyPluginOptions = {}) {
         if (!scoped) return payload
         if (reply.getHeader('Idempotent-Replayed')) return payload // this IS a replay
         if (reply.statusCode >= 500 || typeof payload !== 'string') {
-          store.release(scoped) // keep failures retryable
+          await store.release(scoped) // keep failures retryable
           return payload
         }
         const contentType = reply.getHeader('Content-Type') as string | undefined
-        store.complete(scoped, {
+        await store.complete(scoped, {
           status: reply.statusCode,
           body: payload,
           ...(contentType ? { contentType } : {}),

@@ -36,6 +36,11 @@ export {
   type CorsOptions,
   type SecurityHeadersOptions,
 } from './security.js'
+export {
+  RedisRateLimitStore,
+  type RedisLike,
+  type RedisRateLimitStoreOptions,
+} from './drivers/redis-rate-limit.js'
 export { metricsPlugin, METRICS, type MetricsPluginOptions } from './metrics.js'
 export { tracingPlugin, TRACER, type TracingPluginOptions } from './tracing.js'
 export {

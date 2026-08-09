@@ -1,0 +1,32 @@
+// Reference schema for @machize/tenancy-prisma.
+//
+// Copy these models into your app's schema.prisma (or run `mach prisma:sync`),
+// run `prisma migrate dev`, and pass the generated client to `prismaTenantSource()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Tenant {
+  id      String         @id
+  // The open tenant record ({ id, ...anything }) as JSON — attach whatever
+  // per-tenant fields you like; they round-trip unchanged.
+  data    Json
+  domains TenantDomain[]
+
+  @@map("tenants")
+}
+
+model TenantDomain {
+  domain   String @id
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("tenant_domains")
+}

@@ -1,5 +1,16 @@
 # create-machize
 
+## 1.0.1
+
+### Patch Changes
+
+- Register `mach prisma:sync` in `--cli` apps out of the box. The generated CLI now
+  adds `@machize/prisma` and wires `prismaSyncCommand()` into `commandsPlugin`, so a
+  fresh project can run `pnpm mach prisma:sync --push` to merge every installed
+  `@machize/*-prisma` model into its `prisma/schema.prisma` — no hand-copying.
+- Generated `pnpm-workspace.yaml` now excludes the `@machize/*` scope from pnpm's
+  `minimumReleaseAge` policy, so `pnpm up` is never blocked on a fresh Machize release.
+
 ## 1.0.0
 
 ### Major Changes

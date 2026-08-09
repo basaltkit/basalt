@@ -1,6 +1,6 @@
 {
   "name": "@machize/storage",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Object storage layer for Machize: MinIO/S3 and local drivers under one contract, automatic tenant isolation, and temporary signed URLs.",
   "license": "MIT",
   "type": "module",
@@ -21,10 +21,10 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.782.0",
     "@aws-sdk/s3-request-presigner": "^3.782.0",
-    "@machize/core": "workspace:*"
+    "@machize/core": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

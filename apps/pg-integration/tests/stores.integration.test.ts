@@ -7,6 +7,9 @@ import { prismaInAppStore } from '@machize/notifications-prisma'
 import { prismaAccessStore } from '@machize/permissions-prisma'
 import { prismaSubscriptionsStores } from '@machize/subscriptions-prisma'
 import { prismaTeamsStores } from '@machize/teams-prisma'
+import { prismaTenantSource } from '@machize/tenancy-prisma'
+import { prismaOutboxStore } from '@machize/events-prisma'
+import { prismaWebhookStore } from '@machize/webhooks-prisma'
 
 // Real-PostgreSQL round-trips for every @machize/*-prisma store. Gated on
 // TEST_DATABASE_URL so the default suite stays green when no database is set;
@@ -34,6 +37,8 @@ describe.skipIf(!url)('@machize/*-prisma stores against real PostgreSQL', () => 
       prisma.comment.deleteMany(), prisma.auditEntry.deleteMany(), prisma.activityRecord.deleteMany(),
       prisma.inAppNotification.deleteMany(), prisma.permUserRole.deleteMany(),
       prisma.permUserPermission.deleteMany(), prisma.permRolePermission.deleteMany(),
+      prisma.tenantDomain.deleteMany(), prisma.tenant.deleteMany(),
+      prisma.outboxEntry.deleteMany(), prisma.webhookEndpoint.deleteMany(),
     ])
   })
 
@@ -131,5 +136,61 @@ describe.skipIf(!url)('@machize/*-prisma stores against real PostgreSQL', () => 
     expect(await n.markRead('u1', 'n1')).toBe(true)
     expect(await n.markRead('u1', 'n1')).toBe(false) // already read
     expect(await n.unreadCount('u1')).toBe(0)
+  })
+
+  it('tenancy: open JSON records + unique custom-domain lookup', async () => {
+    const tenants = prismaTenantSource(prisma)
+    await tenants.save({ id: 'acme', name: 'Acme Inc', plan: 'pro', domains: ['app.acme.com'] })
+    // round-trips the open record through the Json column
+    expect(await tenants.find('acme')).toEqual({
+      id: 'acme', name: 'Acme Inc', plan: 'pro', domains: ['app.acme.com'],
+    })
+    expect((await tenants.findByDomain('app.acme.com'))?.id).toBe('acme')
+    // re-save replaces the domain set (drop old, add new)
+    await tenants.save({ id: 'acme', domains: ['new.acme.com'] })
+    expect(await tenants.findByDomain('app.acme.com')).toBeNull()
+    expect((await tenants.findByDomain('new.acme.com'))?.id).toBe('acme')
+    // a domain owned by another tenant is rejected up front
+    await expect(tenants.save({ id: 'globex', domains: ['new.acme.com'] })).rejects.toThrow()
+    expect(await tenants.find('globex')).toBeNull()
+    // remove cascades domains
+    expect(await tenants.remove('acme')).toBe(true)
+    expect(await tenants.findByDomain('new.acme.com')).toBeNull()
+  })
+
+  it('events outbox: enqueue, pending order, publish/fail lifecycle', async () => {
+    const outbox = prismaOutboxStore(prisma).store
+    await outbox.enqueue({ id: 'a', event: 'order.created', payload: { id: 1 }, tenantId: 't1', createdAt: 30 })
+    await outbox.enqueue({ id: 'b', event: 'order.paid', payload: { id: 2 }, createdAt: 10 })
+
+    // oldest first; JSON payload round-trips through the text column
+    const pending = await outbox.pending(10, 5)
+    expect(pending.map((e) => e.id)).toEqual(['b', 'a'])
+    expect(pending.find((e) => e.id === 'a')?.payload).toEqual({ id: 1 })
+    expect(pending.find((e) => e.id === 'a')?.tenantId).toBe('t1')
+
+    // publish removes from pending; failing bumps attempts past the ceiling
+    await outbox.markPublished('b', 99)
+    await outbox.markFailed('a', 'boom')
+    expect((await outbox.pending(10, 1)).length).toBe(0) // a: attempts 1 >= 1, b: published
+    const a = (await outbox.all()).find((e) => e.id === 'a')
+    expect(a?.attempts).toBe(1)
+    expect(a?.lastError).toBe('boom')
+  })
+
+  it('webhooks: endpoint subscriptions, pattern + tenant matching', async () => {
+    const webhooks = prismaWebhookStore(prisma).store
+    await webhooks.add({ id: 'global', url: 'https://g.test', events: ['invoice.*'], secret: 's' })
+    await webhooks.add({ id: 'acme', url: 'https://a.test', events: ['*'], tenantId: 'acme' })
+    await webhooks.add({ id: 'off', url: 'https://o.test', events: ['invoice.paid'], active: false })
+
+    // round-trips the JSON events array + secret
+    expect((await webhooks.list()).find((e) => e.id === 'global')).toEqual({
+      id: 'global', url: 'https://g.test', events: ['invoice.*'], secret: 's',
+    })
+    // active + prefix match, tenant-agnostic 'global' matches acme; inactive 'off' excluded
+    expect((await webhooks.forEvent('invoice.paid', 'acme')).map((e) => e.id).sort()).toEqual(['acme', 'global'])
+    await webhooks.remove('acme')
+    expect((await webhooks.forEvent('invoice.paid', 'acme')).map((e) => e.id)).toEqual(['global'])
   })
 })
