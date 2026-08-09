@@ -11,7 +11,8 @@ works on its own; together they form the framework. Versions move in lockstep
 | `@machize/core` | DI container, plugin lifecycle, `AsyncLocalStorage` context, hooks |
 | `@machize/config` | Namespaced, typed configuration with dot-path access |
 | `@machize/env` | Zod-validated environment variables with an aggregated report |
-| `@machize/events` | Typed domain event bus with wildcards and priorities |
+| `@machize/events` | Typed domain event bus with wildcards and priorities; transactional outbox |
+| `@machize/events-sqlite` · `@machize/events-prisma` | Durable backends for the `@machize/events` OutboxStore — crash-safe transactional outbox; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
 | `@machize/logger` | Pino logger, auto-enriched with request/tenant context, redaction |
 
 ## HTTP
@@ -48,6 +49,7 @@ works on its own; together they form the framework. Versions move in lockstep
 | Package | Purpose |
 |---|---|
 | `@machize/tenancy` | Resolvers, per-request tenant context, lifecycle hooks |
+| `@machize/tenancy-sqlite` · `@machize/tenancy-prisma` | Durable backends for the `@machize/tenancy` TenantSource — persist the tenant registry and custom domains; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
 | `@machize/auth` | Password hashing, JWT + refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
 | `@machize/auth-sqlite` | Durable SQLite (`node:sqlite`) backend for every `@machize/auth` store — survives restarts, zero deps |
 | `@machize/auth-prisma` | Prisma backend for every `@machize/auth` store — Postgres/MySQL, ships a reference schema, pass your `PrismaClient` |
@@ -59,6 +61,7 @@ works on its own; together they form the framework. Versions move in lockstep
 | `@machize/subscriptions-sqlite` · `@machize/subscriptions-prisma` | Durable backends for the subscription, usage (atomic `consume`) and webhook stores — SQLite (zero-dep) and Prisma (Postgres/MySQL) |
 | `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
+| `@machize/webhooks-sqlite` · `@machize/webhooks-prisma` | Durable backends for the `@machize/webhooks` WebhookStore — persist endpoint subscriptions across restarts; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
 | `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
 | `@machize/comments-sqlite` · `@machize/comments-prisma` | Durable backends for the `@machize/comments` CommentStore |
 | `@machize/audit-sqlite` · `@machize/audit-prisma` · `@machize/activity-sqlite` · `@machize/activity-prisma` · `@machize/notifications-sqlite` · `@machize/notifications-prisma` | Durable SQLite/Prisma backends for the audit, activity and in-app notification stores |

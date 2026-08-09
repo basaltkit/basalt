@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { defineCommand, type CommandDefinition } from '@machize/cli'
 
 /** The @machize domains that ship a Prisma reference schema. */
-const DOMAINS = ['auth', 'teams', 'subscriptions', 'permissions', 'comments', 'audit', 'activity', 'notifications']
+const DOMAINS = ['auth', 'teams', 'subscriptions', 'permissions', 'comments', 'audit', 'activity', 'notifications', 'tenancy', 'events', 'webhooks']
 
 export interface PrismaSyncCommandOptions {
   /** App schema path. Default: `prisma/schema.prisma`. Override with `--schema`. */

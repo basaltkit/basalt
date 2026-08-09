@@ -1,6 +1,6 @@
 {
   "name": "@machize/hono",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Hono adapter for Machize: run the same typed routes, enrichers and guards on Hono (Node, Bun, Deno, edge) as on Fastify or Express.",
   "license": "MIT",
   "type": "module",
@@ -19,14 +19,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/http": "workspace:*"
+    "@machize/core": "workspace:^",
+    "@machize/http": "workspace:^"
   },
   "peerDependencies": {
     "hono": "^4.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "hono": "^4.6.0",
     "tsup": "^8.4.0",

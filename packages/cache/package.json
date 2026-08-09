@@ -1,6 +1,6 @@
 {
   "name": "@machize/cache",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Machize cache layer: Redis and Memory drivers, tags, TTL, stampede protection and automatic per-tenant isolation.",
   "license": "MIT",
   "type": "module",
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
+    "@machize/core": "workspace:^",
     "ioredis": "^5.6.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
