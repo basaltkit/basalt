@@ -1,4 +1,4 @@
-# Netlify config for the Machize docs (VitePress).
+# Netlify config for the Basalt docs (VitePress).
 # Connect the repo in the Netlify UI, or deploy the built folder with the CLI
 # (see apps/docs/DEPLOY.md).
 [build]
