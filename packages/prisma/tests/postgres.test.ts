@@ -1,5 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { provisionTenantSchema, tenantSchema, type SchemaProvisioner } from '../src/index.js'
+
+// pglite instantiates a Postgres in WebAssembly; a cold start on a CI runner can
+// exceed the default 5s test/hook timeout (it's ~1.8s locally). Give it room so
+// the suite isn't flaky under load — applies to `pnpm test` and `test:coverage`.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 // Real PostgreSQL, in-process via pglite (WASM) — no server, runs anywhere.
 // The suite skips gracefully if pglite cannot load/instantiate.
