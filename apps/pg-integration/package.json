@@ -35,6 +35,12 @@
     "@machize/notifications": "workspace:*",
     "@machize/notifications-prisma": "workspace:*",
     "@machize/permissions": "workspace:*",
-    "@machize/permissions-prisma": "workspace:*"
+    "@machize/permissions-prisma": "workspace:*",
+    "@machize/tenancy": "workspace:*",
+    "@machize/tenancy-prisma": "workspace:*",
+    "@machize/events": "workspace:*",
+    "@machize/events-prisma": "workspace:*",
+    "@machize/webhooks": "workspace:*",
+    "@machize/webhooks-prisma": "workspace:*"
   }
 }

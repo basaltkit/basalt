@@ -1,6 +1,6 @@
 {
   "name": "@machize/mailer",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Mail layer for Machize: typed declarative mails with Zod, SMTP/log/memory drivers, tenant-aware sender and queue integration.",
   "license": "MIT",
   "type": "module",
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
+    "@machize/core": "workspace:^",
     "nodemailer": "^6.10.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "@types/nodemailer": "^6.4.17",
     "tsup": "^8.4.0",

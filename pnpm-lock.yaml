@@ -124,6 +124,12 @@ importers:
       '@machize/comments-prisma':
         specifier: workspace:*
         version: link:../../packages/comments-prisma
+      '@machize/events':
+        specifier: workspace:*
+        version: link:../../packages/events
+      '@machize/events-prisma':
+        specifier: workspace:*
+        version: link:../../packages/events-prisma
       '@machize/notifications':
         specifier: workspace:*
         version: link:../../packages/notifications
@@ -148,9 +154,21 @@ importers:
       '@machize/teams-prisma':
         specifier: workspace:*
         version: link:../../packages/teams-prisma
+      '@machize/tenancy':
+        specifier: workspace:*
+        version: link:../../packages/tenancy
+      '@machize/tenancy-prisma':
+        specifier: workspace:*
+        version: link:../../packages/tenancy-prisma
       '@machize/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
+      '@machize/webhooks':
+        specifier: workspace:*
+        version: link:../../packages/webhooks
+      '@machize/webhooks-prisma':
+        specifier: workspace:*
+        version: link:../../packages/webhooks-prisma
       '@types/node':
         specifier: ^22.15.0
         version: 22.20.1
@@ -213,11 +231,11 @@ importers:
   packages/activity:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -235,10 +253,10 @@ importers:
   packages/activity-prisma:
     devDependencies:
       '@machize/activity':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../activity
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -256,10 +274,10 @@ importers:
   packages/activity-sqlite:
     devDependencies:
       '@machize/activity':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../activity
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -277,7 +295,7 @@ importers:
   packages/admin:
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -298,11 +316,11 @@ importers:
   packages/admin-react:
     dependencies:
       '@machize/admin':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../admin
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@testing-library/dom':
         specifier: ^10.4.0
@@ -344,7 +362,7 @@ importers:
   packages/admin-shadcn:
     dependencies:
       '@machize/admin':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../admin
       '@radix-ui/react-slot':
         specifier: ^1.1.1
@@ -360,7 +378,7 @@ importers:
         version: 2.6.1
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@testing-library/dom':
         specifier: ^10.4.0
@@ -402,20 +420,20 @@ importers:
   packages/api-keys-ui:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/tenancy':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../tenancy
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -436,14 +454,14 @@ importers:
   packages/audit:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/events':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../events
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -464,10 +482,10 @@ importers:
   packages/audit-prisma:
     devDependencies:
       '@machize/audit':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../audit
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -485,10 +503,10 @@ importers:
   packages/audit-sqlite:
     devDependencies:
       '@machize/audit':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../audit
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -506,23 +524,23 @@ importers:
   packages/audit-viewer:
     dependencies:
       '@machize/audit':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../audit
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/tenancy':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../tenancy
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -543,14 +561,14 @@ importers:
   packages/auth:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -571,10 +589,10 @@ importers:
   packages/auth-prisma:
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -592,10 +610,10 @@ importers:
   packages/auth-sqlite:
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -613,23 +631,23 @@ importers:
   packages/billing-ui:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
       '@machize/subscriptions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../subscriptions
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/tenancy':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../tenancy
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -650,14 +668,14 @@ importers:
   packages/cache:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       ioredis:
         specifier: ^5.6.0
         version: 5.11.1
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -675,11 +693,11 @@ importers:
   packages/cache-tiered:
     dependencies:
       '@machize/cache':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../cache
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -697,11 +715,11 @@ importers:
   packages/cli:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -719,20 +737,20 @@ importers:
   packages/comments:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/tenancy':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../tenancy
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -753,10 +771,10 @@ importers:
   packages/comments-prisma:
     devDependencies:
       '@machize/comments':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../comments
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -774,10 +792,10 @@ importers:
   packages/comments-sqlite:
     devDependencies:
       '@machize/comments':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../comments
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -795,11 +813,11 @@ importers:
   packages/config:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -817,7 +835,7 @@ importers:
   packages/core:
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -835,7 +853,7 @@ importers:
   packages/create-app:
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -853,14 +871,14 @@ importers:
   packages/dashboard:
     dependencies:
       '@machize/admin':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../admin
       '@machize/subscriptions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../subscriptions
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -881,11 +899,11 @@ importers:
   packages/env:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -906,11 +924,11 @@ importers:
   packages/events:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -928,14 +946,56 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
+  packages/events-prisma:
+    devDependencies:
+      '@machize/events':
+        specifier: workspace:^
+        version: link:../events
+      '@machize/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.5)
+
+  packages/events-sqlite:
+    devDependencies:
+      '@machize/events':
+        specifier: workspace:^
+        version: link:../events
+      '@machize/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.5)
+
   packages/exports:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -953,11 +1013,11 @@ importers:
   packages/exports-xlsx:
     dependencies:
       '@machize/exports':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../exports
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -975,14 +1035,14 @@ importers:
   packages/express:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/http':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../http
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/express':
         specifier: ^5.0.0
@@ -1009,17 +1069,17 @@ importers:
   packages/fastify:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/http':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../http
       fastify:
         specifier: ^5.3.0
         version: 5.11.2
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1040,17 +1100,17 @@ importers:
   packages/files:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
       '@machize/storage':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../storage
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1071,11 +1131,11 @@ importers:
   packages/flags:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1093,11 +1153,11 @@ importers:
   packages/generator:
     dependencies:
       '@machize/cli':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../cli
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1115,14 +1175,14 @@ importers:
   packages/hono:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/http':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../http
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1146,11 +1206,11 @@ importers:
   packages/http:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1171,11 +1231,11 @@ importers:
   packages/i18n:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1193,7 +1253,7 @@ importers:
   packages/logger:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       pino:
         specifier: ^9.6.0
@@ -1203,7 +1263,7 @@ importers:
         version: 13.1.3
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1221,14 +1281,14 @@ importers:
   packages/mailer:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       nodemailer:
         specifier: ^6.10.0
         version: 6.10.1
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1252,14 +1312,14 @@ importers:
   packages/notifications:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/mailer':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../mailer
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1280,10 +1340,10 @@ importers:
   packages/notifications-prisma:
     devDependencies:
       '@machize/notifications':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../notifications
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1301,10 +1361,10 @@ importers:
   packages/notifications-sqlite:
     devDependencies:
       '@machize/notifications':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../notifications
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1322,14 +1382,14 @@ importers:
   packages/permissions:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1350,10 +1410,10 @@ importers:
   packages/permissions-prisma:
     devDependencies:
       '@machize/permissions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../permissions
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1371,10 +1431,10 @@ importers:
   packages/permissions-sqlite:
     devDependencies:
       '@machize/permissions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../permissions
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1392,10 +1452,10 @@ importers:
   packages/prisma:
     dependencies:
       '@machize/cli':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../cli
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@prisma/client':
         specifier: '>=5.0.0'
@@ -1405,7 +1465,7 @@ importers:
         specifier: ^0.5.4
         version: 0.5.4
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1423,17 +1483,17 @@ importers:
   packages/queue:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/events':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../events
       bullmq:
         specifier: ^5.44.0
         version: 5.81.3
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1454,14 +1514,14 @@ importers:
   packages/queue-kafka:
     dependencies:
       '@machize/queue':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../queue
       kafkajs:
         specifier: ^2.0.0
         version: 2.2.4
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1479,14 +1539,14 @@ importers:
   packages/queue-rabbitmq:
     dependencies:
       '@machize/queue':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../queue
       amqplib:
         specifier: ^0.10.0
         version: 0.10.9
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1507,11 +1567,11 @@ importers:
         specifier: ^3.0.0
         version: 3.1104.0
       '@machize/queue':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../queue
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1529,11 +1589,11 @@ importers:
   packages/realtime:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1551,7 +1611,7 @@ importers:
   packages/realtime-client:
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1569,14 +1629,14 @@ importers:
   packages/scheduler:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/queue':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../queue
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1597,7 +1657,7 @@ importers:
   packages/sdk:
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1618,11 +1678,11 @@ importers:
   packages/search:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1640,14 +1700,14 @@ importers:
   packages/search-postgres:
     dependencies:
       '@machize/search':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../search
       pg:
         specifier: ^8.0.0
         version: 8.22.0
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1671,11 +1731,11 @@ importers:
         specifier: ^3.782.0
         version: 3.1102.0
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1696,11 +1756,11 @@ importers:
         specifier: ^12.0.0
         version: 12.33.0
       '@machize/storage':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../storage
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1721,11 +1781,11 @@ importers:
         specifier: ^7.0.0
         version: 7.21.0
       '@machize/storage':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../storage
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1743,14 +1803,14 @@ importers:
   packages/subscriptions:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1771,10 +1831,10 @@ importers:
   packages/subscriptions-prisma:
     devDependencies:
       '@machize/subscriptions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../subscriptions
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1792,10 +1852,10 @@ importers:
   packages/subscriptions-sqlite:
     devDependencies:
       '@machize/subscriptions':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../subscriptions
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1813,20 +1873,20 @@ importers:
   packages/teams:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/tenancy':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../tenancy
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1847,10 +1907,10 @@ importers:
   packages/teams-prisma:
     devDependencies:
       '@machize/teams':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../teams
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1868,10 +1928,10 @@ importers:
   packages/teams-sqlite:
     devDependencies:
       '@machize/teams':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../teams
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1889,23 +1949,23 @@ importers:
   packages/teams-ui:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
     devDependencies:
       '@machize/auth':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../auth
       '@machize/teams':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../teams
       '@machize/tenancy':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../tenancy
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1926,14 +1986,14 @@ importers:
   packages/tenancy:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1951,26 +2011,68 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
+  packages/tenancy-prisma:
+    devDependencies:
+      '@machize/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
+      '@machize/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.5)
+
+  packages/tenancy-sqlite:
+    devDependencies:
+      '@machize/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
+      '@machize/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.5)
+
   packages/testing:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/fastify':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../fastify
       '@machize/mailer':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../mailer
       '@machize/queue':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../queue
       fastify:
         specifier: ^5.3.0
         version: 5.11.2
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^22.15.0
@@ -1991,15 +2093,57 @@ importers:
   packages/webhooks:
     dependencies:
       '@machize/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
       '@machize/events':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../events
     devDependencies:
       '@machize/tsconfig':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.5)
+
+  packages/webhooks-prisma:
+    devDependencies:
+      '@machize/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@machize/webhooks':
+        specifier: workspace:^
+        version: link:../webhooks
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.5)
+
+  packages/webhooks-sqlite:
+    devDependencies:
+      '@machize/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@machize/webhooks':
+        specifier: workspace:^
+        version: link:../webhooks
       '@types/node':
         specifier: ^22.15.0
         version: 22.20.1

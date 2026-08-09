@@ -1,5 +1,14 @@
 # @machize/admin-react
 
+## 1.0.5
+
+### Patch Changes
+
+- Lockstep 1.0.5 release. No code changes in this package; it moves with the
+  ecosystem-wide durable/Redis backend expansion (tenancy, events outbox,
+  webhooks, rate-limiting, idempotency). Internal `@machize/*` dependencies now
+  use caret ranges (`workspace:^`).
+
 ## 1.0.0
 
 ### Major Changes
