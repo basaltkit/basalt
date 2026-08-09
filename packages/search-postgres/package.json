@@ -1,6 +1,6 @@
 {
   "name": "@machize/search-postgres",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "PostgreSQL full-text search driver for @machize/search — tsvector/tsquery/ts_rank, tenant-scoped, with an injectable pg client for testing.",
   "license": "MIT",
   "type": "module",
@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/search": "workspace:*"
+    "@machize/search": "workspace:^"
   },
   "peerDependencies": {
     "pg": "^8.0.0"
@@ -30,7 +30,7 @@
     }
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

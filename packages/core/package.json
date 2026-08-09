@@ -1,6 +1,6 @@
 {
   "name": "@machize/core",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Foundation of the Machize ecosystem: token-based DI container, plugin system, lifecycle, hooks and context via AsyncLocalStorage.",
   "license": "MIT",
   "type": "module",
@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

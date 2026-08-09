@@ -1,6 +1,6 @@
 {
   "name": "@machize/http",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Framework-neutral HTTP core for Machize: typed routes, request pipeline (validation, enrichers, guards), and error mapping — shared by the Fastify, Express and Hono adapters.",
   "license": "MIT",
   "type": "module",
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*"
+    "@machize/core": "workspace:^"
   },
   "peerDependencies": {
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
