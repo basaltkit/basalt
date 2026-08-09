@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, ctx, METADATA, runWithContext } from '@machize/core'
+import { createApp, ctx, METADATA, runWithContext } from '@basaltkit/core'
 import {
   applyTenantScope,
   db,

@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { formView, type Field, type FormMode, type Resource } from '@machize/admin'
+import { formView, type Field, type FormMode, type Resource } from '@basaltkit/admin'
 
 export interface ResourceFormProps {
   resource: Resource

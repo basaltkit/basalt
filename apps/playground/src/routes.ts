@@ -1,6 +1,6 @@
-import { ctx, type Container } from '@machize/core'
-import { EVENTS } from '@machize/events'
-import { HttpError, route } from '@machize/fastify'
+import { ctx, type Container } from '@basaltkit/core'
+import { EVENTS } from '@basaltkit/events'
+import { HttpError, route } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { ProjectCreated, ProjectDeleted, PROJECTS, ProjectSchema } from './domain.js'
 

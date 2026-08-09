@@ -1,7 +1,7 @@
 {
-  "name": "@machize/express",
-  "version": "1.0.5",
-  "description": "Express adapter for Machize: run the same typed routes, enrichers and guards on Express that you would on Fastify or Hono.",
+  "name": "@basaltkit/express",
+  "version": "1.0.0",
+  "description": "Express adapter for Basalt: run the same typed routes, enrichers and guards on Express that you would on Fastify or Hono.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,14 +19,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/http": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/http": "workspace:^"
   },
   "peerDependencies": {
     "express": "^4.19.0 || ^5.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",
     "express": "^5.1.0",
@@ -40,13 +40,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/express"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/express#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/express#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "http",
     "express",

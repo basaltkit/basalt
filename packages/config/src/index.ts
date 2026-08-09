@@ -1,6 +1,6 @@
-import { createToken, definePlugin, MachizeError } from '@machize/core'
+import { createToken, definePlugin, BasaltError } from '@basaltkit/core'
 
-export class ConfigKeyError extends MachizeError {
+export class ConfigKeyError extends BasaltError {
   constructor(path: string) {
     super('CONFIG_KEY_MISSING', `Missing configuration key: "${path}" (no fallback defined).`)
   }
@@ -9,13 +9,13 @@ export class ConfigKeyError extends MachizeError {
 /**
  * Packages type their namespaces via module augmentation:
  *
- * declare module '@machize/config' {
- *   interface MachizeConfig {
+ * declare module '@basaltkit/config' {
+ *   interface BasaltConfig {
  *     mail: { from: string }
  *   }
  * }
  */
-export interface MachizeConfig {
+export interface BasaltConfig {
   [namespace: string]: unknown
 }
 
@@ -89,7 +89,7 @@ export const CONFIG = createToken<ConfigRepository>('config')
 
 export function configPlugin(values: Record<string, unknown> = {}) {
   return definePlugin({
-    name: 'machize:config',
+    name: 'basalt:config',
     register({ container }) {
       container.singleton(CONFIG, () => new ConfigRepository(structuredClone(values)))
     },

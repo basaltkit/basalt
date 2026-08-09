@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FASTIFY } from '@machize/fastify'
+import { FASTIFY } from '@basaltkit/fastify'
 import { buildApp } from '../src/app.js'
 import { AUDIT } from '../src/domain.js'
 
@@ -15,7 +15,7 @@ describe('playground E2E — Phase 1 integrated', () => {
     const created = await server.inject({
       method: 'POST',
       url: '/projects',
-      payload: { name: 'Machize' },
+      payload: { name: 'Basalt' },
     })
     expect(created.statusCode).toBe(201)
     const project = created.json()

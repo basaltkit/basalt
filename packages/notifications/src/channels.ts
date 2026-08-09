@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { MachizeError } from '@machize/core'
-import type { MailDefinition, Mailer } from '@machize/mailer'
+import { BasaltError } from '@basaltkit/core'
+import type { MailDefinition, Mailer } from '@basaltkit/mailer'
 import type { Notifiable } from './definition.js'
 
 /** Channel driver contract — sms/push/whatsapp arrive as implementations of this. */
@@ -110,7 +110,7 @@ export class InAppChannel implements NotificationChannel {
 
 // ---------------------------------------------------------------- mail
 
-export class RecipientEmailMissingError extends MachizeError {
+export class RecipientEmailMissingError extends BasaltError {
   constructor(recipientId: string) {
     super(
       'NOTIFICATION_EMAIL_MISSING',
@@ -125,7 +125,7 @@ export interface MailChannelMessage {
   html?: string
 }
 
-/** Bridges the mail channel to @machize/mailer (queue/tenant-sender included). */
+/** Bridges the mail channel to @basaltkit/mailer (queue/tenant-sender included). */
 export class MailChannel implements NotificationChannel {
   readonly name = 'mail'
 

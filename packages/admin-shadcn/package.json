@@ -1,7 +1,7 @@
 {
-  "name": "@machize/admin-shadcn",
-  "version": "1.0.5",
-  "description": "shadcn/ui-styled React components for @machize/admin: Button/Input/Table/Card/Badge primitives and styled DataTable/ResourceForm rendering the Zod-derived view models.",
+  "name": "@basaltkit/admin-shadcn",
+  "version": "1.0.0",
+  "description": "shadcn/ui-styled React components for @basaltkit/admin: Button/Input/Table/Card/Badge primitives and styled DataTable/ResourceForm rendering the Zod-derived view models.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/admin": "workspace:^",
+    "@basaltkit/admin": "workspace:^",
     "@radix-ui/react-slot": "^1.1.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -29,7 +29,7 @@
     "react": ">=18"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.15.0",
@@ -48,13 +48,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/admin-shadcn"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/admin-shadcn#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/admin-shadcn#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "admin",
     "react",

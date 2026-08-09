@@ -1,7 +1,7 @@
 {
-  "name": "@machize/tenancy",
-  "version": "1.0.5",
-  "description": "Multi-tenancy for Machize: pluggable tenant resolvers (subdomain, domain, header, route), tenant context via AsyncLocalStorage and lifecycle hooks.",
+  "name": "@basaltkit/tenancy",
+  "version": "1.0.0",
+  "description": "Multi-tenancy for Basalt: pluggable tenant resolvers (subdomain, domain, header, route), tenant context via AsyncLocalStorage and lifecycle hooks.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^"
+    "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {
-    "@machize/fastify": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -35,13 +35,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/tenancy"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/tenancy#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/tenancy#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "multi-tenant",

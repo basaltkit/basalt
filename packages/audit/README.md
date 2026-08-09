@@ -1,6 +1,6 @@
-# @machize/audit
+# @basaltkit/audit
 
-Audit trail for Machize applications: automatically records, in an immutable history, who did what and when — from lifecycle hooks, domain events, and manual records.
+Audit trail for Basalt applications: automatically records, in an immutable history, who did what and when — from lifecycle hooks, domain events, and manual records.
 
 You need this module when you have to be able to answer questions like "who logged into this account?" or "who changed this billing plan?" — for security, support, or compliance reasons.
 
@@ -10,26 +10,26 @@ You need this module when you have to be able to answer questions like "who logg
 
 **Auditing** is the systematic recording of relevant actions in a system: logins, billing changes, permission changes. Unlike technical logs (which are for developers and can be deleted), the audit trail is a business record: **append-only** (only added to, never altered or deleted) and enriched with the **actor** (who did it), the **tenant** (which organization it belongs to), and the **request** (requestId) — all captured automatically from the active context at record time.
 
-The tedious part of auditing is remembering to record everywhere. This module solves that by hooking into what the application already emits: the `@machize/core` lifecycle **hooks** (e.g. `auth:login`, `billing:subscribed`) and the `@machize/events` **domain events** (e.g. `order.created`). You choose what gets recorded using wildcard patterns — by default, all `auth`, `billing`, `tenancy`, and `permission` activity (hooks) and **all** events.
+The tedious part of auditing is remembering to record everywhere. This module solves that by hooking into what the application already emits: the `@basaltkit/core` lifecycle **hooks** (e.g. `auth:login`, `billing:subscribed`) and the `@basaltkit/events` **domain events** (e.g. `order.created`). You choose what gets recorded using wildcard patterns — by default, all `auth`, `billing`, `tenancy`, and `permission` activity (hooks) and **all** events.
 
 Each entry is frozen (`Object.freeze`) — code can't tamper with the in-memory history, even by accident. To query, use `audit.trail()` with filters on event (with wildcards), tenant, actor, and date.
 
 ## Installation
 
 ```bash
-pnpm add @machize/audit
+pnpm add @basaltkit/audit
 ```
 
-Depends on `@machize/core` and `@machize/events`. The default storage is in-memory (`MemoryAuditStore`) — for production you should provide a persistent `AuditStore` (see "Custom store").
+Depends on `@basaltkit/core` and `@basaltkit/events`. The default storage is in-memory (`MemoryAuditStore`) — for production you should provide a persistent `AuditStore` (see "Custom store").
 
 ## Get started in 5 minutes
 
 **1. Register the plugin (along with the events plugin, if you use it):**
 
 ```ts
-import { createApp } from '@machize/core'
-import { eventsPlugin } from '@machize/events'
-import { AUDIT, auditPlugin } from '@machize/audit'
+import { createApp } from '@basaltkit/core'
+import { eventsPlugin } from '@basaltkit/events'
+import { AUDIT, auditPlugin } from '@basaltkit/audit'
 
 const app = await createApp({
   plugins: [eventsPlugin(), auditPlugin()],
@@ -66,7 +66,7 @@ await audit.record('data.export', { format: 'csv' })
 By default, hooks matching `auth:**`, `billing:**`, `tenancy:**`, or `permission:**` are recorded. You can replace the list:
 
 ```ts
-import { auditPlugin } from '@machize/audit'
+import { auditPlugin } from '@basaltkit/audit'
 
 auditPlugin({
   hooks: ['auth:**', 'billing:**', 'api-keys:**'], // replaces the defaults
@@ -77,7 +77,7 @@ Enrichment comes from the active context: `ctx().user.id` → `actorId`, `ctx().
 
 ### Automatic domain event capture
 
-If the container has an `EventBus` (`@machize/events` registered), the plugin subscribes to `**` and records events that match the patterns. By default it records **everything**; you can narrow or disable it:
+If the container has an `EventBus` (`@basaltkit/events` registered), the plugin subscribes to `**` and records events that match the patterns. By default it records **everything**; you can narrow or disable it:
 
 ```ts
 auditPlugin({ events: ['order.**', 'invoice.**'] }) // only these
@@ -89,7 +89,7 @@ auditPlugin({ events: [] })                          // disable event capture
 For actions that no hook/event covers:
 
 ```ts
-import { runWithContext } from '@machize/core'
+import { runWithContext } from '@basaltkit/core'
 
 await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, async () => {
   const entry = await audit.record('data.export', { format: 'csv' })
@@ -118,8 +118,8 @@ Event patterns support segments separated by `:` (hooks) or `.` (events): `*` ma
 `MemoryAuditStore` loses everything when the process ends. In production, implement `AuditStore` over your database — the contract is append-only (no update or delete):
 
 ```ts
-import type { AuditEntry, AuditQuery, AuditStore } from '@machize/audit'
-import { auditPlugin } from '@machize/audit'
+import type { AuditEntry, AuditQuery, AuditStore } from '@basaltkit/audit'
+import { auditPlugin } from '@basaltkit/audit'
 
 class SqlAuditStore implements AuditStore {
   async append(entry: AuditEntry): Promise<void> {
@@ -194,7 +194,7 @@ In-memory implementation of `AuditStore` (freezes each entry; filters and revers
 Wildcard matcher over `:` and `.` segments — exported for reuse. `*` = one segment; `**` = one or more; `'**'` matches everything.
 
 ```ts
-import { patternMatches } from '@machize/audit'
+import { patternMatches } from '@basaltkit/audit'
 
 patternMatches('auth:**', 'auth:login')      // true
 patternMatches('order.*', 'order.created')   // true
@@ -227,8 +227,8 @@ Convention: lifecycle hooks use `:` (`auth:login`); domain events use `.` (`orde
 
 ## How it connects to other modules
 
-- **`@machize/core`** — lifecycle hooks (`hooks.onAny`) are the primary capture source; the ALS context (`tryCtx`) supplies actor/tenant/requestId; the plugin uses `definePlugin`/`createToken`.
-- **`@machize/events`** — secondary capture source: any domain event emitted on the `EventBus` can land in the trail (`events` patterns).
-- **`@machize/activity`** — sibling module with a different focus: **activity** is the "human-friendly" feed shown to the user ("Maria published the project"); **audit** is the automatic, immutable security/compliance record.
-- **`@machize/logger`** — logs are ephemeral technical diagnostics; audit is durable business record. Use both.
-- **`@machize/queue`** — since context travels to workers, entries recorded inside a job retain the actor/tenant of the original request.
+- **`@basaltkit/core`** — lifecycle hooks (`hooks.onAny`) are the primary capture source; the ALS context (`tryCtx`) supplies actor/tenant/requestId; the plugin uses `definePlugin`/`createToken`.
+- **`@basaltkit/events`** — secondary capture source: any domain event emitted on the `EventBus` can land in the trail (`events` patterns).
+- **`@basaltkit/activity`** — sibling module with a different focus: **activity** is the "human-friendly" feed shown to the user ("Maria published the project"); **audit** is the automatic, immutable security/compliance record.
+- **`@basaltkit/logger`** — logs are ephemeral technical diagnostics; audit is durable business record. Use both.
+- **`@basaltkit/queue`** — since context travels to workers, entries recorded inside a job retain the actor/tenant of the original request.

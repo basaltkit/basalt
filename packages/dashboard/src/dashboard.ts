@@ -1,4 +1,4 @@
-import type { Resource } from '@machize/admin'
+import type { Resource } from '@basaltkit/admin'
 
 export type SectionKind = 'metrics' | 'resource' | 'audit' | 'queue' | 'custom'
 

@@ -1,5 +1,5 @@
-import { defineEnv } from '@machize/env'
-import { FASTIFY } from '@machize/fastify'
+import { defineEnv } from '@basaltkit/env'
+import { FASTIFY } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { buildApp } from './app.js'
 

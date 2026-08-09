@@ -1,6 +1,6 @@
-# @machize/logger
+# @basaltkit/logger
 
-Structured logging for Machize applications, built on top of [pino](https://getpino.io): every log line is emitted as JSON, automatically enriched with the request context (`requestId`, `tenantId`, `userId`), with sensitive data (passwords, tokens) redacted by default.
+Structured logging for Basalt applications, built on top of [pino](https://getpino.io): every log line is emitted as JSON, automatically enriched with the request context (`requestId`, `tenantId`, `userId`), with sensitive data (passwords, tokens) redacted by default.
 
 You need this module as soon as you want to understand what your application is doing — in development, and especially in production.
 
@@ -10,17 +10,17 @@ You need this module as soon as you want to understand what your application is 
 
 A **log** is the application's diary: every relevant event ("user logged in", "payment failed") is written as a line. With `console.log`, those lines are loose text, hard to search. **Structured logging** writes each line as JSON — a format with fields (`{"level":30,"msg":"login ok","userId":"u-9"}`) that tools like Datadog, Loki, or CloudWatch can filter and aggregate.
 
-The next problem is **correlation**: when ten requests run at the same time, how do you know which lines belong to which request? This module reads the application's active context (the `@machize/core` "request context", stored in AsyncLocalStorage) and **automatically** adds `requestId`, `correlationId`, `traceId`, `userId`, and `tenantId` to every line — without you passing anything in your log calls. If the context has `tenant`/`user` objects with an `id`, they become `tenantId`/`userId`.
+The next problem is **correlation**: when ten requests run at the same time, how do you know which lines belong to which request? This module reads the application's active context (the `@basaltkit/core` "request context", stored in AsyncLocalStorage) and **automatically** adds `requestId`, `correlationId`, `traceId`, `userId`, and `tenantId` to every line — without you passing anything in your log calls. If the context has `tenant`/`user` objects with an `id`, they become `tenantId`/`userId`.
 
 Finally, **security**: it's far too easy to accidentally dump a password or token into the logs. By default, fields like `password`, `token`, `secret`, and `authorization` (at any nesting depth: `*.password`, etc.) are replaced with `[REDACTED]`.
 
 ## Installation
 
 ```bash
-pnpm add @machize/logger
+pnpm add @basaltkit/logger
 ```
 
-Depends on `@machize/core` and `pino`. For readable output in development (`pretty: true`), also install `pino-pretty`:
+Depends on `@basaltkit/core` and `pino`. For readable output in development (`pretty: true`), also install `pino-pretty`:
 
 ```bash
 pnpm add -D pino-pretty
@@ -31,8 +31,8 @@ pnpm add -D pino-pretty
 **1. Register the plugin:**
 
 ```ts
-import { createApp } from '@machize/core'
-import { LOGGER, loggerPlugin } from '@machize/logger'
+import { createApp } from '@basaltkit/core'
+import { LOGGER, loggerPlugin } from '@basaltkit/logger'
 
 const app = await createApp({
   plugins: [loggerPlugin({ level: 'info' })],
@@ -59,7 +59,7 @@ Output (JSON, one line per call):
 **3. Inside a request with context, the fields appear on their own:**
 
 ```ts
-import { runWithContext } from '@machize/core'
+import { runWithContext } from '@basaltkit/core'
 
 runWithContext({ requestId: 'req-1', tenant: { id: 't-acme' }, user: { id: 'u-9' } }, () => {
   logger.info('inside the request')
@@ -76,7 +76,7 @@ runWithContext({ requestId: 'req-1', tenant: { id: 't-acme' }, user: { id: 'u-9'
 `createLogger` returns a plain pino logger — use it in scripts, tests, or outside the container:
 
 ```ts
-import { createLogger } from '@machize/logger'
+import { createLogger } from '@basaltkit/logger'
 
 const logger = createLogger({ level: 'debug', base: { service: 'api' } })
 logger.debug('starting')
@@ -87,7 +87,7 @@ logger.debug('starting')
 Pino's levels, from chattiest to most severe: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. The `level` option sets the minimum emitted — with `level: 'warn'`, `info` and `debug` calls are dropped:
 
 ```ts
-import { createLogger } from '@machize/logger'
+import { createLogger } from '@basaltkit/logger'
 
 const logger = createLogger({ level: 'warn' })
 logger.info('does not appear')
@@ -97,7 +97,7 @@ logger.warn('appears')
 ### Readable output in development
 
 ```ts
-import { createLogger } from '@machize/logger'
+import { createLogger } from '@basaltkit/logger'
 
 const logger = createLogger({ pretty: true }) // requires pino-pretty to be installed
 ```
@@ -109,7 +109,7 @@ In production, leave `pretty` off — JSON is the format aggregators expect.
 By default, these are redacted: `password`, `*.password`, `token`, `*.token`, `secret`, `*.secret`, `authorization`, `*.authorization`, `headers.authorization`. You can add more paths:
 
 ```ts
-import { createLogger } from '@machize/logger'
+import { createLogger } from '@basaltkit/logger'
 
 const logger = createLogger({ redact: ['creditCard', '*.creditCard'] })
 logger.info({ email: 'a@b.c', password: '123', auth: { token: 'jwt' } }, 'login')
@@ -135,7 +135,7 @@ Context enrichment still works on child loggers.
 The `destination` option accepts any stream with `write(msg)` — in tests, capture the lines and assert on them:
 
 ```ts
-import { createLogger } from '@machize/logger'
+import { createLogger } from '@basaltkit/logger'
 
 const lines: Record<string, unknown>[] = []
 const logger = createLogger({
@@ -166,10 +166,10 @@ Context fields automatically promoted onto every line (when there's an active co
 
 ### `loggerPlugin(options?: LoggerOptions)`
 
-Machize plugin: registers `createLogger(options)` as a singleton on the `LOGGER` token; on `shutdown`, calls `logger.flush()` to drain buffers. Accepts exactly the same options as `createLogger`.
+Basalt plugin: registers `createLogger(options)` as a singleton on the `LOGGER` token; on `shutdown`, calls `logger.flush()` to drain buffers. Accepts exactly the same options as `createLogger`.
 
 ```ts
-import { LOGGER, loggerPlugin } from '@machize/logger'
+import { LOGGER, loggerPlugin } from '@basaltkit/logger'
 // register:  plugins: [loggerPlugin({ level: 'info' })]
 // retrieve:  const logger = app.container.get(LOGGER)
 ```
@@ -206,7 +206,7 @@ Shut down the application with `app.shutdown()` — the plugin calls `flush()` o
 
 ## How it connects to other modules
 
-- **`@machize/core`** — the source of the context (AsyncLocalStorage via `runWithContext`/`tryCtx`) that enriches every line; `loggerPlugin` uses `definePlugin`/`createToken` from core.
-- **`@machize/queue`** — the queue propagates the request context to workers; logs written inside a job's `handle` come out with the `requestId`/`tenantId` of the request that dispatched it — end-to-end correlation.
-- **`@machize/scheduler`** — uses the logger inside scheduled tasks and `onFailure` handlers to trace periodic runs.
-- **`@machize/audit` / `@machize/activity`** — different roles: the logger is technical diagnostics (ephemeral, for operators); audit and activity are business records (persistent, for compliance and for the end user). Use all three together.
+- **`@basaltkit/core`** — the source of the context (AsyncLocalStorage via `runWithContext`/`tryCtx`) that enriches every line; `loggerPlugin` uses `definePlugin`/`createToken` from core.
+- **`@basaltkit/queue`** — the queue propagates the request context to workers; logs written inside a job's `handle` come out with the `requestId`/`tenantId` of the request that dispatched it — end-to-end correlation.
+- **`@basaltkit/scheduler`** — uses the logger inside scheduled tasks and `onFailure` handlers to trace periodic runs.
+- **`@basaltkit/audit` / `@basaltkit/activity`** — different roles: the logger is technical diagnostics (ephemeral, for operators); audit and activity are business records (persistent, for compliance and for the end user). Use all three together.

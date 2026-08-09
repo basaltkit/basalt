@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 import {
   HttpServerCollector,
   RequestValidationError,
@@ -12,10 +12,10 @@ import {
   tracingPlugin,
   zodToJsonSchema,
 } from '../src/index.js'
-import { MetricsRegistry, InMemorySpanExporter } from '@machize/core'
+import { MetricsRegistry, InMemorySpanExporter } from '@basaltkit/core'
 import { FakeReply, bootWith, makeRequest } from './support.js'
 
-class StatuslessError extends MachizeError {
+class StatuslessError extends BasaltError {
   constructor() {
     super('X_NO_STATUS', 'no status here')
   }
@@ -28,7 +28,7 @@ describe('toErrorResponse — remaining branches', () => {
     expect(res.body).toMatchObject({ error: { code: 'HTTP_VALIDATION', part: 'query', issues: [{ path: 'page' }] } })
   })
 
-  it('falls back to 500 for a MachizeError without a numeric status', () => {
+  it('falls back to 500 for a BasaltError without a numeric status', () => {
     expect(toErrorResponse(new StatuslessError()).status).toBe(500)
   })
 })

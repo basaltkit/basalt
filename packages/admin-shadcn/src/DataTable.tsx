@@ -1,4 +1,4 @@
-import { tableView, type FieldType, type Resource } from '@machize/admin'
+import { tableView, type FieldType, type Resource } from '@basaltkit/admin'
 import { Badge } from './ui/badge.js'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.js'
 

@@ -1,7 +1,7 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
 /** Raised when an identifier has exceeded the failed-login budget. */
-export class AccountLockedError extends MachizeError {
+export class AccountLockedError extends BasaltError {
   readonly status = 429
   constructor(readonly retryAfterMs: number) {
     super(

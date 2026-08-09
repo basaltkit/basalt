@@ -1,13 +1,13 @@
 # Webhooks
 
-`@machize/webhooks` delivers **outbound** webhooks: signed payloads, retries with
+`@basaltkit/webhooks` delivers **outbound** webhooks: signed payloads, retries with
 backoff, per-tenant subscriptions, and automatic dispatch from your domain
 events.
 
 ## Auto-dispatch from events
 
 ```ts
-import { webhooksPlugin } from '@machize/webhooks'
+import { webhooksPlugin } from '@basaltkit/webhooks'
 
 webhooksPlugin({
   secret: env.WEBHOOK_SECRET,          // default signing secret
@@ -22,7 +22,7 @@ the emitter never blocks on HTTP.
 ## Managing subscriptions
 
 ```ts
-import { WEBHOOKS } from '@machize/webhooks'
+import { WEBHOOKS } from '@basaltkit/webhooks'
 
 const hooks = container.get(WEBHOOKS)
 await hooks.register({
@@ -41,15 +41,15 @@ persistence.
 
 ## Signing & verification
 
-Each delivery carries `X-Machize-Signature: t=<unix>,v1=<hmac-sha256(t.body)>` —
+Each delivery carries `X-Basalt-Signature: t=<unix>,v1=<hmac-sha256(t.body)>` —
 the same scheme Stripe uses. Receivers recompute the HMAC over `timestamp.body`
 and compare in constant time, rejecting stale timestamps to prevent replay.
 
 ```ts
-import { verifySignature } from '@machize/webhooks'
+import { verifySignature } from '@basaltkit/webhooks'
 
 // in your receiver
-const valid = verifySignature(req.headers['x-machize-signature'], rawBody, secret)
+const valid = verifySignature(req.headers['x-basalt-signature'], rawBody, secret)
 ```
 
 ## Delivery semantics
@@ -58,5 +58,5 @@ const valid = verifySignature(req.headers['x-machize-signature'], rawBody, secre
   backoff (`maxRetries`, default 3).
 - Client errors (`4xx`) are **not** retried.
 - `dispatch()` returns a `DeliveryResult[]` (status + attempts per endpoint) —
-  persist it for an audit trail, or drive delivery from `@machize/queue` for
+  persist it for an audit trail, or drive delivery from `@basaltkit/queue` for
   durable, distributed retries.

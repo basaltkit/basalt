@@ -1,4 +1,4 @@
-import type { IndexDefinition, SearchDocument, SearchDriver, SearchQuery, SearchResult } from '@machize/search'
+import type { IndexDefinition, SearchDocument, SearchDriver, SearchQuery, SearchResult } from '@basaltkit/search'
 
 /** The subset of a `pg` Pool/Client this driver uses. */
 export interface PgClientLike {
@@ -8,14 +8,14 @@ export interface PgClientLike {
 export interface PostgresSearchOptions {
   /** A connected `pg` Pool or Client. */
   client: PgClientLike
-  /** Table that holds every index (created by `register`). Default `machize_search`. */
+  /** Table that holds every index (created by `register`). Default `basalt_search`. */
   table?: string
   /** Text-search configuration (stemming/stop-words). Default `english`. */
   language?: string
 }
 
 /**
- * PostgreSQL full-text search driver for `@machize/search`, using
+ * PostgreSQL full-text search driver for `@basaltkit/search`, using
  * `tsvector`/`tsquery` and `ts_rank`. All documents live in one table keyed by
  * (index, tenant, id); every query is constrained to the caller's tenant, so
  * results never leak. Bring a `pg` client — it's injected, so the SQL is
@@ -29,7 +29,7 @@ export class PostgresSearchDriver implements SearchDriver {
 
   constructor(options: PostgresSearchOptions) {
     this.client = options.client
-    this.table = options.table ?? 'machize_search'
+    this.table = options.table ?? 'basalt_search'
     this.language = options.language ?? 'english'
   }
 

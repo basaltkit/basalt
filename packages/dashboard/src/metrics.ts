@@ -1,10 +1,10 @@
-// Types only — erased at build time. This keeps @machize/dashboard free of a
-// RUNTIME dependency on @machize/subscriptions (which pulls @machize/fastify
-// and @machize/core's AsyncLocalStorage), so the metrics functions are
+// Types only — erased at build time. This keeps @basaltkit/dashboard free of a
+// RUNTIME dependency on @basaltkit/subscriptions (which pulls @basaltkit/fastify
+// and @basaltkit/core's AsyncLocalStorage), so the metrics functions are
 // browser-safe. planPrice is inlined below for the same reason.
-import type { BillingPeriod, PlanDefinition, SubscriptionRecord } from '@machize/subscriptions'
+import type { BillingPeriod, PlanDefinition, SubscriptionRecord } from '@basaltkit/subscriptions'
 
-/** Numeric monthly/yearly price for a plan, or 'custom'. Mirrors @machize/subscriptions' planPrice. */
+/** Numeric monthly/yearly price for a plan, or 'custom'. Mirrors @basaltkit/subscriptions' planPrice. */
 function planPrice(plan: PlanDefinition, period: BillingPeriod): number | 'custom' {
   if (plan.price === 'custom') return 'custom'
   return typeof plan.price === 'number' ? plan.price : plan.price[period]

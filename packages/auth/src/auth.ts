@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { MachizeError, parseDuration, type DurationInput, type HookBus } from '@machize/core'
+import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
@@ -21,21 +21,21 @@ import {
   type UserSource,
 } from './stores.js'
 
-export class InvalidCredentialsError extends MachizeError {
+export class InvalidCredentialsError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_INVALID_CREDENTIALS', 'Invalid email or password.')
   }
 }
 
-export class EmailTakenError extends MachizeError {
+export class EmailTakenError extends BasaltError {
   readonly status = 409
   constructor() {
     super('AUTH_EMAIL_TAKEN', 'An account with this email already exists.')
   }
 }
 
-export class RefreshInvalidError extends MachizeError {
+export class RefreshInvalidError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_REFRESH_INVALID', 'The refresh token is invalid or expired.')
@@ -43,14 +43,14 @@ export class RefreshInvalidError extends MachizeError {
 }
 
 /** A used refresh token came back — the whole family is revoked. */
-export class RefreshReusedError extends MachizeError {
+export class RefreshReusedError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_REFRESH_REUSED', 'Refresh token reuse detected. All sessions of this family were revoked.')
   }
 }
 
-export class AuthRequiredError extends MachizeError {
+export class AuthRequiredError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_REQUIRED', 'Authentication required.')
@@ -58,7 +58,7 @@ export class AuthRequiredError extends MachizeError {
 }
 
 /** A verification / reset token was unknown, already used, or expired. */
-export class AuthTokenInvalidError extends MachizeError {
+export class AuthTokenInvalidError extends BasaltError {
   readonly status = 400
   constructor() {
     super('AUTH_TOKEN_INVALID', 'The link is invalid or has expired. Request a new one.')
@@ -66,7 +66,7 @@ export class AuthTokenInvalidError extends MachizeError {
 }
 
 /** The configured UserSource can't be updated (needed for verification/reset). */
-export class UserUpdateUnsupportedError extends MachizeError {
+export class UserUpdateUnsupportedError extends BasaltError {
   readonly status = 500
   constructor() {
     super('AUTH_UPDATE_UNSUPPORTED', 'The UserSource does not implement update() — required for this flow.')
@@ -74,7 +74,7 @@ export class UserUpdateUnsupportedError extends MachizeError {
 }
 
 /** Credentials were correct but the account has MFA — a code is required. */
-export class MfaRequiredError extends MachizeError {
+export class MfaRequiredError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_MFA_REQUIRED', 'A multi-factor authentication code is required.')
@@ -82,7 +82,7 @@ export class MfaRequiredError extends MachizeError {
 }
 
 /** The supplied MFA (or recovery) code was wrong. */
-export class MfaInvalidCodeError extends MachizeError {
+export class MfaInvalidCodeError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_MFA_INVALID', 'The authentication code is incorrect.')
@@ -90,7 +90,7 @@ export class MfaInvalidCodeError extends MachizeError {
 }
 
 /** An MFA action needed an enrollment that doesn't exist. */
-export class MfaNotEnrolledError extends MachizeError {
+export class MfaNotEnrolledError extends BasaltError {
   readonly status = 400
   constructor() {
     super('AUTH_MFA_NOT_ENROLLED', 'No MFA enrollment is in progress for this account.')
@@ -122,7 +122,7 @@ export interface AuthOptions {
   resetTtl?: DurationInput
   /** Store for MFA (TOTP) enrollment state. Default: in-memory. */
   mfa?: MfaStore
-  /** Issuer name shown in authenticator apps. Default 'Machize'. */
+  /** Issuer name shown in authenticator apps. Default 'Basalt'. */
   mfaIssuer?: string
 }
 
@@ -164,7 +164,7 @@ export class Auth {
     this.verificationTtl = options.verificationTtl ?? '24h'
     this.resetTtl = options.resetTtl ?? '1h'
     this.mfa = options.mfa ?? new MemoryMfaStore()
-    this.mfaIssuer = options.mfaIssuer ?? 'Machize'
+    this.mfaIssuer = options.mfaIssuer ?? 'Basalt'
   }
 
   async register(email: string, password: string): Promise<PublicUser> {

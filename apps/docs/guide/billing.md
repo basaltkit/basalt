@@ -1,13 +1,13 @@
 # Subscriptions
 
-`@machize/subscriptions` models billing in your own database, with payment
-gateways as drivers. Your app talks to Machize; only drivers talk to Stripe,
+`@basaltkit/subscriptions` models billing in your own database, with payment
+gateways as drivers. Your app talks to Basalt; only drivers talk to Stripe,
 Paddle or Lemon Squeezy.
 
 ## Define plans
 
 ```ts
-import { definePlans, meter, subscriptionsPlugin } from '@machize/subscriptions'
+import { definePlans, meter, subscriptionsPlugin } from '@basaltkit/subscriptions'
 
 subscriptionsPlugin({
   plans: definePlans({
@@ -70,7 +70,7 @@ translates the payload into domain hooks (`billing:subscribed`,
 `billing:webhook`, …). Your app never touches raw gateway payloads.
 
 ```ts
-import { billingWebhookRoute } from '@machize/subscriptions'
+import { billingWebhookRoute } from '@basaltkit/subscriptions'
 
 fastifyPlugin({ routes: [...appRoutes, billingWebhookRoute(gateway)] })
 ```
@@ -81,7 +81,7 @@ The Stripe driver targets the Stripe REST API directly (no `stripe` SDK
 dependency) and verifies webhook signatures with Node's crypto:
 
 ```ts
-import { StripeBillingGateway } from '@machize/subscriptions'
+import { StripeBillingGateway } from '@basaltkit/subscriptions'
 
 const gateway = new StripeBillingGateway({
   secretKey: process.env.STRIPE_SECRET,
@@ -107,7 +107,7 @@ By default usage counters live in memory. For a real deployment, back them with
 Redis so metering is atomic across processes:
 
 ```ts
-import { RedisUsageStore } from '@machize/subscriptions'
+import { RedisUsageStore } from '@basaltkit/subscriptions'
 import Redis from 'ioredis'
 
 subscriptionsPlugin({
@@ -122,7 +122,7 @@ so concurrent `consume` calls can never overshoot a quota. Pair it with
 instances (`SET NX`):
 
 ```ts
-import { RedisUsageStore, RedisWebhookStore } from '@machize/subscriptions'
+import { RedisUsageStore, RedisWebhookStore } from '@basaltkit/subscriptions'
 
 subscriptionsPlugin({
   plans,

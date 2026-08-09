@@ -1,7 +1,7 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 import type { BillingPeriod } from './plans.js'
 
-export class WebhookInvalidError extends MachizeError {
+export class WebhookInvalidError extends BasaltError {
   readonly status = 400
   constructor() {
     super('BILLING_WEBHOOK_INVALID', 'Webhook signature verification failed.')
@@ -55,7 +55,7 @@ export interface SwapInput {
 }
 
 /**
- * Payment gateway driver contract. The app talks to Machize; only drivers
+ * Payment gateway driver contract. The app talks to Basalt; only drivers
  * talk to Stripe/Paddle/Lemon Squeezy. A driver translates raw webhook
  * payloads into WebhookEvent — app code never sees gateway payloads.
  */

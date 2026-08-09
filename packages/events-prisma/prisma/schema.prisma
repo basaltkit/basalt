@@ -1,6 +1,6 @@
-// Reference schema for @machize/events-prisma.
+// Reference schema for @basaltkit/events-prisma.
 //
-// Copy this model into your app's schema.prisma (or run `mach prisma:sync`),
+// Copy this model into your app's schema.prisma (or run `basalt prisma:sync`),
 // run `prisma migrate dev`, and pass the generated client to `prismaOutboxStore()`.
 //
 // Keeping the outbox in the SAME database as your business tables is what makes

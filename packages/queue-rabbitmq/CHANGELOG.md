@@ -1,4 +1,4 @@
-# @machize/queue-rabbitmq
+# @basaltkit/queue-rabbitmq
 
 ## 1.0.5
 
@@ -6,140 +6,140 @@
 
 - Lockstep 1.0.5 release. No code changes in this package; it moves with the
   ecosystem-wide durable/Redis backend expansion (tenancy, events outbox,
-  webhooks, rate-limiting, idempotency). Internal `@machize/*` dependencies now
+  webhooks, rate-limiting, idempotency). Internal `@basaltkit/*` dependencies now
   use caret ranges (`workspace:^`).
 
 ## 1.0.0
 
 ### Major Changes
 
-- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@machize/*` ecosystem.
+- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@basaltkit/*` ecosystem.
 
 ## 0.24.0
 
 ### Patch Changes
 
-- @machize/queue@0.24.0
+- @basaltkit/queue@0.24.0
 
 ## 0.23.0
 
 ### Patch Changes
 
-- @machize/queue@0.23.0
+- @basaltkit/queue@0.23.0
 
 ## 0.22.0
 
 ### Patch Changes
 
-- @machize/queue@0.22.0
+- @basaltkit/queue@0.22.0
 
 ## 0.21.0
 
 ### Patch Changes
 
-- @machize/queue@0.21.0
+- @basaltkit/queue@0.21.0
 
 ## 0.20.0
 
 ### Patch Changes
 
-- @machize/queue@0.20.0
+- @basaltkit/queue@0.20.0
 
 ## 0.19.0
 
 ### Patch Changes
 
-- @machize/queue@0.19.0
+- @basaltkit/queue@0.19.0
 
 ## 0.18.0
 
 ### Patch Changes
 
-- @machize/queue@0.18.0
+- @basaltkit/queue@0.18.0
 
 ## 0.17.0
 
 ### Patch Changes
 
-- @machize/queue@0.17.0
+- @basaltkit/queue@0.17.0
 
 ## 0.16.0
 
 ### Patch Changes
 
-- @machize/queue@0.16.0
+- @basaltkit/queue@0.16.0
 
 ## 0.15.0
 
 ### Patch Changes
 
-- @machize/queue@0.15.0
+- @basaltkit/queue@0.15.0
 
 ## 0.14.0
 
 ### Patch Changes
 
-- @machize/queue@0.14.0
+- @basaltkit/queue@0.14.0
 
 ## 0.13.0
 
 ### Patch Changes
 
-- @machize/queue@0.13.0
+- @basaltkit/queue@0.13.0
 
 ## 0.12.0
 
 ### Patch Changes
 
-- @machize/queue@0.12.0
+- @basaltkit/queue@0.12.0
 
 ## 0.11.0
 
 ### Patch Changes
 
-- @machize/queue@0.11.0
+- @basaltkit/queue@0.11.0
 
 ## 0.10.0
 
 ### Patch Changes
 
-- @machize/queue@0.10.0
+- @basaltkit/queue@0.10.0
 
 ## 0.9.0
 
 ### Patch Changes
 
-- @machize/queue@0.9.0
+- @basaltkit/queue@0.9.0
 
 ## 0.8.1
 
 ### Patch Changes
 
 - 8ef02f4: Add package READMEs. The three queue-driver packages were published without a README (npm showed "This package does not have a README"). Each now documents installation (including the peer dependency), a quick start, how the backend maps retries/backoff/delay and dead-lettering, its honest capability profile, and an options reference.
-  - @machize/queue@0.8.1
+  - @basaltkit/queue@0.8.1
 
 ## 0.8.0
 
 ### Patch Changes
 
-- @machize/queue@0.8.0
+- @basaltkit/queue@0.8.0
 
 ## 0.7.0
 
 ### Patch Changes
 
-- @machize/queue@0.7.0
+- @basaltkit/queue@0.7.0
 
 ## 0.6.0
 
 ### Minor Changes
 
-- f2e8298: New package: `@machize/queue-rabbitmq` — a RabbitMQ driver for `@machize/queue`.
+- f2e8298: New package: `@basaltkit/queue-rabbitmq` — a RabbitMQ driver for `@basaltkit/queue`.
 
   `RabbitmqQueueDriver` implements the `QueueDriver` seam over AMQP (amqplib, an optional peer dependency): jobs publish to durable queues, retries and backoff use a per-queue delay queue (`<queue>.delay`) that dead-letters back via message TTL, exhausted jobs land in `<queue>.dead`, and priority uses `x-max-priority`. It declares full `capabilities` (`delayed`, `priority`, `retries`, `backoff`). The connector is injectable, so the retry/backoff/DLQ logic is unit-tested without a broker.
 
   ```ts
-  import { RabbitmqQueueDriver } from "@machize/queue-rabbitmq";
+  import { RabbitmqQueueDriver } from "@basaltkit/queue-rabbitmq";
   queuePlugin({
     driver: new RabbitmqQueueDriver({ url: env.AMQP_URL }),
     jobs,
@@ -151,4 +151,4 @@
 
 - Updated dependencies [f155979]
 - Updated dependencies [f2e8298]
-  - @machize/queue@0.6.0
+  - @basaltkit/queue@0.6.0

@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // @machize/admin only needs randomUUID from crypto in the browser
+      // @basaltkit/admin only needs randomUUID from crypto in the browser
       crypto: fileURLToPath(new URL('./src/crypto-shim.ts', import.meta.url)),
     },
   },

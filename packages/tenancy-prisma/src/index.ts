@@ -1,11 +1,11 @@
-import type { Tenant, TenantSource } from '@machize/tenancy'
+import type { Tenant, TenantSource } from '@basaltkit/tenancy'
 
 /**
- * Prisma-backed implementation of the `@machize/tenancy` `TenantSource` for
+ * Prisma-backed implementation of the `@basaltkit/tenancy` `TenantSource` for
  * production databases (PostgreSQL, MySQL, …). Bring your generated
  * `PrismaClient` whose schema includes the `Tenant` and `TenantDomain` models
  * (see the bundled `prisma/schema.prisma`); the source only touches those
- * delegates. The production counterpart to `@machize/tenancy-sqlite`.
+ * delegates. The production counterpart to `@basaltkit/tenancy-sqlite`.
  *
  * The tenant is an open record (`{ id, ...anything }`), stored in a `Json`
  * column. Custom domains (`tenant.domains: string[]`) live in a normalized,
@@ -66,7 +66,7 @@ export class PrismaTenantSource implements TenantSource {
       const owner = await this.client.tenantDomain.findUnique({ where: { domain } })
       if (owner && owner.tenantId !== tenant.id) {
         throw new Error(
-          `@machize/tenancy-prisma: domain "${domain}" is already owned by tenant "${owner.tenantId}".`,
+          `@basaltkit/tenancy-prisma: domain "${domain}" is already owned by tenant "${owner.tenantId}".`,
         )
       }
     }
@@ -119,7 +119,7 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
@@ -134,6 +134,6 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  * ```
  */
 export function prismaTenantSource(client: PrismaTenancyClient): PrismaTenantSource {
-  ensureModel(client, 'tenant', '@machize/tenancy-prisma')
+  ensureModel(client, 'tenant', '@basaltkit/tenancy-prisma')
   return new PrismaTenantSource(client)
 }

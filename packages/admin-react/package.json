@@ -1,7 +1,7 @@
 {
-  "name": "@machize/admin-react",
-  "version": "1.0.5",
-  "description": "React binding for @machize/admin: DataTable and ResourceForm rendered from Zod-derived view models, plus data-source hooks.",
+  "name": "@basaltkit/admin-react",
+  "version": "1.0.0",
+  "description": "React binding for @basaltkit/admin: DataTable and ResourceForm rendered from Zod-derived view models, plus data-source hooks.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/admin": "workspace:^"
+    "@basaltkit/admin": "workspace:^"
   },
   "peerDependencies": {
     "react": ">=18"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.15.0",
@@ -44,13 +44,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/admin-react"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/admin-react#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/admin-react#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "admin",
     "react"

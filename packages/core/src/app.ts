@@ -1,7 +1,7 @@
 import { Container } from './container.js'
 import { ConfigValidationError, LifecycleError, PluginDependencyError } from './errors.js'
 import { HookBus } from './hooks.js'
-import type { MachizePlugin, PluginContext } from './plugin.js'
+import type { BasaltPlugin, PluginContext } from './plugin.js'
 
 export type LifecyclePhase =
   | 'created'
@@ -12,27 +12,27 @@ export type LifecyclePhase =
   | 'stopped'
 
 export interface CreateAppOptions {
-  plugins?: MachizePlugin<never>[] | MachizePlugin<any>[]
-  /** Raw config, keyed by plugin name (e.g. `{ 'machize:cache': { driver: 'memory' } }`) */
+  plugins?: BasaltPlugin<never>[] | BasaltPlugin<any>[]
+  /** Raw config, keyed by plugin name (e.g. `{ 'basalt:cache': { driver: 'memory' } }`) */
   config?: Record<string, unknown>
 }
 
 declare module './hooks.js' {
-  interface MachizeHooks {
-    'app:registered': { app: MachizeApp }
-    'app:booted': { app: MachizeApp }
-    'app:shutdown': { app: MachizeApp }
+  interface BasaltHooks {
+    'app:registered': { app: BasaltApp }
+    'app:booted': { app: BasaltApp }
+    'app:shutdown': { app: BasaltApp }
   }
 }
 
-export class MachizeApp {
+export class BasaltApp {
   readonly container = new Container()
   readonly hooks = new HookBus()
   phase: LifecyclePhase = 'created'
 
-  private readonly plugins: MachizePlugin<any>[]
+  private readonly plugins: BasaltPlugin<any>[]
   private readonly rawConfig: Record<string, unknown>
-  private booted: { plugin: MachizePlugin<any>; context: PluginContext<any> }[] = []
+  private booted: { plugin: BasaltPlugin<any>; context: PluginContext<any> }[] = []
 
   constructor(options: CreateAppOptions = {}) {
     this.plugins = sortPlugins(options.plugins ?? [])
@@ -44,7 +44,7 @@ export class MachizeApp {
       throw new LifecycleError(`boot() called in phase "${this.phase}" — it is only allowed once.`)
     }
 
-    const contexts: { plugin: MachizePlugin<any>; context: PluginContext<any> }[] = []
+    const contexts: { plugin: BasaltPlugin<any>; context: PluginContext<any> }[] = []
 
     this.phase = 'registering'
     for (const plugin of this.plugins) {
@@ -89,7 +89,7 @@ export class MachizeApp {
     }
   }
 
-  private resolveConfig(plugin: MachizePlugin<any>): unknown {
+  private resolveConfig(plugin: BasaltPlugin<any>): unknown {
     const raw = this.rawConfig[plugin.name]
     if (!plugin.configSchema) return raw
     const result = plugin.configSchema.safeParse(raw)
@@ -98,13 +98,13 @@ export class MachizeApp {
   }
 }
 
-export function createApp(options: CreateAppOptions = {}): MachizeApp {
-  return new MachizeApp(options)
+export function createApp(options: CreateAppOptions = {}): BasaltApp {
+  return new BasaltApp(options)
 }
 
 /** Topological sort by dependsOn, with cycle and missing-dependency detection. */
-function sortPlugins(plugins: MachizePlugin<any>[]): MachizePlugin<any>[] {
-  const byName = new Map<string, MachizePlugin<any>>()
+function sortPlugins(plugins: BasaltPlugin<any>[]): BasaltPlugin<any>[] {
+  const byName = new Map<string, BasaltPlugin<any>>()
   for (const plugin of plugins) {
     if (byName.has(plugin.name)) {
       throw new PluginDependencyError(`Duplicate plugin: "${plugin.name}"`)
@@ -112,11 +112,11 @@ function sortPlugins(plugins: MachizePlugin<any>[]): MachizePlugin<any>[] {
     byName.set(plugin.name, plugin)
   }
 
-  const sorted: MachizePlugin<any>[] = []
+  const sorted: BasaltPlugin<any>[] = []
   const visiting = new Set<string>()
   const visited = new Set<string>()
 
-  const visit = (plugin: MachizePlugin<any>, path: string[]) => {
+  const visit = (plugin: BasaltPlugin<any>, path: string[]) => {
     if (visited.has(plugin.name)) return
     if (visiting.has(plugin.name)) {
       throw new PluginDependencyError(

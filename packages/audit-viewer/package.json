@@ -1,7 +1,7 @@
 {
-  "name": "@machize/audit-viewer",
-  "version": "1.0.5",
-  "description": "Read-only viewer for the @machize/audit trail: tenant-scoped, filterable, paginated queries with aggregate stats, plus a self-contained HTML browser.",
+  "name": "@basaltkit/audit-viewer",
+  "version": "1.0.0",
+  "description": "Read-only viewer for the @basaltkit/audit trail: tenant-scoped, filterable, paginated queries with aggregate stats, plus a self-contained HTML browser.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,17 +19,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/audit": "workspace:^",
-    "@machize/fastify": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/audit": "workspace:^",
+    "@basaltkit/fastify": "workspace:^"
   },
   "peerDependencies": {
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@machize/auth": "workspace:^",
-    "@machize/tenancy": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/auth": "workspace:^",
+    "@basaltkit/tenancy": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -41,13 +41,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/audit-viewer"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/audit-viewer#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/audit-viewer#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "audit",

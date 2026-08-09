@@ -1,22 +1,22 @@
-# @machize/admin-react
+# @basaltkit/admin-react
 
-Ready-to-use React components for the `@machize/admin` engine: a table (`DataTable`) and a form (`ResourceForm`) generated automatically from your Zod schemas, plus a hook (`useList`) for loading data. You need this when you want to put an admin panel on screen with React, without writing tables and forms by hand.
+Ready-to-use React components for the `@basaltkit/admin` engine: a table (`DataTable`) and a form (`ResourceForm`) generated automatically from your Zod schemas, plus a hook (`useList`) for loading data. You need this when you want to put an admin panel on screen with React, without writing tables and forms by hand.
 
 ## What this module solves
 
-`@machize/admin` (the "engine") knows **what** to show — columns, fields, validation — but doesn't render anything. This package is the **React layer**: it turns those models into visible elements. A **React component** is a function that returns what appears on screen (written in JSX/TSX, an HTML-like syntax inside TypeScript); **props** are the parameters you pass to the component to configure it.
+`@basaltkit/admin` (the "engine") knows **what** to show — columns, fields, validation — but doesn't render anything. This package is the **React layer**: it turns those models into visible elements. A **React component** is a function that returns what appears on screen (written in JSX/TSX, an HTML-like syntax inside TypeScript); **props** are the parameters you pass to the component to configure it.
 
 In practice: you define a resource once (e.g. "projects", with its Zod schema) and this package immediately gives you a table with readable headers and formatted cells (booleans as "Yes/No", dates as `2026-08-07`), and a form with the right input for each field type — text box for text, *checkbox* for true/false, dropdown (`<select>`) for enums, numeric input for numbers — already with validation and per-field error messages.
 
-Important: the components in this package produce **plain, unstyled HTML** (`<table>`, `<form>`, `<input>`…). This is intentional — you apply whatever CSS you want. If you prefer already-styled components with Tailwind/shadcn, use the sibling package `@machize/admin-shadcn`, which has exactly the same props.
+Important: the components in this package produce **plain, unstyled HTML** (`<table>`, `<form>`, `<input>`…). This is intentional — you apply whatever CSS you want. If you prefer already-styled components with Tailwind/shadcn, use the sibling package `@basaltkit/admin-shadcn`, which has exactly the same props.
 
 ## Installation
 
 ```bash
-pnpm add @machize/admin-react @machize/admin zod
+pnpm add @basaltkit/admin-react @basaltkit/admin zod
 ```
 
-> Requirements: `react` >= 18 (peer dependency — you install it in your project). `@machize/admin` comes as a direct dependency, but you need `zod` to write the schemas.
+> Requirements: `react` >= 18 (peer dependency — you install it in your project). `@basaltkit/admin` comes as a direct dependency, but you need `zod` to write the schemas.
 
 ## Get started in 5 minutes
 
@@ -27,7 +27,7 @@ Let's build a mini project dashboard: a list and a creation form.
 ```ts
 // resources.ts
 import { z } from 'zod'
-import { defineResource, memoryDataSource } from '@machize/admin'
+import { defineResource, memoryDataSource } from '@basaltkit/admin'
 
 export const projects = defineResource({
   name: 'projects',
@@ -57,7 +57,7 @@ export const source = memoryDataSource<{
 
 ```tsx
 // ProjectsPage.tsx
-import { DataTable, ResourceForm, useList } from '@machize/admin-react'
+import { DataTable, ResourceForm, useList } from '@basaltkit/admin-react'
 import { projects, source } from './resources'
 
 export function ProjectsPage() {
@@ -99,7 +99,7 @@ export function ProjectsPage() {
 Renders a resource's rows into a `<table>`. Columns come from `resource.columns()` and each cell is formatted by type with `formatCell`.
 
 ```tsx
-import { DataTable } from '@machize/admin-react'
+import { DataTable } from '@basaltkit/admin-react'
 import { projects } from './resources'
 
 <DataTable
@@ -119,7 +119,7 @@ On screen: header `Name | Status | Archived`, one row `Apollo | draft | Yes`. Wi
 Create:
 
 ```tsx
-import { ResourceForm } from '@machize/admin-react'
+import { ResourceForm } from '@basaltkit/admin-react'
 import { projects, source } from './resources'
 
 <ResourceForm
@@ -156,7 +156,7 @@ Inputs generated per field type:
 A **hook** is a special React function (starts with `use`) that gives a component superpowers — here, loading data from an `AdminDataSource` when the component mounts, with loading state, error, and manual reload.
 
 ```tsx
-import { useList } from '@machize/admin-react'
+import { useList } from '@basaltkit/admin-react'
 import { source } from './resources'
 
 function List() {
@@ -174,7 +174,7 @@ Note: `params` are compared by content (via `JSON.stringify`), so you can pass a
 Used internally by `DataTable`; exported for use in your own tables.
 
 ```ts
-import { formatCell } from '@machize/admin-react'
+import { formatCell } from '@basaltkit/admin-react'
 
 formatCell(true, 'boolean')                    // 'Yes'
 formatCell(false, 'boolean')                   // 'No'
@@ -212,7 +212,7 @@ Accessibility: the `<form>` has `aria-label` `"<resource label> form"`; each err
 
 | Parameter | Type | Required? | Description |
 |---|---|---|---|
-| `source` | `AdminDataSource<T>` | Yes | Data source (from `@machize/admin`). |
+| `source` | `AdminDataSource<T>` | Yes | Data source (from `@basaltkit/admin`). |
 | `params` | `ListParams` (`{ page?, pageSize?, search? }`) | No | Listing parameters. |
 
 Returns `UseListResult<T>`:
@@ -229,7 +229,7 @@ Returns `UseListResult<T>`:
 | Parameter | Type | Description |
 |---|---|---|
 | `value` | `unknown` | The cell's value. |
-| `type` | `FieldType` | Field type (from `@machize/admin`). |
+| `type` | `FieldType` | Field type (from `@basaltkit/admin`). |
 
 `null`/`undefined` → `''`; `boolean` → `'Yes'`/`'No'`; `date` → `YYYY-MM-DD` (or `String(value)` if the date is invalid); everything else → `String(value)`.
 
@@ -239,7 +239,7 @@ Returns `UseListResult<T>`:
 
 ## Common issues and solutions (FAQ)
 
-**"The table/form appears with no styling at all."** This is expected behavior — this package emits plain HTML. Style it with your own CSS (e.g. `table { … }`) or use `@machize/admin-shadcn` for already-styled components.
+**"The table/form appears with no styling at all."** This is expected behavior — this package emits plain HTML. Style it with your own CSS (e.g. `table { … }`) or use `@basaltkit/admin-shadcn` for already-styled components.
 
 **"`onSubmit` is never called."** Validation failed. Look on screen for the messages below the fields (`role="alert"` elements). Check the `mode`: in `update` it validates with `updateSchema` (or `createSchema` as a fallback).
 
@@ -253,7 +253,7 @@ Returns `UseListResult<T>`:
 
 ## How it connects to other modules
 
-- **`@machize/admin`** — the engine underneath: `DataTable` uses `tableView`, `ResourceForm` uses `formView` + `resource.validate`, and `useList` consumes any `AdminDataSource`. You define resources there; render them here.
-- **`@machize/admin-shadcn`** — visual alternative styled with shadcn/ui (Tailwind). Its `DataTable` and `ResourceForm` have the **same props** — switching packages is just switching the import.
-- **`@machize/dashboard`** — organizes several resources into navigable sections; uses these components to render each resource section.
-- **`@machize/sdk`** — implements `AdminDataSource` over the SDK's typed client so you can wire these components to a real Machize backend.
+- **`@basaltkit/admin`** — the engine underneath: `DataTable` uses `tableView`, `ResourceForm` uses `formView` + `resource.validate`, and `useList` consumes any `AdminDataSource`. You define resources there; render them here.
+- **`@basaltkit/admin-shadcn`** — visual alternative styled with shadcn/ui (Tailwind). Its `DataTable` and `ResourceForm` have the **same props** — switching packages is just switching the import.
+- **`@basaltkit/dashboard`** — organizes several resources into navigable sections; uses these components to render each resource section.
+- **`@basaltkit/sdk`** — implements `AdminDataSource` over the SDK's typed client so you can wire these components to a real Basalt backend.

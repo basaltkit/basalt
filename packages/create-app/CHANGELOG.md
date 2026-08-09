@@ -1,21 +1,21 @@
-# create-machize
+# create-basalt
 
 ## 1.0.1
 
 ### Patch Changes
 
-- Register `mach prisma:sync` in `--cli` apps out of the box. The generated CLI now
-  adds `@machize/prisma` and wires `prismaSyncCommand()` into `commandsPlugin`, so a
-  fresh project can run `pnpm mach prisma:sync --push` to merge every installed
-  `@machize/*-prisma` model into its `prisma/schema.prisma` — no hand-copying.
-- Generated `pnpm-workspace.yaml` now excludes the `@machize/*` scope from pnpm's
-  `minimumReleaseAge` policy, so `pnpm up` is never blocked on a fresh Machize release.
+- Register `basalt prisma:sync` in `--cli` apps out of the box. The generated CLI now
+  adds `@basaltkit/prisma` and wires `prismaSyncCommand()` into `commandsPlugin`, so a
+  fresh project can run `pnpm basalt prisma:sync --push` to merge every installed
+  `@basaltkit/*-prisma` model into its `prisma/schema.prisma` — no hand-copying.
+- Generated `pnpm-workspace.yaml` now excludes the `@basaltkit/*` scope from pnpm's
+  `minimumReleaseAge` policy, so `pnpm up` is never blocked on a fresh Basalt release.
 
 ## 1.0.0
 
 ### Major Changes
 
-- Generate 1.0 apps and ship ready-made auth flows. The @machize/* dependency
+- Generate 1.0 apps and ship ready-made auth flows. The @basaltkit/* dependency
   range is now `^1.0.0` (was `^0.4.0`/`^0.1.0`, which pinned very old packages).
   With `--auth`, the backend wires `mfaRoutes()` alongside `authRoutes()`, and the
   `--ui` frontend now ships the full standard flows out of the box: sign in with a
@@ -35,19 +35,19 @@
 
 ### Minor Changes
 
-- Generated apps now pin `@machize/generator` at `^0.2.0` so they pick up the `make:resource` auto-wiring (in semver 0.x, `^0.1.0` locks the minor). Added a per-package version override map (`versionOf`) for @machize deps that cross a minor.
+- Generated apps now pin `@basaltkit/generator` at `^0.2.0` so they pick up the `make:resource` auto-wiring (in semver 0.x, `^0.1.0` locks the minor). Added a per-package version override map (`versionOf`) for @basalt deps that cross a minor.
 
 ## 0.4.0
 
 ### Minor Changes
 
-- New `--cli` flag scaffolds the `mach` CLI entrypoint (`bin/mach.ts`) and wires `@machize/cli` + `@machize/generator`, so a freshly-created app can run code generators and built-in commands out of the box: `pnpm mach make:resource Project` (full schema→repository→service→plugin→routes→test vertical), individual `make:*` generators, plus `mach routes` and `mach schedule:list`. The generated `app.ts` registers `commandsPlugin(generatorCommands())` and a `mach` npm script is added.
+- New `--cli` flag scaffolds the `basalt` CLI entrypoint (`bin/basalt.ts`) and wires `@basaltkit/cli` + `@basaltkit/generator`, so a freshly-created app can run code generators and built-in commands out of the box: `pnpm basalt make:resource Project` (full schema→repository→service→plugin→routes→test vertical), individual `make:*` generators, plus `basalt routes` and `basalt schedule:list`. The generated `app.ts` registers `commandsPlugin(generatorCommands())` and a `basalt` npm script is added.
 
 ## 0.3.0
 
 ### Minor Changes
 
-- New `--ui` flag scaffolds a `web/` frontend: React + authentic shadcn/ui components (`@machize/admin-shadcn`) talking to the API through the type-safe `@machize/sdk`, with a Vite dev server that proxies `/api` to the backend (no CORS). With auth on it ships a login/register gate and a small dashboard; otherwise a live status page. `web` is wired as a pnpm workspace member so its dependencies resolve.
+- New `--ui` flag scaffolds a `web/` frontend: React + authentic shadcn/ui components (`@basaltkit/admin-shadcn`) talking to the API through the type-safe `@basaltkit/sdk`, with a Vite dev server that proxies `/api` to the backend (no CORS). With auth on it ships a login/register gate and a small dashboard; otherwise a live status page. `web` is wired as a pnpm workspace member so its dependencies resolve.
 
 ## 0.2.0
 
@@ -61,7 +61,7 @@
 
 ### Patch Changes
 
-- Fix generated apps depending on @machize/\* at the ^0.0.0 placeholder; now ^0.1.0 (the published range).
+- Fix generated apps depending on @basaltkit/\* at the ^0.0.0 placeholder; now ^0.1.0 (the published range).
 
 ## 0.1.0
 

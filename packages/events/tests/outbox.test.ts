@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import { defineEvent, eventsPlugin, EVENTS } from '../src/index.js'
 import { MemoryOutboxStore, Outbox, OUTBOX, outboxPlugin } from '../src/index.js'
 

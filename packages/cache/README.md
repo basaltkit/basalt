@@ -1,6 +1,6 @@
-# @machize/cache
+# @basaltkit/cache
 
-Machize's cache layer: stores the results of slow operations (database queries, external API calls, heavy computations) so they can be returned instantly next time. You need this module when your application repeats the same work over and over and you want to make it faster and cheaper.
+Basalt's cache layer: stores the results of slow operations (database queries, external API calls, heavy computations) so they can be returned instantly next time. You need this module when your application repeats the same work over and over and you want to make it faster and cheaper.
 
 ## What this module solves
 
@@ -17,22 +17,22 @@ It also solves three problems that are normally a hassle:
 ## Installation
 
 ```bash
-pnpm add @machize/cache
+pnpm add @basaltkit/cache
 ```
 
-The package depends on `@machize/core` (the framework core) and already includes the Redis client (`ioredis`) — you don't need to install anything else.
+The package depends on `@basaltkit/core` (the framework core) and already includes the Redis client (`ioredis`) — you don't need to install anything else.
 
 ## Getting started in 5 minutes
 
 Step by step, from zero to having a working cache:
 
-1. **Create the app and register the plugin.** `cachePlugin` registers a `Cache` instance in the application's dependency container (the "container" is where Machize keeps its shared services).
+1. **Create the app and register the plugin.** `cachePlugin` registers a `Cache` instance in the application's dependency container (the "container" is where Basalt keeps its shared services).
 
 2. **Get the cache via the `CACHE` token** and use it.
 
 ```ts
-import { createApp } from '@machize/core'
-import { CACHE, cachePlugin } from '@machize/cache'
+import { createApp } from '@basaltkit/core'
+import { CACHE, cachePlugin } from '@basaltkit/cache'
 
 // 1. Register the plugin (driver 'memory' — no external servers needed)
 const app = await createApp({
@@ -55,7 +55,7 @@ await app.shutdown()
 For production with Redis, just change the plugin options:
 
 ```ts
-import { cachePlugin } from '@machize/cache'
+import { cachePlugin } from '@basaltkit/cache'
 
 cachePlugin({ driver: 'redis', url: 'redis://localhost:6379' })
 ```
@@ -65,7 +65,7 @@ cachePlugin({ driver: 'redis', url: 'redis://localhost:6379' })
 ### Reading and writing values (`get` / `put`)
 
 ```ts
-import { Cache, MemoryCacheDriver } from '@machize/cache'
+import { Cache, MemoryCacheDriver } from '@basaltkit/cache'
 
 const cache = new Cache(new MemoryCacheDriver())
 
@@ -85,7 +85,7 @@ TTLs accept a number in milliseconds **or** a human-readable string: `'500ms'`, 
 Instead of writing "check if it's cached; if not, compute and store it", `remember` does all of that for you — with stampede protection (concurrent calls for the same key share **one** execution of the function):
 
 ```ts
-import { Cache, MemoryCacheDriver } from '@machize/cache'
+import { Cache, MemoryCacheDriver } from '@basaltkit/cache'
 
 const cache = new Cache(new MemoryCacheDriver())
 
@@ -108,7 +108,7 @@ await cache.flush()           // deletes ALL keys in this prefix/scope
 A **tag** is a label that associates several entries with the same group. When the source data changes, you invalidate the whole group:
 
 ```ts
-import { Cache, MemoryCacheDriver } from '@machize/cache'
+import { Cache, MemoryCacheDriver } from '@basaltkit/cache'
 
 const cache = new Cache(new MemoryCacheDriver())
 
@@ -128,11 +128,11 @@ await cache.get('something-else') // 'stays' (didn't have the tag)
 
 ### Automatic tenant isolation
 
-If your application uses Machize's tenancy system, every cache operation reads the tenant from the **request context** (`ctx().tenant.id`) and prefixes keys with `tenant:<id>`. Each tenant thus gets its own "drawer" — no extra code required:
+If your application uses Basalt's tenancy system, every cache operation reads the tenant from the **request context** (`ctx().tenant.id`) and prefixes keys with `tenant:<id>`. Each tenant thus gets its own "drawer" — no extra code required:
 
 ```ts
-import { runWithContext } from '@machize/core'
-import { Cache, MemoryCacheDriver } from '@machize/cache'
+import { runWithContext } from '@basaltkit/core'
+import { Cache, MemoryCacheDriver } from '@basaltkit/cache'
 
 const cache = new Cache(new MemoryCacheDriver())
 
@@ -153,7 +153,7 @@ In normal HTTP requests you don't need to call `runWithContext` — the framewor
 
 ```ts
 import { Redis } from 'ioredis'
-import { Cache, RedisCacheDriver } from '@machize/cache'
+import { Cache, RedisCacheDriver } from '@basaltkit/cache'
 
 // From a URL:
 const cacheA = new Cache(RedisCacheDriver.fromUrl('redis://localhost:6379'))
@@ -182,7 +182,7 @@ const cacheB = new Cache(new RedisCacheDriver(redis))
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `prefix` | `string` | No | `'mach'` | Root prefix for all keys. |
+| `prefix` | `string` | No | `'basalt'` | Root prefix for all keys. |
 | `scope` | `(() => string \| undefined) \| null` | No | reads `ctx().tenant.id` → `tenant:<id>` | Dynamic prefix segment, resolved on each operation. `null` disables tenant isolation. |
 
 ### `cachePlugin(options?: CachePluginOptions)`
@@ -249,7 +249,7 @@ With `driver: 'redis'`, the `url` option is required. Also verify that the Redis
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides `createApp`, the dependency container, the request context (`ctx`/`runWithContext`) from which tenant isolation comes, and the `parseDuration` used for TTLs.
-- **`@machize/tenancy`** — when the tenancy plugin identifies the request's tenant and puts it in the context, the cache automatically starts isolating keys per tenant.
-- **`@machize/prisma`** — pairs well with `cache.remember(...)` to store the results of expensive database queries.
-- **`@machize/flags`, `@machize/permissions`, etc.** — any module can get the cache via `container.get(CACHE)` to speed up its own operations.
+- **`@basaltkit/core`** — provides `createApp`, the dependency container, the request context (`ctx`/`runWithContext`) from which tenant isolation comes, and the `parseDuration` used for TTLs.
+- **`@basaltkit/tenancy`** — when the tenancy plugin identifies the request's tenant and puts it in the context, the cache automatically starts isolating keys per tenant.
+- **`@basaltkit/prisma`** — pairs well with `cache.remember(...)` to store the results of expensive database queries.
+- **`@basaltkit/flags`, `@basaltkit/permissions`, etc.** — any module can get the cache via `container.get(CACHE)` to speed up its own operations.

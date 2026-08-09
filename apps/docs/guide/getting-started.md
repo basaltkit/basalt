@@ -1,13 +1,13 @@
 # Introduction
 
-Machize is a batteries-included toolkit for building SaaS applications on
+Basalt is a batteries-included toolkit for building SaaS applications on
 Node.js. It is not another HTTP framework — Fastify already does that well. It
 fills the layer between the server and a finished SaaS product: **tenancy,
 billing, auth, permissions, audit, queues, notifications** — integrated with
 an end-to-end coherence rare on Node.js, and TypeScript inference from the route
 to the client.
 
-## Why Machize
+## Why Basalt
 
 - **Self-hosted, no lock-in.** Your data lives in your PostgreSQL, your users
   authenticate against your database. Gateways like Stripe are drivers, not
@@ -15,7 +15,7 @@ to the client.
 - **Multi-tenancy as a first-class citizen.** Unlike most Node stacks where
   tenancy is bolted on, the tenant context permeates cache, storage, queue,
   logger and Prisma natively through `AsyncLocalStorage`.
-- **Convention over configuration.** A Machize app runs with zero config;
+- **Convention over configuration.** A Basalt app runs with zero config;
   everything is overridable.
 - **Incremental adoption.** Every package works on its own in an existing
   Fastify app. The full framework is the destination, not the toll to enter.
@@ -23,8 +23,8 @@ to the client.
 ## The 30-second tour
 
 ```ts
-import { createApp } from '@machize/core'
-import { fastifyPlugin, FASTIFY, route } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin, FASTIFY, route } from '@basaltkit/fastify'
 import { z } from 'zod'
 
 const hello = route({
@@ -49,5 +49,5 @@ The same `route` runs unchanged on **Express** and **Hono** — swap
 [HTTP Adapters](/guide/adapters) for complete examples.
 :::
 
-Ready to build something real? [Install Machize](/guide/installation) or jump to
+Ready to build something real? [Install Basalt](/guide/installation) or jump to
 the [multi-tenant SaaS cookbook](/cookbook/multi-tenant-saas).

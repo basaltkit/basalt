@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { createToken, definePlugin, tryCtx } from '@machize/core'
-import { EVENTS } from '@machize/events'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
+import { EVENTS } from '@basaltkit/events'
 
 /** One immutable line of the trail. */
 export interface AuditEntry {
@@ -128,7 +128,7 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
   const eventPatterns = options.events ?? ['**']
 
   return definePlugin({
-    name: 'machize:audit',
+    name: 'basalt:audit',
     register({ container, hooks }) {
       container.singleton(AUDIT, () => new Audit(options.store ?? new MemoryAuditStore()))
 

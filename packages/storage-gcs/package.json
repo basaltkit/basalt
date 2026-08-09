@@ -1,7 +1,7 @@
 {
-  "name": "@machize/storage-gcs",
-  "version": "1.0.5",
-  "description": "Google Cloud Storage driver for @machize/storage — put/get/list/delete/signed URLs over @google-cloud/storage, with an injectable client for testing.",
+  "name": "@basaltkit/storage-gcs",
+  "version": "1.0.0",
+  "description": "Google Cloud Storage driver for @basaltkit/storage — put/get/list/delete/signed URLs over @google-cloud/storage, with an injectable client for testing.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/storage": "workspace:^"
+    "@basaltkit/storage": "workspace:^"
   },
   "peerDependencies": {
     "@google-cloud/storage": "^7.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -36,13 +36,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/storage-gcs"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/storage-gcs#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/storage-gcs#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "storage",
     "gcs",

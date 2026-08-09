@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, definePlugin, ensureMetadata } from '@machize/core'
-import { FASTIFY, fastifyPlugin, route, type RequestEnricher } from '@machize/fastify'
+import { createApp, definePlugin, ensureMetadata } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin, route, type RequestEnricher } from '@basaltkit/fastify'
 import {
   billingWebhookRoute,
   definePlans,

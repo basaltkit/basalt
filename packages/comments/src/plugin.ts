@@ -1,11 +1,11 @@
-import { createToken, ctx, definePlugin, MachizeError, type Container } from '@machize/core'
-import { route, type MachizeRoute } from '@machize/fastify'
+import { createToken, ctx, definePlugin, BasaltError, type Container } from '@basaltkit/core'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { Comments, type CommentsOptions } from './comments.js'
 import type { Comment } from './store.js'
 
-declare module '@machize/core' {
-  interface MachizeHooks {
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
     'comment:created': { comment: Comment }
     'comment:updated': { comment: Comment }
     'comment:deleted': { tenantId: string; id: string; resourceType: string; resourceId: string }
@@ -22,20 +22,20 @@ export type CommentsPluginOptions = Omit<CommentsOptions, 'hooks'>
 
 export function commentsPlugin(options: CommentsPluginOptions = {}) {
   return definePlugin({
-    name: 'machize:comments',
+    name: 'basalt:comments',
     register({ container, hooks }) {
       container.singleton(COMMENTS, () => new Comments({ ...options, hooks }))
     },
   })
 }
 
-class CommentForbiddenError extends MachizeError {
+class CommentForbiddenError extends BasaltError {
   readonly status = 403
   constructor() {
     super('COMMENT_FORBIDDEN', 'You can only modify your own comments.')
   }
 }
-class UserRequiredError extends MachizeError {
+class UserRequiredError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_REQUIRED', 'Authentication required.')
@@ -44,7 +44,7 @@ class UserRequiredError extends MachizeError {
 
 const comments = () => (ctx().container as Container).get(COMMENTS)
 const currentUser = (): string => {
-  // `user` is set by @machize/auth; read it without a hard dependency on it.
+  // `user` is set by @basaltkit/auth; read it without a hard dependency on it.
   const id = (ctx() as { user?: { id: string } }).user?.id
   if (!id) throw new UserRequiredError()
   return id
@@ -59,7 +59,7 @@ const assertAuthor = async (id: string): Promise<void> => {
  * user. The author is taken from `ctx().user`; editing and deleting are
  * restricted to the comment's author.
  */
-export function commentRoutes(): MachizeRoute[] {
+export function commentRoutes(): BasaltRoute[] {
   const resource = z.object({ resourceType: z.string().min(1), resourceId: z.string().min(1) })
 
   return [

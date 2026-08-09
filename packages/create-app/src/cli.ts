@@ -9,7 +9,7 @@ import {
   type PackageManager,
 } from './index.js'
 
-const USAGE = `Usage: npm create machize <name> [options]
+const USAGE = `Usage: npm create basalt <name> [options]
 
 Options:
   --dir=<path>    Target directory (default: ./<name>)
@@ -17,7 +17,7 @@ Options:
   --no-auth       Skip authentication
   --billing       Include subscriptions/billing
   --ui            Scaffold a web/ frontend (React + shadcn + SDK)
-  --cli           Scaffold the 'mach' CLI (code generators + commands)
+  --cli           Scaffold the 'basalt' CLI (code generators + commands)
   --install       Install dependencies after scaffolding
   --git           Initialize a git repository with a first commit
   --pm=<manager>  Package manager: pnpm | npm | yarn | bun (default: auto-detect)
@@ -111,7 +111,7 @@ async function promptMissing(flags: Flags): Promise<Flags> {
     flags.auth = await confirm('Authentication?', true)
     flags.billing = await confirm('Subscriptions / billing?', false)
     flags.ui = await confirm('Web UI (React + shadcn)?', false)
-    flags.cli = await confirm("'mach' CLI (code generators)?", false)
+    flags.cli = await confirm("'basalt' CLI (code generators)?", false)
     flags.install = await confirm('Install dependencies now?', false)
     flags.git = await confirm('Initialize a git repository?', false)
   } catch (error) {
@@ -159,7 +159,7 @@ try {
       (await run('git', ['add', '-A'], result.dir)) &&
       (await run(
         'git',
-        ['commit', '-q', '-m', 'Initial commit from create-machize'],
+        ['commit', '-q', '-m', 'Initial commit from create-basalt'],
         result.dir,
       ))
     console.log(

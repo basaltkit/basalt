@@ -1,11 +1,11 @@
-# RFC-0001 — Machize: A SaaS Ecosystem for Node.js
+# RFC-0001 — Basalt: A SaaS Ecosystem for Node.js
 
 | Field | Value |
 |---|---|
 | **Status** | Draft |
-| **Author** | Machize Core Team |
+| **Author** | Basalt Core Team |
 | **Created** | 2026-08-05 |
-| **npm scope** | `@machize/*` |
+| **npm scope** | `@basaltkit/*` |
 | **License** | MIT |
 | **Stack** | Node.js 22+, TypeScript 5.x, Fastify 5, Prisma, PostgreSQL, Redis, MinIO, BullMQ, Zod, Vitest, TurboRepo, pnpm, Changesets |
 
@@ -15,21 +15,21 @@
 
 ## 1. Vision and Philosophy
 
-**Machize** is an open source ecosystem of tightly integrated libraries for building SaaS applications in Node.js. The goal is not to create "yet another HTTP framework" — Fastify already solves that. The goal is to solve **the missing layer**: everything that sits between the HTTP server and a finished SaaS product — tenancy, billing, auth, permissions, auditing, queues, notifications — with the cohesion and elegance of a first-class backend toolkit.
+**Basalt** is an open source ecosystem of tightly integrated libraries for building SaaS applications in Node.js. The goal is not to create "yet another HTTP framework" — Fastify already solves that. The goal is to solve **the missing layer**: everything that sits between the HTTP server and a finished SaaS product — tenancy, billing, auth, permissions, auditing, queues, notifications — with the cohesion and elegance of a first-class backend toolkit.
 
 ### 1.1 Principles
 
-1. **Convention over configuration** — a Machize app works with zero config; everything is overridable.
-2. **Fastify-first, not Fastify-locked** — the core is HTTP-agnostic; `@machize/fastify` is the official adapter. This protects the ecosystem against the obsolescence of any single HTTP server.
+1. **Convention over configuration** — a Basalt app works with zero config; everything is overridable.
+2. **Fastify-first, not Fastify-locked** — the core is HTTP-agnostic; `@basaltkit/fastify` is the official adapter. This protects the ecosystem against the obsolescence of any single HTTP server.
 3. **TypeScript as the design language** — end-to-end type inference (routes → Zod validation → handler → SDK client). No experimental decorators and no `reflect-metadata` as a mandatory dependency.
 4. **Progressive disclosure** — a simple API for the common case, escape hatches for the advanced case. `auth.login(email, password)` works; underneath, every step is a replaceable hook.
-5. **Tenancy as a first-class citizen** — unlike ecosystems where tenancy is a bolt-on third-party package, in Machize the tenant context permeates cache, storage, queue, logger and Prisma natively via `AsyncLocalStorage`.
-6. **Everything testable** — every package ships in-memory fakes/drivers (`@machize/testing`), in the spirit of built-in test fakes.
+5. **Tenancy as a first-class citizen** — unlike ecosystems where tenancy is a bolt-on third-party package, in Basalt the tenant context permeates cache, storage, queue, logger and Prisma natively via `AsyncLocalStorage`.
+6. **Everything testable** — every package ships in-memory fakes/drivers (`@basaltkit/testing`), in the spirit of built-in test fakes.
 7. **Documentation is product** — no feature ships without docs, a runnable example, and a cookbook recipe.
 
 ### 1.2 Anti-goals
 
-- Do not reimplement the ORM (Prisma), HTTP server (Fastify), validation (Zod) or queue (BullMQ). Machize **integrates and orchestrates**, it does not reinvent.
+- Do not reimplement the ORM (Prisma), HTTP server (Fastify), validation (Zod) or queue (BullMQ). Basalt **integrates and orchestrates**, it does not reinvent.
 - Do not use decorators + `reflect-metadata` as the central DI mechanism (the structural mistake in NestJS that breaks with ESM/esbuild/Bun and hides the dependency graph).
 - Do not couple to a specific frontend. The dashboard is optional and decoupled via the SDK.
 
@@ -42,37 +42,37 @@
 ```mermaid
 graph TB
     subgraph L4["Layer 4 — User application"]
-        APP["developer app<br/>(create-machize)"]
+        APP["developer app<br/>(create-basalt)"]
     end
     subgraph L3["Layer 3 — Product"]
-        DASH["@machize/dashboard"]
-        ADMIN["@machize/admin"]
-        SDK["@machize/sdk"]
+        DASH["@basaltkit/dashboard"]
+        ADMIN["@basaltkit/admin"]
+        SDK["@basaltkit/sdk"]
     end
     subgraph L2["Layer 2 — SaaS domain"]
-        AUTH["@machize/auth"]
-        TEN["@machize/tenancy"]
-        SUBS["@machize/subscriptions"]
-        PERM["@machize/permissions"]
-        AUD["@machize/audit"]
-        ACT["@machize/activity"]
-        NOTIF["@machize/notifications"]
+        AUTH["@basaltkit/auth"]
+        TEN["@basaltkit/tenancy"]
+        SUBS["@basaltkit/subscriptions"]
+        PERM["@basaltkit/permissions"]
+        AUD["@basaltkit/audit"]
+        ACT["@basaltkit/activity"]
+        NOTIF["@basaltkit/notifications"]
     end
     subgraph L1["Layer 1 — Infrastructure"]
-        FAST["@machize/fastify"]
-        PRISMA["@machize/prisma"]
-        QUEUE["@machize/queue"]
-        STOR["@machize/storage"]
-        CACHE["@machize/cache"]
-        MAIL["@machize/mailer"]
-        SCHED["@machize/scheduler"]
-        LOG["@machize/logger"]
+        FAST["@basaltkit/fastify"]
+        PRISMA["@basaltkit/prisma"]
+        QUEUE["@basaltkit/queue"]
+        STOR["@basaltkit/storage"]
+        CACHE["@basaltkit/cache"]
+        MAIL["@basaltkit/mailer"]
+        SCHED["@basaltkit/scheduler"]
+        LOG["@basaltkit/logger"]
     end
     subgraph L0["Layer 0 — Foundation"]
-        CORE["@machize/core"]
-        CONFIG["@machize/config"]
-        ENV["@machize/env"]
-        EVENTS["@machize/events"]
+        CORE["@basaltkit/core"]
+        CONFIG["@basaltkit/config"]
+        ENV["@basaltkit/env"]
+        EVENTS["@basaltkit/events"]
     end
     APP --> L3
     APP --> L2
@@ -82,14 +82,14 @@ graph TB
     L2 --> L0
 ```
 
-**Dependency rule (architectural invariant):** a package may only depend on packages in **lower** layers. Packages in the same layer never import each other directly — they communicate through **events** and **contracts** defined in `@machize/core`. This is enforced in CI with `dependency-cruiser`.
+**Dependency rule (architectural invariant):** a package may only depend on packages in **lower** layers. Packages in the same layer never import each other directly — they communicate through **events** and **contracts** defined in `@basaltkit/core`. This is enforced in CI with `dependency-cruiser`.
 
 **Why:** this is what prevents the "big ball of mud". `subscriptions` does not import `tenancy`; it consumes the `TenantContext` interface exported by the core. Any domain package can be used in isolation inside an existing Fastify app — incremental adoption is the primary growth strategy (see §21).
 
 ### 2.2 Monorepo Structure
 
 ```
-machize/
+basalt/
 ├── packages/
 │   ├── core/               # DI, plugins, lifecycle, context, hooks
 │   ├── config/             # Typed configuration system
@@ -111,15 +111,15 @@ machize/
 │   ├── audit/              # Automatic audit trail
 │   ├── activity/           # Activity log
 │   ├── notifications/      # Multi-channel notifications
-│   ├── cli/                # "mach" CLI
-│   ├── create-app/         # npx create-machize
+│   ├── cli/                # "basalt" CLI
+│   ├── create-app/         # npx create-basalt
 │   ├── generator/          # Code scaffolding
 │   ├── testing/            # Fakes, helpers, factories
 │   ├── sdk/                # Type-safe TypeScript client
 │   ├── dashboard/          # Administrative dashboard
 │   └── admin/              # Reusable admin components
 ├── apps/
-│   ├── docs/               # Documentation site (machize.dev)
+│   ├── docs/               # Documentation site (basalt.dev)
 │   ├── playground/         # Reference app used in E2E tests
 │   └── examples/           # Official examples (starter kits)
 ├── tooling/
@@ -140,7 +140,7 @@ Every package follows the same structural contract:
 packages/<name>/
 ├── src/
 │   ├── index.ts            # Public API — the ONLY exported entrypoint
-│   ├── plugin.ts           # machizePlugin() — integration with the core
+│   ├── plugin.ts           # basaltPlugin() — integration with the core
 │   ├── contracts/          # Public interfaces
 │   ├── drivers/            # Replaceable implementations
 │   ├── errors.ts           # Typed package errors
@@ -152,14 +152,14 @@ packages/<name>/
 
 - **ESM only**, `"type": "module"`, built with `tsup` (dual export only where there is real demand).
 - **Strict `exports` map** — no deep imports; the public API is what lives in `index.ts`. This allows internal refactoring without a breaking change.
-- Errors always extend `MachizeError` with a stable `code` (e.g. `TENANCY_NOT_RESOLVED`), documented — error codes are part of the semver contract.
+- Errors always extend `BasaltError` with a stable `code` (e.g. `TENANCY_NOT_RESOLVED`), documented — error codes are part of the semver contract.
 - Every driver implements a `contracts/` interface and is registered in DI — swapping Redis for memory is a 1-line config change.
 
 ### 2.4 Publishing, Versioning and Maintenance
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Versioning | **Fixed/locked** across core packages (all bump together, like Babel/Jest) | Eliminates the compatibility matrix; `@machize/auth@1.4` always works with `@machize/core@1.4`. Satellite packages (sdk, dashboard) can version independently. |
+| Versioning | **Fixed/locked** across core packages (all bump together, like Babel/Jest) | Eliminates the compatibility matrix; `@basaltkit/auth@1.4` always works with `@basaltkit/core@1.4`. Satellite packages (sdk, dashboard) can version independently. |
 | Releases | Changesets + GitHub Actions; `latest`, `next` (pre-releases) and `canary` (every merge to main) channels | Fast community feedback without compromising stability |
 | Semver | Strict. Breaking = major. Error codes, public events and config names are API | Trust is a framework's #1 asset |
 | LTS | Each major, the previous one receives 12 months of security fixes | A requirement for enterprise adoption |
@@ -171,7 +171,7 @@ packages/<name>/
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant F as Fastify (@machize/fastify)
+    participant F as Fastify (@basaltkit/fastify)
     participant CTX as Context (ALS)
     participant T as Tenancy
     participant A as Auth
@@ -199,7 +199,7 @@ The central point: **`AsyncLocalStorage` carries the context** (request, tenant,
 
 ---
 
-## 3. `@machize/core` — The Foundation
+## 3. `@basaltkit/core` — The Foundation
 
 ### 3.1 Responsibilities
 
@@ -210,7 +210,7 @@ The central point: **`AsyncLocalStorage` carries the context** (request, tenant,
 | **Context (ALS)** | Typed and extensible `AsyncLocalStorage` |
 | **Lifecycle** | Phases: `configuring → registering → booting → ready → shutting-down` |
 | **Hooks** | Named extension points with priority |
-| **Event Bus** | Re-export of `@machize/events` wired into the container |
+| **Event Bus** | Re-export of `@basaltkit/events` wired into the container |
 | **Discovery** | Auto-discovery of jobs, listeners, policies and commands by file convention |
 | **Metadata** | Central registry of what each plugin declared (routes, jobs, schemas) — feeds the CLI, docs and dashboard |
 
@@ -219,7 +219,7 @@ The central point: **`AsyncLocalStorage` carries the context** (request, tenant,
 The container uses **typed tokens + factory functions**, not decorators:
 
 ```ts
-import { createToken, type Container } from '@machize/core'
+import { createToken, type Container } from '@basaltkit/core'
 
 // contract
 export interface Mailer { send(msg: Message): Promise<void> }
@@ -237,14 +237,14 @@ const mailer = container.get(MAILER)
 ### 3.3 Plugin System
 
 ```ts
-import { definePlugin } from '@machize/core'
+import { definePlugin } from '@basaltkit/core'
 
 export const cachePlugin = definePlugin({
-  name: 'machize:cache',
-  dependsOn: ['machize:config'],
+  name: 'basalt:cache',
+  dependsOn: ['basalt:config'],
   configSchema: z.object({
     driver: z.enum(['redis', 'memory']).default('redis'),
-    prefix: z.string().default('mach'),
+    prefix: z.string().default('basalt'),
   }),
   register({ container, config }) {
     container.singleton(CACHE, () => createCacheDriver(config))
@@ -260,12 +260,12 @@ export const cachePlugin = definePlugin({
 
 - `dependsOn` produces a topological boot ordering; cycles are an initialization error with a message explaining the cycle.
 - `configSchema` (Zod) validates config at boot — **fail fast** with a message pointing to the wrong key.
-- Hooks from other packages (like `tenancy:switched`) are typed via **module augmentation** — each package augments the global `MachizeHooks` interface.
+- Hooks from other packages (like `tenancy:switched`) are typed via **module augmentation** — each package augments the global `BasaltHooks` interface.
 
 ### 3.4 Application and Context
 
 ```ts
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 
 const app = createApp({
   plugins: [configPlugin, prismaPlugin, tenancyPlugin, authPlugin],
@@ -274,7 +274,7 @@ const app = createApp({
 await app.boot()
 
 // Context — accessible at ANY point in the call stack
-import { ctx } from '@machize/core'
+import { ctx } from '@basaltkit/core'
 
 export async function anyService() {
   const { tenant, user, requestId, logger } = ctx()
@@ -289,9 +289,9 @@ export async function anyService() {
 ```ts
 export {
   createApp, definePlugin, createToken, ctx,
-  type Container, type MachizeApp, type MachizePlugin,
-  type MachizeHooks, type RequestContext,
-  MachizeError, onShutdown, onBoot,
+  type Container, type BasaltApp, type BasaltPlugin,
+  type BasaltHooks, type RequestContext,
+  BasaltError, onShutdown, onBoot,
 }
 ```
 
@@ -302,16 +302,16 @@ export {
 
 ### 4.1 Architectural decision
 
-Machize **is not a library for Fastify** — it is an ecosystem with a core that is independent of the HTTP framework. The domain layer (auth, tenancy, subscriptions…) talks only to core contracts; the piece that translates HTTP ⇄ context is an **adapter**:
+Basalt **is not a library for Fastify** — it is an ecosystem with a core that is independent of the HTTP framework. The domain layer (auth, tenancy, subscriptions…) talks only to core contracts; the piece that translates HTTP ⇄ context is an **adapter**:
 
 ```mermaid
 graph LR
     subgraph Adapters
-        AF["@machize/fastify<br/>(official, reference)"]
-        AH["@machize/hono<br/>(future)"]
-        AE["@machize/express<br/>(community)"]
+        AF["@basaltkit/fastify<br/>(official, reference)"]
+        AH["@basaltkit/hono<br/>(future)"]
+        AE["@basaltkit/express<br/>(community)"]
     end
-    subgraph Core["@machize/core contracts"]
+    subgraph Core["@basaltkit/core contracts"]
         HA["HttpAdapter"]
         RC["RequestContext"]
         RT["Route / Middleware"]
@@ -328,15 +328,15 @@ graph LR
 ```
 
 ```ts
-// @machize/core/contracts/http.ts
+// @basaltkit/core/contracts/http.ts
 export interface HttpAdapter {
   register(route: RouteDefinition): void
-  use(mw: MachizeMiddleware): void
+  use(mw: BasaltMiddleware): void
   listen(opts: ListenOptions): Promise<void>
   close(): Promise<void>
 }
 
-export interface MachizeRequest {           // neutral shape, not the Fastify Request
+export interface BasaltRequest {           // neutral shape, not the Fastify Request
   method: string; url: string
   headers: Headers; params: Record<string, string>
   query: unknown; body: unknown
@@ -345,23 +345,23 @@ export interface MachizeRequest {           // neutral shape, not the Fastify Re
 ```
 
 **Consequences:**
-- Domain packages expose middlewares/guards as pure functions over `MachizeRequest` + `ctx()` — they never import Fastify.
-- The Fastify adapter is the **reference implementation** and the only one guaranteed tier-1 support in v1. Other adapters follow a **conformance suite** published in `@machize/testing/adapter-compliance` (the same model as a driver conformance test suite).
-- This makes Machize resilient to shifting fashions in the HTTP layer (Express → Fastify → Hono → whatever comes next) without rewriting the domain.
+- Domain packages expose middlewares/guards as pure functions over `BasaltRequest` + `ctx()` — they never import Fastify.
+- The Fastify adapter is the **reference implementation** and the only one guaranteed tier-1 support in v1. Other adapters follow a **conformance suite** published in `@basaltkit/testing/adapter-compliance` (the same model as a driver conformance test suite).
+- This makes Basalt resilient to shifting fashions in the HTTP layer (Express → Fastify → Hono → whatever comes next) without rewriting the domain.
 
-### 4.2 `@machize/fastify` — Official adapter
+### 4.2 `@basaltkit/fastify` — Official adapter
 
 **Goal:** end-to-end typed routing with Zod validation, leveraging Fastify's performance and plugin ecosystem.
 
 ```ts
-import { route } from '@machize/fastify'
+import { route } from '@basaltkit/fastify'
 import { z } from 'zod'
 
 export const createProject = route({
   method: 'POST',
   url: '/projects',
   auth: true,                        // requires an authenticated user
-  can: 'projects:create',            // permission (→ @machize/permissions)
+  can: 'projects:create',            // permission (→ @basaltkit/permissions)
   body: z.object({ name: z.string().min(3) }),
   response: { 201: ProjectSchema },
   async handler({ body, reply }) {
@@ -371,31 +371,31 @@ export const createProject = route({
 })
 ```
 
-- The `body`/`query`/`params`/`response` types are **inferred from Zod** — the handler is 100% typed and the same schema feeds OpenAPI (generated automatically) and the `@machize/sdk`.
+- The `body`/`query`/`params`/`response` types are **inferred from Zod** — the handler is 100% typed and the same schema feeds OpenAPI (generated automatically) and the `@basaltkit/sdk`.
 - `auth`, `can`, `tenant` are **declarative shorthands** that domain plugins register on the adapter via hooks — the adapter does not know about auth; it just runs the registered chain of guards.
 - Discovery: files under `src/routes/**/*.ts` that export `route()` are registered automatically (convention; can be disabled).
 
-**Dependencies:** `fastify`, `@machize/core`, `zod`. **Roadmap:** v1 routes + OpenAPI; v1.x per-tenant rate limiting, ETags; v2 typed streaming/SSE.
+**Dependencies:** `fastify`, `@basaltkit/core`, `zod`. **Roadmap:** v1 routes + OpenAPI; v1.x per-tenant rate limiting, ETags; v2 typed streaming/SSE.
 
-## 5. `@machize/prisma` — Data layer
+## 5. `@basaltkit/prisma` — Data layer
 
-**Goal:** make Prisma "speak Machize": tenancy, auditing and conventions without changing the standard Prisma workflow.
+**Goal:** make Prisma "speak Basalt": tenancy, auditing and conventions without changing the standard Prisma workflow.
 
 - **Client extensions** (not a fork): `withTenancy()`, `withAudit()`, `withSoftDelete()` are official Prisma Client Extensions.
 - The correct tenant client is accessed via `ctx().db` — resolved by the active tenancy mode (§6).
 - **Connection pool management** for database-per-tenant: an LRU of clients with a configurable limit and idle disconnection (a real problem that is well solved elsewhere but rarely solved well in Node).
-- Per-tenant migrations orchestrated by the CLI (`mach tenant migrate`), with parallelism and per-tenant failure reporting.
+- Per-tenant migrations orchestrated by the CLI (`basalt tenant migrate`), with parallelism and per-tenant failure reporting.
 
 ```ts
 // ctx().db is a PrismaClient already scoped to the current tenant
 const users = await ctx().db.user.findMany() // WHERE tenant_id = ... automatic (shared mode)
 ```
 
-**Dependencies:** `@prisma/client`, `@machize/core`. **Roadmap:** v1 extensions + pool; v1.x read replicas; v2 sharding helpers.
+**Dependencies:** `@prisma/client`, `@basaltkit/core`. **Roadmap:** v1 extensions + pool; v1.x read replicas; v2 sharding helpers.
 
 ---
 
-## 6. `@machize/tenancy` — Multi-tenancy
+## 6. `@basaltkit/tenancy` — Multi-tenancy
 
 ### 6.1 Isolation modes
 
@@ -413,7 +413,7 @@ The mode is config, not code: the app writes `ctx().db.user.findMany()` the same
 tenancyPlugin({
   mode: 'shared',
   resolvers: [
-    subdomainResolver({ base: 'machize.app' }),   // acme.machize.app
+    subdomainResolver({ base: 'basalt.app' }),   // acme.basalt.app
     domainResolver(),                              // app.acme.com (custom domain)
     headerResolver({ header: 'x-tenant-id' }),
     jwtResolver({ claim: 'tid' }),
@@ -440,18 +440,18 @@ When the tenant is resolved, the plugin fires the `tenancy:switched` hook, and e
 
 ```ts
 // programmatic API
-import { tenancy } from '@machize/tenancy'
+import { tenancy } from '@basaltkit/tenancy'
 
 await tenancy.create({ id: 'acme', name: 'Acme Inc' })   // runs migrations + seed
 await tenancy.run('acme', async () => { /* code in the tenant context */ })
 await tenancy.forEach(async (t) => { /* bulk maintenance */ }, { concurrency: 5 })
 ```
 
-**Events:** `tenant.created`, `tenant.deleted`, `tenant.migrated`, `tenant.switched`. **CLI:** `mach tenant create|migrate|seed|run|list`. **Roadmap:** v1 shared + resolvers; v1.x schema-per-tenant, seeder; v2 database-per-tenant with an LRU pool, custom domains with TLS provisioning.
+**Events:** `tenant.created`, `tenant.deleted`, `tenant.migrated`, `tenant.switched`. **CLI:** `basalt tenant create|migrate|seed|run|list`. **Roadmap:** v1 shared + resolvers; v1.x schema-per-tenant, seeder; v2 database-per-tenant with an LRU pool, custom domains with TLS provisioning.
 
 ---
 
-## 7. `@machize/auth` — Authentication
+## 7. `@basaltkit/auth` — Authentication
 
 **Goal:** complete server-side auth, with data in **your** database (Prisma), without vendor lock-in — positioned as a self-hosted alternative to Auth0/Clerk.
 
@@ -477,13 +477,13 @@ Ready-made flows (routes registered automatically, all overridable):
 
 - Passwords with **argon2id**; refresh tokens with **rotation + reuse detection** (revokes the whole family); API keys hashed with an identifiable prefix for secret scanning.
 - Each step emits events (`auth.login`, `auth.login_failed`, `auth.mfa_enabled`…) — consumed by audit, notifications and rate limiting.
-- Multi-tenant native: a user can be central (one login, N tenants) or per-tenant — a config decision, integrated with `@machize/tenancy`.
+- Multi-tenant native: a user can be central (one login, N tenants) or per-tenant — a config decision, integrated with `@basaltkit/tenancy`.
 
 **Roadmap:** v1 session + JWT + reset + verification; v1.x API keys, TOTP, OAuth (Google/GitHub); v2 WebAuthn/Passkeys, SSO SAML/OIDC (enterprise).
 
 ---
 
-## 8. `@machize/permissions` — Authorization
+## 8. `@basaltkit/permissions` — Authorization
 
 ```ts
 // role-based access control (RBAC)
@@ -503,15 +503,15 @@ can: 'project:update'        // resolves the policy with the loaded resource
 
 - **Per-tenant scope**: roles/permissions belong to the current tenant by default; global roles are explicit (`{ scope: 'global' }`). This solves the #1 problem of doing role-based permissions in a multi-tenant SaaS.
 - **Super Admin**: `superAdmin: (user) => user.isOwner` — short-circuits all checks via a before hook (a common authorization pattern).
-- Permission cache in `@machize/cache` with event-based invalidation (`permission.changed`) — checks are O(1) in memory per request.
+- Permission cache in `@basaltkit/cache` with event-based invalidation (`permission.changed`) — checks are O(1) in memory per request.
 - Guards per auth strategy: a permission can hold for a session but not for an API key (API key scopes).
 
 **Roadmap:** v1 roles/permissions/policies + tenant scope; v1.x sync UI in the dashboard, wildcard permissions (`projects:*`); v2 temporary permissions and delegation.
 
 ---
-## 9. `@machize/subscriptions` — Billing
+## 9. `@basaltkit/subscriptions` — Billing
 
-**Goal:** your own billing model in your database, with gateways as drivers — the app talks to Machize, never directly to Stripe.
+**Goal:** your own billing model in your database, with gateways as drivers — the app talks to Basalt, never directly to Stripe.
 
 ```ts
 subscriptionsPlugin({
@@ -544,7 +544,7 @@ await tenant.features.consume('api.requests', 1)         // metered; throws Quot
 
 **Roadmap:** v1 Stripe + plans/trials/feature flags; v1.x metered billing, coupons, invoices; v2 Paddle + Lemon Squeezy, international tax/invoicing.
 
-## 10. `@machize/audit` + `@machize/activity`
+## 10. `@basaltkit/audit` + `@basaltkit/activity`
 
 **Audit** (compliance — immutable, automatic):
 - A Prisma extension records every CUD: who (`ctx().user`), in which tenant, what (before/after diff), when, and from where (ip/userAgent from the context).
@@ -562,7 +562,7 @@ const feed = await activity.for(project).latest(20)
 ```
 A deliberate distinction: audit is for the auditor (immutable, verbose), activity is for the end user (curated, readable). Combining the two in one log leads to conflicting retention and permission requirements; separating them avoids that.
 
-## 11. `@machize/notifications` — Multi-channel
+## 11. `@basaltkit/notifications` — Multi-channel
 
 ```ts
 export const InvoicePaid = defineNotification({
@@ -571,7 +571,7 @@ export const InvoicePaid = defineNotification({
   via: {
     mail:  (n) => mailTemplate('invoice-paid', { invoice: n.invoice }),
     inApp: (n) => ({ title: 'Invoice paid', body: `Invoice #${n.invoice.number} confirmed` }),
-    sms:   (n) => `Machize: invoice #${n.invoice.number} paid.`,
+    sms:   (n) => `Basalt: invoice #${n.invoice.number} paid.`,
   },
 })
 
@@ -579,7 +579,7 @@ await notify(user, InvoicePaid, { invoice })
 await notifyMany(tenant.admins(), InvoicePaid, { invoice })
 ```
 
-- Channels as drivers: `mail` (via `@machize/mailer`), `sms` (Twilio driver), `push` (FCM/APNs via web push), `whatsapp` (Cloud API driver), `inApp` (table + SSE/websocket for the dashboard).
+- Channels as drivers: `mail` (via `@basaltkit/mailer`), `sms` (Twilio driver), `push` (FCM/APNs via web push), `whatsapp` (Cloud API driver), `inApp` (table + SSE/websocket for the dashboard).
 - Sending is **always via the queue** by default (BullMQ retry/backoff); synchronous is opt-in.
 - Per-user preferences (opt-out per channel/category) built in; versioned templates with a preview in the dashboard.
 
@@ -587,7 +587,7 @@ await notifyMany(tenant.admins(), InvoicePaid, { invoice })
 
 ## 12. Infrastructure
 
-### 12.1 `@machize/storage`
+### 12.1 `@basaltkit/storage`
 ```ts
 await storage.disk('uploads').put('avatar.png', buffer)        // automatically tenant-prefixed
 const url = await storage.disk('uploads').temporaryUrl('avatar.png', '15m')  // signed URL
@@ -595,7 +595,7 @@ await storage.disk('uploads').image('avatar.png').resize(256).webp().save('avata
 ```
 Drivers: MinIO/S3 (same driver, S3-compatible), Local, Azure Blob, GCS — all passing the same conformance suite. Per-tenant isolation via prefix (default) or a dedicated bucket (config). Image processing via `sharp` in a job (does not block the request). Direct browser→storage upload with pre-signed URLs generated by the backend.
 
-### 12.2 `@machize/queue` + `@machize/jobs`
+### 12.2 `@basaltkit/queue` + `@basaltkit/jobs`
 ```ts
 export const SendWelcomeEmail = defineJob({
   name: 'email.welcome',
@@ -609,18 +609,18 @@ export const SendWelcomeEmail = defineJob({
 
 await SendWelcomeEmail.dispatch({ userId }, { delay: '5m', priority: 2 })
 ```
-BullMQ underneath; Machize adds: typed/validated payload, **context propagation** (tenant/correlationId serialized and restored in the worker via ALS), a DLQ with replay from the dashboard/CLI, workers with graceful shutdown tied to the core lifecycle. `mach queue work`, `mach queue retry --failed`, `mach queue stats`.
+BullMQ underneath; Basalt adds: typed/validated payload, **context propagation** (tenant/correlationId serialized and restored in the worker via ALS), a DLQ with replay from the dashboard/CLI, workers with graceful shutdown tied to the core lifecycle. `basalt queue work`, `basalt queue retry --failed`, `basalt queue stats`.
 
-### 12.3 `@machize/scheduler`
+### 12.3 `@basaltkit/scheduler`
 ```ts
 schedule.job(ReconcileBilling).daily().at('03:00').timezone('UTC')
 schedule.command('tenant:cleanup').weekly().sundays()
 schedule.call(() => cache.purgeExpired()).everyMinute().withoutOverlapping()
 schedule.job(SendDigest).monthly().onFailure(notifyOps)
 ```
-Implemented on top of BullMQ repeatable jobs (no daemon of its own — survives restarts, runs in a cluster without duplicating via a distributed lock). `withoutOverlapping()`, `onOneServer()`, a maintenance window, and `mach schedule list` showing the next runs.
+Implemented on top of BullMQ repeatable jobs (no daemon of its own — survives restarts, runs in a cluster without duplicating via a distributed lock). `withoutOverlapping()`, `onOneServer()`, a maintenance window, and `basalt schedule list` showing the next runs.
 
-### 12.4 `@machize/events`
+### 12.4 `@basaltkit/events`
 ```ts
 export const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))
 
@@ -630,10 +630,10 @@ on('order.*', auditListener)                                         // wildcard
 ```
 Typed events (Zod payload), sync or queued listeners (the events→queue bridge is automatic), wildcards for cross-cutting concerns (audit subscribes to `*`). **Domain events** (internal) vs **integration events** (publishable externally via the outbox pattern — v2, with a driver for the SaaS's own outgoing webhooks).
 
-### 12.5 `@machize/logger`
+### 12.5 `@basaltkit/logger`
 Built on **Pino** (the same family as Fastify, ~zero cost): JSON in production, pretty in dev, and **automatic enrichment via ALS** — every log carries `requestId`, `correlationId`, `tenantId`, `userId`, `traceId` (OpenTelemetry if present) without the developer passing anything. Redaction of sensitive fields (`password`, `token`) by default. Child loggers per module: `logger.child({ pkg: 'subscriptions' })`.
 
-### 12.6 `@machize/cache`
+### 12.6 `@basaltkit/cache`
 ```ts
 await cache.remember('plans', '1h', () => db.plan.findMany())     // cache-aside in 1 line
 await cache.tags(['tenant', `user:${id}`]).put(key, value, '10m')
@@ -641,7 +641,7 @@ await cache.tags([`user:${id}`]).flush()
 ```
 Redis and Memory drivers (same interface, same test suite); automatic per-tenant prefix; tags via sets in Redis; `remember` with **stampede protection** (distributed lock — only one process recomputes). Stale-while-revalidate in v1.x.
 
-### 12.7 `@machize/config` + `@machize/env`
+### 12.7 `@basaltkit/config` + `@basaltkit/env`
 ```ts
 // env.ts — validated at boot, typed at use
 export const env = defineEnv({
@@ -656,33 +656,33 @@ ctx().tenant.config.get('branding.color')     // tenant override (stored in the 
 ```
 Boot fails with an aggregated report of ALL invalid env vars at once (not one at a time). Secrets never appear in logs/errors (integrated with the logger's redaction).
 
-### 12.8 `@machize/mailer`
-Drivers for SMTP, Resend, SES, Mailgun + a `log` driver (dev) and a `fake` driver (test). Templates with **React Email** (official) or MJML; per-tenant layout/branding; sending via the queue by default; a preview server in dev (`mach mail preview`).
+### 12.8 `@basaltkit/mailer`
+Drivers for SMTP, Resend, SES, Mailgun + a `log` driver (dev) and a `fake` driver (test). Templates with **React Email** (official) or MJML; per-tenant layout/branding; sending via the queue by default; a preview server in dev (`basalt mail preview`).
 
 ---
 ## 13. Tooling and DX
 
-### 13.1 `@machize/cli` — `mach` (the ecosystem's command-line tool)
+### 13.1 `@basaltkit/cli` — `basalt` (the ecosystem's command-line tool)
 
 ```
-mach dev                      # dev server with watch + pretty logs + embedded queue worker
-mach doctor                   # diagnoses env, connections, versions, pending migrations
-mach routes                   # lists routes with auth/permissions/schemas (via core Metadata)
-mach tenant create|migrate|seed|run|list
-mach queue work|stats|retry
-mach schedule list|run
-mach make controller|service|repository|use-case|event|listener|middleware|job|notification|mail|policy|command|test
-mach generate docs            # OpenAPI + route docs from the Metadata
-mach publish <package>        # copies a package's templates/config into the app
-mach upgrade                  # codemods between versions (jscodeshift) — key to painless majors
+basalt dev                      # dev server with watch + pretty logs + embedded queue worker
+basalt doctor                   # diagnoses env, connections, versions, pending migrations
+basalt routes                   # lists routes with auth/permissions/schemas (via core Metadata)
+basalt tenant create|migrate|seed|run|list
+basalt queue work|stats|retry
+basalt schedule list|run
+basalt make controller|service|repository|use-case|event|listener|middleware|job|notification|mail|policy|command|test
+basalt generate docs            # OpenAPI + route docs from the Metadata
+basalt publish <package>        # copies a package's templates/config into the app
+basalt upgrade                  # codemods between versions (jscodeshift) — key to painless majors
 ```
 
-The CLI is **extensible via plugins**: any package (or the app itself) registers commands via `defineCommand()` in the core. `mach doctor` and `mach upgrade` are a direct investment in reducing churn — the two biggest causes of framework abandonment are a broken setup and painful majors.
+The CLI is **extensible via plugins**: any package (or the app itself) registers commands via `defineCommand()` in the core. `basalt doctor` and `basalt upgrade` are a direct investment in reducing churn — the two biggest causes of framework abandonment are a broken setup and painful majors.
 
-### 13.2 `create-machize`
+### 13.2 `create-basalt`
 
 ```
-npx create-machize my-saas
+npx create-basalt my-saas
 ┌ Database:       PostgreSQL (only one in v1 — no false choices)
 ├ Tenancy:        shared | schema | database | none
 ├ Auth:           session | jwt | both  (+ OAuth providers)
@@ -695,14 +695,14 @@ npx create-machize my-saas
 
 Generates a project **working in a single command** (`pnpm dev` brings up app + docker-compose + migrations + seed), with a real domain example (a multi-tenant "Tasks" project with billing) — not a hello world. Each choice only adds the selected packages: what was not selected **does not exist** in the generated project (no commented-out dead code).
 
-### 13.3 `@machize/generator`
+### 13.3 `@basaltkit/generator`
 
-The scaffolding engine used by `mach make *`. A `mach make resource Project` generates the complete vertical: controller (typed routes), service, repository, use cases, Zod DTOs, policy, tests (unit + http) and OpenAPI schema — all following the app's templates (publishable via `mach publish generator` for customization, like publishable stubs).
+The scaffolding engine used by `basalt make *`. A `basalt make resource Project` generates the complete vertical: controller (typed routes), service, repository, use cases, Zod DTOs, policy, tests (unit + http) and OpenAPI schema — all following the app's templates (publishable via `basalt publish generator` for customization, like publishable stubs).
 
-### 13.4 `@machize/testing`
+### 13.4 `@basaltkit/testing`
 
 ```ts
-import { createTestApp, mailFake, queueFake, time } from '@machize/testing'
+import { createTestApp, mailFake, queueFake, time } from '@basaltkit/testing'
 
 const app = await createTestApp({ plugins: [...], tenant: 'acme' })
 
@@ -713,31 +713,31 @@ await time.travel('15d')                      // tests trial expiration
 expect(await tenant.subscription.onTrial()).toBe(false)
 ```
 
-Fakes for all drivers (mail, queue, storage, notifications, billing gateway), factories integrated with Prisma, an isolated test tenant per file (transaction with rollback), time travel. A ready Vitest preset (`@machize/testing/vitest`).
+Fakes for all drivers (mail, queue, storage, notifications, billing gateway), factories integrated with Prisma, an isolated test tenant per file (transaction with rollback), time travel. A ready Vitest preset (`@basaltkit/testing/vitest`).
 
-### 13.5 `@machize/sdk`
+### 13.5 `@basaltkit/sdk`
 
-A TypeScript client **generated from the route Metadata** (not from an intermediate OpenAPI): `sdk.projects.create({ name })` with exact types from the server, errors typed by code, automatic auth (transparent refresh). This is what makes Machize attractive for full-stack Next.js/React Native teams: a Machize backend + any frontend.
+A TypeScript client **generated from the route Metadata** (not from an intermediate OpenAPI): `sdk.projects.create({ name })` with exact types from the server, errors typed by code, automatic auth (transparent refresh). This is what makes Basalt attractive for full-stack Next.js/React Native teams: a Basalt backend + any frontend.
 
-### 13.6 `@machize/dashboard` + `@machize/admin`
+### 13.6 `@basaltkit/dashboard` + `@basaltkit/admin`
 
 - **admin**: headless components + UI (React, shadcn-based) for CRUD/tables/forms generated from Zod schemas — a built-in admin UI kit, embeddable in any React app.
-- **dashboard**: a ready-made app built on top of `admin` + `sdk`: users, tenants, plans/subscriptions (MRR, churn), logs/audit, queues (DLQ retry), files, metrics, tenant impersonation. Mountable at `/admin` of the app itself or standalone. Everything protected by `@machize/permissions`.
+- **dashboard**: a ready-made app built on top of `admin` + `sdk`: users, tenants, plans/subscriptions (MRR, churn), logs/audit, queues (DLQ retry), files, metrics, tenant impersonation. Mountable at `/admin` of the app itself or standalone. Everything protected by `@basaltkit/permissions`.
 
 **Roadmap:** v1.x headless admin + basic dashboard (users/tenants/queues); v2 billing analytics, theme/white-label.
 
 ---
 
-## 14. Documentation (machize.dev)
+## 14. Documentation (basalt.dev)
 
 A structure following the industry's recognized gold standard for framework docs:
 
 1. **Getting Started** — installation, first app in 5 min, concepts (context, plugins, tenancy)
 2. **Per-package guides** — narrative + runnable examples (not dry reference)
-3. **Cookbook/Recipes** — "B2B SaaS with seats", "metered API billing", "custom per-tenant domain", "migrate Express → Machize"
+3. **Cookbook/Recipes** — "B2B SaaS with seats", "metered API billing", "custom per-tenant domain", "migrate Express → Basalt"
 4. **Architecture** — this RFC distilled: ALS context, lifecycle, decisions
 5. **API Reference** — generated from TSDoc (typedoc), separate from the guides
-6. **Best Practices** and **Upgrade Guides** (with `mach upgrade` codemods)
+6. **Best Practices** and **Upgrade Guides** (with `basalt upgrade` codemods)
 
 Every guide page has an "open in StackBlitz" button with a running example. Docs versioned per major. Search with Algolia DocSearch.
 
@@ -767,7 +767,7 @@ gantt
 
 | Phase | Deliverable | Exit criterion |
 |---|---|---|
-| **1 — MVP** (m1–5) | `create-machize` generates a typed API with Prisma + CLI + Getting Started docs | 3 real apps built by early adopters; feedback incorporated |
+| **1 — MVP** (m1–5) | `create-basalt` generates a typed API with Prisma + CLI + Getting Started docs | 3 real apps built by early adopters; feedback incorporated |
 | **2 — Core** (m6–9) | Complete infrastructure (queue, events, cache, storage, scheduler) | E2E playground covering all packages; 1k stars |
 | **3 — Tenancy** (m10–12) | Multi-tenancy shared + schema, tenant CLI | "multi-tenant SaaS in 1h" showcase (video/article) |
 | **4 — Auth** (m13–16) | Auth + permissions + audit | paid external security review |
@@ -781,7 +781,7 @@ Cross-cutting rule: **no phase opens without the previous one's docs complete**.
 
 ## 16. Comparison
 
-| | Machize | Full-stack PHP framework | NestJS | AdonisJS | Plain Fastify | Supabase/Appwrite | Convex |
+| | Basalt | Full-stack PHP framework | NestJS | AdonisJS | Plain Fastify | Supabase/Appwrite | Convex |
 |---|---|---|---|---|---|---|---|
 | Language/types | TS end-to-end, inference | PHP | TS + decorators/reflect | TS | TS (manual) | SDK client | TS |
 | SaaS primitives (tenancy, billing, features) | **native** | via 3rd-party packages (billing ok) | none | none | none | partial (auth/storage) | none |
@@ -789,7 +789,7 @@ Cross-cutting rule: **no phase opens without the previous one's docs complete**.
 | Lock-in | zero (your DB, your deploy) | zero | zero | zero | zero | **high** (BaaS) | **high** |
 | DI | typed tokens, no reflect | magic container | decorators (fragile in ESM/Bun) | own IoC | ✗ | — | — |
 | DX/batteries | high | **very high** (reference) | medium (boilerplate) | high | low | high for CRUD | high for realtime |
-| Machize's position | — | inspiration; Machize = "the batteries-included SaaS toolkit for Node" | we avoid its structural mistakes | closest competitor, but not SaaS-focused | Machize builds on top | complementary/competitor: same problem, without lock-in | realtime niche |
+| Basalt's position | — | inspiration; Basalt = "the batteries-included SaaS toolkit for Node" | we avoid its structural mistakes | closest competitor, but not SaaS-focused | Basalt builds on top | complementary/competitor: same problem, without lock-in | realtime niche |
 
 **Positioning thesis:** AdonisJS is the generic full-featured backend framework for Node; Supabase solves SaaS with lock-in. The empty — and defensible — space is **"a batteries-included framework specifically for SaaS, self-hosted, without lock-in"**. Integrated tenancy + billing + permissions is the feature no competitor has and which alone justifies adoption.
 
@@ -800,17 +800,17 @@ Cross-cutting rule: **no phase opens without the previous one's docs complete**.
 | Area | Decision |
 |---|---|
 | **License** | MIT across the board. Future monetization via cloud/services (a managed-hosting model), never via relicensing — a public commitment from day 1 |
-| **Governance** | BDFL for the first 2 years (speed/coherence) → core team with per-package CODEOWNERS. Significant technical decisions via **public RFC** (repo `machize/rfcs`, template inspired by Rust: motivation, design, drawbacks, alternatives, 10-day comment period) |
+| **Governance** | BDFL for the first 2 years (speed/coherence) → core team with per-package CODEOWNERS. Significant technical decisions via **public RFC** (repo `basalt/rfcs`, template inspired by Rust: motivation, design, drawbacks, alternatives, 10-day comment period) |
 | **Contribution** | `CONTRIBUTING.md` + `good first issue` issues per package; a mandatory StackBlitz reproduction template on bugs; bounties on critical issues |
 | **CI/CD** | GitHub Actions: lint (biome) + typecheck + per-package unit tests + E2E on the playground (matrix Node LTS × PG 15/16) + dependency-cruiser (layer rule §2.1) + driver conformance tests. Canary published on every merge |
 | **Testing** | Minimum 90% coverage in core/auth/tenancy/subscriptions; public conformance suites for community drivers and adapters |
-| **Release** | Changesets → automated release PR → npm publish with provenance; predictable monthly minor; major at most yearly, always with a `mach upgrade` codemod |
+| **Release** | Changesets → automated release PR → npm publish with provenance; predictable monthly minor; major at most yearly, always with a `basalt upgrade` codemod |
 | **Security** | `SECURITY.md`, private disclosure, advisories via GitHub; external audit before v1.0 (phase 4) |
 | **Community** | Discord + GitHub Discussions; showcase of apps in production; monthly newsletter of narrated release notes |
 
 ### Adoption strategy
 
-1. **Incremental adoption as a wedge**: each package works on its own in an existing Fastify app ("add `@machize/tenancy` to your app today"). The full framework is the destination, not the toll at the gate.
+1. **Incremental adoption as a wedge**: each package works on its own in an existing Fastify app ("add `@basaltkit/tenancy` to your app today"). The full framework is the destination, not the toll at the gate.
 2. **Content that demonstrates the thesis**: "multi-tenant SaaS with billing in 1 hour" (video + article + template) is the founding marketing material — the equivalent of the 15-minute Rails screencast.
 3. **Initial target audience**: developers moving from other batteries-included backend frameworks to Node (they already understand the value), and TS teams tired of gluing together 15 libraries. Docs with a "coming from another framework: billing package → subscriptions, auth package → auth…" table.
 4. **North-star metrics**: time to first deploy < 30 min; number of SaaS in production (not stars) as the real KPI.

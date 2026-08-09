@@ -68,7 +68,7 @@ describe('SqliteOutboxStore', () => {
 })
 
 describe('sqliteOutboxStore + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-outbox-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-outbox-'))
   const file = join(dir, 'outbox.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

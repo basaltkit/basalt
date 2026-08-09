@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { z } from 'zod'
-import { defineResource } from '@machize/admin'
+import { defineResource } from '@basaltkit/admin'
 import { Badge, Button, DataTable, ResourceForm, buttonVariants, cn } from '../src/index.js'
 
 afterEach(cleanup)
@@ -107,11 +107,11 @@ describe('ResourceForm', () => {
 
     const name = screen.getByLabelText('Name')
     expect(name.className).toContain('rounded-md') // shadcn Input styling
-    fireEvent.change(name, { target: { value: 'Machize' } })
+    fireEvent.change(name, { target: { value: 'Basalt' } })
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'published' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ name: 'Machize', status: 'published' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ name: 'Basalt', status: 'published' }))
   })
 
   it('shows a destructive validation message and blocks submit', async () => {

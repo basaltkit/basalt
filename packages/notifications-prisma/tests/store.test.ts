@@ -1,4 +1,4 @@
-import type { InAppNotification } from '@machize/notifications'
+import type { InAppNotification } from '@basaltkit/notifications'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { PrismaInAppStore, type PrismaNotificationsClient, prismaInAppStore } from '../src/index.js'
 

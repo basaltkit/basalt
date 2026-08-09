@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@machize/core'
-import { defineEvent, EVENTS, eventsPlugin } from '@machize/events'
+import { createApp, runWithContext } from '@basaltkit/core'
+import { defineEvent, EVENTS, eventsPlugin } from '@basaltkit/events'
 import { z } from 'zod'
 import { AUDIT, auditPlugin, patternMatches } from '../src/index.js'
 

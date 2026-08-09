@@ -1,10 +1,10 @@
-# @machize/tenancy-sqlite
+# @basaltkit/tenancy-sqlite
 
 ## 1.0.5
 
 ### Initial release
 
-- Durable, SQLite-backed `TenantSource` for `@machize/tenancy`, on Node's
+- Durable, SQLite-backed `TenantSource` for `@basaltkit/tenancy`, on Node's
   built-in `node:sqlite` — the single-node counterpart to the in-memory
   `MemoryTenantSource`. Tenants and their custom domains survive a restart.
 - `sqliteTenantSource(path)` returns a source ready for `tenancyPlugin({ source })`,

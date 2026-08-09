@@ -1,4 +1,4 @@
-import { route, type MachizeRoute } from '@machize/fastify'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { teamsPageHtml, type TeamsPageOptions } from './html.js'
 
 export interface TeamsUiOptions extends TeamsPageOptions {
@@ -8,10 +8,10 @@ export interface TeamsUiOptions extends TeamsPageOptions {
 
 /**
  * Serves the team management page at `GET /team/ui` (requires a logged-in user;
- * add your own admin `teamRole` guard). Pair with `@machize/teams`'
+ * add your own admin `teamRole` guard). Pair with `@basaltkit/teams`'
  * `teamRoutes()`, which provides the JSON endpoints the page calls.
  */
-export function teamsUiRoutes(options: TeamsUiOptions = {}): MachizeRoute[] {
+export function teamsUiRoutes(options: TeamsUiOptions = {}): BasaltRoute[] {
   const html = teamsPageHtml(options)
   return [
     route({

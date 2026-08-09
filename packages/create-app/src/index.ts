@@ -6,7 +6,7 @@ import {
   envExample,
   envTs,
   gitignore,
-  machBin,
+  basaltBin,
   packageJson,
   pnpmWorkspaceYaml,
   readme,
@@ -28,7 +28,7 @@ export interface CreateProjectInput {
   billing?: boolean
   /** Scaffold a web/ frontend (React + shadcn + SDK). Default: false. */
   ui?: boolean
-  /** Scaffold the `mach` CLI entrypoint (code generators + commands). Default: false. */
+  /** Scaffold the `basalt` CLI entrypoint (code generators + commands). Default: false. */
   cli?: boolean
 }
 
@@ -59,7 +59,7 @@ export function detectPackageManager(
   return 'npm'
 }
 
-/** Generates a ready-to-run Machize app. Does not install dependencies. */
+/** Generates a ready-to-run Basalt app. Does not install dependencies. */
 export async function createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
   const options: ProjectOptions = {
     name: input.name,
@@ -86,7 +86,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     'src/routes.ts': routesTs(options),
     'src/server.ts': serverTs(),
     'tests/app.test.ts': appTest(options),
-    ...(options.cli ? { 'bin/mach.ts': machBin() } : {}),
+    ...(options.cli ? { 'bin/basalt.ts': basaltBin() } : {}),
     ...(options.ui ? uiFiles(options) : {}),
   }
 

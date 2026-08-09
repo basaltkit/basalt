@@ -1,5 +1,5 @@
-import { createToken, definePlugin, tryCtx } from '@machize/core'
-import { EVENTS } from '@machize/events'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
+import { EVENTS } from '@basaltkit/events'
 import { WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
 import { MemoryWebhookStore, type WebhookEndpoint, type WebhookStore } from './store.js'
 
@@ -46,7 +46,7 @@ export const WEBHOOKS = createToken<WebhookManager>('webhooks')
 export interface WebhooksPluginOptions extends WebhookDelivererOptions {
   store?: WebhookStore
   deliverer?: WebhookDeliverer
-  /** Domain event patterns to auto-dispatch (requires @machize/events). */
+  /** Domain event patterns to auto-dispatch (requires @basaltkit/events). */
   events?: string[]
 }
 
@@ -63,8 +63,8 @@ export function webhooksPlugin(options: WebhooksPluginOptions = {}) {
   const autoEvents = options.events ?? []
 
   return definePlugin({
-    name: 'machize:webhooks',
-    dependsOn: autoEvents.length ? ['machize:events'] : [],
+    name: 'basalt:webhooks',
+    dependsOn: autoEvents.length ? ['basalt:events'] : [],
     register({ container }) {
       container.singleton(WEBHOOKS, () => manager)
     },

@@ -1,7 +1,7 @@
 {
-  "name": "@machize/hono",
-  "version": "1.0.5",
-  "description": "Hono adapter for Machize: run the same typed routes, enrichers and guards on Hono (Node, Bun, Deno, edge) as on Fastify or Express.",
+  "name": "@basaltkit/hono",
+  "version": "1.0.0",
+  "description": "Hono adapter for Basalt: run the same typed routes, enrichers and guards on Hono (Node, Bun, Deno, edge) as on Fastify or Express.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,14 +19,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/http": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/http": "workspace:^"
   },
   "peerDependencies": {
     "hono": "^4.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "hono": "^4.6.0",
     "tsup": "^8.4.0",
@@ -39,13 +39,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/hono"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/hono#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/hono#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "http",
     "hono",

@@ -1,6 +1,6 @@
-# @machize/cache-tiered
+# @basaltkit/cache-tiered
 
-**Multi-level (tiered)** cache driver for [`@machize/cache`](https://www.npmjs.com/package/@machize/cache): puts an in-process *near cache* in front of a shared *far cache* (Redis), cutting network round-trips on hot keys. **Zero dependencies** — it composes the drivers you already have. You need this module when the same data is read many times per request/instance and you want to avoid hitting Redis every time.
+**Multi-level (tiered)** cache driver for [`@basaltkit/cache`](https://www.npmjs.com/package/@basaltkit/cache): puts an in-process *near cache* in front of a shared *far cache* (Redis), cutting network round-trips on hot keys. **Zero dependencies** — it composes the drivers you already have. You need this module when the same data is read many times per request/instance and you want to avoid hitting Redis every time.
 
 ## What this module solves
 
@@ -9,16 +9,16 @@ A Redis access is fast, but it's still network. If a key is read hundreds of tim
 ## Installation
 
 ```bash
-pnpm add @machize/cache-tiered @machize/cache
+pnpm add @basaltkit/cache-tiered @basaltkit/cache
 ```
 
-No runtime dependencies beyond `@machize/cache`.
+No runtime dependencies beyond `@basaltkit/cache`.
 
 ## Usage
 
 ```ts
-import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@machize/cache'
-import { TieredCacheDriver } from '@machize/cache-tiered'
+import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@basaltkit/cache'
+import { TieredCacheDriver } from '@basaltkit/cache-tiered'
 
 cachePlugin({
   driver: new TieredCacheDriver({
@@ -48,5 +48,5 @@ Everything else (`cache.remember`, tags, `flush`) works the same — `TieredCach
 
 ## How it connects to other modules
 
-- **`@machize/cache`** — this is a driver for that package; the API (`Cache`, `cachePlugin`, `remember`, tags) comes from there.
+- **`@basaltkit/cache`** — this is a driver for that package; the API (`Cache`, `cachePlugin`, `remember`, tags) comes from there.
 - Composes with `MemoryCacheDriver` and `RedisCacheDriver` (from cache core).

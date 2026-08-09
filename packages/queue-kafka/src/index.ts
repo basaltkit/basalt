@@ -3,7 +3,7 @@ import type {
   DriverCapabilities,
   JobExecutor,
   QueueDriver,
-} from '@machize/queue'
+} from '@basaltkit/queue'
 
 /** The subset of a kafkajs client this driver uses. */
 export interface KafkaClient {
@@ -36,15 +36,15 @@ export interface KafkaConsumer {
 }
 
 const HEADER = {
-  job: 'x-machize-job',
-  attempt: 'x-machize-attempt',
-  attempts: 'x-machize-attempts',
+  job: 'x-basalt-job',
+  attempt: 'x-basalt-attempt',
+  attempts: 'x-basalt-attempts',
 } as const
 
 export interface KafkaDriverOptions {
   brokers: string[]
   clientId?: string
-  /** Consumer group used by workers. Default 'machize-queue'. */
+  /** Consumer group used by workers. Default 'basalt-queue'. */
   groupId?: string
   /** Suffix for the retry topic. Default '.retry'. */
   retrySuffix?: string
@@ -60,11 +60,11 @@ const defaultClient = async (options: KafkaDriverOptions): Promise<KafkaClient> 
   const mod = (await import(specifier)) as {
     Kafka: new (config: { clientId: string; brokers: string[] }) => KafkaClient
   }
-  return new mod.Kafka({ clientId: options.clientId ?? 'machize', brokers: options.brokers })
+  return new mod.Kafka({ clientId: options.clientId ?? 'basalt', brokers: options.brokers })
 }
 
 /**
- * Kafka driver for `@machize/queue`. Kafka is a log, not a task queue, so this
+ * Kafka driver for `@basaltkit/queue`. Kafka is a log, not a task queue, so this
  * driver is deliberately honest about what it can't do:
  *
  * - `delayed` and `priority` are NOT supported (Kafka has neither). With the
@@ -95,7 +95,7 @@ export class KafkaQueueDriver implements QueueDriver {
   private readonly deadSuffix: string
 
   constructor(private readonly options: KafkaDriverOptions) {
-    this.groupId = options.groupId ?? 'machize-queue'
+    this.groupId = options.groupId ?? 'basalt-queue'
     this.retrySuffix = options.retrySuffix ?? '.retry'
     this.deadSuffix = options.deadSuffix ?? '.dead'
   }

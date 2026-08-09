@@ -1,15 +1,15 @@
-# @machize/search-postgres
+# @basaltkit/search-postgres
 
-**PostgreSQL full-text search** driver for [`@machize/search`](https://www.npmjs.com/package/@machize/search): uses Postgres's `tsvector`/`tsquery`/`ts_rank`, with tenant isolation. You need this module when you already have Postgres and want relevant search **without** an external service (Meilisearch/Elastic).
+**PostgreSQL full-text search** driver for [`@basaltkit/search`](https://www.npmjs.com/package/@basaltkit/search): uses Postgres's `tsvector`/`tsquery`/`ts_rank`, with tenant isolation. You need this module when you already have Postgres and want relevant search **without** an external service (Meilisearch/Elastic).
 
 ## What this module solves
 
-Many SaaS apps already run on Postgres. Postgres has real full-text search (stemming, ranking) via `tsvector`. This driver connects `@machize/search` to that: a table indexed by (index, tenant, id), a `tsvector` with a GIN index, and `ts_rank` searches always scoped to the tenant.
+Many SaaS apps already run on Postgres. Postgres has real full-text search (stemming, ranking) via `tsvector`. This driver connects `@basaltkit/search` to that: a table indexed by (index, tenant, id), a `tsvector` with a GIN index, and `ts_rank` searches always scoped to the tenant.
 
 ## Installation
 
 ```bash
-pnpm add @machize/search-postgres @machize/search pg
+pnpm add @basaltkit/search-postgres @basaltkit/search pg
 ```
 
 `pg` is the client you pass to the driver (a `Pool` or `Client`).
@@ -18,8 +18,8 @@ pnpm add @machize/search-postgres @machize/search pg
 
 ```ts
 import { Pool } from 'pg'
-import { searchPlugin, defineIndex } from '@machize/search'
-import { PostgresSearchDriver } from '@machize/search-postgres'
+import { searchPlugin, defineIndex } from '@basaltkit/search'
+import { PostgresSearchDriver } from '@basaltkit/search-postgres'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
@@ -29,7 +29,7 @@ searchPlugin({
 })
 ```
 
-`register` (called by `searchPlugin` at boot) creates the `machize_search` table and the GIN index. `index`/`search`/`remove`/`clear` work like any other `@machize/search` driver.
+`register` (called by `searchPlugin` at boot) creates the `basalt_search` table and the GIN index. `index`/`search`/`remove`/`clear` work like any other `@basaltkit/search` driver.
 
 ## How it works
 
@@ -50,10 +50,10 @@ new PostgresSearchDriver({ client: fakePgClient })
 | Option | Default | Description |
 |---|---|---|
 | `client` | — (required) | Already-connected `pg` `Pool`/`Client`. |
-| `table` | `machize_search` | Table shared by all indexes. |
+| `table` | `basalt_search` | Table shared by all indexes. |
 | `language` | `english` | Text-search configuration (stemming/stop-words). |
 
 ## How it connects to other modules
 
-- **`@machize/search`** — this is a driver for that package; the API (`defineIndex`, `search`, hook-based sync) comes from there.
+- **`@basaltkit/search`** — this is a driver for that package; the API (`defineIndex`, `search`, hook-based sync) comes from there.
 - Sibling drivers: `MemorySearchDriver` (dev) and `MeilisearchDriver` (in search core).

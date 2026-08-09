@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runWithContext } from '@machize/core'
+import { runWithContext } from '@basaltkit/core'
 import { createLogger } from '../src/index.js'
 
 function capture() {

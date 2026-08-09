@@ -1,19 +1,19 @@
-# @machize/express
+# @basaltkit/express
 
-Machize adapter for [Express](https://expressjs.com): the same typed routes, enrichers, and guards you'd use in Fastify or Hono, running on an Express server. You need it when you already use Express (or want its huge middleware ecosystem) and want Machize's validation, per-request context, and standardized errors.
+Basalt adapter for [Express](https://expressjs.com): the same typed routes, enrichers, and guards you'd use in Fastify or Hono, running on an Express server. You need it when you already use Express (or want its huge middleware ecosystem) and want Basalt's validation, per-request context, and standardized errors.
 
 ## What this module solves
 
 [Express](https://expressjs.com) is Node.js's best-known HTTP server — the program that receives **HTTP requests** (messages like "create this project") and returns responses. But Express, by itself, doesn't validate data, doesn't type anything in TypeScript, and every project invents its own error format.
 
-This module connects Express to Machize. **Routes** (address + method, e.g. `POST /echo`) are defined with the `route()` function from `@machize/http`, in a neutral format with [Zod](https://zod.dev) schemas for validation. The adapter converts each Express request into that neutral format, runs the shared pipeline (validation, *enrichers* — functions that enrich the request context, like resolving the tenant — and *guards* — functions that can reject the request, like authentication), and converts errors into JSON responses with a stable format.
+This module connects Express to Basalt. **Routes** (address + method, e.g. `POST /echo`) are defined with the `route()` function from `@basaltkit/http`, in a neutral format with [Zod](https://zod.dev) schemas for validation. The adapter converts each Express request into that neutral format, runs the shared pipeline (validation, *enrichers* — functions that enrich the request context, like resolving the tenant — and *guards* — functions that can reject the request, like authentication), and converts errors into JSON responses with a stable format.
 
-The strong point: **portability**. A route written for this adapter runs unchanged on `@machize/fastify` and `@machize/hono`. And the neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@machize/http` work here exactly the same.
+The strong point: **portability**. A route written for this adapter runs unchanged on `@basaltkit/fastify` and `@basaltkit/hono`. And the neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@basaltkit/http` work here exactly the same.
 
 ## Installation
 
 ```bash
-pnpm add @machize/express @machize/core @machize/http express zod
+pnpm add @basaltkit/express @basaltkit/core @basaltkit/http express zod
 ```
 
 `express` (version 4.19+ or 5) is a peer dependency — install it yourself. `zod` is required for the route schemas.
@@ -25,9 +25,9 @@ pnpm add @machize/express @machize/core @machize/http express zod
 **Step 2** — create a `server.ts` file:
 
 ```ts
-import { createApp } from '@machize/core'
-import { route } from '@machize/http'
-import { EXPRESS, expressPlugin } from '@machize/express'
+import { createApp } from '@basaltkit/core'
+import { route } from '@basaltkit/http'
+import { EXPRESS, expressPlugin } from '@basaltkit/express'
 import { z } from 'zod'
 
 // 1. Define a route: method, URL, validation, and handler (the function that responds).
@@ -41,7 +41,7 @@ const echo = route({
   },
 })
 
-// 2. Create the Machize app with the Express plugin and start it.
+// 2. Create the Basalt app with the Express plugin and start it.
 const app = await createApp({ plugins: [expressPlugin({ routes: [echo] })] }).boot()
 
 // 3. Get the Express app from the container and have it listen on a port.
@@ -71,7 +71,7 @@ curl -X POST http://localhost:3000/echo \
 ### Routes with params, query, and errors
 
 ```ts
-import { HttpError, route } from '@machize/http'
+import { HttpError, route } from '@basaltkit/http'
 import { z } from 'zod'
 
 const hello = route({
@@ -100,9 +100,9 @@ The error format is identical to the other adapters: `{ error: { code, message, 
 Plugins register these functions in the container's metadata "buckets"; the adapter applies them to every route. Real example (from the package's tests) — a tenancy-style enricher and an auth-style guard:
 
 ```ts
-import { createApp, definePlugin, ensureMetadata, tryCtx } from '@machize/core'
-import { HttpError, route, type RequestEnricher, type RouteGuard } from '@machize/http'
-import { EXPRESS, expressPlugin } from '@machize/express'
+import { createApp, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
+import { HttpError, route, type RequestEnricher, type RouteGuard } from '@basaltkit/http'
+import { EXPRESS, expressPlugin } from '@basaltkit/express'
 import { z } from 'zod'
 
 // Enricher: runs before everything else and attaches the tenant to the request context.
@@ -145,12 +145,12 @@ Without `Authorization` → `401 AUTH_REQUIRED`; with the `x-tenant-id: acme` he
 
 ### Neutral edge plugins
 
-Imported from `@machize/http` and work on Express without changes:
+Imported from `@basaltkit/http` and work on Express without changes:
 
 ```ts
-import { createApp } from '@machize/core'
-import { healthPlugin, metricsPlugin, route, securityPlugin } from '@machize/http'
-import { EXPRESS, expressPlugin } from '@machize/express'
+import { createApp } from '@basaltkit/core'
+import { healthPlugin, metricsPlugin, route, securityPlugin } from '@basaltkit/http'
+import { EXPRESS, expressPlugin } from '@basaltkit/express'
 
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
 
@@ -165,7 +165,7 @@ const app = await createApp({
 app.container.get(EXPRESS).listen(3000)
 ```
 
-All the options for these plugins are documented in the [`@machize/http`](../http/README.md) README.
+All the options for these plugins are documented in the [`@basaltkit/http`](../http/README.md) README.
 
 ### Bring your own Express app
 
@@ -173,7 +173,7 @@ If you already have an Express app with your own middleware, pass it to the plug
 
 ```ts
 import express from 'express'
-import { expressPlugin } from '@machize/express'
+import { expressPlugin } from '@basaltkit/express'
 
 const myApp = express()
 // ... your middleware here ...
@@ -183,12 +183,12 @@ expressPlugin({ app: myApp, routes: [] })
 
 ### Advanced: `registerRoutes()` without the plugin
 
-Mount Machize routes on an Express app directly, without the Machize lifecycle:
+Mount Basalt routes on an Express app directly, without the Basalt lifecycle:
 
 ```ts
 import express from 'express'
-import { route } from '@machize/http'
-import { registerRoutes } from '@machize/express'
+import { route } from '@basaltkit/http'
+import { registerRoutes } from '@basaltkit/express'
 
 const app = express()
 app.use(express.json()) // without the plugin, JSON parsing is your responsibility
@@ -201,14 +201,14 @@ In this mode each handler already handles its own errors (the wrapper responds w
 
 ## API reference
 
-### `expressPlugin(options?)` → Machize plugin (`machize:express`)
+### `expressPlugin(options?)` → Basalt plugin (`basalt:express`)
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `routes` | `MachizeRoute[]` | No | `[]` | Routes (created with `route()` from `@machize/http`) to mount. |
+| `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
 | `app` | `Express` | No | new `express()` | Bring your own Express app; either way, `express.json()` is added. |
 
-Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, via `res.on('finish')`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Machize routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
+Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, via `res.on('finish')`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Basalt routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
 > Note: unlike `fastifyPlugin`, this plugin has no `shutdown` step — closing the HTTP server returned by `listen()` is your responsibility.
 
@@ -221,14 +221,14 @@ Dependency-injection token (`Token<Express>`): `app.container.get(EXPRESS)` retu
 | Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `app` | `Express` | Yes | — | Express app to mount on. |
-| `routes` | `MachizeRoute[]` | Yes | — | Routes to mount. |
+| `routes` | `BasaltRoute[]` | Yes | — | Routes to mount. |
 | `container` | `Container` | No | — | DI container; without it there's no per-request scope or enrichers/guards. |
 | `enrichers` | `RequestEnricher[]` | No | `[]` | Functions that enrich the context before the guards. |
 | `guards` | `RouteGuard[]` | No | `[]` | Functions that can reject the request (by throwing an error). |
 
 ### What to import from where
 
-This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `ExpressPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@machize/http`**.
+This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `ExpressPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**.
 
 ## Common errors and solutions (FAQ)
 
@@ -236,7 +236,7 @@ This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `Exp
 
 **"`body` arrives `undefined` in the handler."** The client has to send the `Content-Type: application/json` header; without it `express.json()` won't parse the body.
 
-**"I tried `import { route } from '@machize/express'` and it failed."** The `route()` function isn't exported from this package — import it from `@machize/http` (it's neutral on purpose: the same route runs on Fastify and Hono).
+**"I tried `import { route } from '@basaltkit/express'` and it failed."** The `route()` function isn't exported from this package — import it from `@basaltkit/http` (it's neutral on purpose: the same route runs on Fastify and Hono).
 
 **"400 `HTTP_VALIDATION` on a GET with a correct query."** In Express's query everything arrives as text — use `z.coerce.number()` / `z.coerce.boolean()` in your schemas.
 
@@ -246,8 +246,8 @@ This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `Exp
 
 ## How it connects to other modules
 
-- **`@machize/core`** — `expressPlugin` is a Machize plugin (`definePlugin`) in the `createApp → boot` lifecycle; it uses the `Container` (tokens `EXPRESS`, `HTTP_SERVER`), the metadata buckets, and the per-request context (`ctx()`/`tryCtx()`), available at any depth of the code.
-- **`@machize/http`** — provides `route()`, the `runRoute()` pipeline (validation, enrichers, guards), `toErrorResponse()`, and the edge plugins. This adapter simply converts Express's `Request`/`Response` into the neutral `HttpRequest`/`HttpReply`.
-- **`@machize/fastify` / `@machize/hono`** — sibling adapters: the same routes, enrichers, guards, and edge plugins run on any of them unchanged; switching frameworks is just switching plugins.
-- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — register guards/enrichers in `'http:guards'`/`'http:enrichers'` and read the routes' `meta` (e.g. `meta: { auth: true }`); this adapter applies them automatically.
-- **`@machize/sdk` and the CLI** — consume the `'http:routes'` bucket (routes + Zod schemas) that this plugin publishes.
+- **`@basaltkit/core`** — `expressPlugin` is a Basalt plugin (`definePlugin`) in the `createApp → boot` lifecycle; it uses the `Container` (tokens `EXPRESS`, `HTTP_SERVER`), the metadata buckets, and the per-request context (`ctx()`/`tryCtx()`), available at any depth of the code.
+- **`@basaltkit/http`** — provides `route()`, the `runRoute()` pipeline (validation, enrichers, guards), `toErrorResponse()`, and the edge plugins. This adapter simply converts Express's `Request`/`Response` into the neutral `HttpRequest`/`HttpReply`.
+- **`@basaltkit/fastify` / `@basaltkit/hono`** — sibling adapters: the same routes, enrichers, guards, and edge plugins run on any of them unchanged; switching frameworks is just switching plugins.
+- **`@basaltkit/auth` / `@basaltkit/tenancy` / `@basaltkit/permissions`** — register guards/enrichers in `'http:guards'`/`'http:enrichers'` and read the routes' `meta` (e.g. `meta: { auth: true }`); this adapter applies them automatically.
+- **`@basaltkit/sdk` and the CLI** — consume the `'http:routes'` bucket (routes + Zod schemas) that this plugin publishes.

@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import { matchesEvent, type WebhookEndpoint, type WebhookStore } from '@machize/webhooks'
+import { matchesEvent, type WebhookEndpoint, type WebhookStore } from '@basaltkit/webhooks'
 
 /**
- * Prisma-backed implementation of the `@machize/webhooks` `WebhookStore` (the
+ * Prisma-backed implementation of the `@basaltkit/webhooks` `WebhookStore` (the
  * outbound endpoint subscriptions) for production databases (PostgreSQL, MySQL,
  * …). Bring your generated `PrismaClient` whose schema includes the
  * `WebhookEndpoint` model (see the bundled `prisma/schema.prisma`); the store
  * only touches that delegate. The production counterpart to
- * `@machize/webhooks-sqlite`.
+ * `@basaltkit/webhooks-sqlite`.
  */
 
 // Prisma-return row shape (nullable columns → null; events stored as JSON text).
@@ -101,7 +101,7 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
@@ -116,6 +116,6 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  * ```
  */
 export function prismaWebhookStore(client: PrismaWebhooksClient): PrismaWebhooksStores {
-  ensureModel(client, 'webhookEndpoint', '@machize/webhooks-prisma')
+  ensureModel(client, 'webhookEndpoint', '@basaltkit/webhooks-prisma')
   return { store: new PrismaWebhookStore(client) }
 }

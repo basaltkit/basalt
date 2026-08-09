@@ -1,7 +1,7 @@
 {
-  "name": "@machize/billing-ui",
-  "version": "1.0.5",
-  "description": "A self-contained HTML page for @machize/subscriptions: show the current plan and available plans, subscribe/switch via hosted Checkout, and manage billing via the Customer Portal. Zero dependencies.",
+  "name": "@basaltkit/billing-ui",
+  "version": "1.0.0",
+  "description": "A self-contained HTML page for @basaltkit/subscriptions: show the current plan and available plans, subscribe/switch via hosted Checkout, and manage billing via the Customer Portal. Zero dependencies.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,14 +19,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/fastify": "workspace:^",
-    "@machize/subscriptions": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/subscriptions": "workspace:^"
   },
   "devDependencies": {
-    "@machize/auth": "workspace:^",
-    "@machize/tenancy": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/auth": "workspace:^",
+    "@basaltkit/tenancy": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -38,13 +38,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/billing-ui"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/billing-ui#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/billing-ui#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "billing",

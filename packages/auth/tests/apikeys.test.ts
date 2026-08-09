@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, ctx } from '@machize/core'
-import { FASTIFY, fastifyPlugin, route } from '@machize/fastify'
+import { createApp, ctx } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin, route } from '@basaltkit/fastify'
 import {
   ApiKeys,
   MemoryUserSource,

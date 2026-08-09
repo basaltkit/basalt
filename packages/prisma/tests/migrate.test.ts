@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createApp } from '@machize/core'
-import { commandsPlugin, memoryIo, runCli } from '@machize/cli'
+import { createApp } from '@basaltkit/core'
+import { commandsPlugin, memoryIo, runCli } from '@basaltkit/cli'
 import {
   migrateTenants,
   tenantMigrateCommand,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Disk, StorageFileNotFoundError } from '@machize/storage'
+import { Disk, StorageFileNotFoundError } from '@basaltkit/storage'
 import { GcsStorageDriver, type GcsBucketLike, type GcsFileLike } from '../src/index.js'
 
 class FakeGcsBucket implements GcsBucketLike {

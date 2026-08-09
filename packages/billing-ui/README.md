@@ -1,26 +1,26 @@
-# @machize/billing-ui
+# @basaltkit/billing-ui
 
-A self-contained HTML **subscription** page for [`@machize/subscriptions`](https://www.npmjs.com/package/@machize/subscriptions): shows the current plan and the available plans, lets users **subscribe/switch** (hosted Checkout) and **manage billing** (Customer Portal) — **zero dependencies, no build step**. You need this module when you want a ready-to-use "plans & billing" page.
+A self-contained HTML **subscription** page for [`@basaltkit/subscriptions`](https://www.npmjs.com/package/@basaltkit/subscriptions): shows the current plan and the available plans, lets users **subscribe/switch** (hosted Checkout) and **manage billing** (Customer Portal) — **zero dependencies, no build step**. You need this module when you want a ready-to-use "plans & billing" page.
 
 ## What this module solves
 
-`@machize/subscriptions` already handles plans, Checkout, and the Portal. This module is the **UI**: a page that reads the current subscription state, presents the plans as cards, and wires the buttons to Checkout (subscribe/switch) and the Customer Portal (manage card/cancel).
+`@basaltkit/subscriptions` already handles plans, Checkout, and the Portal. This module is the **UI**: a page that reads the current subscription state, presents the plans as cards, and wires the buttons to Checkout (subscribe/switch) and the Customer Portal (manage card/cancel).
 
 ## Installation
 
 ```bash
-pnpm add @machize/billing-ui @machize/subscriptions
+pnpm add @basaltkit/billing-ui @basaltkit/subscriptions
 ```
 
-Depends on `@machize/core`, `@machize/fastify`, and `@machize/subscriptions`.
+Depends on `@basaltkit/core`, `@basaltkit/fastify`, and `@basaltkit/subscriptions`.
 
 ## Get started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { subscriptionsPlugin, billingRoutes, definePlans, StripeBillingGateway } from '@machize/subscriptions'
-import { billingUiRoutes } from '@machize/billing-ui'
-import { fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { subscriptionsPlugin, billingRoutes, definePlans, StripeBillingGateway } from '@basaltkit/subscriptions'
+import { billingUiRoutes } from '@basaltkit/billing-ui'
+import { fastifyPlugin } from '@basaltkit/fastify'
 
 const plans = definePlans({
   free: { price: 0, features: { projects: 3 } },
@@ -51,7 +51,7 @@ Open **`/billing/ui`** (authenticated). The page shows the current plan (with st
 | `GET /billing/ui` | The HTML page. |
 | `GET /billing/info` | `{ subscription, plans }` for the current tenant. |
 
-Checkout and the Portal (`POST /billing/checkout`, `/billing/portal`) come from `billingRoutes()` in `@machize/subscriptions` — mount those as well.
+Checkout and the Portal (`POST /billing/checkout`, `/billing/portal`) come from `billingRoutes()` in `@basaltkit/subscriptions` — mount those as well.
 
 ## Tenancy and authentication
 
@@ -70,5 +70,5 @@ Subdomain-based apps need nothing extra.
 
 ## How it connects to other modules
 
-- **`@machize/subscriptions`** — plans, Checkout, Portal, subscription state.
-- **`@machize/tenancy` / `@machize/auth`** — resolve the tenant and the user.
+- **`@basaltkit/subscriptions`** — plans, Checkout, Portal, subscription state.
+- **`@basaltkit/tenancy` / `@basaltkit/auth`** — resolve the tenant and the user.

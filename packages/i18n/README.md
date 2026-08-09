@@ -1,6 +1,6 @@
-# @machize/i18n
+# @basaltkit/i18n
 
-Internationalization for Machize: **locale resolved from context** (per user/tenant), **typed message catalogs** with interpolation and plurals, and **formatting** (numbers, currency, dates, relative time, lists) via native `Intl`. **Zero dependencies**. You need this module when your application serves users in multiple languages/regions.
+Internationalization for Basalt: **locale resolved from context** (per user/tenant), **typed message catalogs** with interpolation and plurals, and **formatting** (numbers, currency, dates, relative time, lists) via native `Intl`. **Zero dependencies**. You need this module when your application serves users in multiple languages/regions.
 
 ## What this module solves
 
@@ -9,16 +9,16 @@ In a request, whoever is responding needs to know what language to speak — and
 ## Installation
 
 ```bash
-pnpm add @machize/i18n
+pnpm add @basaltkit/i18n
 ```
 
-Depends only on `@machize/core`. No external catalogs or services — messages live in code.
+Depends only on `@basaltkit/core`. No external catalogs or services — messages live in code.
 
 ## Getting started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { i18nPlugin, I18N, defineMessages } from '@machize/i18n'
+import { createApp } from '@basaltkit/core'
+import { i18nPlugin, I18N, defineMessages } from '@basaltkit/i18n'
 
 const en = defineMessages({
   greeting: 'Hi {name}',
@@ -102,6 +102,6 @@ Registers the `I18N` token. `locales` is `{ [locale]: catalog }`.
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides the request context from which the locale comes.
-- **`@machize/auth` / `@machize/tenancy`** — put `user`/`tenant` in the context; store a `locale` on them for automatic resolution.
-- **`@machize/mailer` / `@machize/notifications`** — translate email/notification content in the recipient's locale.
+- **`@basaltkit/core`** — provides the request context from which the locale comes.
+- **`@basaltkit/auth` / `@basaltkit/tenancy`** — put `user`/`tenant` in the context; store a `locale` on them for automatic resolution.
+- **`@basaltkit/mailer` / `@basaltkit/notifications`** — translate email/notification content in the recipient's locale.

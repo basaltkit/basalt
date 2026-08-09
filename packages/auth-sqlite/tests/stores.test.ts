@@ -151,7 +151,7 @@ describe('SqliteMfaStore', () => {
 })
 
 describe('sqliteAuthStores + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-auth-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-auth-'))
   const file = join(dir, 'auth.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

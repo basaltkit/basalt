@@ -1,4 +1,4 @@
-import { formView, type Field, type FormMode, type Resource } from '@machize/admin'
+import { formView, type Field, type FormMode, type Resource } from '@basaltkit/admin'
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { cn } from './lib/cn.js'
 import { Button } from './ui/button.js'

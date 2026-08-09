@@ -2,7 +2,7 @@
  * Base error for the whole ecosystem. The `code` is stable and part of the
  * semver contract — apps can safely branch on codes.
  */
-export class MachizeError extends Error {
+export class BasaltError extends Error {
   readonly code: string
 
   constructor(code: string, message: string, options?: ErrorOptions) {
@@ -12,7 +12,7 @@ export class MachizeError extends Error {
   }
 }
 
-export class ContextUnavailableError extends MachizeError {
+export class ContextUnavailableError extends BasaltError {
   constructor() {
     super(
       'CONTEXT_UNAVAILABLE',
@@ -22,7 +22,7 @@ export class ContextUnavailableError extends MachizeError {
   }
 }
 
-export class UnknownTokenError extends MachizeError {
+export class UnknownTokenError extends BasaltError {
   constructor(description: string) {
     super(
       'DI_UNKNOWN_TOKEN',
@@ -32,19 +32,19 @@ export class UnknownTokenError extends MachizeError {
   }
 }
 
-export class CircularDependencyError extends MachizeError {
+export class CircularDependencyError extends BasaltError {
   constructor(chain: string[]) {
     super('DI_CIRCULAR_DEPENDENCY', `Circular dependency detected: ${chain.join(' -> ')}`)
   }
 }
 
-export class PluginDependencyError extends MachizeError {
+export class PluginDependencyError extends BasaltError {
   constructor(message: string) {
     super('PLUGIN_DEPENDENCY', message)
   }
 }
 
-export class ConfigValidationError extends MachizeError {
+export class ConfigValidationError extends BasaltError {
   constructor(
     readonly plugin: string,
     readonly issues: unknown,
@@ -56,7 +56,7 @@ export class ConfigValidationError extends MachizeError {
   }
 }
 
-export class LifecycleError extends MachizeError {
+export class LifecycleError extends BasaltError {
   constructor(message: string) {
     super('LIFECYCLE', message)
   }

@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import { MachizeError, tryCtx, type HookBus } from '@machize/core'
+import { BasaltError, tryCtx, type HookBus } from '@basaltkit/core'
 import { MemoryCommentStore, type Comment, type CommentPatch, type CommentStore } from './store.js'
 
-export class CommentNotFoundError extends MachizeError {
+export class CommentNotFoundError extends BasaltError {
   readonly status = 404
   constructor() {
     super('COMMENT_NOT_FOUND', 'Comment not found.')
   }
 }
 
-export class CommentTenantRequiredError extends MachizeError {
+export class CommentTenantRequiredError extends BasaltError {
   readonly status = 400
   constructor() {
     super('COMMENT_TENANT_REQUIRED', 'A tenant is required — pass tenantId or run inside a tenant context.')
@@ -56,7 +56,7 @@ const buildTree = (comments: Comment[]): CommentNode[] => {
 /**
  * Per-resource comment threads with @mentions and resolve/reopen, scoped by
  * tenant. Emits hooks (`comment:created`, `comment:mentioned`, …) so live
- * updates (@machize/realtime) and notifications wire up without coupling.
+ * updates (@basaltkit/realtime) and notifications wire up without coupling.
  */
 export class Comments {
   private readonly store: CommentStore

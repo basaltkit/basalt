@@ -1,10 +1,10 @@
-# @machize/webhooks-sqlite
+# @basaltkit/webhooks-sqlite
 
 ## 1.0.5
 
 ### Initial release
 
-- Durable, SQLite-backed `WebhookStore` for `@machize/webhooks`, on Node's
+- Durable, SQLite-backed `WebhookStore` for `@basaltkit/webhooks`, on Node's
   built-in `node:sqlite` — the single-node counterpart to the in-memory
   `MemoryWebhookStore`. Registered outbound endpoints now survive a restart
   instead of vanishing on redeploy.

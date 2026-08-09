@@ -1,6 +1,6 @@
-# @machize/queue
+# @basaltkit/queue
 
-Job queues for Machize applications: define declarative "jobs" with Zod validation, run them in the background with BullMQ/Redis in production, and synchronously in development and tests — without changing a line of code.
+Job queues for Basalt applications: define declarative "jobs" with Zod validation, run them in the background with BullMQ/Redis in production, and synchronously in development and tests — without changing a line of code.
 
 You need this module when you have work that **must not block the user's request**: sending emails, generating reports, processing images, syncing data, etc.
 
@@ -19,10 +19,10 @@ This module gives you three things you'd normally have to build by hand:
 ## Installation
 
 ```bash
-pnpm add @machize/queue
+pnpm add @basaltkit/queue
 ```
 
-The package depends on `@machize/core` and `@machize/events` (installed automatically). For production you also need an accessible **Redis** server (BullMQ stores the queues there). For development and tests you need nothing.
+The package depends on `@basaltkit/core` and `@basaltkit/events` (installed automatically). For production you also need an accessible **Redis** server (BullMQ stores the queues there). For development and tests you need nothing.
 
 ## Get started in 5 minutes
 
@@ -31,7 +31,7 @@ Step by step to get a job working:
 **1. Define the job** (in its own file, e.g. `src/jobs/send-welcome-email.ts`):
 
 ```ts
-import { defineJob } from '@machize/queue'
+import { defineJob } from '@basaltkit/queue'
 import { z } from 'zod'
 
 export const SendWelcomeEmail = defineJob({
@@ -49,8 +49,8 @@ export const SendWelcomeEmail = defineJob({
 **2. Register the plugin in the application** (e.g. `src/app.ts`):
 
 ```ts
-import { createApp } from '@machize/core'
-import { queuePlugin } from '@machize/queue'
+import { createApp } from '@basaltkit/core'
+import { queuePlugin } from '@basaltkit/queue'
 import { SendWelcomeEmail } from './jobs/send-welcome-email.js'
 
 const app = await createApp({
@@ -84,7 +84,7 @@ queuePlugin({
 ### Defining a job with `defineJob`
 
 ```ts
-import { defineJob } from '@machize/queue'
+import { defineJob } from '@basaltkit/queue'
 import { z } from 'zod'
 
 export const GenerateInvoice = defineJob({
@@ -117,11 +117,11 @@ Note: with the sync driver, `delay` is ignored — the job runs immediately.
 
 ### Context propagation (tenant, requestId…)
 
-If you dispatch a job inside a request with active context (`runWithContext` from `@machize/core`, usually done by HTTP middleware), the fields `requestId`, `correlationId`, `traceId`, `userId`, `tenantId` — and `tenant.id` / `user.id` — are captured and restored inside `handle`:
+If you dispatch a job inside a request with active context (`runWithContext` from `@basaltkit/core`, usually done by HTTP middleware), the fields `requestId`, `correlationId`, `traceId`, `userId`, `tenantId` — and `tenant.id` / `user.id` — are captured and restored inside `handle`:
 
 ```ts
-import { ctx, runWithContext } from '@machize/core'
-import { defineJob, QueueManager, SyncQueueDriver } from '@machize/queue'
+import { ctx, runWithContext } from '@basaltkit/core'
+import { defineJob, QueueManager, SyncQueueDriver } from '@basaltkit/queue'
 
 const job = defineJob({
   name: 'ctx.probe',
@@ -142,11 +142,11 @@ await runWithContext({ requestId: 'req-7', tenant: { id: 'acme', name: 'Acme' } 
 
 ### Turning an event listener into a job: `queuedOn`
 
-If you use `@machize/events`, `queuedOn` bridges events→queue: `emit` just puts the job on the queue, and the handler runs on the worker with retries and restored context.
+If you use `@basaltkit/events`, `queuedOn` bridges events→queue: `emit` just puts the job on the queue, and the handler runs on the worker with retries and restored context.
 
 ```ts
-import { EventBus, defineEvent } from '@machize/events'
-import { QueueManager, SyncQueueDriver, queuedOn } from '@machize/queue'
+import { EventBus, defineEvent } from '@basaltkit/events'
+import { QueueManager, SyncQueueDriver, queuedOn } from '@basaltkit/queue'
 import { z } from 'zod'
 
 const bus = new EventBus()
@@ -187,7 +187,7 @@ If a job reaches a worker that hasn't registered it, `UnknownJobError` is thrown
 ### Manual use without a plugin (e.g. in tests)
 
 ```ts
-import { QueueManager, SyncQueueDriver, defineJob } from '@machize/queue'
+import { QueueManager, SyncQueueDriver, defineJob } from '@basaltkit/queue'
 
 const driver = new SyncQueueDriver()
 const manager = new QueueManager(driver)
@@ -236,7 +236,7 @@ The returned object (`JobDefinition<T>`) exposes:
 
 ### `queuePlugin(options?: QueuePluginOptions)`
 
-Machize plugin that registers a `QueueManager` in the container under the `QUEUE` token, starts workers on `boot`, and closes everything on `shutdown`.
+Basalt plugin that registers a `QueueManager` in the container under the `QUEUE` token, starts workers on `boot`, and closes everything on `shutdown`.
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
@@ -246,7 +246,7 @@ Machize plugin that registers a `QueueManager` in the container under the `QUEUE
 | `workers` | `{ queue: string; concurrency?: number }[]` | No | `[]` | Queues whose workers start in this process on boot. |
 
 ```ts
-import { QUEUE } from '@machize/queue'
+import { QUEUE } from '@basaltkit/queue'
 const manager = app.container.get(QUEUE) // get the QueueManager from the container
 ```
 
@@ -312,8 +312,8 @@ No. Without `connection`, the plugin uses `SyncQueueDriver`. You can also instan
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides `createApp`/`definePlugin` (`queuePlugin` is a core plugin), the ALS context (`runWithContext`/`ctx`) propagated to workers, `parseDuration` (formats `'30s'`, `'10m'`), and the base `MachizeError` class.
-- **`@machize/events`** — via `queuedOn`, any domain event can be processed in the background with retries.
-- **`@machize/scheduler`** — `schedule.job(MyJob, payload)` schedules a `dispatch` for a job from this queue on cron schedules (e.g. daily reconciliation at 03:00).
-- **`@machize/logger`** — since context is restored on the worker, logs written inside `handle` automatically carry `requestId`/`tenantId` from the original request.
-- **`@machize/audit`** and **`@machize/activity`** — records made inside a `handle` inherit the same context (actor, tenant), keeping the trail consistent between the request and the worker.
+- **`@basaltkit/core`** — provides `createApp`/`definePlugin` (`queuePlugin` is a core plugin), the ALS context (`runWithContext`/`ctx`) propagated to workers, `parseDuration` (formats `'30s'`, `'10m'`), and the base `BasaltError` class.
+- **`@basaltkit/events`** — via `queuedOn`, any domain event can be processed in the background with retries.
+- **`@basaltkit/scheduler`** — `schedule.job(MyJob, payload)` schedules a `dispatch` for a job from this queue on cron schedules (e.g. daily reconciliation at 03:00).
+- **`@basaltkit/logger`** — since context is restored on the worker, logs written inside `handle` automatically carry `requestId`/`tenantId` from the original request.
+- **`@basaltkit/audit`** and **`@basaltkit/activity`** — records made inside a `handle` inherit the same context (actor, tenant), keeping the trail consistent between the request and the worker.

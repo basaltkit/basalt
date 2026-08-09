@@ -1,9 +1,9 @@
 import { defineConfig } from 'vitepress'
 
-const github = 'https://github.com/Zebedeu/machize'
+const github = 'https://github.com/Zebedeu/basalt'
 
 export default defineConfig({
-  title: 'Machize',
+  title: 'Basalt',
   description: 'The complete toolkit for building SaaS on Node.js.',
   lang: 'en-US',
   // Served at the domain root (Cloudflare Pages / Netlify / Vercel), so base is '/'.
@@ -100,7 +100,7 @@ export default defineConfig({
 
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2026 Machize Contributors',
+      copyright: 'Copyright © 2026 Basalt Contributors',
     },
 
     search: { provider: 'local' },

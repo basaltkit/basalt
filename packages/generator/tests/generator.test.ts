@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { memoryIo } from '@machize/cli'
+import { memoryIo } from '@basaltkit/cli'
 import {
   FileExistsError,
   generate,
@@ -13,9 +13,9 @@ import {
   writeGenerated,
 } from '../src/index.js'
 
-const SAMPLE_APP = `import { createApp } from '@machize/core'
-import { fastifyPlugin } from '@machize/fastify'
-import { authRoutes } from '@machize/auth'
+const SAMPLE_APP = `import { createApp } from '@basaltkit/core'
+import { fastifyPlugin } from '@basaltkit/fastify'
+import { authRoutes } from '@basaltkit/auth'
 import { appRoutes } from './routes.js'
 
 export function buildApp() {
@@ -88,7 +88,7 @@ describe('generateResource', () => {
 
     const repo = files.find((f) => f.path.endsWith('.repository.ts'))!.content
     expect(repo).toContain('class PrismaBlogPostRepository')
-    expect(repo).toContain("import { db } from '@machize/prisma'")
+    expect(repo).toContain("import { db } from '@basaltkit/prisma'")
     expect(repo).toContain('db<PrismaClient>().blogPost')
     expect(repo).not.toContain('InMemory')
 
@@ -108,7 +108,7 @@ describe('generateResource', () => {
 describe('writeGenerated', () => {
   let root: string
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'machize-gen-'))
+    root = await mkdtemp(join(tmpdir(), 'basalt-gen-'))
   })
   afterEach(async () => {
     await rm(root, { recursive: true, force: true })
@@ -132,7 +132,7 @@ describe('writeGenerated', () => {
 describe('generatorCommands', () => {
   let root: string
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'machize-gen-cmd-'))
+    root = await mkdtemp(join(tmpdir(), 'basalt-gen-cmd-'))
   })
   afterEach(async () => {
     await rm(root, { recursive: true, force: true })
@@ -171,7 +171,7 @@ describe('generatorCommands', () => {
 describe('registerResourceInApp', () => {
   let root: string
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'machize-gen-reg-'))
+    root = await mkdtemp(join(tmpdir(), 'basalt-gen-reg-'))
   })
   afterEach(async () => {
     await rm(root, { recursive: true, force: true })

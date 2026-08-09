@@ -1,22 +1,22 @@
-# @machize/audit-prisma
+# @basaltkit/audit-prisma
 
 **Prisma-backed** implementation of the
-[`@machize/audit`](https://github.com/Zebedeu/machize/tree/main/packages/audit)
+[`@basaltkit/audit`](https://github.com/Zebedeu/basalt/tree/main/packages/audit)
 `AuditStore` — the append-only audit trail — for production databases
 (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the `AuditEntry` model; the store only
 touches that delegate. The production counterpart to
-[`@machize/audit-sqlite`](https://github.com/Zebedeu/machize/tree/main/packages/audit-sqlite).
+[`@basaltkit/audit-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/audit-sqlite).
 
 ```bash
-pnpm add @machize/audit-prisma   # peer: @machize/audit ; you already have @prisma/client
+pnpm add @basaltkit/audit-prisma   # peer: @basaltkit/audit ; you already have @prisma/client
 ```
 
 ## 1. Add the model
 
 Copy the model from the bundled reference schema
-(`@machize/audit-prisma/schema.prisma`) into your `schema.prisma`:
+(`@basaltkit/audit-prisma/schema.prisma`) into your `schema.prisma`:
 
 ```prisma
 model AuditEntry {
@@ -38,8 +38,8 @@ Then `prisma migrate dev` and `prisma generate`.
 ## 2. Wire the store
 
 ```ts
-import { auditPlugin } from '@machize/audit'
-import { prismaAuditStore } from '@machize/audit-prisma'
+import { auditPlugin } from '@basaltkit/audit'
+import { prismaAuditStore } from '@basaltkit/audit-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -57,7 +57,7 @@ createApp({ plugins: [auditPlugin({ store: a.store })] })
   pattern-matched rows.
 - The `payload` is stored as JSON text and round-trips unchanged.
 - For **database-per-tenant**, route the store through the active tenant's client
-  — see the [Database-per-tenant guide](https://machize-docs.pages.dev/guide/database-per-tenant).
+  — see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).
 - `PrismaAuditClient` types delegate **arguments** as `any` (returns stay precise)
   so a real `PrismaClient` is assignable and passes directly.
 

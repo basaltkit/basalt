@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { ctx } from '@machize/core'
-import { fastifyPlugin, route } from '@machize/fastify'
-import { defineMail, MAILER } from '@machize/mailer'
-import { defineJob } from '@machize/queue'
+import { ctx } from '@basaltkit/core'
+import { fastifyPlugin, route } from '@basaltkit/fastify'
+import { defineMail, MAILER } from '@basaltkit/mailer'
+import { defineJob } from '@basaltkit/queue'
 import { createTestApp, fakeMailer, fakeQueue, time } from '../src/index.js'
 
 const WelcomeEmail = defineMail({

@@ -107,7 +107,7 @@ describe('SqliteUsageStore', () => {
 })
 
 describe('sqliteSubscriptionsStores + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-subs-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-subs-'))
   const file = join(dir, 'billing.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

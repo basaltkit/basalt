@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp, createToken, ctx } from '@machize/core'
+import { createApp, createToken, ctx } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin, HttpError, route } from '../src/index.js'
 
 const routes = [
@@ -50,12 +50,12 @@ async function bootServer() {
   return { app, server: app.container.get(FASTIFY) }
 }
 
-describe('@machize/fastify', () => {
+describe('@basaltkit/fastify', () => {
   it('validates body with Zod and responds 201 with the typed handler', async () => {
     const { app, server } = await bootServer()
-    const res = await server.inject({ method: 'POST', url: '/projects', payload: { name: 'Machize' } })
+    const res = await server.inject({ method: 'POST', url: '/projects', payload: { name: 'Basalt' } })
     expect(res.statusCode).toBe(201)
-    expect(res.json()).toEqual({ id: 'p1', name: 'Machize' })
+    expect(res.json()).toEqual({ id: 'p1', name: 'Basalt' })
     await app.shutdown()
   })
 

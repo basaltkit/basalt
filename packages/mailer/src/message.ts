@@ -1,11 +1,11 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
 /** Structural schema compatible with Zod. */
 export interface MailSchema<T> {
   safeParse(input: unknown): { success: boolean; data?: T; error?: unknown }
 }
 
-export class MailValidationError extends MachizeError {
+export class MailValidationError extends BasaltError {
   constructor(
     readonly mail: string,
     readonly issues: unknown,
@@ -14,7 +14,7 @@ export class MailValidationError extends MachizeError {
   }
 }
 
-export class MailIncompleteError extends MachizeError {
+export class MailIncompleteError extends BasaltError {
   constructor(field: 'to' | 'from') {
     super(
       'MAIL_INCOMPLETE',

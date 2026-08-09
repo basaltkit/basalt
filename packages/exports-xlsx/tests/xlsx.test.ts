@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Exports, defineExport } from '@machize/exports'
+import { Exports, defineExport } from '@basaltkit/exports'
 import { xlsxFormatter } from '../src/index.js'
 
 /** Minimal STORE-method ZIP reader — enough to extract our parts by name. */

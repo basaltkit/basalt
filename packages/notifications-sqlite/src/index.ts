@@ -4,13 +4,13 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import type { InAppNotification, InAppStore } from '@machize/notifications'
+import type { InAppNotification, InAppStore } from '@basaltkit/notifications'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/notifications`
+ * Durable, SQLite-backed implementation of the `@basaltkit/notifications`
  * `InAppStore`, on Node's built-in `node:sqlite`. Zero external dependencies.
  * The single-node reference backend; the production (Postgres/MySQL) counterpart
- * is `@machize/notifications-prisma`.
+ * is `@basaltkit/notifications-prisma`.
  *
  * Requires Node 22.5+ (stable and flag-free on Node 24; `--experimental-sqlite`
  * on 22.x).

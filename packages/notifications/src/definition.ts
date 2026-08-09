@@ -1,11 +1,11 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
 /** Structural schema compatible with Zod. */
 export interface NotificationSchema<T> {
   safeParse(input: unknown): { success: boolean; data?: T; error?: unknown }
 }
 
-export class NotificationValidationError extends MachizeError {
+export class NotificationValidationError extends BasaltError {
   constructor(
     readonly notification: string,
     readonly issues: unknown,

@@ -1,6 +1,6 @@
-# @machize/notifications
+# @basaltkit/notifications
 
-Multi-channel notifications for the Machize framework: define a notification once and deliver it by email, in-app (the "bell"), or through custom channels (SMS, push, etc.). You need this module when you want to let users know something happened — "invoice paid", "new comment", "subscription expiring".
+Multi-channel notifications for the Basalt framework: define a notification once and deliver it by email, in-app (the "bell"), or through custom channels (SMS, push, etc.). You need this module when you want to let users know something happened — "invoice paid", "new comment", "subscription expiring".
 
 ## What this module solves
 
@@ -8,15 +8,15 @@ When something important happens in your application, you usually want to notify
 
 This module introduces the concept of a **declarative notification**: with `defineNotification` you describe the name, the data (validated with a *schema*, typically [Zod](https://zod.dev)), the **channels** it should go out through (a channel is a delivery medium: `mail`, `inApp`, `sms`, ...), and, for each channel, a function that turns the data into the right message for that channel (subject and text for email; title and body for the in-app feed).
 
-`Notifier` handles the rest: it validates the data, respects the recipient's preferences (per-channel opt-out), delivers on all requested channels, and returns a report of what was sent, failed, or skipped. A failure on one channel never blocks the others. It includes a ready-to-use **in-app** channel (notification feed with unread count and "mark as read") and an automatic bridge to **@machize/mailer**.
+`Notifier` handles the rest: it validates the data, respects the recipient's preferences (per-channel opt-out), delivers on all requested channels, and returns a report of what was sent, failed, or skipped. A failure on one channel never blocks the others. It includes a ready-to-use **in-app** channel (notification feed with unread count and "mark as read") and an automatic bridge to **@basaltkit/mailer**.
 
 ## Installation
 
 ```bash
-pnpm add @machize/notifications
+pnpm add @basaltkit/notifications
 ```
 
-The package depends on `@machize/mailer` (the email bridge is included). For data validation, also install `zod`.
+The package depends on `@basaltkit/mailer` (the email bridge is included). For data validation, also install `zod`.
 
 ## Get started in 5 minutes
 
@@ -24,7 +24,7 @@ The package depends on `@machize/mailer` (the email bridge is included). For dat
 
 ```ts
 // src/notifications/invoice-paid.ts
-import { defineNotification } from '@machize/notifications'
+import { defineNotification } from '@basaltkit/notifications'
 import { z } from 'zod'
 
 export const InvoicePaid = defineNotification({
@@ -42,9 +42,9 @@ export const InvoicePaid = defineNotification({
 
 ```ts
 // src/app.ts
-import { createApp } from '@machize/core'
-import { mailerPlugin } from '@machize/mailer'
-import { notificationsPlugin } from '@machize/notifications'
+import { createApp } from '@basaltkit/core'
+import { mailerPlugin } from '@basaltkit/mailer'
+import { notificationsPlugin } from '@basaltkit/notifications'
 
 const app = await createApp({
   plugins: [
@@ -57,7 +57,7 @@ const app = await createApp({
 3. **Notify someone.** The recipient is any object with `id` (and `email` if you use the email channel) — the `Notifiable` type:
 
 ```ts
-import { NOTIFIER } from '@machize/notifications'
+import { NOTIFIER } from '@basaltkit/notifications'
 import { InvoicePaid } from './notifications/invoice-paid.js'
 
 const notifier = app.container.get(NOTIFIER)
@@ -71,7 +71,7 @@ console.log(report)
 4. **Read the in-app feed** (to show the "bell" in the UI):
 
 ```ts
-import { IN_APP } from '@machize/notifications'
+import { IN_APP } from '@basaltkit/notifications'
 
 const inApp = app.container.get(IN_APP)
 console.log(await inApp.unreadCount('u1'))     // 1
@@ -95,7 +95,7 @@ const report = await notifier.notify(bruno, InvoicePaid, { number: 'INV-8' })
 `channels` can be a function that decides the channels based on the recipient and the data:
 
 ```ts
-import { defineNotification } from '@machize/notifications'
+import { defineNotification } from '@basaltkit/notifications'
 
 const Ping = defineNotification({
   name: 'ping',
@@ -112,7 +112,7 @@ const Ping = defineNotification({
 A channel is an object with `name` and `send`. The `channel()` helper creates one inline:
 
 ```ts
-import { channel, notificationsPlugin } from '@machize/notifications'
+import { channel, notificationsPlugin } from '@basaltkit/notifications'
 
 const sms = channel('sms', async (recipient, message, info) => {
   // message is whatever the notification's via.sms function returned
@@ -136,8 +136,8 @@ const reports = await notifier.notifyMany([ada, bruno], InvoicePaid, { number: '
 Just like the mailer, `useQueue` makes `notify()` hand each `Delivery` (an already-rendered unit) off to a dispatcher; the worker calls `deliver()`:
 
 ```ts
-import type { Delivery } from '@machize/notifications'
-import { defineJob } from '@machize/queue'
+import type { Delivery } from '@basaltkit/notifications'
+import { defineJob } from '@basaltkit/queue'
 
 const SendNotification = defineJob({
   name: 'notifications.send',
@@ -150,7 +150,7 @@ notifier.useQueue((delivery) => SendNotification.dispatch(delivery))
 
 ### Reacting to sends and failures (hooks)
 
-The plugin declares two global hooks on Machize's `HookBus`:
+The plugin declares two global hooks on Basalt's `HookBus`:
 
 ```ts
 app.hooks.on('notification:sent', ({ notification, channel, recipientId }) => { /* metrics */ })
@@ -246,8 +246,8 @@ Registers `NOTIFIER` (and `IN_APP` when the in-app channel is active). If `MAILE
 
 ## How it connects to other modules
 
-- **@machize/core** — dependency container (`NOTIFIER`/`IN_APP` tokens) and `HookBus` (hooks `notification:sent`/`notification:failed`).
-- **@machize/mailer** — `MailChannel` converts the `mail` channel's message into an email and sends it through the registered `Mailer`, inheriting the per-tenant sender and the mailer's queue.
-- **@machize/queue** — combine with `useQueue` for background delivery with retries.
-- **@machize/subscriptions** — billing hooks (`billing:subscribed`, `billing:trial_expired`, ...) are the typical place to call `notifier.notify(...)`.
-- **@machize/webhooks** — while this module notifies *users*, the webhooks module notifies *other systems* (via HTTP); they're often used together for the same domain event.
+- **@basaltkit/core** — dependency container (`NOTIFIER`/`IN_APP` tokens) and `HookBus` (hooks `notification:sent`/`notification:failed`).
+- **@basaltkit/mailer** — `MailChannel` converts the `mail` channel's message into an email and sends it through the registered `Mailer`, inheriting the per-tenant sender and the mailer's queue.
+- **@basaltkit/queue** — combine with `useQueue` for background delivery with retries.
+- **@basaltkit/subscriptions** — billing hooks (`billing:subscribed`, `billing:trial_expired`, ...) are the typical place to call `notifier.notify(...)`.
+- **@basaltkit/webhooks** — while this module notifies *users*, the webhooks module notifies *other systems* (via HTTP); they're often used together for the same domain event.

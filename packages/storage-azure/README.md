@@ -1,11 +1,11 @@
-# @machize/storage-azure
+# @basaltkit/storage-azure
 
-An **Azure Blob Storage** driver for [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): stores files in Azure Blob without changing your app code. You need this module when you run on Azure and want Blob Storage instead of S3, GCS, or local disk.
+An **Azure Blob Storage** driver for [`@basaltkit/storage`](https://www.npmjs.com/package/@basaltkit/storage): stores files in Azure Blob without changing your app code. You need this module when you run on Azure and want Blob Storage instead of S3, GCS, or local disk.
 
 ## Installation
 
 ```bash
-pnpm add @machize/storage-azure @azure/storage-blob
+pnpm add @basaltkit/storage-azure @azure/storage-blob
 ```
 
 `@azure/storage-blob` is a **peer dependency**.
@@ -13,8 +13,8 @@ pnpm add @machize/storage-azure @azure/storage-blob
 ## Usage
 
 ```ts
-import { storagePlugin } from '@machize/storage'
-import { AzureBlobStorageDriver } from '@machize/storage-azure'
+import { storagePlugin } from '@basaltkit/storage'
+import { AzureBlobStorageDriver } from '@basaltkit/storage-azure'
 
 storagePlugin({
   disks: {
@@ -37,5 +37,5 @@ new AzureBlobStorageDriver({ container: 'c', client: fakeContainer })
 
 ## How it connects to other modules
 
-- **`@machize/storage`** — this is a driver for that package; the API (`Disk`, `storagePlugin`) comes from there.
-- Sibling drivers: `S3StorageDriver` (in core) and [`@machize/storage-gcs`](https://www.npmjs.com/package/@machize/storage-gcs).
+- **`@basaltkit/storage`** — this is a driver for that package; the API (`Disk`, `storagePlugin`) comes from there.
+- Sibling drivers: `S3StorageDriver` (in core) and [`@basaltkit/storage-gcs`](https://www.npmjs.com/package/@basaltkit/storage-gcs).

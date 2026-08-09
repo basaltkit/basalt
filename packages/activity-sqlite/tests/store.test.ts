@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ActivityRecord } from '@machize/activity'
+import type { ActivityRecord } from '@basaltkit/activity'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openActivityDatabase, SqliteActivityStore, sqliteActivityStore } from '../src/index.js'
 
@@ -31,7 +31,7 @@ describe('SqliteActivityStore', () => {
 })
 
 describe('sqliteActivityStore + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-activity-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-activity-'))
   const file = join(dir, 'activity.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

@@ -1,11 +1,11 @@
 {
-  "name": "create-machize",
-  "version": "1.0.1",
-  "description": "Scaffold a production-shaped Machize SaaS app: npm create machize my-saas [--billing] [--ui] [--cli] [--install] [--git]",
+  "name": "create-basalt",
+  "version": "1.0.0",
+  "description": "Scaffold a production-shaped Basalt SaaS app: npm create basalt my-saas [--billing] [--ui] [--cli] [--install] [--git]",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "create-machize": "./dist/cli.js"
+    "create-basalt": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -22,7 +22,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -33,13 +33,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/create-app"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/create-app#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/create-app#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "scaffolding",

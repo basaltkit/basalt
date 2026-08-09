@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to Machize! -->
+<!-- Thanks for contributing to Basalt! -->
 
 ## What & why
 

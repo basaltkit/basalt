@@ -1,11 +1,11 @@
-import { ensureMetadata, type MachizeApp } from '@machize/core'
+import { ensureMetadata, type BasaltApp } from '@basaltkit/core'
 import { builtinCommands } from './builtins.js'
 import type { CommandDefinition, CommandIo } from './command.js'
 import { consoleIo } from './io.js'
 import { parseArgv } from './parse.js'
 
 export interface RunCliOptions {
-  app: MachizeApp
+  app: BasaltApp
   /** Defaults to process.argv.slice(2). */
   argv?: string[]
   /** Defaults to console output — swap in tests. */
@@ -38,7 +38,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
 
     const found = commands.find((candidate) => candidate.name === command)
     if (!found) {
-      io.error(`Unknown command "${command}". Run "mach list" to see what is available.`)
+      io.error(`Unknown command "${command}". Run "basalt list" to see what is available.`)
       return 1
     }
 

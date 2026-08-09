@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, formatTraceparent, InMemorySpanExporter } from '@machize/core'
+import { createApp, formatTraceparent, InMemorySpanExporter } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin, route, tracingPlugin } from '../src/index.js'
 
 const routes = [

@@ -1,6 +1,6 @@
-# @machize/cli
+# @basaltkit/cli
 
-Terminal command framework (the `mach` command) for Machize applications: define your own commands, run them against the already-booted application, and inspect HTTP routes and scheduled tasks. You need it when you want to give your application its own "command line" — for example `mach routes` or `mach db:seed`.
+Terminal command framework (the `basalt` command) for Basalt applications: define your own commands, run them against the already-booted application, and inspect HTTP routes and scheduled tasks. You need it when you want to give your application its own "command line" — for example `basalt routes` or `basalt db:seed`.
 
 ## What this module solves
 
@@ -8,23 +8,23 @@ A **CLI** (Command Line Interface) is a way to interact with a program by typing
 
 The problem is that these tasks usually need the application "alive": with the database connected, plugins registered, and configuration loaded. Writing a standalone script for each task forces you to repeat all that bootstrapping manually.
 
-`@machize/cli` solves this: you describe each command with `defineCommand`, register the commands with the `commandsPlugin` plugin, and `runCli` handles the rest — boots the application, parses the terminal arguments, runs the right command, and shuts everything down at the end. It also ships with two built-in commands (`routes` and `schedule:list`) and utilities for testing commands without printing anything to the screen.
+`@basaltkit/cli` solves this: you describe each command with `defineCommand`, register the commands with the `commandsPlugin` plugin, and `runCli` handles the rest — boots the application, parses the terminal arguments, runs the right command, and shuts everything down at the end. It also ships with two built-in commands (`routes` and `schedule:list`) and utilities for testing commands without printing anything to the screen.
 
 ## Installation
 
 ```bash
-pnpm add @machize/cli
+pnpm add @basaltkit/cli
 ```
 
-> Note: the package depends on `@machize/core` (the heart of the framework, where `createApp` and the dependency container live). If you created the project with `create-machize --cli`, both are already installed.
+> Note: the package depends on `@basaltkit/core` (the heart of the framework, where `createApp` and the dependency container live). If you created the project with `create-basalt --cli`, both are already installed.
 
 ## Get started in 5 minutes
 
-1. Create a `bin/mach.ts` file at the root of the project — this will be the entry point for the `mach` command:
+1. Create a `bin/basalt.ts` file at the root of the project — this will be the entry point for the `basalt` command:
 
 ```typescript
 #!/usr/bin/env node
-import { runCli } from '@machize/cli'
+import { runCli } from '@basaltkit/cli'
 import { buildApp } from '../src/app.js'
 
 const app = buildApp({ logLevel: 'silent' })
@@ -34,7 +34,7 @@ process.exit(await runCli({ app }))
 2. Define one of your own commands, for example in `src/commands/greet.ts`:
 
 ```typescript
-import { defineCommand } from '@machize/cli'
+import { defineCommand } from '@basaltkit/cli'
 
 export const greetCommand = defineCommand({
   name: 'greet',
@@ -48,8 +48,8 @@ export const greetCommand = defineCommand({
 3. Register the command in the application (in `src/app.ts`), inside the plugin list:
 
 ```typescript
-import { createApp } from '@machize/core'
-import { commandsPlugin } from '@machize/cli'
+import { createApp } from '@basaltkit/core'
+import { commandsPlugin } from '@basaltkit/cli'
 import { greetCommand } from './commands/greet.js'
 
 export function buildApp() {
@@ -64,7 +64,7 @@ export function buildApp() {
 ```json
 {
   "scripts": {
-    "mach": "tsx bin/mach.ts"
+    "basalt": "tsx bin/basalt.ts"
   }
 }
 ```
@@ -72,8 +72,8 @@ export function buildApp() {
 5. Run it in the terminal:
 
 ```bash
-pnpm mach list          # lists all available commands
-pnpm mach greet Maria   # prints: Hello, Maria!
+pnpm basalt list          # lists all available commands
+pnpm basalt greet Maria   # prints: Hello, Maria!
 ```
 
 ## Usage guide
@@ -84,11 +84,11 @@ Without registering anything, `runCli` always provides:
 
 | Command | What it does |
 | --- | --- |
-| `mach list` (or `mach` with no arguments) | Lists all available commands, with their descriptions |
-| `mach routes` | Lists the HTTP routes registered by the application (read from the `http:routes` metadata bucket, populated by HTTP adapters such as `@machize/fastify`) |
-| `mach schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@machize/scheduler`) |
+| `basalt list` (or `basalt` with no arguments) | Lists all available commands, with their descriptions |
+| `basalt routes` | Lists the HTTP routes registered by the application (read from the `http:routes` metadata bucket, populated by HTTP adapters such as `@basaltkit/fastify`) |
+| `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
 
-If you also install `@machize/generator`, you gain the `make:*` commands (see the "How it connects to other modules" section).
+If you also install `@basaltkit/generator`, you gain the `make:*` commands (see the "How it connects to other modules" section).
 
 ### Defining a command with arguments and flags
 
@@ -98,7 +98,7 @@ If you also install `@machize/generator`, you gain the `make:*` commands (see th
 - `--step=2` → `flags.step === '2'` (string — convert it to a number yourself if you need to)
 
 ```typescript
-import { defineCommand } from '@machize/cli'
+import { defineCommand } from '@basaltkit/cli'
 
 export const migrateCommand = defineCommand({
   name: 'tenant:migrate',
@@ -106,7 +106,7 @@ export const migrateCommand = defineCommand({
   async handle({ args, flags, container, io }) {
     const tenantId = args[0]
     if (!tenantId) {
-      io.error('Usage: mach tenant:migrate <tenantId> [--fresh] [--step=N]')
+      io.error('Usage: basalt tenant:migrate <tenantId> [--fresh] [--step=N]')
       return 1 // exit code ≠ 0 signals an error to the terminal
     }
     const fresh = flags['fresh'] === true
@@ -127,8 +127,8 @@ Naming convention: `noun:verb`, for example `tenant:migrate`, `db:seed`.
 
 ```typescript
 import { describe, expect, it } from 'vitest'
-import { createApp } from '@machize/core'
-import { commandsPlugin, defineCommand, memoryIo, runCli } from '@machize/cli'
+import { createApp } from '@basaltkit/core'
+import { commandsPlugin, defineCommand, memoryIo, runCli } from '@basaltkit/cli'
 
 it('runs the greet command', async () => {
   const io = memoryIo()
@@ -151,7 +151,7 @@ it('runs the greet command', async () => {
 
 ## API reference
 
-Everything the package exports from `@machize/cli`:
+Everything the package exports from `@basaltkit/cli`:
 
 ### `defineCommand(command)`
 
@@ -162,14 +162,14 @@ A typed identity function — returns the definition as-is, it just ensures the 
 | Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
 | `name` | `string` | Yes | — | Command name; convention `noun:verb` |
-| `description` | `string` | No | — | Description shown in `mach list` |
+| `description` | `string` | No | — | Description shown in `basalt list` |
 | `handle` | `(context) => void \| number \| Promise<void \| number>` | Yes | — | The function that runs; returns the exit code (omit = 0) |
 
 `CommandContext` (the object received by `handle`):
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `app` | `MachizeApp` | The application (already booted) |
+| `app` | `BasaltApp` | The application (already booted) |
 | `container` | `Container` | The dependency container — use `container.get(TOKEN)` to get services |
 | `io` | `CommandIo` | Write surface (`log`, `error`, `table`) |
 | `args` | `string[]` | Positional arguments after the command name |
@@ -183,7 +183,7 @@ Boots the application (if it's still in the `created` phase), resolves the comma
 
 | Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `app` | `MachizeApp` | Yes | — | The application created with `createApp` |
+| `app` | `BasaltApp` | Yes | — | The application created with `createApp` |
 | `argv` | `string[]` | No | `process.argv.slice(2)` | Arguments to parse |
 | `io` | `CommandIo` | No | `consoleIo()` | Write surface — swap for `memoryIo()` in tests |
 
@@ -191,7 +191,7 @@ Behavior: no command (or `list`) shows the command table and returns `0`; an unk
 
 ### `commandsPlugin(commands: CommandDefinition[])`
 
-A Machize plugin that registers the commands in the `'commands'` metadata bucket, where `runCli` fetches them from. Pass it in the `plugins` list of `createApp`.
+A Basalt plugin that registers the commands in the `'commands'` metadata bucket, where `runCli` fetches them from. Pass it in the `plugins` list of `createApp`.
 
 ### `parseArgv(argv: string[]): ParsedArgv`
 
@@ -228,25 +228,25 @@ The definitions of the built-in `routes` and `schedule:list` commands. *(Advance
 
 ## Common errors and solutions (FAQ)
 
-**`Unknown command "x". Run "mach list" to see what is available.`**
-The command isn't registered. Confirm you passed it inside `commandsPlugin([...])` and that plugin is in the `plugins` list of `createApp`. Run `mach list` to see what's available.
+**`Unknown command "x". Run "basalt list" to see what is available.`**
+The command isn't registered. Confirm you passed it inside `commandsPlugin([...])` and that plugin is in the `plugins` list of `createApp`. Run `basalt list` to see what's available.
 
 **My command runs but the `--step 2` flag doesn't work.**
 The parser only recognizes the equals-sign form: `--step=2`. Written with a space, `2` is treated as a positional argument (it shows up in `args`).
 
-**`mach routes` says "No routes registered."**
+**`basalt routes` says "No routes registered."**
 The command reads the `http:routes` metadata bucket, which is populated by the HTTP adapter (for example `fastifyPlugin`). Make sure the adapter is registered on the same application you pass to `runCli`.
 
 **The application "hangs" after the command finishes.**
 `runCli` always calls `app.shutdown()` at the end. If something stays alive, it's probably a resource left open outside the application's lifecycle (a `setInterval` you created, for example) — close it in the command itself.
 
 **I want a custom error exit code.**
-Return a number from `handle` (for example `return 3`). `runCli` propagates it; the example `bin/mach.ts` passes it to `process.exit`.
+Return a number from `handle` (for example `return 3`). `runCli` propagates it; the example `bin/basalt.ts` passes it to `process.exit`.
 
 ## How it connects to other modules
 
-- **`@machize/core`** — direct dependency: `runCli` receives a `MachizeApp` from `createApp`, and commands access the `Container` and the metadata buckets (`ensureMetadata`).
-- **`@machize/generator`** — provides `generatorCommands()`, a list of `make:*` commands (code generators) ready to pass to `commandsPlugin`. That's how `mach make:resource` shows up.
-- **`@machize/fastify`** — writes routes into the `http:routes` bucket, which the built-in `routes` command reads.
-- **`@machize/scheduler`** — writes tasks into the `schedule:entries` bucket, which `schedule:list` reads.
-- **`create-machize`** — with the `--cli` flag, the project generator creates `bin/mach.ts`, the `pnpm mach` script, and registers `commandsPlugin(generatorCommands())` for you.
+- **`@basaltkit/core`** — direct dependency: `runCli` receives a `BasaltApp` from `createApp`, and commands access the `Container` and the metadata buckets (`ensureMetadata`).
+- **`@basaltkit/generator`** — provides `generatorCommands()`, a list of `make:*` commands (code generators) ready to pass to `commandsPlugin`. That's how `basalt make:resource` shows up.
+- **`@basaltkit/fastify`** — writes routes into the `http:routes` bucket, which the built-in `routes` command reads.
+- **`@basaltkit/scheduler`** — writes tasks into the `schedule:entries` bucket, which `schedule:list` reads.
+- **`create-basalt`** — with the `--cli` flag, the project generator creates `bin/basalt.ts`, the `pnpm basalt` script, and registers `commandsPlugin(generatorCommands())` for you.

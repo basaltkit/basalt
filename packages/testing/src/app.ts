@@ -2,11 +2,11 @@ import {
   createApp,
   definePlugin,
   ensureMetadata,
-  MachizeApp,
+  BasaltApp,
   type Container,
   type CreateAppOptions,
-} from '@machize/core'
-import { FASTIFY, type RequestEnricher } from '@machize/fastify'
+} from '@basaltkit/core'
+import { FASTIFY, type RequestEnricher } from '@basaltkit/fastify'
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify'
 
 export interface TestActor {
@@ -30,7 +30,7 @@ export interface TestRequestOptions {
  * Never register this plugin in a real app.
  */
 const impersonationPlugin = definePlugin({
-  name: 'machize:testing:impersonation',
+  name: 'basalt:testing:impersonation',
   register({ container }) {
     const enricher: RequestEnricher = ({ request, context }) => {
       const rawUser = request.headers['x-test-user']
@@ -46,7 +46,7 @@ export class TestApp {
   private defaultUser: TestActor | undefined
   private defaultTenant: TestRequestOptions['tenant'] | undefined
 
-  constructor(readonly app: MachizeApp) {}
+  constructor(readonly app: BasaltApp) {}
 
   get container(): Container {
     return this.app.container

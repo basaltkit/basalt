@@ -1,4 +1,4 @@
-import type { FieldType } from '@machize/admin'
+import type { FieldType } from '@basaltkit/admin'
 
 /** Renders a cell value for display, by field type. */
 export function formatCell(value: unknown, type: FieldType): string {

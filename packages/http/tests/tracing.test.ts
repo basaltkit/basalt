@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { InMemorySpanExporter } from '@machize/core'
+import { InMemorySpanExporter } from '@basaltkit/core'
 import { HttpServerCollector, tracingPlugin } from '../src/index.js'
 import { FakeReply, bootWith, makeRequest } from './support.js'
 

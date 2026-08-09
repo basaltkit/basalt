@@ -1,7 +1,7 @@
 {
-  "name": "@machize/sdk",
-  "version": "1.0.5",
-  "description": "Type-safe HTTP client for Machize APIs: endpoints defined with Zod drive an inferred client with typed errors and transparent token refresh. Frontend-friendly (only Zod).",
+  "name": "@basaltkit/sdk",
+  "version": "1.0.0",
+  "description": "Type-safe HTTP client for Basalt APIs: endpoints defined with Zod drive an inferred client with typed errors and transparent token refresh. Frontend-friendly (only Zod).",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -22,7 +22,7 @@
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -34,13 +34,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/sdk"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/sdk#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/sdk#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "sdk",
     "type-safe",

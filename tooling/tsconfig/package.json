@@ -1,5 +1,5 @@
 {
-  "name": "@machize/tsconfig",
+  "name": "@basaltkit/tsconfig",
   "version": "0.24.0",
   "private": true,
   "files": [

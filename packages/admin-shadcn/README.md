@@ -1,19 +1,19 @@
-# @machize/admin-shadcn
+# @basaltkit/admin-shadcn
 
-React components styled with **shadcn/ui** for the `@machize/admin` engine: visual primitives (Button, Input, Table, Card, Badge…) plus already-styled versions of `DataTable` and `ResourceForm`. You need this when you want a good-looking admin panel "out of the box", with Tailwind CSS — it's the package the `create-machize --ui` scaffold uses.
+React components styled with **shadcn/ui** for the `@basaltkit/admin` engine: visual primitives (Button, Input, Table, Card, Badge…) plus already-styled versions of `DataTable` and `ResourceForm`. You need this when you want a good-looking admin panel "out of the box", with Tailwind CSS — it's the package the `create-basalt --ui` scaffold uses.
 
 ## What this module solves
 
-`@machize/admin-react` generates correct tables and forms, but in plain, unstyled HTML. This package takes the next step: the same components, with the look of **shadcn/ui** — a very popular component set in the React ecosystem, built on top of **Tailwind CSS** (a way of styling by writing utility classes like `rounded-md` or `text-sm` directly on elements).
+`@basaltkit/admin-react` generates correct tables and forms, but in plain, unstyled HTML. This package takes the next step: the same components, with the look of **shadcn/ui** — a very popular component set in the React ecosystem, built on top of **Tailwind CSS** (a way of styling by writing utility classes like `rounded-md` or `text-sm` directly on elements).
 
 Besides the styled `DataTable` and `ResourceForm`, the package exports the shadcn primitives themselves — `Button`, `Input`, `Label`, `Table`, `Card`, `Badge` — so you can build the rest of your panel (headers, metric cards, action buttons) with the same look, without copying shadcn's files into your project.
 
-An important note: Tailwind classes only produce colors and spacing if your app has **Tailwind CSS configured** with shadcn's theme variables (colors like `--primary`, `--border`, etc.). The `create-machize --ui` scaffold takes care of this for you; if you're integrating by hand, see the installation section.
+An important note: Tailwind classes only produce colors and spacing if your app has **Tailwind CSS configured** with shadcn's theme variables (colors like `--primary`, `--border`, etc.). The `create-basalt --ui` scaffold takes care of this for you; if you're integrating by hand, see the installation section.
 
 ## Installation
 
 ```bash
-pnpm add @machize/admin-shadcn @machize/admin zod
+pnpm add @basaltkit/admin-shadcn @basaltkit/admin zod
 ```
 
 Requirements:
@@ -28,22 +28,22 @@ export default {
   content: [
     './index.html',
     './src/**/*.{ts,tsx}',
-    './node_modules/@machize/admin-shadcn/dist/**/*.js', // ← important
+    './node_modules/@basaltkit/admin-shadcn/dist/**/*.js', // ← important
   ],
   // ... rest of the shadcn config (colors, radius, etc.)
 }
 ```
 
-> Shortcut: `pnpm create machize my-app --ui` generates a complete project (API + Vite/React frontend) with all of this already configured.
+> Shortcut: `pnpm create basalt my-app --ui` generates a complete project (API + Vite/React frontend) with all of this already configured.
 
 ## Get started in 5 minutes
 
-**Step 1 — Define the resource** (same as `@machize/admin` — the logic is shared):
+**Step 1 — Define the resource** (same as `@basaltkit/admin` — the logic is shared):
 
 ```ts
 // resources.ts
 import { z } from 'zod'
-import { defineResource, memoryDataSource } from '@machize/admin'
+import { defineResource, memoryDataSource } from '@basaltkit/admin'
 
 export const projects = defineResource({
   name: 'projects',
@@ -73,7 +73,7 @@ export const source = memoryDataSource<{
 ```tsx
 // ProjectsPage.tsx
 import { useState } from 'react'
-import { useList } from '@machize/admin-react' // data hook (optional but handy)
+import { useList } from '@basaltkit/admin-react' // data hook (optional but handy)
 import {
   Button,
   Card,
@@ -82,7 +82,7 @@ import {
   CardTitle,
   DataTable,
   ResourceForm,
-} from '@machize/admin-shadcn'
+} from '@basaltkit/admin-shadcn'
 import { projects, source } from './resources'
 
 export function ProjectsPage() {
@@ -123,10 +123,10 @@ export function ProjectsPage() {
 
 ### `DataTable` — a shadcn table derived from the schema
 
-Same props as the `DataTable` from `@machize/admin-react`; only the presentation changes: it uses the `Table*` primitives, boolean cells become `Badge` ("Yes" = `default` variant, "No" = `secondary`), dates formatted as `YYYY-MM-DD`, and with `onRowClick` rows get `cursor-pointer`.
+Same props as the `DataTable` from `@basaltkit/admin-react`; only the presentation changes: it uses the `Table*` primitives, boolean cells become `Badge` ("Yes" = `default` variant, "No" = `secondary`), dates formatted as `YYYY-MM-DD`, and with `onRowClick` rows get `cursor-pointer`.
 
 ```tsx
-import { DataTable } from '@machize/admin-shadcn'
+import { DataTable } from '@basaltkit/admin-shadcn'
 import { projects } from './resources'
 
 <DataTable
@@ -139,10 +139,10 @@ import { projects } from './resources'
 
 ### `ResourceForm` — a generated, validated shadcn form
 
-Same behavior as the `ResourceForm` from `@machize/admin-react` (a controlled form, validates on submit, shows per-field errors, only calls `onSubmit` with valid data), with shadcn visuals: styled `Label` + `Input`, `<select>` matching the input style, errors in `text-destructive`, primary `Button`.
+Same behavior as the `ResourceForm` from `@basaltkit/admin-react` (a controlled form, validates on submit, shows per-field errors, only calls `onSubmit` with valid data), with shadcn visuals: styled `Label` + `Input`, `<select>` matching the input style, errors in `text-destructive`, primary `Button`.
 
 ```tsx
-import { ResourceForm } from '@machize/admin-shadcn'
+import { ResourceForm } from '@basaltkit/admin-shadcn'
 import { projects, source } from './resources'
 
 <ResourceForm
@@ -163,7 +163,7 @@ All accept the corresponding element's normal HTML props (including `className` 
 **`Button`** — button with visual variants:
 
 ```tsx
-import { Button } from '@machize/admin-shadcn'
+import { Button } from '@basaltkit/admin-shadcn'
 
 <Button>Save</Button>
 <Button variant="destructive" size="sm">Delete</Button>
@@ -176,7 +176,7 @@ import { Button } from '@machize/admin-shadcn'
 **`Input` and `Label`** — text field and label:
 
 ```tsx
-import { Input, Label } from '@machize/admin-shadcn'
+import { Input, Label } from '@basaltkit/admin-shadcn'
 
 <div className="space-y-2">
   <Label htmlFor="email">Email</Label>
@@ -187,7 +187,7 @@ import { Input, Label } from '@machize/admin-shadcn'
 **`Table` and family** — a hand-composed table (when the automatic `DataTable` isn't enough):
 
 ```tsx
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@machize/admin-shadcn'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@basaltkit/admin-shadcn'
 
 <Table>
   <TableHeader>
@@ -208,7 +208,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 **`Card` and family** — card with header and content:
 
 ```tsx
-import { Card, CardContent, CardHeader, CardTitle } from '@machize/admin-shadcn'
+import { Card, CardContent, CardHeader, CardTitle } from '@basaltkit/admin-shadcn'
 
 <Card>
   <CardHeader>
@@ -221,7 +221,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@machize/admin-shadcn'
 **`Badge`** — small status tag:
 
 ```tsx
-import { Badge } from '@machize/admin-shadcn'
+import { Badge } from '@basaltkit/admin-shadcn'
 
 <Badge>Active</Badge>
 <Badge variant="secondary">Draft</Badge>
@@ -232,7 +232,7 @@ import { Badge } from '@machize/admin-shadcn'
 **`cn`** — utility to merge Tailwind classes without conflicts (the last one wins):
 
 ```ts
-import { cn } from '@machize/admin-shadcn'
+import { cn } from '@basaltkit/admin-shadcn'
 
 cn('px-2', 'px-4')                        // 'px-4'
 cn('text-sm', condition && 'font-bold')   // merges conditionally
@@ -305,22 +305,22 @@ Merges conditional classes (`clsx`) and resolves Tailwind conflicts (`tailwind-m
 
 ## Common errors and solutions (FAQ)
 
-**"The components appear without colors/styling."** Two common causes: (1) Tailwind isn't scanning this package's files — add `'./node_modules/@machize/admin-shadcn/dist/**/*.js'` to `content` in `tailwind.config`; (2) the shadcn theme variables (`--primary`, `--border`, …) are missing from your global CSS — follow the shadcn/ui installation guide or use the `create-machize --ui` scaffold.
+**"The components appear without colors/styling."** Two common causes: (1) Tailwind isn't scanning this package's files — add `'./node_modules/@basaltkit/admin-shadcn/dist/**/*.js'` to `content` in `tailwind.config`; (2) the shadcn theme variables (`--primary`, `--border`, …) are missing from your global CSS — follow the shadcn/ui installation guide or use the `create-basalt --ui` scaffold.
 
 **"The button has a transparent/odd background."** Colors come from the shadcn theme's CSS variables. Without `--primary` and friends defined on `:root`, classes like `bg-primary` have no value.
 
 **"`asChild` throws a `React.Children.only` error."** With `asChild`, `Button` requires exactly **one** child element (e.g., a single `<a>`). This comes from Radix Slot.
 
-**"`ResourceForm`'s `onSubmit` doesn't fire."** Validation failed — look for red text below the field (`role="alert"`). Behavior is identical to `@machize/admin-react`.
+**"`ResourceForm`'s `onSubmit` doesn't fire."** Validation failed — look for red text below the field (`role="alert"`). Behavior is identical to `@basaltkit/admin-react`.
 
 **"I changed `initialValues` and the form didn't update."** Initial values are only read on mount. Remount with a different `key`: `<ResourceForm key={record.id} … />`.
 
-**"I want a hook to load data — I don't see `useList` here."** `useList` lives in `@machize/admin-react` (this package only ships visual components). You can use both packages together without issue.
+**"I want a hook to load data — I don't see `useList` here."** `useList` lives in `@basaltkit/admin-react` (this package only ships visual components). You can use both packages together without issue.
 
 ## How it connects to other modules
 
-- **`@machize/admin`** — the headless engine: this package renders the `tableView`/`formView` view models and validates with `resource.validate`. Resources are defined there.
-- **`@machize/admin-react`** — the unstyled version of the same `DataTable`/`ResourceForm` (identical props), plus the `useList` hook and `formatCell`. Switching between the two packages is just switching the import.
-- **`@machize/dashboard`** — defines a panel's sections and metrics; uses these primitives (`Card`, `Badge`, `DataTable`) to display them.
-- **`@machize/sdk`** — the typed HTTP client; in the frontend generated by the scaffold, data arrives via the SDK and is shown with these components.
-- **`create-machize --ui`** — the Machize scaffold generates a Vite + React frontend already configured with Tailwind, the shadcn theme, and this package talking to the API through `@machize/sdk` (`--ui` projects use pnpm workspaces).
+- **`@basaltkit/admin`** — the headless engine: this package renders the `tableView`/`formView` view models and validates with `resource.validate`. Resources are defined there.
+- **`@basaltkit/admin-react`** — the unstyled version of the same `DataTable`/`ResourceForm` (identical props), plus the `useList` hook and `formatCell`. Switching between the two packages is just switching the import.
+- **`@basaltkit/dashboard`** — defines a panel's sections and metrics; uses these primitives (`Card`, `Badge`, `DataTable`) to display them.
+- **`@basaltkit/sdk`** — the typed HTTP client; in the frontend generated by the scaffold, data arrives via the SDK and is shown with these components.
+- **`create-basalt --ui`** — the Basalt scaffold generates a Vite + React frontend already configured with Tailwind, the shadcn theme, and this package talking to the API through `@basaltkit/sdk` (`--ui` projects use pnpm workspaces).

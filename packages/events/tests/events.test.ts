@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import { defineEvent, EventBus, EVENTS, eventsPlugin, EventValidationError } from '../src/index.js'
 
 const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))

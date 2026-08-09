@@ -46,7 +46,7 @@ export interface HandlerArgs<B, Q, P> {
   reply: HttpReply
 }
 
-export interface MachizeRoute {
+export interface BasaltRoute {
   method: HttpMethod
   url: string
   body?: ZodType | undefined
@@ -77,6 +77,6 @@ export function route<
   response?: Record<number, ZodType>
   meta?: Record<string, unknown>
   handler: (args: HandlerArgs<B, Q, P>) => unknown
-}): MachizeRoute {
-  return config as unknown as MachizeRoute
+}): BasaltRoute {
+  return config as unknown as BasaltRoute
 }

@@ -1,14 +1,14 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { MachizeError, parseDuration, type DurationInput } from '@machize/core'
+import { BasaltError, parseDuration, type DurationInput } from '@basaltkit/core'
 
-export class TokenInvalidError extends MachizeError {
+export class TokenInvalidError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_TOKEN_INVALID', 'The token is invalid.')
   }
 }
 
-export class TokenExpiredError extends MachizeError {
+export class TokenExpiredError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_TOKEN_EXPIRED', 'The token has expired.')

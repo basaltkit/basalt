@@ -1,14 +1,14 @@
 # Teams
 
-`@machize/teams` turns a tenant into a **multi-user team**: members with ranked
+`@basaltkit/teams` turns a tenant into a **multi-user team**: members with ranked
 roles, and email invitations to join. It's decoupled from auth and tenancy —
 identifiers are read from the request context — and can mirror role changes into
-[`@machize/permissions`](/guide/security).
+[`@basaltkit/permissions`](/guide/security).
 
 ## Setup
 
 ```ts
-import { teamsPlugin, teamRoutes } from '@machize/teams'
+import { teamsPlugin, teamRoutes } from '@basaltkit/teams'
 
 const app = await createApp({
   plugins: [
@@ -43,7 +43,7 @@ Invitations enroll members, but the first owner is seeded directly — typically
 when the tenant is created:
 
 ```ts
-import { TEAMS } from '@machize/teams'
+import { TEAMS } from '@basaltkit/teams'
 await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 ```
 
@@ -84,12 +84,12 @@ including email plumbing — is in the
 
 ## Mirroring roles into permissions
 
-Pass an `access` store (a `@machize/permissions` `AccessStore` satisfies the
+Pass an `access` store (a `@basaltkit/permissions` `AccessStore` satisfies the
 structural `RoleAssigner`) and every membership change becomes a role grant in
 that tenant's scope:
 
 ```ts
-import { MemoryAccessStore } from '@machize/permissions'
+import { MemoryAccessStore } from '@basaltkit/permissions'
 const access = new MemoryAccessStore()
 teamsPlugin({ access })
 ```

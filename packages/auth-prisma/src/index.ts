@@ -15,16 +15,16 @@ import type {
   SessionStore,
   UserPatch,
   UserSource,
-} from '@machize/auth'
+} from '@basaltkit/auth'
 
 /**
- * Prisma-backed implementations of every `@machize/auth` store — the reference
+ * Prisma-backed implementations of every `@basaltkit/auth` store — the reference
  * "real backend" for production (PostgreSQL, MySQL, …). Bring your own generated
  * `PrismaClient` whose schema includes the `Auth*` models (see the bundled
  * `prisma/schema.prisma`); the stores only touch those delegates, so they layer
  * onto an existing client without owning it.
  *
- * Pairs with `@machize/auth-sqlite` (the zero-dependency, single-node option):
+ * Pairs with `@basaltkit/auth-sqlite` (the zero-dependency, single-node option):
  * same store contracts, different backend.
  */
 
@@ -127,7 +127,7 @@ export interface PrismaAuthClient {
 
 // --- boundary helpers -------------------------------------------------------
 
-// The @machize/auth contracts model time as epoch-ms numbers; Prisma models it
+// The @basaltkit/auth contracts model time as epoch-ms numbers; Prisma models it
 // as DateTime (Date). Convert at the edges, and map nullable columns to the
 // optional-property shape the contracts use.
 const ms = (d: Date): number => d.getTime()
@@ -417,13 +417,13 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaAuthStores(client: PrismaAuthClient): PrismaAuthStores {
-  ensureModel(client, 'authUser', '@machize/auth-prisma')
+  ensureModel(client, 'authUser', '@basaltkit/auth-prisma')
   return {
     users: new PrismaUserSource(client),
     sessions: new PrismaSessionStore(client),

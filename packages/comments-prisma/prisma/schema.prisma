@@ -1,4 +1,4 @@
-// Reference schema for @machize/comments-prisma.
+// Reference schema for @basaltkit/comments-prisma.
 // Copy this model into your app's schema.prisma, migrate, and pass the client
 // to `prismaCommentsStore()`.
 

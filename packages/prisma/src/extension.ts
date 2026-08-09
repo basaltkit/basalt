@@ -1,6 +1,6 @@
-import { MachizeError, tryCtx } from '@machize/core'
+import { BasaltError, tryCtx } from '@basaltkit/core'
 
-export class MissingTenantError extends MachizeError {
+export class MissingTenantError extends BasaltError {
   constructor() {
     super(
       'PRISMA_TENANT_MISSING',
@@ -115,7 +115,7 @@ export function tenancyExtension(options: TenancyExtensionOptions = {}) {
   const getTenantId = options.getTenantId ?? defaultTenantId
 
   return {
-    name: 'machize-tenancy',
+    name: 'basalt-tenancy',
     query: {
       $allModels: {
         async $allOperations({
