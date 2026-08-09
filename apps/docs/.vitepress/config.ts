@@ -41,6 +41,13 @@ export default defineConfig({
           ],
         },
         {
+          text: 'Frontend',
+          items: [
+            { text: 'Web UI & components', link: '/guide/web-ui' },
+            { text: 'Self-contained UIs', link: '/guide/admin-pages' },
+          ],
+        },
+        {
           text: 'Data & infrastructure',
           items: [
             { text: 'Queues & Jobs', link: '/guide/queues' },
@@ -58,7 +65,6 @@ export default defineConfig({
             { text: 'Comments', link: '/guide/comments' },
             { text: 'Internationalization', link: '/guide/i18n' },
             { text: 'Data exports', link: '/guide/exports' },
-            { text: 'Self-contained UIs', link: '/guide/admin-pages' },
           ],
         },
         {
