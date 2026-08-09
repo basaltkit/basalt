@@ -1,5 +1,16 @@
 # @machize/fastify
 
+## 1.0.5
+
+### Minor Changes
+
+- Add `RedisIdempotencyStore` — a Redis-backed `IdempotencyStore` so a cached
+  response is replayed across every instance and the reservation survives a
+  restart (the in-memory store is per-process and lost on reboot). Records carry
+  a PX TTL; inject any ioredis-compatible client — no new dependency.
+- `IdempotencyStore` methods may now return a promise; the idempotency plugin
+  awaits them. Existing synchronous stores are unaffected.
+
 ## 1.0.3
 
 ### Patch Changes

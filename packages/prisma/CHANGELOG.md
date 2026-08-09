@@ -1,5 +1,14 @@
 # @machize/prisma
 
+## 1.0.5
+
+### Patch Changes
+
+- `mach prisma:sync` now also discovers `@machize/tenancy-prisma`,
+  `@machize/events-prisma` and `@machize/webhooks-prisma` — their
+  `Tenant`/`TenantDomain`, `OutboxEntry` and `WebhookEndpoint` models merge into
+  your `schema.prisma` like every other `@machize/*-prisma`.
+
 ## 1.0.4
 
 ### Patch Changes

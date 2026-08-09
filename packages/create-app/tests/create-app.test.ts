@@ -39,7 +39,7 @@ describe('createProject', () => {
     // npm shows "name@undefined" in errors when version is missing.
     expect(pkg.version).toBe('0.1.0')
     // Machize deps must point at a real published range, never a placeholder.
-    expect(pkg.dependencies['@machize/core']).toMatch(/^\^0\.\d+\.\d+$/)
+    expect(pkg.dependencies['@machize/core']).toMatch(/^\^1\.\d+\.\d+$/)
     expect(pkg.dependencies['@machize/core']).not.toBe('^0.0.0')
     expect(pkg.dependencies).toHaveProperty('@machize/tenancy')
     expect(pkg.dependencies).toHaveProperty('@machize/auth')
@@ -124,8 +124,8 @@ describe('createProject', () => {
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
     expect(pkg.dependencies).toHaveProperty('@machize/cli')
     expect(pkg.dependencies).toHaveProperty('@machize/generator')
-    expect(pkg.dependencies['@machize/generator']).toBe('^0.4.0')
-    expect(pkg.dependencies['@machize/cli']).toBe('^0.4.0')
+    expect(pkg.dependencies['@machize/generator']).toBe('^1.0.0')
+    expect(pkg.dependencies['@machize/cli']).toBe('^1.0.0')
     expect(pkg.scripts.mach).toBe('tsx bin/mach.ts')
 
     const bin = await read(result.dir, 'bin/mach.ts')
@@ -133,7 +133,7 @@ describe('createProject', () => {
     expect(bin).toContain('runCli({ app })')
 
     const app = await read(result.dir, 'src/app.ts')
-    expect(app).toContain('commandsPlugin(generatorCommands())')
+    expect(app).toContain('commandsPlugin([...generatorCommands(), prismaSyncCommand()])')
     expect(app).toContain("from '@machize/generator'")
   })
 

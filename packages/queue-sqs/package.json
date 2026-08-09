@@ -1,6 +1,6 @@
 {
   "name": "@machize/queue-sqs",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Amazon SQS driver for @machize/queue: native delayed delivery, app-level retries with backoff and a dead-letter queue (no priority — SQS has none).",
   "license": "MIT",
   "type": "module",
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/queue": "workspace:*"
+    "@machize/queue": "workspace:^"
   },
   "peerDependencies": {
     "@aws-sdk/client-sqs": "^3.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

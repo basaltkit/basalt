@@ -1,6 +1,6 @@
 {
   "name": "@machize/realtime",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Realtime for Machize: server-to-client push over WebSocket/SSE with per-tenant channels, presence, an events bridge, and a pluggable backplane (in-memory or Redis pub/sub).",
   "license": "MIT",
   "type": "module",
@@ -19,10 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*"
+    "@machize/core": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

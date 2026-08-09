@@ -205,6 +205,84 @@ takes the durable `AccessStore` (role assignments and grants, scoped), so RBAC
 state survives a restart too. `@machize/flags` needs no backend — feature flags
 are declared in code and evaluated deterministically, with nothing to persist.
 
+## Tenancy — `@machize/tenancy-sqlite` / `@machize/tenancy-prisma`
+
+The tenant registry is the foundation of a multi-tenant app, yet `@machize/tenancy`
+ships only `MemoryTenantSource` by default — every tenant is forgotten on restart.
+Both durable backends implement the same `TenantSource` contract, so the registry
+(and each tenant's custom domains) becomes persistent:
+
+```ts
+import { tenancyPlugin, subdomainResolver } from '@machize/tenancy'
+import { sqliteTenantSource } from '@machize/tenancy-sqlite'   // single-node, zero-dep
+// import { prismaTenantSource } from '@machize/tenancy-prisma' // Postgres/MySQL
+
+const tenants = sqliteTenantSource('./data/tenants.db')
+await tenants.save({ id: 'acme', name: 'Acme', domains: ['app.acme.com'] })
+tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'localhost' })] })
+```
+
+A tenant is an **open record** (`{ id, ...anything }`), stored as JSON so any
+per-tenant field round-trips unchanged; custom domains are normalized into an
+indexed table so `findByDomain` (the domain resolver) is a keyed lookup. Both add
+write methods — `save` (upsert + replace the domain set), `remove` — and enforce
+**globally-unique domains**: claiming one already owned by another tenant is
+rejected, so routing stays unambiguous. `prismaTenantSource` ships a reference
+`schema.prisma` picked up by `mach prisma:sync`; same "which one?" trade-off as
+auth — SQLite for a single node, Prisma when you already run a database.
+
+## Events outbox — `@machize/events-sqlite` / `@machize/events-prisma`
+
+The [transactional outbox](/guide/events) writes each domain event to a durable
+store, then a relay delivers it to the outside world (webhooks, Kafka…) and marks
+it published — delivery is **at-least-once and survives a crash**. That guarantee
+only holds if the store is durable, yet `@machize/events` defaults to
+`MemoryOutboxStore`, which loses every un-relayed event on restart. Both backends
+implement the same `OutboxStore` contract:
+
+```ts
+import { outboxPlugin } from '@machize/events'
+import { sqliteOutboxStore } from '@machize/events-sqlite'   // single-node, zero-dep
+// import { prismaOutboxStore } from '@machize/events-prisma' // Postgres/MySQL
+
+const outbox = sqliteOutboxStore('./data/outbox.db')
+outboxPlugin({
+  store: outbox.store,
+  captureEvents: ['order.*', 'invoice.*'], // recorded durably as they fire
+  dispatch: async (entry) => sendToWebhook(entry),
+  intervalMs: 1000,
+})
+```
+
+The SQLite backend keeps a partial index on un-published rows so the relay's
+"what's pending?" scan stays cheap. The Prisma backend puts the outbox in your
+primary database — the point of the pattern: enqueue the event **in the same
+transaction** as the state change, and the two can never disagree. `pending`,
+attempt ceilings and `markPublished`/`markFailed` keep the in-memory semantics,
+now durable.
+
+## Outbound webhooks — `@machize/webhooks-sqlite` / `@machize/webhooks-prisma`
+
+`@machize/webhooks` keeps its endpoint subscriptions behind a `WebhookStore`, and
+defaults to `MemoryWebhookStore` — so a redeploy forgets every registered
+endpoint and events silently stop being delivered. Both durable backends persist
+the subscriptions:
+
+```ts
+import { webhooksPlugin } from '@machize/webhooks'
+import { sqliteWebhookStore } from '@machize/webhooks-sqlite'   // single-node, zero-dep
+// import { prismaWebhookStore } from '@machize/webhooks-prisma' // Postgres/MySQL
+
+const webhooks = sqliteWebhookStore('./data/webhooks.db')
+webhooksPlugin({ store: webhooks.store, secret: process.env.WEBHOOK_SECRET })
+```
+
+Each endpoint (URL, event patterns, optional tenant, per-endpoint secret and
+`active` flag) survives a restart. Event-pattern matching (`*`, `prefix.*`,
+exact) reuses `matchesEvent`, so `forEvent` behaves identically to the memory
+store — the delivery/retry logic is unchanged, only the subscription list is now
+durable.
+
 ## Redis-backed stores
 
 Several packages already ship Redis implementations for the state that benefits
@@ -215,6 +293,8 @@ most from being shared across instances:
 | Cache | `MemoryCacheDriver` | `RedisCacheDriver` (`@machize/cache`), tiered (`@machize/cache-tiered`) |
 | Usage metering | `MemoryUsageStore` | `RedisUsageStore` — atomic `consume()` via Lua |
 | Webhook idempotency | `MemoryWebhookStore` | `RedisWebhookStore` — `SET NX EX` across restarts |
+| Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@machize/http`) — one atomic counter shared across instances |
+| Request idempotency | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@machize/fastify`) — replays a cached response across instances |
 | Queues | in-memory driver | RabbitMQ / Kafka / SQS driver packages |
 | Search | `MemorySearchDriver` | Meilisearch / Postgres driver packages |
 | Storage | local disk | S3 / GCS / Azure driver packages |

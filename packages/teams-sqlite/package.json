@@ -1,6 +1,6 @@
 {
   "name": "@machize/teams-sqlite",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Durable, SQLite-backed implementations of the @machize/teams stores (memberships, invitations) built on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",
@@ -22,11 +22,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@machize/teams": "workspace:*"
+    "@machize/teams": "workspace:^"
   },
   "devDependencies": {
-    "@machize/teams": "workspace:*",
-    "@machize/tsconfig": "workspace:*",
+    "@machize/teams": "workspace:^",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

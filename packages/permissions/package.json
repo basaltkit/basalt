@@ -1,6 +1,6 @@
 {
   "name": "@machize/permissions",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Authorization for Machize, Spatie-style: roles, permissions with wildcards, policies, tenant scoping, super admin and route guards.",
   "license": "MIT",
   "type": "module",
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/fastify": "workspace:*"
+    "@machize/core": "workspace:^",
+    "@machize/fastify": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",

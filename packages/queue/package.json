@@ -1,6 +1,6 @@
 {
   "name": "@machize/queue",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Machize queues on top of BullMQ: declarative jobs with Zod payloads, context propagation (tenant/requestId) to workers and a sync driver for tests.",
   "license": "MIT",
   "type": "module",
@@ -19,12 +19,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:*",
-    "@machize/events": "workspace:*",
+    "@machize/core": "workspace:^",
+    "@machize/events": "workspace:^",
     "bullmq": "^5.44.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
