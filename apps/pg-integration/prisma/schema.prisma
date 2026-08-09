@@ -238,3 +238,46 @@ model PermRolePermission {
   @@id([scope, role, permission])
   @@map("perm_role_permissions")
 }
+
+model Tenant {
+  id      String         @id
+  data    Json
+  domains TenantDomain[]
+
+  @@map("tenants")
+}
+
+model TenantDomain {
+  domain   String @id
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("tenant_domains")
+}
+
+model OutboxEntry {
+  id          String    @id
+  event       String
+  payload     String?
+  tenantId    String?
+  createdAt   DateTime
+  attempts    Int       @default(0)
+  publishedAt DateTime?
+  lastError   String?
+
+  @@index([publishedAt, createdAt])
+  @@map("outbox")
+}
+
+model WebhookEndpoint {
+  id       String   @id
+  url      String
+  events   String
+  tenantId String?
+  secret   String?
+  active   Boolean?
+
+  @@index([tenantId])
+  @@map("webhook_endpoints")
+}

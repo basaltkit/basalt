@@ -1,6 +1,6 @@
 {
   "name": "@machize/queue-kafka",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Kafka driver for @machize/queue: produce/consume jobs with retry and dead-letter topics (no delayed delivery or priority — Kafka has neither).",
   "license": "MIT",
   "type": "module",
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/queue": "workspace:*"
+    "@machize/queue": "workspace:^"
   },
   "peerDependencies": {
     "kafkajs": "^2.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@machize/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
