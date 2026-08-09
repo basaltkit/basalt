@@ -39,11 +39,11 @@ function makeFakeClient(): PrismaEventsClient {
         rows.set(row.id, row)
         return row
       },
-      async findMany({ where, orderBy, take }) {
+      async findMany({ where, take }) {
         let list = [...rows.values()]
         if (where?.publishedAt === null) list = list.filter((r) => r.publishedAt === null)
         if (where?.attempts?.lt !== undefined) list = list.filter((r) => r.attempts < where.attempts.lt)
-        // orderBy [{ createdAt: 'asc' }, { id: 'asc' }]
+        // the store always asks for orderBy [{ createdAt: 'asc' }, { id: 'asc' }]
         list.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
         if (take !== undefined) list = list.slice(0, take)
         return list
