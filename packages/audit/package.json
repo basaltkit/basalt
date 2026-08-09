@@ -1,7 +1,7 @@
 {
-  "name": "@machize/audit",
-  "version": "1.0.5",
-  "description": "Append-only audit trail for Machize: automatically records lifecycle hooks and domain events, enriched with actor/tenant/request from the context.",
+  "name": "@basaltkit/audit",
+  "version": "1.0.0",
+  "description": "Append-only audit trail for Basalt: automatically records lifecycle hooks and domain events, enriched with actor/tenant/request from the context.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/events": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/events": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -35,13 +35,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/audit"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/audit#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/audit#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "audit",

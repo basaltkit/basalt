@@ -1,4 +1,4 @@
-import { createToken, definePlugin, tryCtx } from '@machize/core'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
 import type { MailDriver } from './driver.js'
 import { LogMailDriver } from './drivers/log.js'
 import { MemoryMailDriver } from './drivers/memory.js'
@@ -46,7 +46,7 @@ export class Mailer {
 
   /**
    * Routes deliveries through a dispatcher instead of sending inline —
-   * typically a @machize/queue job that calls mailer.deliver(message):
+   * typically a @basaltkit/queue job that calls mailer.deliver(message):
    *
    * const SendMail = defineJob({ name: 'mailer.send', handle: (m) => mailer.deliver(m) })
    * mailer.useQueue((m) => SendMail.dispatch(m))
@@ -123,7 +123,7 @@ export interface MailerPluginOptions extends MailerOptions {
 export function mailerPlugin(options: MailerPluginOptions = {}) {
   let driver: MailDriver | undefined
   return definePlugin({
-    name: 'machize:mailer',
+    name: 'basalt:mailer',
     register({ container }) {
       container.singleton(MAILER, () => {
         driver =

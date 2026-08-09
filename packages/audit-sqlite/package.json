@@ -1,7 +1,7 @@
 {
-  "name": "@machize/audit-sqlite",
-  "version": "1.0.5",
-  "description": "Durable, SQLite-backed implementation of the @machize/audit AuditStore (append-only trail), on Node's built-in node:sqlite. Zero external dependencies.",
+  "name": "@basaltkit/audit-sqlite",
+  "version": "1.0.0",
+  "description": "Durable, SQLite-backed implementation of the @basaltkit/audit AuditStore (append-only trail), on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -22,11 +22,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@machize/audit": "workspace:^"
+    "@basaltkit/audit": "workspace:^"
   },
   "devDependencies": {
-    "@machize/audit": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/audit": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -37,13 +37,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/audit-sqlite"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/audit-sqlite#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/audit-sqlite#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "audit",
     "sqlite",

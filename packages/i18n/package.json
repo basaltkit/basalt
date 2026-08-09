@@ -1,7 +1,7 @@
 {
-  "name": "@machize/i18n",
-  "version": "1.0.5",
-  "description": "Internationalization for Machize: context-resolved locale (per user/tenant), typed message catalogs with interpolation and plurals, and Intl-based formatting. Zero dependencies.",
+  "name": "@basaltkit/i18n",
+  "version": "1.0.0",
+  "description": "Internationalization for Basalt: context-resolved locale (per user/tenant), typed message catalogs with interpolation and plurals, and Intl-based formatting. Zero dependencies.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,10 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^"
+    "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -33,13 +33,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/i18n"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/i18n#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/i18n#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "i18n",

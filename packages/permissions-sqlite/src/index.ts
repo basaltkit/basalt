@@ -4,13 +4,13 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import type { AccessStore } from '@machize/permissions'
+import type { AccessStore } from '@basaltkit/permissions'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/permissions`
+ * Durable, SQLite-backed implementation of the `@basaltkit/permissions`
  * `AccessStore`, on Node's built-in `node:sqlite`. Zero external dependencies.
  * The single-node reference backend; the production (Postgres/MySQL) counterpart
- * is `@machize/permissions-prisma`.
+ * is `@basaltkit/permissions-prisma`.
  *
  * Role assignments and permission grants are sets — every write is an
  * `INSERT OR IGNORE`, so re-granting is a harmless no-op.

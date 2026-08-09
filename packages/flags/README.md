@@ -1,6 +1,6 @@
-# @machize/flags
+# @basaltkit/flags
 
-Feature flags for Machize: switches that let you turn parts of the application on or off (for everyone, for a specific customer, for a user, or for a gradual percentage of people) without deploying new code. You need this module when you want to roll out features safely and in a controlled way.
+Feature flags for Basalt: switches that let you turn parts of the application on or off (for everyone, for a specific customer, for a user, or for a gradual percentage of people) without deploying new code. You need this module when you want to roll out features safely and in a controlled way.
 
 ## What this module solves
 
@@ -8,15 +8,15 @@ A **feature flag** is a switch in the code: instead of "this feature exists for 
 
 This module gives you a **typed** way (TypeScript knows the name and type of each flag) to declare flags with: a default value, exceptions by **tenant** (customer/organization in a SaaS application), exceptions by user, **percentage rollout** (0–100% of subjects, deterministically — the same user always sees the same result, with no "flickering"), and custom rules in code.
 
-And because it's integrated into Machize, flag evaluation automatically uses the **current request context**: if the request belongs to the "acme" tenant and the "vip" user, you just ask `flags.enabled('newDashboard')` — you don't need to pass who the user is, the framework already knows. Flags aren't just booleans: they can hold any type of value (numbers, strings, objects), which is useful for limits and per-plan configuration.
+And because it's integrated into Basalt, flag evaluation automatically uses the **current request context**: if the request belongs to the "acme" tenant and the "vip" user, you just ask `flags.enabled('newDashboard')` — you don't need to pass who the user is, the framework already knows. Flags aren't just booleans: they can hold any type of value (numbers, strings, objects), which is useful for limits and per-plan configuration.
 
 ## Installation
 
 ```bash
-pnpm add @machize/flags
+pnpm add @basaltkit/flags
 ```
 
-Depends only on `@machize/core`. No database or external services needed — flags are defined in code.
+Depends only on `@basaltkit/core`. No database or external services needed — flags are defined in code.
 
 ## Get started in 5 minutes
 
@@ -25,8 +25,8 @@ Depends only on `@machize/core`. No database or external services needed — fla
 3. **Evaluate the flags** wherever you need them.
 
 ```ts
-import { createApp } from '@machize/core'
-import { defineFlags, FLAGS, flagsPlugin } from '@machize/flags'
+import { createApp } from '@basaltkit/core'
+import { defineFlags, FLAGS, flagsPlugin } from '@basaltkit/flags'
 
 // 1. Define the flags (e.g. in a file like src/flags.ts)
 const flags = defineFlags({
@@ -70,7 +70,7 @@ Each flag resolves to the **most specific** value available. The priority order 
 5. `default` — the base value
 
 ```ts
-import { defineFlags } from '@machize/flags'
+import { defineFlags } from '@basaltkit/flags'
 
 const flags = defineFlags({
   maxUploadMb: {
@@ -92,7 +92,7 @@ Note that flags can be **any type** — this one is numeric. `flags.value(...)` 
 For **boolean** flags, `rollout: 25` enables the flag for 25% of subjects. The subject is `userId` (or `tenantId`, if there's no user). The choice is **deterministic**: it's based on a hash of the pair (flag name, subject), so the same user always sees the same result — and different flags get different distributions.
 
 ```ts
-import { defineFlags } from '@machize/flags'
+import { defineFlags } from '@basaltkit/flags'
 
 const flags = defineFlags({
   betaSearch: { default: false, rollout: 50 },
@@ -112,7 +112,7 @@ To ramp up the rollout (25 → 50 → 100), just change the number and deploy: w
 A `rule` is a function that receives the context and returns a value (which wins over everything) or `undefined` (which lets evaluation continue to the next layers). The context accepts extra fields beyond `tenantId`/`userId`:
 
 ```ts
-import { defineFlags } from '@machize/flags'
+import { defineFlags } from '@basaltkit/flags'
 
 const flags = defineFlags({
   europeLaunch: {
@@ -130,8 +130,8 @@ flags.value('europeLaunch', { region: 'us' }) // false (the rule returned undefi
 When you don't pass a context, the flag reads `tenant.id` and `user.id` from the current request's context (placed there by the tenancy/auth plugins):
 
 ```ts
-import { runWithContext } from '@machize/core'
-import { defineFlags } from '@machize/flags'
+import { runWithContext } from '@basaltkit/core'
+import { defineFlags } from '@basaltkit/flags'
 
 const flags = defineFlags({
   newDashboard: { default: false, tenants: { acme: true } },
@@ -158,8 +158,8 @@ const allFlags = flags.all({ tenantId: 'acme', userId: 'u1' })
 The plugin registers the instance under the token `FLAGS`:
 
 ```ts
-import { createApp } from '@machize/core'
-import { FLAGS, flagsPlugin, defineFlags } from '@machize/flags'
+import { createApp } from '@basaltkit/core'
+import { FLAGS, flagsPlugin, defineFlags } from '@basaltkit/flags'
 
 const flags = defineFlags({ newDashboard: { default: false } })
 const app = await createApp({ plugins: [flagsPlugin(flags)] }).boot()
@@ -235,7 +235,7 @@ The deterministic bucket depends on the flag name — renaming redistributes sub
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides `createApp`, the container, the tokens, and the request context where automatic `tenantId`/`userId` come from.
-- **`@machize/tenancy`** and **`@machize/auth`** — these plugins place `tenant` and `user` in each request's context; with them active, `flags.enabled('x')` works without an explicit context.
-- **`@machize/subscriptions`** — common pattern: using a `rule` to tie features to the tenant's subscription plan.
-- **`@machize/http` / web adapters** — typically expose a route that returns `flags.all()` to the frontend at session start.
+- **`@basaltkit/core`** — provides `createApp`, the container, the tokens, and the request context where automatic `tenantId`/`userId` come from.
+- **`@basaltkit/tenancy`** and **`@basaltkit/auth`** — these plugins place `tenant` and `user` in each request's context; with them active, `flags.enabled('x')` works without an explicit context.
+- **`@basaltkit/subscriptions`** — common pattern: using a `rule` to tie features to the tenant's subscription plan.
+- **`@basaltkit/http` / web adapters** — typically expose a route that returns `flags.all()` to the frontend at session start.

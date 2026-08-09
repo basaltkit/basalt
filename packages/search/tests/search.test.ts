@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@machize/core'
+import { createApp, runWithContext } from '@basaltkit/core'
 import {
   MeilisearchDriver,
   MemorySearchDriver,
@@ -11,8 +11,8 @@ import {
   syncRule,
 } from '../src/index.js'
 
-declare module '@machize/core' {
-  interface MachizeHooks {
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
     'doc:created': { tenantId: string; id: string; title: string }
     'doc:deleted': { tenantId: string; id: string }
   }

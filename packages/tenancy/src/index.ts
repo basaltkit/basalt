@@ -5,7 +5,7 @@ import {
   runWithContext,
   tryCtx,
   type HookBus,
-} from '@machize/core'
+} from '@basaltkit/core'
 import type { ResolutionRequest, TenantRef, TenantResolver } from './resolvers.js'
 import {
   TenancyNotResolvedError,
@@ -31,12 +31,12 @@ export {
   type ResolutionRequest,
 } from './resolvers.js'
 
-declare module '@machize/core' {
+declare module '@basaltkit/core' {
   interface RequestContext {
     /** The tenant of the current request/job, set by tenancy. */
     tenant?: Tenant
   }
-  interface MachizeHooks {
+  interface BasaltHooks {
     /** Emitted whenever execution enters a tenant context. */
     'tenancy:switched': { tenant: Tenant }
   }
@@ -121,7 +121,7 @@ export interface TenancyPluginOptions {
 
 export function tenancyPlugin(options: TenancyPluginOptions) {
   return definePlugin({
-    name: 'machize:tenancy',
+    name: 'basalt:tenancy',
     register({ container, hooks }) {
       container.singleton(TENANCY, () => new Tenancy(options.source, options.resolvers, hooks))
 

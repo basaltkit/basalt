@@ -1,4 +1,4 @@
-import type { AuditEntry } from '@machize/audit'
+import type { AuditEntry } from '@basaltkit/audit'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { PrismaAuditStore, type PrismaAuditClient, prismaAuditStore } from '../src/index.js'
 

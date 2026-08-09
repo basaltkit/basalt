@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp, METADATA } from '@machize/core'
-import { defineJob, QueueManager, SyncQueueDriver } from '@machize/queue'
+import { createApp, METADATA } from '@basaltkit/core'
+import { defineJob, QueueManager, SyncQueueDriver } from '@basaltkit/queue'
 import { SCHEDULER, Scheduler, schedulerPlugin } from '../src/index.js'
 
 const utc = (iso: string) => new Date(iso)
@@ -102,7 +102,7 @@ describe('Scheduler', () => {
     expect(captured).toHaveLength(1)
   })
 
-  it('schedules dispatch of @machize/queue jobs', async () => {
+  it('schedules dispatch of @basaltkit/queue jobs', async () => {
     const manager = new QueueManager(new SyncQueueDriver())
     const seen: string[] = []
     const Reconcile = defineJob({

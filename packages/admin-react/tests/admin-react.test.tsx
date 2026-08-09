@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { z } from 'zod'
-import { defineResource, memoryDataSource } from '@machize/admin'
+import { defineResource, memoryDataSource } from '@basaltkit/admin'
 import { DataTable, ResourceForm, useList } from '../src/index.js'
 
 afterEach(cleanup)
@@ -64,12 +64,12 @@ describe('ResourceForm', () => {
     render(<ResourceForm resource={resource} onSubmit={onSubmit} />)
 
     // enum → <select>, string → text input
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Machize' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Basalt' } })
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'published' } })
     fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
-    expect(onSubmit).toHaveBeenCalledWith({ name: 'Machize', status: 'published' })
+    expect(onSubmit).toHaveBeenCalledWith({ name: 'Basalt', status: 'published' })
   })
 
   it('shows per-field validation errors and blocks submit', async () => {

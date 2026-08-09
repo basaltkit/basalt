@@ -1,7 +1,7 @@
 {
-  "name": "@machize/comments",
-  "version": "1.0.5",
-  "description": "Comments for Machize: per-resource threads with @mentions and resolve/reopen, tenant-scoped, emitting events that bridge to realtime and notifications.",
+  "name": "@basaltkit/comments",
+  "version": "1.0.0",
+  "description": "Comments for Basalt: per-resource threads with @mentions and resolve/reopen, tenant-scoped, emitting events that bridge to realtime and notifications.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,16 +19,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/fastify": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/fastify": "workspace:^"
   },
   "peerDependencies": {
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@machize/auth": "workspace:^",
-    "@machize/tenancy": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/auth": "workspace:^",
+    "@basaltkit/tenancy": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -40,13 +40,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/comments"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/comments#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/comments#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "comments",

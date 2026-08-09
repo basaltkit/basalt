@@ -12,7 +12,7 @@ export interface RedisLike {
 const PENDING = 'pending'
 
 export interface RedisIdempotencyStoreOptions {
-  /** Key prefix. Default: 'mach:idem'. */
+  /** Key prefix. Default: 'basalt:idem'. */
   prefix?: string
   /** Retention window in ms (Redis PX). Default 24h. */
   ttlMs?: number
@@ -36,7 +36,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     private readonly redis: RedisLike,
     options: RedisIdempotencyStoreOptions = {},
   ) {
-    this.prefix = options.prefix ?? 'mach:idem'
+    this.prefix = options.prefix ?? 'basalt:idem'
     this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000
   }
 

@@ -1,13 +1,13 @@
 # Authentication
 
-`@machize/auth` provides complete server-side authentication with the data in
+`@basaltkit/auth` provides complete server-side authentication with the data in
 **your** database — no vendor lock-in. Password hashing, JWT with refresh
 rotation, sessions and ready-made routes.
 
 ## Setup
 
 ```ts
-import { authPlugin, MemoryUserSource } from '@machize/auth'
+import { authPlugin, MemoryUserSource } from '@basaltkit/auth'
 
 authPlugin({
   users: new MemoryUserSource(), // implement UserSource over your database
@@ -22,8 +22,8 @@ authPlugin({
 Register the built-in routes — each is a plain route you can replace or omit:
 
 ```ts
-import { authRoutes } from '@machize/auth'
-import { fastifyPlugin } from '@machize/fastify'
+import { authRoutes } from '@basaltkit/auth'
+import { fastifyPlugin } from '@basaltkit/fastify'
 
 fastifyPlugin({ routes: [...appRoutes, ...authRoutes()] })
 ```

@@ -1,6 +1,6 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
-export class CronParseError extends MachizeError {
+export class CronParseError extends BasaltError {
   constructor(expression: string, detail: string) {
     super('CRON_INVALID', `Invalid cron expression "${expression}": ${detail}`)
   }

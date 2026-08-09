@@ -1,7 +1,7 @@
 {
-  "name": "@machize/generator",
-  "version": "1.0.5",
-  "description": "Code scaffolding for Machize apps (mach make): generates a full resource vertical — schema, repository, service, DI plugin, typed routes and test.",
+  "name": "@basaltkit/generator",
+  "version": "1.0.0",
+  "description": "Code scaffolding for Basalt apps (basalt make): generates a full resource vertical — schema, repository, service, DI plugin, typed routes and test.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,10 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/cli": "workspace:^"
+    "@basaltkit/cli": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -33,13 +33,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/generator"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/generator#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/generator#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "codegen",
     "scaffolding"

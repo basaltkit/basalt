@@ -1,12 +1,12 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
-export class StorageFileNotFoundError extends MachizeError {
+export class StorageFileNotFoundError extends BasaltError {
   constructor(path: string) {
     super('STORAGE_FILE_NOT_FOUND', `File not found: "${path}"`)
   }
 }
 
-export class StorageInvalidPathError extends MachizeError {
+export class StorageInvalidPathError extends BasaltError {
   constructor(path: string) {
     super(
       'STORAGE_INVALID_PATH',
@@ -15,7 +15,7 @@ export class StorageInvalidPathError extends MachizeError {
   }
 }
 
-export class UnknownDiskError extends MachizeError {
+export class UnknownDiskError extends BasaltError {
   constructor(disk: string) {
     super(
       'STORAGE_UNKNOWN_DISK',
@@ -24,7 +24,7 @@ export class UnknownDiskError extends MachizeError {
   }
 }
 
-export class TemporaryUrlUnsupportedError extends MachizeError {
+export class TemporaryUrlUnsupportedError extends BasaltError {
   constructor(driver: string) {
     super(
       'STORAGE_TEMPORARY_URL_UNSUPPORTED',

@@ -1,7 +1,7 @@
 {
-  "name": "@machize/queue-rabbitmq",
-  "version": "1.0.5",
-  "description": "RabbitMQ driver for @machize/queue: AMQP jobs with retries, backoff, delayed delivery and priority via dead-letter queues.",
+  "name": "@basaltkit/queue-rabbitmq",
+  "version": "1.0.0",
+  "description": "RabbitMQ driver for @basaltkit/queue: AMQP jobs with retries, backoff, delayed delivery and priority via dead-letter queues.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/queue": "workspace:^"
+    "@basaltkit/queue": "workspace:^"
   },
   "peerDependencies": {
     "amqplib": "^0.10.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -36,13 +36,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/queue-rabbitmq"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/queue-rabbitmq#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/queue-rabbitmq#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "queue",
     "rabbitmq",

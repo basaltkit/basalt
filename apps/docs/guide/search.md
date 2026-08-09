@@ -1,6 +1,6 @@
 # Search
 
-`@machize/search` gives your app full-text search that is **tenant-scoped by
+`@basaltkit/search` gives your app full-text search that is **tenant-scoped by
 construction** — every query is forced to the caller's tenant, so results never
 leak between tenants. It ships an in-memory driver for dev/test and a
 Meilisearch driver for production, behind one API.
@@ -10,8 +10,8 @@ Meilisearch driver for production, behind one API.
 ## Setup
 
 ```ts
-import { createApp } from '@machize/core'
-import { searchPlugin, SEARCH, defineIndex } from '@machize/search'
+import { createApp } from '@basaltkit/core'
+import { searchPlugin, SEARCH, defineIndex } from '@basaltkit/search'
 
 const app = await createApp({
   plugins: [
@@ -61,7 +61,7 @@ relevance (typo tolerance, stemming) is the Meilisearch driver's job.
 Wire domain hooks to the index and it maintains itself:
 
 ```ts
-import { searchPlugin, defineIndex, syncRule } from '@machize/search'
+import { searchPlugin, defineIndex, syncRule } from '@basaltkit/search'
 
 searchPlugin({
   indexes: [defineIndex({ name: 'notes', fields: ['title', 'body'] })],
@@ -82,7 +82,7 @@ event.
 ## Production with Meilisearch
 
 ```ts
-import { searchPlugin, MeilisearchDriver, defineIndex } from '@machize/search'
+import { searchPlugin, MeilisearchDriver, defineIndex } from '@basaltkit/search'
 
 searchPlugin({
   driver: new MeilisearchDriver({ host: process.env.MEILI_HOST!, apiKey: process.env.MEILI_KEY }),
@@ -98,12 +98,12 @@ filterable attributes automatically.
 
 ## Already on Postgres?
 
-If you'd rather not run a separate search service, `@machize/search-postgres`
+If you'd rather not run a separate search service, `@basaltkit/search-postgres`
 uses Postgres' native full-text search (`tsvector` / `ts_rank`) — bring your
 `pg` client:
 
 ```ts
-import { PostgresSearchDriver } from '@machize/search-postgres'
+import { PostgresSearchDriver } from '@basaltkit/search-postgres'
 searchPlugin({ driver: new PostgresSearchDriver({ client: pgPool }), indexes: [/* … */] })
 ```
 

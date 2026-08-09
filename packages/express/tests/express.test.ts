@@ -2,8 +2,8 @@ import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp, definePlugin, ensureMetadata, tryCtx, type MachizeApp } from '@machize/core'
-import { HttpError, route, type RequestEnricher, type RouteGuard } from '@machize/http'
+import { createApp, definePlugin, ensureMetadata, tryCtx, type BasaltApp } from '@basaltkit/core'
+import { HttpError, route, type RequestEnricher, type RouteGuard } from '@basaltkit/http'
 import { EXPRESS, expressPlugin } from '../src/index.js'
 
 // A tenancy-like enricher + auth-like guard, registered the framework-neutral way.
@@ -48,7 +48,7 @@ const routes = [
 
 const json = (res: Response) => res.json() as Promise<{ error?: { code: string }; tenant?: string | null }>
 
-let app: MachizeApp
+let app: BasaltApp
 let base: string
 let server: Server
 

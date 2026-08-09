@@ -6,7 +6,7 @@ export interface ApiKeysPageOptions {
 
 /**
  * A self-contained HTML page (no dependencies, no build) to manage API keys by
- * calling `@machize/auth`'s routes: `GET/POST /apikeys` and `DELETE /apikeys/:id`.
+ * calling `@basaltkit/auth`'s routes: `GET/POST /apikeys` and `DELETE /apikeys/:id`.
  * Serve it from a route (see `apiKeysUiRoutes`). The page assumes the browser is
  * already authenticated (session cookie) for those routes.
  */

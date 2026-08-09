@@ -1,11 +1,11 @@
-import { ctx, MachizeError, type Container } from '@machize/core'
-import { route, type MachizeRoute } from '@machize/fastify'
+import { ctx, BasaltError, type Container } from '@basaltkit/core'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { TEAMS } from './plugin.js'
 
 const teams = () => (ctx().container as Container).get(TEAMS)
 
-/** Current tenant id, read without a hard dependency on @machize/tenancy. */
+/** Current tenant id, read without a hard dependency on @basaltkit/tenancy. */
 function tenantId(): string {
   const id = (ctx() as { tenant?: { id: string } }).tenant?.id
   if (!id) throw new NoTenantError()
@@ -15,13 +15,13 @@ function userId(): string | undefined {
   return (ctx() as { user?: { id: string } }).user?.id
 }
 
-class NoTenantError extends MachizeError {
+class NoTenantError extends BasaltError {
   readonly status = 400
   constructor() {
     super('TEAM_NO_TENANT', 'No tenant in context — team routes require tenancy.')
   }
 }
-class InviteNotFoundError extends MachizeError {
+class InviteNotFoundError extends BasaltError {
   readonly status = 404
   constructor() {
     super('TEAM_INVITE_NOT_FOUND', 'Invitation not found.')
@@ -36,7 +36,7 @@ const roleBody = z.object({ role: z.string().min(1) })
  * invite only requires a logged-in user. Invitation tokens are emailed via the
  * `team:invited` hook and never returned over HTTP.
  */
-export function teamRoutes(): MachizeRoute[] {
+export function teamRoutes(): BasaltRoute[] {
   return [
     route({
       method: 'POST',

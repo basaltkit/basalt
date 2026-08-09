@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@machize/core'
+import { createApp, runWithContext } from '@basaltkit/core'
 import { I18N, I18n, defineMessages, i18nPlugin } from '../src/index.js'
 
 const en = defineMessages({

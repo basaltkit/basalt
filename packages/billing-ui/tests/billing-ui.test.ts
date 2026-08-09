@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '@machize/core'
-import { FASTIFY, fastifyPlugin } from '@machize/fastify'
-import { MemoryUserSource, authPlugin, authRoutes } from '@machize/auth'
-import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@machize/tenancy'
-import { FakeBillingGateway, SUBSCRIPTIONS, billingRoutes, definePlans, subscriptionsPlugin } from '@machize/subscriptions'
+import { createApp } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
+import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
+import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
+import { FakeBillingGateway, SUBSCRIPTIONS, billingRoutes, definePlans, subscriptionsPlugin } from '@basaltkit/subscriptions'
 import { billingPageHtml, billingUiRoutes } from '../src/index.js'
 
 const plans = definePlans({

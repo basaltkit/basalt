@@ -4,13 +4,13 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import { type AuditEntry, type AuditQuery, type AuditStore, patternMatches } from '@machize/audit'
+import { type AuditEntry, type AuditQuery, type AuditStore, patternMatches } from '@basaltkit/audit'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/audit` `AuditStore`, on
+ * Durable, SQLite-backed implementation of the `@basaltkit/audit` `AuditStore`, on
  * Node's built-in `node:sqlite`. Append-only by contract. Zero external
  * dependencies. The single-node reference backend; the production
- * (Postgres/MySQL) counterpart is `@machize/audit-prisma`.
+ * (Postgres/MySQL) counterpart is `@basaltkit/audit-prisma`.
  *
  * Requires Node 22.5+ (stable and flag-free on Node 24; `--experimental-sqlite`
  * on 22.x).

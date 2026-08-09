@@ -1,5 +1,5 @@
-import { createToken, definePlugin } from '@machize/core'
-import type { MachizeHooks } from '@machize/core'
+import { createToken, definePlugin } from '@basaltkit/core'
+import type { BasaltHooks } from '@basaltkit/core'
 import { MemorySearchDriver } from './memory.js'
 import { Search } from './search.js'
 import type { IndexDefinition, SearchDocument, SearchDriver } from './types.js'
@@ -14,17 +14,17 @@ export const SEARCH = createToken<Search>('search')
  *     id: p.note.id, tenantId: p.tenantId, title: p.note.title, body: p.note.body,
  *   })})
  */
-export interface SyncRule<K extends keyof MachizeHooks & string = keyof MachizeHooks & string> {
+export interface SyncRule<K extends keyof BasaltHooks & string = keyof BasaltHooks & string> {
   hook: K
   index: string
   /** Build the document to upsert. Return null to skip. */
-  document?: (payload: MachizeHooks[K]) => SearchDocument | null
+  document?: (payload: BasaltHooks[K]) => SearchDocument | null
   /** Or the identifiers to remove. Return null to skip. */
-  remove?: (payload: MachizeHooks[K]) => { tenantId: string; id: string } | null
+  remove?: (payload: BasaltHooks[K]) => { tenantId: string; id: string } | null
 }
 
 /** Type-checks a sync rule against its hook, then erases the generic. */
-export function syncRule<K extends keyof MachizeHooks & string>(rule: SyncRule<K>): SyncRule {
+export function syncRule<K extends keyof BasaltHooks & string>(rule: SyncRule<K>): SyncRule {
   return rule as unknown as SyncRule
 }
 
@@ -39,7 +39,7 @@ export interface SearchPluginOptions {
 export function searchPlugin(options: SearchPluginOptions = {}) {
   const driver = options.driver ?? new MemorySearchDriver()
   return definePlugin({
-    name: 'machize:search',
+    name: 'basalt:search',
     register({ container }) {
       container.singleton(SEARCH, () => new Search({ driver }))
     },

@@ -1,5 +1,5 @@
-import { createToken, definePlugin, ensureMetadata, tryCtx } from '@machize/core'
-import type { RouteGuard } from '@machize/fastify'
+import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
+import type { RouteGuard } from '@basaltkit/fastify'
 import { AuthRequiredGuardError } from './errors.js'
 
 export { AuthRequiredGuardError, PermissionDeniedError } from './errors.js'
@@ -190,7 +190,7 @@ export type PermissionsPluginOptions = GateOptions
 
 export function permissionsPlugin(options: PermissionsPluginOptions) {
   return definePlugin({
-    name: 'machize:permissions',
+    name: 'basalt:permissions',
     register({ container }) {
       container.singleton(GATE, () => new Gate(options))
 

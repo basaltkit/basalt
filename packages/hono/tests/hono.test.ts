@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp, definePlugin, ensureMetadata, tryCtx, type MachizeApp } from '@machize/core'
-import { HttpError, route, type RequestEnricher, type RouteGuard } from '@machize/http'
+import { createApp, definePlugin, ensureMetadata, tryCtx, type BasaltApp } from '@basaltkit/core'
+import { HttpError, route, type RequestEnricher, type RouteGuard } from '@basaltkit/http'
 import { HONO, honoPlugin } from '../src/index.js'
 
 const enricher: RequestEnricher = ({ request, context }) => {
@@ -45,7 +45,7 @@ const routes = [
 
 const json = (res: Response) => res.json() as Promise<{ error?: { code: string }; tenant?: string | null }>
 
-let app: MachizeApp
+let app: BasaltApp
 let call: (path: string, init?: RequestInit) => Promise<Response>
 
 beforeEach(async () => {

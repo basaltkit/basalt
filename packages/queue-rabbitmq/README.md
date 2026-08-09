@@ -1,29 +1,29 @@
-# @machize/queue-rabbitmq
+# @basaltkit/queue-rabbitmq
 
-**RabbitMQ** driver for [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): runs your jobs over AMQP instead of Redis/BullMQ, without changing a single line of your job code. You need this package when your messaging infrastructure is already RabbitMQ (or when you want a dedicated message broker, with native routing and dead-lettering).
+**RabbitMQ** driver for [`@basaltkit/queue`](https://www.npmjs.com/package/@basaltkit/queue): runs your jobs over AMQP instead of Redis/BullMQ, without changing a single line of your job code. You need this package when your messaging infrastructure is already RabbitMQ (or when you want a dedicated message broker, with native routing and dead-lettering).
 
 ## What this module solves
 
-`@machize/queue` defines **jobs** (background tasks) abstractly and picks the backend via a *driver*. By default it uses BullMQ (Redis). This package provides an alternative driver that talks to **RabbitMQ**: jobs are published to durable AMQP queues, workers consume them, and retries/delays use a *delay queue* with TTL-based dead-lettering.
+`@basaltkit/queue` defines **jobs** (background tasks) abstractly and picks the backend via a *driver*. By default it uses BullMQ (Redis). This package provides an alternative driver that talks to **RabbitMQ**: jobs are published to durable AMQP queues, workers consume them, and retries/delays use a *delay queue* with TTL-based dead-lettering.
 
 Everything else — `defineJob`, `dispatch`, workers, context propagation — stays exactly the same. You just swap the driver.
 
 ## Installation
 
 ```bash
-pnpm add @machize/queue-rabbitmq amqplib
+pnpm add @basaltkit/queue-rabbitmq amqplib
 ```
 
 `amqplib` is a **peer dependency** (you install it yourself): that way, anyone using a different driver doesn't pull in the RabbitMQ client. You'll also need an accessible RabbitMQ server.
 
 ## Get started in 5 minutes
 
-Define jobs as always (with `@machize/queue`) and pass the driver to `queuePlugin`:
+Define jobs as always (with `@basaltkit/queue`) and pass the driver to `queuePlugin`:
 
 ```ts
-import { createApp } from '@machize/core'
-import { queuePlugin, defineJob } from '@machize/queue'
-import { RabbitmqQueueDriver } from '@machize/queue-rabbitmq'
+import { createApp } from '@basaltkit/core'
+import { queuePlugin, defineJob } from '@basaltkit/queue'
+import { RabbitmqQueueDriver } from '@basaltkit/queue-rabbitmq'
 
 const SendWelcome = defineJob<{ email: string }>({
   name: 'send-welcome',
@@ -57,7 +57,7 @@ For each queue `q`, the driver declares three durable AMQP queues:
 - **`q.delay`** — the delay/retry buffer: messages expire after their TTL and get *dead-lettered* back to `q`. This is how `delay` and `backoff` between attempts are implemented.
 - **`q.dead`** — the *dead-letter queue*: where jobs that exhausted their attempts end up.
 
-The attempt number travels in the message headers (`x-machize-attempt`), so the worker knows whether it should retry (via `q.delay`) or give up (via `q.dead`).
+The attempt number travels in the message headers (`x-basalt-attempt`), so the worker knows whether it should retry (via `q.delay`) or give up (via `q.dead`).
 
 ### Capabilities
 
@@ -80,7 +80,7 @@ The driver declares these `capabilities`, so, combined with `onUnsupported`, a j
 | `maxPriority` | `number` | `10` | Maximum priority level (`x-max-priority`). |
 | `connect` | `(url) => Promise<AmqpConnection>` | amqplib | Injectable connector — used in tests so no broker is needed. |
 
-Implements the `QueueDriver` contract from `@machize/queue` (`add`, `startWorker`, `setExecutor`, `close`, `capabilities`).
+Implements the `QueueDriver` contract from `@basaltkit/queue` (`add`, `startWorker`, `setExecutor`, `close`, `capabilities`).
 
 ## Important caveat
 
@@ -88,5 +88,5 @@ Implements the `QueueDriver` contract from `@machize/queue` (`add`, `startWorker
 
 ## How it connects to other modules
 
-- **`@machize/queue`** — this is a driver for that package; the entire job API comes from there.
-- See also the sibling drivers: [`@machize/queue-kafka`](https://www.npmjs.com/package/@machize/queue-kafka) and [`@machize/queue-sqs`](https://www.npmjs.com/package/@machize/queue-sqs), and the [Queues & Jobs](https://github.com/Zebedeu/machize) guide for writing your own driver.
+- **`@basaltkit/queue`** — this is a driver for that package; the entire job API comes from there.
+- See also the sibling drivers: [`@basaltkit/queue-kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) and [`@basaltkit/queue-sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs), and the [Queues & Jobs](https://github.com/Zebedeu/basalt) guide for writing your own driver.

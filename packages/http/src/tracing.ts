@@ -1,10 +1,10 @@
-import { createToken, definePlugin, formatTraceparent, parseTraceparent, Tracer, type Span, type SpanExporter } from '@machize/core'
+import { createToken, definePlugin, formatTraceparent, parseTraceparent, Tracer, type Span, type SpanExporter } from '@basaltkit/core'
 import type { HttpRequest } from './route.js'
 import { HTTP_SERVER } from './server.js'
 
 export const TRACER = createToken<Tracer>('tracer')
 
-const SPAN = Symbol('machize.span')
+const SPAN = Symbol('basalt.span')
 
 export interface TracingPluginOptions {
   serviceName?: string
@@ -33,7 +33,7 @@ export function tracingPlugin(options: TracingPluginOptions = {}) {
   let timer: ReturnType<typeof setInterval> | undefined
 
   return definePlugin({
-    name: 'machize:tracing',
+    name: 'basalt:tracing',
     register({ container }) {
       container.singleton(TRACER, () => tracer)
     },

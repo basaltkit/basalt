@@ -1,10 +1,10 @@
-# @machize/events-sqlite
+# @basaltkit/events-sqlite
 
 ## 1.0.5
 
 ### Initial release
 
-- Durable, SQLite-backed `OutboxStore` for `@machize/events`, on Node's built-in
+- Durable, SQLite-backed `OutboxStore` for `@basaltkit/events`, on Node's built-in
   `node:sqlite` — the single-node counterpart to the in-memory
   `MemoryOutboxStore`. Un-relayed transactional-outbox entries now survive a
   crash/restart instead of being lost.

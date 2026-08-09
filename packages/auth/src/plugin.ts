@@ -1,15 +1,15 @@
-import { createToken, definePlugin, ensureMetadata } from '@machize/core'
-import type { RequestEnricher, RouteGuard } from '@machize/fastify'
+import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
+import type { RequestEnricher, RouteGuard } from '@basaltkit/fastify'
 import { Auth, AuthRequiredError, type AuthOptions } from './auth.js'
 import { publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'
 
-declare module '@machize/core' {
+declare module '@basaltkit/core' {
   interface RequestContext {
     /** The authenticated user of the current request, set by auth. */
     user?: PublicUser
   }
-  interface MachizeHooks {
+  interface BasaltHooks {
     'auth:registered': { user: PublicUser }
     'auth:login': { user: PublicUser }
     'auth:login_failed': { email: string }
@@ -31,7 +31,7 @@ export type AuthPluginOptions = Omit<AuthOptions, 'hooks'>
 
 export function authPlugin(options: AuthPluginOptions) {
   return definePlugin({
-    name: 'machize:auth',
+    name: 'basalt:auth',
     register({ container, hooks }) {
       container.singleton(AUTH, () => new Auth({ ...options, hooks }))
       const metadata = ensureMetadata(container)

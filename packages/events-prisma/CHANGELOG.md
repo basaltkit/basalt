@@ -1,13 +1,13 @@
-# @machize/events-prisma
+# @basaltkit/events-prisma
 
 ## 1.0.5
 
 ### Initial release
 
-- Prisma-backed `OutboxStore` for `@machize/events` — the production
+- Prisma-backed `OutboxStore` for `@basaltkit/events` — the production
   (PostgreSQL/MySQL) counterpart to the in-memory `MemoryOutboxStore`. Bring your
   own `PrismaClient`; ships a reference `schema.prisma` (`OutboxEntry`),
-  discoverable by `mach prisma:sync`.
+  discoverable by `basalt prisma:sync`.
 - `prismaOutboxStore(client)` returns a store ready for `outboxPlugin({ store })`,
   with `enqueue`/`pending`/`markPublished`/`markFailed`/`all`. Keeping the outbox
   in your primary database lets you enqueue events in the same transaction as the

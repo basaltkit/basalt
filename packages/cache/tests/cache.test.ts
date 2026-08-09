@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, runWithContext } from '@machize/core'
+import { createApp, runWithContext } from '@basaltkit/core'
 import { Cache, CACHE, cachePlugin, MemoryCacheDriver } from '../src/index.js'
 
 const makeCache = (options = {}) => new Cache(new MemoryCacheDriver(), options)
@@ -93,7 +93,7 @@ describe('Cache (driver memory)', () => {
     const driver = new MemoryCacheDriver()
     const app = await createApp({ plugins: [cachePlugin({ driver })] }).boot()
     await app.container.get(CACHE).put('k', 1)
-    expect(await driver.get('mach:k')).toBe(1) // wrote through the provided instance
+    expect(await driver.get('basalt:k')).toBe(1) // wrote through the provided instance
     await app.shutdown()
   })
 })

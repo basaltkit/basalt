@@ -4,13 +4,13 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import type { Tenant, TenantSource } from '@machize/tenancy'
+import type { Tenant, TenantSource } from '@basaltkit/tenancy'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/tenancy` `TenantSource`,
+ * Durable, SQLite-backed implementation of the `@basaltkit/tenancy` `TenantSource`,
  * on Node's built-in `node:sqlite`. Zero external dependencies. The single-node
  * reference backend; the production (Postgres/MySQL) counterpart is
- * `@machize/tenancy-prisma`.
+ * `@basaltkit/tenancy-prisma`.
  *
  * The tenant is an open record (`{ id, ...anything }`), so it's stored as a JSON
  * blob keyed by `id`. Custom domains (`tenant.domains: string[]`) are mirrored

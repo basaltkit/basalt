@@ -1,4 +1,4 @@
-import { Container, createToken, definePlugin, ensureMetadata } from '@machize/core'
+import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
   HttpServerCollector,
   HTTP_SERVER,
@@ -6,10 +6,10 @@ import {
   toErrorResponse,
   type HttpReply,
   type HttpRequest,
-  type MachizeRoute,
+  type BasaltRoute,
   type RequestEnricher,
   type RouteGuard,
-} from '@machize/http'
+} from '@basaltkit/http'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
 export const EXPRESS = createToken<Express>('express')
@@ -63,8 +63,8 @@ class ExpressReply implements HttpReply {
 
 type Register = (path: string, handler: (req: Request, res: Response) => unknown) => void
 
-function machizeHandler(
-  definition: MachizeRoute,
+function basaltHandler(
+  definition: BasaltRoute,
   container: Container | undefined,
   enrichers: RequestEnricher[],
   guards: RouteGuard[],
@@ -85,35 +85,35 @@ function machizeHandler(
   }
 }
 
-/** Mounts Machize routes on an Express app (usable without the plugin). */
+/** Mounts Basalt routes on an Express app (usable without the plugin). */
 export function registerRoutes(
   app: Express,
-  routes: MachizeRoute[],
+  routes: BasaltRoute[],
   container?: Container,
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
 ): void {
   const router = app as unknown as Record<string, Register>
   for (const definition of routes) {
-    router[definition.method.toLowerCase()]!(definition.url, machizeHandler(definition, container, enrichers, guards))
+    router[definition.method.toLowerCase()]!(definition.url, basaltHandler(definition, container, enrichers, guards))
   }
 }
 
 export interface ExpressPluginOptions {
-  routes?: MachizeRoute[]
+  routes?: BasaltRoute[]
   /** Bring your own Express app; otherwise one is created with `express.json()`. */
   app?: Express
 }
 
 /**
- * Runs Machize on Express. The same routes, enrichers, guards and edge plugins
+ * Runs Basalt on Express. The same routes, enrichers, guards and edge plugins
  * you register for Fastify work unchanged — resolve `EXPRESS` for the app to
  * `listen()`.
  */
 export function expressPlugin(options: ExpressPluginOptions = {}) {
   const collector = new HttpServerCollector()
   return definePlugin({
-    name: 'machize:express',
+    name: 'basalt:express',
     register({ container }) {
       container.singleton(EXPRESS, () => {
         const app = options.app ?? express()

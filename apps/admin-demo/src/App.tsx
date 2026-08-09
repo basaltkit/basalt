@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { z } from 'zod'
-import { defineResource } from '@machize/admin'
+import { defineResource } from '@basaltkit/admin'
 import {
   Badge,
   Button,
@@ -10,15 +10,15 @@ import {
   CardTitle,
   DataTable,
   ResourceForm,
-} from '@machize/admin-shadcn'
+} from '@basaltkit/admin-shadcn'
 import {
   computeBillingMetrics,
   defineDashboard,
   metricsSection,
   resourceSection,
-} from '@machize/dashboard'
+} from '@basaltkit/dashboard'
 // Types only (erased) — the subscriptions runtime never enters the browser bundle.
-import type { PlanDefinition, SubscriptionRecord } from '@machize/subscriptions'
+import type { PlanDefinition, SubscriptionRecord } from '@basaltkit/subscriptions'
 
 // --- the resource: one Zod schema drives table + form + validation ---------
 
@@ -59,14 +59,14 @@ const seedProjects: Project[] = [
   { id: '3', name: 'Initech Portal', tenant: 'initech', status: 'active', seats: 40, billable: true },
 ]
 
-// --- the dashboard model: sidebar sections, via @machize/dashboard -----------
+// --- the dashboard model: sidebar sections, via @basaltkit/dashboard -----------
 
 const dashboard = defineDashboard({
-  title: 'Machize Admin',
+  title: 'Basalt Admin',
   sections: [metricsSection({ label: 'Overview' }), resourceSection(projects, { key: 'projects' })],
 })
 
-// --- billing metrics computed by @machize/dashboard (now browser-safe) --------
+// --- billing metrics computed by @basaltkit/dashboard (now browser-safe) --------
 
 const plans: Record<string, PlanDefinition> = {
   free: { price: 0, features: {} },

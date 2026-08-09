@@ -3,9 +3,9 @@
  * fails the endpoint's result schema). `code` mirrors the server's stable
  * error code, so callers branch on it the same way on both sides.
  *
- * Kept dependency-free (no @machize/core) so the SDK stays browser-friendly.
+ * Kept dependency-free (no @basaltkit/core) so the SDK stays browser-friendly.
  */
-export class MachizeClientError extends Error {
+export class BasaltClientError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
@@ -13,6 +13,6 @@ export class MachizeClientError extends Error {
     readonly details?: unknown,
   ) {
     super(message)
-    this.name = 'MachizeClientError'
+    this.name = 'BasaltClientError'
   }
 }

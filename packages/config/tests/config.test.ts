@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import { CONFIG, ConfigRepository, configPlugin } from '../src/index.js'
 
 describe('ConfigRepository', () => {
   const repo = () =>
-    new ConfigRepository({ mail: { from: 'oi@machize.dev', smtp: { port: 587 } } })
+    new ConfigRepository({ mail: { from: 'oi@basalt.dev', smtp: { port: 587 } } })
 
   it('reads by dot-path', () => {
-    expect(repo().get('mail.from')).toBe('oi@machize.dev')
+    expect(repo().get('mail.from')).toBe('oi@basalt.dev')
     expect(repo().get('mail.smtp.port')).toBe(587)
   })
 

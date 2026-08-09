@@ -1,14 +1,14 @@
 # Data exports
 
-`@machize/exports` turns typed export definitions into files — CSV, TSV, JSON
+`@basaltkit/exports` turns typed export definitions into files — CSV, TSV, JSON
 and NDJSON out of the box (zero dependencies), with a pluggable formatter seam
-for XLSX/PDF. It's built to run async via [`@machize/queue`](/guide/queues) and
-store the result with `@machize/files`.
+for XLSX/PDF. It's built to run async via [`@basaltkit/queue`](/guide/queues) and
+store the result with `@basaltkit/files`.
 
 ## Define and run
 
 ```ts
-import { exportsPlugin, EXPORTS, defineExport } from '@machize/exports'
+import { exportsPlugin, EXPORTS, defineExport } from '@basaltkit/exports'
 
 const usersExport = defineExport<{ name: string; email: string; joinedAt: Date }>({
   name: 'users',
@@ -47,11 +47,11 @@ const GenerateReport = defineJob({
 
 ## XLSX
 
-Add `@machize/exports-xlsx` — a valid `.xlsx` with a **built-in ZIP writer**,
+Add `@basaltkit/exports-xlsx` — a valid `.xlsx` with a **built-in ZIP writer**,
 still zero-dependency:
 
 ```ts
-import { xlsxFormatter } from '@machize/exports-xlsx'
+import { xlsxFormatter } from '@basaltkit/exports-xlsx'
 exportsPlugin({ formatters: [xlsxFormatter] })
 await exports.run(usersExport, users, 'xlsx') // users.xlsx
 ```

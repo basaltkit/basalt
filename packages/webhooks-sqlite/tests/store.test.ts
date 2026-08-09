@@ -56,7 +56,7 @@ describe('SqliteWebhookStore', () => {
 })
 
 describe('sqliteWebhookStore + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-webhooks-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-webhooks-'))
   const file = join(dir, 'webhooks.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

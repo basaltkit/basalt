@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: Machize
+  name: Basalt
   text: The complete toolkit for building SaaS on Node.js
   tagline: Tenancy, auth, billing, permissions, queues and audit — integrated end to end, self-hosted, no vendor lock-in.
   actions:
@@ -11,7 +11,7 @@ hero:
       link: /guide/getting-started
     - theme: alt
       text: View on GitHub
-      link: https://github.com/Zebedeu/machize
+      link: https://github.com/Zebedeu/basalt
 
 features:
   - title: Multi-tenancy, first class

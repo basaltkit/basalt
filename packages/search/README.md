@@ -1,6 +1,6 @@
-# @machize/search
+# @basaltkit/search
 
-Full-text search for Machize: indexes and searches documents **per tenant**, with a typed API and an interchangeable driver — **in-memory** for development/testing and **Meilisearch** for production. You need this module when you want to give users a fast, relevant search box over their data (notes, projects, customers…).
+Full-text search for Basalt: indexes and searches documents **per tenant**, with a typed API and an interchangeable driver — **in-memory** for development/testing and **Meilisearch** for production. You need this module when you want to give users a fast, relevant search box over their data (notes, projects, customers…).
 
 ## What this module solves
 
@@ -14,16 +14,16 @@ Searching well is more than a `WHERE ... LIKE '%text%'`: you need **relevance** 
 ## Installation
 
 ```bash
-pnpm add @machize/search
+pnpm add @basaltkit/search
 ```
 
-Depends only on `@machize/core`. `MemorySearchDriver` works with nothing installed; for production, point `MeilisearchDriver` at a Meilisearch server.
+Depends only on `@basaltkit/core`. `MemorySearchDriver` works with nothing installed; for production, point `MeilisearchDriver` at a Meilisearch server.
 
 ## Get started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { searchPlugin, SEARCH, defineIndex } from '@machize/search'
+import { createApp } from '@basaltkit/core'
+import { searchPlugin, SEARCH, defineIndex } from '@basaltkit/search'
 
 const app = await createApp({
   plugins: [
@@ -49,7 +49,7 @@ console.log(result.total)
 Instead of indexing by hand everywhere, wire domain events to the index — and it keeps itself up to date:
 
 ```ts
-import { searchPlugin, defineIndex, syncRule } from '@machize/search'
+import { searchPlugin, defineIndex, syncRule } from '@basaltkit/search'
 
 searchPlugin({
   indexes: [defineIndex({ name: 'notes', fields: ['title', 'body'] })],
@@ -77,7 +77,7 @@ searchPlugin({
 ## Production with Meilisearch
 
 ```ts
-import { searchPlugin, MeilisearchDriver, defineIndex } from '@machize/search'
+import { searchPlugin, MeilisearchDriver, defineIndex } from '@basaltkit/search'
 
 searchPlugin({
   driver: new MeilisearchDriver({ host: 'http://localhost:7700', apiKey: process.env.MEILI_KEY }),
@@ -121,6 +121,6 @@ Declares an index: `fields` are searchable (full-text), `filterable` are usable 
 
 ## How it connects to other modules
 
-- **`@machize/core`** — `createApp`, tokens, hooks (which automatic sync consumes), and the context `tenantId` comes from.
-- **`@machize/tenancy`** — places `tenant` in the context; with it active, `search.search('notes', q)` already knows the tenant.
-- **`@machize/events`** — emits the domain events that feed `sync`.
+- **`@basaltkit/core`** — `createApp`, tokens, hooks (which automatic sync consumes), and the context `tenantId` comes from.
+- **`@basaltkit/tenancy`** — places `tenant` in the context; with it active, `search.search('notes', q)` already knows the tenant.
+- **`@basaltkit/events`** — emits the domain events that feed `sync`.

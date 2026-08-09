@@ -1,4 +1,4 @@
-import { tableView, type Resource } from '@machize/admin'
+import { tableView, type Resource } from '@basaltkit/admin'
 import { formatCell } from './format.js'
 
 export interface DataTableProps {

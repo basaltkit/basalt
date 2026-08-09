@@ -1,12 +1,12 @@
-# create-machize
+# create-basalt
 
-Machize project generator: a single command (`npm create machize my-app`) creates a complete, ready-to-run SaaS application — typed API, authentication, multi-tenancy, and optionally billing, a web frontend, and the `mach` CLI. It's the framework's starting point: use it whenever you want to start a new project.
+Basalt project generator: a single command (`npm create basalt my-app`) creates a complete, ready-to-run SaaS application — typed API, authentication, multi-tenancy, and optionally billing, a web frontend, and the `basalt` CLI. It's the framework's starting point: use it whenever you want to start a new project.
 
 ## What this module solves
 
 Starting a backend project from scratch involves dozens of decisions and files before you write the first useful line: setting up TypeScript, choosing the HTTP server, organizing folders, wiring up authentication, preparing tests… A **scaffolder** (project generator) does that work for you: it generates the initial structure with good practices already applied, so you can start building your product right away.
 
-`create-machize` generates a **SaaS** application (Software as a Service — software sold by subscription, usually with several customers/organizations in the same installation) shaped the way mature Machize projects look in production: typed routes with Zod validation, structured logging, domain events, and, depending on the options, **multi-tenancy** (several isolated customers in the same application), authentication (register/login/refresh), subscriptions with plans, a React frontend, and the `mach` command-line tool with code generators.
+`create-basalt` generates a **SaaS** application (Software as a Service — software sold by subscription, usually with several customers/organizations in the same installation) shaped the way mature Basalt projects look in production: typed routes with Zod validation, structured logging, domain events, and, depending on the options, **multi-tenancy** (several isolated customers in the same application), authentication (register/login/refresh), subscriptions with plans, a React frontend, and the `basalt` command-line tool with code generators.
 
 It works in two ways: interactive mode (answers questions in the terminal) or direct mode with flags (ideal for scripts). It doesn't install dependencies or touch git unless you ask it to (`--install`, `--git`).
 
@@ -15,13 +15,13 @@ It works in two ways: interactive mode (answers questions in the terminal) or di
 You don't need to install anything — your package manager's `create` command downloads and runs the package on the spot:
 
 ```bash
-npm create machize my-app
+npm create basalt my-app
 # or
-pnpm create machize my-app
+pnpm create basalt my-app
 # or
-yarn create machize my-app
+yarn create basalt my-app
 # or
-bun create machize my-app
+bun create basalt my-app
 ```
 
 > Requirements: Node.js 18+ and a package manager. Projects with `--ui` require **pnpm** (explained below).
@@ -31,7 +31,7 @@ bun create machize my-app
 1. Create the project (interactive mode — run without a name and answer the questions):
 
 ```bash
-npm create machize
+npm create basalt
 ```
 
 ```
@@ -40,7 +40,7 @@ Multi-tenancy? (Y/n) y
 Authentication? (Y/n) y
 Subscriptions / billing? (y/N) n
 Web UI (React + shadcn)? (y/N) n
-'mach' CLI (code generators)? (y/N) n
+'basalt' CLI (code generators)? (y/N) n
 Install dependencies now? (y/N) y
 Initialize a git repository? (y/N) y
 ```
@@ -71,20 +71,20 @@ npm test
 ### All CLI flags
 
 ```
-Usage: npm create machize <name> [options]
+Usage: npm create basalt <name> [options]
 ```
 
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `<name>` | — (asked in interactive mode) | Project name (and folder name, unless `--dir`) |
 | `--dir=<path>` | `./<name>` | Destination folder |
-| `--no-tenancy` | tenancy **on** | Removes multi-tenancy (`@machize/tenancy`) |
-| `--no-auth` | auth **on** | Removes authentication (`@machize/auth`, `APP_SECRET`, `/auth/*` routes) |
-| `--billing` | off | Includes subscriptions/plans (`@machize/subscriptions`, example `free` and `pro` plans) |
-| `--ui` | off | Generates the `web/` frontend (React + shadcn via `@machize/admin-shadcn` + `@machize/sdk`). **Forces pnpm** — see note below |
-| `--cli` | off | Generates the `mach` CLI (`bin/mach.ts`, `pnpm mach` script, `make:*` generators from `@machize/generator`) |
+| `--no-tenancy` | tenancy **on** | Removes multi-tenancy (`@basaltkit/tenancy`) |
+| `--no-auth` | auth **on** | Removes authentication (`@basaltkit/auth`, `APP_SECRET`, `/auth/*` routes) |
+| `--billing` | off | Includes subscriptions/plans (`@basaltkit/subscriptions`, example `free` and `pro` plans) |
+| `--ui` | off | Generates the `web/` frontend (React + shadcn via `@basaltkit/admin-shadcn` + `@basaltkit/sdk`). **Forces pnpm** — see note below |
+| `--cli` | off | Generates the `basalt` CLI (`bin/basalt.ts`, `pnpm basalt` script, `make:*` generators from `@basaltkit/generator`) |
 | `--install` | off | Installs dependencies at the end (with the detected/chosen manager) |
-| `--git` | off | Runs `git init` + first commit ("Initial commit from create-machize") |
+| `--git` | off | Runs `git init` + first commit ("Initial commit from create-basalt") |
 | `--pm=<manager>` | autodetect | Package manager: `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `-y`, `--yes` | — | Skips the questions and accepts the defaults |
 | `-h`, `--help` | — | Shows help and exits |
@@ -101,16 +101,16 @@ Behavior notes (faithful to the code):
 
 ```bash
 # Full project, no questions, with everything:
-pnpm create machize my-app --billing --ui --cli --install --git
+pnpm create basalt my-app --billing --ui --cli --install --git
 
 # Minimal API (no tenancy or auth), in another folder:
-npm create machize service-api --no-tenancy --no-auth --dir=./apps/service-api
+npm create basalt service-api --no-tenancy --no-auth --dir=./apps/service-api
 
 # Accept all defaults with no questions:
-npm create machize my-app -y
+npm create basalt my-app -y
 
 # Force yarn as the manager:
-npm create machize my-app --pm=yarn --install
+npm create basalt my-app --pm=yarn --install
 ```
 
 ### What gets generated
@@ -119,21 +119,21 @@ Always:
 
 ```
 my-app/
-├── package.json          # scripts: dev, start, test, typecheck (+ mach with --cli)
+├── package.json          # scripts: dev, start, test, typecheck (+ basalt with --cli)
 ├── tsconfig.json         # strict TypeScript, ESM
 ├── .env.example          # PORT, HOST, LOG_LEVEL, NODE_ENV (+ APP_SECRET with auth)
 ├── .gitignore
 ├── README.md             # instructions adapted to the chosen options
 ├── pnpm-workspace.yaml   # esbuild allowBuilds (+ "web" member with --ui)
 ├── src/
-│   ├── env.ts            # environment variables validated with Zod (@machize/env)
+│   ├── env.ts            # environment variables validated with Zod (@basaltkit/env)
 │   ├── app.ts            # buildApp() with the chosen plugins
 │   ├── routes.ts         # GET / (friendly index) and GET /health
 │   └── server.ts         # startup + clean shutdown on SIGINT/SIGTERM
 └── tests/app.test.ts     # smoke test adapted to the options
 ```
 
-With `--cli`, adds `bin/mach.ts` and the `"mach": "tsx bin/mach.ts"` script. With `--ui`, adds the `web/` folder (Vite + React + Tailwind + shadcn, with `web/src/api.ts` built on top of `@machize/sdk`; with auth on it includes a login/register screen).
+With `--cli`, adds `bin/basalt.ts` and the `"basalt": "tsx bin/basalt.ts"` script. With `--ui`, adds the `web/` folder (Vite + React + Tailwind + shadcn, with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
 
 ### With `--ui`: running the API and frontend
 
@@ -145,12 +145,12 @@ pnpm --filter my-app-web dev       # terminal 2 — UI at http://localhost:5180
 
 Vite's dev server proxies `/api` to the API — there's no CORS to configure.
 
-### With `--cli`: the `mach` command line
+### With `--cli`: the `basalt` command line
 
 ```bash
-pnpm mach list                    # available commands
-pnpm mach routes                  # registered HTTP routes
-pnpm mach make:resource Project   # generates schema → repository → service → plugin → routes → test
+pnpm basalt list                    # available commands
+pnpm basalt routes                  # registered HTTP routes
+pnpm basalt make:resource Project   # generates schema → repository → service → plugin → routes → test
 ```
 
 ### Programmatic usage (Advanced)
@@ -158,7 +158,7 @@ pnpm mach make:resource Project   # generates schema → repository → service 
 The package also exports the API used by the executable, for your own scripts:
 
 ```typescript
-import { createProject, detectPackageManager, TargetNotEmptyError } from 'create-machize'
+import { createProject, detectPackageManager, TargetNotEmptyError } from 'create-basalt'
 
 const result = await createProject({
   name: 'my-app',
@@ -178,7 +178,7 @@ Note: `createProject` **only writes files** — it doesn't install dependencies 
 
 ## API reference
 
-Exported from `create-machize` (in addition to the `create-machize` executable):
+Exported from `create-basalt` (in addition to the `create-basalt` executable):
 
 ### `createProject(input): Promise<CreateProjectResult>`
 
@@ -192,7 +192,7 @@ Exported from `create-machize` (in addition to the `create-machize` executable):
 | `auth` | `boolean` | No | `true` | Include authentication |
 | `billing` | `boolean` | No | `false` | Include subscriptions |
 | `ui` | `boolean` | No | `false` | Generate the `web/` frontend |
-| `cli` | `boolean` | No | `false` | Generate the `mach` CLI |
+| `cli` | `boolean` | No | `false` | Generate the `basalt` CLI |
 
 `CreateProjectResult`:
 
@@ -241,16 +241,16 @@ Automatic installation failed (network, Node version, etc.). Go into the folder 
 With auth on, `src/env.ts` requires `APP_SECRET` with at least 16 characters (there's a development default `change-me-in-production--`). Copy `.env.example` to `.env` and set your own secret before going to production.
 
 **I want to change my mind after generating (e.g. add billing).**
-There's no "re-scaffold" command. Either generate a new project with the right flags and compare, or add it by hand: install `@machize/subscriptions` and add the `subscriptionsPlugin` to `src/app.ts` (the generated README and the templates serve as reference).
+There's no "re-scaffold" command. Either generate a new project with the right flags and compare, or add it by hand: install `@basaltkit/subscriptions` and add the `subscriptionsPlugin` to `src/app.ts` (the generated README and the templates serve as reference).
 
 ## How it connects to other modules
 
-`create-machize` isn't used *by* the application — it writes the application that uses the other packages:
+`create-basalt` isn't used *by* the application — it writes the application that uses the other packages:
 
-- **`@machize/core`, `@machize/config`, `@machize/env`, `@machize/events`, `@machize/fastify`, `@machize/logger`** — the foundation of any generated project (`createApp` + plugins in `src/app.ts`).
-- **`@machize/tenancy`** — included by default (remove with `--no-tenancy`): header and subdomain resolvers, with a demo `MemoryTenantSource`.
-- **`@machize/auth`** — included by default (remove with `--no-auth`): `/auth/*` routes and `APP_SECRET` validated in `env.ts`.
-- **`@machize/subscriptions`** — with `--billing`: example `free`/`pro` plans with trial and feature limits.
-- **`@machize/cli` + `@machize/generator`** — with `--cli`: `bin/mach.ts` calls `runCli`, and `commandsPlugin(generatorCommands())` registers the `make:*` generators.
-- **`@machize/sdk` + `@machize/admin-shadcn` + `@machize/admin`** — with `--ui`: the `web/` frontend calls the API through a typed client and uses the shadcn components.
-- **`@machize/testing`** — always present in `devDependencies`, with a generated smoke test in `tests/app.test.ts`.
+- **`@basaltkit/core`, `@basaltkit/config`, `@basaltkit/env`, `@basaltkit/events`, `@basaltkit/fastify`, `@basaltkit/logger`** — the foundation of any generated project (`createApp` + plugins in `src/app.ts`).
+- **`@basaltkit/tenancy`** — included by default (remove with `--no-tenancy`): header and subdomain resolvers, with a demo `MemoryTenantSource`.
+- **`@basaltkit/auth`** — included by default (remove with `--no-auth`): `/auth/*` routes and `APP_SECRET` validated in `env.ts`.
+- **`@basaltkit/subscriptions`** — with `--billing`: example `free`/`pro` plans with trial and feature limits.
+- **`@basaltkit/cli` + `@basaltkit/generator`** — with `--cli`: `bin/basalt.ts` calls `runCli`, and `commandsPlugin(generatorCommands())` registers the `make:*` generators.
+- **`@basaltkit/sdk` + `@basaltkit/admin-shadcn` + `@basaltkit/admin`** — with `--ui`: the `web/` frontend calls the API through a typed client and uses the shadcn components.
+- **`@basaltkit/testing`** — always present in `devDependencies`, with a generated smoke test in `tests/app.test.ts`.

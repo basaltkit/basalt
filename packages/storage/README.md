@@ -1,6 +1,6 @@
-# @machize/storage
+# @basaltkit/storage
 
-Machize's file storage layer: stores, reads and deletes files (uploads, reports, images, invoices…) with the same API, whether they live on local disk or in an S3-compatible cloud service (AWS S3, MinIO, Cloudflare R2). You need this module whenever your application deals with files.
+Basalt's file storage layer: stores, reads and deletes files (uploads, reports, images, invoices…) with the same API, whether they live on local disk or in an S3-compatible cloud service (AWS S3, MinIO, Cloudflare R2). You need this module whenever your application deals with files.
 
 ## What this module solves
 
@@ -13,10 +13,10 @@ It also solves two important problems in SaaS applications: **tenant isolation**
 ## Installation
 
 ```bash
-pnpm add @machize/storage
+pnpm add @basaltkit/storage
 ```
 
-Depends on `@machize/core` and already includes the AWS SDK (`@aws-sdk/client-s3`) — you don't need to install anything else, even if you only use the local driver.
+Depends on `@basaltkit/core` and already includes the AWS SDK (`@aws-sdk/client-s3`) — you don't need to install anything else, even if you only use the local driver.
 
 ## Getting started in 5 minutes
 
@@ -25,8 +25,8 @@ Depends on `@machize/core` and already includes the AWS SDK (`@aws-sdk/client-s3
 3. **Store and read files.**
 
 ```ts
-import { createApp } from '@machize/core'
-import { STORAGE, storagePlugin } from '@machize/storage'
+import { createApp } from '@basaltkit/core'
+import { STORAGE, storagePlugin } from '@basaltkit/storage'
 
 // 1. A disk called 'uploads', stored in the project's ./storage folder
 const app = await createApp({
@@ -77,7 +77,7 @@ storagePlugin({
 ### Writing and reading files
 
 ```ts
-import { Disk, LocalStorageDriver } from '@machize/storage'
+import { Disk, LocalStorageDriver } from '@basaltkit/storage'
 
 const disk = new Disk('uploads', new LocalStorageDriver({ root: './storage' }), { scope: null })
 
@@ -110,8 +110,8 @@ await disk.delete('a/1.txt')  // false (no longer existed)
 You can declare as many disks as you want — for example, public uploads in one bucket and invoices in another:
 
 ```ts
-import { createApp } from '@machize/core'
-import { STORAGE, storagePlugin } from '@machize/storage'
+import { createApp } from '@basaltkit/core'
+import { STORAGE, storagePlugin } from '@basaltkit/storage'
 
 const app = await createApp({
   plugins: [
@@ -146,8 +146,8 @@ The expiration accepts milliseconds or strings like `'500ms'`, `'30s'`, `'15m'`,
 Just like the cache, every operation reads the tenant from the request context and prefixes paths with `tenants/<id>/`. Each tenant gets its own private area with no extra code:
 
 ```ts
-import { runWithContext } from '@machize/core'
-import { Disk, LocalStorageDriver } from '@machize/storage'
+import { runWithContext } from '@basaltkit/core'
+import { Disk, LocalStorageDriver } from '@basaltkit/storage'
 
 const disk = new Disk('uploads', new LocalStorageDriver({ root: './storage' }))
 
@@ -250,7 +250,7 @@ Contract for building your own driver: `name` (readable string, used in errors),
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `storage.disk('name')` for a disk that isn't declared. |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` on a driver without support (e.g. `local`). |
 
-All extend `MachizeError` from `@machize/core` and have a `code` property with the code above.
+All extend `BasaltError` from `@basaltkit/core` and have a `code` property with the code above.
 
 ## Common errors and solutions (FAQ)
 
@@ -274,7 +274,7 @@ A `Buffer` is raw bytes. Convert it: `buffer.toString()` for text, `JSON.parse(b
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides `createApp`, the container, the request context (from which tenant isolation comes), `parseDuration` for expirations, and the `MachizeError` base class.
-- **`@machize/tenancy`** — with the tenancy plugin identifying each request's tenant, disks isolate files per tenant automatically.
-- **`@machize/http` / `@machize/express` / `@machize/fastify` / `@machize/hono`** — in upload/download routes, get `Storage` from the container and use `disk.put`/`disk.get`/`disk.temporaryUrl`.
-- **`@machize/prisma`** — a common pattern: store the file on a disk and its path/metadata in the database.
+- **`@basaltkit/core`** — provides `createApp`, the container, the request context (from which tenant isolation comes), `parseDuration` for expirations, and the `BasaltError` base class.
+- **`@basaltkit/tenancy`** — with the tenancy plugin identifying each request's tenant, disks isolate files per tenant automatically.
+- **`@basaltkit/http` / `@basaltkit/express` / `@basaltkit/fastify` / `@basaltkit/hono`** — in upload/download routes, get `Storage` from the container and use `disk.put`/`disk.get`/`disk.temporaryUrl`.
+- **`@basaltkit/prisma`** — a common pattern: store the file on a disk and its path/metadata in the database.

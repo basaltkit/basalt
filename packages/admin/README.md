@@ -1,19 +1,19 @@
-# @machize/admin
+# @basaltkit/admin
 
-Headless engine (no graphical interface) for admin panels: starting from a Zod data schema, it automatically derives table columns, form fields, and validation rules. You need it whenever you want to build an admin panel to manage your application's data — it's the foundation that the `@machize/admin-react` and `@machize/admin-shadcn` packages render on screen.
+Headless engine (no graphical interface) for admin panels: starting from a Zod data schema, it automatically derives table columns, form fields, and validation rules. You need it whenever you want to build an admin panel to manage your application's data — it's the foundation that the `@basaltkit/admin-react` and `@basaltkit/admin-shadcn` packages render on screen.
 
 ## What this module solves
 
 An **admin panel** is the private area of an application where the team manages data: listing customers, creating projects, editing products, deleting records. Building these screens by hand is repetitive — for each data type you have to write a table, a form, validation, and error messages, almost always with the same structure.
 
-`@machize/admin` eliminates that repetition. You describe your data once with **Zod** (a popular TypeScript validation library, where you write e.g. `z.string()` to say "this field is text"), and the module derives everything else: which columns to show in the table, which fields appear in the form, which are required, and how to validate what the user types.
+`@basaltkit/admin` eliminates that repetition. You describe your data once with **Zod** (a popular TypeScript validation library, where you write e.g. `z.string()` to say "this field is text"), and the module derives everything else: which columns to show in the table, which fields appear in the form, which are required, and how to validate what the user types.
 
-The word **headless** means this package doesn't render anything on screen — it has no HTML or visual components. It only produces "view models" (data structures that describe what should appear). What turns that into real screens are the sibling packages: `@machize/admin-react` (plain HTML) and `@machize/admin-shadcn` (styled with shadcn/ui). This separation lets you swap the visual look without rewriting the logic.
+The word **headless** means this package doesn't render anything on screen — it has no HTML or visual components. It only produces "view models" (data structures that describe what should appear). What turns that into real screens are the sibling packages: `@basaltkit/admin-react` (plain HTML) and `@basaltkit/admin-shadcn` (styled with shadcn/ui). This separation lets you swap the visual look without rewriting the logic.
 
 ## Installation
 
 ```bash
-pnpm add @machize/admin zod
+pnpm add @basaltkit/admin zod
 ```
 
 > `zod` is a *peer dependency* (a dependency you install yourself, to ensure only one version exists in the project). Versions 3.24+ and 4.x are supported.
@@ -45,7 +45,7 @@ const CreateProjectSchema = z.object({
 **Step 2 — Define the resource.** A *resource* is an entity the panel manages (projects, customers, products…):
 
 ```ts
-import { defineResource } from '@machize/admin'
+import { defineResource } from '@basaltkit/admin'
 
 const projects = defineResource({
   name: 'projects',
@@ -71,8 +71,8 @@ console.log(projects.formFields().map((f) => `${f.label} (${f.type})`))
 **Step 4 — Validate user-entered data:**
 
 ```ts
-const ok = projects.validate({ name: 'Machize', status: 'draft' })
-console.log(ok) // { success: true, data: { name: 'Machize', status: 'draft' } }
+const ok = projects.validate({ name: 'Basalt', status: 'draft' })
+console.log(ok) // { success: true, data: { name: 'Basalt', status: 'draft' } }
 
 const bad = projects.validate({ name: 'ab', status: 'nope' })
 console.log(bad.errors)
@@ -83,7 +83,7 @@ console.log(bad.errors)
 **Step 5 — Try it out with in-memory data** (no database):
 
 ```ts
-import { memoryDataSource } from '@machize/admin'
+import { memoryDataSource } from '@basaltkit/admin'
 
 const source = memoryDataSource<{ id: string; name: string }>([
   { id: 'p1', name: 'Apollo' },
@@ -102,7 +102,7 @@ This is the heart of the package: it takes a Zod schema and returns a descriptor
 
 ```ts
 import { z } from 'zod'
-import { fieldsFromSchema } from '@machize/admin'
+import { fieldsFromSchema } from '@basaltkit/admin'
 
 const fields = fieldsFromSchema(
   z.object({
@@ -126,7 +126,7 @@ const fields = fieldsFromSchema(
 Converts technical names into presentable text:
 
 ```ts
-import { humanize } from '@machize/admin'
+import { humanize } from '@basaltkit/admin'
 
 humanize('createdAt')       // 'Created At'
 humanize('blog_post_title') // 'Blog Post Title'
@@ -139,7 +139,7 @@ humanize('due-date')        // 'Due Date'
 
 ```ts
 import { z } from 'zod'
-import { defineResource } from '@machize/admin'
+import { defineResource } from '@basaltkit/admin'
 
 const tags = defineResource({
   name: 'tags',
@@ -160,7 +160,7 @@ Form modes: `'create'` uses `createSchema`; `'update'` uses `updateSchema` (or, 
 These functions produce plain objects that a visual layer (React or otherwise) renders:
 
 ```ts
-import { tableView, formView } from '@machize/admin'
+import { tableView, formView } from '@basaltkit/admin'
 
 const table = tableView(projects, [{ id: 'p1', name: 'A', status: 'draft' }])
 // { columns: [...fields...], rows: [...rows...] }
@@ -171,10 +171,10 @@ const form = formView(projects, { name: 'A' }, 'create')
 
 ### Data source — `AdminDataSource` and `memoryDataSource`
 
-`AdminDataSource` is the **contract** (TypeScript interface) that connects the panel to your real data: five CRUD operations (`list`, `get`, `create`, `update`, `remove`). Implement it on top of your API — typically with the `@machize/sdk` client:
+`AdminDataSource` is the **contract** (TypeScript interface) that connects the panel to your real data: five CRUD operations (`list`, `get`, `create`, `update`, `remove`). Implement it on top of your API — typically with the `@basaltkit/sdk` client:
 
 ```ts
-import type { AdminDataSource } from '@machize/admin'
+import type { AdminDataSource } from '@basaltkit/admin'
 
 type Project = { id: string; name: string; status: string }
 
@@ -281,7 +281,7 @@ In-memory data source (`T` must have `id: string`). `list` supports `search` (fr
 
 ## How it connects to other modules
 
-- **`@machize/admin-react`** — renders `Resource` on screen with plain HTML: `DataTable`, `ResourceForm`, and the `useList` hook consume `tableView`, `formView`, and `AdminDataSource` from this package directly.
-- **`@machize/admin-shadcn`** — the same role, but with styled shadcn/ui components (Tailwind CSS). This is the package used by the `create-machize --ui` scaffold.
-- **`@machize/dashboard`** — uses `Resource` in its `resourceSection` to build navigation for a full admin panel, and adds billing, queue, and audit metrics.
-- **`@machize/sdk`** — Machize's typed HTTP client; it's the natural way to implement `AdminDataSource` against a real Machize backend (Fastify/Express/Hono).
+- **`@basaltkit/admin-react`** — renders `Resource` on screen with plain HTML: `DataTable`, `ResourceForm`, and the `useList` hook consume `tableView`, `formView`, and `AdminDataSource` from this package directly.
+- **`@basaltkit/admin-shadcn`** — the same role, but with styled shadcn/ui components (Tailwind CSS). This is the package used by the `create-basalt --ui` scaffold.
+- **`@basaltkit/dashboard`** — uses `Resource` in its `resourceSection` to build navigation for a full admin panel, and adds billing, queue, and audit metrics.
+- **`@basaltkit/sdk`** — Basalt's typed HTTP client; it's the natural way to implement `AdminDataSource` against a real Basalt backend (Fastify/Express/Hono).

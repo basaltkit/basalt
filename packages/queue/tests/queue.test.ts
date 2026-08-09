@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp, ctx, runWithContext } from '@machize/core'
-import { defineEvent, EventBus } from '@machize/events'
+import { createApp, ctx, runWithContext } from '@basaltkit/core'
+import { defineEvent, EventBus } from '@basaltkit/events'
 import {
   BullmqQueueDriver,
   defineJob,

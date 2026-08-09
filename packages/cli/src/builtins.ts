@@ -1,4 +1,4 @@
-import { METADATA } from '@machize/core'
+import { METADATA } from '@basaltkit/core'
 import { defineCommand, type CommandDefinition } from './command.js'
 
 /** Route entries written by HTTP adapters into the 'http:routes' bucket. */

@@ -5,13 +5,13 @@ const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import { randomUUID } from 'node:crypto'
-import { matchesEvent, type WebhookEndpoint, type WebhookStore } from '@machize/webhooks'
+import { matchesEvent, type WebhookEndpoint, type WebhookStore } from '@basaltkit/webhooks'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/webhooks` `WebhookStore`
+ * Durable, SQLite-backed implementation of the `@basaltkit/webhooks` `WebhookStore`
  * (the outbound endpoint subscriptions), on Node's built-in `node:sqlite`. Zero
  * external dependencies. The single-node reference backend; the production
- * (Postgres/MySQL) counterpart is `@machize/webhooks-prisma`.
+ * (Postgres/MySQL) counterpart is `@basaltkit/webhooks-prisma`.
  *
  * `MemoryWebhookStore` (the default) forgets every registered endpoint on
  * restart — so after a redeploy, nothing is subscribed. This one persists them.

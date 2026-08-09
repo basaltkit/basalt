@@ -1,14 +1,14 @@
-import { createApp, definePlugin, tryCtx } from '@machize/core'
-import { configPlugin } from '@machize/config'
-import { EVENTS, eventsPlugin } from '@machize/events'
-import { fastifyPlugin } from '@machize/fastify'
-import { LOGGER, loggerPlugin } from '@machize/logger'
+import { createApp, definePlugin, tryCtx } from '@basaltkit/core'
+import { configPlugin } from '@basaltkit/config'
+import { EVENTS, eventsPlugin } from '@basaltkit/events'
+import { fastifyPlugin } from '@basaltkit/fastify'
+import { LOGGER, loggerPlugin } from '@basaltkit/logger'
 import {
   headerResolver,
   MemoryTenantSource,
   subdomainResolver,
   tenancyPlugin,
-} from '@machize/tenancy'
+} from '@basaltkit/tenancy'
 import { AUDIT, PROJECTS, ProjectRepository } from './domain.js'
 import { projectRoutes } from './routes.js'
 
@@ -24,7 +24,7 @@ export const tenants = () =>
  */
 const playgroundPlugin = definePlugin({
   name: 'playground',
-  dependsOn: ['machize:events', 'machize:logger'],
+  dependsOn: ['basalt:events', 'basalt:logger'],
   register({ container }) {
     container.singleton(PROJECTS, () => new ProjectRepository())
     container.singleton(AUDIT, () => ({ entries: [] }))

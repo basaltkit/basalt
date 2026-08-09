@@ -1,6 +1,6 @@
-# @machize/permissions
+# @basaltkit/permissions
 
-Authorization for Machize applications: roles, wildcard permissions, resource-based policies, super admin, and route protection — in the style of Laravel's Spatie Permissions.
+Authorization for Basalt applications: roles, wildcard permissions, resource-based policies, super admin, and route protection — in the style of Laravel's Spatie Permissions.
 
 You need this module when different users can do different things in your application (e.g. only admins can delete projects).
 
@@ -15,7 +15,7 @@ Everything is **scoped per tenant** by default: a permission granted within the 
 ## Installation
 
 ```bash
-pnpm add @machize/permissions
+pnpm add @basaltkit/permissions
 ```
 
 ## Get started in 5 minutes
@@ -23,7 +23,7 @@ pnpm add @machize/permissions
 1. **Create a store and grant permissions:**
 
 ```ts
-import { Gate, MemoryAccessStore, GLOBAL_SCOPE } from '@machize/permissions'
+import { Gate, MemoryAccessStore, GLOBAL_SCOPE } from '@basaltkit/permissions'
 
 const store = new MemoryAccessStore()
 
@@ -54,16 +54,16 @@ await gate.authorize({ id: 'other-user' }, 'projects:delete') // throws Permissi
 4. **In an HTTP application, protect routes with `meta.can`:**
 
 ```ts
-import { createApp } from '@machize/core'
-import { fastifyPlugin, route } from '@machize/fastify'
-import { permissionsPlugin, MemoryAccessStore } from '@machize/permissions'
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin, route } from '@basaltkit/fastify'
+import { permissionsPlugin, MemoryAccessStore } from '@basaltkit/permissions'
 
 const store = new MemoryAccessStore()
 await store.grantToUser('user-ada', ['projects:delete'], 'global')
 
 const app = await createApp({
   plugins: [
-    // ... an authentication plugin that sets ctx().user (e.g. @machize/auth)
+    // ... an authentication plugin that sets ctx().user (e.g. @basaltkit/auth)
     permissionsPlugin({ store }),
     fastifyPlugin({
       routes: [
@@ -96,7 +96,7 @@ A permission is a string; by convention `resource:action`. Matching is done with
 A role groups permissions and is assigned to users within a scope:
 
 ```ts
-import { MemoryAccessStore } from '@machize/permissions'
+import { MemoryAccessStore } from '@basaltkit/permissions'
 
 const store = new MemoryAccessStore()
 await store.grantToRole('editor', ['articles:read', 'articles:write'], 'acme')
@@ -108,10 +108,10 @@ You can also grant permissions directly to a user with `grantToUser(userId, perm
 
 ### Per-tenant scope
 
-When the Gate checks, it looks for grants in **two** scopes: the current scope and `GLOBAL_SCOPE` (`'global'`). The current scope, by default, is `ctx().tenant.id` set by `@machize/tenancy` — or `global` if there's no tenant. You can override it with the `scope` option:
+When the Gate checks, it looks for grants in **two** scopes: the current scope and `GLOBAL_SCOPE` (`'global'`). The current scope, by default, is `ctx().tenant.id` set by `@basaltkit/tenancy` — or `global` if there's no tenant. You can override it with the `scope` option:
 
 ```ts
-import { Gate, MemoryAccessStore } from '@machize/permissions'
+import { Gate, MemoryAccessStore } from '@basaltkit/permissions'
 
 const gate = new Gate({
   store: new MemoryAccessStore(),
@@ -124,7 +124,7 @@ const gate = new Gate({
 A **policy** decides by looking at the object in question — for example, "only the owner can edit." When you call `can()` with a third argument (the resource) and a policy exists for `resource:action`, the policy decides (grants are not consulted):
 
 ```ts
-import { Gate, MemoryAccessStore, definePolicy } from '@machize/permissions'
+import { Gate, MemoryAccessStore, definePolicy } from '@basaltkit/permissions'
 
 interface Project { ownerId: string }
 
@@ -144,7 +144,7 @@ await gate.can({ id: 'u9' }, 'project:update', { ownerId: 'other-user' }) // fal
 A function that, when it returns `true` for a user, authorizes everything (equivalent to Laravel's `Gate::before`):
 
 ```ts
-import { Gate, MemoryAccessStore } from '@machize/permissions'
+import { Gate, MemoryAccessStore } from '@basaltkit/permissions'
 
 const gate = new Gate({
   store: new MemoryAccessStore(),
@@ -159,8 +159,8 @@ await gate.can({ id: 'x', owner: true }, 'any:thing') // true, always
 The plugin registers the Gate in the container under the `GATE` token:
 
 ```ts
-import { ctx, type Container } from '@machize/core'
-import { GATE } from '@machize/permissions'
+import { ctx, type Container } from '@basaltkit/core'
+import { GATE } from '@basaltkit/permissions'
 
 const gate = (ctx().container as Container).get(GATE)
 await gate.authorize(ctx().user!, 'billing:write')
@@ -224,7 +224,7 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 
 **"403 PERMISSION_DENIED but I granted the permission."** Check the **scope**: a grant in the `'acme'` scope only applies when the request runs in the `acme` tenant. If you want it to apply everywhere, use `GLOBAL_SCOPE`.
 
-**"401 AUTH_REQUIRED on a route with meta.can."** The guard needs `ctx().user` — register an authentication plugin first (e.g. `@machize/auth`) and send credentials in the request.
+**"401 AUTH_REQUIRED on a route with meta.can."** The guard needs `ctx().user` — register an authentication plugin first (e.g. `@basaltkit/auth`) and send credentials in the request.
 
 **"`projects:*` doesn't cover `projects:sub:deep`."** Intentional: the wildcard covers one segment; the number of segments must match. Use `projects:sub:*` or `*`.
 
@@ -234,7 +234,7 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 
 ## How it connects to other modules
 
-- **@machize/auth** — authenticates and sets `ctx().user`, which the `meta.can` guard consumes. Auth = who you are; permissions = what you can do.
-- **@machize/tenancy** — sets `ctx().tenant`; the Gate uses it as the default scope, isolating permissions per tenant.
-- **@machize/teams** — can mirror team memberships as roles: `MemoryAccessStore` (or your own `AccessStore`) satisfies teams' `RoleAssigner` interface, so "being an admin of the acme team" automatically becomes the `admin` role in the `acme` scope.
-- **@machize/core / @machize/fastify** — container, context, and execution of the HTTP guards.
+- **@basaltkit/auth** — authenticates and sets `ctx().user`, which the `meta.can` guard consumes. Auth = who you are; permissions = what you can do.
+- **@basaltkit/tenancy** — sets `ctx().tenant`; the Gate uses it as the default scope, isolating permissions per tenant.
+- **@basaltkit/teams** — can mirror team memberships as roles: `MemoryAccessStore` (or your own `AccessStore`) satisfies teams' `RoleAssigner` interface, so "being an admin of the acme team" automatically becomes the `admin` role in the `acme` scope.
+- **@basaltkit/core / @basaltkit/fastify** — container, context, and execution of the HTTP guards.

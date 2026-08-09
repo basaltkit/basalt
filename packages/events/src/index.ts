@@ -1,11 +1,11 @@
-import { createToken, definePlugin, MachizeError } from '@machize/core'
+import { createToken, definePlugin, BasaltError } from '@basaltkit/core'
 
 /** Structural schema compatible with Zod — same shape as core's ConfigSchema. */
 export interface EventSchema<T> {
   safeParse(input: unknown): { success: boolean; data?: T; error?: unknown }
 }
 
-export class EventValidationError extends MachizeError {
+export class EventValidationError extends BasaltError {
   constructor(
     readonly event: string,
     readonly issues: unknown,
@@ -14,7 +14,7 @@ export class EventValidationError extends MachizeError {
   }
 }
 
-export interface MachizeEvent<T = void> {
+export interface BasaltEvent<T = void> {
   readonly name: string
   readonly schema?: EventSchema<T> | undefined
   /** phantom type */
@@ -26,7 +26,7 @@ export interface MachizeEvent<T = void> {
  *
  * export const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))
  */
-export function defineEvent<T = void>(name: string, schema?: EventSchema<T>): MachizeEvent<T> {
+export function defineEvent<T = void>(name: string, schema?: EventSchema<T>): BasaltEvent<T> {
   return schema === undefined ? { name } : { name, schema }
 }
 
@@ -60,10 +60,10 @@ export class EventBus {
    * - `on('order.**', h)` or `on('**', h)` — any suffix
    * Returns an unsubscribe function.
    */
-  on<T>(event: MachizeEvent<T>, handler: EventHandler<T>, options?: ListenOptions): () => void
+  on<T>(event: BasaltEvent<T>, handler: EventHandler<T>, options?: ListenOptions): () => void
   on(pattern: string, handler: EventHandler<unknown>, options?: ListenOptions): () => void
   on(
-    eventOrPattern: MachizeEvent<unknown> | string,
+    eventOrPattern: BasaltEvent<unknown> | string,
     handler: EventHandler<never>,
     options: ListenOptions = {},
   ): () => void {
@@ -79,7 +79,7 @@ export class EventBus {
     }
   }
 
-  once<T>(event: MachizeEvent<T>, handler: EventHandler<T>): () => void {
+  once<T>(event: BasaltEvent<T>, handler: EventHandler<T>): () => void {
     return this.on(event, handler, { once: true })
   }
 
@@ -88,7 +88,7 @@ export class EventBus {
    * listeners in series by priority. All listeners run even if one of them
    * fails; failures are aggregated into an AggregateError at the end.
    */
-  async emit<T>(event: MachizeEvent<T>, ...args: T extends void ? [] : [T]): Promise<void> {
+  async emit<T>(event: BasaltEvent<T>, ...args: T extends void ? [] : [T]): Promise<void> {
     const payload = validate(event, args[0])
     const meta: EventMeta = { name: event.name }
     const matched = this.registrations
@@ -116,7 +116,7 @@ export class EventBus {
   }
 }
 
-function validate<T>(event: MachizeEvent<T>, payload: unknown): unknown {
+function validate<T>(event: BasaltEvent<T>, payload: unknown): unknown {
   if (!event.schema) return payload
   const result = event.schema.safeParse(payload)
   if (!result.success) {
@@ -146,7 +146,7 @@ export const EVENTS = createToken<EventBus>('events')
 
 export function eventsPlugin() {
   return definePlugin({
-    name: 'machize:events',
+    name: 'basalt:events',
     register({ container }) {
       container.singleton(EVENTS, () => new EventBus())
     },

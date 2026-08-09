@@ -3,9 +3,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defineCommand, type CommandDefinition } from '@machize/cli'
+import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
 
-/** The @machize domains that ship a Prisma reference schema. */
+/** The @basalt domains that ship a Prisma reference schema. */
 const DOMAINS = ['auth', 'teams', 'subscriptions', 'permissions', 'comments', 'audit', 'activity', 'notifications', 'tenancy', 'events', 'webhooks']
 
 export interface PrismaSyncCommandOptions {
@@ -44,13 +44,13 @@ export function extractSchemaBlocks(schema: string): SchemaBlock[] {
   return blocks
 }
 
-/** Locate installed `@machize/<domain>-prisma` reference schemas, resolved from the app root. */
+/** Locate installed `@basaltkit/<domain>-prisma` reference schemas, resolved from the app root. */
 function discoverSchemas(domains: string[]): { pkg: string; domain: string; schema: string }[] {
   // Resolve from the user's project (cwd), not this package — pnpm isolates deps.
   const requireFromApp = createRequire(pathToFileURL(join(process.cwd(), 'noop.js')))
   const found: { pkg: string; domain: string; schema: string }[] = []
   for (const domain of domains) {
-    const pkg = `@machize/${domain}-prisma`
+    const pkg = `@basaltkit/${domain}-prisma`
     try {
       const schemaPath = requireFromApp.resolve(`${pkg}/schema.prisma`)
       found.push({ pkg, domain, schema: readFileSync(schemaPath, 'utf8') })
@@ -62,8 +62,8 @@ function discoverSchemas(domains: string[]): { pkg: string; domain: string; sche
 }
 
 /**
- * Builds the `mach prisma:sync` command: merges the models each installed
- * `@machize/*-prisma` package needs into your `prisma/schema.prisma`.
+ * Builds the `basalt prisma:sync` command: merges the models each installed
+ * `@basaltkit/*-prisma` package needs into your `prisma/schema.prisma`.
  *
  * Interactive by default (asks per package). Flags:
  * - `--yes` / `--all` — non-interactive; add every installed package's models.
@@ -74,7 +74,7 @@ function discoverSchemas(domains: string[]): { pkg: string; domain: string; sche
 export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): CommandDefinition {
   return defineCommand({
     name: 'prisma:sync',
-    description: 'Merge @machize/*-prisma models into your prisma/schema.prisma',
+    description: 'Merge @basaltkit/*-prisma models into your prisma/schema.prisma',
     async handle({ io, flags }) {
       const schemaPath = resolve(
         typeof flags['schema'] === 'string' ? flags['schema'] : (options.schemaPath ?? 'prisma/schema.prisma'),
@@ -91,7 +91,7 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
         typeof flags['only'] === 'string' ? flags['only'].split(',').map((d) => d.trim()) : (options.domains ?? DOMAINS)
       const packages = discoverSchemas(onlyDomains)
       if (packages.length === 0) {
-        io.log('No installed @machize/*-prisma packages found. Add one (e.g. `@machize/auth-prisma`) first.')
+        io.log('No installed @basaltkit/*-prisma packages found. Add one (e.g. `@basaltkit/auth-prisma`) first.')
         return 0
       }
 
@@ -123,7 +123,7 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
       io.log(`Added ${added} model(s) to ${schemaPath}.`)
 
       if (flags['migrate'] === true || flags['push'] === true) {
-        const args = flags['migrate'] === true ? ['migrate', 'dev', '--name', 'machize-sync'] : ['db', 'push']
+        const args = flags['migrate'] === true ? ['migrate', 'dev', '--name', 'basalt-sync'] : ['db', 'push']
         io.log(`Running: prisma ${args.join(' ')}`)
         const result = spawnSync('npx', ['prisma', ...args, '--schema', schemaPath], { stdio: 'inherit' })
         if (result.status !== 0) {

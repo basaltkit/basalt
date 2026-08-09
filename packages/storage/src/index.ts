@@ -4,7 +4,7 @@ import {
   parseDuration,
   tryCtx,
   type DurationInput,
-} from '@machize/core'
+} from '@basaltkit/core'
 import type { PutOptions, StorageDriver } from './driver.js'
 import { LocalStorageDriver } from './drivers/local.js'
 import { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
@@ -100,7 +100,7 @@ export const STORAGE = createToken<Storage>('storage')
 export type DiskConfig =
   | ({ driver: 'local'; root: string } & DiskOptions)
   | ({ driver: 's3' } & S3DriverOptions & DiskOptions)
-  /** A custom driver instance — e.g. `@machize/storage-gcs`, `-azure`. */
+  /** A custom driver instance — e.g. `@basaltkit/storage-gcs`, `-azure`. */
   | ({ driver: StorageDriver } & DiskOptions)
 
 export interface StoragePluginOptions {
@@ -112,7 +112,7 @@ export interface StoragePluginOptions {
 export function storagePlugin(options: StoragePluginOptions) {
   const drivers: StorageDriver[] = []
   return definePlugin({
-    name: 'machize:storage',
+    name: 'basalt:storage',
     register({ container }) {
       container.singleton(STORAGE, () => {
         const storage = new Storage(options.default)

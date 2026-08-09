@@ -37,7 +37,7 @@ describe('SqliteAccessStore', () => {
 })
 
 describe('sqliteAccessStore + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-perms-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-perms-'))
   const file = join(dir, 'permissions.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

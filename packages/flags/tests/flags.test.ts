@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@machize/core'
+import { createApp, runWithContext } from '@basaltkit/core'
 import { defineFlags, FLAGS, flagsPlugin } from '../src/index.js'
 
 const flags = defineFlags({

@@ -27,7 +27,7 @@ describe('PostgresSearchDriver', () => {
   it('register creates the table and a GIN index', async () => {
     const pg = new FakePg()
     await driverWith(pg).register({ name: 'notes', fields: ['title', 'body'], filterable: ['folder'] })
-    expect(pg.find(/CREATE TABLE/).text).toContain('machize_search')
+    expect(pg.find(/CREATE TABLE/).text).toContain('basalt_search')
     expect(pg.find(/CREATE INDEX/).text).toContain('USING gin(tsv)')
   })
 
@@ -76,6 +76,6 @@ describe('PostgresSearchDriver', () => {
     await driver.remove('notes', 'acme', '1')
     await driver.clear('notes')
     expect(pg.find(/DELETE FROM.*id = \$3/).params).toEqual(['notes', 'acme', '1'])
-    expect(pg.find(/DELETE FROM machize_search WHERE idx = \$1$/).params).toEqual(['notes'])
+    expect(pg.find(/DELETE FROM basalt_search WHERE idx = \$1$/).params).toEqual(['notes'])
   })
 })

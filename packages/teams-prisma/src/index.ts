@@ -4,15 +4,15 @@ import type {
   Membership,
   MembershipStore,
   TeamRole,
-} from '@machize/teams'
+} from '@basaltkit/teams'
 
 /**
- * Prisma-backed implementations of the `@machize/teams` stores (memberships and
+ * Prisma-backed implementations of the `@basaltkit/teams` stores (memberships and
  * invitations) for production databases (PostgreSQL, MySQL, …). Bring your
  * generated `PrismaClient` whose schema includes the `Team*` models (see the
  * bundled `prisma/schema.prisma`); the stores only touch those delegates.
  *
- * The production counterpart to `@machize/teams-sqlite` — same contracts,
+ * The production counterpart to `@basaltkit/teams-sqlite` — same contracts,
  * different backend.
  */
 
@@ -60,7 +60,7 @@ export interface PrismaTeamsClient {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-// The @machize/teams contracts model time as epoch-ms numbers; Prisma models it
+// The @basaltkit/teams contracts model time as epoch-ms numbers; Prisma models it
 // as DateTime. Convert at the edges.
 const ms = (d: Date): number => d.getTime()
 const at = (n: number): Date => new Date(n)
@@ -208,13 +208,13 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaTeamsStores(client: PrismaTeamsClient): PrismaTeamsStores {
-  ensureModel(client, 'teamMembership', '@machize/teams-prisma')
+  ensureModel(client, 'teamMembership', '@basaltkit/teams-prisma')
   return {
     memberships: new PrismaMembershipStore(client),
     invitations: new PrismaInvitationStore(client),

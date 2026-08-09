@@ -1,7 +1,7 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 import { z } from 'zod'
 
-export class EnvValidationError extends MachizeError {
+export class EnvValidationError extends BasaltError {
   constructor(readonly report: string[]) {
     super(
       'ENV_INVALID',

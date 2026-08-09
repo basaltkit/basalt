@@ -1,4 +1,4 @@
-# @machize/dashboard
+# @basaltkit/dashboard
 
 "Headless" (no graphical interface) model of a complete admin panel: billing metrics (MRR, ARR, churn), job queue and audit summaries, and a section registry that organizes resources into navigation. You need it when you want to assemble the management panel for a SaaS product — the "Overview" page with numbers, the resource list in the sidebar, queue status.
 
@@ -8,24 +8,24 @@ When you run a subscription product (a **SaaS** — software sold as a service, 
 
 This package brings those calculations ready-made and tested: `computeBillingMetrics` turns a list of subscriptions and the plan catalog into MRR (monthly recurring revenue), ARR (annual revenue) and counts by status and by plan; `churnRate` calculates the cancellation rate; `summarizeQueue` and `summarizeAudit` summarize job queue status and the audit log.
 
-The second half of the package is structural: `defineDashboard` and the `*Section` functions let you declare your panel's sections ("Overview", "Projects", "Audit Log", "Queues") in a single navigable object — the visual "shell" (React or otherwise) reads `dashboard.nav()` to draw the sidebar and `dashboard.section(key)` to know what to show on each page. Like `@machize/admin`, this package doesn't render anything: it only produces the models. And it's safe to use in the browser — it imports only **types** from `@machize/subscriptions`, no server code.
+The second half of the package is structural: `defineDashboard` and the `*Section` functions let you declare your panel's sections ("Overview", "Projects", "Audit Log", "Queues") in a single navigable object — the visual "shell" (React or otherwise) reads `dashboard.nav()` to draw the sidebar and `dashboard.section(key)` to know what to show on each page. Like `@basaltkit/admin`, this package doesn't render anything: it only produces the models. And it's safe to use in the browser — it imports only **types** from `@basaltkit/subscriptions`, no server code.
 
 ## Installation
 
 ```bash
-pnpm add @machize/dashboard
+pnpm add @basaltkit/dashboard
 ```
 
-> Brings `@machize/admin` and `@machize/subscriptions` as dependencies. In practice you'll also want `@machize/subscriptions` directly (for `definePlans`) and `zod` if you define resources.
+> Brings `@basaltkit/admin` and `@basaltkit/subscriptions` as dependencies. In practice you'll also want `@basaltkit/subscriptions` directly (for `definePlans`) and `zod` if you define resources.
 
 ## Getting started in 5 minutes
 
 Let's calculate the billing metrics for a fictional SaaS and assemble the panel structure.
 
-**Step 1 — Define the plan catalog** (with `@machize/subscriptions`):
+**Step 1 — Define the plan catalog** (with `@basaltkit/subscriptions`):
 
 ```ts
-import { definePlans } from '@machize/subscriptions'
+import { definePlans } from '@basaltkit/subscriptions'
 
 const plans = definePlans({
   free: { price: 0, features: {} },
@@ -37,8 +37,8 @@ const plans = definePlans({
 **Step 2 — Calculate the metrics** from the subscriptions (coming from your database or API):
 
 ```ts
-import { computeBillingMetrics, churnRate } from '@machize/dashboard'
-import type { SubscriptionRecord } from '@machize/subscriptions'
+import { computeBillingMetrics, churnRate } from '@basaltkit/dashboard'
+import type { SubscriptionRecord } from '@basaltkit/subscriptions'
 
 const subscriptions: SubscriptionRecord[] = [
   { billableId: 'a', plan: 'pro', period: 'monthly', status: 'active' },   // +30 €/month
@@ -60,14 +60,14 @@ console.log(churnRate(5, 100)) // 0.05 → we lost 5% of customers in the period
 
 ```ts
 import { z } from 'zod'
-import { defineResource } from '@machize/admin'
+import { defineResource } from '@basaltkit/admin'
 import {
   defineDashboard,
   metricsSection,
   resourceSection,
   auditSection,
   queueSection,
-} from '@machize/dashboard'
+} from '@basaltkit/dashboard'
 
 const projects = defineResource({
   name: 'projects',
@@ -75,7 +75,7 @@ const projects = defineResource({
 })
 
 const dashboard = defineDashboard({
-  title: 'Machize Admin',
+  title: 'Basalt Admin',
   sections: [
     metricsSection({ icon: 'gauge' }),        // "Overview" page with the numbers
     resourceSection(projects, { icon: 'folder' }), // project CRUD
@@ -88,7 +88,7 @@ const dashboard = defineDashboard({
 **Step 4 — Use the model in your interface:**
 
 ```ts
-console.log(dashboard.title) // 'Machize Admin'
+console.log(dashboard.title) // 'Basalt Admin'
 console.log(dashboard.nav())
 // [
 //   { key: 'overview', label: 'Overview', icon: 'gauge' },
@@ -113,7 +113,7 @@ Takes a "snapshot" of the subscriptions and the plan catalog. Important rules, f
 - Values are rounded to 2 decimal places; `arr = mrr × 12`.
 
 ```ts
-import { computeBillingMetrics } from '@machize/dashboard'
+import { computeBillingMetrics } from '@basaltkit/dashboard'
 
 const m = computeBillingMetrics(subscriptions, plans)
 // m: { mrr, arr, active, trialing, pastDue, canceled, byPlan }
@@ -126,7 +126,7 @@ On screen, this usually turns into a row of cards: "MRR 55 €", "ARR 660 €", 
 Customers lost divided by customers at the start of the period. Returns a fraction between 0 and 1 (multiply by 100 for a percentage). Protected against division by zero:
 
 ```ts
-import { churnRate } from '@machize/dashboard'
+import { churnRate } from '@basaltkit/dashboard'
 
 churnRate(5, 100) // 0.05  (5%)
 churnRate(3, 0)   // 0     (there were no customers at the start)
@@ -137,7 +137,7 @@ churnRate(3, 0)   // 0     (there were no customers at the start)
 A **job queue** is where the application stores tasks to run in the background (sending emails, generating reports…). Each task is in a state: waiting, active, completed, failed, delayed. This function fills in missing states with 0, sums the total, and marks the queue as healthy when there are no failures:
 
 ```ts
-import { summarizeQueue } from '@machize/dashboard'
+import { summarizeQueue } from '@basaltkit/dashboard'
 
 summarizeQueue({ waiting: 2, active: 1, failed: 3 })
 // { waiting: 2, active: 1, completed: 0, failed: 3, delayed: 0,
@@ -151,7 +151,7 @@ On screen: one card per queue, with the total and a green (`healthy: true`) or r
 An **audit log** stores "who did what": each entry has an event name (e.g. `auth:login`). This function groups and counts by event, from most frequent to least (ties broken alphabetically):
 
 ```ts
-import { summarizeAudit } from '@machize/dashboard'
+import { summarizeAudit } from '@basaltkit/dashboard'
 
 summarizeAudit([
   { event: 'auth:login' },
@@ -161,7 +161,7 @@ summarizeAudit([
 // [ { event: 'auth:login', count: 2 }, { event: 'billing:subscribed', count: 1 } ]
 ```
 
-Accepts any array of objects with `event: string` — entries from `@machize/audit` work directly.
+Accepts any array of objects with `event: string` — entries from `@basaltkit/audit` work directly.
 
 ### Panel structure — `defineDashboard` and sections
 
@@ -176,7 +176,7 @@ Four section builders, all returning a `Section` object:
 
 All accept `{ key?, label?, icon? }` (`resourceSection` accepts `{ key?, icon? }` — the label always comes from the resource). `icon` is just a textual hint for the UI (e.g. the name of a lucide icon like `'gauge'`); this package doesn't render icons. You can also build a `Section` by hand with `kind: 'custom'` for your own pages.
 
-The visual shell walks through the sections and chooses what to render by `kind`: `metrics` → cards with `computeBillingMetrics`; `resource` → `DataTable`/`ResourceForm` (from `@machize/admin-react` or `@machize/admin-shadcn`) over `section.resource`; `audit` → list with `summarizeAudit`; `queue` → cards with `summarizeQueue`.
+The visual shell walks through the sections and chooses what to render by `kind`: `metrics` → cards with `computeBillingMetrics`; `resource` → `DataTable`/`ResourceForm` (from `@basaltkit/admin-react` or `@basaltkit/admin-shadcn`) over `section.resource`; `audit` → list with `summarizeAudit`; `queue` → cards with `summarizeQueue`.
 
 ## API reference
 
@@ -184,7 +184,7 @@ The visual shell walks through the sections and chooses what to render by `kind`
 
 | Parameter | Type | Required? | Description |
 |---|---|---|---|
-| `subscriptions` | `SubscriptionRecord[]` (from `@machize/subscriptions`) | Yes | Snapshot of subscriptions (`{ billableId, plan, period, status, … }`). |
+| `subscriptions` | `SubscriptionRecord[]` (from `@basaltkit/subscriptions`) | Yes | Snapshot of subscriptions (`{ billableId, plan, period, status, … }`). |
 | `plans` | `Record<string, PlanDefinition>` | Yes | Plan catalog (e.g. the result of `definePlans`). |
 
 `BillingMetrics`:
@@ -247,7 +247,7 @@ Returns counts per event, sorted by descending frequency and then alphabetically
 | `key` | `string` | Yes | Unique identifier (used in routes/navigation). |
 | `label` | `string` | Yes | Displayed text. |
 | `kind` | `SectionKind` = `'metrics' \| 'resource' \| 'audit' \| 'queue' \| 'custom'` | Yes | Tells the UI what to render. |
-| `resource` | `Resource` (from `@machize/admin`) | No | Present on `resource` sections. |
+| `resource` | `Resource` (from `@basaltkit/admin`) | No | Present on `resource` sections. |
 | `icon` | `string` | No | Icon hint for the UI (e.g. lucide name). |
 
 ### `resourceSection(resource, options?)`, `metricsSection(options?)`, `auditSection(options?)`, `queueSection(options?)`
@@ -266,14 +266,14 @@ Returns counts per event, sorted by descending frequency and then alphabetically
 
 **"`dashboard.section('...')` returns `undefined`."** The `key` doesn't match. Remember the defaults: `metricsSection` → `'overview'`, `auditSection` → `'audit'`, `queueSection` → `'queues'`, `resourceSection` → the resource's `name`. Pass `{ key: '...' }` to control it.
 
-**"Can I use this package in the browser?"** Yes. From `@machize/subscriptions` it only imports **types** (erased at compile time), so it doesn't pull in server code — the metrics functions are safe on the frontend.
+**"Can I use this package in the browser?"** Yes. From `@basaltkit/subscriptions` it only imports **types** (erased at compile time), so it doesn't pull in server code — the metrics functions are safe on the frontend.
 
 **"Two sections with the same `key`."** `section(key)` returns the first one found. Give unique `key`s (e.g. `resourceSection(projects, { key: 'projects-archived' })`).
 
 ## How it connects to other modules
 
-- **`@machize/admin`** — provides the `Resource` type that `resourceSection`s carry; the UI renders each one with the admin's view models.
-- **`@machize/admin-react` / `@machize/admin-shadcn`** — the visual layers: they read `dashboard.nav()` for the sidebar and, per section, use `DataTable`/`ResourceForm` (`resource` sections), cards (`Card`/`Badge` from admin-shadcn) for `metrics` and `queue`, and lists for `audit`.
-- **`@machize/subscriptions`** — source of the `SubscriptionRecord`, `PlanDefinition` and `BillingPeriod` types, and of `definePlans` which produces the catalog passed to `computeBillingMetrics`.
-- **`@machize/queue` and `@machize/audit`** — the natural sources of the numbers: pass the queue counters to `summarizeQueue` and the audit entries to `summarizeAudit`.
-- **`@machize/sdk`** — on the frontend, the data (subscriptions, counters, audit) arrives via the SDK's typed client and is summarized here before going to the screen.
+- **`@basaltkit/admin`** — provides the `Resource` type that `resourceSection`s carry; the UI renders each one with the admin's view models.
+- **`@basaltkit/admin-react` / `@basaltkit/admin-shadcn`** — the visual layers: they read `dashboard.nav()` for the sidebar and, per section, use `DataTable`/`ResourceForm` (`resource` sections), cards (`Card`/`Badge` from admin-shadcn) for `metrics` and `queue`, and lists for `audit`.
+- **`@basaltkit/subscriptions`** — source of the `SubscriptionRecord`, `PlanDefinition` and `BillingPeriod` types, and of `definePlans` which produces the catalog passed to `computeBillingMetrics`.
+- **`@basaltkit/queue` and `@basaltkit/audit`** — the natural sources of the numbers: pass the queue counters to `summarizeQueue` and the audit entries to `summarizeAudit`.
+- **`@basaltkit/sdk`** — on the frontend, the data (subscriptions, counters, audit) arrives via the SDK's typed client and is summarized here before going to the screen.

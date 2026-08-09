@@ -1,5 +1,5 @@
-import { createToken, definePlugin, ensureMetadata } from '@machize/core'
-import type { JobDefinition } from '@machize/queue'
+import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
+import type { JobDefinition } from '@basaltkit/queue'
 import { cronMatches, cronToString, parseCron, type CronFields } from './cron.js'
 
 export { CronParseError, cronMatches, parseCron, fieldMatches, zonedParts } from './cron.js'
@@ -106,7 +106,7 @@ export class ScheduleEntry {
     return this
   }
 
-  /** Entry description — consumed by `mach schedule list`. */
+  /** Entry description — consumed by `basalt schedule list`. */
   describe(): { name: string; cron: string; timezone: string } {
     return { name: this.name, cron: cronToString(this.fields), timezone: this.tz }
   }
@@ -143,7 +143,7 @@ export class Scheduler {
   private timer: NodeJS.Timeout | undefined
   private interval: NodeJS.Timeout | undefined
 
-  /** Schedules the dispatch of a @machize/queue job. */
+  /** Schedules the dispatch of a @basaltkit/queue job. */
   job<T>(job: JobDefinition<T>, ...payload: T extends void ? [] : [T]): ScheduleEntry {
     return this.add(new ScheduleEntry(job.name, () => job.dispatch(payload[0] as T)))
   }
@@ -224,14 +224,14 @@ export interface SchedulerPluginOptions {
 
 export function schedulerPlugin(options: SchedulerPluginOptions = {}) {
   return definePlugin({
-    name: 'machize:scheduler',
+    name: 'basalt:scheduler',
     register({ container }) {
       container.singleton(SCHEDULER, () => new Scheduler())
     },
     boot({ container }) {
       const scheduler = container.get(SCHEDULER)
       options.define?.(scheduler)
-      // Expose entries to tooling (CLI `mach schedule:list`).
+      // Expose entries to tooling (CLI `basalt schedule:list`).
       const metadata = ensureMetadata(container)
       for (const entry of scheduler.list()) metadata.add('schedule:entries', entry)
       if (options.autostart !== false) scheduler.start()

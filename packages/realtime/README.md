@@ -1,6 +1,6 @@
-# @machize/realtime
+# @basaltkit/realtime
 
-Real-time communication for Machize: **server-to-client push** over WebSocket or SSE, with **per-tenant channels**, **presence** (who's online), and an **event bridge** that connects your app's domain hooks directly to connected clients. You need this module when you want live updates — notifications, feeds, dashboards, collaboration — without the client polling.
+Real-time communication for Basalt: **server-to-client push** over WebSocket or SSE, with **per-tenant channels**, **presence** (who's online), and an **event bridge** that connects your app's domain hooks directly to connected clients. You need this module when you want live updates — notifications, feeds, dashboards, collaboration — without the client polling.
 
 ## What this module solves
 
@@ -14,18 +14,18 @@ In a typical application the client keeps asking ("anything new?") repeatedly. W
 ## Installation
 
 ```bash
-pnpm add @machize/realtime
+pnpm add @basaltkit/realtime
 ```
 
-Depends only on `@machize/core`. For multi-instance you need a Redis (the client is injected — typically `ioredis`).
+Depends only on `@basaltkit/core`. For multi-instance you need a Redis (the client is injected — typically `ioredis`).
 
 ## Get started in 5 minutes
 
 ### 1. Register the plugin
 
 ```ts
-import { createApp } from '@machize/core'
-import { realtimePlugin, REALTIME } from '@machize/realtime'
+import { createApp } from '@basaltkit/core'
+import { realtimePlugin, REALTIME } from '@basaltkit/realtime'
 
 const app = await createApp({
   plugins: [realtimePlugin()],
@@ -37,7 +37,7 @@ const app = await createApp({
 The core talks to **connections** (`Connection`). You build one from your adapter's socket/response and register it in the hub. WebSocket example:
 
 ```ts
-import { REALTIME_HUB, websocketConnection } from '@machize/realtime'
+import { REALTIME_HUB, websocketConnection } from '@basaltkit/realtime'
 
 // in your adapter's WebSocket upgrade handler, with the user already authenticated:
 const hub = app.container.get(REALTIME_HUB)
@@ -51,7 +51,7 @@ socket.on('close', () => hub.unregister(conn.id))
 It's the same with **SSE**, but you provide how to write to the response (framework-neutral):
 
 ```ts
-import { sseConnection } from '@machize/realtime'
+import { sseConnection } from '@basaltkit/realtime'
 
 reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' })
 const conn = sseConnection(
@@ -76,7 +76,7 @@ await realtime.to('acme').channel('notes').emit('created', { id: 1, title: 'Hell
 Instead of calling `emit` by hand, connect a domain hook to a channel. Whenever the hook fires, the payload is pushed to clients — without touching the code that emits the event:
 
 ```ts
-import { realtimePlugin, bridgeRule } from '@machize/realtime'
+import { realtimePlugin, bridgeRule } from '@basaltkit/realtime'
 
 realtimePlugin({
   bridge: [
@@ -108,7 +108,7 @@ Pass a `RedisBackplane` so an `emit` on one instance reaches clients on all of t
 
 ```ts
 import Redis from 'ioredis'
-import { realtimePlugin, RedisBackplane } from '@machize/realtime'
+import { realtimePlugin, RedisBackplane } from '@basaltkit/realtime'
 
 realtimePlugin({
   backplane: new RedisBackplane({ publisher: new Redis(url), subscriber: new Redis(url) }),
@@ -149,11 +149,11 @@ Registers the `REALTIME` (`Realtime`) and `REALTIME_HUB` (`RealtimeHub`) tokens.
 ### Backplanes
 
 - `MemoryBackplane` — single process (default).
-- `RedisBackplane({ publisher, subscriber, channel? })` — Redis pub/sub (`channel` default `'machize:realtime'`).
+- `RedisBackplane({ publisher, subscriber, channel? })` — Redis pub/sub (`channel` default `'basalt:realtime'`).
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides `createApp`, tokens, and the hook bus the event bridge consumes.
-- **`@machize/events`** — emits domain events; the `bridge` turns them into push.
-- **`@machize/notifications`** — common pattern: notification persisted **and** pushed live by the same event.
-- **`@machize/tenancy` / `@machize/auth`** — where the `tenantId`/`userId` you assign to each connection come from.
+- **`@basaltkit/core`** — provides `createApp`, tokens, and the hook bus the event bridge consumes.
+- **`@basaltkit/events`** — emits domain events; the `bridge` turns them into push.
+- **`@basaltkit/notifications`** — common pattern: notification persisted **and** pushed live by the same event.
+- **`@basaltkit/tenancy` / `@basaltkit/auth`** — where the `tenantId`/`userId` you assign to each connection come from.

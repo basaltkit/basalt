@@ -1,7 +1,7 @@
-# @machize/notifications-sqlite
+# @basaltkit/notifications-sqlite
 
 Durable, **SQLite-backed** implementation of the
-[`@machize/notifications`](https://github.com/Zebedeu/machize/tree/main/packages/notifications)
+[`@basaltkit/notifications`](https://github.com/Zebedeu/basalt/tree/main/packages/notifications)
 `InAppStore` — the in-app notification inbox — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
@@ -9,10 +9,10 @@ dependencies.**
 Swap it in for the in-memory store and the inbox survives a restart — no ORM, no
 migration tool, no service. The single-node reference backend; the production
 (Postgres/MySQL) counterpart is
-[`@machize/notifications-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/notifications-prisma).
+[`@basaltkit/notifications-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/notifications-prisma).
 
 ```bash
-pnpm add @machize/notifications-sqlite   # peer: @machize/notifications
+pnpm add @basaltkit/notifications-sqlite   # peer: @basaltkit/notifications
 ```
 
 > Requires **Node 22.5+**. Stable and flag-free on Node 24; on 22.x run with
@@ -20,11 +20,11 @@ pnpm add @machize/notifications-sqlite   # peer: @machize/notifications
 
 ## Use it
 
-`@machize/notifications` takes the in-app store as the `inApp` channel option:
+`@basaltkit/notifications` takes the in-app store as the `inApp` channel option:
 
 ```ts
-import { notificationsPlugin } from '@machize/notifications'
-import { sqliteInAppStore } from '@machize/notifications-sqlite'
+import { notificationsPlugin } from '@basaltkit/notifications'
+import { sqliteInAppStore } from '@basaltkit/notifications-sqlite'
 
 const n = sqliteInAppStore('./data/notifications.db')   // ':memory:' by default
 

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Machize is at **1.0**. Security fixes land on the latest `1.x` minor — upgrade to
+Basalt is at **1.0**. Security fixes land on the latest `1.x` minor — upgrade to
 the newest `1.x` to receive them. Each major receives 12 months of security fixes
 after its successor is released.
 
@@ -13,7 +13,7 @@ discussions.**
 
 Report privately through GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
 ("Report a vulnerability" under the repository's **Security** tab). If that is
-not available to you, email the maintainers at **security@machize.dev**
+not available to you, email the maintainers at **security@basalt.dev**
 (update this address for your fork/deployment).
 
 Please include:

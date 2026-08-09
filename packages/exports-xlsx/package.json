@@ -1,7 +1,7 @@
 {
-  "name": "@machize/exports-xlsx",
-  "version": "1.0.5",
-  "description": "XLSX formatter for @machize/exports — writes a valid single-sheet .xlsx (Office Open XML) with a built-in ZIP writer. Zero dependencies.",
+  "name": "@basaltkit/exports-xlsx",
+  "version": "1.0.0",
+  "description": "XLSX formatter for @basaltkit/exports — writes a valid single-sheet .xlsx (Office Open XML) with a built-in ZIP writer. Zero dependencies.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,10 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/exports": "workspace:^"
+    "@basaltkit/exports": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -33,13 +33,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/exports-xlsx"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/exports-xlsx#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/exports-xlsx#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "export",
     "xlsx",

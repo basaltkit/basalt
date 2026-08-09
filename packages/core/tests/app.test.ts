@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createApp, createToken, definePlugin } from '../src/index.js'
 
-describe('MachizeApp lifecycle', () => {
+describe('BasaltApp lifecycle', () => {
   it('sorts plugins by dependsOn and runs register before boot', async () => {
     const order: string[] = []
     const a = definePlugin({
@@ -44,7 +44,7 @@ describe('MachizeApp lifecycle', () => {
 
   it('validates config with schema (fail fast)', async () => {
     const plugin = definePlugin<{ driver: string }>({
-      name: 'machize:cache',
+      name: 'basalt:cache',
       configSchema: {
         safeParse: (input) => {
           const driver = (input as { driver?: unknown } | undefined)?.driver
@@ -55,11 +55,11 @@ describe('MachizeApp lifecycle', () => {
       },
     })
 
-    await expect(createApp({ plugins: [plugin] }).boot()).rejects.toThrowError(/machize:cache/)
+    await expect(createApp({ plugins: [plugin] }).boot()).rejects.toThrowError(/basalt:cache/)
     await expect(
       createApp({
         plugins: [plugin],
-        config: { 'machize:cache': { driver: 'memory' } },
+        config: { 'basalt:cache': { driver: 'memory' } },
       }).boot(),
     ).resolves.toBeTruthy()
   })

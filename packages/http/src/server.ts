@@ -1,4 +1,4 @@
-import { createToken } from '@machize/core'
+import { createToken } from '@basaltkit/core'
 import type { HttpMethod, HttpReply, HttpRequest } from './route.js'
 
 /** Middleware before routing. If it sends the reply, routing is skipped. */

@@ -14,7 +14,7 @@ export interface RedisRealtimeClient {
 export interface RedisBackplaneOptions {
   publisher: RedisRealtimeClient
   subscriber: RedisRealtimeClient
-  /** Redis pub/sub channel the instances share. Default 'machize:realtime'. */
+  /** Redis pub/sub channel the instances share. Default 'basalt:realtime'. */
   channel?: string
 }
 
@@ -26,7 +26,7 @@ export interface RedisBackplaneOptions {
 export class RedisBackplane implements RealtimeBackplane {
   private readonly channel: string
   constructor(private readonly options: RedisBackplaneOptions) {
-    this.channel = options.channel ?? 'machize:realtime'
+    this.channel = options.channel ?? 'basalt:realtime'
   }
 
   async publish(message: BackplaneMessage): Promise<void> {

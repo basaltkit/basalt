@@ -10,13 +10,13 @@ import type {
   Membership,
   MembershipStore,
   TeamRole,
-} from '@machize/teams'
+} from '@basaltkit/teams'
 
 /**
- * Durable, SQLite-backed implementations of the `@machize/teams` stores
+ * Durable, SQLite-backed implementations of the `@basaltkit/teams` stores
  * (memberships and invitations), on Node's built-in `node:sqlite` — zero
  * external dependencies. The single-node reference backend for teams; the
- * production (Postgres/MySQL) counterpart is `@machize/teams-prisma`.
+ * production (Postgres/MySQL) counterpart is `@basaltkit/teams-prisma`.
  *
  * Requires Node 22.5+ (stable and flag-free on Node 24; `--experimental-sqlite`
  * on 22.x).

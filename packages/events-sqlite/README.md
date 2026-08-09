@@ -1,13 +1,13 @@
-# @machize/events-sqlite
+# @basaltkit/events-sqlite
 
-Durable, SQLite-backed implementation of the [`@machize/events`](https://github.com/Zebedeu/machize/tree/main/packages/events) `OutboxStore` (the transactional outbox), on Node's built-in `node:sqlite`. Zero external dependencies.
+Durable, SQLite-backed implementation of the [`@basaltkit/events`](https://github.com/Zebedeu/basalt/tree/main/packages/events) `OutboxStore` (the transactional outbox), on Node's built-in `node:sqlite`. Zero external dependencies.
 
-The whole point of the transactional outbox is to survive a crash **between "committed" and "delivered"** — so its store has to be durable. `@machize/events` ships `MemoryOutboxStore` by default, which loses every un-relayed event when the process exits. This package is the drop-in durable replacement for a single node; the production, multi-instance counterpart is [`@machize/events-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/events-prisma).
+The whole point of the transactional outbox is to survive a crash **between "committed" and "delivered"** — so its store has to be durable. `@basaltkit/events` ships `MemoryOutboxStore` by default, which loses every un-relayed event when the process exits. This package is the drop-in durable replacement for a single node; the production, multi-instance counterpart is [`@basaltkit/events-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/events-prisma).
 
 ## Installation
 
 ```bash
-pnpm add @machize/events @machize/events-sqlite
+pnpm add @basaltkit/events @basaltkit/events-sqlite
 ```
 
 Requires **Node 22.5+** (`node:sqlite` is stable and flag-free on Node 24; on Node 22.x run with `--experimental-sqlite`).
@@ -17,8 +17,8 @@ Requires **Node 22.5+** (`node:sqlite` is stable and flag-free on Node 24; on No
 `sqliteOutboxStore()` opens (or creates) the database, applies an idempotent schema, and returns the store named to drop straight into `outboxPlugin`:
 
 ```ts
-import { outboxPlugin } from '@machize/events'
-import { sqliteOutboxStore } from '@machize/events-sqlite'
+import { outboxPlugin } from '@basaltkit/events'
+import { sqliteOutboxStore } from '@basaltkit/events-sqlite'
 
 const outbox = sqliteOutboxStore('./data/outbox.db') // ':memory:' by default
 
@@ -40,7 +40,7 @@ One `outbox` table holds each entry: `event`, JSON `payload`, optional `tenant_i
 
 ## Which backend?
 
-- **`@machize/events-sqlite`** — a single node, zero dependencies, the outbox in a local file.
-- **`@machize/events-prisma`** — you already run Postgres/MySQL, or need the outbox in the same database (and transaction) as your business writes.
+- **`@basaltkit/events-sqlite`** — a single node, zero dependencies, the outbox in a local file.
+- **`@basaltkit/events-prisma`** — you already run Postgres/MySQL, or need the outbox in the same database (and transaction) as your business writes.
 
 Both implement the identical `OutboxStore` contract, so switching is a one-line change.

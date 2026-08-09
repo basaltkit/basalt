@@ -1,4 +1,4 @@
-import { MachizeClientError } from './errors.js'
+import { BasaltClientError } from './errors.js'
 import type { Client, Endpoint, EndpointTree } from './endpoint.js'
 
 export type FetchLike = typeof fetch
@@ -39,7 +39,7 @@ function isEndpoint(value: unknown): value is Endpoint {
  * Builds a typed client from an endpoint tree:
  *
  * const api = createClient(endpoints, { baseUrl, getToken, refresh })
- * const project = await api.projects.create({ body: { name: 'Machize' } })
+ * const project = await api.projects.create({ body: { name: 'Basalt' } })
  */
 export function createClient<T extends EndpointTree>(endpoints: T, options: ClientOptions): Client<T> {
   const doFetch = options.fetch ?? globalThis.fetch
@@ -97,7 +97,7 @@ async function request(
 
   if (!response.ok) {
     const error = (json as { error?: { code?: string; message?: string } } | undefined)?.error ?? {}
-    throw new MachizeClientError(
+    throw new BasaltClientError(
       response.status,
       error.code ?? 'HTTP_ERROR',
       error.message ?? (response.statusText || 'Request failed'),
@@ -108,7 +108,7 @@ async function request(
   if (endpoint.result) {
     const parsed = endpoint.result.safeParse(json)
     if (!parsed.success) {
-      throw new MachizeClientError(
+      throw new BasaltClientError(
         response.status,
         'CLIENT_RESPONSE_MISMATCH',
         'The response did not match the endpoint result schema (client/server drift).',

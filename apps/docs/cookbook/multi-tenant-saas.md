@@ -7,16 +7,16 @@ shape the reference `playground` app uses.
 ## 1. Boot the app
 
 ```ts
-import { createApp } from '@machize/core'
-import { eventsPlugin } from '@machize/events'
-import { loggerPlugin } from '@machize/logger'
-import { fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { eventsPlugin } from '@basaltkit/events'
+import { loggerPlugin } from '@basaltkit/logger'
+import { fastifyPlugin } from '@basaltkit/fastify'
 import {
   tenancyPlugin,
   MemoryTenantSource,
   headerResolver,
   subdomainResolver,
-} from '@machize/tenancy'
+} from '@basaltkit/tenancy'
 import { projectRoutes } from './routes.js'
 import { projectPlugin } from './plugin.js'
 
@@ -40,11 +40,11 @@ export function buildApp() {
 
 ## 2. A tenant-scoped repository
 
-In shared-database mode with `@machize/prisma`, every query scopes to
+In shared-database mode with `@basaltkit/prisma`, every query scopes to
 `ctx().tenant` automatically. Here is the idea in miniature:
 
 ```ts
-import { ctx } from '@machize/core'
+import { ctx } from '@basaltkit/core'
 
 export class ProjectRepository {
   private readonly stores = new Map<string, Map<string, Project>>()
@@ -71,9 +71,9 @@ export class ProjectRepository {
 ## 3. Routes that emit domain events
 
 ```ts
-import { ctx, type Container } from '@machize/core'
-import { EVENTS } from '@machize/events'
-import { route } from '@machize/fastify'
+import { ctx, type Container } from '@basaltkit/core'
+import { EVENTS } from '@basaltkit/events'
+import { route } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { ProjectCreated, PROJECTS } from './domain.js'
 

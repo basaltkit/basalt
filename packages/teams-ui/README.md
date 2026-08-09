@@ -1,26 +1,26 @@
-# @machize/teams-ui
+# @basaltkit/teams-ui
 
-Self-contained HTML page for **managing a team** in [`@machize/teams`](https://www.npmjs.com/package/@machize/teams): invite/revoke invitations and list/change-role/remove members — **zero dependencies, no build step**. You need this module when you want to give admins a team management screen without building the UI from scratch.
+Self-contained HTML page for **managing a team** in [`@basaltkit/teams`](https://www.npmjs.com/package/@basaltkit/teams): invite/revoke invitations and list/change-role/remove members — **zero dependencies, no build step**. You need this module when you want to give admins a team management screen without building the UI from scratch.
 
 ## What this module solves
 
-`@machize/teams` already exposes the invitation and member routes. This module is the **UI** on top of it: a page with an invitation form, the list of pending invitations (with revoke), and the member list (with a role dropdown and remove) — all isolated by tenant.
+`@basaltkit/teams` already exposes the invitation and member routes. This module is the **UI** on top of it: a page with an invitation form, the list of pending invitations (with revoke), and the member list (with a role dropdown and remove) — all isolated by tenant.
 
 ## Installation
 
 ```bash
-pnpm add @machize/teams-ui
+pnpm add @basaltkit/teams-ui
 ```
 
-Depends on `@machize/core` and `@machize/fastify`. Requires `teamsPlugin` + `teamRoutes` from `@machize/teams` to be mounted.
+Depends on `@basaltkit/core` and `@basaltkit/fastify`. Requires `teamsPlugin` + `teamRoutes` from `@basaltkit/teams` to be mounted.
 
 ## Get started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { teamsPlugin, teamRoutes } from '@machize/teams'
-import { teamsUiRoutes } from '@machize/teams-ui'
-import { fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { teamsPlugin, teamRoutes } from '@basaltkit/teams'
+import { teamsUiRoutes } from '@basaltkit/teams-ui'
+import { fastifyPlugin } from '@basaltkit/fastify'
 
 const app = await createApp({
   plugins: [
@@ -46,7 +46,7 @@ The page performs same-origin `fetch` calls, so it assumes the browser session i
 teamsUiRoutes({ headers: { 'x-tenant-id': 'acme' } })
 ```
 
-Management actions (invite, change role, remove) require `teamRole: 'admin'` on the `@machize/teams` routes — protect the page itself with an admin guard if you want.
+Management actions (invite, change role, remove) require `teamRole: 'admin'` on the `@basaltkit/teams` routes — protect the page itself with an admin guard if you want.
 
 ## API reference
 
@@ -60,6 +60,6 @@ Returns the page's HTML as a string, for serving it your own way.
 
 ## How it connects to other modules
 
-- **`@machize/teams`** — provides the invitation/member routes this page consumes.
-- **`@machize/tenancy` / `@machize/auth`** — resolve the tenant and user from context.
-- **`@machize/permissions`** — add a *guard* to the page's route to restrict it to admins.
+- **`@basaltkit/teams`** — provides the invitation/member routes this page consumes.
+- **`@basaltkit/tenancy` / `@basaltkit/auth`** — resolve the tenant and user from context.
+- **`@basaltkit/permissions`** — add a *guard* to the page's route to restrict it to admins.

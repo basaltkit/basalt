@@ -1,24 +1,24 @@
-# @machize/auth-prisma
+# @basaltkit/auth-prisma
 
-**Prisma-backed** implementations of every [`@machize/auth`](https://github.com/Zebedeu/machize/tree/main/packages/auth)
+**Prisma-backed** implementations of every [`@basaltkit/auth`](https://github.com/Zebedeu/basalt/tree/main/packages/auth)
 store — users, sessions, refresh tokens, one-time tokens, API keys and MFA
 state — for production databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` whose schema includes the `Auth*` models;
 the stores only touch those delegates, so they layer onto your existing client
 without owning your schema or connection. It's the production counterpart to
-[`@machize/auth-sqlite`](https://github.com/Zebedeu/machize/tree/main/packages/auth-sqlite)
+[`@basaltkit/auth-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/auth-sqlite)
 (the zero-dependency, single-node option) — same store contracts, different
 backend.
 
 ```bash
-pnpm add @machize/auth-prisma   # peer: @machize/auth ; you already have @prisma/client
+pnpm add @basaltkit/auth-prisma   # peer: @basaltkit/auth ; you already have @prisma/client
 ```
 
 ## 1. Add the models
 
 Copy the models from the bundled reference schema into your `schema.prisma`
-(also available at `@machize/auth-prisma/schema.prisma`):
+(also available at `@basaltkit/auth-prisma/schema.prisma`):
 
 ```prisma
 model AuthUser {
@@ -39,7 +39,7 @@ Then `prisma migrate dev` (or `prisma db push`) and `prisma generate`.
 
 > `scopes` and `recoveryCodes` use PostgreSQL scalar lists (`String[]`). On a
 > database without scalar-list support (e.g. SQLite), model them as `Json` and
-> adapt — or just use `@machize/auth-sqlite`.
+> adapt — or just use `@basaltkit/auth-sqlite`.
 
 ## 2. Wire the stores
 
@@ -47,8 +47,8 @@ Then `prisma migrate dev` (or `prisma db push`) and `prisma generate`.
 auth plugins — pass your client directly, no cast:
 
 ```ts
-import { authPlugin, apiKeysPlugin } from '@machize/auth'
-import { prismaAuthStores } from '@machize/auth-prisma'
+import { authPlugin, apiKeysPlugin } from '@basaltkit/auth'
+import { prismaAuthStores } from '@basaltkit/auth-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -83,17 +83,17 @@ Every store is also exported on its own (`PrismaUserSource`, `PrismaSessionStore
 
 ## Multi-tenant?
 
-Pair with [`@machize/prisma`](https://github.com/Zebedeu/machize/tree/main/packages/prisma):
+Pair with [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma):
 resolve the per-tenant client from the request context and build the stores over
 it, so each tenant's auth data lives in its own database/schema.
 
 ## Notes
 
-- **Time** is stored as `DateTime`; the `@machize/auth` contracts model it as
+- **Time** is stored as `DateTime`; the `@basaltkit/auth` contracts model it as
   epoch-ms `number`, and the stores convert at the boundary.
 - **Secrets are never stored in the clear** — API keys persist only their
   SHA-256 `hash` and a display `prefix`; MFA recovery codes arrive already
-  hashed from `@machize/auth`.
+  hashed from `@basaltkit/auth`.
 - **Expired sessions** are evicted lazily on lookup, matching the other stores.
 - `markUsed` uses `updateMany`, so it's a tolerant no-op if the token is gone —
   the same semantics as the in-memory and SQLite stores.

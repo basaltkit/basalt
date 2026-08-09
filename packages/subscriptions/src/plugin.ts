@@ -1,5 +1,5 @@
-import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@machize/core'
-import { route, type MachizeRoute, type RouteGuard } from '@machize/fastify'
+import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/fastify'
 import { z } from 'zod'
 import type { BillingGateway } from './gateway.js'
 import type { SubscriptionRecord } from './stores.js'
@@ -11,8 +11,8 @@ import {
   type SubscriptionsOptions,
 } from './subscriptions.js'
 
-declare module '@machize/core' {
-  interface MachizeHooks {
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
     'billing:subscribed': { subscription: SubscriptionRecord }
     'billing:swapped': { subscription: SubscriptionRecord; from: string }
     'billing:canceled': { subscription: SubscriptionRecord }
@@ -28,7 +28,7 @@ export type SubscriptionsPluginOptions = Omit<SubscriptionsOptions, 'hooks'>
 
 export function subscriptionsPlugin(options: SubscriptionsPluginOptions) {
   return definePlugin({
-    name: 'machize:subscriptions',
+    name: 'basalt:subscriptions',
     register({ container, hooks }) {
       container.singleton(SUBSCRIPTIONS, () => new Subscriptions({ ...options, hooks }))
 
@@ -83,7 +83,7 @@ export interface BillingRoutesOptions {
  * success/cancel/return URLs are configured here; the request body may
  * override them per call.
  */
-export function billingRoutes(options: BillingRoutesOptions): MachizeRoute[] {
+export function billingRoutes(options: BillingRoutesOptions): BasaltRoute[] {
   const portalReturn = options.portalReturnUrl ?? options.successUrl
   return [
     route({
@@ -120,7 +120,7 @@ export function billingRoutes(options: BillingRoutesOptions): MachizeRoute[] {
  * gateway driver, processing idempotent by event id. Returns 200 with
  * { received, duplicate } so gateways stop retrying.
  */
-export function billingWebhookRoute(gateway: BillingGateway): MachizeRoute {
+export function billingWebhookRoute(gateway: BillingGateway): BasaltRoute {
   return route({
     method: 'POST',
     url: '/billing/webhook',

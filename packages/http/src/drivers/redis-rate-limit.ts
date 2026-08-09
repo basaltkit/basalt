@@ -32,7 +32,7 @@ return {count, ttl}
 `.trim()
 
 export interface RedisRateLimitStoreOptions {
-  /** Key prefix. Default: 'mach:ratelimit'. */
+  /** Key prefix. Default: 'basalt:ratelimit'. */
   prefix?: string
   now?: () => number
 }
@@ -54,7 +54,7 @@ export class RedisRateLimitStore implements RateLimitStore {
     private readonly redis: RedisLike,
     options: RedisRateLimitStoreOptions = {},
   ) {
-    this.prefix = options.prefix ?? 'mach:ratelimit'
+    this.prefix = options.prefix ?? 'basalt:ratelimit'
     this.now = options.now ?? (() => Date.now())
   }
 

@@ -1,4 +1,4 @@
-import { MachizeError, type HookBus } from '@machize/core'
+import { BasaltError, type HookBus } from '@basaltkit/core'
 import type { NotificationChannel } from './channels.js'
 import {
   validateNotificationData,
@@ -6,7 +6,7 @@ import {
   type NotificationDefinition,
 } from './definition.js'
 
-export class UnknownChannelError extends MachizeError {
+export class UnknownChannelError extends BasaltError {
   constructor(channel: string, notification: string) {
     super(
       'NOTIFICATION_UNKNOWN_CHANNEL',
@@ -15,7 +15,7 @@ export class UnknownChannelError extends MachizeError {
   }
 }
 
-export class MissingRendererError extends MachizeError {
+export class MissingRendererError extends BasaltError {
   constructor(channel: string, notification: string) {
     super(
       'NOTIFICATION_MISSING_RENDERER',
@@ -55,7 +55,7 @@ export class Notifier {
   }
 
   /**
-   * Routes deliveries through a dispatcher (typically a @machize/queue job
+   * Routes deliveries through a dispatcher (typically a @basaltkit/queue job
    * whose handler calls notifier.deliver) instead of sending inline.
    */
   useQueue(dispatch: (delivery: Delivery) => Promise<void>): this {

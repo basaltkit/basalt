@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MetricsRegistry } from '@machize/core'
+import { MetricsRegistry } from '@basaltkit/core'
 import { HttpServerCollector, metricsPlugin } from '../src/index.js'
 import { FakeReply, bootWith, makeRequest } from './support.js'
 

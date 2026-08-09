@@ -1,19 +1,19 @@
-# @machize/fastify
+# @basaltkit/fastify
 
-Official Machize adapter for [Fastify](https://fastify.dev): takes Machize's typed routes and serves them on a Fastify server, with per-request context, standardized errors and an idempotency plugin. You need this when you want to build an HTTP API in Node.js with Machize using Fastify as the engine.
+Official Basalt adapter for [Fastify](https://fastify.dev): takes Basalt's typed routes and serves them on a Fastify server, with per-request context, standardized errors and an idempotency plugin. You need this when you want to build an HTTP API in Node.js with Basalt using Fastify as the engine.
 
 ## What this module solves
 
 An HTTP server is the program that receives **HTTP requests** (the messages a browser or an app sends, like "give me user 42") and returns responses. [Fastify](https://fastify.dev) is one of the fastest servers in the Node.js ecosystem — but, on its own, it doesn't validate data, doesn't type the handlers, and every project invents its own error format.
 
-This module connects Fastify to Machize. You define each **route** (an address + method, e.g. `POST /projects`) with the `route()` function and [Zod](https://zod.dev) schemas; the adapter handles the rest: it validates the body, query and URL parameters, creates a per-request context (with `requestId` accessible anywhere in the code, even in deeply nested functions, via `ctx()`), and converts errors into JSON responses with a stable format — never exposing internal messages on a `500`.
+This module connects Fastify to Basalt. You define each **route** (an address + method, e.g. `POST /projects`) with the `route()` function and [Zod](https://zod.dev) schemas; the adapter handles the rest: it validates the body, query and URL parameters, creates a per-request context (with `requestId` accessible anywhere in the code, even in deeply nested functions, via `ctx()`), and converts errors into JSON responses with a stable format — never exposing internal messages on a `500`.
 
-Since route definitions are neutral (they come from `@machize/http`), the same route code also runs on the Express and Hono adapters. And the edge plugins (security, health, metrics, tracing, OpenAPI) are re-exported here for convenience. The extra piece exclusive to this adapter is `idempotencyPlugin`: safe retries of requests that mutate data (e.g. never charging a card twice).
+Since route definitions are neutral (they come from `@basaltkit/http`), the same route code also runs on the Express and Hono adapters. And the edge plugins (security, health, metrics, tracing, OpenAPI) are re-exported here for convenience. The extra piece exclusive to this adapter is `idempotencyPlugin`: safe retries of requests that mutate data (e.g. never charging a card twice).
 
 ## Installation
 
 ```bash
-pnpm add @machize/fastify @machize/core zod
+pnpm add @basaltkit/fastify @basaltkit/core zod
 ```
 
 Fastify already comes as a dependency of this package — you don't need to install it separately. `zod` (version 3 or 4) is a *peer dependency*.
@@ -25,8 +25,8 @@ Fastify already comes as a dependency of this package — you don't need to inst
 **Step 2** — create a `server.ts` file with a route and the server startup:
 
 ```ts
-import { createApp } from '@machize/core'
-import { FASTIFY, fastifyPlugin, route } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin, route } from '@basaltkit/fastify'
 import { z } from 'zod'
 
 // 1. Define the route: method, URL, validation and handler (the function that responds).
@@ -40,7 +40,7 @@ const createProject = route({
   },
 })
 
-// 2. Create the Machize app with the Fastify plugin and start it.
+// 2. Create the Basalt app with the Fastify plugin and start it.
 const app = await createApp({ plugins: [fastifyPlugin({ routes: [createProject] })] }).boot()
 
 // 3. Get the Fastify instance from the container and start listening on a port.
@@ -54,8 +54,8 @@ console.log('Listening on http://localhost:3000')
 npx tsx server.ts
 curl -X POST http://localhost:3000/projects \
   -H 'content-type: application/json' \
-  -d '{"name":"Machize"}'
-# → {"id":"p1","name":"Machize"}   (status 201)
+  -d '{"name":"Basalt"}'
+# → {"id":"p1","name":"Basalt"}   (status 201)
 
 curl -X POST http://localhost:3000/projects \
   -H 'content-type: application/json' \
@@ -70,7 +70,7 @@ curl -X POST http://localhost:3000/projects \
 ### Typed routes with params, query and errors
 
 ```ts
-import { HttpError, route } from '@machize/fastify'
+import { HttpError, route } from '@basaltkit/fastify'
 import { z } from 'zod'
 
 const getProject = route({
@@ -96,8 +96,8 @@ Unintentional errors (`throw new Error('secret')`) respond with `500` and `INTER
 Each request runs inside a context (via Node's `AsyncLocalStorage`): in any function, no matter how deeply nested, you can read the `requestId` without passing it down as an argument.
 
 ```ts
-import { createApp, ctx } from '@machize/core'
-import { fastifyPlugin, route } from '@machize/fastify'
+import { createApp, ctx } from '@basaltkit/core'
+import { fastifyPlugin, route } from '@basaltkit/fastify'
 
 async function deepService(): Promise<string> {
   return ctx().requestId as string // the same id as the current request
@@ -119,8 +119,8 @@ If the client sends the `x-request-id` header, that value is used; otherwise a U
 Idempotency means: repeating the same request doesn't repeat its effect. When the client sends the `Idempotency-Key` header, the first response is stored; any repeat with the same key receives **the same response**, without running the handler again — a network retry never charges a card twice.
 
 ```ts
-import { createApp } from '@machize/core'
-import { FASTIFY, fastifyPlugin, idempotencyPlugin, route } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin, idempotencyPlugin, route } from '@basaltkit/fastify'
 import { z } from 'zod'
 
 const charge = route({
@@ -154,10 +154,10 @@ Rules (verified in the package's tests):
 
 ### Edge plugins (security, health, metrics, tracing, OpenAPI)
 
-They're neutral (they live in `@machize/http`) but re-exported here — you can import everything from `@machize/fastify`:
+They're neutral (they live in `@basaltkit/http`) but re-exported here — you can import everything from `@basaltkit/fastify`:
 
 ```ts
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import {
   FASTIFY,
   fastifyPlugin,
@@ -167,7 +167,7 @@ import {
   route,
   securityPlugin,
   tracingPlugin,
-} from '@machize/fastify'
+} from '@basaltkit/fastify'
 
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
 
@@ -184,15 +184,15 @@ const app = await createApp({
 await app.container.get(FASTIFY).listen({ port: 3000 })
 ```
 
-Detailed documentation for each one (all options) is in the [`@machize/http`](../http/README.md) README.
+Detailed documentation for each one (all options) is in the [`@basaltkit/http`](../http/README.md) README.
 
 ### Advanced: `registerRoutes()` without the plugin
 
-If you already have a Fastify server and just want to mount Machize routes on it:
+If you already have a Fastify server and just want to mount Basalt routes on it:
 
 ```ts
 import Fastify from 'fastify'
-import { registerRoutes, route } from '@machize/fastify'
+import { registerRoutes, route } from '@basaltkit/fastify'
 
 const instance = Fastify()
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
@@ -213,11 +213,11 @@ fastifyPlugin({
 
 ## API reference
 
-### `fastifyPlugin(options?)` → Machize plugin (`machize:fastify`)
+### `fastifyPlugin(options?)` → Basalt plugin (`basalt:fastify`)
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `routes` | `MachizeRoute[]` | No | `[]` | Routes (created with `route()`) to register. |
+| `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()`) to register. |
 | `fastify` | `FastifyServerOptions` | No | `{}` | Options passed to the `Fastify()` constructor (logger, trustProxy, …). |
 
 Behavior: registers the Fastify instance under the `FASTIFY` token and an `HttpServerCollector` under the `HTTP_SERVER` token; on boot it reads enrichers/guards from the metadata buckets (`'http:enrichers'`, `'http:guards'`), registers the routes, publishes them on the `'http:routes'` bucket (for OpenAPI/CLI/SDK) and mounts the edge plugins' hooks on the `app:booted` event. On `shutdown` it closes Fastify (`close()`).
@@ -231,12 +231,12 @@ Dependency injection token (`Token<FastifyInstance>`): `app.container.get(FASTIF
 | Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `instance` | `FastifyInstance` | Yes | — | Fastify server to mount on. |
-| `routes` | `MachizeRoute[]` | Yes | — | Routes to mount. |
+| `routes` | `BasaltRoute[]` | Yes | — | Routes to mount. |
 | `container` | `Container` | No | — | DI container; without it there's no per-request scope or enrichers/guards. |
 | `enrichers` | `RequestEnricher[]` | No | `[]` | Functions that enrich the context before the guards. |
 | `guards` | `RouteGuard[]` | No | `[]` | Functions that can reject the request (by throwing an error). |
 
-### `idempotencyPlugin(options?)` → Machize plugin (`machize:idempotency`, depends on `machize:fastify`)
+### `idempotencyPlugin(options?)` → Basalt plugin (`basalt:idempotency`, depends on `basalt:fastify`)
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
@@ -247,9 +247,9 @@ Dependency injection token (`Token<FastifyInstance>`): `app.container.get(FASTIF
 
 `IdempotencyStore` (interface): `get(key)` → `IdempotencyRecord | 'pending' | undefined`; `setPending(key)`; `complete(key, record)`; `release(key)`. `IdempotencyRecord` = `{ status: number; body: string; contentType?: string }`. `MemoryIdempotencyStore(ttlMs?, clock?)` is the in-memory implementation; for a cluster, implement the interface over Redis.
 
-### Re-exports from `@machize/http`
+### Re-exports from `@basaltkit/http`
 
-For convenience (and backward compatibility), this package re-exports: `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `MemoryRateLimitStore`, `healthPlugin`, `metricsPlugin` + `METRICS`, `tracingPlugin` + `TRACER`, `openapiPlugin`, `generateOpenApi`, `zodToJsonSchema`, `HTTP_SERVER` and the associated types (`MachizeRoute`, `HandlerArgs`, `HttpMethod`, `HttpRequest`, `HttpReply`, `ValidationIssue`, `RequestEnricher`, `RouteGuard`, plugin options, …). See the `@machize/http` README for the option tables.
+For convenience (and backward compatibility), this package re-exports: `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `MemoryRateLimitStore`, `healthPlugin`, `metricsPlugin` + `METRICS`, `tracingPlugin` + `TRACER`, `openapiPlugin`, `generateOpenApi`, `zodToJsonSchema`, `HTTP_SERVER` and the associated types (`BasaltRoute`, `HandlerArgs`, `HttpMethod`, `HttpRequest`, `HttpReply`, `ValidationIssue`, `RequestEnricher`, `RouteGuard`, plugin options, …). See the `@basaltkit/http` README for the option tables.
 
 ## Common errors and solutions (FAQ)
 
@@ -259,7 +259,7 @@ For convenience (and backward compatibility), this package re-exports: `route`, 
 
 **"The body arrives as `undefined`."** The client must send `Content-Type: application/json`; without that header Fastify doesn't parse the JSON.
 
-**"idempotencyPlugin throws an error on boot."** It declares `dependsOn: ['machize:fastify']` — it needs `fastifyPlugin` registered in the same app.
+**"idempotencyPlugin throws an error on boot."** It declares `dependsOn: ['basalt:fastify']` — it needs `fastifyPlugin` registered in the same app.
 
 **"The edge plugins (metrics, health, …) don't respond."** Their hooks/routes are mounted on the `app:booted` event — make sure you call `boot()` and that `fastifyPlugin` is present (it's the one that registers `HTTP_SERVER`).
 
@@ -267,7 +267,7 @@ For convenience (and backward compatibility), this package re-exports: `route`, 
 
 ## How it connects to other modules
 
-- **`@machize/core`** — `fastifyPlugin` is a Machize plugin (`definePlugin`): it lives in the `createApp → boot → shutdown` lifecycle, uses the `Container` (tokens `FASTIFY` and `HTTP_SERVER`) and creates the per-request `RequestContext` that feeds `ctx()`/`tryCtx()`.
-- **`@machize/http`** — the entire pipeline (validation, enrichers, guards, error mapping) comes from here; this adapter only converts Fastify's request/response into the neutral format and calls `runRoute()`. Routes defined with `route()` run unchanged on the Express and Hono adapters.
-- **`@machize/auth` / `@machize/tenancy` / `@machize/permissions`** — register guards and enrichers on the `'http:guards'`/`'http:enrichers'` buckets, which this adapter applies to all routes; they read the route's `meta` (e.g. `meta: { auth: true }`).
-- **`@machize/sdk` and the CLI (`mach routes`)** — read the routes published on the `'http:routes'` bucket (with the Zod schemas) to generate clients and documentation, with no duplicated configuration.
+- **`@basaltkit/core`** — `fastifyPlugin` is a Basalt plugin (`definePlugin`): it lives in the `createApp → boot → shutdown` lifecycle, uses the `Container` (tokens `FASTIFY` and `HTTP_SERVER`) and creates the per-request `RequestContext` that feeds `ctx()`/`tryCtx()`.
+- **`@basaltkit/http`** — the entire pipeline (validation, enrichers, guards, error mapping) comes from here; this adapter only converts Fastify's request/response into the neutral format and calls `runRoute()`. Routes defined with `route()` run unchanged on the Express and Hono adapters.
+- **`@basaltkit/auth` / `@basaltkit/tenancy` / `@basaltkit/permissions`** — register guards and enrichers on the `'http:guards'`/`'http:enrichers'` buckets, which this adapter applies to all routes; they read the route's `meta` (e.g. `meta: { auth: true }`).
+- **`@basaltkit/sdk` and the CLI (`basalt routes`)** — read the routes published on the `'http:routes'` bucket (with the Zod schemas) to generate clients and documentation, with no duplicated configuration.

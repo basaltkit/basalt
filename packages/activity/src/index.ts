@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createToken, definePlugin, tryCtx } from '@machize/core'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
 
 export interface ActivityRecord {
   readonly id: string
@@ -159,7 +159,7 @@ export const ACTIVITY = createToken<Activity>('activity')
 
 export function activityPlugin(options: ActivityOptions = {}) {
   return definePlugin({
-    name: 'machize:activity',
+    name: 'basalt:activity',
     register({ container }) {
       container.singleton(ACTIVITY, () => new Activity(options))
     },

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { createClient, endpoint, MachizeClientError, type EndpointOutput } from '../src/index.js'
+import { createClient, endpoint, BasaltClientError, type EndpointOutput } from '../src/index.js'
 
 const Project = z.object({ id: z.string(), name: z.string() })
 const Tokens = z.object({ accessToken: z.string(), refreshToken: z.string() })
@@ -51,19 +51,19 @@ const jsonResponse = (data: unknown, status = 200) =>
 
 describe('createClient', () => {
   it('mirrors the endpoint tree and returns parsed, typed results', async () => {
-    const { calls, fetchMock } = harness(() => jsonResponse({ id: 'p1', name: 'Machize' }, 201))
+    const { calls, fetchMock } = harness(() => jsonResponse({ id: 'p1', name: 'Basalt' }, 201))
     const client = createClient(api, { baseUrl: 'https://api.test/', fetch: fetchMock })
 
-    const project = await client.projects.create({ body: { name: 'Machize' } })
+    const project = await client.projects.create({ body: { name: 'Basalt' } })
     // typed: EndpointOutput is { id: string; name: string }
     const _check: EndpointOutput<typeof api.projects.create> = project
     void _check
-    expect(project).toEqual({ id: 'p1', name: 'Machize' })
+    expect(project).toEqual({ id: 'p1', name: 'Basalt' })
 
     expect(calls[0]).toMatchObject({
       url: 'https://api.test/projects',
       method: 'POST',
-      body: { name: 'Machize' },
+      body: { name: 'Basalt' },
     })
     expect(calls[0]?.headers['content-type']).toBe('application/json')
   })
@@ -141,7 +141,7 @@ describe('createClient', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('maps non-2xx bodies to MachizeClientError with the stable code', async () => {
+  it('maps non-2xx bodies to BasaltClientError with the stable code', async () => {
     const { fetchMock } = harness(() =>
       jsonResponse({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found' } }, 404),
     )
@@ -150,7 +150,7 @@ describe('createClient', () => {
     const error = await client.projects
       .get({ params: { id: 'ghost' } })
       .catch((caught: unknown) => caught)
-    expect(error).toBeInstanceOf(MachizeClientError)
+    expect(error).toBeInstanceOf(BasaltClientError)
     expect(error).toMatchObject({ status: 404, code: 'PROJECT_NOT_FOUND', message: 'Project not found' })
   })
 

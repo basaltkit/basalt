@@ -3,7 +3,7 @@ import type {
   DriverCapabilities,
   JobExecutor,
   QueueDriver,
-} from '@machize/queue'
+} from '@basaltkit/queue'
 
 /** The subset of an amqplib channel this driver uses. */
 export interface AmqpChannel {
@@ -33,11 +33,11 @@ export interface AmqpConnection {
 export type AmqpConnect = (url: string) => Promise<AmqpConnection>
 
 const HEADER = {
-  job: 'x-machize-job',
-  attempt: 'x-machize-attempt',
-  attempts: 'x-machize-attempts',
-  backoffMs: 'x-machize-backoff-ms',
-  backoffType: 'x-machize-backoff-type',
+  job: 'x-basalt-job',
+  attempt: 'x-basalt-attempt',
+  attempts: 'x-basalt-attempts',
+  backoffMs: 'x-basalt-backoff-ms',
+  backoffType: 'x-basalt-backoff-type',
 } as const
 
 const defaultConnect: AmqpConnect = async (url) => {
@@ -58,7 +58,7 @@ export interface RabbitmqDriverOptions {
 }
 
 /**
- * RabbitMQ queue driver for `@machize/queue`. Retries and backoff use a
+ * RabbitMQ queue driver for `@basaltkit/queue`. Retries and backoff use a
  * per-queue delay queue (`<queue>.delay`) that dead-letters back to the main
  * queue via message TTL; exhausted jobs land in `<queue>.dead`. Priority uses
  * `x-max-priority`.

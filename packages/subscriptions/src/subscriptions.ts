@@ -1,4 +1,4 @@
-import { MachizeError, parseDuration, type HookBus } from '@machize/core'
+import { BasaltError, parseDuration, type HookBus } from '@basaltkit/core'
 import type { BillingGateway, WebhookEvent } from './gateway.js'
 import {
   featureLimit,
@@ -19,21 +19,21 @@ import {
   type WebhookStore,
 } from './stores.js'
 
-export class NotSubscribedError extends MachizeError {
+export class NotSubscribedError extends BasaltError {
   readonly status = 402
   constructor() {
     super('BILLING_SUBSCRIPTION_REQUIRED', 'An active subscription is required.')
   }
 }
 
-export class FeatureUnavailableError extends MachizeError {
+export class FeatureUnavailableError extends BasaltError {
   readonly status = 403
   constructor(feature: string) {
     super('BILLING_FEATURE_UNAVAILABLE', `The feature "${feature}" is not available on this plan.`)
   }
 }
 
-export class QuotaExceededError extends MachizeError {
+export class QuotaExceededError extends BasaltError {
   readonly status = 402
   constructor(feature: string, remaining: number) {
     super(
@@ -44,7 +44,7 @@ export class QuotaExceededError extends MachizeError {
 }
 
 /** A billing action needs a gateway (or gateway capability) that isn't configured. */
-export class GatewayUnsupportedError extends MachizeError {
+export class GatewayUnsupportedError extends BasaltError {
   readonly status = 501
   constructor(capability: string) {
     super('BILLING_GATEWAY_UNSUPPORTED', `The billing gateway does not support "${capability}".`)

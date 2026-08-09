@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 import type { BillingPeriod } from '../plans.js'
 import {
   WebhookInvalidError,
@@ -11,7 +11,7 @@ import {
   type WebhookEvent,
 } from '../gateway.js'
 
-export class StripeRequestError extends MachizeError {
+export class StripeRequestError extends BasaltError {
   constructor(
     readonly httpStatus: number,
     message: string,
@@ -27,7 +27,7 @@ interface StripeEvent {
   data?: { object?: { metadata?: Record<string, string>; [key: string]: unknown } }
 }
 
-/** Stripe event type → Machize domain webhook type. Others are ignored. */
+/** Stripe event type → Basalt domain webhook type. Others are ignored. */
 const EVENT_MAP: Record<string, WebhookEvent['type']> = {
   'customer.subscription.deleted': 'subscription.canceled',
   'invoice.payment_failed': 'payment.failed',

@@ -1,13 +1,13 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 import {
   queuePlugin,
   type AddJobOptions,
   type JobDefinition,
   type JobExecutor,
   type QueueDriver,
-} from '@machize/queue'
+} from '@basaltkit/queue'
 
-export class QueueAssertionError extends MachizeError {
+export class QueueAssertionError extends BasaltError {
   constructor(message: string) {
     super('TEST_QUEUE_ASSERTION', message)
   }

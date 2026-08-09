@@ -3,7 +3,7 @@
 The strongest tenant isolation is **physical**: each tenant's data lives in its
 own database (or its own PostgreSQL schema), so one tenant can never read
 another's rows — the boundary is the connection, not a `WHERE tenant_id = ?` you
-have to remember on every query. `@machize/prisma` gives you a per-tenant client
+have to remember on every query. `@basaltkit/prisma` gives you a per-tenant client
 pool, and the durable [`*-prisma` stores](/guide/persistence) drop on top of it,
 so **every** stateful domain — auth, permissions, comments, audit, the lot —
 becomes tenant-isolated for free.
@@ -29,7 +29,7 @@ one per tenant, building them on demand:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { prismaPlugin } from '@machize/prisma'
+import { prismaPlugin } from '@basaltkit/prisma'
 
 // database-per-tenant: a client per tenant connection string
 prismaPlugin({
@@ -40,7 +40,7 @@ prismaPlugin({
 ```
 
 Schema-per-tenant is one database with a schema per tenant — pass the base URL
-and a client factory, and Machize sets `?schema=tenant_<id>` per tenant so Prisma
+and a client factory, and Basalt sets `?schema=tenant_<id>` per tenant so Prisma
 switches the `search_path` at connect time (reliable, unlike per-request
 switching on a shared pool):
 
@@ -60,7 +60,7 @@ HTTP requests (from the resolved tenant) and inside `tenancy.run()` (workers,
 jobs). You read it with `db()`:
 
 ```ts
-import { db } from '@machize/prisma'
+import { db } from '@basaltkit/prisma'
 import type { PrismaClient } from '@prisma/client'
 
 route({ method: 'GET', url: '/projects', handler: () =>
@@ -76,11 +76,11 @@ resolves `db()` at call time** — so every store operation runs against whichev
 tenant's database is active on the current request:
 
 ```ts
-import { db } from '@machize/prisma'
+import { db } from '@basaltkit/prisma'
 import type { PrismaClient } from '@prisma/client'
-import { prismaAuthStores } from '@machize/auth-prisma'
-import { prismaAccessStore } from '@machize/permissions-prisma'
-import { prismaCommentsStore } from '@machize/comments-prisma'
+import { prismaAuthStores } from '@basaltkit/auth-prisma'
+import { prismaAccessStore } from '@basaltkit/permissions-prisma'
+import { prismaCommentsStore } from '@basaltkit/comments-prisma'
 
 // Every model access resolves to the ACTIVE tenant's client. Build once.
 const tenantDb = new Proxy({} as PrismaClient, {
@@ -128,7 +128,7 @@ runs a migration across every tenant with bounded concurrency, reporting each
 result without letting one failure abort the rest:
 
 ```ts
-import { migrateTenants, prismaMigrator } from '@machize/prisma'
+import { migrateTenants, prismaMigrator } from '@basaltkit/prisma'
 
 const results = await migrateTenants({
   tenants: await listTenantIds(),
@@ -165,7 +165,7 @@ routes each call to the tenant that `run`/`forEach` put in scope.
 
 ## Putting it together
 
-The full shape of a database-per-tenant app on Machize:
+The full shape of a database-per-tenant app on Basalt:
 
 1. **`tenancyPlugin`** resolves the tenant (subdomain, header, route, …).
 2. **`prismaPlugin({ forTenant })`** builds/pools a client per tenant and puts it

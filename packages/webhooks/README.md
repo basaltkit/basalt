@@ -1,6 +1,6 @@
-# @machize/webhooks
+# @basaltkit/webhooks
 
-Outbound webhooks for the Machize framework: deliver events from your application to other systems' URLs, with cryptographic signing, automatic retries and per-tenant subscriptions. You need this module when *your customers* (or other services) want to be notified over HTTP when something happens in your application.
+Outbound webhooks for the Basalt framework: deliver events from your application to other systems' URLs, with cryptographic signing, automatic retries and per-tenant subscriptions. You need this module when *your customers* (or other services) want to be notified over HTTP when something happens in your application.
 
 ## What this module solves
 
@@ -8,12 +8,12 @@ A **webhook** is an HTTP "callback": instead of another system constantly asking
 
 Doing this by hand looks like a simple `fetch`, but the problems show up fast: the destination server may be down (you need retries with growing intervals), the recipient needs to be sure the request really came from you (HMAC signing — a code computed with a shared secret that proves origin and detects tampering), each customer wants to subscribe to only some events, and in a multi-tenant SaaS each tenant should only receive its own events.
 
-The module splits this into three pieces: the **store** (where subscriptions live — in-memory by default, database in production), the **deliverer** (makes the signed `POST` with retries and exponential backoff) and the **manager** (ties the two together: when dispatching an event, it finds the subscribed endpoints and delivers to each one). Optionally, it hooks into `@machize/events` to automatically dispatch domain events.
+The module splits this into three pieces: the **store** (where subscriptions live — in-memory by default, database in production), the **deliverer** (makes the signed `POST` with retries and exponential backoff) and the **manager** (ties the two together: when dispatching an event, it finds the subscribed endpoints and delivers to each one). Optionally, it hooks into `@basaltkit/events` to automatically dispatch domain events.
 
 ## Installation
 
 ```bash
-pnpm add @machize/webhooks
+pnpm add @basaltkit/webhooks
 ```
 
 ## Getting started in 5 minutes
@@ -22,8 +22,8 @@ pnpm add @machize/webhooks
 
 ```ts
 // src/app.ts
-import { createApp } from '@machize/core'
-import { webhooksPlugin } from '@machize/webhooks'
+import { createApp } from '@basaltkit/core'
+import { webhooksPlugin } from '@basaltkit/webhooks'
 
 const app = await createApp({
   plugins: [
@@ -35,7 +35,7 @@ const app = await createApp({
 2. **Register an endpoint** (a subscription: the destination URL and the events it wants to receive):
 
 ```ts
-import { WEBHOOKS } from '@machize/webhooks'
+import { WEBHOOKS } from '@basaltkit/webhooks'
 
 const webhooks = app.container.get(WEBHOOKS)
 
@@ -58,8 +58,8 @@ console.log(results)
 
 ```
 content-type: application/json
-x-machize-event: invoice.paid
-x-machize-signature: t=1712345678,v1=<hmac-sha256>
+x-basalt-event: invoice.paid
+x-basalt-signature: t=1712345678,v1=<hmac-sha256>
 
 {"event":"invoice.paid","data":{"amount":42},"sentAt":"2026-08-07T10:00:00.000Z"}
 ```
@@ -67,7 +67,7 @@ x-machize-signature: t=1712345678,v1=<hmac-sha256>
 5. **The recipient verifies the signature** with `verifySignature` (the same scheme as Stripe: HMAC-SHA256 over `timestamp.body`, rejecting old timestamps to prevent *replays*):
 
 ```ts
-import { verifySignature } from '@machize/webhooks'
+import { verifySignature } from '@basaltkit/webhooks'
 
 // in an HTTP handler on the recipient's side:
 const valid = verifySignature(signatureHeader, rawRequestBody, 'whsec_my_secret')
@@ -105,12 +105,12 @@ To temporarily disable without deleting, save the endpoint with `active: false`.
 
 ### Automatic dispatch from domain events
 
-With `@machize/events` registered, pass `events` to the plugin and every domain event matching the patterns is dispatched automatically — with the tenant read from the request context and in *fire-and-forget* mode (whoever emits the event never blocks waiting for the HTTP call):
+With `@basaltkit/events` registered, pass `events` to the plugin and every domain event matching the patterns is dispatched automatically — with the tenant read from the request context and in *fire-and-forget* mode (whoever emits the event never blocks waiting for the HTTP call):
 
 ```ts
-import { createApp } from '@machize/core'
-import { defineEvent, EVENTS, eventsPlugin } from '@machize/events'
-import { webhooksPlugin } from '@machize/webhooks'
+import { createApp } from '@basaltkit/core'
+import { defineEvent, EVENTS, eventsPlugin } from '@basaltkit/events'
+import { webhooksPlugin } from '@basaltkit/webhooks'
 
 const app = await createApp({
   plugins: [
@@ -133,7 +133,7 @@ The deliverer only retries transient failures — network errors, timeouts and `
 `MemoryWebhookStore` loses everything on restart. In production, implement the `WebhookStore` interface over your database and pass it to the plugin:
 
 ```ts
-import { webhooksPlugin, type WebhookStore, type WebhookEndpoint, matchesEvent } from '@machize/webhooks'
+import { webhooksPlugin, type WebhookStore, type WebhookEndpoint, matchesEvent } from '@basaltkit/webhooks'
 
 class DbWebhookStore implements WebhookStore {
   async forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]> { /* SELECT + matchesEvent */ return [] }
@@ -177,7 +177,7 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 |---|---|---|---|---|
 | `store` | `WebhookStore` | No | `MemoryWebhookStore` | Where subscriptions live |
 | `deliverer` | `WebhookDeliverer` | No | new one, with the given options | Custom deliverer |
-| `events` | `string[]` | No | `[]` | Domain event patterns to dispatch automatically (requires `@machize/events`) |
+| `events` | `string[]` | No | `[]` | Domain event patterns to dispatch automatically (requires `@basaltkit/events`) |
 
 ### `class WebhookDeliverer`
 
@@ -223,13 +223,13 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 
 **Subscriptions disappear when the application restarts** — You're on `MemoryWebhookStore` (the default). In production, implement `WebhookStore` over your database.
 
-**I configured `events` on the plugin but nothing is dispatched** — Automatic dispatch requires `eventsPlugin()` from `@machize/events` to be registered (the plugin declares that dependency). Also confirm the patterns in `events` cover the emitted event names, and that at least one endpoint is subscribed.
+**I configured `events` on the plugin but nothing is dispatched** — Automatic dispatch requires `eventsPlugin()` from `@basaltkit/events` to be registered (the plugin declares that dependency). Also confirm the patterns in `events` cover the emitted event names, and that at least one endpoint is subscribed.
 
 **Automatic `dispatch` doesn't filter by tenant** — The tenant is read from the request context (`ctx().tenant.id`). Outside a request (e.g. in a job), there's no tenant in the context and the event also goes to global endpoints; in that case, dispatch manually with `webhooks.dispatch(event, data, tenantId)`.
 
 ## How it connects to other modules
 
-- **@machize/core** — the container (`WEBHOOKS` token), `definePlugin` and the request context from which `tenantId` comes during automatic dispatch.
-- **@machize/events** — the source of domain events; with the `events` option, the plugin subscribes to the bus and converts internal events into outbound webhooks.
-- **@machize/subscriptions** — the opposite direction: subscriptions *receives* webhooks (from Stripe); this module *sends* webhooks to your customers. A common pattern is forwarding `billing:*` hooks as outbound webhooks.
-- **@machize/notifications** — complementary: notifications alerts people, webhooks alerts machines.
+- **@basaltkit/core** — the container (`WEBHOOKS` token), `definePlugin` and the request context from which `tenantId` comes during automatic dispatch.
+- **@basaltkit/events** — the source of domain events; with the `events` option, the plugin subscribes to the bus and converts internal events into outbound webhooks.
+- **@basaltkit/subscriptions** — the opposite direction: subscriptions *receives* webhooks (from Stripe); this module *sends* webhooks to your customers. A common pattern is forwarding `billing:*` hooks as outbound webhooks.
+- **@basaltkit/notifications** — complementary: notifications alerts people, webhooks alerts machines.

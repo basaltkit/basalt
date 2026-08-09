@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import {
   Realtime,
   RealtimeHub,
@@ -14,8 +14,8 @@ import {
   type RealtimeMessage,
 } from '../src/index.js'
 
-declare module '@machize/core' {
-  interface MachizeHooks {
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
     'test:note_created': { tenantId: string; note: { id: number } }
   }
 }
@@ -119,7 +119,7 @@ describe('RedisBackplane', () => {
     const subscriber = new FakeRedis()
     const hub = new RealtimeHub(new RedisBackplane({ publisher, subscriber }))
     await hub.start()
-    expect(subscriber.subscribed).toEqual(['machize:realtime'])
+    expect(subscriber.subscribed).toEqual(['basalt:realtime'])
 
     const conn = new FakeConnection('a', 'acme', 'u1')
     hub.register(conn)
@@ -127,11 +127,11 @@ describe('RedisBackplane', () => {
 
     await hub.publish('acme', 'notes', 'created', { id: 1 })
     // emit went out via the publisher, not delivered locally yet
-    expect(publisher.published[0]![0]).toBe('machize:realtime')
+    expect(publisher.published[0]![0]).toBe('basalt:realtime')
     expect(conn.received).toHaveLength(0)
 
     // Redis echoes the message to every subscriber (including this instance)
-    subscriber.deliver('machize:realtime', publisher.published[0]![1])
+    subscriber.deliver('basalt:realtime', publisher.published[0]![1])
     expect(conn.received).toEqual([{ channel: 'notes', event: 'created', data: { id: 1 } }])
   })
 })

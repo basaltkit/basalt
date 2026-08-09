@@ -15,8 +15,8 @@ export interface PluginContext<TConfig = unknown> {
   config: TConfig
 }
 
-export interface MachizePlugin<TConfig = unknown> {
-  /** Unique name, by convention `machize:<package>` or `app:<name>` */
+export interface BasaltPlugin<TConfig = unknown> {
+  /** Unique name, by convention `basalt:<package>` or `app:<name>` */
   name: string
   /** Names of plugins that must register/boot before this one */
   dependsOn?: string[]
@@ -31,7 +31,7 @@ export interface MachizePlugin<TConfig = unknown> {
 }
 
 export function definePlugin<TConfig = unknown>(
-  plugin: MachizePlugin<TConfig>,
-): MachizePlugin<TConfig> {
+  plugin: BasaltPlugin<TConfig>,
+): BasaltPlugin<TConfig> {
   return plugin
 }

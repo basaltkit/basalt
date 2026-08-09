@@ -43,9 +43,9 @@ describe('Container', () => {
   it('injects dependencies via typed factories', () => {
     const container = new Container()
     const NAME = createToken<string>('name')
-    container.singleton(NAME, () => 'Machize')
+    container.singleton(NAME, () => 'Basalt')
     container.singleton(GREETER, (c) => ({ greet: () => `Olá, ${c.get(NAME)}` }))
-    expect(container.get(GREETER).greet()).toBe('Olá, Machize')
+    expect(container.get(GREETER).greet()).toBe('Olá, Basalt')
   })
 
   it('throws a typed error for an unknown token', () => {

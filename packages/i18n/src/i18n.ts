@@ -1,4 +1,4 @@
-import { tryCtx } from '@machize/core'
+import { tryCtx } from '@basaltkit/core'
 import { render, type Catalog } from './messages.js'
 
 /** A translator/formatter bound to a specific locale. */

@@ -1,6 +1,6 @@
-# @machize/sdk
+# @basaltkit/sdk
 
-Type-safe HTTP client for Machize APIs: describe your endpoints once with Zod and get a client where every call has the right input/output types, structured errors, and automatic session-token refresh. You need this on the frontend (React, Vue, etc.) or in any code that calls your API.
+Type-safe HTTP client for Basalt APIs: describe your endpoints once with Zod and get a client where every call has the right input/output types, structured errors, and automatic session-token refresh. You need this on the frontend (React, Vue, etc.) or in any code that calls your API.
 
 ## What this module solves
 
@@ -8,12 +8,12 @@ An **SDK** (Software Development Kit) here means a client library: instead of wr
 
 The classic problem with hand-written clients is **client/server drift**: the backend changes a field, the frontend keeps assuming the old shape, and the error only shows up in production. This package fixes that with a single source of truth: each endpoint is described with `endpoint(...)` using **Zod schemas** (Zod is a validation library that also generates TypeScript types). TypeScript infers the input and output types from that — you never write types by hand — and, at runtime, the server's response is validated against the schema: if it doesn't match, you get a clear error (`CLIENT_RESPONSE_MISMATCH`) instead of silently wrong data.
 
-The client also handles **Bearer** token authentication (the token goes in the `Authorization` header), including the refresh pattern: when the server responds 401 (expired token), it calls your `refresh` function once and retries the request with the new token — transparently to the caller. The package is browser-friendly: its only dependency is Zod (it doesn't even depend on `@machize/core`).
+The client also handles **Bearer** token authentication (the token goes in the `Authorization` header), including the refresh pattern: when the server responds 401 (expired token), it calls your `refresh` function once and retries the request with the new token — transparently to the caller. The package is browser-friendly: its only dependency is Zod (it doesn't even depend on `@basaltkit/core`).
 
 ## Installation
 
 ```bash
-pnpm add @machize/sdk zod
+pnpm add @basaltkit/sdk zod
 ```
 
 > Zod is a *peer dependency* (`^3.24.0` or `^4.0.0` are supported) — you have to install it yourself. The client uses the global `fetch` (browsers and Node 18+); on other runtimes, pass your own implementation via `options.fetch`.
@@ -24,7 +24,7 @@ pnpm add @machize/sdk zod
 
 ```typescript
 import { z } from 'zod'
-import { endpoint } from '@machize/sdk'
+import { endpoint } from '@basaltkit/sdk'
 
 const Project = z.object({ id: z.string(), name: z.string() })
 
@@ -50,12 +50,12 @@ export const api = {
 2. Create the client and use it:
 
 ```typescript
-import { createClient } from '@machize/sdk'
+import { createClient } from '@basaltkit/sdk'
 import { api } from './api.js'
 
 const client = createClient(api, { baseUrl: 'https://api.example.com' })
 
-const newProject = await client.projects.create({ body: { name: 'Machize' } })
+const newProject = await client.projects.create({ body: { name: 'Basalt' } })
 console.log(newProject.id) // typed: { id: string; name: string }
 
 const one = await client.projects.get({ params: { id: newProject.id } })
@@ -76,7 +76,7 @@ Each call accepts an object with up to three parts, depending on what the endpoi
 
 ```typescript
 import { z } from 'zod'
-import { createClient, endpoint } from '@machize/sdk'
+import { createClient, endpoint } from '@basaltkit/sdk'
 
 const api = {
   search: endpoint({
@@ -97,7 +97,7 @@ Endpoints without `body`, `query`, or `params` are called with no argument: `awa
 ### Token authentication with automatic refresh
 
 ```typescript
-import { createClient } from '@machize/sdk'
+import { createClient } from '@basaltkit/sdk'
 import { api } from './api.js'
 
 let accessToken: string | undefined
@@ -128,15 +128,15 @@ Flow: request → 401 → `refresh()` → retry the request with the new token. 
 
 ### Handling errors
 
-Any non-2xx response (and any response that fails the `result` schema) throws `MachizeClientError`:
+Any non-2xx response (and any response that fails the `result` schema) throws `BasaltClientError`:
 
 ```typescript
-import { MachizeClientError } from '@machize/sdk'
+import { BasaltClientError } from '@basaltkit/sdk'
 
 try {
   await client.projects.get({ params: { id: 'ghost' } })
 } catch (error) {
-  if (error instanceof MachizeClientError) {
+  if (error instanceof BasaltClientError) {
     console.log(error.status)  // 404
     console.log(error.code)    // 'PROJECT_NOT_FOUND' (stable server code)
     console.log(error.message) // 'Project not found'
@@ -145,7 +145,7 @@ try {
 }
 ```
 
-`code` comes from `body.error.code` (the Machize APIs' error convention); without it, it's `'HTTP_ERROR'`. 204 (no content) responses resolve to `undefined`.
+`code` comes from `body.error.code` (the Basalt APIs' error convention); without it, it's `'HTTP_ERROR'`. 204 (no content) responses resolve to `undefined`.
 
 ### Testing with a fake `fetch`
 
@@ -153,25 +153,25 @@ You don't need a server — inject a fake `fetch` (a real example from the test 
 
 ```typescript
 import { expect, it } from 'vitest'
-import { createClient } from '@machize/sdk'
+import { createClient } from '@basaltkit/sdk'
 import { api } from './api.js'
 
 it('creates a project', async () => {
   const fetchMock: typeof fetch = async () =>
-    new Response(JSON.stringify({ id: 'p1', name: 'Machize' }), {
+    new Response(JSON.stringify({ id: 'p1', name: 'Basalt' }), {
       status: 201,
       headers: { 'content-type': 'application/json' },
     })
 
   const client = createClient(api, { baseUrl: 'https://api.test', fetch: fetchMock })
-  const project = await client.projects.create({ body: { name: 'Machize' } })
-  expect(project).toEqual({ id: 'p1', name: 'Machize' })
+  const project = await client.projects.create({ body: { name: 'Basalt' } })
+  expect(project).toEqual({ id: 'p1', name: 'Basalt' })
 })
 ```
 
 ## API reference
 
-Exported from `@machize/sdk`:
+Exported from `@basaltkit/sdk`:
 
 ### `endpoint(spec): Endpoint`
 
@@ -200,9 +200,9 @@ Builds the client from a tree of endpoints (nested objects at any depth). Each `
 | `getToken` | `() => string \| undefined \| Promise<string \| undefined>` | No | — | Current token — attached as `Authorization: Bearer` |
 | `refresh` | `() => Promise<string \| null>` | No | — | Called once on a 401 to get a new token; `null` gives up and the 401 is thrown |
 
-### `MachizeClientError`
+### `BasaltClientError`
 
-Error thrown for any non-2xx response or a response that fails the `result` schema. No dependencies (doesn't extend `MachizeError`) to stay lightweight in the browser.
+Error thrown for any non-2xx response or a response that fails the `result` schema. No dependencies (doesn't extend `BasaltError`) to stay lightweight in the browser.
 
 | Property | Type | Description |
 | --- | --- | --- |
@@ -245,11 +245,11 @@ Pass them in `params`, not `query`: `client.projects.get({ params: { id: 'p1' } 
 204 (No Content) responses resolve to `undefined` by design — typical of DELETE endpoints.
 
 **Can I use this in a Node backend?**
-Yes — it works anywhere with `fetch` (Node 18+ includes it). It's useful for calling a Machize API from another one.
+Yes — it works anywhere with `fetch` (Node 18+ includes it). It's useful for calling a Basalt API from another one.
 
 ## How it connects to other modules
 
-- **`@machize/fastify`** — the natural counterpart on the other side: server routes are also described with Zod, and the `{ error: { code, message } }` error format from `HttpError` is exactly what the SDK maps to `MachizeClientError.code`.
-- **`@machize/auth`** — the backend's `POST /auth/login` and `POST /auth/refresh` endpoints supply the tokens you wire up to `getToken`/`refresh`.
-- **`create-machize`** — with the `--ui` flag, the generated frontend (`web/src/api.ts`) already uses `endpoint` + `createClient` from this package, including token refresh when authentication is enabled.
-- **`@machize/core`** — deliberately **not** a dependency: the SDK only depends on Zod, so it can run in the browser without pulling in the framework.
+- **`@basaltkit/fastify`** — the natural counterpart on the other side: server routes are also described with Zod, and the `{ error: { code, message } }` error format from `HttpError` is exactly what the SDK maps to `BasaltClientError.code`.
+- **`@basaltkit/auth`** — the backend's `POST /auth/login` and `POST /auth/refresh` endpoints supply the tokens you wire up to `getToken`/`refresh`.
+- **`create-basalt`** — with the `--ui` flag, the generated frontend (`web/src/api.ts`) already uses `endpoint` + `createClient` from this package, including token refresh when authentication is enabled.
+- **`@basaltkit/core`** — deliberately **not** a dependency: the SDK only depends on Zod, so it can run in the browser without pulling in the framework.

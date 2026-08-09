@@ -81,9 +81,9 @@ export class WebhookDeliverer {
       try {
         const headers: Record<string, string> = {
           'content-type': 'application/json',
-          'x-machize-event': event,
+          'x-basalt-event': event,
         }
-        if (secret) headers['x-machize-signature'] = signPayload(body, secret, timestamp)
+        if (secret) headers['x-basalt-signature'] = signPayload(body, secret, timestamp)
 
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), this.timeoutMs)

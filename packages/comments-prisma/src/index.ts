@@ -1,10 +1,10 @@
-import type { Comment, CommentPatch, CommentStore } from '@machize/comments'
+import type { Comment, CommentPatch, CommentStore } from '@basaltkit/comments'
 
 /**
- * Prisma-backed implementation of the `@machize/comments` `CommentStore` for
+ * Prisma-backed implementation of the `@basaltkit/comments` `CommentStore` for
  * production databases (PostgreSQL, MySQL, …). Bring your generated
  * `PrismaClient` with the `Comment` model (see the bundled `prisma/schema.prisma`).
- * The production counterpart to `@machize/comments-sqlite`.
+ * The production counterpart to `@basaltkit/comments-sqlite`.
  */
 
 interface PComment {
@@ -141,12 +141,12 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaCommentsStore(client: PrismaCommentsClient): PrismaCommentsStores {
-  ensureModel(client, 'comment', '@machize/comments-prisma')
+  ensureModel(client, 'comment', '@basaltkit/comments-prisma')
   return { store: new PrismaCommentStore(client) }
 }

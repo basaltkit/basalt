@@ -1,4 +1,4 @@
-// Reference schema for @machize/permissions-prisma.
+// Reference schema for @basaltkit/permissions-prisma.
 // Copy these models into your app's schema.prisma, migrate, and pass the client
 // to `prismaAccessStore()`.
 

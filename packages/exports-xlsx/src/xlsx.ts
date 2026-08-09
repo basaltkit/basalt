@@ -1,4 +1,4 @@
-import type { ExportFormatter } from '@machize/exports'
+import type { ExportFormatter } from '@basaltkit/exports'
 import { zip } from './zip.js'
 
 const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -45,7 +45,7 @@ const WORKBOOK_RELS = `${XML}
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`
 
 /**
- * XLSX formatter for `@machize/exports` — dependency-free. Emits a valid
+ * XLSX formatter for `@basaltkit/exports` — dependency-free. Emits a valid
  * single-sheet .xlsx (Office Open XML SpreadsheetML) with inline strings and
  * numeric cells. Register it: `exportsPlugin({ formatters: [xlsxFormatter] })`.
  */

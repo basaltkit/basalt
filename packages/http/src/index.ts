@@ -1,6 +1,6 @@
 export {
   route,
-  type MachizeRoute,
+  type BasaltRoute,
   type HandlerArgs,
   type HttpMethod,
   type HttpRequest,

@@ -1,6 +1,6 @@
 # Core Concepts
 
-Everything in Machize is built on a small foundation: an application with a
+Everything in Basalt is built on a small foundation: an application with a
 plugin lifecycle, a dependency-injection container, and a request context that
 flows through the whole call stack.
 
@@ -9,7 +9,7 @@ flows through the whole call stack.
 `createApp` assembles plugins and boots them in dependency order.
 
 ```ts
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 
 const app = await createApp({
   plugins: [configPlugin, loggerPlugin, tenancyPlugin, authPlugin],
@@ -25,13 +25,13 @@ A plugin is the unit of composition — every package ships one. Plugins declare
 their dependencies, register services and connect resources.
 
 ```ts
-import { definePlugin, createToken } from '@machize/core'
+import { definePlugin, createToken } from '@basaltkit/core'
 
 export const MAILER = createToken<Mailer>('mailer')
 
 export const mailerPlugin = definePlugin({
-  name: 'machize:mailer',
-  dependsOn: ['machize:config'],
+  name: 'basalt:mailer',
+  dependsOn: ['basalt:config'],
   register({ container, config }) {
     container.singleton(MAILER, () => new SmtpMailer(config))
   },
@@ -62,7 +62,7 @@ request id, correlation id, the current tenant, the authenticated user and the
 scoped database client.
 
 ```ts
-import { ctx } from '@machize/core'
+import { ctx } from '@basaltkit/core'
 
 export async function anyService() {
   const { tenant, user, logger, db } = ctx()
@@ -80,7 +80,7 @@ Domain events are typed and decoupled. Cross-cutting concerns like audit
 subscribe with wildcards instead of touching every call site.
 
 ```ts
-import { defineEvent, on } from '@machize/events'
+import { defineEvent, on } from '@basaltkit/events'
 import { z } from 'zod'
 
 export const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))

@@ -1,7 +1,7 @@
 {
-  "name": "@machize/subscriptions-prisma",
-  "version": "1.0.5",
-  "description": "Prisma-backed implementations of the @machize/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "name": "@basaltkit/subscriptions-prisma",
+  "version": "1.0.0",
+  "description": "Prisma-backed implementations of the @basaltkit/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -21,11 +21,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@machize/subscriptions": "workspace:^"
+    "@basaltkit/subscriptions": "workspace:^"
   },
   "devDependencies": {
-    "@machize/subscriptions": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/subscriptions": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -36,13 +36,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/subscriptions-prisma"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/subscriptions-prisma#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions-prisma#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "subscriptions",
     "billing",

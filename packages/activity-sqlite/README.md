@@ -1,7 +1,7 @@
-# @machize/activity-sqlite
+# @basaltkit/activity-sqlite
 
 Durable, **SQLite-backed** implementation of the
-[`@machize/activity`](https://github.com/Zebedeu/machize/tree/main/packages/activity)
+[`@basaltkit/activity`](https://github.com/Zebedeu/basalt/tree/main/packages/activity)
 `ActivityStore` — the activity feed — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
@@ -9,10 +9,10 @@ dependencies.**
 Swap it in for the in-memory store and the feed survives a restart — no ORM, no
 migration tool, no service. The single-node reference backend; the production
 (Postgres/MySQL) counterpart is
-[`@machize/activity-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/activity-prisma).
+[`@basaltkit/activity-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/activity-prisma).
 
 ```bash
-pnpm add @machize/activity-sqlite   # peer: @machize/activity
+pnpm add @basaltkit/activity-sqlite   # peer: @basaltkit/activity
 ```
 
 > Requires **Node 22.5+**. Stable and flag-free on Node 24; on 22.x run with
@@ -21,8 +21,8 @@ pnpm add @machize/activity-sqlite   # peer: @machize/activity
 ## Use it
 
 ```ts
-import { activityPlugin } from '@machize/activity'
-import { sqliteActivityStore } from '@machize/activity-sqlite'
+import { activityPlugin } from '@basaltkit/activity'
+import { sqliteActivityStore } from '@basaltkit/activity-sqlite'
 
 const a = sqliteActivityStore('./data/activity.db')   // ':memory:' by default
 

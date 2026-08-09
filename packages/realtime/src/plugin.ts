@@ -1,5 +1,5 @@
-import { createToken, definePlugin } from '@machize/core'
-import type { MachizeHooks } from '@machize/core'
+import { createToken, definePlugin } from '@basaltkit/core'
+import type { BasaltHooks } from '@basaltkit/core'
 import { MemoryBackplane, RealtimeHub, type RealtimeBackplane } from './hub.js'
 import { Realtime } from './realtime.js'
 
@@ -18,21 +18,21 @@ export const REALTIME_HUB = createToken<RealtimeHub>('realtime:hub')
  *     data: (p) => p.note,
  *   }]
  */
-export interface BridgeRule<K extends keyof MachizeHooks & string = keyof MachizeHooks & string> {
+export interface BridgeRule<K extends keyof BasaltHooks & string = keyof BasaltHooks & string> {
   hook: K
   /** Tenant to deliver to; return undefined to skip this event. */
-  tenant: (payload: MachizeHooks[K]) => string | undefined
-  channel: string | ((payload: MachizeHooks[K]) => string)
+  tenant: (payload: BasaltHooks[K]) => string | undefined
+  channel: string | ((payload: BasaltHooks[K]) => string)
   event: string
   /** What to send. Default: the whole hook payload. */
-  data?: (payload: MachizeHooks[K]) => unknown
+  data?: (payload: BasaltHooks[K]) => unknown
 }
 
 /**
  * Type-checks one bridge rule against its hook's payload, then erases the
  * generic so rules for different hooks live in the same array.
  */
-export function bridgeRule<K extends keyof MachizeHooks & string>(rule: BridgeRule<K>): BridgeRule {
+export function bridgeRule<K extends keyof BasaltHooks & string>(rule: BridgeRule<K>): BridgeRule {
   return rule as unknown as BridgeRule
 }
 
@@ -45,7 +45,7 @@ export interface RealtimePluginOptions {
 
 export function realtimePlugin(options: RealtimePluginOptions = {}) {
   return definePlugin({
-    name: 'machize:realtime',
+    name: 'basalt:realtime',
     register({ container }) {
       const hub = new RealtimeHub(options.backplane ?? new MemoryBackplane())
       container.singleton(REALTIME_HUB, () => hub)

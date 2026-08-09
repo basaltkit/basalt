@@ -4,7 +4,7 @@ import {
   parseDuration,
   tryCtx,
   type DurationInput,
-} from '@machize/core'
+} from '@basaltkit/core'
 import type { CacheDriver } from './driver.js'
 import { MemoryCacheDriver } from './drivers/memory.js'
 import { RedisCacheDriver } from './drivers/redis.js'
@@ -14,7 +14,7 @@ export { MemoryCacheDriver } from './drivers/memory.js'
 export { RedisCacheDriver } from './drivers/redis.js'
 
 export interface CacheOptions {
-  /** Root prefix for all keys. Default: 'mach' */
+  /** Root prefix for all keys. Default: 'basalt' */
   prefix?: string
   /**
    * Dynamic segment of the prefix, resolved on every operation. The default reads
@@ -38,7 +38,7 @@ export class Cache {
     private readonly driver: CacheDriver,
     options: CacheOptions = {},
   ) {
-    this.prefix = options.prefix ?? 'mach'
+    this.prefix = options.prefix ?? 'basalt'
     this.scope = options.scope === undefined ? defaultScope : options.scope
   }
 
@@ -142,7 +142,7 @@ export interface CachePluginOptions extends CacheOptions {
 export function cachePlugin(options: CachePluginOptions = {}) {
   let driver: CacheDriver | undefined
   return definePlugin({
-    name: 'machize:cache',
+    name: 'basalt:cache',
     register({ container }) {
       container.singleton(CACHE, () => {
         driver =

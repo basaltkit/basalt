@@ -8,7 +8,7 @@ export interface ListParams {
 }
 
 /**
- * The data contract an admin UI drives. Implement it over the @machize/sdk
+ * The data contract an admin UI drives. Implement it over the @basaltkit/sdk
  * client for a real backend, or use memoryDataSource for tests and demos.
  */
 export interface AdminDataSource<T = Record<string, unknown>> {

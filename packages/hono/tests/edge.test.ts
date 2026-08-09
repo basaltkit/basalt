@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { createApp, type MachizeApp } from '@machize/core'
-import { healthPlugin, MemoryRateLimitStore, metricsPlugin, route, securityPlugin } from '@machize/http'
+import { createApp, type BasaltApp } from '@basaltkit/core'
+import { healthPlugin, MemoryRateLimitStore, metricsPlugin, route, securityPlugin } from '@basaltkit/http'
 import { HONO, honoPlugin } from '../src/index.js'
 
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
 
-let app: MachizeApp
+let app: BasaltApp
 let call: (path: string) => Promise<Response>
 
 async function boot(...plugins: unknown[]) {

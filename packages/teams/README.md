@@ -1,6 +1,6 @@
-# @machize/teams
+# @basaltkit/teams
 
-Teams for Machize applications: makes each tenant multi-user, with hierarchical roles (owner/admin/member), email invitations with acceptance and revocation, member management, and a route guard by team role.
+Teams for Basalt applications: makes each tenant multi-user, with hierarchical roles (owner/admin/member), email invitations with acceptance and revocation, member management, and a route guard by team role.
 
 You need this module when several people share the same account/organization — "invite a colleague to the workspace" is exactly this.
 
@@ -10,12 +10,12 @@ In a SaaS, an organization (tenant) rarely has just one user: the founder invite
 
 Roles are hierarchical by rank: by default `owner` (3) > `admin` (2) > `member` (1). Whoever has a higher-rank role can do everything a lower one can — a route that requires `admin` also accepts `owner`. There are built-in protections: a team can never end up without an owner (the last one can't be removed or demoted), invitation tokens expire (7 days by default), are single-use, and never appear in HTTP responses — only in the `team:invited` hook, for your application to send by email.
 
-The module is deliberately decoupled: it receives `tenantId` and `userId` as strings, so it works with any authentication and tenancy setup. Optionally, it mirrors team roles into `@machize/permissions`, so that "admin of team acme" automatically translates into permissions.
+The module is deliberately decoupled: it receives `tenantId` and `userId` as strings, so it works with any authentication and tenancy setup. Optionally, it mirrors team roles into `@basaltkit/permissions`, so that "admin of team acme" automatically translates into permissions.
 
 ## Installation
 
 ```bash
-pnpm add @machize/teams
+pnpm add @basaltkit/teams
 ```
 
 ## Get started in 5 minutes
@@ -23,7 +23,7 @@ pnpm add @machize/teams
 1. **Just the logic (no HTTP)** — create the team, invite, and accept:
 
 ```ts
-import { Teams } from '@machize/teams'
+import { Teams } from '@basaltkit/teams'
 
 const teams = new Teams() // in-memory stores by default
 
@@ -49,11 +49,11 @@ console.log(await teams.can('acme', 'user-bob', 'admin')) // false — member < 
 2. **Complete HTTP application** with auth + tenancy + ready-made team routes:
 
 ```ts
-import { createApp } from '@machize/core'
-import { fastifyPlugin } from '@machize/fastify'
-import { authPlugin, authRoutes, MemoryUserSource } from '@machize/auth'
-import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@machize/tenancy'
-import { teamsPlugin, teamRoutes, TEAMS } from '@machize/teams'
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin } from '@basaltkit/fastify'
+import { authPlugin, authRoutes, MemoryUserSource } from '@basaltkit/auth'
+import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@basaltkit/tenancy'
+import { teamsPlugin, teamRoutes, TEAMS } from '@basaltkit/teams'
 
 const app = await createApp({
   plugins: [
@@ -91,7 +91,7 @@ await teams.addMember('acme', 'ada-id', 'owner')
 ### Members and roles
 
 ```ts
-import { Teams } from '@machize/teams'
+import { Teams } from '@basaltkit/teams'
 
 const teams = new Teams()
 await teams.addMember('acme', 'u1', 'owner')
@@ -110,7 +110,7 @@ Last-owner protection: `changeRole` and `removeMember` throw `LastOwnerError` (4
 Roles are free-form strings; the hierarchy is a name → rank map (roles outside the map have rank 0):
 
 ```ts
-import { Teams } from '@machize/teams'
+import { Teams } from '@basaltkit/teams'
 
 const teams = new Teams({
   roleRank: { owner: 4, admin: 3, editor: 2, viewer: 1 },
@@ -122,7 +122,7 @@ const teams = new Teams({
 `teamsPlugin` registers a guard: routes with `meta: { teamRole: 'admin' }` require the current user (`ctx().user`, from auth) to have that role **or higher** in the current tenant (`ctx().tenant`, from tenancy):
 
 ```ts
-import { route } from '@machize/fastify'
+import { route } from '@basaltkit/fastify'
 
 const myRoute = route({
   method: 'POST',
@@ -134,13 +134,13 @@ const myRoute = route({
 
 No tenant or no user in context → `NotATeamMemberError` (403).
 
-### Mirroring roles into @machize/permissions
+### Mirroring roles into @basaltkit/permissions
 
 Pass a `RoleAssigner` (any object with `assignRole`/`removeRole` — an `AccessStore` from permissions works) and every team join/change/leave is mirrored as a role in the tenant's scope:
 
 ```ts
-import { Teams } from '@machize/teams'
-import { MemoryAccessStore } from '@machize/permissions'
+import { Teams } from '@basaltkit/teams'
+import { MemoryAccessStore } from '@basaltkit/permissions'
 
 const access = new MemoryAccessStore()
 const teams = new Teams({ access })
@@ -244,7 +244,7 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 
 ## How it connects to other modules
 
-- **@machize/tenancy** — the team IS the set of users of a tenant; routes and the guard read `ctx().tenant.id`.
-- **@machize/auth** — identifies who's making the request (`ctx().user.id`), used by the `teamRole` guard and by `accept`.
-- **@machize/permissions** — via the `access` option (`RoleAssigner`), team roles become roles in the tenant's scope, gaining whatever permissions you define for them in the Gate.
-- **@machize/core / @machize/fastify** — container, context, hooks, and execution of guards and routes.
+- **@basaltkit/tenancy** — the team IS the set of users of a tenant; routes and the guard read `ctx().tenant.id`.
+- **@basaltkit/auth** — identifies who's making the request (`ctx().user.id`), used by the `teamRole` guard and by `accept`.
+- **@basaltkit/permissions** — via the `access` option (`RoleAssigner`), team roles become roles in the tenant's scope, gaining whatever permissions you define for them in the Gate.
+- **@basaltkit/core / @basaltkit/fastify** — container, context, hooks, and execution of guards and routes.

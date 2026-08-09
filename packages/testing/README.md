@@ -1,6 +1,6 @@
-# @machize/testing
+# @basaltkit/testing
 
-Testing kit for Machize applications: boots the application in memory with `createTestApp`, makes HTTP requests impersonating users and tenants, replaces mail and queue with fake versions that support assertions, and travels through time. You need it whenever you want to write automated tests for your application without real servers, databases, or external services.
+Testing kit for Basalt applications: boots the application in memory with `createTestApp`, makes HTTP requests impersonating users and tenants, replaces mail and queue with fake versions that support assertions, and travels through time. You need it whenever you want to write automated tests for your application without real servers, databases, or external services.
 
 ## What this module solves
 
@@ -13,10 +13,10 @@ Everything works with any test runner (Vitest, Jest, node:test…), because noth
 ## Installation
 
 ```bash
-pnpm add -D @machize/testing
+pnpm add -D @basaltkit/testing
 ```
 
-> Note: it depends on `@machize/core`, `@machize/fastify`, `@machize/mailer`, `@machize/queue`, and `fastify`. Projects created with `create-machize` already include `@machize/testing` in `devDependencies`.
+> Note: it depends on `@basaltkit/core`, `@basaltkit/fastify`, `@basaltkit/mailer`, `@basaltkit/queue`, and `fastify`. Projects created with `create-basalt` already include `@basaltkit/testing` in `devDependencies`.
 
 ## Get started in 5 minutes
 
@@ -24,8 +24,8 @@ pnpm add -D @machize/testing
 
 ```typescript
 import { describe, expect, it } from 'vitest'
-import { fastifyPlugin, route } from '@machize/fastify'
-import { createTestApp } from '@machize/testing'
+import { fastifyPlugin, route } from '@basaltkit/fastify'
+import { createTestApp } from '@basaltkit/testing'
 
 const health = route({
   method: 'GET',
@@ -80,9 +80,9 @@ The response is a Fastify `LightMyRequestResponse`: use `.statusCode`, `.json()`
 `createTestApp` automatically adds a test plugin that reads the special `x-test-user` / `x-test-tenant` headers and populates `ctx().user` / `ctx().tenant` — the same context your application uses in production. **Never register this mechanism in a real application.**
 
 ```typescript
-import { ctx } from '@machize/core'
-import { fastifyPlugin, route } from '@machize/fastify'
-import { createTestApp } from '@machize/testing'
+import { ctx } from '@basaltkit/core'
+import { fastifyPlugin, route } from '@basaltkit/fastify'
+import { createTestApp } from '@basaltkit/testing'
 
 const whoami = route({
   method: 'GET',
@@ -114,8 +114,8 @@ Records "sent" emails in memory instead of sending them:
 ```typescript
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { defineMail, MAILER } from '@machize/mailer'
-import { createTestApp, fakeMailer } from '@machize/testing'
+import { defineMail, MAILER } from '@basaltkit/mailer'
+import { createTestApp, fakeMailer } from '@basaltkit/testing'
 
 const WelcomeEmail = defineMail({
   name: 'welcome',
@@ -148,8 +148,8 @@ Captures job dispatches **without running them**; `drain()` runs the accumulated
 ```typescript
 import { expect, it } from 'vitest'
 import { z } from 'zod'
-import { defineJob } from '@machize/queue'
-import { createTestApp, fakeQueue } from '@machize/testing'
+import { defineJob } from '@basaltkit/queue'
+import { createTestApp, fakeQueue } from '@basaltkit/testing'
 
 const SendWelcome = defineJob({
   name: 'email.welcome',
@@ -180,7 +180,7 @@ Shifts "now" (`Date.now()` and `new Date()` with no arguments) without depending
 
 ```typescript
 import { afterEach, expect, it } from 'vitest'
-import { time } from '@machize/testing'
+import { time } from '@basaltkit/testing'
 
 afterEach(() => time.restore()) // ALWAYS call this in afterEach
 
@@ -191,15 +191,15 @@ it('the trial expires after 15 days', () => {
 })
 ```
 
-The duration format (`'15d'`, `'2h'`, …) is `@machize/core`'s `DurationInput` (`parseDuration`).
+The duration format (`'15d'`, `'2h'`, …) is `@basaltkit/core`'s `DurationInput` (`parseDuration`).
 
 ## API reference
 
-Exported from `@machize/testing`:
+Exported from `@basaltkit/testing`:
 
 ### `createTestApp(options?): Promise<TestApp>`
 
-Creates the application with `createApp` (the same `CreateAppOptions` as `@machize/core`), prepends the impersonation plugin, calls `boot()`, and returns a `TestApp`.
+Creates the application with `createApp` (the same `CreateAppOptions` as `@basaltkit/core`), prepends the impersonation plugin, calls `boot()`, and returns a `TestApp`.
 
 | Parameter | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -209,7 +209,7 @@ Creates the application with `createApp` (the same `CreateAppOptions` as `@machi
 
 | Member | Signature | Description |
 | --- | --- | --- |
-| `app` | `MachizeApp` | The underlying application |
+| `app` | `BasaltApp` | The underlying application |
 | `container` | `Container` (getter) | Dependency container — `app.container.get(TOKEN)` |
 | `server` | `FastifyInstance` (getter) | The Fastify server (token `FASTIFY`) |
 | `actingAs(user)` | `(user: TestActor) => this` | Sets the default user for subsequent requests |
@@ -237,13 +237,13 @@ Creates the application with `createApp` (the same `CreateAppOptions` as `@machi
 
 | Parameter | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
-| `options` | `MailerOptions` | No | `{ from: 'test@machize.dev' }` | Options for the real `Mailer` (sender, etc.) |
+| `options` | `MailerOptions` | No | `{ from: 'test@basalt.dev' }` | Options for the real `Mailer` (sender, etc.) |
 
 `FakeMailer`:
 
 | Member | Type | Description |
 | --- | --- | --- |
-| `plugin` | Machize plugin | Registers the fake mailer — pass it in `createTestApp({ plugins: [mail.plugin, …] })` |
+| `plugin` | Basalt plugin | Registers the fake mailer — pass it in `createTestApp({ plugins: [mail.plugin, …] })` |
 | `sent` | `ResolvedMail[]` | Everything "sent", in order |
 | `assertSent(mail, predicate?)` | `(MailDefinition \| string, (m: ResolvedMail) => boolean) => ResolvedMail` | Returns the first match; throws `MailAssertionError` if none |
 | `assertNothingSent()` | `() => void` | Throws `MailAssertionError` if anything was sent |
@@ -278,8 +278,8 @@ Creates the application with `createApp` (the same `CreateAppOptions` as `@machi
 
 ### Errors
 
-- `MailAssertionError` — code `TEST_MAIL_ASSERTION` (extends `MachizeError`).
-- `QueueAssertionError` — code `TEST_QUEUE_ASSERTION` (extends `MachizeError`).
+- `MailAssertionError` — code `TEST_MAIL_ASSERTION` (extends `BasaltError`).
+- `QueueAssertionError` — code `TEST_QUEUE_ASSERTION` (extends `BasaltError`).
 
 ## Common errors and solutions (FAQ)
 
@@ -287,7 +287,7 @@ Creates the application with `createApp` (the same `CreateAppOptions` as `@machi
 You're missing `await app.shutdown()` at the end of the test. The application keeps resources open until it's shut down.
 
 **`ctx().user` always comes back `undefined` in handlers.**
-Make sure you created the app with `createTestApp` (it's the one that installs impersonation) and that you called `actingAs(...)` before the request — or passed `{ user: ... }` in that request's options. Impersonation works through `@machize/fastify` request enrichers; it needs `fastifyPlugin` registered.
+Make sure you created the app with `createTestApp` (it's the one that installs impersonation) and that you called `actingAs(...)` before the request — or passed `{ user: ... }` in that request's options. Impersonation works through `@basaltkit/fastify` request enrichers; it needs `fastifyPlugin` registered.
 
 **`Expected mail "welcome" to have been sent. Sent: (nothing)`**
 The code never actually sent the email, or the `Mailer` used isn't the fake one. Make sure `mail.plugin` is in `createTestApp`'s `plugins` list **before** you resolve `MAILER` from the container.
@@ -303,9 +303,9 @@ No. The impersonation plugin reads headers (`x-test-user`) without any validatio
 
 ## How it connects to other modules
 
-- **`@machize/core`** — `createTestApp` wraps `createApp`; `time` uses `parseDuration`; the errors extend `MachizeError`.
-- **`@machize/fastify`** — requests are injected into the `FastifyInstance` (token `FASTIFY`); impersonation is a `RequestEnricher` registered in the `http:enrichers` bucket.
-- **`@machize/mailer`** — `fakeMailer` registers a real `Mailer` with `MemoryMailDriver`, under the same `MAILER` token the application uses.
-- **`@machize/queue`** — `fakeQueue` uses the real `queuePlugin` with a driver that captures instead of running.
-- **`@machize/generator`** — tests generated by `mach make:resource` use `createTestApp` from this package.
-- **`create-machize`** — new projects include `@machize/testing` in `devDependencies` and a ready-to-run startup test.
+- **`@basaltkit/core`** — `createTestApp` wraps `createApp`; `time` uses `parseDuration`; the errors extend `BasaltError`.
+- **`@basaltkit/fastify`** — requests are injected into the `FastifyInstance` (token `FASTIFY`); impersonation is a `RequestEnricher` registered in the `http:enrichers` bucket.
+- **`@basaltkit/mailer`** — `fakeMailer` registers a real `Mailer` with `MemoryMailDriver`, under the same `MAILER` token the application uses.
+- **`@basaltkit/queue`** — `fakeQueue` uses the real `queuePlugin` with a driver that captures instead of running.
+- **`@basaltkit/generator`** — tests generated by `basalt make:resource` use `createTestApp` from this package.
+- **`create-basalt`** — new projects include `@basaltkit/testing` in `devDependencies` and a ready-to-run startup test.

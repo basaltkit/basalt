@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, ctx, definePlugin, ensureMetadata, runWithContext } from '@machize/core'
-import { FASTIFY, fastifyPlugin, route, type RequestEnricher } from '@machize/fastify'
+import { createApp, ctx, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin, route, type RequestEnricher } from '@basaltkit/fastify'
 import {
   definePolicy,
   Gate,

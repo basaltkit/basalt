@@ -1,6 +1,6 @@
 # File uploads
 
-`@machize/files` is an upload pipeline over [`@machize/storage`](/reference/packages):
+`@basaltkit/files` is an upload pipeline over [`@basaltkit/storage`](/reference/packages):
 it validates the content type and size, enforces a per-tenant storage quota,
 writes the bytes tenant-scoped, records metadata, and emits hooks for
 out-of-band processing (antivirus, thumbnails).
@@ -8,7 +8,7 @@ out-of-band processing (antivirus, thumbnails).
 ## Setup
 
 ```ts
-import { filesPlugin, FILES, fileRoutes } from '@machize/files'
+import { filesPlugin, FILES, fileRoutes } from '@basaltkit/files'
 
 filesPlugin({
   disk: 'uploads',                                   // a disk name or a Disk instance
@@ -37,7 +37,7 @@ records metadata (name, size, SHA-256 checksum, uploader) and emits
 ## Quota
 
 `maxTotalBytes` is a built-in per-tenant cap. To tie storage to a plan, wire
-`checkQuota` (it throws to reject) into `@machize/subscriptions`:
+`checkQuota` (it throws to reject) into `@basaltkit/subscriptions`:
 
 ```ts
 filesPlugin({ disk: 'uploads', checkQuota: (tenantId, size) =>

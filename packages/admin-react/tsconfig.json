@@ -1,5 +1,5 @@
 {
-  "extends": "@machize/tsconfig/base.json",
+  "extends": "@basaltkit/tsconfig/base.json",
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": ".",
