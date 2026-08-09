@@ -1,8 +1,8 @@
-# @machize/events-prisma
+# @basaltkit/events-prisma
 
-Prisma-backed implementation of the [`@machize/events`](https://github.com/Zebedeu/machize/tree/main/packages/events) `OutboxStore` (the transactional outbox) — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
+Prisma-backed implementation of the [`@basaltkit/events`](https://github.com/Zebedeu/basalt/tree/main/packages/events) `OutboxStore` (the transactional outbox) — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
 
-`@machize/events` ships `MemoryOutboxStore` by default — fine for tests and dev, but it loses every un-relayed event on restart and can't be shared across instances. This package keeps the outbox in the database you already run, so delivery stays **at-least-once and crash-safe**. The single-node, zero-dependency counterpart is [`@machize/events-sqlite`](https://github.com/Zebedeu/machize/tree/main/packages/events-sqlite).
+`@basaltkit/events` ships `MemoryOutboxStore` by default — fine for tests and dev, but it loses every un-relayed event on restart and can't be shared across instances. This package keeps the outbox in the database you already run, so delivery stays **at-least-once and crash-safe**. The single-node, zero-dependency counterpart is [`@basaltkit/events-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/events-sqlite).
 
 ## Why the same database matters
 
@@ -11,15 +11,15 @@ The transactional outbox only holds its promise when the event is written **in t
 ## Installation
 
 ```bash
-pnpm add @machize/events @machize/events-prisma
+pnpm add @basaltkit/events @basaltkit/events-prisma
 ```
 
 ## Schema
 
-Don't hand-copy the model — run **`mach prisma:sync`** (from [`@machize/prisma`](https://github.com/Zebedeu/machize/tree/main/packages/prisma)), which discovers every installed `@machize/*-prisma` package and merges its models into your `prisma/schema.prisma`:
+Don't hand-copy the model — run **`basalt prisma:sync`** (from [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma)), which discovers every installed `@basaltkit/*-prisma` package and merges its models into your `prisma/schema.prisma`:
 
 ```bash
-pnpm mach prisma:sync --push        # add the OutboxEntry model + create the table
+pnpm basalt prisma:sync --push        # add the OutboxEntry model + create the table
 ```
 
 Or copy the reference model from [`prisma/schema.prisma`](./prisma/schema.prisma):
@@ -46,8 +46,8 @@ Then `prisma generate` and go.
 Pass your generated client directly — no cast:
 
 ```ts
-import { outboxPlugin } from '@machize/events'
-import { prismaOutboxStore } from '@machize/events-prisma'
+import { outboxPlugin } from '@basaltkit/events'
+import { prismaOutboxStore } from '@basaltkit/events-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -61,7 +61,7 @@ outboxPlugin({
 })
 ```
 
-Wire the store before its model exists and it **fails fast** with a message naming the missing model and pointing you at `mach prisma:sync` — no cryptic `reading 'upsert' of undefined`.
+Wire the store before its model exists and it **fails fast** with a message naming the missing model and pointing you at `basalt prisma:sync` — no cryptic `reading 'upsert' of undefined`.
 
 ## API
 
@@ -69,7 +69,7 @@ Wire the store before its model exists and it **fails fast** with a message nami
 
 ## Which backend?
 
-- **`@machize/events-prisma`** — you already run Postgres/MySQL, or need the outbox in the same database (and transaction) as your writes.
-- **`@machize/events-sqlite`** — a single node with zero dependencies.
+- **`@basaltkit/events-prisma`** — you already run Postgres/MySQL, or need the outbox in the same database (and transaction) as your writes.
+- **`@basaltkit/events-sqlite`** — a single node with zero dependencies.
 
 Both implement the identical `OutboxStore` contract, so switching is a one-line change.

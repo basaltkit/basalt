@@ -1,4 +1,4 @@
-import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@machize/storage'
+import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
 
 /** The subset of a `@google-cloud/storage` File this driver uses. */
 export interface GcsFileLike {
@@ -26,7 +26,7 @@ export interface GcsDriverOptions {
 const isNotFound = (error: unknown): boolean => (error as { code?: number } | undefined)?.code === 404
 
 /**
- * Google Cloud Storage driver for `@machize/storage`. Uses
+ * Google Cloud Storage driver for `@basaltkit/storage`. Uses
  * `@google-cloud/storage` (an optional peer dependency) via an injectable
  * bucket, so its logic is unit-tested without touching GCS.
  */

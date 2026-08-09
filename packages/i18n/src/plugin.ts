@@ -1,4 +1,4 @@
-import { createToken, definePlugin } from '@machize/core'
+import { createToken, definePlugin } from '@basaltkit/core'
 import { I18n, type I18nOptions } from './i18n.js'
 import type { Catalog } from './messages.js'
 
@@ -11,7 +11,7 @@ export const I18N = createToken<I18n<Catalog>>('i18n')
  */
 export function i18nPlugin<C extends Catalog>(options: I18nOptions<C>) {
   return definePlugin({
-    name: 'machize:i18n',
+    name: 'basalt:i18n',
     register({ container }) {
       container.singleton(I18N, () => new I18n(options) as I18n<Catalog>)
     },

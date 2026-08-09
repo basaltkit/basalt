@@ -1,6 +1,6 @@
 # Caching
 
-`@machize/cache` is a tenant-scoped cache with tags, TTL and stampede
+`@basaltkit/cache` is a tenant-scoped cache with tags, TTL and stampede
 protection, over a pluggable driver — in-memory for dev, Redis for production,
 or a multi-level driver that puts a near cache in front of Redis.
 
@@ -9,7 +9,7 @@ or a multi-level driver that puts a near cache in front of Redis.
 ## Setup
 
 ```ts
-import { cachePlugin, CACHE } from '@machize/cache'
+import { cachePlugin, CACHE } from '@basaltkit/cache'
 
 cachePlugin({ driver: 'redis', url: process.env.REDIS_URL }) // or 'memory' (default)
 
@@ -46,13 +46,13 @@ instance.
 
 ### Multi-level (tiered)
 
-`@machize/cache-tiered` puts an in-process near cache in front of a shared far
+`@basaltkit/cache-tiered` puts an in-process near cache in front of a shared far
 cache (Redis) — hot keys are served from memory, cutting network round-trips,
 while Redis stays the source of truth across instances:
 
 ```ts
-import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@machize/cache'
-import { TieredCacheDriver } from '@machize/cache-tiered'
+import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@basaltkit/cache'
+import { TieredCacheDriver } from '@basaltkit/cache-tiered'
 
 cachePlugin({
   driver: new TieredCacheDriver({

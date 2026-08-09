@@ -1,6 +1,6 @@
-# @machize/activity
+# @basaltkit/activity
 
-Activity log for Machize applications: a feed in the style of "Maria published project X 5 minutes ago", built with a fluent API and automatically associated with the current user and tenant.
+Activity log for Basalt applications: a feed in the style of "Maria published project X 5 minutes ago", built with a fluent API and automatically associated with the current user and tenant.
 
 You need this module when you want to show users a **readable history** of what happened — on a project page, a user profile, a team dashboard. (Inspired by `spatie/laravel-activitylog` from the Laravel world.)
 
@@ -10,25 +10,25 @@ You need this module when you want to show users a **readable history** of what 
 
 An **activity log** stores actions in a format meant for people: who did it (**causer**), on what (**subject** — e.g. the project "p1"), what was done (a description like `'published'`) and extra details (**properties**, e.g. `{ from: 'draft', to: 'published' }`). With these fields you can build feeds like "recent activity on this project" or "everything this user did".
 
-Writing this by hand for every action is repetitive and easy to forget — especially the "who" and "which organization". This module reads the **active context** of the application (`@machize/core`): if there is a `user`/`tenant` in the context, the record comes out with `causerId` and `tenantId` filled in without you passing anything. Writing becomes a fluent one-liner: `activity.in('project').performedOn('project', id).log('published')`.
+Writing this by hand for every action is repetitive and easy to forget — especially the "who" and "which organization". This module reads the **active context** of the application (`@basaltkit/core`): if there is a `user`/`tenant` in the context, the record comes out with `causerId` and `tenantId` filled in without you passing anything. Writing becomes a fluent one-liner: `activity.in('project').performedOn('project', id).log('published')`.
 
 In a multi-tenant application (several customers on the same database) there is also the danger of a feed showing activity from another organization. By default, **queries are scoped to the tenant in context** (`tenantScoped: true`): inside the "acme" tenant you only see "acme" records; outside any tenant (central/admin context) you see everything.
 
 ## Installation
 
 ```bash
-pnpm add @machize/activity
+pnpm add @basaltkit/activity
 ```
 
-Depends only on `@machize/core`. The default storage is in-memory (`MemoryActivityStore`) — in production, provide a persistent `ActivityStore` (see "Custom store").
+Depends only on `@basaltkit/core`. The default storage is in-memory (`MemoryActivityStore`) — in production, provide a persistent `ActivityStore` (see "Custom store").
 
 ## Get started in 5 minutes
 
 **1. Register the plugin:**
 
 ```ts
-import { createApp } from '@machize/core'
-import { ACTIVITY, activityPlugin } from '@machize/activity'
+import { createApp } from '@basaltkit/core'
+import { ACTIVITY, activityPlugin } from '@basaltkit/activity'
 
 const app = await createApp({
   plugins: [activityPlugin()],
@@ -40,7 +40,7 @@ const activity = app.container.get(ACTIVITY)
 **2. Log an action** (inside a request, the user and tenant come from context):
 
 ```ts
-import { runWithContext } from '@machize/core'
+import { runWithContext } from '@basaltkit/core'
 
 await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, async () => {
   const record = await activity
@@ -107,8 +107,8 @@ await activity.query({                     // free-form query
 With `tenantScoped: true` (the default), any query made **inside** a context with a tenant is automatically filtered to that tenant:
 
 ```ts
-import { runWithContext } from '@machize/core'
-import { Activity } from '@machize/activity'
+import { runWithContext } from '@basaltkit/core'
+import { Activity } from '@basaltkit/activity'
 
 const activity = new Activity()
 
@@ -133,7 +133,7 @@ To turn it off: `new Activity({ tenantScoped: false })` or `activityPlugin({ ten
 ### Usage without the plugin (scripts, tests)
 
 ```ts
-import { Activity } from '@machize/activity'
+import { Activity } from '@basaltkit/activity'
 
 const activity = new Activity()           // MemoryActivityStore by default
 await activity.in('test').log('works')
@@ -144,8 +144,8 @@ await activity.in('test').log('works')
 The in-memory store loses everything on restart. Implement `ActivityStore` over your database:
 
 ```ts
-import type { ActivityQuery, ActivityRecord, ActivityStore } from '@machize/activity'
-import { activityPlugin } from '@machize/activity'
+import type { ActivityQuery, ActivityRecord, ActivityStore } from '@basaltkit/activity'
+import { activityPlugin } from '@basaltkit/activity'
 
 class SqlActivityStore implements ActivityStore {
   async append(record: ActivityRecord): Promise<void> {
@@ -255,12 +255,12 @@ No — records are frozen at `append`. If something changed, log a new activity 
 `MemoryActivityStore` is volatile. In production, implement `ActivityStore` over a database.
 
 **Should I use activity or audit?**
-Activity: a readable feed for the **end user** ("Maria published…"), written by you at the points that matter to the product. Audit (`@machize/audit`): automatic, immutable logging for **security/compliance**, captured from hooks and events. Many applications use both.
+Activity: a readable feed for the **end user** ("Maria published…"), written by you at the points that matter to the product. Audit (`@basaltkit/audit`): automatic, immutable logging for **security/compliance**, captured from hooks and events. Many applications use both.
 
 ## How it connects to other modules
 
-- **`@machize/core`** — source of the context (`tryCtx`) that fills in `causerId`/`tenantId` and feeds tenant scoping; the plugin uses `definePlugin`/`createToken`.
-- **`@machize/audit`** — sibling module: audit is the automatic, append-only security record; activity is the product feed written explicitly. See the FAQ above.
-- **`@machize/queue`** — context travels to workers, so activity logged inside a job keeps the causer/tenant of the request that dispatched it.
-- **`@machize/events`** — you can log activity inside domain event listeners (e.g. on hearing `order.created`, log "order created" in the customer's feed).
-- **`@machize/logger`** — technical logs are for operators; activity is for users. They complement each other.
+- **`@basaltkit/core`** — source of the context (`tryCtx`) that fills in `causerId`/`tenantId` and feeds tenant scoping; the plugin uses `definePlugin`/`createToken`.
+- **`@basaltkit/audit`** — sibling module: audit is the automatic, append-only security record; activity is the product feed written explicitly. See the FAQ above.
+- **`@basaltkit/queue`** — context travels to workers, so activity logged inside a job keeps the causer/tenant of the request that dispatched it.
+- **`@basaltkit/events`** — you can log activity inside domain event listeners (e.g. on hearing `order.created`, log "order created" in the customer's feed).
+- **`@basaltkit/logger`** — technical logs are for operators; activity is for users. They complement each other.

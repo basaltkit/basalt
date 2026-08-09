@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createApp } from '@machize/core'
-import { defineEvent, EVENTS, eventsPlugin } from '@machize/events'
+import { createApp } from '@basaltkit/core'
+import { defineEvent, EVENTS, eventsPlugin } from '@basaltkit/events'
 import {
   MemoryWebhookStore,
   matchesEvent,
@@ -62,7 +62,7 @@ describe('WebhookDeliverer', () => {
     expect(result.attempts).toBe(1)
     // signed
     const init = fetchImpl.mock.calls[0]![1]!
-    expect((init.headers as Record<string, string>)['x-machize-signature']).toContain('t=1000')
+    expect((init.headers as Record<string, string>)['x-basalt-signature']).toContain('t=1000')
   })
 
   it('retries 5xx with backoff then succeeds', async () => {

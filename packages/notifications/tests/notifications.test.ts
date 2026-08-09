@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp } from '@machize/core'
-import { mailerPlugin, MemoryMailDriver, Mailer } from '@machize/mailer'
+import { createApp } from '@basaltkit/core'
+import { mailerPlugin, MemoryMailDriver, Mailer } from '@basaltkit/mailer'
 import {
   channel,
   defineNotification,
@@ -32,7 +32,7 @@ const ada = { id: 'u1', email: 'ada@example.com' }
 const setup = () => {
   const inApp = new MemoryInAppStore()
   const mailDriver = new MemoryMailDriver()
-  const mailer = new Mailer(mailDriver, { from: 'noreply@machize.dev' })
+  const mailer = new Mailer(mailDriver, { from: 'noreply@basalt.dev' })
   const notifier = new Notifier({
     channels: [new InAppChannel(inApp), new MailChannel(mailer)],
   })
@@ -137,7 +137,7 @@ describe('Notifier', () => {
 describe('notificationsPlugin', () => {
   it('wires inApp + mail bridge automatically when the mailer is present', async () => {
     const app = await createApp({
-      plugins: [mailerPlugin({ driver: 'memory', from: 'noreply@machize.dev' }), notificationsPlugin()],
+      plugins: [mailerPlugin({ driver: 'memory', from: 'noreply@basalt.dev' }), notificationsPlugin()],
     }).boot()
 
     const notifier = app.container.get(NOTIFIER)

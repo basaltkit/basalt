@@ -21,11 +21,11 @@ Great free tier, works with private repos. No repo config file needed.
 pnpm --filter docs docs:build
 # 2. log in (opens a browser) and deploy the folder
 ! npx wrangler login
-! npx wrangler pages deploy apps/docs/.vitepress/dist --project-name=machize-docs
+! npx wrangler pages deploy apps/docs/.vitepress/dist --project-name=basalt-docs
 ```
 
-First run creates the `machize-docs` project and prints the
-`https://machize-docs.pages.dev` URL.
+First run creates the `basalt-docs` project and prints the
+`https://basalt-docs.pages.dev` URL.
 
 ## Netlify
 
@@ -48,5 +48,5 @@ First run creates the `machize-docs` project and prints the
 ## Switching back to GitHub Pages later
 
 If the repo is made public (or the plan upgraded), re-add the `push` trigger to
-`.github/workflows/docs.yml`, set `base: '/machize/'` in
+`.github/workflows/docs.yml`, set `base: '/basalt/'` in
 `apps/docs/.vitepress/config.ts`, and enable Pages with source “GitHub Actions”.

@@ -1,186 +1,186 @@
-# @machize/prisma
+# @basaltkit/prisma
 
 ## 1.0.5
 
 ### Patch Changes
 
-- `mach prisma:sync` now also discovers `@machize/tenancy-prisma`,
-  `@machize/events-prisma` and `@machize/webhooks-prisma` — their
+- `basalt prisma:sync` now also discovers `@basaltkit/tenancy-prisma`,
+  `@basaltkit/events-prisma` and `@basaltkit/webhooks-prisma` — their
   `Tenant`/`TenantDomain`, `OutboxEntry` and `WebhookEndpoint` models merge into
-  your `schema.prisma` like every other `@machize/*-prisma`.
+  your `schema.prisma` like every other `@basaltkit/*-prisma`.
 
 ## 1.0.4
 
 ### Patch Changes
 
-- Add the `mach prisma:sync` command — discovers installed @machize/*-prisma packages and merges their models into your prisma/schema.prisma (interactive by default; --yes/--all non-interactive, --only=, --push/--migrate, --schema=). Exports prismaSyncCommand + extractSchemaBlocks.
+- Add the `basalt prisma:sync` command — discovers installed @basaltkit/*-prisma packages and merges their models into your prisma/schema.prisma (interactive by default; --yes/--all non-interactive, --only=, --push/--migrate, --schema=). Exports prismaSyncCommand + extractSchemaBlocks.
 
 ## 1.0.0
 
 ### Major Changes
 
-- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@machize/*` ecosystem.
+- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@basaltkit/*` ecosystem.
 
 ## 0.24.0
 
 ### Patch Changes
 
-- @machize/cli@0.24.0
-- @machize/core@0.24.0
+- @basaltkit/cli@0.24.0
+- @basaltkit/core@0.24.0
 
 ## 0.23.0
 
 ### Patch Changes
 
-- @machize/cli@0.23.0
-- @machize/core@0.23.0
+- @basaltkit/cli@0.23.0
+- @basaltkit/core@0.23.0
 
 ## 0.22.0
 
 ### Patch Changes
 
-- @machize/cli@0.22.0
-- @machize/core@0.22.0
+- @basaltkit/cli@0.22.0
+- @basaltkit/core@0.22.0
 
 ## 0.21.0
 
 ### Patch Changes
 
-- @machize/cli@0.21.0
-- @machize/core@0.21.0
+- @basaltkit/cli@0.21.0
+- @basaltkit/core@0.21.0
 
 ## 0.20.0
 
 ### Patch Changes
 
-- @machize/cli@0.20.0
-- @machize/core@0.20.0
+- @basaltkit/cli@0.20.0
+- @basaltkit/core@0.20.0
 
 ## 0.19.0
 
 ### Patch Changes
 
-- @machize/cli@0.19.0
-- @machize/core@0.19.0
+- @basaltkit/cli@0.19.0
+- @basaltkit/core@0.19.0
 
 ## 0.18.0
 
 ### Patch Changes
 
-- @machize/cli@0.18.0
-- @machize/core@0.18.0
+- @basaltkit/cli@0.18.0
+- @basaltkit/core@0.18.0
 
 ## 0.17.0
 
 ### Patch Changes
 
-- @machize/cli@0.17.0
-- @machize/core@0.17.0
+- @basaltkit/cli@0.17.0
+- @basaltkit/core@0.17.0
 
 ## 0.16.0
 
 ### Patch Changes
 
-- @machize/cli@0.16.0
-- @machize/core@0.16.0
+- @basaltkit/cli@0.16.0
+- @basaltkit/core@0.16.0
 
 ## 0.15.0
 
 ### Patch Changes
 
-- @machize/cli@0.15.0
-- @machize/core@0.15.0
+- @basaltkit/cli@0.15.0
+- @basaltkit/core@0.15.0
 
 ## 0.14.0
 
 ### Patch Changes
 
-- @machize/cli@0.14.0
-- @machize/core@0.14.0
+- @basaltkit/cli@0.14.0
+- @basaltkit/core@0.14.0
 
 ## 0.13.0
 
 ### Patch Changes
 
-- @machize/cli@0.13.0
-- @machize/core@0.13.0
+- @basaltkit/cli@0.13.0
+- @basaltkit/core@0.13.0
 
 ## 0.12.0
 
 ### Patch Changes
 
-- @machize/cli@0.12.0
-- @machize/core@0.12.0
+- @basaltkit/cli@0.12.0
+- @basaltkit/core@0.12.0
 
 ## 0.11.0
 
 ### Patch Changes
 
-- @machize/cli@0.11.0
-- @machize/core@0.11.0
+- @basaltkit/cli@0.11.0
+- @basaltkit/core@0.11.0
 
 ## 0.10.0
 
 ### Patch Changes
 
-- @machize/cli@0.10.0
-- @machize/core@0.10.0
+- @basaltkit/cli@0.10.0
+- @basaltkit/core@0.10.0
 
 ## 0.9.0
 
 ### Patch Changes
 
-- @machize/cli@0.9.0
-- @machize/core@0.9.0
+- @basaltkit/cli@0.9.0
+- @basaltkit/core@0.9.0
 
 ## 0.8.1
 
 ### Patch Changes
 
-- @machize/cli@0.8.1
-- @machize/core@0.8.1
+- @basaltkit/cli@0.8.1
+- @basaltkit/core@0.8.1
 
 ## 0.8.0
 
 ### Patch Changes
 
-- @machize/cli@0.8.0
-- @machize/core@0.8.0
+- @basaltkit/cli@0.8.0
+- @basaltkit/core@0.8.0
 
 ## 0.7.0
 
 ### Patch Changes
 
-- @machize/cli@0.7.0
-- @machize/core@0.7.0
+- @basaltkit/cli@0.7.0
+- @basaltkit/core@0.7.0
 
 ## 0.6.0
 
 ### Patch Changes
 
-- @machize/cli@0.6.0
-- @machize/core@0.6.0
+- @basaltkit/cli@0.6.0
+- @basaltkit/core@0.6.0
 
 ## 0.5.1
 
 ### Patch Changes
 
-- @machize/cli@0.5.1
-- @machize/core@0.5.1
+- @basaltkit/cli@0.5.1
+- @basaltkit/core@0.5.1
 
 ## 0.5.0
 
 ### Patch Changes
 
-- @machize/cli@0.5.0
-- @machize/core@0.5.0
+- @basaltkit/cli@0.5.0
+- @basaltkit/core@0.5.0
 
 ## 0.4.0
 
 ### Patch Changes
 
-- @machize/cli@0.4.0
-- @machize/core@0.4.0
+- @basaltkit/cli@0.4.0
+- @basaltkit/core@0.4.0
 
 ## 0.3.0
 
@@ -188,14 +188,14 @@
 
 - Updated dependencies [8a0ccbc]
 - Updated dependencies [7b92e25]
-  - @machize/core@0.3.0
-  - @machize/cli@0.3.0
+  - @basaltkit/core@0.3.0
+  - @basaltkit/cli@0.3.0
 
 ## 0.1.0
 
 ### Minor Changes
 
-- Initial public release of the Machize ecosystem — a batteries-included,
+- Initial public release of the Basalt ecosystem — a batteries-included,
   self-hosted toolkit for building SaaS applications on Node.js with Fastify,
   Prisma, Zod and TypeScript.
 
@@ -212,8 +212,8 @@
     (plans, trials, feature limits, gateway drivers, idempotent webhooks),
     audit, activity, notifications.
   - **Developer experience**: testing (createTestApp, mail/queue fakes, time
-    travel), create-machize, sdk (typed client from Zod endpoints),
-    generator (mach make).
+    travel), create-basalt, sdk (typed client from Zod endpoints),
+    generator (basalt make).
   - **Admin/product**: admin and dashboard (headless engines), admin-react
     (React binding).
 
@@ -223,4 +223,4 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @machize/core@0.1.0
+  - @basaltkit/core@0.1.0

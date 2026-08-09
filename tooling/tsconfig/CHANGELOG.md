@@ -1,4 +1,4 @@
-# @machize/tsconfig
+# @basaltkit/tsconfig
 
 ## 0.24.0
 

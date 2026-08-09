@@ -1,7 +1,7 @@
 {
-  "name": "@machize/auth-sqlite",
-  "version": "1.0.5",
-  "description": "Durable, SQLite-backed implementations of every @machize/auth store (users, sessions, refresh tokens, one-time tokens, API keys, MFA) built on Node's built-in node:sqlite. Zero external dependencies.",
+  "name": "@basaltkit/auth-sqlite",
+  "version": "1.0.0",
+  "description": "Durable, SQLite-backed implementations of every @basaltkit/auth store (users, sessions, refresh tokens, one-time tokens, API keys, MFA) built on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -22,11 +22,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@machize/auth": "workspace:^"
+    "@basaltkit/auth": "workspace:^"
   },
   "devDependencies": {
-    "@machize/auth": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/auth": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -37,13 +37,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/auth-sqlite"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/auth-sqlite#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/auth-sqlite#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "auth",
     "sqlite",

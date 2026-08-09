@@ -2,16 +2,16 @@
   "name": "admin-demo",
   "private": true,
   "type": "module",
-  "description": "A runnable admin dashboard built from @machize/admin, @machize/dashboard and @machize/admin-shadcn — pnpm --filter admin-demo dev.",
+  "description": "A runnable admin dashboard built from @basaltkit/admin, @basaltkit/dashboard and @basaltkit/admin-shadcn — pnpm --filter admin-demo dev.",
   "scripts": {
     "dev": "vite",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@machize/admin": "workspace:*",
-    "@machize/admin-shadcn": "workspace:*",
-    "@machize/dashboard": "workspace:*",
-    "@machize/subscriptions": "workspace:*",
+    "@basaltkit/admin": "workspace:*",
+    "@basaltkit/admin-shadcn": "workspace:*",
+    "@basaltkit/dashboard": "workspace:*",
+    "@basaltkit/subscriptions": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.24.0"

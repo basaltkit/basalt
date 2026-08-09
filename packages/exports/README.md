@@ -1,6 +1,6 @@
-# @machize/exports
+# @basaltkit/exports
 
-Data export for Machize: turns **typed** export definitions into **CSV / TSV / JSON / NDJSON** files (native, **zero dependencies**), through a formatter seam where XLSX/PDF plug in later. Designed to run **asynchronously** with `@machize/queue` and store the result with `@machize/files`/`@machize/storage`. You need this module when users export data or generate reports.
+Data export for Basalt: turns **typed** export definitions into **CSV / TSV / JSON / NDJSON** files (native, **zero dependencies**), through a formatter seam where XLSX/PDF plug in later. Designed to run **asynchronously** with `@basaltkit/queue` and store the result with `@basaltkit/files`/`@basaltkit/storage`. You need this module when users export data or generate reports.
 
 ## What this module solves
 
@@ -9,16 +9,16 @@ Exporting well involves: mapping records to columns, escaping correctly (commas,
 ## Installation
 
 ```bash
-pnpm add @machize/exports
+pnpm add @basaltkit/exports
 ```
 
-Only depends on `@machize/core`. The CSV/TSV/JSON/NDJSON formats need nothing else.
+Only depends on `@basaltkit/core`. The CSV/TSV/JSON/NDJSON formats need nothing else.
 
 ## Get started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { exportsPlugin, EXPORTS, defineExport } from '@machize/exports'
+import { createApp } from '@basaltkit/core'
+import { exportsPlugin, EXPORTS, defineExport } from '@basaltkit/exports'
 
 const usersExport = defineExport<{ name: string; email: string; joinedAt: Date }>({
   name: 'users',
@@ -92,6 +92,6 @@ exportsPlugin({ formatters: [xlsx] })
 
 ## How it connects to other modules
 
-- **`@machize/queue`** — runs large exports outside the request.
-- **`@machize/files` / `@machize/storage`** — stores the generated file (with a signed URL for download).
-- **`@machize/notifications`** — notifies when the report is ready.
+- **`@basaltkit/queue`** — runs large exports outside the request.
+- **`@basaltkit/files` / `@basaltkit/storage`** — stores the generated file (with a signed URL for download).
+- **`@basaltkit/notifications`** — notifies when the report is ready.

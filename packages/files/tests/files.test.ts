@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { HookBus, runWithContext } from '@machize/core'
-import { Disk, type StorageDriver } from '@machize/storage'
+import { HookBus, runWithContext } from '@basaltkit/core'
+import { Disk, type StorageDriver } from '@basaltkit/storage'
 import {
   FileNotFoundError,
   FileTenantRequiredError,

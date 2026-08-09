@@ -12,10 +12,10 @@ import type {
   UsageConsumeResult,
   UsageStore,
   WebhookStore,
-} from '@machize/subscriptions'
+} from '@basaltkit/subscriptions'
 
 /**
- * Durable, SQLite-backed implementations of the three `@machize/subscriptions`
+ * Durable, SQLite-backed implementations of the three `@basaltkit/subscriptions`
  * stores — subscriptions, usage metering and webhook idempotency — on Node's
  * built-in `node:sqlite`. Zero external dependencies.
  *
@@ -23,7 +23,7 @@ import type {
  * transaction and increments with a `RETURNING` guard, so a quota is never
  * overshot even under concurrent access (the same guarantee the Redis Lua store
  * gives, without Redis). The single-node reference backend; the production
- * (Postgres/MySQL) counterpart is `@machize/subscriptions-prisma`.
+ * (Postgres/MySQL) counterpart is `@basaltkit/subscriptions-prisma`.
  *
  * Requires Node 22.5+ (stable and flag-free on Node 24; `--experimental-sqlite`
  * on 22.x).

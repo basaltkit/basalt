@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MemoryCacheDriver, type CacheDriver } from '@machize/cache'
+import { MemoryCacheDriver, type CacheDriver } from '@basaltkit/cache'
 import { TieredCacheDriver } from '../src/index.js'
 
 /** Wraps a driver to count how often it is consulted. */

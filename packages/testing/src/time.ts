@@ -1,4 +1,4 @@
-import { parseDuration, type DurationInput } from '@machize/core'
+import { parseDuration, type DurationInput } from '@basaltkit/core'
 
 const RealDate = globalThis.Date
 

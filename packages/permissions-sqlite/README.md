@@ -1,18 +1,18 @@
-# @machize/permissions-sqlite
+# @basaltkit/permissions-sqlite
 
-Durable, **SQLite-backed** implementation of the [`@machize/permissions`](https://github.com/Zebedeu/machize/tree/main/packages/permissions)
+Durable, **SQLite-backed** implementation of the [`@basaltkit/permissions`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions)
 `AccessStore` — role assignments and permission grants — built on Node's
 built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
 
-`@machize/permissions` requires an `AccessStore` and ships an in-memory one that
+`@basaltkit/permissions` requires an `AccessStore` and ships an in-memory one that
 forgets everything on restart. Swap in this and role assignments and grants
 persist — no ORM, no migration tool, no service. It's the single-node reference
 backend; the production (Postgres/MySQL) counterpart is
-[`@machize/permissions-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/permissions-prisma).
+[`@basaltkit/permissions-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions-prisma).
 
 ```bash
-pnpm add @machize/permissions-sqlite   # peer: @machize/permissions
+pnpm add @basaltkit/permissions-sqlite   # peer: @basaltkit/permissions
 ```
 
 > Requires **Node 22.5+**. Stable and flag-free on Node 24; on 22.x run with
@@ -21,8 +21,8 @@ pnpm add @machize/permissions-sqlite   # peer: @machize/permissions
 ## Use it
 
 ```ts
-import { permissionsPlugin } from '@machize/permissions'
-import { sqliteAccessStore } from '@machize/permissions-sqlite'
+import { permissionsPlugin } from '@basaltkit/permissions'
+import { sqliteAccessStore } from '@basaltkit/permissions-sqlite'
 
 const p = sqliteAccessStore('./data/permissions.db')   // ':memory:' by default
 

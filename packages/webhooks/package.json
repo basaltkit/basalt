@@ -1,7 +1,7 @@
 {
-  "name": "@machize/webhooks",
-  "version": "1.0.5",
-  "description": "Outbound webhooks for Machize: signed delivery with retries and backoff, per-tenant subscriptions, and automatic dispatch from domain events.",
+  "name": "@basaltkit/webhooks",
+  "version": "1.0.0",
+  "description": "Outbound webhooks for Basalt: signed delivery with retries and backoff, per-tenant subscriptions, and automatic dispatch from domain events.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/events": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/events": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -34,13 +34,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/webhooks"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/webhooks#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/webhooks#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "webhooks",
     "hmac"

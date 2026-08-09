@@ -76,7 +76,7 @@ describe('KafkaQueueDriver', () => {
     const rec = kafka.prod.sent[0]!
     expect(rec.topic).toBe('welcome')
     expect(JSON.parse(rec.messages[0]!.value)).toEqual({ name: 'Ada' })
-    expect(rec.messages[0]!.headers).toMatchObject({ 'x-machize-job': 'send-welcome', 'x-machize-attempt': '1', 'x-machize-attempts': '2' })
+    expect(rec.messages[0]!.headers).toMatchObject({ 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': '1', 'x-basalt-attempts': '2' })
   })
 
   it('subscribes to both the topic and its retry topic', async () => {
@@ -99,13 +99,13 @@ describe('KafkaQueueDriver', () => {
     await kafka.cons.ready
 
     // attempt 1 of 2 → re-produced to welcome.retry as attempt 2
-    await kafka.cons.deliver('welcome', { 'x-machize-job': 'send-welcome', 'x-machize-attempt': '1', 'x-machize-attempts': '2' }, { name: 'Ada' })
+    await kafka.cons.deliver('welcome', { 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': '1', 'x-basalt-attempts': '2' }, { name: 'Ada' })
     const retry = kafka.prod.sent.find((s) => s.topic === 'welcome.retry')!
     expect(retry).toBeTruthy()
-    expect(retry.messages[0]!.headers?.['x-machize-attempt']).toBe('2')
+    expect(retry.messages[0]!.headers?.['x-basalt-attempt']).toBe('2')
 
     // attempt 2 of 2 → dead-lettered
-    await kafka.cons.deliver('welcome.retry', { 'x-machize-job': 'send-welcome', 'x-machize-attempt': '2', 'x-machize-attempts': '2' }, { name: 'Ada' })
+    await kafka.cons.deliver('welcome.retry', { 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': '2', 'x-basalt-attempts': '2' }, { name: 'Ada' })
     expect(kafka.prod.sent.find((s) => s.topic === 'welcome.dead')).toBeTruthy()
   })
 
@@ -119,7 +119,7 @@ describe('KafkaQueueDriver', () => {
     driver.startWorker('welcome')
     await kafka.cons.ready
 
-    await kafka.cons.deliver('welcome', { 'x-machize-job': 'send-welcome', 'x-machize-attempt': '1', 'x-machize-attempts': '1' }, { name: 'Ada' })
+    await kafka.cons.deliver('welcome', { 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': '1', 'x-basalt-attempts': '1' }, { name: 'Ada' })
     expect(seen).toEqual([['send-welcome', { name: 'Ada' }]])
     expect(kafka.prod.sent).toHaveLength(0) // nothing re-produced
   })

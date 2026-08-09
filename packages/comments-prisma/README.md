@@ -1,22 +1,22 @@
-# @machize/comments-prisma
+# @basaltkit/comments-prisma
 
 **Prisma-backed** implementation of the
-[`@machize/comments`](https://github.com/Zebedeu/machize/tree/main/packages/comments)
+[`@basaltkit/comments`](https://github.com/Zebedeu/basalt/tree/main/packages/comments)
 `CommentStore` — per-resource threads with @mentions and resolve/reopen — for
 production databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the `Comment` model; the store only
 touches that delegate. The production counterpart to
-[`@machize/comments-sqlite`](https://github.com/Zebedeu/machize/tree/main/packages/comments-sqlite).
+[`@basaltkit/comments-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/comments-sqlite).
 
 ```bash
-pnpm add @machize/comments-prisma   # peer: @machize/comments ; you already have @prisma/client
+pnpm add @basaltkit/comments-prisma   # peer: @basaltkit/comments ; you already have @prisma/client
 ```
 
 ## 1. Add the model
 
 Copy the model from the bundled reference schema
-(`@machize/comments-prisma/schema.prisma`) into your `schema.prisma`:
+(`@basaltkit/comments-prisma/schema.prisma`) into your `schema.prisma`:
 
 ```prisma
 model Comment {
@@ -43,8 +43,8 @@ Then `prisma migrate dev` and `prisma generate`.
 ## 2. Wire the store
 
 ```ts
-import { commentsPlugin } from '@machize/comments'
-import { prismaCommentsStore } from '@machize/comments-prisma'
+import { commentsPlugin } from '@basaltkit/comments'
+import { prismaCommentsStore } from '@basaltkit/comments-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -58,9 +58,9 @@ createApp({ plugins: [commentsPlugin({ store: c.store })] })
 - **Resolve/reopen** is faithful: a patch key present with `undefined` clears the
   column (reopen), an absent key is left untouched.
 - Timestamps are stored as `DateTime` and converted to/from the epoch-ms numbers
-  the `@machize/comments` contract uses.
+  the `@basaltkit/comments` contract uses.
 - For **database-per-tenant**, route the store through the active tenant's client
-  — see the [Database-per-tenant guide](https://machize-docs.pages.dev/guide/database-per-tenant).
+  — see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).
 - `PrismaCommentsClient` types delegate **arguments** as `any` (returns stay
   precise) so a real `PrismaClient` is assignable and passes directly.
 

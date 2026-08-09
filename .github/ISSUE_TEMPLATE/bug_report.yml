@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect in a Machize package
+description: Report a defect in a Basalt package
 labels: ["bug", "triage"]
 body:
   - type: markdown
@@ -11,8 +11,8 @@ body:
     id: package
     attributes:
       label: Package
-      description: Which package(s)? e.g. @machize/tenancy
-      placeholder: "@machize/..."
+      description: Which package(s)? e.g. @basaltkit/tenancy
+      placeholder: "@basaltkit/..."
     validations:
       required: true
   - type: input

@@ -1,6 +1,6 @@
-# Contributing to Machize
+# Contributing to Basalt
 
-Thanks for helping build Machize. This guide covers the setup, the workflow and
+Thanks for helping build Basalt. This guide covers the setup, the workflow and
 the conventions that keep the monorepo coherent.
 
 ## Setup
@@ -18,15 +18,15 @@ pnpm typecheck
 To work on a single package:
 
 ```bash
-pnpm --filter @machize/core test
-pnpm --filter @machize/core build
+pnpm --filter @basaltkit/core test
+pnpm --filter @basaltkit/core build
 ```
 
 ### Integration tests
 
 Two levels of database integration:
 
-- **In-process (default `pnpm test`)** — `@machize/prisma` runs against real
+- **In-process (default `pnpm test`)** — `@basaltkit/prisma` runs against real
   PostgreSQL via [pglite](https://github.com/electric-sql/pglite) (WASM, no
   server), covering `CREATE SCHEMA`, per-tenant `search_path` isolation and
   tenant-scoped filtering everywhere, including CI.
@@ -37,7 +37,7 @@ Two levels of database integration:
 
   ```bash
   docker compose up -d
-  export TEST_DATABASE_URL=postgresql://machize:machize@localhost:5432/machize
+  export TEST_DATABASE_URL=postgresql://basalt:basalt@localhost:5432/basalt
   pnpm --filter pg-integration prisma:generate
   pnpm --filter pg-integration db:push
   pnpm --filter pg-integration test:integration
@@ -55,7 +55,7 @@ Two levels of database integration:
    pnpm changeset
    ```
    Pick the affected packages and the bump type (patch/minor/major). The
-   `@machize/*` packages are versioned in lockstep — bumping one bumps all.
+   `@basaltkit/*` packages are versioned in lockstep — bumping one bumps all.
 4. **Open a pull request.** CI runs build, typecheck and tests on the supported
    Node versions; all must pass.
 
@@ -64,7 +64,7 @@ Two levels of database integration:
 - **TypeScript, strict.** No `any` at API boundaries; let inference flow from
   Zod schemas through to callers.
 - **Comments and error messages in English.** This is an international project.
-- **Stable error codes are API.** The `code` on a `MachizeError` subclass is
+- **Stable error codes are API.** The `code` on a `BasaltError` subclass is
   part of the contract — renaming one is a breaking change.
 - **The dependency-layer rule.** A package may only depend on packages in a
   lower layer (foundation → infrastructure → domain → product). Same-layer
@@ -72,7 +72,7 @@ Two levels of database integration:
   See [ARCHITECTURE.md](./ARCHITECTURE.md) §2.
 - **Every driver passes the same conformance suite.** New cache/storage/queue/
   mail drivers must satisfy the shared contract and its tests.
-- **Prefer fakes over mocks.** Use the in-memory stores and `@machize/testing`
+- **Prefer fakes over mocks.** Use the in-memory stores and `@basaltkit/testing`
   fakes; assert on behavior, not on call counts where a fake will do.
 
 ## Reporting bugs

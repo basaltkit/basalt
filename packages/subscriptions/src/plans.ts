@@ -1,6 +1,6 @@
-import { MachizeError, type DurationInput } from '@machize/core'
+import { BasaltError, type DurationInput } from '@basaltkit/core'
 
-export class UnknownPlanError extends MachizeError {
+export class UnknownPlanError extends BasaltError {
   constructor(plan: string) {
     super('BILLING_UNKNOWN_PLAN', `Plan "${plan}" is not defined in definePlans().`)
   }

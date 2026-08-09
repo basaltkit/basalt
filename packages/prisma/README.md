@@ -1,6 +1,6 @@
-# @machize/prisma
+# @basaltkit/prisma
 
-Machize's integration with Prisma: connects your application to the database in a multi-tenant way — each customer (tenant) automatically sees only their own data. You need this module when your SaaS application uses Prisma and serves multiple customers with data isolated from each other.
+Basalt's integration with Prisma: connects your application to the database in a multi-tenant way — each customer (tenant) automatically sees only their own data. You need this module when your SaaS application uses Prisma and serves multiple customers with data isolated from each other.
 
 ## What this module solves
 
@@ -17,10 +17,10 @@ In any mode, `prismaPlugin` puts the right client into each request's context �
 ## Installation
 
 ```bash
-pnpm add @machize/prisma
+pnpm add @basaltkit/prisma
 ```
 
-Depends on `@machize/core` and `@machize/cli`. Prisma itself is an optional *peer dependency* — install it in your project if you don't already have it:
+Depends on `@basaltkit/core` and `@basaltkit/cli`. Prisma itself is an optional *peer dependency* — install it in your project if you don't already have it:
 
 ```bash
 pnpm add @prisma/client   # requires version >= 5.0.0
@@ -47,8 +47,8 @@ model Project {
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { createApp } from '@machize/core'
-import { prismaPlugin, tenancyExtension } from '@machize/prisma'
+import { createApp } from '@basaltkit/core'
+import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 
 // The shared client: every query is filtered by the current context's tenant
 const prisma = new PrismaClient().$extends(tenancyExtension())
@@ -64,7 +64,7 @@ const app = await createApp({
 3. **Use `db()` anywhere in a request's code** — the client already comes from the context:
 
 ```ts
-import { db } from '@machize/prisma'
+import { db } from '@basaltkit/prisma'
 import type { PrismaClient } from '@prisma/client'
 
 // Inside an HTTP handler (the tenant has already been identified by the framework):
@@ -86,7 +86,7 @@ The extension covers every operation on every model:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { tenancyExtension } from '@machize/prisma'
+import { tenancyExtension } from '@basaltkit/prisma'
 
 const prisma = new PrismaClient().$extends(
   tenancyExtension({
@@ -106,8 +106,8 @@ Each tenant has its own schema (`tenant_acme`, `tenant_globex`, …) in the same
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { createApp } from '@machize/core'
-import { prismaPlugin } from '@machize/prisma'
+import { createApp } from '@basaltkit/core'
+import { prismaPlugin } from '@basaltkit/prisma'
 
 const app = await createApp({
   plugins: [
@@ -128,7 +128,7 @@ The schema name is derived with `tenantSchema(tenantId)`: lowercase, `[a-z0-9_]`
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { provisionTenantSchema, tenantSchema } from '@machize/prisma'
+import { provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
 
 const admin = new PrismaClient() // administrative connection
 const schema = tenantSchema('acme')          // 'tenant_acme'
@@ -141,8 +141,8 @@ Maximum isolation: you provide a function that creates the client for a tenant i
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { createApp } from '@machize/core'
-import { prismaPlugin } from '@machize/prisma'
+import { createApp } from '@basaltkit/core'
+import { prismaPlugin } from '@basaltkit/prisma'
 
 const app = await createApp({
   plugins: [
@@ -163,7 +163,7 @@ You can combine `client` (for the central, tenant-less context) with `forTenant`
 ### `db()` — the current context's client
 
 ```ts
-import { db } from '@machize/prisma'
+import { db } from '@basaltkit/prisma'
 import type { PrismaClient } from '@prisma/client'
 
 const projects = await db<PrismaClient>().project.findMany()
@@ -177,7 +177,7 @@ A **migration** applies structural changes (new tables, columns…) to the datab
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { migrateTenants } from '@machize/prisma'
+import { migrateTenants } from '@basaltkit/prisma'
 
 const admin = new PrismaClient()
 
@@ -199,12 +199,12 @@ By default each tenant is migrated with `prismaMigrator()`, which runs `npx pris
 
 ### `tenant:migrate` CLI command
 
-A ready-to-use command-line version — register it with `@machize/cli`'s `commandsPlugin`:
+A ready-to-use command-line version — register it with `@basaltkit/cli`'s `commandsPlugin`:
 
 ```ts
-import { createApp } from '@machize/core'
-import { commandsPlugin } from '@machize/cli'
-import { tenantMigrateCommand } from '@machize/prisma'
+import { createApp } from '@basaltkit/core'
+import { commandsPlugin } from '@basaltkit/cli'
+import { tenantMigrateCommand } from '@basaltkit/prisma'
 
 const app = createApp({
   plugins: [
@@ -218,7 +218,7 @@ const app = createApp({
 })
 ```
 
-Running `mach tenant:migrate` prints a report per tenant (`ok`/`FAIL`) and exits with a non-zero code if any tenant failed — ideal for CI/CD pipelines.
+Running `basalt tenant:migrate` prints a report per tenant (`ok`/`FAIL`) and exits with a non-zero code if any tenant failed — ideal for CI/CD pipelines.
 
 ## API reference
 
@@ -312,7 +312,7 @@ Default migrator: runs `npx prisma migrate deploy` in a child process, with the 
 
 ### `tenantMigrateCommand(config: TenantMigrateCommandConfig)`
 
-Returns a `CommandDefinition` (`@machize/cli`) named `tenant:migrate`.
+Returns a `CommandDefinition` (`@basaltkit/cli`) named `tenant:migrate`.
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
@@ -359,8 +359,8 @@ It needs the Prisma CLI available (`pnpm add -D prisma`), and if `schema.prisma`
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides `createApp`, the container, the hooks, and the request context; this module adds `ctx().db` to `RequestContext`.
-- **`@machize/tenancy`** — identifies each request's tenant and emits `tenancy:switched`; without a tenant in context, the extension bypasses (or throws, depending on configuration) and the plugin uses the central client.
-- **`@machize/cli`** — `tenantMigrateCommand` is a `defineCommand` command registered via `commandsPlugin` and run with the `mach` binary.
-- **`@machize/http` / `@machize/express` / `@machize/fastify` / `@machize/hono`** — the plugin registers an HTTP *enricher* that attaches the client to each request's context, so `db()` works in handlers.
-- **`@machize/cache`** — combines `db()` with `cache.remember(...)` to speed up expensive queries, with consistent per-tenant isolation across both modules.
+- **`@basaltkit/core`** — provides `createApp`, the container, the hooks, and the request context; this module adds `ctx().db` to `RequestContext`.
+- **`@basaltkit/tenancy`** — identifies each request's tenant and emits `tenancy:switched`; without a tenant in context, the extension bypasses (or throws, depending on configuration) and the plugin uses the central client.
+- **`@basaltkit/cli`** — `tenantMigrateCommand` is a `defineCommand` command registered via `commandsPlugin` and run with the `basalt` binary.
+- **`@basaltkit/http` / `@basaltkit/express` / `@basaltkit/fastify` / `@basaltkit/hono`** — the plugin registers an HTTP *enricher* that attaches the client to each request's context, so `db()` works in handlers.
+- **`@basaltkit/cache`** — combines `db()` with `cache.remember(...)` to speed up expensive queries, with consistent per-tenant isolation across both modules.

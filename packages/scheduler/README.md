@@ -1,6 +1,6 @@
-# @machize/scheduler
+# @basaltkit/scheduler
 
-Task scheduler for Machize applications: define, with a fluent, readable API (`daily().at('03:00')`), tasks that run automatically at set times — backups, reports, cleanups, billing.
+Task scheduler for Basalt applications: define, with a fluent, readable API (`daily().at('03:00')`), tasks that run automatically at set times — backups, reports, cleanups, billing.
 
 You need this module whenever you want something to happen **on a schedule**, rather than in response to a user request.
 
@@ -17,18 +17,18 @@ It also handles the annoying problems: **timezones** (schedule at 03:00 in Lisbo
 ## Installation
 
 ```bash
-pnpm add @machize/scheduler
+pnpm add @basaltkit/scheduler
 ```
 
-Depends on `@machize/core` and integrates (optionally) with `@machize/queue`.
+Depends on `@basaltkit/core` and integrates (optionally) with `@basaltkit/queue`.
 
 ## Getting started in 5 minutes
 
 **1. Register the plugin and define the schedules** (e.g. `src/app.ts`):
 
 ```ts
-import { createApp } from '@machize/core'
-import { schedulerPlugin } from '@machize/scheduler'
+import { createApp } from '@basaltkit/core'
+import { schedulerPlugin } from '@basaltkit/scheduler'
 
 const app = await createApp({
   plugins: [
@@ -55,7 +55,7 @@ const app = await createApp({
 To see what's scheduled:
 
 ```ts
-import { SCHEDULER } from '@machize/scheduler'
+import { SCHEDULER } from '@basaltkit/scheduler'
 
 console.log(app.container.get(SCHEDULER).list())
 // [{ name: 'heartbeat', cron: '* * * * *', timezone: 'UTC' },
@@ -69,7 +69,7 @@ console.log(app.container.get(SCHEDULER).list())
 Each method returns the entry itself, so they can be chained:
 
 ```ts
-import { Scheduler } from '@machize/scheduler'
+import { Scheduler } from '@basaltkit/scheduler'
 
 const schedule = new Scheduler()
 
@@ -138,12 +138,12 @@ schedule
 
 ### Scheduling queue jobs: `schedule.job()`
 
-Instead of running the task in the scheduler's own process, you can schedule the **dispatch** of an `@machize/queue` job — the heavy lifting runs on the worker, with retries and context:
+Instead of running the task in the scheduler's own process, you can schedule the **dispatch** of an `@basaltkit/queue` job — the heavy lifting runs on the worker, with retries and context:
 
 ```ts
-import { createApp } from '@machize/core'
-import { defineJob, queuePlugin } from '@machize/queue'
-import { schedulerPlugin } from '@machize/scheduler'
+import { createApp } from '@basaltkit/core'
+import { defineJob, queuePlugin } from '@basaltkit/queue'
+import { schedulerPlugin } from '@basaltkit/scheduler'
 import { z } from 'zod'
 
 const ReconcileBilling = defineJob({
@@ -171,7 +171,7 @@ The entry is named after the job (`billing.reconcile`). If the job takes no payl
 `tick(date)` runs everything due at that exact instant — no real timers involved:
 
 ```ts
-import { Scheduler } from '@machize/scheduler'
+import { Scheduler } from '@basaltkit/scheduler'
 
 const scheduler = new Scheduler()
 let runs = 0
@@ -188,7 +188,7 @@ In tests with the plugin, pass `autostart: false` so the timer doesn't start.
 
 ### `schedulerPlugin(options?: SchedulerPluginOptions)`
 
-Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it calls `define`, publishes the entries to the container's metadata (key `schedule:entries`, consumed by the `mach schedule:list` CLI) and starts the timer; on `shutdown` it calls `stop()`.
+Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it calls `define`, publishes the entries to the container's metadata (key `schedule:entries`, consumed by the `basalt schedule:list` CLI) and starts the timer; on `shutdown` it calls `stop()`.
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
@@ -200,7 +200,7 @@ Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it ca
 | Method | Signature | Description |
 |---|---|---|
 | `call` | `(name: string, task: () => void \| Promise<void>) => ScheduleEntry` | Schedules a function with a name. |
-| `job` | `<T>(job: JobDefinition<T>, payload?) => ScheduleEntry` | Schedules the `dispatch` of an `@machize/queue` job (payload required if the job needs one). |
+| `job` | `<T>(job: JobDefinition<T>, payload?) => ScheduleEntry` | Schedules the `dispatch` of an `@basaltkit/queue` job (payload required if the job needs one). |
 | `list` | `() => { name, cron, timezone }[]` | Describes all entries. |
 | `tick` | `(date?: Date) => Promise<void>` | Runs the entries due at that instant (default: now). Aggregates failures without `onFailure` into an `AggregateError`. |
 | `start` | `() => void` | Aligns to the next minute and then `tick()`s every 60s. Idempotent. |
@@ -232,7 +232,7 @@ Exported for tooling and tests; you don't usually need them:
 | `cronMatches` | `(fields: CronFields, date: Date, timeZone?: string) => boolean` | Does the instant match the expression (in the given timezone)? |
 | `fieldMatches` | `(field: string, value: number) => boolean` | Does a field (`*`, `*/n`, `a-b`, `a,b,c`, value) accept the number? |
 | `zonedParts` | `(date: Date, timeZone = 'UTC') => ZonedParts` | Breaks the instant down into minute/hour/day/month/day-of-week in the timezone. |
-| `CronParseError` | class (`MachizeError`, code `CRON_INVALID`) | Invalid cron expression. |
+| `CronParseError` | class (`BasaltError`, code `CRON_INVALID`) | Invalid cron expression. |
 | `CronFields`, `ZonedParts` | types | Cron fields as strings; numeric parts of the instant. |
 
 ### Token
@@ -261,7 +261,7 @@ Pass `autostart: false` to the plugin, or call `scheduler.stop()`. (The timers u
 
 ## How it connects to other modules
 
-- **`@machize/core`** — `schedulerPlugin` is a core plugin (register/boot/shutdown); entries are published to the container's metadata registry (`ensureMetadata` → key `schedule:entries`) for the `mach schedule:list` CLI; `CronParseError` extends `MachizeError`.
-- **`@machize/queue`** — `schedule.job(MyJob, payload)` schedules a job's *dispatch*: the scheduler only enqueues it; execution, retries and context are handled by the queue and its workers. This is the recommended pattern for heavy or critical tasks.
-- **`@machize/logger`** — use the logger inside tasks/`onFailure` to get structured traces of the runs.
-- **`@machize/audit` / `@machize/activity`** — scheduled tasks can record audit or activity entries (e.g. `audit.record('maintenance.run')`) to leave a trail of the automated work.
+- **`@basaltkit/core`** — `schedulerPlugin` is a core plugin (register/boot/shutdown); entries are published to the container's metadata registry (`ensureMetadata` → key `schedule:entries`) for the `basalt schedule:list` CLI; `CronParseError` extends `BasaltError`.
+- **`@basaltkit/queue`** — `schedule.job(MyJob, payload)` schedules a job's *dispatch*: the scheduler only enqueues it; execution, retries and context are handled by the queue and its workers. This is the recommended pattern for heavy or critical tasks.
+- **`@basaltkit/logger`** — use the logger inside tasks/`onFailure` to get structured traces of the runs.
+- **`@basaltkit/audit` / `@basaltkit/activity`** — scheduled tasks can record audit or activity entries (e.g. `audit.record('maintenance.run')`) to leave a trail of the automated work.

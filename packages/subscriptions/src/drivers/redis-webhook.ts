@@ -13,7 +13,7 @@ export interface RedisWebhookClient {
 }
 
 export interface RedisWebhookStoreOptions {
-  /** Key prefix. Default: 'mach:webhook'. */
+  /** Key prefix. Default: 'basalt:webhook'. */
   prefix?: string
   /**
    * How long a processed id stays deduplicated, in seconds. Cover the
@@ -35,7 +35,7 @@ export class RedisWebhookStore implements WebhookStore {
     private readonly redis: RedisWebhookClient,
     options: RedisWebhookStoreOptions = {},
   ) {
-    this.prefix = options.prefix ?? 'mach:webhook'
+    this.prefix = options.prefix ?? 'basalt:webhook'
     this.ttlSeconds = options.ttlSeconds ?? 7 * 24 * 60 * 60
   }
 

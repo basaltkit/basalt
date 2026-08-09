@@ -1,4 +1,4 @@
-import type { CacheDriver } from '@machize/cache'
+import type { CacheDriver } from '@basaltkit/cache'
 
 export interface TieredCacheOptions {
   /**

@@ -20,7 +20,7 @@ function hostOf(request: ResolutionRequest): string | undefined {
   return host?.split(':')[0]
 }
 
-/** acme.machize.app → { id: 'acme' }. Ignores the bare base domain and 'www'. */
+/** acme.basalt.app → { id: 'acme' }. Ignores the bare base domain and 'www'. */
 export function subdomainResolver(options: { base: string }): TenantResolver {
   const suffix = `.${options.base}`
   return (request) => {

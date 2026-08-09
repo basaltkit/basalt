@@ -1,6 +1,6 @@
-# @machize/mailer
+# @basaltkit/mailer
 
-Email layer for the Machize framework: define typed emails once and send them via SMTP, to the console (development), or to memory (tests). You need this module whenever your application has to send emails — welcome messages, invoices, password recovery, etc.
+Email layer for the Basalt framework: define typed emails once and send them via SMTP, to the console (development), or to memory (tests). You need this module whenever your application has to send emails — welcome messages, invoices, password recovery, etc.
 
 ## What this module solves
 
@@ -13,7 +13,7 @@ The actual sending is done by a **driver** (the component that knows how to talk
 ## Installation
 
 ```bash
-pnpm add @machize/mailer
+pnpm add @basaltkit/mailer
 ```
 
 If you want to validate email data (recommended), also install Zod:
@@ -28,7 +28,7 @@ pnpm add zod
 
 ```ts
 // src/mails/welcome.ts
-import { defineMail } from '@machize/mailer'
+import { defineMail } from '@basaltkit/mailer'
 import { z } from 'zod'
 
 export const WelcomeEmail = defineMail({
@@ -40,12 +40,12 @@ export const WelcomeEmail = defineMail({
 })
 ```
 
-2. **Register the plugin** on your Machize application. In development, use the `log` driver (the default), which just prints to the console:
+2. **Register the plugin** on your Basalt application. In development, use the `log` driver (the default), which just prints to the console:
 
 ```ts
 // src/app.ts
-import { createApp } from '@machize/core'
-import { mailerPlugin } from '@machize/mailer'
+import { createApp } from '@basaltkit/core'
+import { mailerPlugin } from '@basaltkit/mailer'
 
 const app = await createApp({
   plugins: [
@@ -54,10 +54,10 @@ const app = await createApp({
 }).boot()
 ```
 
-3. **Send the email.** Get the `Mailer` from the application container via the `MAILER` token (a *token* is the "key" you use to request a registered service from the Machize dependency container):
+3. **Send the email.** Get the `Mailer` from the application container via the `MAILER` token (a *token* is the "key" you use to request a registered service from the Basalt dependency container):
 
 ```ts
-import { MAILER } from '@machize/mailer'
+import { MAILER } from '@basaltkit/mailer'
 import { WelcomeEmail } from './mails/welcome.js'
 
 const mailer = app.container.get(MAILER)
@@ -88,7 +88,7 @@ mailerPlugin({
 An "email template" here is a definition in code: name + schema + rendering functions. Emails without data are also possible (omit the `schema` and skip the parameter):
 
 ```ts
-import { defineMail } from '@machize/mailer'
+import { defineMail } from '@basaltkit/mailer'
 
 const Ping = defineMail({ name: 'ping', subject: () => 'Ping', text: () => 'pong' })
 
@@ -117,7 +117,7 @@ If `to` or `from` is missing, a `MailIncompleteError` is thrown (code `MAIL_INCO
 In a multi-tenant SaaS application (several customers on the same application), each customer may want its own sender. The `from` option accepts a function, evaluated on each send. The `tenantFrom` helper reads `ctx().tenant.mailFrom` from the request context:
 
 ```ts
-import { mailerPlugin, tenantFrom } from '@machize/mailer'
+import { mailerPlugin, tenantFrom } from '@basaltkit/mailer'
 
 mailerPlugin({ driver: 'smtp', smtp: { url: process.env.SMTP_URL! }, from: tenantFrom('fallback@myapp.com') })
 ```
@@ -126,11 +126,11 @@ Inside a request whose context has `tenant.mailFrom`, that address is used; othe
 
 ### Sending in the background (queue)
 
-By default, `send()` sends immediately (blocks until the driver finishes). With `useQueue`, `send()` instead delivers the already-rendered message to a dispatcher — typically a `@machize/queue` job — and the worker calls `deliver()`:
+By default, `send()` sends immediately (blocks until the driver finishes). With `useQueue`, `send()` instead delivers the already-rendered message to a dispatcher — typically a `@basaltkit/queue` job — and the worker calls `deliver()`:
 
 ```ts
-import { defineJob } from '@machize/queue'
-import type { ResolvedMail } from '@machize/mailer'
+import { defineJob } from '@basaltkit/queue'
+import type { ResolvedMail } from '@basaltkit/mailer'
 
 const SendMail = defineJob({ name: 'mailer.send', handle: (m: ResolvedMail) => mailer.deliver(m) })
 mailer.useQueue((m) => SendMail.dispatch(m))
@@ -141,7 +141,7 @@ mailer.useQueue((m) => SendMail.dispatch(m))
 `MemoryMailDriver` stores everything you "sent":
 
 ```ts
-import { Mailer, MemoryMailDriver } from '@machize/mailer'
+import { Mailer, MemoryMailDriver } from '@basaltkit/mailer'
 
 const driver = new MemoryMailDriver()
 const mailer = new Mailer(driver, { from: 'noreply@test.dev' })
@@ -233,7 +233,7 @@ All implement `MailDriver` (`name`, `send(message)`, `disconnect()`):
 
 ## How it connects to other modules
 
-- **@machize/core** — provides `createApp`, the dependency container where `MAILER` is registered, and the context (`ctx`) used by `tenantFrom`.
-- **@machize/notifications** — when the mailer is registered, the notifications plugin automatically creates the `mail` channel, which sends emails through this module (inheriting queueing and per-tenant sender).
-- **@machize/queue** — combine with `useQueue` to send emails in the background with retries.
-- **@machize/subscriptions** — billing hooks (e.g. `billing:trial_expired`) are a natural place to trigger emails defined here.
+- **@basaltkit/core** — provides `createApp`, the dependency container where `MAILER` is registered, and the context (`ctx`) used by `tenantFrom`.
+- **@basaltkit/notifications** — when the mailer is registered, the notifications plugin automatically creates the `mail` channel, which sends emails through this module (inheriting queueing and per-tenant sender).
+- **@basaltkit/queue** — combine with `useQueue` to send emails in the background with retries.
+- **@basaltkit/subscriptions** — billing hooks (e.g. `billing:trial_expired`) are a natural place to trigger emails defined here.

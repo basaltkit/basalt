@@ -63,7 +63,7 @@ describe('Resource', () => {
   })
 
   it('validates input, mapping errors to field names', () => {
-    expect(resource.validate({ name: 'Machize', status: 'draft' })).toMatchObject({ success: true })
+    expect(resource.validate({ name: 'Basalt', status: 'draft' })).toMatchObject({ success: true })
     const failed = resource.validate({ name: 'ab', status: 'nope' })
     expect(failed.success).toBe(false)
     expect(failed.errors).toHaveProperty('name')

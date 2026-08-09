@@ -1,6 +1,6 @@
 # Packages
 
-Machize is a set of small, focused packages under the `@machize/*` scope. Each
+Basalt is a set of small, focused packages under the `@basaltkit/*` scope. Each
 works on its own; together they form the framework. Versions move in lockstep
 (currently **0.31.0**, 69 packages).
 
@@ -8,76 +8,76 @@ works on its own; together they form the framework. Versions move in lockstep
 
 | Package | Purpose |
 |---|---|
-| `@machize/core` | DI container, plugin lifecycle, `AsyncLocalStorage` context, hooks |
-| `@machize/config` | Namespaced, typed configuration with dot-path access |
-| `@machize/env` | Zod-validated environment variables with an aggregated report |
-| `@machize/events` | Typed domain event bus with wildcards and priorities; transactional outbox |
-| `@machize/events-sqlite` · `@machize/events-prisma` | Durable backends for the `@machize/events` OutboxStore — crash-safe transactional outbox; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
-| `@machize/logger` | Pino logger, auto-enriched with request/tenant context, redaction |
+| `@basaltkit/core` | DI container, plugin lifecycle, `AsyncLocalStorage` context, hooks |
+| `@basaltkit/config` | Namespaced, typed configuration with dot-path access |
+| `@basaltkit/env` | Zod-validated environment variables with an aggregated report |
+| `@basaltkit/events` | Typed domain event bus with wildcards and priorities; transactional outbox |
+| `@basaltkit/events-sqlite` · `@basaltkit/events-prisma` | Durable backends for the `@basaltkit/events` OutboxStore — crash-safe transactional outbox; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
+| `@basaltkit/logger` | Pino logger, auto-enriched with request/tenant context, redaction |
 
 ## HTTP
 
 | Package | Purpose |
 |---|---|
-| `@machize/http` | Framework-neutral core — typed routes, pipeline, error mapping, edge plugins |
-| `@machize/fastify` · `@machize/express` · `@machize/hono` | Adapters — the same routes run on any of them |
-| `@machize/sdk` | Type-safe client inferred from Zod endpoint definitions |
+| `@basaltkit/http` | Framework-neutral core — typed routes, pipeline, error mapping, edge plugins |
+| `@basaltkit/fastify` · `@basaltkit/express` · `@basaltkit/hono` | Adapters — the same routes run on any of them |
+| `@basaltkit/sdk` | Type-safe client inferred from Zod endpoint definitions |
 
 ## Data & infrastructure
 
 | Package | Purpose |
 |---|---|
-| `@machize/prisma` | Tenant-scoping client extension, per-tenant LRU client pool, `ctx().db` |
-| `@machize/cache` | Redis/Memory drivers, tags, TTL, stampede protection, per-tenant keys |
-| `@machize/cache-tiered` | Multi-level cache driver — in-process near cache in front of Redis |
-| `@machize/storage` | Local/S3/MinIO under one contract, tenant isolation, signed URLs |
-| `@machize/storage-gcs` · `@machize/storage-azure` | Google Cloud Storage & Azure Blob drivers |
-| `@machize/mailer` | Typed declarative mails, SMTP/log/memory drivers, tenant sender |
-| `@machize/scheduler` | Fluent cron: `schedule.job(X).daily().at('03:00')` |
+| `@basaltkit/prisma` | Tenant-scoping client extension, per-tenant LRU client pool, `ctx().db` |
+| `@basaltkit/cache` | Redis/Memory drivers, tags, TTL, stampede protection, per-tenant keys |
+| `@basaltkit/cache-tiered` | Multi-level cache driver — in-process near cache in front of Redis |
+| `@basaltkit/storage` | Local/S3/MinIO under one contract, tenant isolation, signed URLs |
+| `@basaltkit/storage-gcs` · `@basaltkit/storage-azure` | Google Cloud Storage & Azure Blob drivers |
+| `@basaltkit/mailer` | Typed declarative mails, SMTP/log/memory drivers, tenant sender |
+| `@basaltkit/scheduler` | Fluent cron: `schedule.job(X).daily().at('03:00')` |
 
 ## Queues
 
 | Package | Purpose |
 |---|---|
-| `@machize/queue` | Declarative jobs, context propagation, pluggable driver + capability checks |
-| `@machize/queue-rabbitmq` | RabbitMQ driver — retries, backoff, delay, priority via DLX |
-| `@machize/queue-kafka` | Kafka driver — produce/consume with retry + dead-letter topics |
-| `@machize/queue-sqs` | Amazon SQS driver — native delay, retries with backoff, DLQ |
+| `@basaltkit/queue` | Declarative jobs, context propagation, pluggable driver + capability checks |
+| `@basaltkit/queue-rabbitmq` | RabbitMQ driver — retries, backoff, delay, priority via DLX |
+| `@basaltkit/queue-kafka` | Kafka driver — produce/consume with retry + dead-letter topics |
+| `@basaltkit/queue-sqs` | Amazon SQS driver — native delay, retries with backoff, DLQ |
 
 ## SaaS domain
 
 | Package | Purpose |
 |---|---|
-| `@machize/tenancy` | Resolvers, per-request tenant context, lifecycle hooks |
-| `@machize/tenancy-sqlite` · `@machize/tenancy-prisma` | Durable backends for the `@machize/tenancy` TenantSource — persist the tenant registry and custom domains; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
-| `@machize/auth` | Password hashing, JWT + refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
-| `@machize/auth-sqlite` | Durable SQLite (`node:sqlite`) backend for every `@machize/auth` store — survives restarts, zero deps |
-| `@machize/auth-prisma` | Prisma backend for every `@machize/auth` store — Postgres/MySQL, ships a reference schema, pass your `PrismaClient` |
-| `@machize/permissions` | Roles, wildcard permissions, policies, tenant scoping, super admin |
-| `@machize/permissions-sqlite` · `@machize/permissions-prisma` | Durable backends for the `@machize/permissions` AccessStore — SQLite (zero-dep) and Prisma (Postgres/MySQL) |
-| `@machize/teams` | Multi-user tenants — roles, email invitations, membership, `teamRole` guard |
-| `@machize/teams-sqlite` · `@machize/teams-prisma` | Durable backends for the `@machize/teams` stores — SQLite (`node:sqlite`, zero-dep) and Prisma (Postgres/MySQL) |
-| `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, hosted Checkout & Portal, proration |
-| `@machize/subscriptions-sqlite` · `@machize/subscriptions-prisma` | Durable backends for the subscription, usage (atomic `consume`) and webhook stores — SQLite (zero-dep) and Prisma (Postgres/MySQL) |
-| `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
-| `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
-| `@machize/webhooks-sqlite` · `@machize/webhooks-prisma` | Durable backends for the `@machize/webhooks` WebhookStore — persist endpoint subscriptions across restarts; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
-| `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
-| `@machize/comments-sqlite` · `@machize/comments-prisma` | Durable backends for the `@machize/comments` CommentStore |
-| `@machize/audit-sqlite` · `@machize/audit-prisma` · `@machize/activity-sqlite` · `@machize/activity-prisma` · `@machize/notifications-sqlite` · `@machize/notifications-prisma` | Durable SQLite/Prisma backends for the audit, activity and in-app notification stores |
+| `@basaltkit/tenancy` | Resolvers, per-request tenant context, lifecycle hooks |
+| `@basaltkit/tenancy-sqlite` · `@basaltkit/tenancy-prisma` | Durable backends for the `@basaltkit/tenancy` TenantSource — persist the tenant registry and custom domains; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
+| `@basaltkit/auth` | Password hashing, JWT + refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
+| `@basaltkit/auth-sqlite` | Durable SQLite (`node:sqlite`) backend for every `@basaltkit/auth` store — survives restarts, zero deps |
+| `@basaltkit/auth-prisma` | Prisma backend for every `@basaltkit/auth` store — Postgres/MySQL, ships a reference schema, pass your `PrismaClient` |
+| `@basaltkit/permissions` | Roles, wildcard permissions, policies, tenant scoping, super admin |
+| `@basaltkit/permissions-sqlite` · `@basaltkit/permissions-prisma` | Durable backends for the `@basaltkit/permissions` AccessStore — SQLite (zero-dep) and Prisma (Postgres/MySQL) |
+| `@basaltkit/teams` | Multi-user tenants — roles, email invitations, membership, `teamRole` guard |
+| `@basaltkit/teams-sqlite` · `@basaltkit/teams-prisma` | Durable backends for the `@basaltkit/teams` stores — SQLite (`node:sqlite`, zero-dep) and Prisma (Postgres/MySQL) |
+| `@basaltkit/subscriptions` | Plans, trials, feature limits, gateway drivers, hosted Checkout & Portal, proration |
+| `@basaltkit/subscriptions-sqlite` · `@basaltkit/subscriptions-prisma` | Durable backends for the subscription, usage (atomic `consume`) and webhook stores — SQLite (zero-dep) and Prisma (Postgres/MySQL) |
+| `@basaltkit/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
+| `@basaltkit/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
+| `@basaltkit/webhooks-sqlite` · `@basaltkit/webhooks-prisma` | Durable backends for the `@basaltkit/webhooks` WebhookStore — persist endpoint subscriptions across restarts; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
+| `@basaltkit/audit` · `@basaltkit/activity` · `@basaltkit/notifications` | Audit trail, activity feed, multi-channel notifications |
+| `@basaltkit/comments-sqlite` · `@basaltkit/comments-prisma` | Durable backends for the `@basaltkit/comments` CommentStore |
+| `@basaltkit/audit-sqlite` · `@basaltkit/audit-prisma` · `@basaltkit/activity-sqlite` · `@basaltkit/activity-prisma` · `@basaltkit/notifications-sqlite` · `@basaltkit/notifications-prisma` | Durable SQLite/Prisma backends for the audit, activity and in-app notification stores |
 
 ## Capabilities
 
 | Package | Purpose |
 |---|---|
-| `@machize/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
-| `@machize/realtime-client` | Zero-dep browser client for `@machize/realtime` — subscribe channels, auto-reconnect |
-| `@machize/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch drivers, auto-sync from events |
-| `@machize/search-postgres` | PostgreSQL full-text driver (`tsvector`/`ts_rank`) for `@machize/search` |
-| `@machize/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, scan hooks |
-| `@machize/comments` | Per-resource comment threads — @mentions, resolve/reopen, events for realtime & notifications |
-| `@machize/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting |
-| `@machize/exports` · `@machize/exports-xlsx` | Typed data exports → CSV/TSV/JSON/NDJSON and a zero-dep XLSX formatter |
+| `@basaltkit/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
+| `@basaltkit/realtime-client` | Zero-dep browser client for `@basaltkit/realtime` — subscribe channels, auto-reconnect |
+| `@basaltkit/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch drivers, auto-sync from events |
+| `@basaltkit/search-postgres` | PostgreSQL full-text driver (`tsvector`/`ts_rank`) for `@basaltkit/search` |
+| `@basaltkit/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, scan hooks |
+| `@basaltkit/comments` | Per-resource comment threads — @mentions, resolve/reopen, events for realtime & notifications |
+| `@basaltkit/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting |
+| `@basaltkit/exports` · `@basaltkit/exports-xlsx` | Typed data exports → CSV/TSV/JSON/NDJSON and a zero-dep XLSX formatter |
 
 ## Self-contained UIs
 
@@ -85,19 +85,19 @@ Dependency-free HTML pages served over your existing JSON routes.
 
 | Package | Page |
 |---|---|
-| `@machize/audit-viewer` | `/audit/view` — browse the audit trail (filters, stats) |
-| `@machize/api-keys-ui` | `/apikeys/ui` — create/list/revoke API keys |
-| `@machize/teams-ui` | `/team/ui` — invitations & members |
-| `@machize/billing-ui` | `/billing/ui` — plans, Checkout, Customer Portal |
+| `@basaltkit/audit-viewer` | `/audit/view` — browse the audit trail (filters, stats) |
+| `@basaltkit/api-keys-ui` | `/apikeys/ui` — create/list/revoke API keys |
+| `@basaltkit/teams-ui` | `/team/ui` — invitations & members |
+| `@basaltkit/billing-ui` | `/billing/ui` — plans, Checkout, Customer Portal |
 
 ## Developer experience & product
 
 | Package | Purpose |
 |---|---|
-| `create-machize` | Project scaffolder |
-| `@machize/cli` · `@machize/generator` | The `mach` command framework and `mach make` scaffolding |
-| `@machize/testing` | `createTestApp`, mail/queue fakes, time travel |
-| `@machize/admin` · `@machize/dashboard` · `@machize/admin-react` · `@machize/admin-shadcn` | Headless admin/dashboard engines + React and shadcn/ui bindings |
+| `create-basalt` | Project scaffolder |
+| `@basaltkit/cli` · `@basaltkit/generator` | The `basalt` command framework and `basalt make` scaffolding |
+| `@basaltkit/testing` | `createTestApp`, mail/queue fakes, time travel |
+| `@basaltkit/admin` · `@basaltkit/dashboard` · `@basaltkit/admin-react` · `@basaltkit/admin-shadcn` | Headless admin/dashboard engines + React and shadcn/ui bindings |
 
 ## The dependency rule
 

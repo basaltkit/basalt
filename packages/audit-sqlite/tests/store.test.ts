@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AuditEntry } from '@machize/audit'
+import type { AuditEntry } from '@basaltkit/audit'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openAuditDatabase, SqliteAuditStore, sqliteAuditStore } from '../src/index.js'
 
@@ -35,7 +35,7 @@ describe('SqliteAuditStore', () => {
 })
 
 describe('sqliteAuditStore + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-audit-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-audit-'))
   const file = join(dir, 'audit.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

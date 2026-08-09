@@ -1,6 +1,6 @@
 # Storage
 
-`@machize/storage` gives every backend one API — a **Disk** with
+`@basaltkit/storage` gives every backend one API — a **Disk** with
 `put`/`get`/`exists`/`delete`/`list` and signed `temporaryUrl`s — and scopes
 every path by tenant automatically. Local disk and S3 ship in the core; Google
 Cloud Storage and Azure Blob are drop-in driver packages.
@@ -10,7 +10,7 @@ Cloud Storage and Azure Blob are drop-in driver packages.
 ## Setup
 
 ```ts
-import { storagePlugin, STORAGE } from '@machize/storage'
+import { storagePlugin, STORAGE } from '@basaltkit/storage'
 
 storagePlugin({
   default: 'uploads',
@@ -34,8 +34,8 @@ The backend is chosen per disk. `local` and `s3` are strings; cloud drivers are
 instances (bring the SDK as a peer dependency):
 
 ```ts
-import { GcsStorageDriver } from '@machize/storage-gcs'
-import { AzureBlobStorageDriver } from '@machize/storage-azure'
+import { GcsStorageDriver } from '@basaltkit/storage-gcs'
+import { AzureBlobStorageDriver } from '@basaltkit/storage-azure'
 
 storagePlugin({
   disks: {
@@ -47,10 +47,10 @@ storagePlugin({
 
 | Driver | Package | Notes |
 | --- | --- | --- |
-| Local | `@machize/storage` | Filesystem — dev and single-node |
-| S3 | `@machize/storage` | AWS S3, MinIO, Cloudflare R2 (S3-compatible) |
-| GCS | `@machize/storage-gcs` | Google Cloud Storage |
-| Azure Blob | `@machize/storage-azure` | Azure Blob Storage (SAS signed URLs) |
+| Local | `@basaltkit/storage` | Filesystem — dev and single-node |
+| S3 | `@basaltkit/storage` | AWS S3, MinIO, Cloudflare R2 (S3-compatible) |
+| GCS | `@basaltkit/storage-gcs` | Google Cloud Storage |
+| Azure Blob | `@basaltkit/storage-azure` | Azure Blob Storage (SAS signed URLs) |
 
 ## Signed URLs
 
@@ -60,7 +60,7 @@ Hand a client a time-limited URL straight to the object, no proxying:
 const url = await disk.temporaryUrl('reports/q1.pdf', '15m')
 ```
 
-`@machize/files` builds an upload pipeline on top of this (validation, quota,
+`@basaltkit/files` builds an upload pipeline on top of this (validation, quota,
 metadata) — see the [File uploads guide](/guide/files).
 
 ## Writing a driver
@@ -68,7 +68,7 @@ metadata) — see the [File uploads guide](/guide/files).
 A driver implements the `StorageDriver` contract — six methods:
 
 ```ts
-import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@machize/storage'
+import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
 
 export class MyStorageDriver implements StorageDriver {
   readonly name = 'my-backend'
@@ -83,9 +83,9 @@ export class MyStorageDriver implements StorageDriver {
 ```
 
 Then plug it in as an instance: `disks: { d: { driver: new MyStorageDriver() } }`.
-The bundled cloud drivers ([`@machize/storage-gcs`][gcs], [`-azure`][az]) take an
+The bundled cloud drivers ([`@basaltkit/storage-gcs`][gcs], [`-azure`][az]) take an
 **injectable client**, so their logic is unit-tested with a fake — no cloud
 account. Do the same and your driver is testable in CI.
 
-[gcs]: https://github.com/Zebedeu/machize/tree/main/packages/storage-gcs
-[az]: https://github.com/Zebedeu/machize/tree/main/packages/storage-azure
+[gcs]: https://github.com/Zebedeu/basalt/tree/main/packages/storage-gcs
+[az]: https://github.com/Zebedeu/basalt/tree/main/packages/storage-azure

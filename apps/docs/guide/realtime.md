@@ -1,8 +1,8 @@
 # Realtime
 
-`@machize/realtime` pushes events from the server to connected clients over
+`@basaltkit/realtime` pushes events from the server to connected clients over
 WebSocket or SSE, with **per-tenant channels** and **presence**. Its browser
-half, [`@machize/realtime-client`](#browser-client), subscribes and reconnects.
+half, [`@basaltkit/realtime-client`](#browser-client), subscribes and reconnects.
 Together they turn a domain event into a live UI update, end to end.
 
 [[toc]]
@@ -10,8 +10,8 @@ Together they turn a domain event into a live UI update, end to end.
 ## Setup
 
 ```ts
-import { createApp } from '@machize/core'
-import { realtimePlugin, REALTIME } from '@machize/realtime'
+import { createApp } from '@basaltkit/core'
+import { realtimePlugin, REALTIME } from '@basaltkit/realtime'
 
 const app = await createApp({
   plugins: [realtimePlugin()],
@@ -32,7 +32,7 @@ adapter's socket/response and register it — the framework-specific part is jus
 those two lines.
 
 ```ts
-import { REALTIME_HUB, websocketConnection } from '@machize/realtime'
+import { REALTIME_HUB, websocketConnection } from '@basaltkit/realtime'
 
 // in your WebSocket upgrade handler, once the user is authenticated:
 const hub = app.container.get(REALTIME_HUB)
@@ -56,7 +56,7 @@ user may access a channel before calling `hub.subscribe`.
 **SSE** is the same, but you supply how to write to the response:
 
 ```ts
-import { sseConnection } from '@machize/realtime'
+import { sseConnection } from '@basaltkit/realtime'
 
 reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' })
 const conn = sseConnection(
@@ -74,7 +74,7 @@ Wire a domain hook straight to a channel — pushes happen without touching the
 emitting code:
 
 ```ts
-import { realtimePlugin, bridgeRule } from '@machize/realtime'
+import { realtimePlugin, bridgeRule } from '@basaltkit/realtime'
 
 realtimePlugin({
   bridge: [
@@ -106,7 +106,7 @@ pass a `RedisBackplane` so an emit on one node reaches clients on every node:
 
 ```ts
 import Redis from 'ioredis'
-import { realtimePlugin, RedisBackplane } from '@machize/realtime'
+import { realtimePlugin, RedisBackplane } from '@basaltkit/realtime'
 
 realtimePlugin({
   backplane: new RedisBackplane({ publisher: new Redis(url), subscriber: new Redis(url) }),
@@ -119,15 +119,15 @@ one node or many. Provide **two** clients: a subscriber connection can't publish
 
 ## Browser client
 
-`@machize/realtime-client` is a zero-dependency client using the browser's
+`@basaltkit/realtime-client` is a zero-dependency client using the browser's
 native `WebSocket`/`EventSource`.
 
 ```bash
-npm add @machize/realtime-client
+npm add @basaltkit/realtime-client
 ```
 
 ```ts
-import { createRealtimeClient } from '@machize/realtime-client'
+import { createRealtimeClient } from '@basaltkit/realtime-client'
 
 const client = createRealtimeClient({ url: 'wss://api.example.com/realtime' })
 

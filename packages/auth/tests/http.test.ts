@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '@machize/core'
-import { FASTIFY, fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { authPlugin, authRoutes, MemoryUserSource } from '../src/index.js'
 
 const boot = async () => {

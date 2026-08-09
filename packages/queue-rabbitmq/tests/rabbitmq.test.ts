@@ -63,8 +63,8 @@ describe('RabbitmqQueueDriver', () => {
     const msg = ch.sent.find((s) => s.queue === 'welcome')!
     expect(msg).toBeTruthy()
     expect(msg.options?.['priority']).toBe(5)
-    expect(header(msg, 'x-machize-job')).toBe('send-welcome')
-    expect(header(msg, 'x-machize-attempts')).toBe(1)
+    expect(header(msg, 'x-basalt-job')).toBe('send-welcome')
+    expect(header(msg, 'x-basalt-attempts')).toBe(1)
     // main queue asserted with priority support
     expect(ch.asserted.find((a) => a.queue === 'welcome')?.options?.['arguments']).toMatchObject({
       'x-max-priority': 10,
@@ -95,19 +95,19 @@ describe('RabbitmqQueueDriver', () => {
 
     // attempt 1 of 2 → re-enqueued to the delay queue as attempt 2, with backoff TTL
     ch.deliver(
-      { 'x-machize-job': 'send-welcome', 'x-machize-attempt': 1, 'x-machize-attempts': 2, 'x-machize-backoff-ms': 1000, 'x-machize-backoff-type': 'fixed' },
+      { 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': 1, 'x-basalt-attempts': 2, 'x-basalt-backoff-ms': 1000, 'x-basalt-backoff-type': 'fixed' },
       { name: 'Ada' },
     )
     await tick()
     const retry = ch.sent.find((s) => s.queue === 'welcome.delay')!
     expect(retry).toBeTruthy()
-    expect(header(retry, 'x-machize-attempt')).toBe(2)
+    expect(header(retry, 'x-basalt-attempt')).toBe(2)
     expect(retry.options?.['expiration']).toBe('1000')
     expect(ch.acked).toBe(1)
 
     // attempt 2 of 2 (final) → dead-lettered
     ch.deliver(
-      { 'x-machize-job': 'send-welcome', 'x-machize-attempt': 2, 'x-machize-attempts': 2 },
+      { 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': 2, 'x-basalt-attempts': 2 },
       { name: 'Ada' },
     )
     await tick()
@@ -125,7 +125,7 @@ describe('RabbitmqQueueDriver', () => {
     await ch.ready
 
     ch.deliver(
-      { 'x-machize-job': 'j', 'x-machize-attempt': 3, 'x-machize-attempts': 5, 'x-machize-backoff-ms': 1000, 'x-machize-backoff-type': 'exponential' },
+      { 'x-basalt-job': 'j', 'x-basalt-attempt': 3, 'x-basalt-attempts': 5, 'x-basalt-backoff-ms': 1000, 'x-basalt-backoff-type': 'exponential' },
       {},
     )
     await tick()
@@ -143,7 +143,7 @@ describe('RabbitmqQueueDriver', () => {
     driver.startWorker('welcome')
     await ch.ready
 
-    ch.deliver({ 'x-machize-job': 'send-welcome', 'x-machize-attempt': 1, 'x-machize-attempts': 1 }, { name: 'Ada' })
+    ch.deliver({ 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': 1, 'x-basalt-attempts': 1 }, { name: 'Ada' })
     await tick()
     expect(seen).toEqual([['send-welcome', { name: 'Ada' }]])
     expect(ch.acked).toBe(1)

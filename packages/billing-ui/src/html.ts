@@ -11,7 +11,7 @@ export interface BillingPageOptions {
  * subscription and the available plans, with Subscribe / Switch (hosted
  * Checkout) and Manage-billing (Customer Portal) actions. It reads
  * `GET {apiBase}/billing/info` and posts to `/billing/checkout` and
- * `/billing/portal` (see `billingUiRoutes` and `@machize/subscriptions`'
+ * `/billing/portal` (see `billingUiRoutes` and `@basaltkit/subscriptions`'
  * `billingRoutes`). Assumes an authenticated browser session.
  */
 export function billingPageHtml(options: BillingPageOptions = {}): string {

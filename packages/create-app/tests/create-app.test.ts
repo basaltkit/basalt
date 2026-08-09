@@ -7,7 +7,7 @@ import { createProject, detectPackageManager, TargetNotEmptyError } from '../src
 let root: string
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'create-machize-'))
+  root = await mkdtemp(join(tmpdir(), 'create-basalt-'))
 })
 
 afterEach(async () => {
@@ -38,15 +38,15 @@ describe('createProject', () => {
     expect(pkg.name).toBe('my-saas')
     // npm shows "name@undefined" in errors when version is missing.
     expect(pkg.version).toBe('0.1.0')
-    // Machize deps must point at a real published range, never a placeholder.
-    expect(pkg.dependencies['@machize/core']).toMatch(/^\^1\.\d+\.\d+$/)
-    expect(pkg.dependencies['@machize/core']).not.toBe('^0.0.0')
-    expect(pkg.dependencies).toHaveProperty('@machize/tenancy')
-    expect(pkg.dependencies).toHaveProperty('@machize/auth')
-    expect(pkg.dependencies).not.toHaveProperty('@machize/subscriptions')
-    expect(pkg.devDependencies).toHaveProperty('@machize/testing')
-    // Regression: the @machize range override loop once clobbered third-party
-    // ranges (zod ended up as "^0.1.0", which no @machize peer accepts).
+    // Basalt deps must point at a real published range, never a placeholder.
+    expect(pkg.dependencies['@basaltkit/core']).toMatch(/^\^1\.\d+\.\d+$/)
+    expect(pkg.dependencies['@basaltkit/core']).not.toBe('^0.0.0')
+    expect(pkg.dependencies).toHaveProperty('@basaltkit/tenancy')
+    expect(pkg.dependencies).toHaveProperty('@basaltkit/auth')
+    expect(pkg.dependencies).not.toHaveProperty('@basaltkit/subscriptions')
+    expect(pkg.devDependencies).toHaveProperty('@basaltkit/testing')
+    // Regression: the @basalt range override loop once clobbered third-party
+    // ranges (zod ended up as "^0.1.0", which no @basalt peer accepts).
     expect(pkg.dependencies.zod).toBe('^4.0.0')
 
     const app = await read(result.dir, 'src/app.ts')
@@ -69,9 +69,9 @@ describe('createProject', () => {
     })
 
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
-    expect(pkg.dependencies).not.toHaveProperty('@machize/tenancy')
-    expect(pkg.dependencies).not.toHaveProperty('@machize/auth')
-    expect(pkg.dependencies).toHaveProperty('@machize/subscriptions')
+    expect(pkg.dependencies).not.toHaveProperty('@basaltkit/tenancy')
+    expect(pkg.dependencies).not.toHaveProperty('@basaltkit/auth')
+    expect(pkg.dependencies).toHaveProperty('@basaltkit/subscriptions')
 
     const app = await read(result.dir, 'src/app.ts')
     expect(app).not.toContain('tenancyPlugin')
@@ -97,8 +97,8 @@ describe('createProject', () => {
     // the web package depends on the SDK + shadcn components
     const webPkg = JSON.parse(await read(result.dir, 'web/package.json'))
     expect(webPkg.name).toBe('withui-web')
-    expect(webPkg.dependencies).toHaveProperty('@machize/sdk')
-    expect(webPkg.dependencies).toHaveProperty('@machize/admin-shadcn')
+    expect(webPkg.dependencies).toHaveProperty('@basaltkit/sdk')
+    expect(webPkg.dependencies).toHaveProperty('@basaltkit/admin-shadcn')
 
     // with auth, the App ships a login/register gate + the api exposes auth endpoints
     const app = await read(result.dir, 'web/src/App.tsx')
@@ -116,33 +116,33 @@ describe('createProject', () => {
     expect(await read(noAuth.dir, 'web/src/api.ts')).not.toContain('/auth/login')
   })
 
-  it('scaffolds the mach CLI with --cli (bin + deps + registered commands)', async () => {
+  it('scaffolds the basalt CLI with --cli (bin + deps + registered commands)', async () => {
     const result = await createProject({ name: 'withcli', dir: join(root, 'withcli'), cli: true })
 
-    expect(result.files).toContain('bin/mach.ts')
+    expect(result.files).toContain('bin/basalt.ts')
 
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
-    expect(pkg.dependencies).toHaveProperty('@machize/cli')
-    expect(pkg.dependencies).toHaveProperty('@machize/generator')
-    expect(pkg.dependencies['@machize/generator']).toBe('^1.0.0')
-    expect(pkg.dependencies['@machize/cli']).toBe('^1.0.0')
-    expect(pkg.scripts.mach).toBe('tsx bin/mach.ts')
+    expect(pkg.dependencies).toHaveProperty('@basaltkit/cli')
+    expect(pkg.dependencies).toHaveProperty('@basaltkit/generator')
+    expect(pkg.dependencies['@basaltkit/generator']).toBe('^1.0.0')
+    expect(pkg.dependencies['@basaltkit/cli']).toBe('^1.0.0')
+    expect(pkg.scripts.basalt).toBe('tsx bin/basalt.ts')
 
-    const bin = await read(result.dir, 'bin/mach.ts')
-    expect(bin).toContain("import { runCli } from '@machize/cli'")
+    const bin = await read(result.dir, 'bin/basalt.ts')
+    expect(bin).toContain("import { runCli } from '@basaltkit/cli'")
     expect(bin).toContain('runCli({ app })')
 
     const app = await read(result.dir, 'src/app.ts')
     expect(app).toContain('commandsPlugin([...generatorCommands(), prismaSyncCommand()])')
-    expect(app).toContain("from '@machize/generator'")
+    expect(app).toContain("from '@basaltkit/generator'")
   })
 
-  it('omits the mach CLI by default', async () => {
+  it('omits the basalt CLI by default', async () => {
     const result = await createProject({ name: 'nocli', dir: join(root, 'nocli') })
-    expect(result.files).not.toContain('bin/mach.ts')
+    expect(result.files).not.toContain('bin/basalt.ts')
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
-    expect(pkg.dependencies).not.toHaveProperty('@machize/cli')
-    expect(pkg.scripts).not.toHaveProperty('mach')
+    expect(pkg.dependencies).not.toHaveProperty('@basaltkit/cli')
+    expect(pkg.scripts).not.toHaveProperty('basalt')
   })
 
   it('omits the web UI by default', async () => {

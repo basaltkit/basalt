@@ -5,8 +5,8 @@ This recipe adds the pieces a real SaaS needs around a signed-up user:
 **API keys**, **team invitations**, and **hosted billing** (Stripe Checkout,
 Customer Portal, and prorated plan changes).
 
-Everything here ships in `@machize/auth`, `@machize/teams`, and
-`@machize/subscriptions` (0.5.0+). The design rule throughout: **secrets travel
+Everything here ships in `@basaltkit/auth`, `@basaltkit/teams`, and
+`@basaltkit/subscriptions` (0.5.0+). The design rule throughout: **secrets travel
 by email, never in an HTTP response**, and enumeration is impossible — the
 "request" endpoints always answer `200`.
 
@@ -30,16 +30,16 @@ depends on your mailer.
 ## 1. Plugins
 
 ```ts
-import { createApp } from '@machize/core'
-import { fastifyPlugin } from '@machize/fastify'
-import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@machize/tenancy'
-import { mailerPlugin } from '@machize/mailer'
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin } from '@basaltkit/fastify'
+import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@basaltkit/tenancy'
+import { mailerPlugin } from '@basaltkit/mailer'
 import {
   authPlugin, authRoutes, apiKeysPlugin, apiKeyRoutes, mfaRoutes,
   MemoryUserSource,
-} from '@machize/auth'
-import { teamsPlugin, teamRoutes } from '@machize/teams'
-import { subscriptionsPlugin, billingRoutes, billingWebhookRoute, definePlans, StripeBillingGateway } from '@machize/subscriptions'
+} from '@basaltkit/auth'
+import { teamsPlugin, teamRoutes } from '@basaltkit/teams'
+import { subscriptionsPlugin, billingRoutes, billingWebhookRoute, definePlans, StripeBillingGateway } from '@basaltkit/subscriptions'
 ```
 
 We'll assemble the full `app.ts` at the end — first, each capability in turn.
@@ -53,7 +53,7 @@ package that declared the hook.
 
 ```ts
 // mails.ts
-import { defineMail } from '@machize/mailer'
+import { defineMail } from '@basaltkit/mailer'
 import { z } from 'zod'
 
 const link = z.object({ url: z.string() })
@@ -82,8 +82,8 @@ export const InviteEmail = defineMail({
 
 ```ts
 // emails-plugin.ts
-import { definePlugin } from '@machize/core'
-import { MAILER } from '@machize/mailer'
+import { definePlugin } from '@basaltkit/core'
+import { MAILER } from '@basaltkit/mailer'
 import { VerifyEmail, ResetEmail, InviteEmail } from './mails.js'
 
 const APP_URL = process.env.APP_URL ?? 'https://app.example.com'
@@ -91,7 +91,7 @@ const APP_URL = process.env.APP_URL ?? 'https://app.example.com'
 /** Turns auth/teams token hooks into outbound email. */
 export const emailsPlugin = definePlugin({
   name: 'app:emails',
-  dependsOn: ['machize:mailer'],
+  dependsOn: ['basalt:mailer'],
   register({ container, hooks }) {
     const mailer = () => container.get(MAILER)
 
@@ -165,7 +165,7 @@ handshake so a mistyped code can never lock the user out.
 ```bash
 # 1. begin — returns a secret and an otpauth:// URI to render as a QR code
 curl -X POST /auth/mfa/enroll -H "authorization: Bearer $ACCESS"
-# → { "secret": "JBSWY3…", "otpauthUri": "otpauth://totp/Machize:ada@acme.test?…" }
+# → { "secret": "JBSWY3…", "otpauthUri": "otpauth://totp/Basalt:ada@acme.test?…" }
 
 # 2. confirm with a code from the authenticator — returns one-time recovery codes
 curl -X POST /auth/mfa/activate -H "authorization: Bearer $ACCESS" -d '{"code":"123456"}'
@@ -229,18 +229,18 @@ yields no usable keys. `GET /apikeys` lists them (no hash, no plaintext);
 
 ## 7. Team invitations
 
-`@machize/teams` turns a tenant into a multi-user team with a ranked role
+`@basaltkit/teams` turns a tenant into a multi-user team with a ranked role
 hierarchy (`owner` > `admin` > `member`). Register the plugin and routes, and
 seed the tenant's first owner when you create the tenant.
 
 ```ts
-teamsPlugin({ access })   // optional `access` mirrors roles into @machize/permissions
+teamsPlugin({ access })   // optional `access` mirrors roles into @basaltkit/permissions
 // routes: [...teamRoutes()]
 ```
 
 ```ts
 // when an operator creates a tenant, make the creator its owner:
-import { TEAMS } from '@machize/teams'
+import { TEAMS } from '@basaltkit/teams'
 await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 ```
 
@@ -294,7 +294,7 @@ subscriptionsPlugin({ plans, gateway, fallbackPlan: 'free' })
 // ]
 ```
 
-**Subscribe** — `POST /billing/checkout` returns a URL to redirect to. Machize
+**Subscribe** — `POST /billing/checkout` returns a URL to redirect to. Basalt
 records the subscription as `incomplete`; the Stripe webhook flips it to
 `active` on payment (and teaches it the subscription id for later management).
 
@@ -316,7 +316,7 @@ curl -X POST /billing/portal -H "authorization: Bearer $ACCESS" -H "x-tenant-id:
 credits/charges the mid-cycle difference:
 
 ```ts
-import { SUBSCRIPTIONS } from '@machize/subscriptions'
+import { SUBSCRIPTIONS } from '@basaltkit/subscriptions'
 const subs = ctx().container.get(SUBSCRIPTIONS)
 
 await subs.swap('acme', 'team')                  // create_prorations (default)

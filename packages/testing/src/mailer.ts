@@ -1,4 +1,4 @@
-import { createToken, definePlugin, MachizeError } from '@machize/core'
+import { createToken, definePlugin, BasaltError } from '@basaltkit/core'
 import {
   MAILER,
   Mailer,
@@ -6,9 +6,9 @@ import {
   type MailDefinition,
   type MailerOptions,
   type ResolvedMail,
-} from '@machize/mailer'
+} from '@basaltkit/mailer'
 
-export class MailAssertionError extends MachizeError {
+export class MailAssertionError extends BasaltError {
   constructor(message: string) {
     super('TEST_MAIL_ASSERTION', message)
   }
@@ -28,10 +28,10 @@ export interface FakeMailer {
 }
 
 /** Mail fake: records instead of sending, with Laravel-style assertions. */
-export function fakeMailer(options: MailerOptions = { from: 'test@machize.dev' }): FakeMailer {
+export function fakeMailer(options: MailerOptions = { from: 'test@basalt.dev' }): FakeMailer {
   const driver = new MemoryMailDriver()
   const plugin = definePlugin({
-    name: 'machize:mailer',
+    name: 'basalt:mailer',
     register({ container }) {
       container.singleton(MAILER, () => new Mailer(driver, options))
     },

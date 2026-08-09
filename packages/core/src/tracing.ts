@@ -137,7 +137,7 @@ export class Tracer {
 
   constructor(options: TracerOptions = {}) {
     this.exporter = options.exporter
-    this.serviceName = options.serviceName ?? 'machize'
+    this.serviceName = options.serviceName ?? 'basalt'
     this.clock = options.clock ?? (() => Date.now())
     this.traceFlags = (options.sampled ?? true) ? 1 : 0
     this.ids = options.idGenerator ?? { traceId: () => hex(16), spanId: () => hex(8) }
@@ -207,7 +207,7 @@ export function toOtlpJson(spans: FinishedSpan[], serviceName: string): unknown 
         resource: { attributes: attrs({ 'service.name': serviceName }) },
         scopeSpans: [
           {
-            scope: { name: '@machize/core' },
+            scope: { name: '@basaltkit/core' },
             spans: spans.map((span) => ({
               traceId: span.context.traceId,
               spanId: span.context.spanId,
@@ -250,7 +250,7 @@ export class OtlpHttpExporter implements SpanExporter {
 
   constructor(options: OtlpHttpExporterOptions) {
     this.endpoint = `${options.url.replace(/\/$/, '')}/v1/traces`
-    this.serviceName = options.serviceName ?? 'machize'
+    this.serviceName = options.serviceName ?? 'basalt'
     this.headers = options.headers ?? {}
     this.maxBatch = options.maxBatch ?? 100
     this.fetchImpl = options.fetchImpl ?? fetch

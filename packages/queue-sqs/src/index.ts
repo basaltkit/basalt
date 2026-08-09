@@ -3,7 +3,7 @@ import type {
   DriverCapabilities,
   JobExecutor,
   QueueDriver,
-} from '@machize/queue'
+} from '@basaltkit/queue'
 
 /** SQS caps per-message delay at 15 minutes. */
 export const SQS_MAX_DELAY_SECONDS = 900
@@ -41,11 +41,11 @@ export class SqsDelayTooLongError extends Error {
 }
 
 const HEADER = {
-  job: 'x-machize-job',
-  attempt: 'x-machize-attempt',
-  attempts: 'x-machize-attempts',
-  backoffMs: 'x-machize-backoff-ms',
-  backoffType: 'x-machize-backoff-type',
+  job: 'x-basalt-job',
+  attempt: 'x-basalt-attempt',
+  attempts: 'x-basalt-attempts',
+  backoffMs: 'x-basalt-backoff-ms',
+  backoffType: 'x-basalt-backoff-type',
 } as const
 
 export interface SqsDriverOptions {
@@ -63,7 +63,7 @@ export interface SqsDriverOptions {
 }
 
 /**
- * Amazon SQS driver for `@machize/queue`. SQS has native per-message delay
+ * Amazon SQS driver for `@basaltkit/queue`. SQS has native per-message delay
  * (up to 15 min) but no priority, which its `capabilities` reflect honestly —
  * a priority dispatch is caught by the queue's `onUnsupported` policy.
  *

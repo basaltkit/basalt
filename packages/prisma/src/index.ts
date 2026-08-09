@@ -2,9 +2,9 @@ import {
   createToken,
   definePlugin,
   ensureMetadata,
-  MachizeError,
+  BasaltError,
   tryCtx,
-} from '@machize/core'
+} from '@basaltkit/core'
 import { TenantClientPool } from './pool.js'
 import { schemaUrl, tenantSchema } from './schema.js'
 
@@ -42,14 +42,14 @@ export {
   type PrismaSyncCommandOptions,
 } from './sync-command.js'
 
-declare module '@machize/core' {
+declare module '@basaltkit/core' {
   interface RequestContext {
     /** Database client of the current request/tenant, set by prismaPlugin. */
     db?: unknown
   }
 }
 
-export class DbUnavailableError extends MachizeError {
+export class DbUnavailableError extends BasaltError {
   constructor() {
     super(
       'DB_UNAVAILABLE',
@@ -99,7 +99,7 @@ export interface PrismaPluginOptions<TClient = unknown> {
 
 export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TClient>) {
   return definePlugin({
-    name: 'machize:prisma',
+    name: 'basalt:prisma',
     register({ container, hooks }) {
       // Schema-per-tenant is sugar over the per-tenant pool: build a client
       // whose URL carries the tenant's schema.

@@ -1,6 +1,6 @@
 # Queues & jobs
 
-`@machize/queue` runs work in the background through a small, driver-agnostic
+`@basaltkit/queue` runs work in the background through a small, driver-agnostic
 core. You define typed jobs, dispatch them from anywhere, and workers process
 them — on Redis (BullMQ) in production, inline in dev/test, or on RabbitMQ,
 Kafka, or Amazon SQS through a driver package. The backend is one line to swap;
@@ -11,7 +11,7 @@ your jobs never change.
 ## Define a job
 
 ```ts
-import { defineJob } from '@machize/queue'
+import { defineJob } from '@basaltkit/queue'
 import { z } from 'zod'
 
 export const SendWelcome = defineJob({
@@ -33,7 +33,7 @@ dispatch.
 ## Register it
 
 ```ts
-import { queuePlugin } from '@machize/queue'
+import { queuePlugin } from '@basaltkit/queue'
 
 queuePlugin({
   connection: process.env.REDIS_URL,     // → BullMQ driver. Omit for the sync driver.
@@ -48,8 +48,8 @@ backend but nothing consumes it.
 ## Dispatch
 
 ```ts
-import { ctx } from '@machize/core'
-import { QUEUE } from '@machize/queue'
+import { ctx } from '@basaltkit/core'
+import { QUEUE } from '@basaltkit/queue'
 
 await ctx().container.get(QUEUE).dispatch(SendWelcome, { userId: 'u-1' })
 
@@ -67,20 +67,20 @@ to use another backend.
 
 | Driver | Package | `delayed` | `priority` | `retries` | `backoff` |
 | --- | --- | :---: | :---: | :---: | :---: |
-| **BullMQ** (Redis) | `@machize/queue` | ✅ | ✅ | ✅ | ✅ |
-| **RabbitMQ** | `@machize/queue-rabbitmq` | ✅ | ✅ | ✅ | ✅ |
-| **Amazon SQS** | `@machize/queue-sqs` | ✅ (≤15 min) | ❌ | ✅ | ✅ |
-| **Kafka** | `@machize/queue-kafka` | ❌ | ❌ | ✅ | ❌ |
-| **Sync** (dev/test) | `@machize/queue` | ❌ | ❌ | ✅ | ❌ |
+| **BullMQ** (Redis) | `@basaltkit/queue` | ✅ | ✅ | ✅ | ✅ |
+| **RabbitMQ** | `@basaltkit/queue-rabbitmq` | ✅ | ✅ | ✅ | ✅ |
+| **Amazon SQS** | `@basaltkit/queue-sqs` | ✅ (≤15 min) | ❌ | ✅ | ✅ |
+| **Kafka** | `@basaltkit/queue-kafka` | ❌ | ❌ | ✅ | ❌ |
+| **Sync** (dev/test) | `@basaltkit/queue` | ❌ | ❌ | ✅ | ❌ |
 
 ```ts
-import { RabbitmqQueueDriver } from '@machize/queue-rabbitmq'
+import { RabbitmqQueueDriver } from '@basaltkit/queue-rabbitmq'
 queuePlugin({ driver: new RabbitmqQueueDriver({ url: process.env.AMQP_URL! }), jobs, workers })
 
-import { SqsQueueDriver } from '@machize/queue-sqs'
+import { SqsQueueDriver } from '@basaltkit/queue-sqs'
 queuePlugin({ driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q] }), jobs, workers })
 
-import { KafkaQueueDriver } from '@machize/queue-kafka'
+import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
 queuePlugin({ driver: new KafkaQueueDriver({ brokers: ['localhost:9092'] }), jobs, workers })
 ```
 
@@ -113,7 +113,7 @@ A driver is any object implementing the `QueueDriver` seam — four methods and
 an optional capability declaration:
 
 ```ts
-import type { QueueDriver, DriverCapabilities, JobExecutor, AddJobOptions } from '@machize/queue'
+import type { QueueDriver, DriverCapabilities, JobExecutor, AddJobOptions } from '@basaltkit/queue'
 
 export class MyQueueDriver implements QueueDriver {
   readonly name = 'my-backend'
@@ -158,9 +158,9 @@ queuePlugin({ driver: new MyQueueDriver(), jobs, workers })
 
 - **Be honest in `capabilities`.** If the backend can't defer a message, set
   `delayed: false` — the compatibility check turns a silent drop into a loud
-  one. The bundled drivers are a reference: [`@machize/queue-rabbitmq`][rmq]
-  (delay + retries via a dead-letter queue), [`@machize/queue-sqs`][sqs]
-  (native delay, no priority), [`@machize/queue-kafka`][kafka] (a log, so no
+  one. The bundled drivers are a reference: [`@basaltkit/queue-rabbitmq`][rmq]
+  (delay + retries via a dead-letter queue), [`@basaltkit/queue-sqs`][sqs]
+  (native delay, no priority), [`@basaltkit/queue-kafka`][kafka] (a log, so no
   delay/priority; retries via a retry topic).
 - **Carry retry state in the message.** `attempts`/`backoff` come from `add`;
   stamp the current attempt into message metadata so the worker knows when to
@@ -170,9 +170,9 @@ queuePlugin({ driver: new MyQueueDriver(), jobs, workers })
   unit-tested without a running broker. Do the same and your driver is testable
   in CI.
 
-[rmq]: https://github.com/Zebedeu/machize/tree/main/packages/queue-rabbitmq
-[sqs]: https://github.com/Zebedeu/machize/tree/main/packages/queue-sqs
-[kafka]: https://github.com/Zebedeu/machize/tree/main/packages/queue-kafka
+[rmq]: https://github.com/Zebedeu/basalt/tree/main/packages/queue-rabbitmq
+[sqs]: https://github.com/Zebedeu/basalt/tree/main/packages/queue-sqs
+[kafka]: https://github.com/Zebedeu/basalt/tree/main/packages/queue-kafka
 
 ## See also
 

@@ -1,4 +1,4 @@
-// Reference schema for @machize/subscriptions-prisma.
+// Reference schema for @basaltkit/subscriptions-prisma.
 //
 // Copy these models into your app's schema.prisma, run `prisma migrate dev`,
 // and pass the generated client to `prismaSubscriptionsStores()`.

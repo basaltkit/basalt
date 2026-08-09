@@ -1,4 +1,4 @@
-import { route, type MachizeRoute } from '@machize/fastify'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { apiKeysPageHtml, type ApiKeysPageOptions } from './html.js'
 
 export interface ApiKeysUiOptions extends ApiKeysPageOptions {
@@ -8,10 +8,10 @@ export interface ApiKeysUiOptions extends ApiKeysPageOptions {
 
 /**
  * Serves the API-keys management page at `GET /apikeys/ui` (requires a
- * logged-in user). Pair with `@machize/auth`'s `apiKeyRoutes()`, which provides
+ * logged-in user). Pair with `@basaltkit/auth`'s `apiKeyRoutes()`, which provides
  * the JSON endpoints the page calls.
  */
-export function apiKeysUiRoutes(options: ApiKeysUiOptions = {}): MachizeRoute[] {
+export function apiKeysUiRoutes(options: ApiKeysUiOptions = {}): BasaltRoute[] {
   const html = apiKeysPageHtml(options)
   return [
     route({

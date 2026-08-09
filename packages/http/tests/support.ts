@@ -1,4 +1,4 @@
-import { createApp, definePlugin, type MachizePlugin } from '@machize/core'
+import { createApp, definePlugin, type BasaltPlugin } from '@basaltkit/core'
 import { HTTP_SERVER, HttpServerCollector, type HttpReply, type HttpRequest } from '../src/index.js'
 
 export const makeRequest = (over: Partial<HttpRequest> = {}): HttpRequest => ({
@@ -38,7 +38,7 @@ export class FakeReply implements HttpReply {
 /** Boots an app that provides a shared HttpServerCollector as HTTP_SERVER,
  *  so neutral edge plugins can be tested without any framework adapter.
  *  Returns the booted app (call `.shutdown()` to run shutdown hooks). */
-export function bootWith(collector: HttpServerCollector, plugins: MachizePlugin[]) {
+export function bootWith(collector: HttpServerCollector, plugins: BasaltPlugin[]) {
   const provider = definePlugin({
     name: 'test:http-server',
     register({ container }) {

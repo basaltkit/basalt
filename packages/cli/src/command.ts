@@ -1,4 +1,4 @@
-import type { Container, MachizeApp } from '@machize/core'
+import type { Container, BasaltApp } from '@basaltkit/core'
 
 /** Output surface — swappable in tests to capture what a command prints. */
 export interface CommandIo {
@@ -10,7 +10,7 @@ export interface CommandIo {
 }
 
 export interface CommandContext {
-  app: MachizeApp
+  app: BasaltApp
   container: Container
   io: CommandIo
   /** Positional arguments after the command name. */

@@ -1,4 +1,4 @@
-import { definePlugin } from '@machize/core'
+import { definePlugin } from '@basaltkit/core'
 import type { HttpReply, HttpRequest } from './route.js'
 import { HTTP_SERVER } from './server.js'
 
@@ -132,7 +132,7 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
     headersOption === false ? null : headersOption === true ? {} : headersOption
 
   return definePlugin({
-    name: 'machize:security',
+    name: 'basalt:security',
     boot({ container }) {
       container.get(HTTP_SERVER).use(async ({ request, reply }) => {
         if (headers) applyHeaders(reply, headers)

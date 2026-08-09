@@ -1,14 +1,14 @@
-import type { AccessStore } from '@machize/permissions'
+import type { AccessStore } from '@basaltkit/permissions'
 
 /**
- * Prisma-backed implementation of the `@machize/permissions` `AccessStore` for
+ * Prisma-backed implementation of the `@basaltkit/permissions` `AccessStore` for
  * production databases (PostgreSQL, MySQL, …). Bring your generated
  * `PrismaClient` with the `PermUserRole`, `PermUserPermission` and
  * `PermRolePermission` models (see the bundled `prisma/schema.prisma`).
  *
  * Role assignments and permission grants are sets — every write is a
  * `createMany({ skipDuplicates: true })`, so re-granting is a harmless no-op.
- * The production counterpart to `@machize/permissions-sqlite`.
+ * The production counterpart to `@basaltkit/permissions-sqlite`.
  */
 
 /**
@@ -101,12 +101,12 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaAccessStore(client: PrismaPermissionsClient): PrismaPermissionsStores {
-  ensureModel(client, 'permUserRole', '@machize/permissions-prisma')
+  ensureModel(client, 'permUserRole', '@basaltkit/permissions-prisma')
   return { store: new PrismaAccessStore(client) }
 }

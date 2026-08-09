@@ -1,4 +1,4 @@
-import { definePlugin, ensureMetadata } from '@machize/core'
+import { definePlugin, ensureMetadata } from '@basaltkit/core'
 import type { ZodTypeAny } from 'zod'
 import { HTTP_SERVER } from './server.js'
 
@@ -103,7 +103,7 @@ export interface RouteLike {
 
 const toOpenApiPath = (url: string): string => url.replace(/:([A-Za-z0-9_]+)/g, '{$1}')
 
-/** Builds an OpenAPI 3.0 document from Machize route definitions. */
+/** Builds an OpenAPI 3.0 document from Basalt route definitions. */
 export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSchema {
   const paths: Record<string, Record<string, unknown>> = {}
   let usesAuth = false
@@ -179,7 +179,7 @@ export interface OpenApiPluginOptions {
 /** Serves an OpenAPI 3.0 document from the registered routes (any adapter). */
 export function openapiPlugin(options: OpenApiPluginOptions) {
   return definePlugin({
-    name: 'machize:openapi',
+    name: 'basalt:openapi',
     boot({ container, hooks }) {
       const metadata = ensureMetadata(container)
       // Placeholder until routes are collected — see the app:booted handler.

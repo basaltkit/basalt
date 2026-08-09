@@ -1,4 +1,4 @@
-import { createToken, definePlugin, tryCtx } from '@machize/core'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
 import { pino, type DestinationStream, type Logger as PinoLogger } from 'pino'
 
 export type Logger = PinoLogger<string, boolean>
@@ -69,7 +69,7 @@ export const LOGGER = createToken<Logger>('logger')
 
 export function loggerPlugin(options: LoggerOptions = {}) {
   return definePlugin({
-    name: 'machize:logger',
+    name: 'basalt:logger',
     register({ container }) {
       container.singleton(LOGGER, () => createLogger(options))
     },

@@ -1,7 +1,7 @@
 {
-  "name": "@machize/realtime",
-  "version": "1.0.5",
-  "description": "Realtime for Machize: server-to-client push over WebSocket/SSE with per-tenant channels, presence, an events bridge, and a pluggable backplane (in-memory or Redis pub/sub).",
+  "name": "@basaltkit/realtime",
+  "version": "1.0.0",
+  "description": "Realtime for Basalt: server-to-client push over WebSocket/SSE with per-tenant channels, presence, an events bridge, and a pluggable backplane (in-memory or Redis pub/sub).",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,10 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^"
+    "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -33,13 +33,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/realtime"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/realtime#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/realtime#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "realtime",

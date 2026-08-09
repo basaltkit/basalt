@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { createToken, tryCtx } from '@machize/core'
-import { defineEvent } from '@machize/events'
+import { createToken, tryCtx } from '@basaltkit/core'
+import { defineEvent } from '@basaltkit/events'
 import { z } from 'zod'
 
 export const ProjectSchema = z.object({
@@ -15,7 +15,7 @@ export const ProjectDeleted = defineEvent('project.deleted', ProjectSchema)
 /**
  * In-memory stand-in for the shared-database tenancy mode: every operation
  * is transparently scoped to ctx().tenant, exactly like a Prisma client
- * extended with @machize/prisma's tenancyExtension() against a real database.
+ * extended with @basaltkit/prisma's tenancyExtension() against a real database.
  */
 export class ProjectRepository {
   private readonly stores = new Map<string, Map<string, Project>>()

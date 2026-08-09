@@ -1,11 +1,11 @@
-import type { InAppNotification, InAppStore } from '@machize/notifications'
+import type { InAppNotification, InAppStore } from '@basaltkit/notifications'
 
 /**
- * Prisma-backed implementation of the `@machize/notifications` `InAppStore` for
+ * Prisma-backed implementation of the `@basaltkit/notifications` `InAppStore` for
  * production databases (PostgreSQL, MySQL, …). Bring your generated
  * `PrismaClient` with the `InAppNotification` model (see the bundled
  * `prisma/schema.prisma`). The production counterpart to
- * `@machize/notifications-sqlite`.
+ * `@basaltkit/notifications-sqlite`.
  */
 
 interface PInApp {
@@ -116,12 +116,12 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaInAppStore(client: PrismaNotificationsClient): PrismaNotificationsStores {
-  ensureModel(client, 'inAppNotification', '@machize/notifications-prisma')
+  ensureModel(client, 'inAppNotification', '@basaltkit/notifications-prisma')
   return { store: new PrismaInAppStore(client) }
 }

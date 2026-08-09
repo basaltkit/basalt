@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { MachizeError, parseDuration, type DurationInput, type HookBus } from '@machize/core'
+import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
 import {
   MemoryInvitationStore,
   MemoryMembershipStore,
@@ -12,7 +12,7 @@ import {
 } from './stores.js'
 
 /** An invite token was unknown, already used, revoked, or expired. */
-export class TeamInviteInvalidError extends MachizeError {
+export class TeamInviteInvalidError extends BasaltError {
   readonly status = 400
   constructor() {
     super('TEAM_INVITE_INVALID', 'This invitation link is invalid or has expired.')
@@ -20,7 +20,7 @@ export class TeamInviteInvalidError extends MachizeError {
 }
 
 /** The acting user is not a member of the team. */
-export class NotATeamMemberError extends MachizeError {
+export class NotATeamMemberError extends BasaltError {
   readonly status = 403
   constructor() {
     super('TEAM_NOT_A_MEMBER', 'You are not a member of this team.')
@@ -28,7 +28,7 @@ export class NotATeamMemberError extends MachizeError {
 }
 
 /** The acting user's role is below what the action requires. */
-export class InsufficientTeamRoleError extends MachizeError {
+export class InsufficientTeamRoleError extends BasaltError {
   readonly status = 403
   constructor(required: TeamRole) {
     super('TEAM_ROLE_REQUIRED', `This action requires the "${required}" role or higher.`)
@@ -36,14 +36,14 @@ export class InsufficientTeamRoleError extends MachizeError {
 }
 
 /** Refused because it would leave the team with no owner. */
-export class LastOwnerError extends MachizeError {
+export class LastOwnerError extends BasaltError {
   readonly status = 400
   constructor() {
     super('TEAM_LAST_OWNER', 'A team must keep at least one owner.')
   }
 }
 
-/** Minimal role-store surface — a @machize/permissions AccessStore satisfies it. */
+/** Minimal role-store surface — a @basaltkit/permissions AccessStore satisfies it. */
 export interface RoleAssigner {
   assignRole(userId: string, role: string, scope: string): Promise<void>
   removeRole(userId: string, role: string, scope: string): Promise<void>
@@ -56,7 +56,7 @@ export const OWNER: TeamRole = 'owner'
 export interface TeamsOptions {
   memberships?: MembershipStore
   invitations?: InvitationStore
-  /** Wired to @machize/permissions to mirror memberships into role grants. */
+  /** Wired to @basaltkit/permissions to mirror memberships into role grants. */
   access?: RoleAssigner
   hooks?: HookBus
   /** Invitation link lifetime. Default 7d. */
@@ -75,7 +75,7 @@ const publicInvite = (i: Invitation): PublicInvitation => {
 /**
  * Team membership and email invitations for multi-user tenants. Decoupled from
  * auth and tenancy: identifiers are passed in. Optionally mirrors role changes
- * into a {@link RoleAssigner} (e.g. @machize/permissions).
+ * into a {@link RoleAssigner} (e.g. @basaltkit/permissions).
  */
 export class Teams {
   private readonly memberships: MembershipStore

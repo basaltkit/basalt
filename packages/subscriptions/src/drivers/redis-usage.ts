@@ -30,7 +30,7 @@ return {1, total}
 `.trim()
 
 export interface RedisUsageStoreOptions {
-  /** Key prefix. Default: 'mach:usage'. */
+  /** Key prefix. Default: 'basalt:usage'. */
   prefix?: string
   /**
    * TTL in seconds for periodic (monthly) counters, so old buckets are
@@ -47,7 +47,7 @@ export class RedisUsageStore implements UsageStore {
     private readonly redis: RedisLike,
     options: RedisUsageStoreOptions = {},
   ) {
-    this.prefix = options.prefix ?? 'mach:usage'
+    this.prefix = options.prefix ?? 'basalt:usage'
     this.ttlSeconds = options.ttlSeconds ?? 60 * 24 * 60 * 60
   }
 

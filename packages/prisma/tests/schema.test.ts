@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, METADATA } from '@machize/core'
+import { createApp, METADATA } from '@basaltkit/core'
 import {
   DB_POOL,
   InvalidTenantSchemaError,

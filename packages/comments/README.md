@@ -1,6 +1,6 @@
-# @machize/comments
+# @basaltkit/comments
 
-Per-resource comments for Machize: **threads** (nested replies), **@mentions**, and **resolve/reopen**, isolated by tenant, emitting **events** that connect to [`@machize/realtime`](https://www.npmjs.com/package/@machize/realtime) (live discussion) and [`@machize/notifications`](https://www.npmjs.com/package/@machize/notifications) (notify who was mentioned). You need this module when you want collaboration — commenting on a note, a project, a task.
+Per-resource comments for Basalt: **threads** (nested replies), **@mentions**, and **resolve/reopen**, isolated by tenant, emitting **events** that connect to [`@basaltkit/realtime`](https://www.npmjs.com/package/@basaltkit/realtime) (live discussion) and [`@basaltkit/notifications`](https://www.npmjs.com/package/@basaltkit/notifications) (notify who was mentioned). You need this module when you want collaboration — commenting on a note, a project, a task.
 
 ## What this module solves
 
@@ -9,17 +9,17 @@ A comment system involves more than storing text: threads with replies, extracti
 ## Installation
 
 ```bash
-pnpm add @machize/comments
+pnpm add @basaltkit/comments
 ```
 
-Depends on `@machize/core` and `@machize/fastify` (routes). No database required: the default store is in-memory (`CommentStore` contract for production).
+Depends on `@basaltkit/core` and `@basaltkit/fastify` (routes). No database required: the default store is in-memory (`CommentStore` contract for production).
 
 ## Get started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { commentsPlugin, COMMENTS, commentRoutes } from '@machize/comments'
-import { fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { commentsPlugin, COMMENTS, commentRoutes } from '@basaltkit/comments'
+import { fastifyPlugin } from '@basaltkit/fastify'
 
 const app = await createApp({
   plugins: [commentsPlugin(), fastifyPlugin({ routes: [...commentRoutes()] })],
@@ -89,6 +89,6 @@ Without `tenantId`, uses `ctx().tenant.id` (otherwise `CommentTenantRequiredErro
 
 ## How it connects to other modules
 
-- **`@machize/realtime`** — pushes `comment:created` to the resource's channel (live discussion).
-- **`@machize/notifications`** — reacts to `comment:mentioned` to notify mentioned users.
-- **`@machize/auth` / `@machize/tenancy`** — provide the user (author) and tenant from context.
+- **`@basaltkit/realtime`** — pushes `comment:created` to the resource's channel (live discussion).
+- **`@basaltkit/notifications`** — reacts to `comment:mentioned` to notify mentioned users.
+- **`@basaltkit/auth` / `@basaltkit/tenancy`** — provide the user (author) and tenant from context.

@@ -1,6 +1,6 @@
-// Reference schema for @machize/webhooks-prisma.
+// Reference schema for @basaltkit/webhooks-prisma.
 //
-// Copy this model into your app's schema.prisma (or run `mach prisma:sync`),
+// Copy this model into your app's schema.prisma (or run `basalt prisma:sync`),
 // run `prisma migrate dev`, and pass the generated client to `prismaWebhookStore()`.
 
 datasource db {

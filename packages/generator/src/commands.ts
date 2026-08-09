@@ -1,4 +1,4 @@
-import { defineCommand, type CommandDefinition } from '@machize/cli'
+import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
 import {
   FileExistsError,
   GENERATORS,
@@ -35,7 +35,7 @@ function specs(): MakeSpec[] {
 }
 
 /**
- * CLI commands: `mach make:resource Project`, `mach make:service Project`, …
+ * CLI commands: `basalt make:resource Project`, `basalt make:service Project`, …
  * Options: --dir=<path> (target root), --force (overwrite),
  * --prisma (Prisma-backed repository + schema.prisma model),
  * --no-register (skip wiring the resource into src/app.ts).
@@ -48,7 +48,7 @@ export function generatorCommands(): CommandDefinition[] {
       async handle({ args, flags, io }) {
         const name = args[0]
         if (!name) {
-          io.error(`Usage: mach ${spec.command} <Name> [--dir=<path>] [--force] [--prisma]`)
+          io.error(`Usage: basalt ${spec.command} <Name> [--dir=<path>] [--force] [--prisma]`)
           return 1
         }
         const options = {

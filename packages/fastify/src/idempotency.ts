@@ -1,4 +1,4 @@
-import { definePlugin } from '@machize/core'
+import { definePlugin } from '@basaltkit/core'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FASTIFY } from './adapter.js'
 
@@ -63,7 +63,7 @@ export interface IdempotencyPluginOptions {
   ttlMs?: number
 }
 
-const KEY = Symbol('machize.idempotencyKey')
+const KEY = Symbol('basalt.idempotencyKey')
 
 /**
  * Safe retries for mutating requests: when a client sends an `Idempotency-Key`,
@@ -80,8 +80,8 @@ export function idempotencyPlugin(options: IdempotencyPluginOptions = {}) {
   const methods = new Set((options.methods ?? ['POST']).map((method) => method.toUpperCase()))
 
   return definePlugin({
-    name: 'machize:idempotency',
-    dependsOn: ['machize:fastify'],
+    name: 'basalt:idempotency',
+    dependsOn: ['basalt:fastify'],
     boot({ container }) {
       const app: FastifyInstance = container.get(FASTIFY)
 

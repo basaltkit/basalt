@@ -1,10 +1,10 @@
 import {
-  MachizeError,
+  BasaltError,
   parseDuration,
   runWithContext,
   tryCtx,
   type RequestContext,
-} from '@machize/core'
+} from '@basaltkit/core'
 import type { AddJobOptions, DriverCapabilities, QueueDriver } from './driver.js'
 import {
   validatePayload,
@@ -13,7 +13,7 @@ import {
   type JobDispatcher,
 } from './job.js'
 
-export class UnknownJobError extends MachizeError {
+export class UnknownJobError extends BasaltError {
   constructor(job: string) {
     super(
       'QUEUE_UNKNOWN_JOB',
@@ -24,7 +24,7 @@ export class UnknownJobError extends MachizeError {
 }
 
 /** A job used an option the active driver doesn't support (with policy 'throw'). */
-export class UnsupportedJobOptionError extends MachizeError {
+export class UnsupportedJobOptionError extends BasaltError {
   readonly status = 500
   constructor(driver: string, job: string, features: string[]) {
     super(
@@ -110,7 +110,7 @@ export class QueueManager implements JobDispatcher {
     if (this.warned.has(key)) return // warn once per job+feature combination
     this.warned.add(key)
     this.warn(
-      `[machize/queue] The "${driverName}" driver does not support ${features.join(', ')} — ` +
+      `[basalt/queue] The "${driverName}" driver does not support ${features.join(', ')} — ` +
         `job "${jobName}" will run without it.`,
     )
   }

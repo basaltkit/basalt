@@ -1,7 +1,7 @@
 # admin-demo
 
-A runnable admin dashboard built from the real Machize UI packages —
-`@machize/admin` (headless engine) + `@machize/admin-shadcn` (shadcn/ui
+A runnable admin dashboard built from the real Basalt UI packages —
+`@basaltkit/admin` (headless engine) + `@basaltkit/admin-shadcn` (shadcn/ui
 components) — with a Tailwind + shadcn theme.
 
 ## Run it
@@ -21,10 +21,10 @@ Then open **http://localhost:5174**. You get a sidebar dashboard with:
 
 ## Browser-safe by design
 
-This demo uses `@machize/dashboard` (`computeBillingMetrics`, `defineDashboard`)
+This demo uses `@basaltkit/dashboard` (`computeBillingMetrics`, `defineDashboard`)
 directly in the browser — the MRR/ARR you see are computed live by the real
-package, not hardcoded. `@machize/dashboard` imports `@machize/subscriptions`
+package, not hardcoded. `@basaltkit/dashboard` imports `@basaltkit/subscriptions`
 type-only (erased at build), so the subscriptions/Fastify/Node runtime never
-enters the bundle. `@machize/admin` and `@machize/admin-shadcn` are likewise
-free of `@machize/core` (no `node:async_hooks`), so the whole UI stack bundles
+enters the bundle. `@basaltkit/admin` and `@basaltkit/admin-shadcn` are likewise
+free of `@basaltkit/core` (no `node:async_hooks`), so the whole UI stack bundles
 cleanly for the browser.

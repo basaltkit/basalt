@@ -1,12 +1,12 @@
-import { createToken, ctx, definePlugin, type Container } from '@machize/core'
-import { STORAGE, type Disk } from '@machize/storage'
-import { route, type MachizeRoute } from '@machize/fastify'
+import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { STORAGE, type Disk } from '@basaltkit/storage'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { Files, type FileValidation, type FilesOptions } from './files.js'
 import type { FileRecord, FileStore } from './store.js'
 
-declare module '@machize/core' {
-  interface MachizeHooks {
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
     'file:uploaded': { file: FileRecord }
     'file:deleted': { tenantId: string; id: string }
     'file:scanned': { file: FileRecord }
@@ -16,7 +16,7 @@ declare module '@machize/core' {
 export const FILES = createToken<Files>('files')
 
 export interface FilesPluginOptions {
-  /** A `Disk` instance or the name of a disk configured in `@machize/storage`. */
+  /** A `Disk` instance or the name of a disk configured in `@basaltkit/storage`. */
   disk: Disk | string
   store?: FileStore
   validate?: FileValidation
@@ -26,7 +26,7 @@ export interface FilesPluginOptions {
 
 export function filesPlugin(options: FilesPluginOptions) {
   return definePlugin({
-    name: 'machize:files',
+    name: 'basalt:files',
     register({ container, hooks }) {
       container.singleton(FILES, () => {
         const disk = typeof options.disk === 'string' ? container.get(STORAGE).disk(options.disk) : options.disk
@@ -50,7 +50,7 @@ const files = () => (ctx().container as Container).get(FILES)
  * URL, and delete. Uploading is transport-specific (multipart) — call
  * `FILES.upload(buffer, input)` from your own upload handler.
  */
-export function fileRoutes(): MachizeRoute[] {
+export function fileRoutes(): BasaltRoute[] {
   return [
     route({
       method: 'GET',

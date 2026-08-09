@@ -1,7 +1,7 @@
 {
   "name": "playground",
   "private": true,
-  "description": "Machize reference app — integrates core, config, env, logger, events and fastify. Serves as the living E2E of Phase 1.",
+  "description": "Basalt reference app — integrates core, config, env, logger, events and fastify. Serves as the living E2E of Phase 1.",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -10,17 +10,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/config": "workspace:*",
-    "@machize/core": "workspace:*",
-    "@machize/env": "workspace:*",
-    "@machize/events": "workspace:*",
-    "@machize/fastify": "workspace:*",
-    "@machize/logger": "workspace:*",
-    "@machize/tenancy": "workspace:*",
+    "@basaltkit/config": "workspace:*",
+    "@basaltkit/core": "workspace:*",
+    "@basaltkit/env": "workspace:*",
+    "@basaltkit/events": "workspace:*",
+    "@basaltkit/fastify": "workspace:*",
+    "@basaltkit/logger": "workspace:*",
+    "@basaltkit/tenancy": "workspace:*",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:*",
+    "@basaltkit/tsconfig": "workspace:*",
     "@types/node": "^22.15.0",
     "pino-pretty": "^13.0.0",
     "tsx": "^4.19.0",

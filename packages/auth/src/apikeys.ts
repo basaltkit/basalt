@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { MachizeError, type HookBus } from '@machize/core'
+import { BasaltError, type HookBus } from '@basaltkit/core'
 import {
   MemoryApiKeyStore,
   type ApiKeyFilter,
@@ -9,14 +9,14 @@ import {
 } from './stores.js'
 
 /** A route required a scope the presented key does not hold. */
-export class ScopeRequiredError extends MachizeError {
+export class ScopeRequiredError extends BasaltError {
   readonly status = 403
   constructor(scope: string) {
     super('AUTH_SCOPE_REQUIRED', `This action requires the "${scope}" scope.`)
   }
 }
 
-/** The prefix on every key. `mk` = Machize key, `live` = environment. */
+/** The prefix on every key. `mk` = Basalt key, `live` = environment. */
 const KEY_PREFIX = 'mk_live_'
 
 /** SHA-256 is safe here: API keys are high-entropy, so no slow hash is needed. */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '@machize/core'
-import { FASTIFY, fastifyPlugin } from '@machize/fastify'
-import { MemoryUserSource, apiKeyRoutes, apiKeysPlugin, authPlugin, authRoutes } from '@machize/auth'
+import { createApp } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
+import { MemoryUserSource, apiKeyRoutes, apiKeysPlugin, authPlugin, authRoutes } from '@basaltkit/auth'
 import { apiKeysPageHtml, apiKeysUiRoutes } from '../src/index.js'
 
 describe('apiKeysPageHtml', () => {

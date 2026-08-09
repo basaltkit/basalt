@@ -1,7 +1,7 @@
-# @machize/audit-sqlite
+# @basaltkit/audit-sqlite
 
 Durable, **SQLite-backed** implementation of the
-[`@machize/audit`](https://github.com/Zebedeu/machize/tree/main/packages/audit)
+[`@basaltkit/audit`](https://github.com/Zebedeu/basalt/tree/main/packages/audit)
 `AuditStore` — the append-only audit trail — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
@@ -9,10 +9,10 @@ dependencies.**
 Swap it in for the in-memory store and the trail survives a restart — no ORM, no
 migration tool, no service. The single-node reference backend; the production
 (Postgres/MySQL) counterpart is
-[`@machize/audit-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/audit-prisma).
+[`@basaltkit/audit-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/audit-prisma).
 
 ```bash
-pnpm add @machize/audit-sqlite   # peer: @machize/audit
+pnpm add @basaltkit/audit-sqlite   # peer: @basaltkit/audit
 ```
 
 > Requires **Node 22.5+**. Stable and flag-free on Node 24; on 22.x run with
@@ -21,8 +21,8 @@ pnpm add @machize/audit-sqlite   # peer: @machize/audit
 ## Use it
 
 ```ts
-import { auditPlugin } from '@machize/audit'
-import { sqliteAuditStore } from '@machize/audit-sqlite'
+import { auditPlugin } from '@basaltkit/audit'
+import { sqliteAuditStore } from '@basaltkit/audit-sqlite'
 
 const a = sqliteAuditStore('./data/audit.db')   // ':memory:' by default
 

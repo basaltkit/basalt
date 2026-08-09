@@ -1,16 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { MachizeError, runWithContext, tryCtx, type DurationInput, type HookBus } from '@machize/core'
-import type { Disk } from '@machize/storage'
+import { BasaltError, runWithContext, tryCtx, type DurationInput, type HookBus } from '@basaltkit/core'
+import type { Disk } from '@basaltkit/storage'
 import { MemoryFileStore, type FilePatch, type FileRecord, type FileStore } from './store.js'
 
-export class FileTooLargeError extends MachizeError {
+export class FileTooLargeError extends BasaltError {
   readonly status = 413
   constructor(size: number, max: number) {
     super('FILE_TOO_LARGE', `File is ${size} bytes; the limit is ${max}.`)
   }
 }
 
-export class FileTypeNotAllowedError extends MachizeError {
+export class FileTypeNotAllowedError extends BasaltError {
   readonly status = 415
   constructor(contentType: string) {
     super('FILE_TYPE_NOT_ALLOWED', `Content type "${contentType}" is not allowed.`)
@@ -18,21 +18,21 @@ export class FileTypeNotAllowedError extends MachizeError {
 }
 
 /** The tenant's storage allowance is exhausted. */
-export class StorageQuotaExceededError extends MachizeError {
+export class StorageQuotaExceededError extends BasaltError {
   readonly status = 402
   constructor() {
     super('FILE_QUOTA_EXCEEDED', 'Storage quota exceeded for this tenant.')
   }
 }
 
-export class FileNotFoundError extends MachizeError {
+export class FileNotFoundError extends BasaltError {
   readonly status = 404
   constructor() {
     super('FILE_NOT_FOUND', 'File not found.')
   }
 }
 
-export class FileTenantRequiredError extends MachizeError {
+export class FileTenantRequiredError extends BasaltError {
   readonly status = 400
   constructor() {
     super('FILE_TENANT_REQUIRED', 'A tenant is required — pass tenantId or run inside a tenant context.')
@@ -53,7 +53,7 @@ export interface FilesOptions {
   validate?: FileValidation
   /** Max total bytes per tenant (a built-in quota). */
   maxTotalBytes?: number
-  /** Custom quota check — throw to reject (e.g. wire @machize/subscriptions). */
+  /** Custom quota check — throw to reject (e.g. wire @basaltkit/subscriptions). */
   checkQuota?: (tenantId: string, size: number) => Promise<void> | void
   now?: () => number
 }

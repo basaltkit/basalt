@@ -1,22 +1,22 @@
-# @machize/teams-prisma
+# @basaltkit/teams-prisma
 
-**Prisma-backed** implementations of the [`@machize/teams`](https://github.com/Zebedeu/machize/tree/main/packages/teams)
+**Prisma-backed** implementations of the [`@basaltkit/teams`](https://github.com/Zebedeu/basalt/tree/main/packages/teams)
 stores — **memberships** and **invitations** — for production databases
 (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` whose schema includes the `Team*` models;
 the stores only touch those delegates, so they layer onto your existing client
 without owning your schema. It's the production counterpart to
-[`@machize/teams-sqlite`](https://github.com/Zebedeu/machize/tree/main/packages/teams-sqlite)
+[`@basaltkit/teams-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/teams-sqlite)
 (the zero-dependency, single-node option) — same store contracts.
 
 ```bash
-pnpm add @machize/teams-prisma   # peer: @machize/teams ; you already have @prisma/client
+pnpm add @basaltkit/teams-prisma   # peer: @basaltkit/teams ; you already have @prisma/client
 ```
 
 ## 1. Add the models
 
-Copy the models from the bundled reference schema (`@machize/teams-prisma/schema.prisma`)
+Copy the models from the bundled reference schema (`@basaltkit/teams-prisma/schema.prisma`)
 into your `schema.prisma`:
 
 ```prisma
@@ -51,8 +51,8 @@ Then `prisma migrate dev` and `prisma generate`.
 `teamsPlugin` — pass your client directly, no cast:
 
 ```ts
-import { teamsPlugin } from '@machize/teams'
-import { prismaTeamsStores } from '@machize/teams-prisma'
+import { teamsPlugin } from '@basaltkit/teams'
+import { prismaTeamsStores } from '@basaltkit/teams-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -73,13 +73,13 @@ Each store is also exported on its own (`PrismaMembershipStore`,
 
 ## Multi-tenant?
 
-Pair with [`@machize/prisma`](https://github.com/Zebedeu/machize/tree/main/packages/prisma)
+Pair with [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma)
 to resolve the per-tenant client from the request context and build the stores
 over it.
 
 ## Notes
 
-- **Time** is stored as `DateTime`; the `@machize/teams` contracts model it as
+- **Time** is stored as `DateTime`; the `@basaltkit/teams` contracts model it as
   epoch-ms `number`, and the stores convert at the boundary.
 - **`add()` upserts** a membership (matches the in-memory `Map.set` semantics),
   keyed on the `@@id([tenantId, userId])` compound id.

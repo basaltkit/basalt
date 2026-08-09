@@ -1,24 +1,24 @@
-# @machize/http
+# @basaltkit/http
 
-Machize's neutral HTTP core: defines typed routes, validates request data, and handles errors in a standardized way — the same code then works on Fastify, Express, or Hono. You need it whenever you want to define routes or use the security, health, metrics, tracing, and OpenAPI plugins.
+Basalt's neutral HTTP core: defines typed routes, validates request data, and handles errors in a standardized way — the same code then works on Fastify, Express, or Hono. You need it whenever you want to define routes or use the security, health, metrics, tracing, and OpenAPI plugins.
 
 ## What this module solves
 
 When you build an API (a server that responds to **HTTP requests** — the messages a browser or an app sends over the internet), you typically choose a framework like Fastify, Express, or Hono. The problem: each one has its own way of defining **routes** (the addresses the server responds to, like `GET /users/:id`), validating data, and handling errors. If you ever switch frameworks, you have to rewrite everything.
 
-`@machize/http` solves this: you define each route **once**, with the `route()` function, in a neutral format that doesn't depend on any framework. Then an **adapter** (`@machize/fastify`, `@machize/express`, or `@machize/hono`) takes those routes and connects them to the chosen framework. Data validation is done with [Zod](https://zod.dev) — a library that describes the shape of data (e.g. "the `name` field is text with at least 3 letters") — and TypeScript types are inferred automatically.
+`@basaltkit/http` solves this: you define each route **once**, with the `route()` function, in a neutral format that doesn't depend on any framework. Then an **adapter** (`@basaltkit/fastify`, `@basaltkit/express`, or `@basaltkit/hono`) takes those routes and connects them to the chosen framework. Data validation is done with [Zod](https://zod.dev) — a library that describes the shape of data (e.g. "the `name` field is text with at least 3 letters") — and TypeScript types are inferred automatically.
 
 Besides routes, this module brings ready-to-use **edge plugins** for any adapter: security headers, rate limiting, CORS, health probes (`/livez`, `/readyz`), Prometheus metrics (`/metrics`), distributed tracing, and OpenAPI documentation generation.
 
-> **Note**: in practice you almost never use `@machize/http` alone — you also install an adapter. This README covers the building blocks all adapters share.
+> **Note**: in practice you almost never use `@basaltkit/http` alone — you also install an adapter. This README covers the building blocks all adapters share.
 
 ## Installation
 
 ```bash
-pnpm add @machize/http zod
+pnpm add @basaltkit/http zod
 ```
 
-`zod` is a *peer dependency* (the module uses it but lets you choose the version). You'll also need an adapter to serve requests, e.g. `pnpm add @machize/fastify`.
+`zod` is a *peer dependency* (the module uses it but lets you choose the version). You'll also need an adapter to serve requests, e.g. `pnpm add @basaltkit/fastify`.
 
 ## Get started in 5 minutes
 
@@ -27,15 +27,15 @@ Let's define a typed route and serve it with the Fastify adapter.
 **Step 1** — install the packages:
 
 ```bash
-pnpm add @machize/core @machize/http @machize/fastify zod
+pnpm add @basaltkit/core @basaltkit/http @basaltkit/fastify zod
 ```
 
 **Step 2** — create a `server.ts` file:
 
 ```ts
-import { createApp } from '@machize/core'
-import { route } from '@machize/http'
-import { FASTIFY, fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { route } from '@basaltkit/http'
+import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { z } from 'zod'
 
 // A route: method + URL + validation + handler (the function that responds).
@@ -69,7 +69,7 @@ curl http://localhost:3000/hello/world
 The `route()` function takes a configuration object and returns a route definition. The `body`, `query`, and `params` types in the handler are **inferred** from the Zod schemas — you don't write types by hand.
 
 ```ts
-import { route, HttpError } from '@machize/http'
+import { route, HttpError } from '@basaltkit/http'
 import { z } from 'zod'
 
 const createProject = route({
@@ -107,7 +107,7 @@ If validation fails, the client automatically receives a standardized `400`:
 At any layer of the code you can throw an intentional HTTP error; the adapter converts it into the right response, without exposing internal details:
 
 ```ts
-import { HttpError } from '@machize/http'
+import { HttpError } from '@basaltkit/http'
 
 throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
 // → 404 response with { error: { code: 'PROJECT_NOT_FOUND', message: '...' } }
@@ -120,9 +120,9 @@ Unintentional errors (any `throw new Error(...)`) become a generic `500` with th
 Applies three edge protections to any adapter: secure headers, CORS, and rate limiting (limiting how many requests each client can make in a time window).
 
 ```ts
-import { createApp } from '@machize/core'
-import { route, securityPlugin } from '@machize/http'
-import { fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { route, securityPlugin } from '@basaltkit/http'
+import { fastifyPlugin } from '@basaltkit/fastify'
 
 const ping = route({ method: 'GET', url: '/ping', async handler() { return { pong: true } } })
 
@@ -151,7 +151,7 @@ Creates two Kubernetes-style routes:
 - `GET /readyz` — "is it ready to receive traffic?" Runs all checks; if any fails, responds `503` with the detail for each one.
 
 ```ts
-import { healthPlugin } from '@machize/http'
+import { healthPlugin } from '@basaltkit/http'
 
 healthPlugin({
   checks: {
@@ -166,7 +166,7 @@ healthPlugin({
 Serves `GET /metrics` in Prometheus format and automatically instruments all HTTP requests (counter, duration histogram, and in-flight requests), labeled by the route's **template** (`/users/:id`, not `/users/42`, to keep cardinality under control).
 
 ```ts
-import { METRICS, metricsPlugin } from '@machize/http'
+import { METRICS, metricsPlugin } from '@basaltkit/http'
 
 // in the app's plugins:
 metricsPlugin()
@@ -181,8 +181,8 @@ registry.counter('jobs_processed_total').inc()
 Records a server *span* per request (a record of "this operation took X ms"), continues a received W3C `traceparent`, returns the `traceparent` header in the response, and exports spans periodically.
 
 ```ts
-import { tracingPlugin } from '@machize/http'
-import { OtlpHttpExporter } from '@machize/core'
+import { tracingPlugin } from '@basaltkit/http'
+import { OtlpHttpExporter } from '@basaltkit/core'
 
 tracingPlugin({
   serviceName: 'my-api',
@@ -195,7 +195,7 @@ tracingPlugin({
 Generates an OpenAPI 3.0 document from the registered routes (including the Zod schemas) and serves it at `GET /openapi.json`:
 
 ```ts
-import { openapiPlugin } from '@machize/http'
+import { openapiPlugin } from '@basaltkit/http'
 
 openapiPlugin({ info: { title: 'My API', version: '1.0.0' } })
 ```
@@ -207,8 +207,8 @@ Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the 
 Adapters use `runRoute()` to execute each request: it creates the request context (`requestId`, `correlationId`, a scope from the dependency container), runs the **enrichers** (functions that enrich the context, e.g. resolving the tenant), then the **guards** (functions that can reject the request, e.g. authentication — they reject by throwing an error), validates `body`/`query`/`params`, and finally calls the handler. You only need this if you're writing your own adapter.
 
 ```ts
-import { Container } from '@machize/core'
-import { route, runRoute, toErrorResponse } from '@machize/http'
+import { Container } from '@basaltkit/core'
+import { route, runRoute, toErrorResponse } from '@basaltkit/http'
 
 const result = await runRoute(definition, neutralRequest, neutralReply, {
   container: new Container(),
@@ -219,7 +219,7 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 
 ## API reference
 
-### `route(config)` → `MachizeRoute`
+### `route(config)` → `BasaltRoute`
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
@@ -304,7 +304,7 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `serviceName` | `string` | No | `Tracer` default | Service name in the spans. |
-| `exporter` | `SpanExporter` | No | — | Destination for the spans (e.g. `OtlpHttpExporter`, `InMemorySpanExporter` from `@machize/core`). |
+| `exporter` | `SpanExporter` | No | — | Destination for the spans (e.g. `OtlpHttpExporter`, `InMemorySpanExporter` from `@basaltkit/core`). |
 | `tracer` | `Tracer` | No | created internally | Your own tracer (ignores `exporter`/`serviceName`). |
 | `flushIntervalMs` | `number` | No | `5000` | Export interval. The tracer is also exposed on the `TRACER` token. |
 
@@ -320,19 +320,19 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 
 ## Common errors and solutions (FAQ)
 
-**"I defined routes but nothing responds."** `@machize/http` doesn't open network ports — it needs an adapter (`@machize/fastify`, `@machize/express`, or `@machize/hono`) to connect the routes to a real server.
+**"I defined routes but nothing responds."** `@basaltkit/http` doesn't open network ports — it needs an adapter (`@basaltkit/fastify`, `@basaltkit/express`, or `@basaltkit/hono`) to connect the routes to a real server.
 
 **"The response is 400 with `HTTP_VALIDATION` and I sent the right data."** Check the `issues` array in the response: it indicates the field (`path`) and the reason. In `query` and `params` everything arrives as text — use `z.coerce.number()` / `z.coerce.boolean()` to convert.
 
 **"Rate limiting doesn't work with multiple servers."** `MemoryRateLimitStore` lives in each process's memory. Implement `RateLimitStore` on top of Redis and pass it in `rateLimit.store`.
 
-**"My custom error comes out as a generic 500."** Only `HttpError` (or a `MachizeError` with a numeric `status` property) maps to the status you chose; any other error becomes `INTERNAL_ERROR` on purpose, to avoid exposing internal details.
+**"My custom error comes out as a generic 500."** Only `HttpError` (or a `BasaltError` with a numeric `status` property) maps to the status you chose; any other error becomes `INTERNAL_ERROR` on purpose, to avoid exposing internal details.
 
 **"`/readyz` responds 503."** Some check returned `ok: false` or threw an error; the response body carries the detail per check in `checks`.
 
 ## How it connects to other modules
 
-- **`@machize/core`** — provides the foundation this module uses: `createApp`/plugins (`definePlugin`), the dependency-injection container (`Container`, tokens), the per-request context (`ctx()`/`runWithContext`), `MetricsRegistry`, `Tracer`, and `MachizeError`.
-- **`@machize/fastify` / `@machize/express` / `@machize/hono`** — the adapters: they convert the framework's native request into the neutral `HttpRequest`/`HttpReply`, call `runRoute()`, and register an `HttpServer` on the `HTTP_SERVER` token so this module's edge plugins work on any of them without changes.
-- **Feature plugins** (`@machize/auth`, `@machize/tenancy`, `@machize/permissions`, …) — integrate through the pipeline: register *enrichers* in the `'http:enrichers'` metadata bucket and *guards* in `'http:guards'`, and read the routes' `meta` (e.g. `meta: { auth: true }`).
-- **Tooling** (CLI `mach routes`, OpenAPI, `@machize/sdk`) — read the routes exposed by the adapters in the `'http:routes'` bucket, including the Zod schemas.
+- **`@basaltkit/core`** — provides the foundation this module uses: `createApp`/plugins (`definePlugin`), the dependency-injection container (`Container`, tokens), the per-request context (`ctx()`/`runWithContext`), `MetricsRegistry`, `Tracer`, and `BasaltError`.
+- **`@basaltkit/fastify` / `@basaltkit/express` / `@basaltkit/hono`** — the adapters: they convert the framework's native request into the neutral `HttpRequest`/`HttpReply`, call `runRoute()`, and register an `HttpServer` on the `HTTP_SERVER` token so this module's edge plugins work on any of them without changes.
+- **Feature plugins** (`@basaltkit/auth`, `@basaltkit/tenancy`, `@basaltkit/permissions`, …) — integrate through the pipeline: register *enrichers* in the `'http:enrichers'` metadata bucket and *guards* in `'http:guards'`, and read the routes' `meta` (e.g. `meta: { auth: true }`).
+- **Tooling** (CLI `basalt routes`, OpenAPI, `@basaltkit/sdk`) — read the routes exposed by the adapters in the `'http:routes'` bucket, including the Zod schemas.

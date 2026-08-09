@@ -1,6 +1,6 @@
 # Multi-tenancy
 
-`@machize/tenancy` makes every request tenant-aware. Once the tenant is
+`@basaltkit/tenancy` makes every request tenant-aware. Once the tenant is
 resolved, it lives in the context — and cache, storage, queue, logger and your
 Prisma client all scope to it automatically.
 
@@ -15,7 +15,7 @@ import {
   MemoryTenantSource,
   headerResolver,
   subdomainResolver,
-} from '@machize/tenancy'
+} from '@basaltkit/tenancy'
 
 tenancyPlugin({
   source: new MemoryTenantSource()
@@ -23,7 +23,7 @@ tenancyPlugin({
     .add({ id: 'globex', name: 'Globex' }),
   resolvers: [
     headerResolver(),                          // x-tenant-id: acme
-    subdomainResolver({ base: 'machize.app' }), // acme.machize.app
+    subdomainResolver({ base: 'basalt.app' }), // acme.basalt.app
   ],
 })
 ```
@@ -38,7 +38,7 @@ the `TenantSource` contract over your database.
 ## Reading the tenant
 
 ```ts
-import { ctx } from '@machize/core'
+import { ctx } from '@basaltkit/core'
 
 export async function currentTenant() {
   return ctx().tenant // { id, name, ... } or undefined outside a tenant
@@ -65,7 +65,7 @@ Outside a request — in a job, a script, or maintenance — enter a tenant
 explicitly:
 
 ```ts
-import { TENANCY } from '@machize/tenancy'
+import { TENANCY } from '@basaltkit/tenancy'
 
 const tenancy = app.container.get(TENANCY)
 
@@ -84,7 +84,7 @@ Your queries stay `ctx().db.user.findMany()` in all three modes — the mode is
 configuration, not a rewrite.
 
 **Shared database** (default) — a `tenantId` column, filtered automatically by
-the `@machize/prisma` extension:
+the `@basaltkit/prisma` extension:
 
 ```ts
 const db = new PrismaClient().$extends(tenancyExtension())
@@ -121,11 +121,11 @@ prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }
 Schema- and database-per-tenant need migrations run for each tenant.
 `migrateTenants` orchestrates it — bounded concurrency, provisioning the schema
 first (schema mode), and a per-tenant report where one failure never aborts the
-rest. Wire it as a `mach tenant:migrate` command:
+rest. Wire it as a `basalt tenant:migrate` command:
 
 ```ts
-import { tenantMigrateCommand, provisionTenantSchema } from '@machize/prisma'
-import { commandsPlugin } from '@machize/cli'
+import { tenantMigrateCommand, provisionTenantSchema } from '@basaltkit/prisma'
+import { commandsPlugin } from '@basaltkit/cli'
 
 commandsPlugin([
   tenantMigrateCommand({
@@ -140,7 +140,7 @@ commandsPlugin([
 ```
 
 ```bash
-mach tenant:migrate
+basalt tenant:migrate
 #  ok   acme (tenant_acme)
 #  FAIL globex (tenant_globex) — <error>
 #  Done: 1 migrated, 1 failed.

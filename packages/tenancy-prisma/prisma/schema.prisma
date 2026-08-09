@@ -1,6 +1,6 @@
-// Reference schema for @machize/tenancy-prisma.
+// Reference schema for @basaltkit/tenancy-prisma.
 //
-// Copy these models into your app's schema.prisma (or run `mach prisma:sync`),
+// Copy these models into your app's schema.prisma (or run `basalt prisma:sync`),
 // run `prisma migrate dev`, and pass the generated client to `prismaTenantSource()`.
 
 datasource db {

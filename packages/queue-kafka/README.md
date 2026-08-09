@@ -1,17 +1,17 @@
-# @machize/queue-kafka
+# @basaltkit/queue-kafka
 
-**Apache Kafka** driver for [`@machize/queue`](https://www.npmjs.com/package/@machize/queue): runs your jobs by producing and consuming messages on Kafka topics, without changing your job code. You need this package when your data platform is already built on Kafka and you want to process background work on the same infrastructure.
+**Apache Kafka** driver for [`@basaltkit/queue`](https://www.npmjs.com/package/@basaltkit/queue): runs your jobs by producing and consuming messages on Kafka topics, without changing your job code. You need this package when your data platform is already built on Kafka and you want to process background work on the same infrastructure.
 
 ## What this module solves
 
-`@machize/queue` defines **jobs** in an abstract way and picks the backend via a *driver*. This package provides a driver that talks to **Kafka**: jobs are produced to a topic and consumed by a *consumer group*.
+`@basaltkit/queue` defines **jobs** in an abstract way and picks the backend via a *driver*. This package provides a driver that talks to **Kafka**: jobs are produced to a topic and consumed by a *consumer group*.
 
 `defineJob`, `dispatch`, the workers and context propagation all stay the same — you only swap the driver.
 
 ## Installation
 
 ```bash
-pnpm add @machize/queue-kafka kafkajs
+pnpm add @basaltkit/queue-kafka kafkajs
 ```
 
 `kafkajs` is a **peer dependency**. You need a reachable Kafka cluster.
@@ -19,9 +19,9 @@ pnpm add @machize/queue-kafka kafkajs
 ## Getting started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { queuePlugin, defineJob } from '@machize/queue'
-import { KafkaQueueDriver } from '@machize/queue-kafka'
+import { createApp } from '@basaltkit/core'
+import { queuePlugin, defineJob } from '@basaltkit/queue'
+import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
 
 const IndexDocument = defineJob<{ id: string }>({
   name: 'index-document',
@@ -56,7 +56,7 @@ Kafka is a **distributed log**, not a *task queue* — and the driver is deliber
 | `retries` | ✅ | Via a *retry topic* that the worker also consumes. |
 | `backoff` | ❌ | No delay between attempts (Kafka doesn't defer). |
 
-Since the driver **declares** this, a job that requests `delay` or `priority` is caught by `@machize/queue`'s `onUnsupported` policy:
+Since the driver **declares** this, a job that requests `delay` or `priority` is caught by `@basaltkit/queue`'s `onUnsupported` policy:
 
 ```ts
 queuePlugin({ driver: new KafkaQueueDriver({ brokers }), onUnsupported: 'throw' })
@@ -64,7 +64,7 @@ await Job.dispatch(payload, { delay: '5m' }) // → throws UnsupportedJobOptionE
 // with onUnsupported: 'warn' (default) → warns once and runs immediately
 ```
 
-> If what you need is *streaming*/pub-sub (rather than jobs with retry/delay), the natural fit in Machize is usually `@machize/events`, not `@machize/queue`.
+> If what you need is *streaming*/pub-sub (rather than jobs with retry/delay), the natural fit in Basalt is usually `@basaltkit/events`, not `@basaltkit/queue`.
 
 ## How it works
 
@@ -83,15 +83,15 @@ The worker's concurrency is passed as `partitionsConsumedConcurrently` — actua
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `brokers` | `string[]` | — (required) | List of brokers, e.g. `['localhost:9092']`. |
-| `clientId` | `string` | `'machize'` | Kafka client id. |
-| `groupId` | `string` | `'machize-queue'` | Workers' consumer group. |
+| `clientId` | `string` | `'basalt'` | Kafka client id. |
+| `groupId` | `string` | `'basalt-queue'` | Workers' consumer group. |
 | `retrySuffix` | `string` | `'.retry'` | Suffix for the retry topic. |
 | `deadSuffix` | `string` | `'.dead'` | Suffix for the dead-letter topic. |
 | `client` | `KafkaClient` | kafkajs | Injectable client — used in tests without a broker. |
 
-Implements the `QueueDriver` contract from `@machize/queue`.
+Implements the `QueueDriver` contract from `@basaltkit/queue`.
 
 ## How it connects to other modules
 
-- **`@machize/queue`** — this is a driver for that package; the jobs API comes from there.
-- Sibling drivers: [`@machize/queue-rabbitmq`](https://www.npmjs.com/package/@machize/queue-rabbitmq) and [`@machize/queue-sqs`](https://www.npmjs.com/package/@machize/queue-sqs).
+- **`@basaltkit/queue`** — this is a driver for that package; the jobs API comes from there.
+- Sibling drivers: [`@basaltkit/queue-rabbitmq`](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq) and [`@basaltkit/queue-sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs).

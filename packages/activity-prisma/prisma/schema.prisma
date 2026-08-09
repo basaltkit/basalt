@@ -1,4 +1,4 @@
-// Reference schema for @machize/activity-prisma.
+// Reference schema for @basaltkit/activity-prisma.
 // Copy this model into your app's schema.prisma, migrate, and pass the client
 // to `prismaActivityStore()`.
 

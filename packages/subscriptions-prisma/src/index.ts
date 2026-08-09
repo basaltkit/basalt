@@ -6,10 +6,10 @@ import type {
   UsageConsumeResult,
   UsageStore,
   WebhookStore,
-} from '@machize/subscriptions'
+} from '@basaltkit/subscriptions'
 
 /**
- * Prisma-backed implementations of the three `@machize/subscriptions` stores —
+ * Prisma-backed implementations of the three `@basaltkit/subscriptions` stores —
  * subscriptions, usage metering and webhook idempotency — for production
  * databases (PostgreSQL, MySQL, …). Bring your generated `PrismaClient` whose
  * schema includes the `Subscription`, `UsageCounter` and `WebhookEvent` models
@@ -18,7 +18,7 @@ import type {
  * The metered `consume()` is **atomic**: a conditional `updateMany` increments
  * only while the guarded `value <= limit - amount` holds, and the database's
  * row lock serializes concurrent callers — so a quota is never overshot. The
- * production counterpart to `@machize/subscriptions-sqlite`.
+ * production counterpart to `@basaltkit/subscriptions-sqlite`.
  */
 
 interface PSubscription {
@@ -216,13 +216,13 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaSubscriptionsStores(client: PrismaSubscriptionsClient): PrismaSubscriptionsStores {
-  ensureModel(client, 'subscription', '@machize/subscriptions-prisma')
+  ensureModel(client, 'subscription', '@basaltkit/subscriptions-prisma')
   return {
     store: new PrismaSubscriptionStore(client),
     usage: new PrismaUsageStore(client),

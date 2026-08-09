@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { HookBus, createApp } from '@machize/core'
-import { FASTIFY, fastifyPlugin } from '@machize/fastify'
-import { MemoryUserSource, authPlugin, authRoutes } from '@machize/auth'
-import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@machize/tenancy'
+import { HookBus, createApp } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
+import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
+import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
 import { Comments, commentRoutes, commentsPlugin } from '../src/index.js'
 import type { Comment } from '../src/index.js'
 

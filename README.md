@@ -1,4 +1,4 @@
-# Machize
+# Basalt
 
 **The complete toolkit for building SaaS on Node.js.** Batteries-included,
 self-hosted, no vendor lock-in — tenancy, auth, billing, permissions, queues,
@@ -8,7 +8,7 @@ route to the client.
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
 > **Status: 1.0.4 — 69 packages, all published to npm. 🎉** The public API is
-> stable and covered by [semantic versioning](https://machize-docs.pages.dev/guide/versioning):
+> stable and covered by [semantic versioning](https://basalt-docs.pages.dev/guide/versioning):
 > breaking changes only in a new major, features in a minor, fixes in a patch.
 > In-memory stores are the dev default; every stateful domain has a durable
 > backend — auth, teams, subscriptions, permissions, comments, audit, activity
@@ -20,23 +20,23 @@ Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 ## Quick start
 
 ```bash
-npx create-machize my-saas   # tenancy + auth by default
+npx create-basalt my-saas   # tenancy + auth by default
 cd my-saas && pnpm install && pnpm dev
 ```
 
 Flags: `--billing` (plans), `--ui` (React + shadcn frontend), `--cli` (the
-`mach` generator entrypoint), `--install`, `--git`.
+`basalt` generator entrypoint), `--install`, `--git`.
 
 ## Production-ready by default
 
 Secure and observable out of the box — every piece is zero-dependency and opt-in
-through the plugin lifecycle. See the [Going to Production](https://github.com/Zebedeu/machize/blob/main/apps/docs/guide/production.md) guide.
+through the plugin lifecycle. See the [Going to Production](https://github.com/Zebedeu/basalt/blob/main/apps/docs/guide/production.md) guide.
 
 | Concern | How |
 |---|---|
 | Edge protection | `securityPlugin` — rate limiting, CORS, secure headers |
 | Secrets | `secret()` env schema — fail-closed in production |
-| Brute force | `@machize/auth` login lockout, on by default |
+| Brute force | `@basaltkit/auth` login lockout, on by default |
 | Safe retries | `idempotencyPlugin` — `Idempotency-Key` for mutations |
 | Health | `healthPlugin` — `/livez` liveness vs `/readyz` readiness |
 | Metrics | `metricsPlugin` — Prometheus `/metrics`, auto-instrumented |
@@ -48,7 +48,7 @@ through the plugin lifecycle. See the [Going to Production](https://github.com/Z
 
 ## Packages
 
-`@machize/*` is a **general-purpose backend toolkit** — most packages (HTTP,
+`@basaltkit/*` is a **general-purpose backend toolkit** — most packages (HTTP,
 cache, queue, storage, mailer, events, …) work in any Node app. The
 **SaaS-specific** building blocks (tenancy, auth, permissions, subscriptions,
 audit/activity/notifications) are grouped under *SaaS domain* below and carry
@@ -58,63 +58,63 @@ the `saas` keyword on npm.
 
 | Package | Purpose |
 |---|---|
-| `@machize/core` | DI container, plugin lifecycle, AsyncLocalStorage context, hooks |
-| `@machize/config` · `@machize/env` | Namespaced config and Zod-validated env |
-| `@machize/events` | Typed domain event bus with wildcards |
-| `@machize/logger` | Pino logger, auto-enriched with request/tenant context |
+| `@basaltkit/core` | DI container, plugin lifecycle, AsyncLocalStorage context, hooks |
+| `@basaltkit/config` · `@basaltkit/env` | Namespaced config and Zod-validated env |
+| `@basaltkit/events` | Typed domain event bus with wildcards |
+| `@basaltkit/logger` | Pino logger, auto-enriched with request/tenant context |
 
 **Infrastructure**
 
 | Package | Purpose |
 |---|---|
-| `@machize/http` | Framework-neutral HTTP core — typed routes, pipeline, error mapping |
-| `@machize/fastify` · `@machize/express` · `@machize/hono` | HTTP adapters — the same routes run on any of them |
-| `@machize/prisma` | Tenant-scoping client extension, per-tenant client pool |
-| `@machize/cache` · `@machize/queue` · `@machize/scheduler` | Redis cache, BullMQ jobs (pluggable driver + capability checks), fluent cron |
-| `@machize/cache-tiered` | Multi-level cache driver for `@machize/cache` — in-process near cache in front of Redis, zero deps |
-| `@machize/queue-rabbitmq` | RabbitMQ driver for `@machize/queue` — AMQP jobs with retries, backoff, delay, priority |
-| `@machize/queue-kafka` | Kafka driver for `@machize/queue` — produce/consume with retry + dead-letter topics |
-| `@machize/queue-sqs` | Amazon SQS driver for `@machize/queue` — native delay, retries with backoff, dead-letter queue |
-| `@machize/storage` · `@machize/mailer` | S3/MinIO/local storage, typed mail |
-| `@machize/cli` | The `mach` command framework |
+| `@basaltkit/http` | Framework-neutral HTTP core — typed routes, pipeline, error mapping |
+| `@basaltkit/fastify` · `@basaltkit/express` · `@basaltkit/hono` | HTTP adapters — the same routes run on any of them |
+| `@basaltkit/prisma` | Tenant-scoping client extension, per-tenant client pool |
+| `@basaltkit/cache` · `@basaltkit/queue` · `@basaltkit/scheduler` | Redis cache, BullMQ jobs (pluggable driver + capability checks), fluent cron |
+| `@basaltkit/cache-tiered` | Multi-level cache driver for `@basaltkit/cache` — in-process near cache in front of Redis, zero deps |
+| `@basaltkit/queue-rabbitmq` | RabbitMQ driver for `@basaltkit/queue` — AMQP jobs with retries, backoff, delay, priority |
+| `@basaltkit/queue-kafka` | Kafka driver for `@basaltkit/queue` — produce/consume with retry + dead-letter topics |
+| `@basaltkit/queue-sqs` | Amazon SQS driver for `@basaltkit/queue` — native delay, retries with backoff, dead-letter queue |
+| `@basaltkit/storage` · `@basaltkit/mailer` | S3/MinIO/local storage, typed mail |
+| `@basaltkit/cli` | The `basalt` command framework |
 
 **SaaS domain**
 
 | Package | Purpose |
 |---|---|
-| `@machize/tenancy` | Multi-tenancy — resolvers, per-request context, hooks |
-| `@machize/auth` | Password hashing, JWT with refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
-| `@machize/permissions` | Roles, wildcard permissions, policies, tenant scoping |
-| `@machize/teams` | Multi-user tenants — roles, email invitations, membership management, `teamRole` guard |
-| `@machize/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks, hosted Checkout & Customer Portal, proration |
-| `@machize/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
-| `@machize/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
-| `@machize/audit` · `@machize/activity` · `@machize/notifications` | Audit trail, activity feed, multi-channel notifications |
-| `@machize/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
-| `@machize/realtime-client` | Browser client for `@machize/realtime` — subscribe channels over WS/SSE, auto-reconnect, zero deps |
-| `@machize/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch (prod) drivers, auto-sync from events |
-| `@machize/search-postgres` | PostgreSQL full-text driver for `@machize/search` — tsvector/tsquery/ts_rank, tenant-scoped |
-| `@machize/storage-gcs` · `@machize/storage-azure` | Google Cloud Storage & Azure Blob drivers for `@machize/storage` |
-| `@machize/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, signed URLs, scan hooks |
-| `@machize/comments` | Per-resource comment threads — @mentions, resolve/reopen, tenant-scoped, events for realtime & notifications |
-| `@machize/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting, zero deps |
-| `@machize/exports` | Data exports — typed definitions → CSV/TSV/JSON/NDJSON, pluggable formatters, async via queue |
-| `@machize/exports-xlsx` | XLSX formatter for `@machize/exports` — a valid .xlsx with a built-in ZIP writer, zero deps |
-| `@machize/audit-viewer` | Read-only audit-trail browser — tenant-scoped filters, pagination, stats, self-contained HTML page |
-| `@machize/api-keys-ui` | Self-contained page to create/list/revoke `@machize/auth` API keys — zero deps, no build |
-| `@machize/teams-ui` | Self-contained page to manage `@machize/teams` — invitations & members, zero deps, no build |
-| `@machize/billing-ui` | Self-contained subscription page for `@machize/subscriptions` — plans, Checkout, Customer Portal |
+| `@basaltkit/tenancy` | Multi-tenancy — resolvers, per-request context, hooks |
+| `@basaltkit/auth` | Password hashing, JWT with refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
+| `@basaltkit/permissions` | Roles, wildcard permissions, policies, tenant scoping |
+| `@basaltkit/teams` | Multi-user tenants — roles, email invitations, membership management, `teamRole` guard |
+| `@basaltkit/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks, hosted Checkout & Customer Portal, proration |
+| `@basaltkit/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
+| `@basaltkit/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
+| `@basaltkit/audit` · `@basaltkit/activity` · `@basaltkit/notifications` | Audit trail, activity feed, multi-channel notifications |
+| `@basaltkit/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
+| `@basaltkit/realtime-client` | Browser client for `@basaltkit/realtime` — subscribe channels over WS/SSE, auto-reconnect, zero deps |
+| `@basaltkit/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch (prod) drivers, auto-sync from events |
+| `@basaltkit/search-postgres` | PostgreSQL full-text driver for `@basaltkit/search` — tsvector/tsquery/ts_rank, tenant-scoped |
+| `@basaltkit/storage-gcs` · `@basaltkit/storage-azure` | Google Cloud Storage & Azure Blob drivers for `@basaltkit/storage` |
+| `@basaltkit/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, signed URLs, scan hooks |
+| `@basaltkit/comments` | Per-resource comment threads — @mentions, resolve/reopen, tenant-scoped, events for realtime & notifications |
+| `@basaltkit/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting, zero deps |
+| `@basaltkit/exports` | Data exports — typed definitions → CSV/TSV/JSON/NDJSON, pluggable formatters, async via queue |
+| `@basaltkit/exports-xlsx` | XLSX formatter for `@basaltkit/exports` — a valid .xlsx with a built-in ZIP writer, zero deps |
+| `@basaltkit/audit-viewer` | Read-only audit-trail browser — tenant-scoped filters, pagination, stats, self-contained HTML page |
+| `@basaltkit/api-keys-ui` | Self-contained page to create/list/revoke `@basaltkit/auth` API keys — zero deps, no build |
+| `@basaltkit/teams-ui` | Self-contained page to manage `@basaltkit/teams` — invitations & members, zero deps, no build |
+| `@basaltkit/billing-ui` | Self-contained subscription page for `@basaltkit/subscriptions` — plans, Checkout, Customer Portal |
 
 **Developer experience & product**
 
 | Package | Purpose |
 |---|---|
-| `create-machize` | Project scaffolder |
-| `@machize/testing` | createTestApp, mail/queue fakes, time travel |
-| `@machize/sdk` | Type-safe client inferred from Zod endpoints |
-| `@machize/generator` | `mach make` code scaffolding |
-| `@machize/admin` · `@machize/dashboard` | Headless admin + dashboard engines |
-| `@machize/admin-react` | React binding (DataTable, ResourceForm, hooks) |
+| `create-basalt` | Project scaffolder |
+| `@basaltkit/testing` | createTestApp, mail/queue fakes, time travel |
+| `@basaltkit/sdk` | Type-safe client inferred from Zod endpoints |
+| `@basaltkit/generator` | `basalt make` code scaffolding |
+| `@basaltkit/admin` · `@basaltkit/dashboard` | Headless admin + dashboard engines |
+| `@basaltkit/admin-react` | React binding (DataTable, ResourceForm, hooks) |
 
 ## Development
 
@@ -125,9 +125,9 @@ pnpm test        # 1000+ tests across 86 suites
 pnpm typecheck
 ```
 
-Monorepo layout: `packages/*` (publishable `@machize/*`), `apps/*` (the
+Monorepo layout: `packages/*` (publishable `@basaltkit/*`), `apps/*` (the
 `playground` reference app), `tooling/*` (shared config). Versioning is
-locked across `@machize/*` via Changesets.
+locked across `@basaltkit/*` via Changesets.
 
 ## License
 

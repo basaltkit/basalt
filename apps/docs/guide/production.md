@@ -1,6 +1,6 @@
 # Going to Production
 
-A checklist for shipping a Machize app, and where each capability lives. Most of
+A checklist for shipping a Basalt app, and where each capability lives. Most of
 it is on by default — this page is about making the deliberate choices.
 
 ## Checklist
@@ -8,29 +8,29 @@ it is on by default — this page is about making the deliberate choices.
 - [ ] **Secrets are fail-closed** — sign with `secret()` so production refuses
       placeholders. See [Security](/guide/security#fail-closed-secrets-secret).
 - [ ] **Edge is protected** — `securityPlugin({ rateLimit, cors, headers })`.
-- [ ] **Logins are throttled** — on by default in `@machize/auth`.
+- [ ] **Logins are throttled** — on by default in `@basaltkit/auth`.
 - [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST`.
 - [ ] **Health probes wired** — `healthPlugin({ checks })` for `/livez` + `/readyz`.
 - [ ] **Metrics scraped** — `metricsPlugin()` at `/metrics`.
 - [ ] **Tracing exported** — `tracingPlugin({ exporter })` (OTLP).
 - [ ] **API documented** — `openapiPlugin({ info })`.
 - [ ] **External delivery is reliable** — `outboxPlugin` / `webhooksPlugin`.
-- [ ] **Real database** — put your domain data on `@machize/prisma`, and swap the
+- [ ] **Real database** — put your domain data on `@basaltkit/prisma`, and swap the
       framework's in-memory stores (auth, teams, subscriptions, permissions,
       comments, audit, activity, notifications) for their durable
       [`*-sqlite` / `*-prisma`](/guide/persistence) backends.
-- [ ] **Migrations run per tenant** — `migrateTenants()` / `mach` command.
+- [ ] **Migrations run per tenant** — `migrateTenants()` / `basalt` command.
 - [ ] **CI green** — build, typecheck, coverage gate, `pnpm audit`, CodeQL.
 
 ## A production-shaped `buildApp`
 
 ```ts
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import {
   fastifyPlugin, securityPlugin, healthPlugin, metricsPlugin,
   openapiPlugin, idempotencyPlugin,
-} from '@machize/fastify'
-import { prismaPlugin } from '@machize/prisma'
+} from '@basaltkit/fastify'
+import { prismaPlugin } from '@basaltkit/prisma'
 import { env } from './env.js'
 
 export function buildApp() {
@@ -62,7 +62,7 @@ logging see the real client IP behind a load balancer).
 ## Persistence
 
 Development runs on in-memory stores so there is nothing to install. In
-production, `@machize/prisma` offers three tenancy strategies — the domain code
+production, `@basaltkit/prisma` offers three tenancy strategies — the domain code
 (`db().model.findMany()`) is identical across all three:
 
 | Strategy | Enable with |
@@ -73,13 +73,13 @@ production, `@machize/prisma` offers three tenancy strategies — the domain cod
 
 A built-in LRU `TenantClientPool` keeps connection counts bounded, and
 `migrateTenants()` runs migrations across every tenant. Generate a
-Prisma-backed resource with `mach make:resource Invoice --prisma`.
+Prisma-backed resource with `basalt make:resource Invoice --prisma`.
 
-`@machize/prisma` is for **your** domain data. The framework's own stateful
+`@basaltkit/prisma` is for **your** domain data. The framework's own stateful
 domains — auth, teams, subscriptions, permissions, comments, audit, activity and
 notifications — also default to in-memory and each has a durable backend to swap
-in: `@machize/<domain>-sqlite` (single-node, `node:sqlite`, zero deps) or
-`@machize/<domain>-prisma` (Postgres/MySQL). It's a one-line change per store
+in: `@basaltkit/<domain>-sqlite` (single-node, `node:sqlite`, zero deps) or
+`@basaltkit/<domain>-prisma` (Postgres/MySQL). It's a one-line change per store
 because the contract is unchanged. See the
 [Persistence guide](/guide/persistence) for the catalog, and
 [Database-per-tenant](/guide/database-per-tenant) to route those stores through
@@ -112,23 +112,23 @@ The repo ships GitHub Actions that gate every PR:
 
 ## Reliability
 
-- **Outbox** (`@machize/events`) — write events to a durable store, relay them to
+- **Outbox** (`@basaltkit/events`) — write events to a durable store, relay them to
   external systems with retries and a dead-letter ceiling. At-least-once
   delivery that survives crashes. See [Webhooks](/guide/webhooks).
-- **Webhooks** (`@machize/webhooks`) — signed outbound delivery with backoff,
+- **Webhooks** (`@basaltkit/webhooks`) — signed outbound delivery with backoff,
   per-tenant subscriptions, auto-dispatched from domain events.
-- **Feature flags** (`@machize/flags`) — per-tenant/user targeting and
+- **Feature flags** (`@basaltkit/flags`) — per-tenant/user targeting and
   deterministic rollouts for safe, gradual releases.
 
 ## Quality gates
 
 `pnpm lint` (ESLint), `pnpm typecheck`, and `pnpm test:coverage` (V8, enforced
 thresholds) all run in CI, alongside `pnpm audit`, CodeQL and a Postgres
-integration job. Versions move in [lockstep](https://github.com/Zebedeu/machize/blob/main/VERSIONING.md)
-across `@machize/*`, so one range covers the whole toolkit.
+integration job. Versions move in [lockstep](https://github.com/Zebedeu/basalt/blob/main/VERSIONING.md)
+across `@basaltkit/*`, so one range covers the whole toolkit.
 
 ## Roadmap
 
 Toward `1.0`: settling the API surface, first-class OpenTelemetry **metrics**
 export (traces already export via OTLP), and more persistence adapters. Track
-progress on the [repository](https://github.com/Zebedeu/machize).
+progress on the [repository](https://github.com/Zebedeu/basalt).

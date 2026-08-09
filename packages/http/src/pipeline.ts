@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { Container, MachizeError, runWithContext, type RequestContext } from '@machize/core'
+import { Container, BasaltError, runWithContext, type RequestContext } from '@basaltkit/core'
 import type { ZodType } from 'zod'
 import { RequestValidationError, type ValidationIssue } from './errors.js'
-import type { HttpReply, HttpRequest, MachizeRoute } from './route.js'
+import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 
-declare module '@machize/core' {
+declare module '@basaltkit/core' {
   interface RequestContext {
     /** Per-request DI scope — `scoped` instances live here. */
     container?: Container
@@ -28,7 +28,7 @@ export type RequestEnricher = (info: {
  * `meta.auth`, permissions uses `meta.can`. A guard rejects by throwing.
  */
 export type RouteGuard = (info: {
-  route: MachizeRoute
+  route: BasaltRoute
   request: HttpRequest
   context: RequestContext
   container: Container
@@ -63,7 +63,7 @@ function parsePart(part: 'body' | 'query' | 'params', schema: ZodType | undefine
  * handler's value (the adapter sends it unless the handler already replied).
  */
 export async function runRoute(
-  definition: MachizeRoute,
+  definition: BasaltRoute,
   request: HttpRequest,
   reply: HttpReply,
   pipeline: RoutePipeline = {},
@@ -88,7 +88,7 @@ export async function runRoute(
       params: parsePart('params', definition.params, request.params),
       request,
       reply,
-    } as Parameters<MachizeRoute['handler']>[0])
+    } as Parameters<BasaltRoute['handler']>[0])
   })
 }
 
@@ -108,7 +108,7 @@ export function toErrorResponse(error: unknown): ErrorResponse {
       body: { error: { code: error.code, message: error.message, part: error.part, issues: error.issues } },
     }
   }
-  if (error instanceof MachizeError) {
+  if (error instanceof BasaltError) {
     const status = (error as { status?: unknown }).status
     if (typeof status === 'number') {
       return { status, body: { error: { code: error.code, message: error.message } } }

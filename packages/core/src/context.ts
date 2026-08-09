@@ -5,7 +5,7 @@ import { ContextUnavailableError } from './errors.js'
  * Per-request/job context, propagated through the whole call stack via AsyncLocalStorage.
  * Packages extend it via module augmentation:
  *
- * declare module '@machize/core' {
+ * declare module '@basaltkit/core' {
  *   interface RequestContext {
  *     tenant?: { id: string }
  *   }

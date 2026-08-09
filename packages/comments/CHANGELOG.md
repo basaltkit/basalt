@@ -1,4 +1,4 @@
-# @machize/comments
+# @basaltkit/comments
 
 ## 1.0.5
 
@@ -6,101 +6,101 @@
 
 - Lockstep 1.0.5 release. No code changes in this package; it moves with the
   ecosystem-wide durable/Redis backend expansion (tenancy, events outbox,
-  webhooks, rate-limiting, idempotency). Internal `@machize/*` dependencies now
+  webhooks, rate-limiting, idempotency). Internal `@basaltkit/*` dependencies now
   use caret ranges (`workspace:^`).
 
 ## 1.0.0
 
 ### Major Changes
 
-- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@machize/*` ecosystem.
+- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@basaltkit/*` ecosystem.
 
 ## 0.24.0
 
 ### Patch Changes
 
-- @machize/core@0.24.0
-- @machize/fastify@0.24.0
+- @basaltkit/core@0.24.0
+- @basaltkit/fastify@0.24.0
 
 ## 0.23.0
 
 ### Patch Changes
 
-- @machize/core@0.23.0
-- @machize/fastify@0.23.0
+- @basaltkit/core@0.23.0
+- @basaltkit/fastify@0.23.0
 
 ## 0.22.0
 
 ### Patch Changes
 
-- @machize/core@0.22.0
-- @machize/fastify@0.22.0
+- @basaltkit/core@0.22.0
+- @basaltkit/fastify@0.22.0
 
 ## 0.21.0
 
 ### Patch Changes
 
-- @machize/core@0.21.0
-- @machize/fastify@0.21.0
+- @basaltkit/core@0.21.0
+- @basaltkit/fastify@0.21.0
 
 ## 0.20.0
 
 ### Patch Changes
 
-- @machize/core@0.20.0
-- @machize/fastify@0.20.0
+- @basaltkit/core@0.20.0
+- @basaltkit/fastify@0.20.0
 
 ## 0.19.0
 
 ### Patch Changes
 
-- @machize/core@0.19.0
-- @machize/fastify@0.19.0
+- @basaltkit/core@0.19.0
+- @basaltkit/fastify@0.19.0
 
 ## 0.18.0
 
 ### Patch Changes
 
-- @machize/core@0.18.0
-- @machize/fastify@0.18.0
+- @basaltkit/core@0.18.0
+- @basaltkit/fastify@0.18.0
 
 ## 0.17.0
 
 ### Patch Changes
 
-- @machize/core@0.17.0
-- @machize/fastify@0.17.0
+- @basaltkit/core@0.17.0
+- @basaltkit/fastify@0.17.0
 
 ## 0.16.0
 
 ### Patch Changes
 
-- @machize/core@0.16.0
-- @machize/fastify@0.16.0
+- @basaltkit/core@0.16.0
+- @basaltkit/fastify@0.16.0
 
 ## 0.15.0
 
 ### Patch Changes
 
-- @machize/core@0.15.0
-- @machize/fastify@0.15.0
+- @basaltkit/core@0.15.0
+- @basaltkit/fastify@0.15.0
 
 ## 0.14.0
 
 ### Patch Changes
 
-- @machize/core@0.14.0
-- @machize/fastify@0.14.0
+- @basaltkit/core@0.14.0
+- @basaltkit/fastify@0.14.0
 
 ## 0.13.0
 
 ### Minor Changes
 
-- bbefc0c: New package: `@machize/comments` — per-resource comment threads.
+- bbefc0c: New package: `@basaltkit/comments` — per-resource comment threads.
 
-  Attach comments to any resource (`resourceType`:`resourceId`) within a tenant, with nested replies (`tree()`), @mention extraction, and resolve/reopen. `comments.on(type, id).add({ authorId, body, parentId? })` mints a comment, pulls @mentions from the body (configurable pattern), and emits `comment:created` plus one `comment:mentioned` per mentioned user — so `@machize/realtime` can push live and `@machize/notifications` can alert the mentioned, with no coupling. Also `edit`/`remove`/`resolve`/`reopen`, each emitting its event. `commentRoutes()` exposes list/create/edit/delete/resolve/reopen with the author taken from `ctx().user` and edits/deletes restricted to the author. `CommentStore` (with `MemoryCommentStore`) persists threads; tenant comes from the argument or the request context. Fully unit-tested, including the HTTP author-permission flow.
+  Attach comments to any resource (`resourceType`:`resourceId`) within a tenant, with nested replies (`tree()`), @mention extraction, and resolve/reopen. `comments.on(type, id).add({ authorId, body, parentId? })` mints a comment, pulls @mentions from the body (configurable pattern), and emits `comment:created` plus one `comment:mentioned` per mentioned user — so `@basaltkit/realtime` can push live and `@basaltkit/notifications` can alert the mentioned, with no coupling. Also `edit`/`remove`/`resolve`/`reopen`, each emitting its event. `commentRoutes()` exposes list/create/edit/delete/resolve/reopen with the author taken from `ctx().user` and edits/deletes restricted to the author. `CommentStore` (with `MemoryCommentStore`) persists threads; tenant comes from the argument or the request context. Fully unit-tested, including the HTTP author-permission flow.
 
 ### Patch Changes
 
-- @machize/core@0.13.0
-- @machize/fastify@0.13.0
+- @basaltkit/core@0.13.0
+- @basaltkit/fastify@0.13.0

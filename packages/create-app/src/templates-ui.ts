@@ -1,12 +1,12 @@
 import type { ProjectOptions } from './templates.js'
 
 /** Kept in sync with the monorepo release line (mirror of templates.ts). */
-const MACHIZE_VERSION = '^1.0.0'
+const BASALT_VERSION = '^1.0.0'
 
 /**
  * The `web/` frontend emitted when `--ui` is passed: a Vite + React app on
- * @machize/admin-shadcn (authentic shadcn/ui components) talking to the API
- * through @machize/sdk. With auth on, it ships a login/register gate and a
+ * @basaltkit/admin-shadcn (authentic shadcn/ui components) talking to the API
+ * through @basaltkit/sdk. With auth on, it ships a login/register gate and a
  * small dashboard; otherwise a live status page. The Vite dev server proxies
  * `/api` to the backend so there is no CORS to configure.
  */
@@ -34,9 +34,9 @@ function webPackageJson(options: ProjectOptions): string {
       type: 'module',
       scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' },
       dependencies: {
-        '@machize/admin': MACHIZE_VERSION,
-        '@machize/admin-shadcn': MACHIZE_VERSION,
-        '@machize/sdk': MACHIZE_VERSION,
+        '@basaltkit/admin': BASALT_VERSION,
+        '@basaltkit/admin-shadcn': BASALT_VERSION,
+        '@basaltkit/sdk': BASALT_VERSION,
         react: '^18.3.1',
         'react-dom': '^18.3.1',
         zod: '^3.24.0',
@@ -66,7 +66,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // @machize/admin uses randomUUID from crypto; map it to Web Crypto in the browser.
+      // @basaltkit/admin uses randomUUID from crypto; map it to Web Crypto in the browser.
       crypto: fileURLToPath(new URL('./src/crypto-shim.ts', import.meta.url)),
     },
   },
@@ -138,7 +138,7 @@ function webPostcss(): string {
 function webTailwind(): string {
   return `export default {
   darkMode: ['class'],
-  content: ['./index.html', './src/**/*.{ts,tsx}', './node_modules/@machize/admin-shadcn/dist/**/*.js'],
+  content: ['./index.html', './src/**/*.{ts,tsx}', './node_modules/@basaltkit/admin-shadcn/dist/**/*.js'],
   theme: {
     extend: {
       colors: {
@@ -293,7 +293,7 @@ function webApi(options: ProjectOptions): string {
     : ''
   const user = options.auth ? `\nconst User = z.object({ id: z.string(), email: z.string() })` : ''
 
-  return `import { createClient, endpoint, type Client as SdkClient } from '@machize/sdk'
+  return `import { createClient, endpoint, type Client as SdkClient } from '@basaltkit/sdk'
 import { z } from 'zod'
 ${user}${credentials}
 
@@ -319,7 +319,7 @@ function webApp(options: ProjectOptions): string {
 
 function webAppStatusOnly(options: ProjectOptions): string {
   return `import { useEffect, useState } from 'react'
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@machize/admin-shadcn'
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@basaltkit/admin-shadcn'
 import { makeApi } from './api.js'
 
 const api = makeApi()
@@ -391,7 +391,7 @@ export function App() {
 
 function webAppWithAuth(options: ProjectOptions): string {
   return `import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '@machize/admin-shadcn'
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '@basaltkit/admin-shadcn'
 import { makeApi } from './api.js'
 
 const STORAGE_KEY = '${options.name}.token'

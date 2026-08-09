@@ -1,29 +1,29 @@
-# Code owners for Machize.
+# Code owners for Basalt.
 #
 # As the project grows, assign owners per package so reviews route to the
 # people who maintain each area. Until dedicated teams exist, the core team
-# owns everything. Replace @machize/core-team with real GitHub teams/handles.
+# owns everything. Replace @basaltkit/core-team with real GitHub teams/handles.
 
-* @machize/core-team
+* @basaltkit/core-team
 
 # Foundation
-/packages/core/        @machize/core-team
-/packages/config/      @machize/core-team
-/packages/env/         @machize/core-team
-/packages/events/      @machize/core-team
-/packages/logger/      @machize/core-team
+/packages/core/        @basaltkit/core-team
+/packages/config/      @basaltkit/core-team
+/packages/env/         @basaltkit/core-team
+/packages/events/      @basaltkit/core-team
+/packages/logger/      @basaltkit/core-team
 
 # Infrastructure
-/packages/fastify/     @machize/core-team
-/packages/prisma/      @machize/core-team
+/packages/fastify/     @basaltkit/core-team
+/packages/prisma/      @basaltkit/core-team
 
 # SaaS domain
-/packages/tenancy/       @machize/core-team
-/packages/auth/          @machize/core-team
-/packages/permissions/   @machize/core-team
-/packages/subscriptions/ @machize/core-team
+/packages/tenancy/       @basaltkit/core-team
+/packages/auth/          @basaltkit/core-team
+/packages/permissions/   @basaltkit/core-team
+/packages/subscriptions/ @basaltkit/core-team
 
 # Release + governance
-/.github/              @machize/core-team
-/.changeset/           @machize/core-team
-/ARCHITECTURE.md       @machize/core-team
+/.github/              @basaltkit/core-team
+/.changeset/           @basaltkit/core-team
+/ARCHITECTURE.md       @basaltkit/core-team

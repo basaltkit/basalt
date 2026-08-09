@@ -1,4 +1,4 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
 /** The tenant record. Apps extend it with whatever they store per tenant. */
 export interface Tenant {
@@ -42,7 +42,7 @@ export class MemoryTenantSource implements TenantSource {
 }
 
 /** Request could not be mapped to a tenant. Maps to HTTP 404 in the adapter. */
-export class TenancyNotResolvedError extends MachizeError {
+export class TenancyNotResolvedError extends BasaltError {
   readonly status = 404
   constructor() {
     super(
@@ -52,7 +52,7 @@ export class TenancyNotResolvedError extends MachizeError {
   }
 }
 
-export class TenantNotFoundError extends MachizeError {
+export class TenantNotFoundError extends BasaltError {
   constructor(id: string) {
     super('TENANT_NOT_FOUND', `Tenant "${id}" does not exist in the tenant source.`)
   }

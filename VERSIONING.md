@@ -1,25 +1,25 @@
 # Versioning
 
-## Lockstep for `@machize/*`
+## Lockstep for `@basaltkit/*`
 
-All `@machize/*` packages are versioned **in lockstep** — they always share the
+All `@basaltkit/*` packages are versioned **in lockstep** — they always share the
 same version number and are released together. This is enforced by the
 changesets configuration:
 
 ```jsonc
 // .changeset/config.json
-"fixed": [["@machize/*"]]
+"fixed": [["@basaltkit/*"]]
 ```
 
-A changeset touching any `@machize/*` package bumps **every** `@machize/*`
+A changeset touching any `@basaltkit/*` package bumps **every** `@basaltkit/*`
 package to the same new version. This deliberately avoids the semver-0.x
 footgun where `^0.1.0` (which resolves to `>=0.1.0 <0.2.0`) silently excludes a
 minor bump in a sibling package: because every package moves together, an app
 can pin a single range for the whole toolkit and always get a compatible set.
 
-`create-machize` is **not** part of the group — the scaffolder has its own
-release cadence, and pins the `@machize/*` line it scaffolds via a single
-`MACHIZE_VERSION` constant (with a temporary per-package override only while a
+`create-basalt` is **not** part of the group — the scaffolder has its own
+release cadence, and pins the `@basaltkit/*` line it scaffolds via a single
+`BASALT_VERSION` constant (with a temporary per-package override only while a
 package is briefly ahead of the line; see `packages/create-app/src/templates.ts`).
 
 ## Release flow

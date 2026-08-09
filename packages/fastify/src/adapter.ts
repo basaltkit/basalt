@@ -1,4 +1,4 @@
-import { Container, createToken, definePlugin, ensureMetadata } from '@machize/core'
+import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
   HttpServerCollector,
   HTTP_SERVER,
@@ -6,10 +6,10 @@ import {
   toErrorResponse,
   type HttpReply,
   type HttpRequest,
-  type MachizeRoute,
+  type BasaltRoute,
   type RequestEnricher,
   type RouteGuard,
-} from '@machize/http'
+} from '@basaltkit/http'
 import Fastify, {
   type FastifyError,
   type FastifyInstance,
@@ -19,11 +19,11 @@ import Fastify, {
 } from 'fastify'
 
 // The request pipeline (validation, enrichers, guards, error mapping) lives in
-// @machize/http, shared with the Express and Hono adapters. This module only
+// @basaltkit/http, shared with the Express and Hono adapters. This module only
 // adapts Fastify's request/reply to the neutral shape.
-export type { RequestEnricher, RouteGuard } from '@machize/http'
+export type { RequestEnricher, RouteGuard } from '@basaltkit/http'
 
-declare module '@machize/core' {
+declare module '@basaltkit/core' {
   interface RequestContext {
     /** Per-request DI scope — `scoped` instances live here. */
     container?: Container
@@ -63,7 +63,7 @@ class FastifyReplyAdapter implements HttpReply {
   }
 }
 export interface FastifyPluginOptions {
-  routes?: MachizeRoute[]
+  routes?: BasaltRoute[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
   fastify?: FastifyServerOptions
 }
@@ -71,13 +71,13 @@ export interface FastifyPluginOptions {
 export function fastifyPlugin(options: FastifyPluginOptions = {}) {
   const collector = new HttpServerCollector()
   return definePlugin({
-    name: 'machize:fastify',
+    name: 'basalt:fastify',
     register({ container }) {
       container.singleton(FASTIFY, () => {
         const instance = Fastify(options.fastify ?? {})
         instance.setErrorHandler(errorHandler)
         // Fastify's default JSON parser throws on an empty body — but a POST to a
-        // bodiless route (e.g. an @machize/sdk call with no payload) still sends
+        // bodiless route (e.g. an @basaltkit/sdk call with no payload) still sends
         // `content-type: application/json` with an empty body, which surfaced as a
         // 500. Treat an empty body as "no body" (undefined); keep strict parsing
         // (and a 400) for actual malformed JSON.
@@ -107,7 +107,7 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       registerRoutes(instance, routes, container, enrichers, guards)
       // Mount edge-plugin hooks/routes once every plugin has registered them.
       hooks.on('app:booted', () => mountCollector(instance, collector))
-      // Expose routes to tooling (CLI `mach routes`, OpenAPI, SDK). The Zod
+      // Expose routes to tooling (CLI `basalt routes`, OpenAPI, SDK). The Zod
       // schemas ride along so the OpenAPI generator needs no duplicate wiring.
       for (const definition of routes) {
         metadata.add('http:routes', {
@@ -127,10 +127,10 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
   })
 }
 
-/** Registers Machize routes on a Fastify instance (also usable without the plugin). */
+/** Registers Basalt routes on a Fastify instance (also usable without the plugin). */
 export function registerRoutes(
   instance: FastifyInstance,
-  routes: MachizeRoute[],
+  routes: BasaltRoute[],
   container?: Container,
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
@@ -159,7 +159,7 @@ function toNeutralRequest(request: FastifyRequest): HttpRequest {
 }
 
 function wrapHandler(
-  definition: MachizeRoute,
+  definition: BasaltRoute,
   container: Container | undefined,
   enrichers: RequestEnricher[],
   guards: RouteGuard[],

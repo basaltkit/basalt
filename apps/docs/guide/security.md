@@ -1,6 +1,6 @@
 # Security
 
-Machize is **secure by default** at the HTTP edge and fail-closed on secrets.
+Basalt is **secure by default** at the HTTP edge and fail-closed on secrets.
 Everything here is zero-dependency and wired through the plugin lifecycle.
 
 ## Edge protection — `securityPlugin`
@@ -9,7 +9,7 @@ One plugin covers rate limiting, CORS and secure response headers. All three
 are on by default with sensible values.
 
 ```ts
-import { securityPlugin } from '@machize/fastify'
+import { securityPlugin } from '@basaltkit/fastify'
 
 securityPlugin({
   rateLimit: { limit: 100, windowMs: 60_000 },      // 100 req / minute / IP
@@ -37,7 +37,7 @@ securityPlugin({
 
 The default store is in-memory (`MemoryRateLimitStore`). For multiple instances
 implement the `RateLimitStore` interface over Redis — the same driver pattern
-used by `@machize/cache`.
+used by `@basaltkit/cache`.
 
 ### CORS
 
@@ -57,7 +57,7 @@ The most common production incident is shipping a placeholder signing key.
 `secret()` makes that impossible:
 
 ```ts
-import { defineEnv, secret } from '@machize/env'
+import { defineEnv, secret } from '@basaltkit/env'
 
 export const env = defineEnv({
   APP_SECRET: secret({ devDefault: 'dev-only-insecure-secret-value' }),
@@ -71,13 +71,13 @@ export const env = defineEnv({
 
 ## Brute-force lockout
 
-`@machize/auth` throttles failed logins per email out of the box — no wiring
+`@basaltkit/auth` throttles failed logins per email out of the box — no wiring
 needed. After too many failures within a rolling window, `login()` throws
 `AccountLockedError` (HTTP 429) even for the correct password; a success clears
 the counter.
 
 ```ts
-import { authPlugin, LoginThrottle } from '@machize/auth'
+import { authPlugin, LoginThrottle } from '@basaltkit/auth'
 
 authPlugin({
   users,
@@ -95,7 +95,7 @@ Safe retries for `POST`: a client that sends an `Idempotency-Key` gets the
 card twice.
 
 ```ts
-import { idempotencyPlugin } from '@machize/fastify'
+import { idempotencyPlugin } from '@basaltkit/fastify'
 
 idempotencyPlugin() // guards POST by default
 ```

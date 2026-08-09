@@ -1,4 +1,4 @@
-import { Container, createToken, definePlugin, ensureMetadata } from '@machize/core'
+import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
   HttpServerCollector,
   HTTP_SERVER,
@@ -6,10 +6,10 @@ import {
   toErrorResponse,
   type HttpReply,
   type HttpRequest,
-  type MachizeRoute,
+  type BasaltRoute,
   type RequestEnricher,
   type RouteGuard,
-} from '@machize/http'
+} from '@basaltkit/http'
 import { Hono, type Context, type Next } from 'hono'
 
 export const HONO = createToken<Hono<any>>('hono')
@@ -93,7 +93,7 @@ function toResponse(reply: HonoReply, payload: unknown): Response {
 }
 
 function handlerFor(
-  definition: MachizeRoute,
+  definition: BasaltRoute,
   container: Container | undefined,
   enrichers: RequestEnricher[],
   guards: RouteGuard[],
@@ -117,10 +117,10 @@ function handlerFor(
   }
 }
 
-/** Mounts Machize routes on a Hono app (usable without the plugin). */
+/** Mounts Basalt routes on a Hono app (usable without the plugin). */
 export function registerRoutes(
   app: Hono<any>,
-  routes: MachizeRoute[],
+  routes: BasaltRoute[],
   container?: Container,
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
@@ -131,20 +131,20 @@ export function registerRoutes(
 }
 
 export interface HonoPluginOptions {
-  routes?: MachizeRoute[]
+  routes?: BasaltRoute[]
   /** Bring your own Hono app; otherwise a fresh one is created. */
   app?: Hono<any>
 }
 
 /**
- * Runs Machize on Hono (Node, Bun, Deno, edge). The same routes, enrichers and
+ * Runs Basalt on Hono (Node, Bun, Deno, edge). The same routes, enrichers and
  * guards you register for Fastify work unchanged — resolve `HONO` for the app
  * to serve (e.g. `@hono/node-server` or an edge runtime's `fetch` export).
  */
 export function honoPlugin(options: HonoPluginOptions = {}) {
   const collector = new HttpServerCollector()
   return definePlugin({
-    name: 'machize:hono',
+    name: 'basalt:hono',
     register({ container }) {
       container.singleton(HONO, () => options.app ?? new Hono())
       container.singleton(HTTP_SERVER, () => collector)

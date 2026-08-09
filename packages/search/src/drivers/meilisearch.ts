@@ -1,7 +1,7 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 import type { IndexDefinition, SearchDocument, SearchDriver, SearchQuery, SearchResult } from '../types.js'
 
-export class MeilisearchError extends MachizeError {
+export class MeilisearchError extends BasaltError {
   constructor(
     readonly httpStatus: number,
     message: string,

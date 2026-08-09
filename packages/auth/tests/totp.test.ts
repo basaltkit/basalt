@@ -34,9 +34,9 @@ describe('TOTP (RFC 6238)', () => {
   })
 
   it('builds an otpauth URI with issuer and secret', () => {
-    const uri = otpauthUri({ secret, account: 'ada@acme.test', issuer: 'Machize' })
-    expect(uri.startsWith('otpauth://totp/Machize:ada%40acme.test?')).toBe(true)
+    const uri = otpauthUri({ secret, account: 'ada@acme.test', issuer: 'Basalt' })
+    expect(uri.startsWith('otpauth://totp/Basalt:ada%40acme.test?')).toBe(true)
     expect(uri).toContain(`secret=${secret}`)
-    expect(uri).toContain('issuer=Machize')
+    expect(uri).toContain('issuer=Basalt')
   })
 })

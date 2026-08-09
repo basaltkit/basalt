@@ -1,18 +1,18 @@
-# @machize/teams-sqlite
+# @basaltkit/teams-sqlite
 
-Durable, **SQLite-backed** implementations of the [`@machize/teams`](https://github.com/Zebedeu/machize/tree/main/packages/teams)
+Durable, **SQLite-backed** implementations of the [`@basaltkit/teams`](https://github.com/Zebedeu/basalt/tree/main/packages/teams)
 stores — **memberships** and **invitations** — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
 
-`@machize/teams` ships in-memory stores that forget everything on restart. Swap
+`@basaltkit/teams` ships in-memory stores that forget everything on restart. Swap
 in these and team rosters and pending invitations survive a redeploy — no ORM,
 no migration tool, no service to run. It's the single-node reference backend for
 teams; the production (Postgres/MySQL) counterpart is
-[`@machize/teams-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/teams-prisma).
+[`@basaltkit/teams-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/teams-prisma).
 
 ```bash
-pnpm add @machize/teams-sqlite   # peer: @machize/teams
+pnpm add @basaltkit/teams-sqlite   # peer: @basaltkit/teams
 ```
 
 > Requires **Node 22.5+**. Stable and flag-free on Node 24; on 22.x run with
@@ -24,8 +24,8 @@ pnpm add @machize/teams-sqlite   # peer: @machize/teams
 returns both stores named to drop straight into `teamsPlugin`:
 
 ```ts
-import { teamsPlugin } from '@machize/teams'
-import { sqliteTeamsStores } from '@machize/teams-sqlite'
+import { teamsPlugin } from '@basaltkit/teams'
+import { sqliteTeamsStores } from '@basaltkit/teams-sqlite'
 
 const t = sqliteTeamsStores('./data/teams.db')   // ':memory:' by default
 
@@ -42,10 +42,10 @@ these classes implement the exact same store contracts as the in-memory ones.
 ## Pick individual stores
 
 Both stores are exported and take a `DatabaseSync`, so you can share one handle
-with the rest of your app (or with `@machize/auth-sqlite`):
+with the rest of your app (or with `@basaltkit/auth-sqlite`):
 
 ```ts
-import { openTeamsDatabase, SqliteMembershipStore, SqliteInvitationStore } from '@machize/teams-sqlite'
+import { openTeamsDatabase, SqliteMembershipStore, SqliteInvitationStore } from '@basaltkit/teams-sqlite'
 
 const db = openTeamsDatabase('./data/app.db')
 const memberships = new SqliteMembershipStore(db)

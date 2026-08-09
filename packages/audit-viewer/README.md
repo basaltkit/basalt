@@ -1,26 +1,26 @@
-# @machize/audit-viewer
+# @basaltkit/audit-viewer
 
-**Read-only** viewer for the audit trail produced by [`@machize/audit`](https://www.npmjs.com/package/@machize/audit): **per-tenant**, filterable and paginated queries, with aggregated **statistics**, and a self-contained **HTML page** to browse it. You need this module when you want to give admins (or yourself) a way to review who did what — for support, compliance, or debugging.
+**Read-only** viewer for the audit trail produced by [`@basaltkit/audit`](https://www.npmjs.com/package/@basaltkit/audit): **per-tenant**, filterable and paginated queries, with aggregated **statistics**, and a self-contained **HTML page** to browse it. You need this module when you want to give admins (or yourself) a way to review who did what — for support, compliance, or debugging.
 
 ## What this module solves
 
-`@machize/audit` writes an *append-only* (immutable) trail of everything that happens. This module is the lens for reading it: filter by event/actor/period/source, paginate, view totals and distributions — plus a page ready to open in the browser. It never writes to or alters the trail.
+`@basaltkit/audit` writes an *append-only* (immutable) trail of everything that happens. This module is the lens for reading it: filter by event/actor/period/source, paginate, view totals and distributions — plus a page ready to open in the browser. It never writes to or alters the trail.
 
 ## Installation
 
 ```bash
-pnpm add @machize/audit-viewer @machize/audit
+pnpm add @basaltkit/audit-viewer @basaltkit/audit
 ```
 
-Depends on `@machize/core`, `@machize/audit`, and `@machize/fastify`. Requires the `auditPlugin` to be registered (that's where the trail comes from).
+Depends on `@basaltkit/core`, `@basaltkit/audit`, and `@basaltkit/fastify`. Requires the `auditPlugin` to be registered (that's where the trail comes from).
 
 ## Get started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { auditPlugin } from '@machize/audit'
-import { auditViewerPlugin, auditViewerRoutes, AUDIT_VIEWER } from '@machize/audit-viewer'
-import { fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { auditPlugin } from '@basaltkit/audit'
+import { auditViewerPlugin, auditViewerRoutes, AUDIT_VIEWER } from '@basaltkit/audit-viewer'
+import { fastifyPlugin } from '@basaltkit/fastify'
 
 const app = await createApp({
   plugins: [
@@ -77,6 +77,6 @@ Registers the `AUDIT_VIEWER` token. `bucketMs` is the timeline bucket size (defa
 
 ## How it connects to other modules
 
-- **`@machize/audit`** — the immutable source of the trail (this module only reads it).
-- **`@machize/permissions`** — adds a *guard* (`meta.can: 'audit:read'`) to restrict access to admins.
-- **`@machize/exports`** — exports a query's result to CSV for compliance reports.
+- **`@basaltkit/audit`** — the immutable source of the trail (this module only reads it).
+- **`@basaltkit/permissions`** — adds a *guard* (`meta.can: 'audit:read'`) to restrict access to admins.
+- **`@basaltkit/exports`** — exports a query's result to CSV for compliance reports.

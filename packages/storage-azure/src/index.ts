@@ -1,4 +1,4 @@
-import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@machize/storage'
+import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
 
 /** The subset of an `@azure/storage-blob` BlockBlobClient this driver uses. */
 export interface AzureBlobLike {
@@ -27,7 +27,7 @@ const isNotFound = (error: unknown): boolean =>
   (error as { code?: string } | undefined)?.code === 'BlobNotFound'
 
 /**
- * Azure Blob Storage driver for `@machize/storage`. Uses `@azure/storage-blob`
+ * Azure Blob Storage driver for `@basaltkit/storage`. Uses `@azure/storage-blob`
  * (an optional peer dependency) via an injectable container client, so its
  * logic is unit-tested without touching Azure.
  */

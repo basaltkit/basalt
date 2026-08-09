@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, ctx, tryCtx } from '@machize/core'
-import { FASTIFY, fastifyPlugin, route } from '@machize/fastify'
+import { createApp, ctx, tryCtx } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin, route } from '@basaltkit/fastify'
 import {
   headerResolver,
   MemoryTenantSource,
@@ -20,12 +20,12 @@ const source = () =>
 
 describe('resolvers', () => {
   it('subdomainResolver extracts the first label and ignores www/base/nested', () => {
-    const resolve = subdomainResolver({ base: 'machize.app' })
-    expect(resolve({ headers: { host: 'acme.machize.app' } })).toEqual({ id: 'acme' })
-    expect(resolve({ headers: { host: 'acme.machize.app:3000' } })).toEqual({ id: 'acme' })
-    expect(resolve({ headers: { host: 'machize.app' } })).toBeNull()
-    expect(resolve({ headers: { host: 'www.machize.app' } })).toBeNull()
-    expect(resolve({ headers: { host: 'a.b.machize.app' } })).toBeNull()
+    const resolve = subdomainResolver({ base: 'basalt.app' })
+    expect(resolve({ headers: { host: 'acme.basalt.app' } })).toEqual({ id: 'acme' })
+    expect(resolve({ headers: { host: 'acme.basalt.app:3000' } })).toEqual({ id: 'acme' })
+    expect(resolve({ headers: { host: 'basalt.app' } })).toBeNull()
+    expect(resolve({ headers: { host: 'www.basalt.app' } })).toBeNull()
+    expect(resolve({ headers: { host: 'a.b.basalt.app' } })).toBeNull()
     expect(resolve({ headers: { host: 'other.com' } })).toBeNull()
   })
 
@@ -41,11 +41,11 @@ describe('Tenancy', () => {
   it('resolve: first resolver that loads an existing tenant wins', async () => {
     const tenancy = new Tenancy(source(), [
       headerResolver(),
-      subdomainResolver({ base: 'machize.app' }),
+      subdomainResolver({ base: 'basalt.app' }),
     ])
     // header identifies an unknown tenant → falls through to the subdomain
     const tenant = await tenancy.resolve({
-      headers: { 'x-tenant-id': 'ghost', host: 'globex.machize.app' },
+      headers: { 'x-tenant-id': 'ghost', host: 'globex.basalt.app' },
     })
     expect(tenant?.id).toBe('globex')
   })
