@@ -8,3 +8,10 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: true
   prisma: true
+auditConfig:
+  ignoreGhsas:
+    # vite dev-server `server.fs.deny` bypass (Windows) — reaches us only through
+    # vitepress (docs tooling), which pins vite 5; it never ships in a published
+    # package and doesn't affect the built static docs. Not fixable without
+    # breaking vitepress. Production deps are audited normally.
+    - GHSA-fx2h-pf6j-xcff
