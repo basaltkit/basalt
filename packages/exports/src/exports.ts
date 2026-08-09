@@ -1,4 +1,4 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 import { nativeFormatters, type ExportFormatter } from './formatters.js'
 
 /** One output column: a header and how to read the cell from a row. */
@@ -17,7 +17,7 @@ export function defineExport<T>(definition: ExportDefinition<T>): ExportDefiniti
   return definition
 }
 
-export class UnknownExportFormatError extends MachizeError {
+export class UnknownExportFormatError extends BasaltError {
   readonly status = 400
   constructor(format: string) {
     super('EXPORT_UNKNOWN_FORMAT', `No formatter registered for "${format}".`)
@@ -44,8 +44,8 @@ async function collect<T>(data: Iterable<T> | AsyncIterable<T>): Promise<T[]> {
 
 /**
  * Renders export definitions to files through pluggable formatters. Pure and
- * synchronous to run — for large datasets, call it inside a `@machize/queue`
- * job and store the result with `@machize/files`/`@machize/storage`.
+ * synchronous to run — for large datasets, call it inside a `@basaltkit/queue`
+ * job and store the result with `@basaltkit/files`/`@basaltkit/storage`.
  */
 export class Exports {
   private readonly formatters = new Map<string, ExportFormatter>()

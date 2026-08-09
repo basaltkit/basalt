@@ -1,7 +1,7 @@
-# @machize/comments-sqlite
+# @basaltkit/comments-sqlite
 
 Durable, **SQLite-backed** implementation of the
-[`@machize/comments`](https://github.com/Zebedeu/machize/tree/main/packages/comments)
+[`@basaltkit/comments`](https://github.com/Zebedeu/basalt/tree/main/packages/comments)
 `CommentStore` — per-resource threads with @mentions and resolve/reopen — built
 on Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero
 external dependencies.**
@@ -9,10 +9,10 @@ external dependencies.**
 Swap it in for the in-memory store and comment threads survive a restart — no
 ORM, no migration tool, no service. The single-node reference backend; the
 production (Postgres/MySQL) counterpart is
-[`@machize/comments-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/comments-prisma).
+[`@basaltkit/comments-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/comments-prisma).
 
 ```bash
-pnpm add @machize/comments-sqlite   # peer: @machize/comments
+pnpm add @basaltkit/comments-sqlite   # peer: @basaltkit/comments
 ```
 
 > Requires **Node 22.5+**. Stable and flag-free on Node 24; on 22.x run with
@@ -21,8 +21,8 @@ pnpm add @machize/comments-sqlite   # peer: @machize/comments
 ## Use it
 
 ```ts
-import { commentsPlugin } from '@machize/comments'
-import { sqliteCommentsStore } from '@machize/comments-sqlite'
+import { commentsPlugin } from '@basaltkit/comments'
+import { sqliteCommentsStore } from '@basaltkit/comments-sqlite'
 
 const c = sqliteCommentsStore('./data/comments.db')   // ':memory:' by default
 

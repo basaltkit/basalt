@@ -11,7 +11,7 @@ export interface TeamsPageOptions {
 
 /**
  * A self-contained HTML page (no dependencies, no build) to manage a team via
- * `@machize/teams`' routes: list/invite/revoke invitations and list/change-role/
+ * `@basaltkit/teams`' routes: list/invite/revoke invitations and list/change-role/
  * remove members. Serve it from a route (see `teamsUiRoutes`). Assumes the
  * browser session is authenticated (as an admin) for those routes.
  */

@@ -1,5 +1,5 @@
-import { createToken, definePlugin } from '@machize/core'
-import { MAILER } from '@machize/mailer'
+import { createToken, definePlugin } from '@basaltkit/core'
+import { MAILER } from '@basaltkit/mailer'
 import {
   InAppChannel,
   MailChannel,
@@ -37,8 +37,8 @@ export {
   type NotifierOptions,
 } from './notifier.js'
 
-declare module '@machize/core' {
-  interface MachizeHooks {
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
     'notification:sent': { notification: string; channel: string; recipientId: string }
     'notification:failed': {
       notification: string
@@ -61,7 +61,7 @@ export interface NotificationsPluginOptions {
 
 export function notificationsPlugin(options: NotificationsPluginOptions = {}) {
   return definePlugin({
-    name: 'machize:notifications',
+    name: 'basalt:notifications',
     register({ container, hooks }) {
       const inAppStore = options.inApp === false ? undefined : (options.inApp ?? new MemoryInAppStore())
       if (inAppStore) {

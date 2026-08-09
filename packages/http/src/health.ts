@@ -1,4 +1,4 @@
-import { definePlugin } from '@machize/core'
+import { definePlugin } from '@basaltkit/core'
 import { HTTP_SERVER } from './server.js'
 
 export interface HealthReport {
@@ -22,7 +22,7 @@ export interface HealthPluginOptions {
 export function healthPlugin(options: HealthPluginOptions = {}) {
   const checks = options.checks ?? {}
   return definePlugin({
-    name: 'machize:health',
+    name: 'basalt:health',
     boot({ container }) {
       const server = container.get(HTTP_SERVER)
 

@@ -1,7 +1,7 @@
-import { MachizeError, tryCtx } from '@machize/core'
-import type { Audit, AuditEntry } from '@machize/audit'
+import { BasaltError, tryCtx } from '@basaltkit/core'
+import type { Audit, AuditEntry } from '@basaltkit/audit'
 
-export class AuditTenantRequiredError extends MachizeError {
+export class AuditTenantRequiredError extends BasaltError {
   readonly status = 400
   constructor() {
     super('AUDIT_TENANT_REQUIRED', 'A tenant is required — pass tenantId or run inside a tenant context.')

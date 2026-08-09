@@ -1,6 +1,6 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
-export class PermissionDeniedError extends MachizeError {
+export class PermissionDeniedError extends BasaltError {
   readonly status = 403
   constructor(permission: string) {
     super('PERMISSION_DENIED', `Missing permission "${permission}".`)
@@ -8,7 +8,7 @@ export class PermissionDeniedError extends MachizeError {
 }
 
 /** A `can` route was hit without an authenticated user. */
-export class AuthRequiredGuardError extends MachizeError {
+export class AuthRequiredGuardError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_REQUIRED', 'Authentication required.')

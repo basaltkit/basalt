@@ -1,6 +1,6 @@
-import { ctx, type Container } from '@machize/core'
-import { route, type MachizeRoute } from '@machize/fastify'
-import { SUBSCRIPTIONS, type Plans } from '@machize/subscriptions'
+import { ctx, type Container } from '@basaltkit/core'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { SUBSCRIPTIONS, type Plans } from '@basaltkit/subscriptions'
 import { billingPageHtml, type BillingPageOptions } from './html.js'
 
 export interface BillingUiOptions extends BillingPageOptions {
@@ -30,10 +30,10 @@ const tenantId = (): string | undefined => (ctx() as { tenant?: { id: string } }
 /**
  * Serves the billing page at `GET /billing/ui` and its data at
  * `GET /billing/info` ({ subscription, plans }). Pair with
- * `@machize/subscriptions`' `billingRoutes()` (which provides
+ * `@basaltkit/subscriptions`' `billingRoutes()` (which provides
  * `POST /billing/checkout` and `/billing/portal` that the page calls).
  */
-export function billingUiRoutes(options: BillingUiOptions): MachizeRoute[] {
+export function billingUiRoutes(options: BillingUiOptions): BasaltRoute[] {
   const html = billingPageHtml(options)
   const plans = summarize(options.plans)
 

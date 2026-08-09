@@ -1,7 +1,7 @@
 {
-  "name": "@machize/dashboard",
-  "version": "1.0.5",
-  "description": "Headless admin dashboard model for Machize: billing metrics (MRR/ARR/churn), queue/audit summaries and a section registry binding admin resources to the SDK.",
+  "name": "@basaltkit/dashboard",
+  "version": "1.0.0",
+  "description": "Headless admin dashboard model for Basalt: billing metrics (MRR/ARR/churn), queue/audit summaries and a section registry binding admin resources to the SDK.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/admin": "workspace:^",
-    "@machize/subscriptions": "workspace:^"
+    "@basaltkit/admin": "workspace:^",
+    "@basaltkit/subscriptions": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -35,13 +35,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/dashboard"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/dashboard#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/dashboard#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "dashboard",
     "metrics"

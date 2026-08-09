@@ -90,18 +90,18 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: machize
-          POSTGRES_PASSWORD: machize
-          POSTGRES_DB: machize_test
+          POSTGRES_USER: basalt
+          POSTGRES_PASSWORD: basalt
+          POSTGRES_DB: basalt_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U machize"
+          --health-cmd "pg_isready -U basalt"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      TEST_DATABASE_URL: postgresql://machize:machize@localhost:5432/machize_test
+      TEST_DATABASE_URL: postgresql://basalt:basalt@localhost:5432/basalt_test
     steps:
       - uses: actions/checkout@v4
 

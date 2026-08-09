@@ -1,6 +1,6 @@
-# @machize/files
+# @basaltkit/files
 
-**Upload** pipeline for Machize, built on top of [`@machize/storage`](https://www.npmjs.com/package/@machize/storage): validates (type/size), enforces **per-tenant quota**, stores the bytes, records metadata, and fires **hooks** (antivirus, thumbnails). You need this module when users upload files — attachments, avatars, documents — and you want to do it safely and with tenant isolation.
+**Upload** pipeline for Basalt, built on top of [`@basaltkit/storage`](https://www.npmjs.com/package/@basaltkit/storage): validates (type/size), enforces **per-tenant quota**, stores the bytes, records metadata, and fires **hooks** (antivirus, thumbnails). You need this module when users upload files — attachments, avatars, documents — and you want to do it safely and with tenant isolation.
 
 ## What this module solves
 
@@ -9,17 +9,17 @@ Saving an upload "by hand" involves validating type/size, writing to storage in 
 ## Installation
 
 ```bash
-pnpm add @machize/files @machize/storage
+pnpm add @basaltkit/files @basaltkit/storage
 ```
 
-Depends on `@machize/core`, `@machize/storage`, and `@machize/fastify` (routes). Configure a disk in `@machize/storage` (local in dev, S3/GCS in production).
+Depends on `@basaltkit/core`, `@basaltkit/storage`, and `@basaltkit/fastify` (routes). Configure a disk in `@basaltkit/storage` (local in dev, S3/GCS in production).
 
 ## Get started in 5 minutes
 
 ```ts
-import { createApp } from '@machize/core'
-import { filesPlugin, FILES, fileRoutes } from '@machize/files'
-import { fastifyPlugin } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { filesPlugin, FILES, fileRoutes } from '@basaltkit/files'
+import { fastifyPlugin } from '@basaltkit/fastify'
 
 const app = await createApp({
   plugins: [
@@ -64,7 +64,7 @@ The other operations have ready-made routes via `fileRoutes()`:
 
 ## Post-processing with hooks
 
-The typical pattern: on `file:uploaded`, dispatch a job (with `@machize/queue`) that scans/processes the file and then calls `markScanned`:
+The typical pattern: on `file:uploaded`, dispatch a job (with `@basaltkit/queue`) that scans/processes the file and then calls `markScanned`:
 
 ```ts
 hooks.on('file:uploaded', ({ file }) => ScanFile.dispatch({ tenantId: file.tenantId, id: file.id }))
@@ -79,10 +79,10 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 
 | Option | Type | Description |
 |---|---|---|
-| `disk` | `Disk \| string` | A `Disk` instance or the name of a `@machize/storage` disk. |
+| `disk` | `Disk \| string` | A `Disk` instance or the name of a `@basaltkit/storage` disk. |
 | `validate` | `{ maxSize?, allowedTypes? }` | Size limit and allowed types (`image/*` accepts wildcards). |
 | `maxTotalBytes` | `number` | Total quota per tenant. |
-| `checkQuota` | `(tenantId, size) => void` | Custom quota check (e.g. hook into `@machize/subscriptions`). Throw to reject. |
+| `checkQuota` | `(tenantId, size) => void` | Custom quota check (e.g. hook into `@basaltkit/subscriptions`). Throw to reject. |
 | `store` | `FileStore` | Metadata persistence. Default: in-memory. |
 
 Registers the `FILES` token.
@@ -104,7 +104,7 @@ Errors: `FileTooLargeError` (413), `FileTypeNotAllowedError` (415), `StorageQuot
 
 ## How it connects to other modules
 
-- **`@machize/storage`** — where the bytes live (local/S3/GCS), with tenant isolation.
-- **`@machize/subscriptions`** — hook `checkQuota` into `features(tenant).consume(...)` for plan-based quotas.
-- **`@machize/queue`** — processes `file:uploaded` outside the request (antivirus, thumbnails).
-- **`@machize/tenancy`** — supplies the tenant from the context.
+- **`@basaltkit/storage`** — where the bytes live (local/S3/GCS), with tenant isolation.
+- **`@basaltkit/subscriptions`** — hook `checkQuota` into `features(tenant).consume(...)` for plan-based quotas.
+- **`@basaltkit/queue`** — processes `file:uploaded` outside the request (antivirus, thumbnails).
+- **`@basaltkit/tenancy`** — supplies the tenant from the context.

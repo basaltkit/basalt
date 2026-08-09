@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import type { OutboxEntry, OutboxStore } from '@machize/events'
+import type { OutboxEntry, OutboxStore } from '@basaltkit/events'
 
 /**
- * Prisma-backed implementation of the `@machize/events` `OutboxStore` (the
+ * Prisma-backed implementation of the `@basaltkit/events` `OutboxStore` (the
  * transactional outbox) for production databases (PostgreSQL, MySQL, …). Bring
  * your generated `PrismaClient` whose schema includes the `OutboxEntry` model
  * (see the bundled `prisma/schema.prisma`); the store only touches that
@@ -11,7 +11,7 @@ import type { OutboxEntry, OutboxStore } from '@machize/events'
  * Keeping the outbox in the SAME database as your business writes is what makes
  * the pattern work — enqueue the event in the same transaction as the state
  * change, and delivery becomes at-least-once and crash-safe. The production
- * counterpart to `@machize/events-sqlite`.
+ * counterpart to `@basaltkit/events-sqlite`.
  */
 
 // Prisma-return row shape (DateTime → Date; nullable columns → null).
@@ -42,7 +42,7 @@ export interface PrismaEventsClient {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-// The @machize/events contract models time as epoch-ms numbers; Prisma models it
+// The @basaltkit/events contract models time as epoch-ms numbers; Prisma models it
 // as DateTime. Convert at the edges.
 const ms = (d: Date): number => d.getTime()
 const at = (n: number): Date => new Date(n)
@@ -136,7 +136,7 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
@@ -151,6 +151,6 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  * ```
  */
 export function prismaOutboxStore(client: PrismaEventsClient): PrismaEventsStores {
-  ensureModel(client, 'outboxEntry', '@machize/events-prisma')
+  ensureModel(client, 'outboxEntry', '@basaltkit/events-prisma')
   return { store: new PrismaOutboxStore(client) }
 }

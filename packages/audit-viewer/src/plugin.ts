@@ -1,6 +1,6 @@
-import { createToken, ctx, definePlugin, type Container } from '@machize/core'
-import { AUDIT } from '@machize/audit'
-import { route, type MachizeRoute } from '@machize/fastify'
+import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { AUDIT } from '@basaltkit/audit'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { AuditViewer, type AuditViewerOptions, type ViewerQuery } from './viewer.js'
 import { auditViewerHtml, type AuditViewerHtmlOptions } from './html.js'
@@ -11,7 +11,7 @@ export type AuditViewerPluginOptions = AuditViewerOptions
 
 export function auditViewerPlugin(options: AuditViewerPluginOptions = {}) {
   return definePlugin({
-    name: 'machize:audit-viewer',
+    name: 'basalt:audit-viewer',
     register({ container }) {
       container.singleton(AUDIT_VIEWER, () => new AuditViewer(container.get(AUDIT), options))
     },
@@ -45,7 +45,7 @@ const toQuery = (q: z.infer<typeof querySchema>): ViewerQuery => ({
  * (add your own admin guard on top): `GET /audit`, `/audit/stats`,
  * `/audit/:id`, and a browsable HTML page at `/audit/view`.
  */
-export function auditViewerRoutes(options: AuditViewerHtmlOptions = {}): MachizeRoute[] {
+export function auditViewerRoutes(options: AuditViewerHtmlOptions = {}): BasaltRoute[] {
   return [
     route({
       method: 'GET',

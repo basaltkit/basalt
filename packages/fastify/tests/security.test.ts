@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import {
   FASTIFY,
   fastifyPlugin,

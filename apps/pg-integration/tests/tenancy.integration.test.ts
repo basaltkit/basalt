@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { runWithContext } from '@machize/core'
-import { tenancyExtension } from '@machize/prisma'
+import { runWithContext } from '@basaltkit/core'
+import { tenancyExtension } from '@basaltkit/prisma'
 
 // Full Prisma-client-through-a-server path against real PostgreSQL.
 // Gated on TEST_DATABASE_URL — skips (keeping the default suite green) when unset.

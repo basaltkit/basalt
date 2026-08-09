@@ -1,21 +1,21 @@
 # HTTP Adapters
 
-Machize is **not tied to one HTTP framework**. The route pipeline —
+Basalt is **not tied to one HTTP framework**. The route pipeline —
 validation, enrichers, guards, context and error mapping — lives in a neutral
-core (`@machize/http`), and each framework is a thin adapter over it. Write your
+core (`@basaltkit/http`), and each framework is a thin adapter over it. Write your
 routes, tenancy, auth and permissions **once**, and run them on Fastify,
 Express or Hono unchanged.
 
 | Adapter | Package | Serve with |
 | --- | --- | --- |
-| Fastify | `@machize/fastify` | `app.container.get(FASTIFY).listen({ port })` |
-| Express | `@machize/express` | `app.container.get(EXPRESS).listen(port)` |
-| Hono | `@machize/hono` | `@hono/node-server`, Bun, Deno, or an edge `fetch` export |
+| Fastify | `@basaltkit/fastify` | `app.container.get(FASTIFY).listen({ port })` |
+| Express | `@basaltkit/express` | `app.container.get(EXPRESS).listen(port)` |
+| Hono | `@basaltkit/hono` | `@hono/node-server`, Bun, Deno, or an edge `fetch` export |
 
 ## The same routes everywhere
 
 ```ts
-import { route, HttpError } from '@machize/http' // or from '@machize/fastify'
+import { route, HttpError } from '@basaltkit/http' // or from '@basaltkit/fastify'
 import { z } from 'zod'
 
 export const routes = [
@@ -38,21 +38,21 @@ Zod validation, the standardized error shape) behaves identically:
 ::: code-group
 
 ```ts [Fastify]
-import { fastifyPlugin, FASTIFY } from '@machize/fastify'
+import { fastifyPlugin, FASTIFY } from '@basaltkit/fastify'
 
 const app = await createApp({ plugins: [/* … */, fastifyPlugin({ routes })] }).boot()
 await app.container.get(FASTIFY).listen({ port: 3000 })
 ```
 
 ```ts [Express]
-import { expressPlugin, EXPRESS } from '@machize/express'
+import { expressPlugin, EXPRESS } from '@basaltkit/express'
 
 const app = await createApp({ plugins: [/* … */, expressPlugin({ routes })] }).boot()
 app.container.get(EXPRESS).listen(3000)
 ```
 
 ```ts [Hono]
-import { honoPlugin, HONO } from '@machize/hono'
+import { honoPlugin, HONO } from '@basaltkit/hono'
 import { serve } from '@hono/node-server'
 
 const app = await createApp({ plugins: [/* … */, honoPlugin({ routes })] }).boot()
@@ -66,17 +66,17 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 Install the adapter and Express:
 
 ```bash
-pnpm add @machize/core @machize/http @machize/express express
+pnpm add @basaltkit/core @basaltkit/http @basaltkit/express express
 ```
 
 `src/app.ts` — wire your plugins and routes (this is identical for every
 adapter except the last line):
 
 ```ts
-import { createApp } from '@machize/core'
-import { expressPlugin } from '@machize/express'
-import { headerResolver, MemoryTenantSource, tenancyPlugin } from '@machize/tenancy'
-import { healthPlugin, metricsPlugin, securityPlugin } from '@machize/http'
+import { createApp } from '@basaltkit/core'
+import { expressPlugin } from '@basaltkit/express'
+import { headerResolver, MemoryTenantSource, tenancyPlugin } from '@basaltkit/tenancy'
+import { healthPlugin, metricsPlugin, securityPlugin } from '@basaltkit/http'
 import { routes } from './routes.js'
 
 export function buildApp() {
@@ -95,7 +95,7 @@ export function buildApp() {
 `src/server.ts` — boot, listen, and shut down cleanly:
 
 ```ts
-import { EXPRESS } from '@machize/express'
+import { EXPRESS } from '@basaltkit/express'
 import { buildApp } from './app.js'
 
 const app = await buildApp().boot()
@@ -114,7 +114,7 @@ Express app, pass it in: `expressPlugin({ app: myExistingApp, routes })`.
 Install the adapter, Hono, and (for Node) the Node server:
 
 ```bash
-pnpm add @machize/core @machize/http @machize/hono hono @hono/node-server
+pnpm add @basaltkit/core @basaltkit/http @basaltkit/hono hono @hono/node-server
 ```
 
 `src/app.ts` is the same as above with `honoPlugin({ routes })` in place of
@@ -123,7 +123,7 @@ pnpm add @machize/core @machize/http @machize/hono hono @hono/node-server
 ```ts
 // src/server.ts
 import { serve } from '@hono/node-server'
-import { HONO } from '@machize/hono'
+import { HONO } from '@basaltkit/hono'
 import { buildApp } from './app.js'
 
 const app = await buildApp().boot()
@@ -138,7 +138,7 @@ Hono runs on any runtime — export the app's `fetch` and let the platform serve
 
 ```ts
 // Bun / Deno / Cloudflare Workers entry
-import { HONO } from '@machize/hono'
+import { HONO } from '@basaltkit/hono'
 import { buildApp } from './app.js'
 
 const app = await buildApp().boot()
@@ -147,14 +147,14 @@ export default { fetch: app.container.get(HONO).fetch }
 
 ::: warning Edge runtimes
 The HTTP core, routes, tenancy, auth, permissions and the security/metrics/tracing
-edge plugins run on the edge. Node-only infrastructure — `@machize/queue`
-(BullMQ), `@machize/prisma`, local file `@machize/storage` — is not available in
+edge plugins run on the edge. Node-only infrastructure — `@basaltkit/queue`
+(BullMQ), `@basaltkit/prisma`, local file `@basaltkit/storage` — is not available in
 Workers/Deno-deploy; use HTTP-based drivers there.
 :::
 
 ## How it works
 
-- **`@machize/http`** defines the neutral `HttpRequest` / `HttpReply` and the
+- **`@basaltkit/http`** defines the neutral `HttpRequest` / `HttpReply` and the
   `runRoute` pipeline. Enrichers and guards (tenancy, auth, permissions)
   register into the `http:enrichers` / `http:guards` metadata buckets — they are
   framework-agnostic and every adapter runs them.

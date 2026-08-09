@@ -1,4 +1,4 @@
-import type { EventBus, MachizeEvent } from '@machize/events'
+import type { EventBus, BasaltEvent } from '@basaltkit/events'
 import { defineJob, type JobBackoff } from './job.js'
 import type { QueueManager } from './manager.js'
 
@@ -20,7 +20,7 @@ export interface QueuedListenerOptions {
 export function queuedOn<T>(
   bus: EventBus,
   manager: QueueManager,
-  event: MachizeEvent<T>,
+  event: BasaltEvent<T>,
   handler: (payload: T) => void | Promise<void>,
   options: QueuedListenerOptions = {},
 ): () => void {

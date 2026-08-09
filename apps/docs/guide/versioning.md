@@ -1,23 +1,23 @@
 # Versioning & compatibility
 
-What Machize promises about versions, runtimes, and change — so you can depend on
+What Basalt promises about versions, runtimes, and change — so you can depend on
 it without surprises.
 
 [[toc]]
 
 ## Semantic versioning
 
-Every `@machize/*` package follows [semver](https://semver.org). As of **1.0**,
+Every `@basaltkit/*` package follows [semver](https://semver.org). As of **1.0**,
 the public API is **stable**: breaking changes only in a new **major**, new
 features in a **minor**, and fixes in a **patch**. You can depend on a `^1`
 range and get features and fixes without breakage until the next major.
 
 ## Lockstep versions
 
-The packages are released **in lockstep**: every `@machize/*` package shares the
-same version and is published together (via Changesets, `fixed: [["@machize/*"]]`).
-So `@machize/auth@1.0.0` is built and tested against `@machize/core@1.0.0` —
-keep them on the same version. The `create-machize` scaffolder versions
+The packages are released **in lockstep**: every `@basaltkit/*` package shares the
+same version and is published together (via Changesets, `fixed: [["@basaltkit/*"]]`).
+So `@basaltkit/auth@1.0.0` is built and tested against `@basaltkit/core@1.0.0` —
+keep them on the same version. The `create-basalt` scaffolder versions
 independently.
 
 ::: tip Why lockstep
@@ -57,7 +57,7 @@ policy and may change at any time.
 **1.0 is a stability commitment, not a rewrite** — it's functionally identical to
 `0.32.0`, with no breaking changes. Moving from any recent `0.x`:
 
-- Bump every `@machize/*` dependency to `1.0.0` together (they release in
+- Bump every `@basaltkit/*` dependency to `1.0.0` together (they release in
   lockstep) and pin a `^1` range going forward.
 - If you're on the durable stores, nothing changes — the store contracts were
   already at their 1.0 shape and are now frozen.
@@ -66,5 +66,5 @@ policy and may change at any time.
 ## Security & supported versions
 
 Security fixes land on the latest `1.x` minor — upgrade to the newest `1.x` to
-receive them. See [SECURITY.md](https://github.com/Zebedeu/machize/blob/main/SECURITY.md)
+receive them. See [SECURITY.md](https://github.com/Zebedeu/basalt/blob/main/SECURITY.md)
 for the disclosure process.

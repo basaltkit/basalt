@@ -20,21 +20,21 @@ Tenant   ──(JWT + slug)─▶  Workspace: create/list/delete notes (quota-li
 - **Tenancy** — each tenant is isolated (`x-tenant-id` header or subdomain).
 - **Quota as a consumable feature** — a plan's `notes` limit is spent one note
   at a time, enforced atomically by the subscriptions usage store.
-- **Admin dashboard** — billing metrics + per-tenant usage via `@machize/dashboard`.
+- **Admin dashboard** — billing metrics + per-tenant usage via `@basaltkit/dashboard`.
 - **Production swaps** — in-memory → Prisma + Redis, no domain changes.
 
 ## 1. Scaffold
 
 ```bash
-npm create machize notes -- --billing --cli
+npm create basalt notes -- --billing --cli
 cd notes && pnpm install
 ```
 
-`--billing` adds `@machize/subscriptions`; `--cli` adds the `mach` generators.
+`--billing` adds `@basaltkit/subscriptions`; `--cli` adds the `basalt` generators.
 Add the two extra packages this demo uses:
 
 ```bash
-pnpm add @machize/dashboard @machize/permissions
+pnpm add @basaltkit/dashboard @basaltkit/permissions
 ```
 
 ## 2. Environment
@@ -44,7 +44,7 @@ there and rejects placeholders, while keeping a dev default for local runs.
 
 ```ts
 // src/env.ts
-import { defineEnv, secret } from '@machize/env'
+import { defineEnv, secret } from '@basaltkit/env'
 import { z } from 'zod'
 
 export const env = defineEnv({
@@ -66,7 +66,7 @@ usage store enforces the limit atomically (so a race never overshoots).
 
 ```ts
 // src/billing.ts
-import { definePlans } from '@machize/subscriptions'
+import { definePlans } from '@basaltkit/subscriptions'
 
 export const plans = definePlans({
   basic: { price: 0, features: { notes: 5 } },
@@ -79,7 +79,7 @@ export type PlanName = 'basic' | 'pro'
 
 ```ts
 // src/access.ts
-import type { AccessStore } from '@machize/permissions'
+import type { AccessStore } from '@basaltkit/permissions'
 
 export const ROLES = {
   owner: ['*'],
@@ -98,8 +98,8 @@ export async function seedRoles(store: AccessStore, tenantId: string): Promise<v
 
 ```ts
 // src/domain.ts
-import { createToken } from '@machize/core'
-import { defineEvent } from '@machize/events'
+import { createToken } from '@basaltkit/core'
+import { defineEvent } from '@basaltkit/events'
 import { z } from 'zod'
 
 export const NoteSchema = z.object({
@@ -131,7 +131,7 @@ it — the same isolation a real database gives you. (We swap this for Prisma in
 ```ts
 // src/repositories.ts
 import { randomUUID } from 'node:crypto'
-import { tryCtx } from '@machize/core'
+import { tryCtx } from '@basaltkit/core'
 import type { CreateNoteInput, Note } from './domain.js'
 
 export class NoteRepository {
@@ -160,14 +160,14 @@ The heart of the app. `NoteService.create` **consumes** the quota;
 
 ```ts
 // src/services.ts
-import { ctx } from '@machize/core'
-import type { EventBus } from '@machize/events'
-import { HttpError } from '@machize/fastify'
-import type { Auth } from '@machize/auth'
-import type { AccessStore } from '@machize/permissions'
-import type { Subscriptions, SubscriptionStore, Plans } from '@machize/subscriptions'
-import type { MemoryTenantSource } from '@machize/tenancy'
-import { computeBillingMetrics } from '@machize/dashboard'
+import { ctx } from '@basaltkit/core'
+import type { EventBus } from '@basaltkit/events'
+import { HttpError } from '@basaltkit/fastify'
+import type { Auth } from '@basaltkit/auth'
+import type { AccessStore } from '@basaltkit/permissions'
+import type { Subscriptions, SubscriptionStore, Plans } from '@basaltkit/subscriptions'
+import type { MemoryTenantSource } from '@basaltkit/tenancy'
+import { computeBillingMetrics } from '@basaltkit/dashboard'
 import { seedRoles, type Role } from './access.js'
 import { NoteCreated, type CreateNoteInput, type Note } from './domain.js'
 import type { NoteRepository } from './repositories.js'
@@ -254,12 +254,12 @@ export class AdminService {
 
 ```ts
 // src/plugin.ts
-import { definePlugin } from '@machize/core'
-import { EVENTS } from '@machize/events'
-import { AUTH } from '@machize/auth'
-import type { AccessStore } from '@machize/permissions'
-import { SUBSCRIPTIONS, type Plans, type SubscriptionStore } from '@machize/subscriptions'
-import type { MemoryTenantSource } from '@machize/tenancy'
+import { definePlugin } from '@basaltkit/core'
+import { EVENTS } from '@basaltkit/events'
+import { AUTH } from '@basaltkit/auth'
+import type { AccessStore } from '@basaltkit/permissions'
+import { SUBSCRIPTIONS, type Plans, type SubscriptionStore } from '@basaltkit/subscriptions'
+import type { MemoryTenantSource } from '@basaltkit/tenancy'
 import { ADMIN_SERVICE, NOTE_SERVICE, ONBOARDING } from './domain.js'
 import { NoteRepository } from './repositories.js'
 import { AdminService, NoteService, OnboardingService } from './services.js'
@@ -270,7 +270,7 @@ export function notesPlugin(deps: NotesPluginDeps) {
   const notes = new NoteRepository()
   return definePlugin({
     name: 'app:notes',
-    dependsOn: ['machize:events', 'machize:auth', 'machize:permissions', 'machize:subscriptions'],
+    dependsOn: ['basalt:events', 'basalt:auth', 'basalt:permissions', 'basalt:subscriptions'],
     register({ container }) {
       container.singleton(NOTE_SERVICE, (c) => new NoteService(notes, c.get(EVENTS), c.get(SUBSCRIPTIONS)))
       container.singleton(ONBOARDING, (c) => new OnboardingService(deps.tenants, deps.access, c.get(AUTH), c.get(SUBSCRIPTIONS)))
@@ -287,8 +287,8 @@ permission. The admin routes check the operator key.
 
 ```ts
 // src/routes.ts
-import { ctx, type Container, type Token } from '@machize/core'
-import { HttpError, route, type HttpRequest } from '@machize/fastify'
+import { ctx, type Container, type Token } from '@basaltkit/core'
+import { HttpError, route, type HttpRequest } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { env } from './env.js'
 import { ADMIN_SERVICE, CreateNoteSchema, NOTE_SERVICE, ONBOARDING } from './domain.js'
@@ -326,15 +326,15 @@ export const appRoutes = [
 
 ```ts
 // src/app.ts
-import { createApp } from '@machize/core'
-import { configPlugin } from '@machize/config'
-import { eventsPlugin } from '@machize/events'
-import { fastifyPlugin } from '@machize/fastify'
-import { loggerPlugin } from '@machize/logger'
-import { headerResolver, MemoryTenantSource, subdomainResolver, tenancyPlugin } from '@machize/tenancy'
-import { authPlugin, authRoutes, MemoryUserSource } from '@machize/auth'
-import { MemoryAccessStore, permissionsPlugin } from '@machize/permissions'
-import { MemorySubscriptionStore, MemoryUsageStore, subscriptionsPlugin } from '@machize/subscriptions'
+import { createApp } from '@basaltkit/core'
+import { configPlugin } from '@basaltkit/config'
+import { eventsPlugin } from '@basaltkit/events'
+import { fastifyPlugin } from '@basaltkit/fastify'
+import { loggerPlugin } from '@basaltkit/logger'
+import { headerResolver, MemoryTenantSource, subdomainResolver, tenancyPlugin } from '@basaltkit/tenancy'
+import { authPlugin, authRoutes, MemoryUserSource } from '@basaltkit/auth'
+import { MemoryAccessStore, permissionsPlugin } from '@basaltkit/permissions'
+import { MemorySubscriptionStore, MemoryUsageStore, subscriptionsPlugin } from '@basaltkit/subscriptions'
 import { env } from './env.js'
 import { plans } from './billing.js'
 import { notesPlugin } from './plugin.js'
@@ -413,7 +413,7 @@ auto-scoped to `ctx().tenant`, reads *and* writes:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
-import { prismaPlugin, tenancyExtension } from '@machize/prisma'
+import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 
 const prisma = new PrismaClient().$extends(tenancyExtension()) // scopes by tenantId
 
@@ -425,7 +425,7 @@ prismaPlugin({ client: prisma })
 the extension adds it:
 
 ```ts
-import { db } from '@machize/prisma'
+import { db } from '@basaltkit/prisma'
 import type { PrismaClient } from '@prisma/client'
 
 export class PrismaNoteRepository {
@@ -437,10 +437,10 @@ export class PrismaNoteRepository {
 }
 ```
 
-Generate this whole vertical automatically with the `mach` CLI:
+Generate this whole vertical automatically with the `basalt` CLI:
 
 ```bash
-pnpm mach make:resource Note --prisma
+pnpm basalt make:resource Note --prisma
 ```
 
 ### Database per tenant
@@ -457,7 +457,7 @@ prismaPlugin({
 An LRU pool keeps connection counts bounded. Run migrations across every tenant:
 
 ```ts
-import { migrateTenants } from '@machize/prisma'
+import { migrateTenants } from '@basaltkit/prisma'
 await migrateTenants({ tenants: await listTenantIds(), target: { mode: 'database', urlFor: (id) => `${env.DATABASE_URL}/${id}` } })
 ```
 
@@ -473,7 +473,7 @@ atomic check-and-increment works across instances:
 
 ```ts
 import { Redis } from 'ioredis'
-import { RedisUsageStore } from '@machize/subscriptions'
+import { RedisUsageStore } from '@basaltkit/subscriptions'
 
 const redis = new Redis(env.REDIS_URL!)
 subscriptionsPlugin({ plans, fallbackPlan: 'basic', store: subStore, usage: new RedisUsageStore(redis) })
@@ -482,7 +482,7 @@ subscriptionsPlugin({ plans, fallbackPlan: 'basic', store: subStore, usage: new 
 **b. Cache** — memoize reads (e.g. the admin dashboard) with a Redis cache:
 
 ```ts
-import { cachePlugin, CACHE } from '@machize/cache'
+import { cachePlugin, CACHE } from '@basaltkit/cache'
 
 cachePlugin({ driver: 'redis', url: env.REDIS_URL })
 
@@ -494,7 +494,7 @@ const dashboard = await cache.remember('admin:dashboard', '30s', () => this.buil
 the request, via a BullMQ (Redis) queue:
 
 ```ts
-import { queuePlugin, defineJob, QUEUE } from '@machize/queue'
+import { queuePlugin, defineJob, QUEUE } from '@basaltkit/queue'
 
 const SendWelcome = defineJob('welcome', z.object({ email: z.string() }), async ({ email }) => {
   await mailer.send({ to: email, subject: 'Welcome!' })
@@ -515,7 +515,7 @@ The framework-neutral edge plugins add production concerns without touching your
 routes ([Security](/guide/security), [Observability](/guide/observability)):
 
 ```ts
-import { securityPlugin, healthPlugin, metricsPlugin, tracingPlugin } from '@machize/fastify'
+import { securityPlugin, healthPlugin, metricsPlugin, tracingPlugin } from '@basaltkit/fastify'
 
 securityPlugin({ rateLimit: { limit: 300, windowMs: 60_000 }, cors: { origin: env.WEB_ORIGIN }, headers: true }),
 healthPlugin({ checks: { db: () => ({ ok: prisma != null }), redis: async () => ({ ok: (await redis.ping()) === 'PONG' }) } }),
@@ -528,7 +528,7 @@ Auth already throttles brute-force logins, and `POST` can be made idempotent wit
 
 ## 15. The web app
 
-A React + shadcn/ui frontend (type-safe via `@machize/sdk`) gives the operator a
+A React + shadcn/ui frontend (type-safe via `@basaltkit/sdk`) gives the operator a
 **dashboard + create-tenant** console and each tenant a **workspace** to consume
 their notes — see the `web/` folder of the reference `notes` app. It's the same
 routes you built here, consumed through a generated client; the Vite dev server
@@ -539,7 +539,7 @@ for serving on Express or Hono instead of Fastify.
 
 ```ts
 // tests/notes.e2e.test.ts
-import { FASTIFY } from '@machize/fastify'
+import { FASTIFY } from '@basaltkit/fastify'
 import { buildApp } from '../src/app.js'
 
 const app = await buildApp({ logLevel: 'silent' }).boot()

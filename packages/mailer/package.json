@@ -1,7 +1,7 @@
 {
-  "name": "@machize/mailer",
-  "version": "1.0.5",
-  "description": "Mail layer for Machize: typed declarative mails with Zod, SMTP/log/memory drivers, tenant-aware sender and queue integration.",
+  "name": "@basaltkit/mailer",
+  "version": "1.0.0",
+  "description": "Mail layer for Basalt: typed declarative mails with Zod, SMTP/log/memory drivers, tenant-aware sender and queue integration.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
+    "@basaltkit/core": "workspace:^",
     "nodemailer": "^9.0.5"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "@types/nodemailer": "^6.4.17",
     "tsup": "^8.4.0",
@@ -36,13 +36,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/mailer"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/mailer#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/mailer#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "mailer",
     "email"

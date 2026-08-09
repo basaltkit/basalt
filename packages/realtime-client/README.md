@@ -1,15 +1,15 @@
-# @machize/realtime-client
+# @basaltkit/realtime-client
 
-A **browser** client for [`@machize/realtime`](https://www.npmjs.com/package/@machize/realtime): subscribes to channels, receives real-time events over **WebSocket** or **SSE**, and reconnects on its own. **Zero dependencies** — uses the browser's native `WebSocket`/`EventSource`.
+A **browser** client for [`@basaltkit/realtime`](https://www.npmjs.com/package/@basaltkit/realtime): subscribes to channels, receives real-time events over **WebSocket** or **SSE**, and reconnects on its own. **Zero dependencies** — uses the browser's native `WebSocket`/`EventSource`.
 
 ## What this module solves
 
-On the server side, `@machize/realtime` pushes events to per-tenant channels. This package is the other half: what runs in the **browser** (or any runtime with `WebSocket`) to listen for those events and update the UI live — with automatic reconnection and transparent re-subscription.
+On the server side, `@basaltkit/realtime` pushes events to per-tenant channels. This package is the other half: what runs in the **browser** (or any runtime with `WebSocket`) to listen for those events and update the UI live — with automatic reconnection and transparent re-subscription.
 
 ## Installation
 
 ```bash
-pnpm add @machize/realtime-client
+pnpm add @basaltkit/realtime-client
 ```
 
 No dependencies. In environments without a global `WebSocket`/`EventSource` (old Node, tests), inject the implementation.
@@ -17,7 +17,7 @@ No dependencies. In environments without a global `WebSocket`/`EventSource` (old
 ## Get started in 5 minutes
 
 ```ts
-import { createRealtimeClient } from '@machize/realtime-client'
+import { createRealtimeClient } from '@basaltkit/realtime-client'
 
 const client = createRealtimeClient({ url: 'wss://api.example.com/realtime' })
 
@@ -72,7 +72,7 @@ Returns a `RealtimeClient`:
 
 ### Server side (WebSocket)
 
-`@machize/realtime` decides subscriptions via `hub.subscribe(...)`. Interpret the client's commands in your WebSocket handler:
+`@basaltkit/realtime` decides subscriptions via `hub.subscribe(...)`. Interpret the client's commands in your WebSocket handler:
 
 ```ts
 socket.on('message', (raw) => {
@@ -86,4 +86,4 @@ socket.on('message', (raw) => {
 
 ## How it connects to other modules
 
-- **`@machize/realtime`** — the server that pushes the events this client receives. The message format is shared (`{ channel, event, data }`).
+- **`@basaltkit/realtime`** — the server that pushes the events this client receives. The message format is shared (`{ channel, event, data }`).

@@ -1,6 +1,6 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
-export class InvalidTenantSchemaError extends MachizeError {
+export class InvalidTenantSchemaError extends BasaltError {
   constructor(tenantId: string, reason: string) {
     super('PRISMA_INVALID_SCHEMA', `Cannot derive a PostgreSQL schema for tenant "${tenantId}": ${reason}`)
   }

@@ -1,13 +1,13 @@
-# @machize/webhooks-sqlite
+# @basaltkit/webhooks-sqlite
 
-Durable, SQLite-backed implementation of the [`@machize/webhooks`](https://github.com/Zebedeu/machize/tree/main/packages/webhooks) `WebhookStore` (outbound endpoint subscriptions), on Node's built-in `node:sqlite`. Zero external dependencies.
+Durable, SQLite-backed implementation of the [`@basaltkit/webhooks`](https://github.com/Zebedeu/basalt/tree/main/packages/webhooks) `WebhookStore` (outbound endpoint subscriptions), on Node's built-in `node:sqlite`. Zero external dependencies.
 
-`@machize/webhooks` ships `MemoryWebhookStore` by default, which forgets every registered endpoint when the process exits — so after a redeploy, nobody is subscribed and events silently stop being delivered. This package persists the subscriptions for a single node; the production, multi-instance counterpart is [`@machize/webhooks-prisma`](https://github.com/Zebedeu/machize/tree/main/packages/webhooks-prisma).
+`@basaltkit/webhooks` ships `MemoryWebhookStore` by default, which forgets every registered endpoint when the process exits — so after a redeploy, nobody is subscribed and events silently stop being delivered. This package persists the subscriptions for a single node; the production, multi-instance counterpart is [`@basaltkit/webhooks-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/webhooks-prisma).
 
 ## Installation
 
 ```bash
-pnpm add @machize/webhooks @machize/webhooks-sqlite
+pnpm add @basaltkit/webhooks @basaltkit/webhooks-sqlite
 ```
 
 Requires **Node 22.5+** (`node:sqlite` is stable and flag-free on Node 24; on Node 22.x run with `--experimental-sqlite`).
@@ -17,8 +17,8 @@ Requires **Node 22.5+** (`node:sqlite` is stable and flag-free on Node 24; on No
 `sqliteWebhookStore()` opens (or creates) the database, applies an idempotent schema, and returns the store named to drop straight into `webhooksPlugin`:
 
 ```ts
-import { webhooksPlugin } from '@machize/webhooks'
-import { sqliteWebhookStore } from '@machize/webhooks-sqlite'
+import { webhooksPlugin } from '@basaltkit/webhooks'
+import { sqliteWebhookStore } from '@basaltkit/webhooks-sqlite'
 
 const webhooks = sqliteWebhookStore('./data/webhooks.db') // ':memory:' by default
 
@@ -38,11 +38,11 @@ One `webhook_endpoints` table holds each subscription: `url`, its `events` patte
 | `list(tenantId?)` | Every endpoint, optionally filtered by exact tenant. |
 | `remove(id)` | Delete an endpoint. |
 
-Event matching (`*`, `prefix.*`, exact) reuses `matchesEvent` from `@machize/webhooks`, so it behaves identically to the in-memory store. `sqliteWebhookStore()` also exposes the raw `db` handle.
+Event matching (`*`, `prefix.*`, exact) reuses `matchesEvent` from `@basaltkit/webhooks`, so it behaves identically to the in-memory store. `sqliteWebhookStore()` also exposes the raw `db` handle.
 
 ## Which backend?
 
-- **`@machize/webhooks-sqlite`** — a single node, zero dependencies, subscriptions in a local file.
-- **`@machize/webhooks-prisma`** — you already run Postgres/MySQL, or need several instances to share one set of subscriptions.
+- **`@basaltkit/webhooks-sqlite`** — a single node, zero dependencies, subscriptions in a local file.
+- **`@basaltkit/webhooks-prisma`** — you already run Postgres/MySQL, or need several instances to share one set of subscriptions.
 
 Both implement the identical `WebhookStore` contract, so switching is a one-line change.

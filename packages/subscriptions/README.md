@@ -1,6 +1,6 @@
-# @machize/subscriptions
+# @basaltkit/subscriptions
 
-Billing for the Machize framework, in the style of Laravel Cashier/Soulbscription: declarative plans, subscriptions with a trial period, features with usage limits, Stripe integration, and idempotent webhooks. You need this module when your SaaS application charges monthly fees and limits features by plan.
+Billing for the Basalt framework, in the style of Laravel Cashier/Soulbscription: declarative plans, subscriptions with a trial period, features with usage limits, Stripe integration, and idempotent webhooks. You need this module when your SaaS application charges monthly fees and limits features by plan.
 
 ## What this module solves
 
@@ -13,10 +13,10 @@ This module gives you all of that ready to go: you define plans in code (`define
 ## Installation
 
 ```bash
-pnpm add @machize/subscriptions
+pnpm add @basaltkit/subscriptions
 ```
 
-The package depends on `@machize/core` and `@machize/fastify` (for HTTP routes and guards) and has `zod` as a *peer dependency*.
+The package depends on `@basaltkit/core` and `@basaltkit/fastify` (for HTTP routes and guards) and has `zod` as a *peer dependency*.
 
 ## Get started in 5 minutes
 
@@ -24,7 +24,7 @@ The package depends on `@machize/core` and `@machize/fastify` (for HTTP routes a
 
 ```ts
 // src/billing/plans.ts
-import { definePlans, meter } from '@machize/subscriptions'
+import { definePlans, meter } from '@basaltkit/subscriptions'
 
 export const plans = definePlans({
   free: { price: 0, features: { projects: 3, api: false } },
@@ -41,7 +41,7 @@ export const plans = definePlans({
 
 ```ts
 // src/billing/subscriptions.ts
-import { Subscriptions } from '@machize/subscriptions'
+import { Subscriptions } from '@basaltkit/subscriptions'
 import { plans } from './plans.js'
 
 export const subscriptions = new Subscriptions({
@@ -153,7 +153,7 @@ Anyone without an active subscription uses the `fallbackPlan` (if defined); with
 The driver talks directly to the Stripe REST API (no SDK). You need to tell it how to map your plans to Stripe *Price IDs* and how to get the *Customer ID* for each billable:
 
 ```ts
-import { StripeBillingGateway, Subscriptions } from '@machize/subscriptions'
+import { StripeBillingGateway, Subscriptions } from '@basaltkit/subscriptions'
 import { plans } from './plans.js'
 
 const gateway = new StripeBillingGateway({
@@ -181,13 +181,13 @@ Over HTTP, use the ready-made route (next section) — signature verification is
 `subscriptionsPlugin` registers the service in the container (token `SUBSCRIPTIONS`) and adds route **guards**: with `meta: { subscribed: true | 'plan' }`, the route requires an active subscription (otherwise HTTP 402); with `meta: { feature: 'api' }`, it requires the feature (otherwise HTTP 403). The billable is the tenant from the request context.
 
 ```ts
-import { createApp } from '@machize/core'
-import { fastifyPlugin, route } from '@machize/fastify'
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin, route } from '@basaltkit/fastify'
 import {
   billingRoutes,
   billingWebhookRoute,
   subscriptionsPlugin,
-} from '@machize/subscriptions'
+} from '@basaltkit/subscriptions'
 import { plans } from './billing/plans.js'
 import { gateway } from './billing/gateway.js'
 
@@ -234,7 +234,7 @@ In-memory stores are per-process. In production:
 
 ```ts
 import { Redis } from 'ioredis'
-import { RedisUsageStore, RedisWebhookStore, Subscriptions } from '@machize/subscriptions'
+import { RedisUsageStore, RedisWebhookStore, Subscriptions } from '@basaltkit/subscriptions'
 import { plans } from './plans.js'
 
 const redis = new Redis(process.env.REDIS_URL!)
@@ -251,7 +251,7 @@ export const subscriptions = new Subscriptions({
 
 ### Domain hooks
 
-The plugin emits hooks on Machize's `HookBus`: `billing:subscribed`, `billing:checkout_started`, `billing:swapped`, `billing:canceled`, `billing:trial_expired`, `billing:webhook`. Use them to send emails/notifications:
+The plugin emits hooks on Basalt's `HookBus`: `billing:subscribed`, `billing:checkout_started`, `billing:swapped`, `billing:canceled`, `billing:trial_expired`, `billing:webhook`. Use them to send emails/notifications:
 
 ```ts
 app.hooks.on('billing:trial_expired', ({ subscription }) => {
@@ -335,8 +335,8 @@ Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`
 | `SubscriptionStore` (Advanced) | `get/save/all` — implement over your DB; `MemorySubscriptionStore` included |
 | `UsageStore` (Advanced) | `get/increment/consume` — `consume` must be atomic; `MemoryUsageStore` included |
 | `WebhookStore` (Advanced) | `markProcessed(id)` (claim; `true` = new) / `release(id)`; `MemoryWebhookStore` included |
-| `RedisUsageStore` | `new RedisUsageStore(redis, { prefix? = 'mach:usage', ttlSeconds? = 60 days })` — atomic quotas via EVAL |
-| `RedisWebhookStore` | `new RedisWebhookStore(redis, { prefix? = 'mach:webhook', ttlSeconds? = 7 days })` — durable dedupe via SET NX EX |
+| `RedisUsageStore` | `new RedisUsageStore(redis, { prefix? = 'basalt:usage', ttlSeconds? = 60 days })` — atomic quotas via EVAL |
+| `RedisWebhookStore` | `new RedisWebhookStore(redis, { prefix? = 'basalt:webhook', ttlSeconds? = 7 days })` — durable dedupe via SET NX EX |
 | `RedisLike` / `RedisWebhookClient` | (Advanced) minimal surfaces compatible with ioredis — inject your own client |
 
 ### Plugin and HTTP routes
@@ -366,9 +366,9 @@ Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`
 
 ## How it connects to other modules
 
-- **@machize/core** — `createApp`, the container (token `SUBSCRIPTIONS`), the request context (where the tenant/billable comes from), and `HookBus` (`billing:*` hooks).
-- **@machize/fastify** — the routes (`billingRoutes`, `billingWebhookRoute`) and the `meta.subscribed`/`meta.feature` guards rest on the HTTP plugin.
-- **@machize/mailer** and **@machize/notifications** — subscribe to the `billing:*` hooks to send emails/notifications ("your trial has expired", "payment failed").
-- **@machize/webhooks** — the opposite direction: this module *receives* webhooks from the gateway; `@machize/webhooks` *sends* webhooks to your customers (you can forward `billing:*` events there).
-- **@machize/scheduler** — the natural place to run `expireTrials()` periodically.
-- **@machize/queue** — asynchronous processing of reactions to billing hooks.
+- **@basaltkit/core** — `createApp`, the container (token `SUBSCRIPTIONS`), the request context (where the tenant/billable comes from), and `HookBus` (`billing:*` hooks).
+- **@basaltkit/fastify** — the routes (`billingRoutes`, `billingWebhookRoute`) and the `meta.subscribed`/`meta.feature` guards rest on the HTTP plugin.
+- **@basaltkit/mailer** and **@basaltkit/notifications** — subscribe to the `billing:*` hooks to send emails/notifications ("your trial has expired", "payment failed").
+- **@basaltkit/webhooks** — the opposite direction: this module *receives* webhooks from the gateway; `@basaltkit/webhooks` *sends* webhooks to your customers (you can forward `billing:*` events there).
+- **@basaltkit/scheduler** — the natural place to run `expireTrials()` periodically.
+- **@basaltkit/queue** — asynchronous processing of reactions to billing hooks.

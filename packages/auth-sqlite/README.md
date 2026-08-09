@@ -1,18 +1,18 @@
-# @machize/auth-sqlite
+# @basaltkit/auth-sqlite
 
-Durable, **SQLite-backed** implementations of every [`@machize/auth`](https://github.com/Zebedeu/machize/tree/main/packages/auth)
+Durable, **SQLite-backed** implementations of every [`@basaltkit/auth`](https://github.com/Zebedeu/basalt/tree/main/packages/auth)
 store — users, sessions, refresh tokens, one-time tokens, API keys and MFA
 state — built on Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html).
 **Zero external dependencies.**
 
-`@machize/auth` ships in-memory stores that are perfect for dev and tests but
+`@basaltkit/auth` ships in-memory stores that are perfect for dev and tests but
 lose everything on restart. Swap in these and your users stay logged in, your
 API keys keep working, and password-reset tokens survive a redeploy — no ORM, no
 migration tool, no service to run. It's the reference "real backend" for auth
 and the pattern other durable stores follow.
 
 ```bash
-pnpm add @machize/auth-sqlite   # peer: @machize/auth
+pnpm add @basaltkit/auth-sqlite   # peer: @basaltkit/auth
 ```
 
 > Requires **Node 22.5+**. On Node 24 `node:sqlite` is stable and needs no flag;
@@ -24,8 +24,8 @@ pnpm add @machize/auth-sqlite   # peer: @machize/auth
 returns every store named to drop straight into the auth plugins:
 
 ```ts
-import { authPlugin, apiKeysPlugin } from '@machize/auth'
-import { sqliteAuthStores } from '@machize/auth-sqlite'
+import { authPlugin, apiKeysPlugin } from '@basaltkit/auth'
+import { sqliteAuthStores } from '@basaltkit/auth-sqlite'
 
 const s = sqliteAuthStores('./data/auth.db')   // ':memory:' by default
 
@@ -53,7 +53,7 @@ Every store is exported on its own and takes a `DatabaseSync`, so you can mix
 backends — e.g. keep sessions in Redis but users in SQLite:
 
 ```ts
-import { openAuthDatabase, SqliteUserSource, SqliteSessionStore } from '@machize/auth-sqlite'
+import { openAuthDatabase, SqliteUserSource, SqliteSessionStore } from '@basaltkit/auth-sqlite'
 
 const db = openAuthDatabase('./data/auth.db')
 const users = new SqliteUserSource(db)
@@ -77,7 +77,7 @@ of your app:
 
 ```ts
 import { DatabaseSync } from 'node:sqlite'
-import { sqliteAuthStores } from '@machize/auth-sqlite'
+import { sqliteAuthStores } from '@basaltkit/auth-sqlite'
 
 const db = new DatabaseSync('./data/app.db')
 const s = sqliteAuthStores(db)   // creates the auth_* tables if missing
@@ -92,7 +92,7 @@ things up yourself.
   to run on every boot. WAL journaling is enabled for concurrent reads.
 - **Secrets are never stored in the clear** — the same as the in-memory stores.
   API keys persist only their SHA-256 `hash` and a display `prefix`; MFA recovery
-  codes are stored hashed by `@machize/auth` before they reach the store.
+  codes are stored hashed by `@basaltkit/auth` before they reach the store.
 - **Expired sessions** are evicted lazily on lookup, matching the in-memory
   store's behavior.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contracts,
@@ -102,7 +102,7 @@ things up yourself.
 
 SQLite is an excellent default for single-node deployments and is genuinely
 production-grade. If you run multiple instances that must share auth state, point
-sessions/refresh tokens at Redis (`@machize/auth`'s Redis stores) and keep users
+sessions/refresh tokens at Redis (`@basaltkit/auth`'s Redis stores) and keep users
 in your primary database. These SQLite stores are the reference implementation of
 the durable-store pattern — copy them for Postgres/MySQL when you need it.
 

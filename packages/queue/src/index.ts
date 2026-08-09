@@ -1,4 +1,4 @@
-import { createToken, definePlugin } from '@machize/core'
+import { createToken, definePlugin } from '@basaltkit/core'
 import { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
 import { SyncQueueDriver } from './drivers/sync.js'
 import type { QueueDriver } from './driver.js'
@@ -47,7 +47,7 @@ export interface QueuePluginOptions {
 
 export function queuePlugin(options: QueuePluginOptions = {}) {
   return definePlugin({
-    name: 'machize:queue',
+    name: 'basalt:queue',
     register({ container }) {
       container.singleton(QUEUE, () => {
         const driver =

@@ -1,19 +1,19 @@
-# @machize/core
+# @basaltkit/core
 
-The foundation of the Machize framework: the "engine" that boots your application, wires the pieces together (plugins), holds the shared services (container), and maintains the context of each request. You need this whenever you create a Machize application — every other `@machize/*` package builds on top of it.
+The foundation of the Basalt framework: the "engine" that boots your application, wires the pieces together (plugins), holds the shared services (container), and maintains the context of each request. You need this whenever you create a Basalt application — every other `@basaltkit/*` package builds on top of it.
 
 ## What this module solves
 
-As an application grows, it accumulates many pieces: database, email, job queues, authentication, etc. Without organization, each piece gets wired to the others "by hand", and it becomes hard to know in what order they should start, how they share objects with each other, and how they shut down correctly when the application terminates. `@machize/core` solves exactly that.
+As an application grows, it accumulates many pieces: database, email, job queues, authentication, etc. Without organization, each piece gets wired to the others "by hand", and it becomes hard to know in what order they should start, how they share objects with each other, and how they shut down correctly when the application terminates. `@basaltkit/core` solves exactly that.
 
-The central idea is the **plugin**: a small module with a name (for example `machize:cache`) that knows how to register its services, start up, and shut down. The application (`createApp`) receives a list of plugins, automatically orders them by their declared dependencies, and runs the full lifecycle: register → boot → (later) shutdown, in the right order.
+The central idea is the **plugin**: a small module with a name (for example `basalt:cache`) that knows how to register its services, start up, and shut down. The application (`createApp`) receives a list of plugins, automatically orders them by their declared dependencies, and runs the full lifecycle: register → boot → (later) shutdown, in the right order.
 
 For plugins to share services without knowing about each other directly, there's the **dependency injection container** (DI for short): a "box" where one plugin places a service identified by a **token** (a typed key) and any other plugin retrieves it by that token. The package also includes: **hooks** (internal notifications between plugins), **per-request context** (data like `requestId` available anywhere in the code), **metrics** in Prometheus format, and **tracing** (operation tracking) compatible with OpenTelemetry — all with no external dependencies.
 
 ## Installation
 
 ```bash
-pnpm add @machize/core
+pnpm add @basaltkit/core
 ```
 
 Requirements: Node.js (uses `node:async_hooks` and `node:crypto`) and TypeScript. The package is ESM (`"type": "module"`).
@@ -28,7 +28,7 @@ Let's create an application with two plugins: one provides a greeting service, a
 4. Boot the application.
 
 ```ts
-import { createApp, createToken, definePlugin } from '@machize/core'
+import { createApp, createToken, definePlugin } from '@basaltkit/core'
 
 // 1. The token is the service's "typed label" in the container.
 interface Greeter {
@@ -51,7 +51,7 @@ const helloPlugin = definePlugin({
   name: 'app:hello',
   dependsOn: ['app:greeter'], // ensures boot order
   boot({ container }) {
-    console.log(container.get(GREETER).greet('Machize'))
+    console.log(container.get(GREETER).greet('Basalt'))
   },
 })
 
@@ -61,7 +61,7 @@ const app = await createApp({ plugins: [greeterPlugin, helloPlugin] }).boot()
 await app.shutdown()
 ```
 
-When run, it prints `Hello, Machize!`. Note that the order in the array doesn't matter: `dependsOn` ensures `app:greeter` registers and boots before `app:hello`.
+When run, it prints `Hello, Basalt!`. Note that the order in the array doesn't matter: `dependsOn` ensures `app:greeter` registers and boots before `app:hello`.
 
 ## Usage guide
 
@@ -76,7 +76,7 @@ A plugin is a simple object with a name and up to three lifecycle functions, all
 The `context` received at each phase has three fields: `container`, `hooks`, and `config` (the plugin's configuration slice, already validated — see below).
 
 ```ts
-import { definePlugin } from '@machize/core'
+import { definePlugin } from '@basaltkit/core'
 
 const dbPlugin = definePlugin({
   name: 'app:db',
@@ -97,11 +97,11 @@ const dbPlugin = definePlugin({
 Each plugin can declare a `configSchema` (a "schema" is a description of the expected data shape, for validation). Any object with a `safeParse` method works — schemas from the [Zod](https://zod.dev) library are compatible. At startup, the `config[pluginName]` slice is validated; if it fails, `boot()` immediately throws `ConfigValidationError` (fail fast, before the application serves requests).
 
 ```ts
-import { createApp, definePlugin } from '@machize/core'
+import { createApp, definePlugin } from '@basaltkit/core'
 import { z } from 'zod'
 
 const cachePlugin = definePlugin<{ driver: string }>({
-  name: 'machize:cache',
+  name: 'basalt:cache',
   configSchema: z.object({ driver: z.string() }),
   boot({ config }) {
     console.log(`Cache with driver: ${config.driver}`) // config already typed and validated
@@ -110,7 +110,7 @@ const cachePlugin = definePlugin<{ driver: string }>({
 
 await createApp({
   plugins: [cachePlugin],
-  config: { 'machize:cache': { driver: 'memory' } }, // keyed by plugin name
+  config: { 'basalt:cache': { driver: 'memory' } }, // keyed by plugin name
 }).boot()
 ```
 
@@ -123,13 +123,13 @@ The container holds "recipes" (*factories*: functions that create the service) a
 - `transient` — a fresh instance on every `get()`.
 
 ```ts
-import { Container, createToken } from '@machize/core'
+import { Container, createToken } from '@basaltkit/core'
 
 const COUNTER = createToken<{ n: number }>('counter')
 const NAME = createToken<string>('name')
 
 const container = new Container()
-container.singleton(NAME, () => 'Machize')
+container.singleton(NAME, () => 'Basalt')
 // The factory receives the container — that's how dependencies are injected:
 container.singleton(COUNTER, (c) => ({ n: c.get(NAME).length }))
 
@@ -149,7 +149,7 @@ The container detects cycles (A needs B which needs A) and throws `CircularDepen
 `HookBus` lets one plugin announce events ("hooks") and others react, without knowing about each other. The application itself emits `app:registered`, `app:booted`, and `app:shutdown`.
 
 ```ts
-import { HookBus } from '@machize/core'
+import { HookBus } from '@basaltkit/core'
 
 const hooks = new HookBus()
 
@@ -168,8 +168,8 @@ off() // cancel the subscription
 Packages can add typed hooks via *module augmentation* (Advanced):
 
 ```ts
-declare module '@machize/core' {
-  interface MachizeHooks {
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
     'tenancy:switched': { tenantId: string }
   }
 }
@@ -180,7 +180,7 @@ declare module '@machize/core' {
 The context carries request data (like `requestId`) through the whole call stack, even across `await`s, without manually passing arguments. Uses Node's `AsyncLocalStorage`.
 
 ```ts
-import { ctx, runWithContext, tryCtx } from '@machize/core'
+import { ctx, runWithContext, tryCtx } from '@basaltkit/core'
 
 async function deepService(): Promise<string> {
   // works at any depth, without receiving the id as a parameter:
@@ -201,12 +201,12 @@ Concurrent contexts don't mix: each `runWithContext` has its own.
 ### Human-readable durations
 
 ```ts
-import { parseDuration } from '@machize/core'
+import { parseDuration } from '@basaltkit/core'
 
 parseDuration('30s')  // 30000 (milliseconds)
 parseDuration('1.5d') // 129600000
 parseDuration(1500)   // 1500 (numbers pass through directly)
-// 'abc', '-5s', NaN → throws MachizeError with code 'DURATION_INVALID'
+// 'abc', '-5s', NaN → throws BasaltError with code 'DURATION_INVALID'
 ```
 
 Accepted units: `ms`, `s`, `m`, `h`, `d`.
@@ -216,7 +216,7 @@ Accepted units: `ms`, `s`, `m`, `h`, `d`.
 Counters, gauges, and histograms that export as text in [Prometheus](https://prometheus.io) format (a popular monitoring system) — enough for a `/metrics` endpoint.
 
 ```ts
-import { MetricsRegistry } from '@machize/core'
+import { MetricsRegistry } from '@basaltkit/core'
 
 const registry = new MetricsRegistry()
 
@@ -247,7 +247,7 @@ Requesting a metric with the same name always returns the same instance. Counter
 *Tracing* means recording how long each operation (a *span*) took and how they chain across services. The implementation follows the W3C `traceparent` standard and exports to any OpenTelemetry collector via OTLP/HTTP — without installing the OpenTelemetry SDK.
 
 ```ts
-import { ConsoleSpanExporter, Tracer } from '@machize/core'
+import { ConsoleSpanExporter, Tracer } from '@basaltkit/core'
 
 const tracer = new Tracer({
   serviceName: 'my-api',
@@ -286,13 +286,13 @@ Creates a typed DI token. The type `T` only exists at compile time (there is no 
 
 `Factory<T>` = `(container: Container) => T`. `Lifetime` = `'singleton' | 'scoped' | 'transient'`.
 
-### `definePlugin(plugin)` / `MachizePlugin<TConfig>`
+### `definePlugin(plugin)` / `BasaltPlugin<TConfig>`
 
 `definePlugin` simply returns the object with typing — it's syntactic sugar for autocompletion.
 
 | Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `name` | `string` | yes | — | Unique name; convention `machize:<package>` or `app:<name>`. |
+| `name` | `string` | yes | — | Unique name; convention `basalt:<package>` or `app:<name>`. |
 | `dependsOn` | `string[]` | no | `[]` | Plugins that register/boot before this one. |
 | `configSchema` | `ConfigSchema<TConfig>` | no | — | Object with `safeParse` (Zod-compatible); validates the config slice. |
 | `register` | `(ctx) => void \| Promise<void>` | no | — | Phase 1: register bindings, no I/O. |
@@ -301,14 +301,14 @@ Creates a typed DI token. The type `T` only exists at compile time (there is no 
 
 `PluginContext<TConfig>` = `{ container, hooks, config }`.
 
-### `createApp(options)` / `MachizeApp`
+### `createApp(options)` / `BasaltApp`
 
 | Option (`CreateAppOptions`) | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `plugins` | `MachizePlugin[]` | no | `[]` | Plugins; topologically ordered by `dependsOn`. |
+| `plugins` | `BasaltPlugin[]` | no | `[]` | Plugins; topologically ordered by `dependsOn`. |
 | `config` | `Record<string, unknown>` | no | `{}` | Raw config, keyed by each plugin's name. |
 
-Members of `MachizeApp`: `container`, `hooks`, `phase` (`LifecyclePhase` = `'created' | 'registering' | 'booting' | 'ready' | 'shutting-down' | 'stopped'`), `boot()` (can only be called once; otherwise throws `LifecycleError`), and `shutdown()` (idempotent). Emitted hooks: `app:registered`, `app:booted`, `app:shutdown`.
+Members of `BasaltApp`: `container`, `hooks`, `phase` (`LifecyclePhase` = `'created' | 'registering' | 'booting' | 'ready' | 'shutting-down' | 'stopped'`), `boot()` (can only be called once; otherwise throws `LifecycleError`), and `shutdown()` (idempotent). Emitted hooks: `app:registered`, `app:booted`, `app:shutdown`.
 
 ### `HookBus`
 
@@ -330,11 +330,11 @@ Members of `MachizeApp`: `container`, `hooks`, `phase` (`LifecyclePhase` = `'cre
 
 ### `parseDuration(input)`
 
-`DurationInput` = `number | string`. Converts to milliseconds; throws `MachizeError` (`DURATION_INVALID`) if invalid.
+`DurationInput` = `number | string`. Converts to milliseconds; throws `BasaltError` (`DURATION_INVALID`) if invalid.
 
 ### Errors
 
-All extend `MachizeError`, which has a stable `code` (you can safely do `if (error.code === '...')`):
+All extend `BasaltError`, which has a stable `code` (you can safely do `if (error.code === '...')`):
 
 | Class | `code` |
 |---|---|
@@ -356,7 +356,7 @@ All extend `MachizeError`, which has a stable `code` (you can safely do `if (err
 
 ### Tracing
 
-- `Tracer(options?)` — `TracerOptions`: `exporter?`, `serviceName?` (default `'machize'`), `sampled?` (default `true`), `clock?` (default `Date.now`), `idGenerator?`.
+- `Tracer(options?)` — `TracerOptions`: `exporter?`, `serviceName?` (default `'basalt'`), `sampled?` (default `true`), `clock?` (default `Date.now`), `idGenerator?`.
 - `tracer.startSpan(name, { parent?, kind?, attributes? })` — `kind` defaults to `'internal'`; without `parent`, uses the active span as parent.
 - `tracer.inSpan(span, fn)` — activates the span, marks `error` if `fn` throws, always ends it.
 - `tracer.forceFlush()` — forces the exporter to send.
@@ -387,7 +387,7 @@ All extend `MachizeError`, which has a stable `code` (you can safely do `if (err
 
 ## How it connects to other modules
 
-- **`@machize/config`** — provides `configPlugin`, which registers a `ConfigRepository` in the core container via the `CONFIG` token.
-- **`@machize/env`** — uses core's `MachizeError` for its `EnvValidationError`; usually the first step before assembling the `config` object you pass to `createApp`.
-- **`@machize/events`** — provides `eventsPlugin` (an event bus on the `EVENTS` token) and `outboxPlugin`; both are core plugins, and the outbox uses `tryCtx()` to read the tenant from the context.
-- Any package in the ecosystem extends the `MachizeHooks` and `RequestContext` types via *module augmentation* to add typed hooks and context fields.
+- **`@basaltkit/config`** — provides `configPlugin`, which registers a `ConfigRepository` in the core container via the `CONFIG` token.
+- **`@basaltkit/env`** — uses core's `BasaltError` for its `EnvValidationError`; usually the first step before assembling the `config` object you pass to `createApp`.
+- **`@basaltkit/events`** — provides `eventsPlugin` (an event bus on the `EVENTS` token) and `outboxPlugin`; both are core plugins, and the outbox uses `tryCtx()` to read the tenant from the context.
+- Any package in the ecosystem extends the `BasaltHooks` and `RequestContext` types via *module augmentation* to add typed hooks and context fields.

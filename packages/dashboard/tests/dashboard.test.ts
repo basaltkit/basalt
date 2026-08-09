@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { defineResource } from '@machize/admin'
-import { definePlans } from '@machize/subscriptions'
-import type { SubscriptionRecord } from '@machize/subscriptions'
+import { defineResource } from '@basaltkit/admin'
+import { definePlans } from '@basaltkit/subscriptions'
+import type { SubscriptionRecord } from '@basaltkit/subscriptions'
 import {
   churnRate,
   computeBillingMetrics,
@@ -87,7 +87,7 @@ describe('defineDashboard', () => {
   it('assembles sections and a nav model', () => {
     const projects = defineResource({ name: 'projects', schema: z.object({ id: z.string(), name: z.string() }) })
     const dashboard = defineDashboard({
-      title: 'Machize Admin',
+      title: 'Basalt Admin',
       sections: [
         metricsSection({ icon: 'gauge' }),
         resourceSection(projects, { icon: 'folder' }),
@@ -95,7 +95,7 @@ describe('defineDashboard', () => {
       ],
     })
 
-    expect(dashboard.title).toBe('Machize Admin')
+    expect(dashboard.title).toBe('Basalt Admin')
     expect(dashboard.nav()).toEqual([
       { key: 'overview', label: 'Overview', icon: 'gauge' },
       { key: 'projects', label: 'Projects', icon: 'folder' },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { extractSchemaBlocks, prismaSyncCommand } from '../src/sync-command.js'
-import { memoryIo } from '@machize/cli'
+import { memoryIo } from '@basaltkit/cli'
 
 describe('extractSchemaBlocks', () => {
   it('extracts model and enum blocks with their full text', () => {
@@ -47,7 +47,7 @@ describe('prismaSyncCommand', () => {
   })
 
   it('errors when the schema file does not exist', async () => {
-    const c = prismaSyncCommand({ schemaPath: '/tmp/machize-does-not-exist-xyz.prisma' })
+    const c = prismaSyncCommand({ schemaPath: '/tmp/basalt-does-not-exist-xyz.prisma' })
     const context = ctx()
     const code = await c.handle(context)
     expect(code).toBe(1)

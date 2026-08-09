@@ -16,10 +16,10 @@ The headline 0.x limitation ("some stores ship in-memory") is resolved. Every
 stateful domain has a durable backend; in-memory is now the *dev default*, not a
 ceiling.
 
-- [x] Auth — `@machize/auth-sqlite` / `@machize/auth-prisma` (6 stores)
-- [x] Teams — `@machize/teams-sqlite` / `@machize/teams-prisma`
-- [x] Subscriptions — `@machize/subscriptions-sqlite` / `-prisma` (atomic `consume`)
-- [x] Permissions — `@machize/permissions-sqlite` / `-prisma`
+- [x] Auth — `@basaltkit/auth-sqlite` / `@basaltkit/auth-prisma` (6 stores)
+- [x] Teams — `@basaltkit/teams-sqlite` / `@basaltkit/teams-prisma`
+- [x] Subscriptions — `@basaltkit/subscriptions-sqlite` / `-prisma` (atomic `consume`)
+- [x] Permissions — `@basaltkit/permissions-sqlite` / `-prisma`
 - [x] Comments, Audit, Activity, Notifications — `*-sqlite` / `*-prisma`
 - [x] Cache / usage metering / webhook idempotency — Redis backends
 - [x] Queues, Search, Storage — production driver packages
@@ -42,7 +42,7 @@ The mechanical work was done and the maintainer signed off the surface at 1.0.
       named after their contract (`sqliteInAppStore`, `sqliteAccessStore`) rather
       than the domain — consistent within itself, worth a glance at freeze time.
 - [x] **Deprecation policy** written — see the
-      [Versioning & compatibility guide](https://machize-docs.pages.dev/guide/versioning):
+      [Versioning & compatibility guide](https://basalt-docs.pages.dev/guide/versioning):
       `@deprecated` in a minor, works through the major, removed only in the next.
 - [x] No `@experimental` / `@deprecated` / TODO debt in `src` (1 marker total).
 
@@ -57,9 +57,9 @@ The mechanical work was done and the maintainer signed off the surface at 1.0.
 - [x] **Documentation is single-language (English).** All 53 formerly-Portuguese
       base package READMEs were translated to English — prose and code examples —
       so the docs site, guides, and every package README now read English.
-      (`@machize/i18n` keeps its intentional `pt`-locale demo strings.)
+      (`@basaltkit/i18n` keeps its intentional `pt`-locale demo strings.)
 - [x] A short **"0.x → 1.0" upgrade note** — published in the
-      [Versioning & compatibility guide](https://machize-docs.pages.dev/guide/versioning)
+      [Versioning & compatibility guide](https://basalt-docs.pages.dev/guide/versioning)
       ("1.0 is a stability commitment, not a rewrite"), to be confirmed final by
       the maintainer API sign-off above.
 
@@ -84,20 +84,20 @@ The mechanical work was done and the maintainer signed off the surface at 1.0.
 
 ## 5. Versioning & release — ✅ done
 
-- [x] Lockstep releases via changesets (`fixed: [["@machize/*"]]`); automated
+- [x] Lockstep releases via changesets (`fixed: [["@basaltkit/*"]]`); automated
       publish on merge (`release.yml`, npm provenance).
-- [x] **The 1.0 cut landed.** The whole `@machize/*` group graduated
+- [x] **The 1.0 cut landed.** The whole `@basaltkit/*` group graduated
       `0.32.0 → 1.0.0` in lockstep and published to npm — functionally identical to
       0.32.0, marking the stability commitment.
 - [x] **`1.0.0` announcement** — the README status and every package CHANGELOG
-      state the stability promise; the [Versioning guide](https://machize-docs.pages.dev/guide/versioning) documents it.
+      state the stability promise; the [Versioning guide](https://basalt-docs.pages.dev/guide/versioning) documents it.
 
 ## 6. Runtime & compatibility — ✅ done
 
 - [x] ESM-only, documented.
 - [x] `node:sqlite` packages declare `engines.node >= 22.5.0` (flag-free on 24).
 - [x] **Node support policy documented** — the
-      [Versioning & compatibility guide](https://machize-docs.pages.dev/guide/versioning)
+      [Versioning & compatibility guide](https://basalt-docs.pages.dev/guide/versioning)
       states Node 22+ (CI tests 22 & 24), the `*-sqlite` packages' 22.5+ /
       `--experimental-sqlite` caveat, ESM-only, and the lockstep versioning rule.
 
@@ -108,7 +108,7 @@ The mechanical work was done and the maintainer signed off the surface at 1.0.
       prefix; MFA recovery codes hashed upstream; the durable stores preserve this.
 - [x] Supply-chain audit in CI.
 - [x] `SECURITY.md` disclosure process confirmed current (GitHub private
-      vulnerability reporting + `security@machize.dev`); refreshed the stale
+      vulnerability reporting + `security@basalt.dev`); refreshed the stale
       "currently 0.1.x" supported-versions line to `0.31.x`.
 
 ---

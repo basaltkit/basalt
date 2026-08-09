@@ -1,17 +1,17 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { prismaActivityStore } from '@machize/activity-prisma'
-import { prismaAuditStore } from '@machize/audit-prisma'
-import { prismaAuthStores } from '@machize/auth-prisma'
-import { prismaCommentsStore } from '@machize/comments-prisma'
-import { prismaInAppStore } from '@machize/notifications-prisma'
-import { prismaAccessStore } from '@machize/permissions-prisma'
-import { prismaSubscriptionsStores } from '@machize/subscriptions-prisma'
-import { prismaTeamsStores } from '@machize/teams-prisma'
-import { prismaTenantSource } from '@machize/tenancy-prisma'
-import { prismaOutboxStore } from '@machize/events-prisma'
-import { prismaWebhookStore } from '@machize/webhooks-prisma'
+import { prismaActivityStore } from '@basaltkit/activity-prisma'
+import { prismaAuditStore } from '@basaltkit/audit-prisma'
+import { prismaAuthStores } from '@basaltkit/auth-prisma'
+import { prismaCommentsStore } from '@basaltkit/comments-prisma'
+import { prismaInAppStore } from '@basaltkit/notifications-prisma'
+import { prismaAccessStore } from '@basaltkit/permissions-prisma'
+import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
+import { prismaTeamsStores } from '@basaltkit/teams-prisma'
+import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
+import { prismaOutboxStore } from '@basaltkit/events-prisma'
+import { prismaWebhookStore } from '@basaltkit/webhooks-prisma'
 
-// Real-PostgreSQL round-trips for every @machize/*-prisma store. Gated on
+// Real-PostgreSQL round-trips for every @basaltkit/*-prisma store. Gated on
 // TEST_DATABASE_URL so the default suite stays green when no database is set;
 // CI (and `docker run postgres` locally) provides it. Proves the Prisma
 // backends work against a real database — compound ids, String[] columns,
@@ -22,7 +22,7 @@ const url = process.env['TEST_DATABASE_URL']
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let prisma: any
 
-describe.skipIf(!url)('@machize/*-prisma stores against real PostgreSQL', () => {
+describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () => {
   beforeAll(async () => {
     // Dynamic specifier (typed as string) so tsc doesn't need the generated client.
     const clientModule: string = '../generated/client/index.js'

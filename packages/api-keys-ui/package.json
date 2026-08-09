@@ -1,7 +1,7 @@
 {
-  "name": "@machize/api-keys-ui",
-  "version": "1.0.5",
-  "description": "A self-contained HTML page to manage @machize/auth API keys: create (show once), list and revoke — zero dependencies, no build.",
+  "name": "@basaltkit/api-keys-ui",
+  "version": "1.0.0",
+  "description": "A self-contained HTML page to manage @basaltkit/auth API keys: create (show once), list and revoke — zero dependencies, no build.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/fastify": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/fastify": "workspace:^"
   },
   "devDependencies": {
-    "@machize/auth": "workspace:^",
-    "@machize/tenancy": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/auth": "workspace:^",
+    "@basaltkit/tenancy": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -37,13 +37,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/api-keys-ui"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/api-keys-ui#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/api-keys-ui#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "api-keys",

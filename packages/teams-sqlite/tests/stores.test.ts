@@ -70,7 +70,7 @@ describe('SqliteInvitationStore', () => {
 })
 
 describe('sqliteTeamsStores + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-teams-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-teams-'))
   const file = join(dir, 'teams.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

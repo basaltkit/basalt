@@ -1,6 +1,6 @@
 export {
   route,
-  type MachizeRoute,
+  type BasaltRoute,
   type HandlerArgs,
   type HttpMethod,
   type HttpRequest,
@@ -16,8 +16,8 @@ export {
 } from './adapter.js'
 export { HttpError, RequestValidationError, type ValidationIssue } from './errors.js'
 
-// The edge plugins are framework-neutral (see @machize/http); re-exported so
-// `import { securityPlugin } from '@machize/fastify'` keeps working.
+// The edge plugins are framework-neutral (see @basaltkit/http); re-exported so
+// `import { securityPlugin } from '@basaltkit/fastify'` keeps working.
 export {
   securityPlugin,
   MemoryRateLimitStore,
@@ -45,7 +45,7 @@ export {
   type OpenApiInfo,
   type RouteLike,
   type HttpServer,
-} from '@machize/http'
+} from '@basaltkit/http'
 
 // Idempotency needs to capture the response body, which is Fastify-specific.
 export {

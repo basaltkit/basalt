@@ -1,6 +1,6 @@
 # Comments
 
-`@machize/comments` adds threaded comments to **any resource** — a note, a
+`@basaltkit/comments` adds threaded comments to **any resource** — a note, a
 project, a task — with @mentions and resolve/reopen, scoped per tenant. It emits
 events that bridge cleanly to [realtime](/guide/realtime) (live discussion) and
 notifications (alert the mentioned).
@@ -8,7 +8,7 @@ notifications (alert the mentioned).
 ## Setup
 
 ```ts
-import { commentsPlugin, COMMENTS, commentRoutes } from '@machize/comments'
+import { commentsPlugin, COMMENTS, commentRoutes } from '@basaltkit/comments'
 
 commentsPlugin()
 // routes: [...commentRoutes()]  →  create/list/edit/delete/resolve/reopen

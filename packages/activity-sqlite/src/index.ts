@@ -4,13 +4,13 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import type { ActivityQuery, ActivityRecord, ActivityStore } from '@machize/activity'
+import type { ActivityQuery, ActivityRecord, ActivityStore } from '@basaltkit/activity'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/activity`
+ * Durable, SQLite-backed implementation of the `@basaltkit/activity`
  * `ActivityStore`, on Node's built-in `node:sqlite`. Zero external dependencies.
  * The single-node reference backend; the production (Postgres/MySQL) counterpart
- * is `@machize/activity-prisma`.
+ * is `@basaltkit/activity-prisma`.
  *
  * Requires Node 22.5+ (stable and flag-free on Node 24; `--experimental-sqlite`
  * on 22.x).

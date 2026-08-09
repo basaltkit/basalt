@@ -5,13 +5,13 @@ const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import { randomUUID } from 'node:crypto'
-import type { OutboxEntry, OutboxStore } from '@machize/events'
+import type { OutboxEntry, OutboxStore } from '@basaltkit/events'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/events` `OutboxStore`,
+ * Durable, SQLite-backed implementation of the `@basaltkit/events` `OutboxStore`,
  * on Node's built-in `node:sqlite`. Zero external dependencies. The single-node
  * reference backend for the transactional outbox; the production
- * (Postgres/MySQL) counterpart is `@machize/events-prisma`.
+ * (Postgres/MySQL) counterpart is `@basaltkit/events-prisma`.
  *
  * The whole point of the outbox is to survive a crash between "committed" and
  * "delivered" — so its store must be durable. `MemoryOutboxStore` (the default)

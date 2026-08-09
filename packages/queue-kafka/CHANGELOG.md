@@ -1,4 +1,4 @@
-# @machize/queue-kafka
+# @basaltkit/queue-kafka
 
 ## 1.0.5
 
@@ -6,134 +6,134 @@
 
 - Lockstep 1.0.5 release. No code changes in this package; it moves with the
   ecosystem-wide durable/Redis backend expansion (tenancy, events outbox,
-  webhooks, rate-limiting, idempotency). Internal `@machize/*` dependencies now
+  webhooks, rate-limiting, idempotency). Internal `@basaltkit/*` dependencies now
   use caret ranges (`workspace:^`).
 
 ## 1.0.0
 
 ### Major Changes
 
-- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@machize/*` ecosystem.
+- **First stable release.** The public API is now covered by semantic versioning: breaking changes only in a new major, features in a minor, fixes in a patch. No functional change from 0.32.0 — this release marks the stability commitment across the `@basaltkit/*` ecosystem.
 
 ## 0.24.0
 
 ### Patch Changes
 
-- @machize/queue@0.24.0
+- @basaltkit/queue@0.24.0
 
 ## 0.23.0
 
 ### Patch Changes
 
-- @machize/queue@0.23.0
+- @basaltkit/queue@0.23.0
 
 ## 0.22.0
 
 ### Patch Changes
 
-- @machize/queue@0.22.0
+- @basaltkit/queue@0.22.0
 
 ## 0.21.0
 
 ### Patch Changes
 
-- @machize/queue@0.21.0
+- @basaltkit/queue@0.21.0
 
 ## 0.20.0
 
 ### Patch Changes
 
-- @machize/queue@0.20.0
+- @basaltkit/queue@0.20.0
 
 ## 0.19.0
 
 ### Patch Changes
 
-- @machize/queue@0.19.0
+- @basaltkit/queue@0.19.0
 
 ## 0.18.0
 
 ### Patch Changes
 
-- @machize/queue@0.18.0
+- @basaltkit/queue@0.18.0
 
 ## 0.17.0
 
 ### Patch Changes
 
-- @machize/queue@0.17.0
+- @basaltkit/queue@0.17.0
 
 ## 0.16.0
 
 ### Patch Changes
 
-- @machize/queue@0.16.0
+- @basaltkit/queue@0.16.0
 
 ## 0.15.0
 
 ### Patch Changes
 
-- @machize/queue@0.15.0
+- @basaltkit/queue@0.15.0
 
 ## 0.14.0
 
 ### Patch Changes
 
-- @machize/queue@0.14.0
+- @basaltkit/queue@0.14.0
 
 ## 0.13.0
 
 ### Patch Changes
 
-- @machize/queue@0.13.0
+- @basaltkit/queue@0.13.0
 
 ## 0.12.0
 
 ### Patch Changes
 
-- @machize/queue@0.12.0
+- @basaltkit/queue@0.12.0
 
 ## 0.11.0
 
 ### Patch Changes
 
-- @machize/queue@0.11.0
+- @basaltkit/queue@0.11.0
 
 ## 0.10.0
 
 ### Patch Changes
 
-- @machize/queue@0.10.0
+- @basaltkit/queue@0.10.0
 
 ## 0.9.0
 
 ### Patch Changes
 
-- @machize/queue@0.9.0
+- @basaltkit/queue@0.9.0
 
 ## 0.8.1
 
 ### Patch Changes
 
 - 8ef02f4: Add package READMEs. The three queue-driver packages were published without a README (npm showed "This package does not have a README"). Each now documents installation (including the peer dependency), a quick start, how the backend maps retries/backoff/delay and dead-lettering, its honest capability profile, and an options reference.
-  - @machize/queue@0.8.1
+  - @basaltkit/queue@0.8.1
 
 ## 0.8.0
 
 ### Patch Changes
 
-- @machize/queue@0.8.0
+- @basaltkit/queue@0.8.0
 
 ## 0.7.0
 
 ### Minor Changes
 
-- 9505499: New package: `@machize/queue-kafka` — a Kafka driver for `@machize/queue`.
+- 9505499: New package: `@basaltkit/queue-kafka` — a Kafka driver for `@basaltkit/queue`.
 
   `KafkaQueueDriver` produces jobs to a topic and consumes them with a consumer group (kafkajs, an optional peer dependency). It is deliberately honest about what Kafka can't do: `capabilities` declares `delayed: false` and `priority: false` (Kafka has neither), so the queue's `onUnsupported` policy catches those at dispatch instead of silently dropping them. Retries use a retry topic (`<topic>.retry`) the worker also consumes, with exhausted jobs sent to `<topic>.dead`; there is no backoff delay, so `backoff` is `false` too. Worker concurrency maps to `partitionsConsumedConcurrently`. The client is injectable, so the retry/DLQ logic is unit-tested without a broker.
 
   ```ts
-  import { KafkaQueueDriver } from "@machize/queue-kafka";
+  import { KafkaQueueDriver } from "@basaltkit/queue-kafka";
   queuePlugin({
     driver: new KafkaQueueDriver({ brokers: ["localhost:9092"] }),
     jobs,
@@ -143,4 +143,4 @@
 
 ### Patch Changes
 
-- @machize/queue@0.7.0
+- @basaltkit/queue@0.7.0

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@machize/core'
+import { createApp, runWithContext } from '@basaltkit/core'
 import { ACTIVITY, Activity, activityPlugin } from '../src/index.js'
 
 const asAcmeUser = <T>(fn: () => Promise<T>) =>

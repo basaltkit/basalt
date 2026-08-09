@@ -1,7 +1,7 @@
 {
-  "name": "@machize/notifications-prisma",
-  "version": "1.0.5",
-  "description": "Prisma-backed implementation of the @machize/notifications InAppStore (in-app notifications) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "name": "@basaltkit/notifications-prisma",
+  "version": "1.0.0",
+  "description": "Prisma-backed implementation of the @basaltkit/notifications InAppStore (in-app notifications) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -21,11 +21,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@machize/notifications": "workspace:^"
+    "@basaltkit/notifications": "workspace:^"
   },
   "devDependencies": {
-    "@machize/notifications": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/notifications": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -36,13 +36,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/notifications-prisma"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/notifications-prisma#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/notifications-prisma#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "notifications",
     "prisma",

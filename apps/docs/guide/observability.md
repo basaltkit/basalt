@@ -8,7 +8,7 @@ to install.
 Exposes a Prometheus `/metrics` endpoint and auto-instruments every request.
 
 ```ts
-import { metricsPlugin } from '@machize/fastify'
+import { metricsPlugin } from '@basaltkit/fastify'
 
 metricsPlugin() // serves GET /metrics
 ```
@@ -30,7 +30,7 @@ Resolve the registry via the `METRICS` token and record your own — they render
 on the same `/metrics` endpoint.
 
 ```ts
-import { METRICS } from '@machize/fastify'
+import { METRICS } from '@basaltkit/fastify'
 
 const jobs = container.get(METRICS).counter('jobs_processed_total', {
   help: 'Background jobs processed',
@@ -39,7 +39,7 @@ const jobs = container.get(METRICS).counter('jobs_processed_total', {
 jobs.inc({ queue: 'emails' })
 ```
 
-`Counter`, `Gauge` and `Histogram` are also exported from `@machize/core` for
+`Counter`, `Gauge` and `Histogram` are also exported from `@basaltkit/core` for
 use anywhere — they render the Prometheus text exposition format directly.
 
 ## Health probes — `healthPlugin`
@@ -47,7 +47,7 @@ use anywhere — they render the Prometheus text exposition format directly.
 Liveness and readiness are **deliberately distinct**:
 
 ```ts
-import { healthPlugin } from '@machize/fastify'
+import { healthPlugin } from '@basaltkit/fastify'
 
 healthPlugin({
   checks: {
@@ -74,8 +74,8 @@ Zero-dependency tracing that speaks W3C trace-context and exports OTLP to any
 OpenTelemetry collector — no OTel SDK required.
 
 ```ts
-import { tracingPlugin } from '@machize/fastify'
-import { OtlpHttpExporter } from '@machize/core'
+import { tracingPlugin } from '@basaltkit/fastify'
+import { OtlpHttpExporter } from '@basaltkit/core'
 
 tracingPlugin({
   serviceName: 'acme-api',
@@ -89,7 +89,7 @@ status, echoes `traceparent` on the response, and exports the finished span.
 Resolve the `TRACER` token to wrap your own work in spans:
 
 ```ts
-import { TRACER } from '@machize/fastify'
+import { TRACER } from '@basaltkit/fastify'
 
 const tracer = container.get(TRACER)
 await tracer.inSpan(tracer.startSpan('charge.capture', { kind: 'client' }), async () => {
@@ -103,6 +103,6 @@ For local development, swap in `ConsoleSpanExporter`; in tests,
 ## Request correlation
 
 Every request also carries a `requestId` and `correlationId` in the
-[context](/guide/concepts) and structured logs (`@machize/logger`). Propagate
+[context](/guide/concepts) and structured logs (`@basaltkit/logger`). Propagate
 the incoming `x-request-id` / `x-correlation-id` headers across services to
 trace a call end to end.

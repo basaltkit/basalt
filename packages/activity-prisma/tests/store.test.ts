@@ -1,4 +1,4 @@
-import type { ActivityRecord } from '@machize/activity'
+import type { ActivityRecord } from '@basaltkit/activity'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { PrismaActivityStore, type PrismaActivityClient, prismaActivityStore } from '../src/index.js'
 

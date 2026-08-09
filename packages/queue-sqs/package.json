@@ -1,7 +1,7 @@
 {
-  "name": "@machize/queue-sqs",
-  "version": "1.0.5",
-  "description": "Amazon SQS driver for @machize/queue: native delayed delivery, app-level retries with backoff and a dead-letter queue (no priority — SQS has none).",
+  "name": "@basaltkit/queue-sqs",
+  "version": "1.0.0",
+  "description": "Amazon SQS driver for @basaltkit/queue: native delayed delivery, app-level retries with backoff and a dead-letter queue (no priority — SQS has none).",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,13 +19,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/queue": "workspace:^"
+    "@basaltkit/queue": "workspace:^"
   },
   "peerDependencies": {
     "@aws-sdk/client-sqs": "^3.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -36,13 +36,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/queue-sqs"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/queue-sqs#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/queue-sqs#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "queue",
     "sqs",

@@ -1,11 +1,11 @@
-import { MachizeError, type DurationInput } from '@machize/core'
+import { BasaltError, type DurationInput } from '@basaltkit/core'
 
 /** Structural schema compatible with Zod. */
 export interface JobSchema<T> {
   safeParse(input: unknown): { success: boolean; data?: T; error?: unknown }
 }
 
-export class JobValidationError extends MachizeError {
+export class JobValidationError extends BasaltError {
   constructor(
     readonly job: string,
     readonly issues: unknown,
@@ -14,7 +14,7 @@ export class JobValidationError extends MachizeError {
   }
 }
 
-export class JobNotRegisteredError extends MachizeError {
+export class JobNotRegisteredError extends BasaltError {
   constructor(job: string) {
     super(
       'QUEUE_JOB_NOT_REGISTERED',

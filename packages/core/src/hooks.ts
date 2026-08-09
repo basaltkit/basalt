@@ -2,13 +2,13 @@
  * Global hook registry for the ecosystem. Packages add their typed hooks
  * via module augmentation:
  *
- * declare module '@machize/core' {
- *   interface MachizeHooks {
+ * declare module '@basaltkit/core' {
+ *   interface BasaltHooks {
  *     'tenancy:switched': { tenantId: string }
  *   }
  * }
  */
-export interface MachizeHooks {
+export interface BasaltHooks {
   [hook: string]: unknown
 }
 
@@ -27,9 +27,9 @@ export class HookBus {
   private readonly anyHandlers: AnyHookHandler[] = []
 
   /** Registers a handler. Higher `priority` runs first. Returns an unsubscribe function. */
-  on<K extends keyof MachizeHooks & string>(
+  on<K extends keyof BasaltHooks & string>(
     hook: K,
-    handler: HookHandler<MachizeHooks[K]>,
+    handler: HookHandler<BasaltHooks[K]>,
     options: { priority?: number } = {},
   ): () => void {
     const registration: Registration = {
@@ -58,9 +58,9 @@ export class HookBus {
   }
 
   /** Runs the handlers in series, in priority order, then the onAny handlers. */
-  async emit<K extends keyof MachizeHooks & string>(
+  async emit<K extends keyof BasaltHooks & string>(
     hook: K,
-    payload: MachizeHooks[K],
+    payload: BasaltHooks[K],
   ): Promise<void> {
     for (const { handler } of [...(this.handlers.get(hook) ?? [])]) {
       await handler(payload)

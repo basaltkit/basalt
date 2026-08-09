@@ -1,4 +1,4 @@
-# @machize/env
+# @basaltkit/env
 
 Typed validation of environment variables with [Zod](https://zod.dev): the application fails immediately at startup, with a single report of **all** problems, instead of crashing later in the middle of a request. You need this in any application that reads `process.env` (which is to say, practically all of them).
 
@@ -6,17 +6,17 @@ Typed validation of environment variables with [Zod](https://zod.dev): the appli
 
 An **environment variable** is a value defined outside the code — in the terminal, in a `.env` file, or in the server's dashboard — that the application reads from `process.env`. It's the usual way to pass things like the database address (`DATABASE_URL`) or secret keys. The problem: `process.env` always returns text (or `undefined`), with no guarantees at all. If you forget to set a variable, the error only shows up much later, somewhere hard to make sense of.
 
-`@machize/env` solves this with the `defineEnv` function: you declare the expected shape of each variable using a **schema** (a validatable description of the data's shape, written with the Zod library), and it validates everything the moment the module is loaded. If something is wrong, it throws an error with the full report — all missing or invalid variables at once, not one at a time. The returned object is typed (TypeScript knows `env.PORT` is a number) and frozen (nobody can change it by mistake).
+`@basaltkit/env` solves this with the `defineEnv` function: you declare the expected shape of each variable using a **schema** (a validatable description of the data's shape, written with the Zod library), and it validates everything the moment the module is loaded. If something is wrong, it throws an error with the full report — all missing or invalid variables at once, not one at a time. The returned object is typed (TypeScript knows `env.PORT` is a number) and frozen (nobody can change it by mistake).
 
 It also includes the `secret()` helper, a special schema for secrets (API keys, JWT signing keys, …) with a *fail-closed* policy in production: in development it accepts a default value so you can get up and running right away, but in production it requires a real secret — rejecting values that are missing, too short, or that look like a "placeholder" (`change-me`, `secret`, `password`, …).
 
 ## Installation
 
 ```bash
-pnpm add @machize/env zod
+pnpm add @basaltkit/env zod
 ```
 
-`zod` is a *peer dependency* (you have to install it yourself; both `^3.24.0` and `^4.0.0` are supported). `@machize/core` comes along automatically as a dependency.
+`zod` is a *peer dependency* (you have to install it yourself; both `^3.24.0` and `^4.0.0` are supported). `@basaltkit/core` comes along automatically as a dependency.
 
 ## Get started in 5 minutes
 
@@ -26,7 +26,7 @@ pnpm add @machize/env zod
 
 ```ts
 // src/env.ts
-import { defineEnv, secret } from '@machize/env'
+import { defineEnv, secret } from '@basaltkit/env'
 import { z } from 'zod'
 
 export const env = defineEnv({
@@ -63,7 +63,7 @@ Step by step, what happens: (1) `defineEnv` reads `process.env`; (2) it validate
 Unlike validating one variable at a time, the report brings everything together — you fix your `.env` in a single pass:
 
 ```ts
-import { defineEnv, EnvValidationError } from '@machize/env'
+import { defineEnv, EnvValidationError } from '@basaltkit/env'
 import { z } from 'zod'
 
 try {
@@ -85,7 +85,7 @@ try {
 By default, `defineEnv` reads `process.env`. In tests, pass your own source:
 
 ```ts
-import { defineEnv } from '@machize/env'
+import { defineEnv } from '@basaltkit/env'
 import { z } from 'zod'
 
 const env = defineEnv(
@@ -103,7 +103,7 @@ const env = defineEnv(
 3. **Minimum length in any environment** — 16 characters by default.
 
 ```ts
-import { defineEnv, secret } from '@machize/env'
+import { defineEnv, secret } from '@basaltkit/env'
 
 export const env = defineEnv({
   // boots right away in dev; requires a real value in production:
@@ -115,14 +115,14 @@ export const env = defineEnv({
 
 The practical result: a fresh project runs "out of the box" in development and **refuses to boot** in production until you set real secrets.
 
-### Connecting to the rest of a Machize application
+### Connecting to the rest of a Basalt application
 
 Recommended pattern: validate the environment first and use it to build the application's configuration.
 
 ```ts
-import { createApp } from '@machize/core'
-import { configPlugin } from '@machize/config'
-import { defineEnv, secret } from '@machize/env'
+import { createApp } from '@basaltkit/core'
+import { configPlugin } from '@basaltkit/config'
+import { defineEnv, secret } from '@basaltkit/env'
 import { z } from 'zod'
 
 const env = defineEnv({
@@ -165,7 +165,7 @@ Note: `devDefault` also has to satisfy `minLength` — validation runs over it t
 
 ### `EnvValidationError`
 
-Error thrown by `defineEnv`. Extends `MachizeError` from `@machize/core`.
+Error thrown by `defineEnv`. Extends `BasaltError` from `@basaltkit/core`.
 
 | Property | Type | Description |
 |---|---|---|
@@ -175,7 +175,7 @@ Error thrown by `defineEnv`. Extends `MachizeError` from `@machize/core`.
 
 ## Common errors and solutions (FAQ)
 
-**"Invalid environment variables" on startup** — Read the report's lines: each one names the variable and the problem. Set the missing variables in your `.env` file (or in the server's environment) and start again. Note: `@machize/env` doesn't read `.env` files on its own — use `node --env-file=.env` (Node 20+) or a tool like `dotenv` before the `env.ts` module is imported.
+**"Invalid environment variables" on startup** — Read the report's lines: each one names the variable and the problem. Set the missing variables in your `.env` file (or in the server's environment) and start again. Note: `@basaltkit/env` doesn't read `.env` files on its own — use `node --env-file=.env` (Node 20+) or a tool like `dotenv` before the `env.ts` module is imported.
 
 **"is required in production" for a variable with `devDefault`** — This is the intended behavior: with `NODE_ENV=production`, `devDefault` is ignored. Set the real value in the production environment.
 
@@ -185,12 +185,12 @@ Error thrown by `defineEnv`. Extends `MachizeError` from `@machize/core`.
 
 **`env.PORT` comes back as text instead of a number** — Use `z.coerce.number()` instead of `z.number()`: environment variables are always text, and `coerce` handles the conversion.
 
-**I want to change `env.X` at runtime but it errors** — The returned object is frozen with `Object.freeze` on purpose: the environment is read-only. If you need mutable values, use `ConfigRepository` from `@machize/config`.
+**I want to change `env.X` at runtime but it errors** — The returned object is frozen with `Object.freeze` on purpose: the environment is read-only. If you need mutable values, use `ConfigRepository` from `@basaltkit/config`.
 
 **Validation passed in dev but failed in production with the same `.env`** — `secret()` switches to production rules when `NODE_ENV=production`. Confirm what `NODE_ENV` is in each environment.
 
 ## How it connects to other modules
 
-- **`@machize/core`** — `EnvValidationError` extends `MachizeError` (with the stable `code` `ENV_INVALID`, like every other error in the ecosystem). `defineEnv` normally runs **before** `createApp`, so the application doesn't even attempt to boot with an invalid environment.
-- **`@machize/config`** — a natural pair: `defineEnv` validates the outside world (environment variables), and `configPlugin` distributes those values, already organized into namespaces, to every plugin through the container.
-- **`@machize/events`** — no direct link; use `env` to configure, for example, the `dispatch` destination of the outbox (webhook URLs, API keys).
+- **`@basaltkit/core`** — `EnvValidationError` extends `BasaltError` (with the stable `code` `ENV_INVALID`, like every other error in the ecosystem). `defineEnv` normally runs **before** `createApp`, so the application doesn't even attempt to boot with an invalid environment.
+- **`@basaltkit/config`** — a natural pair: `defineEnv` validates the outside world (environment variables), and `configPlugin` distributes those values, already organized into namespaces, to every plugin through the container.
+- **`@basaltkit/events`** — no direct link; use `env` to configure, for example, the `dispatch` destination of the outbox (webhook URLs, API keys).

@@ -1,4 +1,4 @@
-import { MachizeError } from '@machize/core'
+import { BasaltError } from '@basaltkit/core'
 
 export interface ValidationIssue {
   path: string
@@ -6,7 +6,7 @@ export interface ValidationIssue {
 }
 
 /** Body/query/params validation failure — becomes a standardized 400 response. */
-export class RequestValidationError extends MachizeError {
+export class RequestValidationError extends BasaltError {
   constructor(
     readonly part: 'body' | 'query' | 'params',
     readonly issues: ValidationIssue[],
@@ -19,7 +19,7 @@ export class RequestValidationError extends MachizeError {
  * Intentional HTTP error throwable from any layer:
  * `throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')`
  */
-export class HttpError extends MachizeError {
+export class HttpError extends BasaltError {
   constructor(
     readonly status: number,
     code: string,

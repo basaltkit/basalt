@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AdminDataSource, ListParams } from '@machize/admin'
+import type { AdminDataSource, ListParams } from '@basaltkit/admin'
 
 export interface UseListResult<T> {
   data: T[]

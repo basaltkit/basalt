@@ -1,23 +1,23 @@
-# @machize/subscriptions-prisma
+# @basaltkit/subscriptions-prisma
 
 **Prisma-backed** implementations of the three
-[`@machize/subscriptions`](https://github.com/Zebedeu/machize/tree/main/packages/subscriptions)
+[`@basaltkit/subscriptions`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions)
 stores — the **subscription** record, **usage** metering and **webhook**
 idempotency — for production databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the `Subscription`, `UsageCounter` and
 `WebhookEvent` models; the stores only touch those delegates. The production
 counterpart to
-[`@machize/subscriptions-sqlite`](https://github.com/Zebedeu/machize/tree/main/packages/subscriptions-sqlite).
+[`@basaltkit/subscriptions-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions-sqlite).
 
 ```bash
-pnpm add @machize/subscriptions-prisma   # peer: @machize/subscriptions ; you already have @prisma/client
+pnpm add @basaltkit/subscriptions-prisma   # peer: @basaltkit/subscriptions ; you already have @prisma/client
 ```
 
 ## 1. Add the models
 
 Copy the models from the bundled reference schema
-(`@machize/subscriptions-prisma/schema.prisma`) into your `schema.prisma`:
+(`@basaltkit/subscriptions-prisma/schema.prisma`) into your `schema.prisma`:
 
 ```prisma
 model Subscription {
@@ -54,8 +54,8 @@ Then `prisma migrate dev` and `prisma generate`.
 straight into `subscriptionsPlugin` — pass your client directly, no cast:
 
 ```ts
-import { subscriptionsPlugin } from '@machize/subscriptions'
-import { prismaSubscriptionsStores } from '@machize/subscriptions-prisma'
+import { subscriptionsPlugin } from '@basaltkit/subscriptions'
+import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
@@ -83,7 +83,7 @@ once across restarts and instances.
 ## Multi-tenant?
 
 For **database-per-tenant**, route the stores through the active tenant's client
-— see the [Database-per-tenant guide](https://machize-docs.pages.dev/guide/database-per-tenant).
+— see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).
 
 ## Typing note
 

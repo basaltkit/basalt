@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createToken, definePlugin, tryCtx } from '@machize/core'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
 import { EVENTS } from './index.js'
 
 /**
@@ -130,7 +130,7 @@ export interface OutboxPluginOptions extends OutboxOptions {
   store?: OutboxStore
   /** Delivers a committed entry to the outside world (webhooks, Kafka, …). */
   dispatch: OutboxDispatch
-  /** Capture these event patterns into the outbox automatically (needs @machize/events). */
+  /** Capture these event patterns into the outbox automatically (needs @basaltkit/events). */
   captureEvents?: string[]
   /** Poll interval in ms to flush the outbox. Omit to flush manually via OUTBOX. */
   intervalMs?: number
@@ -149,8 +149,8 @@ export function outboxPlugin(options: OutboxPluginOptions) {
   let timer: ReturnType<typeof setInterval> | undefined
 
   return definePlugin({
-    name: 'machize:outbox',
-    dependsOn: capture.length ? ['machize:events'] : [],
+    name: 'basalt:outbox',
+    dependsOn: capture.length ? ['basalt:events'] : [],
     register({ container }) {
       container.singleton(OUTBOX, () => outbox)
     },

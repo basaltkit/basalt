@@ -1,4 +1,4 @@
-import { defineCommand, type CommandDefinition } from '@machize/cli'
+import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
 import { migrateTenants, prismaMigrator, type MigrateFn, type MigrateTarget } from './migrate.js'
 
 export interface TenantMigrateCommandConfig {
@@ -11,7 +11,7 @@ export interface TenantMigrateCommandConfig {
 }
 
 /**
- * Builds the `mach tenant:migrate` command — register it via commandsPlugin().
+ * Builds the `basalt tenant:migrate` command — register it via commandsPlugin().
  * Runs migrations for every tenant, prints a per-tenant report, and exits
  * non-zero if any tenant failed.
  */

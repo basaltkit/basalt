@@ -59,7 +59,7 @@ describe('SqliteCommentStore', () => {
 })
 
 describe('sqliteCommentsStore + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-comments-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-comments-'))
   const file = join(dir, 'comments.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

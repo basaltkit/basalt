@@ -4,13 +4,13 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import type { Comment, CommentPatch, CommentStore } from '@machize/comments'
+import type { Comment, CommentPatch, CommentStore } from '@basaltkit/comments'
 
 /**
- * Durable, SQLite-backed implementation of the `@machize/comments`
+ * Durable, SQLite-backed implementation of the `@basaltkit/comments`
  * `CommentStore`, on Node's built-in `node:sqlite`. Zero external dependencies.
  * The single-node reference backend; the production (Postgres/MySQL) counterpart
- * is `@machize/comments-prisma`.
+ * is `@basaltkit/comments-prisma`.
  *
  * Requires Node 22.5+ (stable and flag-free on Node 24; `--experimental-sqlite`
  * on 22.x).

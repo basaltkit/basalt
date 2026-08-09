@@ -1,26 +1,26 @@
-# @machize/exports-xlsx
+# @basaltkit/exports-xlsx
 
-**XLSX** formatter for [`@machize/exports`](https://www.npmjs.com/package/@machize/exports): writes a valid `.xlsx` (Office Open XML) — **zero dependencies**. Bring your own Excel writer without dragging in heavy libraries. You need this module when users want to export to Excel, not just CSV.
+**XLSX** formatter for [`@basaltkit/exports`](https://www.npmjs.com/package/@basaltkit/exports): writes a valid `.xlsx` (Office Open XML) — **zero dependencies**. Bring your own Excel writer without dragging in heavy libraries. You need this module when users want to export to Excel, not just CSV.
 
 ## What this module solves
 
-`.xlsx` is, at its core, a ZIP of XML files. Instead of relying on a large library (`exceljs`, `xlsx`), this package writes the ZIP (STORE method + CRC32) and the SpreadsheetML by hand — a single-sheet `.xlsx` file, with headers, strings, and numbers. It plugs into `@machize/exports`'s *formatter* pipeline.
+`.xlsx` is, at its core, a ZIP of XML files. Instead of relying on a large library (`exceljs`, `xlsx`), this package writes the ZIP (STORE method + CRC32) and the SpreadsheetML by hand — a single-sheet `.xlsx` file, with headers, strings, and numbers. It plugs into `@basaltkit/exports`'s *formatter* pipeline.
 
 ## Installation
 
 ```bash
-pnpm add @machize/exports-xlsx @machize/exports
+pnpm add @basaltkit/exports-xlsx @basaltkit/exports
 ```
 
-No runtime dependencies beyond `@machize/exports` (only for the formatter type).
+No runtime dependencies beyond `@basaltkit/exports` (only for the formatter type).
 
 ## Usage
 
-Register the formatter with `@machize/exports` and use the `'xlsx'` format:
+Register the formatter with `@basaltkit/exports` and use the `'xlsx'` format:
 
 ```ts
-import { exportsPlugin, defineExport } from '@machize/exports'
-import { xlsxFormatter } from '@machize/exports-xlsx'
+import { exportsPlugin, defineExport } from '@basaltkit/exports'
+import { xlsxFormatter } from '@basaltkit/exports-xlsx'
 
 exportsPlugin({ formatters: [xlsxFormatter] })
 
@@ -51,5 +51,5 @@ const buffer = xlsxFormatter.render(['Name', 'Price'], [['Ada', 29], ['Bob', 0]]
 
 ## How it connects to other modules
 
-- **`@machize/exports`** — this is a *formatter* for that package; the export definition comes from there.
-- **`@machize/queue` + `@machize/files`** — generate the `.xlsx` in a job and store it for download (large reports).
+- **`@basaltkit/exports`** — this is a *formatter* for that package; the export definition comes from there.
+- **`@basaltkit/queue` + `@basaltkit/files`** — generate the `.xlsx` in a job and store it for download (large reports).

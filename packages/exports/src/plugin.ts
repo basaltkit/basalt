@@ -1,4 +1,4 @@
-import { createToken, definePlugin } from '@machize/core'
+import { createToken, definePlugin } from '@basaltkit/core'
 import { Exports } from './exports.js'
 import type { ExportFormatter } from './formatters.js'
 
@@ -11,7 +11,7 @@ export interface ExportsPluginOptions {
 
 export function exportsPlugin(options: ExportsPluginOptions = {}) {
   return definePlugin({
-    name: 'machize:exports',
+    name: 'basalt:exports',
     register({ container }) {
       container.singleton(EXPORTS, () => new Exports(options))
     },

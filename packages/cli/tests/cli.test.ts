@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, definePlugin, ensureMetadata } from '@machize/core'
+import { createApp, definePlugin, ensureMetadata } from '@basaltkit/core'
 import { commandsPlugin, defineCommand, memoryIo, parseArgv, renderTable, runCli } from '../src/index.js'
 
 describe('parseArgv', () => {

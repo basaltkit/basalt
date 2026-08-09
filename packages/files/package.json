@@ -1,7 +1,7 @@
 {
-  "name": "@machize/files",
-  "version": "1.0.5",
-  "description": "File uploads for Machize: validation (type/size), per-tenant storage quota, metadata records, signed URLs, and hooks (antivirus/thumbnails) over @machize/storage.",
+  "name": "@basaltkit/files",
+  "version": "1.0.0",
+  "description": "File uploads for Basalt: validation (type/size), per-tenant storage quota, metadata records, signed URLs, and hooks (antivirus/thumbnails) over @basaltkit/storage.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,15 +19,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/storage": "workspace:^",
-    "@machize/fastify": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/storage": "workspace:^",
+    "@basaltkit/fastify": "workspace:^"
   },
   "peerDependencies": {
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -39,13 +39,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/files"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/files#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/files#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "uploads",

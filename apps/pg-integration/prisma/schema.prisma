@@ -17,7 +17,7 @@ model Project {
   @@index([tenantId])
 }
 
-// --- store models (for @machize/*-prisma integration tests) ---
+// --- store models (for @basaltkit/*-prisma integration tests) ---
 
 
 model AuthUser {

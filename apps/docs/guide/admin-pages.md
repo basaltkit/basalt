@@ -1,7 +1,7 @@
 # Self-contained UIs
 
 Some jobs need a screen, not just an API — managing API keys, inviting
-teammates, changing a plan, browsing the audit trail. Machize ships those as
+teammates, changing a plan, browsing the audit trail. Basalt ships those as
 **dependency-free HTML pages** you drop into your app: no build step, no
 frontend framework, no npm bloat. Each page is served over the JSON routes you
 already mount and renders in the viewer's light or dark theme.
@@ -33,32 +33,32 @@ Every helper takes the same shape of options: `path?` (where to mount),
 header-based tenancy — `headers?` (e.g. `{ 'x-tenant-id': '…' }`; subdomain apps
 need nothing).
 
-## API keys — `@machize/api-keys-ui`
+## API keys — `@basaltkit/api-keys-ui`
 
 ```ts
-import { apiKeysUiRoutes } from '@machize/api-keys-ui'
-// pair with @machize/auth's apiKeysPlugin() + apiKeyRoutes()
+import { apiKeysUiRoutes } from '@basaltkit/api-keys-ui'
+// pair with @basaltkit/auth's apiKeysPlugin() + apiKeyRoutes()
 ```
 
 Serves **`/apikeys/ui`**: create a key (the plaintext is revealed **once**, with
 a copy button), list keys with prefix/scopes/last-used, and revoke. Requires a
 logged-in user.
 
-## Team — `@machize/teams-ui`
+## Team — `@basaltkit/teams-ui`
 
 ```ts
-import { teamsUiRoutes } from '@machize/teams-ui'
-// pair with @machize/teams' teamsPlugin() + teamRoutes()
+import { teamsUiRoutes } from '@basaltkit/teams-ui'
+// pair with @basaltkit/teams' teamsPlugin() + teamRoutes()
 ```
 
 Serves **`/team/ui`**: invite a member, list and revoke pending invitations, and
 list members with a role dropdown and remove. Admin-level actions require the
 `teamRole: 'admin'` guard on the team routes.
 
-## Billing — `@machize/billing-ui`
+## Billing — `@basaltkit/billing-ui`
 
 ```ts
-import { billingUiRoutes } from '@machize/billing-ui'
+import { billingUiRoutes } from '@basaltkit/billing-ui'
 // pass the same plans you gave subscriptionsPlugin; pair with billingRoutes()
 billingUiRoutes({ plans })
 ```
@@ -67,11 +67,11 @@ Serves **`/billing/ui`** (and `/billing/info`): shows the current plan, status
 and trial, lists the plans as cards, and wires Subscribe/Switch to hosted
 Checkout and Manage-billing to the Customer Portal.
 
-## Audit trail — `@machize/audit-viewer`
+## Audit trail — `@basaltkit/audit-viewer`
 
 ```ts
-import { auditViewerPlugin, auditViewerRoutes } from '@machize/audit-viewer'
-// pair with @machize/audit's auditPlugin()
+import { auditViewerPlugin, auditViewerRoutes } from '@basaltkit/audit-viewer'
+// pair with @basaltkit/audit's auditPlugin()
 auditViewerPlugin()
 ```
 

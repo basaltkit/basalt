@@ -1,7 +1,7 @@
 {
-  "name": "@machize/flags",
-  "version": "1.0.5",
-  "description": "Feature flags for Machize: context-aware evaluation with per-tenant/user targeting and deterministic percentage rollouts.",
+  "name": "@basaltkit/flags",
+  "version": "1.0.0",
+  "description": "Feature flags for Basalt: context-aware evaluation with per-tenant/user targeting and deterministic percentage rollouts.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,10 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^"
+    "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -33,13 +33,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/flags"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/flags#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/flags#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "feature-flags"
   ]

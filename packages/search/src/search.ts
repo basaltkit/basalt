@@ -1,9 +1,9 @@
-import { MachizeError, tryCtx } from '@machize/core'
+import { BasaltError, tryCtx } from '@basaltkit/core'
 import { MemorySearchDriver } from './memory.js'
 import type { SearchDocument, SearchDriver, SearchResult } from './types.js'
 
 /** Search was asked for a tenant it couldn't determine. */
-export class TenantRequiredError extends MachizeError {
+export class TenantRequiredError extends BasaltError {
   readonly status = 400
   constructor() {
     super('SEARCH_TENANT_REQUIRED', 'A tenant is required — pass tenantId or run inside a tenant context.')

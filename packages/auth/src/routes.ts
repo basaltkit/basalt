@@ -1,5 +1,5 @@
-import { ctx, MachizeError, type Container } from '@machize/core'
-import { route, type MachizeRoute } from '@machize/fastify'
+import { ctx, BasaltError, type Container } from '@basaltkit/core'
+import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { AUTH } from './plugin.js'
 import { API_KEYS } from './apikeys-plugin.js'
@@ -14,9 +14,9 @@ const apiKeys = () => (ctx().container as Container).get(API_KEYS)
  * register · login · refresh · logout · me, plus email verification
  * (`/auth/verify/request`, `/auth/verify`) and password reset
  * (`/auth/password/forgot`, `/auth/password/reset`).
- * Every one is a plain MachizeRoute: replace or omit any of them freely.
+ * Every one is a plain BasaltRoute: replace or omit any of them freely.
  */
-export function authRoutes(): MachizeRoute[] {
+export function authRoutes(): BasaltRoute[] {
   return [
     route({
       method: 'POST',
@@ -111,7 +111,7 @@ export function authRoutes(): MachizeRoute[] {
   ]
 }
 
-class ApiKeyForbiddenError extends MachizeError {
+class ApiKeyForbiddenError extends BasaltError {
   readonly status = 404
   constructor() {
     super('AUTH_APIKEY_NOT_FOUND', 'API key not found.')
@@ -124,8 +124,8 @@ class ApiKeyForbiddenError extends MachizeError {
  * ever sees or revokes keys within that scope. Register alongside
  * {@link authRoutes} and pair with `apiKeysPlugin`.
  */
-export function apiKeyRoutes(): MachizeRoute[] {
-  // `tenant` is set by @machize/tenancy when present; read it without a hard
+export function apiKeyRoutes(): BasaltRoute[] {
+  // `tenant` is set by @basaltkit/tenancy when present; read it without a hard
   // dependency on that package's type augmentation.
   const scope = (): { tenantId?: string; userId?: string } => {
     const c = ctx() as { tenant?: { id: string }; user?: { id: string } }
@@ -179,7 +179,7 @@ export function apiKeyRoutes(): MachizeRoute[] {
   ]
 }
 
-class MfaAuthRequiredError extends MachizeError {
+class MfaAuthRequiredError extends BasaltError {
   readonly status = 401
   constructor() {
     super('AUTH_REQUIRED', 'Authentication required.')
@@ -197,7 +197,7 @@ const currentUserId = (): string => {
  * alongside {@link authRoutes} and enable MFA at login via the optional
  * `mfaCode` field on `POST /auth/login`.
  */
-export function mfaRoutes(): MachizeRoute[] {
+export function mfaRoutes(): BasaltRoute[] {
   return [
     route({
       method: 'POST',

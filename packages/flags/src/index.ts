@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createToken, definePlugin, tryCtx } from '@machize/core'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
 
 /** Evaluation context. Falls back to the current request's tenant/user. */
 export type FlagContext = { tenantId?: string; userId?: string } & Record<string, unknown>
@@ -88,7 +88,7 @@ export const FLAGS = createToken<FeatureFlags<FlagsShape>>('flags')
 export function flagsPlugin<TShape extends FlagsShape>(flags: FeatureFlags<TShape> | TShape) {
   const instance = flags instanceof FeatureFlags ? flags : new FeatureFlags(flags)
   return definePlugin({
-    name: 'machize:flags',
+    name: 'basalt:flags',
     register({ container }) {
       container.singleton(FLAGS, () => instance as FeatureFlags<FlagsShape>)
     },

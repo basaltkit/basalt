@@ -21,10 +21,10 @@ import type {
   SessionStore,
   UserPatch,
   UserSource,
-} from '@machize/auth'
+} from '@basaltkit/auth'
 
 /**
- * A durable, SQLite-backed implementation of every `@machize/auth` store, built
+ * A durable, SQLite-backed implementation of every `@basaltkit/auth` store, built
  * on Node's built-in `node:sqlite` — zero external dependencies. It is the
  * reference "real backend" for auth: users, sessions, refresh tokens, one-time
  * tokens, API keys and MFA state all survive process restarts.

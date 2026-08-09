@@ -1,4 +1,4 @@
-import { createToken, definePlugin, MetricsRegistry } from '@machize/core'
+import { createToken, definePlugin, MetricsRegistry } from '@basaltkit/core'
 import type { HttpRequest } from './route.js'
 import { HTTP_SERVER } from './server.js'
 
@@ -21,7 +21,7 @@ export function metricsPlugin(options: MetricsPluginOptions = {}) {
   const instrument = options.instrumentHttp ?? true
 
   return definePlugin({
-    name: 'machize:metrics',
+    name: 'basalt:metrics',
     register({ container }) {
       container.singleton(METRICS, () => registry)
     },

@@ -5,12 +5,12 @@ export interface ProjectOptions {
   billing: boolean
   /** Scaffold a web/ frontend (React + shadcn + SDK). */
   ui: boolean
-  /** Scaffold the `mach` CLI entrypoint (code generators + built-in commands). */
+  /** Scaffold the `basalt` CLI entrypoint (code generators + built-in commands). */
   cli: boolean
 }
 
-/** Base release line for @machize/* deps. */
-const MACHIZE_VERSION = '^1.0.0'
+/** Base release line for @basaltkit/* deps. */
+const BASALT_VERSION = '^1.0.0'
 
 /**
  * Per-package range overrides. In semver 0.x, `^0.4.0` locks the minor, so a
@@ -19,33 +19,33 @@ const MACHIZE_VERSION = '^1.0.0'
  */
 const VERSIONS: Record<string, string> = {}
 
-/** The dependency range for a @machize package (override, else the base line). */
-export const versionOf = (pkg: string): string => VERSIONS[pkg] ?? MACHIZE_VERSION
+/** The dependency range for a @basalt package (override, else the base line). */
+export const versionOf = (pkg: string): string => VERSIONS[pkg] ?? BASALT_VERSION
 
 export function packageJson(options: ProjectOptions): string {
   const dependencies: Record<string, string> = {
-    '@machize/config': MACHIZE_VERSION,
-    '@machize/core': MACHIZE_VERSION,
-    '@machize/env': MACHIZE_VERSION,
-    '@machize/events': MACHIZE_VERSION,
-    '@machize/fastify': MACHIZE_VERSION,
-    '@machize/logger': MACHIZE_VERSION,
+    '@basaltkit/config': BASALT_VERSION,
+    '@basaltkit/core': BASALT_VERSION,
+    '@basaltkit/env': BASALT_VERSION,
+    '@basaltkit/events': BASALT_VERSION,
+    '@basaltkit/fastify': BASALT_VERSION,
+    '@basaltkit/logger': BASALT_VERSION,
     zod: '^4.0.0',
   }
-  if (options.tenancy) dependencies['@machize/tenancy'] = MACHIZE_VERSION
-  if (options.auth) dependencies['@machize/auth'] = MACHIZE_VERSION
-  if (options.billing) dependencies['@machize/subscriptions'] = MACHIZE_VERSION
+  if (options.tenancy) dependencies['@basaltkit/tenancy'] = BASALT_VERSION
+  if (options.auth) dependencies['@basaltkit/auth'] = BASALT_VERSION
+  if (options.billing) dependencies['@basaltkit/subscriptions'] = BASALT_VERSION
   if (options.cli) {
-    dependencies['@machize/cli'] = MACHIZE_VERSION
-    dependencies['@machize/generator'] = MACHIZE_VERSION
-    // Powers `mach prisma:sync` — merges @machize/*-prisma models into the schema.
-    dependencies['@machize/prisma'] = MACHIZE_VERSION
+    dependencies['@basaltkit/cli'] = BASALT_VERSION
+    dependencies['@basaltkit/generator'] = BASALT_VERSION
+    // Powers `basalt prisma:sync` — merges @basaltkit/*-prisma models into the schema.
+    dependencies['@basaltkit/prisma'] = BASALT_VERSION
   }
-  // Apply per-package range overrides. Only @machize/* packages: versionOf
-  // falls back to MACHIZE_VERSION, which would clobber third-party ranges
-  // (this once rewrote zod's range to the @machize base line).
+  // Apply per-package range overrides. Only @basaltkit/* packages: versionOf
+  // falls back to BASALT_VERSION, which would clobber third-party ranges
+  // (this once rewrote zod's range to the @basalt base line).
   for (const pkg of Object.keys(dependencies)) {
-    if (pkg.startsWith('@machize/')) dependencies[pkg] = versionOf(pkg)
+    if (pkg.startsWith('@basaltkit/')) dependencies[pkg] = versionOf(pkg)
   }
 
   return `${JSON.stringify(
@@ -59,11 +59,11 @@ export function packageJson(options: ProjectOptions): string {
         start: 'tsx src/server.ts',
         test: 'vitest run',
         typecheck: 'tsc --noEmit',
-        ...(options.cli ? { mach: 'tsx bin/mach.ts' } : {}),
+        ...(options.cli ? { basalt: 'tsx bin/basalt.ts' } : {}),
       },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
       devDependencies: {
-        '@machize/testing': versionOf('@machize/testing'),
+        '@basaltkit/testing': versionOf('@basaltkit/testing'),
         '@types/node': '^22.15.0',
         'pino-pretty': '^13.0.0',
         tsx: '^4.19.0',
@@ -98,7 +98,7 @@ export function tsconfigJson(): string {
 }
 
 export function envTs(options: ProjectOptions): string {
-  return `import { defineEnv } from '@machize/env'
+  return `import { defineEnv } from '@basaltkit/env'
 import { z } from 'zod'
 
 export const env = defineEnv({
@@ -125,11 +125,11 @@ ${options.auth ? 'APP_SECRET=change-me-in-production--\n' : ''}`
 
 export function appTs(options: ProjectOptions): string {
   const imports = [
-    `import { createApp } from '@machize/core'`,
-    `import { configPlugin } from '@machize/config'`,
-    `import { eventsPlugin } from '@machize/events'`,
-    `import { fastifyPlugin } from '@machize/fastify'`,
-    `import { loggerPlugin } from '@machize/logger'`,
+    `import { createApp } from '@basaltkit/core'`,
+    `import { configPlugin } from '@basaltkit/config'`,
+    `import { eventsPlugin } from '@basaltkit/events'`,
+    `import { fastifyPlugin } from '@basaltkit/fastify'`,
+    `import { loggerPlugin } from '@basaltkit/logger'`,
   ]
   const plugins = [
     `configPlugin({ app: { name: '${options.name}' } })`,
@@ -140,7 +140,7 @@ export function appTs(options: ProjectOptions): string {
 
   if (options.tenancy) {
     imports.push(
-      `import { headerResolver, MemoryTenantSource, subdomainResolver, tenancyPlugin } from '@machize/tenancy'`,
+      `import { headerResolver, MemoryTenantSource, subdomainResolver, tenancyPlugin } from '@basaltkit/tenancy'`,
     )
     plugins.push(`tenancyPlugin({
       // Replace MemoryTenantSource with your database-backed source.
@@ -149,11 +149,11 @@ export function appTs(options: ProjectOptions): string {
     })`)
   }
   if (options.auth) {
-    imports.push(`import { authPlugin, authRoutes, mfaRoutes, MemoryUserSource } from '@machize/auth'`)
+    imports.push(`import { authPlugin, authRoutes, mfaRoutes, MemoryUserSource } from '@basaltkit/auth'`)
     imports.push(`import { env } from './env.js'`)
     plugins.push(`authPlugin({
       // Replace MemoryUserSource with your database-backed source (e.g.
-      // @machize/auth-sqlite or @machize/auth-prisma). The default in-memory
+      // @basaltkit/auth-sqlite or @basaltkit/auth-prisma). The default in-memory
       // MFA store is enough for the ready-made TOTP flow below.
       users: new MemoryUserSource(),
       secret: env.APP_SECRET,
@@ -163,7 +163,7 @@ export function appTs(options: ProjectOptions): string {
     routesExpression = '[...appRoutes, ...authRoutes(), ...mfaRoutes()]'
   }
   if (options.billing) {
-    imports.push(`import { definePlans, subscriptionsPlugin } from '@machize/subscriptions'`)
+    imports.push(`import { definePlans, subscriptionsPlugin } from '@basaltkit/subscriptions'`)
     plugins.push(`subscriptionsPlugin({
       plans: definePlans({
         free: { price: 0, features: { projects: 3 } },
@@ -173,11 +173,11 @@ export function appTs(options: ProjectOptions): string {
     })`)
   }
   if (options.cli) {
-    imports.push(`import { commandsPlugin } from '@machize/cli'`)
-    imports.push(`import { generatorCommands } from '@machize/generator'`)
-    imports.push(`import { prismaSyncCommand } from '@machize/prisma'`)
-    // \`mach make:*\` generators + \`mach prisma:sync\` (merges the models any
-    // @machize/*-prisma store needs into prisma/schema.prisma). Built-ins
+    imports.push(`import { commandsPlugin } from '@basaltkit/cli'`)
+    imports.push(`import { generatorCommands } from '@basaltkit/generator'`)
+    imports.push(`import { prismaSyncCommand } from '@basaltkit/prisma'`)
+    // \`basalt make:*\` generators + \`basalt prisma:sync\` (merges the models any
+    // @basaltkit/*-prisma store needs into prisma/schema.prisma). Built-ins
     // (routes, schedule:list) come free.
     plugins.push(`commandsPlugin([...generatorCommands(), prismaSyncCommand()])`)
   }
@@ -215,8 +215,8 @@ export function routesTs(options: ProjectOptions): string {
         ]
       : []),
   ]
-  return `import { ctx } from '@machize/core'
-import { route } from '@machize/fastify'
+  return `import { ctx } from '@basaltkit/core'
+import { route } from '@basaltkit/fastify'
 
 export const appRoutes = [
   // Friendly index so \`GET /\` is never a bare 404 — lists what the API exposes.
@@ -245,7 +245,7 @@ export const appRoutes = [
 }
 
 export function serverTs(): string {
-  return `import { FASTIFY } from '@machize/fastify'
+  return `import { FASTIFY } from '@basaltkit/fastify'
 import { buildApp } from './app.js'
 import { env } from './env.js'
 
@@ -267,16 +267,16 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 `
 }
 
-export function machBin(): string {
+export function basaltBin(): string {
   return `#!/usr/bin/env node
-import { runCli } from '@machize/cli'
+import { runCli } from '@basaltkit/cli'
 import { buildApp } from '../src/app.js'
 
-// The 'mach' CLI: boots the app, runs one command, shuts down.
-//   pnpm mach list                    — show available commands
-//   pnpm mach routes                  — list registered HTTP routes
-//   pnpm mach make:resource Project   — generate a full resource vertical
-//   pnpm mach make:service Project    — generate a single artifact (schema/service/…)
+// The 'basalt' CLI: boots the app, runs one command, shuts down.
+//   pnpm basalt list                    — show available commands
+//   pnpm basalt routes                  — list registered HTTP routes
+//   pnpm basalt make:resource Project   — generate a full resource vertical
+//   pnpm basalt make:service Project    — generate a single artifact (schema/service/…)
 const app = buildApp({ logLevel: 'silent' })
 process.exit(await runCli({ app }))
 `
@@ -284,7 +284,7 @@ process.exit(await runCli({ app }))
 
 export function appTest(options: ProjectOptions): string {
   return `import { describe, expect, it } from 'vitest'
-import { FASTIFY } from '@machize/fastify'
+import { FASTIFY } from '@basaltkit/fastify'
 import { buildApp } from '../src/app.js'
 
 describe('app', () => {
@@ -324,12 +324,12 @@ export function readme(options: ProjectOptions): string {
     ...(options.tenancy ? ['multi-tenancy (header + subdomain resolvers)'] : []),
     ...(options.auth ? ['authentication (register/login/refresh/me)'] : []),
     ...(options.billing ? ['subscriptions with plans and feature limits'] : []),
-    ...(options.ui ? ['web UI (React + shadcn/ui on @machize/admin-shadcn + @machize/sdk)'] : []),
-    ...(options.cli ? ['`mach` CLI with code generators (`make:*`) and built-in commands'] : []),
+    ...(options.ui ? ['web UI (React + shadcn/ui on @basaltkit/admin-shadcn + @basaltkit/sdk)'] : []),
+    ...(options.cli ? ['`basalt` CLI with code generators (`make:*`) and built-in commands'] : []),
   ]
   return `# ${options.name}
 
-A SaaS app scaffolded with [Machize](https://github.com/Zebedeu/machize).
+A SaaS app scaffolded with [Basalt](https://github.com/Zebedeu/basalt).
 
 Included: ${features.join(' · ')}.
 
@@ -343,13 +343,13 @@ pnpm test
 ${
   options.cli
     ? `
-## The \`mach\` CLI
+## The \`basalt\` CLI
 
 \`\`\`bash
-pnpm mach list                    # available commands
-pnpm mach routes                  # registered HTTP routes
-pnpm mach make:resource Project   # schema → repository → service → plugin → routes → test
-pnpm mach make:service Project    # a single artifact (--force to overwrite)
+pnpm basalt list                    # available commands
+pnpm basalt routes                  # registered HTTP routes
+pnpm basalt make:resource Project   # schema → repository → service → plugin → routes → test
+pnpm basalt make:service Project    # a single artifact (--force to overwrite)
 \`\`\`
 
 Generated resources land in \`src/modules/<name>/\`. Register the generated
@@ -399,9 +399,9 @@ export function pnpmWorkspaceYaml(options: ProjectOptions): string {
   }allowBuilds:
   esbuild: true
   msgpackr-extract: false
-# @machize/* releases in lockstep, often within hours — exclude the scope from
+# @basaltkit/* releases in lockstep, often within hours — exclude the scope from
 # pnpm's minimumReleaseAge policy so \`pnpm up\` is never blocked on a fresh release.
 minimumReleaseAgeExclude:
-  - '@machize/*'
+  - '@basaltkit/*'
 `
 }

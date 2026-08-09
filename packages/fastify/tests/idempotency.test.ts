@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp } from '@machize/core'
+import { createApp } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin, idempotencyPlugin, route } from '../src/index.js'
 
 let charges = 0

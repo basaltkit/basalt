@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@machize/core'
-import { Audit, MemoryAuditStore, auditPlugin, type AuditEntry } from '@machize/audit'
-import { FASTIFY, fastifyPlugin } from '@machize/fastify'
-import { MemoryUserSource, authPlugin, authRoutes } from '@machize/auth'
-import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@machize/tenancy'
+import { createApp, runWithContext } from '@basaltkit/core'
+import { Audit, MemoryAuditStore, auditPlugin, type AuditEntry } from '@basaltkit/audit'
+import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
+import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
+import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
 import { AuditTenantRequiredError, AuditViewer, auditViewerHtml, auditViewerPlugin, auditViewerRoutes } from '../src/index.js'
 
 let counter = 0

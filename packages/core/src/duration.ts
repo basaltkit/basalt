@@ -1,4 +1,4 @@
-import { MachizeError } from './errors.js'
+import { BasaltError } from './errors.js'
 
 /** Number in milliseconds or a human-readable string: '500ms', '30s', '5m', '2h', '7d'. */
 export type DurationInput = number | string
@@ -15,13 +15,13 @@ const UNITS: Record<string, number> = {
 export function parseDuration(input: DurationInput): number {
   if (typeof input === 'number') {
     if (!Number.isFinite(input) || input < 0) {
-      throw new MachizeError('DURATION_INVALID', `Invalid duration: ${input}`)
+      throw new BasaltError('DURATION_INVALID', `Invalid duration: ${input}`)
     }
     return input
   }
   const match = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/.exec(input.trim())
   if (!match) {
-    throw new MachizeError(
+    throw new BasaltError(
       'DURATION_INVALID',
       `Invalid duration: "${input}". Use a number in ms or '500ms', '30s', '5m', '2h', '7d'.`,
     )

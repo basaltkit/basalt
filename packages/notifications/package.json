@@ -1,7 +1,7 @@
 {
-  "name": "@machize/notifications",
-  "version": "1.0.5",
-  "description": "Multi-channel notifications for Machize: declarative definitions, channel drivers (in-app, mail, custom), per-recipient preferences and queue integration.",
+  "name": "@basaltkit/notifications",
+  "version": "1.0.0",
+  "description": "Multi-channel notifications for Basalt: declarative definitions, channel drivers (in-app, mail, custom), per-recipient preferences and queue integration.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,11 +19,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@machize/core": "workspace:^",
-    "@machize/mailer": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/mailer": "workspace:^"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -35,13 +35,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/notifications"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/notifications#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/notifications#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "saas",
     "notifications"

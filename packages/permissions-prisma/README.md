@@ -1,21 +1,21 @@
-# @machize/permissions-prisma
+# @basaltkit/permissions-prisma
 
-**Prisma-backed** implementation of the [`@machize/permissions`](https://github.com/Zebedeu/machize/tree/main/packages/permissions)
+**Prisma-backed** implementation of the [`@basaltkit/permissions`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions)
 `AccessStore` — role assignments and permission grants — for production
 databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the three `Perm*` models; the store
 only touches those delegates. The production counterpart to
-[`@machize/permissions-sqlite`](https://github.com/Zebedeu/machize/tree/main/packages/permissions-sqlite).
+[`@basaltkit/permissions-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions-sqlite).
 
 ```bash
-pnpm add @machize/permissions-prisma   # peer: @machize/permissions ; you already have @prisma/client
+pnpm add @basaltkit/permissions-prisma   # peer: @basaltkit/permissions ; you already have @prisma/client
 ```
 
 ## 1. Add the models
 
 Copy the models from the bundled reference schema
-(`@machize/permissions-prisma/schema.prisma`) into your `schema.prisma`:
+(`@basaltkit/permissions-prisma/schema.prisma`) into your `schema.prisma`:
 
 ```prisma
 model PermUserRole       { scope String  userId String  role String        @@id([scope, userId, role])       @@map("perm_user_roles") }
@@ -28,8 +28,8 @@ Then `prisma migrate dev` and `prisma generate`.
 ## 2. Wire the store
 
 ```ts
-import { permissionsPlugin } from '@machize/permissions'
-import { prismaAccessStore } from '@machize/permissions-prisma'
+import { permissionsPlugin } from '@basaltkit/permissions'
+import { prismaAccessStore } from '@basaltkit/permissions-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()

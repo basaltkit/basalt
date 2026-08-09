@@ -1,22 +1,22 @@
-# @machize/events
+# @basaltkit/events
 
-The Machize event bus: domain events typed and validated with Zod, listeners with priority, wildcard patterns, and the *transactional outbox* pattern for reliable external delivery. You need this when you want parts of the application to react to things happening ("order created", "invoice paid") without knowing about each other.
+The Basalt event bus: domain events typed and validated with Zod, listeners with priority, wildcard patterns, and the *transactional outbox* pattern for reliable external delivery. You need this when you want parts of the application to react to things happening ("order created", "invoice paid") without knowing about each other.
 
 ## What this module solves
 
 As an application grows, a simple "create order" ends up implying several things: sending an email, updating statistics, notifying another system. If the order code calls all of that directly, it becomes huge and fragile. The classic solution is **events**: the code announces "`order.created` happened" and whoever is interested subscribes and reacts — without coupling between the parts.
 
-`@machize/events` gives you an `EventBus` with three important guarantees. First, events are **typed and validated**: you define each event with `defineEvent`, optionally with a **schema** (a validatable description of the data shape, e.g. with the Zod library), and the payload is checked before any listener runs. Second, **listeners** (functions that react to the event) run in priority order and all of them run even if one fails — errors are aggregated at the end. Third, you can subscribe using **wildcard patterns**: `order.*` catches `order.created`, and `order.**` also catches `order.payment.failed`.
+`@basaltkit/events` gives you an `EventBus` with three important guarantees. First, events are **typed and validated**: you define each event with `defineEvent`, optionally with a **schema** (a validatable description of the data shape, e.g. with the Zod library), and the payload is checked before any listener runs. Second, **listeners** (functions that react to the event) run in priority order and all of them run even if one fails — errors are aggregated at the end. Third, you can subscribe using **wildcard patterns**: `order.*` catches `order.created`, and `order.**` also catches `order.payment.failed`.
 
 To communicate with **external** systems (webhooks, Kafka, …) the package includes the **Outbox**: instead of sending the event directly (and losing it if the application crashes midway), you first write the event to a durable store and a "mail carrier" delivers it afterward, retrying on failure. Delivery is *at-least-once*: nothing is lost between "written" and "delivered".
 
 ## Installation
 
 ```bash
-pnpm add @machize/events
+pnpm add @basaltkit/events
 ```
 
-`@machize/core` comes as an automatic dependency. Zod is optional (only needed if you want to validate payloads): `pnpm add zod`.
+`@basaltkit/core` comes as an automatic dependency. Zod is optional (only needed if you want to validate payloads): `pnpm add zod`.
 
 ## Get started in 5 minutes
 
@@ -25,7 +25,7 @@ pnpm add @machize/events
 3. Emit the event with a validated payload.
 
 ```ts
-import { defineEvent, EventBus } from '@machize/events'
+import { defineEvent, EventBus } from '@basaltkit/events'
 import { z } from 'zod'
 
 // 1. Event with schema: the payload is validated on emit.
@@ -43,11 +43,11 @@ await bus.emit(OrderCreated, { orderId: 'o-1' })
 // BEFORE any listener runs.
 ```
 
-In a full Machize application, use the plugin instead of creating the bus by hand:
+In a full Basalt application, use the plugin instead of creating the bus by hand:
 
 ```ts
-import { createApp } from '@machize/core'
-import { EVENTS, eventsPlugin } from '@machize/events'
+import { createApp } from '@basaltkit/core'
+import { EVENTS, eventsPlugin } from '@basaltkit/events'
 
 const app = await createApp({ plugins: [eventsPlugin()] }).boot()
 const bus = app.container.get(EVENTS) // the same EventBus for the whole application
@@ -60,7 +60,7 @@ const bus = app.container.get(EVENTS) // the same EventBus for the whole applica
 If the event carries no data, omit the schema and the type — `emit` no longer accepts a second argument:
 
 ```ts
-import { defineEvent, EventBus } from '@machize/events'
+import { defineEvent, EventBus } from '@basaltkit/events'
 
 const AppBooted = defineEvent('app.booted')
 
@@ -76,7 +76,7 @@ You can also type without validating: `defineEvent<{ amount: number }>('invoice.
 Event names use dot-separated segments. In patterns, `*` matches **exactly one** segment and `**` matches **one or more**:
 
 ```ts
-import { defineEvent, EventBus } from '@machize/events'
+import { defineEvent, EventBus } from '@basaltkit/events'
 
 const bus = new EventBus()
 
@@ -101,7 +101,7 @@ The handler's second argument, `meta`, carries the actual event name (`meta.name
 ### Priority, `once`, and cancelling subscriptions
 
 ```ts
-import { defineEvent, EventBus } from '@machize/events'
+import { defineEvent, EventBus } from '@basaltkit/events'
 
 const AppBooted = defineEvent('app.booted')
 const bus = new EventBus()
@@ -125,7 +125,7 @@ A listener that throws an error **doesn't prevent** the others from running: all
 Use `Outbox` directly when you want to control the timing of delivery:
 
 ```ts
-import { MemoryOutboxStore, Outbox } from '@machize/events'
+import { MemoryOutboxStore, Outbox } from '@basaltkit/events'
 
 const outbox = new Outbox(new MemoryOutboxStore(), { maxAttempts: 3 })
 
@@ -147,8 +147,8 @@ If `dispatch` throws, the entry is marked as failed (`attempts + 1`, `lastError`
 The plugin wires everything together: captures events from the bus into the outbox and delivers them on a timer.
 
 ```ts
-import { createApp } from '@machize/core'
-import { defineEvent, EVENTS, eventsPlugin, MemoryOutboxStore, outboxPlugin } from '@machize/events'
+import { createApp } from '@basaltkit/core'
+import { defineEvent, EVENTS, eventsPlugin, MemoryOutboxStore, outboxPlugin } from '@basaltkit/events'
 
 const app = await createApp({
   plugins: [
@@ -176,21 +176,21 @@ await app.container.get(EVENTS).emit(InvoicePaid, { amount: 5 })
 await app.shutdown() // stops the timer and does one last flush (best-effort)
 ```
 
-Useful details: with `captureEvents`, the plugin depends on `machize:events` (add the `eventsPlugin`!); if there's an active context with `tenant.id` (via the core's `runWithContext`), the tenant is recorded on each entry; without `intervalMs`, you flush manually with `app.container.get(OUTBOX).flush(dispatch)`.
+Useful details: with `captureEvents`, the plugin depends on `basalt:events` (add the `eventsPlugin`!); if there's an active context with `tenant.id` (via the core's `runWithContext`), the tenant is recorded on each entry; without `intervalMs`, you flush manually with `app.container.get(OUTBOX).flush(dispatch)`.
 
 ## API reference
 
 ### `defineEvent<T>(name, schema?)`
 
-Creates a `MachizeEvent<T>`: `{ name, schema? }`. `T` defaults to `void` (event without a payload). `schema` is any object with `safeParse` (`EventSchema<T>`, compatible with Zod).
+Creates a `BasaltEvent<T>`: `{ name, schema? }`. `T` defaults to `void` (event without a payload). `schema` is any object with `safeParse` (`EventSchema<T>`, compatible with Zod).
 
 ### `EventBus`
 
 | Method | Parameters | Returns | Description |
 |---|---|---|---|
-| `on(event, handler, options?)` | `MachizeEvent<T>` or `string` (pattern), `EventHandler<T>`, `ListenOptions?` | `() => void` | Subscribes; returns a cancel function. |
-| `once(event, handler)` | `MachizeEvent<T>`, `EventHandler<T>` | `() => void` | Shortcut for `on(..., { once: true })`. |
-| `emit(event, payload?)` | `MachizeEvent<T>`, payload if `T` is not `void` | `Promise<void>` | Validates (if there's a schema), runs listeners **serially** by priority; aggregates failures into an `AggregateError`. |
+| `on(event, handler, options?)` | `BasaltEvent<T>` or `string` (pattern), `EventHandler<T>`, `ListenOptions?` | `() => void` | Subscribes; returns a cancel function. |
+| `once(event, handler)` | `BasaltEvent<T>`, `EventHandler<T>` | `() => void` | Shortcut for `on(..., { once: true })`. |
+| `emit(event, payload?)` | `BasaltEvent<T>`, payload if `T` is not `void` | `Promise<void>` | Validates (if there's a schema), runs listeners **serially** by priority; aggregates failures into an `AggregateError`. |
 | `listenerCount(eventName)` | `string` | `number` | Number of registrations whose pattern matches the name. |
 
 `EventHandler<T>` = `(payload: T, meta: EventMeta) => void | Promise<void>`; `EventMeta` = `{ name: string }`.
@@ -204,11 +204,11 @@ Creates a `MachizeEvent<T>`: `{ name, schema? }`. `T` defaults to `void` (event 
 
 ### `eventsPlugin()` / `EVENTS`
 
-`eventsPlugin()` returns the `machize:events` plugin, which registers a singleton `EventBus` in the container under the token `EVENTS` (`Token<EventBus>`).
+`eventsPlugin()` returns the `basalt:events` plugin, which registers a singleton `EventBus` in the container under the token `EVENTS` (`Token<EventBus>`).
 
 ### `EventValidationError`
 
-Thrown by `emit` when the payload fails the schema, **before** any listener runs. Extends `MachizeError` with `code: 'EVENT_INVALID'`; fields `event` (name) and `issues` (validation details).
+Thrown by `emit` when the payload fails the schema, **before** any listener runs. Extends `BasaltError` with `code: 'EVENT_INVALID'`; fields `event` (name) and `issues` (validation details).
 
 ### `Outbox`
 
@@ -234,7 +234,7 @@ Persistence interface: `enqueue`, `pending(limit, maxAttempts)` (unpublished, be
 
 ### `outboxPlugin(options)` / `OUTBOX`
 
-Returns the `machize:outbox` plugin; registers `Outbox` under the token `OUTBOX` (`Token<Outbox>`).
+Returns the `basalt:outbox` plugin; registers `Outbox` under the token `OUTBOX` (`Token<Outbox>`).
 
 | Option (`OutboxPluginOptions`) | Type | Required? | Default | Description |
 |---|---|---|---|---|
@@ -256,7 +256,7 @@ On `shutdown`, the plugin stops the timer and performs one last `flush` (best-ef
 
 **I subscribed to `order.*` but I don't catch `order.payment.failed`** — `*` matches exactly one segment. Use `order.**` for any depth.
 
-**Plugin "machize:outbox" depends on "machize:events"** — You used `captureEvents` without adding `eventsPlugin()` to the application. Add it to the `plugins` list.
+**Plugin "basalt:outbox" depends on "basalt:events"** — You used `captureEvents` without adding `eventsPlugin()` to the application. Add it to the `plugins` list.
 
 **Captured events don't show up in the store right away** — Capture does `void outbox.enqueue(...)` (async, unawaited). In tests, let the event loop turn before checking: `await new Promise((r) => setTimeout(r, 0))`.
 
@@ -268,6 +268,6 @@ On `shutdown`, the plugin stops the timer and performs one last `flush` (best-ef
 
 ## How it connects to other modules
 
-- **`@machize/core`** — `eventsPlugin` and `outboxPlugin` are core plugins; `EVENTS` and `OUTBOX` are container tokens; `EventValidationError` extends `MachizeError`. The outbox reads the tenant from the core context (`tryCtx()?.tenant?.id`) when writing captured events. Note the difference from the core's `HookBus`: hooks are the framework's internal infrastructure (lifecycle, extensions); `EventBus` is for events **from your business domain**, with validation and wildcards.
-- **`@machize/config`** — no direct connection; use it to store outbox settings (intervals, destination URLs) and read them when building `outboxPlugin`.
-- **`@machize/env`** — the Zod schemas you use in `defineEnv` follow the same style as the ones you pass to `defineEvent`; use `env` for the credentials/URLs your `dispatch` needs.
+- **`@basaltkit/core`** — `eventsPlugin` and `outboxPlugin` are core plugins; `EVENTS` and `OUTBOX` are container tokens; `EventValidationError` extends `BasaltError`. The outbox reads the tenant from the core context (`tryCtx()?.tenant?.id`) when writing captured events. Note the difference from the core's `HookBus`: hooks are the framework's internal infrastructure (lifecycle, extensions); `EventBus` is for events **from your business domain**, with validation and wildcards.
+- **`@basaltkit/config`** — no direct connection; use it to store outbox settings (intervals, destination URLs) and read them when building `outboxPlugin`.
+- **`@basaltkit/env`** — the Zod schemas you use in `defineEnv` follow the same style as the ones you pass to `defineEvent`; use `env` for the credentials/URLs your `dispatch` needs.

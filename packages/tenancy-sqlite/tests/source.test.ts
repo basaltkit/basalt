@@ -55,7 +55,7 @@ describe('SqliteTenantSource', () => {
 })
 
 describe('sqliteTenantSource + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-tenancy-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-tenancy-'))
   const file = join(dir, 'tenants.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

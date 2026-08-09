@@ -1,6 +1,6 @@
-# @machize/generator
+# @basaltkit/generator
 
-Code generator ("scaffolding") for Machize applications: the `mach make:*` commands create all the files for a resource for you — schema, repository, service, plugin, HTTP routes, and test — already wired together and compiling. You need this whenever you're adding a new "entity" to the application (Projects, Customers, Invoices…) and don't want to write the same skeleton by hand.
+Code generator ("scaffolding") for Basalt applications: the `basalt make:*` commands create all the files for a resource for you — schema, repository, service, plugin, HTTP routes, and test — already wired together and compiling. You need this whenever you're adding a new "entity" to the application (Projects, Customers, Invoices…) and don't want to write the same skeleton by hand.
 
 ## What this module solves
 
@@ -13,20 +13,20 @@ Besides generating the files, `make:resource` also wires the new resource into `
 ## Installation
 
 ```bash
-pnpm add @machize/generator
+pnpm add @basaltkit/generator
 ```
 
-> Note: depends on `@machize/cli` (the `mach` command framework). The generated code uses `@machize/core`, `@machize/fastify`, `zod`, and — in the generated tests — `@machize/testing`, so it's worth having them in the project. If you created the project with `create-machize --cli`, everything is already set up.
+> Note: depends on `@basaltkit/cli` (the `basalt` command framework). The generated code uses `@basaltkit/core`, `@basaltkit/fastify`, `zod`, and — in the generated tests — `@basaltkit/testing`, so it's worth having them in the project. If you created the project with `create-basalt --cli`, everything is already set up.
 
 ## Get started in 5 minutes
 
 1. Make sure your application registers the generator's commands. In `src/app.ts`:
 
 ```typescript
-import { createApp } from '@machize/core'
-import { commandsPlugin } from '@machize/cli'
-import { fastifyPlugin } from '@machize/fastify'
-import { generatorCommands } from '@machize/generator'
+import { createApp } from '@basaltkit/core'
+import { commandsPlugin } from '@basaltkit/cli'
+import { fastifyPlugin } from '@basaltkit/fastify'
+import { generatorCommands } from '@basaltkit/generator'
 import { appRoutes } from './routes.js'
 
 export function buildApp() {
@@ -39,12 +39,12 @@ export function buildApp() {
 }
 ```
 
-2. Make sure you have the `mach` executable (created automatically by `create-machize --cli`; see the `@machize/cli` README if you don't have it).
+2. Make sure you have the `basalt` executable (created automatically by `create-basalt --cli`; see the `@basaltkit/cli` README if you don't have it).
 
 3. Generate a complete resource:
 
 ```bash
-pnpm mach make:resource Project
+pnpm basalt make:resource Project
 ```
 
 4. See what was created:
@@ -69,12 +69,12 @@ pnpm dev           # GET/POST /projects, GET/PATCH/DELETE /projects/:id
 
 ## Usage guide
 
-### `mach make:resource <Name>` — the complete resource
+### `basalt make:resource <Name>` — the complete resource
 
 Generates the entire "vertical slice": schema → repository → service → plugin → routes → test. By default, the repository is **in-memory** (data is lost on restart — great for getting started) and the resource is automatically wired into `src/app.ts`.
 
 ```bash
-pnpm mach make:resource BlogPost
+pnpm basalt make:resource BlogPost
 ```
 
 The name can be given in any format — `BlogPost`, `blog-post`, `blog post` — the generator normalizes it. Endpoints use the plural in kebab-case: `/blog-posts`.
@@ -91,10 +91,10 @@ Options (common to all `make:*` commands, unless noted):
 ### `--prisma` — real persistence with a database
 
 ```bash
-pnpm mach make:resource BlogPost --prisma
+pnpm basalt make:resource BlogPost --prisma
 ```
 
-Instead of the in-memory repository, generates `PrismaBlogPostRepository` (which uses `db()` from `@machize/prisma`) and an extra file `src/modules/blog-post/blog-post.prisma` with the model block to copy into your `schema.prisma`. Then run `prisma migrate dev`.
+Instead of the in-memory repository, generates `PrismaBlogPostRepository` (which uses `db()` from `@basaltkit/prisma`) and an extra file `src/modules/blog-post/blog-post.prisma` with the model block to copy into your `schema.prisma`. Then run `prisma migrate dev`.
 
 ### Automatic wiring into `src/app.ts`
 
@@ -111,18 +111,18 @@ It is **idempotent** (running it twice doesn't duplicate anything) and **all-or-
 Each artifact type has its own command:
 
 ```bash
-pnpm mach make:schema Invoice        # src/modules/invoice/invoice.schema.ts
-pnpm mach make:repository Invoice    # src/modules/invoice/invoice.repository.ts
-pnpm mach make:service Invoice       # src/modules/invoice/invoice.service.ts
-pnpm mach make:plugin Invoice        # src/modules/invoice/invoice.plugin.ts
-pnpm mach make:routes Invoice        # src/modules/invoice/invoice.routes.ts
-pnpm mach make:test Invoice          # tests/invoice.test.ts
+pnpm basalt make:schema Invoice        # src/modules/invoice/invoice.schema.ts
+pnpm basalt make:repository Invoice    # src/modules/invoice/invoice.repository.ts
+pnpm basalt make:service Invoice       # src/modules/invoice/invoice.service.ts
+pnpm basalt make:plugin Invoice        # src/modules/invoice/invoice.plugin.ts
+pnpm basalt make:routes Invoice        # src/modules/invoice/invoice.routes.ts
+pnpm basalt make:test Invoice          # tests/invoice.test.ts
 ```
 
 Without a name, any command prints usage and returns exit code 1:
 
 ```
-Usage: mach make:resource <Name> [--dir=<path>] [--force] [--prisma]
+Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma]
 ```
 
 ### Using the generator as a library (Advanced)
@@ -130,7 +130,7 @@ Usage: mach make:resource <Name> [--dir=<path>] [--force] [--prisma]
 You can generate files programmatically, without going through the CLI:
 
 ```typescript
-import { generateResource, writeGenerated, registerResourceInApp } from '@machize/generator'
+import { generateResource, writeGenerated, registerResourceInApp } from '@basaltkit/generator'
 
 const files = generateResource('BlogPost', { prisma: false })
 const written = await writeGenerated(files, { baseDir: '/path/to/project' })
@@ -142,7 +142,7 @@ console.log(result.registered) // true if it wired into src/app.ts
 
 ## API reference
 
-Exported from `@machize/generator`:
+Exported from `@basaltkit/generator`:
 
 ### `names(input: string): Names`
 
@@ -200,7 +200,7 @@ Wires a generated resource into `src/app.ts` (imports + plugin + routes spread).
 
 ### `generatorCommands(): CommandDefinition[]`
 
-Returns the `make:resource` and `make:<kind>` commands (one per `GeneratorKind`) ready to register with `commandsPlugin` from `@machize/cli`.
+Returns the `make:resource` and `make:<kind>` commands (one per `GeneratorKind`) ready to register with `commandsPlugin` from `@basaltkit/cli`.
 
 ### `GENERATORS` (Advanced)
 
@@ -228,17 +228,17 @@ The Prisma repository assumes a model with the PascalCase name (`model BlogPost`
 **Data disappears when I restart the server.**
 This is the expected behavior of the in-memory repository (the default). For real persistence, generate with `--prisma` or implement the `<Name>Repository` interface yourself and register it in the plugin.
 
-**`Usage: mach make:resource <Name> …` and exit code 1.**
-The resource name is missing: `pnpm mach make:resource Project`.
+**`Usage: basalt make:resource <Name> …` and exit code 1.**
+The resource name is missing: `pnpm basalt make:resource Project`.
 
 **I ran `make:resource` twice and `app.ts` didn't change the second time.**
 Correct — wiring is idempotent. The message `Already wired into src/app.ts — left it as is.` confirms nothing was duplicated.
 
 ## How it connects to other modules
 
-- **`@machize/cli`** — direct dependency: `generatorCommands()` returns `CommandDefinition[]` to register with `commandsPlugin`; this is what makes `make:*` appear in `mach`.
-- **`@machize/core`** — the generated code uses `createToken`, `definePlugin`, and `ctx` from the framework core.
-- **`@machize/fastify`** — generated routes use `route(...)` and `HttpError`; automatic wiring looks for `fastifyPlugin({ routes: [...] })` in `app.ts`.
-- **`@machize/prisma`** — with `--prisma`, the generated repository uses `db()` from this package.
-- **`@machize/testing`** — the generated test uses `createTestApp` to exercise the full CRUD.
-- **`create-machize`** — with `--cli`, the new project already comes with `@machize/generator` installed and the commands registered.
+- **`@basaltkit/cli`** — direct dependency: `generatorCommands()` returns `CommandDefinition[]` to register with `commandsPlugin`; this is what makes `make:*` appear in `basalt`.
+- **`@basaltkit/core`** — the generated code uses `createToken`, `definePlugin`, and `ctx` from the framework core.
+- **`@basaltkit/fastify`** — generated routes use `route(...)` and `HttpError`; automatic wiring looks for `fastifyPlugin({ routes: [...] })` in `app.ts`.
+- **`@basaltkit/prisma`** — with `--prisma`, the generated repository uses `db()` from this package.
+- **`@basaltkit/testing`** — the generated test uses `createTestApp` to exercise the full CRUD.
+- **`create-basalt`** — with `--cli`, the new project already comes with `@basaltkit/generator` installed and the commands registered.

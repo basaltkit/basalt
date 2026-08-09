@@ -1,10 +1,10 @@
-import { type AuditEntry, type AuditQuery, type AuditStore, patternMatches } from '@machize/audit'
+import { type AuditEntry, type AuditQuery, type AuditStore, patternMatches } from '@basaltkit/audit'
 
 /**
- * Prisma-backed implementation of the `@machize/audit` `AuditStore` for
+ * Prisma-backed implementation of the `@basaltkit/audit` `AuditStore` for
  * production databases (PostgreSQL, MySQL, …). Append-only by contract. Bring
  * your generated `PrismaClient` with the `AuditEntry` model (see the bundled
- * `prisma/schema.prisma`). The production counterpart to `@machize/audit-sqlite`.
+ * `prisma/schema.prisma`). The production counterpart to `@basaltkit/audit-sqlite`.
  */
 
 interface PAuditEntry {
@@ -103,12 +103,12 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaAuditStore(client: PrismaAuditClient): PrismaAuditStores {
-  ensureModel(client, 'auditEntry', '@machize/audit-prisma')
+  ensureModel(client, 'auditEntry', '@basaltkit/audit-prisma')
   return { store: new PrismaAuditStore(client) }
 }

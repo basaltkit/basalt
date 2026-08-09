@@ -1,6 +1,6 @@
-# @machize/tenancy
+# @basaltkit/tenancy
 
-Multi-tenancy for Machize applications: automatically identifies which customer (tenant) each request belongs to — by subdomain, custom domain, header, or route — and makes it available at `ctx().tenant` throughout the application.
+Multi-tenancy for Basalt applications: automatically identifies which customer (tenant) each request belongs to — by subdomain, custom domain, header, or route — and makes it available at `ctx().tenant` throughout the application.
 
 You need this module when the same application serves multiple customers/organizations with separate data (the typical SaaS model).
 
@@ -15,7 +15,7 @@ Second, the **context**: once resolved, the tenant is placed in `ctx().tenant` (
 ## Installation
 
 ```bash
-pnpm add @machize/tenancy
+pnpm add @basaltkit/tenancy
 ```
 
 ## Get started in 5 minutes
@@ -23,7 +23,7 @@ pnpm add @machize/tenancy
 1. **Define where tenants come from** (in production, your database; for experimenting, memory):
 
 ```ts
-import { MemoryTenantSource } from '@machize/tenancy'
+import { MemoryTenantSource } from '@basaltkit/tenancy'
 
 const source = new MemoryTenantSource()
   .add({ id: 'acme', name: 'Acme Inc' })
@@ -33,9 +33,9 @@ const source = new MemoryTenantSource()
 2. **Register the plugin with a resolver:**
 
 ```ts
-import { createApp, ctx } from '@machize/core'
-import { fastifyPlugin, route } from '@machize/fastify'
-import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@machize/tenancy'
+import { createApp, ctx } from '@basaltkit/core'
+import { fastifyPlugin, route } from '@basaltkit/fastify'
+import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@basaltkit/tenancy'
 
 const source = new MemoryTenantSource().add({ id: 'acme', name: 'Acme Inc' })
 
@@ -79,7 +79,7 @@ curl http://localhost:3000/whoami
 ```ts
 import {
   subdomainResolver, domainResolver, headerResolver, routeResolver,
-} from '@machize/tenancy'
+} from '@basaltkit/tenancy'
 
 // acme.myapp.com → tenant "acme" (ignores www, the base domain, and nested subdomains)
 subdomainResolver({ base: 'myapp.com' })
@@ -99,7 +99,7 @@ You can pass several in `resolvers: [...]` — they're tried in order, and the f
 ### Connecting to your database (TenantSource)
 
 ```ts
-import type { TenantSource, Tenant } from '@machize/tenancy'
+import type { TenantSource, Tenant } from '@basaltkit/tenancy'
 
 const source: TenantSource = {
   async find(id) { /* SELECT ... WHERE id = ? */ return null },
@@ -117,8 +117,8 @@ The `Tenant` type only requires `id: string`; add whatever fields you want (`nam
 Outside an HTTP request there's no resolver — use the `Tenancy` facade:
 
 ```ts
-import { TENANCY } from '@machize/tenancy'
-import { ctx } from '@machize/core'
+import { TENANCY } from '@basaltkit/tenancy'
+import { ctx } from '@basaltkit/core'
 
 const tenancy = app.container.get(TENANCY)
 
@@ -210,15 +210,15 @@ A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promis
 
 ## How it connects to other modules
 
-- **@machize/core** — provides the per-request context (`ctx()`, AsyncLocalStorage) where the tenant is placed, and the hook bus (`tenancy:switched`).
-- **@machize/fastify** — runs the enricher that resolves the tenant on each HTTP request.
-- **@machize/auth** — independent, but complementary: auth says *who* the user is, tenancy says *where* (in which organization) the request is happening. API keys created within a tenant are scoped to it.
-- **@machize/permissions** — uses `ctx().tenant.id` as the default scope: permissions granted in one tenant don't apply in another.
-- **@machize/teams** — teams are the members of a tenant; team routes require `ctx().tenant` to be set by this module.
+- **@basaltkit/core** — provides the per-request context (`ctx()`, AsyncLocalStorage) where the tenant is placed, and the hook bus (`tenancy:switched`).
+- **@basaltkit/fastify** — runs the enricher that resolves the tenant on each HTTP request.
+- **@basaltkit/auth** — independent, but complementary: auth says *who* the user is, tenancy says *where* (in which organization) the request is happening. API keys created within a tenant are scoped to it.
+- **@basaltkit/permissions** — uses `ctx().tenant.id` as the default scope: permissions granted in one tenant don't apply in another.
+- **@basaltkit/teams** — teams are the members of a tenant; team routes require `ctx().tenant` to be set by this module.
 
 ## Security best practices
 
-- **Never trust a tenant header coming from the browser in production.** `headerResolver` is great for development and internal traffic, but a user can manually send `x-tenant-id: another-customer`. In production, prefer `subdomainResolver`/`domainResolver` (DNS is under your control) and always verify that the authenticated user **belongs** to the resolved tenant (the `teamRole` guard from `@machize/teams` does this).
+- **Never trust a tenant header coming from the browser in production.** `headerResolver` is great for development and internal traffic, but a user can manually send `x-tenant-id: another-customer`. In production, prefer `subdomainResolver`/`domainResolver` (DNS is under your control) and always verify that the authenticated user **belongs** to the resolved tenant (the `teamRole` guard from `@basaltkit/teams` does this).
 - **Isolate tenant data in your queries.** This module identifies the tenant; it's up to your code to use `ctx().tenant.id` in every database query. A query without a tenant filter is a data leak between customers.
 - **Use `required: true` in application areas** so that a misrouted request fails loudly (404) instead of running with no tenant and touching global data.
 - **Be careful with custom domains:** only accept a domain in `findByDomain` after the customer has proven they control it (e.g. a DNS record), otherwise someone could point a domain at your application and impersonate another tenant.

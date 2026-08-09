@@ -1,13 +1,13 @@
 # Feature Flags
 
-`@machize/flags` evaluates flags against a context — falling back to the current
+`@basaltkit/flags` evaluates flags against a context — falling back to the current
 request's tenant and user — with per-tenant/user targeting and deterministic
 percentage rollouts. Zero dependencies, fully typed.
 
 ## Define
 
 ```ts
-import { defineFlags, flagsPlugin } from '@machize/flags'
+import { defineFlags, flagsPlugin } from '@basaltkit/flags'
 
 export const flags = defineFlags({
   newDashboard: { default: false, tenants: { acme: true } },
@@ -23,7 +23,7 @@ flagsPlugin(flags)
 ## Evaluate
 
 ```ts
-import { FLAGS } from '@machize/flags'
+import { FLAGS } from '@basaltkit/flags'
 
 const flags = container.get(FLAGS)
 

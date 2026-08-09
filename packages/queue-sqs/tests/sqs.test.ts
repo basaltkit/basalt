@@ -66,7 +66,7 @@ describe('SqsQueueDriver', () => {
     expect(sent.queueUrl).toBe('https://sqs.test/welcome')
     expect(JSON.parse(sent.body)).toEqual({ name: 'Ada' })
     expect(sent.delaySeconds).toBe(5)
-    expect(sent.attributes).toMatchObject({ 'x-machize-job': 'send-welcome', 'x-machize-attempts': '2' })
+    expect(sent.attributes).toMatchObject({ 'x-basalt-job': 'send-welcome', 'x-basalt-attempts': '2' })
   })
 
   it('rejects a delay beyond the 15-minute SQS limit', async () => {
@@ -83,7 +83,7 @@ describe('SqsQueueDriver', () => {
     driver.setExecutor(async (name, data) => {
       seen.push([name, data])
     })
-    await callHandle(driver, 'welcome', message({ 'x-machize-job': 'send-welcome', 'x-machize-attempt': '1', 'x-machize-attempts': '1' }, { name: 'Ada' }))
+    await callHandle(driver, 'welcome', message({ 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': '1', 'x-basalt-attempts': '1' }, { name: 'Ada' }))
 
     expect(seen).toEqual([['send-welcome', { name: 'Ada' }]])
     expect(sqs.deleted).toEqual(['r1'])
@@ -101,22 +101,22 @@ describe('SqsQueueDriver', () => {
     await callHandle(
       driver,
       'welcome',
-      message({ 'x-machize-job': 'j', 'x-machize-attempt': '1', 'x-machize-attempts': '2', 'x-machize-backoff-ms': '2000', 'x-machize-backoff-type': 'fixed' }, {}),
+      message({ 'x-basalt-job': 'j', 'x-basalt-attempt': '1', 'x-basalt-attempts': '2', 'x-basalt-backoff-ms': '2000', 'x-basalt-backoff-type': 'fixed' }, {}),
     )
     const retry = sqs.sent.find((s) => s.queueUrl === 'https://sqs.test/welcome')!
-    expect(retry.attributes?.['x-machize-attempt']).toBe('2')
+    expect(retry.attributes?.['x-basalt-attempt']).toBe('2')
     expect(retry.delaySeconds).toBe(2)
     expect(sqs.deleted).toEqual(['r1'])
 
     // attempt 2 of 2 → dead-lettered
-    await callHandle(driver, 'welcome', message({ 'x-machize-job': 'j', 'x-machize-attempt': '2', 'x-machize-attempts': '2' }, {}, 'r2'))
+    await callHandle(driver, 'welcome', message({ 'x-basalt-job': 'j', 'x-basalt-attempt': '2', 'x-basalt-attempts': '2' }, {}, 'r2'))
     expect(sqs.sent.find((s) => s.queueUrl === 'https://sqs.test/welcome-dead')).toBeTruthy()
     expect(sqs.deleted).toEqual(['r1', 'r2'])
   })
 
   it('polls and processes a delivered message', async () => {
     const sqs = new FakeSqs()
-    sqs.enqueue([message({ 'x-machize-job': 'send-welcome', 'x-machize-attempt': '1', 'x-machize-attempts': '1' }, { name: 'Ada' })])
+    sqs.enqueue([message({ 'x-basalt-job': 'send-welcome', 'x-basalt-attempt': '1', 'x-basalt-attempts': '1' }, { name: 'Ada' })])
     const driver = new SqsQueueDriver({ queueUrl: (q) => `https://sqs.test/${q}`, api: sqs, waitTimeSeconds: 0 })
     const seen: unknown[] = []
     driver.setExecutor(async (name, data) => {

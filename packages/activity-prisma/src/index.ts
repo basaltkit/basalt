@@ -1,10 +1,10 @@
-import type { ActivityQuery, ActivityRecord, ActivityStore } from '@machize/activity'
+import type { ActivityQuery, ActivityRecord, ActivityStore } from '@basaltkit/activity'
 
 /**
- * Prisma-backed implementation of the `@machize/activity` `ActivityStore` for
+ * Prisma-backed implementation of the `@basaltkit/activity` `ActivityStore` for
  * production databases (PostgreSQL, MySQL, …). Bring your generated
  * `PrismaClient` with the `ActivityRecord` model (see the bundled
- * `prisma/schema.prisma`). The production counterpart to `@machize/activity-sqlite`.
+ * `prisma/schema.prisma`). The production counterpart to `@basaltkit/activity-sqlite`.
  */
 
 interface PActivity {
@@ -103,12 +103,12 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   if (value == null) {
     throw new Error(
       `${pkg}: the Prisma client has no \`${delegate}\` model. Add its models to your ` +
-        `schema.prisma (run \`mach prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
+        `schema.prisma (run \`basalt prisma:sync\`, or copy from '${pkg}/schema.prisma'), then \`prisma generate\`.`,
     )
   }
 }
 
 export function prismaActivityStore(client: PrismaActivityClient): PrismaActivityStores {
-  ensureModel(client, 'activityRecord', '@machize/activity-prisma')
+  ensureModel(client, 'activityRecord', '@basaltkit/activity-prisma')
   return { store: new PrismaActivityStore(client) }
 }

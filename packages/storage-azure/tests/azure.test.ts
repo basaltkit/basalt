@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Disk, StorageFileNotFoundError } from '@machize/storage'
+import { Disk, StorageFileNotFoundError } from '@basaltkit/storage'
 import { AzureBlobStorageDriver, type AzureBlobLike, type AzureContainerLike } from '../src/index.js'
 
 class FakeAzureContainer implements AzureContainerLike {

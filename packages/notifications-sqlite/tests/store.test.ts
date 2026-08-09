@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { InAppNotification } from '@machize/notifications'
+import type { InAppNotification } from '@basaltkit/notifications'
 import { afterAll, describe, expect, it } from 'vitest'
 import { openNotificationsDatabase, SqliteInAppStore, sqliteInAppStore } from '../src/index.js'
 
@@ -42,7 +42,7 @@ describe('SqliteInAppStore', () => {
 })
 
 describe('sqliteInAppStore + durability', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'machize-notif-'))
+  const dir = mkdtempSync(join(tmpdir(), 'basalt-notif-'))
   const file = join(dir, 'notifications.db')
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
 

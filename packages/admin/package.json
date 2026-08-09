@@ -1,7 +1,7 @@
 {
-  "name": "@machize/admin",
-  "version": "1.0.5",
-  "description": "Headless admin kit for Machize: derive table columns, form fields and validation from Zod schemas, plus a framework-agnostic data-source contract. The engine any React admin renders.",
+  "name": "@basaltkit/admin",
+  "version": "1.0.0",
+  "description": "Headless admin kit for Basalt: derive table columns, form fields and validation from Zod schemas, plus a framework-agnostic data-source contract. The engine any React admin renders.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -22,7 +22,7 @@
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -34,13 +34,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/admin"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/admin#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/admin#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "admin",
     "headless"

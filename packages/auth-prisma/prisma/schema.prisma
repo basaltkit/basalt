@@ -1,10 +1,10 @@
-// Reference schema for @machize/auth-prisma.
+// Reference schema for @basaltkit/auth-prisma.
 //
 // Copy these models into your app's schema.prisma (or import them), run
 // `prisma migrate dev`, and pass the generated client to `prismaAuthStores()`.
 // Targets PostgreSQL — `scopes` and `recoveryCodes` use native scalar lists
 // (`String[]`). On a database without scalar-list support (e.g. SQLite), model
-// those two fields as `Json` and adapt, or use @machize/auth-sqlite instead.
+// those two fields as `Json` and adapt, or use @basaltkit/auth-sqlite instead.
 
 datasource db {
   provider = "postgresql"

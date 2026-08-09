@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question / Discussion
-    url: https://github.com/Zebedeu/machize/discussions
+    url: https://github.com/Zebedeu/basalt/discussions
     about: Ask questions and discuss ideas in GitHub Discussions.
   - name: Security vulnerability
-    url: https://github.com/Zebedeu/machize/security/advisories/new
+    url: https://github.com/Zebedeu/basalt/security/advisories/new
     about: Report security issues privately — never in a public issue.

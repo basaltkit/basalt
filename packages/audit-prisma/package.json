@@ -1,7 +1,7 @@
 {
-  "name": "@machize/audit-prisma",
-  "version": "1.0.5",
-  "description": "Prisma-backed implementation of the @machize/audit AuditStore (append-only trail) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "name": "@basaltkit/audit-prisma",
+  "version": "1.0.0",
+  "description": "Prisma-backed implementation of the @basaltkit/audit AuditStore (append-only trail) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -21,11 +21,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@machize/audit": "workspace:^"
+    "@basaltkit/audit": "workspace:^"
   },
   "devDependencies": {
-    "@machize/audit": "workspace:^",
-    "@machize/tsconfig": "workspace:^",
+    "@basaltkit/audit": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
@@ -36,13 +36,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/machize.git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
     "directory": "packages/audit-prisma"
   },
-  "homepage": "https://github.com/Zebedeu/machize/tree/main/packages/audit-prisma#readme",
-  "bugs": "https://github.com/Zebedeu/machize/issues",
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/audit-prisma#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
   "keywords": [
-    "machize",
+    "basalt",
     "typescript",
     "audit",
     "prisma",

@@ -1,15 +1,15 @@
-import { createToken, definePlugin, ensureMetadata } from '@machize/core'
-import type { RequestEnricher, RouteGuard } from '@machize/fastify'
+import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
+import type { RequestEnricher, RouteGuard } from '@basaltkit/fastify'
 import { ApiKeys, ScopeRequiredError, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
 import { publicUser } from './auth.js'
 import type { UserSource } from './stores.js'
 
-declare module '@machize/core' {
+declare module '@basaltkit/core' {
   interface RequestContext {
     /** Set when the request authenticated with an API key instead of a session. */
     apiKey?: ApiKeyContext
   }
-  interface MachizeHooks {
+  interface BasaltHooks {
     'auth:apikey_issued': { id: string; tenantId?: string; userId?: string }
     'auth:apikey_revoked': { id: string }
   }
@@ -38,7 +38,7 @@ export interface ApiKeysPluginOptions extends ApiKeysOptions {
 export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
   const header = options.header ?? 'x-api-key'
   return definePlugin({
-    name: 'machize:apikeys',
+    name: 'basalt:apikeys',
     register({ container, hooks }) {
       container.singleton(API_KEYS, () => new ApiKeys({ ...options, hooks }))
       const metadata = ensureMetadata(container)

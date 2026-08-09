@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { Container, tryCtx } from '@machize/core'
+import { Container, tryCtx } from '@basaltkit/core'
 import { HttpError, route, runRoute, toErrorResponse, type HttpReply, type HttpRequest } from '../src/index.js'
 
 class CaptureReply implements HttpReply {
