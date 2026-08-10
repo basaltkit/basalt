@@ -42,11 +42,32 @@ result.total
 Inside a request, the tenant comes from `ctx().tenant` automatically:
 
 ```ts
-route({ method: 'GET', url: '/search', query: z.object({ q: z.string() }),
-  handler: ({ query }) => search.search('notes', query.q) }) // tenant implicit
+import { z } from 'zod'
+import { route } from '@basaltkit/fastify'
+import { SEARCH } from '@basaltkit/search'
+import { app } from './app.js'
+
+const search = app.container.get(SEARCH)
+
+export const searchNotes = route({
+  method: 'GET',
+  url: '/search',
+  query: z.object({ q: z.string() }),
+  handler: ({ query }) => search.search('notes', query.q), // tenant implicit
+})
 ```
 
 If no tenant can be determined, `search`/`remove` throw `TenantRequiredError`.
+
+To seed an index (backfill, migration), `bulk` upserts many documents at once —
+each still carries its own `tenantId`:
+
+```ts
+await search.bulk('notes', [
+  { id: '1', tenantId: 'acme', title: 'Hello world', body: 'first note' },
+  { id: '2', tenantId: 'acme', title: 'Release plan', body: 'ship it' },
+])
+```
 
 ## Relevance (in-memory driver)
 

@@ -61,6 +61,107 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 
 :::
 
+## Complete example — Fastify
+
+Install the adapter and Fastify:
+
+```bash
+pnpm add @basaltkit/core @basaltkit/fastify fastify @basaltkit/tenancy @basaltkit/auth @basaltkit/permissions zod
+```
+
+Routes are typed from their Zod schemas and protected declaratively through
+`meta`. **Enrichers** run first (tenancy resolves the tenant, auth reads the
+`Authorization: Bearer` token into `ctx().user`); then **guards** run
+(`meta: { auth: true }` demands a user, `meta: { can: '…' }` demands a
+permission). A guard rejects by throwing — you never write that check by hand.
+
+`src/routes.ts`:
+
+```ts
+import { ctx } from '@basaltkit/core'
+import { route, HttpError } from '@basaltkit/fastify'
+import { z } from 'zod'
+
+const projects = new Map<string, { id: string; name: string }>()
+
+export const routes = [
+  // Public — params typed from the Zod schema.
+  route({
+    method: 'GET',
+    url: '/projects/:id',
+    params: z.object({ id: z.string() }),
+    async handler({ params }) {
+      const project = projects.get(params.id)
+      if (!project) throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Not found')
+      return project
+    },
+  }),
+
+  // Requires an authenticated user (auth guard reads `meta.auth`).
+  route({
+    method: 'POST',
+    url: '/projects',
+    body: z.object({ name: z.string().min(1) }),
+    meta: { auth: true }, // no user → 401 AUTH_REQUIRED
+    async handler({ body }) {
+      const project = { id: crypto.randomUUID(), name: body.name }
+      projects.set(project.id, project)
+      ctx().logger.info({ owner: ctx().user?.email }, 'project created')
+      return project
+    },
+  }),
+
+  // Requires a specific permission (permissions guard reads `meta.can`).
+  route({
+    method: 'DELETE',
+    url: '/projects/:id',
+    params: z.object({ id: z.string() }),
+    meta: { can: 'projects:delete' }, // missing permission → 403
+    async handler({ params }) {
+      return { deleted: projects.delete(params.id) }
+    },
+  }),
+]
+```
+
+`src/server.ts` — wire the plugins and boot. The order in `plugins` doesn't
+matter (Basalt boots them in dependency order); enrichers and guards register
+themselves into the pipeline every route runs through:
+
+```ts
+import { createApp, ctx } from '@basaltkit/core'
+import { fastifyPlugin, FASTIFY } from '@basaltkit/fastify'
+import { headerResolver, MemoryTenantSource, tenancyPlugin } from '@basaltkit/tenancy'
+import { authPlugin, authRoutes, MemoryUserSource } from '@basaltkit/auth'
+import { MemoryAccessStore, permissionsPlugin } from '@basaltkit/permissions'
+import { routes } from './routes.js'
+
+const access = new MemoryAccessStore()
+await access.grantToUser('user-ada', ['projects:delete'], 'global')
+
+const app = await createApp({
+  plugins: [
+    tenancyPlugin({ source: new MemoryTenantSource(), resolvers: [headerResolver()] }),
+    authPlugin({ secret: process.env.APP_SECRET!, users: new MemoryUserSource() }),
+    permissionsPlugin({ store: access }),
+    // authRoutes() adds /auth/register, /auth/login, /auth/me, …
+    fastifyPlugin({ routes: [...routes, ...authRoutes()] }),
+  ],
+}).boot()
+
+const server = app.container.get(FASTIFY)
+await server.listen({ port: 3000 })
+console.log('http://localhost:3000')
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => server.close().then(() => app.shutdown()).then(() => process.exit(0)))
+}
+```
+
+A request to `POST /projects` without a token gets a `401 AUTH_REQUIRED`; a
+`DELETE /projects/:id` from a user lacking `projects:delete` gets a `403` — both
+with the standardized error body, and neither check written inside a handler.
+
 ## Complete example — Express
 
 Install the adapter and Express:

@@ -9,24 +9,74 @@ Cloud Storage and Azure Blob are drop-in driver packages.
 
 ## Setup
 
+`storagePlugin` registers a `Storage` under the `STORAGE` token. Declare one or
+more named disks; start with the `local` driver, which only needs a folder:
+
 ```ts
+import { createApp } from '@basaltkit/core'
 import { storagePlugin, STORAGE } from '@basaltkit/storage'
 
-storagePlugin({
-  default: 'uploads',
-  disks: {
-    uploads: { driver: 'local', root: './storage' },     // dev
-    // uploads: { driver: 's3', bucket: 'my-bucket', region: 'eu-west-1' }, // prod
-  },
-})
+const app = await createApp({
+  plugins: [
+    storagePlugin({
+      default: 'uploads',
+      disks: {
+        uploads: { driver: 'local', root: './storage' },
+      },
+    }),
+  ],
+}).boot()
 
-const disk = app.container.get(STORAGE).disk()   // the default disk
+const disk = app.container.get(STORAGE).disk()   // the default disk ('uploads')
 await disk.put('avatars/1.png', buffer, { contentType: 'image/png' })
 ```
 
 Each `Disk` prefixes paths with `tenants/<id>` from `ctx().tenant` — so the same
 code keeps every tenant's files isolated. Pass `scope: null` on a disk to turn
 that off.
+
+## put / get / exists / delete / list
+
+`put` accepts a string or `Buffer` and creates intermediate folders; `get`
+always returns raw bytes as a `Buffer`:
+
+```ts
+await disk.put('docs/read-me.txt', 'hello')
+await disk.put('img/pixel.bin', Buffer.from([1, 2, 3]))
+await disk.put('report.pdf', pdfBuffer, { contentType: 'application/pdf' }) // S3 sets Content-Type
+
+const text = (await disk.get('docs/read-me.txt')).toString()  // Buffer → string
+
+await disk.exists('docs/read-me.txt')  // true
+await disk.delete('docs/read-me.txt')  // true (existed and was deleted)
+await disk.delete('docs/read-me.txt')  // false (no longer existed)
+
+await disk.list('docs')  // ['docs/read-me.txt', ...] — recursive, sorted
+await disk.list()        // every file in the current scope
+```
+
+`get` on a missing file throws `StorageFileNotFoundError`.
+
+## Multiple named disks
+
+Declare as many disks as you like — e.g. public uploads on one backend, invoices
+on another — and pick one by name:
+
+```ts
+storagePlugin({
+  default: 'uploads',
+  disks: {
+    uploads:  { driver: 'local', root: './storage/uploads' },
+    invoices: { driver: 's3', bucket: 'company-invoices', region: 'eu-west-1' },
+  },
+})
+
+const storage = app.container.get(STORAGE)
+await storage.disk().put('avatar.png', image)              // default disk
+await storage.disk('invoices').put('2026/01.pdf', invoice) // by name
+```
+
+`storage.disk('unknown')` throws `UnknownDiskError`.
 
 ## Drivers
 
@@ -39,7 +89,7 @@ import { AzureBlobStorageDriver } from '@basaltkit/storage-azure'
 
 storagePlugin({
   disks: {
-    gcs:   { driver: new GcsStorageDriver({ bucket: 'my-bucket' }) },
+    gcs:   { driver: new GcsStorageDriver({ bucket: 'my-bucket', projectId: 'my-project' }) },
     azure: { driver: new AzureBlobStorageDriver({ container: 'uploads', connectionString: process.env.AZURE_STORAGE_CONNECTION_STRING }) },
   },
 })
@@ -47,10 +97,30 @@ storagePlugin({
 
 | Driver | Package | Notes |
 | --- | --- | --- |
-| Local | `@basaltkit/storage` | Filesystem — dev and single-node |
+| Local | `@basaltkit/storage` | Filesystem — dev and single-node. No `temporaryUrl` |
 | S3 | `@basaltkit/storage` | AWS S3, MinIO, Cloudflare R2 (S3-compatible) |
-| GCS | `@basaltkit/storage-gcs` | Google Cloud Storage |
-| Azure Blob | `@basaltkit/storage-azure` | Azure Blob Storage (SAS signed URLs) |
+| GCS | `@basaltkit/storage-gcs` | Google Cloud Storage (peer: `@google-cloud/storage`) |
+| Azure Blob | `@basaltkit/storage-azure` | Azure Blob (SAS signed URLs; peer: `@azure/storage-blob`) |
+
+### S3, MinIO and Cloudflare R2
+
+The `s3` driver talks to any S3-compatible service. For AWS, `bucket` (and
+usually `region`) is enough — credentials come from the standard AWS chain. For
+MinIO or R2, set an `endpoint`:
+
+```ts
+storagePlugin({
+  disks: {
+    uploads: {
+      driver: 's3',
+      bucket: 'my-app',
+      region: 'eu-west-1',
+      endpoint: 'http://localhost:9000',          // MinIO / R2 — forcePathStyle becomes true automatically
+      credentials: { accessKeyId: '…', secretAccessKey: '…' }, // omit to use the AWS environment
+    },
+  },
+})
+```
 
 ## Signed URLs
 
@@ -60,8 +130,24 @@ Hand a client a time-limited URL straight to the object, no proxying:
 const url = await disk.temporaryUrl('reports/q1.pdf', '15m')
 ```
 
+The expiry accepts a duration string (`'500ms'`, `'30s'`, `'15m'`, `'2h'`,
+`'7d'`) or milliseconds. Supported by `s3`, GCS and Azure; the `local` driver
+throws `TemporaryUrlUnsupportedError` (serve local files through a route in dev,
+or run MinIO locally with an `s3` disk).
+
 `@basaltkit/files` builds an upload pipeline on top of this (validation, quota,
 metadata) — see the [File uploads guide](/guide/files).
+
+## Errors
+
+| Class | Code | When |
+| --- | --- | --- |
+| `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` on a file that doesn't exist |
+| `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | A path escapes the disk root (`../…`) — local driver blocks traversal |
+| `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `disk('name')` for a disk that isn't declared |
+| `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` on a driver without support (e.g. `local`) |
+
+All extend `BasaltError` and carry the `code` above.
 
 ## Writing a driver
 
@@ -73,11 +159,11 @@ import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@
 export class MyStorageDriver implements StorageDriver {
   readonly name = 'my-backend'
   async put(path: string, content: Buffer | string, options?: PutOptions): Promise<void> { /* … */ }
-  async get(path: string): Promise<Buffer> { /* throw StorageFileNotFoundError on miss */ }
-  async exists(path: string): Promise<boolean> { /* … */ }
-  async delete(path: string): Promise<boolean> { /* returns whether it existed */ }
-  async list(prefix: string): Promise<string[]> { /* keys under the prefix */ }
-  async temporaryUrl(path: string, expiresInMs: number): Promise<string> { /* optional */ }
+  async get(path: string): Promise<Buffer> { /* throw StorageFileNotFoundError on miss */ throw 0 }
+  async exists(path: string): Promise<boolean> { /* … */ return false }
+  async delete(path: string): Promise<boolean> { /* returns whether it existed */ return false }
+  async list(prefix: string): Promise<string[]> { /* keys under the prefix */ return [] }
+  async temporaryUrl(path: string, expiresInMs: number): Promise<string> { /* optional */ throw 0 }
   async disconnect(): Promise<void> {}
 }
 ```

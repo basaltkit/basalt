@@ -32,18 +32,51 @@ dispatch.
 
 ## Register it
 
-```ts
-import { queuePlugin } from '@basaltkit/queue'
+`queuePlugin` registers a `QueueManager` under the `QUEUE` token, starts the
+declared workers on `boot`, and closes everything on `shutdown`:
 
-queuePlugin({
-  connection: process.env.REDIS_URL,     // → BullMQ driver. Omit for the sync driver.
-  jobs: [SendWelcome],                    // jobs this process produces and/or runs
-  workers: [{ queue: 'welcome', concurrency: 5 }], // start a worker for this queue
-})
+```ts
+import { createApp } from '@basaltkit/core'
+import { queuePlugin } from '@basaltkit/queue'
+import { SendWelcome } from './jobs/send-welcome.js'
+
+const app = await createApp({
+  plugins: [
+    queuePlugin({
+      connection: process.env.REDIS_URL,     // → BullMQ driver. Omit for the sync driver.
+      jobs: [SendWelcome],                    // jobs this process produces and/or runs
+      workers: [{ queue: 'welcome', concurrency: 5 }], // start a worker for this queue
+    }),
+  ],
+}).boot()
 ```
 
-A worker's `queue` **must match** a job's `queue`, or the job lands in the
+With no `connection` (and no `driver`), the plugin uses the **sync** driver:
+`dispatch` runs `handle` inline in the same process — no Redis, ideal for dev and
+tests. A worker's `queue` **must match** a job's `queue`, or the job lands in the
 backend but nothing consumes it.
+
+### Producer and worker in separate processes
+
+In production the API process usually only **produces** (calls `dispatch`) while
+a separate process **consumes**. Both must register the **same jobs** — the
+worker needs each job's `handle`, and a job that reaches a worker that hasn't
+registered it throws `UnknownJobError`. Only the consumer declares `workers`:
+
+```ts
+// API process — produces only (no `workers`)
+queuePlugin({ jobs: [SendWelcome, GenerateInvoice], connection: process.env.REDIS_URL })
+
+// worker process — consumes
+queuePlugin({
+  jobs: [SendWelcome, GenerateInvoice],
+  connection: process.env.REDIS_URL,
+  workers: [
+    { queue: 'welcome', concurrency: 5 },
+    { queue: 'billing', concurrency: 2 },
+  ],
+})
+```
 
 ## Dispatch
 
@@ -106,6 +139,38 @@ await Job.dispatch(payload, { delay: '5m' })
 
 Use `'throw'` in production for a hard guarantee; the default `'warn'` never
 breaks a dev run but never hides a dropped option either.
+
+## Run domain events on the queue
+
+`queuedOn` bridges `@basaltkit/events` → queue: `emit` just enqueues a job, and
+the handler runs on the worker with retries and restored context. It returns the
+unsubscribe function; the created job is named `listener:<event>`.
+
+```ts
+import { EventBus, defineEvent } from '@basaltkit/events'
+import { QUEUE, queuedOn } from '@basaltkit/queue'
+import { ctx } from '@basaltkit/core'
+import { z } from 'zod'
+
+const bus = new EventBus()
+const manager = ctx().container.get(QUEUE)
+const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))
+
+const unsubscribe = queuedOn(bus, manager, OrderCreated, async ({ orderId }) => {
+  // runs on the worker, with the driver's retry/backoff
+}, { queue: 'orders', attempts: 3 })
+
+await bus.emit(OrderCreated, { orderId: 'o-1' })
+```
+
+## Errors
+
+| Class | Code | When |
+| --- | --- | --- |
+| `JobValidationError` | `JOB_INVALID` | Payload fails the job's `schema` (thrown at `dispatch`; has `.job` and `.issues`) |
+| `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `dispatch` before the job was registered with a manager (add it to `jobs`) |
+| `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | A job reached a worker that hasn't registered it (producer/worker job lists differ) |
+| `UnsupportedJobOptionError` | — | A dispatch requested an option the driver can't honor, under `onUnsupported: 'throw'` |
 
 ## Writing a driver
 
