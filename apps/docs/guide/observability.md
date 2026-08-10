@@ -1,7 +1,46 @@
 # Observability
 
-Metrics and health probes ship in the box — no client libraries, no exporters
-to install.
+Metrics, health probes and distributed tracing ship in the box — no client
+libraries, no exporters to install. Each is a Basalt plugin; they mount their
+hooks and routes on boot, so they need `fastifyPlugin` (or the Express/Hono
+adapter) present and `boot()` called.
+
+[[toc]]
+
+## Wiring it all together
+
+```ts
+// src/app.ts
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin, FASTIFY } from '@basaltkit/fastify'
+import { metricsPlugin, healthPlugin, tracingPlugin } from '@basaltkit/fastify'
+import { OtlpHttpExporter } from '@basaltkit/core'
+
+export const app = await createApp({
+  plugins: [
+    fastifyPlugin({ routes: [/* your routes */] }),
+    metricsPlugin(),                                   // GET /metrics
+    healthPlugin({ checks: { db: () => ({ ok: true }) } }), // GET /livez, /readyz
+    tracingPlugin({
+      serviceName: 'acme-api',
+      exporter: new OtlpHttpExporter({ url: 'http://otel-collector:4318' }),
+    }),
+  ],
+}).boot()
+
+await app.container.get(FASTIFY).listen({ port: 3000 })
+```
+
+Each plugin is detailed below. `metricsPlugin`, `healthPlugin`, `tracingPlugin`,
+`METRICS` and `TRACER` are re-exported from `@basaltkit/fastify` (they live in
+`@basaltkit/http`); the metric and span primitives and exporters come from
+`@basaltkit/core`.
+
+::: warning Edge plugins need the adapter
+Their hooks and routes are mounted on the `app:booted` event, so `/metrics`,
+`/readyz` and tracing only respond when `fastifyPlugin` is present and you called
+`boot()`.
+:::
 
 ## Metrics — `metricsPlugin`
 
@@ -82,6 +121,10 @@ tracingPlugin({
   exporter: new OtlpHttpExporter({ url: 'http://otel-collector:4318' }),
 })
 ```
+
+`url` is the collector's base URL — the OTLP path `/v1/traces` is appended for
+you. Pass `headers` for an authenticated collector, and `maxBatch` (default 100)
+to tune flushing.
 
 Per request it continues an inbound `traceparent` (or starts a new trace),
 records a **server span** labelled by route template with HTTP attributes and

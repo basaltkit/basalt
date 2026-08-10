@@ -49,5 +49,130 @@ The same `route` runs unchanged on **Express** and **Hono** — swap
 [HTTP Adapters](/guide/adapters) for complete examples.
 :::
 
-Ready to build something real? [Install Basalt](/guide/installation) or jump to
-the [multi-tenant SaaS cookbook](/cookbook/multi-tenant-saas).
+## Zero to running
+
+The fastest path from nothing to a typed, authenticated API is the project
+scaffolder. It writes a production-shaped app and includes only what you pick —
+nothing dead ships.
+
+### 1. Scaffold
+
+```bash
+pnpm create basalt my-saas       # or: npm create basalt my-saas
+```
+
+Run it with no name to answer prompts interactively, or pass flags to skip them:
+
+```bash
+pnpm create basalt my-saas --billing --cli   # add subscriptions + the `basalt` CLI
+pnpm create basalt my-saas -y                 # accept every default, no prompts
+```
+
+Multi-tenancy and authentication are **on by default** — opt out with
+`--no-tenancy` / `--no-auth`. The scaffolder doesn't install dependencies or
+touch git unless you ask; add `--install --git`, or do it yourself in the next
+step. The full flag list lives in [Installation](/guide/installation).
+
+### 2. Install and configure
+
+```bash
+cd my-saas
+pnpm install
+cp .env.example .env
+```
+
+The generated `.env` holds `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` and — with
+auth — an `APP_SECRET` (validated by `src/env.ts` with `@basaltkit/env`). It
+ships a development default; set your own before production, and note that auth
+requires a secret of **at least 16 characters**.
+
+### 3. Run
+
+```bash
+pnpm dev        # API on http://localhost:3000
+```
+
+`src/server.ts` boots the app, resolves the Fastify instance and listens — and
+shuts down cleanly on `SIGINT`/`SIGTERM`.
+
+### 4. First requests
+
+Every generated app exposes a friendly index and a health check:
+
+```bash
+curl http://localhost:3000/
+# { "name": "my-saas", "status": "ok", "endpoints": ["GET /", "GET /health", ...] }
+
+curl http://localhost:3000/health
+# { "ok": true, "requestId": "…", "tenant": null }
+```
+
+With auth on (the default), the `/auth/*` routes are already wired. Register, log
+in, then call an authenticated route with the returned token:
+
+```bash
+curl -X POST http://localhost:3000/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","password":"secretpassword1"}'
+
+curl -X POST http://localhost:3000/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","password":"secretpassword1"}'
+# → { "user": {…}, "accessToken": "…", "refreshToken": "…" }
+
+curl http://localhost:3000/auth/me \
+  -H 'authorization: Bearer <accessToken>'
+# → the authenticated user
+```
+
+Run the included smoke test to confirm everything is wired:
+
+```bash
+pnpm test
+```
+
+## Add a durable store
+
+The scaffold boots on **in-memory stores** — perfect for dev and CI, but they
+forget everything on restart. Every store in Basalt is an interface with an
+in-memory default, so going durable is a swap, not a rewrite.
+
+Open `src/app.ts`: `authPlugin` is configured with a `MemoryUserSource`. Swap it
+for a durable set of stores backed by Node's built-in SQLite — no ORM, no
+migration tool, no external service:
+
+```bash
+pnpm add @basaltkit/auth-sqlite
+```
+
+```ts
+// src/app.ts
+import { authPlugin, authRoutes, mfaRoutes } from '@basaltkit/auth'
+import { sqliteAuthStores } from '@basaltkit/auth-sqlite'
+import { env } from './env.js'
+
+const stores = sqliteAuthStores('./data/auth.db') // ':memory:' by default
+
+authPlugin({
+  secret: env.APP_SECRET,
+  users: stores.users,
+  sessions: stores.sessions,
+  refreshTokens: stores.refreshTokens,
+  tokens: stores.tokens, // email verification + password reset
+  mfa: stores.mfa,
+})
+```
+
+Now users survive a restart. The same pattern swaps any in-memory store for a
+durable one — see [Persistence & durable stores](/guide/persistence) for the
+full map (SQLite and Prisma backends for auth, teams, audit, tenancy and more).
+
+## Where to next
+
+- [Installation](/guide/installation) — package managers, requirements, and
+  adding Basalt to an existing app.
+- [Core Concepts](/guide/concepts) — plugins, the DI container, request context
+  and hooks.
+- [HTTP Adapters](/guide/adapters) — the same routes on Fastify, Express or Hono.
+- [Web UI & components](/guide/web-ui) — a type-safe SDK and admin tables/forms.
+- [Build a notes SaaS](/cookbook/notes-saas) — a complete end-to-end walkthrough.

@@ -68,6 +68,40 @@ hub.subscribe(conn.id, 'notes')
 reply.raw.on('close', () => hub.unregister(conn.id))
 ```
 
+## Complete Fastify WebSocket server
+
+Putting it together with `@fastify/websocket` — `realtimePlugin` registers both
+`REALTIME` and `REALTIME_HUB` and starts the hub on boot:
+
+```ts
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin, FASTIFY } from '@basaltkit/fastify'
+import { realtimePlugin, REALTIME_HUB, websocketConnection } from '@basaltkit/realtime'
+import fastifyWebsocket from '@fastify/websocket'
+
+const app = await createApp({ plugins: [fastifyPlugin(), realtimePlugin()] }).boot()
+
+const fastify = app.container.get(FASTIFY)
+const hub = app.container.get(REALTIME_HUB)
+await fastify.register(fastifyWebsocket)
+
+fastify.get('/realtime', { websocket: true }, (socket, request) => {
+  // authenticate the connection (JWT in query, cookie, header…) → tenant + user
+  const { tenantId, userId } = authenticate(request)
+  const conn = websocketConnection({ tenantId, userId }, socket)
+  hub.register(conn)
+
+  socket.on('message', (raw) => {
+    const cmd = JSON.parse(raw.toString()) // { type: 'subscribe' | 'unsubscribe', channel }
+    if (cmd.type === 'subscribe' && mayAccess(userId, cmd.channel)) hub.subscribe(conn.id, cmd.channel)
+    if (cmd.type === 'unsubscribe') hub.unsubscribe(conn.id, cmd.channel)
+  })
+  socket.on('close', () => hub.unregister(conn.id))
+})
+
+await fastify.listen({ port: 3000 })
+```
+
 ## Events bridge
 
 Wire a domain hook straight to a channel — pushes happen without touching the

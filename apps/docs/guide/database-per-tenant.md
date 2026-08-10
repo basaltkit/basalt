@@ -68,6 +68,38 @@ route({ method: 'GET', url: '/projects', handler: () =>
 })
 ```
 
+`db()` throws `DB_UNAVAILABLE` outside a tenant context, so an unscoped operation
+fails loudly instead of silently touching the wrong data.
+
+## Provisioning a new tenant
+
+Before a tenant's first request, its storage has to exist. Persist the record,
+create its storage, then migrate it — for **schema-per-tenant** that's
+`provisionTenantSchema` + a migration; for **database-per-tenant** you create the
+database out of band (your infra/provider), then migrate it the same way:
+
+```ts
+import { PrismaClient } from '@prisma/client'
+import { provisionTenantSchema, tenantSchema, migrateTenants } from '@basaltkit/prisma'
+
+export async function provisionTenant(id: string, name: string) {
+  await tenants.save({ id, name })                 // 1. register in the TenantSource
+
+  // 2. schema-per-tenant: create the schema on an admin connection
+  const admin = new PrismaClient()
+  await provisionTenantSchema(admin, tenantSchema(id)) // CREATE SCHEMA IF NOT EXISTS "tenant_<id>"
+
+  // 3. bring its structure up to date (single-tenant slice of the migrator)
+  await migrateTenants({
+    tenants: [id],
+    target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },
+  })
+}
+```
+
+Once the record exists, `subdomainResolver` / `domainResolver` route the new
+tenant's traffic immediately, and the pool builds its client on first use.
+
 ## Durable stores, one per tenant
 
 Here's the payoff. The [`*-prisma` stores](/guide/persistence) take a
@@ -92,13 +124,22 @@ const access = prismaAccessStore(tenantDb)
 const comments = prismaCommentsStore(tenantDb)
 ```
 
-Now wire them into their plugins as usual:
+Now wire them into their plugins as usual. `tenancyPlugin` resolves the tenant;
+`prismaPlugin({ forTenant })` pools a client per tenant and puts it in context —
+so the stores above land in the right database on every request:
 
 ```ts
 createApp({
   plugins: [
-    tenancyPlugin({ resolver: subdomainResolver({ base: 'myapp.com' }) }),
-    prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }) }),
+    tenancyPlugin({
+      source: tenants, // your durable TenantSource (sqlite/prisma) — see Multi-tenancy
+      resolvers: [subdomainResolver({ base: 'myapp.com' })],
+    }),
+    prismaPlugin({
+      forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }),
+      destroy: (client) => client.$disconnect(),
+      max: 20,
+    }),
     authPlugin({ secret, users: auth.users, sessions: auth.sessions,
                  refreshTokens: auth.refreshTokens, tokens: auth.tokens, mfa: auth.mfa }),
     apiKeysPlugin({ store: auth.apiKeys, users: auth.users }),
@@ -125,22 +166,52 @@ database/schema-per-tenant when the isolation guarantee has to be physical.
 
 N databases means a schema change has to reach all of them. `migrateTenants`
 runs a migration across every tenant with bounded concurrency, reporting each
-result without letting one failure abort the rest:
+result without letting one failure abort the rest. Pick the target that matches
+your mode:
 
 ```ts
-import { migrateTenants, prismaMigrator } from '@basaltkit/prisma'
+import { PrismaClient } from '@prisma/client'
+import { migrateTenants } from '@basaltkit/prisma'
 
+const ids = (await tenants.list()).map((t) => t.id)
+
+// Database-per-tenant: derive each tenant's connection URL.
 const results = await migrateTenants({
-  tenants: await listTenantIds(),
-  target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: true },
+  tenants: ids,
+  target: { mode: 'database', urlFor: (id) => urlFor(id) },
   concurrency: 5,
   onResult: (r) => console.log(r.tenantId, r.ok ? 'ok' : r.error),
 })
+
+// Schema-per-tenant instead: one base URL, and an admin client that can
+// CREATE SCHEMA IF NOT EXISTS before migrating.
+const admin = new PrismaClient()
+await migrateTenants({
+  tenants: ids,
+  target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },
+})
 ```
 
+The default migrator shells out to `prisma migrate deploy` with each tenant's
+scoped URL as `DATABASE_URL`; pass your own `migrate` fn to override it.
+
 Wire it as a CLI command with `tenantMigrateCommand(...)` so `deploy` can run
-`migrate:tenants` after shipping new store models (the `Auth*`, `Perm*`,
-`Comment` … models from each `*-prisma` package's reference schema).
+`basalt tenant:migrate` after shipping new store models (the `Auth*`, `Perm*`,
+`Comment` … models from each `*-prisma` package's reference schema). It prints a
+per-tenant `ok`/`FAIL` report and exits non-zero if any tenant failed — ideal
+for CI/CD:
+
+```ts
+import { tenantMigrateCommand } from '@basaltkit/prisma'
+import { commandsPlugin } from '@basaltkit/cli'
+
+commandsPlugin([
+  tenantMigrateCommand({
+    tenants: () => tenants.list().then((all) => all.map((t) => t.id)),
+    target: { mode: 'database', urlFor: (id) => urlFor(id) },
+  }),
+])
+```
 
 ## Seeding & background work
 
