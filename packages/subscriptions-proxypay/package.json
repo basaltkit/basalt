@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/subscriptions-proxypay",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "ProxyPay payment gateway driver for @basaltkit/subscriptions — reference-based Multicaixa/EMIS payments for Angola (AOA), implementing the PaymentGateway contract.",
   "license": "MIT",
   "type": "module",
