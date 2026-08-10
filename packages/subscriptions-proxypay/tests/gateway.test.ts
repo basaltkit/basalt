@@ -23,7 +23,7 @@ const opts = (fetch: FetchLike) => ({ apiKey: 'k', entity: '00123', sandbox: tru
 describe('ProxyPayGateway.createPayment', () => {
   it('reserves a reference id, activates it, and returns the reference to pay', async () => {
     const { fetch, calls } = fakeFetch({
-      'GET /reference_ids': { status: 200, body: '900000001' },
+      'POST /reference_ids': { status: 200, body: '900000001' },
       'PUT /references/900000001': { status: 204 },
     })
     const gw = new ProxyPayGateway(opts(fetch))
@@ -50,7 +50,7 @@ describe('ProxyPayGateway.createPayment', () => {
   })
 
   it('surfaces a ProxyPay error with its HTTP status', async () => {
-    const { fetch } = fakeFetch({ 'GET /reference_ids': { status: 401, body: 'unauthorized' } })
+    const { fetch } = fakeFetch({ 'POST /reference_ids': { status: 401, body: 'unauthorized' } })
     const gw = new ProxyPayGateway(opts(fetch))
     await expect(gw.createPayment({ billableId: 'x', amount: 1 })).rejects.toBeInstanceOf(ProxyPayRequestError)
   })
