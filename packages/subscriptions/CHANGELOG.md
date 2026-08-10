@@ -1,5 +1,17 @@
 # @basaltkit/subscriptions
 
+## 1.0.1
+
+### Minor Changes
+
+- Add the `PaymentGateway` contract for one-off / reference / mobile-money
+  payments — `PaymentRequest`, `PaymentInstruction`, `PaymentEvent`, and
+  `FakePaymentGateway`. Complements `BillingGateway` (card subscriptions) for
+  providers with no card-on-file recurring or portal (Angola: Multicaixa/EMIS,
+  ProxyPay, AppyPay, UNITEL Money). First driver: `@basaltkit/subscriptions-proxypay`.
+
+<!-- Entries below predate the Machize → Basalt rebrand (published under @machize). -->
+
 ## 1.0.5
 
 ### Patch Changes

@@ -43,6 +43,13 @@ export {
   type SwapInput,
 } from './gateway.js'
 export {
+  FakePaymentGateway,
+  type PaymentGateway,
+  type PaymentRequest,
+  type PaymentInstruction,
+  type PaymentEvent,
+} from './payment.js'
+export {
   StripeBillingGateway,
   StripeRequestError,
   type StripeGatewayOptions,
