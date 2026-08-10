@@ -19,20 +19,23 @@ const payments = new ProxyPayGateway({
   apiKey: process.env.PROXYPAY_API_KEY!,   // Authorization: Token <key>
   entity: process.env.PROXYPAY_ENTITY!,    // your Multicaixa Entity (Entidade)
   sandbox: process.env.NODE_ENV !== 'production',
-  webhookSecret: process.env.PROXYPAY_WEBHOOK_SECRET, // HMAC-SHA256, optional
+  // webhookSecret defaults to apiKey (what ProxyPay signs with); override or set '' to disable.
 })
 
 // Create a payment — reserves a reference and returns what to show the customer.
 const instruction = await payments.createPayment({
   billableId: 'acme',        // echoed back on the webhook (custom_fields.billable_id)
   amount: 5000,              // 5000,00 Kz
-  reference: 'invoice_2026_08',
   expiresAt: Date.now() + 3 * 24 * 60 * 60 * 1000,
 })
 
 // instruction.reference = { entity: '00123', reference: '900000001', amount: 5000 }
 // → show "Entidade 00123 · Referência 900000001 · 5.000,00 Kz"
 ```
+
+> **Bring your own reference:** pass a numeric `reference` (e.g. an order id that
+> is a valid ProxyPay reference) to use it directly and skip the `POST /reference_ids`
+> reserve call. Omit it to have the driver reserve the next available id for you.
 
 ### Receiving the webhook
 
@@ -50,7 +53,7 @@ app.post('/webhooks/proxypay', async (request, reply) => {
 })
 ```
 
-`verifyWebhook` throws `WebhookInvalidError` (HTTP 400) on a bad signature and returns `null` for non-payment events.
+`verifyWebhook` throws `WebhookInvalidError` (HTTP 400) on a bad signature and returns `null` when the payload carries no `reference_id` (i.e. it isn't a payment callback). ProxyPay posts a **flat** payment object — top-level `reference_id`, `amount`, `id`, `custom_fields` — signed with HMAC-SHA256 in the `x-signature` header.
 
 ## API surface used
 
@@ -64,7 +67,7 @@ ProxyPay has no card-on-file recurring charge. Model recurring by creating **one
 
 ## Notes & testing
 
-- Amounts are AOA in the major unit (`5000` = 5.000,00 Kz), formatted to two decimals for ProxyPay.
+- Amounts are AOA in the major unit (`5000` = 5.000,00 Kz), sent to ProxyPay as a two-decimal-rounded number.
 - The **fetch client is injectable** (`options.fetch`) — the global `fetch` is used by default. No hard HTTP dependency.
-- **Webhook auth** varies by ProxyPay account setup. This driver verifies an HMAC-SHA256 of the raw body against a signature header when `webhookSecret` is set; if your account secures the callback with HTTP Basic auth instead, verify that at the route and omit `webhookSecret`.
+- **Webhook auth**: ProxyPay signs the callback with your API key (HMAC-SHA256 of the raw body, hex, in the `x-signature` header), so `webhookSecret` defaults to `apiKey` and verification is on by default. Override `webhookSecret` if you configured a custom secret, or set it to `''` to disable (e.g. if you secure the callback with HTTP Basic auth on the URL instead).
 - Verify the exact `/reference_ids` response shape and webhook signature scheme against **your ProxyPay sandbox** — the driver handles the common shapes but every account's setup should be confirmed against real credentials.
