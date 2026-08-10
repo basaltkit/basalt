@@ -1,5 +1,14 @@
 # @basaltkit/subscriptions-proxypay
 
+## 1.0.4
+
+### Patch Changes
+
+- **Always send `end_datetime` — ProxyPay requires it.** Creating a reference
+  without it returns `400 "é de preenchimento obrigatório"`. `createPayment` now
+  always sends `end_datetime`, derived from `PaymentRequest.expiresAt` or a new
+  `expiryDays` option (default 30 days from now). Verified against the live API.
+
 ## 1.0.3
 
 ### Patch Changes

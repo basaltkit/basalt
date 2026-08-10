@@ -76,6 +76,17 @@ describe('ProxyPayGateway.createPayment', () => {
     expect(JSON.parse(put.body!).custom_fields.callback_url).toBe('https://app.example/webhook')
   })
 
+  it('always sends end_datetime (required by ProxyPay), defaulting when omitted', async () => {
+    const { fetch, calls } = fakeFetch({
+      'POST /reference_ids': { status: 200, body: '900000009' },
+      'PUT /references/900000009': { status: 204 },
+    })
+    const gw = new ProxyPayGateway(opts(fetch))
+    await gw.createPayment({ billableId: 'acme', amount: 1 }) // no expiresAt
+    const body = JSON.parse(calls.find((c) => c.method === 'PUT')!.body!)
+    expect(body.end_datetime).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
   it('surfaces a ProxyPay error with its HTTP status', async () => {
     const { fetch } = fakeFetch({ 'POST /reference_ids': { status: 401, body: 'unauthorized' } })
     const gw = new ProxyPayGateway(opts(fetch))
