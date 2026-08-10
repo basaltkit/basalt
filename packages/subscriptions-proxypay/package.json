@@ -1,0 +1,52 @@
+{
+  "name": "@basaltkit/subscriptions-proxypay",
+  "version": "1.0.0",
+  "description": "ProxyPay payment gateway driver for @basaltkit/subscriptions — reference-based Multicaixa/EMIS payments for Angola (AOA), implementing the PaymentGateway contract.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@basaltkit/subscriptions": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/subscriptions": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
+    "directory": "packages/subscriptions-proxypay"
+  },
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions-proxypay#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "payments",
+    "proxypay",
+    "multicaixa",
+    "emis",
+    "angola",
+    "subscriptions"
+  ]
+}
