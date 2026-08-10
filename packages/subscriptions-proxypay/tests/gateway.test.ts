@@ -18,6 +18,9 @@ function fakeFetch(routes: Record<string, { status: number; body?: string }>) {
   return { fetch, calls }
 }
 
+// A fetch that always succeeds — for verifyWebhook tests that never call the API.
+const fakeOk = (async () => ({ ok: true, status: 200, text: async () => '' })) as FetchLike
+
 const opts = (fetch: FetchLike) => ({ apiKey: 'k', entity: '00123', sandbox: true, fetch })
 
 describe('ProxyPayGateway.createPayment', () => {
@@ -31,7 +34,6 @@ describe('ProxyPayGateway.createPayment', () => {
     const inst = await gw.createPayment({
       billableId: 'acme',
       amount: 5000,
-      reference: 'order_1',
       metadata: { plan: 'pro' },
       expiresAt: Date.parse('2026-08-20T00:00:00Z'),
     })
@@ -41,12 +43,37 @@ describe('ProxyPayGateway.createPayment', () => {
       status: 'pending',
       reference: { entity: '00123', reference: '900000001', amount: 5000 },
     })
-    // the PUT carried a 2-decimal amount + custom_fields + end_datetime
+    // the PUT carried a numeric amount, custom_fields, and a date-only end_datetime
     const put = calls.find((c) => c.method === 'PUT')!
     const body = JSON.parse(put.body!)
-    expect(body.amount).toBe('5000.00')
-    expect(body.custom_fields).toEqual({ billable_id: 'acme', reference: 'order_1', plan: 'pro' })
-    expect(body.end_datetime).toBe('2026-08-20T00:00:00.000Z')
+    expect(body.amount).toBe(5000) // number, not "5000.00"
+    expect(body.custom_fields).toEqual({ billable_id: 'acme', plan: 'pro' })
+    expect(body.end_datetime).toBe('2026-08-20') // date-only, not full ISO
+  })
+
+  it('uses a caller-supplied reference and skips the reserve round-trip', async () => {
+    const { fetch, calls } = fakeFetch({ 'PUT /references/123456789': { status: 204 } })
+    const gw = new ProxyPayGateway(opts(fetch))
+
+    const inst = await gw.createPayment({ billableId: 'acme', amount: 100, reference: '123456789' })
+
+    expect(inst.id).toBe('123456789')
+    expect(inst.reference).toEqual({ entity: '00123', reference: '123456789', amount: 100 })
+    // no POST /reference_ids
+    expect(calls.some((c) => c.path === '/reference_ids')).toBe(false)
+    const put = calls.find((c) => c.method === 'PUT')!
+    expect(put.path).toBe('/references/123456789')
+    expect(JSON.parse(put.body!).custom_fields).toEqual({ billable_id: 'acme', reference: '123456789' })
+  })
+
+  it('tags the reference with callback_url when configured', async () => {
+    const { fetch, calls } = fakeFetch({ 'PUT /references/55': { status: 204 } })
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', sandbox: true, callbackUrl: 'https://app.example/webhook', fetch })
+
+    await gw.createPayment({ billableId: 'acme', amount: 1, reference: '55' })
+
+    const put = calls.find((c) => c.method === 'PUT')!
+    expect(JSON.parse(put.body!).custom_fields.callback_url).toBe('https://app.example/webhook')
   })
 
   it('surfaces a ProxyPay error with its HTTP status', async () => {
@@ -58,21 +85,19 @@ describe('ProxyPayGateway.createPayment', () => {
 
 describe('ProxyPayGateway.verifyWebhook', () => {
   const secret = 'whsec'
+  // ProxyPay posts a FLAT payment object (same shape as GET /payments items).
   const payload = JSON.stringify({
     id: 42,
-    event_type: 'payment',
-    data: {
-      reference_id: '900000001',
-      amount: '5000.00',
-      transaction_id: 'tx_1',
-      custom_fields: { billable_id: 'acme', reference: 'order_1' },
-    },
+    reference_id: '900000001',
+    amount: '5000.00',
+    transaction_id: 'tx_1',
+    custom_fields: { billable_id: 'acme', reference: 'order_1' },
   })
-  const sign = (body: string) => createHmac('sha256', secret).update(body).digest('hex')
+  const sign = (body: string, key: string) => createHmac('sha256', key).update(body).digest('hex')
 
-  it('verifies the HMAC and translates a payment event', () => {
-    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: secret, fetch: (async () => ({ ok: true, status: 200, text: async () => '' })) as FetchLike })
-    const event = gw.verifyWebhook(payload, sign(payload))
+  it('verifies the HMAC and translates a flat payment payload', () => {
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: secret, fetch: fakeOk })
+    const event = gw.verifyWebhook(payload, sign(payload, secret))
     expect(event).toMatchObject({
       id: '42',
       type: 'payment.succeeded',
@@ -83,13 +108,21 @@ describe('ProxyPayGateway.verifyWebhook', () => {
     })
   })
 
+  it('defaults the signing secret to the API key', () => {
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', fetch: fakeOk })
+    const body = JSON.stringify({ reference_id: '7', amount: 10, custom_fields: { billable_id: 'acme' } })
+    expect(gw.verifyWebhook(body, sign(body, 'k'))?.paymentId).toBe('7')
+    expect(() => gw.verifyWebhook(body, 'deadbeef')).toThrow(WebhookInvalidError)
+  })
+
   it('throws on a bad signature', () => {
-    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: secret, fetch: (async () => ({ ok: true, status: 200, text: async () => '' })) as FetchLike })
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: secret, fetch: fakeOk })
     expect(() => gw.verifyWebhook(payload, 'deadbeef')).toThrow(WebhookInvalidError)
   })
 
-  it('returns null for a non-payment event', () => {
-    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', fetch: (async () => ({ ok: true, status: 200, text: async () => '' })) as FetchLike })
-    expect(gw.verifyWebhook(JSON.stringify({ event_type: 'other', data: {} }), undefined)).toBeNull()
+  it('returns null when the payload has no reference_id', () => {
+    // webhookSecret: '' disables verification so we can feed an arbitrary body
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: '', fetch: fakeOk })
+    expect(gw.verifyWebhook(JSON.stringify({ hello: 'world' }), undefined)).toBeNull()
   })
 })
