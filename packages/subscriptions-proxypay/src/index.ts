@@ -53,6 +53,12 @@ export interface ProxyPayOptions {
    * can also pass it through `PaymentRequest.metadata`.
    */
   callbackUrl?: string
+  /**
+   * Days until a reference expires, used when `PaymentRequest.expiresAt` is not
+   * given. ProxyPay **requires** `end_datetime`, so the driver always sends one;
+   * this is the fallback window. Default `30`.
+   */
+  expiryDays?: number
   /** Injected fetch. Defaults to the global `fetch`. */
   fetch?: FetchLike
 }
@@ -77,6 +83,7 @@ export class ProxyPayGateway implements PaymentGateway {
   private readonly baseUrl: string
   private readonly webhookSecret: string | undefined
   private readonly callbackUrl: string | undefined
+  private readonly expiryDays: number
   private readonly fetchImpl: FetchLike
 
   constructor(options: ProxyPayOptions) {
@@ -87,6 +94,7 @@ export class ProxyPayGateway implements PaymentGateway {
     // is on unless the caller explicitly opts out with webhookSecret: ''.
     this.webhookSecret = options.webhookSecret ?? options.apiKey
     this.callbackUrl = options.callbackUrl
+    this.expiryDays = options.expiryDays ?? 30
     const f = options.fetch ?? (globalThis.fetch as FetchLike | undefined)
     if (!f) throw new Error('ProxyPayGateway: no fetch available — pass options.fetch')
     this.fetchImpl = f
@@ -127,15 +135,16 @@ export class ProxyPayGateway implements PaymentGateway {
       ...(this.callbackUrl ? { callback_url: this.callbackUrl } : {}),
       ...(request.metadata ?? {}),
     }
+    // ProxyPay requires `end_datetime`, so always send one — from the request's
+    // expiresAt, or a default `expiryDays` window from now. It's a date
+    // (YYYY-MM-DD): a full ISO datetime can be rejected and `toISOString()` would
+    // also shift the day into UTC.
+    const expiresAt = request.expiresAt ?? Date.now() + this.expiryDays * 86_400_000
     await this.request('PUT', `/references/${referenceId}`, {
       // ProxyPay's v2 API expects `amount` as a JSON number, not a string.
       amount: Number(request.amount.toFixed(2)),
       custom_fields: customFields,
-      // `end_datetime` is a date (YYYY-MM-DD); sending a full ISO datetime can be
-      // rejected and `toISOString()` would also shift the day into UTC.
-      ...(request.expiresAt
-        ? { end_datetime: new Date(request.expiresAt).toISOString().slice(0, 10) }
-        : {}),
+      end_datetime: new Date(expiresAt).toISOString().slice(0, 10),
     })
     return {
       id: referenceId,

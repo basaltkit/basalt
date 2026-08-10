@@ -57,8 +57,8 @@ app.post('/webhooks/proxypay', async (request, reply) => {
 
 ## API surface used
 
-- `POST /reference_ids` — reserve the next reference id
-- `PUT /references/{id}` — activate it with `amount`, `custom_fields`, `end_datetime`
+- `POST /reference_ids` — reserve the next reference id (skipped if you pass a `reference`)
+- `PUT /references/{id}` — activate it with `amount`, `custom_fields`, `end_datetime` (**required** — defaults to `expiryDays` from now, 30 days, when `expiresAt` is omitted)
 - ProxyPay `payment` webhook → `payment.succeeded`
 
 ## Recurring billing
