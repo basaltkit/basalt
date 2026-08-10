@@ -149,20 +149,7 @@ export class ProxyPayGateway implements PaymentGateway {
     }
   }
 
-  /** Best-effort status poll: an active (unpaid) reference exists; a 404 means it's gone (paid/expired). */
-  async getPayment(id: string): Promise<PaymentInstruction> {
-    try {
-      const r = (await this.request('GET', `/references/${id}`)) as { amount?: string | number } | undefined
-      return {
-        id,
-        status: 'pending',
-        reference: { entity: this.entity, reference: id, amount: Number(r?.amount ?? 0) },
-      }
-    } catch (error) {
-      if (error instanceof ProxyPayRequestError && error.httpStatus === 404) {
-        return { id, status: 'paid' }
-      }
-      throw error
-    }
-  }
+  // No status-poll method: ProxyPay confirms payment via the `payment` webhook
+  // (see verifyWebhook), and `GET /references/{id}` 404s even for active,
+  // unpaid references — so a poll can't reliably tell paid from pending.
 }
