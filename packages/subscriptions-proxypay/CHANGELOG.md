@@ -1,5 +1,12 @@
 # @basaltkit/subscriptions-proxypay
 
+## 1.0.1
+
+### Patch Changes
+
+- Fix reference reservation: ProxyPay uses **POST** `/reference_ids` (1.0.0 used
+  GET, which 404s). Verified against the live ProxyPay API.
+
 ## 1.0.0
 
 ### Initial release

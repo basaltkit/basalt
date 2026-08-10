@@ -89,9 +89,9 @@ export class ProxyPayGateway implements PaymentGateway {
     return text ? JSON.parse(text) : undefined
   }
 
-  /** Reserve the next available reference id from ProxyPay. */
+  /** Reserve the next available reference id from ProxyPay (POST /reference_ids). */
   private async reserveReferenceId(): Promise<string> {
-    const r = await this.request('GET', '/reference_ids')
+    const r = await this.request('POST', '/reference_ids')
     // The endpoint returns the id (a number), or an array/object in some setups.
     if (typeof r === 'number' || typeof r === 'string') return String(r)
     if (Array.isArray(r) && r.length) return String(r[0])
