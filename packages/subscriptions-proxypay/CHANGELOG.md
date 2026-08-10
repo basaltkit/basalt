@@ -1,5 +1,26 @@
 # @basaltkit/subscriptions-proxypay
 
+## 1.0.3
+
+### Patch Changes
+
+- **Fix `verifyWebhook` for the real ProxyPay payload (critical).** ProxyPay
+  posts a **flat** payment object — top-level `reference_id`, `amount`, `id`,
+  `custom_fields` (the same shape as a `GET /payments` item), signed with
+  HMAC-SHA256 in the `x-signature` header. The previous version expected a nested
+  `{ event_type: 'payment', data: {...} }` shape and returned `null` for every
+  real callback, so payments were never confirmed. It now reads the flat shape.
+- **Default the webhook signing secret to the API key.** ProxyPay signs the
+  callback with your API key, so `webhookSecret` now defaults to it and
+  verification is on out of the box; pass `webhookSecret: ''` to disable.
+- **Send `amount` as a JSON number** (was a `"0.00"` string) and **`end_datetime`
+  as a date** (`YYYY-MM-DD`, was a full ISO datetime that could shift a day in
+  UTC) — both matching a known-good production integration.
+- **Honor a caller-supplied `reference`** as the ProxyPay reference id, skipping
+  the extra `POST /reference_ids` round-trip when you already have an id.
+- **Add `callbackUrl`** option, echoed on the reference as
+  `custom_fields.callback_url`.
+
 ## 1.0.2
 
 ### Patch Changes

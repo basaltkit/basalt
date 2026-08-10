@@ -16,6 +16,11 @@ import {
  *
  * There's no card-on-file recurring charge — model recurring billing by creating
  * one payment (reference) per period.
+ *
+ * The `payment` callback is a **flat** JSON object (the same shape as an item in
+ * `GET /payments`): top-level `reference_id`, `amount`, `id`, `custom_fields` —
+ * signed with HMAC-SHA256 in the `x-signature` header. `verifyWebhook` validates
+ * it and returns a `payment.succeeded` event.
  */
 
 /** Minimal fetch surface — the global `fetch` (Node 18+/browsers) is assignable. */
@@ -34,11 +39,20 @@ export interface ProxyPayOptions {
   /** Override the base URL entirely. */
   baseUrl?: string
   /**
-   * Shared secret to verify webhook signatures (HMAC-SHA256 of the raw body,
-   * hex). Omit to skip verification (only if you secure the callback another way,
-   * e.g. HTTP Basic auth on the URL). Configure the matching secret in ProxyPay.
+   * Secret used to verify webhook signatures — HMAC-SHA256 of the raw request
+   * body, hex-encoded, delivered in the `x-signature` header. **Defaults to your
+   * API key**, which is what ProxyPay signs the callback with, so verification is
+   * on out of the box. Override only if you configured a different secret; pass
+   * an empty string (`''`) to disable verification entirely.
    */
   webhookSecret?: string
+  /**
+   * Optional callback URL echoed back on the webhook as `custom_fields.callback_url`.
+   * ProxyPay's delivery target is normally set account-wide in the dashboard; this
+   * just tags each reference so the payload carries the URL. Per-reference callers
+   * can also pass it through `PaymentRequest.metadata`.
+   */
+  callbackUrl?: string
   /** Injected fetch. Defaults to the global `fetch`. */
   fetch?: FetchLike
 }
@@ -62,13 +76,17 @@ export class ProxyPayGateway implements PaymentGateway {
   private readonly entity: string
   private readonly baseUrl: string
   private readonly webhookSecret: string | undefined
+  private readonly callbackUrl: string | undefined
   private readonly fetchImpl: FetchLike
 
   constructor(options: ProxyPayOptions) {
     this.apiKey = options.apiKey
     this.entity = options.entity
     this.baseUrl = options.baseUrl ?? (options.sandbox ? SANDBOX : PROD)
-    this.webhookSecret = options.webhookSecret
+    // ProxyPay signs the callback with the API key; default to it so verification
+    // is on unless the caller explicitly opts out with webhookSecret: ''.
+    this.webhookSecret = options.webhookSecret ?? options.apiKey
+    this.callbackUrl = options.callbackUrl
     const f = options.fetch ?? (globalThis.fetch as FetchLike | undefined)
     if (!f) throw new Error('ProxyPayGateway: no fetch available — pass options.fetch')
     this.fetchImpl = f
@@ -100,16 +118,24 @@ export class ProxyPayGateway implements PaymentGateway {
   }
 
   async createPayment(request: PaymentRequest): Promise<PaymentInstruction> {
-    const referenceId = await this.reserveReferenceId()
+    // Honor a caller-supplied reference (e.g. an external order id) and skip the
+    // extra `POST /reference_ids` round-trip; otherwise reserve one from ProxyPay.
+    const referenceId = request.reference ?? (await this.reserveReferenceId())
     const customFields: Record<string, string> = {
       billable_id: request.billableId,
       ...(request.reference ? { reference: request.reference } : {}),
+      ...(this.callbackUrl ? { callback_url: this.callbackUrl } : {}),
       ...(request.metadata ?? {}),
     }
     await this.request('PUT', `/references/${referenceId}`, {
-      amount: request.amount.toFixed(2),
+      // ProxyPay's v2 API expects `amount` as a JSON number, not a string.
+      amount: Number(request.amount.toFixed(2)),
       custom_fields: customFields,
-      ...(request.expiresAt ? { end_datetime: new Date(request.expiresAt).toISOString() } : {}),
+      // `end_datetime` is a date (YYYY-MM-DD); sending a full ISO datetime can be
+      // rejected and `toISOString()` would also shift the day into UTC.
+      ...(request.expiresAt
+        ? { end_datetime: new Date(request.expiresAt).toISOString().slice(0, 10) }
+        : {}),
     })
     return {
       id: referenceId,
@@ -125,31 +151,32 @@ export class ProxyPayGateway implements PaymentGateway {
       const b = Buffer.from(expected, 'utf8')
       if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
     }
+    // ProxyPay POSTs a FLAT payment object when a reference is paid — the same
+    // shape as an item in `GET /payments`: top-level `reference_id`, `amount`,
+    // `id`, `custom_fields`. There is no `event_type` and no nested `data`.
     const payload = JSON.parse(rawBody) as {
       id?: string | number
-      event_type?: string
-      data?: {
-        reference_id?: string | number
-        amount?: string | number
-        transaction_id?: string | number
-        custom_fields?: Record<string, string>
-      }
+      reference_id?: string | number
+      amount?: string | number
+      transaction_id?: string | number
+      datetime?: string
+      custom_fields?: Record<string, string>
     }
-    // ProxyPay emits a `payment` event when a reference is paid; nothing else acts on us.
-    if (payload.event_type !== 'payment') return null
-    const d = payload.data ?? {}
+    // Not a payment callback (no reference id) — ignore.
+    if (payload.reference_id == null) return null
+    const cf = payload.custom_fields ?? {}
     return {
-      id: String(payload.id ?? d.transaction_id ?? d.reference_id),
+      id: String(payload.id ?? payload.transaction_id ?? payload.reference_id),
       type: 'payment.succeeded',
-      paymentId: String(d.reference_id),
-      amount: Number(d.amount),
-      ...(d.custom_fields?.billable_id ? { billableId: d.custom_fields.billable_id } : {}),
-      ...(d.custom_fields?.reference ? { reference: d.custom_fields.reference } : {}),
+      paymentId: String(payload.reference_id),
+      amount: Number(payload.amount),
+      ...(cf.billable_id ? { billableId: cf.billable_id } : {}),
+      ...(cf.reference ? { reference: cf.reference } : {}),
       raw: payload,
     }
   }
 
-  // No status-poll method: ProxyPay confirms payment via the `payment` webhook
-  // (see verifyWebhook), and `GET /references/{id}` 404s even for active,
+  // No status-poll method: ProxyPay confirms payment via the flat `payment`
+  // callback (see verifyWebhook), and `GET /references/{id}` 404s even for active,
   // unpaid references — so a poll can't reliably tell paid from pending.
 }
