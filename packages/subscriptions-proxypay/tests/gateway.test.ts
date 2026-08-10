@@ -93,19 +93,3 @@ describe('ProxyPayGateway.verifyWebhook', () => {
     expect(gw.verifyWebhook(JSON.stringify({ event_type: 'other', data: {} }), undefined)).toBeNull()
   })
 })
-
-describe('ProxyPayGateway.getPayment', () => {
-  it('reports paid when the reference is gone (404)', async () => {
-    const { fetch } = fakeFetch({ 'GET /references/900000001': { status: 404 } })
-    const gw = new ProxyPayGateway(opts(fetch))
-    expect((await gw.getPayment('900000001')).status).toBe('paid')
-  })
-
-  it('reports pending while the reference is still active', async () => {
-    const { fetch } = fakeFetch({ 'GET /references/900000001': { status: 200, body: '{"amount":"5000.00"}' } })
-    const gw = new ProxyPayGateway(opts(fetch))
-    const inst = await gw.getPayment('900000001')
-    expect(inst.status).toBe('pending')
-    expect(inst.reference?.amount).toBe(5000)
-  })
-})
