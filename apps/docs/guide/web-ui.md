@@ -3,15 +3,17 @@
 Basalt gives you two ways to put a screen in front of your API:
 
 1. **[Self-contained HTML pages](/guide/admin-pages)** — drop-in, build-free pages (`teamsUiRoutes`, `billingUiRoutes`, `apiKeysUiRoutes`, the audit viewer). No frontend project, no npm install on the client. Great for internal/admin screens.
-2. **A real React frontend** — a Vite + React app that talks to your API through a type-safe SDK and renders admin tables/forms from your Zod schemas. This is what `create-basalt --ui` scaffolds, and what this guide covers.
+2. **A real React frontend** — a Vite + React app that talks to your API through a type-safe SDK, with the `@basaltkit/admin` components on hand to render tables and forms straight from your Zod schemas. This is what `create-basalt --ui` scaffolds, and what this guide covers.
 
 [[toc]]
 
 ## The `--ui` scaffold
 
 ```bash
-pnpm create basalt my-app --ui          # add --auth for the ready-made auth flows
+pnpm create basalt my-app --ui          # auth is on by default → the ready-made auth flows come too
 ```
+
+Authentication is **on by default** in the scaffold, so `--ui` gives you the auth screens as well; pass `--no-auth` if you want the frontend without them. Requires **pnpm** — the `web/` frontend is a workspace member (the scaffolder switches to pnpm automatically if you invoked it with another manager).
 
 Alongside the API, this generates a **`web/`** frontend wired end to end:
 
@@ -32,9 +34,9 @@ web/
 - **[`@basaltkit/sdk`](#the-type-safe-sdk)** — the type-safe client to your API.
 - The Vite dev server **proxies `/api`** to the backend, so the browser talks same-origin — no CORS to configure.
 
-`web` is registered as a pnpm workspace member, so `pnpm install` at the root resolves it. Run the backend and `pnpm --filter web dev` (or the root `dev` script) and open the printed URL.
+`web` is registered as a pnpm workspace member (named `<your-app>-web`), so `pnpm install` at the root resolves it. Run the backend with `pnpm dev` (API on `:3000`), then the frontend with `pnpm --filter my-app-web dev` — Vite serves it on `http://localhost:5180` and proxies `/api` to the backend.
 
-With **`--auth`**, `App.tsx` ships the full standard flows out of the box: sign in (with a TOTP challenge), register, forgot-password, reset-password via the emailed `?token` link, and a dashboard that manages two-factor (enroll → secret/otpauth → activate → recovery codes → disable).
+With auth enabled (the default), `App.tsx` ships the full standard flows out of the box: sign in (with a TOTP challenge), register, forgot-password, reset-password via the emailed `?token` link, and a dashboard that manages two-factor (enroll → secret/otpauth → activate → recovery codes → disable). Pass `--no-auth` to scaffold the frontend without them.
 
 ## The type-safe SDK
 
@@ -70,7 +72,18 @@ const all     = await client.projects.list()
 The client **mirrors the shape** of your `api` object, TypeScript checks the arguments, and the server's response is **validated against the schema** at runtime — a mismatch throws `CLIENT_RESPONSE_MISMATCH` instead of silently returning wrong data. Change a field on the backend and the frontend fails to compile, not in production.
 
 ::: tip Auth & token refresh
-Pass a `token` and a `refresh` callback to `createClient`. On a `401` the client calls `refresh` once and retries with the new token — transparent to the caller. The `--ui --auth` scaffold wires this to the auth routes for you.
+Pass a `getToken` callback (returns the current access token, sent as `Authorization: Bearer`) and a `refresh` callback to `createClient`. On a `401` the client calls `refresh` once and retries with the new token — transparent to the caller; `refresh` returns the new token, or `null` to give up. The `--ui` scaffold wires this to the auth routes for you.
+
+```ts
+const client = createClient(api, {
+  baseUrl: '/api',
+  getToken: () => localStorage.getItem('accessToken') ?? undefined,
+  refresh: async () => {
+    /* call POST /auth/refresh, store the new tokens, return the access token or null */
+    return null
+  },
+})
+```
 :::
 
 ## Admin panels from your Zod schemas
@@ -133,7 +146,8 @@ export const projectsSource: AdminDataSource = {
 
 ```tsx
 // ProjectsPage.tsx
-import { DataTable, ResourceForm, useList } from '@basaltkit/admin-shadcn' // or @basaltkit/admin-react
+import { DataTable, ResourceForm } from '@basaltkit/admin-shadcn' // or @basaltkit/admin-react (unstyled)
+import { useList } from '@basaltkit/admin-react'                  // the hook lives in admin-react
 import { projects } from './resources'
 import { projectsSource } from './source'
 
@@ -157,7 +171,7 @@ export function ProjectsPage() {
 }
 ```
 
-`useList(source)` loads the list on mount and hands back `{ data, loading, error, reload }`. `DataTable` formats cells (booleans as Yes/No, dates as `2026-08-07`); `ResourceForm` renders one input per field with per-field validation and error messages driven by your `createSchema`. Swap the import between `@basaltkit/admin-react` (unstyled) and `@basaltkit/admin-shadcn` (styled) — **the props are identical**.
+`useList(source)` loads the list on mount and hands back `{ data, loading, error, reload }`. `DataTable` formats cells (booleans as Yes/No, dates as `2026-08-07`); `ResourceForm` renders one input per field with per-field validation and error messages driven by your `createSchema` — it only calls `onSubmit` with valid data. Swap the `DataTable`/`ResourceForm` import between `@basaltkit/admin-react` (unstyled) and `@basaltkit/admin-shadcn` (styled) — **the props are identical**. The `useList` hook and `formatCell` helper are exported only from `@basaltkit/admin-react`, so import them from there regardless of which component skin you use.
 
 ### The shadcn primitives
 

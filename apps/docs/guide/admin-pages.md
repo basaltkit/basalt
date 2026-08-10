@@ -17,15 +17,58 @@ authenticated for the underlying routes — protect the page with your own admin
 guard where appropriate. There's nothing to compile: mount the routes and open
 the URL.
 
+::: warning A UI page needs its data plugin
+Each page is only a viewer over JSON routes — it renders nothing without the
+plugin that serves those routes. Pair `apiKeysUiRoutes()` with
+`apiKeysPlugin()`, `teamsUiRoutes()` with `teamsPlugin()`, `billingUiRoutes()`
+with `subscriptionsPlugin()`, and `auditViewerRoutes()` with **both**
+`auditPlugin()` and `auditViewerPlugin()`.
+:::
+
+Here is the complete wiring — every plugin registered, then every route mounted:
+
 ```ts
-fastifyPlugin({
-  routes: [
-    ...authRoutes(), ...apiKeyRoutes(), ...apiKeysUiRoutes(),   // → /apikeys/ui
-    ...teamRoutes(), ...teamsUiRoutes(),                        // → /team/ui
-    ...billingRoutes({ successUrl, cancelUrl }), ...billingUiRoutes({ plans }), // → /billing/ui
-    ...auditViewerRoutes(),                                     // → /audit/view
-  ],
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin } from '@basaltkit/fastify'
+import {
+  authPlugin, authRoutes, apiKeysPlugin, apiKeyRoutes, MemoryUserSource,
+} from '@basaltkit/auth'
+import { teamsPlugin, teamRoutes } from '@basaltkit/teams'
+import {
+  subscriptionsPlugin, billingRoutes, definePlans, StripeBillingGateway,
+} from '@basaltkit/subscriptions'
+import { auditPlugin } from '@basaltkit/audit'
+import { apiKeysUiRoutes } from '@basaltkit/api-keys-ui'
+import { teamsUiRoutes } from '@basaltkit/teams-ui'
+import { billingUiRoutes } from '@basaltkit/billing-ui'
+import { auditViewerPlugin, auditViewerRoutes } from '@basaltkit/audit-viewer'
+
+const plans = definePlans({
+  free: { price: 0, features: { projects: 3 } },
+  pro: { price: 29, trial: '14d', features: { projects: 50, api: true } },
 })
+
+const app = await createApp({
+  plugins: [
+    // ...tenancyPlugin — the tenant behind each UI's data
+    authPlugin({ users: new MemoryUserSource(), secret: process.env.AUTH_SECRET! }),
+    apiKeysPlugin(),
+    teamsPlugin(),
+    subscriptionsPlugin({ plans, gateway: new StripeBillingGateway({ /* … */ }), fallbackPlan: 'free' }),
+    auditPlugin(),
+    auditViewerPlugin(),
+    fastifyPlugin({
+      routes: [
+        ...authRoutes(),
+        ...apiKeyRoutes(), ...apiKeysUiRoutes(),   // → /apikeys/ui
+        ...teamRoutes(), ...teamsUiRoutes(),        // → /team/ui
+        ...billingRoutes({ successUrl: 'https://app/ok', cancelUrl: 'https://app/billing' }),
+        ...billingUiRoutes({ plans }),              // → /billing/ui
+        ...auditViewerRoutes(),                     // → /audit/view
+      ],
+    }),
+  ],
+}).boot()
 ```
 
 Every helper takes the same shape of options: `path?` (where to mount),
@@ -90,5 +133,23 @@ your own way, embed it, or host it on another framework.
 
 These pages are convenience over your existing routes — they enforce nothing
 new. Put them behind authentication (they're mounted with `meta.auth`) and add a
-permissions guard for admin-only screens. Because they fetch same-origin with no
-embedded secrets, they're safe to serve from your app's origin.
+guard for admin-only screens. The underlying data routes already enforce their
+own guards (e.g. `teamRoutes()`'s admin actions require `teamRole: 'admin'`), but
+the page itself is worth gating too — mount your own copy with a permissions or
+team-role guard so non-admins never see it:
+
+```ts
+import { route } from '@basaltkit/fastify'
+import { teamsPageHtml } from '@basaltkit/teams-ui'
+
+// Serve the page yourself behind an admin guard instead of teamsUiRoutes()
+route({
+  method: 'GET',
+  url: '/team/ui',
+  meta: { auth: true, teamRole: 'admin' }, // or meta.can: 'team:manage' with @basaltkit/permissions
+  handler: () => teamsPageHtml({ title: 'Team' }),
+})
+```
+
+Because these pages fetch same-origin with no embedded secrets, they're safe to
+serve from your app's origin.

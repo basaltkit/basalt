@@ -2,33 +2,63 @@
 
 ## Scaffold a new app
 
-The fastest way to start is the project scaffolder. It generates a
-production-shaped app and only includes what you pick — nothing dead ships.
+The fastest way to start is the project scaffolder, `create-basalt`. It
+generates a production-shaped app and only includes what you pick — nothing dead
+ships. Your package manager's `create` command downloads and runs it on the
+spot — nothing to install first:
 
 ```bash
-npx create-basalt my-saas
+pnpm create basalt my-saas
+# or
+npm create basalt my-saas
+# or
+yarn create basalt my-saas
+# or
+bun create basalt my-saas
 ```
 
-Flags let you shape the stack:
+Run it **without a name** in a terminal to answer prompts interactively
+(multi-tenancy, auth, billing, web UI, CLI, install, git). Pass flags to skip
+the questions:
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--no-tenancy` | tenancy **on** | Skip multi-tenancy (`@basaltkit/tenancy`) |
+| `--no-auth` | auth **on** | Skip authentication (`@basaltkit/auth`, `APP_SECRET`, `/auth/*`) |
+| `--billing` | off | Include subscriptions/plans (`@basaltkit/subscriptions`) |
+| `--ui` | off | Add a React + shadcn `web/` frontend — see [Web UI](/guide/web-ui). Forces pnpm |
+| `--cli` | off | Add the `basalt` CLI (`make:*` generators + built-in commands) |
+| `--install` | off | Install dependencies at the end |
+| `--git` | off | `git init` + an initial commit |
+| `--pm=<mgr>` | autodetect | Force `pnpm` \| `npm` \| `yarn` \| `bun` |
+| `--dir=<path>` | `./<name>` | Destination folder |
+| `-y`, `--yes` | — | Accept all defaults, no prompts |
 
 ```bash
-npx create-basalt my-saas --no-tenancy   # skip multi-tenancy
-npx create-basalt my-saas --no-auth      # skip authentication
-npx create-basalt my-saas --billing      # include subscriptions
+pnpm create basalt my-saas --billing --cli --install --git   # full stack, installed and committed
+npm create basalt service-api --no-tenancy --no-auth         # minimal API
 ```
 
-Then:
+By default the scaffolder only writes files — it doesn't install dependencies or
+touch git unless you add `--install` / `--git`. So the usual next steps are:
 
 ```bash
 cd my-saas
 pnpm install
-pnpm dev        # http://localhost:3000/health
+pnpm dev        # http://localhost:3000  (health check at /health)
 pnpm test
 ```
 
 The generated project boots an app with typed routes, structured logging, a
 health check and — unless you opted out — multi-tenancy (header and subdomain
-resolvers) and authentication.
+resolvers) and authentication. For a guided end-to-end run, see
+[Getting Started](/guide/getting-started).
+
+::: warning `--ui` requires pnpm
+The `web/` frontend is a member of a pnpm workspace (`pnpm-workspace.yaml`), which
+npm, yarn and bun can't install or run. If you request `--ui` with another
+manager, the scaffolder switches to pnpm automatically.
+:::
 
 ## Choose an HTTP adapter
 
