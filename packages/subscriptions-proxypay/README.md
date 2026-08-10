@@ -54,7 +54,7 @@ app.post('/webhooks/proxypay', async (request, reply) => {
 
 ## API surface used
 
-- `GET /reference_ids` — reserve the next reference id
+- `POST /reference_ids` — reserve the next reference id
 - `PUT /references/{id}` — activate it with `amount`, `custom_fields`, `end_datetime`
 - `GET /references/{id}` — status poll (`getPayment`, a webhook fallback)
 - ProxyPay `payment` webhook → `payment.succeeded`
