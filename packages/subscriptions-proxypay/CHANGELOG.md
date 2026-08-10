@@ -1,5 +1,14 @@
 # @basaltkit/subscriptions-proxypay
 
+## 1.0.2
+
+### Patch Changes
+
+- Remove `getPayment`: ProxyPay `GET /references/{id}` 404s even for active,
+  unpaid references, so the poll could report a pending reference as paid.
+  Payment confirmation is via the `payment` webhook (`verifyWebhook`). Verified
+  the createPayment flow against the live ProxyPay API.
+
 ## 1.0.1
 
 ### Patch Changes
