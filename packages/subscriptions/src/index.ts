@@ -57,6 +57,19 @@ export {
   type PaymentApplyResult,
   type PaymentLedgerOptions,
 } from './payment.js'
+
+export {
+  RecurringReferenceBilling,
+  MemoryRecurringStore,
+  addInterval,
+  type RecurringStore,
+  type RecurringSubscription,
+  type RecurringInterval,
+  type RecurringStatus,
+  type RecurringBillingOptions,
+  type SubscribeInput,
+  type HandleEventResult,
+} from './recurring.js'
 export {
   StripeBillingGateway,
   StripeRequestError,

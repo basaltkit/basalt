@@ -239,8 +239,16 @@ export class PaymentLedger {
    * Apply a verified `PaymentEvent` idempotently. Dedupes by `event.id`; on a
    * fresh event, flips the ledger record to paid/failed. If persisting fails the
    * dedupe claim is released so the gateway's retry can reprocess.
+   *
+   * `onFresh` runs **inside the idempotency claim**, after the ledger is
+   * updated — use it for domain side effects (activate a subscription, mark a
+   * booking paid) that must apply exactly once with the payment. If it throws,
+   * the claim is released so the whole thing reprocesses on the gateway's retry.
    */
-  async apply(event: PaymentEvent): Promise<PaymentApplyResult> {
+  async apply(
+    event: PaymentEvent,
+    onFresh?: (record: PaymentRecord | undefined, event: PaymentEvent) => Promise<void> | void,
+  ): Promise<PaymentApplyResult> {
     const fresh = await this.webhooks.markProcessed(event.id)
     if (!fresh) return { fresh: false }
     try {
@@ -250,6 +258,7 @@ export class PaymentLedger {
         ...(event.raw !== undefined ? { raw: event.raw } : {}),
       })
       const record = await this.store.get(event.paymentId)
+      if (onFresh) await onFresh(record, event)
       return { fresh: true, ...(record ? { record } : {}) }
     } catch (error) {
       await this.webhooks.release(event.id)
