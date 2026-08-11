@@ -56,6 +56,9 @@ export {
   type NewPayment,
   type PaymentApplyResult,
   type PaymentLedgerOptions,
+  type PaymentLedgerEvents,
+  type PaymentLedgerEvent,
+  type PaymentLedgerListener,
 } from './payment.js'
 
 export {
