@@ -329,6 +329,13 @@ const settled = await subscriptions.expireTrials()
 
 ## Angolan / reference payments (PaymentGateway)
 
+::: tip Full guide
+This is a summary. For the complete story — the money model, the idempotent
+ledger, lifecycle hooks, durable Prisma/SQLite stores, the Redis dedupe
+hot-path, and recurring billing — see
+**[Reference & mobile-money payments](/guide/reference-payments)**.
+:::
+
 Stripe's `BillingGateway` models **card-on-file subscriptions**. Angolan
 providers work differently: there is no stored card and no self-service portal.
 The customer pays a **Reference** at an ATM, on Multicaixa Express, or in a bank
