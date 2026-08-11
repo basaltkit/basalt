@@ -67,6 +67,61 @@ describe('PaymentLedger', () => {
     expect(result.record?.status).toBe('failed')
   })
 
+  it('emits recorded on created and confirmed once on a fresh apply (not on dedup)', async () => {
+    const ledger = new PaymentLedger()
+    const recorded: string[] = []
+    const confirmed: string[] = []
+    ledger.on('recorded', ({ payment }) => {
+      recorded.push(payment.id)
+    })
+    ledger.on('confirmed', ({ record, event }) => {
+      confirmed.push(`${event.paymentId}:${record?.status}`)
+    })
+
+    await ledger.created(inst, req)
+    expect(recorded).toEqual(['pay_1'])
+
+    await ledger.apply(paid())
+    await ledger.apply(paid()) // duplicate — must not re-emit
+    expect(confirmed).toEqual(['pay_1:paid'])
+  })
+
+  it('emits failed for a failed payment', async () => {
+    const ledger = new PaymentLedger()
+    const seen: string[] = []
+    ledger.on('failed', ({ event }) => {
+      seen.push(event.paymentId)
+    })
+    await ledger.created(inst, req)
+    await ledger.apply(paid({ id: 'evt-x', type: 'payment.failed' }))
+    expect(seen).toEqual(['pay_1'])
+  })
+
+  it('a throwing listener does not roll back the payment (reported via onListenerError)', async () => {
+    const errors: unknown[] = []
+    const ledger = new PaymentLedger({ onListenerError: (e) => errors.push(e) })
+    ledger.on('confirmed', () => {
+      throw new Error('notify failed')
+    })
+    await ledger.created(inst, req)
+    const result = await ledger.apply(paid())
+    expect(result.fresh).toBe(true)
+    expect(result.record?.status).toBe('paid') // payment still applied
+    expect(errors).toHaveLength(1)
+  })
+
+  it('unsubscribe stops further events', async () => {
+    const ledger = new PaymentLedger()
+    let count = 0
+    const off = ledger.on('confirmed', () => {
+      count++
+    })
+    off()
+    await ledger.created(inst, req)
+    await ledger.apply(paid())
+    expect(count).toBe(0)
+  })
+
   it('releases the dedupe claim when persisting throws, so a retry reprocesses', async () => {
     let fail = true
     const flaky = new MemoryPaymentStore()
