@@ -1,5 +1,16 @@
 # @basaltkit/subscriptions-sqlite
 
+## 2.1.0
+
+### Minor Changes
+
+- Add durable **payment ledger + recurring** stores (parity with
+  `@basaltkit/subscriptions-prisma`): `SqlitePaymentStore` (`PaymentStore`) and
+  `SqliteRecurringStore` (`RecurringStore`), plus the `sqlitePaymentStores()`
+  factory. `create` is an idempotent `INSERT OR IGNORE`; money is a 64-bit
+  `INTEGER` (minor units). New `payments` and `recurring_subscriptions` tables in
+  the migration.
+
 ## 2.0.0
 
 ### Major Changes

@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/subscriptions-sqlite",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Durable, SQLite-backed implementations of the @basaltkit/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) built on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",
