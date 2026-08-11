@@ -1,5 +1,22 @@
 # @basaltkit/subscriptions
 
+## 1.2.0
+
+### Minor Changes
+
+- Add **recurring reference billing** for card-less gateways (ProxyPay, AppyPay,
+  Multicaixa/EMIS): `RecurringReferenceBilling` models a subscription as one
+  payment reference per period. `subscribe` issues the first reference,
+  `issueNext` issues the next (for the ones `due()` returns), and `handleEvent`
+  extends `paidThrough` by one interval when a reference is paid (or marks
+  `past_due` on failure) — applied exactly once via the payment ledger. Ships
+  with `MemoryRecurringStore` (`RecurringStore` to back it durably) and an
+  `addInterval` helper.
+- `PaymentLedger.apply` now takes an optional `onFresh` callback that runs inside
+  the idempotency claim, so a domain side effect (activate a subscription, mark a
+  booking paid) applies atomically with the payment and is released together on
+  failure.
+
 ## 1.1.0
 
 ### Minor Changes
