@@ -153,6 +153,62 @@ filterable fields as `keyword`; `search` uses `multi_match` with an exact
 search carries a mandatory `tenantId` filter** — the same isolation guarantee as
 every other driver.
 
+::: warning Auth: password vs API key
+`username` + `password` use HTTP **Basic auth**. `apiKey` sends the header
+`Authorization: ApiKey <key>` and expects an **API key** from
+`POST /_security/api_key` — not your user's password. Passing the password as
+`apiKey` returns `401`.
+:::
+
+## Testing your Elasticsearch connection
+
+Before (or after) wiring it into your app, confirm the cluster and credentials
+work end-to-end.
+
+**1. Ping the cluster** — is it reachable and are the credentials valid?
+
+```bash
+curl -u elastic:$ELASTICSEARCH_PASSWORD http://localhost:9200     # Basic auth
+curl -H "Authorization: ApiKey $ES_API_KEY" http://localhost:9200 # or an API key
+```
+
+A JSON body with `version.number` means you're in. A `401 security_exception`
+means the credentials are wrong.
+
+**2. Smoke-test the driver** — index a throwaway document, search it, verify
+tenant isolation, then clean up. Save as `smoke.mjs` and run
+`node --env-file=.env smoke.mjs`:
+
+```ts
+import { ElasticsearchDriver } from '@basaltkit/search-elasticsearch'
+
+const driver = new ElasticsearchDriver({
+  node: process.env.ELASTICSEARCH_URL,
+  username: process.env.ELASTICSEARCH_USERNAME, // or apiKey: process.env.ES_API_KEY
+  password: process.env.ELASTICSEARCH_PASSWORD,
+  refresh: 'wait_for', // make writes visible immediately (tests only)
+})
+
+const INDEX = 'basalt_smoke_test'
+await driver.register({ name: INDEX, fields: ['title'], filterable: [] })
+await driver.index(INDEX, { id: '1', tenantId: 'demo', title: 'Hello Basalt' })
+
+const found = await driver.search(INDEX, { tenantId: 'demo', q: 'hello' })
+console.log('found:', found.total, found.hits[0]?.document.title) // → 1 'Hello Basalt'
+
+const other = await driver.search(INDEX, { tenantId: 'other', q: 'hello' })
+console.log('other tenant sees:', other.total) // → 0  (isolation holds)
+
+await driver.clear(INDEX) // leave no trace
+```
+
+Seeing `found: 1 'Hello Basalt'` and `other tenant sees: 0` confirms indexing,
+relevance, and tenant isolation all work against your cluster.
+
+**3. In the app** — `searchPlugin` calls `register` for every index at boot, so a
+bad connection or bad credentials **fail fast at startup**. If the app boots, the
+connection is good; then hit your search route.
+
 ## Filters and paging
 
 ```ts
