@@ -126,9 +126,13 @@ export class ProxyPayGateway implements PaymentGateway {
   }
 
   async createPayment(request: PaymentRequest): Promise<PaymentInstruction> {
-    // Honor a caller-supplied reference (e.g. an external order id) and skip the
-    // extra `POST /reference_ids` round-trip; otherwise reserve one from ProxyPay.
-    const referenceId = request.reference ?? (await this.reserveReferenceId())
+    // A ProxyPay reference id is numeric. Use a caller-supplied `reference` as
+    // the id only when it's numeric (skipping the `POST /reference_ids` round-
+    // trip); a logical order id (e.g. from recurring billing) is kept in
+    // `custom_fields.reference` while ProxyPay assigns a numeric id.
+    const numericSupplied =
+      request.reference && /^\d+$/.test(request.reference) ? request.reference : undefined
+    const referenceId = numericSupplied ?? (await this.reserveReferenceId())
     const customFields: Record<string, string> = {
       billable_id: request.billableId,
       ...(request.reference ? { reference: request.reference } : {}),

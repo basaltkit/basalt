@@ -66,6 +66,23 @@ describe('ProxyPayGateway.createPayment', () => {
     expect(JSON.parse(put.body!).custom_fields).toEqual({ billable_id: 'acme', reference: '123456789' })
   })
 
+  it('reserves a numeric id when the supplied reference is non-numeric', async () => {
+    const { fetch, calls } = fakeFetch({
+      'POST /reference_ids': { status: 200, body: '900000123' },
+      'PUT /references/900000123': { status: 204 },
+    })
+    const gw = new ProxyPayGateway(opts(fetch))
+
+    const inst = await gw.createPayment({ billableId: 'acme', amount: 10, reference: 'demo:pro:123' })
+
+    expect(inst.id).toBe('900000123')
+    expect(calls.some((c) => c.path === '/reference_ids')).toBe(true) // reserved, not used as id
+    const put = calls.find((c) => c.method === 'PUT')!
+    expect(put.path).toBe('/references/900000123')
+    // the logical reference is preserved for reconciliation
+    expect(JSON.parse(put.body!).custom_fields.reference).toBe('demo:pro:123')
+  })
+
   it('tags the reference with callback_url when configured', async () => {
     const { fetch, calls } = fakeFetch({ 'PUT /references/55': { status: 204 } })
     const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', sandbox: true, callbackUrl: 'https://app.example/webhook', fetch })
