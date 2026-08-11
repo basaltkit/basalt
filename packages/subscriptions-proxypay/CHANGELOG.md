@@ -1,5 +1,16 @@
 # @basaltkit/subscriptions-proxypay
 
+## 1.0.5
+
+### Patch Changes
+
+- Only treat `PaymentRequest.reference` as the ProxyPay reference id when it's
+  **numeric**. A logical order id (e.g. the `billableId:plan:timestamp` that
+  `RecurringReferenceBilling` sets) is now kept in `custom_fields.reference`
+  while ProxyPay assigns a numeric id via `POST /reference_ids` — previously a
+  non-numeric reference produced `PUT /references/<non-numeric>` and a 400. The
+  numeric-reference fast path (Brilho Total style) is unchanged.
+
 ## 1.0.4
 
 ### Patch Changes
