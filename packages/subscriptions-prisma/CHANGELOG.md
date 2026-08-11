@@ -1,5 +1,13 @@
 # @basaltkit/subscriptions-prisma
 
+## 2.0.0
+
+### Major Changes
+
+- Move to `@basaltkit/subscriptions@2.0` (money in minor units). No code changes
+  in this package — the store interfaces it implements are unchanged; the major
+  bump only widens the peer range to `^2.0.0`.
+
 ## 1.0.5
 
 ### Patch Changes
