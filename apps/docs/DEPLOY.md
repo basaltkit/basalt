@@ -19,13 +19,16 @@ Great free tier, works with private repos. No repo config file needed.
 ```bash
 # 1. build locally (or let CI do it)
 pnpm --filter docs docs:build
-# 2. log in (opens a browser) and deploy the folder
+# 2. log in (opens a browser)
 ! npx wrangler login
-! npx wrangler pages deploy apps/docs/.vitepress/dist --project-name=basalt-docs
+# 3. first time only — create the project
+! npx wrangler pages project create basaltkit-docs --production-branch main
+# 4. deploy the built folder
+! npx wrangler pages deploy apps/docs/.vitepress/dist --project-name=basaltkit-docs
 ```
 
-First run creates the `basalt-docs` project and prints the
-`https://basalt-docs.pages.dev` URL.
+The docs are served at `https://basaltkit-docs.pages.dev`. (Recent `wrangler`
+versions no longer auto-create the project on first deploy — hence step 3.)
 
 ## Netlify
 
