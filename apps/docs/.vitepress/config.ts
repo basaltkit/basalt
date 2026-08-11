@@ -36,6 +36,7 @@ export default defineConfig({
             { text: 'Authentication', link: '/guide/auth' },
             { text: 'Teams', link: '/guide/teams' },
             { text: 'Subscriptions', link: '/guide/billing' },
+            { text: 'Reference & mobile-money payments', link: '/guide/reference-payments' },
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
           ],
