@@ -41,3 +41,35 @@ model WebhookEvent {
 
   @@map("webhook_events")
 }
+
+// For prismaPaymentStores() — PaymentLedger + RecurringReferenceBilling.
+// `amount` is BigInt (minor units / cents) to avoid the 32-bit Int ceiling.
+model Payment {
+  id         String   @id
+  status     String   @default("pending")
+  amount     BigInt
+  billableId String?
+  reference  String?
+  raw        String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status])
+  @@map("payments")
+}
+
+model RecurringSubscription {
+  billableId       String    @id
+  plan             String
+  amount           BigInt
+  interval         String
+  status           String
+  paidThrough      DateTime?
+  pendingPaymentId String?
+  customer         String?
+  createdAt        DateTime
+  updatedAt        DateTime
+
+  @@index([status])
+  @@map("recurring_subscriptions")
+}
