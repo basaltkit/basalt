@@ -3,7 +3,7 @@
 `@basaltkit/teams` transforma um tenant numa **equipa multi-utilizador**: membros com
 roles hierarquizados, e convites por email para aderir. É desacoplado da autenticação e
 da tenancy — os identificadores são lidos do contexto do pedido — e pode espelhar as
-alterações de role para [`@basaltkit/permissions`](/guide/security).
+alterações de role para [`@basaltkit/permissions`](/pt/guide/security).
 
 [[toc]]
 
@@ -239,4 +239,4 @@ teamsPlugin({ access })
 | `team:member_removed` | `{ tenantId, userId }` |
 
 O fluxo completo — incluindo o encanamento de email — está no
-[cookbook do ciclo de vida da conta](/cookbook/account-lifecycle).
+[cookbook do ciclo de vida da conta](/pt/cookbook/account-lifecycle).

@@ -413,7 +413,7 @@ subscrição).
 
 ::: tip Dica: agendamento
 Corre `due()` → `issueNext()` a partir de um cron job, de um job de
-[fila](/guide/queues) repetível, ou de um simples `setInterval` no `boot` de um
+[fila](/pt/guide/queues) repetível, ou de um simples `setInterval` no `boot` de um
 plugin. Mantém o intervalo bem acima do rate limit da tua gateway.
 :::
 
@@ -507,4 +507,4 @@ class MyGateway implements PaymentGateway {
 
 - [Subscrições](/pt/guide/billing) — faturação por cartão, planos, trials, limites de funcionalidades
 - [Webhooks](/pt/guide/webhooks) — o guia geral de entrega/verificação de webhooks
-- [Persistência e stores duráveis](/guide/persistence) — o padrão de store em todo o Basalt
+- [Persistência e stores duráveis](/pt/guide/persistence) — o padrão de store em todo o Basalt

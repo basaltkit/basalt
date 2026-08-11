@@ -26,7 +26,7 @@ Passa flags para saltar as perguntas:
 | `--no-tenancy` | tenancy **ativa** | Salta multi-tenancy (`@basaltkit/tenancy`) |
 | `--no-auth` | auth **ativa** | Salta autenticação (`@basaltkit/auth`, `APP_SECRET`, `/auth/*`) |
 | `--billing` | desativado | Inclui subscrições/planos (`@basaltkit/subscriptions`) |
-| `--ui` | desativado | Adiciona um frontend `web/` React + shadcn — vê [Web UI](/guide/web-ui). Força pnpm |
+| `--ui` | desativado | Adiciona um frontend `web/` React + shadcn — vê [Web UI](/pt/guide/web-ui). Força pnpm |
 | `--cli` | desativado | Adiciona a CLI `basalt` (geradores `make:*` + comandos embutidos) |
 | `--install` | desativado | Instala dependências no fim |
 | `--git` | desativado | `git init` + um commit inicial |
