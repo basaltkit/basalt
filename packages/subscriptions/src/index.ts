@@ -48,6 +48,14 @@ export {
   type PaymentRequest,
   type PaymentInstruction,
   type PaymentEvent,
+  MemoryPaymentStore,
+  PaymentLedger,
+  type PaymentStore,
+  type PaymentRecord,
+  type PaymentRecordStatus,
+  type NewPayment,
+  type PaymentApplyResult,
+  type PaymentLedgerOptions,
 } from './payment.js'
 export {
   StripeBillingGateway,
