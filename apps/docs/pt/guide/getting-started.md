@@ -43,7 +43,7 @@ await app.container.get(FASTIFY).listen({ port: 3000 })
 
 O tipo de `params` da rota é inferido a partir do schema Zod — o handler fica
 totalmente tipado, e o mesmo schema pode alimentar o OpenAPI e o
-[cliente SDK](/reference/packages).
+[cliente SDK](/pt/reference/packages).
 
 ::: tip Dica: Não estás em Fastify?
 A mesma `route` corre sem alterações em **Express** e **Hono** — troca
@@ -167,7 +167,7 @@ authPlugin({
 ```
 
 Agora os utilizadores sobrevivem a um reinício. O mesmo padrão troca qualquer
-store em memória por um durável — vê [Persistência e stores duráveis](/guide/persistence)
+store em memória por um durável — vê [Persistência e stores duráveis](/pt/guide/persistence)
 para o mapa completo (backends SQLite e Prisma para auth, teams, auditoria,
 tenancy e mais).
 
@@ -179,7 +179,7 @@ tenancy e mais).
   contexto de pedido e hooks.
 - [Adaptadores HTTP](/pt/guide/adapters) — as mesmas rotas em Fastify, Express
   ou Hono.
-- [Web UI e componentes](/guide/web-ui) — um SDK type-safe e tabelas/formulários
+- [Web UI e componentes](/pt/guide/web-ui) — um SDK type-safe e tabelas/formulários
   de admin.
-- [Construir um SaaS de notas](/cookbook/notes-saas) — um passo-a-passo completo
+- [Construir um SaaS de notas](/pt/cookbook/notes-saas) — um passo-a-passo completo
   ponta-a-ponta.

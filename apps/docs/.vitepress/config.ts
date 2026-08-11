@@ -22,11 +22,12 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: 'Guia', link: '/pt/guide/getting-started' },
-          { text: 'Referência', link: '/reference/packages' },
+          { text: 'Cookbook', link: '/pt/cookbook/notes-saas' },
+          { text: 'Referência', link: '/pt/reference/packages' },
           { text: '1.0.4', link: `${github}/releases` },
         ],
         sidebar: {
-          '/pt/': [
+          '/pt/guide/': [
             {
               text: 'Começar',
               items: [
@@ -49,8 +50,58 @@ export default defineConfig({
               ],
             },
             {
+              text: 'Frontend',
+              items: [
+                { text: 'Web UI & componentes', link: '/pt/guide/web-ui' },
+                { text: 'UIs autónomas', link: '/pt/guide/admin-pages' },
+              ],
+            },
+            {
+              text: 'Dados & infraestrutura',
+              items: [
+                { text: 'Filas & Jobs', link: '/pt/guide/queues' },
+                { text: 'Storage', link: '/pt/guide/storage' },
+                { text: 'Caching', link: '/pt/guide/caching' },
+                { text: 'Base de dados por tenant', link: '/pt/guide/database-per-tenant' },
+              ],
+            },
+            {
               text: 'Capacidades',
-              items: [{ text: 'Pesquisa', link: '/pt/guide/search' }],
+              items: [
+                { text: 'Realtime', link: '/pt/guide/realtime' },
+                { text: 'Pesquisa', link: '/pt/guide/search' },
+                { text: 'Upload de ficheiros', link: '/pt/guide/files' },
+                { text: 'Comentários', link: '/pt/guide/comments' },
+                { text: 'Internacionalização', link: '/pt/guide/i18n' },
+                { text: 'Exportação de dados', link: '/pt/guide/exports' },
+              ],
+            },
+            {
+              text: 'Produção',
+              items: [
+                { text: 'Persistência & stores duráveis', link: '/pt/guide/persistence' },
+                { text: 'Versionamento & compatibilidade', link: '/pt/guide/versioning' },
+                { text: 'Ir para Produção', link: '/pt/guide/production' },
+                { text: 'Segurança', link: '/pt/guide/security' },
+                { text: 'Observabilidade', link: '/pt/guide/observability' },
+                { text: 'OpenAPI', link: '/pt/guide/openapi' },
+              ],
+            },
+          ],
+          '/pt/cookbook/': [
+            {
+              text: 'Cookbook',
+              items: [
+                { text: 'Construir um SaaS de notas (ponta a ponta)', link: '/pt/cookbook/notes-saas' },
+                { text: 'Um SaaS multi-tenant', link: '/pt/cookbook/multi-tenant-saas' },
+                { text: 'Reforçar contas & faturação', link: '/pt/cookbook/account-lifecycle' },
+              ],
+            },
+          ],
+          '/pt/reference/': [
+            {
+              text: 'Referência',
+              items: [{ text: 'Pacotes', link: '/pt/reference/packages' }],
             },
           ],
         },
