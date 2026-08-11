@@ -1,5 +1,16 @@
 # @basaltkit/subscriptions-proxypay
 
+## 2.0.0
+
+### Major Changes
+
+- **BREAKING: amounts are now integers in minor units** (cents), matching
+  `@basaltkit/subscriptions@2.0`. `createPayment` validates the amount is a
+  minor-unit integer and converts it to ProxyPay's major-unit decimal (e.g.
+  `500000` → `5000.00`); `verifyWebhook` converts ProxyPay's major-unit amount
+  back to minor units. `PaymentInstruction.reference.amount` is minor units.
+  Requires `@basaltkit/subscriptions` ^2.0.0.
+
 ## 1.0.5
 
 ### Patch Changes

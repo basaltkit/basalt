@@ -1,5 +1,22 @@
 # @basaltkit/subscriptions
 
+## 2.0.0
+
+### Major Changes
+
+- **BREAKING: money is now integers in the currency's minor unit** (cents;
+  `100 = 1.00`), the Stripe/Adyen convention — exact, no float rounding, no
+  unit ambiguity. This affects every `amount` (`PaymentRequest`,
+  `PaymentInstruction.reference`, `PaymentEvent`, `PaymentRecord`,
+  `RecurringSubscription`/`SubscribeInput`) and plan `price`. Callers passing a
+  major-unit value (`5000` for 5.000 Kz, `29.99` for $29.99) must switch to
+  minor units (`500000`, `2999`).
+- New `money` helpers: `toMinor`/`toMajor`/`formatMoney`/`currencyDecimals` for
+  the human boundary, and `assertMinorUnits`/`isMinorUnits` for validation.
+- Payment gateway drivers (`subscriptions-proxypay` ≥ 2.0, `subscriptions-appypay`)
+  translate minor units to each provider's expected format. Upgrade drivers in
+  lockstep.
+
 ## 1.2.0
 
 ### Minor Changes

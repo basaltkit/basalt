@@ -1,11 +1,17 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import {
+  assertMinorUnits,
+  toMajor,
+  toMinor,
   WebhookInvalidError,
   type PaymentEvent,
   type PaymentGateway,
   type PaymentInstruction,
   type PaymentRequest,
 } from '@basaltkit/subscriptions'
+
+// ProxyPay settles in Angolan Kwanza.
+const CURRENCY = 'AOA'
 
 /**
  * ProxyPay (https://developer.proxypay.co.ao) driver for the `@basaltkit/subscriptions`
@@ -126,6 +132,7 @@ export class ProxyPayGateway implements PaymentGateway {
   }
 
   async createPayment(request: PaymentRequest): Promise<PaymentInstruction> {
+    assertMinorUnits(request.amount)
     // A ProxyPay reference id is numeric. Use a caller-supplied `reference` as
     // the id only when it's numeric (skipping the `POST /reference_ids` round-
     // trip); a logical order id (e.g. from recurring billing) is kept in
@@ -145,8 +152,8 @@ export class ProxyPayGateway implements PaymentGateway {
     // also shift the day into UTC.
     const expiresAt = request.expiresAt ?? Date.now() + this.expiryDays * 86_400_000
     await this.request('PUT', `/references/${referenceId}`, {
-      // ProxyPay's v2 API expects `amount` as a JSON number, not a string.
-      amount: Number(request.amount.toFixed(2)),
+      // amount arrives in minor units; ProxyPay wants a major-unit decimal number.
+      amount: Number(toMajor(request.amount, request.currency ?? CURRENCY).toFixed(2)),
       custom_fields: customFields,
       end_datetime: new Date(expiresAt).toISOString().slice(0, 10),
     })
@@ -182,7 +189,8 @@ export class ProxyPayGateway implements PaymentGateway {
       id: String(payload.id ?? payload.transaction_id ?? payload.reference_id),
       type: 'payment.succeeded',
       paymentId: String(payload.reference_id),
-      amount: Number(payload.amount),
+      // ProxyPay reports a major-unit amount (e.g. "10.00"); store minor units.
+      amount: toMinor(Number(payload.amount), CURRENCY),
       ...(cf.billable_id ? { billableId: cf.billable_id } : {}),
       ...(cf.reference ? { reference: cf.reference } : {}),
       raw: payload,
