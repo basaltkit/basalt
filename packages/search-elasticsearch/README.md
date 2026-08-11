@@ -71,5 +71,7 @@ the searchable fields with `track_total_hits` for an exact total; filters become
   used by default. No hard HTTP dependency.
 - Leave `refresh: false` in production and let the cluster's refresh interval
   handle visibility; use `'wait_for'` only in tests/dev.
-- Requests are unit-tested against the REST contract; validate against your own
-  cluster/version before production.
+- **Validated end-to-end against a live Elasticsearch 8.x cluster** — index,
+  search, `term`/`terms` filters, paging with an exact `total`, `bulk`, `remove`,
+  and tenant isolation — in addition to the unit tests. Still worth a smoke test
+  against your exact version (especially OpenSearch).
