@@ -164,7 +164,7 @@ webhooksPlugin({
 
 Para retries duráveis e distribuídos que sobrevivem a um restart a meio da
 entrega, conduz `dispatch()` a partir de `@basaltkit/queue` em vez de depender do
-loop de retry em processo — vê [Filas e jobs](/guide/queues).
+loop de retry em processo — vê [Filas e jobs](/pt/guide/queues).
 
 ## Stores de subscrição duráveis
 
@@ -216,7 +216,7 @@ webhooksPlugin({ store: webhooks.store, secret: process.env.WEBHOOK_SECRET })
 `prisma:sync` descobre todos os pacotes `@basaltkit/*-prisma` instalados e junta
 os seus modelos ao teu `schema.prisma`. Liga o store antes de o modelo existir e
 ele falha logo, nomeando o modelo em falta — vê
-[Persistência](/guide/persistence).
+[Persistência](/pt/guide/persistence).
 
 ### Qual backend?
 
@@ -246,7 +246,7 @@ webhooksPlugin({ store: new MyWebhookStore(), secret: process.env.WEBHOOK_SECRET
 
 ## Ver também
 
-- [Filas e jobs](/guide/queues) — conduz a entrega a partir de uma fila para
+- [Filas e jobs](/pt/guide/queues) — conduz a entrega a partir de uma fila para
   retries duráveis.
-- [Cookbook de SaaS multi-tenant](/cookbook/multi-tenant-saas) — endpoints por
+- [Cookbook de SaaS multi-tenant](/pt/cookbook/multi-tenant-saas) — endpoints por
   tenant numa app real.

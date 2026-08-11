@@ -146,7 +146,7 @@ tenancyPlugin({
 ```
 
 `save` substitui o conjunto de domínios personalizados do tenant; um domínio já possuído
-por outro tenant é rejeitado (o routing tem de ser inequívoco). Ver [Persistência](/guide/persistence).
+por outro tenant é rejeitado (o routing tem de ser inequívoco). Ver [Persistência](/pt/guide/persistence).
 
 ::: tip Dica
 Registo com backend Prisma. `prismaTenantSource(prisma)` guarda o registo na base de
@@ -337,7 +337,7 @@ prismaPlugin({
 Em todos os modos o plugin anexa o client certo ao contexto em cada pedido HTTP
 e dentro de `tenancy.run()` — lê-lo com `db<PrismaClient>()`, que
 lança `DB_UNAVAILABLE` fora de um contexto de tenant. Ver
-[Database-per-tenant](/guide/database-per-tenant) para a receita completa com pool.
+[Database-per-tenant](/pt/guide/database-per-tenant) para a receita completa com pool.
 
 ## Migrações por tenant
 

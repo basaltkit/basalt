@@ -232,5 +232,5 @@ await search.search('notes', 'report', {
 | `search.index/bulk/remove/search` | Indexar, indexar em bloco, remover, consultar. |
 | `MemorySearchDriver` · `MeilisearchDriver` | Backends de dev/teste e de produção. |
 
-Vê o [cookbook de notes SaaS](/cookbook/notes-saas) para pesquisa numa app
+Vê o [cookbook de notes SaaS](/pt/cookbook/notes-saas) para pesquisa numa app
 completa.
