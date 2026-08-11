@@ -8,13 +8,17 @@ import { MemoryWebhookStore, type WebhookStore } from './stores.js'
  * `BillingGateway` (card subscriptions). Recurring billing is modelled by
  * creating one payment per period (invoice → reference → webhook confirms → the
  * period is activated).
+ *
+ * **All amounts are integers in the currency's minor unit** (cents; `100 = 1.00`)
+ * — the Stripe convention. Use the `money` helpers (`toMinor`/`formatMoney`) at
+ * the human boundary. Drivers translate to each provider's expected format.
  */
 
 /** A one-off payment request handed to a `PaymentGateway`. */
 export interface PaymentRequest {
   /** Who is paying — a tenant/user/customer id you reconcile against. */
   billableId: string
-  /** Amount in the currency's major unit (e.g. 5000 = 5000,00 Kz). */
+  /** Amount in the currency's minor unit (integer; `500000` = 5.000,00 Kz). */
   amount: number
   /** ISO 4217. Defaults to the gateway's own (AOA for Angolan gateways). */
   currency?: string

@@ -33,7 +33,7 @@ describe('ProxyPayGateway.createPayment', () => {
 
     const inst = await gw.createPayment({
       billableId: 'acme',
-      amount: 5000,
+      amount: 500000, // minor units = 5.000,00 Kz
       metadata: { plan: 'pro' },
       expiresAt: Date.parse('2026-08-20T00:00:00Z'),
     })
@@ -41,12 +41,13 @@ describe('ProxyPayGateway.createPayment', () => {
     expect(inst).toEqual({
       id: '900000001',
       status: 'pending',
-      reference: { entity: '00123', reference: '900000001', amount: 5000 },
+      // reference.amount stays in minor units
+      reference: { entity: '00123', reference: '900000001', amount: 500000 },
     })
-    // the PUT carried a numeric amount, custom_fields, and a date-only end_datetime
+    // the PUT carried a major-unit number, custom_fields, and a date-only end_datetime
     const put = calls.find((c) => c.method === 'PUT')!
     const body = JSON.parse(put.body!)
-    expect(body.amount).toBe(5000) // number, not "5000.00"
+    expect(body.amount).toBe(5000) // 500000 minor -> 5000.00 major
     expect(body.custom_fields).toEqual({ billable_id: 'acme', plan: 'pro' })
     expect(body.end_datetime).toBe('2026-08-20') // date-only, not full ISO
   })
@@ -55,10 +56,10 @@ describe('ProxyPayGateway.createPayment', () => {
     const { fetch, calls } = fakeFetch({ 'PUT /references/123456789': { status: 204 } })
     const gw = new ProxyPayGateway(opts(fetch))
 
-    const inst = await gw.createPayment({ billableId: 'acme', amount: 100, reference: '123456789' })
+    const inst = await gw.createPayment({ billableId: 'acme', amount: 10000, reference: '123456789' })
 
     expect(inst.id).toBe('123456789')
-    expect(inst.reference).toEqual({ entity: '00123', reference: '123456789', amount: 100 })
+    expect(inst.reference).toEqual({ entity: '00123', reference: '123456789', amount: 10000 })
     // no POST /reference_ids
     expect(calls.some((c) => c.path === '/reference_ids')).toBe(false)
     const put = calls.find((c) => c.method === 'PUT')!
@@ -130,7 +131,7 @@ describe('ProxyPayGateway.verifyWebhook', () => {
       id: '42',
       type: 'payment.succeeded',
       paymentId: '900000001',
-      amount: 5000,
+      amount: 500000, // "5000.00" major -> 500000 minor
       billableId: 'acme',
       reference: 'order_1',
     })

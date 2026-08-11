@@ -70,6 +70,15 @@ export {
   type SubscribeInput,
   type HandleEventResult,
 } from './recurring.js'
+
+export {
+  currencyDecimals,
+  toMinor,
+  toMajor,
+  formatMoney,
+  isMinorUnits,
+  assertMinorUnits,
+} from './money.js'
 export {
   StripeBillingGateway,
   StripeRequestError,

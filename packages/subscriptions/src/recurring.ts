@@ -19,7 +19,7 @@ export interface RecurringSubscription {
   /** The customer/tenant this subscription bills. One per billableId. */
   billableId: string
   plan: string
-  /** Price per period, in the currency's major unit. */
+  /** Price per period, in the currency's minor unit (integer; cents). */
   amount: number
   interval: RecurringInterval
   status: RecurringStatus
