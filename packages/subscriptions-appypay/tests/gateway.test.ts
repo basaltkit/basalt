@@ -32,17 +32,18 @@ describe('AppyPayGateway.createPayment', () => {
     })
     const gw = new AppyPayGateway(opts(fetch))
 
-    const inst = await gw.createPayment({ billableId: 'acme', amount: 5000, reference: 'order_1' })
+    const inst = await gw.createPayment({ billableId: 'acme', amount: 500000, reference: 'order_1' })
 
     expect(inst.id).toBe('chg_1')
     expect(inst.status).toBe('pending')
-    expect(inst.reference).toEqual({ entity: '00123', reference: '987654321', amount: 5000 })
+    // reference.amount stays in minor units
+    expect(inst.reference).toEqual({ entity: '00123', reference: '987654321', amount: 500000 })
 
     const charge = calls.find((c) => c.method === 'POST' && c.url.endsWith('/v1.0/charges'))!
     expect(charge.headers?.Authorization).toBe('Bearer tok-123')
     const body = JSON.parse(charge.body!)
     expect(body.merchantTransactionId).toBe('order_1')
-    expect(body.amount).toBe(5000)
+    expect(body.amount).toBe(5000) // 500000 minor -> 5000.00 major
     expect(body.currency).toBe('AOA')
     expect(body.paymentMethod).toBe(APPYPAY_WIRE.method.reference)
     expect(body.metadata.billable_id).toBe('acme')
@@ -113,7 +114,7 @@ describe('AppyPayGateway.verifyWebhook', () => {
       id: 'evt_1',
       type: 'payment.succeeded',
       paymentId: 'order_1',
-      amount: 5000,
+      amount: 500000, // "5000.00" major -> 500000 minor
       billableId: 'acme',
       reference: 'order_1',
     })
