@@ -1,5 +1,17 @@
 # @basaltkit/subscriptions
 
+## 1.1.0
+
+### Minor Changes
+
+- Add a **payment ledger + webhook idempotency** for the `PaymentGateway` side:
+  `PaymentStore` (+ `MemoryPaymentStore`) tracks payments keyed by the gateway
+  payment id, and `PaymentLedger` records a payment as `pending` on create and
+  applies each verified `PaymentEvent` exactly once — deduping retried callbacks
+  by `event.id` (reusing `WebhookStore`) and flipping the record to
+  `paid`/`failed`. Apps no longer hand-roll this per integration. Back
+  `PaymentStore` with your database for durability.
+
 ## 1.0.1
 
 ### Minor Changes
