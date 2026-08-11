@@ -1,5 +1,18 @@
 # @basaltkit/subscriptions-prisma
 
+## 2.1.0
+
+### Minor Changes
+
+- Add durable **payment ledger + recurring** stores so apps stop hand-rolling
+  them: `PrismaPaymentStore` (implements `PaymentStore`) and
+  `PrismaRecurringStore` (implements `RecurringStore`), plus the
+  `prismaPaymentStores(client)` factory. Money is stored as **`BigInt`** (minor
+  units) to avoid the 32-bit `Int` ceiling; `create` uses an atomic
+  `skipDuplicates` insert and `setStatus`/`save` fall back to an update on a
+  concurrent unique-violation (P2002). New `Payment` and `RecurringSubscription`
+  models in the bundled `prisma/schema.prisma`.
+
 ## 2.0.0
 
 ### Major Changes
