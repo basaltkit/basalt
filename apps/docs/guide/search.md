@@ -132,6 +132,27 @@ It creates one GIN-indexed table for all indexes, feeds the searchable fields
 into `to_tsvector`, ranks with `ts_rank`, and constrains every query to the
 tenant — the same isolation guarantee, no extra infrastructure.
 
+## Elasticsearch / OpenSearch
+
+For large-scale relevance, `@basaltkit/search-elasticsearch` targets the
+Elasticsearch 8.x / OpenSearch 2.x REST API directly (no SDK), with an injectable
+`fetch`:
+
+```ts
+import { ElasticsearchDriver } from '@basaltkit/search-elasticsearch'
+
+searchPlugin({
+  driver: new ElasticsearchDriver({ node: process.env.ES_NODE!, apiKey: process.env.ES_API_KEY }),
+  indexes: [defineIndex({ name: 'notes', fields: ['title', 'body'], filterable: ['folder'] })],
+})
+```
+
+`register` maps searchable fields as `text` (with a `.keyword` sub-field) and
+filterable fields as `keyword`; `search` uses `multi_match` with an exact
+`track_total_hits`. Documents get a compound `<tenantId>:<id>` id and **every
+search carries a mandatory `tenantId` filter** — the same isolation guarantee as
+every other driver.
+
 ## Filters and paging
 
 ```ts

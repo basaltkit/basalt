@@ -1,0 +1,49 @@
+{
+  "name": "@basaltkit/search-elasticsearch",
+  "version": "1.0.0",
+  "description": "Elasticsearch / OpenSearch driver for @basaltkit/search — multi_match relevance, tenant-scoped, talking to the REST API directly with an injectable fetch (no SDK).",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/search": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
+    "directory": "packages/search-elasticsearch"
+  },
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/search-elasticsearch#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "search",
+    "elasticsearch",
+    "opensearch",
+    "full-text"
+  ]
+}
