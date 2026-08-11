@@ -1,5 +1,13 @@
 import type {
   BillingPeriod,
+  NewPayment,
+  PaymentRecord,
+  PaymentRecordStatus,
+  PaymentStore,
+  RecurringInterval,
+  RecurringStatus,
+  RecurringStore,
+  RecurringSubscription,
   SubscriptionRecord,
   SubscriptionStatus,
   SubscriptionStore,
@@ -228,4 +236,193 @@ export function prismaSubscriptionsStores(client: PrismaSubscriptionsClient): Pr
     usage: new PrismaUsageStore(client),
     webhooks: new PrismaWebhookStore(client),
   }
+}
+
+// --- payments ledger + recurring --------------------------------------------
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+interface PPayment {
+  id: string
+  status: string
+  amount: bigint
+  billableId: string | null
+  reference: string | null
+  raw: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+interface PRecurring {
+  billableId: string
+  plan: string
+  amount: bigint
+  interval: string
+  status: string
+  paidThrough: Date | null
+  pendingPaymentId: string | null
+  customer: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+/**
+ * Prisma delegates the payment stores call. A real `PrismaClient` whose schema
+ * includes the `Payment` and `RecurringSubscription` models (see the bundled
+ * `prisma/schema.prisma`) is assignable. **Money is stored as `BigInt`** (minor
+ * units) to avoid the 32-bit `Int` ceiling; the stores convert to/from `number`.
+ */
+export interface PrismaPaymentsClient {
+  payment: {
+    findUnique(a: any): Promise<PPayment | null>
+    createMany(a: any): Promise<{ count: number }>
+    upsert(a: any): Promise<PPayment>
+    update(a: any): Promise<PPayment>
+  }
+  recurringSubscription: {
+    findUnique(a: any): Promise<PRecurring | null>
+    findMany(a: any): Promise<PRecurring[]>
+    upsert(a: any): Promise<PRecurring>
+    update(a: any): Promise<PRecurring>
+  }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/** True for Prisma's unique-constraint violation (a concurrent create race). */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: string }).code === 'P2002'
+}
+
+const toBig = (n: number): bigint => BigInt(Math.round(n))
+
+export class PrismaPaymentStore implements PaymentStore {
+  constructor(private readonly client: PrismaPaymentsClient) {}
+
+  async create(payment: NewPayment): Promise<void> {
+    // Atomic idempotent insert: `skipDuplicates` no-ops if the id already exists,
+    // so a concurrent create doesn't throw or clobber.
+    await this.client.payment.createMany({
+      data: [
+        {
+          id: payment.id,
+          status: 'pending',
+          amount: toBig(payment.amount),
+          billableId: payment.billableId ?? null,
+          reference: payment.reference ?? null,
+          raw: payment.raw !== undefined ? JSON.stringify(payment.raw) : null,
+        },
+      ],
+      skipDuplicates: true,
+    })
+  }
+
+  async setStatus(
+    id: string,
+    status: PaymentRecordStatus,
+    patch: { amount?: number; raw?: unknown } = {},
+  ): Promise<void> {
+    const update: Record<string, unknown> = { status }
+    if (patch.amount != null) update.amount = toBig(patch.amount)
+    if (patch.raw !== undefined) update.raw = patch.raw != null ? JSON.stringify(patch.raw) : null
+    const create = {
+      id,
+      status,
+      amount: toBig(patch.amount ?? 0),
+      raw: patch.raw != null ? JSON.stringify(patch.raw) : null,
+    }
+    try {
+      await this.client.payment.upsert({ where: { id }, create, update })
+    } catch (error) {
+      // Lost the create race — the row now exists; apply the update instead.
+      if (!isUniqueViolation(error)) throw error
+      await this.client.payment.update({ where: { id }, data: update })
+    }
+  }
+
+  async get(id: string): Promise<PaymentRecord | undefined> {
+    const p = await this.client.payment.findUnique({ where: { id } })
+    if (!p) return undefined
+    const rec: PaymentRecord = {
+      id: p.id,
+      status: p.status as PaymentRecordStatus,
+      amount: Number(p.amount),
+      createdAt: ms(p.createdAt),
+      updatedAt: ms(p.updatedAt),
+    }
+    if (p.billableId !== null) rec.billableId = p.billableId
+    if (p.reference !== null) rec.reference = p.reference
+    if (p.raw !== null) rec.raw = JSON.parse(p.raw)
+    return rec
+  }
+}
+
+const toRecurring = (r: PRecurring): RecurringSubscription => {
+  const sub: RecurringSubscription = {
+    billableId: r.billableId,
+    plan: r.plan,
+    amount: Number(r.amount),
+    interval: r.interval as RecurringInterval,
+    status: r.status as RecurringStatus,
+    createdAt: ms(r.createdAt),
+    updatedAt: ms(r.updatedAt),
+  }
+  if (r.paidThrough !== null) sub.paidThrough = ms(r.paidThrough)
+  if (r.pendingPaymentId !== null) sub.pendingPaymentId = r.pendingPaymentId
+  if (r.customer !== null) sub.customer = JSON.parse(r.customer)
+  return sub
+}
+
+export class PrismaRecurringStore implements RecurringStore {
+  constructor(private readonly client: PrismaPaymentsClient) {}
+
+  async save(sub: RecurringSubscription): Promise<void> {
+    const data = {
+      plan: sub.plan,
+      amount: toBig(sub.amount),
+      interval: sub.interval,
+      status: sub.status,
+      paidThrough: sub.paidThrough != null ? at(sub.paidThrough) : null,
+      pendingPaymentId: sub.pendingPaymentId ?? null,
+      customer: sub.customer ? JSON.stringify(sub.customer) : null,
+      updatedAt: at(sub.updatedAt),
+    }
+    try {
+      await this.client.recurringSubscription.upsert({
+        where: { billableId: sub.billableId },
+        create: { billableId: sub.billableId, createdAt: at(sub.createdAt), ...data },
+        update: data,
+      })
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error
+      await this.client.recurringSubscription.update({ where: { billableId: sub.billableId }, data })
+    }
+  }
+
+  async get(billableId: string): Promise<RecurringSubscription | undefined> {
+    const r = await this.client.recurringSubscription.findUnique({ where: { billableId } })
+    return r ? toRecurring(r) : undefined
+  }
+
+  async list(): Promise<RecurringSubscription[]> {
+    const rows = await this.client.recurringSubscription.findMany({ orderBy: { billableId: 'asc' } })
+    return rows.map(toRecurring)
+  }
+}
+
+export interface PrismaPaymentStores {
+  payments: PrismaPaymentStore
+  recurring: PrismaRecurringStore
+}
+
+/**
+ * Wire the payment ledger + recurring stores to your Prisma client:
+ *
+ * ```ts
+ * const p = prismaPaymentStores(prisma)
+ * const ledger = new PaymentLedger({ store: p.payments, webhooks: s.webhooks })
+ * const billing = new RecurringReferenceBilling({ gateway, ledger, store: p.recurring })
+ * ```
+ */
+export function prismaPaymentStores(client: PrismaPaymentsClient): PrismaPaymentStores {
+  ensureModel(client, 'payment', '@basaltkit/subscriptions-prisma')
+  ensureModel(client, 'recurringSubscription', '@basaltkit/subscriptions-prisma')
+  return { payments: new PrismaPaymentStore(client), recurring: new PrismaRecurringStore(client) }
 }
