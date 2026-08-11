@@ -1,5 +1,13 @@
 # @basaltkit/search-elasticsearch
 
+## 1.0.1
+
+### Patch Changes
+
+- Validated end-to-end against a live Elasticsearch 8.x cluster (index, search,
+  `term`/`terms` filters, paging with an exact total, `bulk`, `remove`, and
+  tenant isolation). No code changes — docs only.
+
 ## 1.0.0
 
 ### Initial release
