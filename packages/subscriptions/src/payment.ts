@@ -192,6 +192,22 @@ export interface PaymentApplyResult {
   record?: PaymentRecord
 }
 
+/** Lifecycle events emitted by the ledger — subscribe with `ledger.on(...)`. */
+export interface PaymentLedgerEvents {
+  /** A payment was recorded as pending (on `created`). */
+  recorded: { record: PaymentRecord | undefined; payment: NewPayment }
+  /** A payment was confirmed paid (fresh `apply` of a `payment.succeeded`). */
+  confirmed: { record: PaymentRecord | undefined; event: PaymentEvent }
+  /** A payment failed (fresh `apply` of a `payment.failed`). */
+  failed: { record: PaymentRecord | undefined; event: PaymentEvent }
+}
+
+export type PaymentLedgerEvent = keyof PaymentLedgerEvents
+
+export type PaymentLedgerListener<K extends PaymentLedgerEvent> = (
+  payload: PaymentLedgerEvents[K],
+) => void | Promise<void>
+
 export interface PaymentLedgerOptions {
   /** Where payments are stored. Default: in-memory. */
   store?: PaymentStore
@@ -200,6 +216,12 @@ export interface PaymentLedgerOptions {
    * Redis) across the app so a retried callback is applied exactly once.
    */
   webhooks?: WebhookStore
+  /**
+   * Called when a lifecycle listener throws. Listeners are best-effort side
+   * effects (notifications, analytics) that never roll back a payment — a
+   * throwing one is reported here instead. Default: swallow.
+   */
+  onListenerError?: (error: unknown, event: PaymentLedgerEvent) => void
 }
 
 /**
@@ -222,21 +244,54 @@ export interface PaymentLedgerOptions {
 export class PaymentLedger {
   private readonly store: PaymentStore
   private readonly webhooks: WebhookStore
+  private readonly onListenerError: (error: unknown, event: PaymentLedgerEvent) => void
+  private readonly listeners: {
+    [K in PaymentLedgerEvent]: Set<PaymentLedgerListener<K>>
+  } = { recorded: new Set(), confirmed: new Set(), failed: new Set() }
 
   constructor(options: PaymentLedgerOptions = {}) {
     this.store = options.store ?? new MemoryPaymentStore()
     this.webhooks = options.webhooks ?? new MemoryWebhookStore()
+    this.onListenerError = options.onListenerError ?? (() => {})
+  }
+
+  /**
+   * Subscribe to a lifecycle event (`recorded`/`confirmed`/`failed`). Listeners
+   * are best-effort: they run after the payment is safely persisted and a
+   * throwing one never rolls it back (it's reported via `onListenerError`).
+   * Returns an unsubscribe function.
+   */
+  on<K extends PaymentLedgerEvent>(event: K, listener: PaymentLedgerListener<K>): () => void {
+    this.listeners[event].add(listener)
+    return () => {
+      this.listeners[event].delete(listener)
+    }
+  }
+
+  private async emit<K extends PaymentLedgerEvent>(
+    event: K,
+    payload: PaymentLedgerEvents[K],
+  ): Promise<void> {
+    for (const listener of this.listeners[event]) {
+      try {
+        await listener(payload)
+      } catch (error) {
+        this.onListenerError(error, event)
+      }
+    }
   }
 
   /** Record a just-created payment as pending. Call after `createPayment`. */
   async created(instruction: PaymentInstruction, request: PaymentRequest): Promise<void> {
-    await this.store.create({
+    const payment: NewPayment = {
       id: instruction.id,
       amount: request.amount,
       ...(request.billableId ? { billableId: request.billableId } : {}),
       ...(request.reference ? { reference: request.reference } : {}),
       ...(instruction.raw !== undefined ? { raw: instruction.raw } : {}),
-    })
+    }
+    await this.store.create(payment)
+    await this.emit('recorded', { record: await this.store.get(instruction.id), payment })
   }
 
   /**
@@ -255,19 +310,23 @@ export class PaymentLedger {
   ): Promise<PaymentApplyResult> {
     const fresh = await this.webhooks.markProcessed(event.id)
     if (!fresh) return { fresh: false }
+    let record: PaymentRecord | undefined
     try {
       const status: PaymentRecordStatus = event.type === 'payment.succeeded' ? 'paid' : 'failed'
       await this.store.setStatus(event.paymentId, status, {
         amount: event.amount,
         ...(event.raw !== undefined ? { raw: event.raw } : {}),
       })
-      const record = await this.store.get(event.paymentId)
+      record = await this.store.get(event.paymentId)
       if (onFresh) await onFresh(record, event)
-      return { fresh: true, ...(record ? { record } : {}) }
     } catch (error) {
       await this.webhooks.release(event.id)
       throw error
     }
+    // Best-effort lifecycle emit — after the claim, so a throwing listener never
+    // rolls back the payment (it's reported via onListenerError).
+    await this.emit(event.type === 'payment.succeeded' ? 'confirmed' : 'failed', { record, event })
+    return { fresh: true, ...(record ? { record } : {}) }
   }
 
   get(id: string): Promise<PaymentRecord | undefined> {

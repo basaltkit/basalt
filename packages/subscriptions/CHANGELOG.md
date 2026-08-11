@@ -1,5 +1,16 @@
 # @basaltkit/subscriptions
 
+## 2.1.0
+
+### Minor Changes
+
+- `PaymentLedger` gains **lifecycle hooks**: `ledger.on('recorded' | 'confirmed'
+  | 'failed', listener)` lets apps react to payment state changes (notifications,
+  analytics) without touching the store. Listeners are **best-effort** — they run
+  after the payment is safely persisted, fire only on a fresh (non-deduped)
+  apply, and a throwing one never rolls back the payment (it's reported via the
+  new `onListenerError` option). `on()` returns an unsubscribe function.
+
 ## 2.0.0
 
 ### Major Changes
