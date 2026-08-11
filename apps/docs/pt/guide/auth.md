@@ -388,7 +388,7 @@ Cada passo emite um evento — `auth:login`, `auth:login_failed`, `auth:register
 `auth:logout`, `auth:verify_requested`, `auth:email_verified`,
 `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`,
 `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked` — consumidos
-gratuitamente por [audit](/reference/packages) e notificações.
+gratuitamente por [audit](/pt/reference/packages) e notificações.
 
 Para a ligação completa ponta a ponta (encanamento de email, teams e billing), vê o
-[cookbook do ciclo de vida da conta](/cookbook/account-lifecycle).
+[cookbook do ciclo de vida da conta](/pt/cookbook/account-lifecycle).
