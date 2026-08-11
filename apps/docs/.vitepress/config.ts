@@ -10,6 +10,66 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
 
+  // English is the root locale (served at `/`); Portuguese lives under `/pt/`.
+  // The root inherits the shared `themeConfig` below; `pt` overrides nav/sidebar.
+  locales: {
+    root: { label: 'English', lang: 'en-US' },
+    pt: {
+      label: 'Português',
+      lang: 'pt-PT',
+      link: '/pt/',
+      description: 'O toolkit completo para construir SaaS em Node.js.',
+      themeConfig: {
+        nav: [
+          { text: 'Guia', link: '/pt/guide/getting-started' },
+          { text: 'Referência', link: '/reference/packages' },
+          { text: '1.0.4', link: `${github}/releases` },
+        ],
+        sidebar: {
+          '/pt/': [
+            {
+              text: 'Começar',
+              items: [
+                { text: 'Introdução', link: '/pt/guide/getting-started' },
+                { text: 'Instalação', link: '/pt/guide/installation' },
+                { text: 'Conceitos centrais', link: '/pt/guide/concepts' },
+                { text: 'Adaptadores HTTP', link: '/pt/guide/adapters' },
+              ],
+            },
+            {
+              text: 'Blocos de SaaS',
+              items: [
+                { text: 'Multi-tenancy', link: '/pt/guide/tenancy' },
+                { text: 'Autenticação', link: '/pt/guide/auth' },
+                { text: 'Equipas', link: '/pt/guide/teams' },
+                { text: 'Subscrições', link: '/pt/guide/billing' },
+                { text: 'Pagamentos por referência', link: '/pt/guide/reference-payments' },
+                { text: 'Feature Flags', link: '/pt/guide/feature-flags' },
+                { text: 'Webhooks', link: '/pt/guide/webhooks' },
+              ],
+            },
+            {
+              text: 'Capacidades',
+              items: [{ text: 'Pesquisa', link: '/pt/guide/search' }],
+            },
+          ],
+        },
+        editLink: {
+          pattern: `${github}/edit/main/apps/docs/:path`,
+          text: 'Editar esta página no GitHub',
+        },
+        footer: {
+          message: 'Publicado sob a licença MIT.',
+          copyright: 'Copyright © 2026 Basalt Contributors',
+        },
+        docFooter: { prev: 'Página anterior', next: 'Próxima página' },
+        outline: { label: 'Nesta página' },
+        returnToTopLabel: 'Voltar ao topo',
+        langMenuLabel: 'Mudar idioma',
+      },
+    },
+  },
+
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
