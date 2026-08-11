@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/subscriptions-appypay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AppyPay payment gateway driver for @basaltkit/subscriptions — Multicaixa Express (push), reference and card payments for Angola (AOA). PRE-RELEASE: pending validation against the live AppyPay API.",
   "license": "MIT",
   "type": "module",

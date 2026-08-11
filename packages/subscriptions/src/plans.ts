@@ -26,7 +26,12 @@ export type FeatureValue = boolean | number | Meter
 export type BillingPeriod = 'monthly' | 'yearly'
 
 export interface PlanDefinition {
-  /** 0 = free · number = same price both periods · object = per period · 'custom' = sales-led */
+  /**
+   * Price in the currency's minor unit (integer; cents — `2900` = $29.00).
+   * 0 = free · number = same price both periods · object = per period ·
+   * 'custom' = sales-led. Only gated (`> 0`) and displayed here; the actual
+   * Stripe charge uses a pre-created price id on the gateway.
+   */
   price: number | { monthly: number; yearly: number } | 'custom'
   trial?: DurationInput
   features: Record<string, FeatureValue>

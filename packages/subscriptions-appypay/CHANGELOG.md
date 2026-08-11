@@ -1,5 +1,14 @@
 # @basaltkit/subscriptions-appypay
 
+## 0.2.0
+
+### Minor Changes (pre-release)
+
+- Track `@basaltkit/subscriptions@2.0`: amounts are integers in minor units.
+  `createPayment` validates minor units and converts to a major-unit charge;
+  `verifyWebhook` converts back to minor units. (Both conversions remain
+  `TODO(verify)` against the live AppyPay API, like the rest of the wire.)
+
 ## 0.1.0
 
 ### Initial (pre-release)

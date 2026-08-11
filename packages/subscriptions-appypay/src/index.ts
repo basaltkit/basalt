@@ -1,5 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import {
+  assertMinorUnits,
+  toMajor,
+  toMinor,
   WebhookInvalidError,
   type PaymentEvent,
   type PaymentGateway,
@@ -179,13 +182,16 @@ export class AppyPayGateway implements PaymentGateway {
     if (method === 'express' && !request.customer?.phone) {
       throw new AppyPayRequestError(400, 'Multicaixa Express (express) requires customer.phone')
     }
+    assertMinorUnits(request.amount)
 
+    const currency = request.currency ?? 'AOA'
     // TODO(verify): confirm the charge request field names + structure against
-    // the AppyPay API docs. amount as a 2-decimal number, currency AOA default.
+    // the AppyPay API docs, and whether `amount` is major-unit (as assumed here)
+    // or minor units. `request.amount` is minor units; converted to major here.
     const charge: Record<string, unknown> = {
       merchantTransactionId: request.reference ?? `bsl-${request.billableId}-${Date.now()}`,
-      amount: Number(request.amount.toFixed(2)),
-      currency: request.currency ?? 'AOA',
+      amount: Number(toMajor(request.amount, currency).toFixed(2)),
+      currency,
       paymentMethod: WIRE.method[method],
       ...(request.description ? { description: request.description } : {}),
       ...(request.customer?.phone ? { paymentInfo: { phoneNumber: request.customer.phone } } : {}),
@@ -255,7 +261,8 @@ export class AppyPayGateway implements PaymentGateway {
       id: String(payload.id ?? payload.transactionId ?? paymentId),
       type: isPaid ? 'payment.succeeded' : 'payment.failed',
       paymentId,
-      amount: Number(payload.amount ?? 0),
+      // TODO(verify): AppyPay's webhook amount unit. Assumed major → minor here.
+      amount: toMinor(Number(payload.amount ?? 0), 'AOA'),
       ...(payload.metadata?.billable_id ? { billableId: payload.metadata.billable_id } : {}),
       ...(payload.metadata?.reference ? { reference: payload.metadata.reference } : {}),
       raw: payload,
