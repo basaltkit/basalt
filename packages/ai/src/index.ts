@@ -12,6 +12,7 @@ export {
   OpenAICompatibleProvider,
   type OpenAICompatibleProviderOptions,
 } from './provider/openai.js'
+export { fetchWithRetry, type RetryOptions } from './provider/http.js'
 export {
   createProvider,
   providerEnvFromProcess,
