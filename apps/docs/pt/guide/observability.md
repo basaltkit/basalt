@@ -144,6 +144,50 @@ await tracer.inSpan(tracer.startSpan('charge.capture', { kind: 'client' }), asyn
 Para desenvolvimento local, troca por `ConsoleSpanExporter`; em testes,
 `InMemorySpanExporter` recolhe spans para asserções.
 
+## Logging — `loggerPlugin`
+
+O `@basaltkit/logger` envolve o Pino: logs JSON estruturados, campos de contexto
+por pedido (`requestId`, `tenantId`, `userId`…) injetados automaticamente, e
+redação de segredos ligada por defeito.
+
+```ts
+import { loggerPlugin } from '@basaltkit/logger'
+
+loggerPlugin({
+  level: 'info',            // um de LOG_LEVELS; 'silent' desliga o logging
+  pretty: true,             // saída legível para dev (precisa de pino-pretty)
+  redact: ['user.ssn'],     // caminhos extra a redigir (além dos defaults)
+  base: { service: 'api' }, // campos fixos em cada linha
+})
+```
+
+### Os níveis de log são tipados
+
+O `level` é a união **`LogLevel`** — não uma string livre — por isso um erro de
+escrita **não compila**. Do mais para o menos severo:
+
+`'fatal'` · `'error'` · `'warn'` · `'info'` (default) · `'debug'` · `'trace'` · `'silent'`
+
+Reutiliza o mesmo tipo e valores (`LogLevel` / `LOG_LEVELS`) na tua própria opção
+e na validação do env, para um nível errado ser apanhado no código **e** no boot:
+
+```ts
+import { z } from 'zod'
+import { defineEnv } from '@basaltkit/env'
+import { LOG_LEVELS, type LogLevel } from '@basaltkit/logger'
+
+// env — um LOG_LEVEL inválido é rejeitado no arranque
+const env = defineEnv({ LOG_LEVEL: z.enum(LOG_LEVELS).default('info') })
+
+// a tua própria opção — um nível inválido é erro de compilação
+interface BuildAppOptions { logLevel?: LogLevel }
+```
+
+::: tip 'silent'
+O `'silent'` desliga toda a saída — útil para comandos de CLI e testes. Faz parte
+do `LogLevel` (o tipo `Level` do próprio Pino omite-o).
+:::
+
 ## Correlação de pedidos
 
 Cada pedido também carrega um `requestId` e um `correlationId` no
