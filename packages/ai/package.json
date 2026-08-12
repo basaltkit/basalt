@@ -1,0 +1,50 @@
+{
+  "name": "@basaltkit/ai",
+  "version": "0.1.0",
+  "description": "AI-native developer experience for Basalt: a provider-agnostic engine plus `basalt ai` CLI that understands the project's stack, analyzes it, and diagnoses issues — following the framework's own conventions, not inventing new ones.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/cli": "workspace:^",
+    "@basaltkit/generator": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
+    "directory": "packages/ai"
+  },
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/ai#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
+  "keywords": [
+    "basalt",
+    "ai",
+    "agent",
+    "codegen",
+    "developer-experience",
+    "typescript"
+  ]
+}
