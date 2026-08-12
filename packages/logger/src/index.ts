@@ -1,7 +1,16 @@
 import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
-import { pino, type DestinationStream, type Logger as PinoLogger } from 'pino'
+import { pino, type Bindings, type DestinationStream, type Logger as PinoLogger } from 'pino'
 
 export type Logger = PinoLogger<string, boolean>
+
+/**
+ * The log levels Pino supports, most to least severe. `'silent'` disables all
+ * output. Use `LogLevel` to type an option and `LOG_LEVELS` for a runtime
+ * validator (e.g. `z.enum(LOG_LEVELS)`) — so a level is never a free-form string
+ * the user can typo.
+ */
+export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const
+export type LogLevel = (typeof LOG_LEVELS)[number]
 
 /** ALS context fields automatically promoted onto every log line. */
 const CONTEXT_FIELDS = ['requestId', 'correlationId', 'traceId', 'userId', 'tenantId'] as const
@@ -19,15 +28,43 @@ const DEFAULT_REDACT = [
 ]
 
 export interface LoggerOptions {
-  level?: string
-  /** Human-readable output for dev (requires pino-pretty installed). Default: false (JSON). */
-  pretty?: boolean
-  /** Extra redaction paths, added to the defaults. */
-  redact?: string[]
-  /** Fixed fields on every log line (e.g. `{ service: 'api' }`). */
-  base?: Record<string, unknown>
-  /** Destination stream — used in tests to capture the output. */
-  destination?: DestinationStream
+  /**
+   * Minimum log level — one of {@link LOG_LEVELS}. `'silent'` disables output.
+   *
+   * @default "info"
+   */
+  level?: LogLevel;
+
+  /**
+   * Human-readable output for development.
+   *
+   * Requires `pino-pretty` to be installed.
+   *
+   * @default false
+   */
+  pretty?: boolean;
+
+  /**
+   * Additional paths to redact from log output.
+   *
+   * These are added to the default redaction paths.
+   */
+  redact?: string[];
+
+  /**
+   * Fixed fields included in every log entry.
+   *
+   * Example:
+   * `{ service: 'api', version: '1.0.0' }`
+   */
+  base?: Bindings;
+
+  /**
+   * Destination stream used by Pino.
+   *
+   * Useful for tests or custom output streams.
+   */
+  destination?: DestinationStream;
 }
 
 export function createLogger(options: LoggerOptions = {}): Logger {
