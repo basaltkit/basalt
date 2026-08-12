@@ -5,6 +5,7 @@ import {
   OpenAICompatibleProvider,
   createProvider,
   type FetchLike,
+  type SseFetch,
 } from '../src/index.js'
 
 function fakeFetch(status: number, body: unknown): FetchLike {
@@ -67,13 +68,14 @@ describe('OllamaProvider', () => {
   })
 })
 
-describe('OpenAICompatibleProvider', () => {
+describe('OpenAICompatibleProvider (non-streaming)', () => {
   it('reads choices[0].message.content and hits /chat/completions with a Bearer token', async () => {
     const fetch = recordingFetch({ choices: [{ message: { content: 'gateway answer' } }] })
     const provider = new OpenAICompatibleProvider({
       apiKey: 'sk-test',
       model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
       baseUrl: 'https://ai.go4ai.io/v1',
+      stream: false,
       fetch,
     })
     const answer = await provider.generate({
@@ -93,6 +95,7 @@ describe('OpenAICompatibleProvider', () => {
   it('surfaces the error message on a non-2xx', async () => {
     const provider = new OpenAICompatibleProvider({
       apiKey: 'sk-test',
+      stream: false,
       fetch: fakeFetch(401, { error: { message: 'invalid api key' } }),
     })
     await expect(provider.generate({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(
@@ -101,7 +104,53 @@ describe('OpenAICompatibleProvider', () => {
   })
 
   it('requires an api key', () => {
-    expect(() => new OpenAICompatibleProvider({ apiKey: '', fetch: fakeFetch(200, {}) })).toThrow(/apiKey is required/)
+    expect(() => new OpenAICompatibleProvider({ apiKey: '', stream: false, fetch: fakeFetch(200, {}) })).toThrow(
+      /apiKey is required/,
+    )
+  })
+})
+
+describe('OpenAICompatibleProvider (streaming, default)', () => {
+  const SSE =
+    'data: {"choices":[{"delta":{"content":"he"}}]}\n\n' +
+    'data: {"choices":[{"delta":{"content":"llo"}}]}\n\n' +
+    'data: [DONE]\n\n'
+
+  function fakeSse(status: number, text: string): SseFetch & { calls: Array<{ body: unknown }> } {
+    const calls: Array<{ body: unknown }> = []
+    const fn = (async (_url: string, init?: { body?: string }) => {
+      calls.push({ body: init?.body ? JSON.parse(init.body) : undefined })
+      async function* chunks() {
+        yield text
+      }
+      return { ok: status >= 200 && status < 300, status, text: async () => text, chunks: chunks() }
+    }) as unknown as SseFetch & { calls: Array<{ body: unknown }> }
+    fn.calls = calls
+    return fn
+  }
+
+  it('accumulates SSE deltas into the full completion and sends stream:true', async () => {
+    const sseFetch = fakeSse(200, SSE)
+    const provider = new OpenAICompatibleProvider({ apiKey: 'sk', sseFetch })
+    expect(await provider.generate({ messages: [{ role: 'user', content: 'hi' }] })).toBe('hello')
+    expect((sseFetch.calls[0]?.body as { stream?: boolean }).stream).toBe(true)
+  })
+
+  it('yields incremental chunks from stream()', async () => {
+    const provider = new OpenAICompatibleProvider({ apiKey: 'sk', sseFetch: fakeSse(200, SSE) })
+    const parts: string[] = []
+    for await (const c of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) parts.push(c)
+    expect(parts).toEqual(['he', 'llo'])
+  })
+
+  it('throws with the error body on a non-2xx stream open', async () => {
+    const provider = new OpenAICompatibleProvider({
+      apiKey: 'sk',
+      sseFetch: fakeSse(500, 'Internal Server Error'),
+    })
+    await expect(provider.generate({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(
+      /500 — Internal Server Error/,
+    )
   })
 })
 

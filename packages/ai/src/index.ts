@@ -13,6 +13,7 @@ export {
   type OpenAICompatibleProviderOptions,
 } from './provider/openai.js'
 export { fetchWithRetry, type RetryOptions } from './provider/http.js'
+export { globalSseFetch, parseSseContent, type SseFetch, type SseResponse } from './provider/sse.js'
 export {
   createProvider,
   providerEnvFromProcess,
