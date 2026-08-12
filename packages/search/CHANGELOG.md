@@ -1,5 +1,15 @@
 # @basaltkit/search
 
+## 1.1.0
+
+### Minor Changes
+
+- `searchPlugin` no longer crashes app boot when an index fails to register (a
+  search backend that's down or misconfigured). It now logs a warning and boots
+  anyway — search stays degraded until the backend is reachable — so an outage
+  never blocks unrelated work, including CLI commands that don't use search. Set
+  `failOnRegisterError: true` to restore the strict, throw-on-boot behavior.
+
 ## 1.0.5
 
 ### Patch Changes
