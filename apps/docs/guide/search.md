@@ -97,8 +97,52 @@ searchPlugin({
 })
 ```
 
-`syncRule` type-checks against the hook's payload. Return `null` to skip an
-event.
+`document` upserts a document (on create/update); `remove` deletes one. Return
+`null` to skip an event.
+
+### Emit the hook from your code
+
+`sync` only *reacts* — something has to **emit** the hook on the core `HookBus`.
+Pass it to your service (plugins receive it in `register`/`boot`) and emit after
+the write:
+
+```ts
+// post.plugin.ts — hand the HookBus to the service
+register({ container, hooks }) {
+  container.singleton(POST_SERVICE, (c) => new PostService(c.get(POST_REPOSITORY), hooks))
+}
+
+// post.service.ts — emit after persisting
+async create(input) {
+  const post = await this.repository.create(input)
+  await this.hooks.emit('post:created', { tenantId: ctx().tenant?.id ?? 'demo', id: post.id, name: post.name })
+  return post
+}
+```
+
+### Type the hook payloads
+
+`BasaltHooks` has an index signature (`[hook: string]: unknown`), so a hook works
+at runtime **without** declaring it. But then its payload is `unknown`, and the
+`document` / `remove` mappers won't type-check (`p.id` errors). Declare the
+payloads once — in any file that's part of the compilation — to get full type
+safety on both `emit` and `syncRule`:
+
+```ts
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
+    'post:created': { tenantId: string; id: string; name: string }
+    'post:updated': { tenantId: string; id: string; name: string }
+    'post:deleted': { tenantId: string; id: string }
+  }
+}
+```
+
+::: tip Not mandatory to run
+The declaration isn't required for the code to run — it's what makes `emit()` and
+the `syncRule` mappers type-safe. Skip it and the payload is `unknown` (you'd
+cast, or annotate each mapper inline).
+:::
 
 ## Production with Meilisearch
 
