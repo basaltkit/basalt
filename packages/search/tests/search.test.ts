@@ -121,6 +121,49 @@ describe('searchPlugin sync bridge', () => {
   })
 })
 
+describe('searchPlugin register resilience', () => {
+  const throwingDriver = {
+    async register() {
+      throw new Error('backend down')
+    },
+    async index() {},
+    async bulk() {},
+    async remove() {},
+    async clear() {},
+    async search() {
+      return { hits: [], total: 0 }
+    },
+  }
+
+  it('boots even when an index fails to register (default: warn, not crash)', async () => {
+    const warn = console.warn
+    console.warn = () => {} // silence the expected warning
+    try {
+      const app = await createApp({
+        plugins: [searchPlugin({ driver: throwingDriver, indexes: [defineIndex({ name: 'notes', fields: ['title'] })] })],
+      }).boot()
+      expect(app.container.get(SEARCH)).toBeDefined()
+      await app.shutdown()
+    } finally {
+      console.warn = warn
+    }
+  })
+
+  it('throws on boot when failOnRegisterError is set', async () => {
+    await expect(
+      createApp({
+        plugins: [
+          searchPlugin({
+            driver: throwingDriver,
+            indexes: [defineIndex({ name: 'notes', fields: ['title'] })],
+            failOnRegisterError: true,
+          }),
+        ],
+      }).boot(),
+    ).rejects.toThrow('backend down')
+  })
+})
+
 interface Recorded {
   url: string
   method: string

@@ -34,6 +34,13 @@ export interface SearchPluginOptions {
   indexes?: IndexDefinition[]
   /** Rules keeping indexes in sync with domain hooks. */
   sync?: SyncRule[]
+  /**
+   * Throw if an index fails to register at boot. Default `false`: a search
+   * backend that's down or misconfigured logs a warning and the app boots
+   * anyway (search stays degraded until the backend is reachable), so an outage
+   * never blocks unrelated work — including CLI commands that don't use search.
+   */
+  failOnRegisterError?: boolean
 }
 
 export function searchPlugin(options: SearchPluginOptions = {}) {
@@ -47,7 +54,20 @@ export function searchPlugin(options: SearchPluginOptions = {}) {
       const search = container.get(SEARCH)
 
       if (driver.register) {
-        for (const index of options.indexes ?? []) await driver.register(index)
+        for (const index of options.indexes ?? []) {
+          try {
+            await driver.register(index)
+          } catch (error) {
+            if (options.failOnRegisterError) throw error
+            // Non-fatal by default: a search backend that's down/misconfigured
+            // shouldn't stop the app booting or block unrelated CLI commands.
+            console.warn(
+              `[basalt:search] could not register index "${index.name}": ${String(
+                (error as { message?: string })?.message ?? error,
+              )} — search is degraded until the backend is reachable.`,
+            )
+          }
+        }
       }
 
       for (const rule of options.sync ?? []) {
