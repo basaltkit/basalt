@@ -1,3 +1,4 @@
+import { fetchWithRetry } from './http.js'
 import {
   singleChunkStream,
   type AIProvider,
@@ -53,7 +54,7 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async generate(options: GenerateOptions): Promise<string> {
-    const res = await this.fetchImpl(this.baseUrl + '/chat/completions', {
+    const { ok, status, body } = await fetchWithRetry(this.fetchImpl, this.baseUrl + '/chat/completions', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -67,12 +68,11 @@ export class OpenAICompatibleProvider implements AIProvider {
       }),
     })
 
-    const text = await res.text()
-    if (!res.ok) {
-      const detail = safeError(text)
-      throw new Error(`OpenAICompatibleProvider: ${res.status}${detail ? ` — ${detail}` : ''}`)
+    if (!ok) {
+      const detail = safeError(body)
+      throw new Error(`OpenAICompatibleProvider: ${status}${detail ? ` — ${detail}` : ''}`)
     }
-    const json = JSON.parse(text) as OpenAIResponse
+    const json = JSON.parse(body) as OpenAIResponse
     return json.choices?.[0]?.message?.content ?? ''
   }
 
