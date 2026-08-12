@@ -1,5 +1,16 @@
 # @basaltkit/logger
 
+## 1.1.0
+
+### Minor Changes
+
+- `LoggerOptions.level` is now the typed union **`LogLevel`** instead of a
+  free-form string, so an invalid level fails to compile instead of silently
+  misbehaving. Exposes **`LOG_LEVELS`** (the runtime array — `'fatal' | 'error' |
+  'warn' | 'info' | 'debug' | 'trace' | 'silent'`) and the **`LogLevel`** type,
+  so apps can type their own option and build a validator with
+  `z.enum(LOG_LEVELS)`. `'silent'` is now included (it wasn't in Pino's `Level`).
+
 ## 1.0.5
 
 ### Patch Changes
