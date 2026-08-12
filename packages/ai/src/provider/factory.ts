@@ -12,6 +12,8 @@ export interface ProviderEnv {
   AI_MODEL?: string
   AI_API_KEY?: string
   AI_BASE_URL?: string
+  /** `'false'` disables SSE streaming for the OpenAI-compatible provider. */
+  AI_STREAM?: string
 }
 
 export interface CreateProviderOptions {
@@ -27,6 +29,7 @@ export function providerEnvFromProcess(): ProviderEnv {
     ...(e.AI_MODEL !== undefined ? { AI_MODEL: e.AI_MODEL } : {}),
     ...(e.AI_API_KEY !== undefined ? { AI_API_KEY: e.AI_API_KEY } : {}),
     ...(e.AI_BASE_URL !== undefined ? { AI_BASE_URL: e.AI_BASE_URL } : {}),
+    ...(e.AI_STREAM !== undefined ? { AI_STREAM: e.AI_STREAM } : {}),
   }
 }
 
@@ -59,11 +62,13 @@ export function createProvider(env: ProviderEnv = {}, options: CreateProviderOpt
     case 'openai':
     case 'openai-compatible':
       // Any OpenAI Chat Completions endpoint — OpenAI, LiteLLM, OpenRouter,
-      // go4ai, etc. Point AI_BASE_URL at the gateway's `/v1`.
+      // go4ai, etc. Point AI_BASE_URL at the gateway's `/v1`. Streams by default
+      // (AI_STREAM=false to disable).
       return new OpenAICompatibleProvider({
         apiKey: env.AI_API_KEY ?? '',
         ...(env.AI_MODEL ? { model: env.AI_MODEL } : {}),
         ...(env.AI_BASE_URL ? { baseUrl: env.AI_BASE_URL } : {}),
+        ...(env.AI_STREAM === 'false' ? { stream: false } : {}),
         ...fetchOpt,
       })
     case 'google':
