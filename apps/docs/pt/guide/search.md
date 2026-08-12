@@ -99,8 +99,52 @@ searchPlugin({
 })
 ```
 
-`syncRule` faz verificação de tipos contra o payload do hook. Devolve `null` para
-saltar um evento.
+O `document` faz upsert de um documento (no create/update); o `remove` apaga um.
+Devolve `null` para saltar um evento.
+
+### Emitir o hook no teu código
+
+O `sync` apenas *reage* — algo tem de **emitir** o hook no `HookBus` do core.
+Passa-o ao teu serviço (os plugins recebem-no no `register`/`boot`) e emite
+depois da escrita:
+
+```ts
+// post.plugin.ts — passar o HookBus ao serviço
+register({ container, hooks }) {
+  container.singleton(POST_SERVICE, (c) => new PostService(c.get(POST_REPOSITORY), hooks))
+}
+
+// post.service.ts — emitir depois de persistir
+async create(input) {
+  const post = await this.repository.create(input)
+  await this.hooks.emit('post:created', { tenantId: ctx().tenant?.id ?? 'demo', id: post.id, name: post.name })
+  return post
+}
+```
+
+### Tipar os payloads dos hooks
+
+O `BasaltHooks` tem uma index signature (`[hook: string]: unknown`), por isso um
+hook funciona em runtime **sem** o declarar. Mas então o payload é `unknown`, e os
+mappers `document` / `remove` não verificam tipos (`p.id` dá erro). Declara os
+payloads uma vez — em qualquer ficheiro que entre na compilação — para teres
+segurança de tipos total no `emit` e no `syncRule`:
+
+```ts
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
+    'post:created': { tenantId: string; id: string; name: string }
+    'post:updated': { tenantId: string; id: string; name: string }
+    'post:deleted': { tenantId: string; id: string }
+  }
+}
+```
+
+::: tip Não é obrigatória para correr
+A declaração não é necessária para o código funcionar — é o que torna o `emit()` e
+os mappers do `syncRule` type-safe. Sem ela, o payload é `unknown` (terias de fazer
+cast, ou anotar cada mapper à mão).
+:::
 
 ## Produção com Meilisearch
 
