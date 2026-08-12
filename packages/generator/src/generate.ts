@@ -38,12 +38,12 @@ export function generate(kind: GeneratorKind, name: string, options: GeneratorOp
 export function generateResource(name: string, options: GeneratorOptions = {}): GeneratedFile[] {
   const n: Names = names(name)
   return [
-    schemaFile(n),
+    schemaFile(n, options),
     repositoryFile(n, options),
-    ...(options.prisma ? [prismaModelFile(n)] : []),
-    serviceFile(n),
+    ...(options.prisma ? [prismaModelFile(n, options)] : []),
+    serviceFile(n, options),
     pluginFile(n, options),
-    routesFile(n),
+    routesFile(n, options),
     testFile(n),
   ]
 }

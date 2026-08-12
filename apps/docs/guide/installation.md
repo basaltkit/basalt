@@ -95,8 +95,13 @@ you adopt one capability at a time.
 Once you have an app, generate full resource verticals with the CLI generator:
 
 ```bash
-basalt make:resource Project
+basalt make:resource Project                       # in-memory repository
+basalt make:resource Project --prisma              # Prisma-backed + a schema.prisma model
+basalt make:resource Project --prisma --soft-delete # + a deletedAt column & restore
 ```
 
 This emits a schema, repository, service, DI plugin, typed CRUD routes and a
-test — all wired and ready to run.
+test — all wired and ready to run. Models get **`createdAt` + `updatedAt`**
+automatically. **`--soft-delete`** adds a `deletedAt` column (so `delete` marks
+the row instead of removing it, and `list`/`find` skip soft-deleted rows), a
+`restore()` method, and a `POST /projects/:id/restore` route.

@@ -98,8 +98,14 @@ Assim que tiveres uma app, gera verticais de recurso completas com o gerador da
 CLI:
 
 ```bash
-basalt make:resource Project
+basalt make:resource Project                       # repositório em memória
+basalt make:resource Project --prisma              # repositório Prisma + modelo no schema.prisma
+basalt make:resource Project --prisma --soft-delete # + coluna deletedAt e restore
 ```
 
 Isto emite um schema, repositório, serviço, plugin de DI, rotas CRUD tipadas e um
-teste — tudo ligado e pronto a correr.
+teste — tudo ligado e pronto a correr. Os modelos ganham **`createdAt` +
+`updatedAt`** automaticamente. O **`--soft-delete`** adiciona uma coluna
+`deletedAt` (o `delete` marca a linha em vez de a remover, e o `list`/`find`
+ignoram as linhas soft-deleted), um método `restore()` e uma rota
+`POST /projects/:id/restore`.

@@ -1,5 +1,19 @@
 # @basaltkit/generator
 
+## 1.1.0
+
+### Minor Changes
+
+- **`make:resource` now generates `createdAt` + `updatedAt` by default** (schema,
+  Prisma model with `@updatedAt`, and both repositories).
+- **New `--soft-delete` flag**: adds a `deletedAt` column, makes `delete` a soft
+  delete, hides soft-deleted rows from `list`/`find`, and generates a `restore()`
+  method plus a `POST /…/:id/restore` route.
+- **Fix:** the Prisma repository now maps the row's `Date` timestamps to the API
+  type's ISO strings (via a `to<Name>` mapper). Before, the generated
+  `PrismaRepository` returned raw `Date` columns and failed to typecheck against
+  the schema's string timestamps.
+
 ## 1.0.5
 
 ### Patch Changes

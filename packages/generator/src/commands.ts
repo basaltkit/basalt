@@ -38,6 +38,7 @@ function specs(): MakeSpec[] {
  * CLI commands: `basalt make:resource Project`, `basalt make:service Project`, …
  * Options: --dir=<path> (target root), --force (overwrite),
  * --prisma (Prisma-backed repository + schema.prisma model),
+ * --soft-delete (deletedAt column + restore() + restore route),
  * --no-register (skip wiring the resource into src/app.ts).
  */
 export function generatorCommands(): CommandDefinition[] {
@@ -48,14 +49,19 @@ export function generatorCommands(): CommandDefinition[] {
       async handle({ args, flags, io }) {
         const name = args[0]
         if (!name) {
-          io.error(`Usage: basalt ${spec.command} <Name> [--dir=<path>] [--force] [--prisma]`)
+          io.error(
+            `Usage: basalt ${spec.command} <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete]`,
+          )
           return 1
         }
         const options = {
           ...(typeof flags['dir'] === 'string' ? { baseDir: flags['dir'] } : {}),
           force: flags['force'] === true,
         }
-        const genOptions: GeneratorOptions = { prisma: flags['prisma'] === true }
+        const genOptions: GeneratorOptions = {
+          prisma: flags['prisma'] === true,
+          softDelete: flags['soft-delete'] === true,
+        }
         try {
           const written = await writeGenerated(spec.build(name, genOptions), options)
           io.log(`Generated ${written.length} file(s):`)
