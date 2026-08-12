@@ -1,3 +1,4 @@
+import { fetchWithRetry } from './http.js'
 import {
   singleChunkStream,
   type AIProvider,
@@ -57,7 +58,7 @@ export class AnthropicProvider implements AIProvider {
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role, content: m.content }))
 
-    const res = await this.fetchImpl(this.baseUrl + '/v1/messages', {
+    const { ok, status, body } = await fetchWithRetry(this.fetchImpl, this.baseUrl + '/v1/messages', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -73,12 +74,11 @@ export class AnthropicProvider implements AIProvider {
       }),
     })
 
-    const text = await res.text()
-    if (!res.ok) {
-      const detail = safeError(text)
-      throw new Error(`AnthropicProvider: ${res.status}${detail ? ` — ${detail}` : ''}`)
+    if (!ok) {
+      const detail = safeError(body)
+      throw new Error(`AnthropicProvider: ${status}${detail ? ` — ${detail}` : ''}`)
     }
-    const json = JSON.parse(text) as AnthropicResponse
+    const json = JSON.parse(body) as AnthropicResponse
     return (json.content ?? [])
       .filter((block) => block.type === 'text')
       .map((block) => block.text ?? '')

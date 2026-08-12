@@ -1,3 +1,4 @@
+import { fetchWithRetry } from './http.js'
 import {
   singleChunkStream,
   type AIProvider,
@@ -40,7 +41,7 @@ export class OllamaProvider implements AIProvider {
   }
 
   async generate(options: GenerateOptions): Promise<string> {
-    const res = await this.fetchImpl(this.baseUrl + '/api/chat', {
+    const { ok, status, body } = await fetchWithRetry(this.fetchImpl, this.baseUrl + '/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -50,9 +51,8 @@ export class OllamaProvider implements AIProvider {
         ...(options.temperature !== undefined ? { options: { temperature: options.temperature } } : {}),
       }),
     })
-    const text = await res.text()
-    if (!res.ok) throw new Error(`OllamaProvider: ${res.status} — ${text.slice(0, 200)}`)
-    const json = JSON.parse(text) as OllamaResponse
+    if (!ok) throw new Error(`OllamaProvider: ${status} — ${body.slice(0, 200)}`)
+    const json = JSON.parse(body) as OllamaResponse
     if (json.error) throw new Error(`OllamaProvider: ${json.error}`)
     return json.message?.content ?? ''
   }
