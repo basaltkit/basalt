@@ -143,6 +143,50 @@ await tracer.inSpan(tracer.startSpan('charge.capture', { kind: 'client' }), asyn
 For local development, swap in `ConsoleSpanExporter`; in tests,
 `InMemorySpanExporter` collects spans for assertions.
 
+## Logging — `loggerPlugin`
+
+`@basaltkit/logger` wraps Pino: structured JSON logs, per-request context fields
+(`requestId`, `tenantId`, `userId`…) mixed in automatically, and secret redaction
+on by default.
+
+```ts
+import { loggerPlugin } from '@basaltkit/logger'
+
+loggerPlugin({
+  level: 'info',            // one of LOG_LEVELS; 'silent' turns logging off
+  pretty: true,             // human-readable dev output (needs pino-pretty)
+  redact: ['user.ssn'],     // extra paths to redact (on top of the defaults)
+  base: { service: 'api' }, // fixed fields on every line
+})
+```
+
+### Log levels are typed
+
+`level` is the union **`LogLevel`** — not a free string — so a typo fails to
+compile. From most to least severe:
+
+`'fatal'` · `'error'` · `'warn'` · `'info'` (default) · `'debug'` · `'trace'` · `'silent'`
+
+Reuse the same type and values (`LogLevel` / `LOG_LEVELS`) for your own option and
+env validation, so a wrong level is caught in code **and** at boot:
+
+```ts
+import { z } from 'zod'
+import { defineEnv } from '@basaltkit/env'
+import { LOG_LEVELS, type LogLevel } from '@basaltkit/logger'
+
+// env — an invalid LOG_LEVEL is rejected at startup
+const env = defineEnv({ LOG_LEVEL: z.enum(LOG_LEVELS).default('info') })
+
+// your own option — an invalid level is a compile error
+interface BuildAppOptions { logLevel?: LogLevel }
+```
+
+::: tip 'silent'
+`'silent'` disables all output — handy for CLI commands and tests. It's part of
+`LogLevel` (Pino's own `Level` type omits it).
+:::
+
 ## Request correlation
 
 Every request also carries a `requestId` and `correlationId` in the
