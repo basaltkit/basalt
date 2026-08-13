@@ -2,7 +2,7 @@ import type { ProjectContext } from '../context/project.js'
 import type { AIProvider } from '../provider/types.js'
 import { buildPlanContext } from './context.js'
 import { BASALT_KNOWLEDGE } from './knowledge.js'
-import type { ArchitecturePlan, PlanEntity, PlanStep, PlanStepKind } from './types.js'
+import type { ArchitecturePlan, PlanEntity, PlanRelation, PlanStep, PlanStepKind } from './types.js'
 
 export interface CreatePlanOptions {
   temperature?: number
@@ -87,7 +87,7 @@ function normalizeEntities(value: unknown): PlanEntity[] {
   return value
     .filter((e): e is Record<string, unknown> => typeof e === 'object' && e !== null)
     .map((e) => {
-      const relations = stringArray(e['relations'])
+      const relations = normalizeRelations(e['relations'])
       const entity: PlanEntity = {
         name: typeof e['name'] === 'string' ? e['name'] : 'Unnamed',
         fields: normalizeFields(e['fields']),
@@ -96,6 +96,29 @@ function normalizeEntities(value: unknown): PlanEntity[] {
       }
       return entity
     })
+}
+
+const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1)
+const upperFirst = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
+/** Accept relations as bare model names (`"Paciente"`) or objects (`{ name, model }`). */
+function normalizeRelations(value: unknown): PlanRelation[] {
+  if (!Array.isArray(value)) return []
+  const out: PlanRelation[] = []
+  for (const r of value) {
+    if (typeof r === 'string' && r.trim() !== '') {
+      const model = r.trim()
+      out.push({ name: lowerFirst(model), model })
+    } else if (typeof r === 'object' && r !== null) {
+      const obj = r as Record<string, unknown>
+      const rawModel = typeof obj['model'] === 'string' ? obj['model'] : ''
+      const rawName = typeof obj['name'] === 'string' ? obj['name'] : ''
+      const model = rawModel !== '' ? rawModel : rawName !== '' ? upperFirst(rawName) : ''
+      if (model === '') continue
+      out.push({ name: rawName !== '' ? rawName : lowerFirst(model), model })
+    }
+  }
+  return out
 }
 
 function normalizeFields(value: unknown): PlanEntity['fields'] {

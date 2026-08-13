@@ -60,6 +60,7 @@ export type {
   ArchitecturePlan,
   PlanEntity,
   PlanField,
+  PlanRelation,
   PlanStep,
   PlanStepKind,
 } from './plan/types.js'
@@ -78,6 +79,14 @@ export {
   type CanonicalType,
 } from './make/fields.js'
 export { renderPrismaRepository, type RepositoryOptions } from './make/repository.js'
+export {
+  externalRelationTargets,
+  foreignKey,
+  injectPrismaRelations,
+  inverseRelationLines,
+  relationFieldLines,
+  relationForeignKeys,
+} from './make/relations.js'
 export { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './make/wire.js'
 export type {
   MakeOptions,
