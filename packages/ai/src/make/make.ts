@@ -1,13 +1,15 @@
 import {
   FileExistsError,
   generateResource,
+  names,
   registerResourceInApp,
   writeGenerated,
   type GeneratedFile,
 } from '@basaltkit/generator'
 import type { ProjectContext } from '../context/project.js'
 import type { ArchitecturePlan, PlanEntity } from '../plan/types.js'
-import { injectPrismaFields, injectZodFields } from './fields.js'
+import { domainFields, injectPrismaFields, injectZodFields } from './fields.js'
+import { renderPrismaRepository } from './repository.js'
 import { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './wire.js'
 import type { MakeOptions, MakeResult, ResourceBuild, ReviewItem, ReviewResult } from './types.js'
 
@@ -40,7 +42,7 @@ export async function runMake(
     const softDelete = options.softDelete ?? gen?.softDelete ?? false
 
     const generated = generateResource(entity.name, { prisma, softDelete })
-    const { files, augmented, guarded, audited } = augmentFiles(generated, entity, plan, ctx)
+    const { files, augmented, guarded, audited } = augmentFiles(generated, entity, plan, ctx, { prisma, softDelete })
 
     const build: ResourceBuild = {
       name: entity.name,
@@ -110,8 +112,16 @@ function augmentFiles(
   entity: PlanEntity,
   plan: ArchitecturePlan,
   ctx: ProjectContext,
+  opts: { prisma: boolean; softDelete: boolean },
 ): { files: GeneratedFile[]; augmented: boolean; guarded: boolean; audited: boolean } {
   const tenantScoped = ctx.stack.tenancy && entity.tenantScoped
+  // Drop the generator's base `name` column when the entity has its own fields
+  // and none is literally `name` (else keep it as the label field).
+  const removeName = domainFields(entity.fields).length > 0 && !entity.fields.some((f) => f.name.toLowerCase() === 'name')
+  const keepName = !removeName
+  // Per-entity permission namespace — so each entity in a multi-entity plan is
+  // guarded by its own permission, not a shared one from permissions[0].
+  const guardPrefix = names(entity.name).pluralKebab
   const wireGuards = ctx.stack.rbac && plan.permissions.length > 0
   const wireAudit = ctx.stack.audit && plan.auditEvents.length > 0
   let augmented = false
@@ -120,17 +130,27 @@ function augmentFiles(
 
   const out = files.map((file) => {
     if (file.path.endsWith('.prisma')) {
-      const result = injectPrismaFields(file.content, entity.fields, tenantScoped)
+      const result = injectPrismaFields(file.content, entity.fields, tenantScoped, removeName)
       augmented = augmented || result.injected
       return { ...file, content: result.content }
     }
     if (file.path.endsWith('.schema.ts')) {
-      const result = injectZodFields(file.content, entity.fields)
+      const result = injectZodFields(file.content, entity.fields, removeName)
       augmented = augmented || result.injected
       return { ...file, content: result.content }
     }
+    if (file.path.endsWith('.repository.ts') && opts.prisma) {
+      // Replace the generator's repository with a complete mapper (all domain
+      // fields) + explicit tenant scoping when tenant-scoped.
+      const content = renderPrismaRepository(entity.name, entity.fields, {
+        softDelete: opts.softDelete,
+        tenantScoped,
+        keepName,
+      })
+      return { ...file, content }
+    }
     if (file.path.endsWith('.routes.ts') && wireGuards) {
-      const result = injectPermissionGuards(file.content, plan.permissions)
+      const result = injectPermissionGuards(file.content, guardPrefix)
       guarded = guarded || result.injected
       return { ...file, content: result.content }
     }
@@ -155,7 +175,16 @@ function buildFollowUps(plan: ArchitecturePlan, resources: ResourceBuild[]): str
     const list = prismaResources
       .map((r) => `src/modules/${kebab(r.name)}/${kebab(r.name)}.prisma`)
       .join(', ')
-    followUps.push(`Copy the generated model(s) (${list}) into prisma/schema.prisma, then run \`basalt prisma:sync\`.`)
+    followUps.push(
+      `Copy the generated model(s) (${list}) into prisma/schema.prisma, then run ` +
+        '`npx prisma db push` (or `prisma migrate dev`) to create the table(s) and regenerate the client — then restart the server.',
+    )
+  }
+  const withRelations = plan.entities.filter((e) => e.relations && e.relations.length > 0)
+  if (withRelations.length > 0) {
+    followUps.push(
+      'Relations are generated as foreign-key String columns (e.g. `<name>Id`). Add Prisma `@relation` in schema.prisma if you need referential integrity.',
+    )
   }
   const guarded = resources.some((r) => r.guarded)
   const audited = resources.some((r) => r.audited)
@@ -243,7 +272,7 @@ function reviewBuild(
 
   // Migration is always manual (generator emits a snippet, not the live schema).
   if (resources.some((r) => r.prisma)) {
-    items.push({ label: 'Migration', status: 'warn', detail: 'add the model to schema.prisma + run basalt prisma:sync' })
+    items.push({ label: 'Migration', status: 'warn', detail: 'add the model to schema.prisma + run npx prisma db push' })
   }
 
   return { items, ok: !items.some((i) => i.status === 'fail') }
