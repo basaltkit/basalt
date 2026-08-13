@@ -50,7 +50,7 @@ describe('injectPermissionGuards (unit)', () => {
   }),
 ]`
   it('adds meta.can per method', () => {
-    const { content, injected } = injectPermissionGuards(routes, ['patients.view', 'patients.create'])
+    const { content, injected } = injectPermissionGuards(routes, 'patients')
     expect(injected).toBe(true)
     expect(content).toContain("meta: { can: 'patients.view' },")
     expect(content).toContain("meta: { can: 'patients.create' },")

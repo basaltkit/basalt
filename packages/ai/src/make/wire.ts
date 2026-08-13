@@ -37,14 +37,14 @@ function actionFor(method: string, url: string): Action | null {
 
 /**
  * Inject `meta: { can: '<prefix>.<action>' }` into every generated route, so the
- * permissions guard enforces it. `prefix` is taken from the plan's permissions
- * (e.g. `patients`).
+ * permissions guard enforces it. `prefix` is the resource's permission namespace
+ * (e.g. `patients`) — derived per entity by the caller, so each entity in a
+ * multi-entity plan gets its own correct permission, not a shared one.
  */
 export function injectPermissionGuards(
   content: string,
-  permissions: string[],
+  prefix: string,
 ): { content: string; injected: boolean } {
-  const prefix = permissions[0]?.split('.')[0]
   if (!prefix) return { content, injected: false }
 
   let injected = false

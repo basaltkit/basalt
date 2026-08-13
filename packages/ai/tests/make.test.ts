@@ -122,7 +122,7 @@ describe('runMake (dry-run)', () => {
     const tenantItem = result.review.items.find((i) => i.label === 'Tenant isolation')
     expect(tenantItem?.status).toBe('pass')
     expect(result.review.ok).toBe(true)
-    expect(result.followUps.join('\n')).toMatch(/prisma:sync/)
+    expect(result.followUps.join('\n')).toMatch(/prisma db push/)
     expect(result.followUps.join('\n')).toMatch(/patients\.create/)
   })
 
