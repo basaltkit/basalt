@@ -100,13 +100,21 @@ export {
   relationForeignKeys,
 } from './make/relations.js'
 export { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './make/wire.js'
+export {
+  extractModelBlock,
+  mergeModelsIntoSchema,
+  runPrismaPush,
+  type ModelBlock,
+} from './make/schema.js'
 export type {
   MakeOptions,
   MakeResult,
+  Migration,
   ResourceBuild,
   ReviewItem,
   ReviewResult,
   ReviewStatus,
+  SchemaMerge,
 } from './make/types.js'
 
 // Rendering + CLI wiring.

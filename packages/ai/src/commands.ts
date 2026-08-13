@@ -165,7 +165,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
       async handle({ args, flags, io }) {
         const request = args.join(' ').trim()
         if (!request) {
-          io.error('Usage: basalt ai:make "<what to build>" [--dry-run] [--yes] [--force] [--verify]')
+          io.error('Usage: basalt ai:make "<what to build>" [--dry-run] [--yes] [--force] [--migrate] [--verify]')
           return 1
         }
         let provider
@@ -212,7 +212,11 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         io.log('')
         let result
         try {
-          result = await runMake(ctx, plan, { baseDir, force: flags['force'] === true })
+          result = await runMake(ctx, plan, {
+            baseDir,
+            force: flags['force'] === true,
+            migrate: flags['migrate'] === true,
+          })
         } catch (error) {
           io.error((error as Error).message)
           return 1

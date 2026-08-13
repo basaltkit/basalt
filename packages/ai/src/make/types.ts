@@ -11,6 +11,30 @@ export interface MakeOptions {
   prisma?: boolean
   /** Force soft-delete (default: from the plan's generator command). */
   softDelete?: boolean
+  /** Path to the Prisma schema to merge models into. Default `prisma/schema.prisma`. */
+  schemaPath?: string
+  /** After merging models, run `prisma db push` (creates tables + regenerates the client). */
+  migrate?: boolean
+}
+
+/** How the generated models were merged into prisma/schema.prisma. */
+export interface SchemaMerge {
+  path: string
+  /** The schema file was found on disk. */
+  found: boolean
+  /** Models appended. */
+  merged: string[]
+  /** Models already present (left as is). */
+  skipped: string[]
+  /** The schema file was written (false on dry-run). */
+  written: boolean
+}
+
+/** Result of an opt-in `prisma db push`. */
+export interface Migration {
+  ok: boolean
+  /** Tail of the command output. */
+  output: string
 }
 
 export interface ResourceBuild {
@@ -51,7 +75,11 @@ export interface MakeResult {
   request: string
   dryRun: boolean
   resources: ResourceBuild[]
-  /** Manual follow-ups the scaffold can't do yet (migration, permissions, audit). */
+  /** How models were merged into the Prisma schema (undefined when no Prisma resource). */
+  schema?: SchemaMerge
+  /** Result of `--migrate` (undefined when not requested). */
+  migration?: Migration
+  /** Manual follow-ups the scaffold can't do yet. */
   followUps: string[]
   review: ReviewResult
 }
