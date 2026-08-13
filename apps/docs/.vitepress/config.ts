@@ -38,6 +38,10 @@ export default defineConfig({
               ],
             },
             {
+              text: 'Experiência de desenvolvimento',
+              items: [{ text: 'Desenvolvimento assistido por IA', link: '/pt/guide/ai' }],
+            },
+            {
               text: 'Blocos de SaaS',
               items: [
                 { text: 'Multi-tenancy', link: '/pt/guide/tenancy' },
@@ -139,6 +143,10 @@ export default defineConfig({
             { text: 'Core Concepts', link: '/guide/concepts' },
             { text: 'HTTP Adapters', link: '/guide/adapters' },
           ],
+        },
+        {
+          text: 'Developer Experience',
+          items: [{ text: 'AI-assisted development', link: '/guide/ai' }],
         },
         {
           text: 'SaaS Building Blocks',
