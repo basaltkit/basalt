@@ -79,6 +79,7 @@ export {
   type CanonicalType,
 } from './make/fields.js'
 export { renderPrismaRepository, type RepositoryOptions } from './make/repository.js'
+export { permissionList, renderPermissionsFile } from './make/permissions.js'
 export {
   externalRelationTargets,
   foreignKey,
