@@ -137,7 +137,8 @@ export async function registerResourceInApp(
   }
 
   // Both anchors must be present, or we make no change (all-or-nothing).
-  const routesAnchor = /fastifyPlugin\(\s*\{\s*routes:\s*\[/
+  // Tolerate other options before `routes:` (e.g. `fastifyPlugin({ fastify: {...}, routes: [...] })`).
+  const routesAnchor = /fastifyPlugin\(\s*\{[\s\S]*?\broutes:\s*\[/
   const pluginAnchor = /^([ \t]*)fastifyPlugin\(/m
   const imports = [...source.matchAll(/^import .*$/gm)]
   const lastImport = imports.at(-1)
