@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/ai",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "AI-native developer experience for Basalt: a provider-agnostic engine plus `basalt ai` CLI that understands the project's stack, analyzes it, and diagnoses issues — following the framework's own conventions, not inventing new ones.",
   "license": "MIT",
   "type": "module",

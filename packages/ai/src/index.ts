@@ -117,6 +117,12 @@ export type {
   SchemaMerge,
 } from './make/types.js'
 
+// Review agent (spec §19/§20) — LLM critique of the generated code.
+export { buildReviewContext, parseReview, reviewImplementation, type ReviewOptions } from './review/review.js'
+export { REVIEW_KNOWLEDGE } from './review/knowledge.js'
+export { renderAgentReview } from './review/render.js'
+export type { AgentReview, ReviewIssue } from './review/types.js'
+
 // Rendering + CLI wiring.
 export { renderAnalysis, renderDoctor, type LineWriter } from './render.js'
 export { aiCommands, type AiCommandsOptions } from './commands.js'

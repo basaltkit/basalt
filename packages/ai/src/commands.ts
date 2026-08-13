@@ -9,6 +9,8 @@ import { renderPlan } from './plan/render.js'
 import { runMake } from './make/make.js'
 import { renderMakeResult } from './make/render.js'
 import { verifyProject } from './make/verify.js'
+import { reviewImplementation } from './review/review.js'
+import { renderAgentReview } from './review/render.js'
 import { renderAnalysis, renderDoctor } from './render.js'
 
 export interface AiCommandsOptions {
@@ -165,7 +167,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
       async handle({ args, flags, io }) {
         const request = args.join(' ').trim()
         if (!request) {
-          io.error('Usage: basalt ai:make "<what to build>" [--dry-run] [--yes] [--force] [--migrate] [--verify]')
+          io.error('Usage: basalt ai:make "<what to build>" [--dry-run] [--yes] [--force] [--migrate] [--review] [--verify]')
           return 1
         }
         let provider
@@ -191,11 +193,27 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         renderPlan(plan, io)
         io.log('')
 
+        // Agent review over the generated code — read-only, uses the same provider.
+        const agentReview = async (result: Awaited<ReturnType<typeof runMake>>): Promise<boolean> => {
+          if (flags['review'] !== true) return true
+          io.log('')
+          io.log('Reviewing (agent)...')
+          io.log('')
+          try {
+            const verdict = await reviewImplementation(provider, plan, result)
+            renderAgentReview(verdict, io)
+            return verdict.approved
+          } catch (error) {
+            io.error(`Review inconclusive — ${(error as Error).message}`)
+            return true // don't block the build on a review hiccup
+          }
+        }
+
         const dryRun = flags['dry-run'] === true
         if (dryRun) {
           const result = await runMake(ctx, plan, { dryRun: true, baseDir })
           renderMakeResult(result, io)
-          return 0
+          return (await agentReview(result)) ? 0 : 1
         }
 
         // Safety: writes require confirmation unless --yes (spec §10).
@@ -223,6 +241,8 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         }
         renderMakeResult(result, io)
 
+        const approved = await agentReview(result)
+
         if (flags['verify'] === true) {
           io.log('')
           io.log('Verifying (typecheck)...')
@@ -236,7 +256,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
           }
         }
 
-        return result.review.ok ? 0 : 1
+        return result.review.ok && approved ? 0 : 1
       },
     }),
   ]
