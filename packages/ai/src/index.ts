@@ -47,6 +47,17 @@ export {
 } from './doctor/types.js'
 export { DEFAULT_RULES } from './doctor/rules.js'
 export { hasErrors, runDoctor } from './doctor/run.js'
+export {
+  applyFixEdits,
+  fixableIds,
+  planFix,
+  renderFixes,
+  FIXES,
+  type FileEdit,
+  type FixApplier,
+  type FixOutcome,
+  type FixStatus,
+} from './doctor/fixes.js'
 
 // Analysis report (spec §5, Analyze).
 export { analyze, type AnalysisReport } from './analyze/run.js'
