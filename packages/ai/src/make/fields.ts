@@ -64,6 +64,14 @@ function usable(field: PlanField): boolean {
   return field.name.trim() !== '' && !RESERVED.has(field.name.toLowerCase())
 }
 
+/** Zod validator for a field, honoring an enum (`z.enum([...])`) over its base type. */
+export function zodForField(field: PlanField, create: boolean): string {
+  if (field.enum && field.enum.length > 0) {
+    return `z.enum([${field.enum.map((v) => `'${v}'`).join(', ')}])`
+  }
+  return zodValidator(canonicalType(field.type), create)
+}
+
 /** The entity's own fields, minus reserved/base columns and duplicates. */
 export function domainFields(fields: PlanField[]): PlanField[] {
   const seen = new Set<string>()
@@ -128,14 +136,14 @@ export function injectZodFields(
   let injected = false
 
   const entityAnchor = /^([ \t]*)name: z\.string\(\),.*$/m
-  const entityLines = usableFields.map((f) => `  ${f.name}: ${zodValidator(canonicalType(f.type), false)},`)
+  const entityLines = usableFields.map((f) => `  ${f.name}: ${zodForField(f, false)},`)
   if (entityAnchor.test(out)) {
     out = out.replace(entityAnchor, (line) => `${line}\n${entityLines.join('\n')}`)
     injected = true
   }
 
   const createAnchor = /^([ \t]*)name: z\.string\(\)\.min\(1\),.*$/m
-  const createLines = usableFields.map((f) => `  ${f.name}: ${zodValidator(canonicalType(f.type), true)},`)
+  const createLines = usableFields.map((f) => `  ${f.name}: ${zodForField(f, true)},`)
   if (createAnchor.test(out)) {
     out = out.replace(createAnchor, (line) => `${line}\n${createLines.join('\n')}`)
     injected = true

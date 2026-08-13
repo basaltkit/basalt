@@ -86,6 +86,7 @@ export {
   injectPrismaFields,
   injectZodFields,
   prismaType,
+  zodForField,
   zodValidator,
   type CanonicalType,
 } from './make/fields.js'
