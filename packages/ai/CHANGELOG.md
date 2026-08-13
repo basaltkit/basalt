@@ -1,5 +1,19 @@
 # @basaltkit/ai
 
+## 0.7.0
+
+### Minor Changes
+
+- **Review agent (Fase 10, spec §19/§20).** `ai:make --review` runs an LLM pass
+  over the *generated code* (model, schema, routes, service, repository,
+  permissions) plus the deterministic review, and returns a verdict with issues by
+  dimension (tenancy, security, rbac, validation, audit, tests, fit). `approved` is
+  **derived from the issues** — any error-severity issue blocks (and makes the
+  command exit non-zero), warnings don't. Reuses the same provider as planning; a
+  review error is reported but never fails the build. Read-only — it judges, it
+  doesn't edit. `reviewImplementation` / `parseReview` are exported and
+  provider-injectable for testing.
+
 ## 0.6.0
 
 ### Minor Changes
