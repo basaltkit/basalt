@@ -1,5 +1,17 @@
 # @basaltkit/ai
 
+## 0.8.0
+
+### Minor Changes
+
+- **OpenAPI enrichment (Fase 11, spec §14).** `ai:make` now adds a `summary` and
+  `tags` to every generated route's `meta` (merging with the RBAC `can` guard) —
+  `List clientes`, `Create a cliente`, `Get a cliente`, … tagged by the resource.
+  Paired with `@basaltkit/http@1.1.0` (which renders summary/description/tags/
+  operationId + human status descriptions), the generated OpenAPI is grouped by
+  resource and readable instead of a flat, undescribed list. Requires
+  `@basaltkit/http` ≥ 1.1.0 in the app for the metadata to surface.
+
 ## 0.7.0
 
 ### Minor Changes

@@ -91,6 +91,7 @@ export {
 } from './make/fields.js'
 export { renderPrismaRepository, type RepositoryOptions } from './make/repository.js'
 export { permissionList, renderPermissionsFile } from './make/permissions.js'
+export { injectOpenApiMeta } from './make/openapi.js'
 export {
   externalRelationTargets,
   foreignKey,

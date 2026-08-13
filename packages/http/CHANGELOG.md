@@ -1,5 +1,11 @@
 # @basaltkit/http
 
+## 1.1.0
+
+### Minor Changes
+
+- `generateOpenApi` now renders `summary`, `description`, `tags` and `operationId` from `route.meta`, and gives each response a human status description (201 → Created, 204 → No Content, 404 → Not Found, …) instead of a flat "OK".
+
 ## 1.0.5
 
 ### Minor Changes
