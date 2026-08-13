@@ -16,6 +16,7 @@ import {
   relationFieldLines,
   relationForeignKeys,
 } from './relations.js'
+import { renderPermissionsFile } from './permissions.js'
 import { renderPrismaRepository } from './repository.js'
 import { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './wire.js'
 import type { MakeOptions, MakeResult, ResourceBuild, ReviewItem, ReviewResult } from './types.js'
@@ -180,6 +181,13 @@ function augmentFiles(
     }
     return file
   })
+
+  // Declare the resource's permissions + a grant helper (closes the RBAC loop).
+  if (guarded) {
+    const kebab = names(entity.name).kebab
+    out.push({ path: `src/modules/${kebab}/${kebab}.permissions.ts`, content: renderPermissionsFile(entity.name) })
+  }
+
   return { files: out, augmented, guarded, audited }
 }
 
@@ -202,12 +210,13 @@ function buildFollowUps(plan: ArchitecturePlan, resources: ResourceBuild[]): str
         '(e.g. `items <This>[]`) to those existing models in schema.prisma so Prisma can validate the relation.',
     )
   }
-  const guarded = resources.some((r) => r.guarded)
+  const guardedResources = resources.filter((r) => r.guarded)
   const audited = resources.some((r) => r.audited)
-  if (plan.permissions.length > 0 && !guarded) {
+  if (plan.permissions.length > 0 && guardedResources.length === 0) {
     followUps.push(`Register RBAC permissions (${plan.permissions.join(', ')}) and guard the routes.`)
-  } else if (guarded) {
-    followUps.push(`Grant the permissions (${plan.permissions.join(', ')}) to the roles that should have them.`)
+  } else if (guardedResources.length > 0) {
+    const helpers = guardedResources.map((r) => `grant${names(r.name).pascal}Permissions(store, 'admin')`).join(', ')
+    followUps.push(`Grant permissions to your roles during seed/setup — call ${helpers} (declared in each module's *.permissions.ts).`)
   }
   if (plan.auditEvents.length > 0 && !audited) {
     followUps.push(`Emit audit events (${plan.auditEvents.join(', ')}) on create/update/delete.`)
@@ -263,7 +272,7 @@ function reviewBuild(
     const guarded = resources.some((r) => r.guarded)
     items.push(
       guarded
-        ? { label: 'Permissions', status: 'pass', detail: 'routes guarded with meta.can (grant them to roles)' }
+        ? { label: 'Permissions', status: 'pass', detail: 'routes guarded + permissions declared in *.permissions.ts (grant via the helper)' }
         : {
             label: 'Permissions',
             status: 'warn',
