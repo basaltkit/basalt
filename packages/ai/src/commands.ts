@@ -8,6 +8,7 @@ import { createPlan } from './plan/plan.js'
 import { renderPlan } from './plan/render.js'
 import { runMake } from './make/make.js'
 import { renderMakeResult } from './make/render.js'
+import { runPrismaPush } from './make/schema.js'
 import { verifyProject } from './make/verify.js'
 import { reviewImplementation } from './review/review.js'
 import { renderAgentReview } from './review/render.js'
@@ -167,7 +168,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
       async handle({ args, flags, io }) {
         const request = args.join(' ').trim()
         if (!request) {
-          io.error('Usage: basalt ai:make "<what to build>" [--dry-run] [--yes] [--force] [--migrate] [--review] [--verify]')
+          io.error('Usage: basalt ai:make "<what to build>" [--dry-run] [--yes] [--force] [--migrate|--no-migrate] [--review] [--verify]')
           return 1
         }
         let provider
@@ -233,13 +234,40 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
           result = await runMake(ctx, plan, {
             baseDir,
             force: flags['force'] === true,
-            migrate: flags['migrate'] === true,
+            // --migrate, or --yes (pre-consented), runs prisma db push inside runMake.
+            migrate: flags['migrate'] === true || flags['yes'] === true,
           })
         } catch (error) {
           io.error((error as Error).message)
           return 1
         }
         renderMakeResult(result, io)
+
+        // The step most often forgotten: without db push the Prisma client has no
+        // delegate for the new model, so every route 500s. Offer it right here.
+        if (
+          !result.migration &&
+          result.schema?.found &&
+          flags['no-migrate'] !== true &&
+          result.resources.some((r) => r.prisma)
+        ) {
+          io.log('')
+          const ok = await io.confirm(
+            'Run `prisma db push` now to create the table(s) + regenerate the Prisma client? (the routes 500 until you do)',
+          )
+          if (ok) {
+            io.log('Running prisma db push...')
+            const push = await runPrismaPush(baseDir)
+            io.log(
+              push.ok
+                ? '✓ prisma db push done — restart the dev server to load the regenerated client.'
+                : `✗ prisma db push failed:\n${push.output}`,
+            )
+            if (!push.ok) return 1
+          } else {
+            io.log('Skipped — run `npx prisma db push` and restart the server before using the routes.')
+          }
+        }
 
         const approved = await agentReview(result)
 
