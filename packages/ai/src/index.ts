@@ -70,12 +70,14 @@ export { renderMakeResult } from './make/render.js'
 export { verifyProject, type VerifyResult } from './make/verify.js'
 export {
   canonicalType,
+  domainFields,
   injectPrismaFields,
   injectZodFields,
   prismaType,
   zodValidator,
   type CanonicalType,
 } from './make/fields.js'
+export { renderPrismaRepository, type RepositoryOptions } from './make/repository.js'
 export { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './make/wire.js'
 export type {
   MakeOptions,
