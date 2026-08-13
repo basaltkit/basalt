@@ -98,8 +98,8 @@ export function injectPrismaFields(
 
   const extras: string[] = []
   if (tenantScoped && !hasPrismaField(content, 'tenantId')) extras.push('  tenantId  String')
-  for (const field of fields) {
-    if (!usable(field) || hasPrismaField(content, field.name)) continue
+  for (const field of domainFields(fields)) {
+    if (hasPrismaField(content, field.name)) continue
     extras.push(`  ${field.name}  ${prismaType(canonicalType(field.type))}`)
   }
   if (extras.length === 0) return { content, injected: false }

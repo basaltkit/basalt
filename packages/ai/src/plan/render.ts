@@ -19,7 +19,7 @@ export function renderPlan(plan: ArchitecturePlan, io: LineWriter): void {
       const fields = entity.fields.map((f) => `${f.name}: ${f.type}`).join(', ')
       io.log(`  • ${entity.name}${scope}${fields ? ` — ${fields}` : ''}`)
       if (entity.relations && entity.relations.length > 0) {
-        io.log(`      relations: ${entity.relations.join(', ')}`)
+        io.log(`      relations: ${entity.relations.map((r) => `${r.name} → ${r.model}`).join(', ')}`)
       }
     }
   }
