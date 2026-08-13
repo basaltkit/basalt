@@ -18,8 +18,24 @@ import {
 } from './relations.js'
 import { renderPermissionsFile } from './permissions.js'
 import { renderPrismaRepository } from './repository.js'
+import {
+  extractModelBlock,
+  mergeModelsIntoSchema,
+  readSchema,
+  runPrismaPush,
+  writeSchema,
+  type ModelBlock,
+} from './schema.js'
 import { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './wire.js'
-import type { MakeOptions, MakeResult, ResourceBuild, ReviewItem, ReviewResult } from './types.js'
+import type {
+  MakeOptions,
+  MakeResult,
+  Migration,
+  ResourceBuild,
+  ReviewItem,
+  ReviewResult,
+  SchemaMerge,
+} from './types.js'
 
 /**
  * Execute an {@link ArchitecturePlan}: scaffold each entity via the official
@@ -87,9 +103,63 @@ export async function runMake(
     resources.push(build)
   }
 
-  const followUps = buildFollowUps(plan, resources)
-  const review = reviewBuild(ctx, plan, resources)
-  return { request: plan.request, dryRun: options.dryRun === true, resources, followUps, review }
+  // Merge the generated models into prisma/schema.prisma (idempotent), and
+  // optionally run `prisma db push` — removing the biggest manual step.
+  const { schema, migration } = await mergeSchema(resources, baseDir, options)
+
+  const followUps = buildFollowUps(plan, resources, schema, migration)
+  const review = reviewBuild(ctx, plan, resources, schema, migration)
+  return {
+    request: plan.request,
+    dryRun: options.dryRun === true,
+    resources,
+    ...(schema ? { schema } : {}),
+    ...(migration ? { migration } : {}),
+    followUps,
+    review,
+  }
+}
+
+async function mergeSchema(
+  resources: ResourceBuild[],
+  baseDir: string,
+  options: MakeOptions,
+): Promise<{ schema: SchemaMerge | undefined; migration: Migration | undefined }> {
+  const prismaResources = resources.filter((r) => r.prisma)
+  if (prismaResources.length === 0) return { schema: undefined, migration: undefined }
+
+  const schemaPath = options.schemaPath ?? 'prisma/schema.prisma'
+  const blocks = prismaResources
+    .map((r) => r.files.find((f) => f.path.endsWith('.prisma')))
+    .map((f) => (f ? extractModelBlock(f.content) : null))
+    .filter((b): b is ModelBlock => b !== null)
+
+  const existing = await readSchema(baseDir, schemaPath)
+  if (existing === null) {
+    return { schema: { path: schemaPath, found: false, merged: [], skipped: [], written: false }, migration: undefined }
+  }
+
+  const outcome = mergeModelsIntoSchema(existing, blocks)
+  const schema: SchemaMerge = {
+    path: schemaPath,
+    found: true,
+    merged: outcome.merged,
+    skipped: outcome.skipped,
+    written: false,
+  }
+
+  if (options.dryRun) return { schema, migration: undefined }
+
+  if (outcome.merged.length > 0) {
+    await writeSchema(baseDir, schemaPath, outcome.content)
+    schema.written = true
+  }
+
+  if (options.migrate && (schema.written || outcome.skipped.length > 0)) {
+    const push = await runPrismaPush(baseDir)
+    return { schema, migration: { ok: push.ok, output: push.output } }
+  }
+  return { schema, migration: undefined }
 }
 
 interface GeneratorInvocation {
@@ -191,17 +261,31 @@ function augmentFiles(
   return { files: out, augmented, guarded, audited }
 }
 
-function buildFollowUps(plan: ArchitecturePlan, resources: ResourceBuild[]): string[] {
+function buildFollowUps(
+  plan: ArchitecturePlan,
+  resources: ResourceBuild[],
+  schema: SchemaMerge | undefined,
+  migration: Migration | undefined,
+): string[] {
   const followUps: string[] = []
   const prismaResources = resources.filter((r) => r.prisma)
   if (prismaResources.length > 0) {
-    const list = prismaResources
-      .map((r) => `src/modules/${kebab(r.name)}/${kebab(r.name)}.prisma`)
-      .join(', ')
-    followUps.push(
-      `Copy the generated model(s) (${list}) into prisma/schema.prisma, then run ` +
-        '`npx prisma db push` (or `prisma migrate dev`) to create the table(s) and regenerate the client — then restart the server.',
-    )
+    if (!schema?.found) {
+      const list = prismaResources.map((r) => `src/modules/${kebab(r.name)}/${kebab(r.name)}.prisma`).join(', ')
+      followUps.push(
+        `Add the generated model(s) (${list}) to prisma/schema.prisma, then run \`npx prisma db push\` and restart the server.`,
+      )
+    } else if (migration) {
+      followUps.push(
+        migration.ok
+          ? 'Restart the server so it loads the regenerated Prisma client.'
+          : '`prisma db push` failed — check the output, fix it, and re-run `npx prisma db push`.',
+      )
+    } else {
+      followUps.push(
+        'Run `npx prisma db push` (or re-run `ai:make --migrate`) to create the table(s) + regenerate the client, then restart the server.',
+      )
+    }
   }
   const external = externalRelationTargets(plan.entities)
   if (external.length > 0) {
@@ -228,6 +312,8 @@ function reviewBuild(
   ctx: ProjectContext,
   plan: ArchitecturePlan,
   resources: ResourceBuild[],
+  schema: SchemaMerge | undefined,
+  migration: Migration | undefined,
 ): ReviewResult {
   const items: ReviewItem[] = []
 
@@ -295,9 +381,17 @@ function reviewBuild(
     )
   }
 
-  // Migration is always manual (generator emits a snippet, not the live schema).
+  // Migration — auto-merged into schema.prisma; `--migrate` runs prisma db push.
   if (resources.some((r) => r.prisma)) {
-    items.push({ label: 'Migration', status: 'warn', detail: 'add the model to schema.prisma + run npx prisma db push' })
+    if (migration?.ok) {
+      items.push({ label: 'Migration', status: 'pass', detail: 'model merged into schema.prisma + prisma db push ran' })
+    } else if (migration) {
+      items.push({ label: 'Migration', status: 'fail', detail: 'prisma db push failed — see output' })
+    } else if (schema?.found) {
+      items.push({ label: 'Migration', status: 'warn', detail: 'model merged into schema.prisma — run npx prisma db push' })
+    } else {
+      items.push({ label: 'Migration', status: 'warn', detail: 'add the model to schema.prisma + run npx prisma db push' })
+    }
   }
 
   return { items, ok: !items.some((i) => i.status === 'fail') }

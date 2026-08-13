@@ -23,6 +23,25 @@ export function renderMakeResult(result: MakeResult, io: LineWriter): void {
     io.log('')
   }
 
+  if (result.schema) {
+    const s = result.schema
+    if (!s.found) {
+      io.log(`Schema: ${s.path} not found — add the model(s) manually.`)
+    } else {
+      const parts: string[] = []
+      if (s.merged.length > 0) parts.push(`${result.dryRun ? 'would merge' : 'merged'} ${s.merged.join(', ')}`)
+      if (s.skipped.length > 0) parts.push(`already present: ${s.skipped.join(', ')}`)
+      io.log(`Schema (${s.path}): ${parts.length > 0 ? parts.join('; ') : 'no change'}`)
+    }
+  }
+  if (result.migration) {
+    io.log(result.migration.ok ? 'Migration: ✓ prisma db push' : 'Migration: ✗ prisma db push failed')
+    if (!result.migration.ok) {
+      for (const line of result.migration.output.split('\n').slice(-6)) io.log(`  ${line}`)
+    }
+  }
+  if (result.schema || result.migration) io.log('')
+
   io.log('Review:')
   for (const item of result.review.items) {
     io.log(`  ${REVIEW_MARK[item.status]} ${item.label} — ${item.detail}`)
