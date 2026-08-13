@@ -50,6 +50,34 @@ describe('generateOpenApi', () => {
     expect(doc.components.securitySchemes.bearerAuth.scheme).toBe('bearer')
   })
 
+  it('carries summary/description/tags/operationId from meta and human status descriptions', () => {
+    const doc = generateOpenApi(
+      [
+        {
+          method: 'POST',
+          url: '/clientes',
+          meta: { summary: 'Create a cliente', tags: ['Cliente'], operationId: 'createCliente', description: 'Adds a client.' },
+          body: z.object({ nome: z.string() }),
+          response: { 201: z.object({ id: z.string() }) },
+        },
+        {
+          method: 'DELETE',
+          url: '/clientes/:id',
+          params: z.object({ id: z.string() }),
+          response: { 204: z.object({}) },
+        },
+      ],
+      { title: 'API', version: '1' },
+    ) as any
+    const post = doc.paths['/clientes'].post
+    expect(post.summary).toBe('Create a cliente')
+    expect(post.description).toBe('Adds a client.')
+    expect(post.tags).toEqual(['Cliente'])
+    expect(post.operationId).toBe('createCliente')
+    expect(post.responses['201'].description).toBe('Created')
+    expect(doc.paths['/clientes/{id}'].delete.responses['204'].description).toBe('No Content')
+  })
+
   it('has no securitySchemes when no route needs auth', () => {
     const doc = generateOpenApi([{ method: 'GET', url: '/open' }], { title: 'API', version: '1' }) as any
     expect(doc.components).toBeUndefined()

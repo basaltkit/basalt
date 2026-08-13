@@ -16,6 +16,7 @@ import {
   relationFieldLines,
   relationForeignKeys,
 } from './relations.js'
+import { injectOpenApiMeta } from './openapi.js'
 import { renderPermissionsFile } from './permissions.js'
 import { renderPrismaRepository } from './repository.js'
 import {
@@ -235,10 +236,16 @@ function augmentFiles(
       })
       return { ...file, content }
     }
-    if (file.path.endsWith('.routes.ts') && wireGuards) {
-      const result = injectPermissionGuards(file.content, guardPrefix)
-      guarded = guarded || result.injected
-      return { ...file, content: result.content }
+    if (file.path.endsWith('.routes.ts')) {
+      let content = file.content
+      if (wireGuards) {
+        const result = injectPermissionGuards(content, guardPrefix)
+        content = result.content
+        guarded = guarded || result.injected
+      }
+      // OpenAPI enrichment: summary + tags on every route (merges with the guard meta).
+      content = injectOpenApiMeta(content, entity.name).content
+      return { ...file, content }
     }
     if (file.path.endsWith('.service.ts') && wireAudit) {
       const result = injectAuditService(file.content, entity.name, plan.auditEvents)
