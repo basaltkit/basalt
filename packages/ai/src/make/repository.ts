@@ -99,20 +99,22 @@ export function renderPrismaRepository(name: string, fields: PlanField[], option
   const interfaceRestore = softDelete ? `\n  restore(id: string): Promise<boolean>` : ''
 
   const coreImport = tenantScoped ? 'createToken, tryCtx' : 'createToken'
+  const httpImport = tenantScoped ? `\nimport { HttpError } from '@basaltkit/fastify'` : ''
   const tenantHelper = tenantScoped
     ? `
 // Tenant-scoped model. Scoped by tenantId explicitly from the request context, so
 // it works even on a raw client shared with non-tenant models (no global extension).
+// A missing tenant is a client error (400) — never a silent 500.
 const currentTenantId = (): string => {
   const id = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-  if (!id) throw new Error('${n.kebab}: no tenant in the request context')
+  if (!id) throw new HttpError(400, 'TENANT_REQUIRED', 'No tenant in context — send the x-tenant-id header (or resolve a tenant first).')
   return id
 }
 `
     : ''
 
   return `import { ${coreImport} } from '@basaltkit/core'
-import { db } from '@basaltkit/prisma'
+import { db } from '@basaltkit/prisma'${httpImport}
 import type { PrismaClient } from '@prisma/client'
 import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from './${n.kebab}.schema.js'
 ${tenantHelper}

@@ -43,6 +43,9 @@ describe('renderPrismaRepository', () => {
     const src = renderPrismaRepository('Patient', fields, { softDelete: true, tenantScoped: true, keepName: false })
     expect(src).toContain("import { createToken, tryCtx } from '@basaltkit/core'")
     expect(src).toContain('const currentTenantId')
+    // a missing tenant is a clear 400, not a silent 500
+    expect(src).toContain("import { HttpError } from '@basaltkit/fastify'")
+    expect(src).toContain("throw new HttpError(400, 'TENANT_REQUIRED'")
     expect(src).toContain('data: { ...input, tenantId: currentTenantId() }')
     expect(src).toContain('findMany({ where: { tenantId: currentTenantId(), deletedAt: null } })')
     expect(src).toContain('updateMany({ where: { id, tenantId: currentTenantId(), deletedAt: null }')
