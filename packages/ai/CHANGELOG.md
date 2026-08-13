@@ -1,5 +1,18 @@
 # @basaltkit/ai
 
+## 0.6.0
+
+### Minor Changes
+
+- **`ai:make` auto-merges models into `prisma/schema.prisma` (Fase 9).** The
+  generator emits each model as a snippet and, until now, left "copy it into
+  schema.prisma, run db push, restart" as a manual step — the biggest recurring
+  friction. `ai:make` now appends the generated model block(s) to the schema
+  (idempotent — skips models already present) and reports it. `--migrate` runs
+  `npx prisma db push` afterward (creates the table(s) + regenerates the client);
+  without it, the follow-up and review point at the command. The review's
+  Migration item reflects the actual state (merged / pushed / failed).
+
 ## 0.5.0
 
 ### Minor Changes
