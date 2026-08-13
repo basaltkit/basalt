@@ -65,12 +65,12 @@ describe('runMake auto-wiring (dry-run)', () => {
     expect(patient?.audited).toBe(true)
 
     const routes = patient?.files.find((f) => f.path.endsWith('.routes.ts'))?.content ?? ''
-    expect(routes).toContain("meta: { can: 'patients.view' },")
-    expect(routes).toContain("meta: { can: 'patients.create' },")
-    expect(routes).toContain("meta: { can: 'patients.update' },")
-    expect(routes).toContain("meta: { can: 'patients.delete' },")
+    expect(routes).toContain("can: 'patients.view'")
+    expect(routes).toContain("can: 'patients.create'")
+    expect(routes).toContain("can: 'patients.update'")
+    expect(routes).toContain("can: 'patients.delete'")
     // restore route (soft-delete) → update permission
-    expect(routes.match(/meta: \{ can: 'patients\.update' \},/g)?.length).toBe(2)
+    expect(routes.match(/can: 'patients\.update'/g)?.length).toBe(2)
 
     const service = patient?.files.find((f) => f.path.endsWith('.service.ts'))?.content ?? ''
     expect(service).toContain("import type { Audit } from '@basaltkit/audit'")

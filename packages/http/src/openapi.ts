@@ -103,6 +103,19 @@ export interface RouteLike {
 
 const toOpenApiPath = (url: string): string => url.replace(/:([A-Za-z0-9_]+)/g, '{$1}')
 
+/** Human descriptions for the common status codes (fallback: "OK"). */
+const STATUS_TEXT: Record<string, string> = {
+  '200': 'OK',
+  '201': 'Created',
+  '204': 'No Content',
+  '400': 'Validation error',
+  '401': 'Unauthorized',
+  '403': 'Forbidden',
+  '404': 'Not Found',
+  '409': 'Conflict',
+  '500': 'Internal server error',
+}
+
 /** Builds an OpenAPI 3.0 document from Basalt route definitions. */
 export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSchema {
   const paths: Record<string, Record<string, unknown>> = {}
@@ -113,6 +126,13 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSch
     const method = route.method.toLowerCase()
     const operation: JsonSchema = { responses: {} }
     const responses = operation.responses as Record<string, unknown>
+
+    // OpenAPI enrichment from route.meta (summary/description/tags/operationId).
+    const meta = route.meta ?? {}
+    if (typeof meta['summary'] === 'string') operation.summary = meta['summary']
+    if (typeof meta['description'] === 'string') operation.description = meta['description']
+    if (Array.isArray(meta['tags'])) operation.tags = meta['tags'].filter((t): t is string => typeof t === 'string')
+    if (typeof meta['operationId'] === 'string') operation.operationId = meta['operationId']
 
     const parameters: JsonSchema[] = []
     if (route.params) {
@@ -139,11 +159,11 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSch
 
     const statuses = Object.keys(route.response ?? {})
     if (statuses.length === 0) {
-      responses['200'] = { description: 'OK' }
+      responses['200'] = { description: STATUS_TEXT['200'] }
     } else {
       for (const status of statuses) {
         responses[status] = {
-          description: 'OK',
+          description: STATUS_TEXT[status] ?? 'OK',
           content: { 'application/json': { schema: zodToJsonSchema(route.response![Number(status)]!) } },
         }
       }
