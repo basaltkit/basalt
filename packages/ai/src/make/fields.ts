@@ -59,6 +59,19 @@ function usable(field: PlanField): boolean {
   return field.name.trim() !== '' && !RESERVED.has(field.name.toLowerCase())
 }
 
+/** The entity's own fields, minus reserved/base columns and duplicates. */
+export function domainFields(fields: PlanField[]): PlanField[] {
+  const seen = new Set<string>()
+  const out: PlanField[] = []
+  for (const field of fields) {
+    const key = field.name.toLowerCase()
+    if (!usable(field) || seen.has(key)) continue
+    seen.add(key)
+    out.push(field)
+  }
+  return out
+}
+
 function hasPrismaField(content: string, name: string): boolean {
   return new RegExp(`^[ \\t]*${name}[ \\t]+`, 'm').test(content)
 }
@@ -73,6 +86,7 @@ export function injectPrismaFields(
   content: string,
   fields: PlanField[],
   tenantScoped: boolean,
+  removeName = false,
 ): { content: string; injected: boolean } {
   const nameAnchor = /^([ \t]*)name[ \t]+String.*$/m
   if (!nameAnchor.test(content)) return { content, injected: false }
@@ -87,6 +101,9 @@ export function injectPrismaFields(
 
   let out = content.replace(nameAnchor, (line) => `${line}\n${extras.join('\n')}`)
   if (tenantScoped) out = out.replace(/\n\}\s*$/, `\n\n  @@index([tenantId])\n}\n`)
+  // Drop the generator's base `name` column when the entity supplies its own
+  // fields and none is literally `name` (avoids a spurious empty column).
+  if (removeName) out = out.replace(/^[ \t]*name[ \t]+String\b.*\n/m, '')
   return { content: out, injected: true }
 }
 
@@ -97,8 +114,9 @@ export function injectPrismaFields(
 export function injectZodFields(
   content: string,
   fields: PlanField[],
+  removeName = false,
 ): { content: string; injected: boolean } {
-  const usableFields = fields.filter(usable)
+  const usableFields = domainFields(fields)
   if (usableFields.length === 0) return { content, injected: false }
 
   let out = content
@@ -116,6 +134,13 @@ export function injectZodFields(
   if (createAnchor.test(out)) {
     out = out.replace(createAnchor, (line) => `${line}\n${createLines.join('\n')}`)
     injected = true
+  }
+
+  // Drop the base `name` from both schemas when the entity has its own fields
+  // and none is literally `name`.
+  if (removeName) {
+    out = out.replace(/^[ \t]*name: z\.string\(\),.*\n/m, '')
+    out = out.replace(/^[ \t]*name: z\.string\(\)\.min\(1\),.*\n/m, '')
   }
 
   return { content: out, injected }
