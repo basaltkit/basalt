@@ -125,10 +125,14 @@ function normalizeFields(value: unknown): PlanEntity['fields'] {
   if (!Array.isArray(value)) return []
   return value
     .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
-    .map((f) => ({
-      name: typeof f['name'] === 'string' ? f['name'] : '',
-      type: typeof f['type'] === 'string' ? f['type'] : 'String',
-    }))
+    .map((f) => {
+      const values = Array.isArray(f['enum']) ? f['enum'].filter((v): v is string => typeof v === 'string') : []
+      return {
+        name: typeof f['name'] === 'string' ? f['name'] : '',
+        type: typeof f['type'] === 'string' ? f['type'] : 'String',
+        ...(values.length > 0 ? { enum: values } : {}),
+      }
+    })
     .filter((f) => f.name !== '')
 }
 

@@ -1,5 +1,11 @@
 # @basaltkit/ai
 
+## 0.9.0
+
+### Minor Changes
+
+- **Enum field support (Fase 12).** A plan field can now carry `enum: string[]` — it becomes a validated `z.enum([...])` in the Zod schema (entity + create), a `String` column in Prisma (no native enum block / migration churn), and the repository mapper narrows the row value to the union. The Architect prompt recognises a fixed set of values (e.g. "estado (pago/pendente)") and emits the enum instead of a free `z.string()`. Found via a live Review-agent suggestion.
+
 ## 0.8.1
 
 ### Patch Changes
