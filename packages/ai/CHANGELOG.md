@@ -1,5 +1,11 @@
 # @basaltkit/ai
 
+## 0.9.2
+
+### Patch Changes
+
+- **A tenant-scoped repository now returns a clear 400 when there is no tenant in context**, instead of a generic 500. The generated `currentTenantId()` throws `HttpError(400, TENANT_REQUIRED, "send the x-tenant-id header …")` — a missing/unresolved tenant is a client error, and the old silent 500 hid the real cause.
+
 ## 0.9.1
 
 ### Patch Changes
