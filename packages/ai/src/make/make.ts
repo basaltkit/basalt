@@ -9,6 +9,13 @@ import {
 import type { ProjectContext } from '../context/project.js'
 import type { ArchitecturePlan, PlanEntity } from '../plan/types.js'
 import { domainFields, injectPrismaFields, injectZodFields } from './fields.js'
+import {
+  externalRelationTargets,
+  injectPrismaRelations,
+  inverseRelationLines,
+  relationFieldLines,
+  relationForeignKeys,
+} from './relations.js'
 import { renderPrismaRepository } from './repository.js'
 import { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './wire.js'
 import type { MakeOptions, MakeResult, ResourceBuild, ReviewItem, ReviewResult } from './types.js'
@@ -115,9 +122,11 @@ function augmentFiles(
   opts: { prisma: boolean; softDelete: boolean },
 ): { files: GeneratedFile[]; augmented: boolean; guarded: boolean; audited: boolean } {
   const tenantScoped = ctx.stack.tenancy && entity.tenantScoped
+  // Domain fields plus the synthetic FK columns from belongs-to relations.
+  const effectiveFields = [...entity.fields, ...relationForeignKeys(entity)]
   // Drop the generator's base `name` column when the entity has its own fields
   // and none is literally `name` (else keep it as the label field).
-  const removeName = domainFields(entity.fields).length > 0 && !entity.fields.some((f) => f.name.toLowerCase() === 'name')
+  const removeName = domainFields(effectiveFields).length > 0 && !effectiveFields.some((f) => f.name.toLowerCase() === 'name')
   const keepName = !removeName
   // Per-entity permission namespace — so each entity in a multi-entity plan is
   // guarded by its own permission, not a shared one from permissions[0].
@@ -130,19 +139,25 @@ function augmentFiles(
 
   const out = files.map((file) => {
     if (file.path.endsWith('.prisma')) {
-      const result = injectPrismaFields(file.content, entity.fields, tenantScoped, removeName)
-      augmented = augmented || result.injected
-      return { ...file, content: result.content }
+      const withFields = injectPrismaFields(file.content, effectiveFields, tenantScoped, removeName)
+      // Real Prisma relations: FK column (above), @relation field + inverse fields.
+      const withRelations = injectPrismaRelations(
+        withFields.content,
+        relationFieldLines(entity),
+        inverseRelationLines(entity.name, plan.entities),
+      )
+      augmented = augmented || withFields.injected || withRelations.injected
+      return { ...file, content: withRelations.content }
     }
     if (file.path.endsWith('.schema.ts')) {
-      const result = injectZodFields(file.content, entity.fields, removeName)
+      const result = injectZodFields(file.content, effectiveFields, removeName)
       augmented = augmented || result.injected
       return { ...file, content: result.content }
     }
     if (file.path.endsWith('.repository.ts') && opts.prisma) {
       // Replace the generator's repository with a complete mapper (all domain
-      // fields) + explicit tenant scoping when tenant-scoped.
-      const content = renderPrismaRepository(entity.name, entity.fields, {
+      // fields + FK columns) + explicit tenant scoping when tenant-scoped.
+      const content = renderPrismaRepository(entity.name, effectiveFields, {
         softDelete: opts.softDelete,
         tenantScoped,
         keepName,
@@ -180,10 +195,11 @@ function buildFollowUps(plan: ArchitecturePlan, resources: ResourceBuild[]): str
         '`npx prisma db push` (or `prisma migrate dev`) to create the table(s) and regenerate the client — then restart the server.',
     )
   }
-  const withRelations = plan.entities.filter((e) => e.relations && e.relations.length > 0)
-  if (withRelations.length > 0) {
+  const external = externalRelationTargets(plan.entities)
+  if (external.length > 0) {
     followUps.push(
-      'Relations are generated as foreign-key String columns (e.g. `<name>Id`). Add Prisma `@relation` in schema.prisma if you need referential integrity.',
+      `Relations reference model(s) not in this plan (${external.join(', ')}). Add the inverse field ` +
+        '(e.g. `items <This>[]`) to those existing models in schema.prisma so Prisma can validate the relation.',
     )
   }
   const guarded = resources.some((r) => r.guarded)

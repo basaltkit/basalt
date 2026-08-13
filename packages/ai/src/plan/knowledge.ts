@@ -32,7 +32,8 @@ OUTPUT: Return ONLY a single JSON object (no prose, no markdown fences) matching
 {
   "summary": string,                     // 1-2 sentences on the approach
   "entities": [                          // domain entities to create
-    { "name": string, "fields": [{ "name": string, "type": string }], "tenantScoped": boolean, "relations": string[] }
+    { "name": string, "fields": [{ "name": string, "type": string }], "tenantScoped": boolean,
+      "relations": [{ "name": string, "model": string }] }   // belongs-to: this model gets a <name>Id FK → <model>
   ],
   "steps": [                             // ordered implementation steps
     { "order": number, "title": string, "kind": "generator"|"schema"|"migration"|"service"|"routes"|"permissions"|"audit"|"test"|"docs"|"other", "detail": string, "command": string, "files": string[] }
@@ -42,4 +43,6 @@ OUTPUT: Return ONLY a single JSON object (no prose, no markdown fences) matching
   "tenantScoped": boolean,               // does this feature involve tenant-owned data
   "warnings": string[]                   // risks, decisions to confirm, missing info
 }
-For generator steps, put the exact command in "command" (e.g. "basalt make:resource Patient --prisma --soft-delete"). Omit "command"/"files" when not applicable.`
+For generator steps, put the exact command in "command" (e.g. "basalt make:resource Patient --prisma --soft-delete"). Omit "command"/"files" when not applicable.
+
+RELATIONS: express a belongs-to as an entry in "relations" (e.g. an Appointment belongs to a Patient → { "name": "patient", "model": "Patient" }). Do NOT also add the "<name>Id" field to "fields" — the FK column, the @relation and the inverse field are generated. Prefer generating both sides of a relation in the same plan.`
