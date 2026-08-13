@@ -54,6 +54,9 @@ describe('field mapping', () => {
     expect(zodValidator('String', false)).toBe('z.string()')
     expect(zodValidator('String', true)).toBe('z.string().min(1)')
     expect(zodValidator('Int', false)).toBe('z.number().int()')
+    // DateTime: ISO string out, coerced Date in (so Prisma accepts date-only input)
+    expect(zodValidator('DateTime', false)).toBe('z.string()')
+    expect(zodValidator('DateTime', true)).toBe('z.coerce.date()')
   })
 })
 
