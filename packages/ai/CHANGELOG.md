@@ -1,5 +1,17 @@
 # @basaltkit/ai
 
+## 0.4.0
+
+### Minor Changes
+
+- **Permission registration (Fase 7) — closes the RBAC loop.** F4 injected route
+  `meta.can` guards but left granting the permissions as a manual to-do. `ai:make`
+  now emits a `<kebab>.permissions.ts` per guarded resource: a
+  `<NAME>_PERMISSIONS` constant (the exact `<plural>.<action>` strings the routes
+  guard on) plus a `grant<Name>Permissions(store, role, scope?)` helper over
+  `@basaltkit/permissions`. The review reflects it and the follow-up points at the
+  helper, so registering RBAC is one call in the app's seed/setup.
+
 ## 0.3.0
 
 ### Minor Changes
