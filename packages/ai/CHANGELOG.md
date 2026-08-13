@@ -1,5 +1,18 @@
 # @basaltkit/ai
 
+## 0.5.0
+
+### Minor Changes
+
+- **`basalt ai:fix` (Fase 8) — closes the analyze → doctor → fix loop.** The doctor
+  only printed advice; now `ai:fix <id>` (or `ai:fix` for every currently-firing
+  auto-fixable rule) applies the change to the right file, with a line-level diff,
+  a confirmation prompt, `--dry-run` and `--yes`. Auto-fixers ship for the safe,
+  precise rules — `fastify-logger-off` (adds the Fastify logger option) and
+  `insecure-app-secret` (drops the committed default, sets `min(32)`). Rules that
+  need a judgement call (tenant scoping, durable stores) report "no auto-fix —
+  apply manually".
+
 ## 0.4.0
 
 ### Minor Changes

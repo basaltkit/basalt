@@ -1,7 +1,8 @@
 import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
 import { analyze } from './analyze/run.js'
-import { detectProject } from './context/project.js'
+import { detectProject, nodeReader } from './context/project.js'
 import { hasErrors, runDoctor } from './doctor/run.js'
+import { applyFixEdits, fixableIds, planFix, renderFixes, type FixOutcome } from './doctor/fixes.js'
 import { createProvider, providerEnvFromProcess } from './provider/factory.js'
 import { createPlan } from './plan/plan.js'
 import { renderPlan } from './plan/render.js'
@@ -21,6 +22,7 @@ export interface AiCommandsOptions {
  * - `basalt ai`          — overview: detected stack + what the agent can do
  * - `basalt ai:analyze`  — static analysis report (read-only, offline)
  * - `basalt ai:doctor`   — diagnostics with fixes (read-only, offline; exits 1 on errors)
+ * - `basalt ai:fix`      — apply a doctor fix, or all auto-fixable ones (offline; --dry-run/--yes)
  * - `basalt ai:plan`     — natural language → architecture plan (read-only; needs a provider)
  * - `basalt ai:make`     — plan then implement: scaffold + domain fields, review gate (writes; needs a provider)
  *
@@ -48,6 +50,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         io.log('Available now:')
         io.log('  basalt ai:analyze          Static analysis report')
         io.log('  basalt ai:doctor           Diagnostics with suggested fixes')
+        io.log('  basalt ai:fix [id]         Apply an auto-fixable diagnostic')
         io.log('  basalt ai:plan "<request>" Architecture plan from a description')
         io.log('  basalt ai:make "<request>" Plan + implement (scaffold + review gate)')
         return 0
@@ -73,6 +76,55 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         renderDoctor(diagnostics, io)
         // Non-zero exit on errors so CI can gate on `basalt ai:doctor`.
         return hasErrors(diagnostics) ? 1 : 0
+      },
+    }),
+
+    defineCommand({
+      name: 'ai:fix',
+      description: 'Apply a doctor fix (or all auto-fixable issues). --dry-run to preview, --yes to skip confirm',
+      async handle({ args, flags, io }) {
+        const root = rootOf(flags)
+        const ctx = detectProject(root)
+        const read = (rel: string): string | null => nodeReader(root).read(rel)
+        const id = args[0]
+
+        let outcomes: FixOutcome[]
+        if (id) {
+          outcomes = [planFix(id, ctx, read)]
+        } else {
+          // No id: fix every currently-firing rule that has an auto-fixer.
+          const firing = new Set(runDoctor(ctx).map((d) => d.id))
+          const targets = fixableIds().filter((f) => firing.has(f))
+          if (targets.length === 0) {
+            io.log('Nothing to auto-fix. Run `basalt ai:doctor` for the full picture.')
+            return 0
+          }
+          outcomes = targets.map((f) => planFix(f, ctx, read))
+        }
+
+        renderFixes(outcomes, io)
+        const ready = outcomes.filter((o) => o.status === 'ready')
+        if (ready.length === 0) {
+          // Nothing to write; exit 1 only if the user asked for an unfixable id.
+          return id && outcomes[0]?.status === 'unfixable' ? 1 : 0
+        }
+
+        if (flags['dry-run'] === true) {
+          io.log('')
+          io.log('Dry run — nothing written.')
+          return 0
+        }
+        if (flags['yes'] !== true) {
+          const ok = await io.confirm(`Apply ${ready.length} fix(es)?`)
+          if (!ok) {
+            io.log('Aborted — nothing changed.')
+            return 0
+          }
+        }
+        for (const outcome of ready) await applyFixEdits(outcome.edits, root)
+        io.log('')
+        io.log(`✓ Applied ${ready.length} fix(es). Review the changes and restart the server.`)
+        return 0
       },
     }),
 
