@@ -1,5 +1,11 @@
 # create-basalt
 
+## 1.1.0
+
+### Minor Changes
+
+- Scaffolded apps now keep the code-generation layer **dev-only**. `--cli` projects register `make:*`/`prisma:sync` from `bin/basalt.ts` (which passes them via a new `buildApp({ commands })` option) instead of from `app.ts`, so the runtime server never imports `@basaltkit/generator` — it moves to devDependencies. A generated SaaS runs completely without the codegen/AI layer, while the `basalt` CLI keeps every command. (Add `@basaltkit/ai` in bin/basalt.ts for `ai:*`.)
+
 ## 1.0.1
 
 ### Patch Changes

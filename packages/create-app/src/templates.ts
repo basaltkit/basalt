@@ -36,9 +36,9 @@ export function packageJson(options: ProjectOptions): string {
   if (options.auth) dependencies['@basaltkit/auth'] = BASALT_VERSION
   if (options.billing) dependencies['@basaltkit/subscriptions'] = BASALT_VERSION
   if (options.cli) {
+    // Runtime deps: app.ts uses commandsPlugin (@basaltkit/cli); prisma powers
+    // prismaPlugin + `basalt prisma:sync`. @basaltkit/generator is dev-only (below).
     dependencies['@basaltkit/cli'] = BASALT_VERSION
-    dependencies['@basaltkit/generator'] = BASALT_VERSION
-    // Powers `basalt prisma:sync` — merges @basaltkit/*-prisma models into the schema.
     dependencies['@basaltkit/prisma'] = BASALT_VERSION
   }
   // Apply per-package range overrides. Only @basaltkit/* packages: versionOf
@@ -46,6 +46,20 @@ export function packageJson(options: ProjectOptions): string {
   // (this once rewrote zod's range to the @basalt base line).
   for (const pkg of Object.keys(dependencies)) {
     if (pkg.startsWith('@basaltkit/')) dependencies[pkg] = versionOf(pkg)
+  }
+
+  const devDependencies: Record<string, string> = {
+    '@basaltkit/testing': versionOf('@basaltkit/testing'),
+    '@types/node': '^22.15.0',
+    'pino-pretty': '^13.0.0',
+    tsx: '^4.19.0',
+    typescript: '^5.8.0',
+    vitest: '^3.1.0',
+  }
+  if (options.cli) {
+    // Dev-only: only bin/basalt.ts imports the code generator — the runtime server
+    // never does, so the app runs completely without the codegen/AI layer.
+    devDependencies['@basaltkit/generator'] = versionOf('@basaltkit/generator')
   }
 
   return `${JSON.stringify(
@@ -62,14 +76,7 @@ export function packageJson(options: ProjectOptions): string {
         ...(options.cli ? { basalt: 'tsx bin/basalt.ts' } : {}),
       },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
-      devDependencies: {
-        '@basaltkit/testing': versionOf('@basaltkit/testing'),
-        '@types/node': '^22.15.0',
-        'pino-pretty': '^13.0.0',
-        tsx: '^4.19.0',
-        typescript: '^5.8.0',
-        vitest: '^3.1.0',
-      },
+      devDependencies: Object.fromEntries(Object.entries(devDependencies).sort()),
     },
     null,
     2,
@@ -173,22 +180,25 @@ export function appTs(options: ProjectOptions): string {
     })`)
   }
   if (options.cli) {
-    imports.push(`import { commandsPlugin } from '@basaltkit/cli'`)
-    imports.push(`import { generatorCommands } from '@basaltkit/generator'`)
-    imports.push(`import { prismaSyncCommand } from '@basaltkit/prisma'`)
-    // \`basalt make:*\` generators + \`basalt prisma:sync\` (merges the models any
-    // @basaltkit/*-prisma store needs into prisma/schema.prisma). Built-ins
-    // (routes, schedule:list) come free.
-    plugins.push(`commandsPlugin([...generatorCommands(), prismaSyncCommand()])`)
+    // Only the commandsPlugin lives here. The dev tools (@basaltkit/generator, and
+    // @basaltkit/ai if installed) are imported ONLY by bin/basalt.ts and passed via
+    // \`options.commands\`, so the runtime server never imports them — the SaaS runs
+    // completely without the AI/codegen layer. Built-ins (routes, schedule:list) come free.
+    imports.push(`import { commandsPlugin, type CommandDefinition } from '@basaltkit/cli'`)
+    plugins.push(`...(options.commands && options.commands.length > 0 ? [commandsPlugin(options.commands)] : [])`)
   }
   plugins.push(`fastifyPlugin({ routes: ${routesExpression} })`)
+
+  const commandsField = options.cli
+    ? `\n  /** Dev/CLI commands (make:*, ai:*, prisma:sync) — passed ONLY by bin/basalt.ts. */\n  commands?: CommandDefinition[]`
+    : ''
 
   return `${imports.join('\n')}
 import { appRoutes } from './routes.js'
 
 export interface BuildAppOptions {
   logLevel?: string
-  pretty?: boolean
+  pretty?: boolean${commandsField}
 }
 
 export function buildApp(options: BuildAppOptions = {}) {
@@ -270,14 +280,22 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 export function basaltBin(): string {
   return `#!/usr/bin/env node
 import { runCli } from '@basaltkit/cli'
+import { generatorCommands } from '@basaltkit/generator'
+import { prismaSyncCommand } from '@basaltkit/prisma'
 import { buildApp } from '../src/app.js'
 
-// The 'basalt' CLI: boots the app, runs one command, shuts down.
+// The 'basalt' CLI: boots the app WITH the dev/CLI commands, runs one, shuts down.
+// The dev tools (@basaltkit/generator; add @basaltkit/ai for ai:*) are imported
+// ONLY here — the runtime server (src/server.ts) never loads them, so the SaaS
+// runs without the codegen/AI layer.
 //   pnpm basalt list                    — show available commands
 //   pnpm basalt routes                  — list registered HTTP routes
 //   pnpm basalt make:resource Project   — generate a full resource vertical
 //   pnpm basalt make:service Project    — generate a single artifact (schema/service/…)
-const app = buildApp({ logLevel: 'silent' })
+const app = buildApp({
+  logLevel: 'silent',
+  commands: [...generatorCommands(), prismaSyncCommand()],
+})
 process.exit(await runCli({ app }))
 `
 }

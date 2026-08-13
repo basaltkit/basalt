@@ -123,18 +123,26 @@ describe('createProject', () => {
 
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
     expect(pkg.dependencies).toHaveProperty('@basaltkit/cli')
-    expect(pkg.dependencies).toHaveProperty('@basaltkit/generator')
-    expect(pkg.dependencies['@basaltkit/generator']).toBe('^1.0.0')
     expect(pkg.dependencies['@basaltkit/cli']).toBe('^1.0.0')
+    // The generator is a DEV tool — devDependency, not a runtime dependency.
+    expect(pkg.dependencies).not.toHaveProperty('@basaltkit/generator')
+    expect(pkg.devDependencies).toHaveProperty('@basaltkit/generator')
+    expect(pkg.devDependencies['@basaltkit/generator']).toBe('^1.0.0')
     expect(pkg.scripts.basalt).toBe('tsx bin/basalt.ts')
 
+    // The CLI entry (dev-only) imports the generator and passes it via `commands`.
     const bin = await read(result.dir, 'bin/basalt.ts')
     expect(bin).toContain("import { runCli } from '@basaltkit/cli'")
+    expect(bin).toContain("import { generatorCommands } from '@basaltkit/generator'")
+    expect(bin).toContain('commands: [...generatorCommands(), prismaSyncCommand()]')
     expect(bin).toContain('runCli({ app })')
 
+    // The runtime app must NOT import the generator — it only wires commandsPlugin
+    // conditionally from options.commands (passed by bin/basalt.ts).
     const app = await read(result.dir, 'src/app.ts')
-    expect(app).toContain('commandsPlugin([...generatorCommands(), prismaSyncCommand()])')
-    expect(app).toContain("from '@basaltkit/generator'")
+    expect(app).not.toContain("from '@basaltkit/generator'")
+    expect(app).toContain('commandsPlugin(options.commands)')
+    expect(app).toContain('commands?: CommandDefinition[]')
   })
 
   it('omits the basalt CLI by default', async () => {
