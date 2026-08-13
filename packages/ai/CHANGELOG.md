@@ -1,5 +1,21 @@
 # @basaltkit/ai
 
+## 0.3.0
+
+### Minor Changes
+
+- **Real Prisma relations (Fase 6).** A plan entity's `relations` are now
+  generated as proper Prisma relations, not bare `String` FK columns. A belongs-to
+  relation (`{ name, model }`) emits: the `<name>Id` FK column, a
+  `<name> <Model> @relation(fields: [<name>Id], references: [id])` field, and — on
+  the related model, when it's in the same plan — the inverse `<plural> <This>[]`
+  field. The FK is also a validated field in the Zod schema and the repository
+  mapper. Output verified with `prisma validate`.
+
+  `PlanEntity.relations` is now `{ name, model }[]` (bare model-name strings are
+  still accepted and normalized). Relations to a model outside the plan are
+  surfaced as a follow-up to add the inverse field manually.
+
 ## 0.2.1
 
 ### Patch Changes

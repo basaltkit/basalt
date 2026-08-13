@@ -132,11 +132,11 @@ describe('multi-entity permission guards', () => {
   })
 })
 
-// ── Fix #3 + #6: follow-up text ──
+// ── Fix #3: follow-up text; external-relation note ──
 describe('follow-ups', () => {
-  it('recommends prisma db push (not prisma:sync) and notes relations', async () => {
+  it('recommends prisma db push and notes a relation to a model not in the plan', async () => {
     const p = plan(
-      [{ name: 'Consulta', tenantScoped: true, relations: ['Paciente'], fields: [{ name: 'pacienteId', type: 'String' }] }],
+      [{ name: 'Consulta', tenantScoped: true, relations: [{ name: 'paciente', model: 'Paciente' }], fields: [{ name: 'inicio', type: 'DateTime' }] }],
       [],
       [{ order: 1, kind: 'generator', title: 'x', detail: '', command: 'basalt make:resource Consulta --prisma' }],
     )
@@ -144,6 +144,6 @@ describe('follow-ups', () => {
     const text = r.followUps.join('\n')
     expect(text).toMatch(/prisma db push/)
     expect(text).not.toMatch(/prisma:sync/)
-    expect(text).toMatch(/Relations are generated as foreign-key/)
+    expect(text).toMatch(/not in this plan \(Paciente\)/)
   })
 })

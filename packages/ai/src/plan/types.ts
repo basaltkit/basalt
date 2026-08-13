@@ -15,11 +15,19 @@ export interface PlanField {
   type: string
 }
 
+/** A belongs-to relation: this entity holds a `<name>Id` FK referencing `model`. */
+export interface PlanRelation {
+  /** Relation field name on this model, e.g. `paciente`. */
+  name: string
+  /** Related model, e.g. `Paciente`. */
+  model: string
+}
+
 export interface PlanEntity {
   name: string
   fields: PlanField[]
   tenantScoped: boolean
-  relations?: string[]
+  relations?: PlanRelation[]
 }
 
 export interface PlanStep {
