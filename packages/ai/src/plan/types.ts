@@ -13,6 +13,11 @@ export type PlanStepKind =
 export interface PlanField {
   name: string
   type: string
+  /**
+   * Allowed values — makes this a `z.enum([...])` field (validated on input,
+   * stored as a String column). E.g. a status: `['pago', 'pendente']`.
+   */
+  enum?: string[]
 }
 
 /** A belongs-to relation: this entity holds a `<name>Id` FK referencing `model`. */

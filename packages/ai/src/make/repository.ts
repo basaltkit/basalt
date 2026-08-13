@@ -43,13 +43,20 @@ export function renderPrismaRepository(name: string, fields: PlanField[], option
   const n = names(name)
   const { softDelete, tenantScoped, keepName } = options
 
-  const bodyFields: Array<{ name: string; canon: CanonicalType }> = []
+  const bodyFields: Array<{ name: string; canon: CanonicalType; values?: string[] }> = []
   if (keepName) bodyFields.push({ name: 'name', canon: 'String' })
-  for (const f of domainFields(fields)) bodyFields.push({ name: f.name, canon: canonicalType(f.type) })
+  for (const f of domainFields(fields)) {
+    bodyFields.push({ name: f.name, canon: canonicalType(f.type), ...(f.enum && f.enum.length > 0 ? { values: f.enum } : {}) })
+  }
+
+  // Enum columns are stored as String; the mapper narrows them to the union.
+  const colType = (f: { canon: CanonicalType; values?: string[] }): string => (f.values ? 'string' : rowType(f.canon))
+  const colExpr = (f: { name: string; canon: CanonicalType; values?: string[] }): string =>
+    f.values ? `r.${f.name} as ${f.values.map((v) => `'${v}'`).join(' | ')}` : mapExpr(f.name, f.canon)
 
   const rowTypeEntries = [
     'id: string',
-    ...bodyFields.map((f) => `${f.name}: ${rowType(f.canon)}`),
+    ...bodyFields.map((f) => `${f.name}: ${colType(f)}`),
     'createdAt: Date',
     'updatedAt: Date',
     ...(softDelete ? ['deletedAt: Date | null'] : []),
@@ -57,7 +64,7 @@ export function renderPrismaRepository(name: string, fields: PlanField[], option
 
   const mapLines = [
     '  id: r.id,',
-    ...bodyFields.map((f) => `  ${f.name}: ${mapExpr(f.name, f.canon)},`),
+    ...bodyFields.map((f) => `  ${f.name}: ${colExpr(f)},`),
     '  createdAt: r.createdAt.toISOString(),',
     '  updatedAt: r.updatedAt.toISOString(),',
     ...(softDelete ? ['  deletedAt: r.deletedAt ? r.deletedAt.toISOString() : null,'] : []),
