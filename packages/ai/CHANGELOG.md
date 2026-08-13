@@ -1,5 +1,11 @@
 # @basaltkit/ai
 
+## 0.9.1
+
+### Patch Changes
+
+- **ai:make now offers to run `prisma db push` right after generating.** The most-forgotten step: without it the Prisma client has no delegate for the new model, so every route 500s (list + create). ai:make now prompts to run db push immediately (skip with `--no-migrate`, auto-run with `--migrate` or `--yes`). After it runs, restart the dev server to load the regenerated client.
+
 ## 0.9.0
 
 ### Minor Changes
