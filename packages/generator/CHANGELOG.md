@@ -1,5 +1,14 @@
 # @basaltkit/generator
 
+## 1.1.1
+
+### Patch Changes
+
+- `registerResourceInApp` now wires routes even when `fastifyPlugin` has options
+  before `routes:` — e.g. `fastifyPlugin({ fastify: { logger: … }, routes: […] })`.
+  The anchor previously required `routes:` to be the first key and silently fell
+  back to "not auto-wired", forcing a manual edit.
+
 ## 1.1.0
 
 ### Minor Changes

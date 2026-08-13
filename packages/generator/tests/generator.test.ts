@@ -191,6 +191,26 @@ describe('registerResourceInApp', () => {
     expect(app).toContain('routes: [...roomRoutes, ...appRoutes, ...authRoutes()]')
   })
 
+  it('wires routes when fastifyPlugin has options before routes: (e.g. fastify: {...})', async () => {
+    await writeApp(
+      root,
+      `import { fastifyPlugin } from '@basaltkit/fastify'
+export const buildApp = () =>
+  createApp({
+    plugins: [
+      fastifyPlugin({ fastify: { logger: true }, routes: [...appRoutes, ...authRoutes()] }),
+    ],
+  })
+`,
+    )
+    const result = await registerResourceInApp('Room', { baseDir: root })
+    expect(result.registered).toBe(true)
+    const app = await readFile(join(root, 'src/app.ts'), 'utf8')
+    expect(app).toContain('routes: [...roomRoutes, ...appRoutes, ...authRoutes()]')
+    expect(app).toContain('fastify: { logger: true }') // untouched
+    expect(app).toMatch(/roomPlugin,\s*\n\s*fastifyPlugin\(/)
+  })
+
   it('is idempotent — a second call changes nothing', async () => {
     await writeApp(root)
     await registerResourceInApp('Room', { baseDir: root })
