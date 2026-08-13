@@ -1,5 +1,16 @@
 # @basaltkit/ai
 
+## 0.8.1
+
+### Patch Changes
+
+- **Review agent scope fix.** The `--review` agent could raise a *blocking* `fit`
+  error when the request asked for something outside `ai:make`'s scope (e.g. "web
+  interfaces"), even though the generated backend was correct — found in a live
+  run. The rubric now states `ai:make` produces a backend resource vertical only;
+  out-of-scope requests (web UI, frontend, jobs) are a `warning` at most, never an
+  `error`. The `fit` dimension judges the backend against the request's data model.
+
 ## 0.8.0
 
 ### Minor Changes
