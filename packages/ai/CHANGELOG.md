@@ -1,5 +1,16 @@
 # @basaltkit/ai
 
+## 0.2.1
+
+### Patch Changes
+
+- **`DateTime` create/update fields now coerce to a `Date`** (`z.coerce.date()`)
+  instead of a bare `z.string()`. A plain string let a non-ISO value like
+  `"1990-05-01"` through to Prisma, which requires ISO-8601 and threw a 500. Now a
+  date-only or ISO string is accepted (and coerced), while garbage is rejected
+  with a 400 at the Zod layer. Output stays an ISO string (unchanged). Found while
+  route-testing a generated module end to end.
+
 ## 0.2.0
 
 ### Minor Changes

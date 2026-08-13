@@ -37,7 +37,12 @@ export function prismaType(t: CanonicalType): string {
   return t
 }
 
-/** Zod validator for a field. Dates are strings, matching the generator's convention. */
+/**
+ * Zod validator for a field. On input (`create`) a `DateTime` coerces from a
+ * date/ISO string to a `Date` (so Prisma accepts it — a bare `z.string()` lets a
+ * non-ISO value like `"1990-05-01"` through to Prisma and 500). On output it's an
+ * ISO string, matching the mapper.
+ */
 export function zodValidator(t: CanonicalType, create: boolean): string {
   switch (t) {
     case 'Int':
@@ -47,7 +52,7 @@ export function zodValidator(t: CanonicalType, create: boolean): string {
     case 'Boolean':
       return 'z.boolean()'
     case 'DateTime':
-      return 'z.string()'
+      return create ? 'z.coerce.date()' : 'z.string()'
     case 'Json':
       return 'z.unknown()'
     case 'String':
