@@ -189,6 +189,35 @@ await prisma.$queryRaw`
 Na dúvida, prefere operações de modelo (limitadas automaticamente) a SQL bruto,
 e revê cada `connect` contra o tenant atual.
 
+### 4. CSRF — seguro por omissão com auth por header; cookies são responsabilidade tua
+
+O Basalt autentica cada pedido a partir de um **header** — `Authorization: Bearer
+<jwt>` ou `x-session-id: <id>` (ver o enricher de auth). Isto é **CSRF-safe por
+design**: um cross-site request forgery só funciona com credenciais que o browser
+anexa *automaticamente* (cookies, HTTP Basic). Um header custom nunca é enviado
+cross-origin num pedido forjado, por isso a página do atacante não pode aproveitar
+a sessão da vítima. **Mantém a auth num header e não há nada a fazer.**
+
+Assumes o risco de CSRF no momento em que moves essa credencial para um **cookie**
+— p. ex. guardar o session id ou o JWT num cookie para o browser o enviar
+automaticamente. Se o fizeres, protege-o tu:
+
+- Define o cookie `SameSite=Lax` (ou `Strict`), `HttpOnly` e `Secure`.
+  Só o `SameSite=Lax` já trava o `POST` cross-site comum.
+- Acrescenta uma segunda verificação para pedidos que alteram estado: um **token
+  CSRF double-submit** (um valor aleatório espelhado num cookie e num header/campo
+  do body, comparados no servidor), ou uma **allow-list de Origin/Referer**.
+- Nunca contes com o CORS para isto — o CORS governa a *leitura* de uma resposta,
+  não se um pedido forjado é *enviado*. Um `POST` de formulário dispara à mesma.
+
+```ts
+// ✅ preferido — sem cookie, sem superfície de CSRF
+fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } })
+
+// ⚠️ se tiveres mesmo de usar sessão em cookie, junta SameSite + verificação de token CSRF
+setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
+```
+
 ## Cadeia de fornecimento
 
 O CI corre `pnpm audit` (severidade alta), **CodeQL** SAST, e o **Dependabot**
