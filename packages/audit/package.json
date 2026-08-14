@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/audit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Append-only audit trail for Basalt: automatically records lifecycle hooks and domain events, enriched with actor/tenant/request from the context.",
   "license": "MIT",
   "type": "module",

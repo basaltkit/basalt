@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/flags",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Feature flags for Basalt: context-aware evaluation with per-tenant/user targeting and deterministic percentage rollouts.",
   "license": "MIT",
   "type": "module",

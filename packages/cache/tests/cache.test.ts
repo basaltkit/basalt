@@ -1,8 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, runWithContext } from '@basaltkit/core'
-import { Cache, CACHE, cachePlugin, MemoryCacheDriver } from '../src/index.js'
+import { Cache, CACHE, cachePlugin, MemoryCacheDriver, MissingCacheScopeError } from '../src/index.js'
 
 const makeCache = (options = {}) => new Cache(new MemoryCacheDriver(), options)
+
+describe('Cache — tenant-scope safety', () => {
+  it('flush() fails closed when no tenant scope resolves (never wipes every tenant)', async () => {
+    const cache = makeCache() // default scope reads ctx().tenant, absent here
+    await expect(cache.flush()).rejects.toBeInstanceOf(MissingCacheScopeError)
+    // a deliberate global cache (scope:null) may flush its whole namespace
+    await expect(makeCache({ scope: null }).flush()).resolves.toBeUndefined()
+    // and a properly-scoped flush works
+    await runWithContext({ tenant: { id: 'acme' } }, () => cache.flush())
+  })
+
+  it("onMissingScope:'error' fails closed on read/write without a tenant", async () => {
+    const cache = makeCache({ onMissingScope: 'error' })
+    await expect(cache.put('k', 'v')).rejects.toBeInstanceOf(MissingCacheScopeError)
+    await expect(cache.get('k')).rejects.toBeInstanceOf(MissingCacheScopeError)
+    // with a tenant in context it works and is isolated
+    await runWithContext({ tenant: { id: 'acme' } }, async () => {
+      await cache.put('k', 'v')
+      expect(await cache.get('k')).toBe('v')
+    })
+    // a different tenant does not see it
+    await runWithContext({ tenant: { id: 'globex' } }, async () => {
+      expect(await cache.get('k')).toBeUndefined()
+    })
+  })
+})
 
 describe('Cache (driver memory)', () => {
   it('put/get with fallback', async () => {

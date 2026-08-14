@@ -51,10 +51,13 @@ export class FeatureFlags<TShape extends FlagsShape> {
       const ruled = def.rule(ctx)
       if (ruled !== undefined) return ruled as FlagValue<TShape[K]>
     }
-    if (ctx.userId && def.users && ctx.userId in def.users) {
+    // Object.hasOwn, not `in`: a caller-supplied `userId`/`tenantId` of
+    // `__proto__`/`constructor` would otherwise match an inherited key and
+    // return `Object.prototype` instead of falling through to rollout/default.
+    if (ctx.userId && def.users && Object.hasOwn(def.users, ctx.userId)) {
       return def.users[ctx.userId] as FlagValue<TShape[K]>
     }
-    if (ctx.tenantId && def.tenants && ctx.tenantId in def.tenants) {
+    if (ctx.tenantId && def.tenants && Object.hasOwn(def.tenants, ctx.tenantId)) {
       return def.tenants[ctx.tenantId] as FlagValue<TShape[K]>
     }
     if (def.rollout !== undefined && typeof def.default === 'boolean') {

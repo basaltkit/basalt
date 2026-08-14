@@ -41,6 +41,9 @@ const HEADER = {
   attempts: 'x-basalt-attempts',
 } as const
 
+/** Hard ceiling on retries, so a crafted message can't request unbounded ones. */
+const MAX_ATTEMPTS = 50
+
 export interface KafkaDriverOptions {
   brokers: string[]
   clientId?: string
@@ -156,7 +159,9 @@ export class KafkaQueueDriver implements QueueDriver {
       await this.executor?.(jobName, JSON.parse(value))
     } catch {
       const attempt = Number(headers[HEADER.attempt] ?? 1)
-      const attempts = Number(headers[HEADER.attempts] ?? 1)
+      // Clamp the max-attempts read from the (untrusted) message to a hard
+      // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
+      const attempts = Math.min(Number(headers[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
       const producer = await this.producer()
       if (attempt < attempts) {
         await producer.send({
