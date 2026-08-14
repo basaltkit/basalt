@@ -44,6 +44,14 @@ used by `@basaltkit/cache`.
 `origin` accepts `true` (reflect), a string, an allow-list array, or a
 predicate. Preflight `OPTIONS` requests are answered automatically.
 
+::: warning Credentials require an explicit allow-list
+Reflecting an arbitrary `Origin` back **with** `credentials: true` would hand
+authenticated, cookie-bearing responses to any site. When `credentials` is on,
+Basalt refuses to reflect — you **must** pass an explicit `origin` (string,
+array, or predicate). A wildcard `*` is only ever emitted for non-credentialed
+requests.
+:::
+
 ### Secure headers
 
 `headers: true` sets HSTS, `X-Content-Type-Options: nosniff`,
@@ -103,7 +111,82 @@ idempotencyPlugin() // guards POST by default
 - Repeat with the same key → the cached response, with `Idempotent-Replayed: true`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - `5xx` responses are **not** cached, so genuine failures stay retryable.
-- Keys are scoped by method + route, so the same key on two endpoints can't collide.
+- Keys are scoped by **caller + method + route**: a per-caller fingerprint is
+  mixed into the stored key, so one user's cached response can never be replayed
+  to another (no cross-user/tenant leak), and the same key on two endpoints
+  can't collide.
+
+## Shared responsibility — hardening your integration
+
+Basalt closes the vulnerabilities it *can* close on its own. Three things,
+though, depend on how **your app** wires the pieces together — the framework
+can't decide them for you. Get these right in every deployment.
+
+### 1. Authorization is explicit — declare a guard, don't just declare intent
+
+A route's `meta.can` (or `meta.teamRole`) documents *what* the route needs, but
+the **guard that enforces it must actually be registered**. A declared-but-
+unguarded route is **open**: there is no implicit default-deny that blocks a
+request just because a permission was named.
+
+```ts
+// ❌ meta says "admin", but nothing enforces it → the route is public
+route({ method: 'POST', url: '/admin/purge', meta: { can: 'admin' }, handler })
+
+// ✅ register the guard that reads meta and rejects unauthorized callers
+app.use(authorizationPlugin())        // enforces meta.can on every route
+app.use(teamsPlugin())                // enforces meta.teamRole
+```
+
+Treat "a route with a permission in `meta` but no matching guard in the
+pipeline" as a bug. A good pattern is a CI check that fails when any route
+declares `meta.can`/`meta.teamRole` while the enforcing plugin is absent.
+
+### 2. Never trust a client-supplied tenant — verify membership
+
+Resolving the active tenant from a request header (or subdomain, or path) is
+convenient, but the header is **attacker-controlled**. Reading
+`X-Tenant-Id: acme` and scoping to `acme` without checking that the
+*authenticated user actually belongs to `acme`* lets any logged-in user read
+another tenant's data.
+
+```ts
+// ❌ tenant taken straight from a client header — cross-tenant access
+const tenantId = req.headers['x-tenant-id']
+
+// ✅ resolve, then confirm the user is a member before trusting it
+const tenantId = req.headers['x-tenant-id']
+if (!(await teams.can(tenantId, ctx().user.id, 'member'))) {
+  throw new ForbiddenError()
+}
+```
+
+Bind tenant selection to a **verified user↔tenant membership** (via
+`@basaltkit/teams`, an API-key's `tenantId`, or a session claim) — never to the
+raw request alone.
+
+### 3. Automatic tenant scoping covers the ORM — not raw SQL or nested writes
+
+The Prisma tenancy extension scopes standard model operations and **fails
+closed** without a tenant context. Two paths sit *outside* that net:
+
+- **Raw queries** — `$queryRaw` / `$executeRaw` run exactly as written. Add the
+  `tenant_id = $1` predicate yourself, and always parameterize.
+- **Nested writes** — a `connect` / nested `create` reaching another model isn't
+  re-scoped. Verify the related record belongs to the current tenant first.
+
+```ts
+// ❌ raw query with no tenant predicate — reads across tenants
+await prisma.$queryRaw`SELECT * FROM invoices WHERE status = ${status}`
+
+// ✅ scope explicitly, parameterized
+const tenantId = ctx().tenant.id
+await prisma.$queryRaw`
+  SELECT * FROM invoices WHERE status = ${status} AND tenant_id = ${tenantId}`
+```
+
+When in doubt, prefer model operations (which are scoped automatically) over raw
+SQL, and review every `connect` against the current tenant.
 
 ## Supply chain
 
