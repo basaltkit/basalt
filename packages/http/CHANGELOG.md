@@ -1,5 +1,15 @@
 # @basaltkit/http
 
+## 1.2.0
+
+### Minor Changes
+
+- Security hardening (edge headers, CORS, rate limiting, health):
+  - **CORS no longer reflects an arbitrary `Origin` when `credentials` is
+    enabled.** Reflecting the request origin back *with* `Access-Control-Allow-Credentials: true` hands authenticated, cookie-bearing responses to any site. `securityPlugin` now refuses to emit `Access-Control-Allow-Origin` in the reflect-all case when `credentials: true` — credentialed CORS requires an explicit `origin` allowlist (string, array, or predicate). Non-credentialed reflect-all (`*`) is unchanged.
+  - **Rate-limit key no longer trusts `X-Forwarded-For`.** The default key used the client-spoofable `X-Forwarded-For` header, letting a caller mint an unlimited number of buckets and bypass the limit. It now uses the socket address the adapter sets on `request.ip`, falling back to a single shared bucket (fail closed) when unknown. Behind a trusted proxy, configure the adapter to populate `request.ip`; pass a custom `key` to opt back into header-derived keys deliberately.
+  - **`/readyz` no longer leaks raw error text.** A failing readiness check returned the thrown error's message to an unauthenticated probe, exposing DB hosts/ports/DSN fragments. The client body now reports only `{ ok: false }` per check; the cause is logged server-side via `console.error`.
+
 ## 1.1.0
 
 ### Minor Changes

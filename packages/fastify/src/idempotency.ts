@@ -1,6 +1,14 @@
+import { createHash } from 'node:crypto'
 import { definePlugin } from '@basaltkit/core'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FASTIFY } from './adapter.js'
+
+/** Short, non-reversible fingerprint of the caller's credential, or '' if anonymous. */
+function principalOf(request: FastifyRequest): string {
+  const raw = request.headers['authorization'] ?? request.headers['x-session-id'] ?? ''
+  const value = Array.isArray(raw) ? (raw[0] ?? '') : raw
+  return value ? createHash('sha256').update(value).digest('hex').slice(0, 16) : 'anon'
+}
 
 export interface IdempotencyRecord {
   status: number
@@ -91,7 +99,9 @@ export function idempotencyPlugin(options: IdempotencyPluginOptions = {}) {
         const key = Array.isArray(raw) ? raw[0] : raw
         if (!key) return
 
-        const scoped = `${request.method}:${request.routeOptions?.url ?? request.url}:${key}`
+        // Scope by the caller's credential so an Idempotency-Key can never replay
+        // one user's cached response to another (cross-user/tenant data leak).
+        const scoped = `${principalOf(request)}:${request.method}:${request.routeOptions?.url ?? request.url}:${key}`
         ;(request as unknown as Record<symbol, string>)[KEY] = scoped
 
         const existing = await store.get(scoped)
