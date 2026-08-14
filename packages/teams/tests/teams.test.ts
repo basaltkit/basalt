@@ -3,9 +3,11 @@ import { createApp } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
+import { createHash } from 'node:crypto'
 import {
   InsufficientTeamRoleError,
   LastOwnerError,
+  MemoryInvitationStore,
   TeamInviteInvalidError,
   Teams,
   TEAMS,
@@ -29,6 +31,20 @@ describe('Teams service', () => {
 
     // token is single-use
     await expect(teams.accept(token, 'bob1')).rejects.toBeInstanceOf(TeamInviteInvalidError)
+  })
+
+  it('persists only the hash of an invite token, never the raw value', async () => {
+    const invitations = new MemoryInvitationStore()
+    const teams = new Teams({ invitations })
+    const { token } = await teams.invite({ tenantId: 'acme', email: 'bob@acme.test' })
+
+    // the raw token is not a key in the store; its sha256 is
+    expect(await invitations.findByToken(token)).toBeNull()
+    expect(await invitations.findByToken(createHash('sha256').update(token).digest('hex'))).not.toBeNull()
+
+    // the raw token still resolves acceptance (accept hashes on the way in)
+    const membership = await teams.accept(token, 'bob1', 'bob@acme.test')
+    expect(membership).toMatchObject({ userId: 'bob1', role: 'member' })
   })
 
   it('binds invite acceptance to the invited email (a forwarded link is refused)', async () => {
