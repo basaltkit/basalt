@@ -35,6 +35,8 @@ export {
 export {
   FakeBillingGateway,
   WebhookInvalidError,
+  WebhookSecretMissingError,
+  PaymentAmountMismatchError,
   type BillingGateway,
   type WebhookEvent,
   type CreateSubscriptionInput,
