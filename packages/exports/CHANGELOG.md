@@ -1,5 +1,11 @@
 # @basaltkit/exports
 
+## 1.1.0
+
+### Minor Changes
+
+- Security: **CSV/TSV export neutralizes spreadsheet formula injection.** A string cell beginning with `=`, `+`, `-`, `@`, or a leading tab/CR is a formula a spreadsheet evaluates on open — so an exported value like `=WEBSERVICE(...)` could exfiltrate data or run a command on the recipient's machine. Such string cells are now prefixed with a single quote so the spreadsheet renders them as text. Numbers and dates are untouched (a negative number stays `-5`).
+
 ## 1.0.5
 
 ### Patch Changes

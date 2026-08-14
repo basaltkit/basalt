@@ -213,4 +213,13 @@ describe('MeilisearchDriver', () => {
     expect(calls[0]!.method).toBe('DELETE')
     expect(calls[0]!.url).toContain('/indexes/notes/documents/')
   })
+
+  it('rejects a filter field name that could inject filter syntax (tenant-scope escape)', async () => {
+    const { calls, driver } = meiliHarness(() => ok({ hits: [], estimatedTotalHits: 0 }))
+    await expect(
+      // a crafted "field" trying to OR past the mandatory tenantId scope
+      driver.search('notes', { tenantId: 'acme', q: 'x', filters: { 'x" OR tenantId = "victim': 1 } }),
+    ).rejects.toThrow(/invalid filter field/i)
+    expect(calls.length).toBe(0) // never reached the network
+  })
 })
