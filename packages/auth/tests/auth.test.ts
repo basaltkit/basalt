@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   Auth,
   EmailTakenError,
   InvalidCredentialsError,
+  MemoryRefreshTokenStore,
+  MemorySessionStore,
   MemoryUserSource,
   RefreshInvalidError,
   RefreshReusedError,
@@ -12,6 +15,8 @@ import {
   TokenInvalidError,
   verifyJwt,
 } from '../src/index.js'
+
+const sha256 = (v: string): string => createHash('sha256').update(v).digest('hex')
 
 describe('ScryptPasswordHasher', () => {
   it('round-trips and rejects wrong passwords and tampered hashes', async () => {
@@ -42,8 +47,8 @@ describe('JWT (HS256)', () => {
   })
 })
 
-const makeAuth = () =>
-  new Auth({ users: new MemoryUserSource(), secret: 'test-secret', accessTtl: '15m' })
+const makeAuth = (extra: Partial<ConstructorParameters<typeof Auth>[0]> = {}) =>
+  new Auth({ users: new MemoryUserSource(), secret: 'test-secret', accessTtl: '15m', ...extra })
 
 describe('Auth', () => {
   it('register + login issues verifiable tokens; duplicate email is 409', async () => {
@@ -82,6 +87,24 @@ describe('Auth', () => {
     expect((await auth.sessionUser(session.id))?.email).toBe('ada@example.com')
     await auth.logout(session.id)
     expect(await auth.sessionUser(session.id)).toBeNull()
+  })
+
+  it('persists only hashes of refresh tokens and session ids, never the raw value', async () => {
+    const refreshTokens = new MemoryRefreshTokenStore()
+    const sessions = new MemorySessionStore()
+    const auth = makeAuth({ refreshTokens, sessions })
+    await auth.register('ada@example.com', 'password123')
+
+    const { tokens } = await auth.login('ada@example.com', 'password123')
+    // the raw refresh token is not a key in the store; its sha256 is
+    expect(await refreshTokens.find(tokens.refreshToken)).toBeNull()
+    expect(await refreshTokens.find(sha256(tokens.refreshToken))).not.toBeNull()
+
+    const session = await auth.createSession('u1')
+    // find() hashes on the way in, so the raw id resolves…
+    expect((await sessions.find(session.id))?.userId).toBe('u1')
+    // …but the already-hashed value does not (proving the store keys by hash)
+    expect(await sessions.find(sha256(session.id))).toBeNull()
   })
 
   it('revoke() kills a refresh family — token-client logout', async () => {

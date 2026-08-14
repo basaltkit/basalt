@@ -1,4 +1,7 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+
+/** SHA-256 of a session id — only this is persisted, never the raw cookie value. */
+const hashSessionId = (id: string): string => createHash('sha256').update(id).digest('hex')
 // esbuild strips the `node:` prefix from a static `node:sqlite` import — it's a
 // newer builtin it doesn't recognize — and emits a broken `from "sqlite"`. Load
 // it through an opaque specifier so the bundler leaves it exactly as written.
@@ -231,31 +234,32 @@ export class SqliteSessionStore implements SessionStore {
   constructor(private readonly db: DatabaseSync) {}
 
   async create(userId: string, ttlMs: number): Promise<SessionRecord> {
-    const record: SessionRecord = {
-      id: randomBytes(32).toString('base64url'),
-      userId,
-      expiresAt: nowMs() + ttlMs,
-    }
+    // Mint a raw id for the client (cookie), but store its hash so a dump of
+    // auth_sessions can't be replayed as a live session.
+    const rawId = randomBytes(32).toString('base64url')
+    const expiresAt = nowMs() + ttlMs
     this.db
       .prepare('INSERT INTO auth_sessions (id, user_id, expires_at) VALUES (?, ?, ?)')
-      .run(record.id, record.userId, record.expiresAt)
-    return record
+      .run(hashSessionId(rawId), userId, expiresAt)
+    return { id: rawId, userId, expiresAt }
   }
 
   async find(id: string): Promise<SessionRecord | null> {
+    const hashed = hashSessionId(id)
     const row = this.db
       .prepare('SELECT * FROM auth_sessions WHERE id = ?')
-      .get(id) as SessionRow | undefined
+      .get(hashed) as SessionRow | undefined
     if (!row) return null
     if (nowMs() >= row.expires_at) {
-      this.db.prepare('DELETE FROM auth_sessions WHERE id = ?').run(id)
+      this.db.prepare('DELETE FROM auth_sessions WHERE id = ?').run(hashed)
       return null
     }
-    return { id: row.id, userId: row.user_id, expiresAt: row.expires_at }
+    // Echo the id the caller queried with (never the stored hash).
+    return { id, userId: row.user_id, expiresAt: row.expires_at }
   }
 
   async delete(id: string): Promise<boolean> {
-    const info = this.db.prepare('DELETE FROM auth_sessions WHERE id = ?').run(id)
+    const info = this.db.prepare('DELETE FROM auth_sessions WHERE id = ?').run(hashSessionId(id))
     return info.changes > 0
   }
 
