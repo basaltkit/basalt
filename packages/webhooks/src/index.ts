@@ -16,6 +16,15 @@ export {
   type DeliveryResult,
   type WebhookDelivererOptions,
 } from './deliver.js'
+export {
+  assertDeliverableUrl,
+  isPrivateIp,
+  WebhookUrlBlockedError,
+  type SsrfGuardOptions,
+} from './ssrf.js'
+
+const currentTenantId = (): string | undefined =>
+  (tryCtx() as { tenant?: { id?: string } } | undefined)?.tenant?.id
 
 /** Register/list subscriptions and dispatch events to matching endpoints. */
 export class WebhookManager {
@@ -25,10 +34,15 @@ export class WebhookManager {
   ) {}
 
   register(endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string }): Promise<WebhookEndpoint> {
-    return this.store.add(endpoint)
+    // Bind the endpoint to the current tenant when one is in context, so a tenant
+    // can't register a tenant-less endpoint that would receive every tenant's
+    // events. A caller-supplied tenantId can't override the ambient one.
+    const tenantId = currentTenantId()
+    return this.store.add(tenantId !== undefined ? { ...endpoint, tenantId } : endpoint)
   }
+  /** Removes an endpoint. Scoped to the current tenant when one is in context. */
   unregister(id: string): Promise<void> {
-    return this.store.remove(id)
+    return this.store.remove(id, currentTenantId())
   }
   list(tenantId?: string): Promise<WebhookEndpoint[]> {
     return this.store.list(tenantId)

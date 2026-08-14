@@ -98,8 +98,12 @@ export class SqliteWebhookStore implements WebhookStore {
     return record
   }
 
-  async remove(id: string): Promise<void> {
-    this.db.prepare('DELETE FROM webhook_endpoints WHERE id = ?').run(id)
+  async remove(id: string, tenantId?: string): Promise<void> {
+    if (tenantId === undefined) {
+      this.db.prepare('DELETE FROM webhook_endpoints WHERE id = ?').run(id)
+    } else {
+      this.db.prepare('DELETE FROM webhook_endpoints WHERE id = ? AND tenant_id = ?').run(id, tenantId)
+    }
   }
 
   async list(tenantId?: string): Promise<WebhookEndpoint[]> {

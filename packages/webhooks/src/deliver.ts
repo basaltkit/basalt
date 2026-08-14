@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { assertDeliverableUrl, WebhookUrlBlockedError, type SsrfGuardOptions } from './ssrf.js'
 import type { WebhookEndpoint } from './store.js'
 
 /**
@@ -45,6 +46,13 @@ export interface WebhookDelivererOptions {
   sleep?: (ms: number) => Promise<void>
   /** Clock in seconds, for deterministic tests. */
   now?: () => number
+  /**
+   * SSRF guard for the delivery URL. By default every delivery is refused if the
+   * URL scheme isn't http(s) or the host is/resolves to a private, loopback,
+   * link-local, CGNAT, ULA or reserved address. Set `ssrf.allowPrivateHosts:
+   * true` only for a trusted self-hosted setup that delivers to internal hosts.
+   */
+  ssrf?: SsrfGuardOptions | false
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -72,6 +80,19 @@ export class WebhookDeliverer {
     const body = JSON.stringify({ event, data, sentAt: new Date(timestamp * 1000).toISOString() })
     const secret = endpoint.secret ?? this.options.secret
 
+    // SSRF guard (unless explicitly disabled): validate the URL ONCE up front. A
+    // blocked URL is a permanent config error, so fail immediately without retry.
+    if (this.options.ssrf !== false) {
+      try {
+        await assertDeliverableUrl(endpoint.url, this.options.ssrf ?? {})
+      } catch (error) {
+        if (error instanceof WebhookUrlBlockedError) {
+          return { endpointId: endpoint.id, ok: false, attempts: 0, error: error.message }
+        }
+        throw error
+      }
+    }
+
     let attempts = 0
     let lastStatus: number | undefined
     let lastError: string | undefined
@@ -88,9 +109,15 @@ export class WebhookDeliverer {
         const controller = new AbortController()
         const timer = setTimeout(() => controller.abort(), this.timeoutMs)
         try {
-          const response = await this.fetchImpl(endpoint.url, { method: 'POST', headers, body, signal: controller.signal })
+          // `redirect: 'manual'` so a 3xx can't bounce the request to an internal
+          // address that bypassed the SSRF check on the original URL.
+          const response = await this.fetchImpl(endpoint.url, { method: 'POST', headers, body, redirect: 'manual', signal: controller.signal })
           lastStatus = response.status
           if (response.ok) return { endpointId: endpoint.id, ok: true, status: response.status, attempts }
+          // A redirect is refused, not followed (opaqueredirect ⇒ status 0).
+          if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+            return { endpointId: endpoint.id, ok: false, status: response.status, attempts, error: 'redirect refused' }
+          }
           // 4xx is a client error — do not retry.
           if (response.status < 500) {
             return { endpointId: endpoint.id, ok: false, status: response.status, attempts, error: `HTTP ${response.status}` }
