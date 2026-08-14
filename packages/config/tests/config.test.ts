@@ -30,6 +30,20 @@ describe('ConfigRepository', () => {
     expect(config.get('mail.smtp.host')).toBe('smtp.acme.com')
   })
 
+  it('merge ignores prototype-pollution keys and never touches Object.prototype', () => {
+    const config = repo()
+    config.merge(JSON.parse('{"__proto__": {"polluted": true}, "mail": {"from": "x@y.z"}}'))
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined()
+    expect(config.get('mail.from')).toBe('x@y.z') // the safe key still merged
+  })
+
+  it('set refuses an unsafe key rather than polluting the prototype', () => {
+    const config = repo()
+    expect(() => config.set('__proto__.polluted', true)).toThrowError(/unsafe/i)
+    expect(() => config.set('constructor', 'x')).toThrowError(/unsafe/i)
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined()
+  })
+
   it('configPlugin registers the repository in the container without sharing the original object', async () => {
     const values = { app: { name: 'demo' } }
     const app = await createApp({ plugins: [configPlugin(values)] }).boot()

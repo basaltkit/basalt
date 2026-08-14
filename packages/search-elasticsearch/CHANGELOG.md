@@ -1,5 +1,11 @@
 # @basaltkit/search-elasticsearch
 
+## 1.1.0
+
+### Minor Changes
+
+- Security: **an index with no configured `fields` now searches via `simple_query_string`, not `query_string`.** The `query_string` query exposes full Lucene syntax to raw user input — field probing (`_index:*`), unbounded leading wildcards, and regex that can pin a node (DoS). `simple_query_string` never throws on malformed input and can't reach fields the user wasn't given. Indexes with declared fields (which use `multi_match`) are unaffected.
+
 ## 1.0.1
 
 ### Patch Changes

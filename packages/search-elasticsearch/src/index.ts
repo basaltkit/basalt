@@ -197,7 +197,12 @@ export class ElasticsearchDriver implements SearchDriver {
       must.push(
         fields.length > 0
           ? { multi_match: { query: query.q, fields, type: 'best_fields' } }
-          : { query_string: { query: query.q } },
+          : // Fall back to `simple_query_string`, not `query_string`: the latter
+            // exposes full Lucene syntax to raw user input — field probing
+            // (`_index:*`), unbounded leading wildcards and regex that can pin a
+            // node. `simple_query_string` never throws on bad syntax and can't
+            // reach fields the user wasn't given.
+            { simple_query_string: { query: query.q } },
       )
     }
 

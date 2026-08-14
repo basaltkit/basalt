@@ -117,6 +117,19 @@ describe('ElasticsearchDriver.search', () => {
     expect(body.query.bool.filter).toContainEqual({ term: { 'title.keyword': 'x' } }) // title is searchable → .keyword
     expect(body.query.bool.must).toBeUndefined() // empty q → no must, filter-only
   })
+
+  it('with no configured fields, uses simple_query_string (not the injectable query_string)', async () => {
+    const { fetch, calls } = fakeFetch({
+      'PUT /notes': { status: 200 },
+      'POST /notes/_search': { status: 200, body: canned },
+    })
+    const gw = new ElasticsearchDriver(opts(fetch))
+    await gw.register({ name: 'notes', fields: [], filterable: [] })
+    await gw.search('notes', { tenantId: 'acme', q: 'title:secret OR _index:*' })
+    const body = JSON.parse(calls.find((c) => c.path === '/notes/_search')!.body!)
+    expect(body.query.bool.must[0].simple_query_string).toMatchObject({ query: 'title:secret OR _index:*' })
+    expect(body.query.bool.must[0].query_string).toBeUndefined() // never the full-Lucene variant
+  })
 })
 
 describe('errors', () => {
