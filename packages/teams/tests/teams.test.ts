@@ -4,6 +4,7 @@ import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
 import {
+  InsufficientTeamRoleError,
   LastOwnerError,
   TeamInviteInvalidError,
   Teams,
@@ -28,6 +29,46 @@ describe('Teams service', () => {
 
     // token is single-use
     await expect(teams.accept(token, 'bob1')).rejects.toBeInstanceOf(TeamInviteInvalidError)
+  })
+
+  it('binds invite acceptance to the invited email (a forwarded link is refused)', async () => {
+    const teams = new Teams()
+    await teams.addMember('acme', 'owner1', 'owner')
+    const { token } = await teams.invite({ tenantId: 'acme', email: 'bob@acme.test', role: 'member' })
+
+    // a different account holding the link cannot redeem it
+    await expect(teams.accept(token, 'mallory1', 'mallory@evil.test')).rejects.toBeInstanceOf(TeamInviteInvalidError)
+    // the invited address (case-insensitive) still works
+    const membership = await teams.accept(token, 'bob1', 'BOB@acme.test')
+    expect(membership).toMatchObject({ userId: 'bob1', role: 'member' })
+  })
+
+  it('blocks privilege escalation: an admin cannot grant or self-promote to owner', async () => {
+    const teams = new Teams()
+    await teams.addMember('acme', 'owner1', 'owner')
+    await teams.addMember('acme', 'admin1', 'admin')
+    await teams.addMember('acme', 'member1', 'member')
+
+    // admin promoting another member to owner → refused
+    await expect(
+      teams.changeRole('acme', 'member1', 'owner', { actingUserId: 'admin1' }),
+    ).rejects.toBeInstanceOf(InsufficientTeamRoleError)
+    // admin self-promoting to owner → refused
+    await expect(
+      teams.changeRole('acme', 'admin1', 'owner', { actingUserId: 'admin1' }),
+    ).rejects.toBeInstanceOf(InsufficientTeamRoleError)
+    // admin inviting at owner → refused
+    await expect(
+      teams.invite({ tenantId: 'acme', email: 'x@acme.test', role: 'owner', actingUserId: 'admin1' }),
+    ).rejects.toBeInstanceOf(InsufficientTeamRoleError)
+    // admin can't re-role an owner (who outranks them)
+    await expect(
+      teams.changeRole('acme', 'owner1', 'member', { actingUserId: 'admin1' }),
+    ).rejects.toBeInstanceOf(InsufficientTeamRoleError)
+
+    // an admin CAN still grant admin/member, and an owner can grant owner
+    await expect(teams.changeRole('acme', 'member1', 'admin', { actingUserId: 'admin1' })).resolves.toMatchObject({ role: 'admin' })
+    await expect(teams.changeRole('acme', 'member1', 'owner', { actingUserId: 'owner1' })).resolves.toMatchObject({ role: 'owner' })
   })
 
   it('rejects an expired invitation token', async () => {
