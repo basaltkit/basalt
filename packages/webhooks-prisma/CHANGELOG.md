@@ -1,5 +1,11 @@
 # @basaltkit/webhooks-prisma
 
+## 1.1.0
+
+### Minor Changes
+
+- Security: `PrismaWebhookStore.remove(id, tenantId?)` now scopes the delete by `tenantId` when a tenant is given, so one tenant can't delete another's endpoint by id (see `@basaltkit/webhooks` 1.1.0).
+
 ## 1.0.5
 
 ### Initial release

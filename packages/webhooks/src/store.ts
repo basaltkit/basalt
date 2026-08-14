@@ -26,7 +26,8 @@ export function matchesEvent(patterns: string[], event: string): boolean {
 export interface WebhookStore {
   forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]>
   add(endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string }): Promise<WebhookEndpoint>
-  remove(id: string): Promise<void>
+  /** Removes an endpoint. When `tenantId` is given, only if it owns the endpoint. */
+  remove(id: string, tenantId?: string): Promise<void>
   list(tenantId?: string): Promise<WebhookEndpoint[]>
 }
 
@@ -49,7 +50,11 @@ export class MemoryWebhookStore implements WebhookStore {
     return record
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, tenantId?: string): Promise<void> {
+    if (tenantId !== undefined) {
+      const existing = this.endpoints.get(id)
+      if (!existing || existing.tenantId !== tenantId) return // not ours — no-op
+    }
     this.endpoints.delete(id)
   }
 
