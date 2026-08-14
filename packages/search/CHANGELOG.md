@@ -1,5 +1,11 @@
 # @basaltkit/search
 
+## 1.2.0
+
+### Minor Changes
+
+- Security: **the Meilisearch driver validates filter field names.** A filter key is interpolated into Meilisearch's filter DSL, so a crafted name (e.g. `x" OR tenantId = "victim`) could break out of the mandatory `tenantId` scope and read another tenant's documents. Field names are now required to be bare, optionally-dotted identifiers; anything else throws the new `SearchFilterFieldError` before any request is sent. Values were already quoted and are unaffected.
+
 ## 1.1.0
 
 ### Minor Changes

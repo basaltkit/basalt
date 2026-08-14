@@ -1,5 +1,11 @@
 # @basaltkit/config
 
+## 1.1.0
+
+### Minor Changes
+
+- Security: **`merge` and `set` can no longer pollute `Object.prototype`.** Both take untrusted input (parsed JSON, env), so a payload like `{"__proto__": {"isAdmin": true}}` could previously walk the prototype chain and set a global default that leaks into every object. `merge` now silently drops `__proto__`/`constructor`/`prototype` keys; `set` throws `ConfigUnsafeKeyError` on any such segment. Safe keys in the same payload still apply.
+
 ## 1.0.5
 
 ### Patch Changes

@@ -10,10 +10,17 @@ export interface ExportFormatter {
   render(headers: string[], rows: unknown[][]): Buffer | Promise<Buffer>
 }
 
+// A spreadsheet evaluates a cell whose text starts with =, +, -, @ or a leading
+// tab/CR as a formula, so an exported value like `=WEBSERVICE(...)` runs on open
+// (CSV/formula injection). Only strings are risky — numbers and dates render
+// themselves and can never be a formula — so guard on the original type.
+const FORMULA_TRIGGER = /^[=+\-@\t\r]/
+
 const cell = (value: unknown): string => {
   if (value === null || value === undefined) return ''
   if (value instanceof Date) return value.toISOString()
-  return String(value)
+  const text = String(value)
+  return typeof value === 'string' && FORMULA_TRIGGER.test(text) ? `'${text}` : text
 }
 
 /** CSV/TSV via a configurable delimiter, with RFC-4180 quoting. */
