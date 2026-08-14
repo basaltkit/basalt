@@ -5,6 +5,7 @@ export {
   type RealtimeMessage,
   type BackplaneMessage,
   type RealtimeBackplane,
+  type RealtimeHubOptions,
 } from './hub.js'
 export { Realtime, type ChannelTarget } from './realtime.js'
 export {
