@@ -1,5 +1,13 @@
 # @basaltkit/realtime
 
+## 1.1.0
+
+### Minor Changes
+
+- Security hardening (channel authorization + DoS bounds):
+  - **Subscription authorization seam (HIGH).** `RealtimeHub.subscribe` previously attached a connection to *any* client-supplied channel with no check, so any authenticated connection could subscribe to another user's private channel or an admin channel within its tenant and receive its broadcasts — and there was no hook to prevent it. `subscribe` is now `async` and returns whether the subscription was accepted; a new `authorize(connection, channel)` option (settable on `RealtimeHub` and `realtimePlugin`) gates every join. **Set it whenever channels carry data not readable by every member of the tenant.** Cross-tenant isolation was already enforced and is unchanged. Note: `subscribe` now returns `Promise<boolean>` — adapters should check the result and signal/close on refusal.
+  - **DoS bounds.** `maxSubscriptionsPerConnection` (default 1000) and `maxChannelLength` (default 256) cap how many channels a single connection can hold and how long a channel name may be, so one socket can't exhaust memory by looping `subscribe` over unbounded distinct channels.
+
 ## 1.0.5
 
 ### Patch Changes
