@@ -222,6 +222,12 @@ export interface SessionStore {
   /** Returns null for unknown or expired sessions. */
   find(id: string): Promise<SessionRecord | null>
   delete(id: string): Promise<boolean>
+  /**
+   * Deletes every session for a user — fired on password reset so a reset logs
+   * out all of the user's active sessions, not just token-based clients.
+   * Optional so existing stores keep compiling; implement it to close the gap.
+   */
+  deleteAllForUser?(userId: string): Promise<void>
 }
 
 export class MemorySessionStore implements SessionStore {
@@ -249,6 +255,12 @@ export class MemorySessionStore implements SessionStore {
 
   async delete(id: string): Promise<boolean> {
     return this.sessions.delete(id)
+  }
+
+  async deleteAllForUser(userId: string): Promise<void> {
+    for (const [id, record] of this.sessions) {
+      if (record.userId === userId) this.sessions.delete(id)
+    }
   }
 }
 
