@@ -12,6 +12,7 @@ export { Search, TenantRequiredError, type SearchOptions } from './search.js'
 export {
   MeilisearchDriver,
   MeilisearchError,
+  SearchFilterFieldError,
   type MeilisearchDriverOptions,
 } from './drivers/meilisearch.js'
 export {

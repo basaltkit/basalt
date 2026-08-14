@@ -10,6 +10,18 @@ export class MeilisearchError extends BasaltError {
   }
 }
 
+export class SearchFilterFieldError extends BasaltError {
+  constructor(field: string) {
+    super('SEARCH_INVALID_FILTER_FIELD', `Invalid filter field name: ${JSON.stringify(field)}.`)
+  }
+}
+
+// A filter field is interpolated into Meilisearch's filter DSL, so it must be a
+// bare identifier (optionally dotted). Rejecting anything else stops a crafted
+// field name from injecting operators (` OR `, `=`, quotes) to escape the
+// mandatory `tenantId` scope and read another tenant's documents.
+const SAFE_FILTER_FIELD = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/
+
 export interface MeilisearchDriverOptions {
   host: string
   apiKey?: string
@@ -89,6 +101,7 @@ export class MeilisearchDriver implements SearchDriver {
   private buildFilter(tenantId: string, filters: Record<string, unknown> | undefined): string {
     const parts = [`tenantId = ${quote(tenantId)}`]
     for (const [field, value] of Object.entries(filters ?? {})) {
+      if (!SAFE_FILTER_FIELD.test(field)) throw new SearchFilterFieldError(field)
       parts.push(Array.isArray(value) ? `${field} IN [${value.map(quote).join(', ')}]` : `${field} = ${quote(value)}`)
     }
     return parts.join(' AND ')

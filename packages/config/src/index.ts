@@ -6,6 +6,12 @@ export class ConfigKeyError extends BasaltError {
   }
 }
 
+export class ConfigUnsafeKeyError extends BasaltError {
+  constructor(key: string) {
+    super('CONFIG_UNSAFE_KEY', `Refusing to write unsafe configuration key: "${key}" (prototype pollution).`)
+  }
+}
+
 /**
  * Packages type their namespaces via module augmentation:
  *
@@ -38,6 +44,7 @@ export class ConfigRepository {
 
   set(path: string, value: unknown): void {
     const segments = path.split('.')
+    for (const segment of segments) assertSafeKey(segment)
     let target = this.values
     for (const segment of segments.slice(0, -1)) {
       const next = target[segment]
@@ -70,8 +77,18 @@ function resolvePath(source: Record<string, unknown>, path: string): unknown {
   return current
 }
 
+// Keys that would poison Object.prototype (or the constructor chain) if written
+// through. `merge`/`set` take untrusted input (parsed JSON/env), so a payload
+// like {"__proto__": {"isAdmin": true}} must never reach an assignment target.
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function assertSafeKey(key: string): void {
+  if (UNSAFE_KEYS.has(key)) throw new ConfigUnsafeKeyError(key)
+}
+
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(source)) {
+    if (UNSAFE_KEYS.has(key)) continue // drop pollution attempts silently
     const existing = target[key]
     if (isPlainObject(existing) && isPlainObject(value)) {
       deepMerge(existing, value)
