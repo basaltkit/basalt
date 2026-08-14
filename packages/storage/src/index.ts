@@ -8,7 +8,7 @@ import {
 import type { PutOptions, StorageDriver } from './driver.js'
 import { LocalStorageDriver } from './drivers/local.js'
 import { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
-import { TemporaryUrlUnsupportedError, UnknownDiskError } from './errors.js'
+import { StorageInvalidPathError, TemporaryUrlUnsupportedError, UnknownDiskError } from './errors.js'
 
 export type { StorageDriver, PutOptions } from './driver.js'
 export { LocalStorageDriver } from './drivers/local.js'
@@ -45,23 +45,25 @@ export class Disk {
     this.scope = options.scope === undefined ? defaultScope : options.scope
   }
 
-  put(path: string, content: Buffer | string, options?: PutOptions): Promise<void> {
+  // async so a rejected path (this.path throws) surfaces as a rejected promise,
+  // consistent with the driver's own async errors.
+  async put(path: string, content: Buffer | string, options?: PutOptions): Promise<void> {
     return this.driver.put(this.path(path), content, options)
   }
 
-  get(path: string): Promise<Buffer> {
+  async get(path: string): Promise<Buffer> {
     return this.driver.get(this.path(path))
   }
 
-  exists(path: string): Promise<boolean> {
+  async exists(path: string): Promise<boolean> {
     return this.driver.exists(this.path(path))
   }
 
-  delete(path: string): Promise<boolean> {
+  async delete(path: string): Promise<boolean> {
     return this.driver.delete(this.path(path))
   }
 
-  list(prefix = ''): Promise<string[]> {
+  async list(prefix = ''): Promise<string[]> {
     return this.driver.list(this.path(prefix))
   }
 
@@ -72,6 +74,12 @@ export class Disk {
   }
 
   private path(path: string): string {
+    // Reject traversal BEFORE scoping, so a caller-supplied key can never `..`
+    // its way out of the tenant prefix (the local driver only guards the disk
+    // root, not the tenant scope).
+    if (path.startsWith('/') || path.startsWith('\\') || path.split(/[/\\]+/).some((seg) => seg === '..')) {
+      throw new StorageInvalidPathError(path)
+    }
     const scope = this.scope?.()
     return scope ? `${scope}/${path}` : path
   }
