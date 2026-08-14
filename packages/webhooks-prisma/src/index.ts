@@ -72,8 +72,10 @@ export class PrismaWebhookStore implements WebhookStore {
     return record
   }
 
-  async remove(id: string): Promise<void> {
-    await this.client.webhookEndpoint.deleteMany({ where: { id } })
+  async remove(id: string, tenantId?: string): Promise<void> {
+    await this.client.webhookEndpoint.deleteMany({
+      where: tenantId === undefined ? { id } : { id, tenantId },
+    })
   }
 
   async list(tenantId?: string): Promise<WebhookEndpoint[]> {
