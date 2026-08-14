@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/webhooks-sqlite",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Durable, SQLite-backed implementation of the @basaltkit/webhooks WebhookStore (endpoint subscriptions), on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",

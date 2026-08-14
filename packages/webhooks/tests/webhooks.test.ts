@@ -14,6 +14,9 @@ import {
 
 const okResponse = (status = 200) => ({ ok: status >= 200 && status < 300, status }) as unknown as Response
 const noSleep = async () => {}
+// Resolve any (fake) test hostname to a public IP so the SSRF guard passes for
+// delivery-mechanics tests without real DNS. SSRF blocking is covered separately.
+const publicDns = { lookup: async () => [{ address: '93.184.216.34' }] }
 
 describe('signing', () => {
   it('signs and verifies, rejecting tampering and stale timestamps', () => {
@@ -44,6 +47,15 @@ describe('matchesEvent + store', () => {
     // a different tenant only gets the tenant-agnostic one
     expect((await store.forEvent('invoice.paid', 'globex')).map((e) => e.url)).toEqual(['https://b'])
   })
+
+  it('remove is tenant-scoped when a tenantId is given (no cross-tenant delete)', async () => {
+    const store = new MemoryWebhookStore()
+    const ep = await store.add({ url: 'https://a', events: ['*'], tenantId: 'acme' })
+    await store.remove(ep.id, 'globex') // wrong tenant → no-op
+    expect(await store.list()).toHaveLength(1)
+    await store.remove(ep.id, 'acme') // owning tenant → removed
+    expect(await store.list()).toHaveLength(0)
+  })
 })
 
 describe('WebhookDeliverer', () => {
@@ -56,6 +68,7 @@ describe('WebhookDeliverer', () => {
       sleep: noSleep,
       now: () => 1000,
       secret: 's',
+      ssrf: publicDns,
     })
     const result = await deliverer.deliver(endpoint, 'invoice.paid', { amount: 10 })
     expect(result.ok).toBe(true)
@@ -68,7 +81,7 @@ describe('WebhookDeliverer', () => {
   it('retries 5xx with backoff then succeeds', async () => {
     let n = 0
     const fetchImpl = vi.fn(async () => okResponse(n++ < 2 ? 503 : 200))
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3 })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3, ssrf: publicDns })
     const result = await deliverer.deliver(endpoint, 'e', {})
     expect(result.ok).toBe(true)
     expect(result.attempts).toBe(3)
@@ -76,7 +89,7 @@ describe('WebhookDeliverer', () => {
 
   it('does not retry 4xx', async () => {
     const fetchImpl = vi.fn(async () => okResponse(400))
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3 })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3, ssrf: publicDns })
     const result = await deliverer.deliver(endpoint, 'e', {})
     expect(result.ok).toBe(false)
     expect(result.status).toBe(400)
@@ -85,11 +98,66 @@ describe('WebhookDeliverer', () => {
 
   it('gives up after maxRetries on persistent failure', async () => {
     const fetchImpl = vi.fn(async () => { throw new Error('ECONNREFUSED') })
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 2 })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 2, ssrf: publicDns })
     const result = await deliverer.deliver(endpoint, 'e', {})
     expect(result.ok).toBe(false)
     expect(result.attempts).toBe(3) // 1 + 2 retries
     expect(result.error).toContain('ECONNREFUSED')
+  })
+})
+
+describe('WebhookDeliverer — SSRF guard', () => {
+  it('refuses a URL whose host is a private/metadata IP, without calling fetch', async () => {
+    const fetchImpl = vi.fn(async () => okResponse(200))
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep })
+    for (const url of ['http://169.254.169.254/latest/meta-data', 'http://127.0.0.1/', 'http://10.0.0.5/', 'http://[::1]/']) {
+      const result = await deliverer.deliver({ id: 'x', url, events: ['*'] }, 'e', {})
+      expect(result.ok).toBe(false)
+      expect(result.attempts).toBe(0)
+      expect(result.error).toMatch(/private or reserved/)
+    }
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('refuses a hostname that resolves to a private address', async () => {
+    const fetchImpl = vi.fn(async () => okResponse(200))
+    const deliverer = new WebhookDeliverer({
+      fetchImpl,
+      sleep: noSleep,
+      ssrf: { lookup: async () => [{ address: '10.1.2.3' }] }, // internal rebind
+    })
+    const result = await deliverer.deliver({ id: 'x', url: 'https://evil.example', events: ['*'] }, 'e', {})
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/resolves to a private address/)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('refuses a non-http(s) scheme', async () => {
+    const fetchImpl = vi.fn(async () => okResponse(200))
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep })
+    const result = await deliverer.deliver({ id: 'x', url: 'file:///etc/passwd', events: ['*'] }, 'e', {})
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/scheme/)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('allowPrivateHosts opts out for trusted internal delivery', async () => {
+    const fetchImpl = vi.fn(async () => okResponse(200))
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: { allowPrivateHosts: true } })
+    const result = await deliverer.deliver({ id: 'x', url: 'http://10.0.0.5/hook', events: ['*'] }, 'e', {})
+    expect(result.ok).toBe(true)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not follow a redirect (redirect: manual, refused)', async () => {
+    const fetchImpl = vi.fn((_url: string | URL, _init?: RequestInit) =>
+      Promise.resolve({ ok: false, status: 0, type: 'opaqueredirect' } as unknown as Response),
+    )
+    const deliverer = new WebhookDeliverer({ fetchImpl: fetchImpl as unknown as typeof fetch, sleep: noSleep, ssrf: publicDns })
+    const result = await deliverer.deliver({ id: 'x', url: 'https://hook', events: ['*'] }, 'e', {})
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('redirect refused')
+    expect(fetchImpl.mock.calls[0]![1]!.redirect).toBe('manual')
   })
 })
 
@@ -99,7 +167,7 @@ describe('WebhookManager.dispatch', () => {
     await store.add({ id: 'a', url: 'https://a', events: ['invoice.*'] })
     await store.add({ id: 'b', url: 'https://b', events: ['user.*'] })
     const fetchImpl = vi.fn(async () => okResponse(200))
-    const manager = new WebhookManager(store, new WebhookDeliverer({ fetchImpl, sleep: noSleep }))
+    const manager = new WebhookManager(store, new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: publicDns }))
 
     const results = await manager.dispatch('invoice.paid', { amount: 1 })
     expect(results).toHaveLength(1)
