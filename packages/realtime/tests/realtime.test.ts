@@ -57,6 +57,39 @@ describe('RealtimeHub', () => {
     expect(otherChannel.received).toHaveLength(0)
   })
 
+  it('enforces the authorize gate: a refused channel is never joined', async () => {
+    // only allow a user to join their OWN private channel
+    const hub = new RealtimeHub(undefined, {
+      authorize: (conn, channel) => channel === `user:${conn.userId}` || channel === 'public',
+    })
+    await hub.start()
+    const mallory = new FakeConnection('m', 'acme', 'mallory')
+    hub.register(mallory)
+
+    expect(await hub.subscribe('m', 'user:victim')).toBe(false) // someone else's private channel
+    expect(await hub.subscribe('m', 'admin')).toBe(false)
+    expect(await hub.subscribe('m', 'user:mallory')).toBe(true) // own channel
+    expect(await hub.subscribe('m', 'public')).toBe(true)
+
+    // a message on the refused channel never reaches the connection
+    await hub.publish('acme', 'user:victim', 'secret', { pii: true })
+    expect(mallory.received).toHaveLength(0)
+    await hub.publish('acme', 'user:mallory', 'ok', { x: 1 })
+    expect(mallory.received).toHaveLength(1)
+  })
+
+  it('bounds subscriptions per connection and channel-name length (DoS)', async () => {
+    const hub = new RealtimeHub(undefined, { maxSubscriptionsPerConnection: 2, maxChannelLength: 8 })
+    await hub.start()
+    const c = new FakeConnection('c', 'acme', 'u1')
+    hub.register(c)
+    expect(await hub.subscribe('c', 'a')).toBe(true)
+    expect(await hub.subscribe('c', 'b')).toBe(true)
+    expect(await hub.subscribe('c', 'c')).toBe(false) // cap reached
+    expect(await hub.subscribe('c', 'x'.repeat(9))).toBe(false) // too long
+    expect(await hub.subscribe('c', '')).toBe(false) // empty
+  })
+
   it('tracks presence (distinct user ids) and clears on unsubscribe/unregister', () => {
     const hub = new RealtimeHub()
     const a = new FakeConnection('a', 'acme', 'u1')
