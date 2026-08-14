@@ -40,6 +40,32 @@ describe('auditPlugin', () => {
     })
   })
 
+  it('redacts secret/PII fields from the stored payload by default', async () => {
+    const { app, audit } = await boot()
+    await runWithContext({ tenant: { id: 'acme' } }, () =>
+      app.hooks.emit('auth:login', { user: { id: 'u1' }, password: 'hunter2', apiKey: 'sk_live_x', token: 'abc', nested: { sessionId: 's1' } }),
+    )
+    const [entry] = await audit.trail()
+    const payload = entry!.payload as Record<string, unknown>
+    expect(payload['password']).toBe('[redacted]')
+    expect(payload['apiKey']).toBe('[redacted]')
+    expect(payload['token']).toBe('[redacted]')
+    expect((payload['nested'] as Record<string, unknown>)['sessionId']).toBe('[redacted]')
+    expect((payload['user'] as Record<string, unknown>)['id']).toBe('u1') // non-secret kept
+  })
+
+  it('trail() auto-scopes to the current tenant (no cross-tenant read)', async () => {
+    const { app, audit } = await boot()
+    await runWithContext({ tenant: { id: 'acme' } }, () => app.hooks.emit('auth:login', { user: { id: 'a' } }))
+    await runWithContext({ tenant: { id: 'globex' } }, () => app.hooks.emit('auth:login', { user: { id: 'g' } }))
+
+    // queried inside acme's context → only acme's entries
+    const acme = await runWithContext({ tenant: { id: 'acme' } }, () => audit.trail())
+    expect(acme.map((e) => e.tenantId)).toEqual(['acme'])
+    // a system caller with no tenant context still sees both
+    expect((await audit.trail()).length).toBe(2)
+  })
+
   it('records domain events from the EventBus', async () => {
     const { app, audit, bus } = await boot()
     const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))

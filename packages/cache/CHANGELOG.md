@@ -1,5 +1,13 @@
 # @basaltkit/cache
 
+## 1.1.0
+
+### Minor Changes
+
+- Security: **don't fail open to a shared global namespace when the tenant scope is absent.**
+  - **`flush()` now fails closed** (throws `MissingCacheScopeError`) when a tenant-scoped cache resolves no tenant, instead of wiping the entire `basalt:*` namespace across *every* tenant. A deliberate global cache (`scope: null`) still flushes its whole namespace, and a properly-scoped flush is unchanged.
+  - **New `onMissingScope: 'error'`** option makes reads/writes fail closed too when no tenant resolves — recommended for multi-tenant apps, so a per-tenant value cached from a context that lost its tenant can't leak into the shared namespace and be read by another tenant. Default stays `'global'` (previous behavior) for compatibility.
+
 ## 1.0.5
 
 ### Patch Changes

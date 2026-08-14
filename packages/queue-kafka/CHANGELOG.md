@@ -1,5 +1,11 @@
 # @basaltkit/queue-kafka
 
+## 1.0.1
+
+### Patch Changes
+
+- Security (defense-in-depth): clamp the max-retry count read from an (untrusted) message to a hard ceiling (50), so a crafted `x-basalt-attempts` header can't drive a retry-amplification loop. Requires broker write access to exploit.
+
 ## 1.0.5
 
 ### Patch Changes

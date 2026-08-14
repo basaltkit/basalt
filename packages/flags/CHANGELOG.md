@@ -1,5 +1,11 @@
 # @basaltkit/flags
 
+## 1.0.1
+
+### Patch Changes
+
+- Security/correctness: resolve user/tenant flag overrides with `Object.hasOwn` instead of the `in` operator. A caller-supplied `userId`/`tenantId` of `__proto__` or `constructor` matched an inherited key, returning `Object.prototype` instead of falling through to the rollout/default. Not a privilege escalation (the value is never `=== true`), but it could suppress the intended default/rollout.
+
 ## 1.0.5
 
 ### Patch Changes
