@@ -1,5 +1,11 @@
 # @basaltkit/teams
 
+## 1.2.0
+
+### Minor Changes
+
+- Security: **invite tokens are stored hashed.** The invitation token was persisted in plaintext, so a read of the invitations table let an attacker accept pending invites (bounded, since 1.1.0, by the invited-email check — but still a leak vector). Only `sha256(token)` is now stored and looked up; the raw token exists solely in the emailed link. Any invites issued before upgrading stop validating and must be re-sent.
+
 ## 1.1.0
 
 ### Minor Changes

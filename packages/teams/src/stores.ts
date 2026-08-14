@@ -15,7 +15,7 @@ export interface Invitation {
   tenantId: string
   email: string
   role: TeamRole
-  /** Secret carried in the emailed link. A DB store may persist a hash instead. */
+  /** SHA-256 hash of the secret carried in the emailed link (never the raw token). */
   token: string
   invitedBy?: string
   expiresAt: number

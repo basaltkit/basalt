@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
 import {
   MemoryInvitationStore,
@@ -10,6 +10,9 @@ import {
   type PublicInvitation,
   type TeamRole,
 } from './stores.js'
+
+/** SHA-256 of an invite token — only this is persisted, never the raw value. */
+const hashInviteToken = (token: string): string => createHash('sha256').update(token).digest('hex')
 
 /** An invite token was unknown, already used, revoked, or expired. */
 export class TeamInviteInvalidError extends BasaltError {
@@ -162,11 +165,14 @@ export class Teams {
       tenantId: input.tenantId,
       email: input.email,
       role,
-      token,
+      // Persist only the hash — a leak of the invitations table can't be replayed
+      // to accept an invite (the raw token lives only in the emailed link).
+      token: hashInviteToken(token),
       expiresAt: this.now() + parseDuration(this.inviteTtl),
       ...(input.invitedBy !== undefined ? { invitedBy: input.invitedBy } : {}),
     }
     await this.invitations.create(invitation)
+    // Emit and return the RAW token (for the link); the stored record holds the hash.
     await this.hooks?.emit('team:invited', { invitation: publicInvite(invitation), token })
     return { invitation: publicInvite(invitation), token }
   }
@@ -176,7 +182,7 @@ export class Teams {
    * Idempotent for an already-accepted membership of the same user.
    */
   async accept(token: string, userId: string, acceptingEmail?: string): Promise<Membership> {
-    const invitation = await this.invitations.findByToken(token)
+    const invitation = await this.invitations.findByToken(hashInviteToken(token))
     if (
       !invitation ||
       invitation.acceptedAt !== undefined ||
