@@ -1,5 +1,11 @@
 # @basaltkit/subscriptions-proxypay
 
+## 2.1.0
+
+### Minor Changes
+
+- Security: **`verifyWebhook` now fails closed.** An empty `webhookSecret` previously disabled signature verification silently, so a misconfigured deployment (or an explicit `webhookSecret: ''`) would trust any unsigned callback and let anyone forge a `payment.succeeded`. Verification with no usable secret now throws `WebhookSecretMissingError`. The secret still defaults to the API key, so normal setups are unaffected.
+
 ## 2.0.0
 
 ### Major Changes

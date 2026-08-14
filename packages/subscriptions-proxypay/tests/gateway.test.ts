@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { WebhookInvalidError } from '@basaltkit/subscriptions'
+import { WebhookInvalidError, WebhookSecretMissingError } from '@basaltkit/subscriptions'
 import { ProxyPayGateway, ProxyPayRequestError, type FetchLike } from '../src/index.js'
 
 // Fake fetch: routes by method+path, records calls, returns canned responses.
@@ -150,8 +150,13 @@ describe('ProxyPayGateway.verifyWebhook', () => {
   })
 
   it('returns null when the payload has no reference_id', () => {
-    // webhookSecret: '' disables verification so we can feed an arbitrary body
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: secret, fetch: fakeOk })
+    const body = JSON.stringify({ hello: 'world' })
+    expect(gw.verifyWebhook(body, sign(body, secret))).toBeNull()
+  })
+
+  it('fails closed: an empty webhookSecret no longer disables verification', () => {
     const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: '', fetch: fakeOk })
-    expect(gw.verifyWebhook(JSON.stringify({ hello: 'world' }), undefined)).toBeNull()
+    expect(() => gw.verifyWebhook(payload, undefined)).toThrow(WebhookSecretMissingError)
   })
 })

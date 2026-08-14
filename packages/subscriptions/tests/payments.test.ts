@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MemoryPaymentStore,
+  PaymentAmountMismatchError,
   PaymentLedger,
   type PaymentEvent,
   type PaymentInstruction,
@@ -47,6 +48,20 @@ describe('PaymentLedger', () => {
     const result = await ledger.apply(paid())
     expect(result.fresh).toBe(true)
     expect(result.record).toMatchObject({ id: 'pay_1', status: 'paid', amount: 5000 })
+  })
+
+  it('refuses to mark paid when the confirmed amount differs from the requested one', async () => {
+    const ledger = new PaymentLedger()
+    await ledger.created(inst, req) // requested 5000
+
+    // an underpayment / forged callback claiming success for only 1000
+    await expect(ledger.apply(paid({ amount: 1000 }))).rejects.toBeInstanceOf(PaymentAmountMismatchError)
+    expect((await ledger.get('pay_1'))?.status).toBe('pending') // never settled
+
+    // the claim was released, so the correct amount still applies on retry
+    const ok = await ledger.apply(paid({ amount: 5000 }))
+    expect(ok.fresh).toBe(true)
+    expect(ok.record).toMatchObject({ status: 'paid', amount: 5000 })
   })
 
   it('deduplicates a retried webhook by event id', async () => {
