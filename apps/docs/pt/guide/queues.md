@@ -140,6 +140,39 @@ await Job.dispatch(payload, { delay: '5m' })
 Usa `'throw'` em produção para uma garantia rígida; a predefinição `'warn'` nunca
 quebra uma execução de dev mas também nunca esconde uma opção descartada.
 
+## Retenção de jobs no Redis
+
+Com o driver BullMQ, os jobs terminados ficam no Redis para os poderes
+inspecionar e re-tentar. Por predefinição os **concluídos** mantêm os últimos
+**1000**, e os **falhados** ficam **para sempre** — ou seja, o conjunto de
+falhados pode crescer sem limite. Controla isso com `removeOnComplete` /
+`removeOnFail`, globalmente no `queuePlugin` ou por job:
+
+```ts
+// Predefinição global para todos os jobs
+queuePlugin({
+  connection: process.env.REDIS_URL,
+  jobs: [SendWelcome],
+  removeOnComplete: { age: '7d' },   // mantém concluídos 7 dias
+  removeOnFail: { age: '14d' },      // falhados deixam de crescer para sempre
+})
+
+// Por job — sobrepõe a predefinição global
+defineJob({
+  name: 'email.welcome',
+  removeOnComplete: true,             // remove assim que termina
+  removeOnFail: { count: 500 },       // mantém as últimas 500 falhas
+  handle: () => {},
+})
+```
+
+Cada opção aceita `true` (remove ao terminar), `false` (mantém tudo), um número
+(mantém os N mais recentes), ou `{ age, count }` onde `age` é uma duração como
+`'14d'`. Sem configuração, aplicam-se as predefinições acima. O driver **sync**
+ignora a retenção — não guarda nada. (As chaves de estrutura da própria fila,
+`bull:<queue>:*`, existem sempre depois de a fila ser criada; isso é do BullMQ,
+não são jobs esquecidos.)
+
 ## Executar domain events na queue
 
 `queuedOn` faz a ponte `@basaltkit/events` → queue: `emit` apenas enfileira um job, e

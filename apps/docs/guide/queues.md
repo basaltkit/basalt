@@ -140,6 +140,37 @@ await Job.dispatch(payload, { delay: '5m' })
 Use `'throw'` in production for a hard guarantee; the default `'warn'` never
 breaks a dev run but never hides a dropped option either.
 
+## Job retention in Redis
+
+With the BullMQ driver, finished jobs stay in Redis so you can inspect and retry
+them. By default **completed** jobs keep the last **1000**, and **failed** jobs are
+kept **forever** — which means the failed set can grow unbounded. Control it with
+`removeOnComplete` / `removeOnFail`, globally on `queuePlugin` or per job:
+
+```ts
+// Global default for every job
+queuePlugin({
+  connection: process.env.REDIS_URL,
+  jobs: [SendWelcome],
+  removeOnComplete: { age: '7d' },   // keep completed for 7 days
+  removeOnFail: { age: '14d' },      // failed no longer grow forever
+})
+
+// Per job — overrides the global default
+defineJob({
+  name: 'email.welcome',
+  removeOnComplete: true,             // remove as soon as it finishes
+  removeOnFail: { count: 500 },       // keep the last 500 failures
+  handle: () => {},
+})
+```
+
+Each option accepts `true` (remove on finish), `false` (keep all), a number (keep
+that many most-recent), or `{ age, count }` where `age` is a duration like `'14d'`.
+Left unset, the defaults above apply. The **sync** driver ignores retention — it
+stores nothing. (The queue's own `bull:<queue>:*` structure keys always exist once
+the queue is created; that's BullMQ, not leftover jobs.)
+
 ## Run domain events on the queue
 
 `queuedOn` bridges `@basaltkit/events` → queue: `emit` just enqueues a job, and
