@@ -5,13 +5,24 @@ import {
   tryCtx,
   type RequestContext,
 } from '@basaltkit/core'
-import type { AddJobOptions, DriverCapabilities, QueueDriver } from './driver.js'
+import type { AddJobOptions, DriverCapabilities, QueueDriver, RetentionOption } from './driver.js'
 import {
   validatePayload,
   type DispatchOptions,
   type JobDefinition,
   type JobDispatcher,
+  type JobRetention,
 } from './job.js'
+
+/** Convert a public {@link JobRetention} to the driver-neutral shape (age → ms). */
+function resolveRetention(retention: JobRetention | undefined): RetentionOption | undefined {
+  if (retention === undefined) return undefined
+  if (typeof retention === 'boolean' || typeof retention === 'number') return retention
+  const out: { ageMs?: number; count?: number } = {}
+  if (retention.age !== undefined) out.ageMs = parseDuration(retention.age)
+  if (retention.count !== undefined) out.count = retention.count
+  return out
+}
 
 export class UnknownJobError extends BasaltError {
   constructor(job: string) {
@@ -74,6 +85,10 @@ export interface QueueManagerOptions {
   onUnsupported?: UnsupportedPolicy
   /** Sink for 'warn' diagnostics. Default console.warn. */
   warn?: (message: string) => void
+  /** Default retention for completed jobs (a job can override). Driver default: keep 1000. */
+  removeOnComplete?: JobRetention
+  /** Default retention for failed jobs (a job can override). Driver default: keep all. */
+  removeOnFail?: JobRetention
 }
 
 export class QueueManager implements JobDispatcher {
@@ -81,6 +96,8 @@ export class QueueManager implements JobDispatcher {
   private readonly onUnsupported: UnsupportedPolicy
   private readonly warn: (message: string) => void
   private readonly warned = new Set<string>()
+  private readonly defaultRemoveOnComplete: JobRetention | undefined
+  private readonly defaultRemoveOnFail: JobRetention | undefined
 
   constructor(
     private readonly driver: QueueDriver,
@@ -88,6 +105,8 @@ export class QueueManager implements JobDispatcher {
   ) {
     this.onUnsupported = options.onUnsupported ?? 'warn'
     this.warn = options.warn ?? ((message) => console.warn(message))
+    this.defaultRemoveOnComplete = options.removeOnComplete
+    this.defaultRemoveOnFail = options.removeOnFail
     driver.setExecutor((jobName, data) => this.execute(jobName, data))
   }
 
@@ -135,6 +154,9 @@ export class QueueManager implements JobDispatcher {
         : undefined,
       delayMs: options.delay === undefined ? undefined : parseDuration(options.delay),
       priority: options.priority,
+      // Per-job overrides the queuePlugin default; undefined leaves the driver default.
+      removeOnComplete: resolveRetention(job.removeOnComplete ?? this.defaultRemoveOnComplete),
+      removeOnFail: resolveRetention(job.removeOnFail ?? this.defaultRemoveOnFail),
     }
     this.assertSupported(job.name, addOptions)
     await this.driver.add(job.queue, job.name, envelope, addOptions)

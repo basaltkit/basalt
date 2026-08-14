@@ -1,8 +1,15 @@
+/** Driver-neutral retention: `true`/`false`, a count, or `{ ageMs, count }`. */
+export type RetentionOption = boolean | number | { ageMs?: number; count?: number }
+
 export interface AddJobOptions {
   attempts: number
   backoff?: { type: 'exponential' | 'fixed'; delayMs: number } | undefined
   delayMs?: number | undefined
   priority?: number | undefined
+  /** Retention for completed jobs. Undefined → the driver's default. */
+  removeOnComplete?: RetentionOption | undefined
+  /** Retention for failed jobs. Undefined → the driver's default. */
+  removeOnFail?: RetentionOption | undefined
 }
 
 export type JobExecutor = (jobName: string, data: unknown) => Promise<void>
