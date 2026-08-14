@@ -40,6 +40,10 @@ const HEADER = {
   backoffType: 'x-basalt-backoff-type',
 } as const
 
+/** Hard ceilings on retries and backoff so a crafted message can't demand unbounded ones. */
+const MAX_ATTEMPTS = 50
+const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000 // 24h
+
 const defaultConnect: AmqpConnect = async (url) => {
   // Bare-specifier dynamic import kept opaque to the bundler/type-checker so
   // `amqplib` stays an optional peer dependency, resolved at runtime.
@@ -145,7 +149,9 @@ export class RabbitmqQueueDriver implements QueueDriver {
       channel.ack(message)
     } catch {
       const attempt = Number(headers[HEADER.attempt] ?? 1)
-      const attempts = Number(headers[HEADER.attempts] ?? 1)
+      // Clamp the max-attempts read from the (untrusted) message to a hard
+      // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
+      const attempts = Math.min(Number(headers[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
       if (attempt < attempts) {
         // Re-enqueue via the delay queue with the next attempt and a backoff TTL.
         channel.sendToQueue(this.delayQueue(queue), message.content, {
@@ -164,7 +170,10 @@ export class RabbitmqQueueDriver implements QueueDriver {
   private backoffDelay(headers: Record<string, unknown>, attempt: number): number {
     const base = Number(headers[HEADER.backoffMs] ?? 0)
     if (!base) return 0
-    return headers[HEADER.backoffType] === 'exponential' ? base * 2 ** (attempt - 1) : base
+    if (headers[HEADER.backoffType] !== 'exponential') return base
+    // Clamp the exponent (attempt comes from the message) so the TTL can't blow
+    // up to Infinity / an absurd expiration string handed to the broker.
+    return Math.min(base * 2 ** Math.min(Math.max(attempt - 1, 0), 16), MAX_BACKOFF_MS)
   }
 
   private async ensureTopology(channel: AmqpChannel, queue: string): Promise<void> {
