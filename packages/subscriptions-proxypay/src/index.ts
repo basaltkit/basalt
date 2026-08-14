@@ -4,6 +4,7 @@ import {
   toMajor,
   toMinor,
   WebhookInvalidError,
+  WebhookSecretMissingError,
   type PaymentEvent,
   type PaymentGateway,
   type PaymentInstruction,
@@ -97,7 +98,8 @@ export class ProxyPayGateway implements PaymentGateway {
     this.entity = options.entity
     this.baseUrl = options.baseUrl ?? (options.sandbox ? SANDBOX : PROD)
     // ProxyPay signs the callback with the API key; default to it so verification
-    // is on unless the caller explicitly opts out with webhookSecret: ''.
+    // is always on. An explicit empty secret no longer disables it — verifyWebhook
+    // fails closed (see there) rather than trusting an unsigned callback.
     this.webhookSecret = options.webhookSecret ?? options.apiKey
     this.callbackUrl = options.callbackUrl
     this.expiryDays = options.expiryDays ?? 30
@@ -165,12 +167,15 @@ export class ProxyPayGateway implements PaymentGateway {
   }
 
   verifyWebhook(rawBody: string, signature: string | undefined): PaymentEvent | null {
-    if (this.webhookSecret) {
-      const expected = createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex')
-      const a = Buffer.from(signature ?? '', 'utf8')
-      const b = Buffer.from(expected, 'utf8')
-      if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
-    }
+    // Fail closed: an empty/absent secret can't authenticate the callback, and
+    // an unsigned webhook lets anyone forge a `payment.succeeded`. Previously an
+    // explicit `webhookSecret: ''` silently disabled verification — now it's
+    // refused. (The default is the API key, so normal setups always verify.)
+    if (!this.webhookSecret) throw new WebhookSecretMissingError('ProxyPayGateway')
+    const expected = createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex')
+    const a = Buffer.from(signature ?? '', 'utf8')
+    const b = Buffer.from(expected, 'utf8')
+    if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
     // ProxyPay POSTs a FLAT payment object when a reference is paid — the same
     // shape as an item in `GET /payments`: top-level `reference_id`, `amount`,
     // `id`, `custom_fields`. There is no `event_type` and no nested `data`.
