@@ -188,6 +188,35 @@ await prisma.$queryRaw`
 When in doubt, prefer model operations (which are scoped automatically) over raw
 SQL, and review every `connect` against the current tenant.
 
+### 4. CSRF — safe by default with header auth; cookies are your responsibility
+
+Basalt authenticates every request from a **header** — `Authorization: Bearer
+<jwt>` or `x-session-id: <id>` (see the auth enricher). This is **CSRF-safe by
+design**: a cross-site request forgery works only with credentials the browser
+attaches *automatically* (cookies, HTTP Basic). A custom header is never sent
+cross-origin on a forged request, so an attacker's page can't ride the victim's
+session. **Keep auth in a header and there is nothing to do.**
+
+You take on CSRF the moment you move that credential into a **cookie** — e.g.
+storing the session id or JWT in a cookie so the browser sends it automatically.
+If you do, protect it yourself:
+
+- Set the cookie `SameSite=Lax` (or `Strict`), `HttpOnly`, and `Secure`.
+  `SameSite=Lax` alone stops the common cross-site `POST`.
+- Add a second check for state-changing requests: a **double-submit CSRF token**
+  (a random value mirrored in a cookie and a header/body field, compared on the
+  server), or an **Origin/Referer allow-list**.
+- Never rely on CORS for this — CORS governs *reading* a response, not whether a
+  forged request is *sent*. A form `POST` fires regardless of CORS.
+
+```ts
+// ✅ preferred — no cookie, no CSRF surface
+fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } })
+
+// ⚠️ if you must use a cookie session, add SameSite + a CSRF token check
+setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
+```
+
 ## Supply chain
 
 CI runs `pnpm audit` (high severity), **CodeQL** SAST, and **Dependabot** keeps
