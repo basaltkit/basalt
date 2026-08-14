@@ -34,12 +34,24 @@ export interface JobBackoff {
   delay: DurationInput
 }
 
+/**
+ * Redis retention for finished jobs (BullMQ driver): `true` removes it as soon as
+ * it finishes, `false` keeps it forever, a number keeps that many most-recent, and
+ * `{ age, count }` keeps by age and/or count. Defaults: completed `{ count: 1000 }`,
+ * failed `false` (keep all). The sync driver ignores it (it stores nothing).
+ */
+export type JobRetention = boolean | number | { age?: DurationInput; count?: number }
+
 export interface JobDefinition<T = unknown> {
   readonly name: string
   readonly schema?: JobSchema<T> | undefined
   readonly queue: string
   readonly attempts: number
   readonly backoff?: JobBackoff | undefined
+  /** Retention for completed jobs. Overrides the queuePlugin default. */
+  readonly removeOnComplete?: JobRetention | undefined
+  /** Retention for failed jobs. Overrides the queuePlugin default. */
+  readonly removeOnFail?: JobRetention | undefined
   handle(payload: T): void | Promise<void>
   /** Enqueues the job — available after registration in a QueueManager. */
   dispatch(payload: T, options?: DispatchOptions): Promise<void>
@@ -68,6 +80,8 @@ export function defineJob<T = unknown>(config: {
   queue?: string
   attempts?: number
   backoff?: JobBackoff
+  removeOnComplete?: JobRetention
+  removeOnFail?: JobRetention
   handle(payload: T): void | Promise<void>
 }): JobDefinition<T> {
   let dispatcher: JobDispatcher | undefined
@@ -78,6 +92,8 @@ export function defineJob<T = unknown>(config: {
     queue: config.queue ?? 'default',
     attempts: config.attempts ?? 1,
     backoff: config.backoff,
+    removeOnComplete: config.removeOnComplete,
+    removeOnFail: config.removeOnFail,
     handle: config.handle,
     async dispatch(payload, options) {
       if (!dispatcher) throw new JobNotRegisteredError(config.name)

@@ -2,7 +2,7 @@ import { createToken, definePlugin } from '@basaltkit/core'
 import { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
 import { SyncQueueDriver } from './drivers/sync.js'
 import type { QueueDriver } from './driver.js'
-import type { JobDefinition } from './job.js'
+import type { JobDefinition, JobRetention } from './job.js'
 import { QueueManager, type UnsupportedPolicy } from './manager.js'
 
 export {
@@ -12,6 +12,7 @@ export {
   type JobDefinition,
   type JobSchema,
   type JobBackoff,
+  type JobRetention,
   type DispatchOptions,
 } from './job.js'
 export {
@@ -43,6 +44,17 @@ export interface QueuePluginOptions {
    * 'throw' in production for a hard guarantee, 'ignore' for the old behavior.
    */
   onUnsupported?: UnsupportedPolicy
+  /**
+   * Default retention for completed jobs in Redis (BullMQ). `true` removes on
+   * finish, a number keeps that many, `{ age: '7d', count: 500 }` caps both.
+   * Default: keep the last 1000. A job can override via `defineJob`.
+   */
+  removeOnComplete?: JobRetention
+  /**
+   * Default retention for failed jobs. Default `false` (keep all, for inspection
+   * and retries) — set e.g. `{ age: '14d' }` so failures don't grow unbounded.
+   */
+  removeOnFail?: JobRetention
 }
 
 export function queuePlugin(options: QueuePluginOptions = {}) {
@@ -55,10 +67,11 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
           (options.connection
             ? new BullmqQueueDriver({ connection: options.connection })
             : new SyncQueueDriver())
-        const manager = new QueueManager(
-          driver,
-          options.onUnsupported !== undefined ? { onUnsupported: options.onUnsupported } : {},
-        )
+        const manager = new QueueManager(driver, {
+          ...(options.onUnsupported !== undefined ? { onUnsupported: options.onUnsupported } : {}),
+          ...(options.removeOnComplete !== undefined ? { removeOnComplete: options.removeOnComplete } : {}),
+          ...(options.removeOnFail !== undefined ? { removeOnFail: options.removeOnFail } : {}),
+        })
         for (const job of options.jobs ?? []) manager.register(job)
         return manager
       })
