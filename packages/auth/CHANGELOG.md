@@ -1,5 +1,13 @@
 # @basaltkit/auth
 
+## 1.2.0
+
+### Minor Changes
+
+- Security: **refresh tokens and session ids are now hashed at rest.** Both were persisted in plaintext, so a read of the refresh-token or session table could be replayed to hijack a live session. Only `sha256(value)` is now stored and looked up — the raw value exists solely in the client's cookie/token. Refresh tokens are hashed in the core (stores need no change); session stores hash the id they mint (see `@basaltkit/auth-sqlite` / `-prisma` 1.2.0), returning the raw id to the caller and echoing it back from `find`.
+
+  **Upgrade note:** tokens and sessions issued before upgrading stop validating — every user is logged out once and must re-authenticate. No schema change (the same `token`/`id` columns now hold a 64-char hex hash).
+
 ## 1.1.0
 
 ### Minor Changes

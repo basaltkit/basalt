@@ -1,4 +1,7 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+
+/** SHA-256 of a session id — only this is persisted, never the raw cookie value. */
+const hashSessionId = (id: string): string => createHash('sha256').update(id).digest('hex')
 
 /** The stored user record. Apps map this onto their own user table. */
 export interface AuthUser {
@@ -234,32 +237,34 @@ export class MemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, SessionRecord>()
 
   async create(userId: string, ttlMs: number): Promise<SessionRecord> {
-    const record: SessionRecord = {
-      id: randomBytes(32).toString('base64url'),
-      userId,
-      expiresAt: Date.now() + ttlMs,
-    }
-    this.sessions.set(record.id, record)
-    return record
+    // Mint a raw id for the client (cookie), but key/store by its hash so a leak
+    // of the session table can't be replayed as a live session.
+    const rawId = randomBytes(32).toString('base64url')
+    const hashed = hashSessionId(rawId)
+    const expiresAt = Date.now() + ttlMs
+    this.sessions.set(hashed, { id: hashed, userId, expiresAt })
+    return { id: rawId, userId, expiresAt }
   }
 
   async find(id: string): Promise<SessionRecord | null> {
-    const record = this.sessions.get(id)
+    const hashed = hashSessionId(id)
+    const record = this.sessions.get(hashed)
     if (!record) return null
     if (Date.now() >= record.expiresAt) {
-      this.sessions.delete(id)
+      this.sessions.delete(hashed)
       return null
     }
-    return record
+    // Echo the id the caller queried with (never the stored hash).
+    return { id, userId: record.userId, expiresAt: record.expiresAt }
   }
 
   async delete(id: string): Promise<boolean> {
-    return this.sessions.delete(id)
+    return this.sessions.delete(hashSessionId(id))
   }
 
   async deleteAllForUser(userId: string): Promise<void> {
-    for (const [id, record] of this.sessions) {
-      if (record.userId === userId) this.sessions.delete(id)
+    for (const [key, record] of this.sessions) {
+      if (record.userId === userId) this.sessions.delete(key)
     }
   }
 }

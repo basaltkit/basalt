@@ -241,7 +241,8 @@ export class Auth {
    * (theft indicator), the whole family is revoked.
    */
   async refresh(refreshToken: string): Promise<TokenPair> {
-    const record = await this.refreshTokens.find(refreshToken)
+    const hashed = this.hashToken(refreshToken)
+    const record = await this.refreshTokens.find(hashed)
     if (!record) throw new RefreshInvalidError()
     if (record.usedAt !== undefined) {
       await this.refreshTokens.revokeFamily(record.familyId)
@@ -249,13 +250,13 @@ export class Auth {
     }
     if (Date.now() >= record.expiresAt) throw new RefreshInvalidError()
 
-    await this.refreshTokens.markUsed(refreshToken)
+    await this.refreshTokens.markUsed(hashed)
     return this.issueTokens(record.userId, record.familyId)
   }
 
   /** Revokes a refresh family — logout for token-based clients. */
   async revoke(refreshToken: string): Promise<void> {
-    const record = await this.refreshTokens.find(refreshToken)
+    const record = await this.refreshTokens.find(this.hashToken(refreshToken))
     if (record) await this.refreshTokens.revokeFamily(record.familyId)
   }
 
@@ -421,8 +422,9 @@ export class Auth {
 
   // --- token helpers -------------------------------------------------------
 
-  /** SHA-256 of a one-time token — only this is persisted, never the raw value. */
-  private hashOneTimeToken(token: string): string {
+  /** SHA-256 of a bearer secret (one-time token, refresh token) — only this is
+   * persisted, so a leak of the token/session table can't be replayed. */
+  private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex')
   }
 
@@ -432,7 +434,7 @@ export class Auth {
     // Store only the hash: a leak of the token table can't be replayed to reset
     // or verify accounts (the raw token lives only in the user's inbox/link).
     await this.tokens.create({
-      token: this.hashOneTimeToken(token),
+      token: this.hashToken(token),
       userId,
       purpose,
       expiresAt: Date.now() + parseDuration(ttl),
@@ -441,7 +443,7 @@ export class Auth {
   }
 
   private async consumeToken(token: string, purpose: AuthTokenPurpose) {
-    const hashed = this.hashOneTimeToken(token)
+    const hashed = this.hashToken(token)
     const record = await this.tokens.find(hashed)
     if (!record || record.purpose !== purpose || record.usedAt !== undefined || Date.now() >= record.expiresAt) {
       throw new AuthTokenInvalidError()
@@ -460,7 +462,8 @@ export class Auth {
   private async issueTokens(userId: string, familyId: string = randomUUID()): Promise<TokenPair> {
     const refreshToken = randomBytes(32).toString('base64url')
     await this.refreshTokens.create({
-      token: refreshToken,
+      // Persist only the hash; the raw token is returned to the client below.
+      token: this.hashToken(refreshToken),
       familyId,
       userId,
       expiresAt: Date.now() + parseDuration(this.refreshTtl),
