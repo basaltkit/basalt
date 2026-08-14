@@ -100,8 +100,36 @@ export class Teams {
     return this.roleRank[role] ?? 0
   }
 
+  /**
+   * Guards a role grant against privilege escalation. When `actingUserId` is
+   * given, the actor must be a member who ranks at least as high as the role
+   * being granted (so an admin can never mint or self-promote to owner) and at
+   * least as high as the target's current role (so they can't demote someone
+   * who outranks them). Omit the actor for trusted server-side seeding.
+   */
+  private async assertCanGrant(
+    tenantId: string,
+    actingUserId: string,
+    grantedRole: TeamRole,
+    currentTargetRole?: TeamRole,
+  ): Promise<void> {
+    const actorRole = await this.roleOf(tenantId, actingUserId)
+    if (actorRole === null) throw new NotATeamMemberError()
+    const actorRank = this.rankOf(actorRole)
+    if (this.rankOf(grantedRole) > actorRank) throw new InsufficientTeamRoleError(grantedRole)
+    if (currentTargetRole !== undefined && this.rankOf(currentTargetRole) > actorRank) {
+      throw new InsufficientTeamRoleError(currentTargetRole)
+    }
+  }
+
   /** Directly adds/updates a membership — used to seed a team's first owner. */
-  async addMember(tenantId: string, userId: string, role: TeamRole): Promise<Membership> {
+  async addMember(
+    tenantId: string,
+    userId: string,
+    role: TeamRole,
+    opts: { actingUserId?: string } = {},
+  ): Promise<Membership> {
+    if (opts.actingUserId !== undefined) await this.assertCanGrant(tenantId, opts.actingUserId, role)
     const existing = await this.memberships.find(tenantId, userId)
     const membership: Membership = { tenantId, userId, role, createdAt: existing?.createdAt ?? this.now() }
     await this.memberships.add(membership)
@@ -120,7 +148,11 @@ export class Teams {
     email: string
     role?: TeamRole
     invitedBy?: string
+    /** When set, enforce that the inviter can't grant a role above their own. */
+    actingUserId?: string
   }): Promise<{ invitation: PublicInvitation; token: string }> {
+    const role = input.role ?? 'member'
+    if (input.actingUserId !== undefined) await this.assertCanGrant(input.tenantId, input.actingUserId, role)
     const existing = await this.invitations.findPending(input.tenantId, input.email)
     if (existing) await this.invitations.revoke(existing.id, this.now())
 
@@ -129,7 +161,7 @@ export class Teams {
       id: randomUUID(),
       tenantId: input.tenantId,
       email: input.email,
-      role: input.role ?? 'member',
+      role,
       token,
       expiresAt: this.now() + parseDuration(this.inviteTtl),
       ...(input.invitedBy !== undefined ? { invitedBy: input.invitedBy } : {}),
@@ -143,7 +175,7 @@ export class Teams {
    * Consumes an invitation token and enrolls `userId` at the invited role.
    * Idempotent for an already-accepted membership of the same user.
    */
-  async accept(token: string, userId: string): Promise<Membership> {
+  async accept(token: string, userId: string, acceptingEmail?: string): Promise<Membership> {
     const invitation = await this.invitations.findByToken(token)
     if (
       !invitation ||
@@ -151,6 +183,13 @@ export class Teams {
       invitation.revokedAt !== undefined ||
       this.now() >= invitation.expiresAt
     ) {
+      throw new TeamInviteInvalidError()
+    }
+    // Bind acceptance to the invited address: a leaked or forwarded invite link
+    // must not enroll a different account. Same error as an invalid token so a
+    // wrong recipient can't tell a real token from a fake one. Pass the caller's
+    // *verified* email. Omit only for trusted server-side flows.
+    if (acceptingEmail !== undefined && acceptingEmail.toLowerCase() !== invitation.email.toLowerCase()) {
       throw new TeamInviteInvalidError()
     }
     await this.invitations.markAccepted(invitation.id, this.now())
@@ -188,11 +227,19 @@ export class Teams {
     return role !== null && this.rankOf(role) >= this.rankOf(required)
   }
 
-  async changeRole(tenantId: string, userId: string, role: TeamRole): Promise<Membership> {
+  async changeRole(
+    tenantId: string,
+    userId: string,
+    role: TeamRole,
+    opts: { actingUserId?: string } = {},
+  ): Promise<Membership> {
     const current = await this.memberships.find(tenantId, userId)
     if (!current) throw new NotATeamMemberError()
     // Snapshot before setRole — the store may mutate `current` in place.
     const previousRole = current.role
+    // Block privilege escalation: an admin can't promote anyone (or themselves)
+    // to owner, nor re-role a member who currently outranks them.
+    if (opts.actingUserId !== undefined) await this.assertCanGrant(tenantId, opts.actingUserId, role, previousRole)
     const membership: Membership = { ...current, role }
     if (previousRole !== role && previousRole === OWNER) await this.assertNotLastOwner(tenantId, userId)
 

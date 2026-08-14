@@ -14,6 +14,9 @@ function tenantId(): string {
 function userId(): string | undefined {
   return (ctx() as { user?: { id: string } }).user?.id
 }
+function userEmail(): string | undefined {
+  return (ctx() as { user?: { email?: string } }).user?.email
+}
 
 class NoTenantError extends BasaltError {
   readonly status = 400
@@ -49,7 +52,7 @@ export function teamRoutes(): BasaltRoute[] {
           tenantId: tenantId(),
           email: body.email,
           ...(body.role !== undefined ? { role: body.role } : {}),
-          ...(uid !== undefined ? { invitedBy: uid } : {}),
+          ...(uid !== undefined ? { invitedBy: uid, actingUserId: uid } : {}),
         })
         return reply.code(201).send(invitation)
       },
@@ -63,7 +66,9 @@ export function teamRoutes(): BasaltRoute[] {
       async handler({ body }) {
         const uid = userId()
         if (!uid) throw new NoTenantError()
-        return teams().accept(body.token, uid)
+        // Bind to the caller's verified email so a forwarded link can't be
+        // redeemed by a different account.
+        return teams().accept(body.token, uid, userEmail())
       },
     }),
 
@@ -105,7 +110,8 @@ export function teamRoutes(): BasaltRoute[] {
       params: z.object({ userId: z.string() }),
       body: roleBody,
       async handler({ params, body }) {
-        return teams().changeRole(tenantId(), params.userId, body.role)
+        const uid = userId()
+        return teams().changeRole(tenantId(), params.userId, body.role, uid !== undefined ? { actingUserId: uid } : {})
       },
     }),
 
