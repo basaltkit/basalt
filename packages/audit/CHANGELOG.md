@@ -1,5 +1,13 @@
 # @basaltkit/audit
 
+## 1.1.0
+
+### Minor Changes
+
+- Security hardening (secret redaction + tenant scoping):
+  - **Payloads are redacted before storage by default.** The trail captured `auth:**`/`billing:**` hook payloads verbatim, so a password, session/API token or other secret in an event was written to the audit store in plaintext. Payloads now pass through `defaultAuditRedactor`, which recursively masks common secret keys (`password`, `token`, `secret`, `authorization`, `api-key`, `session`, `cookie`, `otp`/`mfa`, …) as `[redacted]`. Override with the `redact` option (`(p) => p` to keep the old verbatim behavior). Exposes `redactSensitive` / `defaultAuditRedactor`.
+  - **`trail()` auto-scopes to the current tenant.** It passed the query straight to the store with no default tenant filter (unlike `Activity.query`), so a caller forwarding a client-supplied query — or omitting `tenantId` — could read across tenants. `trail()` now scopes to `ctx().tenant` when one is in context and the query didn't pin a tenant; a system caller outside a tenant context can still query broadly.
+
 ## 1.0.5
 
 ### Patch Changes

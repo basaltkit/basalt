@@ -1,4 +1,5 @@
 import {
+  BasaltError,
   createToken,
   definePlugin,
   parseDuration,
@@ -13,14 +14,32 @@ export type { CacheDriver } from './driver.js'
 export { MemoryCacheDriver } from './drivers/memory.js'
 export { RedisCacheDriver } from './drivers/redis.js'
 
+export class MissingCacheScopeError extends BasaltError {
+  constructor(op: string) {
+    super(
+      'CACHE_SCOPE_MISSING',
+      `Refusing cache ${op}: a tenant-scoped cache resolved no tenant (ran without a tenant context). Establish a tenant, or use scope:null for a deliberate global cache.`,
+    )
+  }
+}
+
 export interface CacheOptions {
   /** Root prefix for all keys. Default: 'basalt' */
   prefix?: string
   /**
    * Dynamic segment of the prefix, resolved on every operation. The default reads
-   * `ctx().tenant.id` — automatic per-tenant isolation. Pass `null` to disable.
+   * `ctx().tenant.id` — automatic per-tenant isolation. Pass `null` to disable
+   * (a deliberate global cache).
    */
   scope?: (() => string | undefined) | null
+  /**
+   * What to do when the scope function resolves nothing (no tenant in context):
+   * `'global'` (default) shares one namespace — convenient but a per-tenant value
+   * cached without a tenant leaks to others; `'error'` fails closed (throws
+   * {@link MissingCacheScopeError}) on read/write. `flush()` ALWAYS fails closed
+   * regardless, so a mis-scoped call can't wipe every tenant's cache.
+   */
+  onMissingScope?: 'global' | 'error'
 }
 
 const defaultScope = (): string | undefined => {
@@ -31,6 +50,7 @@ const defaultScope = (): string | undefined => {
 export class Cache {
   private readonly prefix: string
   private readonly scope: (() => string | undefined) | null
+  private readonly onMissingScope: 'global' | 'error'
   /** dedupe of in-flight factories — per-process stampede protection */
   private readonly pending = new Map<string, Promise<unknown>>()
 
@@ -40,6 +60,7 @@ export class Cache {
   ) {
     this.prefix = options.prefix ?? 'basalt'
     this.scope = options.scope === undefined ? defaultScope : options.scope
+    this.onMissingScope = options.onMissingScope ?? 'global'
   }
 
   async get<T>(key: string): Promise<T | undefined>
@@ -71,6 +92,9 @@ export class Cache {
 
   /** Clears only the keys under this prefix/scope — never the entire Redis. */
   async flush(): Promise<void> {
+    // Always fail closed: a whole-namespace wipe with an unresolved tenant scope
+    // would delete EVERY tenant's cache. `scope:null` (deliberate global) is fine.
+    if (this.scope !== null && this.scope() === undefined) throw new MissingCacheScopeError('flush')
     await this.driver.flushPrefix(this.root())
   }
 
@@ -121,7 +145,9 @@ export class Cache {
   }
 
   private root(): string {
-    const scope = this.scope?.()
+    if (this.scope === null) return `${this.prefix}:` // deliberate global cache
+    const scope = this.scope()
+    if (scope === undefined && this.onMissingScope === 'error') throw new MissingCacheScopeError('operation')
     return scope ? `${this.prefix}:${scope}:` : `${this.prefix}:`
   }
 

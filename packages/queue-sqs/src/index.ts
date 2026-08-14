@@ -48,6 +48,9 @@ const HEADER = {
   backoffType: 'x-basalt-backoff-type',
 } as const
 
+/** Hard ceiling on retries, so a crafted message can't request unbounded ones. */
+const MAX_ATTEMPTS = 50
+
 export interface SqsDriverOptions {
   /** Resolves a queue name to its SQS queue URL. */
   queueUrl: (queue: string) => string
@@ -164,7 +167,9 @@ export class SqsQueueDriver implements QueueDriver {
       await api.deleteMessage({ queueUrl, receiptHandle: message.receiptHandle })
     } catch {
       const attempt = Number(attributes[HEADER.attempt] ?? 1)
-      const attempts = Number(attributes[HEADER.attempts] ?? 1)
+      // Clamp the max-attempts read from the (untrusted) message to a hard
+      // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
+      const attempts = Math.min(Number(attributes[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
       if (attempt < attempts) {
         await api.sendMessage({
           queueUrl,

@@ -1,5 +1,11 @@
 # @basaltkit/queue-rabbitmq
 
+## 1.0.1
+
+### Patch Changes
+
+- Security (defense-in-depth): clamp the max-retry count and the exponential-backoff exponent read from an (untrusted) message to hard ceilings (50 attempts; backoff ≤ 24h), so a crafted `x-basalt-attempts`/backoff header can't drive a retry-amplification loop or an absurd/`Infinity` message TTL. Requires broker write access to exploit.
+
 ## 1.0.5
 
 ### Patch Changes

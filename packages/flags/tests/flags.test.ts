@@ -34,6 +34,14 @@ describe('FeatureFlags', () => {
     expect(on).toBeLessThan(140)
   })
 
+  it('a __proto__/constructor subject id does not match an inherited key', () => {
+    // maxUploadMb has users:{vip:500}; a crafted userId must not resolve via the
+    // prototype chain and return Object.prototype instead of the default.
+    expect(flags.value('maxUploadMb', { userId: '__proto__' })).toBe(10)
+    expect(flags.value('maxUploadMb', { userId: 'constructor' })).toBe(10)
+    expect(flags.value('newDashboard', { tenantId: '__proto__' })).toBe(false)
+  })
+
   it('all() resolves every flag for a context', () => {
     const resolved = flags.all({ tenantId: 'acme' })
     expect(resolved.newDashboard).toBe(true)
