@@ -258,6 +258,10 @@ export class SqliteSessionStore implements SessionStore {
     const info = this.db.prepare('DELETE FROM auth_sessions WHERE id = ?').run(id)
     return info.changes > 0
   }
+
+  async deleteAllForUser(userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(userId)
+  }
 }
 
 // --- refresh tokens ---------------------------------------------------------

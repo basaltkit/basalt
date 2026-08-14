@@ -180,8 +180,20 @@ export class Auth {
   /** Verifies credentials without side effects. Null on failure. */
   async attempt(email: string, password: string): Promise<AuthUser | null> {
     const user = await this.users.findByEmail(email)
-    if (!user) return null
+    if (!user) {
+      // Equalize timing: a missing account must cost the same as a wrong
+      // password, or the response time reveals which emails are registered
+      // (account enumeration). Verify against a throwaway hash and discard.
+      await this.hasher.verify(password, await this.dummyHash())
+      return null
+    }
     return (await this.hasher.verify(password, user.passwordHash)) ? user : null
+  }
+
+  private dummyHashPromise?: Promise<string>
+  /** A valid hash of a throwaway secret, produced once by the configured hasher. */
+  private dummyHash(): Promise<string> {
+    return (this.dummyHashPromise ??= this.hasher.hash('basalt-timing-equalizer'))
   }
 
   /**
@@ -317,7 +329,10 @@ export class Auth {
     const user = await this.updateUser(record.userId, {
       passwordHash: await this.hasher.hash(newPassword),
     })
+    // A reset must lock out anyone already in — both token-based clients and
+    // active server-side sessions (cookie logins survived this before).
     await this.refreshTokens.revokeAllForUser?.(user.id)
+    await this.sessions.deleteAllForUser?.(user.id)
     await this.hooks?.emit('auth:password_reset', { user: publicUser(user) })
     return publicUser(user)
   }
@@ -406,19 +421,32 @@ export class Auth {
 
   // --- token helpers -------------------------------------------------------
 
+  /** SHA-256 of a one-time token — only this is persisted, never the raw value. */
+  private hashOneTimeToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex')
+  }
+
   private async issueOneTimeToken(userId: string, purpose: AuthTokenPurpose, ttl: DurationInput): Promise<string> {
     await this.tokens.deleteForUser(userId, purpose) // one live token per purpose
     const token = randomBytes(32).toString('base64url')
-    await this.tokens.create({ token, userId, purpose, expiresAt: Date.now() + parseDuration(ttl) })
+    // Store only the hash: a leak of the token table can't be replayed to reset
+    // or verify accounts (the raw token lives only in the user's inbox/link).
+    await this.tokens.create({
+      token: this.hashOneTimeToken(token),
+      userId,
+      purpose,
+      expiresAt: Date.now() + parseDuration(ttl),
+    })
     return token
   }
 
   private async consumeToken(token: string, purpose: AuthTokenPurpose) {
-    const record = await this.tokens.find(token)
+    const hashed = this.hashOneTimeToken(token)
+    const record = await this.tokens.find(hashed)
     if (!record || record.purpose !== purpose || record.usedAt !== undefined || Date.now() >= record.expiresAt) {
       throw new AuthTokenInvalidError()
     }
-    await this.tokens.markUsed(token)
+    await this.tokens.markUsed(hashed)
     return record
   }
 
