@@ -91,8 +91,14 @@ export interface TenancyExtensionOptions {
   getTenantId?: () => string | undefined
   /**
    * Behavior when there is no tenant in scope:
-   * - 'bypass' (default): run the query unscoped — central/admin context
-   * - 'error': throw PRISMA_TENANT_MISSING — strictest isolation
+   * - 'error' (default): throw PRISMA_TENANT_MISSING — fail closed, so a query
+   *   that runs without a tenant can never leak/mutate across tenants.
+   * - 'bypass': run the query UNSCOPED — opt-in, for explicit central/admin code
+   *   paths only (wrap them in a context with no tenant deliberately).
+   *
+   * @security Defaults to 'error'. Do NOT set 'bypass' globally — it disables
+   * tenant isolation whenever a tenant isn't resolved (a forgotten job context,
+   * an unauthenticated route), returning every tenant's rows.
    */
   onMissingTenant?: 'bypass' | 'error'
 }
@@ -129,7 +135,8 @@ export function tenancyExtension(options: TenancyExtensionOptions = {}) {
         }) {
           const tenantId = getTenantId()
           if (!tenantId) {
-            if (options.onMissingTenant === 'error') throw new MissingTenantError()
+            // Fail closed by default: only an explicit 'bypass' runs unscoped.
+            if (options.onMissingTenant !== 'bypass') throw new MissingTenantError()
             return query(args)
           }
           return query(applyTenantScope(operation, args, tenantId, field))

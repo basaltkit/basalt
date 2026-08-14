@@ -9,6 +9,7 @@ import {
   STORAGE,
   storagePlugin,
   StorageFileNotFoundError,
+  StorageInvalidPathError,
 } from '../src/index.js'
 
 let root: string
@@ -118,5 +119,20 @@ describe('storagePlugin', () => {
     await app.container.get(STORAGE).disk().put('custom.txt', 'yes')
     expect((await driver.get('custom.txt')).toString()).toBe('yes') // wrote through the instance
     await app.shutdown()
+  })
+})
+
+describe('Disk tenant-scope path safety', () => {
+  it('rejects traversal so a scoped key cannot escape its tenant prefix', async () => {
+    const disk = new Disk('uploads', new LocalStorageDriver({ root }), {
+      scope: () => 'tenants/t1',
+    })
+    await disk.put('ok/file.txt', 'x') // normal key still works
+    expect((await disk.get('ok/file.txt')).toString()).toBe('x')
+
+    // A caller-supplied `..` must NOT reach another tenant's prefix.
+    await expect(disk.get('../../tenants/t2/secret.txt')).rejects.toBeInstanceOf(StorageInvalidPathError)
+    await expect(disk.put('../t2/x.txt', 'evil')).rejects.toBeInstanceOf(StorageInvalidPathError)
+    await expect(disk.delete('/etc/passwd')).rejects.toBeInstanceOf(StorageInvalidPathError)
   })
 })

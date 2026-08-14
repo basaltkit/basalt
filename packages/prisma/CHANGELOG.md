@@ -1,5 +1,19 @@
 # @basaltkit/prisma
 
+## 1.1.0
+
+### Minor Changes
+
+- **SECURITY (behavior change): the tenancy extension now fails closed.**
+  `tenancyExtension`'s `onMissingTenant` now defaults to **`'error'`** — a query
+  that runs with no tenant in context throws `MissingTenantError` instead of
+  silently running **unscoped** (which returned/mutated every tenant's rows). This
+  closes a critical cross-tenant exposure (a forgotten job/worker context, or a
+  route hit before the tenancy enricher, previously leaked all tenants' data).
+  Central/admin code that intentionally runs unscoped must now opt in explicitly
+  with `tenancyExtension({ onMissingTenant: 'bypass' })`.
+
+
 ## 1.0.5
 
 ### Patch Changes
