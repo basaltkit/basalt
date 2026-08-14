@@ -1,5 +1,17 @@
 # @basaltkit/storage
 
+## 1.0.1
+
+### Patch Changes
+
+- **SECURITY: path-traversal fix on the tenant-scoping seam.** `Disk` now rejects
+  keys containing `..` segments or an absolute path before applying the tenant
+  prefix, so a caller-supplied key can no longer `../` its way out of
+  `tenants/<id>/…` into another tenant's objects (the local driver only guarded
+  the disk root, not the tenant scope). Data methods are now async so an invalid
+  path surfaces as a rejected promise.
+
+
 ## 1.0.5
 
 ### Patch Changes
