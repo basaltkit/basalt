@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type {
   ApiKeyFilter,
   ApiKeyRecord,
@@ -132,6 +132,8 @@ export interface PrismaAuthClient {
 // optional-property shape the contracts use.
 const ms = (d: Date): number => d.getTime()
 const at = (n: number): Date => new Date(n)
+/** SHA-256 of a session id — only this is persisted, never the raw cookie value. */
+const hashSessionId = (id: string): string => createHash('sha256').update(id).digest('hex')
 
 // --- users ------------------------------------------------------------------
 
@@ -220,30 +222,31 @@ export class PrismaSessionStore implements SessionStore {
   constructor(private readonly client: PrismaAuthClient) {}
 
   async create(userId: string, ttlMs: number): Promise<SessionRecord> {
-    const record: SessionRecord = {
-      id: randomBytes(32).toString('base64url'),
-      userId,
-      expiresAt: Date.now() + ttlMs,
-    }
+    // Mint a raw id for the client (cookie), but store its hash so a dump of the
+    // session table can't be replayed as a live session.
+    const rawId = randomBytes(32).toString('base64url')
+    const expiresAt = Date.now() + ttlMs
     await this.client.authSession.create({
-      data: { id: record.id, userId: record.userId, expiresAt: at(record.expiresAt) },
+      data: { id: hashSessionId(rawId), userId, expiresAt: at(expiresAt) },
     })
-    return record
+    return { id: rawId, userId, expiresAt }
   }
 
   async find(id: string): Promise<SessionRecord | null> {
-    const r = await this.client.authSession.findUnique({ where: { id } })
+    const hashed = hashSessionId(id)
+    const r = await this.client.authSession.findUnique({ where: { id: hashed } })
     if (!r) return null
     const expiresAt = ms(r.expiresAt)
     if (Date.now() >= expiresAt) {
-      await this.client.authSession.deleteMany({ where: { id } })
+      await this.client.authSession.deleteMany({ where: { id: hashed } })
       return null
     }
-    return { id: r.id, userId: r.userId, expiresAt }
+    // Echo the id the caller queried with (never the stored hash).
+    return { id, userId: r.userId, expiresAt }
   }
 
   async delete(id: string): Promise<boolean> {
-    const { count } = await this.client.authSession.deleteMany({ where: { id } })
+    const { count } = await this.client.authSession.deleteMany({ where: { id: hashSessionId(id) } })
     return count > 0
   }
 

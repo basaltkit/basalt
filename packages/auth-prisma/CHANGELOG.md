@@ -1,5 +1,11 @@
 # @basaltkit/auth-prisma
 
+## 1.2.0
+
+### Minor Changes
+
+- Security: **`PrismaSessionStore` hashes session ids at rest.** It now mints a raw id for the client but stores `sha256(id)` on `authSession`, hashing on the way in for `find`/`delete`, so a dump of the table can't be replayed as a live session (see `@basaltkit/auth` 1.2.0). No schema change; existing sessions are invalidated once on upgrade.
+
 ## 1.1.0
 
 ### Minor Changes

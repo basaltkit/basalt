@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/auth",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Authentication for Basalt: password hashing, JWT with refresh rotation and reuse detection, sessions, ready-made /auth routes and route guards.",
   "license": "MIT",
   "type": "module",
