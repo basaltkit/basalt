@@ -8,6 +8,36 @@ export class WebhookInvalidError extends BasaltError {
   }
 }
 
+/**
+ * Thrown when a gateway is asked to verify a webhook but no signing secret is
+ * configured. Verification fails closed: an unauthenticated callback must never
+ * be trusted (anyone could forge a `payment.succeeded`).
+ */
+export class WebhookSecretMissingError extends BasaltError {
+  readonly status = 500
+  constructor(gateway: string) {
+    super(
+      'BILLING_WEBHOOK_SECRET_MISSING',
+      `${gateway}: cannot verify a webhook without a configured signing secret — refusing to trust an unsigned callback.`,
+    )
+  }
+}
+
+/**
+ * Thrown when a confirmed payment's amount does not match the amount that was
+ * originally requested for that payment id — an underpayment, or a forged /
+ * mis-routed callback trying to settle an invoice for less.
+ */
+export class PaymentAmountMismatchError extends BasaltError {
+  readonly status = 400
+  constructor(paymentId: string, expected: number, actual: number) {
+    super(
+      'BILLING_PAYMENT_AMOUNT_MISMATCH',
+      `Payment ${paymentId} was requested for ${expected} but the webhook confirmed ${actual} — refusing to mark it paid.`,
+    )
+  }
+}
+
 /** Gateway-agnostic webhook event, already translated to domain terms. */
 export interface WebhookEvent {
   /** Unique id at the gateway — used for idempotent processing. */

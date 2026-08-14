@@ -1,5 +1,11 @@
 # @basaltkit/subscriptions-appypay
 
+## 0.3.0
+
+### Minor Changes
+
+- Security: **`verifyWebhook` fails closed when no `webhookSecret` is set** — it throws `WebhookSecretMissingError` instead of accepting an unsigned callback (which would let anyone forge a `payment.succeeded`). Still a pre-release skeleton pending sandbox validation; the wire details remain `TODO(verify)`.
+
 ## 0.2.0
 
 ### Minor Changes (pre-release)

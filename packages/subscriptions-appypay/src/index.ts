@@ -4,6 +4,7 @@ import {
   toMajor,
   toMinor,
   WebhookInvalidError,
+  WebhookSecretMissingError,
   type PaymentEvent,
   type PaymentGateway,
   type PaymentInstruction,
@@ -231,15 +232,15 @@ export class AppyPayGateway implements PaymentGateway {
   }
 
   verifyWebhook(rawBody: string, signature: string | undefined): PaymentEvent | null {
-    // TODO(verify): AppyPay's real callback authentication. This does optional
-    // HMAC-SHA256(rawBody) vs `signature`, matching the ProxyPay scheme; confirm
-    // the header name and whether AppyPay actually signs this way.
-    if (this.webhookSecret) {
-      const expected = createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex')
-      const a = Buffer.from(signature ?? '', 'utf8')
-      const b = Buffer.from(expected, 'utf8')
-      if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
-    }
+    // Fail closed: without a configured secret we cannot authenticate the
+    // callback, and an unsigned webhook lets anyone forge a `payment.succeeded`
+    // to settle an invoice. Refuse rather than silently trust it.
+    // TODO(verify): AppyPay's real callback auth (header name + signing scheme).
+    if (!this.webhookSecret) throw new WebhookSecretMissingError('AppyPayGateway')
+    const expected = createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex')
+    const a = Buffer.from(signature ?? '', 'utf8')
+    const b = Buffer.from(expected, 'utf8')
+    if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
 
     // TODO(verify): the real webhook payload shape + status field.
     const payload = JSON.parse(rawBody) as {

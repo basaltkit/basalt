@@ -1,5 +1,11 @@
 # @basaltkit/subscriptions
 
+## 2.2.0
+
+### Minor Changes
+
+- Security: **`PaymentLedger.apply` refuses to settle a payment for the wrong amount.** When a `payment.succeeded` event's `amount` differs from the amount originally recorded for that payment id (via `created`), the ledger throws the new `PaymentAmountMismatchError` and releases the idempotency claim instead of marking it paid — blocking underpayments and forged/mis-routed callbacks that would settle an invoice for less. Webhook-first payments (no prior record) are unaffected. Also exports `WebhookSecretMissingError` for gateways that fail closed when no signing secret is configured.
+
 ## 2.1.0
 
 ### Minor Changes

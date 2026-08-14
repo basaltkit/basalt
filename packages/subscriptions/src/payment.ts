@@ -1,4 +1,4 @@
-import { WebhookInvalidError } from './gateway.js'
+import { PaymentAmountMismatchError, WebhookInvalidError } from './gateway.js'
 import { MemoryWebhookStore, type WebhookStore } from './stores.js'
 
 /**
@@ -313,6 +313,18 @@ export class PaymentLedger {
     let record: PaymentRecord | undefined
     try {
       const status: PaymentRecordStatus = event.type === 'payment.succeeded' ? 'paid' : 'failed'
+      if (status === 'paid') {
+        // Defense in depth: a confirmed payment must settle the amount that was
+        // requested. If the webhook reports a different amount for a payment we
+        // already recorded, refuse to mark it paid — an underpayment or a
+        // forged / mis-routed callback settling an invoice for less. Throwing
+        // here hits the catch below, which releases the claim so the mismatch
+        // surfaces on every retry instead of settling into a paid state.
+        const existing = await this.store.get(event.paymentId)
+        if (existing && existing.amount > 0 && event.amount !== existing.amount) {
+          throw new PaymentAmountMismatchError(event.paymentId, existing.amount, event.amount)
+        }
+      }
       await this.store.setStatus(event.paymentId, status, {
         amount: event.amount,
         ...(event.raw !== undefined ? { raw: event.raw } : {}),

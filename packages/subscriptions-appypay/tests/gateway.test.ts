@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { WebhookInvalidError } from '@basaltkit/subscriptions'
+import { WebhookInvalidError, WebhookSecretMissingError } from '@basaltkit/subscriptions'
 import { AppyPayGateway, AppyPayRequestError, APPYPAY_WIRE, type FetchLike } from '../src/index.js'
 
 const TOKEN_URL = 'https://auth.test/token'
@@ -133,5 +133,11 @@ describe('AppyPayGateway.verifyWebhook', () => {
   it('throws on a bad signature', () => {
     const body = JSON.stringify({ status: 'SUCCESS', merchantTransactionId: 'x', amount: 1 })
     expect(() => gw.verifyWebhook(body, 'deadbeef')).toThrow(WebhookInvalidError)
+  })
+
+  it('fails closed when no webhook secret is configured', () => {
+    const noSecret = new AppyPayGateway({ ...creds, fetch: fakeOk })
+    const body = JSON.stringify({ status: 'SUCCESS', merchantTransactionId: 'x', amount: 1 })
+    expect(() => noSecret.verifyWebhook(body, 'anything')).toThrow(WebhookSecretMissingError)
   })
 })
