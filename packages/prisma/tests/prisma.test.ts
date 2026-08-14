@@ -86,12 +86,15 @@ describe('tenancyExtension', () => {
     expect(captured).toEqual([{ where: { status: 'open', tenantId: 'acme' } }])
   })
 
-  it('bypasses without a tenant by default; strict mode throws', async () => {
-    const captured = await run(undefined)
+  it('fails closed without a tenant by default (no silent cross-tenant query)', async () => {
+    // Default is now 'error' — a query with no tenant throws instead of running unscoped.
+    await expect(run(undefined)).rejects.toBeInstanceOf(MissingTenantError)
+    await expect(run(undefined, { onMissingTenant: 'error' })).rejects.toBeInstanceOf(MissingTenantError)
+  })
+
+  it("runs unscoped only with an explicit 'bypass' (central/admin opt-in)", async () => {
+    const captured = await run(undefined, { onMissingTenant: 'bypass' })
     expect(captured).toEqual([{ where: { status: 'open' } }])
-    await expect(run(undefined, { onMissingTenant: 'error' })).rejects.toBeInstanceOf(
-      MissingTenantError,
-    )
   })
 })
 
