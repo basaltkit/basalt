@@ -1,5 +1,17 @@
-import { Queue, Worker, type ConnectionOptions } from 'bullmq'
-import type { AddJobOptions, JobExecutor, QueueDriver } from '../driver.js'
+import { Queue, Worker, type ConnectionOptions, type JobsOptions } from 'bullmq'
+import type { AddJobOptions, JobExecutor, QueueDriver, RetentionOption } from '../driver.js'
+
+type KeepJobs = { age?: number; count?: number }
+
+/** Map the driver-neutral retention to BullMQ's (age in seconds), falling back to a default. */
+function toBullRetention(retention: RetentionOption | undefined, fallback: boolean | KeepJobs): boolean | number | KeepJobs {
+  if (retention === undefined) return fallback
+  if (typeof retention === 'boolean' || typeof retention === 'number') return retention
+  const out: KeepJobs = {}
+  if (retention.ageMs !== undefined) out.age = Math.max(1, Math.round(retention.ageMs / 1000))
+  if (retention.count !== undefined) out.count = retention.count
+  return out
+}
 
 export interface BullmqDriverOptions {
   /** Redis URL (redis://... or rediss://...) or ioredis connection options. */
@@ -33,8 +45,10 @@ export class BullmqQueueDriver implements QueueDriver {
         : {}),
       ...(options.delayMs !== undefined ? { delay: options.delayMs } : {}),
       ...(options.priority !== undefined ? { priority: options.priority } : {}),
-      removeOnComplete: { count: 1000 },
-      removeOnFail: false,
+      removeOnComplete: toBullRetention(options.removeOnComplete, { count: 1000 }) as NonNullable<
+        JobsOptions['removeOnComplete']
+      >,
+      removeOnFail: toBullRetention(options.removeOnFail, false) as NonNullable<JobsOptions['removeOnFail']>,
     })
   }
 

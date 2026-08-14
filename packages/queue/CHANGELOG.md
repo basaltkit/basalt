@@ -1,5 +1,11 @@
 # @basaltkit/queue
 
+## 1.1.0
+
+### Minor Changes
+
+- **Configurable Redis retention for finished jobs.** The BullMQ driver kept the last 1000 completed jobs and **all** failed jobs () forever — the failed set could grow unbounded. You can now set `removeOnComplete`/`removeOnFail` on `queuePlugin` (global default) or per job via `defineJob` — `true` (remove on finish), a count, or `{ age: "14d", count: 500 }`. The previous defaults are preserved when unset (completed keep 1000, failed keep all). The sync driver ignores it.
+
 ## 1.0.5
 
 ### Patch Changes

@@ -13,8 +13,22 @@ import {
   queuePlugin,
   SyncQueueDriver,
   UnsupportedJobOptionError,
+  type AddJobOptions,
   type QueueDriver,
 } from '../src/index.js'
+
+/** Records the options each job was enqueued with. */
+class SpyDriver implements QueueDriver {
+  readonly name = 'spy'
+  readonly capabilities = { delayed: true, priority: true, retries: true, backoff: true }
+  last?: AddJobOptions
+  setExecutor(): void {}
+  async add(_queue: string, _name: string, _data: unknown, options: AddJobOptions): Promise<void> {
+    this.last = options
+  }
+  startWorker(): void {}
+  async close(): Promise<void> {}
+}
 
 const setup = () => {
   const driver = new SyncQueueDriver()
@@ -189,5 +203,42 @@ describe('QueueManager (driver sync)', () => {
     expect(seen).toEqual(['ok'])
     expect(app.container.get(QUEUE)).toBeInstanceOf(QueueManager)
     await app.shutdown()
+  })
+})
+
+describe('job retention (removeOnComplete / removeOnFail)', () => {
+  it('passes nothing by default — the driver keeps its own defaults', async () => {
+    const driver = new SpyDriver()
+    const manager = new QueueManager(driver)
+    const job = defineJob({ name: 'r.default', handle: () => {} })
+    manager.register(job)
+    await manager.dispatch(job, undefined)
+    expect(driver.last?.removeOnComplete).toBeUndefined()
+    expect(driver.last?.removeOnFail).toBeUndefined()
+  })
+
+  it('applies the queuePlugin default and converts age to ms', async () => {
+    const driver = new SpyDriver()
+    const manager = new QueueManager(driver, { removeOnComplete: 50, removeOnFail: { age: '14d' } })
+    const job = defineJob({ name: 'r.global', handle: () => {} })
+    manager.register(job)
+    await manager.dispatch(job, undefined)
+    expect(driver.last?.removeOnComplete).toBe(50)
+    expect(driver.last?.removeOnFail).toEqual({ ageMs: 14 * 24 * 3600 * 1000 })
+  })
+
+  it('lets a job override the global default', async () => {
+    const driver = new SpyDriver()
+    const manager = new QueueManager(driver, { removeOnComplete: 50 })
+    const job = defineJob({
+      name: 'r.job',
+      removeOnComplete: false,
+      removeOnFail: { age: '7d', count: 500 },
+      handle: () => {},
+    })
+    manager.register(job)
+    await manager.dispatch(job, undefined)
+    expect(driver.last?.removeOnComplete).toBe(false) // job wins over global 50
+    expect(driver.last?.removeOnFail).toEqual({ ageMs: 7 * 24 * 3600 * 1000, count: 500 })
   })
 })
