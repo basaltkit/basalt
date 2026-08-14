@@ -7,9 +7,12 @@ import {
   authPlugin,
   authRoutes,
   InvalidCredentialsError,
+  MemoryAuthTokenStore,
+  MemorySessionStore,
   MemoryUserSource,
   RefreshInvalidError,
 } from '../src/index.js'
+import { createHash } from 'node:crypto'
 
 const secret = 'test-secret-value-123456'
 const json = (res: { json(): unknown }): any => res.json()
@@ -62,6 +65,49 @@ describe('password reset', () => {
 
     // reset token is single-use
     await expect(auth.resetPassword(requested!.token, 'again-1234')).rejects.toBeInstanceOf(AuthTokenInvalidError)
+  })
+
+  it('a reset invalidates active server-side sessions too, not just refresh tokens', async () => {
+    const auth = new Auth({ users: new MemoryUserSource(), secret, loginThrottle: false })
+    const user = await auth.register('ada@acme.test', 'old-password-1')
+    const session = await auth.createSession(user.id)
+    expect(await auth.sessionUser(session.id)).not.toBeNull()
+
+    const requested = await auth.requestPasswordReset('ada@acme.test')
+    await auth.resetPassword(requested!.token, 'new-password-2')
+
+    // the cookie session minted before the reset is gone
+    expect(await auth.sessionUser(session.id)).toBeNull()
+  })
+
+  it('persists only the hash of a one-time token, never the raw value', async () => {
+    const tokens = new MemoryAuthTokenStore()
+    const auth = new Auth({ users: new MemoryUserSource(), secret, tokens })
+    await auth.register('ada@acme.test', 'password123')
+
+    const requested = await auth.requestPasswordReset('ada@acme.test')
+    const raw = requested!.token
+    const expectedHash = createHash('sha256').update(raw).digest('hex')
+
+    // the raw token is not a key in the store; its sha256 is
+    expect(await tokens.find(raw)).toBeNull()
+    expect(await tokens.find(expectedHash)).not.toBeNull()
+
+    // and the raw token still resolves the reset (lookup hashes on the way in)
+    const reset = await auth.resetPassword(raw, 'new-password-2')
+    expect(reset.email).toBe('ada@acme.test')
+  })
+})
+
+describe('login timing (account enumeration)', () => {
+  it('attempt() returns null for an unknown email without leaking existence', async () => {
+    const auth = new Auth({ users: new MemoryUserSource(), secret, sessions: new MemorySessionStore() })
+    // Both a missing account and a wrong password resolve to null (the timing
+    // path runs a dummy verify for the missing case — see attempt()).
+    expect(await auth.attempt('nobody@x.com', 'whatever-123')).toBeNull()
+    await auth.register('ada@acme.test', 'password123')
+    expect(await auth.attempt('ada@acme.test', 'wrong-password')).toBeNull()
+    expect(await auth.attempt('ada@acme.test', 'password123')).not.toBeNull()
   })
 })
 

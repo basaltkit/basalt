@@ -1,5 +1,15 @@
 # @basaltkit/auth
 
+## 1.1.0
+
+### Minor Changes
+
+- Security hardening (password reset, one-time tokens, login, hashing):
+  - **A password reset now invalidates active server-side sessions**, not just refresh tokens. Previously a reset revoked refresh-token clients but left cookie/session logins alive, so a stolen session survived the reset. `SessionStore` gains an optional `deleteAllForUser(userId)` (implemented by the in-memory, sqlite and prisma stores) and `resetPassword` calls it. Custom stores should implement it to close the gap.
+  - **One-time tokens (email verification, password reset) are stored hashed.** The token was persisted in plaintext, so a read of the token table let an attacker reset or verify any account with a live token. Only `sha256(token)` is now stored and looked up; the raw token exists solely in the user's emailed link. Any tokens issued before upgrading stop validating (they're short-lived — re-request).
+  - **Login no longer leaks account existence via timing.** `attempt()` returned immediately for an unknown email while a real one paid the full hash cost — a timing oracle for enumeration. A miss now runs a dummy verify so both paths cost the same.
+  - **Default scrypt cost raised** from N=2^14 to N=2^16 (r=8, p=1, ~64 MiB/hash), with `maxmem` set so higher-cost hashes derive and verify without hitting Node's default memory ceiling. Cost parameters are embedded per hash, so existing hashes keep verifying at their stored cost.
+
 ## 1.0.5
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @basaltkit/auth-prisma
 
+## 1.1.0
+
+### Minor Changes
+
+- Add `PrismaSessionStore.deleteAllForUser(userId)` so a password reset revokes every one of the user's active sessions (see `@basaltkit/auth` 1.1.0). Uses `authSession.deleteMany({ where: { userId } })`.
+
 ## 1.0.5
 
 ### Patch Changes

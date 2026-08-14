@@ -246,6 +246,10 @@ export class PrismaSessionStore implements SessionStore {
     const { count } = await this.client.authSession.deleteMany({ where: { id } })
     return count > 0
   }
+
+  async deleteAllForUser(userId: string): Promise<void> {
+    await this.client.authSession.deleteMany({ where: { userId } })
+  }
 }
 
 // --- refresh tokens ---------------------------------------------------------

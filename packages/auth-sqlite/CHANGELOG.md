@@ -1,5 +1,11 @@
 # @basaltkit/auth-sqlite
 
+## 1.1.0
+
+### Minor Changes
+
+- Add `SqliteSessionStore.deleteAllForUser(userId)` so a password reset revokes every one of the user's active sessions (see `@basaltkit/auth` 1.1.0). Deletes all `auth_sessions` rows for the user in one statement.
+
 ## 1.0.5
 
 ### Patch Changes
