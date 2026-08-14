@@ -1,5 +1,11 @@
 # @basaltkit/fastify
 
+## 1.1.0
+
+### Minor Changes
+
+- Security: **idempotency keys are now scoped to the caller.** The `Idempotency-Key` cache key was scoped only by method + route, so the same key sent by two different callers would replay the *first* caller's cached response to the second — a cross-user/tenant data leak. The key now includes a short, non-reversible fingerprint (sha256, truncated) of the caller's `Authorization`/`x-session-id` header (or `anon`), so a key can only ever replay its own principal's response. No API change; existing keys simply gain a principal prefix.
+
 ## 1.0.5
 
 ### Minor Changes

@@ -34,12 +34,19 @@ export function healthPlugin(options: HealthPluginOptions = {}) {
             try {
               return [name, await checks[name]!()] as const
             } catch (error) {
-              return [name, { ok: false, detail: error instanceof Error ? error.message : String(error) }] as const
+              // Log the cause server-side; never return raw error text (it leaks
+              // DB hosts/ports/DSN fragments) to an unauthenticated probe.
+              console.error(`[basalt:health] readiness check "${name}" failed:`, error)
+              return [name, { ok: false }] as const
             }
           }),
         )
         const ok = results.every(([, report]) => report.ok)
-        const body = { status: ok ? 'ok' : 'unavailable', checks: Object.fromEntries(results) }
+        // Expose only pass/fail per check — no `detail` reaches the client.
+        const body = {
+          status: ok ? 'ok' : 'unavailable',
+          checks: Object.fromEntries(results.map(([name, report]) => [name, { ok: report.ok }])),
+        }
         return ok ? body : reply.code(503).send(body)
       })
     },

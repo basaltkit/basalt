@@ -81,10 +81,20 @@ const headerOf = (request: HttpRequest, name: string): string | undefined => {
   const value = request.headers[name]
   return Array.isArray(value) ? value[0] : value
 }
-const clientIp = (request: HttpRequest): string => request.ip ?? headerOf(request, 'x-forwarded-for') ?? 'unknown'
+// Do NOT trust X-Forwarded-For (client-spoofable) for the rate-limit key. Use the
+// socket address the adapter sets on `request.ip`; when unknown, share a single
+// bucket (fail closed) rather than mint a per-header, spoofable one. Behind a
+// trusted proxy, configure the adapter to populate `request.ip` from it.
+const clientIp = (request: HttpRequest): string => request.ip ?? 'unknown'
 
-function resolveOrigin(option: CorsOptions['origin'], requestOrigin: string | undefined): string | null {
-  if (option === undefined || option === true) return requestOrigin ?? '*'
+function resolveOrigin(options: CorsOptions, requestOrigin: string | undefined): string | null {
+  const option = options.origin
+  if (option === undefined || option === true) {
+    // Reflecting an arbitrary Origin *with credentials* hands authenticated
+    // responses to any site — refuse. Credentials require an explicit allowlist.
+    if (options.credentials) return null
+    return requestOrigin ?? '*'
+  }
   if (option === false) return null
   if (typeof option === 'string') return option
   if (Array.isArray(option)) return requestOrigin && option.includes(requestOrigin) ? requestOrigin : null
@@ -111,7 +121,7 @@ function applyHeaders(reply: HttpReply, options: SecurityHeadersOptions): void {
 }
 
 function applyCors(request: HttpRequest, reply: HttpReply, options: CorsOptions): void {
-  const origin = resolveOrigin(options.origin, headerOf(request, 'origin'))
+  const origin = resolveOrigin(options, headerOf(request, 'origin'))
   if (origin === null) return
   reply.header('Access-Control-Allow-Origin', origin)
   if (origin !== '*') reply.header('Vary', 'Origin')

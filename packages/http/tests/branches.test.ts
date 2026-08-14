@@ -85,10 +85,21 @@ describe('healthPlugin — a check that throws', () => {
     const reply = new FakeReply()
     await readyz.handler({ request: makeRequest(), reply })
     expect(reply.statusCode).toBe(503)
-    expect((reply.payload as { checks: Record<string, { ok: boolean; detail?: string }> }).checks['boom']).toMatchObject({
-      ok: false,
-      detail: 'kaboom',
-    })
+    const boom = (reply.payload as { checks: Record<string, { ok: boolean; detail?: string }> }).checks['boom']
+    expect(boom).toEqual({ ok: false }) // fails, but the raw error text is NOT leaked
+    expect(boom).not.toHaveProperty('detail')
+  })
+})
+
+describe('securityPlugin — CORS credentials do not reflect an arbitrary origin', () => {
+  it('refuses to reflect the request Origin when credentials are enabled (no allowlist)', async () => {
+    const c = new HttpServerCollector()
+    await bootWith(c, [securityPlugin({ headers: false, cors: { credentials: true } })])
+    const reply = new FakeReply()
+    await c.runPre(makeRequest({ headers: { origin: 'https://evil.test' } }), reply)
+    // No Access-Control-Allow-Origin at all → the browser blocks the credentialed read.
+    expect(reply.headers['access-control-allow-origin']).toBeUndefined()
+    expect(reply.headers['access-control-allow-credentials']).toBeUndefined()
   })
 })
 
@@ -203,7 +214,7 @@ describe('final branch closers', () => {
     expect(zodToJsonSchema({} as never)).toEqual({})
   })
 
-  it('healthPlugin with no checks is ready, and stringifies a non-Error throw', async () => {
+  it('healthPlugin with no checks is ready, and hides the text of a non-Error throw', async () => {
     const empty = new HttpServerCollector()
     await bootWith(empty, [healthPlugin()]) // no checks → ?? {}
     const readyz = empty.extraRoutes.find((r) => r.url === '/readyz')!
@@ -224,7 +235,9 @@ describe('final branch closers', () => {
     ])
     const reply2 = new FakeReply()
     await c.extraRoutes.find((r) => r.url === '/readyz')!.handler({ request: makeRequest(), reply: reply2 })
-    expect((reply2.payload as { checks: Record<string, { detail?: string }> }).checks['weird']?.detail).toBe('plain string')
+    const weird = (reply2.payload as { checks: Record<string, { ok: boolean; detail?: string }> }).checks['weird']
+    expect(weird).toEqual({ ok: false }) // the raw thrown text never reaches the client
+    expect(weird).not.toHaveProperty('detail')
   })
 
   it('security: rate-limit skip, x-forwarded-for key, and preflight defaults', async () => {
