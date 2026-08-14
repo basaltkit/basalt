@@ -1,5 +1,13 @@
 # @basaltkit/teams
 
+## 1.1.0
+
+### Minor Changes
+
+- Security hardening (privilege escalation, invite binding):
+  - **A member can no longer be granted a role above the actor's own.** `changeRole`, `invite` and `addMember` accept an `actingUserId` (threaded automatically by the HTTP routes from `ctx().user`). When set, the actor must rank at least as high as the role being granted and as high as the target's current role — so an admin can't mint, promote, or self-promote anyone to owner, nor re-role an owner. Server-side seeding without an actor is unchanged.
+  - **Invite acceptance is bound to the invited email.** `accept(token, userId, acceptingEmail?)` now refuses (with the same `TeamInviteInvalidError`, to avoid confirming a valid token to the wrong recipient) when the caller's verified email doesn't match the invitation's — so a forwarded or leaked invite link can't enroll a different account. The HTTP route passes `ctx().user.email`.
+
 ## 1.0.5
 
 ### Patch Changes
