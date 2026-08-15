@@ -191,8 +191,7 @@ e revê cada `connect` contra o tenant atual.
 
 ### 4. CSRF — seguro por omissão com auth por header; cookies são responsabilidade tua
 
-O Basalt autentica cada pedido a partir de um **header** — `Authorization: Bearer
-<jwt>` ou `x-session-id: <id>` (ver o enricher de auth). Isto é **CSRF-safe por
+O Basalt autentica cada pedido a partir de um **header** — `Authorization: Bearer <jwt>` ou `x-session-id: <id>` (ver o enricher de auth). Isto é **CSRF-safe por
 design**: um cross-site request forgery só funciona com credenciais que o browser
 anexa *automaticamente* (cookies, HTTP Basic). Um header custom nunca é enviado
 cross-origin num pedido forjado, por isso a página do atacante não pode aproveitar
