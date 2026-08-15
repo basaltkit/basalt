@@ -1,5 +1,11 @@
 # @basaltkit/http
 
+## 1.3.0
+
+### Minor Changes
+
+- OpenAPI: **top-level `tags` support.** `generateOpenApi` and `openapiPlugin` now accept a `tags` list (`{ name, description }[]`) and emit a top-level `tags` array in the document, so tools like Swagger UI can order and describe the operation groups. Any tag used on an operation (`route.meta.tags`) but not described is still listed by name, so no group is dropped; when nothing is tagged, no `tags` array is emitted. Exposes the `OpenApiTag` type. Per-operation tags (from `meta.tags`) are unchanged.
+
 ## 1.2.0
 
 ### Minor Changes

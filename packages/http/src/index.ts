@@ -49,5 +49,6 @@ export {
   zodToJsonSchema,
   type OpenApiPluginOptions,
   type OpenApiInfo,
+  type OpenApiTag,
   type RouteLike,
 } from './openapi.js'
