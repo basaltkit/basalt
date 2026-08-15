@@ -45,6 +45,7 @@ export default defineConfig({
               text: 'Blocos de SaaS',
               items: [
                 { text: 'Multi-tenancy', link: '/pt/guide/tenancy' },
+                { text: 'Criar um tenant', link: '/pt/guide/criar-um-tenant' },
                 { text: 'Autenticação', link: '/pt/guide/auth' },
                 { text: 'Equipas', link: '/pt/guide/teams' },
                 { text: 'Subscrições', link: '/pt/guide/billing' },
@@ -152,6 +153,7 @@ export default defineConfig({
           text: 'SaaS Building Blocks',
           items: [
             { text: 'Multi-tenancy', link: '/guide/tenancy' },
+            { text: 'Creating a tenant', link: '/guide/creating-a-tenant' },
             { text: 'Authentication', link: '/guide/auth' },
             { text: 'Teams', link: '/guide/teams' },
             { text: 'Subscriptions', link: '/guide/billing' },
