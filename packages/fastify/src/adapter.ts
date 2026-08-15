@@ -89,7 +89,7 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
             try {
               done(null, JSON.parse(body))
             } catch (error) {
-              ;(error as FastifyError).statusCode = 400
+              (error as FastifyError).statusCode = 400
               done(error as Error)
             }
           },

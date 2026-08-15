@@ -91,6 +91,12 @@ export interface OpenApiInfo {
   description?: string
 }
 
+/** A top-level OpenAPI tag: a group name and an optional human description. */
+export interface OpenApiTag {
+  name: string
+  description?: string
+}
+
 export interface RouteLike {
   method: string
   url: string
@@ -116,9 +122,17 @@ const STATUS_TEXT: Record<string, string> = {
   '500': 'Internal server error',
 }
 
-/** Builds an OpenAPI 3.0 document from Basalt route definitions. */
-export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSchema {
+/**
+ * Builds an OpenAPI 3.0 document from Basalt route definitions.
+ *
+ * Per-operation tags come from `route.meta.tags`; pass `tags` to add a top-level
+ * `tags` array (names + descriptions) that tools like Swagger UI use to order
+ * and describe the groups. Any tag used on an operation but missing from `tags`
+ * is still listed (name only), so groups are never dropped.
+ */
+export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo, tags: OpenApiTag[] = []): JsonSchema {
   const paths: Record<string, Record<string, unknown>> = {}
+  const usedTags = new Set<string>()
   let usesAuth = false
 
   for (const route of routes) {
@@ -131,7 +145,11 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSch
     const meta = route.meta ?? {}
     if (typeof meta['summary'] === 'string') operation.summary = meta['summary']
     if (typeof meta['description'] === 'string') operation.description = meta['description']
-    if (Array.isArray(meta['tags'])) operation.tags = meta['tags'].filter((t): t is string => typeof t === 'string')
+    if (Array.isArray(meta['tags'])) {
+      const opTags = meta['tags'].filter((t): t is string => typeof t === 'string')
+      operation.tags = opTags
+      for (const t of opTags) usedTags.add(t)
+    }
     if (typeof meta['operationId'] === 'string') operation.operationId = meta['operationId']
 
     const parameters: JsonSchema[] = []
@@ -177,9 +195,17 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo): JsonSch
     paths[path] = { ...(paths[path] ?? {}), [method]: operation }
   }
 
+  // Top-level tags: the provided ones (in order, with descriptions) first, then
+  // any tag used on an operation that wasn't described, so no group is lost.
+  const documentTags: OpenApiTag[] = [
+    ...tags, // described groups, in the caller's order
+    ...[...usedTags].filter((name) => !tags.some((t) => t.name === name)).map((name) => ({ name })),
+  ]
+
   const document: JsonSchema = {
     openapi: '3.0.3',
     info: { title: info.title, version: info.version, ...(info.description ? { description: info.description } : {}) },
+    ...(documentTags.length > 0 ? { tags: documentTags } : {}),
     paths,
   }
   if (usesAuth) {
@@ -194,6 +220,8 @@ export interface OpenApiPluginOptions {
   info: OpenApiInfo
   path?: string
   routes?: RouteLike[]
+  /** Top-level tag list (names + descriptions) for grouping in the docs UI. */
+  tags?: OpenApiTag[]
 }
 
 /** Serves an OpenAPI 3.0 document from the registered routes (any adapter). */
@@ -218,7 +246,7 @@ export function openapiPlugin(options: OpenApiPluginOptions) {
       // started listening yet, so no request can observe the placeholder.
       hooks.on('app:booted', () => {
         const routes = options.routes ?? metadata.get<RouteLike>('http:routes')
-        document = generateOpenApi(routes, options.info)
+        document = generateOpenApi(routes, options.info, options.tags)
       })
       container.get(HTTP_SERVER).addRoute('GET', options.path ?? '/openapi.json', () => document)
     },
