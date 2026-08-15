@@ -35,6 +35,7 @@ export default defineConfig({
                 { text: 'Instalação', link: '/pt/guide/installation' },
                 { text: 'Conceitos centrais', link: '/pt/guide/concepts' },
                 { text: 'Adaptadores HTTP', link: '/pt/guide/adapters' },
+                { text: 'Perguntas frequentes (FAQ)', link: '/pt/guide/faq' },
               ],
             },
             {
@@ -143,6 +144,7 @@ export default defineConfig({
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Core Concepts', link: '/guide/concepts' },
             { text: 'HTTP Adapters', link: '/guide/adapters' },
+            { text: 'FAQ', link: '/guide/faq' },
           ],
         },
         {
