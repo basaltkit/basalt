@@ -190,8 +190,7 @@ SQL, and review every `connect` against the current tenant.
 
 ### 4. CSRF — safe by default with header auth; cookies are your responsibility
 
-Basalt authenticates every request from a **header** — `Authorization: Bearer
-<jwt>` or `x-session-id: <id>` (see the auth enricher). This is **CSRF-safe by
+Basalt authenticates every request from a **header** — `Authorization: Bearer <jwt>` or `x-session-id: <id>` (see the auth enricher). This is **CSRF-safe by
 design**: a cross-site request forgery works only with credentials the browser
 attaches *automatically* (cookies, HTTP Basic). A custom header is never sent
 cross-origin on a forged request, so an attacker's page can't ride the victim's
