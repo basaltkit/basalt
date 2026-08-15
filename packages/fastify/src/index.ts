@@ -43,6 +43,7 @@ export {
   type TracingPluginOptions,
   type OpenApiPluginOptions,
   type OpenApiInfo,
+  type OpenApiTag,
   type RouteLike,
   type HttpServer,
 } from '@basaltkit/http'

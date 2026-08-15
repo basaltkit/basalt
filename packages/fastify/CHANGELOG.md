@@ -1,5 +1,11 @@
 # @basaltkit/fastify
 
+## 1.2.0
+
+### Minor Changes
+
+- Re-exports the `OpenApiTag` type and passes through the new `tags` option on `openapiPlugin` (top-level OpenAPI tag groups with descriptions — see `@basaltkit/http` 1.3.0).
+
 ## 1.1.0
 
 ### Minor Changes

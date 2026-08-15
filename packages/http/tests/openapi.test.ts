@@ -78,6 +78,30 @@ describe('generateOpenApi', () => {
     expect(doc.paths['/clientes/{id}'].delete.responses['204'].description).toBe('No Content')
   })
 
+  it('emits a top-level tags[] — described groups first, then discovered ones', () => {
+    const doc = generateOpenApi(
+      [
+        { method: 'GET', url: '/clientes', meta: { tags: ['Clientes'] } },
+        { method: 'GET', url: '/faturas', meta: { tags: ['Faturas'] } }, // used but not described
+      ],
+      { title: 'API', version: '1' },
+      [
+        { name: 'Clientes', description: 'Gestão de clientes' },
+        { name: 'Vazio', description: 'Descrito mas sem rotas' }, // provided even if unused
+      ],
+    ) as any
+    expect(doc.tags).toEqual([
+      { name: 'Clientes', description: 'Gestão de clientes' },
+      { name: 'Vazio', description: 'Descrito mas sem rotas' },
+      { name: 'Faturas' }, // discovered, name only
+    ])
+  })
+
+  it('omits top-level tags[] when nothing is tagged', () => {
+    const doc = generateOpenApi([{ method: 'GET', url: '/open' }], { title: 'API', version: '1' }) as any
+    expect(doc.tags).toBeUndefined()
+  })
+
   it('has no securitySchemes when no route needs auth', () => {
     const doc = generateOpenApi([{ method: 'GET', url: '/open' }], { title: 'API', version: '1' }) as any
     expect(doc.components).toBeUndefined()
