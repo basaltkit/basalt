@@ -108,7 +108,8 @@ export default defineConfig({
           '/pt/reference/': [
             {
               text: 'Referência',
-              items: [{ text: 'Pacotes', link: '/pt/reference/packages' }],
+              items: [{ text: 'Pacotes', link: '/pt/reference/packages' },
+                { text: 'Ecossistema', link: '/pt/guide/ecossistema' }],
             },
           ],
         },
@@ -218,7 +219,8 @@ export default defineConfig({
       '/reference/': [
         {
           text: 'Reference',
-          items: [{ text: 'Packages', link: '/reference/packages' }],
+          items: [{ text: 'Packages', link: '/reference/packages' },
+            { text: 'Ecosystem', link: '/guide/ecosystem' }],
         },
       ],
     },

@@ -1,8 +1,7 @@
 # Packages
 
 Basalt is a set of small, focused packages under the `@basaltkit/*` scope. Each
-works on its own; together they form the framework. Versions move in lockstep
-(currently **0.31.0**, 69 packages).
+works on its own; together they form the framework. Each package is versioned independently — see the [Ecosystem](../guide/ecosystem) page for every package's current version.
 
 ## Foundation
 
