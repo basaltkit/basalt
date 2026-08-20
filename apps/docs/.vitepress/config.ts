@@ -36,6 +36,7 @@ export default defineConfig({
                 { text: 'Conceitos centrais', link: '/pt/guide/concepts' },
                 { text: 'Adaptadores HTTP', link: '/pt/guide/adapters' },
                 { text: 'Perguntas frequentes (FAQ)', link: '/pt/guide/faq' },
+                { text: 'Para além do SaaS', link: '/pt/guide/para-alem-do-saas' },
               ],
             },
             {
@@ -145,6 +146,7 @@ export default defineConfig({
             { text: 'Core Concepts', link: '/guide/concepts' },
             { text: 'HTTP Adapters', link: '/guide/adapters' },
             { text: 'FAQ', link: '/guide/faq' },
+            { text: 'Beyond SaaS', link: '/guide/beyond-saas' },
           ],
         },
         {
