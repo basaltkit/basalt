@@ -1,5 +1,11 @@
 # @basaltkit/audit
 
+## 1.2.0
+
+### Minor Changes
+
+- `trail()` now forces the context tenant (a caller-supplied `tenantId` cannot widen scope); add `systemTrail()` for explicit cross-tenant reads and an opt-in `piiMinimizingRedactor`.
+
 ## 1.1.0
 
 ### Minor Changes

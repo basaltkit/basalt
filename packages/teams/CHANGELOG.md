@@ -1,5 +1,11 @@
 # @basaltkit/teams
 
+## 1.3.0
+
+### Minor Changes
+
+- Add `tenantMembershipPlugin` — a secure-by-default guard binding the authenticated user to the resolved tenant (403 for non-members).
+
 ## 1.2.0
 
 ### Minor Changes

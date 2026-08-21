@@ -1,5 +1,11 @@
 # @basaltkit/fastify
 
+## 1.3.0
+
+### Minor Changes
+
+- Make idempotency-key reservation atomic (Redis `SET … NX PX`; reserve-then-fallback-to-read), preventing concurrent double-execution.
+
 ## 1.2.0
 
 ### Minor Changes

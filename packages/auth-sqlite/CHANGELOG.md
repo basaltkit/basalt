@@ -1,5 +1,11 @@
 # @basaltkit/auth-sqlite
 
+## 1.3.0
+
+### Minor Changes
+
+- Persist the TOTP `lastUsedStep` (anti-replay) and add the `auth_token_versions` table + `SqliteTokenVersionStore` for access-token revocation.
+
 ## 1.2.0
 
 ### Minor Changes
