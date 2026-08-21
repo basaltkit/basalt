@@ -135,6 +135,14 @@ export interface AuthOptions {
    * Only applies when the caller passes the client ip to `login`.
    */
   ipLoginThrottle?: LoginThrottle | false
+  /**
+   * Make the public registration endpoint enumeration-safe: a request for an
+   * email that already exists returns the same response (and does equivalent
+   * work) as a fresh signup, instead of a 409 that reveals the account exists.
+   * Applies to {@link Auth.registerSafely} (used by the register route); the
+   * lower-level {@link Auth.register} always throws on a duplicate. Default true.
+   */
+  enumerationSafeRegister?: boolean
   /** Store for verification/reset tokens. Default: in-memory. */
   tokens?: AuthTokenStore
   /** Email-verification link lifetime. Default 24h. */
@@ -186,6 +194,7 @@ export class Auth {
   private readonly mfaIssuer: string
   private readonly mfaKey: Buffer | undefined
   private readonly tokenVersions: TokenVersionStore | undefined
+  private readonly enumerationSafeRegister: boolean
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -215,6 +224,7 @@ export class Auth {
     this.mfaIssuer = options.mfaIssuer ?? 'Basalt'
     this.mfaKey = options.mfaEncryptionKey ? deriveKey(options.mfaEncryptionKey) : undefined
     this.tokenVersions = options.tokenVersions
+    this.enumerationSafeRegister = options.enumerationSafeRegister ?? true
   }
 
   async register(email: string, password: string): Promise<PublicUser> {
@@ -225,6 +235,33 @@ export class Auth {
     })
     await this.hooks?.emit('auth:registered', { user: publicUser(user) })
     return publicUser(user)
+  }
+
+  /**
+   * Enumeration-safe registration for the public endpoint: creates the account
+   * for a new email, or — when the email is already taken — does equivalent work
+   * (so timing doesn't leak) and emits `auth:register_existing_email` so the app
+   * can send an out-of-band "you already have an account" email. Returns nothing
+   * either way, so the response can't reveal whether the account existed.
+   *
+   * With `enumerationSafeRegister: false` it throws {@link EmailTakenError} on a
+   * duplicate instead (the classic, enumerable behavior).
+   */
+  async registerSafely(email: string, password: string): Promise<void> {
+    const existing = await this.users.findByEmail(email)
+    if (existing) {
+      if (!this.enumerationSafeRegister) throw new EmailTakenError()
+      // Equalize timing with the create path (which hashes), then signal the
+      // collision out-of-band — never in the HTTP response.
+      await this.hasher.hash(password)
+      await this.hooks?.emit('auth:register_existing_email', { email })
+      return
+    }
+    const user = await this.users.create({
+      email,
+      passwordHash: await this.hasher.hash(password),
+    })
+    await this.hooks?.emit('auth:registered', { user: publicUser(user) })
   }
 
   /** Verifies credentials without side effects. Null on failure. */
