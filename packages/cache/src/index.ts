@@ -40,6 +40,36 @@ export interface CacheOptions {
    * regardless, so a mis-scoped call can't wipe every tenant's cache.
    */
   onMissingScope?: 'global' | 'error'
+  /** Injectable clock (ms) for stale-while-revalidate windows. Default: Date.now. */
+  now?: () => number
+}
+
+/** SwrOptions turns `remember` into a stale-while-revalidate read. */
+export interface SwrOptions {
+  /** How long the value stays fresh (served without revalidation). */
+  ttl: DurationInput
+  /**
+   * Extra window after `ttl` during which a stale value is served immediately
+   * while a single background revalidation refreshes it. After `ttl + staleFor`
+   * the entry is hard-expired and the next read blocks on the factory.
+   */
+  staleFor: DurationInput
+}
+
+/** Internal wrapper stored for SWR entries; carries the freshness windows. */
+interface SwrEnvelope {
+  __swr: 1
+  v: unknown
+  freshUntil: number
+  staleUntil: number
+}
+
+function isEnvelope(value: unknown): value is SwrEnvelope {
+  return typeof value === 'object' && value !== null && (value as { __swr?: unknown }).__swr === 1
+}
+
+function isSwr(value: DurationInput | SwrOptions): value is SwrOptions {
+  return typeof value === 'object' && value !== null && 'staleFor' in value
 }
 
 const defaultScope = (): string | undefined => {
@@ -51,7 +81,8 @@ export class Cache {
   private readonly prefix: string
   private readonly scope: (() => string | undefined) | null
   private readonly onMissingScope: 'global' | 'error'
-  /** dedupe of in-flight factories — per-process stampede protection */
+  private readonly now: () => number
+  /** dedupe of in-flight factories — per-process stampede protection (also dedupes SWR revalidation) */
   private readonly pending = new Map<string, Promise<unknown>>()
 
   constructor(
@@ -61,12 +92,14 @@ export class Cache {
     this.prefix = options.prefix ?? 'basalt'
     this.scope = options.scope === undefined ? defaultScope : options.scope
     this.onMissingScope = options.onMissingScope ?? 'global'
+    this.now = options.now ?? Date.now
   }
 
   async get<T>(key: string): Promise<T | undefined>
   async get<T>(key: string, fallback: T): Promise<T>
   async get<T>(key: string, fallback?: T): Promise<T | undefined> {
-    const value = await this.driver.get(this.key(key))
+    const stored = await this.driver.get(this.key(key))
+    const value = isEnvelope(stored) ? stored.v : stored
     return value === undefined ? fallback : (value as T)
   }
 
@@ -82,8 +115,14 @@ export class Cache {
    * One-line cache-aside, with stampede protection: concurrent calls
    * for the same key share ONE execution of the factory.
    */
-  async remember<T>(key: string, ttl: DurationInput, factory: () => Promise<T> | T): Promise<T> {
-    return this.rememberWithTags(key, ttl, factory, [])
+  async remember<T>(key: string, ttl: DurationInput, factory: () => Promise<T> | T): Promise<T>
+  async remember<T>(key: string, options: SwrOptions, factory: () => Promise<T> | T): Promise<T>
+  async remember<T>(
+    key: string,
+    ttlOrOptions: DurationInput | SwrOptions,
+    factory: () => Promise<T> | T,
+  ): Promise<T> {
+    return this.rememberWithTags(key, ttlOrOptions, factory, [])
   }
 
   async forget(key: string): Promise<boolean> {
@@ -110,8 +149,11 @@ export class Cache {
           scopedTags,
         )
       },
-      remember: <T>(key: string, ttl: DurationInput, factory: () => Promise<T> | T): Promise<T> =>
-        this.rememberWithTags(key, ttl, factory, scopedTags),
+      remember: <T>(
+        key: string,
+        ttlOrOptions: DurationInput | SwrOptions,
+        factory: () => Promise<T> | T,
+      ): Promise<T> => this.rememberWithTags(key, ttlOrOptions, factory, scopedTags),
       flush: async (): Promise<void> => {
         await this.driver.flushTags(scopedTags)
       },
@@ -120,21 +162,66 @@ export class Cache {
 
   private async rememberWithTags<T>(
     key: string,
-    ttl: DurationInput,
+    ttlOrOptions: DurationInput | SwrOptions,
     factory: () => Promise<T> | T,
     tags: string[],
   ): Promise<T> {
     const fullKey = this.key(key)
-    const cached = await this.driver.get(fullKey)
-    if (cached !== undefined) return cached as T
+    const stored = await this.driver.get(fullKey)
 
+    // Plain hard-TTL remember (no staleFor): unchanged cache-aside with raw values.
+    if (!isSwr(ttlOrOptions)) {
+      const cached = isEnvelope(stored) ? stored.v : stored
+      if (cached !== undefined) return cached as T
+      return this.compute(fullKey, () => factory(), (value) =>
+        this.driver.set(fullKey, value, parseDuration(ttlOrOptions), tags),
+      )
+    }
+
+    // Stale-while-revalidate path.
+    const ttlMs = parseDuration(ttlOrOptions.ttl)
+    const staleMs = parseDuration(ttlOrOptions.staleFor)
+    const store = (value: T): Promise<void> => {
+      const now = this.now()
+      const envelope: SwrEnvelope = {
+        __swr: 1,
+        v: value,
+        freshUntil: now + ttlMs,
+        staleUntil: now + ttlMs + staleMs,
+      }
+      // Driver TTL is the hard window; Cache-layer windows gate fresh/stale/expired.
+      return this.driver.set(fullKey, envelope, ttlMs + staleMs, tags)
+    }
+
+    if (isEnvelope(stored)) {
+      const now = this.now()
+      if (now < stored.freshUntil) return stored.v as T
+      if (now < stored.staleUntil) {
+        // Serve stale immediately; refresh once in the background.
+        this.revalidate(fullKey, () => factory(), store)
+        return stored.v as T
+      }
+      // Hard-expired → fall through to a blocking recompute.
+    } else if (stored !== undefined) {
+      // A raw value written by put()/plain remember(): treat as fresh, no windows.
+      return stored as T
+    }
+
+    return this.compute(fullKey, () => factory(), store)
+  }
+
+  /** Blocking cache-aside compute with per-key stampede dedupe. */
+  private compute<T>(
+    fullKey: string,
+    factory: () => Promise<T> | T,
+    store: (value: T) => Promise<void>,
+  ): Promise<T> {
     const inFlight = this.pending.get(fullKey)
     if (inFlight) return inFlight as Promise<T>
-
     const computation = (async () => {
       try {
         const value = await factory()
-        await this.driver.set(fullKey, value, parseDuration(ttl), tags)
+        await store(value)
         return value
       } finally {
         this.pending.delete(fullKey)
@@ -142,6 +229,26 @@ export class Cache {
     })()
     this.pending.set(fullKey, computation)
     return computation
+  }
+
+  /** Fire-and-forget SWR refresh: one per key, failures keep serving stale. */
+  private revalidate<T>(
+    fullKey: string,
+    factory: () => Promise<T> | T,
+    store: (value: T) => Promise<void>,
+  ): void {
+    if (this.pending.has(fullKey)) return
+    const computation = (async () => {
+      try {
+        const value = await factory()
+        await store(value)
+      } finally {
+        this.pending.delete(fullKey)
+      }
+    })()
+    this.pending.set(fullKey, computation)
+    // Never surface a background error as an unhandled rejection.
+    void computation.catch(() => undefined)
   }
 
   private root(): string {

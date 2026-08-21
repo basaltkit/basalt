@@ -95,6 +95,27 @@ const plans = await cache.remember('plans', '1h', async () => {
 })
 ```
 
+### Stale-while-revalidate (serve fast, refresh in the background)
+
+For values that are expensive to build but tolerate being *slightly* out of date
+(dashboards, feeds, pricing pages), pass `{ ttl, staleFor }` instead of a plain
+TTL. The value is **fresh** for `ttl`; for a further `staleFor` window a read gets
+the **stale** value **instantly** while a single background revalidation refreshes
+it. Only after `ttl + staleFor` does a read block on the factory again:
+
+```ts
+const feed = await cache.remember('feed', { ttl: '1m', staleFor: '10m' }, () => buildFeed())
+//  0–1m   → fresh, served from cache
+//  1–11m  → stale value returned immediately; ONE background refresh runs
+//  > 11m  → hard-expired; the next read blocks and recomputes
+```
+
+No caller ever waits for a refresh during the stale window, and concurrent stale
+reads trigger only **one** background revalidation (same stampede protection as
+`remember`). If a background refresh throws, the stale value keeps being served
+until it hard-expires — a failing upstream never turns into an error for the user.
+Works with `tags(...)` too: `cache.tags('feed').remember(key, { ttl, staleFor }, fn)`.
+
 ### Deleting entries (`forget` / `flush`)
 
 ```ts
@@ -173,7 +194,7 @@ const cacheB = new Cache(new RedisCacheDriver(redis))
 |---|---|---|
 | `get` | `get<T>(key: string): Promise<T \| undefined>` / `get<T>(key: string, fallback: T): Promise<T>` | Reads a value; returns `undefined` (or the `fallback`) on miss/expiration. |
 | `put` | `put(key: string, value: unknown, ttl?: DurationInput): Promise<void>` | Stores a value, with an optional TTL. |
-| `remember` | `remember<T>(key: string, ttl: DurationInput, factory: () => Promise<T> \| T): Promise<T>` | Returns the cached value or runs the `factory` (only once, even with concurrent calls) and stores the result. |
+| `remember` | `remember<T>(key, ttl: DurationInput, factory): Promise<T>` — or `remember<T>(key, { ttl, staleFor }: SwrOptions, factory)` | Cache-aside with stampede protection. With `{ ttl, staleFor }` it becomes stale-while-revalidate: serves a stale value while refreshing once in the background. |
 | `forget` | `forget(key: string): Promise<boolean>` | Deletes a key; `true` if it existed. |
 | `flush` | `flush(): Promise<void>` | Deletes all keys in the current prefix/scope. |
 | `tags` | `tags(...tags: string[])` | Returns an object with `put`, `remember` and `flush` scoped to the given tags. |
