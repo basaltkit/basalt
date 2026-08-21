@@ -1,5 +1,15 @@
 # create-basalt
 
+## 1.2.0
+
+### Minor Changes
+
+- de28084: Add a rich interactive wizard.
+
+  Running `create-basalt` with no name in a terminal now launches a guided, dependency-free wizard: an intro banner, a **starting-point preset** (SaaS starter / API only / Full stack / Minimal / Custom), an arrow-key **feature multiselect** on the custom path, a package-manager select (with the Web-UI-forces-pnpm rule), and a **summary + confirm** step before scaffolding. Passing a name, `--yes`, or piping input (CI) keeps the flag-driven path unchanged.
+
+  Exposes the testable core: `runWizard(prompter, options)`, `validateProjectName`, `PRESETS`/`FEATURES`, and the `Prompter` abstraction with `ttyPrompter()` (raw-mode arrow keys) and `scriptedPrompter()` (tests).
+
 ## 1.1.1
 
 ### Minor Changes
@@ -27,7 +37,7 @@
 
 ### Major Changes
 
-- Generate 1.0 apps and ship ready-made auth flows. The @basaltkit/* dependency
+- Generate 1.0 apps and ship ready-made auth flows. The @basaltkit/\* dependency
   range is now `^1.0.0` (was `^0.4.0`/`^0.1.0`, which pinned very old packages).
   With `--auth`, the backend wires `mfaRoutes()` alongside `authRoutes()`, and the
   `--ui` frontend now ships the full standard flows out of the box: sign in with a

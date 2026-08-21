@@ -1,5 +1,19 @@
 # @basaltkit/fastify
 
+## 1.4.0
+
+### Minor Changes
+
+- 2fb6c59: **SAML 2.0 SSO** + cross-adapter form-body support.
+
+  - New **`@basaltkit/auth-saml`** package: SP-initiated SAML 2.0 login built on the vetted `@node-saml/node-saml` XML-DSig library (no hand-rolled crypto), plugging validated assertions into `Auth.socialLogin`. `samlPlugin({ providers })` + `samlRoutes()` add `/auth/saml/:provider/login`, `…/acs` and `…/metadata`. Adapter-agnostic.
+  - **Fastify and Express adapters now parse `application/x-www-form-urlencoded`** into the request body (Hono already did), so the SAML ACS POST — and HTML form submissions in general — work on any adapter.
+
+### Patch Changes
+
+- Updated dependencies [90e48fe]
+  - @basaltkit/http@1.5.0
+
 ## 1.3.0
 
 ### Minor Changes
@@ -16,7 +30,7 @@
 
 ### Minor Changes
 
-- Security: **idempotency keys are now scoped to the caller.** The `Idempotency-Key` cache key was scoped only by method + route, so the same key sent by two different callers would replay the *first* caller's cached response to the second — a cross-user/tenant data leak. The key now includes a short, non-reversible fingerprint (sha256, truncated) of the caller's `Authorization`/`x-session-id` header (or `anon`), so a key can only ever replay its own principal's response. No API change; existing keys simply gain a principal prefix.
+- Security: **idempotency keys are now scoped to the caller.** The `Idempotency-Key` cache key was scoped only by method + route, so the same key sent by two different callers would replay the _first_ caller's cached response to the second — a cross-user/tenant data leak. The key now includes a short, non-reversible fingerprint (sha256, truncated) of the caller's `Authorization`/`x-session-id` header (or `anon`), so a key can only ever replay its own principal's response. No API change; existing keys simply gain a principal prefix.
 
 ## 1.0.5
 

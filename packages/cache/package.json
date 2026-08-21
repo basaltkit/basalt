@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/cache",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Basalt cache layer: Redis and Memory drivers, tags, TTL, stampede protection and automatic per-tenant isolation.",
   "license": "MIT",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/auth-saml",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "SAML 2.0 SSO for @basaltkit/auth — SP-initiated login over @node-saml/node-saml (vetted XML-DSig), plugging into Auth.socialLogin.",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",
@@ -33,7 +35,9 @@
     "vitest": "^3.1.0",
     "zod": "^3.24.0"
   },
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Zebedeu/basalt.git",
@@ -41,5 +45,11 @@
   },
   "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/auth-saml#readme",
   "bugs": "https://github.com/Zebedeu/basalt/issues",
-  "keywords": ["basalt", "auth", "saml", "sso", "typescript"]
+  "keywords": [
+    "basalt",
+    "auth",
+    "saml",
+    "sso",
+    "typescript"
+  ]
 }

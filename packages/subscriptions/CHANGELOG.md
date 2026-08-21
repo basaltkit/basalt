@@ -1,5 +1,21 @@
 # @basaltkit/subscriptions
 
+## 2.3.0
+
+### Minor Changes
+
+- 3125a96: Add a **Lemon Squeezy** billing gateway (`LemonSqueezyBillingGateway`) — same no-SDK, `fetch`-based contract as Stripe/Paddle, over the Lemon Squeezy JSON:API:
+
+  - `createSubscription` / `createCheckoutSession` (checkout-first — creates a checkout with your store + variant), `cancelSubscription` (DELETE), `createPortalSession` (reads the customer's `customer_portal` url), `swapSubscription` (proration → `disable_prorations` / `invoice_immediately`).
+  - `verifyWebhook` implements the `X-Signature` scheme (bare HMAC-SHA256 hex over the raw body, timing-safe) and maps `subscription_payment_success` → `payment.succeeded`, `subscription_payment_failed` → `payment.failed`, `subscription_cancelled`/`subscription_expired` → `subscription.canceled`. `billableId` reads `meta.custom_data.billableId`.
+
+  With this, all three merchant gateways (Stripe, Paddle, Lemon Squeezy) ship.
+
+### Patch Changes
+
+- Updated dependencies [2fb6c59]
+  - @basaltkit/fastify@1.4.0
+
 ## 2.2.0
 
 ### Minor Changes
@@ -11,7 +27,7 @@
 ### Minor Changes
 
 - `PaymentLedger` gains **lifecycle hooks**: `ledger.on('recorded' | 'confirmed'
-  | 'failed', listener)` lets apps react to payment state changes (notifications,
+| 'failed', listener)` lets apps react to payment state changes (notifications,
   analytics) without touching the store. Listeners are **best-effort** — they run
   after the payment is safely persisted, fire only on a fresh (non-deduped)
   apply, and a throwing one never rolls back the payment (it's reported via the
