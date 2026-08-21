@@ -79,7 +79,58 @@ export const DEFAULT_RULES: DoctorRule[] = [
     },
   }),
 
+  defineRule({
+    id: 'missing-security-plugin',
+    category: 'security',
+    check(ctx) {
+      if (!ctx.app) return null
+      if (ctx.app.pluginCalls.includes('securityPlugin')) return null
+      return {
+        id: 'missing-security-plugin',
+        title: 'No securityPlugin — responses ship without secure headers',
+        severity: 'warning',
+        category: 'security',
+        detected: `${ctx.app.path} registers no securityPlugin()`,
+        recommended:
+          'add securityPlugin() so secure response headers are set, and enable rate limiting + a CORS allow-list for production',
+        reason:
+          'Without it the API returns no security headers (HSTS, X-Frame-Options, ' +
+          'nosniff, …) and applies no rate limiting — a fresh deploy is unprotected ' +
+          'at the edge. The security primitives exist but are off until wired.',
+        fix: 'securityPlugin({ /* headers on by default */ rateLimit: { limit: 120, windowMs: 60_000 } })',
+        docs: '/guide/security',
+      }
+    },
+  }),
+
   // ── tenancy ───────────────────────────────────────────────────────────────
+  defineRule({
+    id: 'missing-tenant-membership',
+    category: 'tenancy',
+    check(ctx) {
+      if (!ctx.app || !ctx.stack.tenancy || !ctx.stack.auth) return null
+      const teamsAvailable =
+        ctx.app.pluginCalls.includes('teamsPlugin') || ctx.installed.includes('@basaltkit/teams')
+      if (!teamsAvailable) return null
+      if (ctx.app.pluginCalls.includes('tenantMembershipPlugin')) return null
+      return {
+        id: 'missing-tenant-membership',
+        title: 'Tenant is resolved from the request but membership is never enforced',
+        severity: 'error',
+        category: 'tenancy',
+        detected: `${ctx.app.path} wires tenancy + auth (+ teams) but no tenantMembershipPlugin`,
+        recommended:
+          'register tenantMembershipPlugin() so every authenticated, tenant-scoped request verifies the user belongs to the resolved tenant',
+        reason:
+          'Resolvers take the tenant from client input (x-tenant-id / Host). Without a ' +
+          'membership check, any authenticated user can act on another tenant just by ' +
+          'changing that header — a cross-tenant data breach. Tenant resolution is ' +
+          'identification, never authorization.',
+        fix: "tenantMembershipPlugin()  // central routes opt out with meta: { central: true }",
+        docs: '/guide/security',
+      }
+    },
+  }),
   defineRule({
     id: 'tenant-scoping-missing',
     category: 'tenancy',
