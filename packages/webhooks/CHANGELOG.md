@@ -1,5 +1,11 @@
 # @basaltkit/webhooks
 
+## 1.2.0
+
+### Minor Changes
+
+- Pin the outbound connection to the SSRF-validated IP to defeat DNS-rebinding (custom `lookup`); Host/SNI preserved.
+
 ## 1.1.0
 
 ### Minor Changes

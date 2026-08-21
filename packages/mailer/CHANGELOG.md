@@ -1,5 +1,11 @@
 # @basaltkit/mailer
 
+## 1.1.0
+
+### Minor Changes
+
+- Add an `assertHeaderSafe` choke point rejecting CRLF header injection in the subject and address fields across every driver.
+
 ## 1.0.5
 
 ### Patch Changes
