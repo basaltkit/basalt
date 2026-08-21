@@ -191,6 +191,44 @@ console.log(driver.sent.length)            // 1
 console.log(driver.ofMail('welcome')[0])   // the resolved message
 ```
 
+### Previewing mails in the browser
+
+See exactly what a driver would send — subject, HTML (layout and all), and text —
+without sending anything. Register previews with sample data and run the dev server:
+
+```ts
+import { mailerPlugin, definePreview } from '@basaltkit/mailer'
+import { WelcomeEmail, InvoiceEmail } from './mails.js'
+
+mailerPlugin({
+  driver: 'smtp',
+  smtp: { url: process.env.SMTP_URL! },
+  from: 'noreply@myapp.com',
+  layout: (body, { mail }) => `<html><body>${body}<footer>${mail}</footer></body></html>`,
+  previews: [
+    definePreview({ mail: WelcomeEmail, data: { name: 'Ada' } }),
+    definePreview({ mail: InvoiceEmail, data: { total: 4200, currency: 'AOA' }, label: 'Invoice · paid' }),
+  ],
+})
+```
+
+```bash
+basalt mail:preview --port=3737   # → http://127.0.0.1:3737
+```
+
+The preview reuses the mailer's own `resolve` (schema validation + `layout`), so
+the render is faithful. Invalid sample data shows an error card instead of
+crashing. Need it without the CLI? Use the server directly:
+
+```ts
+import { createMailPreviewServer } from '@basaltkit/mailer'
+
+const server = createMailPreviewServer(previews, { from: 'preview@myapp.com', layout })
+const { url } = await server.listen(3737)
+console.log(`Mail preview at ${url}`)
+// later: await server.close()
+```
+
 ## API reference
 
 ### `defineMail<T>(definition): MailDefinition<T>`
@@ -250,6 +288,8 @@ All implement `MailDriver` (`name`, `send(message)`, `disconnect()`):
 | Export | Type | Description |
 |---|---|---|
 | `MAILER` | token | Key for the `Mailer` in the container |
+| `createMailPreviewServer(previews, opts?)` | function | Browser dev server behind `mail:preview` |
+| `definePreview<T>(preview)` | function | Type-checks a preview's sample data against its mail |
 | `tenantFrom(fallback?)` | function | Dynamic sender that reads `ctx().tenant.mailFrom` |
 | `Envelope` | type | `{ to, from?, cc?, bcc?, replyTo? }` |
 | `ResolvedMail` | type | Final message: `{ mail, to[], from, cc[], bcc[], replyTo?, subject, text?, html? }` |
