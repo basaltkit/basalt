@@ -1,6 +1,16 @@
 import { defineConfig } from 'vitepress'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 const github = 'https://github.com/Zebedeu/basalt'
+
+// The umbrella "Basalt release" version — a single marketing/docs marker. The
+// `@basaltkit/*` packages are versioned INDEPENDENTLY (see the Ecosystem page);
+// this is read from the private root package.json so the nav never drifts from it.
+const rootPkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../../../package.json', import.meta.url)), 'utf8'),
+) as { version: string }
+const basaltRelease = rootPkg.version.split('.').slice(0, 2).join('.') // "1.1.0" → "1.1"
 
 export default defineConfig({
   title: 'Basalt',
@@ -24,7 +34,7 @@ export default defineConfig({
           { text: 'Guia', link: '/pt/guide/getting-started' },
           { text: 'Cookbook', link: '/pt/cookbook/notes-saas' },
           { text: 'Referência', link: '/pt/reference/packages' },
-          { text: 'Releases', link: `${github}/releases` },
+          { text: `Basalt ${basaltRelease}`, link: '/pt/guide/versioning' },
         ],
         sidebar: {
           '/pt/guide/': [
@@ -135,7 +145,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
-      { text: 'Releases', link: `${github}/releases` },
+      { text: `Basalt ${basaltRelease}`, link: '/guide/versioning' },
     ],
 
     sidebar: {
