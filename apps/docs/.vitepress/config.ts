@@ -37,6 +37,7 @@ export default defineConfig({
                 { text: 'Adaptadores HTTP', link: '/pt/guide/adapters' },
                 { text: 'Perguntas frequentes (FAQ)', link: '/pt/guide/faq' },
                 { text: 'Para além do SaaS', link: '/pt/guide/para-alem-do-saas' },
+                { text: 'Comparação com outras frameworks', link: '/pt/guide/comparacao' },
               ],
             },
             {
@@ -148,6 +149,7 @@ export default defineConfig({
             { text: 'HTTP Adapters', link: '/guide/adapters' },
             { text: 'FAQ', link: '/guide/faq' },
             { text: 'Beyond SaaS', link: '/guide/beyond-saas' },
+            { text: 'vs other frameworks', link: '/guide/comparison' },
           ],
         },
         {
