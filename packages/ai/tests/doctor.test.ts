@@ -58,12 +58,60 @@ describe('runDoctor', () => {
   it('reports errors present via hasErrors', () => {
     expect(hasErrors(found)).toBe(true)
   })
+
+  it('flags a missing securityPlugin', () => {
+    expect(ids).toContain('missing-security-plugin')
+  })
+
+  it('does NOT flag missing membership without auth (no false positive)', () => {
+    expect(ids).not.toContain('missing-tenant-membership')
+  })
+})
+
+describe('missing-tenant-membership (custodian for F1)', () => {
+  const base = {
+    'package.json': JSON.stringify({
+      dependencies: {
+        '@basaltkit/fastify': '^1.0.0',
+        '@basaltkit/tenancy': '^1.0.0',
+        '@basaltkit/auth': '^1.0.0',
+        '@basaltkit/teams': '^1.0.0',
+      },
+    }),
+    'src/env.ts': 'APP_SECRET: secret({ minLength: 32 }),',
+  }
+  const appWith = (extra: string) => `
+    import { securityPlugin, fastifyPlugin } from '@basaltkit/fastify'
+    import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@basaltkit/tenancy'
+    import { authPlugin, MemoryUserSource } from '@basaltkit/auth'
+    import { teamsPlugin${extra ? ', ' + extra : ''} } from '@basaltkit/teams'
+    export const app = createApp({ plugins: [
+      securityPlugin(),
+      tenancyPlugin({ source: new MemoryTenantSource(), resolvers: [headerResolver()] }),
+      authPlugin({ users: new MemoryUserSource(), secret: env.APP_SECRET }),
+      teamsPlugin(),
+      ${extra ? extra + '(),' : ''}
+      fastifyPlugin({ routes: [] }),
+    ] })
+  `
+
+  it('fires as an ERROR when tenancy + auth + teams are wired but the membership guard is not', () => {
+    const ctx = detectProject('/vuln', memoryReader({ ...base, 'src/app.ts': appWith('') }))
+    const d = runDoctor(ctx).find((x) => x.id === 'missing-tenant-membership')
+    expect(d?.severity).toBe('error')
+  })
+
+  it('clears once tenantMembershipPlugin is registered', () => {
+    const ctx = detectProject('/safe', memoryReader({ ...base, 'src/app.ts': appWith('tenantMembershipPlugin') }))
+    const ids = runDoctor(ctx).map((x) => x.id)
+    expect(ids).not.toContain('missing-tenant-membership')
+  })
 })
 
 describe('runDoctor on a healthy project', () => {
   const healthy = {
     'package.json': JSON.stringify({ dependencies: { '@basaltkit/fastify': '^1.0.0', '@basaltkit/prisma': '^1.0.0' } }),
-    'src/app.ts': "export const app = createApp({ plugins: [ prismaPlugin({}), fastifyPlugin({ fastify: { logger: true }, routes: [] }) ] })",
+    'src/app.ts': "import { securityPlugin } from '@basaltkit/fastify'\nexport const app = createApp({ plugins: [ securityPlugin(), prismaPlugin({}), fastifyPlugin({ fastify: { logger: true }, routes: [] }) ] })",
     'src/server.ts': "const app = await buildApp().boot()\nawait app.container.get(PRISMA).$connect()\nawait server.listen({ port: 3000 })",
     'src/env.ts': "APP_SECRET: z.string().min(32),",
     'prisma/schema.prisma': 'datasource db { provider = "postgresql" url = env("DATABASE_URL") }\nmodel Tenant { id String @id }',
