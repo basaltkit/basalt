@@ -5,8 +5,13 @@ and will change only under semver. This checklist tracks what that promise needs
 It's honest about what's done and what isn't — items are only checked when they're
 actually true in the tree.
 
-**🎉 1.0.0 shipped.** All 69 packages are published at `1.0.0`. This checklist
-is kept as the record of how we got here — every gate below is met.
+**🎉 1.0.0 shipped.** All 69 packages were published at `1.0.0`. This checklist
+is kept as a **historical record** of how we got here — every gate below was met.
+
+> **Note (post-1.0):** the ecosystem has since moved to **independent per-package
+> versioning** (the packages are no longer released in lockstep, and the umbrella
+> "Basalt 1.1" marker is for comms/docs). Mentions of lockstep below reflect the
+> 1.0-era policy. Current model: [VERSIONING.md](./VERSIONING.md).
 
 ---
 
@@ -42,7 +47,7 @@ The mechanical work was done and the maintainer signed off the surface at 1.0.
       named after their contract (`sqliteInAppStore`, `sqliteAccessStore`) rather
       than the domain — consistent within itself, worth a glance at freeze time.
 - [x] **Deprecation policy** written — see the
-      [Versioning & compatibility guide](https://basalt-docs.pages.dev/guide/versioning):
+      [Versioning & compatibility guide](https://basaltkit-docs.pages.dev/guide/versioning):
       `@deprecated` in a minor, works through the major, removed only in the next.
 - [x] No `@experimental` / `@deprecated` / TODO debt in `src` (1 marker total).
 
@@ -59,7 +64,7 @@ The mechanical work was done and the maintainer signed off the surface at 1.0.
       so the docs site, guides, and every package README now read English.
       (`@basaltkit/i18n` keeps its intentional `pt`-locale demo strings.)
 - [x] A short **"0.x → 1.0" upgrade note** — published in the
-      [Versioning & compatibility guide](https://basalt-docs.pages.dev/guide/versioning)
+      [Versioning & compatibility guide](https://basaltkit-docs.pages.dev/guide/versioning)
       ("1.0 is a stability commitment, not a rewrite"), to be confirmed final by
       the maintainer API sign-off above.
 
@@ -90,14 +95,14 @@ The mechanical work was done and the maintainer signed off the surface at 1.0.
       `0.32.0 → 1.0.0` in lockstep and published to npm — functionally identical to
       0.32.0, marking the stability commitment.
 - [x] **`1.0.0` announcement** — the README status and every package CHANGELOG
-      state the stability promise; the [Versioning guide](https://basalt-docs.pages.dev/guide/versioning) documents it.
+      state the stability promise; the [Versioning guide](https://basaltkit-docs.pages.dev/guide/versioning) documents it.
 
 ## 6. Runtime & compatibility — ✅ done
 
 - [x] ESM-only, documented.
 - [x] `node:sqlite` packages declare `engines.node >= 22.5.0` (flag-free on 24).
 - [x] **Node support policy documented** — the
-      [Versioning & compatibility guide](https://basalt-docs.pages.dev/guide/versioning)
+      [Versioning & compatibility guide](https://basaltkit-docs.pages.dev/guide/versioning)
       states Node 22+ (CI tests 22 & 24), the `*-sqlite` packages' 22.5+ /
       `--experimental-sqlite` caveat, ESM-only, and the lockstep versioning rule.
 

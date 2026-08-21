@@ -7,8 +7,8 @@ route to the client.
 
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: 1.0.4 — 69 packages, all published to npm. 🎉** The public API is
-> stable and covered by [semantic versioning](https://basalt-docs.pages.dev/guide/versioning):
+> **Status: Basalt 1.1 — the security-hardened release. 79 packages, each versioned independently. 🎉** The public API is
+> stable and covered by [semantic versioning](https://basaltkit-docs.pages.dev/guide/versioning):
 > breaking changes only in a new major, features in a minor, fixes in a patch.
 > In-memory stores are the dev default; every stateful domain has a durable
 > backend — auth, teams, subscriptions, permissions, comments, audit, activity
@@ -44,7 +44,7 @@ through the plugin lifecycle. See the [Going to Production](https://github.com/Z
 | API docs | `openapiPlugin` — OpenAPI 3.0 from your Zod schemas |
 | Reliable delivery | `outboxPlugin` (at-least-once) + `webhooksPlugin` (signed) |
 | Quality gates | CI lint (ESLint), coverage thresholds, `pnpm audit`, CodeQL |
-| Supply chain | Dependabot, npm provenance, lockstep versioning |
+| Supply chain | Dependabot, npm provenance, independent per-package versioning |
 
 ## Packages
 
@@ -126,8 +126,8 @@ pnpm typecheck
 ```
 
 Monorepo layout: `packages/*` (publishable `@basaltkit/*`), `apps/*` (the
-`playground` reference app), `tooling/*` (shared config). Versioning is
-locked across `@basaltkit/*` via Changesets.
+`playground` reference app), `tooling/*` (shared config). Each `@basaltkit/*` package is versioned independently (changesets capture
+changelogs).
 
 ## License
 
