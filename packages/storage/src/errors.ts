@@ -61,3 +61,11 @@ export class TemporaryUrlUnsupportedError extends BasaltError {
     )
   }
 }
+
+export class ImageProcessingUnavailableError extends BasaltError {
+  constructor(
+    detail = 'No image processor configured. Install @basaltkit/image-sharp and pass it to storagePlugin({ imageProcessor }).',
+  ) {
+    super('STORAGE_IMAGE_UNAVAILABLE', detail)
+  }
+}

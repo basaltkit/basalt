@@ -1,0 +1,53 @@
+{
+  "name": "@basaltkit/image-sharp",
+  "version": "1.0.0",
+  "description": "sharp-backed image processor for @basaltkit/storage — resize/rotate/blur and JPEG/PNG/WebP/AVIF encoding behind the engine-neutral ImageProcessor contract.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/storage": "workspace:^"
+  },
+  "peerDependencies": {
+    "sharp": "^0.33.0 || ^0.34.0"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^22.15.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
+    "directory": "packages/image-sharp"
+  },
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/image-sharp#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "image",
+    "sharp",
+    "resize",
+    "webp",
+    "avif"
+  ]
+}
