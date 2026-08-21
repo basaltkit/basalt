@@ -5,6 +5,7 @@ import { MemoryMailDriver } from './drivers/memory.js'
 import { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 import { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
 import { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
+import { MailgunMailDriver, type MailgunDriverOptions } from './drivers/mailgun.js'
 import {
   assertHeaderSafe,
   MailIncompleteError,
@@ -21,6 +22,7 @@ export { LogMailDriver } from './drivers/log.js'
 export { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 export { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
 export { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
+export { MailgunMailDriver, type MailgunDriverOptions } from './drivers/mailgun.js'
 export {
   defineMail,
   MailValidationError,
@@ -41,6 +43,14 @@ export interface MailerOptions {
    */
   from?: string | (() => string | undefined)
   replyTo?: string
+  /**
+   * Wraps every rendered HTML body in a shared layout (branding, header/footer).
+   * Called with the mail's own HTML and its context; return the full document.
+   * Read `ctx().tenant` inside for per-tenant branding. Only applied when the
+   * mail has an HTML body. Any template engine (MJML, React Email, Handlebars…)
+   * can be used here — or inside a mail's own `html()`.
+   */
+  layout?: (html: string, context: { mail: string; data: unknown }) => string
 }
 
 export class Mailer {
@@ -91,6 +101,12 @@ export class Mailer {
     if (!from) throw new MailIncompleteError('from')
 
     const replyTo = envelope.replyTo ?? this.options.replyTo
+    const rawHtml = mail.html?.(validated)
+    // Wrap the body in the shared layout (branding), when one is configured.
+    const html =
+      rawHtml !== undefined && this.options.layout
+        ? this.options.layout(rawHtml, { mail: mail.name, data: validated })
+        : rawHtml
     const message: ResolvedMail = {
       mail: mail.name,
       to,
@@ -100,7 +116,7 @@ export class Mailer {
       replyTo,
       subject: mail.subject(validated),
       text: mail.text?.(validated),
-      html: mail.html?.(validated),
+      html,
     }
     // Single header-injection choke point: guards every driver, not just SMTP.
     assertHeaderSafe(message)
@@ -124,13 +140,15 @@ export const tenantFrom =
 export const MAILER = createToken<Mailer>('mailer')
 
 export interface MailerPluginOptions extends MailerOptions {
-  driver?: 'smtp' | 'log' | 'memory' | 'resend' | 'ses'
+  driver?: 'smtp' | 'log' | 'memory' | 'resend' | 'ses' | 'mailgun'
   /** Required with the 'smtp' driver. */
   smtp?: SmtpDriverOptions
   /** Required with the 'resend' driver. */
   resend?: ResendDriverOptions
   /** Required with the 'ses' driver. */
   ses?: SesDriverOptions
+  /** Required with the 'mailgun' driver. */
+  mailgun?: MailgunDriverOptions
   /** Sink for the 'log' driver. Default: console.log */
   sink?: (line: string) => void
 }
@@ -148,9 +166,11 @@ export function mailerPlugin(options: MailerPluginOptions = {}) {
               ? new ResendMailDriver(options.resend as ResendDriverOptions)
               : options.driver === 'ses'
                 ? new SesMailDriver(options.ses as SesDriverOptions)
-                : options.driver === 'memory'
-                  ? new MemoryMailDriver()
-                  : new LogMailDriver(options.sink)
+                : options.driver === 'mailgun'
+                  ? new MailgunMailDriver(options.mailgun as MailgunDriverOptions)
+                  : options.driver === 'memory'
+                    ? new MemoryMailDriver()
+                    : new LogMailDriver(options.sink)
         return new Mailer(driver, options)
       })
     },

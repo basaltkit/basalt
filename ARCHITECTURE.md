@@ -17,7 +17,7 @@
 > current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
 > page. Still **design-only** today:
 >
-> - **Mailer** — Mailgun driver, React-Email/MJML templates, `mail preview` (SMTP, Resend and SES now ship).
+> - **Mailer** — `mail preview` server (SMTP, Resend, SES, Mailgun & HTML layouts now ship; React-Email/MJML work inside `html()`).
 > - **Storage** — image processing (`.image().resize().webp()`).
 > - **Cache** — stale-while-revalidate.
 > - **CLI** — `upgrade` codemods, `dev`, `queue work|stats|retry`, `generate docs`, `publish`, and most `tenant:*` / `make:*` subcommands (only `make:resource` / `make:service` ship).
@@ -682,7 +682,7 @@ ctx().tenant.config.get('branding.color')     // tenant override (stored in the 
 ```
 Boot fails with an aggregated report of ALL invalid env vars at once (not one at a time). Secrets never appear in logs/errors (integrated with the logger's redaction).
 
-### 12.8 `@basaltkit/mailer`  `[🚧 partial — no Mailgun/React-Email/preview]`
+### 12.8 `@basaltkit/mailer`  `[🚧 partial — no mail-preview server]`
 Drivers for SMTP, Resend, SES, Mailgun + a `log` driver (dev) and a `fake` driver (test). Templates with **React Email** (official) or MJML; per-tenant layout/branding; sending via the queue by default; a preview server in dev (`basalt mail preview`).
 
 ---

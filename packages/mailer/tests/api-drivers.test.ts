@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MailDeliveryError,
+  MailgunMailDriver,
   ResendMailDriver,
   SesMailDriver,
   type ResolvedMail,
@@ -114,6 +115,39 @@ describe('SesMailDriver (SES v2 + SigV4)', () => {
   it('throws MailDeliveryError on a non-2xx response', async () => {
     const { fn } = fakeFetch({ ok: false, status: 400, text: 'MessageRejected' })
     await expect(new SesMailDriver({ ...base, fetch: fn }).send(mail)).rejects.toBeInstanceOf(
+      MailDeliveryError,
+    )
+  })
+})
+
+describe('MailgunMailDriver', () => {
+  it('POSTs form-encoded with Basic auth to the domain messages endpoint', async () => {
+    const { fn, calls } = fakeFetch({ ok: true, status: 200 })
+    await new MailgunMailDriver({ apiKey: 'key-123', domain: 'mg.example.com', fetch: fn }).send({
+      ...mail,
+      cc: ['c@x.com'],
+      replyTo: 'r@app.dev',
+    })
+    expect(calls[0]!.url).toBe('https://api.mailgun.net/v3/mg.example.com/messages')
+    const headers = calls[0]!.init.headers as Record<string, string>
+    expect(headers.authorization).toBe(`Basic ${Buffer.from('api:key-123').toString('base64')}`)
+    const body = new URLSearchParams(calls[0]!.init.body as string)
+    expect(body.get('from')).toBe('no-reply@app.dev')
+    expect(body.get('to')).toBe('ada@example.com')
+    expect(body.get('cc')).toBe('c@x.com')
+    expect(body.get('h:Reply-To')).toBe('r@app.dev')
+    expect(body.get('subject')).toBe('Hi')
+  })
+
+  it('targets the EU base when region is eu', async () => {
+    const { fn, calls } = fakeFetch({ ok: true, status: 200 })
+    await new MailgunMailDriver({ apiKey: 'k', domain: 'd', region: 'eu', fetch: fn }).send(mail)
+    expect(calls[0]!.url).toBe('https://api.eu.mailgun.net/v3/d/messages')
+  })
+
+  it('throws MailDeliveryError on a non-2xx response', async () => {
+    const { fn } = fakeFetch({ ok: false, status: 401, text: 'Unauthorized' })
+    await expect(new MailgunMailDriver({ apiKey: 'k', domain: 'd', fetch: fn }).send(mail)).rejects.toBeInstanceOf(
       MailDeliveryError,
     )
   })
