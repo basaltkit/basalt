@@ -1,5 +1,23 @@
 # @basaltkit/auth
 
+## 1.4.0
+
+### Minor Changes
+
+- 6354c41: Add **OAuth / social login** (Google, GitHub) — OAuth 2.0 authorization-code flow, no SDK, cookieless.
+
+  - `oauthPlugin({ secret, providers })` + `oauthRoutes({ callbackBaseUrl, successRedirect? })` register `GET /auth/oauth/:provider` (→ authorize redirect) and `GET /auth/oauth/:provider/callback` (verify state → exchange code → log in).
+  - `googleProvider(...)` and `githubProvider(...)` prebuilt (GitHub reads the primary _verified_ email); bring your own via the `OAuthProvider` contract.
+  - The CSRF `state` is HMAC-signed and stateless (no server storage). New accounts are created passwordless and matched by email; a verified email flips `emailVerified`.
+  - New `Auth.socialLogin(email, { emailVerified })` primitive (find-or-create + issue tokens). Injectable `fetch`/clock for testing.
+
+- edbf998: Add generic **OIDC** SSO on top of the OAuth flow: `oidcProvider({ authorizeUrl, tokenUrl, userInfoUrl, clientId, clientSecret })` for any OpenID Connect IdP (Okta, Azure AD / Entra ID, Auth0, Google Workspace, Keycloak), and `discoverOidcProvider({ issuer, clientId, clientSecret })` which resolves the endpoints from the IdP's `.well-known/openid-configuration`. Maps the standard `sub`/`email`/`email_verified`/`name` claims. (SAML 2.0 remains a separate, future integration.)
+
+### Patch Changes
+
+- Updated dependencies [2fb6c59]
+  - @basaltkit/fastify@1.4.0
+
 ## 1.3.1
 
 ### Patch Changes

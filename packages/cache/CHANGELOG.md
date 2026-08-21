@@ -1,11 +1,23 @@
 # @basaltkit/cache
 
+## 1.2.0
+
+### Minor Changes
+
+- e015e1b: Add stale-while-revalidate to `remember`.
+
+  `cache.remember(key, { ttl, staleFor }, factory)` serves a value fresh for `ttl`, then serves it **stale immediately** for a further `staleFor` window while a single background revalidation refreshes it; only after `ttl + staleFor` does a read block on the factory again. Concurrent stale reads dedupe into one background refresh (same stampede protection as `remember`), and a throwing refresh keeps serving stale until hard expiry instead of surfacing an error.
+
+  - Freshness windows are gated in the Cache layer via an injectable `now` clock (`CacheOptions.now`), independent of driver eviction.
+  - Works through `tags(...).remember(...)`; plain `get()` transparently unwraps SWR entries.
+  - The plain `remember(key, ttl, factory)` signature is unchanged. New `SwrOptions` type exported.
+
 ## 1.1.0
 
 ### Minor Changes
 
 - Security: **don't fail open to a shared global namespace when the tenant scope is absent.**
-  - **`flush()` now fails closed** (throws `MissingCacheScopeError`) when a tenant-scoped cache resolves no tenant, instead of wiping the entire `basalt:*` namespace across *every* tenant. A deliberate global cache (`scope: null`) still flushes its whole namespace, and a properly-scoped flush is unchanged.
+  - **`flush()` now fails closed** (throws `MissingCacheScopeError`) when a tenant-scoped cache resolves no tenant, instead of wiping the entire `basalt:*` namespace across _every_ tenant. A deliberate global cache (`scope: null`) still flushes its whole namespace, and a properly-scoped flush is unchanged.
   - **New `onMissingScope: 'error'`** option makes reads/writes fail closed too when no tenant resolves — recommended for multi-tenant apps, so a per-tenant value cached from a context that lost its tenant can't leak into the shared namespace and be read by another tenant. Default stays `'global'` (previous behavior) for compatibility.
 
 ## 1.0.5

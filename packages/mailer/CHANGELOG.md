@@ -1,5 +1,28 @@
 # @basaltkit/mailer
 
+## 1.2.0
+
+### Minor Changes
+
+- 0496844: Add the Mailgun driver and a shared HTML layout hook.
+
+  - **`mailgun`** — delivers via the Mailgun HTTP API (no SDK), Basic auth (`api:<key>`) over a form-encoded body, `region: 'us' | 'eu'`: `mailerPlugin({ driver: 'mailgun', mailgun: { apiKey, domain } })`. Non-2xx responses surface as `MailDeliveryError`.
+  - **`layout`** — `mailerPlugin({ layout: (html, { mail }) => `…${html}…` })` wraps every rendered HTML body once, for shared branding (header/footer, per-tenant colours). Runs per send, so it can read `ctx().tenant`. Any template engine (MJML, React Email, Handlebars) still works inside a mail's own `html()`.
+
+- b4f7874: Add a mail preview dev server — the runtime behind `basalt mail:preview`.
+
+  - **`createMailPreviewServer(previews, { from?, layout? })`** — a zero-dependency `node:http` server that renders every registered mail (HTML with the shared layout, plaintext, and metadata) in the browser, reusing the mailer's own `resolve` so the preview is faithful to what a driver would send. Invalid sample data renders an error card instead of crashing.
+  - **`definePreview({ mail, data, label? })`** — type-checks sample data against a mail's schema.
+  - **`mailerPlugin({ previews: [...] })`** registers a `mail:preview` command (`--port`, default 3737) into the CLI command bucket.
+  - Exposes the pure `renderPreviewResponse` router for testing/embedding.
+
+- 86121b5: Add two API-based mail drivers, both over HTTPS with no SDK:
+
+  - **`resend`** — delivers via the Resend API (`mailerPlugin({ driver: 'resend', resend: { apiKey } })`).
+  - **`ses`** — Amazon SES v2 `SendEmail`, signed with a hand-rolled SigV4 using `node:crypto` (`mailerPlugin({ driver: 'ses', ses: { region, accessKeyId, secretAccessKey } })`) — keeps the mailer free of the AWS SDK.
+
+  Both share the existing envelope and the header-injection guard. New `MailDeliveryError` (`MAIL_DELIVERY_FAILED`) surfaces a provider's non-2xx response. Drivers accept an injectable `fetch` (and SES an injectable clock) for testing.
+
 ## 1.1.0
 
 ### Minor Changes
