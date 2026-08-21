@@ -263,6 +263,25 @@ fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } 
 setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 ```
 
+## Catch regressions automatically — `ai:doctor`
+
+`basalt ai:doctor` statically checks your project against the framework's
+security invariants — offline, no API key. Two checks encode the most important
+guarantees from the security guide:
+
+- **`missing-tenant-membership`** (error) — you wire tenancy + auth + teams but no
+  `tenantMembershipPlugin`, so a resolved tenant is never bound to a verified
+  member. This is the cross-tenant-access class in section 2.
+- **`missing-security-plugin`** (warning) — no `securityPlugin()`, so responses
+  ship without secure headers.
+
+```bash
+basalt ai:doctor      # run it in CI to fail the build on a security regression
+```
+
+Wire it into your pipeline so a change that drops the membership guard or the
+security plugin turns the build red instead of shipping.
+
 ## Supply chain
 
 CI runs `pnpm audit` (high severity), **CodeQL** SAST, and **Dependabot** keeps

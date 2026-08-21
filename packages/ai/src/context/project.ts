@@ -72,6 +72,8 @@ export interface AppFileInfo {
   fastifyLoggerConfigured: boolean
   /** In-memory (non-durable) sources still wired, e.g. `MemoryTenantSource`. */
   memorySources: string[]
+  /** Every `<name>Plugin(` factory call in the app file (unfiltered by capability). */
+  pluginCalls: string[]
 }
 
 export interface ServerFileInfo {
@@ -172,7 +174,10 @@ function detectAppFile(reader: ProjectReader): AppFileInfo | null {
   const memorySources = ['MemoryTenantSource', 'MemoryUserSource'].filter((source) =>
     found.content.includes(source),
   )
-  return { path: found.path, plugins, fastifyLoggerConfigured, memorySources }
+  const pluginCalls = [
+    ...new Set(Array.from(found.content.matchAll(/\b([A-Za-z][A-Za-z0-9]*Plugin)\s*\(/g), (m) => m[1] as string)),
+  ]
+  return { path: found.path, plugins, fastifyLoggerConfigured, memorySources, pluginCalls }
 }
 
 function detectServerFile(reader: ProjectReader): ServerFileInfo | null {
