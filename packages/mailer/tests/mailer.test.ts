@@ -188,3 +188,20 @@ describe('Mailer', () => {
     await app.shutdown()
   })
 })
+
+describe('HTML layout', () => {
+  it('wraps the rendered html body in the configured layout', async () => {
+    const { driver, mailer } = setup({
+      layout: (html: string, ctx: { mail: string }) => `<main data-mail="${ctx.mail}">${html}</main>`,
+    })
+    await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'a@b.c' })
+    expect(driver.sent[0]!.html).toBe('<main data-mail="welcome"><h1>Hello Ada</h1></main>')
+  })
+
+  it('leaves a text-only mail untouched (no html → no layout)', async () => {
+    const TextOnly = defineMail({ name: 'ping', subject: () => 'Ping', text: () => 'pong' })
+    const { driver, mailer } = setup({ layout: (html: string) => `<wrap>${html}</wrap>` })
+    await mailer.send(TextOnly, { to: 'a@b.c' })
+    expect(driver.sent[0]!.html).toBeUndefined()
+  })
+})
