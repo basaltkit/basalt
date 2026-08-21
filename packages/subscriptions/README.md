@@ -1,6 +1,6 @@
 # @basaltkit/subscriptions
 
-Billing for the Basalt framework, in the style of Laravel Cashier/Soulbscription: declarative plans, subscriptions with a trial period, features with usage limits, Stripe integration, and idempotent webhooks. You need this module when your SaaS application charges monthly fees and limits features by plan.
+Billing for the Basalt framework, in the style of Laravel Cashier/Soulbscription: declarative plans, subscriptions with a trial period, features with usage limits, Stripe & Paddle integration, and idempotent webhooks. You need this module when your SaaS application charges monthly fees and limits features by plan.
 
 ## What this module solves
 
@@ -167,6 +167,23 @@ const gateway = new StripeBillingGateway({
 
 export const subscriptions = new Subscriptions({ plans, gateway, fallbackPlan: 'free' })
 ```
+
+### Paddle gateway
+
+`PaddleBillingGateway` targets **Paddle Billing** the same way (no SDK, injectable `fetch`), mapping plans to Paddle *Price IDs* (`pri_…`) and billables to *Customer IDs* (`ctm_…`). Paddle is checkout-first, so `createSubscription`/`createCheckoutSession` create a transaction and the durable subscription ref arrives on a `subscription.*` webhook.
+
+```ts
+import { PaddleBillingGateway, Subscriptions } from '@basaltkit/subscriptions'
+
+const gateway = new PaddleBillingGateway({
+  apiKey: process.env.PADDLE_API_KEY!,
+  webhookSecret: process.env.PADDLE_NOTIFICATION_SECRET!, // ntfset_...
+  priceId: (plan, period) => ({ pro: { monthly: 'pri_pro_m', yearly: 'pri_pro_y' } })[plan]![period],
+  customerId: async (billableId) => getOrCreatePaddleCustomer(billableId),
+})
+```
+
+Webhook signatures use Paddle's `Paddle-Signature` scheme (`ts=…;h1=…`, HMAC-SHA256 over `${ts}:${rawBody}`) — verified by the driver, with the same 5-minute timestamp tolerance as Stripe.
 
 For development and testing there's `FakeBillingGateway`, which records all calls in arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`) and accepts the webhook signature `'valid'`.
 
