@@ -5,7 +5,7 @@ import {
   tryCtx,
   type RequestContext,
 } from '@basaltkit/core'
-import type { AddJobOptions, DriverCapabilities, QueueDriver, RetentionOption } from './driver.js'
+import type { AddJobOptions, DriverCapabilities, QueueDriver, QueueStats, RetentionOption } from './driver.js'
 import {
   validatePayload,
   type DispatchOptions,
@@ -165,6 +165,19 @@ export class QueueManager implements JobDispatcher {
   /** Starts a worker for the queue. With the sync driver it is a no-op. */
   work(queue = 'default', options: { concurrency?: number } = {}): void {
     this.driver.startWorker(queue, options)
+  }
+
+  /** Job counts per state, or `undefined` if the driver can't introspect. */
+  async stats(queue = 'default'): Promise<QueueStats | undefined> {
+    return this.driver.stats?.(queue)
+  }
+
+  /**
+   * Re-enqueues failed jobs; returns the count, or `undefined` if the driver
+   * doesn't support retrying (e.g. the inline sync driver).
+   */
+  async retryFailed(queue = 'default', options: { limit?: number } = {}): Promise<number | undefined> {
+    return this.driver.retryFailed?.(queue, options)
   }
 
   async close(): Promise<void> {

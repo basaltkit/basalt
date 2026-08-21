@@ -1,5 +1,5 @@
 import { Queue, Worker, type ConnectionOptions, type JobsOptions } from 'bullmq'
-import type { AddJobOptions, JobExecutor, QueueDriver, RetentionOption } from '../driver.js'
+import type { AddJobOptions, JobExecutor, QueueDriver, QueueStats, RetentionOption } from '../driver.js'
 
 type KeepJobs = { age?: number; count?: number }
 
@@ -59,6 +59,28 @@ export class BullmqQueueDriver implements QueueDriver {
         concurrency: options.concurrency ?? 1,
       }),
     )
+  }
+
+  async stats(queue: string): Promise<QueueStats> {
+    const c = await this.queue(queue).getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed')
+    return {
+      waiting: c['waiting'] ?? 0,
+      active: c['active'] ?? 0,
+      completed: c['completed'] ?? 0,
+      failed: c['failed'] ?? 0,
+      delayed: c['delayed'] ?? 0,
+    }
+  }
+
+  async retryFailed(queue: string, options: { limit?: number } = {}): Promise<number> {
+    const limit = options.limit ?? 1000
+    const failed = await this.queue(queue).getFailed(0, limit - 1)
+    let retried = 0
+    for (const job of failed) {
+      await job.retry()
+      retried++
+    }
+    return retried
   }
 
   async close(): Promise<void> {
