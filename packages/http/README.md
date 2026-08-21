@@ -202,6 +202,16 @@ openapiPlugin({ info: { title: 'My API', version: '1.0.0' } })
 
 Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document. The route's `response` field (schemas per status code) feeds the documented responses.
 
+The same plugin registers a **`generate:docs`** CLI command that writes the
+document to disk (or stdout) — handy for CI, publishing, or feeding a static docs
+site — without starting the server:
+
+```bash
+basalt generate:docs                 # writes openapi.json
+basalt generate:docs --out=api.json  # custom path
+basalt generate:docs --stdout        # print instead of writing
+```
+
 ### Advanced: `runRoute()` and the pipeline
 
 Adapters use `runRoute()` to execute each request: it creates the request context (`requestId`, `correlationId`, a scope from the dependency container), runs the **enrichers** (functions that enrich the context, e.g. resolving the tenant), then the **guards** (functions that can reject the request, e.g. authentication — they reject by throwing an error), validates `body`/`query`/`params`, and finally calls the handler. You only need this if you're writing your own adapter.
