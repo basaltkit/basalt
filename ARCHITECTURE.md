@@ -17,7 +17,6 @@
 > current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
 > page. Still **design-only** today:
 >
-> - **Cache** — stale-while-revalidate.
 > - **CLI** — `upgrade` codemods, `dev`, `queue work|stats|retry`, `generate docs`, `publish`, and most `tenant:*` / `make:*` subcommands (only `make:resource` / `make:service` ship).
 > - **create-basalt** — the rich interactive wizard (it's flag-based today).
 > - **Dashboard** — the ready-made analytics app (headless `admin` + per-feature UIs ship).
@@ -693,13 +692,14 @@ Typed events (Zod payload), sync or queued listeners (the events→queue bridge 
 ### 12.5 `@basaltkit/logger`  `[✅ shipped]`
 Built on **Pino** (the same family as Fastify, ~zero cost): JSON in production, pretty in dev, and **automatic enrichment via ALS** — every log carries `requestId`, `correlationId`, `tenantId`, `userId`, `traceId` (OpenTelemetry if present) without the developer passing anything. Redaction of sensitive fields (`password`, `token`) by default. Child loggers per module: `logger.child({ pkg: 'subscriptions' })`.
 
-### 12.6 `@basaltkit/cache`  `[🚧 partial — no stale-while-revalidate]`
+### 12.6 `@basaltkit/cache`  `[✅ shipped]`
 ```ts
 await cache.remember('plans', '1h', () => db.plan.findMany())     // cache-aside in 1 line
+await cache.remember('feed', { ttl: '1m', staleFor: '10m' }, build) // stale-while-revalidate
 await cache.tags(['tenant', `user:${id}`]).put(key, value, '10m')
 await cache.tags([`user:${id}`]).flush()
 ```
-Redis and Memory drivers (same interface, same test suite); automatic per-tenant prefix; tags via sets in Redis; `remember` with **stampede protection** (distributed lock — only one process recomputes). Stale-while-revalidate in v1.x.
+Redis and Memory drivers (same interface, same test suite); automatic per-tenant prefix; tags via sets in Redis; `remember` with **stampede protection** (only one process/call recomputes). **Stale-while-revalidate**: `remember(key, { ttl, staleFor }, factory)` serves a stale value instantly while a single background revalidation refreshes it, and blocks only after the hard `ttl + staleFor` window.
 
 ### 12.7 `@basaltkit/config` + `@basaltkit/env`  `[✅ shipped]`
 ```ts
