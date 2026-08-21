@@ -14,3 +14,6 @@ coverage/
 
 # Generated typedoc API reference (built by docs:api)
 apps/docs/reference/api/
+
+# npm auth token — never commit
+.npmrc
