@@ -133,3 +133,28 @@ describe('@basaltkit/fastify', () => {
     await app.shutdown()
   })
 })
+
+describe('urlencoded body (adapter compatibility)', () => {
+  it('parses application/x-www-form-urlencoded into the body', async () => {
+    const formRoutes = [
+      route({
+        method: 'POST',
+        url: '/form',
+        body: z.object({ name: z.string() }),
+        async handler({ body }) {
+          return { got: body.name }
+        },
+      }),
+    ]
+    const app = await createApp({ plugins: [fastifyPlugin({ routes: formRoutes })] }).boot()
+    const res = await app.container.get(FASTIFY).inject({
+      method: 'POST',
+      url: '/form',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'name=Ada',
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ got: 'Ada' })
+    await app.shutdown()
+  })
+})

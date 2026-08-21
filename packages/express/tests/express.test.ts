@@ -103,3 +103,23 @@ describe('expressPlugin', () => {
     expect((await json(boom)).error!.code).toBe('TEAPOT')
   })
 })
+
+describe('urlencoded body (adapter compatibility)', () => {
+  it('parses application/x-www-form-urlencoded into the body', async () => {
+    const formRoutes = [
+      route({ method: 'POST', url: '/form', body: z.object({ name: z.string() }), async handler({ body }) { return { got: body.name } } }),
+    ]
+    const a = await createApp({ plugins: [expressPlugin({ routes: formRoutes })] }).boot()
+    const s = a.container.get(EXPRESS).listen(0)
+    const b = `http://127.0.0.1:${(s.address() as AddressInfo).port}`
+    const res = await fetch(`${b}/form`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'name=Ada',
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ got: 'Ada' })
+    s.close()
+    await a.shutdown()
+  })
+})

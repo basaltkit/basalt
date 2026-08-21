@@ -118,6 +118,8 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
       container.singleton(EXPRESS, () => {
         const app = options.app ?? express()
         app.use(express.json())
+        // HTML forms and the SAML ACS binding post application/x-www-form-urlencoded.
+        app.use(express.urlencoded({ extended: false }))
         return app
       })
       container.singleton(HTTP_SERVER, () => collector)
