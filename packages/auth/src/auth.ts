@@ -238,6 +238,35 @@ export class Auth {
   }
 
   /**
+   * Logs in an externally-authenticated user (e.g. from an OAuth provider),
+   * matched by email — find-or-create. A new account is created **passwordless**
+   * (a random, unusable password hash), so password login won't work for it
+   * until a password is set. A provider-verified email flips `emailVerified`.
+   * Returns the tokens and whether the account was just created.
+   */
+  async socialLogin(
+    email: string,
+    options: { emailVerified?: boolean } = {},
+  ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean }> {
+    let user = await this.users.findByEmail(email)
+    let created = false
+    if (!user) {
+      user = await this.users.create({
+        email,
+        passwordHash: await this.hasher.hash(randomBytes(32).toString('hex')),
+      })
+      created = true
+      await this.hooks?.emit('auth:registered', { user: publicUser(user) })
+    }
+    if (options.emailVerified && !user.emailVerified && this.users.update) {
+      user = (await this.users.update(user.id, { emailVerified: true })) ?? user
+    }
+    const tokens = await this.issueTokens(user.id)
+    await this.hooks?.emit('auth:login', { user: publicUser(user) })
+    return { user: publicUser(user), tokens, created }
+  }
+
+  /**
    * Enumeration-safe registration for the public endpoint: creates the account
    * for a new email, or — when the email is already taken — does equivalent work
    * (so timing doesn't leak) and emits `auth:register_existing_email` so the app
