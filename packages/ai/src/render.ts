@@ -65,7 +65,7 @@ export function renderDoctor(diagnostics: Diagnostic[], io: LineWriter): void {
     }
     if (d.docs) {
       io.log('')
-      io.log(`  Docs: https://basalt.dev${d.docs}`)
+      io.log(`  Docs: https://basaltkit.dev${d.docs}`)
     }
     io.log('')
     io.log('  ' + '─'.repeat(60))
