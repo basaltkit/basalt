@@ -19,6 +19,8 @@ export interface JwtClaims {
   sub: string
   iat: number
   exp?: number
+  /** Access-token version — checked against TokenVersionStore for revocation. */
+  tv?: number
   [claim: string]: unknown
 }
 

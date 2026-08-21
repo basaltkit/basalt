@@ -8,6 +8,7 @@ import {
   PrismaSessionStore,
   PrismaUserSource,
   prismaAuthStores,
+  PrismaTokenVersionStore,
 } from '../src/index.js'
 
 // A faithful in-memory fake of the Prisma delegate surface the stores use —
@@ -339,5 +340,29 @@ describe('prismaAuthStores guard', () => {
   it('tolerates a lazy/proxy client (database-per-tenant)', () => {
     const proxy = new Proxy({}, { get() { throw new Error('no context') } }) as never
     expect(() => prismaAuthStores(proxy)).not.toThrow()
+  })
+})
+
+describe('PrismaTokenVersionStore', () => {
+  it('reads 0 by default and increments via upsert', async () => {
+    const rows = new Map<string, number>()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = {
+      authTokenVersion: {
+        async findUnique({ where: { userId } }: any) {
+          return rows.has(userId) ? { userId, version: rows.get(userId) } : null
+        },
+        async upsert({ where: { userId }, create }: any) {
+          const v = rows.has(userId) ? (rows.get(userId) as number) + 1 : create.version
+          rows.set(userId, v)
+          return { userId, version: v }
+        },
+      },
+    } as any
+    const store = new PrismaTokenVersionStore(client)
+    expect(await store.get('u1')).toBe(0)
+    expect(await store.increment('u1')).toBe(1)
+    expect(await store.increment('u1')).toBe(2)
+    expect(await store.get('u1')).toBe(2)
   })
 })

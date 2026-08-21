@@ -13,6 +13,7 @@ import type {
   RefreshTokenStore,
   SessionRecord,
   SessionStore,
+  TokenVersionStore,
   UserPatch,
   UserSource,
 } from '@basaltkit/auth'
@@ -122,6 +123,10 @@ export interface PrismaAuthClient {
     findUnique(a: any): Promise<PMfa | null>
     upsert(a: any): Promise<PMfa>
     deleteMany(a: any): Promise<{ count: number }>
+  }
+  authTokenVersion: {
+    findUnique(a: any): Promise<{ userId: string; version: number } | null>
+    upsert(a: any): Promise<{ userId: string; version: number }>
   }
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -402,6 +407,23 @@ export class PrismaMfaStore implements MfaStore {
   }
 }
 
+export class PrismaTokenVersionStore implements TokenVersionStore {
+  constructor(private readonly client: PrismaAuthClient) {}
+
+  async get(userId: string): Promise<number> {
+    return (await this.client.authTokenVersion.findUnique({ where: { userId } }))?.version ?? 0
+  }
+
+  async increment(userId: string): Promise<number> {
+    const r = await this.client.authTokenVersion.upsert({
+      where: { userId },
+      create: { userId, version: 1 },
+      update: { version: { increment: 1 } },
+    })
+    return r.version
+  }
+}
+
 // --- convenience ------------------------------------------------------------
 
 export interface PrismaAuthStores {
@@ -411,6 +433,7 @@ export interface PrismaAuthStores {
   tokens: PrismaAuthTokenStore
   apiKeys: PrismaApiKeyStore
   mfa: PrismaMfaStore
+  tokenVersions: PrismaTokenVersionStore
 }
 
 /**
@@ -450,5 +473,6 @@ export function prismaAuthStores(client: PrismaAuthClient): PrismaAuthStores {
     tokens: new PrismaAuthTokenStore(client),
     apiKeys: new PrismaApiKeyStore(client),
     mfa: new PrismaMfaStore(client),
+    tokenVersions: new PrismaTokenVersionStore(client),
   }
 }

@@ -220,6 +220,32 @@ export class MemoryMfaStore implements MfaStore {
   }
 }
 
+/**
+ * Per-user access-token version. Access tokens carry the version they were
+ * minted at; bumping it (on password reset or an explicit "log out everywhere")
+ * invalidates every access token issued before the bump — the missing piece for
+ * revoking stateless JWTs before they expire. Opt-in via `authPlugin`.
+ */
+export interface TokenVersionStore {
+  /** Current version for the user (0 if never bumped). */
+  get(userId: string): Promise<number>
+  /** Bump the version and return the new value. */
+  increment(userId: string): Promise<number>
+}
+
+export class MemoryTokenVersionStore implements TokenVersionStore {
+  private readonly versions = new Map<string, number>()
+
+  async get(userId: string): Promise<number> {
+    return this.versions.get(userId) ?? 0
+  }
+  async increment(userId: string): Promise<number> {
+    const next = (this.versions.get(userId) ?? 0) + 1
+    this.versions.set(userId, next)
+    return next
+  }
+}
+
 export interface SessionRecord {
   id: string
   userId: string
