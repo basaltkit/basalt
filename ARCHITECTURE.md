@@ -17,7 +17,6 @@
 > current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
 > page. Still **design-only** today:
 >
-> - **CLI** — `upgrade` codemods, `dev`, and `publish` (`generate:docs`, `queue:work|stats|retry`, `tenant:list|create|migrate|seed|run`, `routes`, `schedule:list`, `mail:preview`, `ai:*` and `make:*` ship).
 > - **create-basalt** — the rich interactive wizard (it's flag-based today).
 > - **Dashboard** — the ready-made analytics app (headless `admin` + per-feature UIs ship).
 > - **Docs** — StackBlitz buttons, Algolia DocSearch, typedoc reference.
@@ -722,7 +721,7 @@ Drivers for SMTP, Resend, SES and Mailgun + a `log` driver (dev) and a `memory` 
 ---
 ## 13. Tooling and DX
 
-### 13.1 `@basaltkit/cli` — `basalt` (the ecosystem's command-line tool)  `[🚧 partial — many commands not built]`
+### 13.1 `@basaltkit/cli` — `basalt` (the ecosystem's command-line tool)  `[✅ shipped — codemods & stubs grow over time]`
 
 ```
 basalt dev                      # dev server with watch + pretty logs + embedded queue worker
@@ -737,7 +736,7 @@ basalt publish <package>        # copies a package's templates/config into the a
 basalt upgrade                  # codemods between versions (jscodeshift) — key to painless majors
 ```
 
-The CLI is **extensible via plugins**: any package (or the app itself) registers commands via `defineCommand()` in the core. `basalt doctor` and `basalt upgrade` are a direct investment in reducing churn — the two biggest causes of framework abandonment are a broken setup and painful majors.
+The CLI is **extensible via plugins**: any package (or the app itself) registers commands via `defineCommand()` (or structurally into the `commands` metadata bucket, as the queue/tenancy/mailer/http plugins do). `dev` delegates watching to the runtime (`tsx watch` / `node --watch`); `upgrade` runs versioned codemods (the `@machize/*` → `@basaltkit/*` rename ships; the engine is ready for more); `publish` copies bundled stub groups (Dockerfile, CI, editorconfig) into the app, à la Laravel's `vendor:publish`. `basalt doctor` and `basalt upgrade` are a direct investment in reducing churn — the two biggest causes of framework abandonment are a broken setup and painful majors.
 
 ### 13.2 `create-basalt`  `[🚧 partial — flag-based, not the wizard]`
 

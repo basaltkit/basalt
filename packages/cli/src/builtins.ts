@@ -1,5 +1,8 @@
 import { METADATA } from '@basaltkit/core'
 import { defineCommand, type CommandDefinition } from './command.js'
+import { devCommand } from './dev.js'
+import { upgradeCommand } from './upgrade.js'
+import { publishCommand } from './publish.js'
 
 /** Route entries written by HTTP adapters into the 'http:routes' bucket. */
 export interface RouteMetadata {
@@ -46,5 +49,5 @@ export const scheduleListCommand = defineCommand({
 })
 
 export function builtinCommands(): CommandDefinition[] {
-  return [routesCommand, scheduleListCommand]
+  return [routesCommand, scheduleListCommand, devCommand, upgradeCommand, publishCommand]
 }
