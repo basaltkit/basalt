@@ -7,6 +7,8 @@ import {
   OAuth,
   OAuthExchangeError,
   OAuthStateInvalidError,
+  oidcProvider,
+  discoverOidcProvider,
   type OAuthProvider,
 } from '../src/index.js'
 
@@ -155,5 +157,54 @@ describe('prebuilt provider profile mapping', () => {
       emailVerified: true,
       name: 'Ada',
     })
+  })
+})
+
+describe('OIDC provider (enterprise SSO)', () => {
+  it('oidcProvider maps the standard userinfo claims', async () => {
+    const doFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ sub: 'o1', email: 'e@corp.com', email_verified: true, name: 'Bob' }),
+    })) as unknown as typeof fetch
+    const p = oidcProvider({
+      authorizeUrl: 'https://idp/authorize',
+      tokenUrl: 'https://idp/token',
+      userInfoUrl: 'https://idp/userinfo',
+      clientId: 'c',
+      clientSecret: 's',
+    })
+    expect(p.scopes).toEqual(['openid', 'email', 'profile'])
+    expect(await p.fetchProfile('at', doFetch)).toEqual({
+      subject: 'o1',
+      email: 'e@corp.com',
+      emailVerified: true,
+      name: 'Bob',
+    })
+  })
+
+  it('discoverOidcProvider resolves endpoints from the well-known document', async () => {
+    const doFetch = (async (url: string) => {
+      expect(String(url)).toBe('https://acme.okta.com/.well-known/openid-configuration')
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          authorization_endpoint: 'https://acme.okta.com/authorize',
+          token_endpoint: 'https://acme.okta.com/token',
+          userinfo_endpoint: 'https://acme.okta.com/userinfo',
+        }),
+      }
+    }) as unknown as typeof fetch
+    const p = await discoverOidcProvider({
+      name: 'okta',
+      issuer: 'https://acme.okta.com/',
+      clientId: 'c',
+      clientSecret: 's',
+      fetch: doFetch,
+    })
+    expect(p.name).toBe('okta')
+    expect(p.authorizeUrl).toBe('https://acme.okta.com/authorize')
+    expect(p.tokenUrl).toBe('https://acme.okta.com/token')
   })
 })

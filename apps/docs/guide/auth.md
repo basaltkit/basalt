@@ -313,6 +313,25 @@ Only trust providers that return a **verified** email. Google and the built-in
 GitHub provider both do — GitHub's driver reads the primary *verified* address.
 :::
 
+### Enterprise SSO (OIDC)
+
+Any OpenID Connect IdP — Okta, Azure AD / Entra ID, Auth0, Google Workspace,
+Keycloak — plugs in as a provider. Give the three endpoints, or let
+`discoverOidcProvider` read them from the IdP's `.well-known/openid-configuration`:
+
+```ts
+import { oidcProvider, discoverOidcProvider, oauthPlugin } from '@basaltkit/auth'
+
+// explicit endpoints…
+oidcProvider({ name: 'okta', authorizeUrl, tokenUrl, userInfoUrl, clientId, clientSecret })
+
+// …or discovery (await at startup)
+const okta = await discoverOidcProvider({ name: 'okta', issuer: 'https://acme.okta.com', clientId, clientSecret })
+oauthPlugin({ secret: env.APP_SECRET, providers: [okta] })
+```
+
+(Legacy **SAML 2.0** IdPs are a separate integration — see the roadmap.)
+
 ## Password reset (end-to-end)
 
 The module never sends email — it emits a hook carrying a single-use token
