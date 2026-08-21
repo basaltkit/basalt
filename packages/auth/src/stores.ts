@@ -192,6 +192,12 @@ export interface MfaRecord {
   secret: string
   enabled: boolean
   recoveryCodes: string[]
+  /**
+   * The last TOTP step (counter) accepted for this user. Codes at a step ≤ this
+   * are rejected, so an intercepted 6-digit code cannot be replayed within its
+   * validity window (RFC 6238 §5.2). Undefined until the first accepted code.
+   */
+  lastUsedStep?: number
 }
 
 export interface MfaStore {

@@ -13,14 +13,19 @@ export {
   WebhookDeliverer,
   signPayload,
   verifySignature,
+  PINNED_ADDRESS,
   type DeliveryResult,
   type WebhookDelivererOptions,
 } from './deliver.js'
 export {
   assertDeliverableUrl,
+  resolveAndValidate,
+  pinnedLookup,
   isPrivateIp,
   WebhookUrlBlockedError,
   type SsrfGuardOptions,
+  type ValidatedAddress,
+  type ValidatedTarget,
 } from './ssrf.js'
 
 const currentTenantId = (): string | undefined =>

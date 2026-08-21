@@ -73,6 +73,7 @@ interface PMfa {
   secret: string
   enabled: boolean
   recoveryCodes: string[]
+  lastUsedStep: number | null
 }
 
 /**
@@ -374,14 +375,25 @@ export class PrismaMfaStore implements MfaStore {
   async get(userId: string): Promise<MfaRecord | null> {
     const r = await this.client.authMfa.findUnique({ where: { userId } })
     if (!r) return null
-    return { secret: r.secret, enabled: r.enabled, recoveryCodes: r.recoveryCodes }
+    return {
+      secret: r.secret,
+      enabled: r.enabled,
+      recoveryCodes: r.recoveryCodes,
+      ...(r.lastUsedStep !== null ? { lastUsedStep: r.lastUsedStep } : {}),
+    }
   }
 
   async set(userId: string, record: MfaRecord): Promise<void> {
+    const data = {
+      secret: record.secret,
+      enabled: record.enabled,
+      recoveryCodes: record.recoveryCodes,
+      lastUsedStep: record.lastUsedStep ?? null,
+    }
     await this.client.authMfa.upsert({
       where: { userId },
-      create: { userId, secret: record.secret, enabled: record.enabled, recoveryCodes: record.recoveryCodes },
-      update: { secret: record.secret, enabled: record.enabled, recoveryCodes: record.recoveryCodes },
+      create: { userId, ...data },
+      update: data,
     })
   }
 

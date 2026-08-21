@@ -111,9 +111,18 @@ export function migrate(db: DatabaseSync): void {
       user_id        TEXT PRIMARY KEY,
       secret         TEXT NOT NULL,
       enabled        INTEGER NOT NULL DEFAULT 0,
-      recovery_codes TEXT NOT NULL
+      recovery_codes TEXT NOT NULL,
+      last_used_step INTEGER
     );
   `)
+
+  // Migrate existing databases: add the anti-replay column if it's absent.
+  // (ADD COLUMN throws when it already exists — ignore that.)
+  try {
+    db.exec('ALTER TABLE auth_mfa ADD COLUMN last_used_step INTEGER')
+  } catch {
+    /* column already present */
+  }
 }
 
 // --- users ------------------------------------------------------------------
@@ -420,6 +429,7 @@ interface MfaRow {
   secret: string
   enabled: number
   recovery_codes: string
+  last_used_step: number | null
 }
 
 export class SqliteMfaStore implements MfaStore {
@@ -434,16 +444,17 @@ export class SqliteMfaStore implements MfaStore {
       secret: row.secret,
       enabled: row.enabled === 1,
       recoveryCodes: JSON.parse(row.recovery_codes) as string[],
+      ...(row.last_used_step !== null ? { lastUsedStep: row.last_used_step } : {}),
     }
   }
 
   async set(userId: string, record: MfaRecord): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO auth_mfa (user_id, secret, enabled, recovery_codes) VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET secret = excluded.secret, enabled = excluded.enabled, recovery_codes = excluded.recovery_codes`,
+        `INSERT INTO auth_mfa (user_id, secret, enabled, recovery_codes, last_used_step) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET secret = excluded.secret, enabled = excluded.enabled, recovery_codes = excluded.recovery_codes, last_used_step = excluded.last_used_step`,
       )
-      .run(userId, record.secret, bool(record.enabled), JSON.stringify(record.recoveryCodes))
+      .run(userId, record.secret, bool(record.enabled), JSON.stringify(record.recoveryCodes), record.lastUsedStep ?? null)
   }
 
   async delete(userId: string): Promise<void> {

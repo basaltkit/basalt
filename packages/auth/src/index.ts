@@ -54,6 +54,7 @@ export {
   generateTotpSecret,
   totp,
   verifyTotp,
+  matchTotpStep,
   otpauthUri,
   type TotpOptions,
   type VerifyTotpOptions,

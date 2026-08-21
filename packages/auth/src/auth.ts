@@ -3,7 +3,7 @@ import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@b
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
-import { generateTotpSecret, otpauthUri, verifyTotp } from './totp.js'
+import { generateTotpSecret, matchTotpStep, otpauthUri } from './totp.js'
 import {
   MemoryAuthTokenStore,
   MemoryMfaStore,
@@ -124,8 +124,15 @@ export interface AuthOptions {
   refreshTtl?: DurationInput
   sessionTtl?: DurationInput
   hooks?: HookBus
-  /** Brute-force lockout. Enabled by default; pass `false` to disable. */
+  /** Brute-force lockout (per email). Enabled by default; pass `false` to disable. */
   loginThrottle?: LoginThrottle | false
+  /**
+   * Per-IP login throttle — blunts password spraying (1 attempt across many
+   * accounts) and lockout-DoS that a per-email counter alone misses. Enabled by
+   * default with a higher budget than the per-email one; pass `false` to disable.
+   * Only applies when the caller passes the client ip to `login`.
+   */
+  ipLoginThrottle?: LoginThrottle | false
   /** Store for verification/reset tokens. Default: in-memory. */
   tokens?: AuthTokenStore
   /** Email-verification link lifetime. Default 24h. */
@@ -155,6 +162,7 @@ export class Auth {
   private readonly sessionTtl: DurationInput
   private readonly hooks: HookBus | undefined
   private readonly throttle: LoginThrottle | undefined
+  private readonly ipThrottle: LoginThrottle | undefined
   private readonly tokens: AuthTokenStore
   private readonly verificationTtl: DurationInput
   private readonly resetTtl: DurationInput
@@ -178,6 +186,10 @@ export class Auth {
     this.sessionTtl = options.sessionTtl ?? '30d'
     this.hooks = options.hooks
     this.throttle = options.loginThrottle === false ? undefined : options.loginThrottle ?? new LoginThrottle()
+    this.ipThrottle =
+      options.ipLoginThrottle === false
+        ? undefined
+        : options.ipLoginThrottle ?? new LoginThrottle({ maxAttempts: 50, windowMs: 15 * 60_000 })
     this.tokens = options.tokens ?? new MemoryAuthTokenStore()
     this.verificationTtl = options.verificationTtl ?? '24h'
     this.resetTtl = options.resetTtl ?? '1h'
@@ -228,13 +240,21 @@ export class Auth {
     email: string,
     password: string,
     mfaCode?: string,
+    context: { ip?: string } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair }> {
     const key = email.toLowerCase()
+    const ipKey = context.ip ? `ip:${context.ip}` : undefined
     this.throttle?.assertAllowed(key)
+    if (ipKey) this.ipThrottle?.assertAllowed(ipKey)
+
+    const recordFailure = () => {
+      this.throttle?.recordFailure(key)
+      if (ipKey) this.ipThrottle?.recordFailure(ipKey)
+    }
 
     const user = await this.attempt(email, password)
     if (!user) {
-      this.throttle?.recordFailure(key)
+      recordFailure()
       await this.hooks?.emit('auth:login_failed', { email })
       throw new InvalidCredentialsError()
     }
@@ -242,7 +262,7 @@ export class Auth {
     if (await this.isMfaEnabled(user.id)) {
       if (!mfaCode) throw new MfaRequiredError() // password was correct — not a failure
       if (!(await this.verifyMfaCode(user.id, mfaCode))) {
-        this.throttle?.recordFailure(key)
+        recordFailure()
         throw new MfaInvalidCodeError()
       }
     }
@@ -390,7 +410,8 @@ export class Auth {
   async activateMfa(userId: string, code: string): Promise<{ recoveryCodes: string[] }> {
     const record = await this.mfa.get(userId)
     if (!record || record.enabled) throw new MfaNotEnrolledError()
-    if (!verifyTotp(record.secret, code)) throw new MfaInvalidCodeError()
+    const step = matchTotpStep(record.secret, code)
+    if (step === null) throw new MfaInvalidCodeError()
 
     const recoveryCodes = Array.from({ length: 10 }, () => this.generateRecoveryCode())
     await this.mfa.set(userId, {
@@ -419,7 +440,15 @@ export class Auth {
   async verifyMfaCode(userId: string, code: string): Promise<boolean> {
     const record = await this.mfa.get(userId)
     if (!record || !record.enabled) return false
-    if (verifyTotp(record.secret, code)) return true
+    const step = matchTotpStep(record.secret, code)
+    if (step !== null) {
+      // Anti-replay: a code from a step already used cannot be reused within
+      // its ~90s window (an intercepted code is single-use).
+      if (record.lastUsedStep !== undefined && step <= record.lastUsedStep) return false
+      record.lastUsedStep = step
+      await this.mfa.set(userId, record)
+      return true
+    }
 
     const hash = this.hashRecoveryCode(code)
     const index = record.recoveryCodes.indexOf(hash)
