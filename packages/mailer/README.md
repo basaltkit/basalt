@@ -8,7 +8,7 @@ Sending an email seems simple, but in practice there are several hidden problems
 
 This module solves that with the concept of a **typed email**: you describe each email once with `defineMail` — the name, the data it needs (validated with a *schema*, i.e. a formal description of the data shape, usually built with the [Zod](https://zod.dev) library), the subject, and the body. Then, to send it, you call `mailer.send(...)` with the data and the recipient. If the data is wrong, sending fails immediately with a clear error, before any email goes out.
 
-The actual sending is done by a **driver** (the component that knows how to talk to the outside world). Five are included: `smtp` (via nodemailer), `resend` and `ses` (API providers over HTTPS, no SDK), `log` (writes to the console — dev), and `memory` (array — tests). You can switch drivers without changing a single line of the rest of the code.
+The actual sending is done by a **driver** (the component that knows how to talk to the outside world). Six are included: `smtp` (via nodemailer), `resend`, `ses` and `mailgun` (API providers over HTTPS, no SDK), `log` (console — dev), and `memory` (array — tests). You can switch drivers without changing a single line of the rest of the code.
 
 ## Installation
 
@@ -87,7 +87,35 @@ mailerPlugin({
   ses: { region: 'eu-west-1', accessKeyId: process.env.AWS_ACCESS_KEY_ID!, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY! },
   from: 'noreply@myapp.com',
 })
+
+// Mailgun — API key + sending domain (region: 'us' | 'eu')
+mailerPlugin({ driver: 'mailgun', mailgun: { apiKey: process.env.MAILGUN_KEY!, domain: 'mg.myapp.com' }, from: 'noreply@myapp.com' })
 ```
+
+### Layouts & templates
+
+`defineMail`'s `html(data)` returns a string, so **any template engine works** —
+plain template literals, [MJML](https://mjml.io) (`mjml2html(...)`), or
+[React Email](https://react.email) (`render(<Email/>)`). Render inside `html()`.
+
+For shared branding (header/footer, per-tenant colours), pass a `layout` — it
+wraps every mail's HTML body once:
+
+```ts
+mailerPlugin({
+  driver: 'smtp',
+  smtp: { url: process.env.SMTP_URL! },
+  from: 'noreply@myapp.com',
+  layout: (body, { mail }) => `<!doctype html><html><body style="font-family:sans-serif">
+    <img src="https://myapp.com/logo.png" height="32"/>
+    ${body}
+    <footer>Sent by MyApp · ${mail}</footer>
+  </body></html>`,
+})
+```
+
+The `layout` runs per send, so it can read `ctx().tenant` for per-tenant branding.
+It only applies when the mail has an HTML body.
 
 > All drivers share the same envelope and the framework's header-injection guard.
 > SES also works via the `smtp` driver using SES SMTP credentials.
