@@ -13,6 +13,7 @@ export {
   MeilisearchDriver,
   MeilisearchError,
   SearchFilterFieldError,
+  SearchIndexNameError,
   type MeilisearchDriverOptions,
 } from './drivers/meilisearch.js'
 export {

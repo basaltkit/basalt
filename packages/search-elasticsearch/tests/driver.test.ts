@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { IndexDefinition } from '@basaltkit/search'
-import { ElasticsearchDriver, ElasticsearchError, type FetchLike } from '../src/index.js'
+import { ElasticsearchDriver, ElasticsearchError, assertValidIndexName, type FetchLike } from '../src/index.js'
 
 // Fake fetch: routes by "METHOD pathname" (query stripped), records every call.
 function fakeFetch(routes: Record<string, { status: number; body?: string }>) {
@@ -129,6 +129,28 @@ describe('ElasticsearchDriver.search', () => {
     const body = JSON.parse(calls.find((c) => c.path === '/notes/_search')!.body!)
     expect(body.query.bool.must[0].simple_query_string).toMatchObject({ query: 'title:secret OR _index:*' })
     expect(body.query.bool.must[0].query_string).toBeUndefined() // never the full-Lucene variant
+  })
+})
+
+describe('index-name validation', () => {
+  it('rejects an index name that would break out of the URL path', async () => {
+    const { fetch, calls } = fakeFetch({ 'PUT *': { status: 200 } })
+    const gw = new ElasticsearchDriver(opts(fetch))
+    await expect(gw.register({ name: 'posts/_all/_delete', fields: [], filterable: [] })).rejects.toThrow(/invalid index name/i)
+    await expect(gw.search('a b', { tenantId: 'acme', q: 'x' })).rejects.toThrow(/invalid index name/i)
+    expect(calls.length).toBe(0) // never reached the network
+  })
+
+  it('rejects an unsafe indexPrefix at construction', () => {
+    expect(() => new ElasticsearchDriver({ node: NODE, indexPrefix: 'bad/prefix' })).toThrow(/invalid index name/i)
+  })
+
+  it('accepts a valid index name', async () => {
+    const { fetch, calls } = fakeFetch({ 'PUT /my-index_1': { status: 200 } })
+    const gw = new ElasticsearchDriver(opts(fetch))
+    await gw.register({ name: 'my-index_1', fields: [], filterable: [] })
+    expect(calls[0]!.path).toBe('/my-index_1')
+    expect(assertValidIndexName('a_b-C9')).toBe('a_b-C9')
   })
 })
 

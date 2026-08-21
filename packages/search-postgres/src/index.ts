@@ -14,6 +14,28 @@ export interface PostgresSearchOptions {
   language?: string
 }
 
+/** A single unquoted SQL identifier: starts with a letter/underscore, then word chars. */
+const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Validate a table name before it is string-interpolated into DDL/DML. The
+ * table name is a configuration-time identifier (never request input), but a
+ * developer wiring it from an external value would otherwise have a SQL
+ * injection. Accepts a bare identifier or a `schema.table` pair, each part a
+ * valid identifier. Returns the (unchanged) name so it can be used inline.
+ */
+export function assertValidTableName(table: string): string {
+  const parts = table.split('.')
+  if (parts.length > 2 || parts.some((part) => !SAFE_IDENTIFIER.test(part))) {
+    throw new Error(
+      `PostgresSearchDriver: invalid table name ${JSON.stringify(table)} — ` +
+        'must be a SQL identifier matching /^[A-Za-z_][A-Za-z0-9_]*$/ ' +
+        '(optionally schema-qualified as "schema.table").',
+    )
+  }
+  return table
+}
+
 /**
  * PostgreSQL full-text search driver for `@basaltkit/search`, using
  * `tsvector`/`tsquery` and `ts_rank`. All documents live in one table keyed by
@@ -29,7 +51,7 @@ export class PostgresSearchDriver implements SearchDriver {
 
   constructor(options: PostgresSearchOptions) {
     this.client = options.client
-    this.table = options.table ?? 'basalt_search'
+    this.table = assertValidTableName(options.table ?? 'basalt_search')
     this.language = options.language ?? 'english'
   }
 
