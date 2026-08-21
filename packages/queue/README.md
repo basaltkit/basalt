@@ -184,6 +184,20 @@ queuePlugin({
 
 If a job reaches a worker that hasn't registered it, `UnknownJobError` is thrown.
 
+### CLI commands (`basalt queue:*`)
+
+Registering `queuePlugin` also wires three CLI commands (run via the `@basaltkit/cli` runner):
+
+```bash
+basalt queue:work --queue=default --concurrency=5   # run a worker until Ctrl+C
+basalt queue:stats --queue=billing                  # waiting/active/completed/failed/delayed
+basalt queue:retry --queue=billing --limit=100      # re-enqueue failed jobs
+```
+
+`queue:stats` and `queue:retry` need a driver that can introspect job state — the
+**BullMQ** driver (a Redis `connection`). With the inline `sync` driver they
+report the operation as unsupported (it keeps no job state), rather than guessing.
+
 ### Manual use without a plugin (e.g. in tests)
 
 ```ts
