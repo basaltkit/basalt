@@ -36,8 +36,8 @@ export default defineConfig({
                 { text: 'Conceitos centrais', link: '/pt/guide/concepts' },
                 { text: 'Adaptadores HTTP', link: '/pt/guide/adapters' },
                 { text: 'Perguntas frequentes (FAQ)', link: '/pt/guide/faq' },
-                { text: 'Para além do SaaS', link: '/pt/guide/para-alem-do-saas' },
-                { text: 'Comparação com outras frameworks', link: '/pt/guide/comparacao' },
+                { text: 'Para além do SaaS', link: '/pt/guide/beyond-saas' },
+                { text: 'Comparação com outras frameworks', link: '/pt/guide/comparison' },
               ],
             },
             {
@@ -48,7 +48,7 @@ export default defineConfig({
               text: 'Blocos de SaaS',
               items: [
                 { text: 'Multi-tenancy', link: '/pt/guide/tenancy' },
-                { text: 'Criar um tenant', link: '/pt/guide/criar-um-tenant' },
+                { text: 'Criar um tenant', link: '/pt/guide/creating-a-tenant' },
                 { text: 'Autenticação', link: '/pt/guide/auth' },
                 { text: 'Equipas', link: '/pt/guide/teams' },
                 { text: 'Subscrições', link: '/pt/guide/billing' },
@@ -110,7 +110,7 @@ export default defineConfig({
             {
               text: 'Referência',
               items: [{ text: 'Pacotes', link: '/pt/reference/packages' },
-                { text: 'Ecossistema', link: '/pt/guide/ecossistema' }],
+                { text: 'Ecossistema', link: '/pt/guide/ecosystem' }],
             },
           ],
         },

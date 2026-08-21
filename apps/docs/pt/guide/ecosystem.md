@@ -45,7 +45,7 @@ as versões refletem sempre os lançamentos publicados mais recentes.
 
 ## Instalar
 
-Instala só os pacotes que a tua app precisa — vê [Para além do SaaS](./para-alem-do-saas)
+Instala só os pacotes que a tua app precisa — vê [Para além do SaaS](./beyond-saas)
 para escolher um conjunto mínimo.
 
 ```bash

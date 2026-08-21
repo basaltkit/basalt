@@ -1,0 +1,6 @@
+# Portuguese docs now use the English slug (so the language switcher never 404s).
+# Keep the old Portuguese URLs working.
+/pt/guide/para-alem-do-saas   /pt/guide/beyond-saas        301
+/pt/guide/comparacao          /pt/guide/comparison         301
+/pt/guide/criar-um-tenant     /pt/guide/creating-a-tenant  301
+/pt/guide/ecossistema         /pt/guide/ecosystem          301
