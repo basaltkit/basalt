@@ -24,7 +24,14 @@ export interface IdempotencyRecord {
 export interface IdempotencyStore {
   /** A completed record, the string 'pending' for an in-flight request, or undefined. */
   get(key: string): IdempotencyRecord | 'pending' | undefined | Promise<IdempotencyRecord | 'pending' | undefined>
-  setPending(key: string): void | Promise<void>
+  /**
+   * Atomically reserve the key iff it is free. Returns `true` when this caller
+   * won the reservation, `false` when a record (pending or completed) already
+   * exists — the caller must then `get()` to decide replay vs. conflict. The
+   * check-and-set MUST be atomic so two concurrent first-time requests can't
+   * both win (Redis `SET NX`, a single synchronous step in-process).
+   */
+  setPending(key: string): boolean | Promise<boolean>
   complete(key: string, record: IdempotencyRecord): void | Promise<void>
   /** Release a reservation so the client can retry (e.g. after a 5xx). */
   release(key: string): void | Promise<void>
@@ -48,8 +55,14 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
     return entry.record ?? 'pending'
   }
 
-  setPending(key: string): void {
+  setPending(key: string): boolean {
+    const entry = this.entries.get(key)
+    if (entry) {
+      if (this.clock() < entry.expiresAt) return false // already reserved or completed
+      this.entries.delete(key) // expired — free to reclaim
+    }
     this.entries.set(key, { expiresAt: this.clock() + this.ttlMs })
+    return true
   }
 
   complete(key: string, record: IdempotencyRecord): void {
@@ -104,22 +117,26 @@ export function idempotencyPlugin(options: IdempotencyPluginOptions = {}) {
         const scoped = `${principalOf(request)}:${request.method}:${request.routeOptions?.url ?? request.url}:${key}`
         ;(request as unknown as Record<symbol, string>)[KEY] = scoped
 
+        // Reserve atomically first: a plain get()-then-setPending has a TOCTOU
+        // window where two concurrent first-time requests both read undefined and
+        // both execute the handler — the double-charge this plugin exists to stop.
+        const reserved = await store.setPending(scoped)
+        if (reserved) return undefined // we won the reservation → run the handler
+
+        // Someone got there first. Read the record to decide replay vs. conflict.
         const existing = await store.get(scoped)
-        if (existing === 'pending') {
-          return reply.code(409).send({
-            error: {
-              code: 'IDEMPOTENCY_CONFLICT',
-              message: 'A request with this Idempotency-Key is already in progress.',
-            },
-          })
-        }
-        if (existing) {
+        if (existing && existing !== 'pending') {
           if (existing.contentType) void reply.header('Content-Type', existing.contentType)
           void reply.header('Idempotent-Replayed', 'true')
           return reply.code(existing.status).send(existing.body)
         }
-        await store.setPending(scoped)
-        return undefined
+        // Still in flight (or vanished mid-race) → conflict; the client can retry.
+        return reply.code(409).send({
+          error: {
+            code: 'IDEMPOTENCY_CONFLICT',
+            message: 'A request with this Idempotency-Key is already in progress.',
+          },
+        })
       })
 
       app.addHook('onSend', async (request: FastifyRequest, reply: FastifyReply, payload: unknown) => {

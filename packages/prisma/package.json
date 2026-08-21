@@ -23,7 +23,7 @@
     "@basaltkit/core": "workspace:^"
   },
   "peerDependencies": {
-    "@prisma/client": ">=5.0.0"
+    "@prisma/client": ">=5.0.0 <8"
   },
   "peerDependenciesMeta": {
     "@prisma/client": {
