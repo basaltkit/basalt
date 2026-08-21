@@ -62,5 +62,5 @@ because the contract is unchanged. See the [Persistence guide][p] and the
 [Database-per-tenant guide][dpt]; remaining 1.0 work is tracked in
 [RELEASE_1.0_CHECKLIST.md](./RELEASE_1.0_CHECKLIST.md).
 
-[p]: https://basalt-docs.pages.dev/guide/persistence
-[dpt]: https://basalt-docs.pages.dev/guide/database-per-tenant
+[p]: https://basaltkit-docs.pages.dev/guide/persistence
+[dpt]: https://basaltkit-docs.pages.dev/guide/database-per-tenant
