@@ -11,8 +11,10 @@ export interface TenantSource {
   find(id: string): Promise<Tenant | null>
   /** Required by the domain resolver (custom domains). */
   findByDomain?(domain: string): Promise<Tenant | null>
-  /** Required by tenancy.forEach(). */
+  /** Required by tenancy.forEach() and `basalt tenant:list`. */
   list?(): Promise<Tenant[]>
+  /** Required by `basalt tenant:create`. Persists and returns the new tenant. */
+  create?(tenant: Tenant): Promise<Tenant>
 }
 
 /** In-memory source — tests, dev and small single-node setups. */
@@ -38,6 +40,11 @@ export class MemoryTenantSource implements TenantSource {
 
   async list(): Promise<Tenant[]> {
     return [...this.tenants.values()]
+  }
+
+  async create(tenant: Tenant): Promise<Tenant> {
+    this.tenants.set(tenant.id, tenant)
+    return tenant
   }
 }
 
