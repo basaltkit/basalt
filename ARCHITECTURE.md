@@ -18,7 +18,7 @@
 > page. Still **design-only** today:
 >
 > - **Billing** — Paddle & Lemon Squeezy gateways (only **Stripe** ships, plus local proxypay/appypay).
-> - **Mailer** — Resend / SES / Mailgun drivers, React-Email/MJML templates, `mail preview` (only SMTP/log/fake ship).
+> - **Mailer** — Mailgun driver, React-Email/MJML templates, `mail preview` (SMTP, Resend and SES now ship).
 > - **Auth** — OAuth / social login (SSO/SAML is Phase 7).
 > - **Storage** — image processing (`.image().resize().webp()`).
 > - **Cache** — stale-while-revalidate.
@@ -684,7 +684,7 @@ ctx().tenant.config.get('branding.color')     // tenant override (stored in the 
 ```
 Boot fails with an aggregated report of ALL invalid env vars at once (not one at a time). Secrets never appear in logs/errors (integrated with the logger's redaction).
 
-### 12.8 `@basaltkit/mailer`  `[🚧 partial — SMTP/log/fake only]`
+### 12.8 `@basaltkit/mailer`  `[🚧 partial — no Mailgun/React-Email/preview]`
 Drivers for SMTP, Resend, SES, Mailgun + a `log` driver (dev) and a `fake` driver (test). Templates with **React Email** (official) or MJML; per-tenant layout/branding; sending via the queue by default; a preview server in dev (`basalt mail preview`).
 
 ---

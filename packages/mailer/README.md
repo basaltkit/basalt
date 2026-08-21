@@ -1,6 +1,6 @@
 # @basaltkit/mailer
 
-Email layer for the Basalt framework: define typed emails once and send them via SMTP, to the console (development), or to memory (tests). You need this module whenever your application has to send emails — welcome messages, invoices, password recovery, etc.
+Email layer for the Basalt framework: define typed emails once and send them via SMTP, an API provider (Resend or Amazon SES), to the console (development), or to memory (tests). You need this module whenever your application has to send emails — welcome messages, invoices, password recovery, etc.
 
 ## What this module solves
 
@@ -8,7 +8,7 @@ Sending an email seems simple, but in practice there are several hidden problems
 
 This module solves that with the concept of a **typed email**: you describe each email once with `defineMail` — the name, the data it needs (validated with a *schema*, i.e. a formal description of the data shape, usually built with the [Zod](https://zod.dev) library), the subject, and the body. Then, to send it, you call `mailer.send(...)` with the data and the recipient. If the data is wrong, sending fails immediately with a clear error, before any email goes out.
 
-The actual sending is done by a **driver** (the component that knows how to talk to the outside world). Three are included: `smtp` (real sending through a mail server, via nodemailer), `log` (writes the email to the console — ideal for development), and `memory` (stores emails in an array — ideal for testing). You can switch drivers without changing a single line of the rest of the code.
+The actual sending is done by a **driver** (the component that knows how to talk to the outside world). Five are included: `smtp` (via nodemailer), `resend` and `ses` (API providers over HTTPS, no SDK), `log` (writes to the console — dev), and `memory` (array — tests). You can switch drivers without changing a single line of the rest of the code.
 
 ## Installation
 
@@ -71,15 +71,26 @@ await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com' })
 Hello Ada
 ```
 
-5. **In production**, just switch the plugin configuration to SMTP:
+5. **In production**, switch the plugin to a real driver — SMTP, or an API
+   provider (**Resend** or **Amazon SES**, both over HTTPS, no SDK):
 
 ```ts
+// SMTP (any mail server)
+mailerPlugin({ driver: 'smtp', smtp: { url: 'smtps://user:password@smtp.example.com:465' }, from: 'noreply@myapp.com' })
+
+// Resend — https API, just an API key
+mailerPlugin({ driver: 'resend', resend: { apiKey: process.env.RESEND_API_KEY! }, from: 'noreply@myapp.com' })
+
+// Amazon SES v2 — signed (SigV4) with your AWS credentials
 mailerPlugin({
-  driver: 'smtp',
-  smtp: { url: 'smtps://user:password@smtp.example.com:465' },
+  driver: 'ses',
+  ses: { region: 'eu-west-1', accessKeyId: process.env.AWS_ACCESS_KEY_ID!, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY! },
   from: 'noreply@myapp.com',
 })
 ```
+
+> All drivers share the same envelope and the framework's header-injection guard.
+> SES also works via the `smtp` driver using SES SMTP credentials.
 
 ## Usage guide
 
