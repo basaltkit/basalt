@@ -32,6 +32,15 @@ export interface DriverCapabilities {
   backoff: boolean
 }
 
+/** Job counts per state, for `basalt queue:stats`. */
+export interface QueueStats {
+  waiting: number
+  active: number
+  completed: number
+  failed: number
+  delayed: number
+}
+
 /** Queue driver contract. BullMQ in production; sync in tests/dev. */
 export interface QueueDriver {
   /** Short identifier used in diagnostics (e.g. 'bullmq', 'sync'). */
@@ -43,5 +52,16 @@ export interface QueueDriver {
   add(queue: string, jobName: string, data: unknown, options: AddJobOptions): Promise<void>
   /** Starts a worker for the queue (no-op in the sync driver: add executes inline). */
   startWorker(queue: string, options?: { concurrency?: number }): void
+  /**
+   * Optional: job counts per state, for `basalt queue:stats`. Backends that
+   * cannot introspect (e.g. the inline sync driver) omit it — the CLI then
+   * reports the operation as unsupported rather than guessing.
+   */
+  stats?(queue: string): Promise<QueueStats>
+  /**
+   * Optional: re-enqueue failed jobs (`basalt queue:retry`). Returns how many
+   * were retried. `limit` caps how many are processed (default driver's choice).
+   */
+  retryFailed?(queue: string, options?: { limit?: number }): Promise<number>
   close(): Promise<void>
 }

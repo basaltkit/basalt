@@ -1,4 +1,4 @@
-import { createToken, definePlugin } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
 import { SyncQueueDriver } from './drivers/sync.js'
 import type { QueueDriver } from './driver.js'
@@ -25,7 +25,7 @@ export {
 export { queuedOn, type QueuedListenerOptions } from './bridge.js'
 export { SyncQueueDriver } from './drivers/sync.js'
 export { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
-export type { QueueDriver, AddJobOptions, JobExecutor, DriverCapabilities } from './driver.js'
+export type { QueueDriver, QueueStats, AddJobOptions, JobExecutor, DriverCapabilities } from './driver.js'
 
 export const QUEUE = createToken<QueueManager>('queue')
 
@@ -61,6 +61,7 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
   return definePlugin({
     name: 'basalt:queue',
     register({ container }) {
+      registerQueueCommands(container)
       container.singleton(QUEUE, () => {
         const driver =
           options.driver ??
@@ -85,6 +86,70 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
     },
     async shutdown({ container }) {
       await container.get(QUEUE).close()
+    },
+  })
+}
+
+/**
+ * Registers `queue:work`, `queue:stats` and `queue:retry` into the CLI command
+ * bucket. Commands resolve the manager lazily, so they work with whatever driver
+ * the app configured. Registered structurally to avoid a hard @basaltkit/cli dep.
+ */
+function registerQueueCommands(container: Container): void {
+  const manager = () => container.get(QUEUE)
+  const unsupported =
+    'Not supported by the active queue driver — the inline sync driver keeps no job state. Use the BullMQ driver (a Redis `connection`).'
+
+  ensureMetadata(container).add('commands', {
+    name: 'queue:work',
+    description: 'Run a worker that processes jobs for a queue (Ctrl+C to stop)',
+    async handle({ io, flags }: { io: { log(m: string): void }; flags: Record<string, string | boolean> }) {
+      const queue = typeof flags['queue'] === 'string' ? flags['queue'] : 'default'
+      const concurrency = typeof flags['concurrency'] === 'string' ? Number(flags['concurrency']) : undefined
+      manager().work(queue, concurrency !== undefined ? { concurrency } : {})
+      io.log(`Worker started on queue "${queue}"${concurrency ? ` (concurrency ${concurrency})` : ''}. Ctrl+C to stop.`)
+      await new Promise<void>((resolve) => process.once('SIGINT', resolve))
+    },
+  })
+
+  ensureMetadata(container).add('commands', {
+    name: 'queue:stats',
+    description: 'Show job counts (waiting/active/completed/failed/delayed) for a queue',
+    async handle({
+      io,
+      flags,
+    }: {
+      io: { log(m: string): void; table(rows: Record<string, unknown>[]): void }
+      flags: Record<string, string | boolean>
+    }) {
+      const queue = typeof flags['queue'] === 'string' ? flags['queue'] : 'default'
+      const stats = await manager().stats(queue)
+      if (!stats) {
+        io.log(unsupported)
+        return
+      }
+      io.table([{ queue, ...stats }])
+    },
+  })
+
+  ensureMetadata(container).add('commands', {
+    name: 'queue:retry',
+    description: 'Re-enqueue failed jobs on a queue',
+    async handle({
+      io,
+      flags,
+    }: {
+      io: { log(m: string): void }
+      flags: Record<string, string | boolean>
+    }) {
+      const queue = typeof flags['queue'] === 'string' ? flags['queue'] : 'default'
+      const limit = typeof flags['limit'] === 'string' ? Number(flags['limit']) : undefined
+      const retried = await manager().retryFailed(queue, limit !== undefined ? { limit } : {})
+      if (retried === undefined) {
+        io.log(unsupported)
+        return
+      }
+      io.log(`Re-enqueued ${retried} failed job(s) on "${queue}".`)
     },
   })
 }
