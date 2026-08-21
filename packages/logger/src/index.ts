@@ -15,16 +15,46 @@ export type LogLevel = (typeof LOG_LEVELS)[number]
 /** ALS context fields automatically promoted onto every log line. */
 const CONTEXT_FIELDS = ['requestId', 'correlationId', 'traceId', 'userId', 'tenantId'] as const
 
-const DEFAULT_REDACT = [
+// Keys whose values are redacted wherever they appear (top level and one level
+// of nesting, e.g. req.body.password). The previous list matched only the exact
+// key `token`, so `accessToken`/`refreshToken`/`cookie` logged in clear — this
+// covers the secret-bearing names this framework actually mints, plus the usual
+// credential/header carriers. Mirrors the audit module's stronger coverage.
+const REDACT_KEYS = [
   'password',
-  '*.password',
-  'token',
-  '*.token',
+  'pass',
   'secret',
-  '*.secret',
+  'token',
+  'accessToken',
+  'refreshToken',
+  'idToken',
+  'jwt',
+  'apiKey',
+  'api_key',
+  'apikey',
+  'mfaCode',
+  'otp',
+  'resetToken',
   'authorization',
-  '*.authorization',
+  'cookie',
+  'creditCard',
+  'cardNumber',
+  'cvv',
+  'cvc',
+  'ssn',
+]
+
+const DEFAULT_REDACT = [
+  ...REDACT_KEYS,
+  ...REDACT_KEYS.map((k) => `*.${k}`),
+  // Common request-shaped nesting that sits two levels deep.
   'headers.authorization',
+  'headers.cookie',
+  'headers["set-cookie"]',
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'request.headers.authorization',
+  'request.headers.cookie',
 ]
 
 export interface LoggerOptions {

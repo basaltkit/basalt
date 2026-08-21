@@ -35,6 +35,18 @@ export class EmailTakenError extends BasaltError {
   }
 }
 
+/**
+ * Thrown at construction when the JWT signing secret is missing or too weak. A
+ * short/low-entropy HS256 key can be brute-forced offline, letting an attacker
+ * forge access tokens for any account — so this fails closed rather than boot
+ * with a guessable key. Use `@basaltkit/env`'s `secret({ minLength: 32 })`.
+ */
+export class WeakJwtSecretError extends BasaltError {
+  constructor(reason: string) {
+    super('AUTH_WEAK_SECRET', `The auth signing secret is ${reason}. Set a strong APP_SECRET (>= 32 chars).`)
+  }
+}
+
 export class RefreshInvalidError extends BasaltError {
   readonly status = 401
   constructor() {
@@ -152,6 +164,12 @@ export class Auth {
   constructor(options: AuthOptions) {
     this.users = options.users
     this.secret = options.secret
+    // Fail closed on a weak signing key. Always reject an empty secret; in
+    // production require >= 32 chars (a short HS256 key is offline-forgeable).
+    if (!this.secret) throw new WeakJwtSecretError('missing')
+    if (process.env['NODE_ENV'] === 'production' && this.secret.length < 32) {
+      throw new WeakJwtSecretError('too short')
+    }
     this.hasher = options.hasher ?? new ScryptPasswordHasher()
     this.sessions = options.sessions ?? new MemorySessionStore()
     this.refreshTokens = options.refreshTokens ?? new MemoryRefreshTokenStore()
