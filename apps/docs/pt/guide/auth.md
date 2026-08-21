@@ -316,6 +316,25 @@ provider GitHub incorporado fazem-no — o driver do GitHub lê o endereço prim
 *verificado*.
 :::
 
+### SSO empresarial (OIDC)
+
+Qualquer IdP OpenID Connect — Okta, Azure AD / Entra ID, Auth0, Google Workspace,
+Keycloak — encaixa como provider. Passa os três endpoints, ou deixa o
+`discoverOidcProvider` lê-los do `.well-known/openid-configuration` do IdP:
+
+```ts
+import { oidcProvider, discoverOidcProvider, oauthPlugin } from '@basaltkit/auth'
+
+// endpoints explícitos…
+oidcProvider({ name: 'okta', authorizeUrl, tokenUrl, userInfoUrl, clientId, clientSecret })
+
+// …ou por descoberta (await no arranque)
+const okta = await discoverOidcProvider({ name: 'okta', issuer: 'https://acme.okta.com', clientId, clientSecret })
+oauthPlugin({ secret: env.APP_SECRET, providers: [okta] })
+```
+
+(Os IdPs **SAML 2.0** legados são uma integração à parte — ver o roadmap.)
+
 ## Reposição de password (ponta a ponta)
 
 O módulo nunca envia email — emite um hook que transporta um token de uso único
