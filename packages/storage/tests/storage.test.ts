@@ -8,8 +8,10 @@ import {
   LocalStorageDriver,
   STORAGE,
   storagePlugin,
+  StorageContentTypeError,
   StorageFileNotFoundError,
-  StorageInvalidPathError,
+  StorageInvalidKeyError,
+  StorageTooLargeError,
 } from '../src/index.js'
 
 let root: string
@@ -56,10 +58,10 @@ describe('Disk (local driver)', () => {
   it('blocks path traversal outside the disk root', async () => {
     const disk = makeDisk({ scope: null })
     await expect(disk.put('../escape.txt', 'x')).rejects.toMatchObject({
-      code: 'STORAGE_INVALID_PATH',
+      code: 'STORAGE_INVALID_KEY',
     })
     await expect(disk.get('a/../../escape.txt')).rejects.toMatchObject({
-      code: 'STORAGE_INVALID_PATH',
+      code: 'STORAGE_INVALID_KEY',
     })
   })
 
@@ -131,8 +133,70 @@ describe('Disk tenant-scope path safety', () => {
     expect((await disk.get('ok/file.txt')).toString()).toBe('x')
 
     // A caller-supplied `..` must NOT reach another tenant's prefix.
-    await expect(disk.get('../../tenants/t2/secret.txt')).rejects.toBeInstanceOf(StorageInvalidPathError)
-    await expect(disk.put('../t2/x.txt', 'evil')).rejects.toBeInstanceOf(StorageInvalidPathError)
-    await expect(disk.delete('/etc/passwd')).rejects.toBeInstanceOf(StorageInvalidPathError)
+    await expect(disk.get('../../tenants/t2/secret.txt')).rejects.toBeInstanceOf(StorageInvalidKeyError)
+    await expect(disk.put('../t2/x.txt', 'evil')).rejects.toBeInstanceOf(StorageInvalidKeyError)
+    await expect(disk.delete('/etc/passwd')).rejects.toBeInstanceOf(StorageInvalidKeyError)
+  })
+})
+
+describe('Disk key validation (L-3, shared across all drivers)', () => {
+  it('rejects leading-slash, backslash, .. and control-char keys', async () => {
+    const disk = makeDisk({ scope: null })
+    await expect(disk.put('/leading.txt', 'x')).rejects.toBeInstanceOf(StorageInvalidKeyError)
+    await expect(disk.put('\\windows.txt', 'x')).rejects.toBeInstanceOf(StorageInvalidKeyError)
+    await expect(disk.put('a/../b.txt', 'x')).rejects.toMatchObject({ code: 'STORAGE_INVALID_KEY' })
+    await expect(disk.put('bad\x00name.txt', 'x')).rejects.toMatchObject({
+      code: 'STORAGE_INVALID_KEY',
+    })
+    // list() and get() go through the same choke point
+    await expect(disk.list('../etc')).rejects.toBeInstanceOf(StorageInvalidKeyError)
+  })
+
+  it('allows a normal nested key like avatars/123/pic.png', async () => {
+    const disk = makeDisk({ scope: null })
+    await disk.put('avatars/123/pic.png', Buffer.from([9, 8, 7]))
+    expect([...(await disk.get('avatars/123/pic.png'))]).toEqual([9, 8, 7])
+    expect(await disk.list('avatars')).toEqual(['avatars/123/pic.png'])
+  })
+})
+
+describe('Disk upload validation (L-4, opt-in, enforced at the facade)', () => {
+  it('rejects a Buffer larger than maxBytes with STORAGE_TOO_LARGE', async () => {
+    const disk = makeDisk({ scope: null })
+    await expect(
+      disk.put('big.bin', Buffer.alloc(11), { maxBytes: 10 }),
+    ).rejects.toBeInstanceOf(StorageTooLargeError)
+    await expect(disk.put('big.txt', 'x'.repeat(11), { maxBytes: 10 })).rejects.toMatchObject({
+      code: 'STORAGE_TOO_LARGE',
+    })
+    // within the cap still writes
+    await disk.put('ok.bin', Buffer.alloc(10), { maxBytes: 10 })
+    expect(await disk.exists('ok.bin')).toBe(true)
+  })
+
+  it('enforces allowedContentTypes: rejects disallowed, allows allowed', async () => {
+    const disk = makeDisk({ scope: null })
+    await expect(
+      disk.put('x.exe', 'data', {
+        contentType: 'application/octet-stream',
+        allowedContentTypes: ['image/png', 'image/jpeg'],
+      }),
+    ).rejects.toBeInstanceOf(StorageContentTypeError)
+    // a missing content type is also rejected when an allowlist is set
+    await expect(
+      disk.put('x.png', 'data', { allowedContentTypes: ['image/png'] }),
+    ).rejects.toMatchObject({ code: 'STORAGE_CONTENT_TYPE' })
+    // an allowed type writes through
+    await disk.put('ok.png', 'data', {
+      contentType: 'image/png',
+      allowedContentTypes: ['image/png', 'image/jpeg'],
+    })
+    expect(await disk.exists('ok.png')).toBe(true)
+  })
+
+  it('leaves existing behavior unchanged when no limits are set', async () => {
+    const disk = makeDisk({ scope: null })
+    await disk.put('anything.bin', Buffer.alloc(1000), { contentType: 'application/x-weird' })
+    expect(await disk.exists('anything.bin')).toBe(true)
   })
 })

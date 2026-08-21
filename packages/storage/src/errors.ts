@@ -15,6 +15,35 @@ export class StorageInvalidPathError extends BasaltError {
   }
 }
 
+export class StorageInvalidKeyError extends BasaltError {
+  constructor(key: string) {
+    super(
+      'STORAGE_INVALID_KEY',
+      `Invalid storage key: "${key}". Keys may not start with "/" or "\\", ` +
+        `contain ".." path segments, or include NUL/control characters.`,
+    )
+  }
+}
+
+export class StorageTooLargeError extends BasaltError {
+  constructor(bytes: number, maxBytes: number) {
+    super(
+      'STORAGE_TOO_LARGE',
+      `Upload is ${bytes} bytes, exceeding the configured ${maxBytes}-byte limit.`,
+    )
+  }
+}
+
+export class StorageContentTypeError extends BasaltError {
+  constructor(contentType: string | undefined, allowed: readonly string[]) {
+    super(
+      'STORAGE_CONTENT_TYPE',
+      `Content type ${contentType ? `"${contentType}"` : '(none provided)'} is not allowed. ` +
+        `Allowed types: ${allowed.join(', ')}.`,
+    )
+  }
+}
+
 export class UnknownDiskError extends BasaltError {
   constructor(disk: string) {
     super(

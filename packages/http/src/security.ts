@@ -1,4 +1,4 @@
-import { definePlugin } from '@basaltkit/core'
+import { definePlugin, ensureMetadata } from '@basaltkit/core'
 import type { HttpReply, HttpRequest } from './route.js'
 import { HTTP_SERVER } from './server.js'
 
@@ -67,8 +67,35 @@ export interface SecurityHeadersOptions {
   contentTypeOptions?: boolean
   frameOptions?: 'DENY' | 'SAMEORIGIN' | false
   referrerPolicy?: string | false
+  /**
+   * Content-Security-Policy value. Defaults to {@link DEFAULT_CSP} (a lock-down
+   * policy fit for a JSON API); pass a string to use your own, or `false` to
+   * omit the header entirely.
+   */
   contentSecurityPolicy?: string | false
   crossOriginOpenerPolicy?: string | false
+}
+
+/** Restrictive default CSP for a JSON API: it renders nothing and frames nothing. */
+export const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
+
+/**
+ * Per-route rate-limit override, read from a route's `meta.rateLimit`. When set,
+ * that route gets its own bucket (keyed by client + route) at these thresholds
+ * instead of the global default — so login/reset can be stricter than the rest.
+ */
+export interface RouteRateLimit {
+  limit: number
+  windowMs: number
+}
+
+/** Coerces a route's `meta.rateLimit` into a {@link RouteRateLimit}, or `null` if absent/malformed. */
+function parseRouteRateLimit(value: unknown): RouteRateLimit | null {
+  if (!value || typeof value !== 'object') return null
+  const { limit, windowMs } = value as Record<string, unknown>
+  if (typeof limit !== 'number' || typeof windowMs !== 'number') return null
+  if (!(limit > 0) || !(windowMs > 0)) return null
+  return { limit, windowMs }
 }
 
 export interface SecurityPluginOptions {
@@ -117,7 +144,10 @@ function applyHeaders(reply: HttpReply, options: SecurityHeadersOptions): void {
   if (referrer) reply.header('Referrer-Policy', referrer)
   const coop = options.crossOriginOpenerPolicy ?? 'same-origin'
   if (coop) reply.header('Cross-Origin-Opener-Policy', coop)
-  if (options.contentSecurityPolicy) reply.header('Content-Security-Policy', options.contentSecurityPolicy)
+  // A JSON API renders nothing and frames nothing, so lock it down by default.
+  // Callers override with their own policy string, or pass `false` to omit it.
+  const csp = options.contentSecurityPolicy ?? DEFAULT_CSP
+  if (csp) reply.header('Content-Security-Policy', csp)
 }
 
 function applyCors(request: HttpRequest, reply: HttpReply, options: CorsOptions): void {
@@ -141,9 +171,23 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
   const headers: SecurityHeadersOptions | null =
     headersOption === false ? null : headersOption === true ? {} : headersOption
 
+  // Per-route overrides, filled at app:booted from the `http:routes` metadata
+  // bucket (adapters publish it). Populated before any request is served.
+  const perRoute = new Map<string, RouteRateLimit>()
+
   return definePlugin({
     name: 'basalt:security',
-    boot({ container }) {
+    boot({ container, hooks }) {
+      if (rateLimit && store) {
+        hooks.on('app:booted', () => {
+          const metadata = ensureMetadata(container)
+          for (const route of metadata.get<{ url: string; meta?: Record<string, unknown> }>('http:routes')) {
+            const override = parseRouteRateLimit(route.meta?.['rateLimit'])
+            if (override) perRoute.set(route.url, override)
+          }
+        })
+      }
+
       container.get(HTTP_SERVER).use(async ({ request, reply }) => {
         if (headers) applyHeaders(reply, headers)
 
@@ -160,7 +204,15 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
         }
 
         if (rateLimit && store && !rateLimit.skip?.(request)) {
-          const result = await store.hit(rateLimit.key?.(request) ?? clientIp(request), rateLimit.limit, rateLimit.windowMs)
+          const baseKey = rateLimit.key?.(request) ?? clientIp(request)
+          // A route with its own `meta.rateLimit` gets a dedicated bucket (keyed
+          // by client + route) at its stricter threshold; everything else shares
+          // the global bucket, exactly as before.
+          const override = request.routePattern ? perRoute.get(request.routePattern) : undefined
+          const key = override ? `${baseKey}::${request.routePattern}` : baseKey
+          const limit = override?.limit ?? rateLimit.limit
+          const windowMs = override?.windowMs ?? rateLimit.windowMs
+          const result = await store.hit(key, limit, windowMs)
           reply.header('X-RateLimit-Limit', String(result.limit))
           reply.header('X-RateLimit-Remaining', String(result.remaining))
           reply.header('X-RateLimit-Reset', String(Math.ceil(result.resetAt / 1000)))
