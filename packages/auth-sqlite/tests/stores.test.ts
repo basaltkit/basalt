@@ -186,3 +186,14 @@ describe('sqliteAuthStores + durability', () => {
     second.db.close()
   })
 })
+
+describe('SqliteTokenVersionStore', () => {
+  it('starts at 0, increments monotonically, and persists per user', async () => {
+    const s = sqliteAuthStores(openAuthDatabase())
+    expect(await s.tokenVersions.get('u1')).toBe(0)
+    expect(await s.tokenVersions.increment('u1')).toBe(1)
+    expect(await s.tokenVersions.increment('u1')).toBe(2)
+    expect(await s.tokenVersions.get('u1')).toBe(2)
+    expect(await s.tokenVersions.get('u2')).toBe(0)
+  })
+})

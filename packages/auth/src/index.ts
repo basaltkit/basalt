@@ -13,6 +13,8 @@ export {
   MemoryAuthTokenStore,
   MemoryApiKeyStore,
   MemoryMfaStore,
+  MemoryTokenVersionStore,
+  type TokenVersionStore,
   type AuthUser,
   type PublicUser,
   type UserSource,

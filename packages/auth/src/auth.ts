@@ -4,6 +4,7 @@ import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
 import { generateTotpSecret, matchTotpStep, otpauthUri } from './totp.js'
+import { decryptSecret, deriveKey, encryptSecret } from './secret-box.js'
 import {
   MemoryAuthTokenStore,
   MemoryMfaStore,
@@ -17,6 +18,7 @@ import {
   type RefreshTokenStore,
   type SessionRecord,
   type SessionStore,
+  type TokenVersionStore,
   type UserPatch,
   type UserSource,
 } from './stores.js'
@@ -141,6 +143,20 @@ export interface AuthOptions {
   resetTtl?: DurationInput
   /** Store for MFA (TOTP) enrollment state. Default: in-memory. */
   mfa?: MfaStore
+  /**
+   * Enables access-token revocation. When set, access tokens carry a version
+   * (`tv`) and `resetPassword`/`revokeAllTokens` bump it — invalidating every
+   * token issued before the bump, even before its TTL expires. Opt-in; access
+   * verification then costs one store read per request. Default: off.
+   */
+  tokenVersions?: TokenVersionStore
+  /**
+   * Key for encrypting TOTP secrets at rest (AES-256-GCM). When set, secrets are
+   * stored as `v1:` envelopes so a database leak can't recover a live second
+   * factor; existing plaintext records keep working and are encrypted on next
+   * write. Any length — derived to 32 bytes. Omit to store secrets in plaintext.
+   */
+  mfaEncryptionKey?: string | Buffer
   /** Issuer name shown in authenticator apps. Default 'Basalt'. */
   mfaIssuer?: string
 }
@@ -168,6 +184,8 @@ export class Auth {
   private readonly resetTtl: DurationInput
   private readonly mfa: MfaStore
   private readonly mfaIssuer: string
+  private readonly mfaKey: Buffer | undefined
+  private readonly tokenVersions: TokenVersionStore | undefined
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -195,6 +213,8 @@ export class Auth {
     this.resetTtl = options.resetTtl ?? '1h'
     this.mfa = options.mfa ?? new MemoryMfaStore()
     this.mfaIssuer = options.mfaIssuer ?? 'Basalt'
+    this.mfaKey = options.mfaEncryptionKey ? deriveKey(options.mfaEncryptionKey) : undefined
+    this.tokenVersions = options.tokenVersions
   }
 
   async register(email: string, password: string): Promise<PublicUser> {
@@ -298,8 +318,33 @@ export class Auth {
     if (record) await this.refreshTokens.revokeFamily(record.familyId)
   }
 
+  /** Structural JWT verification only (signature + expiry). */
   verifyAccess(accessToken: string): JwtClaims {
     return verifyJwt(accessToken, this.secret)
+  }
+
+  /**
+   * Verifies the access token AND, when token-version revocation is enabled,
+   * rejects a token minted before the user's version was last bumped (i.e.
+   * revoked by a password reset / `revokeAllTokens`). Prefer this over
+   * {@link verifyAccess} on the request path.
+   */
+  async verifyAccessToken(accessToken: string): Promise<JwtClaims> {
+    const claims = this.verifyAccess(accessToken)
+    if (this.tokenVersions) {
+      const current = await this.tokenVersions.get(claims.sub)
+      if ((claims.tv ?? 0) < current) throw new AuthTokenInvalidError()
+    }
+    return claims
+  }
+
+  /**
+   * Revokes every access token issued so far for the user (logout-everywhere),
+   * by bumping the token version. No-op unless a {@link TokenVersionStore} is
+   * configured. Pair with refresh/session revocation for a full logout.
+   */
+  async revokeAllTokens(userId: string): Promise<void> {
+    await this.tokenVersions?.increment(userId)
   }
 
   async createSession(userId: string): Promise<SessionRecord> {
@@ -372,6 +417,9 @@ export class Auth {
     // active server-side sessions (cookie logins survived this before).
     await this.refreshTokens.revokeAllForUser?.(user.id)
     await this.sessions.deleteAllForUser?.(user.id)
+    // Bump the token version so outstanding access tokens are rejected before
+    // their TTL expires (no-op unless a TokenVersionStore is configured).
+    await this.tokenVersions?.increment(user.id)
     await this.hooks?.emit('auth:password_reset', { user: publicUser(user) })
     return publicUser(user)
   }
@@ -392,11 +440,21 @@ export class Auth {
    * returns it plus an `otpauth://` URI to render as a QR code. Call
    * {@link activateMfa} with a code from the app to switch it on.
    */
+  /** Encrypt a TOTP secret for storage (no-op when no key is configured). */
+  private encryptMfaSecret(secret: string): string {
+    return this.mfaKey ? encryptSecret(secret, this.mfaKey) : secret
+  }
+
+  /** Decrypt a stored TOTP secret (passes plaintext/legacy values through). */
+  private decryptMfaSecret(stored: string): string {
+    return this.mfaKey ? decryptSecret(stored, this.mfaKey) : stored
+  }
+
   async enrollMfa(userId: string): Promise<{ secret: string; otpauthUri: string }> {
     const user = await this.users.findById(userId)
     if (!user) throw new AuthRequiredError()
     const secret = generateTotpSecret()
-    await this.mfa.set(userId, { secret, enabled: false, recoveryCodes: [] })
+    await this.mfa.set(userId, { secret: this.encryptMfaSecret(secret), enabled: false, recoveryCodes: [] })
     return {
       secret,
       otpauthUri: otpauthUri({ secret, account: user.email, issuer: this.mfaIssuer }),
@@ -410,7 +468,7 @@ export class Auth {
   async activateMfa(userId: string, code: string): Promise<{ recoveryCodes: string[] }> {
     const record = await this.mfa.get(userId)
     if (!record || record.enabled) throw new MfaNotEnrolledError()
-    const step = matchTotpStep(record.secret, code)
+    const step = matchTotpStep(this.decryptMfaSecret(record.secret), code)
     if (step === null) throw new MfaInvalidCodeError()
 
     const recoveryCodes = Array.from({ length: 10 }, () => this.generateRecoveryCode())
@@ -440,7 +498,7 @@ export class Auth {
   async verifyMfaCode(userId: string, code: string): Promise<boolean> {
     const record = await this.mfa.get(userId)
     if (!record || !record.enabled) return false
-    const step = matchTotpStep(record.secret, code)
+    const step = matchTotpStep(this.decryptMfaSecret(record.secret), code)
     if (step !== null) {
       // Anti-replay: a code from a step already used cannot be reused within
       // its ~90s window (an intercepted code is single-use).
@@ -515,8 +573,12 @@ export class Auth {
       userId,
       expiresAt: Date.now() + parseDuration(this.refreshTtl),
     })
+    const tv = this.tokenVersions ? await this.tokenVersions.get(userId) : undefined
     return {
-      accessToken: signJwt({ sub: userId }, { secret: this.secret, expiresIn: this.accessTtl }),
+      accessToken: signJwt(
+        { sub: userId, ...(tv !== undefined ? { tv } : {}) },
+        { secret: this.secret, expiresIn: this.accessTtl },
+      ),
       refreshToken,
     }
   }
