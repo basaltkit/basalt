@@ -165,24 +165,69 @@ Bind tenant selection to a **verified user↔tenant membership** (via
 `@basaltkit/teams`, an API-key's `tenantId`, or a session claim) — never to the
 raw request alone.
 
+**Do this for every route at once with `tenantMembershipPlugin`.** Instead of
+repeating the check, register the guard from `@basaltkit/teams`: on every
+authenticated, tenant-scoped request it asserts the user is a member of the
+resolved tenant and returns `403` otherwise. Central routes that legitimately
+act outside one tenant (login, tenant creation, platform admin, invite accept)
+opt out with `meta: { central: true }`.
+
+```ts
+import { teamsPlugin, tenantMembershipPlugin } from '@basaltkit/teams'
+
+createApp({
+  plugins: [
+    authPlugin(/* … */),
+    tenancyPlugin(/* … */),
+    teamsPlugin(/* … */),
+    tenantMembershipPlugin(), // secure by default: membership enforced everywhere
+  ],
+})
+
+// a route the current user is not a member of → 403; central route opts out:
+route({ method: 'POST', url: '/tenants', meta: { central: true }, /* … */ })
+```
+
 ### 3. Automatic tenant scoping covers the ORM — not raw SQL or nested writes
 
 The Prisma tenancy extension scopes standard model operations and **fails
 closed** without a tenant context. Two paths sit *outside* that net:
 
-- **Raw queries** — `$queryRaw` / `$executeRaw` run exactly as written. Add the
-  `tenant_id = $1` predicate yourself, and always parameterize.
+- **Raw queries** — `$queryRaw` / `$executeRaw` bypass model scoping. Basalt now
+  **refuses them by default when a tenant is in scope** (`PRISMA_RAW_IN_TENANT`),
+  so a raw query can't silently read across tenants. Run them in central code
+  (no tenant in context), or add the `tenant_id = $1` predicate yourself and set
+  `onRawInTenant: 'allow'`.
 - **Nested writes** — a `connect` / nested `create` reaching another model isn't
   re-scoped. Verify the related record belongs to the current tenant first.
 
 ```ts
-// ❌ raw query with no tenant predicate — reads across tenants
-await prisma.$queryRaw`SELECT * FROM invoices WHERE status = ${status}`
+// ❌ raw query inside a tenant context now throws PRISMA_RAW_IN_TENANT
+await db.$queryRaw`SELECT * FROM invoices WHERE status = ${status}`
 
-// ✅ scope explicitly, parameterized
+// ✅ scope explicitly, parameterized, and opt in
 const tenantId = ctx().tenant.id
-await prisma.$queryRaw`
+await db.$queryRaw`
   SELECT * FROM invoices WHERE status = ${status} AND tenant_id = ${tenantId}`
+// with tenancyExtension({ onRawInTenant: 'allow' })
+```
+
+**Defense in depth — enable Postgres RLS.** Application-layer scoping is one
+layer; add a database-enforced one so even a forgotten predicate can't leak.
+`rlsPolicySql` generates the migration, and `set_config` names the active tenant
+per transaction — the database then filters every row itself:
+
+```ts
+import { rlsPolicySql, setTenantConfigSql, tenantConfigParams } from '@basaltkit/prisma'
+
+// migration (once): enable RLS + a tenant-isolation policy on each table
+await db.$executeRawUnsafe(rlsPolicySql({ tables: ['invoices', 'projects'] }))
+
+// per request: set the active tenant, transaction-local (never leaks on a pool)
+await db.$transaction(async (tx) => {
+  await tx.$executeRawUnsafe(setTenantConfigSql(), ...tenantConfigParams(ctx().tenant.id))
+  // every query in here is filtered to the tenant by the database
+})
 ```
 
 When in doubt, prefer model operations (which are scoped automatically) over raw

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { provisionTenantSchema, tenantSchema, type SchemaProvisioner } from '../src/index.js'
+import {
+  provisionTenantSchema,
+  rlsPolicySql,
+  setTenantConfigSql,
+  tenantConfigParams,
+  tenantSchema,
+  type SchemaProvisioner,
+} from '../src/index.js'
 
 // pglite instantiates a Postgres in WebAssembly; a cold start on a CI runner can
 // exceed the default 5s test/hook timeout (it's ~1.8s locally). Give it room so
@@ -103,6 +110,55 @@ describe.skipIf(!Ctor)('PostgreSQL integration (pglite)', () => {
       // a create stamped with tenant_id lands in the right tenant's set
       await db.query("INSERT INTO project (id, tenant_id, name) VALUES ('d','globex','D')")
       expect(await count('SELECT count(*)::int AS n FROM project WHERE tenant_id = $1', ['globex'])).toBe(2)
+    })
+  })
+
+  describe('RLS defense in depth — the database enforces isolation', () => {
+    // Run as a NON-superuser: superusers bypass RLS regardless of policy.
+    const asAppUser = async () => {
+      await db.exec('CREATE ROLE app_user')
+      await db.exec('GRANT SELECT, INSERT, UPDATE, DELETE ON project TO app_user')
+      await db.exec('SET ROLE app_user')
+    }
+
+    it('a query with NO tenant predicate still only sees the active tenant, and cross-tenant writes are rejected', async () => {
+      await db.exec('CREATE TABLE project (id text primary key, tenant_id text, name text)')
+      await db.query("INSERT INTO project VALUES ('a','acme','A'),('b','globex','B'),('c','acme','C')")
+      // Install RLS + the tenant-isolation policy exactly as a migration would.
+      await db.exec(rlsPolicySql({ tables: ['project'] }))
+      await asAppUser()
+
+      // Active tenant = acme, for this transaction only (set_config is_local=true).
+      await db.exec('BEGIN')
+      await db.query(setTenantConfigSql(), tenantConfigParams('acme'))
+
+      // NOTE: no WHERE tenant_id — the DB filters anyway. This is the whole point:
+      // a raw query that forgets the predicate can't leak another tenant's rows.
+      const seen = await db.query<{ name: string }>('SELECT name FROM project ORDER BY name')
+      // A cross-tenant write is blocked by the policy's WITH CHECK.
+      let writeRejected = false
+      try {
+        await db.query("INSERT INTO project VALUES ('x','globex','X')")
+      } catch {
+        writeRejected = true
+      }
+      await db.exec('ROLLBACK')
+      await db.exec('RESET ROLE')
+
+      expect(seen.rows.map((r) => r.name)).toEqual(['A', 'C'])
+      expect(writeRejected).toBe(true)
+    })
+
+    it('fails closed: with no tenant set, the policy matches no rows', async () => {
+      await db.exec('CREATE TABLE project (id text primary key, tenant_id text, name text)')
+      await db.query("INSERT INTO project VALUES ('a','acme','A'),('b','globex','B')")
+      await db.exec(rlsPolicySql({ tables: ['project'] }))
+      await asAppUser()
+
+      // No set_config at all → current_setting(..., true) is NULL → zero rows.
+      const { rows } = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM project')
+      await db.exec('RESET ROLE')
+      expect(Number(rows[0]?.n ?? -1)).toBe(0)
     })
   })
 })
