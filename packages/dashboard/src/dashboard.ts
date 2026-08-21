@@ -83,3 +83,29 @@ export function queueSection(options: { key?: string; label?: string; icon?: str
     ...(options.icon ? { icon: options.icon } : {}),
   }
 }
+
+export interface StandardDashboardOptions {
+  title?: string
+  /** Admin resources to expose as sidebar sections. */
+  resources?: Resource[]
+  /** Include the billing/metrics Overview. Default: true. */
+  billing?: boolean
+  /** Include the Queues section. Default: false. */
+  queues?: boolean
+  /** Include the Audit Log section. Default: false. */
+  audit?: boolean
+}
+
+/**
+ * Assembles a conventional admin dashboard — Overview, your resources, then
+ * Queues and Audit — with sensible labels and icon hints. A shortcut over
+ * hand-listing sections; the shell still renders it via `nav()`/`section()`.
+ */
+export function standardDashboard(options: StandardDashboardOptions = {}): Dashboard {
+  const sections: Section[] = []
+  if (options.billing !== false) sections.push(metricsSection({ icon: 'bar-chart' }))
+  for (const resource of options.resources ?? []) sections.push(resourceSection(resource, { icon: 'box' }))
+  if (options.queues) sections.push(queueSection({ icon: 'layers' }))
+  if (options.audit) sections.push(auditSection({ icon: 'scroll' }))
+  return defineDashboard({ ...(options.title ? { title: options.title } : {}), sections })
+}

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { z } from 'zod'
 import { defineResource } from '@basaltkit/admin'
 import {
@@ -11,12 +11,7 @@ import {
   DataTable,
   ResourceForm,
 } from '@basaltkit/admin-shadcn'
-import {
-  computeBillingMetrics,
-  defineDashboard,
-  metricsSection,
-  resourceSection,
-} from '@basaltkit/dashboard'
+import { buildOverview, standardDashboard, type Kpi, type OverviewModel } from '@basaltkit/dashboard'
 // Types only (erased) — the subscriptions runtime never enters the browser bundle.
 import type { PlanDefinition, SubscriptionRecord } from '@basaltkit/subscriptions'
 
@@ -39,6 +34,7 @@ const CreateProject = z.object({
 })
 const projects = defineResource({
   name: 'projects',
+  label: 'Projects',
   schema: ProjectSchema,
   createSchema: CreateProject,
   columns: ['name', 'tenant', 'status', 'seats', 'billable'],
@@ -52,21 +48,22 @@ interface Project {
   seats: number
   billable: boolean
 }
-
 const seedProjects: Project[] = [
   { id: '1', name: 'Acme Billing', tenant: 'acme', status: 'active', seats: 12, billable: true },
   { id: '2', name: 'Globex Analytics', tenant: 'globex', status: 'draft', seats: 3, billable: false },
   { id: '3', name: 'Initech Portal', tenant: 'initech', status: 'active', seats: 40, billable: true },
 ]
 
-// --- the dashboard model: sidebar sections, via @basaltkit/dashboard -----------
+// --- the ready-made dashboard: Overview → resources → Queues → Audit --------
 
-const dashboard = defineDashboard({
+const dashboard = standardDashboard({
   title: 'Basalt Admin',
-  sections: [metricsSection({ label: 'Overview' }), resourceSection(projects, { key: 'projects' })],
+  resources: [projects],
+  queues: true,
+  audit: true,
 })
 
-// --- billing metrics computed by @basaltkit/dashboard (now browser-safe) --------
+// --- the Overview snapshot, assembled by @basaltkit/dashboard (browser-safe) -
 
 const plans: Record<string, PlanDefinition> = {
   free: { price: 0, features: {} },
@@ -79,13 +76,36 @@ const subs: SubscriptionRecord[] = [
   { billableId: 'initech', plan: 'pro', period: 'monthly', status: 'active' },
   { billableId: 'umbrella', plan: 'pro', period: 'monthly', status: 'trialing' },
   { billableId: 'soylent', plan: 'free', period: 'monthly', status: 'active' },
+  { billableId: 'wayne', plan: 'pro', period: 'monthly', status: 'past_due' },
 ]
-const metrics = computeBillingMetrics(subs, plans)
+const auditLog = [
+  { event: 'project.created' },
+  { event: 'user.login' },
+  { event: 'user.login' },
+  { event: 'subscription.updated' },
+  { event: 'user.login' },
+  { event: 'project.deleted' },
+]
+const overview: OverviewModel = buildOverview({
+  subscriptions: subs,
+  plans,
+  activeAtStart: 5,
+  queue: { waiting: 8, active: 2, completed: 340, failed: 3, delayed: 1 },
+  audit: auditLog,
+})
+
+const TONE: Record<NonNullable<Kpi['tone']>, string> = {
+  default: 'border-border',
+  positive: 'border-l-4 border-l-emerald-500',
+  warning: 'border-l-4 border-l-amber-500',
+  critical: 'border-l-4 border-l-red-500',
+}
 
 export function App() {
-  const [active, setActive] = useState('overview')
+  const [active, setActive] = useState(dashboard.sections[0]?.key ?? 'overview')
   const [rows, setRows] = useState<Project[]>(seedProjects)
   const [dark, setDark] = useState(false)
+  const section = useMemo(() => dashboard.section(active), [active])
 
   const toggleTheme = () => {
     const next = !dark
@@ -95,11 +115,10 @@ export function App() {
 
   return (
     <div className="flex min-h-screen">
-      {/* sidebar — driven by dashboard.nav() */}
       <aside className="w-60 shrink-0 border-r bg-card px-3 py-5">
         <div className="mb-6 flex items-center gap-2 px-2">
           <div className="grid h-8 w-8 place-items-center rounded-lg bg-primary font-mono font-bold text-primary-foreground">
-            M
+            B
           </div>
           <span className="font-semibold tracking-tight">{dashboard.title}</span>
         </div>
@@ -120,39 +139,17 @@ export function App() {
         </nav>
       </aside>
 
-      {/* main */}
       <main className="flex-1 px-8 py-6">
         <header className="mb-6 flex items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight">
-            {dashboard.section(active)?.label}
-          </h1>
+          <h1 className="text-xl font-semibold tracking-tight">{section?.label}</h1>
           <Button variant="outline" size="sm" onClick={toggleTheme}>
             {dark ? 'Light' : 'Dark'}
           </Button>
         </header>
 
-        {active === 'overview' ? (
-          <div className="space-y-6">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="MRR" value={`$${metrics.mrr.toLocaleString()}`} hint="monthly recurring" />
-              <Stat label="ARR" value={`$${metrics.arr.toLocaleString()}`} hint="annual run rate" />
-              <Stat label="Active" value={String(metrics.active)} hint="paying subscriptions" />
-              <Stat label="Trialing" value={String(metrics.trialing)} hint="in trial" />
-            </div>
-            <Card>
-              <CardHeader>
-                <CardTitle>Subscriptions by plan</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                {Object.entries(metrics.byPlan).map(([plan, count]) => (
-                  <Badge key={plan} variant="secondary">
-                    {plan}: {count}
-                  </Badge>
-                ))}
-              </CardContent>
-            </Card>
-          </div>
-        ) : (
+        {section?.kind === 'metrics' && <OverviewPage model={overview} />}
+
+        {section?.kind === 'resource' && (
           <div className="grid gap-6 lg:grid-cols-[1.7fr_1fr]">
             <Card>
               <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -182,18 +179,92 @@ export function App() {
             </Card>
           </div>
         )}
+
+        {section?.kind === 'queue' && overview.queue && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(['waiting', 'active', 'completed', 'failed', 'delayed'] as const).map((state) => (
+              <Stat
+                key={state}
+                label={state[0]!.toUpperCase() + state.slice(1)}
+                value={String(overview.queue![state])}
+                hint={state === 'failed' && overview.queue!.failed > 0 ? 'needs retry' : ''}
+                tone={state === 'failed' && overview.queue!.failed > 0 ? 'critical' : 'default'}
+              />
+            ))}
+            <Stat
+              label="Health"
+              value={overview.queue.healthy ? 'Healthy' : 'Degraded'}
+              hint={`${overview.queue.total} jobs tracked`}
+              tone={overview.queue.healthy ? 'positive' : 'critical'}
+            />
+          </div>
+        )}
+
+        {section?.kind === 'audit' && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Top events</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {(overview.topEvents ?? []).map((row) => (
+                <div key={row.event} className="flex items-center justify-between text-sm">
+                  <span className="font-mono">{row.event}</span>
+                  <Badge variant="secondary">{row.count}</Badge>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
       </main>
     </div>
   )
 }
 
-function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
+function OverviewPage({ model }: { model: OverviewModel }) {
   return (
-    <Card>
+    <div className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {model.kpis.map((k) => (
+          <Stat key={k.label} label={k.label} value={k.value} hint={k.hint ?? ''} tone={k.tone ?? 'default'} />
+        ))}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Subscriptions by plan</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {model.byPlan.map(({ plan, count }) => (
+              <Badge key={plan} variant="secondary">
+                {plan}: {count}
+              </Badge>
+            ))}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>By status</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {model.byStatus.map(({ status, count }) => (
+              <Badge key={status} variant="secondary">
+                {status}: {count}
+              </Badge>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+function Stat({ label, value, hint, tone }: { label: string; value: string; hint: string; tone: NonNullable<Kpi['tone']> }) {
+  return (
+    <Card className={TONE[tone]}>
       <CardContent className="pt-6">
         <div className="text-sm text-muted-foreground">{label}</div>
         <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
-        <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+        {hint ? <div className="mt-1 text-xs text-muted-foreground">{hint}</div> : null}
       </CardContent>
     </Card>
   )

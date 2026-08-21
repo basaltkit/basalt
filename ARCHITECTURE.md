@@ -17,7 +17,6 @@
 > current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
 > page. Still **design-only** today:
 >
-> - **Dashboard** — the ready-made analytics app (headless `admin` + per-feature UIs ship).
 > - **Docs** — StackBlitz buttons, Algolia DocSearch, typedoc reference.
 >
 > Not gaps, just structural drift: `@basaltkit/jobs` merged into `@basaltkit/queue`;
@@ -777,10 +776,10 @@ Fakes for all drivers (mail, queue, storage, notifications, billing gateway), fa
 
 A TypeScript client **generated from the route Metadata** (not from an intermediate OpenAPI): `sdk.projects.create({ name })` with exact types from the server, errors typed by code, automatic auth (transparent refresh). This is what makes Basalt attractive for full-stack Next.js/React Native teams: a Basalt backend + any frontend.
 
-### 13.6 `@basaltkit/dashboard` + `@basaltkit/admin`  `[🚧 partial — no full dashboard app]`
+### 13.6 `@basaltkit/dashboard` + `@basaltkit/admin`  `[✅ shipped — headless model + ready-made app]`
 
 - **admin**: headless components + UI (React, shadcn-based) for CRUD/tables/forms generated from Zod schemas — a built-in admin UI kit, embeddable in any React app.
-- **dashboard**: a ready-made app built on top of `admin` + `sdk`: users, tenants, plans/subscriptions (MRR, churn), logs/audit, queues (DLQ retry), files, metrics, tenant impersonation. Mountable at `/admin` of the app itself or standalone. Everything protected by `@basaltkit/permissions`.
+- **dashboard**: the headless model — `standardDashboard()` assembles Overview → resources → Queues → Audit; `buildOverview()` turns a subscriptions/queue/audit snapshot into KPI cards (MRR, ARR, churn, failed-jobs health) with semantic tones; plus `computeBillingMetrics` / `summarizeQueue` / `summarizeAudit`. Browser-safe (types-only import of subscriptions). A shell renders it via `nav()` / `section()`; the ready-made **`apps/admin-demo`** does exactly that, rendering every section kind (metrics/resource/queue/audit) from the model.
 
 **Roadmap:** v1.x headless admin + basic dashboard (users/tenants/queues); v2 billing analytics, theme/white-label.
 
