@@ -49,7 +49,7 @@ export function authPlugin(options: AuthPluginOptions) {
             : undefined
         // `mk_`-prefixed bearers are API keys — left to apiKeysPlugin.
         if (bearer && !bearer.startsWith('mk_')) {
-          const claims = auth.verifyAccess(bearer)
+          const claims = await auth.verifyAccessToken(bearer)
           const user = await auth.users.findById(claims.sub)
           if (user) context.user = publicUser(user)
           return

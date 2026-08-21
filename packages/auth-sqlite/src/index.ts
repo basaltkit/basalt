@@ -18,6 +18,7 @@ import type {
   AuthUser,
   MfaRecord,
   MfaStore,
+  TokenVersionStore,
   RefreshRecord,
   RefreshTokenStore,
   SessionRecord,
@@ -113,6 +114,11 @@ export function migrate(db: DatabaseSync): void {
       enabled        INTEGER NOT NULL DEFAULT 0,
       recovery_codes TEXT NOT NULL,
       last_used_step INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_token_versions (
+      user_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL DEFAULT 0
     );
   `)
 
@@ -462,6 +468,29 @@ export class SqliteMfaStore implements MfaStore {
   }
 }
 
+// --- token versions (access-token revocation) -------------------------------
+
+export class SqliteTokenVersionStore implements TokenVersionStore {
+  constructor(private readonly db: DatabaseSync) {}
+
+  async get(userId: string): Promise<number> {
+    const row = this.db
+      .prepare('SELECT version FROM auth_token_versions WHERE user_id = ?')
+      .get(userId) as { version: number } | undefined
+    return row?.version ?? 0
+  }
+
+  async increment(userId: string): Promise<number> {
+    this.db
+      .prepare(
+        `INSERT INTO auth_token_versions (user_id, version) VALUES (?, 1)
+         ON CONFLICT(user_id) DO UPDATE SET version = version + 1`,
+      )
+      .run(userId)
+    return this.get(userId)
+  }
+}
+
 // --- convenience ------------------------------------------------------------
 
 export interface SqliteAuthStores {
@@ -472,6 +501,7 @@ export interface SqliteAuthStores {
   tokens: SqliteAuthTokenStore
   apiKeys: SqliteApiKeyStore
   mfa: SqliteMfaStore
+  tokenVersions: SqliteTokenVersionStore
 }
 
 /**
@@ -497,5 +527,6 @@ export function sqliteAuthStores(dbOrLocation: DatabaseSync | string = ':memory:
     tokens: new SqliteAuthTokenStore(db),
     apiKeys: new SqliteApiKeyStore(db),
     mfa: new SqliteMfaStore(db),
+    tokenVersions: new SqliteTokenVersionStore(db),
   }
 }
