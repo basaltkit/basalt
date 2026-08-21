@@ -19,5 +19,11 @@ export {
   type MembershipStore,
   type InvitationStore,
 } from './stores.js'
-export { teamsPlugin, TEAMS, type TeamsPluginOptions } from './plugin.js'
+export {
+  teamsPlugin,
+  tenantMembershipPlugin,
+  TEAMS,
+  type TeamsPluginOptions,
+  type TenantMembershipPluginOptions,
+} from './plugin.js'
 export { teamRoutes } from './routes.js'

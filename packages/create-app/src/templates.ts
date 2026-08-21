@@ -105,7 +105,7 @@ export function tsconfigJson(): string {
 }
 
 export function envTs(options: ProjectOptions): string {
-  return `import { defineEnv } from '@basaltkit/env'
+  return `import { defineEnv${options.auth ? ', secret' : ''} } from '@basaltkit/env'
 import { z } from 'zod'
 
 export const env = defineEnv({
@@ -115,7 +115,9 @@ export const env = defineEnv({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),${
     options.auth
       ? `
-  APP_SECRET: z.string().min(16).default('change-me-in-production--'),`
+  // Signs JWTs and sessions. secret() is fail-closed: required in production
+  // (no fallback), rejected if it looks like a placeholder. Dev uses devDefault.
+  APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-please-change-me' }),`
       : ''
   }
 })
@@ -127,7 +129,7 @@ export function envExample(options: ProjectOptions): string {
 HOST=0.0.0.0
 LOG_LEVEL=info
 NODE_ENV=development
-${options.auth ? 'APP_SECRET=change-me-in-production--\n' : ''}`
+${options.auth ? '# Required in production (the app refuses to boot without it).\n# Generate a strong one:  openssl rand -base64 48\n# APP_SECRET=\n' : ''}`
 }
 
 export function appTs(options: ProjectOptions): string {

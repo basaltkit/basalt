@@ -12,9 +12,17 @@ export {
   tenancyExtension,
   applyTenantScope,
   MissingTenantError,
+  RawQueryInTenantContextError,
   type TenancyExtensionOptions,
 } from './extension.js'
 export { TenantClientPool, type TenantClientPoolOptions } from './pool.js'
+export {
+  rlsPolicySql,
+  setTenantConfigSql,
+  tenantConfigParams,
+  DEFAULT_TENANT_SETTING,
+  type RlsPolicyOptions,
+} from './rls.js'
 export {
   tenantSchema,
   schemaUrl,
