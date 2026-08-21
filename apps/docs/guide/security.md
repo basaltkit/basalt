@@ -41,6 +41,19 @@ The default store is in-memory (`MemoryRateLimitStore`). For multiple instances
 implement the `RateLimitStore` interface over Redis — the same driver pattern
 used by `@basaltkit/cache`.
 
+**Per-route limits.** A route can tighten the budget for a sensitive endpoint
+via `meta.rateLimit` — it gets its own bucket (keyed by IP + route) at that
+threshold, while every other route uses the global one:
+
+```ts
+route({
+  method: 'POST',
+  url: '/auth/login',
+  meta: { rateLimit: { limit: 5, windowMs: 60_000 } }, // 5/min on top of the global limit
+  // …
+})
+```
+
 ### CORS
 
 `origin` accepts `true` (reflect), a string, an allow-list array, or a
@@ -57,9 +70,12 @@ requests.
 ### Secure headers
 
 `headers: true` sets HSTS, `X-Content-Type-Options: nosniff`,
-`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
-`Cross-Origin-Opener-Policy: same-origin`. Pass an object to customize (e.g. a
-`contentSecurityPolicy` for HTML surfaces) or `false` to disable.
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
+`Cross-Origin-Opener-Policy: same-origin` and a restrictive default
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` (right for
+a JSON API). Pass an object to customize (e.g. your own `contentSecurityPolicy`
+for an HTML/docs surface), `contentSecurityPolicy: false` to omit just the CSP,
+or `headers: false` to disable them all.
 
 ## Fail-closed secrets — `secret()`
 
@@ -140,6 +156,38 @@ idempotencyPlugin() // guards POST by default
   mixed into the stored key, so one user's cached response can never be replayed
   to another (no cross-user/tenant leak), and the same key on two endpoints
   can't collide.
+
+## Revoking access tokens
+
+Access tokens (JWTs) are stateless, so they normally stay valid until they
+expire. Wire a `TokenVersionStore` to revoke them early — a password reset (and
+the explicit `revokeAllTokens(userId)`) then invalidates every token issued
+before the bump:
+
+```ts
+import { authPlugin, MemoryTokenVersionStore } from '@basaltkit/auth'
+import { PrismaTokenVersionStore } from '@basaltkit/auth-prisma' // or SqliteTokenVersionStore
+
+authPlugin({ users, secret: env.APP_SECRET, tokenVersions: new PrismaTokenVersionStore(prisma) })
+```
+
+Off by default (verification then costs one store read per request). The signing
+secret itself is guarded too: `Auth` refuses to start with an empty secret, and
+in production rejects one shorter than 32 chars (a short HS256 key is
+offline-forgeable) — use `secret({ minLength: 32 })`.
+
+## Encrypting TOTP secrets at rest
+
+TOTP is replay-protected out of the box (a code's time-step is recorded, so an
+intercepted code is single-use). To also survive a database leak, encrypt the
+stored secrets with an app-held key — they're kept as AES-256-GCM envelopes and
+decrypted only when verifying a code:
+
+```ts
+authPlugin({ users, secret: env.APP_SECRET, mfaEncryptionKey: env.MFA_KEY })
+```
+
+Existing plaintext enrollments keep working and are encrypted on their next write.
 
 ## Shared responsibility — hardening your integration
 

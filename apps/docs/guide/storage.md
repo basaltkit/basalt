@@ -57,6 +57,24 @@ await disk.list()        // every file in the current scope
 
 `get` on a missing file throws `StorageFileNotFoundError`.
 
+## Validating keys & uploads
+
+Object keys are validated on every operation across **all** drivers: a key with
+a leading slash, a `..` segment, or control characters is rejected with
+`StorageInvalidKeyError` — so a user-supplied key can never escape its prefix or
+collide with another tenant's.
+
+Uploads are unrestricted by default; pass opt-in limits to `put` to cap size and
+constrain the content type (enforced at the facade, before any driver runs):
+
+```ts
+await disk.put(key, buffer, {
+  contentType: 'image/png',
+  maxBytes: 5 * 1024 * 1024,                          // → StorageTooLargeError above 5 MiB
+  allowedContentTypes: ['image/png', 'image/jpeg'],   // → StorageContentTypeError otherwise
+})
+```
+
 ## Multiple named disks
 
 Declare as many disks as you like — e.g. public uploads on one backend, invoices
