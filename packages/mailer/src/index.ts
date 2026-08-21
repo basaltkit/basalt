@@ -3,6 +3,8 @@ import type { MailDriver } from './driver.js'
 import { LogMailDriver } from './drivers/log.js'
 import { MemoryMailDriver } from './drivers/memory.js'
 import { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
+import { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
+import { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
 import {
   assertHeaderSafe,
   MailIncompleteError,
@@ -17,11 +19,14 @@ export type { MailDriver } from './driver.js'
 export { MemoryMailDriver } from './drivers/memory.js'
 export { LogMailDriver } from './drivers/log.js'
 export { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
+export { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
+export { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
 export {
   defineMail,
   MailValidationError,
   MailIncompleteError,
   MailHeaderInjectionError,
+  MailDeliveryError,
   assertHeaderSafe,
   type MailDefinition,
   type MailSchema,
@@ -119,9 +124,13 @@ export const tenantFrom =
 export const MAILER = createToken<Mailer>('mailer')
 
 export interface MailerPluginOptions extends MailerOptions {
-  driver?: 'smtp' | 'log' | 'memory'
+  driver?: 'smtp' | 'log' | 'memory' | 'resend' | 'ses'
   /** Required with the 'smtp' driver. */
   smtp?: SmtpDriverOptions
+  /** Required with the 'resend' driver. */
+  resend?: ResendDriverOptions
+  /** Required with the 'ses' driver. */
+  ses?: SesDriverOptions
   /** Sink for the 'log' driver. Default: console.log */
   sink?: (line: string) => void
 }
@@ -135,9 +144,13 @@ export function mailerPlugin(options: MailerPluginOptions = {}) {
         driver =
           options.driver === 'smtp'
             ? new SmtpMailDriver(options.smtp as SmtpDriverOptions)
-            : options.driver === 'memory'
-              ? new MemoryMailDriver()
-              : new LogMailDriver(options.sink)
+            : options.driver === 'resend'
+              ? new ResendMailDriver(options.resend as ResendDriverOptions)
+              : options.driver === 'ses'
+                ? new SesMailDriver(options.ses as SesDriverOptions)
+                : options.driver === 'memory'
+                  ? new MemoryMailDriver()
+                  : new LogMailDriver(options.sink)
         return new Mailer(driver, options)
       })
     },

@@ -47,6 +47,17 @@ export class MailHeaderInjectionError extends BasaltError {
   }
 }
 
+/** An API-based driver (Resend, SES, …) got a non-success response from the provider. */
+export class MailDeliveryError extends BasaltError {
+  constructor(
+    readonly driver: string,
+    readonly httpStatus: number,
+    readonly detail: string,
+  ) {
+    super('MAIL_DELIVERY_FAILED', `${driver} rejected the message (HTTP ${httpStatus}): ${detail}`)
+  }
+}
+
 /** CR or LF — the raw header-injection vector, illegal anywhere in a header value. */
 // eslint-disable-next-line no-control-regex
 const NEWLINE = /[\r\n]/
