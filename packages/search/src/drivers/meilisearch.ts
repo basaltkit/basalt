@@ -16,6 +16,25 @@ export class SearchFilterFieldError extends BasaltError {
   }
 }
 
+export class SearchIndexNameError extends BasaltError {
+  constructor(name: string) {
+    super('SEARCH_INVALID_INDEX_NAME', `Invalid index name: ${JSON.stringify(name)}.`)
+  }
+}
+
+// The index name is interpolated into Meilisearch REST URL paths
+// (`/indexes/${name}/...`). Meilisearch index uids only allow letters, digits,
+// hyphens and underscores, so anything else is both invalid upstream and a way
+// to break out of the path — reject it at the boundary. Config-time identifier,
+// not request input, but validated defensively.
+const SAFE_INDEX_NAME = /^[A-Za-z0-9_-]+$/
+
+/** Throw on an index name that isn't a safe Meilisearch uid / path segment. */
+const assertValidIndexName = (name: string): string => {
+  if (!SAFE_INDEX_NAME.test(name)) throw new SearchIndexNameError(name)
+  return name
+}
+
 // A filter field is interpolated into Meilisearch's filter DSL, so it must be a
 // bare identifier (optionally dotted). Rejecting anything else stops a crafted
 // field name from injecting operators (` OR `, `=`, quotes) to escape the
@@ -48,6 +67,7 @@ export class MeilisearchDriver implements SearchDriver {
   }
 
   async register(index: IndexDefinition): Promise<void> {
+    assertValidIndexName(index.name)
     // Create the index (ignore "already exists"), then declare attributes.
     try {
       await this.request('POST', '/indexes', { uid: index.name, primaryKey: '_pk' })
@@ -65,19 +85,23 @@ export class MeilisearchDriver implements SearchDriver {
   }
 
   async bulk(indexName: string, documents: SearchDocument[]): Promise<void> {
+    assertValidIndexName(indexName)
     const withPk = documents.map((d) => ({ ...d, _pk: primaryKey(d.tenantId, d.id) }))
     await this.request('PUT', `/indexes/${indexName}/documents`, withPk)
   }
 
   async remove(indexName: string, tenantId: string, id: string): Promise<void> {
+    assertValidIndexName(indexName)
     await this.request('DELETE', `/indexes/${indexName}/documents/${primaryKey(tenantId, id)}`)
   }
 
   async clear(indexName: string): Promise<void> {
+    assertValidIndexName(indexName)
     await this.request('DELETE', `/indexes/${indexName}/documents`)
   }
 
   async search(indexName: string, query: SearchQuery): Promise<SearchResult> {
+    assertValidIndexName(indexName)
     const result = (await this.request('POST', `/indexes/${indexName}/search`, {
       q: query.q,
       filter: this.buildFilter(query.tenantId, query.filters),

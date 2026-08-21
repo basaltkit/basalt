@@ -72,3 +72,14 @@ describe('access-token revocation (M-5)', () => {
     expect((await auth.verifyAccessToken(tokens.accessToken)).sub).toBeTruthy()
   })
 })
+
+describe('recovery-code entropy (L-1)', () => {
+  it('issues 80-bit recovery codes (20 hex chars)', async () => {
+    const auth = new Auth({ users: new MemoryUserSource(), secret: SECRET })
+    const user = await auth.register('a@b.c', 'password123')
+    const { secret } = await auth.enrollMfa(user.id)
+    const { recoveryCodes } = await auth.activateMfa(user.id, totp(secret))
+    expect(recoveryCodes).toHaveLength(10)
+    expect(recoveryCodes[0]!.replace(/-/g, '')).toMatch(/^[0-9a-f]{20}$/)
+  })
+})

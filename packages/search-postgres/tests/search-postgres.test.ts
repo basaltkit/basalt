@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PostgresSearchDriver, type PgClientLike } from '../src/index.js'
+import { PostgresSearchDriver, assertValidTableName, type PgClientLike } from '../src/index.js'
 
 interface Call {
   text: string
@@ -68,6 +68,22 @@ describe('PostgresSearchDriver', () => {
     expect(select.text).toContain('0 AS score')
     expect(select.text).not.toContain('plainto_tsquery')
     expect(select.text).toContain('tenant_id = $2')
+  })
+
+  it('rejects an injection-crafted table name at construction', () => {
+    const pg = new FakePg()
+    expect(() => new PostgresSearchDriver({ client: pg, table: 'x; DROP TABLE users; --' })).toThrow(/invalid table name/i)
+    expect(() => new PostgresSearchDriver({ client: pg, table: 'a"b' })).toThrow(/invalid table name/i)
+    expect(() => new PostgresSearchDriver({ client: pg, table: '' })).toThrow(/invalid table name/i)
+    expect(() => new PostgresSearchDriver({ client: pg, table: 'a.b.c' })).toThrow(/invalid table name/i)
+  })
+
+  it('accepts a valid (optionally schema-qualified) table name and uses it in DDL', async () => {
+    const pg = new FakePg()
+    await new PostgresSearchDriver({ client: pg, table: 'app.my_search' }).register({ name: 'notes', fields: ['title'], filterable: [] })
+    expect(pg.find(/CREATE TABLE/).text).toContain('app.my_search')
+    expect(assertValidTableName('basalt_search')).toBe('basalt_search')
+    expect(assertValidTableName('_t0')).toBe('_t0')
   })
 
   it('removes and clears', async () => {

@@ -29,10 +29,12 @@ export { healthPlugin, type HealthPluginOptions, type HealthCheck, type HealthRe
 export {
   securityPlugin,
   MemoryRateLimitStore,
+  DEFAULT_CSP,
   type SecurityPluginOptions,
   type RateLimitOptions,
   type RateLimitResult,
   type RateLimitStore,
+  type RouteRateLimit,
   type CorsOptions,
   type SecurityHeadersOptions,
 } from './security.js'
