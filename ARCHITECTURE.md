@@ -18,7 +18,7 @@
 > page. Still **design-only** today:
 >
 > - **Mailer** — Mailgun driver, React-Email/MJML templates, `mail preview` (SMTP, Resend and SES now ship).
-> - **Auth** — OAuth / social login (SSO/SAML is Phase 7).
+> - **Auth** — SSO/SAML (Phase 7). OAuth / social login (Google, GitHub) now ships.
 > - **Storage** — image processing (`.image().resize().webp()`).
 > - **Cache** — stale-while-revalidate.
 > - **CLI** — `upgrade` codemods, `dev`, `queue work|stats|retry`, `generate docs`, `publish`, and most `tenant:*` / `make:*` subcommands (only `make:resource` / `make:service` ship).
@@ -478,7 +478,7 @@ await tenancy.forEach(async (t) => { /* bulk maintenance */ }, { concurrency: 5 
 
 ---
 
-## 7. `@basaltkit/auth` — Authentication  `[🚧 partial — no OAuth/social login]`
+## 7. `@basaltkit/auth` — Authentication  `[🚧 partial — no SSO/SAML]`
 
 **Goal:** complete server-side auth, with data in **your** database (Prisma), without vendor lock-in — positioned as a self-hosted alternative to Auth0/Clerk.
 
