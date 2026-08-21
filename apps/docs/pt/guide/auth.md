@@ -270,6 +270,52 @@ um código de recovery são aceites (os códigos de recovery são consumidos ao 
 implementação de TOTP não tem dependências e é verificada contra os vetores de teste
 da RFC 6238.
 
+## Login social (OAuth)
+
+Entra com Google ou GitHub via o fluxo *authorization-code* do OAuth 2.0 — sem
+SDK e sem cookies: o `state` (CSRF) é assinado com HMAC e é stateless.
+
+```ts
+import {
+  authPlugin, oauthPlugin, oauthRoutes, authRoutes, googleProvider, githubProvider,
+} from '@basaltkit/auth'
+
+createApp({
+  plugins: [
+    authPlugin({ users, secret: env.APP_SECRET }),
+    oauthPlugin({
+      secret: env.APP_SECRET, // assina o state
+      providers: [
+        googleProvider({ clientId: env.GOOGLE_ID, clientSecret: env.GOOGLE_SECRET }),
+        githubProvider({ clientId: env.GITHUB_ID, clientSecret: env.GITHUB_SECRET }),
+      ],
+    }),
+  ],
+})
+
+// regista as rotas
+fastifyPlugin({ routes: [...authRoutes(), ...oauthRoutes({ callbackBaseUrl: 'https://app.example.com' })] })
+```
+
+São adicionadas duas rotas por provider:
+
+- `GET /auth/oauth/:provider` → redireciona para o provider. Regista
+  `${callbackBaseUrl}/auth/oauth/:provider/callback` como o redirect URI do provider.
+- `GET /auth/oauth/:provider/callback` → verifica o state, troca o code e faz o
+  login do utilizador. A resposta é JSON `{ user, accessToken, refreshToken }`;
+  passa `successRedirect` para devolver o browser à tua SPA com os tokens no
+  fragmento do URL.
+
+As contas novas são criadas **sem password** (autenticam via provider até definires
+uma password); um email verificado pelo provider ativa o `emailVerified`. O
+`Auth.socialLogin(email)` é a primitiva subjacente se ligares um provider próprio.
+
+::: warning As contas são associadas por email
+Confia apenas em providers que devolvem um email **verificado**. O Google e o
+provider GitHub incorporado fazem-no — o driver do GitHub lê o endereço primário
+*verificado*.
+:::
+
 ## Reposição de password (ponta a ponta)
 
 O módulo nunca envia email — emite um hook que transporta um token de uso único

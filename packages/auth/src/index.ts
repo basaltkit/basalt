@@ -73,4 +73,22 @@ export {
 } from './apikeys.js'
 export { apiKeysPlugin, API_KEYS, type ApiKeysPluginOptions } from './apikeys-plugin.js'
 export { authRoutes, apiKeyRoutes, mfaRoutes } from './routes.js'
+export {
+  OAuth,
+  googleProvider,
+  githubProvider,
+  OAuthProviderUnknownError,
+  OAuthStateInvalidError,
+  OAuthExchangeError,
+  type OAuthProvider,
+  type OAuthProfile,
+  type OAuthOptions,
+} from './oauth.js'
+export {
+  oauthPlugin,
+  oauthRoutes,
+  OAUTH,
+  type OAuthPluginOptions,
+  type OAuthRoutesOptions,
+} from './oauth-plugin.js'
 export { LoginThrottle, AccountLockedError, type LoginThrottleOptions } from './throttle.js'
