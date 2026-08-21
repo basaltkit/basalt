@@ -1,5 +1,11 @@
 # @basaltkit/search-elasticsearch
 
+## 1.1.1
+
+### Patch Changes
+
+- Validate index names / prefix at the driver boundary so a crafted name can not break out of the REST URL path.
+
 ## 1.1.0
 
 ### Minor Changes

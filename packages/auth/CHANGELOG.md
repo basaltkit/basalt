@@ -1,5 +1,11 @@
 # @basaltkit/auth
 
+## 1.3.1
+
+### Patch Changes
+
+- MFA recovery codes now carry 80 bits of entropy (was 40) — a leaked recovery-code hash is no longer brute-forceable offline.
+
 ## 1.3.0
 
 ### Minor Changes

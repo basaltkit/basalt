@@ -1,5 +1,11 @@
 # @basaltkit/search
 
+## 1.3.0
+
+### Minor Changes
+
+- Validate the Meilisearch index name at the driver boundary (`SearchIndexNameError`) so a crafted name can not break out of the REST URL path.
+
 ## 1.2.0
 
 ### Minor Changes
