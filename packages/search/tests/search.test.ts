@@ -222,4 +222,18 @@ describe('MeilisearchDriver', () => {
     ).rejects.toThrow(/invalid filter field/i)
     expect(calls.length).toBe(0) // never reached the network
   })
+
+  it('rejects an index name that would break out of the REST URL path', async () => {
+    const { calls, driver } = meiliHarness(() => ok({}))
+    await expect(driver.search('notes/../keys', { tenantId: 'acme', q: 'x' })).rejects.toThrow(/invalid index name/i)
+    await expect(driver.register(defineIndex({ name: 'a b', fields: [] }))).rejects.toThrow(/invalid index name/i)
+    await expect(driver.remove('a/b', 'acme', '1')).rejects.toThrow(/invalid index name/i)
+    expect(calls.length).toBe(0) // never reached the network
+  })
+
+  it('accepts a valid index name', async () => {
+    const { calls, driver } = meiliHarness(() => ok({}))
+    await driver.register(defineIndex({ name: 'my-notes_1', fields: ['title'] }))
+    expect(calls[0]).toMatchObject({ method: 'POST', url: 'http://meili.test/indexes' })
+  })
 })

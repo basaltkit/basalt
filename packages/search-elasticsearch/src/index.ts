@@ -44,6 +44,27 @@ export interface ElasticsearchDriverOptions {
   fetch?: FetchLike
 }
 
+/**
+ * Index names (and the optional prefix) are interpolated into REST URL paths,
+ * so they must be safe path segments. They are configuration-time identifiers,
+ * not request input, but a developer building one from an external value would
+ * otherwise be able to break out of the path. Elasticsearch/OpenSearch names
+ * are already restricted (no uppercase, no `\/*?"<>| ,#:`), so this conservative
+ * pattern is a strict subset of what the engine accepts.
+ */
+const SAFE_INDEX_NAME = /^[A-Za-z0-9_-]+$/
+
+/** Throw on an index name that isn't a safe URL path segment; return it otherwise. */
+export function assertValidIndexName(name: string): string {
+  if (!SAFE_INDEX_NAME.test(name)) {
+    throw new Error(
+      `ElasticsearchDriver: invalid index name ${JSON.stringify(name)} — ` +
+        'must match /^[A-Za-z0-9_-]+$/.',
+    )
+  }
+  return name
+}
+
 export class ElasticsearchError extends Error {
   constructor(
     readonly httpStatus: number,
@@ -65,6 +86,9 @@ export class ElasticsearchDriver implements SearchDriver {
   constructor(options: ElasticsearchDriverOptions) {
     this.node = options.node.replace(/\/+$/, '')
     this.prefix = options.indexPrefix ?? ''
+    // The prefix is prepended to every index name in the URL path — hold it to
+    // the same safe-segment rule (empty means "no prefix", which is fine).
+    if (this.prefix) assertValidIndexName(this.prefix)
     this.refresh = options.refresh ?? false
     const headers: Record<string, string> = {}
     if (options.apiKey) {
@@ -80,7 +104,7 @@ export class ElasticsearchDriver implements SearchDriver {
   }
 
   private idx(name: string): string {
-    return `${this.prefix}${name}`
+    return `${this.prefix}${assertValidIndexName(name)}`
   }
 
   /** Compound document id for the JSON body (`_id`). */

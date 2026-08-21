@@ -8,17 +8,65 @@ import {
 import type { PutOptions, StorageDriver } from './driver.js'
 import { LocalStorageDriver } from './drivers/local.js'
 import { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
-import { StorageInvalidPathError, TemporaryUrlUnsupportedError, UnknownDiskError } from './errors.js'
+import {
+  StorageContentTypeError,
+  StorageInvalidKeyError,
+  StorageTooLargeError,
+  TemporaryUrlUnsupportedError,
+  UnknownDiskError,
+} from './errors.js'
 
 export type { StorageDriver, PutOptions } from './driver.js'
 export { LocalStorageDriver } from './drivers/local.js'
 export { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
 export {
+  StorageContentTypeError,
   StorageFileNotFoundError,
+  StorageInvalidKeyError,
   StorageInvalidPathError,
+  StorageTooLargeError,
   TemporaryUrlUnsupportedError,
   UnknownDiskError,
 } from './errors.js'
+
+// eslint-disable-next-line no-control-regex -- NUL/control chars are exactly what we reject
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
+/**
+ * Shared key guard for every driver (L-3). Cloud drivers forward object keys
+ * verbatim, so this runs at the facade choke point — the one layer all drivers
+ * pass through — rejecting keys that could produce confusing/duplicate objects
+ * or defeat prefix-based `list()` isolation. Conservative: normal nested keys
+ * like `avatars/123/pic.png` are untouched.
+ */
+function assertValidKey(key: string): void {
+  if (
+    key.startsWith('/') ||
+    key.startsWith('\\') ||
+    CONTROL_CHARS.test(key) ||
+    key.split(/[/\\]+/).some((segment) => segment === '..')
+  ) {
+    throw new StorageInvalidKeyError(key)
+  }
+}
+
+/**
+ * Shared upload guard for every driver (L-4). Both limits are opt-in, so with
+ * no options set behavior is unchanged. Byte size is enforced for `Buffer` and
+ * `string` inputs — for those the length is known up front. The driver contract
+ * only accepts `Buffer | string`, so there is no unmeasured-stream case here; a
+ * future streaming input would need enforcement pushed into the driver.
+ */
+function enforceUploadLimits(content: Buffer | string, options: PutOptions | undefined): void {
+  if (!options) return
+  if (options.maxBytes !== undefined) {
+    const bytes = typeof content === 'string' ? Buffer.byteLength(content) : content.byteLength
+    if (bytes > options.maxBytes) throw new StorageTooLargeError(bytes, options.maxBytes)
+  }
+  if (options.allowedContentTypes && !options.allowedContentTypes.includes(options.contentType ?? '')) {
+    throw new StorageContentTypeError(options.contentType, options.allowedContentTypes)
+  }
+}
 
 export interface DiskOptions {
   /**
@@ -48,7 +96,9 @@ export class Disk {
   // async so a rejected path (this.path throws) surfaces as a rejected promise,
   // consistent with the driver's own async errors.
   async put(path: string, content: Buffer | string, options?: PutOptions): Promise<void> {
-    return this.driver.put(this.path(path), content, options)
+    const key = this.path(path)
+    enforceUploadLimits(content, options)
+    return this.driver.put(key, content, options)
   }
 
   async get(path: string): Promise<Buffer> {
@@ -74,12 +124,10 @@ export class Disk {
   }
 
   private path(path: string): string {
-    // Reject traversal BEFORE scoping, so a caller-supplied key can never `..`
-    // its way out of the tenant prefix (the local driver only guards the disk
-    // root, not the tenant scope).
-    if (path.startsWith('/') || path.startsWith('\\') || path.split(/[/\\]+/).some((seg) => seg === '..')) {
-      throw new StorageInvalidPathError(path)
-    }
+    // Validate the caller key BEFORE scoping, so it can never `..` its way out
+    // of the tenant prefix and every driver — not just the local one, which
+    // guards only the disk root — gets the same key guarantee (L-3).
+    assertValidKey(path)
     const scope = this.scope?.()
     return scope ? `${scope}/${path}` : path
   }

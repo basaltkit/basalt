@@ -554,8 +554,10 @@ export class Auth {
   }
 
   private generateRecoveryCode(): string {
-    const raw = randomBytes(5).toString('hex') // 10 hex chars
-    return `${raw.slice(0, 5)}-${raw.slice(5)}`
+    // 80 bits of entropy (was 40): a leaked recovery-code hash can't be brute
+    // forced offline even with a fast/unsalted digest. 20 hex chars, grouped.
+    const raw = randomBytes(10).toString('hex')
+    return `${raw.slice(0, 5)}-${raw.slice(5, 10)}-${raw.slice(10, 15)}-${raw.slice(15)}`
   }
 
   private hashRecoveryCode(code: string): string {
