@@ -77,6 +77,8 @@ export {
   OAuth,
   googleProvider,
   githubProvider,
+  oidcProvider,
+  discoverOidcProvider,
   OAuthProviderUnknownError,
   OAuthStateInvalidError,
   OAuthExchangeError,
