@@ -1,4 +1,4 @@
-import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import type { MailDriver } from './driver.js'
 import { LogMailDriver } from './drivers/log.js'
 import { MemoryMailDriver } from './drivers/memory.js'
@@ -6,6 +6,7 @@ import { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 import { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
 import { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
 import { MailgunMailDriver, type MailgunDriverOptions } from './drivers/mailgun.js'
+import { createMailPreviewServer, type MailPreview } from './preview.js'
 import {
   assertHeaderSafe,
   MailIncompleteError,
@@ -23,6 +24,15 @@ export { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 export { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
 export { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
 export { MailgunMailDriver, type MailgunDriverOptions } from './drivers/mailgun.js'
+export {
+  createMailPreviewServer,
+  definePreview,
+  renderPreviewResponse,
+  type MailPreview,
+  type MailPreviewOptions,
+  type MailPreviewServer,
+  type PreviewResponse,
+} from './preview.js'
 export {
   defineMail,
   MailValidationError,
@@ -151,6 +161,12 @@ export interface MailerPluginOptions extends MailerOptions {
   mailgun?: MailgunDriverOptions
   /** Sink for the 'log' driver. Default: console.log */
   sink?: (line: string) => void
+  /**
+   * Mails to expose through the `mail:preview` CLI command (a browser dev
+   * server). Each carries sample data; the preview reuses the mailer's own
+   * schema validation and `layout`.
+   */
+  previews?: MailPreview[]
 }
 
 export function mailerPlugin(options: MailerPluginOptions = {}) {
@@ -158,6 +174,7 @@ export function mailerPlugin(options: MailerPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:mailer',
     register({ container }) {
+      registerPreviewCommand(container, options)
       container.singleton(MAILER, () => {
         driver =
           options.driver === 'smtp'
@@ -176,6 +193,37 @@ export function mailerPlugin(options: MailerPluginOptions = {}) {
     },
     async shutdown() {
       await driver?.disconnect()
+    },
+  })
+}
+
+/**
+ * Registers the `mail:preview` command into the CLI command bucket when the app
+ * declares previews. The command boots {@link createMailPreviewServer} and stays
+ * up until interrupted — `basalt mail:preview [--port=3737]`.
+ */
+function registerPreviewCommand(
+  container: Parameters<NonNullable<ReturnType<typeof definePlugin>['register']>>[0]['container'],
+  options: MailerPluginOptions,
+): void {
+  const previews = options.previews
+  if (!previews || previews.length === 0) return
+  ensureMetadata(container).add('commands', {
+    name: 'mail:preview',
+    description: 'Serve a browser preview of the app\'s mails',
+    async handle({ io, flags }: { io: { log(m: string): void }; flags: Record<string, string | boolean> }) {
+      const port = typeof flags['port'] === 'string' ? Number(flags['port']) : 3737
+      const server = createMailPreviewServer(previews, {
+        ...(typeof options.from === 'string' ? { from: options.from } : {}),
+        ...(options.layout ? { layout: options.layout } : {}),
+      })
+      const { url } = await server.listen(port)
+      io.log(`Mail preview running at ${url} (${previews.length} mails) \u2014 Ctrl+C to stop`)
+      await new Promise<void>((resolve) => {
+        process.once('SIGINT', () => {
+          void server.close().then(resolve)
+        })
+      })
     },
   })
 }
