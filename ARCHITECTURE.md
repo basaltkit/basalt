@@ -17,7 +17,7 @@
 > current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
 > page. Still **design-only** today:
 >
-> - **CLI** — `upgrade` codemods, `dev`, `generate docs`, `publish`, and most `tenant:*` subcommands (`queue:work|stats|retry`, `routes`, `schedule:list`, `mail:preview`, `ai:*` and `make:*` ship).
+> - **CLI** — `upgrade` codemods, `dev`, and `publish` (`generate:docs`, `queue:work|stats|retry`, `tenant:list|create|migrate|seed|run`, `routes`, `schedule:list`, `mail:preview`, `ai:*` and `make:*` ship).
 > - **create-basalt** — the rich interactive wizard (it's flag-based today).
 > - **Dashboard** — the ready-made analytics app (headless `admin` + per-feature UIs ship).
 > - **Docs** — StackBlitz buttons, Algolia DocSearch, typedoc reference.

@@ -1,4 +1,4 @@
-import { definePlugin, ensureMetadata } from '@basaltkit/core'
+import { definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import type { ZodTypeAny } from 'zod'
 import { HTTP_SERVER } from './server.js'
 
@@ -228,6 +228,9 @@ export interface OpenApiPluginOptions {
 export function openapiPlugin(options: OpenApiPluginOptions) {
   return definePlugin({
     name: 'basalt:openapi',
+    register({ container }) {
+      registerDocsCommand(container, options)
+    },
     boot({ container, hooks }) {
       const metadata = ensureMetadata(container)
       // Placeholder until routes are collected — see the app:booted handler.
@@ -249,6 +252,38 @@ export function openapiPlugin(options: OpenApiPluginOptions) {
         document = generateOpenApi(routes, options.info, options.tags)
       })
       container.get(HTTP_SERVER).addRoute('GET', options.path ?? '/openapi.json', () => document)
+    },
+  })
+}
+
+/**
+ * Registers `generate:docs` into the CLI command bucket. It rebuilds the OpenAPI
+ * document from the same routes/info/tags the plugin serves and writes it to a
+ * file (`--out`, default `openapi.json`) or stdout (`--stdout`). Structural
+ * registration keeps @basaltkit/http free of a hard @basaltkit/cli dependency.
+ */
+function registerDocsCommand(container: Container, options: OpenApiPluginOptions): void {
+  ensureMetadata(container).add('commands', {
+    name: 'generate:docs',
+    description: 'Write the OpenAPI 3.0 document (--out=<file> | --stdout)',
+    async handle({
+      io,
+      flags,
+    }: {
+      io: { log(m: string): void; error(m: string): void }
+      flags: Record<string, string | boolean>
+    }) {
+      const routes = options.routes ?? ensureMetadata(container).get<RouteLike>('http:routes')
+      const document = generateOpenApi(routes, options.info, options.tags)
+      const json = JSON.stringify(document, null, 2)
+      if (flags['stdout'] === true) {
+        io.log(json)
+        return
+      }
+      const out = typeof flags['out'] === 'string' ? flags['out'] : 'openapi.json'
+      const { writeFile } = await import('node:fs/promises')
+      await writeFile(out, `${json}\n`, 'utf8')
+      io.log(`Wrote ${Object.keys(document.paths as object).length} path(s) to ${out}.`)
     },
   })
 }
