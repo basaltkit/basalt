@@ -61,7 +61,7 @@ TypeScript.
 - Queres **TypeScript de ponta a ponta**, com tipos a partir dos schemas, OpenAPI
   e um cliente gerado.
 - Valorizas **pacotes pequenos e compostáveis** e escolher só o que precisas —
-  funciona igualmente bem para uma API simples (vê [Para além do SaaS](./para-alem-do-saas)).
+  funciona igualmente bem para uma API simples (vê [Para além do SaaS](./beyond-saas)).
 
 ## Quando procurar outra coisa
 

@@ -1,7 +1,7 @@
 # Pacotes
 
 O Basalt é um conjunto de pacotes pequenos e focados sob o scope `@basaltkit/*`.
-Cada um funciona por si só; juntos formam o framework. Cada pacote é versionado de forma independente — vê a página [Ecossistema](../guide/ecossistema) para a versão atual de cada um.
+Cada um funciona por si só; juntos formam o framework. Cada pacote é versionado de forma independente — vê a página [Ecossistema](../guide/ecosystem) para a versão atual de cada um.
 
 ## Fundação
 
