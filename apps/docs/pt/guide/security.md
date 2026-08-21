@@ -5,8 +5,11 @@ Tudo aqui é zero-dependências e ligado através do ciclo de vida dos plugins.
 
 ## Proteção de borda — `securityPlugin`
 
-Um só plugin cobre rate limiting, CORS e cabeçalhos de resposta seguros. Os três
-estão ligados por omissão com valores sensatos.
+Um só plugin cobre rate limiting, CORS e cabeçalhos de resposta seguros. **Os
+cabeçalhos seguros estão ligados por omissão**; o rate limiting e o CORS são
+opt-in — ativa-os explicitamente para produção. As apps novas já trazem
+`securityPlugin()` no scaffold, por isso os cabeçalhos ficam protegidos desde o
+primeiro deploy.
 
 ```ts
 import { securityPlugin } from '@basaltkit/fastify'

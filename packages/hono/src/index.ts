@@ -14,6 +14,9 @@ import { Hono, type Context, type Next } from 'hono'
 
 export const HONO = createToken<Hono<any>>('hono')
 
+/** Default maximum request body size (1 MiB) — override via honoPlugin({ bodyLimit }). */
+export const DEFAULT_BODY_LIMIT = 1_048_576
+
 async function parseBody(context: Context): Promise<unknown> {
   const method = context.req.method
   if (method === 'GET' || method === 'HEAD') return undefined
@@ -134,6 +137,12 @@ export interface HonoPluginOptions {
   routes?: BasaltRoute[]
   /** Bring your own Hono app; otherwise a fresh one is created. */
   app?: Hono<any>
+  /**
+   * Maximum request body size in bytes. A request whose `Content-Length`
+   * exceeds this is rejected with 413 before the body is read — Hono/edge has
+   * no default cap, so without this a large upload is unbounded. Default: 1 MiB.
+   */
+  bodyLimit?: number
 }
 
 /**
@@ -157,7 +166,19 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
       const guards = metadata.get<RouteGuard>('http:guards')
 
       // Mount once edge plugins have registered their hooks/routes.
+      const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT
       hooks.on('app:booted', () => {
+        // Reject oversized bodies up front (Hono/edge has no default cap).
+        app.use(async (context: Context, next: Next) => {
+          const declared = Number(context.req.header('content-length') ?? '')
+          if (Number.isFinite(declared) && declared > bodyLimit) {
+            return context.json(
+              { code: 'PAYLOAD_TOO_LARGE', message: `Request body exceeds the ${bodyLimit}-byte limit.` },
+              413,
+            )
+          }
+          return next()
+        })
         if (collector.afterHooks.length) {
           app.use(async (context: Context, next: Next) => {
             const start = Date.now()
