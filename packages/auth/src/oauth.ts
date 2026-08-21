@@ -108,6 +108,79 @@ export function githubProvider(keys: ProviderKeys): OAuthProvider {
   }
 }
 
+interface OidcConfig extends ProviderKeys {
+  /** Display name for this provider. Default: 'oidc'. */
+  name?: string
+  authorizeUrl: string
+  tokenUrl: string
+  userInfoUrl: string
+}
+
+/**
+ * A generic **OIDC** provider — enterprise SSO for any OpenID Connect IdP
+ * (Okta, Azure AD / Entra ID, Auth0, Google Workspace, Keycloak…). Pass the
+ * three endpoints from the IdP's `.well-known/openid-configuration`, or use
+ * {@link discoverOidcProvider} to fetch them for you. Maps the standard OIDC
+ * `userinfo` claims (`sub`, `email`, `email_verified`, `name`).
+ */
+export function oidcProvider(config: OidcConfig): OAuthProvider {
+  return {
+    name: config.name ?? 'oidc',
+    authorizeUrl: config.authorizeUrl,
+    tokenUrl: config.tokenUrl,
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    scopes: config.scopes ?? ['openid', 'email', 'profile'],
+    async fetchProfile(accessToken, doFetch) {
+      const res = await doFetch(config.userInfoUrl, { headers: { authorization: `Bearer ${accessToken}` } })
+      if (!res.ok) throw new OAuthExchangeError(`oidc userinfo HTTP ${res.status}`)
+      const p = (await res.json()) as { sub?: string; email?: string; email_verified?: boolean; name?: string }
+      return {
+        subject: String(p.sub),
+        email: String(p.email),
+        emailVerified: p.email_verified === true,
+        ...(p.name ? { name: p.name } : {}),
+      }
+    },
+  }
+}
+
+/**
+ * Builds an {@link oidcProvider} by fetching the IdP's OIDC discovery document
+ * (`${issuer}/.well-known/openid-configuration`). Await it at startup.
+ */
+export async function discoverOidcProvider(config: {
+  name?: string
+  /** The IdP issuer URL, e.g. `https://acme.okta.com` or `https://login.microsoftonline.com/<tenant>/v2.0`. */
+  issuer: string
+  clientId: string
+  clientSecret: string
+  scopes?: string[]
+  fetch?: typeof fetch
+}): Promise<OAuthProvider> {
+  const doFetch = config.fetch ?? globalThis.fetch
+  const url = `${config.issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`
+  const res = await doFetch(url)
+  if (!res.ok) throw new OAuthExchangeError(`OIDC discovery HTTP ${res.status} for ${url}`)
+  const meta = (await res.json()) as {
+    authorization_endpoint?: string
+    token_endpoint?: string
+    userinfo_endpoint?: string
+  }
+  if (!meta.authorization_endpoint || !meta.token_endpoint || !meta.userinfo_endpoint) {
+    throw new OAuthExchangeError('OIDC discovery document is missing required endpoints')
+  }
+  return oidcProvider({
+    ...(config.name ? { name: config.name } : {}),
+    authorizeUrl: meta.authorization_endpoint,
+    tokenUrl: meta.token_endpoint,
+    userInfoUrl: meta.userinfo_endpoint,
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    ...(config.scopes ? { scopes: config.scopes } : {}),
+  })
+}
+
 export interface OAuthOptions {
   /** Secret used to sign the CSRF `state` (typically your APP_SECRET). */
   secret: string
