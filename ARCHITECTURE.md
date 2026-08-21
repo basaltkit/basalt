@@ -569,6 +569,42 @@ await tenant.features.consume('api.requests', 1)         // metered; throws Quot
 
 **Roadmap:** v1 Stripe + plans/trials/feature flags; v1.x metered billing, coupons, invoices; v2 Paddle + Lemon Squeezy, international tax/invoicing.
 
+#### 9.1 Decision — bundled drivers vs satellite gateway packages
+
+Two distinct contracts live in this package, and they draw the packaging line:
+
+- **`BillingGateway`** — recurring subscriptions (hosted checkout, customer
+  portal, plan swap with proration, subscription-lifecycle webhooks).
+- **`PaymentGateway`** — single reference/push payments with no card-on-file
+  (an amount → a Reference or a phone push → one `payment.succeeded`).
+
+**A gateway ships *inside* `@basaltkit/subscriptions`** (as a driver under
+`src/drivers/`) when it is **universal, stable, SDK-free, and on the core's
+release cadence**. Stripe, Paddle and Lemon Squeezy qualify: each is a
+`BillingGateway` implemented with `fetch` only — no third-party SDK, so bundling
+adds zero install weight. This is the same "batteries-included" choice the mailer
+makes by bundling smtp/resend/ses/mailgun rather than a package per provider.
+
+**A gateway ships as a *satellite* package** — its own npm package that
+`peerDependencies` on `@basaltkit/subscriptions` — when any of these hold:
+
+- **Regional / opt-in.** It serves one market, so most apps never install it.
+  `@basaltkit/subscriptions-proxypay` (2.1.0) and `@basaltkit/subscriptions-appypay`
+  (0.3.0) are `PaymentGateway` drivers for Angolan Multicaixa/EMIS (AOA); a global
+  app should not carry them.
+- **Independent release cadence.** A satellite versions on its own clock
+  (ProxyPay is at 2.x, AppyPay at 0.x) instead of being pinned to the core.
+- **Pre-release / unvetted.** A driver with `TODO(verify)` wire details **must
+  not** ride inside a stable release. AppyPay stays a satellite at `0.3.0` and
+  **unpublished** until validated against a real sandbox — impossible if it lived
+  in the 2.x core.
+
+**Rule of thumb:** *global + stable + SDK-free → bundled driver; regional,
+independently versioned, or pre-release → opt-in satellite package.* The line is
+pragmatic, not dogmatic: a satellite can graduate into a bundled driver once it is
+universal and stable, and a bundled driver could be extracted if it ever grew an
+SDK dependency or a divergent release cadence.
+
 ## 10. `@basaltkit/audit` + `@basaltkit/activity`  `[✅ shipped]`
 
 **Audit** (compliance — immutable, automatic):
