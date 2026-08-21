@@ -11,7 +11,8 @@ is kept as a **historical record** of how we got here — every gate below was m
 > **Note (post-1.0):** the ecosystem has since moved to **independent per-package
 > versioning** (the packages are no longer released in lockstep, and the umbrella
 > "Basalt 1.1" marker is for comms/docs). Mentions of lockstep below reflect the
-> 1.0-era policy. Current model: [VERSIONING.md](./VERSIONING.md).
+> 1.0-era policy. Current model: [VERSIONING.md](./VERSIONING.md). The next
+> generation is tracked in [RELEASE_1.1_CHECKLIST.md](./RELEASE_1.1_CHECKLIST.md).
 
 ---
 
