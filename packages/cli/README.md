@@ -87,8 +87,14 @@ Without registering anything, `runCli` always provides:
 | `basalt list` (or `basalt` with no arguments) | Lists all available commands, with their descriptions |
 | `basalt routes` | Lists the HTTP routes registered by the application (read from the `http:routes` metadata bucket, populated by HTTP adapters such as `@basaltkit/fastify`) |
 | `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
+| `basalt dev [--entry=<file>]` | Runs the app with file watching + auto-restart (delegates to `tsx watch` when available, otherwise `node --watch`) |
+| `basalt upgrade [--dry] [--only=<id>]` | Applies framework upgrade codemods (ships the `@machize/*` → `@basaltkit/*` scope rename; `--dry` previews) |
+| `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile`, `ci`, `editorconfig` (run with no id to list) |
 
-If you also install `@basaltkit/generator`, you gain the `make:*` commands (see the "How it connects to other modules" section).
+If you also install `@basaltkit/generator`, you gain the `make:*` commands. Feature
+plugins register their own: `queue:work|stats|retry` (`@basaltkit/queue`),
+`tenant:list|create|migrate|seed|run` (`@basaltkit/tenancy`), `generate:docs`
+(`@basaltkit/http`), and `mail:preview` (`@basaltkit/mailer`).
 
 ### Defining a command with arguments and flags
 
@@ -211,7 +217,7 @@ Renders the rows as an aligned text table, with no external dependencies. Return
 
 ### `builtinCommands(): CommandDefinition[]`
 
-Returns `[routesCommand, scheduleListCommand]`. *(Advanced — `runCli` already includes them automatically.)*
+Returns `[routesCommand, scheduleListCommand, devCommand, upgradeCommand, publishCommand]`. *(Advanced — `runCli` already includes them automatically.)*
 
 ### `routesCommand` / `scheduleListCommand`
 

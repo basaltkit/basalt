@@ -10,3 +10,25 @@ export {
   type RouteMetadata,
   type ScheduleMetadata,
 } from './builtins.js'
+export { devCommand, resolveDevEntry, resolveDevRunner, DEV_ENTRY_CANDIDATES, type DevRunner } from './dev.js'
+export {
+  upgradeCommand,
+  runUpgrade,
+  MIGRATIONS,
+  renameMachizeScope,
+  nodeUpgradeFs,
+  type Migration,
+  type Edit,
+  type UpgradeFs,
+  type UpgradeReport,
+} from './upgrade.js'
+export {
+  publishCommand,
+  runPublish,
+  PUBLISHABLES,
+  nodePublishFs,
+  type Publishable,
+  type PublishableFile,
+  type PublishFs,
+  type PublishResult,
+} from './publish.js'
