@@ -82,3 +82,10 @@ model AuthMfa {
 
   @@map("auth_mfa")
 }
+
+model AuthTokenVersion {
+  userId  String @id
+  version Int    @default(0)
+
+  @@map("auth_token_versions")
+}
