@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createApp, runWithContext } from '@basaltkit/core'
 import { defineEvent, EVENTS, eventsPlugin } from '@basaltkit/events'
 import { z } from 'zod'
-import { AUDIT, auditPlugin, patternMatches } from '../src/index.js'
+import { AUDIT, auditPlugin, patternMatches, piiMinimizingRedactor, pseudonymize } from '../src/index.js'
 
 describe('patternMatches', () => {
   it('handles hook (:) and event (.) separators with * and **', () => {
@@ -29,7 +29,7 @@ describe('auditPlugin', () => {
     )
     await app.hooks.emit('app:internal', { noise: true }) // not in the allowlist
 
-    const trail = await audit.trail()
+    const trail = await audit.systemTrail()
     expect(trail).toHaveLength(1)
     expect(trail[0]).toMatchObject({
       source: 'hook',
@@ -45,7 +45,7 @@ describe('auditPlugin', () => {
     await runWithContext({ tenant: { id: 'acme' } }, () =>
       app.hooks.emit('auth:login', { user: { id: 'u1' }, password: 'hunter2', apiKey: 'sk_live_x', token: 'abc', nested: { sessionId: 's1' } }),
     )
-    const [entry] = await audit.trail()
+    const [entry] = await audit.systemTrail()
     const payload = entry!.payload as Record<string, unknown>
     expect(payload['password']).toBe('[redacted]')
     expect(payload['apiKey']).toBe('[redacted]')
@@ -62,8 +62,42 @@ describe('auditPlugin', () => {
     // queried inside acme's context → only acme's entries
     const acme = await runWithContext({ tenant: { id: 'acme' } }, () => audit.trail())
     expect(acme.map((e) => e.tenantId)).toEqual(['acme'])
-    // a system caller with no tenant context still sees both
-    expect((await audit.trail()).length).toBe(2)
+    // a system caller uses the explicit escape hatch to see both
+    expect((await audit.systemTrail()).length).toBe(2)
+  })
+
+  it('trail() FORCES the context tenant — a caller-supplied tenantId cannot widen scope (PII F2)', async () => {
+    const { app, audit } = await boot()
+    await runWithContext({ tenant: { id: 'acme' } }, () => app.hooks.emit('auth:login', { user: { id: 'a' } }))
+    await runWithContext({ tenant: { id: 'victim' } }, () => app.hooks.emit('auth:login', { user: { id: 'v' } }))
+
+    // Inside acme's context, forwarding a client-controlled `tenantId: 'victim'`
+    // must NOT read victim's trail — the context tenant wins.
+    const leaked = await runWithContext({ tenant: { id: 'acme' } }, () => audit.trail({ tenantId: 'victim' }))
+    expect(leaked.map((e) => e.tenantId)).toEqual(['acme'])
+    expect(leaked.some((e) => e.tenantId === 'victim')).toBe(false)
+  })
+
+  it('systemTrail() is the explicit escape hatch for unscoped cross-tenant reads (PII F2)', async () => {
+    const { app, audit } = await boot()
+    await runWithContext({ tenant: { id: 'acme' } }, () => app.hooks.emit('auth:login', { user: { id: 'a' } }))
+    await runWithContext({ tenant: { id: 'victim' } }, () => app.hooks.emit('auth:login', { user: { id: 'v' } }))
+
+    // Unscoped read returns every tenant only when deliberately requested.
+    expect((await audit.systemTrail()).map((e) => e.tenantId).sort()).toEqual(['acme', 'victim'])
+    // and it still honours an explicit single-tenant filter.
+    expect((await audit.systemTrail({ tenantId: 'victim' })).map((e) => e.tenantId)).toEqual(['victim'])
+  })
+
+  it('trail() refuses a silent broad read with no tenant in context (PII F2)', async () => {
+    const { app, audit } = await boot()
+    await runWithContext({ tenant: { id: 'acme' } }, () => app.hooks.emit('auth:login', { user: { id: 'a' } }))
+
+    // No tenant context and no explicit tenantId → must not return everything.
+    await expect(audit.trail()).rejects.toThrow(/systemTrail/)
+    // A normal scoped read (inside the tenant context) still works.
+    const scoped = await runWithContext({ tenant: { id: 'acme' } }, () => audit.trail())
+    expect(scoped.map((e) => e.tenantId)).toEqual(['acme'])
   })
 
   it('records domain events from the EventBus', async () => {
@@ -74,7 +108,7 @@ describe('auditPlugin', () => {
       bus.emit(OrderCreated, { orderId: 'o-1' }),
     )
 
-    const trail = await audit.trail({ event: 'order.**' })
+    const trail = await audit.systemTrail({ event: 'order.**' })
     expect(trail[0]).toMatchObject({
       source: 'event',
       event: 'order.created',
@@ -96,15 +130,15 @@ describe('auditPlugin', () => {
     await audit.record('maintenance.run')
 
     expect(await audit.trail({ tenantId: 'acme' })).toHaveLength(1)
-    expect(await audit.trail({ actorId: 'u1' })).toHaveLength(1)
-    const all = await audit.trail({ limit: 2 })
+    expect(await audit.systemTrail({ actorId: 'u1' })).toHaveLength(1)
+    const all = await audit.systemTrail({ limit: 2 })
     expect(all.map((entry) => entry.event)).toEqual(['maintenance.run', 'data.export'])
   })
 
   it('entries are frozen — the trail cannot be tampered with', async () => {
     const { app, audit } = await boot()
     await app.hooks.emit('auth:login', { user: { id: 'u1' } })
-    const [entry] = await audit.trail()
+    const [entry] = await audit.systemTrail()
     expect(Object.isFrozen(entry)).toBe(true)
     expect(() => {
       ;(entry as { event: string }).event = 'tampered'
@@ -115,7 +149,22 @@ describe('auditPlugin', () => {
     const { app, audit } = await boot({ hooks: ['custom:**'], events: [] })
     await app.hooks.emit('auth:login', { user: { id: 'u1' } })
     await app.hooks.emit('custom:thing', { ok: true })
-    const trail = await audit.trail()
+    const trail = await audit.systemTrail()
     expect(trail.map((entry) => entry.event)).toEqual(['custom:thing'])
+  })
+
+  it('opt-in piiMinimizingRedactor pseudonymizes PII while still masking secrets (PII F3)', async () => {
+    const { app, audit } = await boot({ redact: piiMinimizingRedactor })
+    await runWithContext({ tenant: { id: 'acme' } }, () =>
+      app.hooks.emit('auth:login', { user: { id: 'u1', email: 'alice@example.com' }, password: 'hunter2' }),
+    )
+    const [entry] = await audit.systemTrail()
+    const payload = entry!.payload as Record<string, unknown>
+    const user = payload['user'] as Record<string, unknown>
+    // secrets still masked, PII pseudonymized deterministically, non-PII kept
+    expect(payload['password']).toBe('[redacted]')
+    expect(user['email']).toBe(pseudonymize('alice@example.com'))
+    expect(user['email']).not.toContain('alice@example.com')
+    expect(user['id']).toBe('u1')
   })
 })

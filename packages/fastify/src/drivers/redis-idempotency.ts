@@ -55,8 +55,12 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     return JSON.parse(raw) as IdempotencyRecord
   }
 
-  async setPending(key: string): Promise<void> {
-    await this.redis.set(this.key(key), PENDING, 'PX', this.px())
+  async setPending(key: string): Promise<boolean> {
+    // SET ... NX makes the reservation atomic: Redis writes the key only if it is
+    // absent, returning 'OK'; a losing racer gets null. This closes the TOCTOU gap
+    // where two concurrent first-time requests could both reserve and both run.
+    const result = await this.redis.set(this.key(key), PENDING, 'PX', this.px(), 'NX')
+    return result !== null
   }
 
   async complete(key: string, record: IdempotencyRecord): Promise<void> {

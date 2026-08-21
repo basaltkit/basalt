@@ -108,6 +108,77 @@ describe('Mailer', () => {
     expect(lines[0]).toContain('Welcome, Ada!')
   })
 
+  it('rejects a subject carrying CRLF header injection', async () => {
+    const { driver, mailer } = setup()
+    const Evil = defineMail({
+      name: 'evil-subject',
+      subject: () => 'Hi\r\nBcc: evil@x.com',
+      text: () => 'body',
+    })
+    await expect(mailer.send(Evil, { to: 'ada@example.com' })).rejects.toMatchObject({
+      code: 'MAIL_HEADER_INJECTION',
+      field: 'subject',
+      status: 400,
+    })
+    expect(driver.sent).toHaveLength(0)
+  })
+
+  it('rejects a recipient address containing a newline', async () => {
+    const { driver, mailer } = setup()
+    await expect(
+      mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com\nBcc: evil@x.com' }),
+    ).rejects.toMatchObject({ code: 'MAIL_HEADER_INJECTION', field: 'to' })
+    expect(driver.sent).toHaveLength(0)
+  })
+
+  it('rejects injection in cc, bcc, replyTo and from too', async () => {
+    const { mailer } = setup()
+    await expect(
+      mailer.send(WelcomeEmail, { name: 'A' }, { to: 'a@b.c', cc: 'x@y.z\r\nBcc: e@x.com' }),
+    ).rejects.toMatchObject({ code: 'MAIL_HEADER_INJECTION', field: 'cc' })
+    await expect(
+      mailer.send(WelcomeEmail, { name: 'A' }, { to: 'a@b.c', bcc: ['ok@x.com', 'bad\n@x.com'] }),
+    ).rejects.toMatchObject({ code: 'MAIL_HEADER_INJECTION', field: 'bcc' })
+    await expect(
+      mailer.send(WelcomeEmail, { name: 'A' }, { to: 'a@b.c', replyTo: 'r@x.com\rSubject: x' }),
+    ).rejects.toMatchObject({ code: 'MAIL_HEADER_INJECTION', field: 'replyTo' })
+
+    const bad = new Mailer(new MemoryMailDriver(), { from: 'noreply\n@x.com' })
+    await expect(
+      bad.send(WelcomeEmail, { name: 'A' }, { to: 'a@b.c' }),
+    ).rejects.toMatchObject({ code: 'MAIL_HEADER_INJECTION', field: 'from' })
+  })
+
+  it('rejects a malformed address with no @ or spaces in the addr-spec', async () => {
+    const { mailer } = setup()
+    await expect(
+      mailer.send(WelcomeEmail, { name: 'A' }, { to: 'not-an-email' }),
+    ).rejects.toMatchObject({ code: 'MAIL_HEADER_INJECTION', field: 'to' })
+    await expect(
+      mailer.send(WelcomeEmail, { name: 'A' }, { to: 'spaced @example.com' }),
+    ).rejects.toMatchObject({ code: 'MAIL_HEADER_INJECTION', field: 'to' })
+  })
+
+  it('still builds a normal message, including a display-name address', async () => {
+    const { driver, mailer } = setup({ replyTo: 'support@basalt.dev' })
+    await mailer.send(
+      WelcomeEmail,
+      { name: 'Ada' },
+      {
+        to: '"Ada Lovelace" <ada@example.com>',
+        cc: ['Bob <bob@example.com>', 'carol@example.com'],
+        from: 'Basalt <noreply@basalt.dev>',
+      },
+    )
+    expect(driver.sent).toHaveLength(1)
+    expect(driver.sent[0]).toMatchObject({
+      to: ['"Ada Lovelace" <ada@example.com>'],
+      cc: ['Bob <bob@example.com>', 'carol@example.com'],
+      from: 'Basalt <noreply@basalt.dev>',
+      subject: 'Welcome, Ada!',
+    })
+  })
+
   it('mailerPlugin registers the token with the chosen driver', async () => {
     const app = await createApp({
       plugins: [mailerPlugin({ driver: 'memory', from: 'noreply@basalt.dev' })],

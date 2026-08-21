@@ -82,26 +82,37 @@ export interface VerifyTotpOptions extends TotpOptions {
   window?: number
 }
 
-/** True when `token` matches the TOTP within the allowed time window (constant-time). */
-export function verifyTotp(secret: string, token: string, options: VerifyTotpOptions = {}): boolean {
+/**
+ * The TOTP step (counter) that `token` matches within the allowed window, or
+ * null. Constant-time over the window (no early exit → no timing side channel).
+ * The step is what enables replay prevention: persist the last-accepted step and
+ * reject any code whose step is ≤ it (RFC 6238 §5.2).
+ */
+export function matchTotpStep(secret: string, token: string, options: VerifyTotpOptions = {}): number | null {
   const period = options.period ?? 30
   const digits = options.digits ?? 6
   const now = options.now ?? Date.now()
   const window = options.window ?? 1
   const cleaned = token.replace(/\s/g, '')
-  if (cleaned.length !== digits) return false
+  if (cleaned.length !== digits) return null
 
   const key = base32Decode(secret)
   const base = Math.floor(now / 1000 / period)
-  let ok = false
+  let matched = -1
   // Loop the whole window regardless of an early hit — no timing side channel.
   for (let error = -window; error <= window; error++) {
-    const candidate = hotp(key, base + error, digits)
+    const step = base + error
+    const candidate = hotp(key, step, digits)
     if (candidate.length === cleaned.length && timingSafeEqual(Buffer.from(candidate), Buffer.from(cleaned))) {
-      ok = true
+      matched = step
     }
   }
-  return ok
+  return matched === -1 ? null : matched
+}
+
+/** True when `token` matches the TOTP within the allowed time window (constant-time). */
+export function verifyTotp(secret: string, token: string, options: VerifyTotpOptions = {}): boolean {
+  return matchTotpStep(secret, token, options) !== null
 }
 
 export interface OtpauthUriInput {

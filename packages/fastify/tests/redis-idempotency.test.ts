@@ -12,6 +12,9 @@ function fakeRedis() {
     },
     async set(key, value, ...args) {
       setCalls.push([key, value, ...args])
+      // Honour NX: only write when the key is absent, mirroring Redis' return of
+      // null for a rejected SET so we can exercise the atomic reservation path.
+      if (args.includes('NX') && store.has(key)) return null
       store.set(key, value)
       return 'OK'
     },
@@ -30,7 +33,7 @@ describe('RedisIdempotencyStore', () => {
     const s = new RedisIdempotencyStore(redis.client, { prefix: 'idem' })
 
     expect(await s.get('k')).toBeUndefined()
-    await s.setPending('k')
+    expect(await s.setPending('k')).toBe(true) // won the reservation
     expect(await s.get('k')).toBe('pending')
 
     const record = { status: 201, body: '{"id":1}', contentType: 'application/json' }
@@ -50,6 +53,14 @@ describe('RedisIdempotencyStore', () => {
     const redis = fakeRedis()
     const s = new RedisIdempotencyStore(redis.client, { prefix: 'idem', ttlMs: 5000 })
     await s.setPending('k')
-    expect(redis.setCalls[0]).toEqual(['idem:k', 'pending', 'PX', 5000])
+    expect(redis.setCalls[0]).toEqual(['idem:k', 'pending', 'PX', 5000, 'NX'])
+  })
+
+  it('reserves atomically with NX — a second setPending on a held key loses', async () => {
+    const redis = fakeRedis()
+    const s = new RedisIdempotencyStore(redis.client, { prefix: 'idem' })
+    expect(await s.setPending('k')).toBe(true) // first caller wins
+    expect(await s.setPending('k')).toBe(false) // key already held → rejected
+    expect(await s.get('k')).toBe('pending') // still the original reservation
   })
 })

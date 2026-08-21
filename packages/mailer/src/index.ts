@@ -4,6 +4,7 @@ import { LogMailDriver } from './drivers/log.js'
 import { MemoryMailDriver } from './drivers/memory.js'
 import { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 import {
+  assertHeaderSafe,
   MailIncompleteError,
   toList,
   validateMailData,
@@ -20,6 +21,8 @@ export {
   defineMail,
   MailValidationError,
   MailIncompleteError,
+  MailHeaderInjectionError,
+  assertHeaderSafe,
   type MailDefinition,
   type MailSchema,
   type Envelope,
@@ -83,7 +86,7 @@ export class Mailer {
     if (!from) throw new MailIncompleteError('from')
 
     const replyTo = envelope.replyTo ?? this.options.replyTo
-    return {
+    const message: ResolvedMail = {
       mail: mail.name,
       to,
       from,
@@ -94,6 +97,9 @@ export class Mailer {
       text: mail.text?.(validated),
       html: mail.html?.(validated),
     }
+    // Single header-injection choke point: guards every driver, not just SMTP.
+    assertHeaderSafe(message)
+    return message
   }
 
   private defaultFrom(): string | undefined {

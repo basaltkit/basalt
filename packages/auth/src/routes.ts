@@ -32,8 +32,13 @@ export function authRoutes(): BasaltRoute[] {
       method: 'POST',
       url: '/auth/login',
       body: credentials.extend({ mfaCode: z.string().optional() }),
-      async handler({ body }) {
-        const { user, tokens } = await auth().login(body.email, body.password, body.mfaCode)
+      async handler({ body, request }) {
+        const { user, tokens } = await auth().login(
+          body.email,
+          body.password,
+          body.mfaCode,
+          request.ip ? { ip: request.ip } : {},
+        )
         return { user, ...tokens }
       },
     }),

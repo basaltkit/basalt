@@ -1,6 +1,14 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { assertDeliverableUrl, WebhookUrlBlockedError, type SsrfGuardOptions } from './ssrf.js'
+import { resolveAndValidate, WebhookUrlBlockedError, type SsrfGuardOptions, type ValidatedAddress } from './ssrf.js'
+import { pinnedRequest } from './pinned-fetch.js'
 import type { WebhookEndpoint } from './store.js'
+
+/**
+ * Non-standard init key carrying the SSRF-validated address the connection is
+ * pinned to. The built-in transport uses the explicit argument; an injected
+ * `fetchImpl` (which can't take extra positional args) can read it from init.
+ */
+export const PINNED_ADDRESS: unique symbol = Symbol('basalt.webhooks.pinnedAddress')
 
 /**
  * Signs a payload the Stripe way: `t=<unix>,v1=<hmac-sha256(t.body)>`. The
@@ -62,7 +70,8 @@ export class WebhookDeliverer {
   private readonly maxRetries: number
   private readonly backoffMs: number
   private readonly timeoutMs: number
-  private readonly fetchImpl: typeof fetch
+  /** Injected HTTP client; when absent the built-in pinned transport is used. */
+  private readonly fetchImpl: typeof fetch | undefined
   private readonly sleep: (ms: number) => Promise<void>
   private readonly now: () => number
 
@@ -70,9 +79,27 @@ export class WebhookDeliverer {
     this.maxRetries = options.maxRetries ?? 3
     this.backoffMs = options.backoffMs ?? 500
     this.timeoutMs = options.timeoutMs ?? 10_000
-    this.fetchImpl = options.fetchImpl ?? fetch
+    this.fetchImpl = options.fetchImpl
     this.sleep = options.sleep ?? defaultSleep
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000))
+  }
+
+  /**
+   * Sends one request. With no injected `fetchImpl`, uses the built-in transport
+   * that pins the socket to `pinned` (rebind-proof). An injected `fetchImpl`
+   * receives the pin on the init object under {@link PINNED_ADDRESS} so callers
+   * that pin via a dispatcher — and tests — can observe/use it.
+   */
+  private send(
+    url: string,
+    init: { method: string; headers: Record<string, string>; body: string; redirect: 'manual'; signal: AbortSignal },
+    pinned: ValidatedAddress | null,
+  ): Promise<{ ok: boolean; status: number; type?: string }> {
+    if (this.fetchImpl) {
+      const initWithPin = { ...init, [PINNED_ADDRESS]: pinned } as RequestInit
+      return this.fetchImpl(url, initWithPin)
+    }
+    return pinnedRequest(new URL(url), init, pinned)
   }
 
   async deliver(endpoint: WebhookEndpoint, event: string, data: unknown): Promise<DeliveryResult> {
@@ -80,11 +107,14 @@ export class WebhookDeliverer {
     const body = JSON.stringify({ event, data, sentAt: new Date(timestamp * 1000).toISOString() })
     const secret = endpoint.secret ?? this.options.secret
 
-    // SSRF guard (unless explicitly disabled): validate the URL ONCE up front. A
-    // blocked URL is a permanent config error, so fail immediately without retry.
+    // SSRF guard (unless explicitly disabled): resolve+validate the URL ONCE up
+    // front and remember the validated address. The connection is later pinned to
+    // it so a DNS rebind between check and connect (TOCTOU) can't swap in an
+    // internal IP. A blocked URL is a permanent config error → fail without retry.
+    let pinned: ValidatedAddress | null = null
     if (this.options.ssrf !== false) {
       try {
-        await assertDeliverableUrl(endpoint.url, this.options.ssrf ?? {})
+        pinned = (await resolveAndValidate(endpoint.url, this.options.ssrf ?? {})).pinned
       } catch (error) {
         if (error instanceof WebhookUrlBlockedError) {
           return { endpointId: endpoint.id, ok: false, attempts: 0, error: error.message }
@@ -110,8 +140,9 @@ export class WebhookDeliverer {
         const timer = setTimeout(() => controller.abort(), this.timeoutMs)
         try {
           // `redirect: 'manual'` so a 3xx can't bounce the request to an internal
-          // address that bypassed the SSRF check on the original URL.
-          const response = await this.fetchImpl(endpoint.url, { method: 'POST', headers, body, redirect: 'manual', signal: controller.signal })
+          // address that bypassed the SSRF check on the original URL. The socket
+          // is pinned to the validated `pinned` address (rebind-proof).
+          const response = await this.send(endpoint.url, { method: 'POST', headers, body, redirect: 'manual', signal: controller.signal }, pinned)
           lastStatus = response.status
           if (response.ok) return { endpointId: endpoint.id, ok: true, status: response.status, attempts }
           // A redirect is refused, not followed (opaqueredirect ⇒ status 0).

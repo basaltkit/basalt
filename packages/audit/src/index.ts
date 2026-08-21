@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
 
@@ -88,6 +88,50 @@ export type AuditRedactor = (payload: unknown, event: string) => unknown
 /** Default payload scrubber: masks common secret keys, ignoring the event name. */
 export const defaultAuditRedactor: AuditRedactor = (payload) => redactSensitive(payload)
 
+/** Object keys that commonly carry direct PII and can be pseudonymized on request. */
+const PII_KEY = /e[-_]?mail|phone|msisdn|ssn|nif|taxid|passport/i
+/** A value that looks like an email address. */
+const EMAIL_VALUE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/**
+ * Deterministically pseudonymizes a value: the same input always maps to the
+ * same opaque token, so records stay correlatable without persisting the raw PII.
+ */
+export function pseudonymize(value: string): string {
+  return `pii_${createHash('sha256').update(value).digest('hex').slice(0, 16)}`
+}
+
+/**
+ * Recursively masks secrets (like {@link redactSensitive}) AND replaces obvious
+ * PII — email/phone-shaped values, and values under common PII keys — with a
+ * stable pseudonym. Use it to minimize PII at rest in the trail while keeping
+ * entries correlatable.
+ */
+export function redactSensitiveAndPii(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value === null) return value
+  if (typeof value === 'string') return EMAIL_VALUE.test(value) ? pseudonymize(value) : value
+  if (typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map((v) => redactSensitiveAndPii(v, depth + 1))
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (SENSITIVE_KEY.test(k)) out[k] = '[redacted]'
+    else if (PII_KEY.test(k) && typeof v === 'string') out[k] = pseudonymize(v)
+    else out[k] = redactSensitiveAndPii(v, depth + 1)
+  }
+  return out
+}
+
+/**
+ * Payload scrubber that also pseudonymizes obvious PII (PII F3). Opt-in — pass it
+ * to `auditPlugin({ redact: piiMinimizingRedactor })` or `new Audit(store, piiMinimizingRedactor)`.
+ *
+ * TODO(PII F3 follow-up): the default capture set still persists whatever the
+ * emitting code puts in the payload. A fuller minimization pass would let callers
+ * declare per-event field policies; kept out of the default here to avoid changing
+ * existing capture/redaction behavior.
+ */
+export const piiMinimizingRedactor: AuditRedactor = (payload) => redactSensitiveAndPii(payload)
+
 export class Audit {
   constructor(
     private readonly store: AuditStore,
@@ -107,13 +151,51 @@ export class Audit {
     await this.store.append(this.build(source, event, payload))
   }
 
+  /**
+   * Reads the audit trail, **always scoped to the current tenant**.
+   *
+   * Security model (PII F2):
+   * - When a tenant is present in the ambient context, the read is FORCED to
+   *   that tenant. Any caller-supplied `query.tenantId` is ignored/overridden
+   *   (the context tenant is spread LAST so it always wins), so a tenant-facing
+   *   handler that forwards client input — e.g. `trail({ tenantId: req.query.tenantId })`
+   *   — can never widen the scope and read another tenant's trail.
+   * - When there is NO tenant in context, an explicit single-tenant read
+   *   (`trail({ tenantId })`) is honoured, but a broad/unscoped read is refused:
+   *   returning every tenant's records must be a deliberate, system-only act via
+   *   {@link systemTrail}, never the silent default.
+   */
   async trail(query: AuditQuery = {}): Promise<AuditEntry[]> {
-    // Auto-scope to the current tenant when one is in context (and the query
-    // didn't pin one), so a tenant-facing caller forwarding a client query can't
-    // read another tenant's trail. A system caller outside a tenant context can
-    // still query broadly.
-    const tenantId = query.tenantId ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    return this.store.query(tenantId !== undefined ? { ...query, tenantId } : query)
+    const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    if (ctxTenantId !== undefined) {
+      // Force the scope: spread the context tenant LAST so a differing
+      // caller-supplied `tenantId` cannot override it.
+      return this.store.query({ ...query, tenantId: ctxTenantId })
+    }
+    if (query.tenantId !== undefined) {
+      // No context, but the caller explicitly pinned a single tenant.
+      return this.store.query(query)
+    }
+    // No tenant to scope to and no explicit tenant pinned: refuse to silently
+    // return every tenant's records. Cross-tenant/system reads go through
+    // systemTrail() so broad access is always deliberate.
+    throw new Error(
+      'Audit.trail() requires a tenant in context or an explicit `tenantId`. ' +
+        'For a deliberate system-wide, cross-tenant read use Audit.systemTrail().',
+    )
+  }
+
+  /**
+   * SYSTEM-ONLY escape hatch: reads across ALL tenants (or whatever
+   * `query.tenantId` explicitly pins), bypassing the tenant auto-scoping that
+   * {@link trail} enforces.
+   *
+   * This exists for trusted platform/admin tooling only. NEVER call it with, or
+   * forward into it, client-controlled input — doing so re-opens the
+   * cross-tenant data-exposure that {@link trail} closes.
+   */
+  async systemTrail(query: AuditQuery = {}): Promise<AuditEntry[]> {
+    return this.store.query(query)
   }
 
   private build(source: AuditEntry['source'], event: string, payload: unknown): AuditEntry {
