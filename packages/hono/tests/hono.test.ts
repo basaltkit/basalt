@@ -95,3 +95,36 @@ describe('honoPlugin', () => {
     expect((await json(boom)).error!.code).toBe('TEAPOT')
   })
 })
+
+describe('body limit (HTTP HIGH-2)', () => {
+  const mk = (bodyLimit: number) => createApp({ plugins: [honoPlugin({ routes, bodyLimit })] }).boot()
+
+  it('rejects a body whose Content-Length exceeds the limit with 413', async () => {
+    const small = await mk(16)
+    const hono = small.container.get(HONO)
+    const res = await hono.fetch(
+      new Request('http://local/echo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': '2048' },
+        body: JSON.stringify({ n: 1 }),
+      }),
+    )
+    expect(res.status).toBe(413)
+    expect((await res.json()).code).toBe('PAYLOAD_TOO_LARGE')
+    await small.shutdown()
+  })
+
+  it('allows a body within the limit', async () => {
+    const ok = await mk(1_048_576)
+    const hono = ok.container.get(HONO)
+    const res = await hono.fetch(
+      new Request('http://local/echo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ n: 21 }),
+      }),
+    )
+    expect(res.status).toBe(201)
+    await ok.shutdown()
+  })
+})

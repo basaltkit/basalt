@@ -54,6 +54,8 @@ describe('createProject', () => {
     expect(app).toContain('authPlugin')
     expect(app).toContain('authRoutes()')
     expect(app).not.toContain('subscriptionsPlugin')
+    // Secure by default: the security plugin (headers on) ships in every app.
+    expect(app).toContain('securityPlugin(')
 
     const env = await read(result.dir, 'src/env.ts')
     expect(env).toContain('APP_SECRET')

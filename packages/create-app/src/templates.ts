@@ -137,13 +137,19 @@ export function appTs(options: ProjectOptions): string {
     `import { createApp } from '@basaltkit/core'`,
     `import { configPlugin } from '@basaltkit/config'`,
     `import { eventsPlugin } from '@basaltkit/events'`,
-    `import { fastifyPlugin } from '@basaltkit/fastify'`,
+    `import { fastifyPlugin, securityPlugin } from '@basaltkit/fastify'`,
     `import { loggerPlugin } from '@basaltkit/logger'`,
   ]
   const plugins = [
     `configPlugin({ app: { name: '${options.name}' } })`,
     `loggerPlugin({ level: options.logLevel ?? 'info', ...(options.pretty ? { pretty: true } : {}) })`,
     `eventsPlugin()`,
+    `securityPlugin({
+      // Secure response headers (HSTS, X-Frame-Options, nosniff, …) are on by
+      // default. Turn on rate limiting and a CORS allow-list for production:
+      // rateLimit: { limit: 120, windowMs: 60_000 },
+      // cors: { origin: ['https://app.example.com'], credentials: true },
+    })`,
   ]
   let routesExpression = 'appRoutes'
 

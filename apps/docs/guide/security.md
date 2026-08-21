@@ -5,8 +5,10 @@ Everything here is zero-dependency and wired through the plugin lifecycle.
 
 ## Edge protection — `securityPlugin`
 
-One plugin covers rate limiting, CORS and secure response headers. All three
-are on by default with sensible values.
+One plugin covers rate limiting, CORS and secure response headers. **Secure
+response headers are on by default**; rate limiting and CORS are opt-in — enable
+them explicitly for production. New apps ship `securityPlugin()` in the scaffold,
+so headers are protected from the first deploy.
 
 ```ts
 import { securityPlugin } from '@basaltkit/fastify'

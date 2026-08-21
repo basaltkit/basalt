@@ -36,6 +36,7 @@ export {
   publicUser,
   InvalidCredentialsError,
   EmailTakenError,
+  WeakJwtSecretError,
   RefreshInvalidError,
   RefreshReusedError,
   AuthRequiredError,
