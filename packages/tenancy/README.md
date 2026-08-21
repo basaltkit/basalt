@@ -147,6 +147,34 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
 })
 ```
 
+### CLI commands (`basalt tenant:*`)
+
+Registering `tenancyPlugin` wires five CLI commands (run via the `@basaltkit/cli` runner):
+
+```bash
+basalt tenant:list                          # every tenant (needs source.list)
+basalt tenant:create acme --name=Acme       # needs source.create
+basalt tenant:migrate                       # run onMigrate for every tenant…
+basalt tenant:migrate --tenant=acme         # …or just one
+basalt tenant:seed --tenant=acme            # run onSeed inside the tenant context
+basalt tenant:run acme queue:stats          # run ANY command as that tenant
+```
+
+`tenant:migrate` / `tenant:seed` run the per-tenant hooks you pass to the plugin —
+you own the DB-specific work, the framework iterates tenants and enters each
+context for you:
+
+```ts
+tenancyPlugin({
+  source, resolvers,
+  onMigrate: (tenant) => runPrismaMigrateFor(tenant),
+  onSeed:    (tenant) => seedDefaultsFor(tenant),
+})
+```
+
+`tenant:run <id> <command> [args]` resolves any plugin-registered command and runs
+it inside `<id>`'s context — e.g. `basalt tenant:run acme queue:retry`.
+
 ## API reference
 
 ### `tenancyPlugin(options)`

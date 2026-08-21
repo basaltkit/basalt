@@ -4,6 +4,7 @@ import {
   ensureMetadata,
   runWithContext,
   tryCtx,
+  type Container,
   type HookBus,
 } from '@basaltkit/core'
 import type { ResolutionRequest, TenantRef, TenantResolver } from './resolvers.js'
@@ -117,6 +118,14 @@ export interface TenancyPluginOptions {
   resolvers: TenantResolver[]
   /** Reject requests without a tenant (404 TENANCY_NOT_RESOLVED). Default: false. */
   required?: boolean
+  /**
+   * Per-tenant migration hook for `basalt tenant:migrate`. The framework iterates
+   * tenants and runs this inside each one's context; you provide the DB-specific
+   * work (e.g. `prisma migrate deploy` against the tenant's schema).
+   */
+  onMigrate?: (tenant: Tenant) => void | Promise<void>
+  /** Per-tenant seed hook for `basalt tenant:seed`, run inside each tenant's context. */
+  onSeed?: (tenant: Tenant) => void | Promise<void>
 }
 
 export function tenancyPlugin(options: TenancyPluginOptions) {
@@ -124,6 +133,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
     name: 'basalt:tenancy',
     register({ container, hooks }) {
       container.singleton(TENANCY, () => new Tenancy(options.source, options.resolvers, hooks))
+      registerTenantCommands(container, options)
 
       // Request enricher consumed by the HTTP adapter: resolves the tenant,
       // attaches it to the context and fires the switch hook.
@@ -153,4 +163,135 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
       )
     },
   })
+}
+
+type Io = {
+  log(m: string): void
+  error(m: string): void
+  table(rows: Record<string, unknown>[]): void
+}
+type CmdCtx = { container: Container; io: Io; args: string[]; flags: Record<string, string | boolean> }
+
+/**
+ * Registers `tenant:list|create|migrate|seed|run` into the CLI command bucket.
+ * Registered structurally (no hard @basaltkit/cli dep). Commands resolve the
+ * Tenancy service lazily so they use whatever source the app configured.
+ */
+function registerTenantCommands(container: Container, options: TenancyPluginOptions): void {
+  const tenancy = () => container.get(TENANCY)
+  const add = (command: { name: string; description: string; handle: (ctx: CmdCtx) => unknown }) =>
+    ensureMetadata(container).add('commands', command)
+
+  add({
+    name: 'tenant:list',
+    description: 'List all tenants',
+    async handle({ io }) {
+      if (!options.source.list) {
+        io.error('The configured TenantSource does not implement list().')
+        return 1
+      }
+      const tenants = await options.source.list()
+      if (tenants.length === 0) {
+        io.log('No tenants.')
+        return
+      }
+      io.table(tenants.map((t) => ({ id: t.id, ...pickScalars(t) })))
+    },
+  })
+
+  add({
+    name: 'tenant:create',
+    description: 'Create a tenant: tenant:create <id> [--name=… --domain=…]',
+    async handle({ io, args, flags }) {
+      const id = args[0]
+      if (!id) {
+        io.error('Usage: basalt tenant:create <id> [--name=… --anyField=…]')
+        return 1
+      }
+      if (!options.source.create) {
+        io.error('The configured TenantSource does not implement create().')
+        return 1
+      }
+      const fields: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(flags)) fields[key] = value
+      const tenant = await options.source.create({ id, ...fields })
+      io.log(`Created tenant "${tenant.id}".`)
+    },
+  })
+
+  const runHook = async (
+    io: Io,
+    only: string | undefined,
+    hook: ((tenant: Tenant) => void | Promise<void>) | undefined,
+    label: string,
+  ): Promise<number | void> => {
+    if (!hook) {
+      io.error(`No ${label} hook configured. Pass tenancyPlugin({ on${label[0]!.toUpperCase()}${label.slice(1)}: … }).`)
+      return 1
+    }
+    if (only) {
+      const tenant = await options.source.find(only)
+      if (!tenant) {
+        io.error(`Tenant "${only}" not found.`)
+        return 1
+      }
+      await tenancy().run(tenant, () => hook(tenant))
+      io.log(`Ran ${label} for "${only}".`)
+      return
+    }
+    let count = 0
+    await tenancy().forEach(async (tenant) => {
+      await hook(tenant)
+      count++
+    })
+    io.log(`Ran ${label} for ${count} tenant(s).`)
+  }
+
+  add({
+    name: 'tenant:migrate',
+    description: 'Run the per-tenant migration hook (all tenants, or --tenant=<id>)',
+    handle: ({ io, flags }) =>
+      runHook(io, typeof flags['tenant'] === 'string' ? flags['tenant'] : undefined, options.onMigrate, 'migrate'),
+  })
+
+  add({
+    name: 'tenant:seed',
+    description: 'Run the per-tenant seed hook (all tenants, or --tenant=<id>)',
+    handle: ({ io, flags }) =>
+      runHook(io, typeof flags['tenant'] === 'string' ? flags['tenant'] : undefined, options.onSeed, 'seed'),
+  })
+
+  add({
+    name: 'tenant:run',
+    description: "Run another command inside a tenant's context: tenant:run <id> <command> [args]",
+    async handle({ container: c, io, args, flags }) {
+      const [id, sub, ...rest] = args
+      if (!id || !sub) {
+        io.error('Usage: basalt tenant:run <tenantId> <command> [args…]')
+        return 1
+      }
+      const tenant = await options.source.find(id)
+      if (!tenant) {
+        io.error(`Tenant "${id}" not found.`)
+        return 1
+      }
+      const commands = ensureMetadata(c).get<{ name: string; handle: (ctx: CmdCtx) => unknown }>('commands')
+      const target = commands.find((cmd) => cmd.name === sub)
+      if (!target) {
+        io.error(`Unknown command "${sub}". (tenant:run resolves plugin-registered commands.)`)
+        return 1
+      }
+      return tenancy().run(tenant, () => target.handle({ container: c, io, args: rest, flags }))
+    },
+  })
+}
+
+/** Keeps only primitive tenant fields for the list table (drops objects/arrays). */
+function pickScalars(tenant: Tenant): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(tenant)) {
+    if (key === 'id') continue
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') out[key] = value
+  }
+  return out
 }
