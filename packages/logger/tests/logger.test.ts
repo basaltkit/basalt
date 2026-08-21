@@ -46,6 +46,26 @@ describe('createLogger', () => {
     expect(lines[0]?.['email']).toBe('a@b.c')
   })
 
+  it('redacts modern token/cookie names top-level and one level deep (PII F1)', () => {
+    const { lines, stream } = capture()
+    createLogger({ destination: stream }).info(
+      {
+        accessToken: 'a',
+        refreshToken: 'b',
+        body: { accessToken: 'c', mfaCode: '123456' },
+        headers: { authorization: 'Bearer x', cookie: 'sid=1' },
+      },
+      'auth',
+    )
+    const l = lines[0] as Record<string, Record<string, unknown>>
+    expect(l['accessToken']).toBe('[REDACTED]')
+    expect(l['refreshToken']).toBe('[REDACTED]')
+    expect(l['body']?.['accessToken']).toBe('[REDACTED]')
+    expect(l['body']?.['mfaCode']).toBe('[REDACTED]')
+    expect(l['headers']?.['authorization']).toBe('[REDACTED]')
+    expect(l['headers']?.['cookie']).toBe('[REDACTED]')
+  })
+
   it('child logger keeps bindings and context', () => {
     const { lines, stream } = capture()
     const child = createLogger({ destination: stream }).child({ pkg: 'subscriptions' })
