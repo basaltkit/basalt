@@ -1,5 +1,11 @@
 # @basaltkit/prisma
 
+## 1.2.0
+
+### Minor Changes
+
+- Refuse raw queries (`$queryRaw`/`$executeRaw`) inside a tenant context (`PRISMA_RAW_IN_TENANT`), and add Postgres RLS helpers (`rlsPolicySql`/`setTenantConfigSql`/`tenantConfigParams`) for database-enforced tenant isolation.
+
 ## 1.1.0
 
 ### Minor Changes

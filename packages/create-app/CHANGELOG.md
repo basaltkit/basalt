@@ -1,5 +1,11 @@
 # create-basalt
 
+## 1.1.1
+
+### Minor Changes
+
+- Scaffold ships `securityPlugin()` by default (secure headers) and a fail-closed `APP_SECRET` via `secret({ minLength: 32 })` (no committed default).
+
 ## 1.1.0
 
 ### Minor Changes

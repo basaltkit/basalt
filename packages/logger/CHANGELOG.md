@@ -1,5 +1,11 @@
 # @basaltkit/logger
 
+## 1.2.0
+
+### Minor Changes
+
+- Broaden default log redaction to cover `accessToken`/`refreshToken`/`cookie`/`mfaCode`/… at the top level and one level deep (was exact-key `token` only).
+
 ## 1.1.0
 
 ### Minor Changes
