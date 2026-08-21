@@ -1,6 +1,6 @@
 # @basaltkit/subscriptions
 
-Billing for the Basalt framework, in the style of Laravel Cashier/Soulbscription: declarative plans, subscriptions with a trial period, features with usage limits, Stripe & Paddle integration, and idempotent webhooks. You need this module when your SaaS application charges monthly fees and limits features by plan.
+Billing for the Basalt framework, in the style of Laravel Cashier/Soulbscription: declarative plans, subscriptions with a trial period, features with usage limits, Stripe / Paddle / Lemon Squeezy integration, and idempotent webhooks. You need this module when your SaaS application charges monthly fees and limits features by plan.
 
 ## What this module solves
 
@@ -184,6 +184,22 @@ const gateway = new PaddleBillingGateway({
 ```
 
 Webhook signatures use Paddle's `Paddle-Signature` scheme (`ts=…;h1=…`, HMAC-SHA256 over `${ts}:${rawBody}`) — verified by the driver, with the same 5-minute timestamp tolerance as Stripe.
+
+### Lemon Squeezy gateway
+
+`LemonSqueezyBillingGateway` targets the Lemon Squeezy REST API (JSON:API, no SDK), mapping plans to *Variant IDs* and using your *Store ID* for checkouts. Also checkout-first; webhook signatures use the `X-Signature` header (a bare HMAC-SHA256 hex of the raw body — no timestamp).
+
+```ts
+import { LemonSqueezyBillingGateway, Subscriptions } from '@basaltkit/subscriptions'
+
+const gateway = new LemonSqueezyBillingGateway({
+  apiKey: process.env.LEMONSQUEEZY_API_KEY!,
+  webhookSecret: process.env.LEMONSQUEEZY_WEBHOOK_SECRET!,
+  storeId: process.env.LEMONSQUEEZY_STORE_ID!,
+  variantId: (plan, period) => ({ pro: { monthly: '111', yearly: '222' } })[plan]![period],
+  customerId: async (billableId) => getLemonSqueezyCustomer(billableId), // for the portal
+})
+```
 
 For development and testing there's `FakeBillingGateway`, which records all calls in arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`) and accepts the webhook signature `'valid'`.
 
