@@ -98,3 +98,6 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 
   return { dir, files: Object.keys(files).sort(), options }
 }
+
+export { runWizard, validateProjectName, PRESETS, FEATURES, type WizardResult, type WizardOptions, type FeatureKey } from './wizard.js'
+export { ttyPrompter, scriptedPrompter, WizardCancelledError, type Prompter, type Choice } from './prompt.js'
