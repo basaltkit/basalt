@@ -11,3 +11,6 @@ generated/
 coverage/
 
 .demo-build/
+
+# Generated typedoc API reference (built by docs:api)
+apps/docs/reference/api/
