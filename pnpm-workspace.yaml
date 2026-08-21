@@ -15,3 +15,14 @@ auditConfig:
     # package and doesn't affect the built static docs. Not fixable without
     # breaking vitepress. Production deps are audited normally.
     - GHSA-fx2h-pf6j-xcff
+    # nanoid infinite-loop with attacker-controlled CUSTOM alphabets. Reaches us
+    # only through build tooling (vite>postcss>nanoid, via vitest/vitepress/
+    # tailwind); never in a published package, and we never pass a custom
+    # generator. Dev/build-only; not exploitable here.
+    - GHSA-2v37-7h3g-55p8
+    # deepmerge-ts stack exhaustion on deeply-recursive object graphs. Reaches us
+    # only through the Prisma CLI's config parsing (@prisma/client>prisma>@prisma/
+    # config>deepmerge-ts) at build/dev time — pinned by Prisma, not overridable
+    # without breaking @prisma/config, and never on a request path. Low real-world
+    # exploitability; production runtime deps are unaffected.
+    - GHSA-ggr8-5vv4-36mx
