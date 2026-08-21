@@ -7,6 +7,10 @@ import {
   DbUnavailableError,
   MissingTenantError,
   prismaPlugin,
+  RawQueryInTenantContextError,
+  rlsPolicySql,
+  setTenantConfigSql,
+  tenantConfigParams,
   TenantClientPool,
   tenancyExtension,
 } from '../src/index.js'
@@ -95,6 +99,53 @@ describe('tenancyExtension', () => {
   it("runs unscoped only with an explicit 'bypass' (central/admin opt-in)", async () => {
     const captured = await run(undefined, { onMissingTenant: 'bypass' })
     expect(captured).toEqual([{ where: { status: 'open' } }])
+  })
+})
+
+describe('tenancyExtension — raw query guard (F2)', () => {
+  const runRaw = async (method: string, contextTenant: string | undefined, options = {}) => {
+    const captured: unknown[] = []
+    const extension = tenancyExtension(options)
+    const handler = (extension.query as Record<string, (a: unknown) => Promise<unknown>>)[method]
+    const invoke = () => handler({ args: 'SELECT 1', query: async (args: unknown) => void captured.push(args) })
+    if (contextTenant) await runWithContext({ tenant: { id: contextTenant } }, invoke)
+    else await invoke()
+    return captured
+  }
+
+  for (const method of ['$queryRaw', '$queryRawUnsafe', '$executeRaw', '$executeRawUnsafe']) {
+    it(`${method} throws inside a tenant context (no silent cross-tenant raw)`, async () => {
+      await expect(runRaw(method, 'acme')).rejects.toBeInstanceOf(RawQueryInTenantContextError)
+    })
+
+    it(`${method} runs when no tenant is in scope (central/admin raw)`, async () => {
+      expect(await runRaw(method, undefined)).toEqual(['SELECT 1'])
+    })
+
+    it(`${method} runs inside a tenant context only with onRawInTenant: 'allow'`, async () => {
+      expect(await runRaw(method, 'acme', { onRawInTenant: 'allow' })).toEqual(['SELECT 1'])
+    })
+  }
+})
+
+describe('rls helpers (defense in depth)', () => {
+  it('generates enable + force + isolation policy with the current_setting predicate', () => {
+    const sql = rlsPolicySql({ tables: ['project'] })
+    expect(sql).toContain('ALTER TABLE "project" ENABLE ROW LEVEL SECURITY;')
+    expect(sql).toContain('ALTER TABLE "project" FORCE ROW LEVEL SECURITY;')
+    expect(sql).toContain('DROP POLICY IF EXISTS "tenant_isolation" ON "project";')
+    expect(sql).toContain(`"tenant_id" = current_setting('app.tenant_id', true)`)
+  })
+
+  it('rejects identifiers that could carry SQL injection (config-time guard)', () => {
+    expect(() => rlsPolicySql({ tables: ['project; drop table users'] })).toThrow()
+    expect(() => rlsPolicySql({ tables: ['project'], tenantColumn: 'tenant_id"; --' })).toThrow()
+    expect(() => tenantConfigParams('t1', 'no_namespace')).toThrow()
+  })
+
+  it('set-tenant statement is fully parameterized', () => {
+    expect(setTenantConfigSql()).toBe('select set_config($1, $2, true)')
+    expect(tenantConfigParams('acme')).toEqual(['app.tenant_id', 'acme'])
   })
 })
 
