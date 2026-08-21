@@ -7,6 +7,27 @@ docs are hosted on a free static host instead. VitePress is configured with
 **Build output:** `apps/docs/.vitepress/dist`
 **Build command:** `pnpm --filter docs docs:build`
 
+`docs:build` runs `docs:api` first, which regenerates the **typedoc API
+reference** into `apps/docs/reference/api/` (gitignored). It reads the packages'
+`src/index.ts`, so build the workspace first in CI:
+
+```bash
+pnpm -r build            # packages' dist/*.d.ts feed typedoc's type resolution
+pnpm --filter docs docs:build
+```
+
+## Search — Algolia DocSearch (optional)
+
+Search falls back to VitePress's built-in **local** index, so no configuration is
+required. To switch to Algolia DocSearch, set these in the build environment
+(from your DocSearch application); leaving any unset keeps the local index:
+
+```bash
+ALGOLIA_APP_ID=...      # DocSearch application id
+ALGOLIA_API_KEY=...     # search-only public key
+ALGOLIA_INDEX=...       # index name
+```
+
 Pick one host. Each has two paths: a one-off **CLI deploy** (fastest — you run
 the login in this terminal with `!`), or **Git integration** (auto-deploys on
 every push; connect the repo in the host's dashboard using the build settings

@@ -7,6 +7,12 @@ billing, auth, permissions, audit, queues, notifications** — integrated with
 an end-to-end coherence rare on Node.js, and TypeScript inference from the route
 to the client.
 
+:::tip Try it in the browser
+No local setup needed — boot a runnable Basalt server in a StackBlitz WebContainer:
+
+<StackBlitz label="Run the playground in StackBlitz" />
+:::
+
 ## Why Basalt
 
 - **Self-hosted, no lock-in.** Your data lives in your PostgreSQL, your users
