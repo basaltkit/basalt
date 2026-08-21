@@ -88,6 +88,13 @@ graph TB
 
 ### 2.2 Monorepo Structure
 
+> The tree below is **illustrative** — it shows the core packages and the layering.
+> The framework now spans ~79 `@basaltkit/*` packages (HTTP adapters for Fastify/
+> Express/Hono, `ai`, `teams`, `webhooks`, `search` + engine drivers, realtime,
+> comments, i18n, exports, flags, the `*-prisma`/`*-sqlite` store split, UI kits,
+> and more). The full, current list is on the
+> [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem) page.
+
 ```
 basalt/
 ├── packages/
@@ -97,7 +104,7 @@ basalt/
 │   ├── events/             # Event bus (sync/async/queued)
 │   ├── logger/             # Structured logger (Pino-based)
 │   ├── fastify/            # HTTP adapter + typed routing
-│   ├── prisma/             # Prisma extensions (tenancy, audit, soft-delete)
+│   ├── prisma/             # Prisma extensions (tenancy scoping, raw-query guard, RLS helpers, soft-delete)
 │   ├── cache/              # Multi-driver cache with tags
 │   ├── queue/              # BullMQ with a first-class developer experience
 │   ├── jobs/               # Declarative job definition
@@ -120,8 +127,9 @@ basalt/
 │   └── admin/              # Reusable admin components
 ├── apps/
 │   ├── docs/               # Documentation site (basalt.dev)
-│   ├── playground/         # Reference app used in E2E tests
-│   └── examples/           # Official examples (starter kits)
+│   ├── playground/         # Reference app used in tests
+│   ├── admin-demo/         # Admin UI demo
+│   └── pg-integration/     # Postgres integration tests (pglite)
 ├── tooling/
 │   ├── tsconfig/           # Shared tsconfigs
 │   ├── eslint-config/      # Shared lint rules
@@ -159,7 +167,7 @@ packages/<name>/
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Versioning | **Fixed/locked** across core packages (all bump together, like Babel/Jest) | Eliminates the compatibility matrix; `@basaltkit/auth@1.4` always works with `@basaltkit/core@1.4`. Satellite packages (sdk, dashboard) can version independently. |
+| Versioning | **Two-tier**: each `@basaltkit/*` package versions **independently** (its own semver), with a single umbrella "Basalt release" number (e.g. Basalt 1.1) for comms/docs | Reflects the real change cadence — a package bumps only when it changes; an app pins each `^` range and the umbrella marker communicates the framework generation. See [VERSIONING.md](./VERSIONING.md). |
 | Releases | Changesets + GitHub Actions; `latest`, `next` (pre-releases) and `canary` (every merge to main) channels | Fast community feedback without compromising stability |
 | Semver | Strict. Breaking = major. Error codes, public events and config names are API | Trust is a framework's #1 asset |
 | LTS | Each major, the previous one receives 12 months of security fixes | A requirement for enterprise adoption |
@@ -826,7 +834,7 @@ Cross-cutting rule: **no phase opens without the previous one's docs complete**.
 | 3 | ALS as the context spine | passing `ctx` by parameter | ergonomic context propagation without real global state |
 | 4 | Prisma extensions | own ORM / fork | do not reinvent; the Prisma ecosystem is an asset |
 | 5 | Zod as the single schema source | manual JSON Schema | TS inference; feeds validation, OpenAPI and the SDK |
-| 6 | Fixed versioning of the core | independent | eliminates the compatibility matrix |
+| 6 | Independent per-package versioning + umbrella "Basalt release" marker | fixed/lockstep versioning | reflects real change cadence; the umbrella number communicates the framework generation |
 | 7 | Local billing state + webhooks | call the gateway on every check | latency, resilience, multi-gateway |
 | 8 | Scheduler on BullMQ repeatables | in-process node-cron | cluster-safe, survives restart |
 | 9 | MIT + monetization via services | BSL/ELv2 | community trust is the moat |
