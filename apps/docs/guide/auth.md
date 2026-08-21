@@ -330,7 +330,17 @@ const okta = await discoverOidcProvider({ name: 'okta', issuer: 'https://acme.ok
 oauthPlugin({ secret: env.APP_SECRET, providers: [okta] })
 ```
 
-(Legacy **SAML 2.0** IdPs are a separate integration — see the roadmap.)
+For legacy **SAML 2.0** IdPs (ADFS, Shibboleth, or an IdP configured for SAML),
+use the companion **`@basaltkit/auth-saml`** package — SP-initiated SSO built on the
+vetted `@node-saml/node-saml` XML-DSig library, plugging into the same
+`Auth.socialLogin`:
+
+```ts
+import { samlPlugin, samlRoutes } from '@basaltkit/auth-saml'
+
+samlPlugin({ providers: [{ name: 'okta', entryPoint, idpCert, issuer, callbackUrl }] })
+// routes: GET /auth/saml/:provider/login · POST …/acs · GET …/metadata
+```
 
 ## Password reset (end-to-end)
 

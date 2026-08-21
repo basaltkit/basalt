@@ -94,6 +94,16 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
             }
           },
         )
+        // HTML forms and the SAML ACS binding post application/x-www-form-urlencoded;
+        // parse it into an object so form routes work like JSON routes (Fastify has
+        // no default parser for it).
+        instance.addContentTypeParser(
+          'application/x-www-form-urlencoded',
+          { parseAs: 'string' },
+          (_request: FastifyRequest, body: string, done: (err: Error | null, value?: unknown) => void) => {
+            done(null, body ? Object.fromEntries(new URLSearchParams(body)) : undefined)
+          },
+        )
         return instance
       })
       container.singleton(HTTP_SERVER, () => collector)
