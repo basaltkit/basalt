@@ -93,13 +93,16 @@ Behavior notes (faithful to the code):
 
 - **Package manager detection**: by default, detects who invoked the command via the `npm_config_user_agent` variable (set by npm/pnpm/yarn/bun); unknown managers fall back to `npm`. `--pm=` overrides this.
 - **`--ui` forces pnpm**: the `web/` frontend is a member of a pnpm *workspace* (declared in the generated `pnpm-workspace.yaml`). npm, yarn, and bun can't install or run that structure, so if you request `--ui` with another manager, you'll see `Note: --ui projects are pnpm workspaces — using pnpm instead of <manager>.` and pnpm is used.
-- **Interactive mode**: only happens when you don't pass a name, you're in a terminal (TTY), and you didn't use `--yes`. Ctrl+C during a question ends cleanly with "Cancelled." (exit code 130).
+- **Interactive wizard**: when you don't pass a name, you're in a terminal (TTY), and you didn't use `--yes`, you get the guided wizard — an intro, a **starting-point preset** (SaaS starter / API only / Full stack / Minimal / Custom), an arrow-key **feature multiselect** on the custom path, package-manager select, and a **summary + confirm** step before anything is written. Ctrl+C (or declining the final confirm) ends cleanly with "Cancelled." (exit code 130).
 - **Occupied folder**: if the destination folder exists and isn't empty, the command refuses with `Target directory "<dir>" already exists and is not empty.` and exits with code 1.
 - At the end, it prints the created files and the "Next steps" appropriate to your choices.
 
 ### Invocation examples
 
 ```bash
+# Interactive wizard (presets, feature multiselect, summary):
+pnpm create basalt
+
 # Full project, no questions, with everything:
 pnpm create basalt my-app --billing --ui --cli --install --git
 

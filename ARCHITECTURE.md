@@ -17,7 +17,6 @@
 > current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
 > page. Still **design-only** today:
 >
-> - **create-basalt** — the rich interactive wizard (it's flag-based today).
 > - **Dashboard** — the ready-made analytics app (headless `admin` + per-feature UIs ship).
 > - **Docs** — StackBlitz buttons, Algolia DocSearch, typedoc reference.
 >
@@ -738,7 +737,7 @@ basalt upgrade                  # codemods between versions (jscodeshift) — ke
 
 The CLI is **extensible via plugins**: any package (or the app itself) registers commands via `defineCommand()` (or structurally into the `commands` metadata bucket, as the queue/tenancy/mailer/http plugins do). `dev` delegates watching to the runtime (`tsx watch` / `node --watch`); `upgrade` runs versioned codemods (the `@machize/*` → `@basaltkit/*` rename ships; the engine is ready for more); `publish` copies bundled stub groups (Dockerfile, CI, editorconfig) into the app, à la Laravel's `vendor:publish`. `basalt doctor` and `basalt upgrade` are a direct investment in reducing churn — the two biggest causes of framework abandonment are a broken setup and painful majors.
 
-### 13.2 `create-basalt`  `[🚧 partial — flag-based, not the wizard]`
+### 13.2 `create-basalt`  `[✅ shipped — interactive wizard + flags]`
 
 ```
 npx create-basalt my-saas
@@ -752,7 +751,7 @@ npx create-basalt my-saas
 └ Extras:         docker-compose (pg+redis+minio) | GitHub Actions CI | biome
 ```
 
-Generates a project **working in a single command** (`pnpm dev` brings up app + docker-compose + migrations + seed), with a real domain example (a multi-tenant "Tasks" project with billing) — not a hello world. Each choice only adds the selected packages: what was not selected **does not exist** in the generated project (no commented-out dead code).
+Run with no name in a terminal for the **interactive wizard**: an intro banner, a starting-point **preset** (SaaS starter / API only / Full stack / Minimal / Custom), arrow-key **feature multiselect** for the custom path, package-manager select, and a **summary + confirm** step before anything is written. Passing a name and/or `--yes`, or piping input (CI), keeps the flag-driven path. Generates a project **working in a single command**; each choice only adds the selected packages — what was not selected **does not exist** in the generated project (no commented-out dead code).
 
 ### 13.3 `@basaltkit/generator`  `[🚧 partial — only make:resource/make:service]`
 

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
 import { stdin, stdout } from 'node:process'
-import { createInterface } from 'node:readline/promises'
 import {
   createProject,
   detectPackageManager,
+  runWizard,
+  ttyPrompter,
   TargetNotEmptyError,
+  WizardCancelledError,
   type PackageManager,
 } from './index.js'
 
@@ -90,41 +92,29 @@ function cancel(): never {
   process.exit(130) // 128 + SIGINT
 }
 
-/** Prompts for anything missing — only in a TTY and when --yes was not passed. */
-async function promptMissing(flags: Flags): Promise<Flags> {
-  if (flags.yes || flags.name !== undefined || !stdin.isTTY) return flags
-  const rl = createInterface({ input: stdin, output: stdout })
-  rl.on('SIGINT', cancel) // Ctrl+C during a prompt
-  try {
-    const ask = async (question: string, fallback: string): Promise<string> => {
-      const answer = (await rl.question(`${question} `)).trim()
-      return answer || fallback
-    }
-    const confirm = async (question: string, fallback: boolean): Promise<boolean> => {
-      const answer = (await rl.question(`${question} (${fallback ? 'Y/n' : 'y/N'}) `))
-        .trim()
-        .toLowerCase()
-      return answer ? answer.startsWith('y') : fallback
-    }
-    flags.name = await ask('Project name:', 'my-saas')
-    flags.tenancy = await confirm('Multi-tenancy?', true)
-    flags.auth = await confirm('Authentication?', true)
-    flags.billing = await confirm('Subscriptions / billing?', false)
-    flags.ui = await confirm('Web UI (React + shadcn)?', false)
-    flags.cli = await confirm("'basalt' CLI (code generators)?", false)
-    flags.install = await confirm('Install dependencies now?', false)
-    flags.git = await confirm('Initialize a git repository?', false)
-  } catch (error) {
-    // readline/promises rejects the pending question with an AbortError on Ctrl+C.
-    if ((error as NodeJS.ErrnoException).code === 'ABORT_ERR') cancel()
-    throw error
-  } finally {
-    rl.close()
-  }
-  return flags
-}
+const flags = parseArgs(process.argv.slice(2))
 
-const flags = await promptMissing(parseArgs(process.argv.slice(2)))
+// Rich interactive wizard when nothing was specified in a terminal. CI, piped
+// input, and `--yes` keep the flag-driven path.
+if (!flags.yes && flags.name === undefined && stdin.isTTY) {
+  try {
+    const result = await runWizard(ttyPrompter(), {
+      defaultPm: flags.pm ?? detectPackageManager(),
+    })
+    flags.name = result.name
+    flags.tenancy = result.tenancy
+    flags.auth = result.auth
+    flags.billing = result.billing
+    flags.ui = result.ui
+    flags.cli = result.cli
+    flags.install = result.install
+    flags.git = result.git
+    flags.pm = result.pm
+  } catch (error) {
+    if (error instanceof WizardCancelledError) cancel()
+    throw error
+  }
+}
 
 if (!flags.name) {
   stdout.write(USAGE)
