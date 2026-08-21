@@ -6,6 +6,7 @@ import {
   type DurationInput,
 } from '@basaltkit/core'
 import type { PutOptions, StorageDriver } from './driver.js'
+import { ImagePipeline, type ImageProcessor } from './image.js'
 import { LocalStorageDriver } from './drivers/local.js'
 import { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
 import {
@@ -17,9 +18,18 @@ import {
 } from './errors.js'
 
 export type { StorageDriver, PutOptions } from './driver.js'
+export {
+  ImagePipeline,
+  type ImageProcessor,
+  type ImageOp,
+  type ImageFormat,
+  type ImageMetadata,
+  type ResizeOptions,
+} from './image.js'
 export { LocalStorageDriver } from './drivers/local.js'
 export { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
 export {
+  ImageProcessingUnavailableError,
   StorageContentTypeError,
   StorageFileNotFoundError,
   StorageInvalidKeyError,
@@ -74,6 +84,8 @@ export interface DiskOptions {
    * `ctx().tenant.id` — automatic tenant isolation. Pass `null` to disable.
    */
   scope?: (() => string | undefined) | null
+  /** Engine that backs `disk.image(...)`. Injected by `storagePlugin`. */
+  imageProcessor?: ImageProcessor
 }
 
 const defaultScope = (): string | undefined => {
@@ -84,6 +96,7 @@ const defaultScope = (): string | undefined => {
 /** A named disk: driver + tenant scoping. All app code talks to this API. */
 export class Disk {
   private readonly scope: (() => string | undefined) | null
+  private readonly imageProcessor: ImageProcessor | undefined
 
   constructor(
     readonly name: string,
@@ -91,6 +104,21 @@ export class Disk {
     options: DiskOptions = {},
   ) {
     this.scope = options.scope === undefined ? defaultScope : options.scope
+    this.imageProcessor = options.imageProcessor
+  }
+
+  /**
+   * Opens a fluent image pipeline reading `path` from this disk:
+   * `disk.image('a.png').resize(256, 256).webp().save('a.webp')`. Requires an
+   * `imageProcessor` (from `@basaltkit/image-sharp`); otherwise the terminal
+   * throws `ImageProcessingUnavailableError`.
+   */
+  image(path: string): ImagePipeline {
+    return new ImagePipeline(
+      () => this.get(path),
+      this.imageProcessor,
+      (target, content, options) => this.put(target, content, options),
+    )
   }
 
   // async so a rejected path (this.path throws) surfaces as a rejected promise,
@@ -163,6 +191,12 @@ export interface StoragePluginOptions {
   disks: Record<string, DiskConfig>
   /** Disk returned by `storage.disk()` with no argument. */
   default?: string
+  /**
+   * Image engine shared by every disk's `.image(...)` pipeline. Pass a
+   * `SharpImageProcessor` from `@basaltkit/image-sharp` (native `sharp`) — kept
+   * out of the core so apps that never process images carry no native dep.
+   */
+  imageProcessor?: ImageProcessor
 }
 
 export function storagePlugin(options: StoragePluginOptions) {
@@ -181,7 +215,10 @@ export function storagePlugin(options: StoragePluginOptions) {
                 : new S3StorageDriver(config as S3DriverOptions)
           drivers.push(driver)
           storage.add(
-            new Disk(name, driver, config.scope !== undefined ? { scope: config.scope } : {}),
+            new Disk(name, driver, {
+              ...(config.scope !== undefined ? { scope: config.scope } : {}),
+              ...(options.imageProcessor ? { imageProcessor: options.imageProcessor } : {}),
+            }),
           )
         }
         return storage
