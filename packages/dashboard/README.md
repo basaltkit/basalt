@@ -178,6 +178,46 @@ All accept `{ key?, label?, icon? }` (`resourceSection` accepts `{ key?, icon? }
 
 The visual shell walks through the sections and chooses what to render by `kind`: `metrics` → cards with `computeBillingMetrics`; `resource` → `DataTable`/`ResourceForm` (from `@basaltkit/admin-react` or `@basaltkit/admin-shadcn`) over `section.resource`; `audit` → list with `summarizeAudit`; `queue` → cards with `summarizeQueue`.
 
+### The ready-made dashboard — `standardDashboard` + `buildOverview`
+
+Two shortcuts turn the pieces above into a complete panel with almost no wiring.
+
+**`standardDashboard(options)`** assembles the conventional layout — Overview →
+your resources → Queues → Audit — with sensible labels and icon hints:
+
+```ts
+import { standardDashboard } from '@basaltkit/dashboard'
+
+const dashboard = standardDashboard({
+  title: 'Basalt Admin',
+  resources: [projects],   // admin resources
+  queues: true,
+  audit: true,
+})
+// dashboard.nav() → overview, projects, queues, audit
+```
+
+**`buildOverview(input)`** assembles the whole Overview page from one snapshot —
+billing metrics, optional churn, and optional queue health — into KPI cards (each
+with a semantic `tone`: `positive` / `warning` / `critical`) plus breakdowns:
+
+```ts
+import { buildOverview } from '@basaltkit/dashboard'
+
+const overview = buildOverview({
+  subscriptions, plans,
+  activeAtStart: 120,                                   // → Churn KPI
+  queue: { waiting: 8, failed: 3, completed: 340 },     // → Failed-jobs KPI (critical)
+  audit: recentAuditEntries,                            // → topEvents list
+})
+// overview.kpis → [{ label:'MRR', value:'$1,240', tone:'default' }, …]
+// overview.byPlan / byStatus / queue / topEvents
+```
+
+The shell renders `overview.kpis` directly — it decides nothing. See the
+ready-made **`apps/admin-demo`** for a full React shell that renders every section
+kind (metrics / resource / queue / audit) straight from this model.
+
 ## API reference
 
 ### `computeBillingMetrics(subscriptions, plans): BillingMetrics`
