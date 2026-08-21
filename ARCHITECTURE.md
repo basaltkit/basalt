@@ -17,7 +17,7 @@
 > current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
 > page. Still **design-only** today:
 >
-> - **Billing** — Paddle & Lemon Squeezy gateways (only **Stripe** ships, plus local proxypay/appypay).
+> - **Billing** — Lemon Squeezy gateway (Stripe & Paddle ship, plus local proxypay/appypay).
 > - **Mailer** — Mailgun driver, React-Email/MJML templates, `mail preview` (SMTP, Resend and SES now ship).
 > - **Auth** — OAuth / social login (SSO/SAML is Phase 7).
 > - **Storage** — image processing (`.image().resize().webp()`).
@@ -537,7 +537,7 @@ can: 'project:update'        // resolves the policy with the loaded resource
 **Roadmap:** v1 roles/permissions/policies + tenant scope; v1.x sync UI in the dashboard, wildcard permissions (`projects:*`); v2 temporary permissions and delegation.
 
 ---
-## 9. `@basaltkit/subscriptions` — Billing  `[🚧 partial — Stripe only (no Paddle/Lemon)]`
+## 9. `@basaltkit/subscriptions` — Billing  `[🚧 partial — Stripe & Paddle (no Lemon Squeezy)]`
 
 **Goal:** your own billing model in your database, with gateways as drivers — the app talks to Basalt, never directly to Stripe.
 

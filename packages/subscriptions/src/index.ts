@@ -90,6 +90,11 @@ export {
   type StripeGatewayOptions,
 } from './drivers/stripe.js'
 export {
+  PaddleBillingGateway,
+  PaddleRequestError,
+  type PaddleGatewayOptions,
+} from './drivers/paddle.js'
+export {
   Subscriptions,
   NotSubscribedError,
   FeatureUnavailableError,
