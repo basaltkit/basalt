@@ -265,6 +265,25 @@ fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } 
 setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 ```
 
+## Apanha regressões automaticamente — `ai:doctor`
+
+O `basalt ai:doctor` verifica estaticamente o teu projeto contra os invariantes
+de segurança do framework — offline, sem chave de API. Duas verificações
+codificam as garantias mais importantes deste guia:
+
+- **`missing-tenant-membership`** (erro) — tens tenancy + auth + teams mas nenhum
+  `tenantMembershipPlugin`, por isso um tenant resolvido nunca é ligado a um
+  membro verificado. É a classe de acesso cross-tenant da secção 2.
+- **`missing-security-plugin`** (aviso) — sem `securityPlugin()`, as respostas
+  saem sem cabeçalhos seguros.
+
+```bash
+basalt ai:doctor      # corre-o em CI para falhar o build numa regressão de segurança
+```
+
+Liga-o ao teu pipeline para que uma mudança que remova o guard de membership ou
+o security plugin ponha o build vermelho em vez de ir para produção.
+
 ## Cadeia de fornecimento
 
 O CI corre `pnpm audit` (severidade alta), **CodeQL** SAST, e o **Dependabot**
