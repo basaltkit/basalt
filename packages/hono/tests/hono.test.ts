@@ -128,3 +128,22 @@ describe('body limit (HTTP HIGH-2)', () => {
     await ok.shutdown()
   })
 })
+
+describe('urlencoded body (adapter compatibility)', () => {
+  it('parses application/x-www-form-urlencoded into the body', async () => {
+    const formRoutes = [
+      route({ method: 'POST', url: '/form', body: z.object({ name: z.string() }), async handler({ body }) { return { got: body.name } } }),
+    ]
+    const app = await createApp({ plugins: [honoPlugin({ routes: formRoutes })] }).boot()
+    const res = await app.container.get(HONO).fetch(
+      new Request('http://local/form', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'name=Ada',
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ got: 'Ada' })
+    await app.shutdown()
+  })
+})
