@@ -11,6 +11,13 @@ declare module '@basaltkit/core' {
   }
   interface BasaltHooks {
     'auth:registered': { user: PublicUser }
+    /**
+     * Someone tried to register an email that already has an account. Emitted by
+     * the enumeration-safe register endpoint so the app can email the address
+     * ("you already have an account — sign in or reset your password") instead of
+     * revealing existence in the HTTP response. Only the email is provided.
+     */
+    'auth:register_existing_email': { email: string }
     'auth:login': { user: PublicUser }
     'auth:login_failed': { email: string }
     'auth:logout': { user: PublicUser }

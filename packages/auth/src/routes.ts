@@ -22,9 +22,11 @@ export function authRoutes(): BasaltRoute[] {
       method: 'POST',
       url: '/auth/register',
       body: credentials,
+      // Enumeration-safe: the same 202 whether the email is new or already taken
+      // (a collision is signalled out-of-band via auth:register_existing_email).
       async handler({ body, reply }) {
-        const user = await auth().register(body.email, body.password)
-        return reply.code(201).send(user)
+        await auth().registerSafely(body.email, body.password)
+        return reply.code(202).send({ ok: true })
       },
     }),
 

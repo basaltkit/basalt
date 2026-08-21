@@ -19,7 +19,7 @@ describe('auth over HTTP (end to end)', () => {
     const credentials = { email: 'ada@example.com', password: 'password123' }
 
     const registered = await server.inject({ method: 'POST', url: '/auth/register', payload: credentials })
-    expect(registered.statusCode).toBe(201)
+    expect(registered.statusCode).toBe(202)
 
     const login = await server.inject({ method: 'POST', url: '/auth/login', payload: credentials })
     const { accessToken, refreshToken, user } = login.json()
@@ -65,10 +65,12 @@ describe('auth over HTTP (end to end)', () => {
     await app.shutdown()
   })
 
-  it('wrong credentials → 401; duplicate registration → 409', async () => {
+  it('wrong credentials → 401; duplicate registration is enumeration-safe (same 202, no leak)', async () => {
     const { app, server } = await boot()
     const credentials = { email: 'ada@example.com', password: 'password123' }
-    await server.inject({ method: 'POST', url: '/auth/register', payload: credentials })
+    const existing: string[] = []
+    app.hooks.on('auth:register_existing_email', ({ email }) => void existing.push(email))
+    const first = await server.inject({ method: 'POST', url: '/auth/register', payload: credentials })
 
     const bad = await server.inject({
       method: 'POST',
@@ -78,9 +80,14 @@ describe('auth over HTTP (end to end)', () => {
     expect(bad.statusCode).toBe(401)
     expect(bad.json().error.code).toBe('AUTH_INVALID_CREDENTIALS')
 
+    // Re-registering the same email returns the SAME response as the first time —
+    // no 409, no AUTH_EMAIL_TAKEN — so it can't be used to probe which emails exist.
     const duplicate = await server.inject({ method: 'POST', url: '/auth/register', payload: credentials })
-    expect(duplicate.statusCode).toBe(409)
-    expect(duplicate.json().error.code).toBe('AUTH_EMAIL_TAKEN')
+    expect(duplicate.statusCode).toBe(first.statusCode)
+    expect(duplicate.statusCode).toBe(202)
+    expect(duplicate.json().error).toBeUndefined()
+    // The collision is signalled out-of-band instead.
+    expect(existing).toEqual(['ada@example.com'])
     await app.shutdown()
   })
 
