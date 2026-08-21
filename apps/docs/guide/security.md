@@ -98,6 +98,29 @@ authPlugin({
 })
 ```
 
+A per-IP throttle runs alongside it (on by default) so a spray of one attempt
+across many accounts is caught too — pass the client IP to `login({ ip })` (the
+built-in route does this).
+
+## Account enumeration is closed by default
+
+The public register endpoint is **enumeration-safe**: registering an email that
+already exists returns the *same* `202` (and does equivalent work) as a fresh
+signup, so it can't be used to probe which emails have accounts. The collision is
+signalled out-of-band via the `auth:register_existing_email` hook — email the
+address "you already have an account; sign in or reset your password":
+
+```ts
+app.hooks.on('auth:register_existing_email', ({ email }) => sendAlreadyRegisteredEmail(email))
+
+// opt out (classic 409 on duplicate) if you really need it:
+authPlugin({ users, secret: env.APP_SECRET, enumerationSafeRegister: false })
+```
+
+Login, password-reset and email-verification responses are likewise uniform
+whether or not the account exists (equalized timing, generic `{ ok: true }`), so
+none of the auth endpoints leak which emails are registered.
+
 ## Idempotent mutations — `idempotencyPlugin`
 
 Safe retries for `POST`: a client that sends an `Idempotency-Key` gets the
