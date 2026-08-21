@@ -163,6 +163,49 @@ await disk.put('logo.png', 'central-logo') // outside any tenant
 
 In normal HTTP requests you don't need `runWithContext` — the framework puts the tenant in the context for you. To disable it, configure the disk with `scope: null`.
 
+### Image processing (resize, WebP, thumbnails)
+
+`disk.image(path)` opens a fluent, engine-agnostic pipeline. Operations are
+collected lazily and run only on a terminal (`toBuffer` / `save` / `metadata`).
+The result of `save()` goes back through `disk.put`, so tenant scoping, the key
+guard, and upload limits all still apply.
+
+The engine (native `sharp`) is **not** bundled here — install the opt-in
+[`@basaltkit/image-sharp`](https://www.npmjs.com/package/@basaltkit/image-sharp)
+satellite so apps that never touch images carry no native dependency:
+
+```bash
+pnpm add @basaltkit/image-sharp sharp
+```
+
+```ts
+import { storagePlugin } from '@basaltkit/storage'
+import { SharpImageProcessor } from '@basaltkit/image-sharp'
+
+storagePlugin({
+  imageProcessor: new SharpImageProcessor(),
+  disks: { uploads: { driver: 'local', root: './storage' } },
+})
+```
+
+```ts
+// resize + re-encode + write back (content type inferred from the format)
+await storage.disk('uploads')
+  .image('avatars/1.png')
+  .resize(256, 256, { fit: 'cover' })
+  .webp(80)
+  .save('avatars/1.webp')
+
+const thumb = await storage.disk('uploads').image('hero.jpg').resize(320).jpeg().toBuffer()
+const { width, height } = await storage.disk('uploads').image('hero.jpg').metadata()
+```
+
+Chainable ops: `.resize(w?, h?, { fit?, position? })`, `.rotate(deg?)`,
+`.blur(sigma?)`, `.grayscale()`, `.flip()`, `.flop()`, and the encoders
+`.webp(q?)` / `.jpeg(q?)` / `.png(q?)` / `.avif(q?)`. Without an `imageProcessor`
+configured, the terminal throws `ImageProcessingUnavailableError`. Run heavy work
+inside a `@basaltkit/queue` job to keep it off the request path.
+
 ## API reference
 
 ### `class Disk`

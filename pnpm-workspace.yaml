@@ -8,6 +8,7 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: true
   prisma: true
+  sharp: false
 auditConfig:
   ignoreGhsas:
     # vite dev-server `server.fs.deny` bypass (Windows) — reaches us only through
