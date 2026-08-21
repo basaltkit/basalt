@@ -12,18 +12,25 @@ the public API is **stable**: breaking changes only in a new **major**, new
 features in a **minor**, and fixes in a **patch**. You can depend on a `^1`
 range and get features and fixes without breakage until the next major.
 
-## Lockstep versions
+## Package versions & the Basalt release
 
-The packages are released **in lockstep**: every `@basaltkit/*` package shares the
-same version and is published together (via Changesets, `fixed: [["@basaltkit/*"]]`).
-So `@basaltkit/auth@1.0.0` is built and tested against `@basaltkit/core@1.0.0` —
-keep them on the same version. The `create-basalt` scaffolder versions
-independently.
+Versioning works on two levels, on purpose:
 
-::: tip Why lockstep
-The packages are one integrated framework, not independent libraries. Lockstep
-means any combination you install was tested together — no version-matrix
-guesswork.
+- **Each `@basaltkit/*` package is versioned independently.** A package bumps its
+  own semver only when *it* changes, so `@basaltkit/subscriptions` may be at `2.x`
+  while `@basaltkit/core` is still `1.x`. Depend on each with a `^` range; every
+  package is built and tested against the current `@basaltkit/core`. The exact,
+  current version of every package is on the [Ecosystem](./ecosystem) page.
+- **The framework as a whole has one "Basalt release" version** — currently
+  **1.1** (the number in the nav). It's a human-friendly marker for a *generation*
+  of the framework, used only for communication and these docs — `1.0` was the
+  first stable release, `1.1` the security-hardening wave. It is **not** the
+  version of any single package.
+
+::: tip Which number do I depend on?
+Depend on the **package** versions — those are what npm installs and resolves.
+The **Basalt release** number (e.g. "Basalt 1.1") is just a friendly label for
+"which generation of the framework these docs describe."
 :::
 
 ## Runtime support
