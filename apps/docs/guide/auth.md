@@ -268,6 +268,51 @@ throws `MfaInvalidCodeError` and counts toward the throttle. Both a TOTP code an
 a recovery code are accepted (recovery codes are consumed on use). The TOTP
 implementation is dependency-free and verified against the RFC 6238 test vectors.
 
+## Social login (OAuth)
+
+Sign in with Google or GitHub via the OAuth 2.0 authorization-code flow — no SDK,
+and cookieless: the CSRF `state` is HMAC-signed and stateless.
+
+```ts
+import {
+  authPlugin, oauthPlugin, oauthRoutes, authRoutes, googleProvider, githubProvider,
+} from '@basaltkit/auth'
+
+createApp({
+  plugins: [
+    authPlugin({ users, secret: env.APP_SECRET }),
+    oauthPlugin({
+      secret: env.APP_SECRET, // signs the state
+      providers: [
+        googleProvider({ clientId: env.GOOGLE_ID, clientSecret: env.GOOGLE_SECRET }),
+        githubProvider({ clientId: env.GITHUB_ID, clientSecret: env.GITHUB_SECRET }),
+      ],
+    }),
+  ],
+})
+
+// register the routes
+fastifyPlugin({ routes: [...authRoutes(), ...oauthRoutes({ callbackBaseUrl: 'https://app.example.com' })] })
+```
+
+Two routes per provider are added:
+
+- `GET /auth/oauth/:provider` → redirects to the provider. Register
+  `${callbackBaseUrl}/auth/oauth/:provider/callback` as the provider's redirect URI.
+- `GET /auth/oauth/:provider/callback` → verifies the state, exchanges the code,
+  and logs the user in. The response is JSON `{ user, accessToken, refreshToken }`;
+  pass `successRedirect` to bounce the browser back to your SPA with the tokens in
+  the URL fragment instead.
+
+New accounts are created **passwordless** (they authenticate via the provider
+until a password is set); a provider-verified email flips `emailVerified`.
+`Auth.socialLogin(email)` is the underlying primitive if you wire a custom provider.
+
+::: warning Accounts are matched by email
+Only trust providers that return a **verified** email. Google and the built-in
+GitHub provider both do — GitHub's driver reads the primary *verified* address.
+:::
+
 ## Password reset (end-to-end)
 
 The module never sends email — it emits a hook carrying a single-use token
