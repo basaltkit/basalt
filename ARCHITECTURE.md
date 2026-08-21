@@ -11,6 +11,26 @@
 
 > **Known technical debt:** deferred items that only surface with real backends (atomic billing, trial conversion at the gateway, durable webhook idempotency) are tracked in [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md), with a remediation plan and anchors in the code.
 
+> **Implementation status (as of Basalt 1.1).** This is the original design RFC —
+> the *vision*, not a current-state reference. Section headings below are tagged
+> **✅ shipped**, **🚧 partial**, or **📋 roadmap**; for each package's exact,
+> current version see the [Ecosystem](https://basaltkit-docs.pages.dev/guide/ecosystem)
+> page. Still **design-only** today:
+>
+> - **Billing** — Paddle & Lemon Squeezy gateways (only **Stripe** ships, plus local proxypay/appypay).
+> - **Mailer** — Resend / SES / Mailgun drivers, React-Email/MJML templates, `mail preview` (only SMTP/log/fake ship).
+> - **Auth** — OAuth / social login (SSO/SAML is Phase 7).
+> - **Storage** — image processing (`.image().resize().webp()`).
+> - **Cache** — stale-while-revalidate.
+> - **CLI** — `upgrade` codemods, `dev`, `queue work|stats|retry`, `generate docs`, `publish`, and most `tenant:*` / `make:*` subcommands (only `make:resource` / `make:service` ship).
+> - **create-basalt** — the rich interactive wizard (it's flag-based today).
+> - **Dashboard** — the ready-made analytics app (headless `admin` + per-feature UIs ship).
+> - **Docs** — StackBlitz buttons, Algolia DocSearch, typedoc reference.
+>
+> Not gaps, just structural drift: `@basaltkit/jobs` merged into `@basaltkit/queue`;
+> `basalt doctor` shipped as `ai:doctor`; **database-per-tenant is done** (the RFC
+> lists it under Phase 7).
+
 ---
 
 ## 1. Vision and Philosophy
@@ -207,7 +227,7 @@ The central point: **`AsyncLocalStorage` carries the context** (request, tenant,
 
 ---
 
-## 3. `@basaltkit/core` — The Foundation
+## 3. `@basaltkit/core` — The Foundation  `[✅ shipped]`
 
 ### 3.1 Responsibilities
 
@@ -306,7 +326,7 @@ export {
 **Core roadmap:** v1 — container, plugins, ALS, hooks; v1.x — discovery with watch mode, devtools for inspecting the DI graph; v2 — worker threads support with propagated context.
 
 ---
-## 4. HTTP Layer — Framework-independent core
+## 4. HTTP Layer — Framework-independent core  `[✅ shipped]`
 
 ### 4.1 Architectural decision
 
@@ -385,7 +405,7 @@ export const createProject = route({
 
 **Dependencies:** `fastify`, `@basaltkit/core`, `zod`. **Roadmap:** v1 routes + OpenAPI; v1.x per-tenant rate limiting, ETags; v2 typed streaming/SSE.
 
-## 5. `@basaltkit/prisma` — Data layer
+## 5. `@basaltkit/prisma` — Data layer  `[✅ shipped]`
 
 **Goal:** make Prisma "speak Basalt": tenancy, auditing and conventions without changing the standard Prisma workflow.
 
@@ -403,7 +423,7 @@ const users = await ctx().db.user.findMany() // WHERE tenant_id = ... automatic 
 
 ---
 
-## 6. `@basaltkit/tenancy` — Multi-tenancy
+## 6. `@basaltkit/tenancy` — Multi-tenancy  `[✅ shipped]`
 
 ### 6.1 Isolation modes
 
@@ -459,7 +479,7 @@ await tenancy.forEach(async (t) => { /* bulk maintenance */ }, { concurrency: 5 
 
 ---
 
-## 7. `@basaltkit/auth` — Authentication
+## 7. `@basaltkit/auth` — Authentication  `[🚧 partial — no OAuth/social login]`
 
 **Goal:** complete server-side auth, with data in **your** database (Prisma), without vendor lock-in — positioned as a self-hosted alternative to Auth0/Clerk.
 
@@ -491,7 +511,7 @@ Ready-made flows (routes registered automatically, all overridable):
 
 ---
 
-## 8. `@basaltkit/permissions` — Authorization
+## 8. `@basaltkit/permissions` — Authorization  `[✅ shipped]`
 
 ```ts
 // role-based access control (RBAC)
@@ -517,7 +537,7 @@ can: 'project:update'        // resolves the policy with the loaded resource
 **Roadmap:** v1 roles/permissions/policies + tenant scope; v1.x sync UI in the dashboard, wildcard permissions (`projects:*`); v2 temporary permissions and delegation.
 
 ---
-## 9. `@basaltkit/subscriptions` — Billing
+## 9. `@basaltkit/subscriptions` — Billing  `[🚧 partial — Stripe only (no Paddle/Lemon)]`
 
 **Goal:** your own billing model in your database, with gateways as drivers — the app talks to Basalt, never directly to Stripe.
 
@@ -552,7 +572,7 @@ await tenant.features.consume('api.requests', 1)         // metered; throws Quot
 
 **Roadmap:** v1 Stripe + plans/trials/feature flags; v1.x metered billing, coupons, invoices; v2 Paddle + Lemon Squeezy, international tax/invoicing.
 
-## 10. `@basaltkit/audit` + `@basaltkit/activity`
+## 10. `@basaltkit/audit` + `@basaltkit/activity`  `[✅ shipped]`
 
 **Audit** (compliance — immutable, automatic):
 - A Prisma extension records every CUD: who (`ctx().user`), in which tenant, what (before/after diff), when, and from where (ip/userAgent from the context).
@@ -570,7 +590,7 @@ const feed = await activity.for(project).latest(20)
 ```
 A deliberate distinction: audit is for the auditor (immutable, verbose), activity is for the end user (curated, readable). Combining the two in one log leads to conflicting retention and permission requirements; separating them avoids that.
 
-## 11. `@basaltkit/notifications` — Multi-channel
+## 11. `@basaltkit/notifications` — Multi-channel  `[✅ shipped]`
 
 ```ts
 export const InvoicePaid = defineNotification({
@@ -595,7 +615,7 @@ await notifyMany(tenant.admins(), InvoicePaid, { invoice })
 
 ## 12. Infrastructure
 
-### 12.1 `@basaltkit/storage`
+### 12.1 `@basaltkit/storage`  `[🚧 partial — no image processing]`
 ```ts
 await storage.disk('uploads').put('avatar.png', buffer)        // automatically tenant-prefixed
 const url = await storage.disk('uploads').temporaryUrl('avatar.png', '15m')  // signed URL
@@ -603,7 +623,7 @@ await storage.disk('uploads').image('avatar.png').resize(256).webp().save('avata
 ```
 Drivers: MinIO/S3 (same driver, S3-compatible), Local, Azure Blob, GCS — all passing the same conformance suite. Per-tenant isolation via prefix (default) or a dedicated bucket (config). Image processing via `sharp` in a job (does not block the request). Direct browser→storage upload with pre-signed URLs generated by the backend.
 
-### 12.2 `@basaltkit/queue` + `@basaltkit/jobs`
+### 12.2 `@basaltkit/queue` + `@basaltkit/jobs`  `[🚧 partial — no queue CLI; jobs is part of queue]`
 ```ts
 export const SendWelcomeEmail = defineJob({
   name: 'email.welcome',
@@ -619,7 +639,7 @@ await SendWelcomeEmail.dispatch({ userId }, { delay: '5m', priority: 2 })
 ```
 BullMQ underneath; Basalt adds: typed/validated payload, **context propagation** (tenant/correlationId serialized and restored in the worker via ALS), a DLQ with replay from the dashboard/CLI, workers with graceful shutdown tied to the core lifecycle. `basalt queue work`, `basalt queue retry --failed`, `basalt queue stats`.
 
-### 12.3 `@basaltkit/scheduler`
+### 12.3 `@basaltkit/scheduler`  `[🚧 partial — only schedule:list in the CLI]`
 ```ts
 schedule.job(ReconcileBilling).daily().at('03:00').timezone('UTC')
 schedule.command('tenant:cleanup').weekly().sundays()
@@ -628,7 +648,7 @@ schedule.job(SendDigest).monthly().onFailure(notifyOps)
 ```
 Implemented on top of BullMQ repeatable jobs (no daemon of its own — survives restarts, runs in a cluster without duplicating via a distributed lock). `withoutOverlapping()`, `onOneServer()`, a maintenance window, and `basalt schedule list` showing the next runs.
 
-### 12.4 `@basaltkit/events`
+### 12.4 `@basaltkit/events`  `[✅ shipped]`
 ```ts
 export const OrderCreated = defineEvent('order.created', z.object({ orderId: z.string() }))
 
@@ -638,10 +658,10 @@ on('order.*', auditListener)                                         // wildcard
 ```
 Typed events (Zod payload), sync or queued listeners (the events→queue bridge is automatic), wildcards for cross-cutting concerns (audit subscribes to `*`). **Domain events** (internal) vs **integration events** (publishable externally via the outbox pattern — v2, with a driver for the SaaS's own outgoing webhooks).
 
-### 12.5 `@basaltkit/logger`
+### 12.5 `@basaltkit/logger`  `[✅ shipped]`
 Built on **Pino** (the same family as Fastify, ~zero cost): JSON in production, pretty in dev, and **automatic enrichment via ALS** — every log carries `requestId`, `correlationId`, `tenantId`, `userId`, `traceId` (OpenTelemetry if present) without the developer passing anything. Redaction of sensitive fields (`password`, `token`) by default. Child loggers per module: `logger.child({ pkg: 'subscriptions' })`.
 
-### 12.6 `@basaltkit/cache`
+### 12.6 `@basaltkit/cache`  `[🚧 partial — no stale-while-revalidate]`
 ```ts
 await cache.remember('plans', '1h', () => db.plan.findMany())     // cache-aside in 1 line
 await cache.tags(['tenant', `user:${id}`]).put(key, value, '10m')
@@ -649,7 +669,7 @@ await cache.tags([`user:${id}`]).flush()
 ```
 Redis and Memory drivers (same interface, same test suite); automatic per-tenant prefix; tags via sets in Redis; `remember` with **stampede protection** (distributed lock — only one process recomputes). Stale-while-revalidate in v1.x.
 
-### 12.7 `@basaltkit/config` + `@basaltkit/env`
+### 12.7 `@basaltkit/config` + `@basaltkit/env`  `[✅ shipped]`
 ```ts
 // env.ts — validated at boot, typed at use
 export const env = defineEnv({
@@ -664,13 +684,13 @@ ctx().tenant.config.get('branding.color')     // tenant override (stored in the 
 ```
 Boot fails with an aggregated report of ALL invalid env vars at once (not one at a time). Secrets never appear in logs/errors (integrated with the logger's redaction).
 
-### 12.8 `@basaltkit/mailer`
+### 12.8 `@basaltkit/mailer`  `[🚧 partial — SMTP/log/fake only]`
 Drivers for SMTP, Resend, SES, Mailgun + a `log` driver (dev) and a `fake` driver (test). Templates with **React Email** (official) or MJML; per-tenant layout/branding; sending via the queue by default; a preview server in dev (`basalt mail preview`).
 
 ---
 ## 13. Tooling and DX
 
-### 13.1 `@basaltkit/cli` — `basalt` (the ecosystem's command-line tool)
+### 13.1 `@basaltkit/cli` — `basalt` (the ecosystem's command-line tool)  `[🚧 partial — many commands not built]`
 
 ```
 basalt dev                      # dev server with watch + pretty logs + embedded queue worker
@@ -687,7 +707,7 @@ basalt upgrade                  # codemods between versions (jscodeshift) — ke
 
 The CLI is **extensible via plugins**: any package (or the app itself) registers commands via `defineCommand()` in the core. `basalt doctor` and `basalt upgrade` are a direct investment in reducing churn — the two biggest causes of framework abandonment are a broken setup and painful majors.
 
-### 13.2 `create-basalt`
+### 13.2 `create-basalt`  `[🚧 partial — flag-based, not the wizard]`
 
 ```
 npx create-basalt my-saas
@@ -703,11 +723,11 @@ npx create-basalt my-saas
 
 Generates a project **working in a single command** (`pnpm dev` brings up app + docker-compose + migrations + seed), with a real domain example (a multi-tenant "Tasks" project with billing) — not a hello world. Each choice only adds the selected packages: what was not selected **does not exist** in the generated project (no commented-out dead code).
 
-### 13.3 `@basaltkit/generator`
+### 13.3 `@basaltkit/generator`  `[🚧 partial — only make:resource/make:service]`
 
 The scaffolding engine used by `basalt make *`. A `basalt make resource Project` generates the complete vertical: controller (typed routes), service, repository, use cases, Zod DTOs, policy, tests (unit + http) and OpenAPI schema — all following the app's templates (publishable via `basalt publish generator` for customization, like publishable stubs).
 
-### 13.4 `@basaltkit/testing`
+### 13.4 `@basaltkit/testing`  `[✅ shipped]`
 
 ```ts
 import { createTestApp, mailFake, queueFake, time } from '@basaltkit/testing'
@@ -723,11 +743,11 @@ expect(await tenant.subscription.onTrial()).toBe(false)
 
 Fakes for all drivers (mail, queue, storage, notifications, billing gateway), factories integrated with Prisma, an isolated test tenant per file (transaction with rollback), time travel. A ready Vitest preset (`@basaltkit/testing/vitest`).
 
-### 13.5 `@basaltkit/sdk`
+### 13.5 `@basaltkit/sdk`  `[✅ shipped]`
 
 A TypeScript client **generated from the route Metadata** (not from an intermediate OpenAPI): `sdk.projects.create({ name })` with exact types from the server, errors typed by code, automatic auth (transparent refresh). This is what makes Basalt attractive for full-stack Next.js/React Native teams: a Basalt backend + any frontend.
 
-### 13.6 `@basaltkit/dashboard` + `@basaltkit/admin`
+### 13.6 `@basaltkit/dashboard` + `@basaltkit/admin`  `[🚧 partial — no full dashboard app]`
 
 - **admin**: headless components + UI (React, shadcn-based) for CRUD/tables/forms generated from Zod schemas — a built-in admin UI kit, embeddable in any React app.
 - **dashboard**: a ready-made app built on top of `admin` + `sdk`: users, tenants, plans/subscriptions (MRR, churn), logs/audit, queues (DLQ retry), files, metrics, tenant impersonation. Mountable at `/admin` of the app itself or standalone. Everything protected by `@basaltkit/permissions`.
@@ -736,7 +756,7 @@ A TypeScript client **generated from the route Metadata** (not from an intermedi
 
 ---
 
-## 14. Documentation (basalt.dev)
+## 14. Documentation (basalt.dev)  `[🚧 partial — no StackBlitz/Algolia/typedoc]`
 
 A structure following the industry's recognized gold standard for framework docs:
 
