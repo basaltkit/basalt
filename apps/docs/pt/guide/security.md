@@ -42,6 +42,19 @@ O store por omissão é em memória (`MemoryRateLimitStore`). Para múltiplas
 instâncias, implementa a interface `RateLimitStore` sobre Redis — o mesmo padrão
 de driver usado por `@basaltkit/cache`.
 
+**Limites por rota.** Uma rota pode apertar o orçamento de um endpoint sensível
+via `meta.rateLimit` — recebe o seu próprio balde (por IP + rota) nesse limite,
+enquanto as restantes usam o global:
+
+```ts
+route({
+  method: 'POST',
+  url: '/auth/login',
+  meta: { rateLimit: { limit: 5, windowMs: 60_000 } }, // 5/min além do limite global
+  // …
+})
+```
+
 ### CORS
 
 `origin` aceita `true` (refletir), uma string, um array de allow-list, ou um
@@ -57,9 +70,12 @@ predicado). Um wildcard `*` só é emitido para pedidos sem credenciais.
 ### Cabeçalhos seguros
 
 `headers: true` define HSTS, `X-Content-Type-Options: nosniff`,
-`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` e
-`Cross-Origin-Opener-Policy: same-origin`. Passa um objeto para personalizar (p.
-ex. uma `contentSecurityPolicy` para superfícies HTML) ou `false` para desativar.
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
+`Cross-Origin-Opener-Policy: same-origin` e uma `Content-Security-Policy`
+restritiva por omissão — `default-src 'none'; frame-ancestors 'none'` (adequada
+a uma API JSON). Passa um objeto para personalizar (p. ex. a tua própria
+`contentSecurityPolicy` para uma superfície HTML/docs), `contentSecurityPolicy:
+false` para omitir só a CSP, ou `headers: false` para desativar tudo.
 
 ## Segredos fail-closed — `secret()`
 
@@ -141,6 +157,39 @@ idempotencyPlugin() // protege POST por omissão
   caller é misturada na chave armazenada, por isso a resposta em cache de um
   utilizador nunca pode ser replicada a outro (sem fuga entre utilizadores/
   tenants), e a mesma chave em dois endpoints não pode colidir.
+
+## Revogar access tokens
+
+Os access tokens (JWTs) são stateless, por isso ficam válidos até expirarem. Liga
+um `TokenVersionStore` para os revogar mais cedo — uma reposição de password (e o
+explícito `revokeAllTokens(userId)`) invalida então todos os tokens emitidos
+antes do incremento:
+
+```ts
+import { authPlugin, MemoryTokenVersionStore } from '@basaltkit/auth'
+import { PrismaTokenVersionStore } from '@basaltkit/auth-prisma' // ou SqliteTokenVersionStore
+
+authPlugin({ users, secret: env.APP_SECRET, tokenVersions: new PrismaTokenVersionStore(prisma) })
+```
+
+Desligado por omissão (a verificação passa a custar uma leitura ao store por
+pedido). O próprio segredo de assinatura é protegido: o `Auth` recusa arrancar
+com segredo vazio e, em produção, rejeita um com menos de 32 chars (uma chave
+HS256 curta é forjável offline) — usa `secret({ minLength: 32 })`.
+
+## Cifrar segredos TOTP em repouso
+
+O TOTP tem proteção anti-replay de origem (o time-step de um código é registado,
+por isso um código intercetado é de uso único). Para sobreviver também a uma fuga
+da base de dados, cifra os segredos guardados com uma chave da app — ficam como
+envelopes AES-256-GCM e só são decifrados ao verificar um código:
+
+```ts
+authPlugin({ users, secret: env.APP_SECRET, mfaEncryptionKey: env.MFA_KEY })
+```
+
+Os registos em plaintext existentes continuam a funcionar e são cifrados na
+próxima escrita.
 
 ## Responsabilidade partilhada — reforçar a tua integração
 

@@ -57,6 +57,25 @@ await disk.list()        // todos os ficheiros no scope atual
 
 `get` num ficheiro inexistente lança `StorageFileNotFoundError`.
 
+## Validar keys e uploads
+
+As object keys são validadas em todas as operações e em **todos** os drivers:
+uma key com barra inicial, um segmento `..` ou caracteres de controlo é rejeitada
+com `StorageInvalidKeyError` — por isso uma key fornecida pelo utilizador nunca
+pode escapar ao seu prefixo nem colidir com a de outro tenant.
+
+Os uploads são ilimitados por omissão; passa limites opt-in ao `put` para limitar
+o tamanho e restringir o content-type (aplicados na fachada, antes de qualquer
+driver correr):
+
+```ts
+await disk.put(key, buffer, {
+  contentType: 'image/png',
+  maxBytes: 5 * 1024 * 1024,                          // → StorageTooLargeError acima de 5 MiB
+  allowedContentTypes: ['image/png', 'image/jpeg'],   // → StorageContentTypeError caso contrário
+})
+```
+
 ## Múltiplos discos nomeados
 
 Declara tantos discos quantos quiseres — ex.: uploads públicos num backend, faturas
