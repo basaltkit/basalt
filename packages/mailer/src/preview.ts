@@ -55,7 +55,7 @@ function renderOne(mailer: Mailer, preview: MailPreview): ResolvedMail | Error {
  * `node:http` wrapper over this — keep the logic here so it stays testable.
  *
  * - `/`                     → the app shell (sidebar + preview pane)
- * - `/raw/<name>/html`      → the layout-wrapped HTML body (for the <iframe>)
+ * - `/raw/<name>/html`      → the layout-wrapped HTML body (for the `iframe`)
  * - `/raw/<name>/text`      → the plaintext body
  */
 export function renderPreviewResponse(

@@ -7,6 +7,12 @@ autenticação, permissões, auditoria, filas, notificações** — integrados c
 coerência ponta-a-ponta rara em Node.js, e com inferência de TypeScript da rota
 até ao cliente.
 
+:::tip Experimenta no browser
+Sem configuração local — arranca um servidor Basalt executável num WebContainer do StackBlitz:
+
+<StackBlitz label="Correr o playground no StackBlitz" />
+:::
+
 ## Porquê o Basalt
 
 - **Self-hosted, sem lock-in.** Os teus dados vivem no teu PostgreSQL, os teus
