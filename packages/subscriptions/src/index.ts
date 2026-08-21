@@ -95,6 +95,11 @@ export {
   type PaddleGatewayOptions,
 } from './drivers/paddle.js'
 export {
+  LemonSqueezyBillingGateway,
+  LemonSqueezyRequestError,
+  type LemonSqueezyGatewayOptions,
+} from './drivers/lemonsqueezy.js'
+export {
   Subscriptions,
   NotSubscribedError,
   FeatureUnavailableError,
