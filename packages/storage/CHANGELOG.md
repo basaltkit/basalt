@@ -1,5 +1,11 @@
 # @basaltkit/storage
 
+## 1.1.0
+
+### Minor Changes
+
+- Facade-level object-key validation across every driver (`STORAGE_INVALID_KEY` for leading-slash/`..`/control chars) and opt-in `maxBytes` / `allowedContentTypes` upload limits on `put()`.
+
 ## 1.0.1
 
 ### Patch Changes
