@@ -1,5 +1,11 @@
 # @basaltkit/search-postgres
 
+## 1.0.1
+
+### Patch Changes
+
+- Validate the `table` option (optionally schema-qualified) at construction so it can not inject into the interpolated DDL/DML.
+
 ## 1.0.5
 
 ### Patch Changes

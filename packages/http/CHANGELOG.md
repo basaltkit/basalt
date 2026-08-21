@@ -1,5 +1,11 @@
 # @basaltkit/http
 
+## 1.4.0
+
+### Minor Changes
+
+- Restrictive default `Content-Security-Policy` when secure headers are enabled (overridable / `false` to omit), and per-route rate limits via `route.meta.rateLimit`.
+
 ## 1.3.0
 
 ### Minor Changes
