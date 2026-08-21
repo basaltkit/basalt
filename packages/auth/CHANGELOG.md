@@ -1,5 +1,11 @@
 # @basaltkit/auth
 
+## 1.3.0
+
+### Minor Changes
+
+- TOTP anti-replay + per-IP login throttle, weak JWT-secret guard, opt-in access-token revocation (TokenVersionStore) and TOTP secret encryption at rest, and enumeration-safe registration.
+
 ## 1.2.0
 
 ### Minor Changes

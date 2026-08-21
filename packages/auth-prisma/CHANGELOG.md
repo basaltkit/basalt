@@ -1,5 +1,11 @@
 # @basaltkit/auth-prisma
 
+## 1.3.0
+
+### Minor Changes
+
+- Persist the TOTP `lastUsedStep` (anti-replay) and add the `AuthTokenVersion` model + `PrismaTokenVersionStore` for access-token revocation.
+
 ## 1.2.0
 
 ### Minor Changes

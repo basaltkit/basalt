@@ -1,5 +1,11 @@
 # @basaltkit/hono
 
+## 1.1.0
+
+### Minor Changes
+
+- Enforce a request body-size limit (`honoPlugin({ bodyLimit })`, default 1 MiB) — 413 before the body is read.
+
 ## 1.0.5
 
 ### Patch Changes

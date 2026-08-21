@@ -1,5 +1,11 @@
 # @basaltkit/ai
 
+## 0.10.0
+
+### Minor Changes
+
+- Add two `ai:doctor` security rules — `missing-tenant-membership` (error) and `missing-security-plugin` (warning) — as a continuous custodian for the tenant-isolation invariants.
+
 ## 0.9.2
 
 ### Patch Changes
