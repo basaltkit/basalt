@@ -165,25 +165,70 @@ Liga a seleção de tenant a uma **membership user↔tenant verificada** (via
 `@basaltkit/teams`, o `tenantId` de uma API-key, ou uma claim de sessão) — nunca
 apenas ao pedido em bruto.
 
+**Faz isto para todas as rotas de uma vez com `tenantMembershipPlugin`.** Em vez
+de repetir a verificação, regista o guard do `@basaltkit/teams`: em cada pedido
+autenticado e com tenant resolvido, garante que o utilizador é membro do tenant
+e devolve `403` caso contrário. As rotas centrais que legitimamente atuam fora
+de um só tenant (login, criação de tenant, admin da plataforma, aceitar convite)
+optam por sair com `meta: { central: true }`.
+
+```ts
+import { teamsPlugin, tenantMembershipPlugin } from '@basaltkit/teams'
+
+createApp({
+  plugins: [
+    authPlugin(/* … */),
+    tenancyPlugin(/* … */),
+    teamsPlugin(/* … */),
+    tenantMembershipPlugin(), // seguro por omissão: membership imposta em todo o lado
+  ],
+})
+
+// uma rota de que o utilizador não é membro → 403; rota central sai:
+route({ method: 'POST', url: '/tenants', meta: { central: true }, /* … */ })
+```
+
 ### 3. O scoping automático de tenant cobre o ORM — não SQL bruto nem writes aninhados
 
 A extensão de tenancy do Prisma limita as operações de modelo padrão e **falha
 fechado** sem contexto de tenant. Dois caminhos ficam *fora* dessa rede:
 
-- **Queries brutas** — `$queryRaw` / `$executeRaw` correm exatamente como
-  escritas. Adiciona tu o predicado `tenant_id = $1`, e parametriza sempre.
+- **Queries brutas** — `$queryRaw` / `$executeRaw` contornam o scoping de modelo.
+  O Basalt agora **recusa-as por omissão quando há um tenant em contexto**
+  (`PRISMA_RAW_IN_TENANT`), para uma query bruta não poder ler entre tenants em
+  silêncio. Corre-as em código central (sem tenant em contexto), ou adiciona tu o
+  predicado `tenant_id = $1` e define `onRawInTenant: 'allow'`.
 - **Writes aninhados** — um `connect` / `create` aninhado que alcança outro
   modelo não é re-limitado. Verifica primeiro que o registo relacionado pertence
   ao tenant atual.
 
 ```ts
-// ❌ query bruta sem predicado de tenant — lê entre tenants
-await prisma.$queryRaw`SELECT * FROM invoices WHERE status = ${status}`
+// ❌ query bruta dentro de um contexto de tenant agora lança PRISMA_RAW_IN_TENANT
+await db.$queryRaw`SELECT * FROM invoices WHERE status = ${status}`
 
-// ✅ limita explicitamente, parametrizado
+// ✅ limita explicitamente, parametrizado, e opta por permitir
 const tenantId = ctx().tenant.id
-await prisma.$queryRaw`
+await db.$queryRaw`
   SELECT * FROM invoices WHERE status = ${status} AND tenant_id = ${tenantId}`
+// com tenancyExtension({ onRawInTenant: 'allow' })
+```
+
+**Defesa em profundidade — ativa RLS no Postgres.** O scoping aplicacional é uma
+camada; junta uma imposta pela base de dados, para que nem um predicado esquecido
+vaze. O `rlsPolicySql` gera a migração, e o `set_config` nomeia o tenant ativo
+por transação — a base de dados filtra cada linha por si:
+
+```ts
+import { rlsPolicySql, setTenantConfigSql, tenantConfigParams } from '@basaltkit/prisma'
+
+// migração (uma vez): ativa RLS + política de isolamento por tenant em cada tabela
+await db.$executeRawUnsafe(rlsPolicySql({ tables: ['invoices', 'projects'] }))
+
+// por pedido: define o tenant ativo, local à transação (nunca vaza num pool)
+await db.$transaction(async (tx) => {
+  await tx.$executeRawUnsafe(setTenantConfigSql(), ...tenantConfigParams(ctx().tenant.id))
+  // cada query aqui é filtrada ao tenant pela base de dados
+})
 ```
 
 Na dúvida, prefere operações de modelo (limitadas automaticamente) a SQL bruto,

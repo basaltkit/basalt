@@ -10,6 +10,23 @@ export class MissingTenantError extends BasaltError {
   }
 }
 
+/**
+ * Raw SQL/command methods ($queryRaw, $executeRaw, …) bypass the model-level
+ * tenant scoping entirely, so running one INSIDE a tenant context would read or
+ * mutate every tenant's rows. This is thrown to fail closed on that path.
+ */
+export class RawQueryInTenantContextError extends BasaltError {
+  constructor(method: string) {
+    super(
+      'PRISMA_RAW_IN_TENANT',
+      `${method}() is not tenant-scoped and was called inside a tenant context, so it would ` +
+        'ignore tenant isolation and touch every tenant\'s rows. Add the tenant predicate ' +
+        'yourself and run it outside the tenant context (central/admin code), or set ' +
+        "onRawInTenant: 'allow' if you have manually scoped the query.",
+    )
+  }
+}
+
 type QueryArgs = Record<string, unknown>
 
 /**
@@ -101,6 +118,19 @@ export interface TenancyExtensionOptions {
    * an unauthenticated route), returning every tenant's rows.
    */
   onMissingTenant?: 'bypass' | 'error'
+  /**
+   * Behavior for raw methods ($queryRaw/$queryRawUnsafe/$executeRaw/
+   * $executeRawUnsafe) invoked WHILE a tenant is in scope — these bypass the
+   * model-level scoping and would touch every tenant's rows:
+   * - 'error' (default): throw PRISMA_RAW_IN_TENANT — fail closed.
+   * - 'allow': run the raw query as-is (only for queries you have already
+   *   scoped by tenant by hand).
+   *
+   * Raw queries with NO tenant in scope are always allowed (central/admin code).
+   *
+   * @security Defaults to 'error'. Do not set 'allow' globally.
+   */
+  onRawInTenant?: 'allow' | 'error'
 }
 
 const defaultTenantId = (): string | undefined => {
@@ -119,6 +149,16 @@ const defaultTenantId = (): string | undefined => {
 export function tenancyExtension(options: TenancyExtensionOptions = {}) {
   const field = options.tenantField ?? 'tenantId'
   const getTenantId = options.getTenantId ?? defaultTenantId
+
+  // Raw methods bypass model-level scoping. Refuse them when a tenant is in
+  // scope (they would ignore isolation); allow them otherwise (central code).
+  const rawGuard = (method: string) =>
+    async ({ args, query }: { args: unknown; query: (args: unknown) => Promise<unknown> }) => {
+      if (options.onRawInTenant !== 'allow' && getTenantId() !== undefined) {
+        throw new RawQueryInTenantContextError(method)
+      }
+      return query(args)
+    }
 
   return {
     name: 'basalt-tenancy',
@@ -142,6 +182,12 @@ export function tenancyExtension(options: TenancyExtensionOptions = {}) {
           return query(applyTenantScope(operation, args, tenantId, field))
         },
       },
+      // Client-level raw operations (Prisma extends these top-level, not under
+      // $allModels) — guarded so raw SQL can't silently escape tenant scoping.
+      $queryRaw: rawGuard('$queryRaw'),
+      $queryRawUnsafe: rawGuard('$queryRawUnsafe'),
+      $executeRaw: rawGuard('$executeRaw'),
+      $executeRawUnsafe: rawGuard('$executeRawUnsafe'),
     },
   }
 }

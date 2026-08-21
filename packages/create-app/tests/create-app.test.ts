@@ -57,6 +57,14 @@ describe('createProject', () => {
 
     const env = await read(result.dir, 'src/env.ts')
     expect(env).toContain('APP_SECRET')
+    // Fail-closed: uses the secret() helper (required in prod, no fallback),
+    // never a committed default that would reach production.
+    expect(env).toContain('secret({')
+    expect(env).toContain('minLength: 32')
+    expect(env).not.toContain('change-me-in-production')
+
+    const envExample = await read(result.dir, '.env.example')
+    expect(envExample).not.toContain('APP_SECRET=change-me')
   })
 
   it('honors feature flags: --billing, --no-tenancy, --no-auth', async () => {
