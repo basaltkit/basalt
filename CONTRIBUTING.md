@@ -54,8 +54,9 @@ Two levels of database integration:
    ```bash
    pnpm changeset
    ```
-   Pick the affected packages and the bump type (patch/minor/major). The
-   `@basaltkit/*` packages are versioned in lockstep — bumping one bumps all.
+   Pick the affected packages and the bump type (patch/minor/major). Each
+   `@basaltkit/*` package is versioned **independently** — a changeset bumps only
+   the packages it touches.
 4. **Open a pull request.** CI runs build, typecheck and tests on the supported
    Node versions; all must pass.
 
