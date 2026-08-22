@@ -23,3 +23,24 @@ describe('dev entry + runner resolution', () => {
     expect(resolveDevRunner('src/main.js')).toEqual({ command: 'node', args: ['--watch', 'src/main.js'] })
   })
 })
+
+import { devRouteRows } from '../src/index.js'
+
+describe('devRouteRows (dev route table)', () => {
+  it('sorts by url then method and derives a flags column', () => {
+    const rows = devRouteRows([
+      { method: 'post', url: '/projects', meta: { auth: true, tags: ['Projects'] } },
+      { method: 'get', url: '/health' },
+      { method: 'get', url: '/projects', meta: { rateLimit: { max: 10 } } },
+    ])
+    expect(rows).toEqual([
+      { method: 'GET', url: '/health', flags: '' },
+      { method: 'GET', url: '/projects', flags: 'rate-limit' },
+      { method: 'POST', url: '/projects', flags: 'auth, Projects' },
+    ])
+  })
+
+  it('returns an empty list for no routes', () => {
+    expect(devRouteRows([])).toEqual([])
+  })
+})
