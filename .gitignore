@@ -20,3 +20,7 @@ apps/docs/reference/api/
 
 # Generated per-package reference pages (built by docs:packages)
 apps/docs/reference/packages/
+
+# Generated typedoc config (built by docs:api → gen-typedoc.mjs)
+apps/docs/typedoc.json
+apps/docs/typedoc.tsconfig.json

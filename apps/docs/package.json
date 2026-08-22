@@ -6,7 +6,7 @@
     "docs:dev": "vitepress dev",
     "docs:build": "pnpm docs:api && pnpm docs:packages && vitepress build",
     "docs:preview": "vitepress preview",
-    "docs:api": "typedoc --options typedoc.json",
+    "docs:api": "node scripts/gen-typedoc.mjs && typedoc --options typedoc.json && node scripts/sanitize-api.mjs",
     "docs:packages": "node scripts/gen-packages.mjs"
   },
   "devDependencies": {
