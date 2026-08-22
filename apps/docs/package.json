@@ -4,9 +4,10 @@
   "type": "module",
   "scripts": {
     "docs:dev": "vitepress dev",
-    "docs:build": "pnpm docs:api && vitepress build",
+    "docs:build": "pnpm docs:api && pnpm docs:packages && vitepress build",
     "docs:preview": "vitepress preview",
-    "docs:api": "typedoc --options typedoc.json"
+    "docs:api": "typedoc --options typedoc.json",
+    "docs:packages": "node scripts/gen-packages.mjs"
   },
   "devDependencies": {
     "typedoc": "^0.28.20",

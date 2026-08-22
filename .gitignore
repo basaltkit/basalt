@@ -17,3 +17,6 @@ apps/docs/reference/api/
 
 # npm auth token — never commit
 .npmrc
+
+# Generated per-package reference pages (built by docs:packages)
+apps/docs/reference/packages/
