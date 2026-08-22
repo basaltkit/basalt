@@ -667,7 +667,7 @@ await SendWelcomeEmail.dispatch({ userId }, { delay: '5m', priority: 2 })
 ```
 BullMQ underneath; Basalt adds: typed/validated payload, **context propagation** (tenant/correlationId serialized and restored in the worker via ALS), a DLQ with replay from the dashboard/CLI, workers with graceful shutdown tied to the core lifecycle. `basalt queue work`, `basalt queue retry --failed`, `basalt queue stats`.
 
-### 12.3 `@basaltkit/scheduler`  `[🚧 partial — only schedule:list in the CLI]`
+### 12.3 `@basaltkit/scheduler`  `[✅ shipped]`
 ```ts
 schedule.job(ReconcileBilling).daily().at('03:00').timezone('UTC')
 schedule.command('tenant:cleanup').weekly().sundays()
