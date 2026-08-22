@@ -861,7 +861,7 @@ per-package roadmaps — the next horizon, **not gaps**:
 - **Events** — outbox / integration events (externally publishable via the app's own webhooks).
 - **Core** — DI-graph devtools; worker-threads with propagated context.
 - **Dashboard** — deeper billing analytics; theme / white-label.
-- **Docs/DX** — more `upgrade` codemods and `make:*` kinds over time; expand the typedoc API surface to every package.
+- **Docs/DX** — more `upgrade` codemods and `make:*` kinds over time.
 - **Ecosystem (non-code)** — production adopters, community, and the open half of the phase exit criteria above.
 
 ---
