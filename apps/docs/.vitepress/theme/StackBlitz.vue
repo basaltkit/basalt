@@ -1,13 +1,14 @@
 <script setup lang="ts">
-// Opens a repo path in a StackBlitz WebContainer. Defaults to the runnable
-// playground app so readers can boot a real Basalt server in the browser.
+// Opens a repo in a StackBlitz WebContainer. Defaults to the standalone,
+// PUBLIC basalt-playground repo (published @basaltkit/* deps, no workspace
+// protocol) so readers can boot a real Basalt server in the browser — the main
+// monorepo is private and its apps use workspace: deps, so it can't be opened.
 const props = withDefaults(
-  defineProps<{ path?: string; file?: string; label?: string }>(),
-  { path: 'apps/playground', label: 'Open in StackBlitz' },
+  defineProps<{ repo?: string; path?: string; file?: string; label?: string }>(),
+  { repo: 'Zebedeu/basalt-playground', path: '', label: 'Open in StackBlitz' },
 )
-const repo = 'Zebedeu/basalt'
 const href = () => {
-  const base = `https://stackblitz.com/github/${repo}/tree/main${props.path ? `/${props.path}` : ''}`
+  const base = `https://stackblitz.com/github/${props.repo}${props.path ? `/tree/main/${props.path}` : ''}`
   return props.file ? `${base}?file=${encodeURIComponent(props.file)}` : base
 }
 </script>
