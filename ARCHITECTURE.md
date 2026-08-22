@@ -315,7 +315,7 @@ export {
 }
 ```
 
-**Core roadmap:** v1 — container, plugins, ALS, hooks; v1.x — discovery with watch mode, devtools for inspecting the DI graph; v2 — worker threads support with propagated context.
+**Core roadmap:** _Shipped_ — container, plugins, ALS context, hooks, lifecycle, metadata registry. _Next_ — DI-graph devtools/inspection; worker-threads with propagated context.
 
 ---
 ## 4. HTTP Layer — Framework-independent core  `[✅ shipped]`
@@ -395,7 +395,7 @@ export const createProject = route({
 - `auth`, `can`, `tenant` are **declarative shorthands** that domain plugins register on the adapter via hooks — the adapter does not know about auth; it just runs the registered chain of guards.
 - Discovery: files under `src/routes/**/*.ts` that export `route()` are registered automatically (convention; can be disabled).
 
-**Dependencies:** `fastify`, `@basaltkit/core`, `zod`. **Roadmap:** v1 routes + OpenAPI; v1.x per-tenant rate limiting, ETags; v2 typed streaming/SSE.
+**Dependencies:** `fastify`, `@basaltkit/core`, `zod`. **Roadmap:** _Shipped_ — typed routes, OpenAPI + `generate:docs`, security headers/CORS/rate-limit, per-route rate limits. _Next_ — ETags; typed SSE streaming.
 
 ## 5. `@basaltkit/prisma` — Data layer  `[✅ shipped]`
 
@@ -411,7 +411,7 @@ export const createProject = route({
 const users = await ctx().db.user.findMany() // WHERE tenant_id = ... automatic (shared mode)
 ```
 
-**Dependencies:** `@prisma/client`, `@basaltkit/core`. **Roadmap:** v1 extensions + pool; v1.x read replicas; v2 sharding helpers.
+**Dependencies:** `@prisma/client`, `@basaltkit/core`. **Roadmap:** _Shipped_ — tenancy extension, raw-query guard, RLS helpers, pool. _Next_ — read replicas; sharding helpers.
 
 ---
 
@@ -467,7 +467,7 @@ await tenancy.run('acme', async () => { /* code in the tenant context */ })
 await tenancy.forEach(async (t) => { /* bulk maintenance */ }, { concurrency: 5 })
 ```
 
-**Events:** `tenant.created`, `tenant.deleted`, `tenant.migrated`, `tenant.switched`. **CLI:** `basalt tenant create|migrate|seed|run|list`. **Roadmap:** v1 shared + resolvers; v1.x schema-per-tenant, seeder; v2 database-per-tenant with an LRU pool, custom domains with TLS provisioning.
+**Events:** `tenant.created`, `tenant.deleted`, `tenant.migrated`, `tenant.switched`. **CLI:** `basalt tenant create|migrate|seed|run|list`. **Roadmap:** _Shipped_ — shared + resolvers, schema-per-tenant, database-per-tenant, `tenant:*` CLI. _Next_ — per-tenant custom domains with TLS provisioning.
 
 ---
 
@@ -499,7 +499,7 @@ Ready-made flows (routes registered automatically, all overridable):
 - Each step emits events (`auth.login`, `auth.login_failed`, `auth.mfa_enabled`…) — consumed by audit, notifications and rate limiting.
 - Multi-tenant native: a user can be central (one login, N tenants) or per-tenant — a config decision, integrated with `@basaltkit/tenancy`.
 
-**Roadmap:** v1 session + JWT + reset + verification; v1.x API keys, TOTP, OAuth (Google/GitHub); v2 WebAuthn/Passkeys, SSO SAML/OIDC (enterprise).
+**Roadmap:** _Shipped_ — session + JWT + reset + verification, API keys, TOTP, OAuth (Google/GitHub/OIDC), SSO **SAML 2.0**. _Next_ — WebAuthn / Passkeys.
 
 ---
 
@@ -526,7 +526,7 @@ can: 'project:update'        // resolves the policy with the loaded resource
 - Permission cache in `@basaltkit/cache` with event-based invalidation (`permission.changed`) — checks are O(1) in memory per request.
 - Guards per auth strategy: a permission can hold for a session but not for an API key (API key scopes).
 
-**Roadmap:** v1 roles/permissions/policies + tenant scope; v1.x sync UI in the dashboard, wildcard permissions (`projects:*`); v2 temporary permissions and delegation.
+**Roadmap:** _Shipped_ — roles/permissions/policies + tenant scope, wildcard permissions (`projects:*`), dashboard UI. _Next_ — temporary permissions and delegation.
 
 ---
 ## 9. `@basaltkit/subscriptions` — Billing  `[✅ shipped — Stripe, Paddle & Lemon Squeezy]`
@@ -562,7 +562,7 @@ await tenant.features.consume('api.requests', 1)         // metered; throws Quot
 - Coupons, invoices (PDF via a job), grace period for failed payments, trial without a card.
 - Middleware/guard: `subscribed('pro')`, `feature('api')` as route shorthands.
 
-**Roadmap:** v1 Stripe + plans/trials/feature flags; v1.x metered billing, coupons, invoices; v2 Paddle + Lemon Squeezy, international tax/invoicing.
+**Roadmap:** _Shipped_ — Stripe + plans/trials/feature flags, **Paddle & Lemon Squeezy**. _Next_ — metered-billing depth, coupons, invoices (PDF), international tax.
 
 #### 9.1 Decision — bundled drivers vs satellite gateway packages
 
@@ -639,7 +639,7 @@ await notifyMany(tenant.admins(), InvoicePaid, { invoice })
 - Sending is **always via the queue** by default (BullMQ retry/backoff); synchronous is opt-in.
 - Per-user preferences (opt-out per channel/category) built in; versioned templates with a preview in the dashboard.
 
-**Roadmap:** v1 mail + inApp; v1.x push + sms + preferences; v2 whatsapp, digest/batching ("5 new comments" in one email).
+**Roadmap:** _Shipped_ — mail + inApp. _Next_ — push + SMS + per-user preferences; WhatsApp channel; digest/batching ("5 new comments" in one email).
 
 ## 12. Infrastructure
 
@@ -781,7 +781,7 @@ A TypeScript client **generated from the route Metadata** (not from an intermedi
 - **admin**: headless components + UI (React, shadcn-based) for CRUD/tables/forms generated from Zod schemas — a built-in admin UI kit, embeddable in any React app.
 - **dashboard**: the headless model — `standardDashboard()` assembles Overview → resources → Queues → Audit; `buildOverview()` turns a subscriptions/queue/audit snapshot into KPI cards (MRR, ARR, churn, failed-jobs health) with semantic tones; plus `computeBillingMetrics` / `summarizeQueue` / `summarizeAudit`. Browser-safe (types-only import of subscriptions). A shell renders it via `nav()` / `section()`; the ready-made **`apps/admin-demo`** does exactly that, rendering every section kind (metrics/resource/queue/audit) from the model.
 
-**Roadmap:** v1.x headless admin + basic dashboard (users/tenants/queues); v2 billing analytics, theme/white-label.
+**Roadmap:** _Shipped_ — headless admin + ready-made dashboard (`buildOverview`/`standardDashboard`, all section kinds). _Next_ — deeper billing analytics; theme / white-label.
 
 ---
 
@@ -800,7 +800,17 @@ Getting Started carries an **Open in StackBlitz** button that boots the runnable
 
 ---
 
-## 15. Roadmap — 3 years
+## 15. Roadmap — delivered (and what's next)  `[✅ engineering delivered]`
+
+> **Status (2026-08).** Every **engineering deliverable** of the original 7-phase,
+> 3-year plan below has **shipped** — well ahead of the notional timeline (the
+> gantt dates were a projection, not history). The plan is kept as a record. What
+> remains genuinely open is **adoption**, not code: the right-hand exit criteria
+> mix product milestones with community/business ones the codebase can't satisfy
+> on its own. The unbuilt *technical* work lives in **§15.1 What's next** — a next
+> horizon, not gaps.
+
+_Original plan (projection):_
 
 ```mermaid
 gantt
@@ -822,17 +832,37 @@ gantt
     db-per-tenant, SSO/SAML, outbox, LTS, Paddle/LS   :2028-10, 11M
 ```
 
-| Phase | Deliverable | Exit criterion |
-|---|---|---|
-| **1 — MVP** (m1–5) | `create-basalt` generates a typed API with Prisma + CLI + Getting Started docs | 3 real apps built by early adopters; feedback incorporated |
-| **2 — Core** (m6–9) | Complete infrastructure (queue, events, cache, storage, scheduler) | E2E playground covering all packages; 1k stars |
-| **3 — Tenancy** (m10–12) | Multi-tenancy shared + schema, tenant CLI | "multi-tenant SaaS in 1h" showcase (video/article) |
-| **4 — Auth** (m13–16) | Auth + permissions + audit | paid external security review |
-| **5 — Subscriptions** (m17–20) | Stripe billing + notifications | 10 paying SaaS in production, documented |
-| **6 — Dashboard** (m21–25) | **v1.0** — API freeze, dashboard, SDK | public semver promise; 100% docs; conference talk |
-| **7 — Enterprise** (m26–36) | DB-per-tenant, SSO, LTS, more gateways | 1st public enterprise customer; active LTS program |
+| Phase | Deliverable | Eng. | Adoption exit criterion (open) |
+|---|---|---|---|
+| **1 — MVP** | `create-basalt` → typed API + Prisma + CLI + Getting Started | ✅ | 3 real apps built by early adopters; feedback incorporated |
+| **2 — Core** | Infrastructure (queue, events, cache, storage, scheduler) | ✅ | E2E playground covering all packages; 1k stars |
+| **3 — Tenancy** | Multi-tenancy shared + schema, tenant CLI | ✅ | "multi-tenant SaaS in 1h" showcase (video/article) |
+| **4 — Auth** | Auth + permissions + audit | ✅ | external security review _(deep 7-domain audit run internally; see the scorecard)_ |
+| **5 — Subscriptions** | Stripe billing + notifications | ✅ | 10 paying SaaS in production, documented |
+| **6 — Dashboard** | **v1.0** — API surface, dashboard, SDK | ✅ | public semver promise; 100% docs; conference talk |
+| **7 — Enterprise** | DB-per-tenant, SSO/SAML, more gateways (Paddle/LS) | ✅ | 1st public enterprise customer; active LTS program |
+
+Every **Eng.** cell is ✅ — the framework shipped Basalt **1.2** (all packages on npm). The open column is community/business, tracked outside this RFC.
 
 Cross-cutting rule: **no phase opens without the previous one's docs complete**. Late docs are blocking debt, not backlog.
+
+### 15.1 What's next
+
+The pillars are complete; these are the genuinely-unbuilt items pulled from the
+per-package roadmaps — the next horizon, **not gaps**:
+
+- **Auth** — WebAuthn / Passkeys.
+- **HTTP** — ETags; typed SSE streaming.
+- **Data** — read replicas; sharding helpers.
+- **Tenancy** — per-tenant custom domains with TLS provisioning.
+- **Billing** — metered-billing depth, coupons, invoices (PDF), international tax; validate & publish the parked AppyPay driver.
+- **Permissions** — temporary permissions and delegation.
+- **Notifications** — push + SMS + per-user preferences; WhatsApp channel; digest/batching.
+- **Events** — outbox / integration events (externally publishable via the app's own webhooks).
+- **Core** — DI-graph devtools; worker-threads with propagated context.
+- **Dashboard** — deeper billing analytics; theme / white-label.
+- **Docs/DX** — more `upgrade` codemods and `make:*` kinds over time; expand the typedoc API surface to every package.
+- **Ecosystem (non-code)** — production adopters, community, and the open half of the phase exit criteria above.
 
 ---
 
@@ -849,6 +879,8 @@ Cross-cutting rule: **no phase opens without the previous one's docs complete**.
 | Basalt's position | — | inspiration; Basalt = "the batteries-included SaaS toolkit for Node" | we avoid its structural mistakes | closest competitor, but not SaaS-focused | Basalt builds on top | complementary/competitor: same problem, without lock-in | realtime niche |
 
 **Positioning thesis:** AdonisJS is the generic full-featured backend framework for Node; Supabase solves SaaS with lock-in. The empty — and defensible — space is **"a batteries-included framework specifically for SaaS, self-hosted, without lock-in"**. Integrated tenancy + billing + permissions is the feature no competitor has and which alone justifies adoption.
+
+> **As of Basalt 1.2, these are shipped, not aspirational:** the "native" cells above are backed by published packages — tenancy (3 modes incl. database-per-tenant), billing (Stripe/Paddle/Lemon), permissions, auth incl. OAuth/OIDC/SAML — verified and on npm. The competitive gap is now real, not planned.
 
 ---
 
