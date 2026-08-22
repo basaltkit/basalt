@@ -1,3 +1,4 @@
+import { ensureMetadata } from '@basaltkit/core'
 import { defineCommand, type CommandDefinition } from './command.js'
 
 /** Default entry files probed in order when `--entry` is not given. */
@@ -34,11 +35,44 @@ export function resolveDevRunner(entry: string, options: { tsx?: boolean } = {})
   return { command: 'node', args: ['--watch', entry] }
 }
 
-/** `basalt dev [--entry=<file>]` — run the app with watch + restart. */
+/** A route as published into the `http:routes` metadata bucket by an adapter. */
+export interface DevRoute {
+  method: string
+  url: string
+  meta?: Record<string, unknown>
+}
+
+/**
+ * Formats the registered routes into printable rows (method, url, and a compact
+ * flags column for auth/rate-limit) — sorted by url then method. Pure: this is
+ * what `basalt dev` prints on boot, and `pnpm dev` (plain tsx watch) can't.
+ */
+export function devRouteRows(routes: DevRoute[]): { method: string; url: string; flags: string }[] {
+  return [...routes]
+    .sort((a, b) => a.url.localeCompare(b.url) || a.method.localeCompare(b.method))
+    .map((r) => {
+      const flags: string[] = []
+      if (r.meta?.['auth'] === true) flags.push('auth')
+      if (r.meta?.['rateLimit']) flags.push('rate-limit')
+      const tags = r.meta?.['tags']
+      if (Array.isArray(tags) && tags.length) flags.push(...tags.map(String))
+      return { method: r.method.toUpperCase(), url: r.url, flags: flags.join(', ') }
+    })
+}
+
+/**
+ * `basalt dev [--entry=<file>] [--worker] [--queue=<name>] [--no-routes]`
+ *
+ * A richer dev loop than a bare `tsx watch`: prints the app's **route table** on
+ * boot (the app is already booted by the CLI runner, so routes are known), then
+ * runs the server with watch/restart — and, with `--worker`, also starts a
+ * watched queue worker alongside it (server + worker in one command, the real
+ * producer/worker topology).
+ */
 export const devCommand: CommandDefinition = defineCommand({
   name: 'dev',
-  description: 'Run the app with file watching and auto-restart',
-  async handle({ io, flags }) {
+  description: 'Run the app with watch + restart, print the route table, and (--worker) an embedded queue worker',
+  async handle({ container, io, flags }) {
     const { existsSync } = await import('node:fs')
     const entry =
       typeof flags['entry'] === 'string'
@@ -50,23 +84,56 @@ export const devCommand: CommandDefinition = defineCommand({
       )
       return 1
     }
+
+    // The route table — the app was already booted by runCli, so `http:routes`
+    // is populated by whichever adapter is in use. Adapter-agnostic (metadata only).
+    if (flags['routes'] !== false) {
+      const routes = ensureMetadata(container).get<DevRoute>('http:routes')
+      if (routes.length > 0) {
+        io.log(`Routes (${routes.length}):`)
+        io.table(devRouteRows(routes))
+      }
+    }
+
     const tsx = await canResolve('tsx')
-    const runner = resolveDevRunner(entry, { tsx })
-    io.log(`Starting: ${runner.command} ${runner.args.join(' ')}`)
+    const server = resolveDevRunner(entry, { tsx })
+    const runners: { label: string; runner: DevRunner }[] = [{ label: 'server', runner: server }]
+
+    // Embedded worker: a watched `queue:work` on the same CLI bin, so jobs
+    // process in dev without a second terminal. Separate process (correct
+    // producer/worker split) — each restarts independently on file change.
+    if (flags['worker'] === true || flags['w'] === true) {
+      const bin = process.argv[1] ?? entry
+      const workerBase = resolveDevRunner(bin, { tsx })
+      const queue = typeof flags['queue'] === 'string' ? [`--queue=${flags['queue']}`] : []
+      runners.push({ label: 'worker', runner: { command: workerBase.command, args: [...workerBase.args, 'queue:work', ...queue] } })
+    }
+
+    for (const { label, runner } of runners) {
+      io.log(`▶ ${label}: ${runner.command} ${runner.args.join(' ')}`)
+    }
 
     const { spawn } = await import('node:child_process')
     return await new Promise<number>((resolve) => {
-      const child = spawn(runner.command, runner.args, { stdio: 'inherit' })
-      const stop = () => child.kill('SIGINT')
+      const children = runners.map(({ runner }) => spawn(runner.command, runner.args, { stdio: 'inherit' }))
+      const stop = () => children.forEach((c) => c.kill('SIGINT'))
       process.once('SIGINT', stop)
-      child.on('exit', (code) => {
+      let done = false
+      const finish = (code: number) => {
+        if (done) return
+        done = true
         process.removeListener('SIGINT', stop)
-        resolve(code ?? 0)
-      })
-      child.on('error', (error) => {
-        io.error(`Failed to start dev runner: ${(error as Error).message}`)
-        resolve(1)
-      })
+        children.forEach((c) => c.kill('SIGINT'))
+        resolve(code)
+      }
+      // The server is primary — when it exits, tear everything down.
+      children[0]?.on('exit', (code) => finish(code ?? 0))
+      children.forEach((child, i) =>
+        child.on('error', (error) => {
+          io.error(`Failed to start ${runners[i]?.label}: ${(error as Error).message}`)
+          finish(1)
+        }),
+      )
     })
   },
 })
