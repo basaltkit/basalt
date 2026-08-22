@@ -184,11 +184,23 @@ console.log(runs) // 1
 
 In tests with the plugin, pass `autostart: false` so the timer doesn't start.
 
+## CLI commands (`basalt schedule:*`)
+
+```bash
+basalt schedule:list                 # every scheduled task + its cron (from metadata)
+basalt schedule:run reconcile-billing  # run one task NOW, ignoring its cron
+basalt schedule:run --due            # run everything due at this instant (a manual tick)
+```
+
+`schedule:list` reads the `schedule:entries` metadata bucket; `schedule:run` is
+registered by `schedulerPlugin` and executes against the live `Scheduler`, so it
+respects each entry's overlap guard and `onFailure` handler.
+
 ## API reference
 
 ### `schedulerPlugin(options?: SchedulerPluginOptions)`
 
-Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it calls `define`, publishes the entries to the container's metadata (key `schedule:entries`, consumed by the `basalt schedule:list` CLI) and starts the timer; on `shutdown` it calls `stop()`.
+Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it calls `define`, publishes the entries to the container's metadata (key `schedule:entries`, consumed by `basalt schedule:list`), registers the `schedule:run` command, and starts the timer; on `shutdown` it calls `stop()`.
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|

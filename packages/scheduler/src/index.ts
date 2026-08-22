@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import type { JobDefinition } from '@basaltkit/queue'
 import { cronMatches, cronToString, parseCron, type CronFields } from './cron.js'
 
@@ -157,6 +157,23 @@ export class Scheduler {
     return this.entries.map((entry) => entry.describe())
   }
 
+  /** Names of every scheduled entry — for CLI validation/listing. */
+  names(): string[] {
+    return this.entries.map((entry) => entry.name)
+  }
+
+  /**
+   * Runs a single entry by name on demand, ignoring its cron (for `schedule:run`
+   * and manual triggers). Returns false if no entry has that name. The entry's
+   * own overlap guard and failure handler still apply.
+   */
+  async runNow(name: string): Promise<boolean> {
+    const entry = this.entries.find((candidate) => candidate.name === name)
+    if (!entry) return false
+    await entry.run()
+    return true
+  }
+
   /**
    * Runs the entries due at the given instant. Deterministic — this is what
    * the tests call directly and what the timer calls every minute.
@@ -227,6 +244,7 @@ export function schedulerPlugin(options: SchedulerPluginOptions = {}) {
     name: 'basalt:scheduler',
     register({ container }) {
       container.singleton(SCHEDULER, () => new Scheduler())
+      registerScheduleRunCommand(container)
     },
     boot({ container }) {
       const scheduler = container.get(SCHEDULER)
@@ -238,6 +256,46 @@ export function schedulerPlugin(options: SchedulerPluginOptions = {}) {
     },
     shutdown({ container }) {
       container.get(SCHEDULER).stop()
+    },
+  })
+}
+
+/**
+ * Registers `schedule:run` into the CLI command bucket. Runs a scheduled task on
+ * demand by name (ignoring its cron), or `--due` to run everything due right now.
+ * Registered structurally to avoid a hard @basaltkit/cli dependency.
+ */
+function registerScheduleRunCommand(container: Container): void {
+  ensureMetadata(container).add('commands', {
+    name: 'schedule:run',
+    description: 'Run a scheduled task on demand (by name), or --due for all due now',
+    async handle({
+      io,
+      args,
+      flags,
+    }: {
+      io: { log(m: string): void; error(m: string): void }
+      args: string[]
+      flags: Record<string, string | boolean>
+    }) {
+      const scheduler = container.get(SCHEDULER)
+      if (flags['due'] === true) {
+        await scheduler.tick()
+        io.log('Ran all due scheduled tasks.')
+        return
+      }
+      const name = args[0]
+      if (!name) {
+        io.error('Usage: basalt schedule:run <name> | --due')
+        return 1
+      }
+      const ran = await scheduler.runNow(name)
+      if (!ran) {
+        const available = scheduler.names().join(', ') || '(none)'
+        io.error(`Unknown scheduled task "${name}". Available: ${available}.`)
+        return 1
+      }
+      io.log(`Ran scheduled task "${name}".`)
     },
   })
 }
