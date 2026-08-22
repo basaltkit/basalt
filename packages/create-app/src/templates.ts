@@ -296,6 +296,7 @@ import { buildApp } from '../src/app.js'
 // The dev tools (@basaltkit/generator; add @basaltkit/ai for ai:*) are imported
 // ONLY here — the runtime server (src/server.ts) never loads them, so the SaaS
 // runs without the codegen/AI layer.
+//   pnpm basalt dev                     — dev server: route table + watch (--worker for a queue worker)
 //   pnpm basalt list                    — show available commands
 //   pnpm basalt routes                  — list registered HTTP routes
 //   pnpm basalt make:resource Project   — generate a full resource vertical

@@ -10,7 +10,15 @@ export {
   type RouteMetadata,
   type ScheduleMetadata,
 } from './builtins.js'
-export { devCommand, resolveDevEntry, resolveDevRunner, DEV_ENTRY_CANDIDATES, type DevRunner } from './dev.js'
+export {
+  devCommand,
+  resolveDevEntry,
+  resolveDevRunner,
+  devRouteRows,
+  DEV_ENTRY_CANDIDATES,
+  type DevRunner,
+  type DevRoute,
+} from './dev.js'
 export {
   upgradeCommand,
   runUpgrade,

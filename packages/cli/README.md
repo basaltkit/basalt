@@ -87,7 +87,7 @@ Without registering anything, `runCli` always provides:
 | `basalt list` (or `basalt` with no arguments) | Lists all available commands, with their descriptions |
 | `basalt routes` | Lists the HTTP routes registered by the application (read from the `http:routes` metadata bucket, populated by HTTP adapters such as `@basaltkit/fastify`) |
 | `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
-| `basalt dev [--entry=<file>]` | Runs the app with file watching + auto-restart (delegates to `tsx watch` when available, otherwise `node --watch`) |
+| `basalt dev [--entry] [--worker] [--queue] [--no-routes]` | Runs the app with watch + restart, **prints the route table on boot**, and with `--worker` also starts a watched `queue:work` alongside it (server + worker in one command). Delegates watching to `tsx watch` / `node --watch`. |
 | `basalt upgrade [--dry] [--only=<id>]` | Applies framework upgrade codemods (ships the `@machize/*` → `@basaltkit/*` scope rename; `--dry` previews) |
 | `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile`, `ci`, `editorconfig` (run with no id to list) |
 
