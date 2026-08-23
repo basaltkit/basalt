@@ -28,7 +28,7 @@ describe('McpServer protocol', () => {
     const res = await mcp.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
     const tools = (res?.result as { tools: Array<{ name: string; inputSchema: { properties: object } }> }).tools
     const names = tools.map((t) => t.name).sort()
-    expect(names).toEqual(['get_project', 'get_whoami', 'post_projects']) // NOT get_secret
+    expect(names).toEqual(['get_project', 'get_tags', 'get_whoami', 'post_projects']) // NOT get_secret
     const create = tools.find((t) => t.name === 'post_projects')!
     expect(create.inputSchema.properties).toHaveProperty('name')
     await app.shutdown()
@@ -71,6 +71,18 @@ describe('McpServer protocol', () => {
       { headers: { 'x-tenant-id': 'acme' } },
     )
     expect((res?.result as { structuredContent: { tenant: string } }).structuredContent.tenant).toBe('acme')
+    await app.shutdown()
+  })
+
+  it('omits structuredContent for array/primitive returns (MCP wants a record)', async () => {
+    const { app, mcp } = await server()
+    const res = await mcp.handleMessage({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'get_tags', arguments: {} },
+    })
+    const result = res?.result as { content: Array<{ text: string }>; structuredContent?: unknown }
+    expect('structuredContent' in result).toBe(false) // array → no structuredContent
+    expect(JSON.parse(result.content[0]!.text)).toEqual(['a', 'b', 'c']) // data still in text
     await app.shutdown()
   })
 

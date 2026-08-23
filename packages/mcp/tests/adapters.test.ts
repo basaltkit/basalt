@@ -53,7 +53,7 @@ describe.each(['fastify', 'express', 'hono'] as const)('MCP over HTTP on the %s 
       expect(init.serverInfo).toEqual({ name: 'test-app', version: '9.9.9' })
 
       const { tools } = await client.listTools()
-      expect(tools.map((t) => t.name).sort()).toEqual(['get_project', 'get_whoami', 'post_projects'])
+      expect(tools.map((t) => t.name).sort()).toEqual(['get_project', 'get_tags', 'get_whoami', 'post_projects'])
 
       const created = await client.callTool('post_projects', { name: 'Basalt' })
       const project = created.structuredContent as { id: string; name: string; tenant: string }
