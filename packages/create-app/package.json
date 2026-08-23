@@ -1,6 +1,6 @@
 {
   "name": "create-basalt",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Scaffold a production-shaped Basalt SaaS app: npm create basalt my-saas [--billing] [--ui] [--cli] [--install] [--git]",
   "license": "MIT",
   "type": "module",
