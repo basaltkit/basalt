@@ -53,16 +53,76 @@ await createApp({
 - **Same pipeline** — a `tools/call` runs enrichers, guards and validation before
   the handler; request headers (tenant, authorization) propagate into the call.
 
-## stdio
+## Tool schemas & arguments
 
-For local agents (Claude Desktop, IDEs), serve the same server over stdio:
+**Tool names** come from the route's method and path: `GET /skills` →
+`get_skills`, `GET /skills/:id` → `get_skills_by_id`, `POST /skills` →
+`post_skills`. Override with `meta: { mcp: { name: 'my_tool' } }`.
+
+**Input schema** is generated from the route's `params`, `query` and `body` Zod
+schemas, merged into one flat object with the right `required` fields — so the
+client knows exactly what to send.
+
+**Argument coercion.** MCP clients and LLMs frequently send numbers and booleans
+as *strings* (`"7"`, `"true"`). Before validation the bridge coerces each
+argument to the scalar type its Zod field declares, so a `z.number()` field
+accepts `"7"` and receives `7`. Non-coercible strings are left as-is so genuine
+validation errors still surface.
+
+**Structured output.** A tool result always carries the handler's return value as
+text (`content`), and — **only when that value is a JSON object** — also as
+`structuredContent`. Handlers returning a top-level array or primitive (e.g. a
+list endpoint) put the data in `content` only, because MCP requires
+`structuredContent` to be an object.
+
+**Zod 3 and 4** are both supported; on Zod 4 the schema conversion uses Zod's
+native `z.toJSONSchema`.
+
+## stdio & Claude Desktop
+
+For local agents (Claude Desktop, IDEs), serve the same server over stdio. Use a
+**dedicated entry** — not your HTTP `server.ts` — that boots the app and serves
+stdio, with **no HTTP `listen` and nothing printed to stdout**:
 
 ```ts
+// src/mcp-stdio.ts
 import { serveMcpStdio } from '@basaltkit/mcp'
+import { buildApp } from './app.js'
 
-const app = await buildApp().boot() // includes mcpPlugin
-serveMcpStdio(app)                  // newline-delimited JSON-RPC on stdin/stdout
+const app = await buildApp({ logLevel: 'silent' }).boot() // includes mcpPlugin
+serveMcpStdio(app) // newline-delimited JSON-RPC on stdin/stdout
 ```
+
+Wire Claude Desktop to it (`claude_desktop_config.json`):
+
+```jsonc
+{
+  "mcpServers": {
+    "my-app": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/dist/mcp-stdio.js"]
+    }
+  }
+}
+```
+
+Getting this right in practice:
+
+- **Build first.** Claude Desktop runs the compiled `dist/mcp-stdio.js`, so run
+  your build after every change. For a dev loop, run the TS entry with
+  `node --import tsx src/mcp-stdio.ts` instead.
+- **Use an absolute `node` path.** GUI apps on macOS don't inherit your shell
+  PATH, so `node`/`npx`/`pnpm` may not be found — point `command` at the absolute
+  binary (from `which node`).
+- **Keep stdout clean.** stdout is the JSON-RPC channel: set `logLevel: 'silent'`
+  and remove any `console.log` in your handlers — one stray line corrupts the
+  protocol.
+- **Load your env.** The spawned process has no shell, so load your `.env` (Node's
+  `process.loadEnvFile()`, or pass vars via the config's `env` field), and make
+  sure the DB/services the app boots against are reachable.
+- **A silent stdio server is normal.** Run alone it just waits for input — it is
+  meant to be spawned by a client, not run by hand. Pipe a message to check it:
+  `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node dist/mcp-stdio.js`.
 
 ## Consume external MCP servers (client)
 
@@ -120,6 +180,24 @@ Connections are lazy-safe: `callTool` / `listTools` connect on demand, so
 The HTTP transport is a neutral `route()`, verified on all three adapters — the
 same tool surface regardless of the server underneath.
 
+
+## Testing with the MCP Inspector
+
+The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) connects
+to your server and lets you list and call tools interactively — a visual studio
+for MCP:
+
+```bash
+# Web UI (opens a browser):
+npx @modelcontextprotocol/inspector /absolute/node dist/mcp-stdio.js
+
+# Headless CLI:
+npx @modelcontextprotocol/inspector --cli /absolute/node dist/mcp-stdio.js --method tools/list
+npx @modelcontextprotocol/inspector --cli /absolute/node dist/mcp-stdio.js \
+  --method tools/call --tool-name get_skills
+```
+
+Over HTTP, point it at your `POST /mcp` endpoint instead.
 
 ## Try it in the playground
 
