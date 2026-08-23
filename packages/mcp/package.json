@@ -1,0 +1,61 @@
+{
+  "name": "@basaltkit/mcp",
+  "version": "0.1.0",
+  "description": "Model Context Protocol for Basalt: expose opt-in routes as MCP tools over HTTP (any adapter) or stdio, and consume external MCP servers as a client \u2014 all through the neutral route pipeline.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/http": "workspace:^"
+  },
+  "peerDependencies": {
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@basaltkit/express": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/hono": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@hono/node-server": "^1.13.0",
+    "@types/node": "^22.15.0",
+    "express": "^5.0.0",
+    "fastify": "^5.11.0",
+    "hono": "^4.13.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0",
+    "zod": "^3.24.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/mcp#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
+  "keywords": [
+    "basalt",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "tools",
+    "agent"
+  ]
+}

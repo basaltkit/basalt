@@ -4,6 +4,7 @@ import { EVENTS, eventsPlugin } from '@basaltkit/events'
 import { fastifyPlugin } from '@basaltkit/fastify'
 import { expressPlugin } from '@basaltkit/express'
 import { honoPlugin } from '@basaltkit/hono'
+import { mcpPlugin, mcpRoutes } from '@basaltkit/mcp'
 import { LOGGER, loggerPlugin, type LogLevel } from '@basaltkit/logger'
 import type { BasaltRoute } from '@basaltkit/http'
 import {
@@ -82,8 +83,12 @@ export function buildApp(options: BuildAppOptions = {}) {
         resolvers: [headerResolver(), subdomainResolver({ base: 'localhost' })],
       }),
       playgroundPlugin,
+      // Expose the mcp-opted-in routes as MCP tools (POST /mcp), reusing the same
+      // pipeline — tenancy included. See src/mcp-stdio.ts for the stdio server.
+      mcpPlugin({ routes: projectRoutes, serverInfo: { name: 'playground', version: '1.0.0' } }),
       // The one line that differs per runtime — everything above is adapter-neutral.
-      httpPlugin(options.adapter ?? 'fastify', projectRoutes),
+      // MCP rides along on whichever adapter is chosen (POST /mcp on all three).
+      httpPlugin(options.adapter ?? 'fastify', [...projectRoutes, ...mcpRoutes()]),
     ],
   })
 }
