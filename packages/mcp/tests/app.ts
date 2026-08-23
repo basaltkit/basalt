@@ -18,10 +18,10 @@ export function makeRoutes() {
       method: 'POST',
       url: '/projects',
       meta: { mcp: true },
-      body: z.object({ name: z.string().min(3) }),
+      body: z.object({ name: z.string().min(3), order: z.number().optional() }),
       async handler({ body }) {
         const id = `p${++seq}`
-        const project = { id, name: body.name, tenant: ctx().tenant?.id ?? null }
+        const project = { id, name: body.name, tenant: ctx().tenant?.id ?? null, order: body.order ?? null }
         store.set(id, project)
         return project
       },
