@@ -254,15 +254,27 @@ importers:
       '@basaltkit/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@basaltkit/express':
+        specifier: workspace:*
+        version: link:../../packages/express
       '@basaltkit/fastify':
         specifier: workspace:*
         version: link:../../packages/fastify
+      '@basaltkit/hono':
+        specifier: workspace:*
+        version: link:../../packages/hono
+      '@basaltkit/http':
+        specifier: workspace:*
+        version: link:../../packages/http
       '@basaltkit/logger':
         specifier: workspace:*
         version: link:../../packages/logger
       '@basaltkit/tenancy':
         specifier: workspace:*
         version: link:../../packages/tenancy
+      '@hono/node-server':
+        specifier: ^1.13.0
+        version: 1.19.17(hono@4.13.0)
       zod:
         specifier: ^3.24.0
         version: 3.25.76
