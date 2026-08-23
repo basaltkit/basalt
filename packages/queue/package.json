@@ -21,7 +21,7 @@
   "dependencies": {
     "@basaltkit/core": "workspace:^",
     "@basaltkit/events": "workspace:^",
-    "bullmq": "^5.44.0"
+    "bullmq": "^6.1.2"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
@@ -29,7 +29,7 @@
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
-    "zod": "^3.24.0"
+    "zod": "^4.4.3"
   },
   "publishConfig": {
     "access": "public"
