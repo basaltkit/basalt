@@ -211,6 +211,9 @@ importers:
       '@basaltkit/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@basaltkit/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@basaltkit/tenancy':
         specifier: workspace:*
         version: link:../../packages/tenancy

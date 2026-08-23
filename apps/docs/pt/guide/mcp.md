@@ -91,3 +91,25 @@ await local.connect()
 
 O transporte HTTP é um `route()` neutro, verificado nos três adaptadores — a mesma
 superfície de tools independentemente do servidor por baixo.
+
+
+## Experimenta no playground
+
+O [`apps/playground`](https://github.com/Zebedeu/basalt/tree/main/apps/playground)
+do repositório marca três rotas para MCP — `create_project`, `list_projects`,
+`get_project` — e traz uma entrada stdio. Aponta o Claude Desktop para ela:
+
+```jsonc
+// claude_desktop_config.json
+{
+  "mcpServers": {
+    "basalt-playground": {
+      "command": "pnpm",
+      "args": ["--filter", "playground", "mcp:stdio"]
+    }
+  }
+}
+```
+
+O logging está silenciado nessa entrada porque o stdout é o canal JSON-RPC. Por
+HTTP, as mesmas tools ficam em `POST /mcp` com o servidor a correr.

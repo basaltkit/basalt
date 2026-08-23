@@ -2,7 +2,8 @@ import { createApp, definePlugin, tryCtx } from '@basaltkit/core'
 import { configPlugin } from '@basaltkit/config'
 import { EVENTS, eventsPlugin } from '@basaltkit/events'
 import { fastifyPlugin } from '@basaltkit/fastify'
-import { LOGGER, loggerPlugin } from '@basaltkit/logger'
+import { mcpPlugin, mcpRoutes } from '@basaltkit/mcp'
+import { LOGGER, loggerPlugin, type LogLevel } from '@basaltkit/logger'
 import {
   headerResolver,
   MemoryTenantSource,
@@ -42,7 +43,7 @@ const playgroundPlugin = definePlugin({
 })
 
 export interface BuildAppOptions {
-  logLevel?: string
+  logLevel?: LogLevel
   pretty?: boolean
 }
 
@@ -62,7 +63,10 @@ export function buildApp(options: BuildAppOptions = {}) {
         resolvers: [headerResolver(), subdomainResolver({ base: 'localhost' })],
       }),
       playgroundPlugin,
-      fastifyPlugin({ routes: projectRoutes }),
+      // Expose the mcp-opted-in routes as MCP tools (POST /mcp), reusing the same
+      // pipeline — tenancy included. See src/mcp-stdio.ts for the stdio server.
+      mcpPlugin({ routes: projectRoutes, serverInfo: { name: 'playground', version: '1.0.0' } }),
+      fastifyPlugin({ routes: [...projectRoutes, ...mcpRoutes()] }),
     ],
   })
 }

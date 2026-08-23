@@ -1,13 +1,14 @@
 {
   "name": "playground",
   "private": true,
-  "description": "Basalt reference app — integrates core, config, env, logger, events and fastify. Serves as the living E2E of Phase 1.",
+  "description": "Basalt reference app \u2014 integrates core, config, env, logger, events and fastify. Serves as the living E2E of Phase 1.",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "mcp:stdio": "tsx src/mcp-stdio.ts"
   },
   "dependencies": {
     "@basaltkit/config": "workspace:*",
@@ -16,6 +17,7 @@
     "@basaltkit/events": "workspace:*",
     "@basaltkit/fastify": "workspace:*",
     "@basaltkit/logger": "workspace:*",
+    "@basaltkit/mcp": "workspace:*",
     "@basaltkit/tenancy": "workspace:*",
     "zod": "^3.24.0"
   },
