@@ -21,6 +21,7 @@ function makeFakeClient(): PrismaAuthClient {
   const tokens = new Map<string, PTokenRow>()
   const apiKeys = new Map<string, PApiKeyRow>()
   const mfa = new Map<string, PMfaRow>()
+  const versions = new Map<string, number>()
 
   return {
     authUser: {
@@ -155,6 +156,16 @@ function makeFakeClient(): PrismaAuthClient {
         return { count: mfa.delete(where.userId) ? 1 : 0 }
       },
     },
+    authTokenVersion: {
+      async findUnique({ where }: { where: { userId: string } }) {
+        return versions.has(where.userId) ? { userId: where.userId, version: versions.get(where.userId)! } : null
+      },
+      async upsert({ where, create }: { where: { userId: string }; create: { version: number } }) {
+        const v = versions.has(where.userId) ? versions.get(where.userId)! + 1 : create.version
+        versions.set(where.userId, v)
+        return { userId: where.userId, version: v }
+      },
+    },
   }
 }
 
@@ -167,7 +178,7 @@ interface PApiKeyRow {
   id: string; name: string; prefix: string; hash: string; tenantId: string | null
   userId: string | null; scopes: string[]; createdAt: Date; lastUsedAt: Date | null; revokedAt: Date | null
 }
-interface PMfaRow { userId: string; secret: string; enabled: boolean; recoveryCodes: string[] }
+interface PMfaRow { userId: string; secret: string; enabled: boolean; recoveryCodes: string[]; lastUsedStep: number | null }
 
 let client: PrismaAuthClient
 beforeEach(() => {

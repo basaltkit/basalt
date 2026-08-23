@@ -110,7 +110,7 @@ describe('body limit (HTTP HIGH-2)', () => {
       }),
     )
     expect(res.status).toBe(413)
-    expect((await res.json()).code).toBe('PAYLOAD_TOO_LARGE')
+    expect(((await res.json()) as { code: string }).code).toBe('PAYLOAD_TOO_LARGE')
     await small.shutdown()
   })
 

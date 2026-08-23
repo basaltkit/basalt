@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createApp, ensureMetadata } from '@basaltkit/core'
-import { QUEUE, queuePlugin, SyncQueueDriver, type AddJobOptions, type QueueDriver } from '../src/index.js'
+import { queuePlugin, SyncQueueDriver, type AddJobOptions, type QueueDriver } from '../src/index.js'
 
 /** A driver that supports introspection (like BullMQ). */
 class InspectableDriver implements QueueDriver {
   readonly name = 'fake'
   started: { queue: string; concurrency?: number }[] = []
-  retryLimit?: number
+  retryLimit?: number | undefined
   setExecutor(): void {}
   async add(_q: string, _n: string, _d: unknown, _o: AddJobOptions): Promise<void> {}
   startWorker(queue: string, options: { concurrency?: number } = {}): void {

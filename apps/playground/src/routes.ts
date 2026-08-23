@@ -11,6 +11,8 @@ export const projectRoutes = [
   route({
     method: 'POST',
     url: '/projects',
+    // Opted in to MCP: agents can create a project as the `create_project` tool.
+    meta: { mcp: { name: 'create_project', description: 'Create a project for the current tenant' } },
     body: z.object({ name: z.string().min(3) }),
     response: { 201: ProjectSchema },
     async handler({ body, reply }) {
@@ -23,6 +25,7 @@ export const projectRoutes = [
   route({
     method: 'GET',
     url: '/projects',
+    meta: { mcp: { name: 'list_projects', description: 'List the current tenant projects' } },
     response: { 200: z.array(ProjectSchema) },
     async handler() {
       return scope().get(PROJECTS).list()
@@ -32,6 +35,7 @@ export const projectRoutes = [
   route({
     method: 'GET',
     url: '/projects/:id',
+    meta: { mcp: { name: 'get_project', description: 'Fetch one project by id' } },
     params: z.object({ id: z.string() }),
     async handler({ params }) {
       const project = scope().get(PROJECTS).find(params.id)
