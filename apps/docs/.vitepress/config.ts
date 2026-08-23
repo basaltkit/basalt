@@ -102,6 +102,7 @@ export default defineConfig({
                 { text: 'Perguntas frequentes (FAQ)', link: '/pt/guide/faq' },
                 { text: 'Para além do SaaS', link: '/pt/guide/beyond-saas' },
                 { text: 'Comparação com outras frameworks', link: '/pt/guide/comparison' },
+                { text: 'Benchmarks', link: '/pt/guide/benchmarks' },
               ],
             },
             {
@@ -215,6 +216,7 @@ export default defineConfig({
             { text: 'FAQ', link: '/guide/faq' },
             { text: 'Beyond SaaS', link: '/guide/beyond-saas' },
             { text: 'vs other frameworks', link: '/guide/comparison' },
+            { text: 'Benchmarks', link: '/guide/benchmarks' },
           ],
         },
         {
