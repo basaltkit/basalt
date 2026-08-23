@@ -1972,13 +1972,31 @@ importers:
       '@basaltkit/fastify':
         specifier: workspace:^
         version: link:../fastify
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
     devDependencies:
+      '@basaltkit/express':
+        specifier: workspace:^
+        version: link:../express
+      '@basaltkit/hono':
+        specifier: workspace:^
+        version: link:../hono
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
+      '@hono/node-server':
+        specifier: ^1.13.0
+        version: 1.19.17(hono@4.13.0)
       '@types/node':
         specifier: ^22.15.0
         version: 22.20.1
+      express:
+        specifier: ^5.0.0
+        version: 5.2.1
+      hono:
+        specifier: ^4.13.0
+        version: 4.13.0
       tsup:
         specifier: ^8.4.0
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)(yaml@2.9.0)
