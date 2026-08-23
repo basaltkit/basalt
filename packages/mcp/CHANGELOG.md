@@ -1,5 +1,16 @@
 # @basaltkit/mcp
 
+## 0.2.3
+
+### Patch Changes
+
+- d41d1c7: Support Zod 4 when reading route schemas for tools. Object shapes (`_def.shape`
+  is now a plain object, not a function) and scalar types (`_def.type` instead of
+  `_def.typeName`) changed in v4, which broke tool argument splitting and the
+  string→number/boolean coercion. Introspection is now version-agnostic.
+- Updated dependencies [d41d1c7]
+  - @basaltkit/http@1.5.1
+
 ## 0.2.2
 
 ### Patch Changes

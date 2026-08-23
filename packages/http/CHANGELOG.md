@@ -1,5 +1,14 @@
 # @basaltkit/http
 
+## 1.5.1
+
+### Patch Changes
+
+- d41d1c7: Support Zod 4 in `zodToJsonSchema` (used by OpenAPI and MCP input schemas). Zod 4
+  removed the v3 internals the hand-rolled converter relied on (`_def.typeName`),
+  so schemas produced empty `{}`. It now delegates to Zod 4's native
+  `z.toJSONSchema` when present and keeps the v3 path as a fallback.
+
 ## 1.5.0
 
 ### Minor Changes
