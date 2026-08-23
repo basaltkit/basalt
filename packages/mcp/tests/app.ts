@@ -1,4 +1,4 @@
-import { createApp, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { HttpError, route, type BasaltRoute, type RequestEnricher } from '@basaltkit/http'
 import { z } from 'zod'
 import { mcpPlugin, mcpRoutes } from '../src/index.js'

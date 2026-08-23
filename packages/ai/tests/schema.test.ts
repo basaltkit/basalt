@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   detectProject,
   extractModelBlock,
-  memoryReader,
   mergeModelsIntoSchema,
   runMake,
   type ArchitecturePlan,
