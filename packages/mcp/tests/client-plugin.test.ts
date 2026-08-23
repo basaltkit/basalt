@@ -32,7 +32,7 @@ describe('mcpClientPlugin', () => {
     expect(clients.names()).toEqual(['remote'])
 
     const { tools } = await clients.listTools('remote')
-    expect(tools.map((t) => t.name).sort()).toEqual(['get_project', 'get_whoami', 'post_projects'])
+    expect(tools.map((t) => t.name).sort()).toEqual(['get_project', 'get_tags', 'get_whoami', 'post_projects'])
 
     const created = await clients.callTool('remote', 'post_projects', { name: 'Basalt' })
     expect((created.structuredContent as { name: string; tenant: string }).name).toBe('Basalt')

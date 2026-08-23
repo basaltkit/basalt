@@ -138,7 +138,15 @@ function makeInvoke(route: BasaltRoute, container: Container) {
         guards: metadata.get<RouteGuard>('http:guards'),
       })
       const value = reply.sent ? reply.payload : returned
-      return { content: [{ type: 'text', text: asText(value) }], structuredContent: value }
+      // MCP requires `structuredContent` to be a JSON object (a record) — never
+      // an array or primitive. Arrays/primitives ride in the text content only,
+      // which still carries the full JSON. Otherwise clients reject the result
+      // with "expected record, received array".
+      const isRecord = value !== null && typeof value === 'object' && !Array.isArray(value)
+      return {
+        content: [{ type: 'text', text: asText(value) }],
+        ...(isRecord ? { structuredContent: value } : {}),
+      }
     } catch (error) {
       const { body: errorBody } = toErrorResponse(error)
       return { content: [{ type: 'text', text: JSON.stringify(errorBody.error) }], isError: true }

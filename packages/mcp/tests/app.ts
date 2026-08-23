@@ -46,6 +46,15 @@ export function makeRoutes() {
         return { tenant: ctx().tenant?.id ?? null }
       },
     }),
+    // Returns a top-level ARRAY — structuredContent must be omitted (MCP wants a record).
+    route({
+      method: 'GET',
+      url: '/tags',
+      meta: { mcp: true },
+      async handler() {
+        return ['a', 'b', 'c']
+      },
+    }),
     // NOT opted in — must never surface as a tool.
     route({
       method: 'GET',

@@ -43,7 +43,7 @@ describe('serveMcpStdio', () => {
     // three responses (init, tools/list, tools/call) — the notification produced none
     expect(lines).toHaveLength(3)
     expect((lines[0] as { result: { serverInfo: object } }).result.serverInfo).toEqual({ name: 'test-app', version: '9.9.9' })
-    expect((lines[1] as { result: { tools: unknown[] } }).result.tools).toHaveLength(3)
+    expect((lines[1] as { result: { tools: unknown[] } }).result.tools).toHaveLength(4)
     // static stdio headers propagate into the tool
     expect((lines[2] as { result: { structuredContent: { tenant: string } } }).result.structuredContent.tenant).toBe('globex')
 
