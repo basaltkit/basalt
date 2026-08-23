@@ -1,9 +1,12 @@
-import { createApp, definePlugin, tryCtx } from '@basaltkit/core'
+import { createApp, definePlugin, tryCtx, type BasaltPlugin } from '@basaltkit/core'
 import { configPlugin } from '@basaltkit/config'
 import { EVENTS, eventsPlugin } from '@basaltkit/events'
 import { fastifyPlugin } from '@basaltkit/fastify'
+import { expressPlugin } from '@basaltkit/express'
+import { honoPlugin } from '@basaltkit/hono'
 import { mcpPlugin, mcpRoutes } from '@basaltkit/mcp'
 import { LOGGER, loggerPlugin, type LogLevel } from '@basaltkit/logger'
+import type { BasaltRoute } from '@basaltkit/http'
 import {
   headerResolver,
   MemoryTenantSource,
@@ -42,9 +45,26 @@ const playgroundPlugin = definePlugin({
   },
 })
 
+/** The HTTP runtime to mount. The routes, plugins and domain are identical for all three. */
+export type Adapter = 'fastify' | 'express' | 'hono'
+
+/** Same neutral `route()` list, bound to whichever adapter is chosen. */
+function httpPlugin(adapter: Adapter, routes: BasaltRoute[]): BasaltPlugin {
+  switch (adapter) {
+    case 'express':
+      return expressPlugin({ routes })
+    case 'hono':
+      return honoPlugin({ routes })
+    default:
+      return fastifyPlugin({ routes })
+  }
+}
+
 export interface BuildAppOptions {
   logLevel?: LogLevel
   pretty?: boolean
+  /** Which HTTP adapter to mount. Default `fastify`. */
+  adapter?: Adapter
 }
 
 export function buildApp(options: BuildAppOptions = {}) {
@@ -66,7 +86,9 @@ export function buildApp(options: BuildAppOptions = {}) {
       // Expose the mcp-opted-in routes as MCP tools (POST /mcp), reusing the same
       // pipeline — tenancy included. See src/mcp-stdio.ts for the stdio server.
       mcpPlugin({ routes: projectRoutes, serverInfo: { name: 'playground', version: '1.0.0' } }),
-      fastifyPlugin({ routes: [...projectRoutes, ...mcpRoutes()] }),
+      // The one line that differs per runtime — everything above is adapter-neutral.
+      // MCP rides along on whichever adapter is chosen (POST /mcp on all three).
+      httpPlugin(options.adapter ?? 'fastify', [...projectRoutes, ...mcpRoutes()]),
     ],
   })
 }

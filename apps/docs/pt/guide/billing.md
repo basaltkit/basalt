@@ -261,6 +261,82 @@ Para desenvolvimento e testes há o `FakeBillingGateway`, que regista cada chama
 em arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`) e aceita a
 assinatura de webhook `'valid'`.
 
+## Faturas
+
+Uma subscrição diz *a que* um tenant tem direito; uma **fatura** é o registo *do
+que lhe foi cobrado* num período — line items, desconto, imposto, totais e um
+estado de pagamento. O motor é domínio puro (sem HTTP, sem gateway), por isso
+comporta-se da mesma forma por trás de qualquer adaptador ou driver de pagamento.
+
+O ciclo de vida é `draft → open → paid`, e uma fatura em `draft` ou `open` pode
+ser anulada (`void`). **Todos os valores são inteiros em unidades menores**
+(cêntimos), coerente com o resto do billing.
+
+```ts
+import { Invoices, planLine, overageLine } from '@basaltkit/subscriptions'
+
+const invoices = new Invoices({ taxRate: 0.14 }) // 14% de IVA por omissão
+
+// Constrói a partir do plano + qualquer excedente medido no período
+const draft = await invoices.draft({
+  billableId: tenantId,
+  currency: 'USD',
+  lineItems: [
+    planLine('pro', plans.pro, 'monthly'),                       // base de $29.00
+    overageLine('api.calls', { used: 1500, included: 1000, unitAmount: 2 })!, // 500 × $0.02
+  ],
+  discount: 500,        // $5.00 de desconto, aplicado antes do imposto
+})
+
+const open = await invoices.finalize(draft.id) // atribui INV-2026-0001, estado → open
+await invoices.markPaid(open.id, { paymentId: 'pay_123' }) // quando o gateway confirmar
+```
+
+`overageLine()` devolve `null` quando o uso está dentro da franquia (espalha e
+filtra, ou usa-o só quando há excedente). `planLine()` lança para um preço
+`'custom'` (sales-led) — esses não têm valor self-serve.
+
+### Liquidar a partir de um webhook de pagamento
+
+As faturas não falam com os gateways. Quando o teu pagamento confirma (via
+`handleWebhook` ou o evento `confirmed` do `PaymentLedger`), chama `markPaid`:
+
+```ts
+ledger.on('confirmed', async ({ record }) => {
+  if (record?.reference) await invoices.markPaid(record.reference, { paymentId: record.id })
+})
+```
+
+### Expor faturas por HTTP
+
+`invoiceRoutes()` adiciona endpoints só-de-leitura, com âmbito de tenant,
+construídos sobre o `route()` neutro — por isso servem de forma idêntica em
+**Fastify, Express e Hono**:
+
+```ts
+import { subscriptionsPlugin, invoiceRoutes } from '@basaltkit/subscriptions'
+
+createApp({
+  plugins: [
+    subscriptionsPlugin({ plans, fallbackPlan: 'free', gateway, invoices: { taxRate: 0.14 } }),
+    fastifyPlugin({ routes: [...invoiceRoutes()] }), // ou expressPlugin / honoPlugin
+  ],
+})
+```
+
+| Rota | Devolve |
+| --- | --- |
+| `GET /billing/invoices` | `{ data: Invoice[] }` do tenant atual, mais recentes primeiro |
+| `GET /billing/invoices/:id` | uma fatura em JSON (404 se não for do tenant) |
+| `GET /billing/invoices/:id/html` | uma fatura em HTML imprimível |
+
+Resolve o token `INVOICES` (ou a tua instância `Invoices`) para emitir e
+finalizar faturas no servidor; as rotas são deliberadamente só-de-leitura. Em
+produção, suporta o motor com um `InvoiceStore` durável — o padrão é em memória.
+
+Renderiza em qualquer lado com `renderInvoiceText(invoice)` (recibos, emails) ou
+`renderInvoiceHtml(invoice)` (autossuficiente, sem assets externos).
+
 ## Stores duráveis
 
 As stores predefinidas são em memória e por processo — bom para um único nó ou um
