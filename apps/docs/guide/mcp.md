@@ -81,6 +81,35 @@ const local = new McpClient(new StdioClientTransport({ command: 'some-mcp-server
 await local.connect()
 ```
 
+### Register servers with a plugin
+
+`mcpClientPlugin` wires named external servers into the container — it connects
+them at boot and closes them on shutdown, so any part of the app can use their
+tools through the `MCP_CLIENTS` registry:
+
+```ts
+import { mcpClientPlugin, MCP_CLIENTS } from '@basaltkit/mcp'
+
+createApp({
+  plugins: [
+    mcpClientPlugin({
+      servers: {
+        search: { type: 'http', url: 'https://search.example/mcp' },
+        files: { type: 'stdio', command: 'mcp-files', args: ['--root', '.'] },
+      },
+    }),
+  ],
+})
+
+// anywhere with the container:
+const clients = container.get(MCP_CLIENTS)
+const { tools } = await clients.listTools('search')
+const result = await clients.callTool('search', 'query', { q: 'basalt' })
+```
+
+Connections are lazy-safe: `callTool` / `listTools` connect on demand, so
+`eager: false` defers connecting until first use.
+
 ## Transports
 
 | Transport | Server | Client | Adapters |

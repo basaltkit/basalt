@@ -77,6 +77,20 @@ const local = new McpClient(new StdioClientTransport({ command: 'some-mcp-server
 await local.connect()
 ```
 
+Or register named servers with a plugin — `mcpClientPlugin` connects them at boot
+and exposes them via the `MCP_CLIENTS` registry:
+
+```ts
+import { mcpClientPlugin, MCP_CLIENTS } from '@basaltkit/mcp'
+
+createApp({ plugins: [mcpClientPlugin({ servers: {
+  search: { type: 'http', url: 'https://search.example/mcp' },
+  files:  { type: 'stdio', command: 'mcp-files', args: ['--root', '.'] },
+} })] })
+
+// await container.get(MCP_CLIENTS).callTool('search', 'query', { q: 'basalt' })
+```
+
 ## Transports
 
 | Transport | Server | Client | Adapter-agnostic |

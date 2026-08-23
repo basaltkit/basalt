@@ -82,6 +82,35 @@ const local = new McpClient(new StdioClientTransport({ command: 'some-mcp-server
 await local.connect()
 ```
 
+### Registar servidores com um plugin
+
+O `mcpClientPlugin` liga servidores externos nomeados ao container — conecta-os no
+arranque e fecha-os no shutdown, para que qualquer parte da app possa usar as suas
+tools através do registry `MCP_CLIENTS`:
+
+```ts
+import { mcpClientPlugin, MCP_CLIENTS } from '@basaltkit/mcp'
+
+createApp({
+  plugins: [
+    mcpClientPlugin({
+      servers: {
+        search: { type: 'http', url: 'https://search.example/mcp' },
+        files: { type: 'stdio', command: 'mcp-files', args: ['--root', '.'] },
+      },
+    }),
+  ],
+})
+
+// em qualquer lado com o container:
+const clients = container.get(MCP_CLIENTS)
+const { tools } = await clients.listTools('search')
+const result = await clients.callTool('search', 'query', { q: 'basalt' })
+```
+
+As ligações são lazy-safe: `callTool` / `listTools` conectam a pedido, por isso
+`eager: false` adia a ligação até ao primeiro uso.
+
 ## Transportes
 
 | Transporte | Servidor | Cliente | Adaptadores |

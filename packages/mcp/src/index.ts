@@ -42,3 +42,11 @@ export {
   type McpClientInfo,
   type StdioTransportOptions,
 } from './client.js'
+
+export {
+  mcpClientPlugin,
+  McpClients,
+  MCP_CLIENTS,
+  type McpClientPluginOptions,
+  type McpServerConnection,
+} from './client-plugin.js'
