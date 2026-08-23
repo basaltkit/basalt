@@ -71,7 +71,7 @@ export default defineConfig({
   // The generated typedoc API reference embeds example URLs (localhost OTLP
   // endpoints, etc.) as default values; those aren't navigable doc links, so
   // ignore localhost/127.0.0.1 while keeping dead-link checking everywhere else.
-  ignoreDeadLinks: [/^https?:\/\/localhost/, /^https?:\/\/127\.0\.0\.1/],
+  ignoreDeadLinks: [/^https?:\/\/localhost/, /^https?:\/\/127\.0\.0\.1/, /^\/reference\/api/],
 
   // English is the root locale (served at `/`); Portuguese lives under `/pt/`.
   // The root inherits the shared `themeConfig` below; `pt` overrides nav/sidebar.
@@ -87,7 +87,7 @@ export default defineConfig({
           { text: 'Guia', link: '/pt/guide/getting-started' },
           { text: 'Cookbook', link: '/pt/cookbook/notes-saas' },
           { text: 'Referência', link: '/pt/reference/packages' },
-          { text: 'API', link: '/reference/api/' },
+          ...(apiSidebar.length ? [{ text: 'API', link: '/reference/api/' }] : []),
           { text: `Basalt ${basaltRelease}`, link: '/pt/guide/versioning' },
         ],
         sidebar: {
@@ -204,7 +204,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
       { text: 'Reference', link: '/reference/packages' },
-      { text: 'API', link: '/reference/api/' },
+      ...(apiSidebar.length ? [{ text: 'API', link: '/reference/api/' }] : []),
       { text: `Basalt ${basaltRelease}`, link: '/guide/versioning' },
     ],
 
