@@ -1402,6 +1402,55 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
+  packages/mcp:
+    dependencies:
+      '@basaltkit/core':
+        specifier: workspace:^
+        version: link:../core
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
+    devDependencies:
+      '@basaltkit/express':
+        specifier: workspace:^
+        version: link:../express
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
+      '@basaltkit/hono':
+        specifier: workspace:^
+        version: link:../hono
+      '@basaltkit/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@hono/node-server':
+        specifier: ^1.13.0
+        version: 1.19.17(hono@4.13.0)
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      express:
+        specifier: ^5.0.0
+        version: 5.2.1
+      fastify:
+        specifier: ^5.11.0
+        version: 5.11.2
+      hono:
+        specifier: ^4.13.0
+        version: 4.13.0
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.23.5)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.5)(yaml@2.9.0)
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+
   packages/notifications:
     dependencies:
       '@basaltkit/core':
@@ -3474,6 +3523,12 @@ packages:
   '@google-cloud/storage@7.21.0':
     resolution: {integrity: sha512-l+IFTkd+6Y5LoAuXyYCKNAKtw/Ci+rAMqgdTB1jv4iZiLhw0rtq+0qjIRbBizXkNzEFmXiXUW0H7sZQQvk1ffA==}
     engines: {node: '>=14'}
+
+  '@hono/node-server@1.19.17':
+    resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -8160,6 +8215,10 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
+
+  '@hono/node-server@1.19.17(hono@4.13.0)':
+    dependencies:
+      hono: 4.13.0
 
   '@humanfs/core@0.19.2':
     dependencies:

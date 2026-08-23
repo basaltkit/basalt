@@ -106,7 +106,10 @@ export default defineConfig({
             },
             {
               text: 'Experiência de desenvolvimento',
-              items: [{ text: 'Desenvolvimento assistido por IA', link: '/pt/guide/ai' }],
+              items: [
+                { text: 'Desenvolvimento assistido por IA', link: '/pt/guide/ai' },
+                { text: 'MCP (Model Context Protocol)', link: '/pt/guide/mcp' },
+              ],
             },
             {
               text: 'Blocos de SaaS',
@@ -219,7 +222,10 @@ export default defineConfig({
         },
         {
           text: 'Developer Experience',
-          items: [{ text: 'AI-assisted development', link: '/guide/ai' }],
+          items: [
+            { text: 'AI-assisted development', link: '/guide/ai' },
+            { text: 'MCP (Model Context Protocol)', link: '/guide/mcp' },
+          ],
         },
         {
           text: 'SaaS Building Blocks',
