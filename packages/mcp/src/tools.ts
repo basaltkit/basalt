@@ -46,33 +46,66 @@ export function defaultToolName(route: BasaltRoute): string {
   return `${route.method.toLowerCase()}${path ? `_${path}` : ''}`.replace(/[^a-z0-9_]/gi, '_')
 }
 
-/** The property names of a Zod object schema, or null if it isn't a plain object. */
-function objectKeys(schema: ZodType | undefined): string[] | null {
-  const def = (schema as { _def?: { typeName?: string; shape?: () => Record<string, unknown> } } | undefined)?._def
-  if (!def || def.typeName !== 'ZodObject' || typeof def.shape !== 'function') return null
-  return Object.keys(def.shape())
+// --- Zod introspection that works on both Zod 3 and Zod 4 ---
+// v3 identifies types via `_def.typeName` ('ZodNumber') and exposes an object's
+// shape as `_def.shape()` (a function). v4 uses `_def.type` ('number') and
+// `_def.shape` (a plain object). These helpers normalise both.
+
+type ZodDefLike = {
+  typeName?: string
+  type?: string
+  innerType?: unknown
+  shape?: Record<string, unknown> | (() => Record<string, unknown>)
 }
 
-/** Unwrap Optional/Default/Nullable to reach the inner Zod def. */
-function unwrapDef(schema: unknown): { typeName?: string; shape?: () => Record<string, unknown> } | undefined {
-  let def = (schema as { _def?: Record<string, unknown> } | undefined)?._def as
-    | { typeName?: string; innerType?: unknown; shape?: () => Record<string, unknown> }
-    | undefined
-  while (def && (def.typeName === 'ZodOptional' || def.typeName === 'ZodDefault' || def.typeName === 'ZodNullable')) {
-    def = (def.innerType as { _def?: Record<string, unknown> } | undefined)?._def as typeof def
+const zodDef = (schema: unknown): ZodDefLike | undefined =>
+  (schema as { _def?: ZodDefLike } | undefined)?._def
+
+/** Normalised lowercase type name, e.g. 'number' | 'object' | 'optional'. */
+function zodType(schema: unknown): string | undefined {
+  const def = zodDef(schema)
+  if (!def) return undefined
+  if (typeof def.type === 'string') return def.type // v4
+  if (typeof def.typeName === 'string' && def.typeName.startsWith('Zod')) {
+    return def.typeName.slice(3).toLowerCase() // v3: 'ZodNumber' -> 'number'
   }
-  return def
+  return undefined
+}
+
+/** The shape record of a Zod object (both versions), or null. */
+function zodShape(schema: unknown): Record<string, unknown> | null {
+  if (zodType(schema) !== 'object') return null
+  const shape = zodDef(schema)?.shape
+  const resolved = typeof shape === 'function' ? shape() : shape
+  return resolved && typeof resolved === 'object' ? resolved : null
+}
+
+/** Unwrap optional/default/nullable to the inner scalar type name. */
+function unwrapType(schema: unknown): string | undefined {
+  let current = schema
+  let t = zodType(current)
+  while (t === 'optional' || t === 'default' || t === 'nullable') {
+    current = zodDef(current)?.innerType
+    t = zodType(current)
+  }
+  return t
+}
+
+/** The property names of a Zod object schema, or null if it isn't a plain object. */
+function objectKeys(schema: ZodType | undefined): string[] | null {
+  const shape = zodShape(schema)
+  return shape ? Object.keys(shape) : null
 }
 
 /** Coerce a stringified scalar to the type its Zod field expects (LLMs often send numbers/booleans as text). */
 function coerceScalar(fieldSchema: unknown, value: unknown): unknown {
   if (typeof value !== 'string') return value
-  const t = unwrapDef(fieldSchema)?.typeName
-  if (t === 'ZodNumber') {
+  const t = unwrapType(fieldSchema)
+  if (t === 'number') {
     const n = Number(value)
     return value.trim() !== '' && !Number.isNaN(n) ? n : value
   }
-  if (t === 'ZodBoolean') {
+  if (t === 'boolean') {
     if (value === 'true') return true
     if (value === 'false') return false
   }
@@ -85,9 +118,8 @@ function coerceToSchema(
   obj: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   if (!obj || !schema) return obj
-  const def = unwrapDef(schema)
-  if (def?.typeName !== 'ZodObject' || typeof def.shape !== 'function') return obj
-  const shape = def.shape()
+  const shape = zodShape(schema)
+  if (!shape) return obj
   const out: Record<string, unknown> = { ...obj }
   for (const key of Object.keys(out)) if (key in shape) out[key] = coerceScalar(shape[key], out[key])
   return out
