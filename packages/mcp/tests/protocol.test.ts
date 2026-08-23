@@ -74,6 +74,18 @@ describe('McpServer protocol', () => {
     await app.shutdown()
   })
 
+  it('coerces stringified numbers/booleans to the schema types (LLMs send text)', async () => {
+    const { app, mcp } = await server()
+    const res = await mcp.handleMessage({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'post_projects', arguments: { name: 'Basalt', order: '7' } }, // order as STRING
+    })
+    const result = res?.result as { isError?: boolean; structuredContent: { order: number } }
+    expect(result.isError ?? false).toBe(false) // no 'expected number, received string'
+    expect(result.structuredContent.order).toBe(7) // coerced to a real number
+    await app.shutdown()
+  })
+
   it('omits structuredContent for array/primitive returns (MCP wants a record)', async () => {
     const { app, mcp } = await server()
     const res = await mcp.handleMessage({
