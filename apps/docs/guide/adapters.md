@@ -61,6 +61,22 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 
 :::
 
+## Live example — the playground
+
+The repo's [`apps/playground`](https://github.com/Zebedeu/basalt/tree/main/apps/playground)
+is the same neutral `route()` list (a small Projects CRUD + multi-tenancy)
+served on **all three** adapters. Only the last line of `buildApp()` changes —
+pick the runtime with an env var:
+
+```bash
+pnpm --filter playground dev               # fastify (default)
+ADAPTER=express pnpm --filter playground dev
+ADAPTER=hono    pnpm --filter playground dev
+```
+
+Its `tests/adapters.e2e.test.ts` runs the identical flow over a real socket on
+Fastify, Express and Hono — the executable proof that routes are runtime-neutral.
+
 ## Complete example — Fastify
 
 Install the adapter and Fastify:
