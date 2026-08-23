@@ -1,10 +1,10 @@
 import { ctx, type Container } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
-import { HttpError, route } from '@basaltkit/fastify'
+import { HttpError, route } from '@basaltkit/http'
 import { z } from 'zod'
 import { ProjectCreated, ProjectDeleted, PROJECTS, ProjectSchema } from './domain.js'
 
-/** DI scope of the current request (created by the Fastify adapter). */
+/** DI scope of the current request (created by whichever HTTP adapter is mounted). */
 const scope = (): Container => ctx().container as Container
 
 export const projectRoutes = [

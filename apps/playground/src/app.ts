@@ -1,8 +1,11 @@
-import { createApp, definePlugin, tryCtx } from '@basaltkit/core'
+import { createApp, definePlugin, tryCtx, type BasaltPlugin } from '@basaltkit/core'
 import { configPlugin } from '@basaltkit/config'
 import { EVENTS, eventsPlugin } from '@basaltkit/events'
 import { fastifyPlugin } from '@basaltkit/fastify'
-import { LOGGER, loggerPlugin } from '@basaltkit/logger'
+import { expressPlugin } from '@basaltkit/express'
+import { honoPlugin } from '@basaltkit/hono'
+import { LOGGER, loggerPlugin, type LogLevel } from '@basaltkit/logger'
+import type { BasaltRoute } from '@basaltkit/http'
 import {
   headerResolver,
   MemoryTenantSource,
@@ -41,9 +44,26 @@ const playgroundPlugin = definePlugin({
   },
 })
 
+/** The HTTP runtime to mount. The routes, plugins and domain are identical for all three. */
+export type Adapter = 'fastify' | 'express' | 'hono'
+
+/** Same neutral `route()` list, bound to whichever adapter is chosen. */
+function httpPlugin(adapter: Adapter, routes: BasaltRoute[]): BasaltPlugin {
+  switch (adapter) {
+    case 'express':
+      return expressPlugin({ routes })
+    case 'hono':
+      return honoPlugin({ routes })
+    default:
+      return fastifyPlugin({ routes })
+  }
+}
+
 export interface BuildAppOptions {
-  logLevel?: string
+  logLevel?: LogLevel
   pretty?: boolean
+  /** Which HTTP adapter to mount. Default `fastify`. */
+  adapter?: Adapter
 }
 
 export function buildApp(options: BuildAppOptions = {}) {
@@ -62,7 +82,8 @@ export function buildApp(options: BuildAppOptions = {}) {
         resolvers: [headerResolver(), subdomainResolver({ base: 'localhost' })],
       }),
       playgroundPlugin,
-      fastifyPlugin({ routes: projectRoutes }),
+      // The one line that differs per runtime — everything above is adapter-neutral.
+      httpPlugin(options.adapter ?? 'fastify', projectRoutes),
     ],
   })
 }

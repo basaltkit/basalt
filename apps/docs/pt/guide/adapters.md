@@ -62,6 +62,22 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 
 :::
 
+## Exemplo vivo — o playground
+
+O [`apps/playground`](https://github.com/Zebedeu/basalt/tree/main/apps/playground)
+do repositório é a mesma lista neutra de `route()` (um pequeno CRUD de Projetos +
+multi-tenancy) servida nos **três** adaptadores. Só muda a última linha do
+`buildApp()` — escolhe o runtime com uma variável de ambiente:
+
+```bash
+pnpm --filter playground dev               # fastify (por omissão)
+ADAPTER=express pnpm --filter playground dev
+ADAPTER=hono    pnpm --filter playground dev
+```
+
+O seu `tests/adapters.e2e.test.ts` corre o fluxo idêntico sobre um socket real em
+Fastify, Express e Hono — a prova executável de que as rotas são neutras ao runtime.
+
 ## Exemplo completo — Fastify
 
 Instala o adaptador e o Fastify:

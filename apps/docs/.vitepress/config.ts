@@ -99,9 +99,11 @@ export default defineConfig({
                 { text: 'Instalação', link: '/pt/guide/installation' },
                 { text: 'Conceitos centrais', link: '/pt/guide/concepts' },
                 { text: 'Adaptadores HTTP', link: '/pt/guide/adapters' },
+                { text: 'Migrar do Express', link: '/pt/guide/migrating-from-express' },
                 { text: 'Perguntas frequentes (FAQ)', link: '/pt/guide/faq' },
                 { text: 'Para além do SaaS', link: '/pt/guide/beyond-saas' },
                 { text: 'Comparação com outras frameworks', link: '/pt/guide/comparison' },
+                { text: 'Benchmarks', link: '/pt/guide/benchmarks' },
               ],
             },
             {
@@ -212,9 +214,11 @@ export default defineConfig({
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Core Concepts', link: '/guide/concepts' },
             { text: 'HTTP Adapters', link: '/guide/adapters' },
+            { text: 'Migrating from Express', link: '/guide/migrating-from-express' },
             { text: 'FAQ', link: '/guide/faq' },
             { text: 'Beyond SaaS', link: '/guide/beyond-saas' },
             { text: 'vs other frameworks', link: '/guide/comparison' },
+            { text: 'Benchmarks', link: '/guide/benchmarks' },
           ],
         },
         {

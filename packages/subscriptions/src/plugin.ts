@@ -1,5 +1,7 @@
 import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { route as httpRoute } from '@basaltkit/http'
 import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/fastify'
+import { Invoices, renderInvoiceHtml, InvoiceNotFoundError, type InvoicesOptions } from './invoice.js'
 import { z } from 'zod'
 import type { BillingGateway } from './gateway.js'
 import type { SubscriptionRecord } from './stores.js'
@@ -23,14 +25,19 @@ declare module '@basaltkit/core' {
 }
 
 export const SUBSCRIPTIONS = createToken<Subscriptions>('subscriptions')
+export const INVOICES = createToken<Invoices>('invoices')
 
-export type SubscriptionsPluginOptions = Omit<SubscriptionsOptions, 'hooks'>
+export type SubscriptionsPluginOptions = Omit<SubscriptionsOptions, 'hooks'> & {
+  /** Invoice engine config (store, tax rate, number prefix). A memory store is used by default. */
+  invoices?: InvoicesOptions
+}
 
 export function subscriptionsPlugin(options: SubscriptionsPluginOptions) {
   return definePlugin({
     name: 'basalt:subscriptions',
     register({ container, hooks }) {
       container.singleton(SUBSCRIPTIONS, () => new Subscriptions({ ...options, hooks }))
+      container.singleton(INVOICES, () => new Invoices(options.invoices ?? {}))
 
       // Route guards: meta.subscribed (true or a plan name) and meta.feature.
       // The billable is the current tenant.
@@ -142,4 +149,52 @@ export function billingWebhookRoute(gateway: BillingGateway): BasaltRoute {
       return reply.code(200).send({ received: true, duplicate: !applied })
     },
   })
+}
+
+const invoicesService = (): Invoices => (ctx().container as Container).get(INVOICES)
+
+/**
+ * Read-only invoice endpoints for the current tenant, built on the neutral
+ * `route()` from `@basaltkit/http` — so they serve identically on the Fastify,
+ * Express and Hono adapters:
+ *
+ * - `GET /billing/invoices`        — list this tenant's invoices (newest first)
+ * - `GET /billing/invoices/:id`    — one invoice as JSON
+ * - `GET /billing/invoices/:id/html` — a printable HTML invoice
+ *
+ * Ownership is enforced against the current tenant; another tenant's invoice
+ * reads as 404. Issuing/finalizing invoices stays server-side via `INVOICES`.
+ */
+export function invoiceRoutes(): BasaltRoute[] {
+  const own = async (id: string) => {
+    const invoice = await invoicesService().get(id)
+    if (!invoice || invoice.billableId !== billable()) throw new InvoiceNotFoundError(id)
+    return invoice
+  }
+  return [
+    httpRoute({
+      method: 'GET',
+      url: '/billing/invoices',
+      async handler() {
+        return { data: await invoicesService().list(billable()) }
+      },
+    }),
+    httpRoute({
+      method: 'GET',
+      url: '/billing/invoices/:id',
+      params: z.object({ id: z.string() }),
+      async handler({ params }) {
+        return own(params.id)
+      },
+    }),
+    httpRoute({
+      method: 'GET',
+      url: '/billing/invoices/:id/html',
+      params: z.object({ id: z.string() }),
+      async handler({ params, reply }) {
+        const invoice = await own(params.id)
+        return reply.header('content-type', 'text/html; charset=utf-8').send(renderInvoiceHtml(invoice))
+      },
+    }),
+  ]
 }

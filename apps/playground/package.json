@@ -1,7 +1,7 @@
 {
   "name": "playground",
   "private": true,
-  "description": "Basalt reference app — integrates core, config, env, logger, events and fastify. Serves as the living E2E of Phase 1.",
+  "description": "Basalt reference app \u2014 the same neutral route() list served on fastify, express AND hono (ADAPTER=env). Living E2E of the core (config, env, logger, events, tenancy, HTTP).",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -14,9 +14,13 @@
     "@basaltkit/core": "workspace:*",
     "@basaltkit/env": "workspace:*",
     "@basaltkit/events": "workspace:*",
+    "@basaltkit/express": "workspace:*",
     "@basaltkit/fastify": "workspace:*",
+    "@basaltkit/hono": "workspace:*",
+    "@basaltkit/http": "workspace:*",
     "@basaltkit/logger": "workspace:*",
     "@basaltkit/tenancy": "workspace:*",
+    "@hono/node-server": "^1.13.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {

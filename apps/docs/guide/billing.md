@@ -255,6 +255,81 @@ For development and tests there is `FakeBillingGateway`, which records every cal
 in arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`) and accepts
 the webhook signature `'valid'`.
 
+## Invoices
+
+A subscription says *what* a tenant is entitled to; an **invoice** is the record
+of *what they were charged* for a period — line items, discount, tax, totals and
+a payment status. The engine is pure domain (no HTTP, no gateway), so it behaves
+the same behind any adapter or payment driver.
+
+The lifecycle is `draft → open → paid`, and a draft or open invoice can be
+`void`ed. **All amounts are integer minor units** (cents), consistent with the
+rest of billing.
+
+```ts
+import { Invoices, planLine, overageLine } from '@basaltkit/subscriptions'
+
+const invoices = new Invoices({ taxRate: 0.14 }) // 14% VAT by default
+
+// Build from the plan + any metered overage this period
+const draft = await invoices.draft({
+  billableId: tenantId,
+  currency: 'USD',
+  lineItems: [
+    planLine('pro', plans.pro, 'monthly'),                       // $29.00 base
+    overageLine('api.calls', { used: 1500, included: 1000, unitAmount: 2 })!, // 500 × $0.02
+  ],
+  discount: 500,        // $5.00 off, applied before tax
+})
+
+const open = await invoices.finalize(draft.id) // assigns INV-2026-0001, status → open
+await invoices.markPaid(open.id, { paymentId: 'pay_123' }) // once the gateway confirms
+```
+
+`overageLine()` returns `null` when usage is within the allowance (so spread it
+and filter, or use it only when over). `planLine()` throws for a `'custom'`
+(sales-led) price — those have no self-serve amount.
+
+### Settling from a payment webhook
+
+Invoices don't talk to gateways. When your payment confirms (via `handleWebhook`
+or the `PaymentLedger`'s `confirmed` event), call `markPaid`:
+
+```ts
+ledger.on('confirmed', async ({ record }) => {
+  if (record?.reference) await invoices.markPaid(record.reference, { paymentId: record.id })
+})
+```
+
+### Exposing invoices over HTTP
+
+`invoiceRoutes()` adds read-only, tenant-scoped endpoints, built on the neutral
+`route()` — so they serve identically on **Fastify, Express and Hono**:
+
+```ts
+import { subscriptionsPlugin, invoiceRoutes } from '@basaltkit/subscriptions'
+
+createApp({
+  plugins: [
+    subscriptionsPlugin({ plans, fallbackPlan: 'free', gateway, invoices: { taxRate: 0.14 } }),
+    fastifyPlugin({ routes: [...invoiceRoutes()] }), // or expressPlugin / honoPlugin
+  ],
+})
+```
+
+| Route | Returns |
+| --- | --- |
+| `GET /billing/invoices` | `{ data: Invoice[] }` for the current tenant, newest first |
+| `GET /billing/invoices/:id` | one invoice as JSON (404 if it isn't the tenant's) |
+| `GET /billing/invoices/:id/html` | a printable HTML invoice |
+
+Resolve the `INVOICES` token (or your own `Invoices` instance) to issue and
+finalize invoices server-side; the routes are deliberately read-only. Back the
+engine with a durable `InvoiceStore` in production — the default is in-memory.
+
+Render anywhere with `renderInvoiceText(invoice)` (receipts, emails) or
+`renderInvoiceHtml(invoice)` (self-contained, no external assets).
+
 ## Durable stores
 
 The default stores are in-memory and per-process — fine for a single node or a
