@@ -242,6 +242,12 @@ const { userId } = await passkeys.finishAuthentication(sessionKey, browserRespon
 // → mint your session/JWT for userId as usual
 ```
 
+> **Security:** the registration challenge is bound to the `user.id` you pass to
+> `startRegistration`; `finishRegistration` refuses (`WEBAUTHN_SUBJECT_MISMATCH`) if the
+> `userId` doesn't match, so a passkey can never be bound to another account. Always
+> derive `userId` from the authenticated session, never from request input. A duplicate
+> credential id is rejected (`PASSKEY_EXISTS`) rather than overwriting an existing one.
+
 `finishAuthentication` looks the credential up by id, verifies it, checks the
 signature counter **increased** (a non-increasing counter throws `PasskeyClonedError`),
 and persists the new counter. Use `passkeys.list(userId)` / `passkeys.remove(id)`

@@ -1,3 +1,4 @@
+import { normalizeDomain } from './custom-domains.js'
 /** Neutral request shape — resolvers never see the HTTP framework. */
 export interface ResolutionRequest {
   headers?: Record<string, string | string[] | undefined>
@@ -16,8 +17,9 @@ export type TenantResolver = (
 function hostOf(request: ResolutionRequest): string | undefined {
   const raw = request.headers?.['host']
   const host = Array.isArray(raw) ? raw[0] : raw
-  // strip the port
-  return host?.split(':')[0]
+  // Canonicalize exactly like registration/lookup (lowercase, strip port +
+  // trailing dot, IDNA) so a forged/oddly-cased Host maps to the same key.
+  return host ? normalizeDomain(host) : undefined
 }
 
 /** acme.basalt.app → { id: 'acme' }. Ignores the bare base domain and 'www'. */

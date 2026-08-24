@@ -20,7 +20,7 @@ const READ_OPERATIONS = new Set([
   'groupBy',
 ])
 
-/** Client-level raw reads. `$executeRaw*` mutates, so it is NOT here. */
+/** Client-level raw reads — routed to a replica ONLY when `rawReadsOnReplica` is set. */
 const READ_ROOT = new Set(['$queryRaw', '$queryRawUnsafe'])
 
 export interface ReadReplicaOptions<TClient extends object> {
@@ -30,6 +30,20 @@ export interface ReadReplicaOptions<TClient extends object> {
   replicas: TClient[]
   /** Extra model methods to treat as reads (e.g. a Prisma extension's). */
   readOps?: string[]
+  /**
+   * Apply the SAME extension (e.g. `tenancyExtension()`) to the primary AND every
+   * replica, guaranteeing identical query scoping across all of them. Strongly
+   * recommended for multi-tenant setups: passing a raw, un-extended replica would
+   * route reads around your tenant filter and leak every tenant's rows.
+   */
+  extend?: (client: TClient) => TClient
+  /**
+   * Route `$queryRaw` / `$queryRawUnsafe` to a replica too. OFF by default: raw
+   * SQL can mutate (e.g. a `WITH ... INSERT` CTE) and a read used for an
+   * auth/permission decision must not read a lagged replica. Opt in only for
+   * genuinely read-only raw queries; otherwise they run on the primary.
+   */
+  rawReadsOnReplica?: boolean
 }
 
 /**
@@ -40,8 +54,10 @@ export interface ReadReplicaOptions<TClient extends object> {
 export function readReplica<TClient extends object>(
   options: ReadReplicaOptions<TClient>,
 ): TClient & { $primary: TClient } {
-  const { primary, replicas } = options
+  const primary = options.extend ? options.extend(options.primary) : options.primary
+  const replicas = options.extend ? options.replicas.map(options.extend) : options.replicas
   const reads = options.readOps ? new Set([...READ_OPERATIONS, ...options.readOps]) : READ_OPERATIONS
+  const rootReads = options.rawReadsOnReplica ? READ_ROOT : new Set<string>()
 
   // No replicas configured → every call is primary. Still expose `$primary`.
   if (replicas.length === 0) {
@@ -64,9 +80,10 @@ export function readReplica<TClient extends object>(
     get(target, prop, receiver) {
       if (prop === '$primary') return primary
 
-      // Client-level raw reads → a replica; every other client method (writes,
-      // $transaction, $executeRaw, $connect, lifecycle) stays on the primary.
-      if (typeof prop === 'string' && READ_ROOT.has(prop)) {
+      // Client-level raw reads → a replica ONLY when opted in; every other client
+      // method (writes, $transaction, $executeRaw, $connect, lifecycle) — and raw
+      // reads by default — stays on the primary.
+      if (typeof prop === 'string' && rootReads.has(prop)) {
         return (...args: unknown[]) =>
           (nextReplica() as Record<string, (...a: unknown[]) => unknown>)[prop]!(...args)
       }

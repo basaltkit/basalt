@@ -60,26 +60,46 @@ export class MemoryPasskeyStore implements PasskeyStore {
 
 // --- challenge store ------------------------------------------------------
 
+/** A stored challenge plus the subject (user id) it was issued for, if any. */
+export interface StoredChallenge {
+  challenge: string
+  /** The user the registration challenge is bound to — enforced at finish. */
+  userId?: string
+}
+
 export interface WebAuthnChallengeStore {
-  save(key: string, challenge: string, expiresAt: number): Promise<void>
+  save(key: string, value: StoredChallenge, expiresAt: number): Promise<void>
   /** Return AND consume the challenge (single-use), or null if missing/expired. */
-  take(key: string): Promise<string | null>
+  take(key: string): Promise<StoredChallenge | null>
 }
 
 export class MemoryWebAuthnChallengeStore implements WebAuthnChallengeStore {
-  private readonly entries = new Map<string, { challenge: string; expiresAt: number }>()
+  private readonly entries = new Map<string, { value: StoredChallenge; expiresAt: number }>()
   private readonly now: () => number
-  constructor(options: { now?: () => number } = {}) {
+  private readonly maxEntries: number
+  constructor(options: { now?: () => number; maxEntries?: number } = {}) {
     this.now = options.now ?? (() => Date.now())
+    this.maxEntries = options.maxEntries ?? 10_000
   }
-  async save(key: string, challenge: string, expiresAt: number): Promise<void> {
-    this.entries.set(key, { challenge, expiresAt })
+  async save(key: string, value: StoredChallenge, expiresAt: number): Promise<void> {
+    // Purge expired entries so unconsumed challenges cannot accumulate (DoS),
+    // and cap total size with FIFO eviction as a hard backstop.
+    const now = this.now()
+    for (const [k, entry] of this.entries) {
+      if (entry.expiresAt <= now) this.entries.delete(k)
+    }
+    while (this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value
+      if (oldest === undefined) break
+      this.entries.delete(oldest)
+    }
+    this.entries.set(key, { value, expiresAt })
   }
-  async take(key: string): Promise<string | null> {
+  async take(key: string): Promise<StoredChallenge | null> {
     const entry = this.entries.get(key)
     if (!entry) return null
     this.entries.delete(key)
-    return entry.expiresAt > this.now() ? entry.challenge : null
+    return entry.expiresAt > this.now() ? entry.value : null
   }
 }
 
@@ -188,6 +208,21 @@ export class PasskeyClonedError extends BasaltError {
     super('PASSKEY_CLONED', 'Signature counter did not increase — the authenticator may be cloned.')
   }
 }
+export class PasskeyExistsError extends BasaltError {
+  readonly status = 409
+  constructor() {
+    super('PASSKEY_EXISTS', 'This credential is already registered.')
+  }
+}
+export class WebAuthnSubjectMismatchError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super(
+      'WEBAUTHN_SUBJECT_MISMATCH',
+      'The challenge was issued for a different user — refusing to bind the passkey.',
+    )
+  }
+}
 
 // --- the service ----------------------------------------------------------
 
@@ -241,18 +276,32 @@ export class WebAuthnService {
   private get timeout(): number {
     return this.config.timeoutMs ?? 60_000
   }
-  private async issueChallenge(sessionKey: string): Promise<string> {
+  // Challenges are namespaced per ceremony so a registration and an
+  // authentication on the same sessionKey never clobber or cross-consume.
+  private challengeKey(kind: 'reg' | 'auth', sessionKey: string): string {
+    return `${kind}:${sessionKey}`
+  }
+  private async issueChallenge(
+    kind: 'reg' | 'auth',
+    sessionKey: string,
+    userId?: string,
+  ): Promise<string> {
     const challenge = this.randomChallenge()
-    await this.challenges.save(sessionKey, challenge, this.now() + (this.config.challengeTtlMs ?? 300_000))
+    const value: StoredChallenge = userId === undefined ? { challenge } : { challenge, userId }
+    await this.challenges.save(
+      this.challengeKey(kind, sessionKey),
+      value,
+      this.now() + (this.config.challengeTtlMs ?? 300_000),
+    )
     return challenge
   }
 
-  /** Registration options for a known user; stores the challenge under `sessionKey`. */
+  /** Registration options for a known user; stores the challenge bound to `user.id`. */
   async startRegistration(
     sessionKey: string,
     user: { id: string; name: string; displayName?: string },
   ): Promise<RegistrationOptions> {
-    const challenge = await this.issueChallenge(sessionKey)
+    const challenge = await this.issueChallenge('reg', sessionKey, user.id)
     const existing = await this.credentials.forUser(user.id)
     return {
       challenge,
@@ -277,17 +326,27 @@ export class WebAuthnService {
     response: unknown,
     deviceName?: string,
   ): Promise<PasskeyCredential> {
-    const expectedChallenge = await this.challenges.take(sessionKey)
-    if (!expectedChallenge) throw new WebAuthnChallengeError()
+    const stored = await this.challenges.take(this.challengeKey('reg', sessionKey))
+    if (!stored) throw new WebAuthnChallengeError()
+    // The challenge is bound to the user it was issued for; refuse to bind the
+    // new passkey to any other account (prevents adding an attacker's
+    // authenticator to a victim's account via a caller-supplied userId).
+    if (stored.userId !== undefined && stored.userId !== userId) {
+      throw new WebAuthnSubjectMismatchError()
+    }
 
     const result = await this.verifier.verifyRegistration({
       response,
-      expectedChallenge,
+      expectedChallenge: stored.challenge,
       expectedOrigin: this.config.origin,
       expectedRpId: this.config.rpId,
       requireUserVerification: this.uv === 'required',
     })
     if (!result.verified || !result.credential) throw new WebAuthnVerificationError()
+
+    // Never overwrite an existing credential record (a collided/duplicate
+    // credential id must not rebind or clobber another registration).
+    if (await this.credentials.get(result.credential.id)) throw new PasskeyExistsError()
 
     const credential: PasskeyCredential = {
       id: result.credential.id,
@@ -304,7 +363,7 @@ export class WebAuthnService {
 
   /** Authentication options; `userId` narrows allowCredentials, omit it for discoverable login. */
   async startAuthentication(sessionKey: string, userId?: string): Promise<AuthenticationOptions> {
-    const challenge = await this.issueChallenge(sessionKey)
+    const challenge = await this.issueChallenge('auth', sessionKey)
     const creds = userId ? await this.credentials.forUser(userId) : []
     return {
       challenge,
@@ -328,17 +387,23 @@ export class WebAuthnService {
     sessionKey: string,
     response: unknown,
   ): Promise<{ userId: string; credentialId: string }> {
-    const credentialId = (response as { id?: string })?.id
-    if (!credentialId) throw new PasskeyNotFoundError()
+    const rawId = (response as { id?: unknown })?.id
+    if (typeof rawId !== 'string' || rawId.length === 0 || rawId.length > 512) {
+      throw new PasskeyNotFoundError()
+    }
+    const credentialId = rawId
+
+    // Consume the challenge FIRST so a failed lookup still burns the nonce and
+    // the endpoint cannot be used as an unauthenticated credential-existence oracle.
+    const stored = await this.challenges.take(this.challengeKey('auth', sessionKey))
+    if (!stored) throw new WebAuthnChallengeError()
+
     const credential = await this.credentials.get(credentialId)
     if (!credential) throw new PasskeyNotFoundError()
 
-    const expectedChallenge = await this.challenges.take(sessionKey)
-    if (!expectedChallenge) throw new WebAuthnChallengeError()
-
     const result = await this.verifier.verifyAuthentication({
       response,
-      expectedChallenge,
+      expectedChallenge: stored.challenge,
       expectedOrigin: this.config.origin,
       expectedRpId: this.config.rpId,
       requireUserVerification: this.uv === 'required',
