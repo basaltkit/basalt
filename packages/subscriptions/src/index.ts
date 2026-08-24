@@ -155,3 +155,10 @@ export {
   type CouponsOptions,
   type CouponDuration,
 } from './coupon.js'
+export {
+  loadPlans,
+  plansToStored,
+  MemoryPlanStore,
+  type PlanStore,
+  type StoredPlan,
+} from './plan-store.js'
