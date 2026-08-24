@@ -134,3 +134,18 @@ export {
   type InvoicesOptions,
   type DraftInvoiceInput,
 } from './invoice.js'
+export {
+  Coupons,
+  MemoryCouponStore,
+  CouponInvalidError,
+  CouponNotRedeemableError,
+  CouponNotFoundError,
+  assertValidCoupon,
+  couponRedeemable,
+  couponDiscount,
+  type Coupon,
+  type CouponRecord,
+  type CouponStore,
+  type CouponsOptions,
+  type CouponDuration,
+} from './coupon.js'
