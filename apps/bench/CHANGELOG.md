@@ -1,5 +1,13 @@
 # @basaltkit/bench
 
+## 0.0.4
+
+### Patch Changes
+
+- Updated dependencies [c305a67]
+  - @basaltkit/http@1.8.0
+  - @basaltkit/core@1.1.1
+
 ## 0.0.3
 
 ### Patch Changes
