@@ -1,5 +1,12 @@
 export { createToken, type Token } from './token.js'
-export { Container, type Factory, type Lifetime } from './container.js'
+export {
+  Container,
+  type Factory,
+  type Lifetime,
+  type BindingInfo,
+  type DependencyGraph,
+} from './container.js'
+export { renderDependencyGraph } from './devtools.js'
 export { HookBus, type HookHandler, type AnyHookHandler, type BasaltHooks } from './hooks.js'
 export { ctx, tryCtx, runWithContext, type RequestContext } from './context.js'
 export {

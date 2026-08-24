@@ -25,6 +25,11 @@ export class Container {
   private readonly scopedInstances = new Map<symbol, unknown>()
   /** Resolution stack for cycle detection — keyed by token symbol, not description. */
   private readonly resolving: { key: symbol; description: string }[] = []
+  /** Dependency-graph recorder (devtools) — only set on the root once enabled. */
+  private graphRecorder?: {
+    nodes: Map<symbol, { description: string; lifetime: Lifetime }>
+    edges: Set<string>
+  }
 
   constructor(private readonly parent?: Container) {}
 
@@ -83,6 +88,12 @@ export class Container {
   }
 
   private build<T>(token: Token<T>, binding: Binding): unknown {
+    const recorder = this.recorder()
+    if (recorder) {
+      recorder.nodes.set(token.key, { description: token.description, lifetime: binding.lifetime })
+      const parent = this.resolving[this.resolving.length - 1]
+      if (parent) recorder.edges.add(`${parent.description}\u0000${token.description}`)
+    }
     this.resolving.push({ key: token.key, description: token.description })
     try {
       return binding.factory(this)
@@ -94,4 +105,70 @@ export class Container {
   private findBinding(key: symbol): Binding | undefined {
     return this.bindings.get(key) ?? this.parent?.findBinding(key)
   }
+
+  // ---- devtools ----
+
+  /** Enable dependency-graph recording (off by default — zero overhead otherwise). */
+  enableGraph(): this {
+    this.graphRecorder ??= { nodes: new Map(), edges: new Set() }
+    return this
+  }
+
+  private recorder(): Container['graphRecorder'] {
+    return this.graphRecorder ?? this.parent?.recorder()
+  }
+
+  /**
+   * The dependency graph observed **so far** — every `A depends on B` edge seen
+   * during resolution since `enableGraph()`. Passive: it records real
+   * resolutions and never forces eager construction.
+   */
+  dependencyGraph(): DependencyGraph {
+    const recorder = this.recorder()
+    if (!recorder) return { nodes: [], edges: [] }
+    return {
+      nodes: [...recorder.nodes.values()].map((n) => ({ token: n.description, lifetime: n.lifetime })),
+      edges: [...recorder.edges].map((e) => {
+        const [from = '', to = ''] = e.split('\u0000')
+        return { from, to }
+      }),
+    }
+  }
+
+  /** Static snapshot of every reachable binding — token, lifetime, and whether it's been built. */
+  describe(): BindingInfo[] {
+    const seen = new Set<symbol>()
+    const out: BindingInfo[] = []
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    for (let c: Container | undefined = this; c; c = c.parent) {
+      for (const [key, binding] of c.bindings) {
+        if (seen.has(key)) continue
+        seen.add(key)
+        const instantiated =
+          binding.lifetime === 'singleton'
+            ? binding.owner.singletons.has(key)
+            : binding.lifetime === 'scoped'
+              ? this.scopedInstances.has(key)
+              : false
+        out.push({ token: describeKey(key), lifetime: binding.lifetime, instantiated })
+      }
+    }
+    return out
+  }
+}
+
+export interface BindingInfo {
+  token: string
+  lifetime: Lifetime
+  instantiated: boolean
+}
+
+export interface DependencyGraph {
+  nodes: { token: string; lifetime: Lifetime }[]
+  edges: { from: string; to: string }[]
+}
+
+/** Best-effort human name for a token key (symbols carry their description). */
+function describeKey(key: symbol): string {
+  return key.description ?? key.toString()
 }

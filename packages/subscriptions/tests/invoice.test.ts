@@ -14,7 +14,7 @@ import {
 
 // Deterministic clock + ids so numbers/dates are stable in assertions.
 const makeInvoices = () => {
-  let t = Date.UTC(2026, 0, 15) // 2026-01-15
+  const t = Date.UTC(2026, 0, 15) // 2026-01-15
   let n = 0
   return new Invoices({
     store: new MemoryInvoiceStore(),
