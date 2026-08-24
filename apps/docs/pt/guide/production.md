@@ -86,6 +86,43 @@ backend durável para trocar: `@basaltkit/<domain>-sqlite` (single-node,
 [Base de dados por tenant](/pt/guide/database-per-tenant) para encaminhar esses
 stores através do cliente do tenant ativo.
 
+## Escalar leituras (read replicas)
+
+Quando uma base de dados já não aguenta a carga de leitura, acrescenta réplicas e
+divide o tráfego: as leituras vão para as réplicas, as escritas ficam no primary.
+O `readReplica` embrulha qualquer client Prisma e faz o routing — é um `Proxy`,
+não uma dependência:
+
+```ts
+import { PrismaClient } from '@prisma/client'
+import { prismaPlugin, readReplica } from '@basaltkit/prisma'
+
+const client = readReplica({
+  primary: new PrismaClient({ datasourceUrl: process.env.DATABASE_URL }),
+  replicas: [
+    new PrismaClient({ datasourceUrl: process.env.REPLICA_1_URL }),
+    new PrismaClient({ datasourceUrl: process.env.REPLICA_2_URL }),
+  ],
+})
+
+app.use(prismaPlugin({ client }))
+```
+
+`findMany`, `findUnique`, `count`, `aggregate`, `groupBy` e `$queryRaw` fazem
+round-robin pelas réplicas; toda a escrita, `$transaction` e `$executeRaw` vão
+para o primary. Logo após uma escrita as réplicas podem estar atrasadas — força o
+primary para um read-your-writes com o escape hatch `$primary`:
+
+```ts
+await db().order.create({ data })
+const fresh = await db<Client>().$primary.order.findMany({ where: { userId } })
+```
+
+Com `replicas: []` devolve o primary inalterado, por isso a mesma montagem corre
+em dev e num deploy de nó único. Usas `tenancyExtension()`? Estende o primary **e**
+cada réplica, depois embrulha os clients estendidos. (TLS/detalhes de ligação são
+do teu fornecedor de base de dados; o Basalt só encaminha as chamadas.)
+
 ## Encerramento gracioso
 
 `app.shutdown()` corre o `shutdown` de cada plugin na ordem inversa do boot
