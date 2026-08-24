@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Container, BasaltError, runWithContext, type RequestContext } from '@basaltkit/core'
 import type { ZodType } from 'zod'
 import { RequestValidationError, type ValidationIssue } from './errors.js'
+import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 
 declare module '@basaltkit/core' {
@@ -57,6 +58,32 @@ function parsePart(part: 'body' | 'query' | 'params', schema: ZodType | undefine
 }
 
 /**
+ * Sets a strong ETag for `meta.etag` GET/HEAD responses and short-circuits to
+ * 304 when the client's If-None-Match matches. No-op if the handler already
+ * replied or returned nothing.
+ */
+function applyEtag(
+  definition: BasaltRoute,
+  request: HttpRequest,
+  reply: HttpReply,
+  result: unknown,
+): unknown {
+  if (definition.meta?.['etag'] !== true) return result
+  const method = request.method.toUpperCase()
+  if ((method !== 'GET' && method !== 'HEAD') || reply.sent || result === undefined || result === null) {
+    return result
+  }
+  const body = typeof result === 'string' ? result : JSON.stringify(result)
+  const etag = computeEtag(body)
+  reply.header('etag', etag)
+  if (ifNoneMatchSatisfied(headerValue(request, 'if-none-match'), etag)) {
+    reply.code(304).send()
+    return undefined
+  }
+  return result
+}
+
+/**
  * The framework-neutral request pipeline every adapter shares: establishes the
  * request context (id, correlation, scoped container), runs enrichers then
  * guards, validates body/query/params, and invokes the handler. Returns the
@@ -82,13 +109,14 @@ export async function runRoute(
       for (const enrich of pipeline.enrichers ?? []) await enrich({ request, context, container: scoped })
       for (const guard of pipeline.guards ?? []) await guard({ route: definition, request, context, container: scoped })
     }
-    return definition.handler({
+    const result = await definition.handler({
       body: parsePart('body', definition.body, request.body),
       query: parsePart('query', definition.query, request.query),
       params: parsePart('params', definition.params, request.params),
       request,
       reply,
     } as Parameters<BasaltRoute['handler']>[0])
+    return applyEtag(definition, request, reply, result)
   })
 }
 
