@@ -50,6 +50,23 @@ Feature values speak for themselves:
 `price` is `0` (free), a single `number` (same in both periods), a
 `{ monthly, yearly }` object, or `'custom'` (sales-led — checkout is disabled).
 
+### Persisting the plan catalog
+
+Plans are consumed **synchronously** (by `planPrice`, features and the guards),
+so keep the source of truth in a `PlanStore` and **load it once at boot**:
+
+```ts
+import { loadPlans, subscriptionsPlugin } from '@basaltkit/subscriptions'
+
+const plans = await loadPlans(planStore) // reads your DB, builds the Plans object
+subscriptionsPlugin({ plans, fallbackPlan: 'free', ...stores })
+```
+
+`MemoryPlanStore` (seed it with a `definePlans` object) ships for tests; back a
+real `PlanStore` with your database to manage plans in the DB — edits apply on
+restart. `plansToStored(plans)` turns a `definePlans` object into rows for
+seeding.
+
 ## Wire the plugin
 
 `subscriptionsPlugin` registers the service under the `SUBSCRIPTIONS` token and
