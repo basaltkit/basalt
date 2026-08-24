@@ -27,3 +27,12 @@ export {
   type Kpi,
   type KpiTone,
 } from './overview.js'
+
+export {
+  mrrMovement,
+  growth,
+  change,
+  type MrrMovement,
+  type MetricsGrowth,
+  type Change,
+} from './analytics.js'
