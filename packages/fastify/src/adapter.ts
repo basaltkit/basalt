@@ -9,6 +9,10 @@ import {
   type BasaltRoute,
   type RequestEnricher,
   type RouteGuard,
+  isSseResponse,
+  sseProducerOf,
+  driveSse,
+  SSE_HEADERS,
 } from '@basaltkit/http'
 import Fastify, {
   type FastifyError,
@@ -189,6 +193,16 @@ function wrapHandler(
         },
       )
 
+      if (isSseResponse(result)) {
+        reply.hijack()
+        reply.raw.writeHead(200, SSE_HEADERS)
+        await driveSse(sseProducerOf(result), {
+          write: (frame) => void reply.raw.write(frame),
+          end: () => reply.raw.end(),
+          onClose: (listener) => request.raw.on('close', listener),
+        })
+        return
+      }
       if (!neutralReply.sent) {
         neutralReply.send(result)
       }

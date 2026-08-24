@@ -9,6 +9,11 @@ import {
   type BasaltRoute,
   type RequestEnricher,
   type RouteGuard,
+  isSseResponse,
+  sseProducerOf,
+  driveSse,
+  SSE_HEADERS,
+  type SseProducer,
 } from '@basaltkit/http'
 import { Hono, type Context, type Next } from 'hono'
 
@@ -42,6 +47,28 @@ async function toNeutralRequest(context: Context): Promise<HttpRequest> {
     ...(context.req.routePath ? { routePattern: context.req.routePath } : {}),
     raw: context,
   }
+}
+
+/** Streams an SSE producer as a Response backed by a ReadableStream (Web streams). */
+function sseResponse(context: Context, producer: SseProducer): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      void driveSse(producer, {
+        write: (frame) => controller.enqueue(encoder.encode(frame)),
+        end: () => {
+          try {
+            controller.close()
+          } catch {
+            /* already closed */
+          }
+        },
+        onClose: (listener) => context.req.raw.signal.addEventListener('abort', listener),
+      })
+    },
+  })
+  const { connection: _connection, ...headers } = SSE_HEADERS
+  return new Response(stream, { headers })
 }
 
 /** Neutral reply that buffers the response; the handler emits a native Response. */
@@ -109,6 +136,7 @@ function handlerFor(
         enrichers,
         guards,
       })
+      if (isSseResponse(result)) return sseResponse(context, sseProducerOf(result))
       return toResponse(reply, reply.sent ? reply.payload : result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
