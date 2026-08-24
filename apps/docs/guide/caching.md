@@ -151,3 +151,26 @@ class MyCacheDriver implements CacheDriver {
 
 `TieredCacheDriver` is a small reference implementation — it's pure composition
 over other drivers.
+
+
+## Conditional requests (ETags)
+
+Separate from the cache above — an HTTP-level optimisation that skips re-sending an
+unchanged response. Opt a route in with `meta: { etag: true }`: the framework hashes
+the `GET`/`HEAD` response into a strong `ETag`, and when the client sends a matching
+`If-None-Match` it replies `304 Not Modified` with no body. Adapter-agnostic
+(fastify/express/hono), no handler changes.
+
+```ts
+route({
+  method: 'GET',
+  url: '/projects/:id',
+  meta: { etag: true }, // ← ETag + 304 handling
+  params: z.object({ id: z.string() }),
+  async handler({ params }) { return db.projects.find(params.id) },
+})
+```
+
+The client caches by `ETag` and revalidates cheaply — you save serialization and
+bandwidth on unchanged reads. `computeEtag(body)` and `ifNoneMatchSatisfied(header,
+etag)` are exported for custom flows.
