@@ -335,7 +335,10 @@ finalizar faturas no servidor; as rotas são deliberadamente só-de-leitura. Em
 produção, suporta o motor com um `InvoiceStore` durável — o padrão é em memória.
 
 Renderiza em qualquer lado com `renderInvoiceText(invoice)` (recibos, emails) ou
-`renderInvoiceHtml(invoice)` (autossuficiente, sem assets externos).
+`renderInvoiceHtml(invoice)` (autossuficiente, sem assets externos). Para **PDF**,
+adiciona o [`@basaltkit/subscriptions-pdf`](https://www.npmjs.com/package/@basaltkit/subscriptions-pdf)
+e chama `renderInvoicePdf(invoice, { businessName })` → um `Buffer` (mantém o pdfkit
+fora do core sem dependências).
 
 ## Stores duráveis
 
