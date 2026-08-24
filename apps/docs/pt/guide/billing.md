@@ -53,6 +53,24 @@ Os valores das funcionalidades falam por si:
 objeto `{ monthly, yearly }`, ou `'custom'` (liderado pelo comercial — o checkout
 fica desativado).
 
+### Persistir o catálogo de planos
+
+Os planos são consumidos de forma **síncrona** (pelo `planPrice`, features e
+guards), por isso mantém a fonte de verdade num `PlanStore` e **carrega-o uma vez
+no arranque**:
+
+```ts
+import { loadPlans, subscriptionsPlugin } from '@basaltkit/subscriptions'
+
+const plans = await loadPlans(planStore) // lê a tua BD, constrói o objeto Plans
+subscriptionsPlugin({ plans, fallbackPlan: 'free', ...stores })
+```
+
+O `MemoryPlanStore` (semeia-o com um objeto `definePlans`) serve para testes;
+suporta um `PlanStore` real com a tua base de dados para gerir planos na BD — as
+edições aplicam-se no restart. O `plansToStored(plans)` transforma um objeto
+`definePlans` em linhas para o seed.
+
 ## Ligar o plugin
 
 `subscriptionsPlugin` regista o serviço sob o token `SUBSCRIPTIONS` e instala os
