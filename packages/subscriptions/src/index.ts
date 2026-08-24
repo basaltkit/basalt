@@ -85,6 +85,12 @@ export {
   assertMinorUnits,
 } from './money.js'
 export {
+  tieredCost,
+  meteredLine,
+  type PricingTier,
+  type TieredPrice,
+} from './metered.js'
+export {
   StripeBillingGateway,
   StripeRequestError,
   type StripeGatewayOptions,

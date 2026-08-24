@@ -144,6 +144,34 @@ that never resets. Pick the number type deliberately — it is the difference
 between "1000 API calls per month" and "1000 API calls ever".
 :::
 
+### Metered usage & tiered pricing
+
+Bill consumption with brackets — `graduated` (each unit priced by the bracket it
+falls into) or `volume` (all units at the bracket the total lands in) — and turn
+recorded usage into an invoice line:
+
+```ts
+import { meteredLine, tieredCost } from '@basaltkit/subscriptions'
+
+const price = {
+  mode: 'graduated' as const,
+  tiers: [
+    { upTo: 1000, unitAmount: 2 }, // first 1,000 calls @ $0.02
+    { upTo: null, unitAmount: 1 }, // beyond @ $0.01
+  ],
+}
+
+const line = meteredLine('api.calls', { units: 2_500, includedUnits: 1_000, price })
+// → one line for the 1,500 billable units; tieredCost(price, 1500) = 2500 (¢)
+
+await invoices.draft({ billableId, currency: 'USD', lineItems: [line].filter(Boolean) })
+```
+
+`includedUnits` (the plan's free allowance) is subtracted first; `meteredLine`
+returns `null` when nothing is billable. Use `tieredCost(price, units)` directly
+for previews or proration. Tiered pricing has no single per-unit rate, so the line
+is a single amount with the breakdown in its `metadata`.
+
 ## Guard routes
 
 Attach requirements as route `meta`. The guard resolves the billable from the
