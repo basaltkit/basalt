@@ -1,6 +1,6 @@
 # @basaltkit/auth
 
-Complete authentication for Basalt applications: user registration and login, JWT tokens with secure renewal, sessions, email verification, password recovery, two-factor authentication (MFA/TOTP), and API keys — all with ready-to-use HTTP routes.
+Complete authentication for Basalt applications: user registration and login, JWT tokens with secure renewal, sessions, email verification, password recovery, two-factor authentication (MFA/TOTP), social login (Google, GitHub, or any OpenID Connect provider), and API keys — all with ready-to-use HTTP routes.
 
 You need this module whenever your application has users who log in.
 
@@ -10,7 +10,7 @@ When an application has user accounts, it needs to answer two questions on every
 
 `@basaltkit/auth` handles all of this for you. Passwords are never stored in plain text — only an irreversibly scrambled version (**hash**, using the scrypt algorithm). Login returns a pair of tokens: an **access token** (short-lived JWT, 15 minutes by default, sent with every request) and a **refresh token** (long-lived, 30 days, used only to obtain a new access token). If a refresh token is used twice — a typical sign of theft — the entire token "family" is automatically revoked.
 
-It also includes, with nothing extra to install: account lockout after too many failed attempts, email verification and password recovery via single-use links, MFA via authenticator app (Google Authenticator, etc.) with recovery codes, and API keys for programmatic access (scripts, integrations).
+It also includes, with nothing extra to install: account lockout after too many failed attempts, email verification and password recovery via single-use links, MFA via authenticator app (Google Authenticator, etc.) with recovery codes, social login (OAuth 2.0 / OpenID Connect), and API keys for programmatic access (scripts, integrations).
 
 ## Installation
 
@@ -162,6 +162,65 @@ Flow (all routes require login):
 3. From then on, `POST /auth/login` requires the extra `mfaCode` field (TOTP code or a recovery code). Correct password without a code → `AUTH_MFA_REQUIRED` error.
 4. `GET /auth/mfa/status` and `POST /auth/mfa/disable` (with `{ code }`) complete the cycle.
 
+### Social login (OAuth)
+
+Sign in with Google, GitHub, or any OpenID Connect provider via the OAuth 2.0
+authorization-code flow — no SDK, and cookieless (the CSRF `state` is HMAC-signed
+and stateless). Register `oauthPlugin` with your providers and `oauthRoutes` with
+your app's **base URL**:
+
+```ts
+import {
+  authPlugin, authRoutes, oauthPlugin, oauthRoutes, googleProvider, githubProvider,
+} from '@basaltkit/auth'
+import { fastifyPlugin } from '@basaltkit/fastify'
+
+createApp({
+  plugins: [
+    authPlugin({ users, secret: process.env.AUTH_SECRET! }),
+    oauthPlugin({
+      secret: process.env.AUTH_SECRET!, // signs the stateless `state`
+      providers: [
+        googleProvider({ clientId: env.GOOGLE_ID, clientSecret: env.GOOGLE_SECRET }),
+        githubProvider({ clientId: env.GITHUB_ID, clientSecret: env.GITHUB_SECRET }),
+      ],
+    }),
+    fastifyPlugin({
+      routes: [
+        ...authRoutes(),
+        // callbackBaseUrl is your app's BASE url — the module appends
+        // /auth/oauth/:provider/callback itself.
+        ...oauthRoutes({ callbackBaseUrl: 'https://app.example.com' }),
+      ],
+    }),
+  ],
+})
+```
+
+Two routes are added per provider:
+
+- `GET /auth/oauth/:provider` → 302 to the provider's consent screen.
+- `GET /auth/oauth/:provider/callback` → verifies the `state`, exchanges the code,
+  and logs the user in. Returns JSON `{ user, accessToken, refreshToken }`; pass
+  `successRedirect` to `oauthRoutes` to bounce the browser back to your SPA with
+  the tokens in the URL fragment instead.
+
+**Register the redirect URI with each provider exactly** as
+`${callbackBaseUrl}/auth/oauth/:provider/callback` — e.g.
+`https://app.example.com/auth/oauth/github/callback`. It must match
+character-for-character, or the provider rejects it with *"redirect_uri is not
+associated with this application"*.
+
+New accounts are created **passwordless** and a provider-verified email flips
+`emailVerified`. Accounts are matched by email, so only trust providers that
+return a **verified** address (Google and the built-in GitHub driver both do).
+`Auth.socialLogin(email)` is the underlying primitive for custom providers.
+
+**Enterprise SSO (OIDC):** any OpenID Connect IdP (Okta, Entra ID, Auth0,
+Keycloak…) plugs in via `oidcProvider({ clientId, clientSecret, authorizationUrl,
+tokenUrl, userinfoUrl })`, or let `discoverOidcProvider(issuerUrl, keys)` read the
+endpoints from the IdP's `.well-known/openid-configuration`.
+
 ### API keys
 
 For programmatic access (scripts, CI, integrations) without interactive login. A key has the format `mk_live_...`, is shown **only once** when created, and only its SHA-256 hash is stored.
@@ -254,12 +313,14 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
 | `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
 | `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | MFA state and verification. |
+| `socialLogin(email, { emailVerified? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; returns `{ user, tokens }`. |
 
 ### Ready-made routes
 
 - `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them.
 - `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (all require login; scoped to the current tenant/user).
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
+- `oauthRoutes({ callbackBaseUrl, successRedirect? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider.
 
 ### `apiKeysPlugin(options)` and the `ApiKeys` class
 
@@ -283,7 +344,9 @@ Options (`ApiKeysPluginOptions`):
 | `LoginThrottle` (`maxAttempts` def. 5, `windowMs` def. 15 min, `clock`) | Anti brute-force. |
 | `generateTotpSecret`, `totp`, `verifyTotp`, `otpauthUri`, `base32Encode`, `base32Decode` | TOTP primitives (RFC 6238). Advanced. |
 | `publicUser(user)` | Converts `AuthUser` → `PublicUser` (removes the hash). |
-| `AUTH`, `API_KEYS` | Injection tokens: `container.get(AUTH)` returns the `Auth` instance. |
+| `AUTH`, `API_KEYS`, `OAUTH` | Injection tokens: `container.get(AUTH)` returns the `Auth` instance; `OAUTH` returns the `OAuth` instance. |
+| `oauthPlugin`, `oauthRoutes` | Social-login plugin (`{ secret, providers }`) and its routes (`{ callbackBaseUrl, successRedirect? }`). |
+| `googleProvider`, `githubProvider`, `oidcProvider`, `discoverOidcProvider` | OAuth 2.0 / OpenID Connect providers. Each takes `{ clientId, clientSecret, scopes? }`. |
 | In-memory stores | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore` — dev/testing. |
 
 ### Exported errors
@@ -300,6 +363,9 @@ Options (`ApiKeysPluginOptions`):
 | `MfaRequiredError` / `MfaInvalidCodeError` / `MfaNotEnrolledError` | `AUTH_MFA_*` | 401/401/400 |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 |
+| `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 |
+| `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 |
 
 ## Common issues and solutions (FAQ)
 
@@ -316,6 +382,8 @@ Options (`ApiKeysPluginOptions`):
 **"429 AUTH_LOCKED in tests."** The throttle is active by default. In tests, pass `loginThrottle: false`.
 
 **"My API key doesn't work with authPlugin."** Correct: bearers prefixed with `mk_` are ignored by `authPlugin` and handled by `apiKeysPlugin` — register both.
+
+**"OAuth: redirect_uri is not associated with this application."** Your `callbackBaseUrl` must be the app's **base URL** (`https://app.example.com`), *not* the full callback path — the module appends `/auth/oauth/:provider/callback` itself. Passing the full callback URL doubles the path so it no longer matches what you registered. Register exactly `${callbackBaseUrl}/auth/oauth/:provider/callback` with the provider.
 
 ## How it connects to other modules
 
