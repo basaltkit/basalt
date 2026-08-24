@@ -1,5 +1,18 @@
 # @basaltkit/permissions
 
+## 1.1.0
+
+### Minor Changes
+
+- 978c5be: Add temporary permissions and delegation. `gate.grantTemporarily(userId,
+permissions, { ttlMs | expiresAt })` gives time-boxed access (break-glass,
+  short tasks) via a `TemporaryGrantStore`. `gate.delegate({ from, to, permissions,
+expiresAt? })` lets one user act with a subset of another's authority via a
+  `DelegationStore` — bounded at check time to the delegator's _direct_ permissions
+  (never lends more than the delegator has) and non-chaining (a delegatee can't
+  re-delegate authority it only holds by delegation). In-memory stores included;
+  both are opt-in via `GateOptions`.
+
 ## 1.0.5
 
 ### Patch Changes

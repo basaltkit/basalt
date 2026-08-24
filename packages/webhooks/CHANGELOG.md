@@ -1,5 +1,17 @@
 # @basaltkit/webhooks
 
+## 1.3.0
+
+### Minor Changes
+
+- 2031bfb: Add a durable, at-least-once integration-events bridge over the app's own
+  webhooks. `webhookOutboxPlugin({ events, store, intervalMs })` captures domain
+  events into a transactional outbox (from `@basaltkit/events`) and relays them to
+  webhook subscribers with retries — unlike `webhooksPlugin({ events })`, which is
+  fire-and-forget and loses events on failure or a crash. `webhookOutboxDispatch
+(webhooks)` is the underlying `OutboxDispatch` for manual wiring; resolve the
+  `OUTBOX` token to enqueue or flush yourself (e.g. from a queue worker).
+
 ## 1.2.0
 
 ### Minor Changes
@@ -11,8 +23,8 @@
 ### Minor Changes
 
 - Security hardening (SSRF + tenant scoping):
-  - **SSRF guard on delivery (HIGH).** The delivery URL is customer-supplied and was POSTed with no validation, so a tenant could point it at internal infrastructure — `http://169.254.169.254/` (cloud metadata), `localhost`, `10.x`/`192.168.x`/`172.16.x`, `[::1]`, etc. Every delivery is now validated first (`assertDeliverableUrl`): the scheme must be http(s), and the host must not be — or resolve to — a private, loopback, link-local, CGNAT, ULA or reserved address (the hostname is resolved and *every* returned address checked, catching a name pointed at an internal IP). Redirects are no longer followed (`redirect: 'manual'`) so a 3xx can't bounce into an internal address. A blocked URL fails immediately without retry. Opt out for trusted self-hosted internal delivery with `ssrf: { allowPrivateHosts: true }`, or disable entirely with `ssrf: false`. Exposes `assertDeliverableUrl`, `isPrivateIp`, `WebhookUrlBlockedError`.
-  - **Endpoints are bound to the registering tenant (MEDIUM).** `register` now stamps the current tenant (from context) onto the endpoint, so a tenant can no longer register a tenant-less endpoint that would receive *every* tenant's event payloads. A caller-supplied `tenantId` can't override the ambient one.
+  - **SSRF guard on delivery (HIGH).** The delivery URL is customer-supplied and was POSTed with no validation, so a tenant could point it at internal infrastructure — `http://169.254.169.254/` (cloud metadata), `localhost`, `10.x`/`192.168.x`/`172.16.x`, `[::1]`, etc. Every delivery is now validated first (`assertDeliverableUrl`): the scheme must be http(s), and the host must not be — or resolve to — a private, loopback, link-local, CGNAT, ULA or reserved address (the hostname is resolved and _every_ returned address checked, catching a name pointed at an internal IP). Redirects are no longer followed (`redirect: 'manual'`) so a 3xx can't bounce into an internal address. A blocked URL fails immediately without retry. Opt out for trusted self-hosted internal delivery with `ssrf: { allowPrivateHosts: true }`, or disable entirely with `ssrf: false`. Exposes `assertDeliverableUrl`, `isPrivateIp`, `WebhookUrlBlockedError`.
+  - **Endpoints are bound to the registering tenant (MEDIUM).** `register` now stamps the current tenant (from context) onto the endpoint, so a tenant can no longer register a tenant-less endpoint that would receive _every_ tenant's event payloads. A caller-supplied `tenantId` can't override the ambient one.
   - **`unregister` is tenant-scoped (MEDIUM, IDOR).** `WebhookStore.remove(id, tenantId?)` now only deletes when the tenant owns the endpoint; `unregister` passes the current tenant, so one tenant can't delete or (via upsert) hijack another's endpoint by id.
 
 ## 1.0.5
