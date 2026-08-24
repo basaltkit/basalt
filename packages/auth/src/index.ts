@@ -94,3 +94,26 @@ export {
   type OAuthRoutesOptions,
 } from './oauth-plugin.js'
 export { LoginThrottle, AccountLockedError, type LoginThrottleOptions } from './throttle.js'
+
+export {
+  WebAuthnService,
+  MemoryPasskeyStore,
+  MemoryWebAuthnChallengeStore,
+  WebAuthnChallengeError,
+  WebAuthnVerificationError,
+  PasskeyNotFoundError,
+  PasskeyClonedError,
+  type PasskeyCredential,
+  type PasskeyStore,
+  type WebAuthnChallengeStore,
+  type WebAuthnVerifier,
+  type VerifyRegistrationInput,
+  type VerifiedRegistration,
+  type VerifyAuthenticationInput,
+  type VerifiedAuthentication,
+  type WebAuthnConfig,
+  type WebAuthnServiceOptions,
+  type RegistrationOptions,
+  type AuthenticationOptions,
+} from './webauthn.js'
+export { webauthnPlugin, WEBAUTHN, type WebAuthnPluginOptions } from './webauthn-plugin.js'

@@ -162,6 +162,91 @@ Flow (all routes require login):
 3. From then on, `POST /auth/login` requires the extra `mfaCode` field (TOTP code or a recovery code). Correct password without a code → `AUTH_MFA_REQUIRED` error.
 4. `GET /auth/mfa/status` and `POST /auth/mfa/disable` (with `{ code }`) complete the cycle.
 
+### Passkeys — WebAuthn (`webauthnPlugin`)
+
+Passkeys let users sign in with Face ID / Touch ID / a security key — no password.
+The framework drives the whole **ceremony** (challenges, browser options, credential
+storage, single-use challenges, the clone-detection counter check) and delegates
+only the **cryptographic verification** to a small `WebAuthnVerifier` you implement
+over [`@simplewebauthn/server`](https://simplewebauthn.dev) — so `@basaltkit/auth`
+never depends on a WebAuthn crypto library.
+
+```ts
+import { webauthnPlugin, type WebAuthnVerifier } from '@basaltkit/auth'
+import {
+  verifyRegistrationResponse,
+  verifyAuthenticationResponse,
+} from '@simplewebauthn/server'
+
+const verifier: WebAuthnVerifier = {
+  async verifyRegistration(input) {
+    const v = await verifyRegistrationResponse({
+      response: input.response as never,
+      expectedChallenge: input.expectedChallenge,
+      expectedOrigin: input.expectedOrigin,
+      expectedRPID: input.expectedRpId,
+      requireUserVerification: input.requireUserVerification,
+    })
+    if (!v.verified || !v.registrationInfo) return { verified: false }
+    const { credential } = v.registrationInfo
+    return {
+      verified: true,
+      credential: {
+        id: credential.id,
+        publicKey: Buffer.from(credential.publicKey).toString('base64url'),
+        counter: credential.counter,
+        transports: input.response && (input.response as any).response?.transports,
+      },
+    }
+  },
+  async verifyAuthentication(input) {
+    const v = await verifyAuthenticationResponse({
+      response: input.response as never,
+      expectedChallenge: input.expectedChallenge,
+      expectedOrigin: input.expectedOrigin,
+      expectedRPID: input.expectedRpId,
+      requireUserVerification: input.requireUserVerification,
+      credential: {
+        id: input.credential.id,
+        publicKey: Buffer.from(input.credential.publicKey, 'base64url'),
+        counter: input.credential.counter,
+      },
+    })
+    return { verified: v.verified, newCounter: v.authenticationInfo?.newCounter ?? input.credential.counter }
+  },
+}
+
+app.use(webauthnPlugin({
+  config: { rpId: 'example.com', rpName: 'Example', origin: 'https://example.com' },
+  verifier,
+  // credentials / challenges default to in-memory — pass durable stores in prod
+}))
+```
+
+Then drive the four steps from your routes, resolving the service from the `WEBAUTHN`
+token. The **sessionKey** ties a challenge to the current session (use the user id,
+or a session id for logged-out login):
+
+```ts
+import { WEBAUTHN } from '@basaltkit/auth'
+const passkeys = container.get(WEBAUTHN)
+
+// Register a passkey for a signed-in user
+const options = await passkeys.startRegistration(sessionKey, { id: user.id, name: user.email })
+// → send options to @simplewebauthn/browser's startRegistration(), post the result back:
+await passkeys.finishRegistration(sessionKey, user.id, browserResponse, 'MacBook')
+
+// Sign in with a passkey (usernameless: omit the userId)
+const authOptions = await passkeys.startAuthentication(sessionKey)
+const { userId } = await passkeys.finishAuthentication(sessionKey, browserResponse)
+// → mint your session/JWT for userId as usual
+```
+
+`finishAuthentication` looks the credential up by id, verifies it, checks the
+signature counter **increased** (a non-increasing counter throws `PasskeyClonedError`),
+and persists the new counter. Use `passkeys.list(userId)` / `passkeys.remove(id)`
+for a "manage devices" screen.
+
 ### Social login (OAuth)
 
 Sign in with Google, GitHub, or any OpenID Connect provider via the OAuth 2.0
