@@ -387,7 +387,10 @@ finalize invoices server-side; the routes are deliberately read-only. Back the
 engine with a durable `InvoiceStore` in production — the default is in-memory.
 
 Render anywhere with `renderInvoiceText(invoice)` (receipts, emails) or
-`renderInvoiceHtml(invoice)` (self-contained, no external assets).
+`renderInvoiceHtml(invoice)` (self-contained, no external assets). For **PDF**, add
+[`@basaltkit/subscriptions-pdf`](https://www.npmjs.com/package/@basaltkit/subscriptions-pdf)
+and call `renderInvoicePdf(invoice, { businessName })` → a `Buffer` (keeps pdfkit
+out of the dependency-free core).
 
 ## Durable stores
 

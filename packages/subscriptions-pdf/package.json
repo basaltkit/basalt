@@ -1,0 +1,43 @@
+{
+  "name": "@basaltkit/subscriptions-pdf",
+  "version": "0.1.0",
+  "description": "Render @basaltkit/subscriptions invoices to PDF with pdfkit — a printable invoice from the same Invoice object, kept out of the dependency-free core.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pdfkit": "^0.15.0 || ^0.16.0 || ^0.17.0 || ^0.20.0"
+  },
+  "peerDependencies": {
+    "@basaltkit/subscriptions": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/subscriptions": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^22.15.0",
+    "@types/pdfkit": "^0.17.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  },
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zebedeu/basalt.git",
+    "directory": "packages/subscriptions-pdf"
+  },
+  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions-pdf#readme",
+  "bugs": "https://github.com/Zebedeu/basalt/issues",
+  "keywords": ["basalt", "subscriptions", "billing", "invoice", "pdf", "pdfkit"]
+}
