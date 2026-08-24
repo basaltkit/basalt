@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sse, isSseResponse, encodeSseEvent, driveSse, type SseSink } from '../src/index.js'
+import { sse, isSseResponse, encodeSseEvent, driveSse, sseProducerOf, type SseSink } from '../src/index.js'
 
 describe('encodeSseEvent', () => {
   it('encodes a bare data string', () => {
@@ -18,7 +18,9 @@ function mockSink() {
   let ended = false
   let closeListener: (() => void) | undefined
   const sink: SseSink = {
-    write: (f) => frames.push(f),
+    write: (f) => {
+      frames.push(f)
+    },
     end: () => { ended = true },
     onClose: (l) => { closeListener = l },
   }
@@ -53,5 +55,59 @@ describe('sse() + driveSse', () => {
     expect(frames).toEqual(['data: one\n\n'])
     expect(seen).toEqual([true])
     expect(isEnded()).toBe(false) // client disconnected — we don't end() a gone connection
+  })
+})
+
+describe('encodeSseEvent — injection hardening (security)', () => {
+  it('H4: strips CR/LF from the id so it cannot inject extra SSE fields/events', () => {
+    const frame = encodeSseEvent({
+      event: 'tick',
+      id: '1\nevent: adminMessage\ndata: {"grantAdmin":true}',
+      data: 'ok',
+    })
+    // The forged fields must NOT appear as their own SSE lines — the injected
+    // newlines are stripped, flattening everything onto the single id line.
+    expect(frame.split('\n').some((l) => l.startsWith('event: adminMessage'))).toBe(false)
+    expect(frame).toContain('id: 1event: adminMessagedata: {"grantAdmin":true}') // flattened, inert
+    // exactly one event line and one id line
+    expect(frame.match(/^event: /gm)?.length).toBe(1)
+    expect(frame.match(/^id: /gm)?.length).toBe(1)
+  })
+
+  it('H4: strips CR/LF from a custom event name', () => {
+    const frame = encodeSseEvent({ event: 'a\nevent: b', data: 'x' })
+    expect(frame.match(/^event: /gm)?.length).toBe(1)
+  })
+
+  it('H4: re-prefixes every data line, splitting on \\r, \\n and \\r\\n', () => {
+    const frame = encodeSseEvent({ data: 'line1\rline2\nline3\r\nline4' })
+    const dataLines = frame.split('\n').filter((l) => l.startsWith('data: '))
+    expect(dataLines).toEqual(['data: line1', 'data: line2', 'data: line3', 'data: line4'])
+    // no bare (unprefixed) content line leaks through
+    for (const l of frame.replace(/\n\n$/, '').split('\n')) {
+      expect(l === '' || l.includes(': ')).toBe(true)
+    }
+  })
+})
+
+describe('SSE backpressure (security)', () => {
+  it('M4: send() returns false when the sink signals a full buffer', async () => {
+    const results: boolean[] = []
+    const resp = sse((stream) => {
+      results.push(stream.send({ data: 1 }))
+      results.push(stream.send({ data: 2 }))
+    })
+    const frames: string[] = []
+    let n = 0
+    const sink: SseSink = {
+      write: (f) => {
+        frames.push(f)
+        return ++n < 2 // first write ok, second signals saturation
+      },
+      end: () => {},
+      onClose: () => {},
+    }
+    await driveSse(sseProducerOf(resp), sink)
+    expect(results).toEqual([true, false])
   })
 })

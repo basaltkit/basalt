@@ -18,8 +18,13 @@ export interface SseEvent {
 }
 
 export interface SseStream {
-  /** Send an event (or a bare data string). No-op once closed. */
-  send(event: SseEvent | string): void
+  /**
+   * Send an event (or a bare data string). Returns `false` if the stream is
+   * closed OR the transport's write buffer is full — a backpressure signal a
+   * producer should honour (await/slow down) to avoid unbounded memory growth
+   * with a slow client. No-op once closed.
+   */
+  send(event: SseEvent | string): boolean
   /** End the stream. */
   close(): void
   readonly closed: boolean
@@ -49,14 +54,28 @@ export function sseProducerOf(value: SseResponse): SseProducer {
 }
 
 /** Encode one event into the `text/event-stream` wire format. */
+/**
+ * Strip CR/LF/NUL from a single-line SSE field (`event`, `id`). Newlines there
+ * would let a value inject additional SSE fields or whole events (event-stream
+ * response splitting) — the spec forbids them, so we drop them defensively.
+ */
+function sseField(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\r\n\u0000]/g, '')
+}
+
 export function encodeSseEvent(event: SseEvent | string): string {
-  if (typeof event === 'string') return `data: ${event}\n\n`
   const lines: string[] = []
-  if (event.event) lines.push(`event: ${event.event}`)
-  if (event.id) lines.push(`id: ${event.id}`)
-  if (event.retry !== undefined) lines.push(`retry: ${Math.round(event.retry)}`)
-  const data = typeof event.data === 'string' ? event.data : JSON.stringify(event.data)
-  for (const line of String(data).split('\n')) lines.push(`data: ${line}`)
+  if (typeof event !== 'string') {
+    if (event.event) lines.push(`event: ${sseField(event.event)}`)
+    if (event.id) lines.push(`id: ${sseField(event.id)}`)
+    if (event.retry !== undefined) lines.push(`retry: ${Math.round(event.retry)}`)
+  }
+  const payload = typeof event === 'string' ? event : event.data
+  const data = typeof payload === 'string' ? payload : JSON.stringify(payload)
+  // Split on every SSE line terminator (\r\n, \r, or \n) and re-prefix each line
+  // with `data:` — a bare \r in the payload must not leak an unprefixed line.
+  for (const line of String(data).split(/\r\n|\r|\n/)) lines.push(`data: ${line}`)
   return `${lines.join('\n')}\n\n`
 }
 
@@ -70,7 +89,12 @@ export const SSE_HEADERS: Record<string, string> = {
 
 /** A transport an adapter provides — where frames are written and how disconnects arrive. */
 export interface SseSink {
-  write(frame: string): void
+  /**
+   * Write a frame. Return `false` when the underlying buffer is full (Node's
+   * `res.write` convention) so `send` can surface backpressure; returning
+   * `void` is treated as "written, no pressure".
+   */
+  write(frame: string): boolean | void
   end(): void
   onClose(listener: () => void): void
 }
@@ -92,7 +116,8 @@ export async function driveSse(producer: SseProducer, sink: SseSink): Promise<vo
 
   const stream: SseStream = {
     send(event) {
-      if (!closed) sink.write(encodeSseEvent(event))
+      if (closed) return false
+      return sink.write(encodeSseEvent(event)) !== false
     },
     close() {
       if (!closed) {

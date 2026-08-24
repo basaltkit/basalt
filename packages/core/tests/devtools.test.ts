@@ -55,3 +55,19 @@ describe('dependency graph', () => {
     expect(mermaid).toContain('n_A --> n_B')
   })
 })
+
+describe('renderDependencyGraph — label injection hardening (security)', () => {
+  it('neutralizes special chars so a token name cannot break out of the Mermaid node or inject HTML', () => {
+    const graph = {
+      nodes: [{ token: 'svc"] click evil<img src=x onerror=alert(1)>', lifetime: 'singleton' as const }],
+      edges: [],
+    }
+    const out = renderDependencyGraph(graph)
+    // No raw quote/bracket/angle that would terminate the label or open a tag.
+    const label = out.split('\n').find((l) => l.includes('n_svc'))!
+    expect(label).not.toContain('"] ')
+    expect(label).not.toContain('<img')
+    expect(label).not.toContain('onerror=alert(1)>')
+    expect(label).toContain('#60;') // '<' rendered as an inert numeric entity
+  })
+})

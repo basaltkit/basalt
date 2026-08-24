@@ -137,3 +137,60 @@ describe('WebAuthnService — authentication', () => {
     )
   })
 })
+
+describe('WebAuthnService — security hardening (audit remediation)', () => {
+  it('H1: refuses to bind a passkey to a user other than the challenge subject', async () => {
+    // Challenge issued for the attacker (u-att), finished with the victim's id.
+    const { service } = build(fakeVerifier())
+    const { WebAuthnSubjectMismatchError } = await import('../src/index.js')
+    await service.startRegistration('sess', { id: 'u-att', name: 'att@x.io' })
+    await expect(service.finishRegistration('sess', 'victim', { id: 'cred-1' })).rejects.toBeInstanceOf(
+      WebAuthnSubjectMismatchError,
+    )
+  })
+
+  it('M1: never overwrites an already-registered credential id', async () => {
+    const { PasskeyExistsError } = await import('../src/index.js')
+    const { service } = build(fakeVerifier())
+    await service.startRegistration('s1', { id: 'u1', name: 'a' })
+    await service.finishRegistration('s1', 'u1', { id: 'cred-1' }) // stores cred-1 → u1
+    // A second registration (even for the same user) whose authenticator reports
+    // the same credential id must be rejected, not silently rebind/clobber.
+    await service.startRegistration('s2', { id: 'u1', name: 'a' })
+    await expect(service.finishRegistration('s2', 'u1', { id: 'cred-1' })).rejects.toBeInstanceOf(
+      PasskeyExistsError,
+    )
+  })
+
+  it('a registration challenge cannot be consumed by the authentication ceremony (namespaced)', async () => {
+    const { service } = build(fakeVerifier())
+    await service.startRegistration('shared', { id: 'u1', name: 'a' })
+    // No auth challenge was issued under 'shared' → finishAuthentication must fail closed.
+    await expect(service.finishAuthentication('shared', { id: 'cred-1' })).rejects.toThrow()
+  })
+
+  it('M3: expired challenges are purged and never accumulate', async () => {
+    let clock = 1000
+    const store = new MemoryWebAuthnChallengeStore({ now: () => clock, maxEntries: 5 })
+    // save 5 short-lived entries, then advance time past expiry and save one more.
+    for (let i = 0; i < 5; i++) await store.save(`k${i}`, { challenge: `c${i}` }, clock + 100)
+    clock = 2000 // everything above is now expired
+    await store.save('fresh', { challenge: 'c-fresh' }, clock + 100)
+    // The expired entries were purged on save, so the fresh one is retained and valid.
+    expect(await store.take('fresh')).toEqual({ challenge: 'c-fresh' })
+    expect(await store.take('k0')).toBeNull()
+  })
+
+  it('rejects a non-string credential id without consuming nothing dangerous', async () => {
+    const { service } = await (async () => {
+      const ctx = build(fakeVerifier())
+      await ctx.service.startRegistration('r', { id: 'u1', name: 'a' })
+      await ctx.service.finishRegistration('r', 'u1', { id: 'cred-1' })
+      return ctx
+    })()
+    await service.startAuthentication('l', 'u1')
+    await expect(service.finishAuthentication('l', { id: { evil: true } })).rejects.toBeInstanceOf(
+      PasskeyNotFoundError,
+    )
+  })
+})

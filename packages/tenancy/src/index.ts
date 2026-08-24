@@ -299,8 +299,11 @@ function pickScalars(tenant: Tenant): Record<string, string | number | boolean> 
 export {
   CustomDomains,
   MemoryDomainStore,
+  normalizeDomain,
+  findByVerifiedDomain,
   DomainTakenError,
   DomainNotFoundError,
+  DomainForbiddenError,
   type CustomDomain,
   type DomainStore,
   type DnsVerification,
