@@ -108,6 +108,40 @@ Raramente escreves isto à mão — usa `MemoryTenantSource` em dev, ou uma sour
 em produção (ambas mostradas abaixo). Só implementa a interface tu mesmo quando os
 tenants já vivem numa tabela que possuis.
 
+## Domínios custom (verificados)
+
+O `domainResolver()` mapeia `app.acme.com → { domain }` e o `findByDomain` carrega o
+tenant. Mas não podes deixar um tenant *reclamar* um domínio que não é dele. O
+`CustomDomains` trata disso: regista um domínio (não verificado), prova a posse com
+um registo DNS TXT, e só os domínios **verificados** resolvem.
+
+```ts
+import { CustomDomains } from '@basaltkit/tenancy'
+
+const domains = new CustomDomains({ store }) // store default: em memória
+
+// 1. O tenant adiciona o domínio → mostras-lhe o registo DNS a publicar
+const { dns } = await domains.add('acme', 'app.acme.com')
+// dns → { type: 'TXT', host: '_basalt-verify.app.acme.com', value: 'basalt-domain-verify=…' }
+
+// 2. Depois de o adicionar, verifica — um lookup DNS real confirma o token
+if (await domains.verify('app.acme.com')) { /* ativo */ }
+
+// 3. Liga os domínios verificados à tua source — os não verificados devolvem null
+const source: TenantSource = {
+  async find(id) { /* … */ },
+  async findByDomain(domain) {
+    const tenantId = await domains.tenantOf(domain) // null a menos que verificado
+    return tenantId ? this.find(tenantId) : null
+  },
+}
+```
+
+O `verify()` faz um lookup `TXT` real via `node:dns` (injetável nos testes). Fornece um
+`DomainStore` durável (com a forma de `MemoryDomainStore`) para persistir os domínios.
+O provisionamento do certificado TLS é infraestrutura — emite o certificado na tua
+plataforma (Cloudflare, Caddy, ACME) assim que o `verify()` devolver `true`.
+
 ## Criar tenants
 
 A forma de criares um tenant depende do backend.
