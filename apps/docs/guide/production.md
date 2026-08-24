@@ -120,6 +120,40 @@ With `replicas: []` it returns the primary unchanged, so the same wiring runs in
 dev and in a single-node deploy. Applying `tenancyExtension()`? Extend the
 primary **and** each replica, then wrap the extended clients. (TLS/connection
 details are your database provider's; Basalt only routes the calls.)
+## Sharding the database
+
+Read replicas scale reads; **sharding scales writes and storage** by spreading
+tenants across several databases. `ShardRouter` maps a tenant id to a shard with
+a stable hash — a tenant's data always lands on the same database:
+
+```ts
+import { PrismaClient } from '@prisma/client'
+import { prismaPlugin, ShardRouter } from '@basaltkit/prisma'
+
+const shards = new ShardRouter({
+  shards: [
+    new PrismaClient({ datasourceUrl: process.env.SHARD_0_URL }),
+    new PrismaClient({ datasourceUrl: process.env.SHARD_1_URL }),
+    new PrismaClient({ datasourceUrl: process.env.SHARD_2_URL }),
+  ],
+})
+
+app.use(prismaPlugin({ shards }))
+// each request's tenant is routed to its shard; db() reads the right one
+```
+
+Shard clients are **long-lived and shared** by all the tenants that hash to them
+(unlike the per-tenant pool, nothing is evicted). For cross-shard work — a
+migration, a platform-wide report — fan out over `shards.all()`:
+
+```ts
+await Promise.all(shards.all().map((db) => db.$executeRawUnsafe(migrationSql)))
+```
+
+Sharding is for **scale-out**, not isolation — for one-database-per-tenant use
+`prismaPlugin({ forTenant })` instead. Changing `shards.length` re-maps keys, so
+plan a migration before you resize; pass a custom `hash` if you need consistent
+hashing to minimise reshuffling.
 
 ## Graceful shutdown
 

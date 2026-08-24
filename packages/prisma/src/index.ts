@@ -6,6 +6,7 @@ import {
   tryCtx,
 } from '@basaltkit/core'
 import { TenantClientPool } from './pool.js'
+import type { ShardRouter } from './sharding.js'
 import { schemaUrl, tenantSchema } from './schema.js'
 
 export {
@@ -17,6 +18,12 @@ export {
 } from './extension.js'
 export { TenantClientPool, type TenantClientPoolOptions } from './pool.js'
 export { readReplica, type ReadReplicaOptions } from './replicas.js'
+export {
+  ShardRouter,
+  fnv1aShard,
+  type ShardHash,
+  type ShardRouterOptions,
+} from './sharding.js'
 export {
   rlsPolicySql,
   setTenantConfigSql,
@@ -100,6 +107,17 @@ export interface PrismaPluginOptions<TClient = unknown> {
     /** Schema name prefix. Default: 'tenant_'. */
     prefix?: string
   }
+  /**
+   * Sharding mode: a fixed set of databases, routed by tenant id. Shard clients
+   * are long-lived and shared by many tenants (no eviction) — use for scale-out,
+   * not database-per-tenant isolation.
+   */
+  shards?: ShardRouter<TClient>
+  /**
+   * Low-level escape hatch: resolve the client for a tenant yourself, bypassing
+   * the pool. `shards` is sugar over this. Called per request/switch.
+   */
+  resolveClient?: (tenantId: string) => TClient | Promise<TClient>
   /** Eviction callback for the per-tenant pool (e.g. client.$disconnect()). */
   destroy?: (client: TClient, tenantId: string) => void | Promise<void>
   /** Max simultaneously open per-tenant clients. Default: 10 */
@@ -140,7 +158,12 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         container.singleton(DB_POOL, () => pool as TenantClientPool<unknown>)
       }
 
+      const resolveClient =
+        options.resolveClient ??
+        (options.shards ? (tenantId: string) => options.shards!.for(tenantId) : undefined)
+
       const clientFor = async (tenantId: string | undefined): Promise<unknown> => {
+        if (resolveClient && tenantId !== undefined) return resolveClient(tenantId)
         if (pool) return tenantId === undefined ? options.client : pool.get(tenantId)
         return options.client
       }
@@ -165,6 +188,13 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
     },
     async shutdown({ container }) {
       if (container.has(DB_POOL)) await container.get(DB_POOL).destroyAll()
+      if (options.shards) {
+        await Promise.all(
+          options.shards
+            .all()
+            .map((c) => (c as { $disconnect?: () => Promise<void> }).$disconnect?.()),
+        )
+      }
       const client = container.has(DB) ? (container.get(DB) as { $disconnect?: () => Promise<void> }) : undefined
       await client?.$disconnect?.()
     },
