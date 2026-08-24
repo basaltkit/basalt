@@ -190,7 +190,50 @@ O scaffold `--ui` faz tudo isto por ti. A integrar à mão? Segue [ui.shadcn.com
 
 ## Dashboards
 
-O [`@basaltkit/dashboard`](/pt/reference/packages) compõe uma visão geral a partir dos teus dados — `defineDashboard` com secções de métricas/auditoria/fila, métricas de billing (`computeBillingMetrics`, `churnRate`) e resumos de fila — renderizados pelos mesmos componentes shadcn.
+O [`@basaltkit/dashboard`](/reference/packages/dashboard) compõe uma visão geral a partir dos teus dados — `defineDashboard` com secções de métricas/auditoria/fila, métricas de billing (`computeBillingMetrics`, `churnRate`) e resumos de fila — renderizados pelos mesmos componentes shadcn.
+
+### Analytics — tendências, não só snapshots
+
+O `computeBillingMetrics` é um snapshot num instante; o `mrrMovement` transforma
+**dois** snapshots no **MRR bridge** de SaaS — como a receita mudou, decomposta:
+
+```ts
+import { mrrMovement, growth } from '@basaltkit/dashboard'
+
+const m = mrrMovement(subsMesPassado, subsEsteMes, plans)
+// { new, reactivation, expansion, contraction, churned, net, previousMrr, currentMrr }
+// new + reactivation + expansion − contraction − churned === net
+
+const g = growth(metricasMesPassado, metricasEsteMes)
+g.mrr // { previous, current, delta, pct }  → seta cima/baixo + "+22%" num card de KPI
+```
+
+Os snapshots fazem match por `billableId`, por isso dás-lhe dois `subscriptions.all()`
+tirados em momentos diferentes (persiste um snapshot mensal, ou faz diff de um
+guardado). Tudo é puro e browser-safe.
+
+### Branding white-label
+
+A vender o painel a outras empresas? Cada tenant traz o seu próprio nome de produto,
+logo e cores sobre um brand default:
+
+```ts
+import { resolveBranding, brandingStyleSheet, defineDashboard } from '@basaltkit/dashboard'
+
+const brand = await resolveBranding(brandingStore, tenantId) // merged sobre o teu default
+const dashboard = defineDashboard({ branding: brand, sections })
+dashboard.title // o nome de produto do tenant
+
+// injeta as cores do brand como CSS custom properties no <head> do shell:
+`<style>${brandingStyleSheet(brand)}</style>` // :root { --brand-primary: … }
+```
+
+O `resolveBranding` faz deep-merge, por isso um tenant que sobrescreve uma cor mantém
+o resto do teu tema. Nomes e valores são validados e o input inseguro é descartado (o
+CSS é injetado em `<style>`), por isso branding vindo do tenant é seguro — mesmo assim
+serve o shell sob uma CSP que restrinja estilos inline como defesa em profundidade.
+Emparelha com [domínios custom](/pt/guide/tenancy) por tenant: resolve o tenant do
+domínio, depois o brand do tenant.
 
 ## Que abordagem de UI?
 

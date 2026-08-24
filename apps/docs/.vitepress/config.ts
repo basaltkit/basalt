@@ -125,6 +125,7 @@ export default defineConfig({
                 { text: 'Pagamentos por referência', link: '/pt/guide/reference-payments' },
                 { text: 'Feature Flags', link: '/pt/guide/feature-flags' },
                 { text: 'Webhooks', link: '/pt/guide/webhooks' },
+                { text: 'Notifications', link: '/pt/guide/notifications' },
               ],
             },
             {
@@ -244,6 +245,7 @@ export default defineConfig({
             { text: 'Reference & mobile-money payments', link: '/guide/reference-payments' },
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
+                { text: 'Notifications', link: '/guide/notifications' },
           ],
         },
         {
