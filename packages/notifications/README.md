@@ -90,6 +90,53 @@ const report = await notifier.notify(bruno, InvoicePaid, { number: 'INV-8' })
 // report.skipped === ['mail'] — only receives in-app
 ```
 
+### Persistable preferences (per notification × channel)
+
+`channelPreferences` above is inline on the recipient object. For **durable,
+finer-grained** opt-outs, enable `NotificationPreferences` (backed by a
+`PreferenceStore`): a user can silence a specific notification on a specific
+channel, and the **most-specific** preference wins.
+
+```ts
+import { notificationsPlugin, PREFERENCES } from '@basaltkit/notifications'
+
+notificationsPlugin({ preferences: true }) // in-memory; pass a store in production
+
+const prefs = container.get(PREFERENCES)
+await prefs.optOut('u2', { channel: 'sms' })                         // no SMS at all
+await prefs.optOut('u2', { notification: 'invoice.paid' })           // never for invoice.paid
+await prefs.optIn('u2', { notification: 'security.alert', channel: 'sms' }) // …but keep this one
+```
+
+The plugin passes these to the `Notifier` automatically, which **skips** any
+channel a user opted out of (reported in `skipped`). Everything is allowed by
+default; back the `PreferenceStore` with your database in production.
+
+### Digest (batching)
+
+Instead of sending immediately, hold notifications and flush them as one batch —
+a daily summary, say. Enable `digest: true` and use the `DIGEST` token:
+
+```ts
+import { notificationsPlugin, DIGEST, NOTIFIER } from '@basaltkit/notifications'
+
+notificationsPlugin({ digest: true }) // in-memory; pass a store in production
+
+const digest = container.get(DIGEST)
+await digest.collect(user, UsageAlert, { used: 900 }) // renders + holds, does NOT send
+
+// later, on a schedule (@basaltkit/scheduler), send each recipient's batch once:
+await digest.flush(async ({ recipientId, channel, items }) => {
+  await container.get(NOTIFIER).deliver({
+    notification: 'digest', channel, recipient: { id: recipientId }, message: { items },
+  })
+})
+```
+
+`collect()` renders through the notification's `via` and groups by
+recipient + channel; `flush()` sends each group once and clears it. You decide how
+to render the combined message.
+
 ### Dynamic channels per recipient
 
 `channels` can be a function that decides the channels based on the recipient and the data:
