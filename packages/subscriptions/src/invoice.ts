@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { BasaltError } from '@basaltkit/core'
 import { assertMinorUnits, formatMoney } from './money.js'
 import { planPrice, type BillingPeriod, type PlanDefinition } from './plans.js'
+import { assertValidCoupon, couponDiscount, type Coupon } from './coupon.js'
 
 /**
  * Invoices — the billing depth on top of `Subscriptions`. A subscription tells
@@ -63,6 +64,8 @@ export interface Invoice {
   /** Link to the `PaymentRecord.id` / gateway reference that settled it. */
   paymentId?: string
   gatewayRef?: string
+  /** Coupon applied to this invoice, if any. */
+  couponCode?: string
   notes?: string
   metadata?: Record<string, unknown>
 }
@@ -121,6 +124,8 @@ export interface DraftInvoiceInput {
   lineItems: NewLineItem[]
   /** Absolute discount in minor units. Clamped to [0, subtotal]. */
   discount?: number
+  /** A coupon whose discount is added to `discount` (computed on the subtotal). */
+  coupon?: Coupon
   /** Absolute tax (minor units) or a `{ rate }` (0.14 = 14% of subtotal − discount). */
   tax?: number | { rate: number }
   periodStart?: number
@@ -188,7 +193,12 @@ export class Invoices {
     const now = this.now()
     const lineItems = input.lineItems.map(toLine)
     const subtotal = lineItems.reduce((sum, l) => sum + l.amount, 0)
-    const discount = Math.min(Math.max(0, round(input.discount ?? 0)), subtotal)
+    let couponOff = 0
+    if (input.coupon) {
+      assertValidCoupon(input.coupon)
+      couponOff = couponDiscount(input.coupon, subtotal, input.currency)
+    }
+    const discount = Math.min(Math.max(0, round(input.discount ?? 0)) + couponOff, subtotal)
     const taxable = subtotal - discount
     const tax =
       input.tax === undefined
@@ -214,6 +224,7 @@ export class Invoices {
       ...(input.periodStart !== undefined ? { periodStart: input.periodStart } : {}),
       ...(input.periodEnd !== undefined ? { periodEnd: input.periodEnd } : {}),
       ...(input.dueInDays !== undefined ? { dueAt: now + input.dueInDays * 86_400_000 } : {}),
+      ...(input.coupon ? { couponCode: input.coupon.code } : {}),
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
       ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
     }
