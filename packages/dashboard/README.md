@@ -132,6 +132,45 @@ churnRate(5, 100) // 0.05  (5%)
 churnRate(3, 0)   // 0     (there were no customers at the start)
 ```
 
+### MRR movement & growth — `mrrMovement`, `growth`
+
+`computeBillingMetrics` is a **snapshot**; analytics is about *change over time*.
+Given two subscription snapshots — say last month's and this month's — `mrrMovement`
+decomposes the change in MRR into the standard SaaS bridge:
+
+```ts
+import { mrrMovement } from '@basaltkit/dashboard'
+
+const m = mrrMovement(lastMonthSubs, thisMonthSubs, plans)
+// {
+//   previousMrr: 500, currentMrr: 610,
+//   new: 90,          // billables paying now that never appeared before
+//   reactivation: 20, // billables that existed but weren't paying, now are
+//   expansion: 40,    // upgrades among already-paying billables
+//   contraction: 20,  // downgrades that still pay something
+//   churned: 20,      // billables that stopped paying entirely
+//   net: 110,         // currentMrr − previousMrr
+// }
+```
+
+The buckets always balance: `new + reactivation + expansion − contraction − churned === net`.
+Yearly prices are normalized to monthly; trials and `custom` plans contribute 0 —
+consistent with `computeBillingMetrics`. Snapshots are matched by `billableId`
+(the tenant id), so you feed it two calls to `subscriptions.all()` taken at
+different times (persist a monthly snapshot, or diff against a stored one).
+
+For simple period-over-period deltas on the headline numbers, `growth` (and the
+`change(a, b)` primitive) give you `{ previous, current, delta, pct }` — ready for
+an up/down arrow and a percentage on each KPI card:
+
+```ts
+import { growth } from '@basaltkit/dashboard'
+
+const g = growth(lastMonthMetrics, thisMonthMetrics)
+g.mrr    // { previous: 500, current: 610, delta: 110, pct: 0.22 }  → "MRR +22%"
+g.active // { previous: 40, current: 44, delta: 4, pct: 0.1 }
+```
+
 ### Queue summary — `summarizeQueue`
 
 A **job queue** is where the application stores tasks to run in the background (sending emails, generating reports…). Each task is in a state: waiting, active, completed, failed, delayed. This function fills in missing states with 0, sums the total, and marks the queue as healthy when there are no failures:
