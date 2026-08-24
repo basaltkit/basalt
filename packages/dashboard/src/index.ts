@@ -36,3 +36,15 @@ export {
   type MetricsGrowth,
   type Change,
 } from './analytics.js'
+
+export {
+  DEFAULT_BRANDING,
+  MemoryBrandingStore,
+  mergeBranding,
+  resolveBranding,
+  brandingCssVars,
+  brandingStyleSheet,
+  type Branding,
+  type BrandColors,
+  type BrandingStore,
+} from './branding.js'

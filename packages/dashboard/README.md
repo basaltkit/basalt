@@ -202,6 +202,46 @@ summarizeAudit([
 
 Accepts any array of objects with `event: string` — entries from `@basaltkit/audit` work directly.
 
+### White-label branding — `Branding`, `resolveBranding`
+
+Selling your admin panel to other companies? Each tenant can ship their own
+product name, logo and colours over a default brand. `Branding` is plain data;
+`resolveBranding` merges a tenant's overrides on top of your default:
+
+```ts
+import { MemoryBrandingStore, resolveBranding, brandingStyleSheet } from '@basaltkit/dashboard'
+
+const brands = new MemoryBrandingStore() // or a durable store
+await brands.set('acme', {
+  productName: 'Acme Console',
+  logoUrl: 'https://acme.example/logo.svg',
+  colors: { primary: '#5b21b6', accent: '#f59e0b' },
+  supportEmail: 'help@acme.example',
+})
+
+const brand = await resolveBranding(brands, currentTenantId) // merged over the default
+```
+
+Feed the brand into your `Dashboard` — the title defaults to the product name —
+and inject its colours as CSS custom properties (`--brand-primary`, `--brand-accent`,
+`--brand-bg`, `--brand-fg`, plus any `cssVars`) the shell reads:
+
+```ts
+import { defineDashboard, brandingStyleSheet } from '@basaltkit/dashboard'
+
+const dashboard = defineDashboard({ branding: brand, sections })
+dashboard.title // 'Acme Console'
+
+// in the page <head>:
+`<style>${brandingStyleSheet(brand)}</style>`
+// :root { --brand-primary: #5b21b6; --brand-accent: #f59e0b; }
+```
+
+`resolveBranding` deep-merges colours and `cssVars`, so a tenant that overrides
+only `--brand-primary` keeps every other token from your default theme. It pairs
+naturally with per-tenant **custom domains** (`@basaltkit/tenancy`): resolve the
+tenant from the domain, then its brand from the tenant.
+
 ### Panel structure — `defineDashboard` and sections
 
 Four section builders, all returning a `Section` object:
