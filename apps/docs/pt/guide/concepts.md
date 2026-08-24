@@ -54,6 +54,27 @@ grafo de dependências é explícito, e o tree-shaking funciona.
 const mailer = container.get(MAILER) // totalmente tipado, sem reflexão
 ```
 
+## Inspecionar o container (devtools)
+
+Dois auxiliares leves para perceber uma app já montada:
+
+```ts
+import { renderDependencyGraph } from '@basaltkit/core'
+
+container.describe()      // cada binding alcançável: token, lifetime, construído?
+// → [{ token: 'auth', lifetime: 'singleton', instantiated: true }, …]
+
+container.enableGraph()   // opt-in; zero overhead quando desligado
+// … arranca a app / corre alguns pedidos …
+const graph = container.dependencyGraph()  // { nodes, edges } observados até agora
+console.log(renderDependencyGraph(graph))  // Mermaid — cola em qualquer viewer
+```
+
+O `describe()` é um snapshot estático; o grafo de dependências é **passivo** —
+grava as resoluções reais `A depende de B` desde o `enableGraph()` e nunca força
+construção eager. Útil para detetar um serviço que puxa algo que não devia, ou só
+para ver como o container encaixa.
+
 ## Contexto (AsyncLocalStorage)
 
 O `ctx()` devolve o contexto de pedido/job ativo em qualquer ponto da call stack
