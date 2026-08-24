@@ -115,6 +115,42 @@ endpoints **globais**. Faz dispatch manual com um `tenantId` explícito quando
 precisares de scoping por tenant fora do caminho do pedido.
 :::
 
+## Eventos de integração duráveis (outbox)
+
+O auto-dispatch acima é **fire-and-forget** — uma entrega falhada ou um crash
+entre "committed" e "delivered" perde o evento. Para entrega garantida usa o
+**outbox**: os eventos de domínio são primeiro escritos num store transacional e
+depois um relay publica-os aos subscritores com retries (**at-least-once**).
+Requer o `eventsPlugin`.
+
+```ts
+import { webhooksPlugin, webhookOutboxPlugin, webhookOutboxDispatch, WEBHOOKS } from '@basaltkit/webhooks'
+import { eventsPlugin, OUTBOX } from '@basaltkit/events'
+
+createApp({
+  plugins: [
+    eventsPlugin(),
+    webhooksPlugin({ store }),               // sem `events:` aqui — o outbox captura-os
+    webhookOutboxPlugin({
+      events: ['invoice.*', 'user.created'], // padrões a capturar (default '**')
+      // store: new MyDurableOutboxStore(),  // durável em produção (default em memória)
+      intervalMs: 5000,                      // poll do relay; 0 = flush manual via OUTBOX
+    }),
+  ],
+})
+```
+
+Os subscritores têm de ser **idempotentes** — uma falha parcial de entrega
+reenvia a entrada inteira (os payloads de webhook levam um id para dedup).
+Resolve o token `OUTBOX` para fazer o relay tu mesmo, ex. de um worker de queue:
+
+```ts
+await container.get(OUTBOX).flush(webhookOutboxDispatch(container.get(WEBHOOKS)))
+```
+
+Suporta o outbox com um `OutboxStore` durável (a tua BD) para não perder nada
+entre reinícios — o objetivo do padrão.
+
 ## Assinatura e verificação
 
 Cada entrega carrega `X-Basalt-Signature: t=<unix>,v1=<hmac-sha256(t.body)>` — o

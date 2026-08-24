@@ -114,6 +114,42 @@ request (e.g. in a job) there's no tenant in context, so the event reaches only
 tenant scoping off the request path.
 :::
 
+## Durable integration events (outbox)
+
+Auto-dispatch above is **fire-and-forget** — a failed delivery or a crash between
+"committed" and "delivered" loses the event. For guaranteed delivery use the
+**outbox**: domain events are first written to a transactional store, then a relay
+publishes them to subscribers with retries (**at-least-once**). Requires
+`eventsPlugin`.
+
+```ts
+import { webhooksPlugin, webhookOutboxPlugin, webhookOutboxDispatch, WEBHOOKS } from '@basaltkit/webhooks'
+import { eventsPlugin, OUTBOX } from '@basaltkit/events'
+
+createApp({
+  plugins: [
+    eventsPlugin(),
+    webhooksPlugin({ store }),               // no `events:` here — the outbox captures them
+    webhookOutboxPlugin({
+      events: ['invoice.*', 'user.created'], // patterns to capture (default '**')
+      // store: new MyDurableOutboxStore(),  // durable in production (default in-memory)
+      intervalMs: 5000,                      // relay poll; 0 = flush manually via OUTBOX
+    }),
+  ],
+})
+```
+
+Subscribers must be **idempotent** — a partial delivery failure re-delivers the
+whole entry (webhook payloads carry an id for dedup). Resolve the `OUTBOX` token
+to relay yourself, e.g. from a queue worker instead of the timer:
+
+```ts
+await container.get(OUTBOX).flush(webhookOutboxDispatch(container.get(WEBHOOKS)))
+```
+
+Back the outbox with a durable `OutboxStore` (your DB) so nothing is lost across
+restarts — the whole point of the pattern.
+
 ## Signing & verification
 
 Each delivery carries `X-Basalt-Signature: t=<unix>,v1=<hmac-sha256(t.body)>` —
