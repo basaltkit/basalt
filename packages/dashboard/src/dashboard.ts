@@ -1,4 +1,5 @@
 import type { Resource } from '@basaltkit/admin'
+import { DEFAULT_BRANDING, type Branding } from './branding.js'
 
 export type SectionKind = 'metrics' | 'resource' | 'audit' | 'queue' | 'custom'
 
@@ -14,16 +15,20 @@ export interface Section {
 
 export interface DashboardConfig {
   title?: string
+  /** White-label branding; the title defaults to `branding.productName`. */
+  branding?: Branding
   sections: Section[]
 }
 
 /** The navigable model an admin shell (React, etc.) renders. */
 export class Dashboard {
   readonly title: string
+  readonly branding: Branding
   readonly sections: Section[]
 
   constructor(config: DashboardConfig) {
-    this.title = config.title ?? 'Admin'
+    this.branding = config.branding ?? DEFAULT_BRANDING
+    this.title = config.title ?? this.branding.productName
     this.sections = config.sections
   }
 
