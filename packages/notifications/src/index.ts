@@ -29,6 +29,12 @@ export {
   type InAppNotification,
   type InAppMessage,
   type MailChannelMessage,
+  SmsChannel,
+  whatsappChannel,
+  RecipientPhoneMissingError,
+  type SmsSender,
+  type SmsMessage,
+  type SmsChannelOptions,
 } from './channels.js'
 export {
   Notifier,

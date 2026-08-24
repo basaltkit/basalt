@@ -21,6 +21,8 @@ export class NotificationValidationError extends BasaltError {
 export interface Notifiable {
   id: string
   email?: string
+  /** Phone number (E.164, e.g. +244923...) — used by the sms/whatsapp channels. */
+  phone?: string
   /** Per-channel opt-out: `{ sms: false }` silences the sms channel. */
   channelPreferences?: Record<string, boolean>
   [key: string]: unknown
