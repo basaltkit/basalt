@@ -1,5 +1,29 @@
 # @basaltkit/prisma
 
+## 1.3.0
+
+### Minor Changes
+
+- 26ab7d8: Read replicas: `readReplica({ primary, replicas })` wraps a Prisma client so
+  model reads (`findMany`, `count`, `aggregate`, `$queryRaw`, …) round-robin
+  across read replicas while writes, transactions and `$executeRaw` stay on the
+  primary. It's a dependency-free `Proxy` — pass it straight to
+  `prismaPlugin({ client })`. `db().$primary` forces the primary for
+  read-your-writes right after a write. With no replicas it returns the primary
+  unchanged, so the same wiring runs in every environment.
+- 758ee6d: Horizontal sharding: `ShardRouter` maps a key (typically a tenant id) to one of
+  a fixed set of database clients with a deterministic FNV-1a hash — a tenant's
+  data always lives on the same shard. Wire it with `prismaPlugin({ shards })`,
+  which routes each request/tenancy switch to its shard client (long-lived, shared
+  by many tenants — no eviction) and disconnects every shard on shutdown. Also
+  adds a low-level `resolveClient` escape hatch and `router.all()` for cross-shard
+  migrations and fan-out reads.
+
+### Patch Changes
+
+- Updated dependencies [fd5b55c]
+  - @basaltkit/core@1.1.0
+
 ## 1.2.0
 
 ### Minor Changes
@@ -19,7 +43,6 @@
   Central/admin code that intentionally runs unscoped must now opt in explicitly
   with `tenancyExtension({ onMissingTenant: 'bypass' })`.
 
-
 ## 1.0.5
 
 ### Patch Changes
@@ -33,7 +56,7 @@
 
 ### Patch Changes
 
-- Add the `basalt prisma:sync` command — discovers installed @basaltkit/*-prisma packages and merges their models into your prisma/schema.prisma (interactive by default; --yes/--all non-interactive, --only=, --push/--migrate, --schema=). Exports prismaSyncCommand + extractSchemaBlocks.
+- Add the `basalt prisma:sync` command — discovers installed @basaltkit/\*-prisma packages and merges their models into your prisma/schema.prisma (interactive by default; --yes/--all non-interactive, --only=, --push/--migrate, --schema=). Exports prismaSyncCommand + extractSchemaBlocks.
 
 ## 1.0.0
 
