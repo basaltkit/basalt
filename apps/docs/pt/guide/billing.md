@@ -296,6 +296,36 @@ await invoices.markPaid(open.id, { paymentId: 'pay_123' }) // quando o gateway c
 filtra, ou usa-o só quando há excedente). `planLine()` lança para um preço
 `'custom'` (sales-led) — esses não têm valor self-serve.
 
+### Cupões e descontos
+
+Define um cupão — `percentOff` (0–100) ou um `amountOff` fixo (unidades menores +
+moeda), com `maxRedemptions` e expiração `redeemBy` opcionais — e depois aplica-o
+ao criar uma fatura:
+
+```ts
+import { Coupons } from '@basaltkit/subscriptions'
+
+const coupons = new Coupons()
+await coupons.define({ code: 'LAUNCH20', percentOff: 20, maxRedemptions: 100 })
+
+// valida + calcula (lança se desconhecido, expirado, esgotado, ou moeda errada)
+const { discount } = await coupons.quote('LAUNCH20', subtotalMinor, 'USD')
+
+const invoice = await invoices.draft({
+  billableId: tenantId,
+  currency: 'USD',
+  lineItems: [planLine('pro', plans.pro, 'monthly')],
+  coupon: { code: 'LAUNCH20', percentOff: 20 }, // somado a qualquer desconto explícito
+})
+// → invoice.discount reflete o cupão; invoice.couponCode = 'LAUNCH20'
+
+await coupons.redeem('LAUNCH20') // quando o pagamento tem sucesso, consome uma redenção
+```
+
+O `quote()` valida a redimibilidade **sem** consumir; o `redeem()` incrementa o
+contador. Um cupão de valor fixo só se aplica a faturas na sua própria moeda.
+Em produção, suporta o registo com um `CouponStore` durável (o padrão é em memória).
+
 ### Liquidar a partir de um webhook de pagamento
 
 As faturas não falam com os gateways. Quando o teu pagamento confirma (via

@@ -290,6 +290,37 @@ await invoices.markPaid(open.id, { paymentId: 'pay_123' }) // once the gateway c
 and filter, or use it only when over). `planLine()` throws for a `'custom'`
 (sales-led) price — those have no self-serve amount.
 
+### Coupons & discounts
+
+Define a coupon — `percentOff` (0–100) or a fixed `amountOff` (minor units +
+currency), with optional `maxRedemptions` and a `redeemBy` expiry — then apply it
+when drafting an invoice:
+
+```ts
+import { Coupons } from '@basaltkit/subscriptions'
+
+const coupons = new Coupons()
+await coupons.define({ code: 'LAUNCH20', percentOff: 20, maxRedemptions: 100 })
+
+// validate + compute (throws if unknown, expired, capped, or wrong currency)
+const { discount } = await coupons.quote('LAUNCH20', subtotalMinor, 'USD')
+
+const invoice = await invoices.draft({
+  billableId: tenantId,
+  currency: 'USD',
+  lineItems: [planLine('pro', plans.pro, 'monthly')],
+  coupon: { code: 'LAUNCH20', percentOff: 20 }, // added on top of any explicit discount
+})
+// → invoice.discount reflects the coupon; invoice.couponCode = 'LAUNCH20'
+
+await coupons.redeem('LAUNCH20') // once the charge succeeds, consume a redemption
+```
+
+`quote()` validates redeemability **without** consuming; `redeem()` increments
+the counter. A fixed-amount coupon only applies to invoices in its own currency.
+Back the registry with a durable `CouponStore` in production (the default is
+in-memory).
+
 ### Settling from a payment webhook
 
 Invoices don't talk to gateways. When your payment confirms (via `handleWebhook`
