@@ -57,6 +57,23 @@ route({
 })
 ```
 
+::: warning O `securityPlugin` bloqueia a UI de docs por omissão
+O `securityPlugin` (ligado por omissão no scaffold) mete um CSP de lock-down
+(`default-src 'none'`) que bloqueia o CDN e os scripts inline que esta página
+precisa, por isso a UI aparece em branco. Sobrepõe o CSP **só para a rota
+`/docs`** — o handler corre depois do pre-hook de segurança, por isso o header
+dele vence e o resto da API continua bloqueado:
+
+```ts
+void reply.header(
+  'content-security-policy',
+  "default-src 'self'; script-src 'self' https://unpkg.com 'unsafe-inline'; " +
+    "style-src 'self' https://unpkg.com 'unsafe-inline'; img-src 'self' data:; " +
+    "font-src 'self' data:; connect-src 'self'",
+)
+```
+:::
+
 ## Gerar sem servir
 
 `generateOpenApi(routes, info)` é uma função pura — usa-a para escrever a spec
