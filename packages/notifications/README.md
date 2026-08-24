@@ -171,6 +171,49 @@ notificationsPlugin({ channels: [sms] })
 
 Then the notification just needs to include `'sms'` in `channels` and define `via.sms`.
 
+### Built-in SMS & WhatsApp channels
+
+You don't have to hand-roll the SMS channel — `SmsChannel` ships with the module.
+It delivers over a **provider-agnostic** `SmsSender`, so the framework never
+depends on Twilio, Vonage, MessageBird or any SDK; you implement one tiny method:
+
+```ts
+import { SmsChannel, whatsappChannel, notificationsPlugin } from '@basaltkit/notifications'
+import type { SmsSender } from '@basaltkit/notifications'
+
+const twilio: SmsSender = {
+  async send({ to, from, body }) {
+    await twilioClient.messages.create({ to, from, body })
+  },
+}
+
+notificationsPlugin({
+  channels: [
+    new SmsChannel(twilio, { from: '+15551234567' }),        // channel 'sms'
+    whatsappChannel(twilio, { from: 'whatsapp:+15551234567' }), // channel 'whatsapp'
+  ],
+})
+```
+
+The recipient's address comes from `recipient.phone` by default (add a `phone`
+field to your `Notifiable`); `whatsappChannel` reads `recipient.whatsapp ?? recipient.phone`.
+Point the notification's `via.sms` / `via.whatsapp` at a `{ body }` message:
+
+```ts
+const LowBalance = defineNotification({
+  name: 'wallet.low',
+  channels: ['sms', 'inApp'],
+  via: {
+    sms: (data) => ({ body: `Your balance is ${data.amount}. Top up to keep sending.` }),
+    inApp: (data) => ({ title: 'Low balance', body: `${data.amount} left` }),
+  },
+})
+```
+
+Both channels honour per-recipient opt-out through `channelPreferences`
+(`{ sms: false }`) exactly like `mail` and `inApp`. A recipient with no address
+is reported in `failed` — one channel failing never blocks the others.
+
 ### Notifying multiple recipients
 
 ```ts

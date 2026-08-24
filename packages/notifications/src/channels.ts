@@ -147,3 +147,80 @@ export class MailChannel implements NotificationChannel {
     await this.mailer.send(definition, { to: recipient.email })
   }
 }
+
+// ---------------------------------------------------------------- sms / whatsapp
+
+/**
+ * Provider-agnostic SMS/WhatsApp transport. Implement it over Twilio, Vonage,
+ * MessageBird, AppyPay… — the framework never depends on a provider SDK, the
+ * same way payment drivers stay outside the core.
+ */
+export interface SmsSender {
+  send(message: { to: string; from?: string; body: string }): Promise<void>
+}
+
+export interface SmsMessage {
+  body: string
+  /** Override the channel's default sender id for this one message. */
+  from?: string
+}
+
+export class RecipientPhoneMissingError extends BasaltError {
+  constructor(recipientId: string, channel: string) {
+    super(
+      'NOTIFICATION_PHONE_MISSING',
+      `Recipient "${recipientId}" has no address — cannot deliver on the ${channel} channel.`,
+    )
+  }
+}
+
+export interface SmsChannelOptions {
+  /** Channel name. Default 'sms'; use 'whatsapp' for the WhatsApp variant. */
+  name?: string
+  /** Default sender id (phone number / WhatsApp business number). */
+  from?: string
+  /** How to read the recipient's address. Default: `recipient.phone`. */
+  toAddress?: (recipient: Notifiable) => string | undefined
+}
+
+/**
+ * Delivers notifications over an {@link SmsSender}. Works for both SMS and
+ * WhatsApp — the only difference is the channel name and how the address is
+ * read, both configurable. Honours per-recipient opt-out via
+ * `channelPreferences` (e.g. `{ sms: false }`), like every channel.
+ */
+export class SmsChannel implements NotificationChannel {
+  readonly name: string
+  private readonly from: string | undefined
+  private readonly toAddress: (recipient: Notifiable) => string | undefined
+
+  constructor(
+    private readonly sender: SmsSender,
+    options: SmsChannelOptions = {},
+  ) {
+    this.name = options.name ?? 'sms'
+    this.from = options.from
+    this.toAddress = options.toAddress ?? ((recipient) => recipient.phone)
+  }
+
+  async send(recipient: Notifiable, message: unknown, _info: { notification: string }): Promise<void> {
+    const to = this.toAddress(recipient)
+    if (!to) throw new RecipientPhoneMissingError(recipient.id, this.name)
+    const sms = message as SmsMessage
+    const from = sms.from ?? this.from
+    await this.sender.send({ to, body: sms.body, ...(from ? { from } : {}) })
+  }
+}
+
+/**
+ * WhatsApp is the SMS channel named 'whatsapp'; addresses default to
+ * `recipient.whatsapp ?? recipient.phone`. Point your {@link SmsSender} at the
+ * provider's WhatsApp endpoint (e.g. Twilio's `whatsapp:` numbers).
+ */
+export function whatsappChannel(sender: SmsSender, options: SmsChannelOptions = {}): SmsChannel {
+  return new SmsChannel(sender, {
+    name: 'whatsapp',
+    toAddress: (recipient) => (recipient['whatsapp'] as string | undefined) ?? recipient.phone,
+    ...options,
+  })
+}
