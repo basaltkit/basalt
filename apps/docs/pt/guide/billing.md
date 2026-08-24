@@ -148,6 +148,34 @@ diferença entre "1000 chamadas de API por mês" e "1000 chamadas de API para
 sempre".
 :::
 
+### Uso medido e preços por escalões
+
+Cobra o consumo por escalões — `graduated` (cada unidade ao preço do escalão em
+que cai) ou `volume` (todas as unidades ao escalão em que o total aterra) — e
+transforma o uso registado numa linha de fatura:
+
+```ts
+import { meteredLine, tieredCost } from '@basaltkit/subscriptions'
+
+const price = {
+  mode: 'graduated' as const,
+  tiers: [
+    { upTo: 1000, unitAmount: 2 }, // primeiras 1.000 chamadas @ $0.02
+    { upTo: null, unitAmount: 1 }, // acima @ $0.01
+  ],
+}
+
+const line = meteredLine('api.calls', { units: 2_500, includedUnits: 1_000, price })
+// → uma linha para as 1.500 unidades faturáveis; tieredCost(price, 1500) = 2500 (¢)
+
+await invoices.draft({ billableId, currency: 'USD', lineItems: [line].filter(Boolean) })
+```
+
+O `includedUnits` (a franquia do plano) é subtraído primeiro; o `meteredLine`
+devolve `null` quando nada é faturável. Usa o `tieredCost(price, units)`
+diretamente para pré-visualizações ou rateio. Preços por escalões não têm uma taxa
+única por unidade, por isso a linha é um valor único com o detalhe no `metadata`.
+
 ## Proteger rotas
 
 Anexa requisitos como `meta` da rota. O guard resolve o faturável a partir do
