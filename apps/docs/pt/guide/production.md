@@ -122,6 +122,41 @@ Com `replicas: []` devolve o primary inalterado, por isso a mesma montagem corre
 em dev e num deploy de nó único. Usas `tenancyExtension()`? Estende o primary **e**
 cada réplica, depois embrulha os clients estendidos. (TLS/detalhes de ligação são
 do teu fornecedor de base de dados; o Basalt só encaminha as chamadas.)
+## Fazer sharding da base de dados
+
+As réplicas escalam leituras; o **sharding escala escritas e armazenamento**,
+espalhando os tenants por várias bases de dados. O `ShardRouter` mapeia um id de
+tenant para um shard com um hash estável — os dados de um tenant caem sempre na
+mesma base:
+
+```ts
+import { PrismaClient } from '@prisma/client'
+import { prismaPlugin, ShardRouter } from '@basaltkit/prisma'
+
+const shards = new ShardRouter({
+  shards: [
+    new PrismaClient({ datasourceUrl: process.env.SHARD_0_URL }),
+    new PrismaClient({ datasourceUrl: process.env.SHARD_1_URL }),
+    new PrismaClient({ datasourceUrl: process.env.SHARD_2_URL }),
+  ],
+})
+
+app.use(prismaPlugin({ shards }))
+// o tenant de cada pedido é encaminhado para o seu shard; db() lê o correto
+```
+
+Os clients de shard são **longevos e partilhados** por todos os tenants que lhes
+fazem hash (ao contrário do pool per-tenant, nada é despejado). Para trabalho
+cross-shard — uma migração, um relatório global — faz fan-out sobre `shards.all()`:
+
+```ts
+await Promise.all(shards.all().map((db) => db.$executeRawUnsafe(migrationSql)))
+```
+
+O sharding é para **scale-out**, não isolamento — para uma-base-por-tenant usa
+antes `prismaPlugin({ forTenant })`. Mudar `shards.length` re-mapeia as chaves,
+por isso planeia uma migração antes de redimensionar; passa um `hash` próprio se
+precisares de consistent hashing para minimizar o reshuffle.
 
 ## Encerramento gracioso
 
