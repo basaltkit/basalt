@@ -295,3 +295,14 @@ function pickScalars(tenant: Tenant): Record<string, string | number | boolean> 
   }
   return out
 }
+
+export {
+  CustomDomains,
+  MemoryDomainStore,
+  DomainTakenError,
+  DomainNotFoundError,
+  type CustomDomain,
+  type DomainStore,
+  type DnsVerification,
+  type CustomDomainsOptions,
+} from './custom-domains.js'
