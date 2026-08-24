@@ -1,5 +1,6 @@
 import { BasaltError, type HookBus } from '@basaltkit/core'
 import type { NotificationChannel } from './channels.js'
+import type { NotificationPreferences } from './preferences.js'
 import {
   validateNotificationData,
   type Notifiable,
@@ -42,16 +43,20 @@ export interface DeliveryReport {
 export interface NotifierOptions {
   channels: NotificationChannel[]
   hooks?: HookBus
+  /** Persistable per-user opt-outs (notification × channel). Consulted before sending. */
+  preferences?: NotificationPreferences
 }
 
 export class Notifier {
   private readonly channels = new Map<string, NotificationChannel>()
   private readonly hooks: HookBus | undefined
+  private readonly preferences: NotificationPreferences | undefined
   private enqueue: ((delivery: Delivery) => Promise<void>) | undefined
 
   constructor(options: NotifierOptions) {
     for (const channel of options.channels) this.channels.set(channel.name, channel)
     this.hooks = options.hooks
+    this.preferences = options.preferences
   }
 
   /**
@@ -82,6 +87,10 @@ export class Notifier {
     const report: DeliveryReport = { sent: [], failed: [], skipped: [] }
     for (const channelName of requested) {
       if (recipient.channelPreferences?.[channelName] === false) {
+        report.skipped.push(channelName)
+        continue
+      }
+      if (this.preferences && !(await this.preferences.allowed(recipient.id, definition.name, channelName))) {
         report.skipped.push(channelName)
         continue
       }
