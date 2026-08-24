@@ -9,6 +9,10 @@ import {
   type BasaltRoute,
   type RequestEnricher,
   type RouteGuard,
+  isSseResponse,
+  sseProducerOf,
+  driveSse,
+  SSE_HEADERS,
 } from '@basaltkit/http'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
@@ -77,6 +81,15 @@ function basaltHandler(
         enrichers,
         guards,
       })
+      if (isSseResponse(result)) {
+        res.writeHead(200, SSE_HEADERS)
+        await driveSse(sseProducerOf(result), {
+          write: (frame) => void res.write(frame),
+          end: () => res.end(),
+          onClose: (listener) => req.on('close', listener),
+        })
+        return
+      }
       if (!reply.sent) reply.send(result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
