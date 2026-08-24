@@ -237,6 +237,12 @@ dashboard.title // 'Acme Console'
 // :root { --brand-primary: #5b21b6; --brand-accent: #f59e0b; }
 ```
 
+> **Security:** because branding is tenant-controlled and the output is injected into
+> `<style>`, `brandingStyleSheet`/`brandingCssVars` strictly validate custom-property
+> names and values and **silently drop** anything that could break out of the rule or the
+> `<style>` element (a CSS-injection / stored-XSS vector). Still serve the shell under a
+> CSP that restricts inline styles as defence in depth.
+
 `resolveBranding` deep-merges colours and `cssVars`, so a tenant that overrides
 only `--brand-primary` keeps every other token from your default theme. It pairs
 naturally with per-tenant **custom domains** (`@basaltkit/tenancy`): resolve the

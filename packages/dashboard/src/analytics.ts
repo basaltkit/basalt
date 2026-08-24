@@ -15,7 +15,7 @@ function subscriptionMrr(
   const plan = plans[sub.plan]
   if (!plan || plan.price === 'custom') return 0
   const price = typeof plan.price === 'number' ? plan.price : plan.price[sub.period]
-  if (typeof price !== 'number') return 0
+  if (!Number.isFinite(price)) return 0 // rejects NaN/Infinity, which `typeof === 'number'` would let through
   return sub.period === 'yearly' ? price / 12 : price
 }
 

@@ -96,6 +96,8 @@ import { PrismaClient } from '@prisma/client'
 import { prismaPlugin, readReplica } from '@basaltkit/prisma'
 
 const client = readReplica({
+  // apply the SAME extension to primary AND replicas — never leave a replica un-scoped
+  // extend: (c) => c.$extends(tenancyExtension()),
   primary: new PrismaClient({ datasourceUrl: process.env.DATABASE_URL }),
   replicas: [
     new PrismaClient({ datasourceUrl: process.env.REPLICA_1_URL }),
@@ -105,6 +107,8 @@ const client = readReplica({
 
 app.use(prismaPlugin({ client }))
 ```
+
+Multi-tenant? Pass `extend: (c) => c.$extends(tenancyExtension())` so **every** replica carries your tenant filter — a raw replica would route reads around it and leak rows. `$queryRaw`/`$queryRawUnsafe` stay on the **primary** by default (raw SQL can mutate and gating reads must not be stale); opt in with `rawReadsOnReplica: true` for genuinely read-only raw queries.
 
 `findMany`, `findUnique`, `count`, `aggregate`, `groupBy` and `$queryRaw`
 round-robin across the replicas; every write, `$transaction` and `$executeRaw`

@@ -123,16 +123,15 @@ const domains = new CustomDomains({ store }) // store defaults to in-memory
 const { dns } = await domains.add('acme', 'app.acme.com')
 // dns → { type: 'TXT', host: '_basalt-verify.app.acme.com', value: 'basalt-domain-verify=…' }
 
-// 2. Once they've added it, verify — a real DNS lookup confirms the token
-if (await domains.verify('app.acme.com')) { /* live */ }
+// 2. Once they've added it, verify — a real DNS lookup confirms the token.
+//    verify/instructions/remove are scoped to the owning tenant.
+if (await domains.verify('acme', 'app.acme.com')) { /* live */ }
 
-// 3. Wire verified domains into your source — unverified ones return null
+// 3. Wire verified domains into your source with the built-in helper — a forged
+//    or unverified Host header can never resolve to a tenant.
 const source: TenantSource = {
   async find(id) { /* … */ },
-  async findByDomain(domain) {
-    const tenantId = await domains.tenantOf(domain) // null unless verified
-    return tenantId ? this.find(tenantId) : null
-  },
+  findByDomain: findByVerifiedDomain(domains, (id) => /* load tenant */ this.find(id)),
 }
 ```
 

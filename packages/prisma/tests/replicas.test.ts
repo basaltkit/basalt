@@ -42,11 +42,33 @@ describe('readReplica', () => {
     expect(served).toEqual(['r1', 'r2', 'r1', 'r2'])
   })
 
-  it('routes $queryRaw to a replica but $executeRaw and $transaction to primary', async () => {
-    const db = readReplica({ primary: fakeClient('primary'), replicas: [fakeClient('r1')] })
-    expect((await db.$queryRaw()).served).toBe('r1')
-    expect((await db.$executeRaw()).served).toBe('primary')
-    expect((await db.$transaction(async () => 1)).served).toBe('primary')
+  it('keeps $queryRaw on the primary by default (raw can mutate); opt-in routes it to a replica', async () => {
+    const safe = readReplica({ primary: fakeClient('primary'), replicas: [fakeClient('r1')] })
+    expect((await safe.$queryRaw()).served).toBe('primary') // secure default
+    expect((await safe.$executeRaw()).served).toBe('primary')
+    expect((await safe.$transaction(async () => 1)).served).toBe('primary')
+
+    const optedIn = readReplica({
+      primary: fakeClient('primary'),
+      replicas: [fakeClient('r1')],
+      rawReadsOnReplica: true,
+    })
+    expect((await optedIn.$queryRaw()).served).toBe('r1')
+    expect((await optedIn.$executeRaw()).served).toBe('primary') // still never a replica
+  })
+
+  it('extend applies the same extension to primary AND every replica (no un-scoped replica)', async () => {
+    const tag = (client: ReturnType<typeof fakeClient>) => {
+      // simulate $extends wrapping: mark the client as "scoped"
+      return { ...client, scoped: true } as typeof client & { scoped: boolean }
+    }
+    const db = readReplica({
+      primary: fakeClient('primary'),
+      replicas: [fakeClient('r1'), fakeClient('r2')],
+      extend: tag as never,
+    })
+    // both a replica read and $primary are the extended (scoped) clients
+    expect((db as unknown as { $primary: { scoped?: boolean } }).$primary.scoped).toBe(true)
   })
 
   it('$primary forces the primary for read-your-writes', async () => {

@@ -72,3 +72,15 @@ describe('prismaPlugin({ shards })', () => {
     await app.shutdown()
   })
 })
+
+describe('ShardRouter — defensive copy (security)', () => {
+  it('does not remap live tenants when the caller mutates the original shards array', () => {
+    const shards = [{ id: 0 }, { id: 1 }, { id: 2 }]
+    const router = new ShardRouter({ shards })
+    const before = router.for('acme')
+    shards.push({ id: 3 }) // attacker/accidental mutation of the source array
+    shards.length = 1
+    expect(router.count).toBe(3) // unchanged
+    expect(router.for('acme')).toBe(before) // same shard — routing is stable
+  })
+})

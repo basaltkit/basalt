@@ -76,3 +76,20 @@ describe('growth / change', () => {
 function round2(v: number): number {
   return Math.round(v * 100) / 100
 }
+
+describe('analytics — numeric integrity (security)', () => {
+  it('ignores non-finite plan prices instead of poisoning MRR', () => {
+    const badPlans = {
+      nan: { name: 'nan', price: Number.NaN } as never,
+      inf: { name: 'inf', price: Number.POSITIVE_INFINITY } as never,
+      ok: { name: 'ok', price: 10 } as never,
+    }
+    const m = mrrMovement([], [
+      { billableId: 'a', plan: 'nan', period: 'monthly', status: 'active' } as never,
+      { billableId: 'b', plan: 'inf', period: 'monthly', status: 'active' } as never,
+      { billableId: 'c', plan: 'ok', period: 'monthly', status: 'active' } as never,
+    ], badPlans)
+    expect(Number.isFinite(m.currentMrr)).toBe(true)
+    expect(m.currentMrr).toBe(10) // only the finite plan contributes
+  })
+})

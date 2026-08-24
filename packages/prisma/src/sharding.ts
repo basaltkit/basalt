@@ -39,7 +39,7 @@ export class ShardRouter<TClient> {
     if (options.shards.length === 0) {
       throw new Error('ShardRouter needs at least one shard.')
     }
-    this.shards = options.shards
+    this.shards = [...options.shards] // defensive copy: later caller mutation must not remap live tenants
     this.hash = options.hash ?? fnv1aShard
   }
 

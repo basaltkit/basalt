@@ -7,9 +7,15 @@ import type { DependencyGraph } from './container.js'
  */
 export function renderDependencyGraph(graph: DependencyGraph): string {
   const idOf = (token: string): string => `n_${token.replace(/[^a-zA-Z0-9_]/g, '_')}`
+  // Token descriptions are usually developer constants, but a codebase that
+  // mints tokens from user/tenant-derived names would otherwise let a label
+  // break out of the Mermaid node (`"`/`]`) or inject live HTML (Mermaid renders
+  // htmlLabels). Neutralise the label so the diagram is inert wherever it renders.
+  const label = (token: string): string =>
+    token.replace(/[\\<>"&[\]|{}]/g, (ch) => `#${ch.charCodeAt(0)};`)
   const lines = ['graph TD']
   for (const node of graph.nodes) {
-    lines.push(`  ${idOf(node.token)}["${node.token}<br/>(${node.lifetime})"]`)
+    lines.push(`  ${idOf(node.token)}["${label(node.token)}<br/>(${label(node.lifetime)})"]`)
   }
   for (const edge of graph.edges) {
     lines.push(`  ${idOf(edge.from)} --> ${idOf(edge.to)}`)

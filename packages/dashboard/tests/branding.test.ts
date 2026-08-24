@@ -79,3 +79,37 @@ describe('Dashboard branding', () => {
     expect(defineDashboard({ sections: [] }).branding).toBe(DEFAULT_BRANDING)
   })
 })
+
+describe('branding — CSS injection hardening (security)', () => {
+  it('drops a cssVars value that tries to break out of <style>', () => {
+    const evil = 'red;} </style><script>alert(1)</script><style> {'
+    const css = brandingStyleSheet({ productName: 'X', cssVars: { '--x': evil } })
+    expect(css).not.toContain('</style>')
+    expect(css).not.toContain('<script>')
+    expect(css).toBe(':root {\n\n}') // the unsafe entry is dropped entirely (empty body)
+  })
+
+  it('drops a cssVars key that is not a valid custom-property name', () => {
+    const css = brandingStyleSheet({ productName: 'X', cssVars: { '</style><script>x</script>': 'red' } })
+    expect(css).toBe(':root {\n\n}')
+  })
+
+  it('drops colour values containing CSS control characters', () => {
+    const css = brandingStyleSheet({
+      productName: 'X',
+      colors: { primary: '#abc', accent: 'red } body{display:none}' },
+    })
+    expect(css).toBe(':root {\n  --brand-primary: #abc;\n}') // accent dropped, primary kept
+  })
+
+  it('keeps well-formed values (no false positives)', () => {
+    const css = brandingStyleSheet({
+      productName: 'X',
+      colors: { primary: '#5b21b6' },
+      cssVars: { '--radius': '8px', '--font': 'Inter, sans-serif' },
+    })
+    expect(css).toContain('--brand-primary: #5b21b6;')
+    expect(css).toContain('--radius: 8px;')
+    expect(css).toContain('--font: Inter, sans-serif;')
+  })
+})
