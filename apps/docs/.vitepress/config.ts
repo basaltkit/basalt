@@ -99,6 +99,7 @@ export default defineConfig({
                 { text: 'Introdução', link: '/pt/guide/getting-started' },
                 { text: 'Instalação', link: '/pt/guide/installation' },
                 { text: 'Conceitos centrais', link: '/pt/guide/concepts' },
+                { text: 'Configuração', link: '/pt/guide/config' },
                 { text: 'Adaptadores HTTP', link: '/pt/guide/adapters' },
                 { text: 'Migrar do Express', link: '/pt/guide/migrating-from-express' },
                 { text: 'Perguntas frequentes (FAQ)', link: '/pt/guide/faq' },
@@ -112,6 +113,7 @@ export default defineConfig({
               items: [
                 { text: 'Desenvolvimento assistido por IA', link: '/pt/guide/ai' },
                 { text: 'MCP (Model Context Protocol)', link: '/pt/guide/mcp' },
+                { text: 'Testes', link: '/pt/guide/testing' },
               ],
             },
             {
@@ -120,6 +122,7 @@ export default defineConfig({
                 { text: 'Multi-tenancy', link: '/pt/guide/tenancy' },
                 { text: 'Criar um tenant', link: '/pt/guide/creating-a-tenant' },
                 { text: 'Autenticação', link: '/pt/guide/auth' },
+                { text: 'Autorização', link: '/pt/guide/authorization' },
                 { text: 'Equipas', link: '/pt/guide/teams' },
                 { text: 'Subscrições', link: '/pt/guide/billing' },
                 { text: 'Pagamentos por referência', link: '/pt/guide/reference-payments' },
@@ -139,6 +142,7 @@ export default defineConfig({
               text: 'Dados & infraestrutura',
               items: [
                 { text: 'Filas & Jobs', link: '/pt/guide/queues' },
+                { text: 'Tarefas agendadas', link: '/pt/guide/scheduler' },
                 { text: 'Storage', link: '/pt/guide/storage' },
                 { text: 'Caching', link: '/pt/guide/caching' },
                 { text: 'Base de dados por tenant', link: '/pt/guide/database-per-tenant' },
@@ -151,6 +155,7 @@ export default defineConfig({
                 { text: 'Pesquisa', link: '/pt/guide/search' },
                 { text: 'Upload de ficheiros', link: '/pt/guide/files' },
                 { text: 'Comentários', link: '/pt/guide/comments' },
+                { text: 'Log de atividade', link: '/pt/guide/activity' },
                 { text: 'Internacionalização', link: '/pt/guide/i18n' },
                 { text: 'Exportação de dados', link: '/pt/guide/exports' },
               ],
@@ -219,6 +224,7 @@ export default defineConfig({
                 { text: 'Introduction', link: '/guide/getting-started' },
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Core Concepts', link: '/guide/concepts' },
+            { text: 'Configuration', link: '/guide/config' },
             { text: 'HTTP Adapters', link: '/guide/adapters' },
             { text: 'Migrating from Express', link: '/guide/migrating-from-express' },
             { text: 'FAQ', link: '/guide/faq' },
@@ -232,6 +238,7 @@ export default defineConfig({
           items: [
             { text: 'AI-assisted development', link: '/guide/ai' },
             { text: 'MCP (Model Context Protocol)', link: '/guide/mcp' },
+            { text: 'Testing', link: '/guide/testing' },
           ],
         },
         {
@@ -240,6 +247,7 @@ export default defineConfig({
             { text: 'Multi-tenancy', link: '/guide/tenancy' },
             { text: 'Creating a tenant', link: '/guide/creating-a-tenant' },
             { text: 'Authentication', link: '/guide/auth' },
+            { text: 'Authorization', link: '/guide/authorization' },
             { text: 'Teams', link: '/guide/teams' },
             { text: 'Subscriptions', link: '/guide/billing' },
             { text: 'Reference & mobile-money payments', link: '/guide/reference-payments' },
@@ -259,6 +267,7 @@ export default defineConfig({
           text: 'Data & infrastructure',
           items: [
             { text: 'Queues & Jobs', link: '/guide/queues' },
+            { text: 'Scheduled tasks', link: '/guide/scheduler' },
             { text: 'Storage', link: '/guide/storage' },
             { text: 'Caching', link: '/guide/caching' },
             { text: 'Database-per-tenant', link: '/guide/database-per-tenant' },
@@ -271,6 +280,7 @@ export default defineConfig({
             { text: 'Search', link: '/guide/search' },
             { text: 'File uploads', link: '/guide/files' },
             { text: 'Comments', link: '/guide/comments' },
+            { text: 'Activity log', link: '/guide/activity' },
             { text: 'Internationalization', link: '/guide/i18n' },
             { text: 'Data exports', link: '/guide/exports' },
           ],
