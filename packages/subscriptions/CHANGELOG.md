@@ -1,5 +1,27 @@
 # @basaltkit/subscriptions
 
+## 2.5.0
+
+### Minor Changes
+
+- bb07d0c: Add coupons & discounts (billing depth). A `Coupon` is `percentOff` (0–100) or a
+  fixed `amountOff` (minor units + currency), with optional `maxRedemptions` and
+  `redeemBy` expiry. `couponDiscount()` computes the discount on a subtotal;
+  `Invoices.draft({ coupon })` applies it (on top of any explicit discount, clamped
+  to the subtotal) and records `couponCode`. A `Coupons` registry (with
+  `CouponStore`/`MemoryCouponStore`) defines, quotes (validating redeemability) and
+  redeems codes. Pure domain — no HTTP, no gateway.
+- c1483ec: Add metered-billing depth: tiered pricing (`TieredPrice` with `graduated` or
+  `volume` mode) via `tieredCost(price, units)`, and `meteredLine(feature, { units,
+price, includedUnits })` to turn recorded usage into an invoice line (subtracting
+  the plan's free allowance; `null` when nothing is billable). Complements the flat
+  `overageLine`. Pure domain.
+
+### Patch Changes
+
+- Updated dependencies [0768769]
+  - @basaltkit/http@1.6.0
+
 ## 2.4.0
 
 ### Minor Changes
