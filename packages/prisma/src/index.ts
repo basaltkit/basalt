@@ -16,6 +16,7 @@ export {
   type TenancyExtensionOptions,
 } from './extension.js'
 export { TenantClientPool, type TenantClientPoolOptions } from './pool.js'
+export { readReplica, type ReadReplicaOptions } from './replicas.js'
 export {
   rlsPolicySql,
   setTenantConfigSql,

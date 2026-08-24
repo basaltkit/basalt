@@ -85,6 +85,42 @@ because the contract is unchanged. See the
 [Database-per-tenant](/guide/database-per-tenant) to route those stores through
 the active tenant's client.
 
+## Scaling reads (read replicas)
+
+When one database can't take the read load, add read replicas and split traffic:
+reads go to the replicas, writes stay on the primary. `readReplica` wraps any
+Prisma client and does the routing — it's a `Proxy`, not a dependency:
+
+```ts
+import { PrismaClient } from '@prisma/client'
+import { prismaPlugin, readReplica } from '@basaltkit/prisma'
+
+const client = readReplica({
+  primary: new PrismaClient({ datasourceUrl: process.env.DATABASE_URL }),
+  replicas: [
+    new PrismaClient({ datasourceUrl: process.env.REPLICA_1_URL }),
+    new PrismaClient({ datasourceUrl: process.env.REPLICA_2_URL }),
+  ],
+})
+
+app.use(prismaPlugin({ client }))
+```
+
+`findMany`, `findUnique`, `count`, `aggregate`, `groupBy` and `$queryRaw`
+round-robin across the replicas; every write, `$transaction` and `$executeRaw`
+goes to the primary. Right after a write, replicas may lag — force the primary
+for a read-your-writes check with the `$primary` escape hatch:
+
+```ts
+await db().order.create({ data })
+const fresh = await db<Client>().$primary.order.findMany({ where: { userId } })
+```
+
+With `replicas: []` it returns the primary unchanged, so the same wiring runs in
+dev and in a single-node deploy. Applying `tenancyExtension()`? Extend the
+primary **and** each replica, then wrap the extended clients. (TLS/connection
+details are your database provider's; Basalt only routes the calls.)
+
 ## Graceful shutdown
 
 `app.shutdown()` runs every plugin's `shutdown` in reverse boot order (closing
