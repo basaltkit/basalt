@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/prisma",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Prisma integration for Basalt: tenant-scoping client extension (shared database), LRU client pool (database per tenant) and ctx().db.",
   "license": "MIT",
   "type": "module",

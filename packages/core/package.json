@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/core",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Foundation of the Basalt ecosystem: token-based DI container, plugin system, lifecycle, hooks and context via AsyncLocalStorage.",
   "license": "MIT",
   "type": "module",
