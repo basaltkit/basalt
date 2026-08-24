@@ -2,9 +2,11 @@
 
 > *How much does Basalt's neutral core cost over the bare HTTP server?*
 
-Short answer: **on Fastify, about 5–10%.** The container, plugin boot, route
-metadata and validation pipeline are close to free. The reproducible harness
-lives in [`apps/bench`](https://github.com/Zebedeu/basalt/tree/main/apps/bench).
+Short answer: **on Fastify, roughly 10–17% throughput overhead** for the
+container, plugin boot, request context, route metadata and validation pipeline.
+Meaningful but modest — you're trading it for the whole `@basaltkit/*` toolkit.
+The reproducible harness lives in
+[`apps/bench`](https://github.com/Zebedeu/basalt/tree/main/apps/bench).
 
 ## Method
 
@@ -14,9 +16,6 @@ Fastify baseline:
 
 - `GET /health` — trivial handler, measures pure framework overhead
 - `POST /echo` — a Zod-validated body, measures the validation path
-
-Each server is warmed up, then hit with [autocannon](https://github.com/mcollina/autocannon)
-at 50 concurrent connections for 10 seconds.
 
 ```ts
 // src/routes.ts — one definition, every adapter
@@ -30,40 +29,55 @@ export const routes = [
 ]
 ```
 
+Fair comparison is easy to get wrong, so the harness:
+
+- **Runs each server in its own process** — no sockets, GC, JIT or event-loop
+  state carries over, so the server measured *last* isn't penalised by the ones
+  before it. (Running everything in one process skews the mean and can even make
+  a wrapper look *faster* than the server it wraps.)
+- **Warms up** at the measurement concurrency and discards it.
+- **Runs several iterations and reports the median**, with cooldowns and a clean
+  shutdown between servers.
+- **Reports p50 (median) and p99 latency, never the arithmetic mean** — the mean
+  is skewed by a handful of outliers. An `errors` count flags any untrustworthy
+  run.
+
 ## Results
 
-`50 connections · 10s` on Apple Silicon / Node 22. **Absolute numbers are
-machine-specific — read the gaps between rows, not the digits.**
+`50 connections · 10s · median of 3 iterations` on Apple Silicon / Node 24.
+**Absolute numbers are machine-specific — read the gaps between rows, not the
+digits.** Zero errors across all runs.
 
 ### `GET /health`
 
-| server               |  req/sec | vs #1 | avg | p99 |
+| server               |  req/sec | vs #1 | p50 | p99 |
 | -------------------- | -------: | ----: | --: | --: |
-| plain fastify        |   31,971 |  100% | 1.06ms | 2ms |
-| **Basalt · fastify** |   30,337 |   95% | 1.12ms | 3ms |
-| Basalt · express     |   21,656 |   68% | 1.98ms | 4ms |
-| Basalt · hono        |   20,498 |   64% | 2.07ms | 3ms |
+| plain fastify        |   59,943 |  100% | <1ms | 1ms |
+| **Basalt · fastify** |   49,884 |   83% | <1ms | 2ms |
+| Basalt · express     |   32,136 |   54% | 1ms | 3ms |
+| Basalt · hono        |   26,665 |   44% | 1ms | 4ms |
 
 ### `POST /echo` (Zod-validated)
 
-| server               |  req/sec | vs #1 | avg | p99 |
+| server               |  req/sec | vs #1 | p50 | p99 |
 | -------------------- | -------: | ----: | --: | --: |
-| plain fastify        |   25,429 |  100% | 1.29ms | 5ms |
-| **Basalt · fastify** |   22,990 |   90% | 1.59ms | 5ms |
-| Basalt · express     |   16,434 |   65% | 2.53ms | 9ms |
-| Basalt · hono        |   14,607 |   57% | 3.03ms | 5ms |
+| plain fastify        |   39,114 |  100% | 1ms | 5ms |
+| **Basalt · fastify** |   34,474 |   88% | 1ms | 5ms |
+| Basalt · express     |   27,228 |   70% | 1ms | 3ms |
+| Basalt · hono        |   18,987 |   49% | 2ms | 5ms |
 
 ## Reading the numbers
 
-- **Basalt keeps ~90–95% of raw Fastify throughput.** The neutral core adds
-  single-digit percent overhead — you don't pay meaningfully for the container,
-  DI, plugin lifecycle or metadata routing.
+- **Basalt on Fastify keeps ~83–88% of raw Fastify throughput** — a ~10–17%
+  overhead for the container, DI, plugin lifecycle, request context and metadata
+  routing. Plain Fastify is the fastest row, as it should be: Basalt wraps it, so
+  it can never beat it.
 - **Express and Hono are slower because those runtimes are slower** — not because
   Basalt costs more on them. The Basalt layer is *byte-for-byte identical* across
   all three adapters (same `route()` objects); the gap you see is each adapter's
   own per-request cost. Choose an adapter for its ecosystem, not for a number
   Basalt would change.
-- Even the slowest row serves **~14k validated requests/second on a laptop** —
+- Even the slowest row serves **~19k validated requests/second on a laptop** —
   comfortably above what a typical multi-tenant SaaS API needs. Your database and
   network are the ceiling long before the framework is.
 
@@ -71,5 +85,7 @@ machine-specific — read the gaps between rows, not the digits.**
 
 ```bash
 pnpm --filter @basaltkit/bench bench
-BENCH_DURATION=20 BENCH_CONNECTIONS=100 pnpm --filter @basaltkit/bench bench
+# knobs (with defaults):
+BENCH_CONNECTIONS=50 BENCH_DURATION=10 BENCH_ITERATIONS=3 BENCH_WARMUP=3 \
+  pnpm --filter @basaltkit/bench bench
 ```
