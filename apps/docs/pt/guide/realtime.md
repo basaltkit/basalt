@@ -68,6 +68,42 @@ hub.subscribe(conn.id, 'notes')
 reply.raw.on('close', () => hub.unregister(conn.id))
 ```
 
+## SSE simples a partir de uma rota
+
+Para streaming unidirecional simples — progresso, logs, um contador ao vivo — não
+precisas dos canais acima. Devolve `sse()` de qualquer rota e faz streaming de
+`text/event-stream` em **todos os adaptadores** (Fastify, Express, Hono):
+
+```ts
+import { sse, route } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/progress/:job',
+  async handler({ params }) {
+    return sse(async (stream) => {
+      stream.onClose(() => stopWatching(params.job)) // cliente desligou-se
+      for await (const pct of watch(params.job)) {
+        stream.send({ event: 'progress', data: { pct } })
+        if (pct === 100) break
+      }
+      stream.close()
+    })
+  },
+})
+```
+
+O `stream.send(event)` codifica um objeto em JSON (ou envia uma string como
+`data:`); `event`, `id` e `retry` são opcionais. No browser:
+
+```js
+const es = new EventSource('/progress/42')
+es.addEventListener('progress', (e) => console.log(JSON.parse(e.data).pct))
+```
+
+Usa o pacote realtime baseado em canais (acima) só quando precisas de pub/sub,
+fan-out por tenant ou presença.
+
 ## Servidor WebSocket Fastify completo
 
 Juntando tudo com `@fastify/websocket` — `realtimePlugin` regista tanto

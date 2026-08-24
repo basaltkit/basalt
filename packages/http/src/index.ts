@@ -56,3 +56,17 @@ export {
 } from './openapi.js'
 
 export { computeEtag, ifNoneMatchSatisfied } from './etag.js'
+
+export {
+  sse,
+  isSseResponse,
+  sseProducerOf,
+  encodeSseEvent,
+  driveSse,
+  SSE_HEADERS,
+  type SseEvent,
+  type SseStream,
+  type SseProducer,
+  type SseResponse,
+  type SseSink,
+} from './sse.js'
