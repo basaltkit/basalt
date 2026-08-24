@@ -54,3 +54,5 @@ export {
   type OpenApiTag,
   type RouteLike,
 } from './openapi.js'
+
+export { computeEtag, ifNoneMatchSatisfied } from './etag.js'
