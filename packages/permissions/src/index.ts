@@ -1,4 +1,11 @@
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
+import {
+  newDelegationId,
+  type TemporaryGrant,
+  type TemporaryGrantStore,
+  type Delegation,
+  type DelegationStore,
+} from './delegation.js'
 import type { RouteGuard } from '@basaltkit/fastify'
 import { AuthRequiredGuardError } from './errors.js'
 
@@ -114,6 +121,12 @@ export interface GateOptions {
   /** Current scope. Default: ctx().tenant.id, falling back to GLOBAL_SCOPE. */
   scope?: () => string
   policies?: Policy<never>[]
+  /** Optional store enabling time-boxed grants via `grantTemporarily()`. */
+  temporaryGrants?: TemporaryGrantStore
+  /** Optional store enabling `delegate()` — one user acting with another's authority. */
+  delegations?: DelegationStore
+  /** Injectable clock (tests). Default `Date.now`. */
+  now?: () => number
 }
 
 const defaultScope = (): string => {
@@ -124,9 +137,11 @@ const defaultScope = (): string => {
 export class Gate {
   private readonly policies = new Map<string, Policy<never>>()
   private readonly scope: () => string
+  private readonly now: () => number
 
   constructor(private readonly options: GateOptions) {
     this.scope = options.scope ?? defaultScope
+    this.now = options.now ?? (() => Date.now())
     for (const policy of options.policies ?? []) this.register(policy)
   }
 
@@ -150,14 +165,25 @@ export class Gate {
       if (check) return check(user, resource as never)
     }
 
-    const scopes = [this.scope(), GLOBAL_SCOPE].filter(
-      (scope, index, all) => all.indexOf(scope) === index,
-    )
-    for (const scope of scopes) {
-      const granted = new Set(await this.options.store.getUserPermissions(user.id, scope))
-      for (const role of await this.options.store.getUserRoles(user.id, scope)) {
-        for (const permissionOfRole of await this.options.store.getRolePermissions(role, scope)) {
-          granted.add(permissionOfRole)
+    if (await this.canDirect(user.id, permission)) return true
+    if (await this.canViaDelegation(user.id, permission)) return true
+    return false
+  }
+
+  private scopes(): string[] {
+    return [this.scope(), GLOBAL_SCOPE].filter((scope, index, all) => all.indexOf(scope) === index)
+  }
+
+  /** Standing grants (user + roles) plus active temporary grants — no delegation. */
+  private async canDirect(userId: string, permission: string): Promise<boolean> {
+    for (const scope of this.scopes()) {
+      const granted = new Set(await this.options.store.getUserPermissions(userId, scope))
+      for (const role of await this.options.store.getUserRoles(userId, scope)) {
+        for (const perm of await this.options.store.getRolePermissions(role, scope)) granted.add(perm)
+      }
+      if (this.options.temporaryGrants) {
+        for (const grant of await this.options.temporaryGrants.activeFor(userId, scope, this.now())) {
+          for (const perm of grant.permissions) granted.add(perm)
         }
       }
       for (const grantedPermission of granted) {
@@ -165,6 +191,62 @@ export class Gate {
       }
     }
     return false
+  }
+
+  /** Active delegations to the user, bounded by the delegator's DIRECT permissions (no chaining). */
+  private async canViaDelegation(userId: string, permission: string): Promise<boolean> {
+    if (!this.options.delegations) return false
+    const now = this.now()
+    for (const scope of this.scopes()) {
+      for (const d of await this.options.delegations.activeTo(userId, scope, now)) {
+        if (d.permissions.some((pattern) => permissionMatches(pattern, permission))) {
+          if (await this.canDirect(d.fromUserId, permission)) return true
+        }
+      }
+    }
+    return false
+  }
+
+  /** Grant a user extra permissions until `expiresAt` (or `ttlMs` from now). Needs a `temporaryGrants` store. */
+  async grantTemporarily(
+    userId: string,
+    permissions: string[],
+    options: { expiresAt?: number; ttlMs?: number; scope?: string; grantedBy?: string; reason?: string } = {},
+  ): Promise<TemporaryGrant> {
+    if (!this.options.temporaryGrants) throw new Error('Gate has no temporaryGrants store configured')
+    const grant: TemporaryGrant = {
+      id: newDelegationId(),
+      userId,
+      permissions,
+      scope: options.scope ?? this.scope(),
+      expiresAt: options.expiresAt ?? this.now() + (options.ttlMs ?? 0),
+      ...(options.grantedBy !== undefined ? { grantedBy: options.grantedBy } : {}),
+      ...(options.reason !== undefined ? { reason: options.reason } : {}),
+    }
+    await this.options.temporaryGrants.add(grant)
+    return grant
+  }
+
+  /** Delegate a subset of `from`'s authority to `to` (bounded at check time). Needs a `delegations` store. */
+  async delegate(input: {
+    from: string
+    to: string
+    permissions: string[]
+    scope?: string
+    expiresAt?: number
+  }): Promise<Delegation> {
+    if (!this.options.delegations) throw new Error('Gate has no delegations store configured')
+    const delegation: Delegation = {
+      id: newDelegationId(),
+      fromUserId: input.from,
+      toUserId: input.to,
+      permissions: input.permissions,
+      scope: input.scope ?? this.scope(),
+      createdAt: this.now(),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    }
+    await this.options.delegations.add(delegation)
+    return delegation
   }
 
   /** Like can(), but throws PERMISSION_DENIED (403). */
@@ -206,3 +288,12 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
     },
   })
 }
+
+export {
+  MemoryTemporaryGrantStore,
+  MemoryDelegationStore,
+  type TemporaryGrant,
+  type TemporaryGrantStore,
+  type Delegation,
+  type DelegationStore,
+} from './delegation.js'

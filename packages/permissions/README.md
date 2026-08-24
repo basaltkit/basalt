@@ -154,6 +154,38 @@ const gate = new Gate({
 await gate.can({ id: 'x', owner: true }, 'any:thing') // true, always
 ```
 
+### Temporary grants & delegation
+
+Beyond standing roles and permissions, the Gate supports **time-boxed** access and
+**delegation** — opt in by passing the stores:
+
+```ts
+import {
+  Gate, MemoryAccessStore, MemoryTemporaryGrantStore, MemoryDelegationStore,
+} from '@basaltkit/permissions'
+
+const gate = new Gate({
+  store: new MemoryAccessStore(),
+  temporaryGrants: new MemoryTemporaryGrantStore(),
+  delegations: new MemoryDelegationStore(),
+})
+
+// Break-glass / short task: extra permissions that expire on their own.
+await gate.grantTemporarily('alice', ['reports:read'], { ttlMs: 60 * 60_000 }) // 1h
+await gate.can({ id: 'alice' }, 'reports:read') // true until it expires
+
+// Delegation: let Bob act with a subset of Alice's authority while she's away.
+await gate.delegate({ from: 'alice', to: 'bob', permissions: ['projects:*'] })
+await gate.can({ id: 'bob' }, 'projects:update') // true — *if* Alice can do it
+```
+
+Delegation is **bounded** and **non-chaining**: at check time it's limited to what
+the delegator can *directly* do (their standing grants + active temporary grants,
+but not their own delegations). So a delegation never lends more than the
+delegator has, and a delegatee can't re-delegate authority it only holds by
+delegation. Both grant and delegation carry an expiry; back the stores with your
+database in production (the `Memory*` ones are per-process).
+
 ### Using the Gate inside handlers
 
 The plugin registers the Gate in the container under the `GATE` token:
