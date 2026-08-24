@@ -99,3 +99,9 @@ export function webhooksPlugin(options: WebhooksPluginOptions = {}) {
     },
   })
 }
+
+export {
+  webhookOutboxDispatch,
+  webhookOutboxPlugin,
+  type WebhookOutboxOptions,
+} from './outbox.js'
