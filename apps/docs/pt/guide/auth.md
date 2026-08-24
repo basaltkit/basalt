@@ -270,6 +270,91 @@ um código de recovery são aceites (os códigos de recovery são consumidos ao 
 implementação de TOTP não tem dependências e é verificada contra os vetores de teste
 da RFC 6238.
 
+## Passkeys (WebAuthn)
+
+As passkeys deixam os utilizadores entrar com Face ID, Touch ID ou uma chave de
+segurança física — sem password para phishing ou fugas. O Basalt conduz toda a
+cerimónia (challenges, opções do browser, storage de credenciais, challenges de uso
+único, o contador de deteção de clone) e delega só a criptografia a um pequeno
+verifier que implementas sobre [`@simplewebauthn/server`](https://simplewebauthn.dev),
+por isso a framework não carrega dependência WebAuthn.
+
+```ts
+import { webauthnPlugin, type WebAuthnVerifier } from '@basaltkit/auth'
+import { verifyRegistrationResponse, verifyAuthenticationResponse } from '@simplewebauthn/server'
+
+const verifier: WebAuthnVerifier = {
+  async verifyRegistration(i) {
+    const v = await verifyRegistrationResponse({
+      response: i.response as never,
+      expectedChallenge: i.expectedChallenge,
+      expectedOrigin: i.expectedOrigin,
+      expectedRPID: i.expectedRpId,
+      requireUserVerification: i.requireUserVerification,
+    })
+    if (!v.verified || !v.registrationInfo) return { verified: false }
+    const c = v.registrationInfo.credential
+    return { verified: true, credential: {
+      id: c.id, publicKey: Buffer.from(c.publicKey).toString('base64url'), counter: c.counter,
+    } }
+  },
+  async verifyAuthentication(i) {
+    const v = await verifyAuthenticationResponse({
+      response: i.response as never,
+      expectedChallenge: i.expectedChallenge,
+      expectedOrigin: i.expectedOrigin,
+      expectedRPID: i.expectedRpId,
+      requireUserVerification: i.requireUserVerification,
+      credential: {
+        id: i.credential.id,
+        publicKey: Buffer.from(i.credential.publicKey, 'base64url'),
+        counter: i.credential.counter,
+      },
+    })
+    return { verified: v.verified, newCounter: v.authenticationInfo?.newCounter ?? i.credential.counter }
+  },
+}
+
+app.use(webauthnPlugin({
+  config: { rpId: 'example.com', rpName: 'Example', origin: 'https://example.com' },
+  verifier,
+}))
+```
+
+### Os quatro passos
+
+Resolve o serviço a partir do token `WEBAUTHN` e conduz a partir das tuas rotas. O
+`sessionKey` liga um challenge à sessão atual — o id do utilizador quando autenticado,
+ou um id de sessão para login sem sessão iniciada.
+
+```ts
+import { WEBAUTHN } from '@basaltkit/auth'
+const passkeys = container.get(WEBAUTHN)
+
+// 1. Registo — um utilizador autenticado adiciona uma passkey
+const regOptions = await passkeys.startRegistration(sessionKey, { id: user.id, name: user.email })
+// → @simplewebauthn/browser startRegistration(regOptions), depois faz POST do resultado:
+await passkeys.finishRegistration(sessionKey, user.id, browserResponse, 'MacBook')
+
+// 2. Entrar — sem username: omite o userId
+await passkeys.startAuthentication(sessionKey)
+const { userId } = await passkeys.finishAuthentication(sessionKey, browserResponse)
+// → emite a tua sessão / JWT para userId
+```
+
+O `finishAuthentication` procura a credencial pelo id, verifica-a, confirma que o
+contador de assinatura **aumentou** (um clone lança `PasskeyClonedError`), e guarda o
+novo contador. Usa `passkeys.list(userId)` / `passkeys.remove(id)` para um ecrã de
+"gerir dispositivos".
+
+::: warning Security
+O challenge é vinculado ao utilizador que passas ao `startRegistration`; o
+`finishRegistration` lança `WEBAUTHN_SUBJECT_MISMATCH` se o `userId` for diferente,
+por isso uma passkey nunca pode ser vinculada à conta de outra pessoa — tira sempre o
+`userId` da sessão autenticada, nunca do input do pedido. Em produção, troca os
+`PasskeyStore` / `WebAuthnChallengeStore` em memória por versões duráveis.
+:::
+
 ## Login social (OAuth)
 
 Entra com Google ou GitHub via o fluxo *authorization-code* do OAuth 2.0 — sem

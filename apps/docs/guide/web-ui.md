@@ -190,7 +190,50 @@ The `--ui` scaffold does all of this for you. Integrating by hand? Follow [ui.sh
 
 ## Dashboards
 
-[`@basaltkit/dashboard`](/reference/packages) composes an overview from your data — `defineDashboard` with metric/audit/queue sections, billing metrics (`computeBillingMetrics`, `churnRate`), and queue summaries — rendered by the same shadcn components.
+[`@basaltkit/dashboard`](/reference/packages/dashboard) composes an overview from your data — `defineDashboard` with metric/audit/queue sections, billing metrics (`computeBillingMetrics`, `churnRate`), and queue summaries — rendered by the same shadcn components.
+
+### Analytics — trends, not just snapshots
+
+`computeBillingMetrics` is a point-in-time snapshot; `mrrMovement` turns **two**
+snapshots into the SaaS **MRR bridge** — how revenue changed, decomposed:
+
+```ts
+import { mrrMovement, growth } from '@basaltkit/dashboard'
+
+const m = mrrMovement(lastMonthSubs, thisMonthSubs, plans)
+// { new, reactivation, expansion, contraction, churned, net, previousMrr, currentMrr }
+// new + reactivation + expansion − contraction − churned === net
+
+const g = growth(lastMonthMetrics, thisMonthMetrics)
+g.mrr // { previous, current, delta, pct }  → an up/down arrow + "+22%" on a KPI card
+```
+
+Snapshots match by `billableId`, so feed it two `subscriptions.all()` taken at
+different times (persist a monthly snapshot, or diff a stored one). Everything is
+pure and browser-safe.
+
+### White-label branding
+
+Selling the panel to other companies? Each tenant ships their own product name,
+logo and colours over a default brand:
+
+```ts
+import { resolveBranding, brandingStyleSheet, defineDashboard } from '@basaltkit/dashboard'
+
+const brand = await resolveBranding(brandingStore, tenantId) // merged over your default
+const dashboard = defineDashboard({ branding: brand, sections })
+dashboard.title // the tenant's product name
+
+// inject the brand's colours as CSS custom properties in the shell <head>:
+`<style>${brandingStyleSheet(brand)}</style>` // :root { --brand-primary: … }
+```
+
+`resolveBranding` deep-merges, so a tenant overriding one colour keeps the rest of
+your theme. Names and values are validated and unsafe input is dropped (the CSS is
+injected into `<style>`), so tenant-supplied branding is safe — still serve the
+shell under a CSP restricting inline styles as defence in depth. Pairs with
+per-tenant [custom domains](/guide/tenancy): resolve the tenant from the domain,
+then its brand from the tenant.
 
 ## Which UI approach?
 
