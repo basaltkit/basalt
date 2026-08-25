@@ -23,14 +23,14 @@
     "@basaltkit/http": "workspace:^"
   },
   "peerDependencies": {
-    "zod": "^3.24.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@basaltkit/express": "workspace:^",
     "@basaltkit/fastify": "workspace:^",
     "@basaltkit/hono": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.1.1",
     "@types/node": "^22.15.0",
     "express": "^5.0.0",
     "fastify": "^5.12.1",
@@ -38,7 +38,7 @@
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
-    "zod": "^3.24.0"
+    "zod": "^4.4.3"
   },
   "publishConfig": {
     "access": "public"
