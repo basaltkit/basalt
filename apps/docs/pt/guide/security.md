@@ -77,6 +77,65 @@ a uma API JSON). Passa um objeto para personalizar (p. ex. a tua própria
 `contentSecurityPolicy` para uma superfície HTML/docs), `contentSecurityPolicy:
 false` para omitir só a CSP, ou `headers: false` para desativar tudo.
 
+## Limites de recursos & resistência a DoS
+
+Para além de headers e rate limits, conexões longas e lentas podem esgotar um
+servidor. O Basalt traz defaults sensatos e knobs para as arestas.
+
+### Timeouts de request (anti-slowloris)
+
+Um cliente lento que envia um pedido byte a byte prende uma conexão indefinidamente. O
+adapter Fastify usa por omissão um **`requestTimeout` de 30 s** (o default do Fastify é
+*desligado*); sobrepõe via `fastifyPlugin({ fastify: { requestTimeout } })`. O Express e
+o Hono correm num servidor Node teu — aplica a mesma proteção nele:
+
+```ts
+// Express / Hono (servidor node:http)
+server.requestTimeout = 30_000   // o pedido inteiro tem de chegar em 30s
+server.headersTimeout = 20_000   // headers em 20s (slowloris de headers)
+server.keepAliveTimeout = 5_000
+```
+
+### Streams SSE
+
+Os Server-Sent Events são longos por natureza, por isso dá-lhes um heartbeat e um
+limite de vida. O `send()` devolve também um booleano de **backpressure** — para de
+produzir quando for `false`:
+
+```ts
+return sse(async (stream) => {
+  for await (const update of source) {
+    if (!stream.send({ data: update })) break // o cliente não acompanha → abranda
+  }
+}, { heartbeatMs: 15_000, maxDurationMs: 30 * 60_000 }) // ping a cada 15s, limite de 30 min
+```
+
+Os pings de heartbeat impedem os proxies de largar um stream inativo e revelam um socket
+morto; o `maxDurationMs` é um backstop contra conexões que nunca desligam. Limita o
+número de streams concorrentes por utilizador/tenant no teu handler para um teto rígido.
+
+### Endpoints de cerimónia (WebAuthn, MFA)
+
+Endpoints que emitem um challenge ou verificam um código são pré-auth e baratos de
+martelar — faz-lhes throttle. Reutiliza o [bloqueio por força bruta](#bloqueio-por-forca-bruta)
+e limites por-rota, e em produção suporta o `PasskeyStore` / `WebAuthnChallengeStore` do
+WebAuthn (e os stores de MFA) com uma implementação **durável**, não o default em memória.
+
+### Re-verificação de domínios custom
+
+Um domínio custom verificado que depois expira ou repointa o DNS é um risco de takeover.
+Re-verifica num agendamento com [`@basaltkit/scheduler`](/pt/guide/scheduler) — o
+`verify(tenantId, domain, { force })` re-verifica o registo TXT e **revoga** o domínio se
+já não corresponder:
+
+```ts
+schedule.call('reverify-domains', async () => {
+  for (const { tenantId, domain } of await listVerifiedDomains()) {
+    await customDomains.verify(tenantId, domain, { force: true })
+  }
+}).daily().at('04:00')
+```
+
 ## Segredos fail-closed — `secret()`
 
 O incidente de produção mais comum é enviar uma chave de assinatura placeholder.

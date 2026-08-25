@@ -78,7 +78,9 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
     name: 'basalt:fastify',
     register({ container }) {
       container.singleton(FASTIFY, () => {
-        const instance = Fastify(options.fastify ?? {})
+        // Anti-slowloris default: cap how long the whole request may take to arrive.
+        // Fastify's default is 0 (disabled); a caller-supplied value always wins.
+        const instance = Fastify({ requestTimeout: 30_000, ...(options.fastify ?? {}) })
         instance.setErrorHandler(errorHandler)
         // Fastify's default JSON parser throws on an empty body — but a POST to a
         // bodiless route (e.g. an @basaltkit/sdk call with no payload) still sends
