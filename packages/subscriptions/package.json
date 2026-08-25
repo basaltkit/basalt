@@ -33,7 +33,7 @@
     "@hono/node-server": "^1.13.0",
     "@types/node": "^22.15.0",
     "express": "^5.0.0",
-    "hono": "^4.13.0",
+    "hono": "^4.13.4",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
