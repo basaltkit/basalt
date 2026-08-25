@@ -33,9 +33,11 @@ function contextFromRequest(): FlagContext {
   return context
 }
 
-/** Stable 0–99 bucket for a (flag, subject) pair. */
+/** Stable 0–99 bucket for a (flag, subject) pair. The hash only needs to spread
+ * subjects evenly and deterministically — it is not a security primitive — but we
+ * use SHA-256 (not SHA-1) so static analysis isn't tripped by a weak algorithm. */
 function bucket(flag: string, subject: string): number {
-  const hex = createHash('sha1').update(`${flag}:${subject}`).digest('hex').slice(0, 8)
+  const hex = createHash('sha256').update(`${flag}:${subject}`).digest('hex').slice(0, 8)
   return parseInt(hex, 16) % 100
 }
 
