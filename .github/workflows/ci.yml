@@ -54,10 +54,6 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
-    # Informational under Vitest 4: its projects+coverage model under-instruments
-    # the monorepo (~half the packages), so the gate doesn't block. Tests still run
-    # in `verify`. Re-enable enforcement once the coverage config is fixed.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -68,8 +64,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build
         run: pnpm build
-      - name: Test with coverage (enforces thresholds)
+      - name: Test with coverage (informational under Vitest 4 — see issue #195)
         run: pnpm test:coverage
+        # Vitest 4's projects+coverage model under-instruments the monorepo, so the
+        # gate is informational (doesn't fail the job). Tests are gated in `verify`.
+        continue-on-error: true
 
   audit:
     name: audit (supply chain)
