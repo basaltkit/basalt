@@ -34,7 +34,7 @@ describe('plan store', () => {
     const subs = new Subscriptions({
       plans,
       fallbackPlan: 'free',
-      subscriptions: new MemorySubscriptionStore(),
+      store: new MemorySubscriptionStore(),
       usage: new MemoryUsageStore(),
     })
     await subs.subscribe('acme', 'pro')

@@ -194,3 +194,19 @@ describe('WebAuthnService — security hardening (audit remediation)', () => {
     )
   })
 })
+
+describe('webauthnPlugin', () => {
+  it('binds a WebAuthnService under the WEBAUTHN token with in-memory defaults', async () => {
+    const { createApp } = await import('@basaltkit/core')
+    const { webauthnPlugin, WEBAUTHN, WebAuthnService } = await import('../src/index.js')
+    const app = await createApp({
+      plugins: [webauthnPlugin({ config, verifier: fakeVerifier() })],
+    }).boot()
+    const service = app.container.get(WEBAUTHN)
+    expect(service).toBeInstanceOf(WebAuthnService)
+    // it works end-to-end with the default in-memory stores
+    const options = await service.startRegistration('s', { id: 'u1', name: 'a@x.io' })
+    expect(options.rp.id).toBe('example.com')
+    await app.shutdown()
+  })
+})

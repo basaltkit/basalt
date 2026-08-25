@@ -7,7 +7,7 @@ import type { DeliveryResult } from '../src/index.js'
 
 /** A WebhookManager stand-in — real delivery would hit the SSRF guard. */
 function fakeWebhooks() {
-  const calls: Array<{ event: string; data: unknown; tenantId?: string }> = []
+  const calls: Array<{ event: string; data: unknown; tenantId: string | undefined }> = []
   let results: DeliveryResult[] = [{ endpointId: 'e1', ok: true, attempts: 1 }]
   const manager = {
     async dispatch(event: string, data: unknown, tenantId?: string) {

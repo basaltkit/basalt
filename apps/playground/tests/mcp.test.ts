@@ -33,14 +33,18 @@ describe('playground MCP endpoint', () => {
       { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_projects', arguments: {} } },
       tenant,
     )
-    expect(listed.result.structuredContent).toHaveLength(1)
+    // Array results carry their data in `content` (as JSON text), not
+    // `structuredContent` — MCP only sets structuredContent for plain objects
+    // (Claude Desktop rejects array structuredContent). See @basaltkit/mcp.
+    const listRows = (r: typeof listed) => JSON.parse(r.result.content[0].text) as unknown[]
+    expect(listRows(listed)).toHaveLength(1)
 
     // a different tenant sees none — isolation holds through MCP
     const other = await rpc(
       { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_projects', arguments: {} } },
       { 'x-tenant-id': 'globex' },
     )
-    expect(other.result.structuredContent).toEqual([])
+    expect(listRows(other)).toEqual([])
     await app.shutdown()
   })
 })
