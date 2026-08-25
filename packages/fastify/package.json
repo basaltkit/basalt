@@ -21,7 +21,7 @@
   "dependencies": {
     "@basaltkit/core": "workspace:^",
     "@basaltkit/http": "workspace:^",
-    "fastify": "^5.3.0"
+    "fastify": "^5.12.1"
   },
   "peerDependencies": {
     "zod": "^3.24.0 || ^4.0.0"
