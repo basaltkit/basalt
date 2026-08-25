@@ -31,7 +31,7 @@ export function serveMcpStdio(
   options: McpStdioOptions = {},
 ): McpStdioHandle {
   const server: McpServer = app.container.get(MCP)
-  const input = options.input ?? process.stdin
+  const input: NodeJS.ReadableStream = options.input ?? process.stdin
   const output = options.output ?? process.stdout
   const headers = options.headers ?? {}
 
