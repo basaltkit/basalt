@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 200" role="img" aria-labelledby="t">
+  <title id="t">Basalt — horizontal logo (light)</title>
+  <!-- Brandmark -->
+  <g transform="translate(20,25) scale(0.75)" stroke="#0E1116" stroke-width="2" stroke-linejoin="round">
+    <polygon points="127.5,27.37 155,75 127.5,122.63 72.5,122.63 45,75 72.5,27.37" fill="#7B8B99"/>
+    <polygon points="45,75 72.5,122.63 72.5,167.63 45,120" fill="#2C3843"/>
+    <polygon points="72.5,122.63 127.5,122.63 127.5,167.63 72.5,167.63" fill="#3C4C59"/>
+    <polygon points="127.5,122.63 155,75 155,120 127.5,167.63" fill="#232E38"/>
+    <line x1="100" y1="124.5" x2="100" y2="165.6" stroke="#FF5A1F" stroke-width="4" stroke-linecap="round"/>
+    <line x1="100" y1="127" x2="100" y2="163" stroke="#FFB347" stroke-width="1.6" stroke-linecap="round"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="196" y="132" font-family="'Helvetica Neue', 'Arial Nova', Arial, sans-serif" font-size="104" font-weight="600" letter-spacing="-3" fill="#14181F">Basalt</text>
+</svg>
