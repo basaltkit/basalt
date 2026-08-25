@@ -79,6 +79,7 @@ export {
   githubProvider,
   oidcProvider,
   discoverOidcProvider,
+  stripTrailingSlashes,
   OAuthProviderUnknownError,
   OAuthStateInvalidError,
   OAuthExchangeError,

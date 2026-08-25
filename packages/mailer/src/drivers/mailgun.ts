@@ -1,6 +1,13 @@
 import type { MailDriver } from '../driver.js'
 import { MailDeliveryError, type ResolvedMail } from '../message.js'
 
+/** Strip trailing '/' without a backtracking regex (avoids ReDoS on long runs). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--
+  return s.slice(0, end)
+}
+
 export interface MailgunDriverOptions {
   /** Mailgun private API key. */
   apiKey: string
@@ -27,7 +34,7 @@ export class MailgunMailDriver implements MailDriver {
 
   constructor(private readonly options: MailgunDriverOptions) {
     const region = options.region === 'eu' ? 'https://api.eu.mailgun.net/v3' : 'https://api.mailgun.net/v3'
-    this.baseUrl = (options.baseUrl ?? region).replace(/\/+$/, '')
+    this.baseUrl = stripTrailingSlashes(options.baseUrl ?? region)
     this.doFetch = options.fetch ?? fetch
   }
 

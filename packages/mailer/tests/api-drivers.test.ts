@@ -152,3 +152,26 @@ describe('MailgunMailDriver', () => {
     )
   })
 })
+
+describe('API driver baseUrl normalization', () => {
+  it('strips every trailing slash from the Resend baseUrl', async () => {
+    const { fn, calls } = fakeFetch({ ok: true, status: 200 })
+    await new ResendMailDriver({ apiKey: 'k', baseUrl: 'https://mail.test///', fetch: fn }).send(mail)
+    expect(calls[0]!.url).toBe('https://mail.test/emails')
+  })
+
+  it('strips every trailing slash from the Mailgun baseUrl', async () => {
+    const { fn, calls } = fakeFetch({ ok: true, status: 200 })
+    await new MailgunMailDriver({ apiKey: 'k', domain: 'd', baseUrl: 'https://mg.test/api///', fetch: fn }).send(mail)
+    expect(calls[0]!.url).toBe('https://mg.test/api/d/messages')
+  })
+
+  it('resolves a pathological trailing-slash run promptly (no ReDoS)', async () => {
+    const { fn, calls } = fakeFetch({ ok: true, status: 200 })
+    // A long slash run followed by a non-slash char is the polynomial-ReDoS
+    // trigger for /\/+$/; the linear trim returns the string unchanged, fast.
+    const baseUrl = 'https://x/' + '/'.repeat(100000) + 'a'
+    await new MailgunMailDriver({ apiKey: 'k', domain: 'd', baseUrl, fetch: fn }).send(mail)
+    expect(calls[0]!.url).toBe(baseUrl + '/d/messages')
+  })
+})

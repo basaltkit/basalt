@@ -9,6 +9,13 @@ import { BasaltError } from '@basaltkit/core'
  * and only let **verified** domains resolve. (TLS certificate provisioning is
  * infrastructure and out of scope.)
  */
+/** Strip trailing '.' without a backtracking regex (avoids ReDoS on long runs). */
+function stripTrailingDots(s: string): string {
+  let end = s.length
+  while (end > 0 && s.charCodeAt(end - 1) === 46 /* '.' */) end--
+  return s.slice(0, end)
+}
+
 export interface CustomDomain {
   domain: string
   tenantId: string
@@ -30,7 +37,7 @@ export function normalizeDomain(input: string): string {
   let host = input.trim().toLowerCase()
   if (host.startsWith('[')) host = host.slice(1, host.indexOf(']') > 0 ? host.indexOf(']') : undefined) // IPv6
   else host = host.split(':')[0] ?? host // strip port
-  host = host.replace(/\.+$/, '') // strip ALL trailing dots (FQDN form / `com..`) — idempotent
+  host = stripTrailingDots(host) // strip ALL trailing dots (FQDN form / `com..`) — idempotent
   try {
     // URL applies IDNA (unicode → punycode ASCII); guards against homograph tricks.
     return new URL(`http://${host}`).hostname

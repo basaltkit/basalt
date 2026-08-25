@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createApp, runWithContext } from '@basaltkit/core'
 import { defineEvent, EVENTS, eventsPlugin } from '@basaltkit/events'
 import { z } from 'zod'
-import { AUDIT, auditPlugin, patternMatches, piiMinimizingRedactor, pseudonymize } from '../src/index.js'
+import { AUDIT, auditPlugin, patternMatches, piiMinimizingRedactor, pseudonymize, redactSensitiveAndPii } from '../src/index.js'
 
 describe('patternMatches', () => {
   it('handles hook (:) and event (.) separators with * and **', () => {
@@ -166,5 +166,34 @@ describe('auditPlugin', () => {
     expect(user['email']).toBe(pseudonymize('alice@example.com'))
     expect(user['email']).not.toContain('alice@example.com')
     expect(user['id']).toBe('u1')
+  })
+})
+
+describe('redactSensitiveAndPii — email detection is ReDoS-safe (js/polynomial-redos)', () => {
+  it('still pseudonymizes a normal email-shaped value', () => {
+    expect(redactSensitiveAndPii('alice@example.com')).toBe(pseudonymize('alice@example.com'))
+  })
+
+  it('leaves a plain non-email string untouched', () => {
+    expect(redactSensitiveAndPii('just a log line')).toBe('just a log line')
+  })
+
+  it('does NOT pseudonymize a very long non-email string, and returns promptly', () => {
+    // Pathological input for the /^[^\s@]+@[^\s@]+\.[^\s@]+$/ regex: a long run of
+    // non-space/non-@ chars with no '@' — classic backtracking trigger.
+    const evil = `${'a'.repeat(200_000)}!`
+    const start = performance.now()
+    const out = redactSensitiveAndPii(evil)
+    const elapsed = performance.now() - start
+    expect(out).toBe(evil) // over the length bound → never runs the regex → unchanged
+    expect(elapsed).toBeLessThan(100) // bounded before the regex; no backtracking blowup
+  })
+
+  it('a long value that starts email-like but is over the bound is not pseudonymized', () => {
+    const evil = `a@b.${'c'.repeat(200_000)}@`
+    const start = performance.now()
+    const out = redactSensitiveAndPii(evil)
+    expect(performance.now() - start).toBeLessThan(100)
+    expect(out).toBe(evil)
   })
 })

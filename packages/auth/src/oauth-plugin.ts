@@ -2,7 +2,7 @@ import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/fastify'
 import { z } from 'zod'
 import { AUTH } from './plugin.js'
-import { OAuth, type OAuthOptions, type OAuthProvider } from './oauth.js'
+import { OAuth, type OAuthOptions, type OAuthProvider, stripTrailingSlashes } from './oauth.js'
 
 export const OAUTH = createToken<OAuth>('auth.oauth')
 
@@ -47,7 +47,7 @@ export interface OAuthRoutesOptions {
  */
 export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
   const oauth = () => (ctx().container as Container).get(OAUTH)
-  const base = options.callbackBaseUrl.replace(/\/+$/, '')
+  const base = stripTrailingSlashes(options.callbackBaseUrl)
   const redirectUri = (provider: string): string => `${base}/auth/oauth/${provider}/callback`
 
   return [

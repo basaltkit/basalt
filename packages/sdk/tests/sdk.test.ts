@@ -168,3 +168,22 @@ describe('createClient', () => {
     })
   })
 })
+
+describe('createClient baseUrl normalization', () => {
+  it('strips every trailing slash from baseUrl', async () => {
+    const { calls, fetchMock } = harness(() => jsonResponse({ ok: true }))
+    const client = createClient(api, { baseUrl: 'https://api.test///', fetch: fetchMock })
+    await client.ping()
+    expect(calls[0]?.url).toBe('https://api.test/ping')
+  })
+
+  it('resolves a pathological trailing-slash run promptly (no ReDoS)', async () => {
+    const { calls, fetchMock } = harness(() => jsonResponse({ ok: true }))
+    // A long slash run followed by a non-slash char is the polynomial-ReDoS
+    // trigger for /\/+$/; the linear trim returns the string unchanged, fast.
+    const baseUrl = 'https://x/' + '/'.repeat(100000) + 'a'
+    const client = createClient(api, { baseUrl, fetch: fetchMock })
+    await client.ping()
+    expect(calls[0]?.url).toBe(baseUrl + '/ping')
+  })
+})
