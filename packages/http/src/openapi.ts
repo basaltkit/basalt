@@ -9,25 +9,43 @@ type JsonSchema = Record<string, unknown>
  * route definitions. Unknown types degrade to `{}` rather than throwing.
  */
 export function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
+  // Dates aren't a JSON type, so v4's native converter drops them to {}; keep
+  // the useful OpenAPI shape (works on both Zod v3 and v4 via instanceof).
+  if (schema instanceof z.ZodDate) return { type: 'string', format: 'date-time' }
   // Zod v4 ships a complete native converter and changed its internals (the
   // hand-rolled path below only understands Zod v3). Delegate to it when present.
   const native = (z as unknown as { toJSONSchema?: (s: unknown, o?: unknown) => JsonSchema }).toJSONSchema
   if (typeof native === 'function') {
-    const clean = (out: JsonSchema): JsonSchema => {
-      if (out && typeof out === 'object') delete (out as Record<string, unknown>)['$schema']
-      return out
+    // Normalise Zod 4's native output to the shape Basalt has always emitted,
+    // recursively (nested objects/arrays too): drop the $schema banner, strip
+    // the JS safe-integer bounds it stamps on every number, and treat a property
+    // with a `default` as optional (a client may omit it) rather than required.
+    const clean = (node: unknown): unknown => {
+      if (!node || typeof node !== 'object') return node
+      if (Array.isArray(node)) return node.map(clean)
+      const o = node as Record<string, unknown>
+      delete o['$schema']
+      if (o['minimum'] === -9007199254740991 || o['minimum'] === Number.MIN_SAFE_INTEGER) delete o['minimum']
+      if (o['maximum'] === 9007199254740991 || o['maximum'] === Number.MAX_SAFE_INTEGER) delete o['maximum']
+      const props = o['properties'] as Record<string, JsonSchema> | undefined
+      if (props && Array.isArray(o['required'])) {
+        o['required'] = (o['required'] as string[]).filter((k) => props[k]?.['default'] === undefined)
+        if ((o['required'] as string[]).length === 0) delete o['required']
+      }
+      for (const v of Object.values(o)) clean(v)
+      return o
     }
     try {
-      return clean(native(schema, { unrepresentable: 'any' }))
+      return clean(native(schema, { target: 'openapi-3.0', unrepresentable: 'any' })) as JsonSchema
     } catch {
       try {
-        return clean(native(schema))
+        return clean(native(schema)) as JsonSchema
       } catch {
         return {}
       }
     }
   }
-  const def = (schema as { _def?: Record<string, unknown> })?._def as Record<string, unknown> | undefined
+  const def = (schema as unknown as { _def?: Record<string, unknown> })?._def as Record<string, unknown> | undefined
   if (!def) return {}
   const anyDef = def as Record<string, unknown> & { typeName: string; checks?: { kind: string; value?: unknown; regex?: RegExp }[] }
   switch (anyDef.typeName) {

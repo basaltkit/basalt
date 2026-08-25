@@ -31,7 +31,7 @@ export interface SecretOptions {
 export function secret(options: SecretOptions = {}): z.ZodType<string> {
   const minLength = options.minLength ?? 16
   const checked = z
-    .string({ required_error: 'is required in production' })
+    .string()
     .min(minLength, `must be at least ${minLength} characters`)
     .refine(
       (value) => !(isProduction() && INSECURE.test(value)),

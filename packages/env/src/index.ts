@@ -38,7 +38,7 @@ export function defineEnv<TShape extends z.ZodRawShape>(
     throw new EnvValidationError(report)
   }
 
-  return Object.freeze(result.data)
+  return Object.freeze(result.data) as z.infer<z.ZodObject<TShape>>
 }
 
 export { secret, type SecretOptions } from './secret.js'
