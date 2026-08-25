@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/mcp",
-  "version": "0.2.3",
-  "description": "Model Context Protocol for Basalt: expose opt-in routes as MCP tools over HTTP (any adapter) or stdio, and consume external MCP servers as a client \u2014 all through the neutral route pipeline.",
+  "version": "1.0.0",
+  "description": "Model Context Protocol for Basalt: expose opt-in routes as MCP tools over HTTP (any adapter) or stdio, and consume external MCP servers as a client — all through the neutral route pipeline.",
   "license": "MIT",
   "type": "module",
   "exports": {
