@@ -1,5 +1,23 @@
 # @basaltkit/ai
 
+## 0.11.0
+
+### Minor Changes
+
+- 9f606fa: Security P2 — institutionalize:
+
+  - **`@basaltkit/tenancy` (fix):** `normalizeDomain` now strips _all_ trailing dots,
+    not just one — `example.com..` normalized to `example.com.` (non-idempotent),
+    which could sidestep the custom-domain dedup/lookup. Found by a new property/fuzz
+    test. Now idempotent and canonical for every input.
+  - **`@basaltkit/ai`:** new `ai:doctor` security rule **`in-memory-security-store`** —
+    warns when WebAuthn passkeys/challenges, roles & permissions, or verified custom
+    domains are kept in an in-memory store (lost on restart, not shared across
+    instances → lockouts or authorization drift in production).
+
+  Also adds parser property/fuzz tests (SSE encoder injection-resistance, domain
+  normalization totality/idempotence, TOTP roundtrip) that run in CI on every change.
+
 ## 0.10.0
 
 ### Minor Changes
@@ -28,7 +46,7 @@
 
 ### Patch Changes
 
-- **Review agent scope fix.** The `--review` agent could raise a *blocking* `fit`
+- **Review agent scope fix.** The `--review` agent could raise a _blocking_ `fit`
   error when the request asked for something outside `ai:make`'s scope (e.g. "web
   interfaces"), even though the generated backend was correct — found in a live
   run. The rubric now states `ai:make` produces a backend resource vertical only;
@@ -52,7 +70,7 @@
 ### Minor Changes
 
 - **Review agent (Fase 10, spec §19/§20).** `ai:make --review` runs an LLM pass
-  over the *generated code* (model, schema, routes, service, repository,
+  over the _generated code_ (model, schema, routes, service, repository,
   permissions) plus the deterministic review, and returns a verdict with issues by
   dimension (tenancy, security, rbac, validation, audit, tests, fit). `approved` is
   **derived from the issues** — any error-severity issue blocks (and makes the
@@ -135,13 +153,13 @@
   1. **Tenant-scoped repositories now scope `tenantId` explicitly** from the
      request context (`renderPrismaRepository`) instead of relying on a global
      `tenancyExtension`. Works on a raw Prisma client shared with non-tenant
-     models (e.g. auth) — previously `create` threw *"Argument tenantId is
-     missing"* (a 500) on the first tenant-scoped model.
+     models (e.g. auth) — previously `create` threw _"Argument tenantId is
+     missing"_ (a 500) on the first tenant-scoped model.
   2. **The repository mapper now maps every domain field** (with `DateTime →
-     ISO string`), not just id/name/timestamps — responses were dropping domain
+ISO string`), not just id/name/timestamps — responses were dropping domain
      fields before.
   3. **Follow-up + review text says `npx prisma db push`** (or `prisma migrate
-     dev`), not `basalt prisma:sync` (which only merges `@basaltkit/*-prisma`
+dev`), not `basalt prisma:sync` (which only merges `@basaltkit/*-prisma`
      package models and doesn't regenerate the client).
   4. **The generator's base `name` column is dropped** when the entity supplies
      its own fields and none is literally `name` (no more `name` + `nome`).
