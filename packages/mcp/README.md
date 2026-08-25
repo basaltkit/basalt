@@ -9,6 +9,9 @@ apply unchanged.
 This is a **runtime** package — distinct from the dev-only `@basaltkit/ai`
 codegen layer. No external SDK; Basalt speaks MCP's JSON-RPC directly.
 
+> **Status: 1.0 (stable).** Server and client, over both HTTP and stdio, are
+> settled and covered by semver: breaking changes land only in a new major.
+
 ## Server — expose routes as tools
 
 Opt a route in with `meta.mcp`, register `mcpPlugin`, and add `mcpRoutes()` to

@@ -5,9 +5,10 @@ AI-native developer experience for Basalt. A provider-agnostic engine plus a
 diagnoses issues — following the framework's own conventions instead of inventing
 new ones.
 
-> **Status: 0.1 (foundation).** This release ships the provider abstraction and
-> the read-only `ai:analyze` / `ai:doctor` commands. Natural-language planning and
-> scaffolding (`ai:plan`, `ai:make`) build on this foundation in later phases.
+> **Status: 1.0 (stable).** The provider abstraction and the full `basalt ai`
+> command surface — `ai:analyze`, `ai:doctor`, `ai:plan`, `ai:make`, `ai:review` —
+> are settled and covered by semver: breaking changes land only in a new major.
+> The AI layer stays **dev-only** — it is never a runtime dependency of your app.
 
 ## Install
 
