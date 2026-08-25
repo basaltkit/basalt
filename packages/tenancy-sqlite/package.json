@@ -17,7 +17,7 @@
     "node": ">=22.5.0"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -28,8 +28,7 @@
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.3.0",
-    "tsup": "^8.4.0",
-    "typescript": "^5.8.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },
   "publishConfig": {

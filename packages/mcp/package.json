@@ -14,7 +14,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -35,8 +35,7 @@
     "express": "^5.0.0",
     "fastify": "^5.12.1",
     "hono": "^4.13.4",
-    "tsup": "^8.4.0",
-    "typescript": "^5.8.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "zod": "^3.24.0 || ^4.0.0"
   },
