@@ -165,11 +165,11 @@ describe('fastify anti-slowloris default (security)', () => {
     const { fastifyPlugin, FASTIFY } = await import('../src/index.js')
 
     const a = await createApp({ plugins: [fastifyPlugin()] }).boot()
-    expect(a.container.get(FASTIFY).initialConfig.requestTimeout).toBe(30_000)
+    expect((a.container.get(FASTIFY).initialConfig as { requestTimeout?: number }).requestTimeout).toBe(30_000)
     await a.shutdown()
 
     const b = await createApp({ plugins: [fastifyPlugin({ fastify: { requestTimeout: 5_000 } })] }).boot()
-    expect(b.container.get(FASTIFY).initialConfig.requestTimeout).toBe(5_000) // override wins
+    expect((b.container.get(FASTIFY).initialConfig as { requestTimeout?: number }).requestTimeout).toBe(5_000) // override wins
     await b.shutdown()
   })
 })
