@@ -171,7 +171,16 @@ function detectAppFile(reader: ProjectReader): AppFileInfo | null {
     new RegExp(`\\b${factory}\\s*\\(`).test(found.content),
   )
   const fastifyLoggerConfigured = /fastify\s*:\s*\{[^}]*\blogger\b/.test(found.content)
-  const memorySources = ['MemoryTenantSource', 'MemoryUserSource'].filter((source) =>
+  const memorySources = [
+    'MemoryTenantSource',
+    'MemoryUserSource',
+    // Security-critical in-memory stores: auth/authorization/domain state that
+    // must survive restarts and be shared across instances in production.
+    'MemoryPasskeyStore',
+    'MemoryWebAuthnChallengeStore',
+    'MemoryAccessStore',
+    'MemoryDomainStore',
+  ].filter((source) =>
     found.content.includes(source),
   )
   const pluginCalls = [

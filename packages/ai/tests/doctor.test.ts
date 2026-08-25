@@ -121,3 +121,31 @@ describe('runDoctor on a healthy project', () => {
     expect(runDoctor(ctx)).toEqual([])
   })
 })
+
+describe('in-memory-security-store rule', () => {
+  const files = {
+    'package.json': JSON.stringify({ dependencies: { '@basaltkit/auth': '^1.0.0' } }),
+    'src/app.ts': `
+      import { webauthnPlugin, MemoryPasskeyStore } from '@basaltkit/auth'
+      export const app = createApp({ plugins: [
+        webauthnPlugin({ config, verifier, credentials: new MemoryPasskeyStore() }),
+      ] })
+    `,
+  }
+  const found = runDoctor(detectProject('/proj', memoryReader(files)))
+
+  it('flags a security store kept in memory as a warning', () => {
+    const d = found.find((x) => x.id === 'in-memory-security-store')
+    expect(d?.severity).toBe('warning')
+    expect(d?.category).toBe('security')
+    expect(d?.detected).toContain('WebAuthn passkeys')
+  })
+
+  it('does not fire when no in-memory security store is used', () => {
+    const clean = runDoctor(detectProject('/p', memoryReader({
+      'package.json': '{}',
+      'src/app.ts': 'export const app = createApp({ plugins: [] })',
+    })))
+    expect(clean.find((x) => x.id === 'in-memory-security-store')).toBeUndefined()
+  })
+})
