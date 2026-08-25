@@ -1,6 +1,6 @@
 # @basaltkit/teams-sqlite
 
-Durable, **SQLite-backed** implementations of the [`@basaltkit/teams`](https://github.com/Zebedeu/basalt/tree/main/packages/teams)
+Durable, **SQLite-backed** implementations of the [`@basaltkit/teams`](https://github.com/basaltkit/basalt/tree/main/packages/teams)
 stores — **memberships** and **invitations** — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
@@ -9,7 +9,7 @@ dependencies.**
 in these and team rosters and pending invitations survive a redeploy — no ORM,
 no migration tool, no service to run. It's the single-node reference backend for
 teams; the production (Postgres/MySQL) counterpart is
-[`@basaltkit/teams-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/teams-prisma).
+[`@basaltkit/teams-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/teams-prisma).
 
 ```bash
 pnpm add @basaltkit/teams-sqlite   # peer: @basaltkit/teams

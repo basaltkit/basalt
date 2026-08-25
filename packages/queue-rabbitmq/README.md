@@ -89,4 +89,4 @@ Implements the `QueueDriver` contract from `@basaltkit/queue` (`add`, `startWork
 ## How it connects to other modules
 
 - **`@basaltkit/queue`** — this is a driver for that package; the entire job API comes from there.
-- See also the sibling drivers: [`@basaltkit/queue-kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) and [`@basaltkit/queue-sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs), and the [Queues & Jobs](https://github.com/Zebedeu/basalt) guide for writing your own driver.
+- See also the sibling drivers: [`@basaltkit/queue-kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) and [`@basaltkit/queue-sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs), and the [Queues & Jobs](https://github.com/basaltkit/basalt) guide for writing your own driver.

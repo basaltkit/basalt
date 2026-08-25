@@ -203,7 +203,7 @@ Por HTTP, aponta-o ao teu endpoint `POST /mcp`.
 
 ## Experimenta no playground
 
-O [`apps/playground`](https://github.com/Zebedeu/basalt/tree/main/apps/playground)
+O [`apps/playground`](https://github.com/basaltkit/basalt/tree/main/apps/playground)
 do repositório marca três rotas para MCP — `create_project`, `list_projects`,
 `get_project` — e traz uma entrada stdio. Aponta o Claude Desktop para ela:
 

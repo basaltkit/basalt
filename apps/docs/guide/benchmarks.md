@@ -6,7 +6,7 @@ Short answer: **on Fastify, roughly 10–17% throughput overhead** for the
 container, plugin boot, request context, route metadata and validation pipeline.
 Meaningful but modest — you're trading it for the whole `@basaltkit/*` toolkit.
 The reproducible harness lives in
-[`apps/bench`](https://github.com/Zebedeu/basalt/tree/main/apps/bench).
+[`apps/bench`](https://github.com/basaltkit/basalt/tree/main/apps/bench).
 
 ## Method
 

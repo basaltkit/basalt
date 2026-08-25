@@ -1,6 +1,6 @@
 # @basaltkit/search-elasticsearch
 
-[Elasticsearch](https://www.elastic.co/elasticsearch) / [OpenSearch](https://opensearch.org) driver for [`@basaltkit/search`](https://github.com/Zebedeu/basalt/tree/main/packages/search).
+[Elasticsearch](https://www.elastic.co/elasticsearch) / [OpenSearch](https://opensearch.org) driver for [`@basaltkit/search`](https://github.com/basaltkit/basalt/tree/main/packages/search).
 
 Targets the REST API directly — **no SDK**, an injectable `fetch`, so the
 requests are unit-tested without a cluster. Works against Elasticsearch 8.x and

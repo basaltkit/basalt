@@ -356,7 +356,7 @@ export function readme(options: ProjectOptions): string {
   ]
   return `# ${options.name}
 
-A SaaS app scaffolded with [Basalt](https://github.com/Zebedeu/basalt).
+A SaaS app scaffolded with [Basalt](https://github.com/basaltkit/basalt).
 
 Included: ${features.join(' · ')}.
 

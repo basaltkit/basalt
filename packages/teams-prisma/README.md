@@ -1,13 +1,13 @@
 # @basaltkit/teams-prisma
 
-**Prisma-backed** implementations of the [`@basaltkit/teams`](https://github.com/Zebedeu/basalt/tree/main/packages/teams)
+**Prisma-backed** implementations of the [`@basaltkit/teams`](https://github.com/basaltkit/basalt/tree/main/packages/teams)
 stores — **memberships** and **invitations** — for production databases
 (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` whose schema includes the `Team*` models;
 the stores only touch those delegates, so they layer onto your existing client
 without owning your schema. It's the production counterpart to
-[`@basaltkit/teams-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/teams-sqlite)
+[`@basaltkit/teams-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/teams-sqlite)
 (the zero-dependency, single-node option) — same store contracts.
 
 ```bash
@@ -73,7 +73,7 @@ Each store is also exported on its own (`PrismaMembershipStore`,
 
 ## Multi-tenant?
 
-Pair with [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma)
+Pair with [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma)
 to resolve the per-tenant client from the request context and build the stores
 over it.
 

@@ -64,7 +64,7 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 
 ## Exemplo vivo — o playground
 
-O [`apps/playground`](https://github.com/Zebedeu/basalt/tree/main/apps/playground)
+O [`apps/playground`](https://github.com/basaltkit/basalt/tree/main/apps/playground)
 do repositório é a mesma lista neutra de `route()` (um pequeno CRUD de Projetos +
 multi-tenancy) servida nos **três** adaptadores. Só muda a última linha do
 `buildApp()` — escolhe o runtime com uma variável de ambiente:

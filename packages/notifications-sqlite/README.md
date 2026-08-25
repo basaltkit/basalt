@@ -1,7 +1,7 @@
 # @basaltkit/notifications-sqlite
 
 Durable, **SQLite-backed** implementation of the
-[`@basaltkit/notifications`](https://github.com/Zebedeu/basalt/tree/main/packages/notifications)
+[`@basaltkit/notifications`](https://github.com/basaltkit/basalt/tree/main/packages/notifications)
 `InAppStore` — the in-app notification inbox — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
@@ -9,7 +9,7 @@ dependencies.**
 Swap it in for the in-memory store and the inbox survives a restart — no ORM, no
 migration tool, no service. The single-node reference backend; the production
 (Postgres/MySQL) counterpart is
-[`@basaltkit/notifications-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/notifications-prisma).
+[`@basaltkit/notifications-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/notifications-prisma).
 
 ```bash
 pnpm add @basaltkit/notifications-sqlite   # peer: @basaltkit/notifications

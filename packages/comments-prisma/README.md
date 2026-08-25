@@ -1,13 +1,13 @@
 # @basaltkit/comments-prisma
 
 **Prisma-backed** implementation of the
-[`@basaltkit/comments`](https://github.com/Zebedeu/basalt/tree/main/packages/comments)
+[`@basaltkit/comments`](https://github.com/basaltkit/basalt/tree/main/packages/comments)
 `CommentStore` — per-resource threads with @mentions and resolve/reopen — for
 production databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the `Comment` model; the store only
 touches that delegate. The production counterpart to
-[`@basaltkit/comments-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/comments-sqlite).
+[`@basaltkit/comments-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/comments-sqlite).
 
 ```bash
 pnpm add @basaltkit/comments-prisma   # peer: @basaltkit/comments ; you already have @prisma/client

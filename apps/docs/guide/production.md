@@ -198,11 +198,11 @@ The repo ships GitHub Actions that gate every PR:
 
 `pnpm lint` (ESLint), `pnpm typecheck`, and `pnpm test:coverage` (V8, enforced
 thresholds) all run in CI, alongside `pnpm audit`, CodeQL and a Postgres
-integration job. Versions move in [lockstep](https://github.com/Zebedeu/basalt/blob/main/VERSIONING.md)
+integration job. Versions move in [lockstep](https://github.com/basaltkit/basalt/blob/main/VERSIONING.md)
 across `@basaltkit/*`, so one range covers the whole toolkit.
 
 ## Roadmap
 
 Toward `1.0`: settling the API surface, first-class OpenTelemetry **metrics**
 export (traces already export via OTLP), and more persistence adapters. Track
-progress on the [repository](https://github.com/Zebedeu/basalt).
+progress on the [repository](https://github.com/basaltkit/basalt).
