@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Basalt is at **1.x** (current release: **Basalt 1.1**, the security-hardened
+Basalt is at **1.x** (current release: **Basalt 1.3**, the security-hardened
 line). The `@basaltkit/*` packages are versioned **independently**, so security
 fixes ship in each package's latest release — upgrade to the newest
 `@basaltkit/*` versions to receive them. Each package major receives 12 months of
