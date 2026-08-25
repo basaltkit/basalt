@@ -23,7 +23,7 @@
     "@basaltkit/fastify": "workspace:^",
     "@basaltkit/mailer": "workspace:^",
     "@basaltkit/queue": "workspace:^",
-    "fastify": "^5.3.0"
+    "fastify": "^5.12.1"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",

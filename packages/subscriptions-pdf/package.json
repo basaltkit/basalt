@@ -10,14 +10,16 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pdfkit": "^0.15.0 || ^0.16.0 || ^0.17.0 || ^0.20.0"
+    "pdfkit": "^0.20.1"
   },
   "peerDependencies": {
     "@basaltkit/subscriptions": "workspace:^"
@@ -31,7 +33,9 @@
     "typescript": "^5.8.0",
     "vitest": "^3.1.0"
   },
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/basaltkit/basalt.git",
@@ -39,5 +43,12 @@
   },
   "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/subscriptions-pdf#readme",
   "bugs": "https://github.com/basaltkit/basalt/issues",
-  "keywords": ["basalt", "subscriptions", "billing", "invoice", "pdf", "pdfkit"]
+  "keywords": [
+    "basalt",
+    "subscriptions",
+    "billing",
+    "invoice",
+    "pdf",
+    "pdfkit"
+  ]
 }
