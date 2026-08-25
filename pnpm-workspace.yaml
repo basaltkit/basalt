@@ -44,6 +44,8 @@ minimumReleaseAgeExclude:
 
 # Force zod 4 across the tree while ranges stay `^3 || ^4` (library compat).
 overrides:
+  ioredis: ^6.0.0
+  pino: ^10.3.1
   eslint: ^10.9.1
   react: ^19.2.8
   react-dom: ^19.2.8
