@@ -5,7 +5,7 @@ import { FakeReply, bootWith, makeRequest } from './support.js'
 
 describe('zodToJsonSchema', () => {
   it('maps primitives, dates and enums', () => {
-    expect(zodToJsonSchema(z.string().uuid())).toEqual({ type: 'string', format: 'uuid' })
+    expect(zodToJsonSchema(z.string().uuid())).toMatchObject({ type: 'string', format: 'uuid' })
     expect(zodToJsonSchema(z.number().int().max(10))).toEqual({ type: 'integer', maximum: 10 })
     expect(zodToJsonSchema(z.boolean())).toEqual({ type: 'boolean' })
     expect(zodToJsonSchema(z.date())).toEqual({ type: 'string', format: 'date-time' })

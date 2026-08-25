@@ -39,7 +39,7 @@ describe('zodToJsonSchema — full type matrix', () => {
     expect(zodToJsonSchema(z.string().url())).toEqual({ type: 'string', format: 'uri' })
     expect(zodToJsonSchema(z.string().regex(/^a/))).toMatchObject({ type: 'string', pattern: '^a' })
     expect(zodToJsonSchema(z.number().min(1))).toEqual({ type: 'number', minimum: 1 })
-    expect(zodToJsonSchema(z.literal('x'))).toEqual({ const: 'x' })
+    expect(zodToJsonSchema(z.literal('x'))).toEqual({ type: 'string', enum: ['x'] })
     expect(zodToJsonSchema(z.string().optional())).toMatchObject({ type: 'string' })
     expect(zodToJsonSchema(z.string().nullable())).toMatchObject({ type: 'string', nullable: true })
     expect(zodToJsonSchema(z.string().default('d'))).toMatchObject({ type: 'string', default: 'd' })

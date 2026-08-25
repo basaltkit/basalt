@@ -1,7 +1,7 @@
 {
   "name": "playground",
   "private": true,
-  "description": "Basalt reference app — the same neutral route() list served on fastify, express AND hono (ADAPTER=env), also exposed as MCP tools. Living E2E of the core (config, env, logger, events, tenancy, HTTP, MCP).",
+  "description": "Basalt reference app \u2014 the same neutral route() list served on fastify, express AND hono (ADAPTER=env), also exposed as MCP tools. Living E2E of the core (config, env, logger, events, tenancy, HTTP, MCP).",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -23,7 +23,7 @@
     "@basaltkit/mcp": "workspace:*",
     "@basaltkit/tenancy": "workspace:*",
     "@hono/node-server": "^1.13.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:*",

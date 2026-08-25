@@ -2,7 +2,7 @@
   "name": "admin-demo",
   "private": true,
   "type": "module",
-  "description": "A runnable admin dashboard built from @basaltkit/admin, @basaltkit/dashboard and @basaltkit/admin-shadcn — pnpm --filter admin-demo dev.",
+  "description": "A runnable admin dashboard built from @basaltkit/admin, @basaltkit/dashboard and @basaltkit/admin-shadcn \u2014 pnpm --filter admin-demo dev.",
   "scripts": {
     "dev": "vite",
     "preview": "vite preview"
@@ -14,7 +14,7 @@
     "@basaltkit/subscriptions": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",

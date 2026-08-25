@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/http",
   "version": "1.9.0",
-  "description": "Framework-neutral HTTP core for Basalt: typed routes, request pipeline (validation, enrichers, guards), and error mapping — shared by the Fastify, Express and Hono adapters.",
+  "description": "Framework-neutral HTTP core for Basalt: typed routes, request pipeline (validation, enrichers, guards), and error mapping \u2014 shared by the Fastify, Express and Hono adapters.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -22,7 +22,7 @@
     "@basaltkit/core": "workspace:^"
   },
   "peerDependencies": {
-    "zod": "^3.24.0"
+    "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
@@ -30,7 +30,7 @@
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0 || ^4.0.0"
   },
   "publishConfig": {
     "access": "public"

@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/api-keys-ui",
   "version": "1.0.0",
-  "description": "A self-contained HTML page to manage @basaltkit/auth API keys: create (show once), list and revoke — zero dependencies, no build.",
+  "description": "A self-contained HTML page to manage @basaltkit/auth API keys: create (show once), list and revoke \u2014 zero dependencies, no build.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -30,7 +30,7 @@
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0 || ^4.0.0"
   },
   "publishConfig": {
     "access": "public"
