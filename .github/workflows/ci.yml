@@ -62,6 +62,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
       - name: Test with coverage (enforces thresholds)
         run: pnpm test:coverage
 

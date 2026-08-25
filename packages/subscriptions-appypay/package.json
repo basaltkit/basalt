@@ -49,5 +49,6 @@
     "emis",
     "angola",
     "subscriptions"
-  ]
+  ],
+  "private": true
 }

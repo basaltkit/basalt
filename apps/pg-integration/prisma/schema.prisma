@@ -83,6 +83,7 @@ model AuthMfa {
   secret        String
   enabled       Boolean  @default(false)
   recoveryCodes String[]
+  lastUsedStep  Int?
 
   @@map("auth_mfa")
 }

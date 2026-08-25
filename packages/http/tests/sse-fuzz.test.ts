@@ -13,8 +13,8 @@ describe('encodeSseEvent — injection-resistance (fuzz)', () => {
     for (let i = 0; i < 2000; i++) {
       const event = {
         data: Array.from({ length: i % 5 }, (_, k) => rand(i + k)).join(''),
-        event: i % 3 ? rand(i) : undefined,
-        id: i % 2 ? rand(i * 2) : undefined,
+        ...(i % 3 ? { event: rand(i) } : {}),
+        ...(i % 2 ? { id: rand(i * 2) } : {}),
       }
       const frame = encodeSseEvent(event)
       expect(frame.endsWith('\n\n')).toBe(true)
