@@ -5,7 +5,7 @@ import { FASTIFY, fastifyPlugin, generateOpenApi, openapiPlugin, route, zodToJso
 
 describe('zodToJsonSchema', () => {
   it('maps common Zod types', () => {
-    expect(zodToJsonSchema(z.string().email())).toEqual({ type: 'string', format: 'email' })
+    expect(zodToJsonSchema(z.string().email())).toMatchObject({ type: 'string', format: 'email' })
     expect(zodToJsonSchema(z.number().int().min(1))).toEqual({ type: 'integer', minimum: 1 })
     expect(zodToJsonSchema(z.enum(['a', 'b']))).toEqual({ type: 'string', enum: ['a', 'b'] })
     expect(zodToJsonSchema(z.array(z.boolean()))).toEqual({ type: 'array', items: { type: 'boolean' } })

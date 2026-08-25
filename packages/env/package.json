@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/env",
   "version": "1.0.0",
-  "description": "Typed environment variable validation with Zod — fails at boot with an aggregated report.",
+  "description": "Typed environment variable validation with Zod \u2014 fails at boot with an aggregated report.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -30,7 +30,7 @@
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0 || ^4.0.0"
   },
   "publishConfig": {
     "access": "public"
