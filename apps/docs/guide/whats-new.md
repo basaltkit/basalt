@@ -1,71 +1,51 @@
-# What's new in Basalt 1.3
+# What's new in Basalt 1.4
 
-> *"Basalt 1.3" is the umbrella label for this wave of work; the `@basaltkit/*`
+> *"Basalt 1.4" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
 
-Basalt 1.3 rounds out the framework's scaling, real-time and passwordless story —
-and hardens all of it with a dedicated adversarial security pass.
+Basalt 1.4 is a foundations-and-hardening release: it modernizes the toolchain,
+puts real teeth back into the quality and security gates, and graduates the AI
+surface to a stable 1.0.
 
 ## Highlights
 
-### Real-time & transport
-- **Server-Sent Events** — typed `sse()` producers wired identically into Fastify,
-  Express and Hono. `send()` returns a backpressure signal; `id`/`event` are
-  injection-safe. *(`@basaltkit/http` 1.8, adapters 1.5/1.2/1.2)*
+### TypeScript 7 toolchain
+- **The whole monorepo compiles, type-checks and tests on the TypeScript 7 native
+  compiler.** Every package's build moved from `tsup` to plain `tsc` — dropping
+  `rollup-plugin-dts`, which is incompatible with the TS 7 compiler — with no change
+  to the published `exports`/`types` contracts. Linting stays on its supported
+  TypeScript until `typescript-eslint` ships TS 7 support.
 
-### Scaling data
-- **Read replicas** — `readReplica({ primary, replicas, extend })` routes reads
-  across replicas and writes to the primary; `extend` guarantees every replica
-  carries your tenant scoping. *(`@basaltkit/prisma` 1.4)*
-- **Horizontal sharding** — `ShardRouter` maps each tenant to a fixed database with
-  a deterministic hash; wire it with `prismaPlugin({ shards })`. *(`@basaltkit/prisma` 1.4)*
+### AI & MCP → 1.0
+- **`@basaltkit/ai` 1.0** — the dev-only AI developer experience: a provider-agnostic
+  engine plus the `basalt ai` CLI (`analyze`, `doctor`, `plan`, `make`, `review`),
+  now under a stable public API. It stays dev-only — never a runtime dependency of
+  your app. *(`@basaltkit/ai` 1.0)*
+- **`@basaltkit/mcp` 1.0** — the runtime Model Context Protocol surface: expose
+  opt-in routes as tools over **HTTP (any adapter)** or **stdio**, and consume
+  external MCP servers as a client — all through the neutral route pipeline, no
+  external SDK. *(`@basaltkit/mcp` 1.0)*
 
-### Multi-tenancy
-- **Custom domains** — register a tenant's own domain, prove ownership with a DNS
-  TXT record, and resolve only **verified** domains via `findByVerifiedDomain`.
-  *(`@basaltkit/tenancy` 1.3)*
+### Quality gate
+- **The coverage gate is enforced again.** It had gone informational; it now blocks
+  regressions, scoped to unit-testable runtime code (dev-only CLI tooling and
+  live-infra drivers are out of scope). Real aggregate at re-baseline: statements
+  93% · branches 85% · functions 91% · lines 95%.
 
-### Auth
-- **WebAuthn / passkeys** — the full registration & authentication ceremony
-  (challenges, options, credential storage, clone detection) with a pluggable
-  crypto verifier, so the framework carries no WebAuthn dependency.
-  *(`@basaltkit/auth` 1.6)*
-
-### Notifications
-- **SMS & WhatsApp channels** over a provider-agnostic `SmsSender` — no provider
-  SDK in the framework. *(`@basaltkit/notifications` 1.2)*
-
-### Dashboard
-- **Analytics** — the MRR movement bridge (new / expansion / contraction / churn /
-  reactivation) plus period-over-period growth. *(`@basaltkit/dashboard` 1.4)*
-- **White-label branding** — per-tenant product name, logo and colours rendered to
-  CSS custom properties. *(`@basaltkit/dashboard` 1.4)*
-
-### Developer experience
-- **DI-graph devtools** — `container.describe()`, a passive dependency graph, and a
-  Mermaid renderer. *(`@basaltkit/core` 1.1)*
-
-## Security hardening
-
-Every new component above went through an adversarial security audit before this
-release. One critical and several high/medium issues were found and fixed with
-regression tests:
-
-- **Critical:** closed a tenant-controlled stored-XSS vector in white-label CSS.
-- **High:** WebAuthn registration is bound to its subject (no cross-account passkey
-  binding); read replicas can't route around tenant scoping; custom-domain
-  operations are tenant-scoped with a shared IDNA-aware normalizer and revoke-on-
-  re-check; SSE `id`/`event` are injection-safe.
-
-See the [security audit notes](/guide/production#reliability) for the full picture.
+### Security hardening
+- **Every runtime-reachable ReDoS finding is eliminated.** Quadratic
+  trailing-character strips were rewritten as linear, non-regex trims across
+  `audit`, `tenancy`, `mailer`, `auth`, `sdk` and `search-elasticsearch`, and the
+  PII redactor length-bounds its input before matching — each with a regression test
+  that proves a pathological input returns promptly. The code-scanning backlog is at
+  **zero open alerts**. *(security-fix releases across the affected packages)*
 
 ## Upgrading
 
 Packages are independent — bump only what you use; ranges are semver, so a `1.x`
-minor is a drop-in. Two behaviour refinements from the security pass:
-
-- `CustomDomains.verify` / `instructions` / `remove` now take the owning `tenantId`
-  as their first argument.
-- `readReplica` keeps `$queryRaw` on the primary by default — opt into replica raw
-  reads with `rawReadsOnReplica: true`.
+minor is a drop-in and `@basaltkit/ai` / `@basaltkit/mcp` reach their first stable
+`1.0`. There are no breaking runtime changes in this wave: the toolchain move is
+internal, and the security fixes preserve existing behaviour (all trailing-character
+stripping and email detection behave exactly as before, just without the quadratic
+backtracking).

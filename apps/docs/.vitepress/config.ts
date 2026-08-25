@@ -90,7 +90,7 @@ export default defineConfig({
             {
               text: 'Começar',
               items: [
-                { text: 'Novidades na 1.3', link: '/pt/guide/whats-new' },
+                { text: 'Novidades na 1.4', link: '/pt/guide/whats-new' },
                 { text: 'Introdução', link: '/pt/guide/getting-started' },
                 { text: 'Instalação', link: '/pt/guide/installation' },
                 { text: 'Conceitos centrais', link: '/pt/guide/concepts' },
@@ -215,7 +215,7 @@ export default defineConfig({
         {
           text: 'Getting Started',
           items: [
-            { text: "What's new in 1.3", link: '/guide/whats-new' },
+            { text: "What's new in 1.4", link: '/guide/whats-new' },
                 { text: 'Introduction', link: '/guide/getting-started' },
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Core Concepts', link: '/guide/concepts' },

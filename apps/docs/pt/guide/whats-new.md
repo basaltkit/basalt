@@ -1,70 +1,53 @@
-# Novidades no Basalt 1.3
+# Novidades no Basalt 1.4
 
-> *"Basalt 1.3" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.4" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são versionados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que entrou e a versão do
 > pacote que o traz.*
 
-O Basalt 1.3 completa a história de escala, tempo-real e passwordless da
-framework — e reforça tudo isso com uma ronda de segurança adversarial dedicada.
+O Basalt 1.4 é uma release de fundações e endurecimento: moderniza a toolchain,
+devolve dentes reais aos gates de qualidade e segurança, e gradua a superfície de
+IA para um 1.0 estável.
 
 ## Destaques
 
-### Tempo-real & transporte
-- **Server-Sent Events** — produtores `sse()` tipados, ligados de forma idêntica ao
-  Fastify, Express e Hono. O `send()` devolve sinal de backpressure; `id`/`event`
-  são à prova de injeção. *(`@basaltkit/http` 1.8, adapters 1.5/1.2/1.2)*
+### Toolchain TypeScript 7
+- **Todo o monorepo compila, faz type-check e testa no compilador nativo do
+  TypeScript 7.** O build de cada pacote passou de `tsup` para `tsc` puro —
+  abandonando o `rollup-plugin-dts`, incompatível com o compilador do TS 7 — sem
+  alterar os contratos `exports`/`types` publicados. O lint mantém-se no TypeScript
+  que suporta até o `typescript-eslint` suportar o TS 7.
 
-### Escalar dados
-- **Read replicas** — `readReplica({ primary, replicas, extend })` encaminha
-  leituras pelas réplicas e escritas para o primary; o `extend` garante que cada
-  réplica leva o teu scoping de tenant. *(`@basaltkit/prisma` 1.4)*
-- **Sharding horizontal** — o `ShardRouter` mapeia cada tenant para uma base fixa
-  com hash determinístico; liga com `prismaPlugin({ shards })`. *(`@basaltkit/prisma` 1.4)*
+### IA & MCP → 1.0
+- **`@basaltkit/ai` 1.0** — a experiência de desenvolvimento IA (dev-only): um motor
+  agnóstico de provider mais o CLI `basalt ai` (`analyze`, `doctor`, `plan`, `make`,
+  `review`), agora com API pública estável. Continua dev-only — nunca uma dependência
+  de runtime da tua app. *(`@basaltkit/ai` 1.0)*
+- **`@basaltkit/mcp` 1.0** — a superfície de runtime do Model Context Protocol:
+  expõe rotas opt-in como ferramentas sobre **HTTP (qualquer adaptador)** ou
+  **stdio**, e consome servidores MCP externos como cliente — tudo pela pipeline
+  neutra de rotas, sem SDK externo. *(`@basaltkit/mcp` 1.0)*
 
-### Multi-tenancy
-- **Domínios custom** — regista o domínio próprio de um tenant, prova a posse com um
-  registo DNS TXT, e resolve só domínios **verificados** via `findByVerifiedDomain`.
-  *(`@basaltkit/tenancy` 1.3)*
+### Gate de qualidade
+- **O gate de cobertura volta a ser imposto.** Tinha ficado informativo; agora
+  bloqueia regressões, focado em código de runtime testável por unidade (o tooling
+  de CLI dev-only e os drivers de infra-live ficam fora de âmbito). Agregado real no
+  re-baseline: statements 93% · branches 85% · funções 91% · linhas 95%.
 
-### Auth
-- **WebAuthn / passkeys** — a cerimónia completa de registo e autenticação
-  (challenges, opções, storage de credenciais, deteção de clone) com um verifier de
-  crypto plugável, para a framework não carregar dependência WebAuthn.
-  *(`@basaltkit/auth` 1.6)*
+### Endurecimento de segurança
+- **Todos os achados de ReDoS alcançáveis em runtime foram eliminados.** As remoções
+  quadráticas de caracteres finais foram reescritas como trims lineares sem regex em
+  `audit`, `tenancy`, `mailer`, `auth`, `sdk` e `search-elasticsearch`, e o redator
+  de PII limita o comprimento do input antes de correr a regex — cada um com um teste
+  de regressão que prova que um input patológico retorna prontamente. O backlog de
+  code-scanning está em **zero alertas abertos**. *(releases de correção nos pacotes
+  afetados)*
 
-### Notifications
-- **Canais SMS & WhatsApp** sobre um `SmsSender` provider-agnostic — sem SDK de
-  provider na framework. *(`@basaltkit/notifications` 1.2)*
+## Atualização
 
-### Dashboard
-- **Analytics** — o bridge de movimento de MRR (new / expansion / contraction /
-  churn / reactivation) mais o crescimento período-a-período. *(`@basaltkit/dashboard` 1.4)*
-- **Branding white-label** — nome do produto, logo e cores por tenant renderizados
-  para CSS custom properties. *(`@basaltkit/dashboard` 1.4)*
-
-### Experiência de desenvolvimento
-- **DI-graph devtools** — `container.describe()`, um grafo de dependências passivo, e
-  um renderer Mermaid. *(`@basaltkit/core` 1.1)*
-
-## Reforço de segurança
-
-Cada componente novo acima passou por uma auditoria de segurança adversarial antes
-desta release. Um problema crítico e vários altos/médios foram encontrados e
-corrigidos com testes de regressão:
-
-- **Crítico:** fechado um vetor de stored-XSS controlado pelo tenant no CSS do white-label.
-- **Alto:** o registo WebAuthn é vinculado ao sujeito (sem binding de passkey
-  cross-conta); as read replicas não conseguem contornar o scoping de tenant; as
-  operações de domínio custom são scoped por tenant com um normalizador IDNA
-  partilhado e revogação na re-verificação; `id`/`event` de SSE à prova de injeção.
-
-## Atualizar
-
-Os pacotes são independentes — bumpa só o que usas; os ranges são semver, por isso um
-minor `1.x` é drop-in. Dois refinamentos de comportamento da ronda de segurança:
-
-- `CustomDomains.verify` / `instructions` / `remove` passam a receber o `tenantId`
-  dono como primeiro argumento.
-- O `readReplica` mantém o `$queryRaw` no primary por omissão — opta por leituras raw
-  na réplica com `rawReadsOnReplica: true`.
+Os pacotes são independentes — sobe só o que usas; os intervalos são semver, por isso
+um minor `1.x` é drop-in e o `@basaltkit/ai` / `@basaltkit/mcp` atingem o primeiro
+`1.0` estável. Não há mudanças de runtime disruptivas nesta vaga: a mudança de
+toolchain é interna e as correções de segurança preservam o comportamento existente
+(toda a remoção de caracteres finais e a deteção de email comportam-se exatamente
+como antes, só que sem o backtracking quadrático).
