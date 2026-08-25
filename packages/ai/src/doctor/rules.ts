@@ -199,6 +199,34 @@ export const DEFAULT_RULES: DoctorRule[] = [
       }
     },
   }),
+  defineRule({
+    id: 'in-memory-security-store',
+    category: 'security',
+    check(ctx) {
+      const SECURITY_STORES: Record<string, string> = {
+        MemoryPasskeyStore: 'WebAuthn passkeys',
+        MemoryWebAuthnChallengeStore: 'WebAuthn challenges',
+        MemoryAccessStore: 'roles & permissions',
+        MemoryDomainStore: 'verified custom domains',
+      }
+      const hit = (ctx.app?.memorySources ?? []).find((source) => source in SECURITY_STORES)
+      if (!hit) return null
+      return {
+        id: 'in-memory-security-store',
+        title: 'Security state is kept in an in-memory store',
+        severity: 'warning',
+        category: 'security',
+        detected: `${hit} holds ${SECURITY_STORES[hit]} in memory.`,
+        recommended: 'Back it with a durable store (database/Redis) in production.',
+        reason:
+          'In-memory security stores are wiped on restart and are not shared across ' +
+          'instances — passkeys/permissions/verified domains would silently reset or ' +
+          'diverge per replica, which can lock users out or bypass authorization.',
+        fix: `// swap ${hit} for a durable implementation of the same interface`,
+        docs: '/guide/security',
+      }
+    },
+  }),
 ]
 
 /** Models that legitimately have no tenantId (platform-global tables). */

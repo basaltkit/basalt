@@ -30,7 +30,7 @@ export function normalizeDomain(input: string): string {
   let host = input.trim().toLowerCase()
   if (host.startsWith('[')) host = host.slice(1, host.indexOf(']') > 0 ? host.indexOf(']') : undefined) // IPv6
   else host = host.split(':')[0] ?? host // strip port
-  if (host.endsWith('.')) host = host.slice(0, -1) // strip the FQDN trailing dot
+  host = host.replace(/\.+$/, '') // strip ALL trailing dots (FQDN form / `com..`) — idempotent
   try {
     // URL applies IDNA (unicode → punycode ASCII); guards against homograph tricks.
     return new URL(`http://${host}`).hostname
