@@ -3,6 +3,13 @@ import type { Client, Endpoint, EndpointTree } from './endpoint.js'
 
 export type FetchLike = typeof fetch
 
+/** Strip trailing '/' without a backtracking regex (avoids ReDoS on long runs). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--
+  return s.slice(0, end)
+}
+
 export interface ClientOptions {
   /** API root, e.g. 'https://api.example.com'. A trailing slash is fine. */
   baseUrl: string
@@ -132,7 +139,7 @@ function buildUrl(
       resolved = resolved.replace(`:${key}`, encodeURIComponent(String(value)))
     }
   }
-  const base = baseUrl.replace(/\/+$/, '')
+  const base = stripTrailingSlashes(baseUrl)
   const search = query ? queryString(query) : ''
   return `${base}${resolved}${search ? `?${search}` : ''}`
 }

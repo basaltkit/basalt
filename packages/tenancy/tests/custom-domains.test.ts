@@ -95,6 +95,21 @@ describe('CustomDomains — security hardening (audit remediation)', () => {
     expect(normalizeDomain('  victim.com ')).toBe('victim.com')
   })
 
+  it('normalizeDomain strips ALL trailing dots and stays idempotent (ReDoS-safe trim)', () => {
+    expect(normalizeDomain('x.com..')).toBe('x.com')
+    expect(normalizeDomain('x.com...')).toBe('x.com')
+    // idempotent: re-normalizing a result is a fixed point
+    expect(normalizeDomain(normalizeDomain('x.com..'))).toBe('x.com')
+  })
+
+  it('normalizeDomain handles a pathological trailing-dot run promptly (no backtracking blowup)', () => {
+    const evil = `app.acme.com${'.'.repeat(200_000)}`
+    const start = performance.now()
+    const out = normalizeDomain(evil)
+    expect(performance.now() - start).toBeLessThan(100)
+    expect(out).toBe('app.acme.com')
+  })
+
   it('missing domain throws NotFound (not Forbidden), keeping errors honest', async () => {
     const cd = new CustomDomains(opts({}))
     await expect(cd.verify('acme', 'ghost.com')).rejects.toBeInstanceOf(DomainNotFoundError)
