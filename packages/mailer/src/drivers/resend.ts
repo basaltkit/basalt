@@ -1,6 +1,13 @@
 import type { MailDriver } from '../driver.js'
 import { MailDeliveryError, type ResolvedMail } from '../message.js'
 
+/** Strip trailing '/' without a backtracking regex (avoids ReDoS on long runs). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--
+  return s.slice(0, end)
+}
+
 export interface ResendDriverOptions {
   /** Resend API key (`re_…`). */
   apiKey: string
@@ -21,7 +28,7 @@ export class ResendMailDriver implements MailDriver {
   private readonly doFetch: typeof fetch
 
   constructor(private readonly options: ResendDriverOptions) {
-    this.baseUrl = (options.baseUrl ?? 'https://api.resend.com').replace(/\/+$/, '')
+    this.baseUrl = stripTrailingSlashes(options.baseUrl ?? 'https://api.resend.com')
     this.doFetch = options.fetch ?? fetch
   }
 

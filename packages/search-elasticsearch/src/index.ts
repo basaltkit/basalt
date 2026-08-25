@@ -6,6 +6,13 @@ import type {
   SearchResult,
 } from '@basaltkit/search'
 
+/** Strip trailing '/' without a backtracking regex (avoids ReDoS on long runs). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--
+  return s.slice(0, end)
+}
+
 /**
  * Elasticsearch / OpenSearch driver for `@basaltkit/search`. Talks to the REST
  * API directly (no SDK), with an injectable `fetch` so the requests are
@@ -84,7 +91,7 @@ export class ElasticsearchDriver implements SearchDriver {
   private readonly configs = new Map<string, IndexDefinition>()
 
   constructor(options: ElasticsearchDriverOptions) {
-    this.node = options.node.replace(/\/+$/, '')
+    this.node = stripTrailingSlashes(options.node)
     this.prefix = options.indexPrefix ?? ''
     // The prefix is prepended to every index name in the URL path — hold it to
     // the same safe-segment rule (empty means "no prefix", which is fine).

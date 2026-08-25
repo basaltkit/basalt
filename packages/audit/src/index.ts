@@ -109,7 +109,11 @@ export function pseudonymize(value: string): string {
  */
 export function redactSensitiveAndPii(value: unknown, depth = 0): unknown {
   if (depth > 6 || value === null) return value
-  if (typeof value === 'string') return EMAIL_VALUE.test(value) ? pseudonymize(value) : value
+  // Bound the length before the regex: a real email is <= 254 chars (RFC 5321),
+  // so only test plausibly-email-length strings — arbitrary logged values never
+  // reach the regex, avoiding ReDoS on attacker-influenceable input.
+  if (typeof value === 'string')
+    return value.length <= 320 && EMAIL_VALUE.test(value) ? pseudonymize(value) : value
   if (typeof value !== 'object') return value
   if (Array.isArray(value)) return value.map((v) => redactSensitiveAndPii(v, depth + 1))
   const out: Record<string, unknown> = {}

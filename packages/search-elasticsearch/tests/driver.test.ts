@@ -161,3 +161,22 @@ describe('errors', () => {
     await expect(gw.index('posts', { id: 'p1', tenantId: 'acme' })).rejects.toBeInstanceOf(ElasticsearchError)
   })
 })
+
+describe('ElasticsearchDriver node normalization', () => {
+  it('strips every trailing slash from the node URL', async () => {
+    const { fetch, calls } = fakeFetch({ 'PUT /posts': { status: 200, body: '{"acknowledged":true}' } })
+    const gw = new ElasticsearchDriver({ node: 'http://es.test:9200///', apiKey: 'k', fetch })
+    await gw.register(posts)
+    expect(calls[0]!.url).toBe('http://es.test:9200/posts')
+  })
+
+  it('resolves a pathological trailing-slash run promptly (no ReDoS)', async () => {
+    const { fetch, calls } = fakeFetch({ 'PUT *': { status: 200, body: '{"acknowledged":true}' } })
+    // A long slash run followed by a non-slash char is the polynomial-ReDoS
+    // trigger for /\/+$/; the linear trim returns the string unchanged, fast.
+    const node = 'https://x/' + '/'.repeat(100000) + 'a'
+    const gw = new ElasticsearchDriver({ node, apiKey: 'k', fetch })
+    await gw.register(posts)
+    expect(calls[0]!.url).toBe(node + '/posts')
+  })
+})

@@ -3,6 +3,13 @@ import { BasaltError } from '@basaltkit/core'
 import type { Auth, TokenPair } from './auth.js'
 import type { PublicUser } from './stores.js'
 
+/** Strip trailing '/' without a backtracking regex (avoids ReDoS on long runs). */
+export function stripTrailingSlashes(s: string): string {
+  let end = s.length
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--
+  return s.slice(0, end)
+}
+
 export class OAuthProviderUnknownError extends BasaltError {
   readonly status = 404
   constructor(name: string) {
@@ -159,7 +166,7 @@ export async function discoverOidcProvider(config: {
   fetch?: typeof fetch
 }): Promise<OAuthProvider> {
   const doFetch = config.fetch ?? globalThis.fetch
-  const url = `${config.issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`
+  const url = `${stripTrailingSlashes(config.issuer)}/.well-known/openid-configuration`
   const res = await doFetch(url)
   if (!res.ok) throw new OAuthExchangeError(`OIDC discovery HTTP ${res.status} for ${url}`)
   const meta = (await res.json()) as {
