@@ -20,7 +20,7 @@
     "@basaltkit/tsconfig": "workspace:*",
     "@types/node": "^26.3.0",
     "prisma": "^7.9.1",
-    "typescript": "^5.8.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "@basaltkit/auth": "workspace:*",
     "@basaltkit/auth-prisma": "workspace:*",
