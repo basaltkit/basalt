@@ -21,7 +21,7 @@
   "dependencies": {
     "@basaltkit/core": "workspace:^",
     "@basaltkit/events": "workspace:^",
-    "bullmq": "^5.44.0"
+    "bullmq": "^6.2.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
