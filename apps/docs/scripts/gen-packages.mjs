@@ -9,7 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const docsRoot = join(here, '..')
 const packagesDir = join(docsRoot, '../../packages')
 const outDir = join(docsRoot, 'reference/packages')
-const repo = 'https://github.com/Zebedeu/basalt'
+const repo = 'https://github.com/basaltkit/basalt'
 
 const F = '⁣CODEF' // invisible-safe sentinels for protected code spans
 const I = '⁣CODEI'

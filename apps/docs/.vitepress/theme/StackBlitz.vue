@@ -5,7 +5,7 @@
 // monorepo is private and its apps use workspace: deps, so it can't be opened.
 const props = withDefaults(
   defineProps<{ repo?: string; path?: string; file?: string; label?: string }>(),
-  { repo: 'Zebedeu/basalt-playground', path: '', label: 'Open in StackBlitz' },
+  { repo: 'basaltkit/basalt-playground', path: '', label: 'Open in StackBlitz' },
 )
 const href = () => {
   const base = `https://stackblitz.com/github/${props.repo}${props.path ? `/tree/main/${props.path}` : ''}`
