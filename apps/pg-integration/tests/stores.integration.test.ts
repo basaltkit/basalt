@@ -1,3 +1,4 @@
+import { PrismaPg } from '@prisma/adapter-pg'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { prismaActivityStore } from '@basaltkit/activity-prisma'
 import { prismaAuditStore } from '@basaltkit/audit-prisma'
@@ -26,8 +27,8 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
   beforeAll(async () => {
     // Dynamic specifier (typed as string) so tsc doesn't need the generated client.
     const clientModule: string = '../generated/client/index.js'
-    const { PrismaClient } = (await import(clientModule)) as { PrismaClient: new () => unknown }
-    prisma = new PrismaClient()
+    const { PrismaClient } = (await import(clientModule)) as { PrismaClient: new (opts?: unknown) => unknown }
+    prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) })
     // Clean every store table so the assertions are deterministic.
     await Promise.all([
       prisma.authUser.deleteMany(), prisma.authSession.deleteMany(), prisma.authRefreshToken.deleteMany(),

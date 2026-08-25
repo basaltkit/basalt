@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { runWithContext } from '@basaltkit/core'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { tenancyExtension } from '@basaltkit/prisma'
 
 // Full Prisma-client-through-a-server path against real PostgreSQL.
@@ -30,9 +31,10 @@ describe.skipIf(!url)('tenancyExtension against real PostgreSQL', () => {
     // client need not exist for typecheck (it's produced by `prisma generate`).
     const clientModule: string = '../generated/client/index.js'
     const { PrismaClient } = (await import(clientModule)) as {
-      PrismaClient: new () => typeof base & { $extends(ext: unknown): typeof db }
+      PrismaClient: new (opts?: unknown) => typeof base & { $extends(ext: unknown): typeof db }
     }
-    base = new PrismaClient() as never
+    // Prisma 7: the runtime client connects through a driver adapter.
+    base = new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) }) as never
     db = (base as unknown as { $extends(ext: unknown): typeof db }).$extends(tenancyExtension())
   })
 
