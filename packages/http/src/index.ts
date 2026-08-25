@@ -66,6 +66,7 @@ export {
   SSE_HEADERS,
   type SseEvent,
   type SseStream,
+  type SseOptions,
   type SseProducer,
   type SseResponse,
   type SseSink,

@@ -77,6 +77,63 @@ a JSON API). Pass an object to customize (e.g. your own `contentSecurityPolicy`
 for an HTML/docs surface), `contentSecurityPolicy: false` to omit just the CSP,
 or `headers: false` to disable them all.
 
+## Resource limits & DoS resistance
+
+Beyond headers and rate limits, long-lived and slow connections can exhaust a
+server. Basalt ships sane defaults and knobs for the sharp edges.
+
+### Request timeouts (anti-slowloris)
+
+A slow client that dribbles out a request one byte at a time ties up a connection
+indefinitely. The Fastify adapter defaults to a **30 s `requestTimeout`** (Fastify's
+own default is *disabled*); override it via `fastifyPlugin({ fastify: { requestTimeout } })`.
+Express and Hono run on a Node server you own — set the same protection on it:
+
+```ts
+// Express / Hono (node:http server)
+server.requestTimeout = 30_000   // whole request must arrive within 30s
+server.headersTimeout = 20_000   // headers within 20s (slowloris headers)
+server.keepAliveTimeout = 5_000
+```
+
+### SSE streams
+
+Server-Sent Events are long-lived by design, so give them a heartbeat and a lifetime
+cap. `send()` also returns a **backpressure** boolean — stop producing when it's `false`:
+
+```ts
+return sse(async (stream) => {
+  for await (const update of source) {
+    if (!stream.send({ data: update })) break // client can't keep up → back off
+  }
+}, { heartbeatMs: 15_000, maxDurationMs: 30 * 60_000 }) // ping every 15s, cap at 30 min
+```
+
+The heartbeat pings keep proxies from dropping an idle stream and reveal a dead socket;
+`maxDurationMs` is a backstop against connections that never disconnect. Cap the number
+of concurrent streams per user/tenant in your handler for a hard ceiling.
+
+### Ceremony endpoints (WebAuthn, MFA)
+
+Endpoints that mint a challenge or verify a code are pre-auth and cheap to hammer —
+throttle them. Reuse the [brute-force lockout](#brute-force-lockout) and per-route
+limits, and in production back the WebAuthn `PasskeyStore` / `WebAuthnChallengeStore`
+(and MFA stores) with a **durable** implementation, not the in-memory default.
+
+### Custom-domain re-verification
+
+A verified custom domain that later expires or repoints its DNS is a takeover risk.
+Re-verify on a schedule with [`@basaltkit/scheduler`](/guide/scheduler) — `verify(tenantId, domain, { force })`
+re-checks the TXT record and **revokes** the domain if it no longer matches:
+
+```ts
+schedule.call('reverify-domains', async () => {
+  for (const { tenantId, domain } of await listVerifiedDomains()) {
+    await customDomains.verify(tenantId, domain, { force: true })
+  }
+}).daily().at('04:00')
+```
+
 ## Fail-closed secrets — `secret()`
 
 The most common production incident is shipping a placeholder signing key.

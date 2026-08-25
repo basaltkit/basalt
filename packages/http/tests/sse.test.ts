@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { sse, isSseResponse, encodeSseEvent, driveSse, sseProducerOf, type SseSink } from '../src/index.js'
 
 describe('encodeSseEvent', () => {
@@ -109,5 +109,35 @@ describe('SSE backpressure (security)', () => {
     }
     await driveSse(sseProducerOf(resp), sink)
     expect(results).toEqual([true, false])
+  })
+})
+
+describe('SSE edge hardening — heartbeat & max duration (security)', () => {
+  it('sends comment pings on the heartbeat interval', async () => {
+    vi.useFakeTimers()
+    const frames: string[] = []
+    const sink: SseSink = { write: (f) => { frames.push(f) }, end: () => {}, onClose: () => {} }
+    // a producer that never resolves — the heartbeat must fire on its own
+    const resp = sse((stream) => new Promise<void>(() => { void stream }), { heartbeatMs: 1000 })
+    const drive = driveSse(sseProducerOf(resp), sink)
+    await vi.advanceTimersByTimeAsync(3500)
+    const pings = frames.filter((f) => f.startsWith(': '))
+    expect(pings.length).toBe(3) // 3 beats in 3.5s
+    vi.useRealTimers()
+    void drive
+  })
+
+  it('closes the stream after maxDurationMs', async () => {
+    vi.useFakeTimers()
+    let ended = false
+    const sink: SseSink = { write: () => {}, end: () => { ended = true }, onClose: () => {} }
+    const resp = sse((stream) => new Promise<void>(() => { void stream }), { maxDurationMs: 5000 })
+    const drive = driveSse(sseProducerOf(resp), sink)
+    await vi.advanceTimersByTimeAsync(4999)
+    expect(ended).toBe(false)
+    await vi.advanceTimersByTimeAsync(2)
+    expect(ended).toBe(true) // capped
+    vi.useRealTimers()
+    void drive
   })
 })

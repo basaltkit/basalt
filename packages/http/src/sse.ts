@@ -35,14 +35,34 @@ export interface SseStream {
 export type SseProducer = (stream: SseStream) => void | Promise<void>
 
 const SSE = Symbol.for('basalt.sse')
+const SSE_OPTS = Symbol.for('basalt.sse.options')
+
+/** Edge-hardening knobs for a stream — defends against dead/idle connections. */
+export interface SseOptions {
+  /**
+   * Send a comment ping every N ms. Keeps proxies from closing an idle stream
+   * and surfaces a dead socket (the write fails) instead of leaking the
+   * connection. Off when unset.
+   */
+  heartbeatMs?: number
+  /**
+   * Hard cap on a single stream's lifetime, in ms. The stream is closed when it
+   * elapses — a backstop against connections that never disconnect. Off when unset.
+   */
+  maxDurationMs?: number
+}
+
+type ProducerWithOptions = SseProducer & { [SSE_OPTS]?: SseOptions }
 
 export interface SseResponse {
   readonly [SSE]: SseProducer
 }
 
 /** Wrap a producer as an SSE response for a route handler to return. */
-export function sse(producer: SseProducer): SseResponse {
-  return { [SSE]: producer }
+export function sse(producer: SseProducer, options: SseOptions = {}): SseResponse {
+  const wrapped: ProducerWithOptions = (stream) => producer(stream)
+  wrapped[SSE_OPTS] = options
+  return { [SSE]: wrapped }
 }
 
 export function isSseResponse(value: unknown): value is SseResponse {
@@ -105,11 +125,14 @@ export interface SseSink {
  * Shared by every adapter so behaviour is identical.
  */
 export async function driveSse(producer: SseProducer, sink: SseSink): Promise<void> {
+  const options = (producer as ProducerWithOptions)[SSE_OPTS] ?? {}
   let closed = false
+  const timers: Array<ReturnType<typeof setTimeout>> = []
   const listeners: Array<() => void> = []
   const markClosed = () => {
     if (closed) return
     closed = true
+    for (const timer of timers) clearTimeout(timer)
     for (const listener of listeners) listener()
   }
   sink.onClose(markClosed)
@@ -132,6 +155,28 @@ export async function driveSse(producer: SseProducer, sink: SseSink): Promise<vo
       if (closed) listener()
       else listeners.push(listener)
     },
+  }
+
+  // Heartbeat: a comment ping (`:\n\n`) keeps proxies alive and reveals a dead
+  // socket. Uses an interval that unrefs so it never holds the process open.
+  if (options.heartbeatMs && options.heartbeatMs > 0) {
+    const beat = setInterval(() => {
+      if (closed) return
+      sink.write(': ping\n\n')
+    }, options.heartbeatMs)
+    beat.unref?.()
+    timers.push(beat)
+  }
+  // Max lifetime: a backstop close for connections that never disconnect.
+  if (options.maxDurationMs && options.maxDurationMs > 0) {
+    const cap = setTimeout(() => {
+      if (!closed) {
+        markClosed()
+        sink.end()
+      }
+    }, options.maxDurationMs)
+    cap.unref?.()
+    timers.push(cap)
   }
 
   try {

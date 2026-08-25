@@ -158,3 +158,18 @@ describe('urlencoded body (adapter compatibility)', () => {
     await app.shutdown()
   })
 })
+
+describe('fastify anti-slowloris default (security)', () => {
+  it('applies a default requestTimeout that a caller can override', async () => {
+    const { createApp } = await import('@basaltkit/core')
+    const { fastifyPlugin, FASTIFY } = await import('../src/index.js')
+
+    const a = await createApp({ plugins: [fastifyPlugin()] }).boot()
+    expect(a.container.get(FASTIFY).initialConfig.requestTimeout).toBe(30_000)
+    await a.shutdown()
+
+    const b = await createApp({ plugins: [fastifyPlugin({ fastify: { requestTimeout: 5_000 } })] }).boot()
+    expect(b.container.get(FASTIFY).initialConfig.requestTimeout).toBe(5_000) // override wins
+    await b.shutdown()
+  })
+})
