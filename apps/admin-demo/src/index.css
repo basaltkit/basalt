@@ -1,6 +1,6 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+/* Reuse the shadcn theme (colours -> CSS variables) via Tailwind 4's legacy config. */
+@config '../tailwind.config.js';
 
 @layer base {
   :root {
