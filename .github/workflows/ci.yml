@@ -123,6 +123,10 @@ jobs:
 
       - name: Push schema
         run: pnpm --filter pg-integration db:push
+        # Prisma 7 guards `db push` against unattended/AI-driven runs; this is an
+        # ephemeral CI test database (basalt_test), so consent is pre-granted here.
+        env:
+          PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION: 'ephemeral CI test database (basalt_test) — schema push is safe'
 
       - name: Integration tests (real PostgreSQL)
         run: pnpm --filter pg-integration test:integration

@@ -5,19 +5,21 @@
   "description": "Integration harness: exercises @basaltkit/prisma against a real PostgreSQL server (gated on TEST_DATABASE_URL). Not part of the default test run.",
   "scripts": {
     "prisma:generate": "prisma generate",
-    "db:push": "prisma db push --skip-generate --accept-data-loss",
+    "db:push": "prisma db push --accept-data-loss",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@basaltkit/core": "workspace:*",
     "@basaltkit/prisma": "workspace:*",
-    "@prisma/client": "^6.2.0"
+    "@prisma/client": "^7.9.1",
+    "@prisma/adapter-pg": "^7.9.1",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:*",
     "@types/node": "^22.15.0",
-    "prisma": "^6.2.0",
+    "prisma": "^7.9.1",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0",
     "@basaltkit/auth": "workspace:*",
@@ -41,6 +43,7 @@
     "@basaltkit/events": "workspace:*",
     "@basaltkit/events-prisma": "workspace:*",
     "@basaltkit/webhooks": "workspace:*",
-    "@basaltkit/webhooks-prisma": "workspace:*"
+    "@basaltkit/webhooks-prisma": "workspace:*",
+    "@types/pg": "^8.11.0"
   }
 }
