@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pdfkit": "^0.15.0 || ^0.16.0 || ^0.17.0 || ^0.20.0"
+    "pdfkit": "^0.19.1"
   },
   "peerDependencies": {
     "@basaltkit/subscriptions": "workspace:^"
