@@ -71,8 +71,12 @@ describe.skipIf(!url)('tenancyExtension against real PostgreSQL', () => {
     await asTenant('acme', () => db.project.create({ data: { name: 'A' } }))
     await asTenant('globex', () => db.project.create({ data: { name: 'B' } }))
 
-    // no runWithContext → no tenant → bypass, sees everything
-    const all = await db.project.count()
+    // no runWithContext → no tenant. The default is fail-closed (throws
+    // MissingTenantError); the central/admin path opts into an unscoped view.
+    const admin = (base as unknown as { $extends(ext: unknown): typeof db }).$extends(
+      tenancyExtension({ onMissingTenant: 'bypass' }),
+    )
+    const all = await admin.project.count()
     expect(all).toBe(2)
   })
 })
