@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/search-elasticsearch",
-  "version": "1.1.1",
-  "description": "Elasticsearch / OpenSearch driver for @basaltkit/search \u2014 multi_match relevance, tenant-scoped, talking to the REST API directly with an injectable fetch (no SDK).",
+  "version": "1.1.2",
+  "description": "Elasticsearch / OpenSearch driver for @basaltkit/search — multi_match relevance, tenant-scoped, talking to the REST API directly with an injectable fetch (no SDK).",
   "license": "MIT",
   "type": "module",
   "exports": {
