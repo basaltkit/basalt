@@ -33,11 +33,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Zebedeu/basalt.git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
     "directory": "packages/i18n"
   },
-  "homepage": "https://github.com/Zebedeu/basalt/tree/main/packages/i18n#readme",
-  "bugs": "https://github.com/Zebedeu/basalt/issues",
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/i18n#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
   "keywords": [
     "basalt",
     "typescript",

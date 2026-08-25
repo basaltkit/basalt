@@ -30,7 +30,7 @@ Flags: `--billing` (plans), `--ui` (React + shadcn frontend), `--cli` (the
 ## Production-ready by default
 
 Secure and observable out of the box — every piece is zero-dependency and opt-in
-through the plugin lifecycle. See the [Going to Production](https://github.com/Zebedeu/basalt/blob/main/apps/docs/guide/production.md) guide.
+through the plugin lifecycle. See the [Going to Production](https://github.com/basaltkit/basalt/blob/main/apps/docs/guide/production.md) guide.
 
 | Concern | How |
 |---|---|

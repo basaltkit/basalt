@@ -1,13 +1,13 @@
 # @basaltkit/notifications-prisma
 
 **Prisma-backed** implementation of the
-[`@basaltkit/notifications`](https://github.com/Zebedeu/basalt/tree/main/packages/notifications)
+[`@basaltkit/notifications`](https://github.com/basaltkit/basalt/tree/main/packages/notifications)
 `InAppStore` — the in-app notification inbox — for production databases
 (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the `InAppNotification` model; the
 store only touches that delegate. The production counterpart to
-[`@basaltkit/notifications-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/notifications-sqlite).
+[`@basaltkit/notifications-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/notifications-sqlite).
 
 ```bash
 pnpm add @basaltkit/notifications-prisma   # peer: @basaltkit/notifications ; you already have @prisma/client

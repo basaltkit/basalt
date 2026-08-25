@@ -1,14 +1,14 @@
 # @basaltkit/subscriptions-prisma
 
 **Prisma-backed** implementations of the three
-[`@basaltkit/subscriptions`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions)
+[`@basaltkit/subscriptions`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions)
 stores — the **subscription** record, **usage** metering and **webhook**
 idempotency — for production databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the `Subscription`, `UsageCounter` and
 `WebhookEvent` models; the stores only touch those delegates. The production
 counterpart to
-[`@basaltkit/subscriptions-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions-sqlite).
+[`@basaltkit/subscriptions-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions-sqlite).
 
 ```bash
 pnpm add @basaltkit/subscriptions-prisma   # peer: @basaltkit/subscriptions ; you already have @prisma/client

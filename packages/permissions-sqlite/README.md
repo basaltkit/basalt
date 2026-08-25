@@ -1,6 +1,6 @@
 # @basaltkit/permissions-sqlite
 
-Durable, **SQLite-backed** implementation of the [`@basaltkit/permissions`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions)
+Durable, **SQLite-backed** implementation of the [`@basaltkit/permissions`](https://github.com/basaltkit/basalt/tree/main/packages/permissions)
 `AccessStore` — role assignments and permission grants — built on Node's
 built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
@@ -9,7 +9,7 @@ dependencies.**
 forgets everything on restart. Swap in this and role assignments and grants
 persist — no ORM, no migration tool, no service. It's the single-node reference
 backend; the production (Postgres/MySQL) counterpart is
-[`@basaltkit/permissions-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions-prisma).
+[`@basaltkit/permissions-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/permissions-prisma).
 
 ```bash
 pnpm add @basaltkit/permissions-sqlite   # peer: @basaltkit/permissions

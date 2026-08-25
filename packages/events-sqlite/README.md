@@ -1,8 +1,8 @@
 # @basaltkit/events-sqlite
 
-Durable, SQLite-backed implementation of the [`@basaltkit/events`](https://github.com/Zebedeu/basalt/tree/main/packages/events) `OutboxStore` (the transactional outbox), on Node's built-in `node:sqlite`. Zero external dependencies.
+Durable, SQLite-backed implementation of the [`@basaltkit/events`](https://github.com/basaltkit/basalt/tree/main/packages/events) `OutboxStore` (the transactional outbox), on Node's built-in `node:sqlite`. Zero external dependencies.
 
-The whole point of the transactional outbox is to survive a crash **between "committed" and "delivered"** — so its store has to be durable. `@basaltkit/events` ships `MemoryOutboxStore` by default, which loses every un-relayed event when the process exits. This package is the drop-in durable replacement for a single node; the production, multi-instance counterpart is [`@basaltkit/events-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/events-prisma).
+The whole point of the transactional outbox is to survive a crash **between "committed" and "delivered"** — so its store has to be durable. `@basaltkit/events` ships `MemoryOutboxStore` by default, which loses every un-relayed event when the process exits. This package is the drop-in durable replacement for a single node; the production, multi-instance counterpart is [`@basaltkit/events-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/events-prisma).
 
 ## Installation
 

@@ -1,13 +1,13 @@
 # @basaltkit/audit-prisma
 
 **Prisma-backed** implementation of the
-[`@basaltkit/audit`](https://github.com/Zebedeu/basalt/tree/main/packages/audit)
+[`@basaltkit/audit`](https://github.com/basaltkit/basalt/tree/main/packages/audit)
 `AuditStore` — the append-only audit trail — for production databases
 (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the `AuditEntry` model; the store only
 touches that delegate. The production counterpart to
-[`@basaltkit/audit-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/audit-sqlite).
+[`@basaltkit/audit-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/audit-sqlite).
 
 ```bash
 pnpm add @basaltkit/audit-prisma   # peer: @basaltkit/audit ; you already have @prisma/client

@@ -266,9 +266,9 @@ queuePlugin({ driver: new MyQueueDriver(), jobs, workers })
   unit-tested without a running broker. Do the same and your driver is testable
   in CI.
 
-[rmq]: https://github.com/Zebedeu/basalt/tree/main/packages/queue-rabbitmq
-[sqs]: https://github.com/Zebedeu/basalt/tree/main/packages/queue-sqs
-[kafka]: https://github.com/Zebedeu/basalt/tree/main/packages/queue-kafka
+[rmq]: https://github.com/basaltkit/basalt/tree/main/packages/queue-rabbitmq
+[sqs]: https://github.com/basaltkit/basalt/tree/main/packages/queue-sqs
+[kafka]: https://github.com/basaltkit/basalt/tree/main/packages/queue-kafka
 
 ## See also
 
