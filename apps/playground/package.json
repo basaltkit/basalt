@@ -22,7 +22,7 @@
     "@basaltkit/logger": "workspace:*",
     "@basaltkit/mcp": "workspace:*",
     "@basaltkit/tenancy": "workspace:*",
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.1.1",
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
