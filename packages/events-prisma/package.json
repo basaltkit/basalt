@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/events-prisma",
   "version": "1.0.0",
-  "description": "Prisma-backed implementation of the @basaltkit/events OutboxStore (transactional outbox) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "description": "Prisma-backed implementation of the @basaltkit/events OutboxStore (transactional outbox) \u2014 the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -29,7 +29,7 @@
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0"
+    "vitest": "^4.1.11"
   },
   "publishConfig": {
     "access": "public"

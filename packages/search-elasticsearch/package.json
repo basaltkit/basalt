@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/search-elasticsearch",
   "version": "1.1.1",
-  "description": "Elasticsearch / OpenSearch driver for @basaltkit/search — multi_match relevance, tenant-scoped, talking to the REST API directly with an injectable fetch (no SDK).",
+  "description": "Elasticsearch / OpenSearch driver for @basaltkit/search \u2014 multi_match relevance, tenant-scoped, talking to the REST API directly with an injectable fetch (no SDK).",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -26,7 +26,7 @@
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0"
+    "vitest": "^4.1.11"
   },
   "publishConfig": {
     "access": "public"

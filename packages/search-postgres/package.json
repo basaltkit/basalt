@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/search-postgres",
   "version": "1.0.1",
-  "description": "PostgreSQL full-text search driver for @basaltkit/search — tsvector/tsquery/ts_rank, tenant-scoped, with an injectable pg client for testing.",
+  "description": "PostgreSQL full-text search driver for @basaltkit/search \u2014 tsvector/tsquery/ts_rank, tenant-scoped, with an injectable pg client for testing.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -34,7 +34,7 @@
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0"
+    "vitest": "^4.1.11"
   },
   "publishConfig": {
     "access": "public"
