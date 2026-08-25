@@ -1,5 +1,13 @@
 # @basaltkit/bench
 
+## 0.0.5
+
+### Patch Changes
+
+- Updated dependencies [2c667ff]
+  - @basaltkit/http@1.9.0
+  - @basaltkit/fastify@1.6.0
+
 ## 0.0.4
 
 ### Patch Changes
