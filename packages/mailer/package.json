@@ -24,8 +24,8 @@
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^22.15.0",
-    "@types/nodemailer": "^6.4.17",
+    "@types/node": "^26.3.0",
+    "@types/nodemailer": "^8.0.1",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^4.1.11",

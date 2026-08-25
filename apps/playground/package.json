@@ -22,12 +22,12 @@
     "@basaltkit/logger": "workspace:*",
     "@basaltkit/mcp": "workspace:*",
     "@basaltkit/tenancy": "workspace:*",
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.1.1",
     "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:*",
-    "@types/node": "^22.15.0",
+    "@types/node": "^26.3.0",
     "pino-pretty": "^13.0.0",
     "tsx": "^4.23.12",
     "typescript": "^5.8.0",

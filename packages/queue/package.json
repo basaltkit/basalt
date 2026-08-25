@@ -21,11 +21,11 @@
   "dependencies": {
     "@basaltkit/core": "workspace:^",
     "@basaltkit/events": "workspace:^",
-    "bullmq": "^5.44.0"
+    "bullmq": "^6.2.1"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^22.15.0",
+    "@types/node": "^26.3.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
     "vitest": "^4.1.11",
