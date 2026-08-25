@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/subscriptions-prisma",
   "version": "2.1.0",
-  "description": "Prisma-backed implementations of the @basaltkit/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) — the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "description": "Prisma-backed implementations of the @basaltkit/subscriptions stores (subscriptions, atomic usage metering, webhook idempotency) \u2014 the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -29,7 +29,7 @@
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0"
+    "vitest": "^4.1.11"
   },
   "publishConfig": {
     "access": "public"
