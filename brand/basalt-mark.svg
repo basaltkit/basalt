@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-labelledby="t">
+  <title id="t">Basalt — hexagonal basalt column mark</title>
+  <!-- Extruded hexagonal basalt column: top face lit, three side faces shaded for depth -->
+  <g stroke="#0E1116" stroke-width="2" stroke-linejoin="round">
+    <!-- top face (hexagon, lit) -->
+    <polygon points="127.5,27.37 155,75 127.5,122.63 72.5,122.63 45,75 72.5,27.37" fill="#7B8B99"/>
+    <!-- left side face -->
+    <polygon points="45,75 72.5,122.63 72.5,167.63 45,120" fill="#2C3843"/>
+    <!-- front-centre side face -->
+    <polygon points="72.5,122.63 127.5,122.63 127.5,167.63 72.5,167.63" fill="#3C4C59"/>
+    <!-- right side face -->
+    <polygon points="127.5,122.63 155,75 155,120 127.5,167.63" fill="#232E38"/>
+  </g>
+  <!-- molten seam: a pressure crack glowing in the front column -->
+  <line x1="100" y1="124.5" x2="100" y2="165.6" stroke="#FF5A1F" stroke-width="4" stroke-linecap="round"/>
+  <line x1="100" y1="127" x2="100" y2="163" stroke="#FFB347" stroke-width="1.6" stroke-linecap="round"/>
+</svg>
