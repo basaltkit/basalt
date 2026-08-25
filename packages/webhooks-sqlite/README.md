@@ -1,8 +1,8 @@
 # @basaltkit/webhooks-sqlite
 
-Durable, SQLite-backed implementation of the [`@basaltkit/webhooks`](https://github.com/Zebedeu/basalt/tree/main/packages/webhooks) `WebhookStore` (outbound endpoint subscriptions), on Node's built-in `node:sqlite`. Zero external dependencies.
+Durable, SQLite-backed implementation of the [`@basaltkit/webhooks`](https://github.com/basaltkit/basalt/tree/main/packages/webhooks) `WebhookStore` (outbound endpoint subscriptions), on Node's built-in `node:sqlite`. Zero external dependencies.
 
-`@basaltkit/webhooks` ships `MemoryWebhookStore` by default, which forgets every registered endpoint when the process exits — so after a redeploy, nobody is subscribed and events silently stop being delivered. This package persists the subscriptions for a single node; the production, multi-instance counterpart is [`@basaltkit/webhooks-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/webhooks-prisma).
+`@basaltkit/webhooks` ships `MemoryWebhookStore` by default, which forgets every registered endpoint when the process exits — so after a redeploy, nobody is subscribed and events silently stop being delivered. This package persists the subscriptions for a single node; the production, multi-instance counterpart is [`@basaltkit/webhooks-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/webhooks-prisma).
 
 ## Installation
 

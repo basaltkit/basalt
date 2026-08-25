@@ -1,8 +1,8 @@
 # @basaltkit/subscriptions-appypay
 
-[AppyPay](https://www.appypay.co.ao) payment gateway driver for [`@basaltkit/subscriptions`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions) — **Multicaixa Express (push), reference and card payments for Angola (AOA)**.
+[AppyPay](https://www.appypay.co.ao) payment gateway driver for [`@basaltkit/subscriptions`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions) — **Multicaixa Express (push), reference and card payments for Angola (AOA)**.
 
-Where [`@basaltkit/subscriptions-proxypay`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions-proxypay) is reference-only, AppyPay adds **push** (the customer approves on their phone via Multicaixa Express) and **card** flows — all behind the same `PaymentGateway` contract, so your checkout and webhook code doesn't change.
+Where [`@basaltkit/subscriptions-proxypay`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions-proxypay) is reference-only, AppyPay adds **push** (the customer approves on their phone via Multicaixa Express) and **card** flows — all behind the same `PaymentGateway` contract, so your checkout and webhook code doesn't change.
 
 > ⚠️ **Pre-release (0.x).** The AppyPay-specific wire details — token/charge URLs, request/response field names, the payment-method enum, and the webhook signature scheme — are **not yet validated against the live AppyPay API**. They live in the `APPYPAY_WIRE` block and are marked `TODO(verify)` in the source. The `PaymentGateway` mapping, OAuth token caching and HMAC verification are stable. **Do not use in production until validated against the AppyPay sandbox.**
 

@@ -73,5 +73,5 @@ policy and may change at any time.
 ## Security & supported versions
 
 Security fixes land on the latest `1.x` minor — upgrade to the newest `1.x` to
-receive them. See [SECURITY.md](https://github.com/Zebedeu/basalt/blob/main/SECURITY.md)
+receive them. See [SECURITY.md](https://github.com/basaltkit/basalt/blob/main/SECURITY.md)
 for the disclosure process.

@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-const github = 'https://github.com/Zebedeu/basalt'
+const github = 'https://github.com/basaltkit/basalt'
 
 // The umbrella "Basalt release" version — a single marketing/docs marker. The
 // `@basaltkit/*` packages are versioned INDEPENDENTLY (see the Ecosystem page);

@@ -74,5 +74,5 @@ idêntica à `0.32.0`, sem breaking changes. A migrar de qualquer `0.x` recente:
 ## Segurança & versões suportadas
 
 As correções de segurança aterram no minor `1.x` mais recente — atualiza para o
-`1.x` mais novo para as receber. Ver [SECURITY.md](https://github.com/Zebedeu/basalt/blob/main/SECURITY.md)
+`1.x` mais novo para as receber. Ver [SECURITY.md](https://github.com/basaltkit/basalt/blob/main/SECURITY.md)
 para o processo de divulgação.

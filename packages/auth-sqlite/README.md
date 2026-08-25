@@ -1,6 +1,6 @@
 # @basaltkit/auth-sqlite
 
-Durable, **SQLite-backed** implementations of every [`@basaltkit/auth`](https://github.com/Zebedeu/basalt/tree/main/packages/auth)
+Durable, **SQLite-backed** implementations of every [`@basaltkit/auth`](https://github.com/basaltkit/basalt/tree/main/packages/auth)
 store — users, sessions, refresh tokens, one-time tokens, API keys and MFA
 state — built on Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html).
 **Zero external dependencies.**

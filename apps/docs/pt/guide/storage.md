@@ -192,5 +192,5 @@ Os drivers de cloud incluídos ([`@basaltkit/storage-gcs`][gcs], [`-azure`][az])
 recebem um **cliente injetável**, pelo que a sua lógica é testada unitariamente com um
 fake — sem conta de cloud. Faz o mesmo e o teu driver fica testável em CI.
 
-[gcs]: https://github.com/Zebedeu/basalt/tree/main/packages/storage-gcs
-[az]: https://github.com/Zebedeu/basalt/tree/main/packages/storage-azure
+[gcs]: https://github.com/basaltkit/basalt/tree/main/packages/storage-gcs
+[az]: https://github.com/basaltkit/basalt/tree/main/packages/storage-azure

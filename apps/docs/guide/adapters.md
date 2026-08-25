@@ -63,7 +63,7 @@ serve({ fetch: app.container.get(HONO).fetch, port: 3000 })
 
 ## Live example — the playground
 
-The repo's [`apps/playground`](https://github.com/Zebedeu/basalt/tree/main/apps/playground)
+The repo's [`apps/playground`](https://github.com/basaltkit/basalt/tree/main/apps/playground)
 is the same neutral `route()` list (a small Projects CRUD + multi-tenancy)
 served on **all three** adapters. Only the last line of `buildApp()` changes —
 pick the runtime with an env var:

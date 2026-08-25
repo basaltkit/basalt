@@ -1,12 +1,12 @@
 # @basaltkit/permissions-prisma
 
-**Prisma-backed** implementation of the [`@basaltkit/permissions`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions)
+**Prisma-backed** implementation of the [`@basaltkit/permissions`](https://github.com/basaltkit/basalt/tree/main/packages/permissions)
 `AccessStore` — role assignments and permission grants — for production
 databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` with the three `Perm*` models; the store
 only touches those delegates. The production counterpart to
-[`@basaltkit/permissions-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/permissions-sqlite).
+[`@basaltkit/permissions-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/permissions-sqlite).
 
 ```bash
 pnpm add @basaltkit/permissions-prisma   # peer: @basaltkit/permissions ; you already have @prisma/client

@@ -1,7 +1,7 @@
 # @basaltkit/activity-sqlite
 
 Durable, **SQLite-backed** implementation of the
-[`@basaltkit/activity`](https://github.com/Zebedeu/basalt/tree/main/packages/activity)
+[`@basaltkit/activity`](https://github.com/basaltkit/basalt/tree/main/packages/activity)
 `ActivityStore` — the activity feed — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
 dependencies.**
@@ -9,7 +9,7 @@ dependencies.**
 Swap it in for the in-memory store and the feed survives a restart — no ORM, no
 migration tool, no service. The single-node reference backend; the production
 (Postgres/MySQL) counterpart is
-[`@basaltkit/activity-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/activity-prisma).
+[`@basaltkit/activity-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/activity-prisma).
 
 ```bash
 pnpm add @basaltkit/activity-sqlite   # peer: @basaltkit/activity

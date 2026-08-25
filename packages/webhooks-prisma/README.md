@@ -1,8 +1,8 @@
 # @basaltkit/webhooks-prisma
 
-Prisma-backed implementation of the [`@basaltkit/webhooks`](https://github.com/Zebedeu/basalt/tree/main/packages/webhooks) `WebhookStore` (outbound endpoint subscriptions) — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
+Prisma-backed implementation of the [`@basaltkit/webhooks`](https://github.com/basaltkit/basalt/tree/main/packages/webhooks) `WebhookStore` (outbound endpoint subscriptions) — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
 
-`@basaltkit/webhooks` ships `MemoryWebhookStore` by default — fine for tests and dev, but it forgets every registered endpoint on restart and can't be shared across instances. This package persists the subscriptions in the database you already run. The single-node, zero-dependency counterpart is [`@basaltkit/webhooks-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/webhooks-sqlite).
+`@basaltkit/webhooks` ships `MemoryWebhookStore` by default — fine for tests and dev, but it forgets every registered endpoint on restart and can't be shared across instances. This package persists the subscriptions in the database you already run. The single-node, zero-dependency counterpart is [`@basaltkit/webhooks-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/webhooks-sqlite).
 
 ## Installation
 
@@ -12,7 +12,7 @@ pnpm add @basaltkit/webhooks @basaltkit/webhooks-prisma
 
 ## Schema
 
-Don't hand-copy the model — run **`basalt prisma:sync`** (from [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma)), which discovers every installed `@basaltkit/*-prisma` package and merges its models into your `prisma/schema.prisma`:
+Don't hand-copy the model — run **`basalt prisma:sync`** (from [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma)), which discovers every installed `@basaltkit/*-prisma` package and merges its models into your `prisma/schema.prisma`:
 
 ```bash
 pnpm basalt prisma:sync --push        # add the WebhookEndpoint model + create the table

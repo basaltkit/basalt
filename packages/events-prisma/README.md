@@ -1,8 +1,8 @@
 # @basaltkit/events-prisma
 
-Prisma-backed implementation of the [`@basaltkit/events`](https://github.com/Zebedeu/basalt/tree/main/packages/events) `OutboxStore` (the transactional outbox) — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
+Prisma-backed implementation of the [`@basaltkit/events`](https://github.com/basaltkit/basalt/tree/main/packages/events) `OutboxStore` (the transactional outbox) — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
 
-`@basaltkit/events` ships `MemoryOutboxStore` by default — fine for tests and dev, but it loses every un-relayed event on restart and can't be shared across instances. This package keeps the outbox in the database you already run, so delivery stays **at-least-once and crash-safe**. The single-node, zero-dependency counterpart is [`@basaltkit/events-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/events-sqlite).
+`@basaltkit/events` ships `MemoryOutboxStore` by default — fine for tests and dev, but it loses every un-relayed event on restart and can't be shared across instances. This package keeps the outbox in the database you already run, so delivery stays **at-least-once and crash-safe**. The single-node, zero-dependency counterpart is [`@basaltkit/events-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/events-sqlite).
 
 ## Why the same database matters
 
@@ -16,7 +16,7 @@ pnpm add @basaltkit/events @basaltkit/events-prisma
 
 ## Schema
 
-Don't hand-copy the model — run **`basalt prisma:sync`** (from [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma)), which discovers every installed `@basaltkit/*-prisma` package and merges its models into your `prisma/schema.prisma`:
+Don't hand-copy the model — run **`basalt prisma:sync`** (from [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma)), which discovers every installed `@basaltkit/*-prisma` package and merges its models into your `prisma/schema.prisma`:
 
 ```bash
 pnpm basalt prisma:sync --push        # add the OutboxEntry model + create the table

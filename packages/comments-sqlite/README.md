@@ -1,7 +1,7 @@
 # @basaltkit/comments-sqlite
 
 Durable, **SQLite-backed** implementation of the
-[`@basaltkit/comments`](https://github.com/Zebedeu/basalt/tree/main/packages/comments)
+[`@basaltkit/comments`](https://github.com/basaltkit/basalt/tree/main/packages/comments)
 `CommentStore` — per-resource threads with @mentions and resolve/reopen — built
 on Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero
 external dependencies.**
@@ -9,7 +9,7 @@ external dependencies.**
 Swap it in for the in-memory store and comment threads survive a restart — no
 ORM, no migration tool, no service. The single-node reference backend; the
 production (Postgres/MySQL) counterpart is
-[`@basaltkit/comments-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/comments-prisma).
+[`@basaltkit/comments-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/comments-prisma).
 
 ```bash
 pnpm add @basaltkit/comments-sqlite   # peer: @basaltkit/comments

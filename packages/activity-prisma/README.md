@@ -1,13 +1,13 @@
 # @basaltkit/activity-prisma
 
 **Prisma-backed** implementation of the
-[`@basaltkit/activity`](https://github.com/Zebedeu/basalt/tree/main/packages/activity)
+[`@basaltkit/activity`](https://github.com/basaltkit/basalt/tree/main/packages/activity)
 `ActivityStore` — the activity feed — for production databases (PostgreSQL,
 MySQL, …).
 
 You bring a generated `PrismaClient` with the `ActivityRecord` model; the store
 only touches that delegate. The production counterpart to
-[`@basaltkit/activity-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/activity-sqlite).
+[`@basaltkit/activity-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/activity-sqlite).
 
 ```bash
 pnpm add @basaltkit/activity-prisma   # peer: @basaltkit/activity ; you already have @prisma/client

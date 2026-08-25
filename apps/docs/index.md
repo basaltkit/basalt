@@ -11,7 +11,7 @@ hero:
       link: /guide/getting-started
     - theme: alt
       text: View on GitHub
-      link: https://github.com/Zebedeu/basalt
+      link: https://github.com/basaltkit/basalt
 
 features:
   - title: Multi-tenancy, first class

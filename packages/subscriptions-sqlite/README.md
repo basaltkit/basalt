@@ -1,7 +1,7 @@
 # @basaltkit/subscriptions-sqlite
 
 Durable, **SQLite-backed** implementations of the three
-[`@basaltkit/subscriptions`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions)
+[`@basaltkit/subscriptions`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions)
 stores — the **subscription** record, **usage** metering and **webhook**
 idempotency — built on Node's built-in
 [`node:sqlite`](https://nodejs.org/api/sqlite.html). **Zero external
@@ -11,7 +11,7 @@ dependencies.**
 restart. Swap in these and billing state survives a redeploy — no ORM, no
 migration tool, no service. The single-node reference backend; the production
 (Postgres/MySQL) counterpart is
-[`@basaltkit/subscriptions-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions-prisma).
+[`@basaltkit/subscriptions-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions-prisma).
 
 ```bash
 pnpm add @basaltkit/subscriptions-sqlite   # peer: @basaltkit/subscriptions

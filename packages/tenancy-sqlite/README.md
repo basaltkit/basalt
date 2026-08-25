@@ -1,8 +1,8 @@
 # @basaltkit/tenancy-sqlite
 
-Durable, SQLite-backed implementation of the [`@basaltkit/tenancy`](https://github.com/Zebedeu/basalt/tree/main/packages/tenancy) `TenantSource`, on Node's built-in `node:sqlite`. Zero external dependencies.
+Durable, SQLite-backed implementation of the [`@basaltkit/tenancy`](https://github.com/basaltkit/basalt/tree/main/packages/tenancy) `TenantSource`, on Node's built-in `node:sqlite`. Zero external dependencies.
 
-`@basaltkit/tenancy` ships an in-memory `MemoryTenantSource` — perfect for tests and dev, but it forgets every tenant when the process exits. This package is the drop-in durable replacement for a single node: your tenant registry (and their custom domains) survives a restart. The production, multi-instance counterpart is [`@basaltkit/tenancy-prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/tenancy-prisma).
+`@basaltkit/tenancy` ships an in-memory `MemoryTenantSource` — perfect for tests and dev, but it forgets every tenant when the process exits. This package is the drop-in durable replacement for a single node: your tenant registry (and their custom domains) survives a restart. The production, multi-instance counterpart is [`@basaltkit/tenancy-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/tenancy-prisma).
 
 ## Installation
 

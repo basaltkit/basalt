@@ -1,13 +1,13 @@
 # @basaltkit/auth-prisma
 
-**Prisma-backed** implementations of every [`@basaltkit/auth`](https://github.com/Zebedeu/basalt/tree/main/packages/auth)
+**Prisma-backed** implementations of every [`@basaltkit/auth`](https://github.com/basaltkit/basalt/tree/main/packages/auth)
 store — users, sessions, refresh tokens, one-time tokens, API keys and MFA
 state — for production databases (PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` whose schema includes the `Auth*` models;
 the stores only touch those delegates, so they layer onto your existing client
 without owning your schema or connection. It's the production counterpart to
-[`@basaltkit/auth-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/auth-sqlite)
+[`@basaltkit/auth-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/auth-sqlite)
 (the zero-dependency, single-node option) — same store contracts, different
 backend.
 
@@ -83,7 +83,7 @@ Every store is also exported on its own (`PrismaUserSource`, `PrismaSessionStore
 
 ## Multi-tenant?
 
-Pair with [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma):
+Pair with [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma):
 resolve the per-tenant client from the request context and build the stores over
 it, so each tenant's auth data lives in its own database/schema.
 

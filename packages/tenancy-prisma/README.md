@@ -1,8 +1,8 @@
 # @basaltkit/tenancy-prisma
 
-Prisma-backed implementation of the [`@basaltkit/tenancy`](https://github.com/Zebedeu/basalt/tree/main/packages/tenancy) `TenantSource` — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
+Prisma-backed implementation of the [`@basaltkit/tenancy`](https://github.com/basaltkit/basalt/tree/main/packages/tenancy) `TenantSource` — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.
 
-`@basaltkit/tenancy` ships an in-memory `MemoryTenantSource` — fine for tests and dev, but it forgets every tenant on restart and can't be shared across instances. This package persists your tenant registry (and their custom domains) in the database you already run. The single-node, zero-dependency counterpart is [`@basaltkit/tenancy-sqlite`](https://github.com/Zebedeu/basalt/tree/main/packages/tenancy-sqlite).
+`@basaltkit/tenancy` ships an in-memory `MemoryTenantSource` — fine for tests and dev, but it forgets every tenant on restart and can't be shared across instances. This package persists your tenant registry (and their custom domains) in the database you already run. The single-node, zero-dependency counterpart is [`@basaltkit/tenancy-sqlite`](https://github.com/basaltkit/basalt/tree/main/packages/tenancy-sqlite).
 
 ## Installation
 
@@ -12,7 +12,7 @@ pnpm add @basaltkit/tenancy @basaltkit/tenancy-prisma
 
 ## Schema
 
-The source touches two models. Don't hand-copy them — run **`basalt prisma:sync`** (from [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma)), which discovers every installed `@basaltkit/*-prisma` package and merges its models into your `prisma/schema.prisma`:
+The source touches two models. Don't hand-copy them — run **`basalt prisma:sync`** (from [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma)), which discovers every installed `@basaltkit/*-prisma` package and merges its models into your `prisma/schema.prisma`:
 
 ```bash
 pnpm basalt prisma:sync --push        # add missing models + create the tables
@@ -72,4 +72,4 @@ A tenant is an **open record** (`{ id, ...anything }`), stored in a `Json` colum
 - **`@basaltkit/tenancy-prisma`** — you already run Postgres/MySQL, or need multiple instances sharing one tenant registry.
 - **`@basaltkit/tenancy-sqlite`** — a single node with zero dependencies.
 
-Both implement the identical `TenantSource` contract, so switching is a one-line change. For **database-per-tenant**, pair with [`@basaltkit/prisma`](https://github.com/Zebedeu/basalt/tree/main/packages/prisma).
+Both implement the identical `TenantSource` contract, so switching is a one-line change. For **database-per-tenant**, pair with [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma).

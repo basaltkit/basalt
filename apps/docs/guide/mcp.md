@@ -201,7 +201,7 @@ Over HTTP, point it at your `POST /mcp` endpoint instead.
 
 ## Try it in the playground
 
-The repo's [`apps/playground`](https://github.com/Zebedeu/basalt/tree/main/apps/playground)
+The repo's [`apps/playground`](https://github.com/basaltkit/basalt/tree/main/apps/playground)
 opts three routes into MCP — `create_project`, `list_projects`, `get_project` —
 and ships a stdio entry. Point Claude Desktop at it:
 

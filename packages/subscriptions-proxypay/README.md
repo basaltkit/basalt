@@ -1,6 +1,6 @@
 # @basaltkit/subscriptions-proxypay
 
-[ProxyPay](https://developer.proxypay.co.ao) payment gateway driver for [`@basaltkit/subscriptions`](https://github.com/Zebedeu/basalt/tree/main/packages/subscriptions) — **reference-based Multicaixa / EMIS payments for Angola (AOA)**.
+[ProxyPay](https://developer.proxypay.co.ao) payment gateway driver for [`@basaltkit/subscriptions`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions) — **reference-based Multicaixa / EMIS payments for Angola (AOA)**.
 
 Basalt's `BillingGateway` models card subscriptions (Stripe/Paddle). Angolan providers work differently: the customer pays a **Reference** at an ATM, Multicaixa Express, or a bank app using your account's fixed **Entity**, and the gateway confirms by webhook. This driver implements the `PaymentGateway` contract for that model.
 
