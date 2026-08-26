@@ -60,6 +60,8 @@ single accent — the molten face and rim only, never a full fill or a glow-out.
 | `basalt-mark-mono.svg`   | Single-hue mark via `currentColor`; set `color` for light/print.   |
 | `basalt-logo.svg`        | Horizontal logo (crystal + "Basalt") for light backgrounds.        |
 | `basalt-logo-dark.svg`   | Horizontal logo tuned for dark backgrounds.                        |
+| `basalt-avatar.svg/.png` | Square avatar (crystal on dark), 512×512 — GitHub/npm org avatar.  |
+| `basalt-social.svg/.png` | Social banner (logo + tagline), 1280×640 — repo social preview / og:image. |
 
 The mono mark inherits `currentColor` — e.g. `#14181F` on light, `#F4F2ED` on dark.
 
