@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="Basalt — the modular framework for SaaS on Node.js">
+  <defs>
+    <linearGradient id="lit" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#A9B7C4"/><stop offset="1" stop-color="#6C7C8A"/></linearGradient>
+    <linearGradient id="lit2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8B9AA7"/><stop offset="1" stop-color="#586878"/></linearGradient>
+    <linearGradient id="shadow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3C4C59"/><stop offset="1" stop-color="#1B242D"/></linearGradient>
+    <linearGradient id="shadow2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2C3843"/><stop offset="1" stop-color="#141B22"/></linearGradient>
+    <linearGradient id="molten" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFD27A"/><stop offset=".45" stop-color="#FF6A22"/><stop offset="1" stop-color="#C23F12"/></linearGradient>
+    <linearGradient id="molten2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF8A3D"/><stop offset="1" stop-color="#9E3410"/></linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0A0D13"/><stop offset="1" stop-color="#070910"/></linearGradient>
+    <radialGradient id="halo" cx="0.28" cy="0.32" r="0.5"><stop offset="0" stop-color="#FF7A1E" stop-opacity="0.20"/><stop offset="1" stop-color="#FF7A1E" stop-opacity="0"/></radialGradient>
+    <radialGradient id="core" cx="0.5" cy="0.45" r="0.6"><stop offset="0" stop-color="#FFE7B0"/><stop offset=".4" stop-color="#FF6A22"/><stop offset="1" stop-color="#FF5A1F" stop-opacity="0"/></radialGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="7"/></filter>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#halo)"/>
+  <rect x="0" y="0" width="1280" height="4" fill="#FF5A1F"/>
+  <!-- crystal -->
+  <svg x="150" y="185" width="270" height="270" viewBox="0 0 200 200">
+    <ellipse cx="122" cy="104" rx="44" ry="50" fill="url(#core)" filter="url(#glow)" opacity="0.9"/>
+    <g stroke="#0B0E13" stroke-width="1.6" stroke-linejoin="round">
+      <polygon points="52.37,72.5 100,45 100,100" fill="url(#lit)"/>
+      <polygon points="100,45 147.63,72.5 100,100" fill="url(#lit2)"/>
+      <polygon points="52.37,72.5 100,100 52.37,127.5" fill="url(#shadow)"/>
+      <polygon points="52.37,127.5 100,100 100,155" fill="url(#shadow2)"/>
+      <polygon points="100,100 147.63,72.5 147.63,127.5" fill="url(#molten)"/>
+      <polygon points="100,100 147.63,127.5 100,155" fill="url(#molten2)"/>
+    </g>
+    <polyline points="100,45 147.63,72.5 147.63,127.5" fill="none" stroke="#FFCF87" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+    <line x1="100" y1="100" x2="100" y2="155" stroke="#FFE7B0" stroke-width="2" stroke-linecap="round" opacity="0.8"/>
+    <circle cx="100" cy="45" r="3.4" fill="#FFE7B0" filter="url(#glow)"/>
+  </svg>
+  <!-- wordmark + tagline -->
+  <text x="470" y="330" font-family="'Helvetica Neue','Arial Nova',Arial,sans-serif" font-size="150" font-weight="600" letter-spacing="-6" fill="#F4F2ED">Basalt</text>
+  <text x="476" y="392" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace" font-size="26" letter-spacing="7" fill="#5D6874">THE MODULAR NODE.JS FRAMEWORK</text>
+</svg>

@@ -61,6 +61,10 @@ export default defineConfig({
   lang: 'en-US',
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+    ['meta', { property: 'og:image', content: 'https://basaltkit-docs.pages.dev/social-card.png' }],
+    ['meta', { property: 'og:type', content: 'website' }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:image', content: 'https://basaltkit-docs.pages.dev/social-card.png' }],
   ],
   // Served at the domain root (Cloudflare Pages / Netlify / Vercel), so base is '/'.
   cleanUrls: true,

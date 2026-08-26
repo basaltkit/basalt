@@ -1,4 +1,9 @@
-# Basalt
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/basalt-logo-dark.svg">
+    <img alt="Basalt" src="brand/basalt-logo.svg" width="360">
+  </picture>
+</p>
 
 **The modular framework for SaaS on Node.js.** Batteries-included,
 self-hosted, no vendor lock-in — tenancy, auth, billing, permissions, queues,
@@ -7,7 +12,7 @@ route to the client.
 
 Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.1 — the security-hardened release. 79 packages, each versioned independently. 🎉** The public API is
+> **Status: Basalt 1.4 — the TypeScript-7 toolchain & hardening release. 82 packages, each versioned independently. 🎉** The public API is
 > stable and covered by [semantic versioning](https://basaltkit-docs.pages.dev/guide/versioning):
 > breaking changes only in a new major, features in a minor, fixes in a patch.
 > In-memory stores are the dev default; every stateful domain has a durable
