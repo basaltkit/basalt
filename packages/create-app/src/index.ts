@@ -30,6 +30,8 @@ export interface CreateProjectInput {
   ui?: boolean
   /** Scaffold the `basalt` CLI entrypoint (code generators + commands). Default: false. */
   cli?: boolean
+  /** Expose opted-in routes as MCP tools over HTTP at `/mcp`. Default: false. */
+  mcp?: boolean
 }
 
 export interface CreateProjectResult {
@@ -68,6 +70,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     billing: input.billing ?? false,
     ui: input.ui ?? false,
     cli: input.cli ?? false,
+    mcp: input.mcp ?? false,
   }
   const dir = resolve(input.dir ?? input.name)
 

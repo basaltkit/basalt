@@ -20,6 +20,7 @@ Options:
   --billing       Include subscriptions/billing
   --ui            Scaffold a web/ frontend (React + shadcn + SDK)
   --cli           Scaffold the 'basalt' CLI (code generators + commands)
+  --mcp           Expose read-only routes as MCP tools at /mcp
   --install       Install dependencies after scaffolding
   --git           Initialize a git repository with a first commit
   --pm=<manager>  Package manager: pnpm | npm | yarn | bun (default: auto-detect)
@@ -37,6 +38,7 @@ interface Flags {
   billing: boolean
   ui: boolean
   cli: boolean
+  mcp: boolean
   install: boolean
   git: boolean
   yes: boolean
@@ -50,6 +52,7 @@ function parseArgs(argv: string[]): Flags {
     billing: false,
     ui: false,
     cli: false,
+    mcp: false,
     install: false,
     git: false,
     yes: false,
@@ -60,6 +63,7 @@ function parseArgs(argv: string[]): Flags {
     else if (token === '--billing') flags.billing = true
     else if (token === '--ui') flags.ui = true
     else if (token === '--cli') flags.cli = true
+    else if (token === '--mcp') flags.mcp = true
     else if (token === '--install') flags.install = true
     else if (token === '--git') flags.git = true
     else if (token === '-y' || token === '--yes') flags.yes = true
@@ -107,6 +111,7 @@ if (!flags.yes && flags.name === undefined && stdin.isTTY) {
     flags.billing = result.billing
     flags.ui = result.ui
     flags.cli = result.cli
+    flags.mcp = result.mcp
     flags.install = result.install
     flags.git = result.git
     flags.pm = result.pm
@@ -138,6 +143,7 @@ try {
     billing: flags.billing,
     ui: flags.ui,
     cli: flags.cli,
+    mcp: flags.mcp,
   })
   console.log(`\nCreated ${result.options.name} in ${result.dir}\n`)
   for (const file of result.files) console.log(`  ${file}`)
