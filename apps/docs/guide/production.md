@@ -199,7 +199,7 @@ The repo ships GitHub Actions that gate every PR:
 `pnpm lint` (ESLint), `pnpm typecheck`, and `pnpm test:coverage` (V8, enforced
 thresholds) all run in CI, alongside `pnpm audit`, CodeQL and a Postgres
 integration job. Versions move in [lockstep](https://github.com/basaltkit/basalt/blob/main/VERSIONING.md)
-across `@basaltkit/*`, so one range covers the whole toolkit.
+across `@basaltkit/*`, so one range covers the whole stack.
 
 ## Roadmap
 

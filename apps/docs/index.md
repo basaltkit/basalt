@@ -3,8 +3,11 @@ layout: home
 
 hero:
   name: Basalt
-  text: The complete toolkit for building SaaS on Node.js
+  text: The modular framework for SaaS on Node.js
   tagline: Tenancy, auth, billing, permissions, queues and audit — integrated end to end, self-hosted, no vendor lock-in.
+  image:
+    src: /hero-mark.svg
+    alt: Basalt
   actions:
     - theme: brand
       text: Get Started
