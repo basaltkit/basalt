@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/events
 
 The Basalt event bus: domain events typed and validated with Zod, listeners with priority, wildcard patterns, and the *transactional outbox* pattern for reliable external delivery. You need this when you want parts of the application to react to things happening ("order created", "invoice paid") without knowing about each other.

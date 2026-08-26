@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/logger
 
 Structured logging for Basalt applications, built on top of [pino](https://getpino.io): every log line is emitted as JSON, automatically enriched with the request context (`requestId`, `tenantId`, `userId`), with sensitive data (passwords, tokens) redacted by default.

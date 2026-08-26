@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/billing-ui
 
 A self-contained HTML **subscription** page for [`@basaltkit/subscriptions`](https://www.npmjs.com/package/@basaltkit/subscriptions): shows the current plan and the available plans, lets users **subscribe/switch** (hosted Checkout) and **manage billing** (Customer Portal) — **zero dependencies, no build step**. You need this module when you want a ready-to-use "plans & billing" page.

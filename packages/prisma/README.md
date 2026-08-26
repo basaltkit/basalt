@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/prisma
 
 Basalt's integration with Prisma: connects your application to the database in a multi-tenant way — each customer (tenant) automatically sees only their own data. You need this module when your SaaS application uses Prisma and serves multiple customers with data isolated from each other.

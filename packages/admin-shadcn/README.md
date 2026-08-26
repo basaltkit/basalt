@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/admin-shadcn
 
 React components styled with **shadcn/ui** for the `@basaltkit/admin` engine: visual primitives (Button, Input, Table, Card, Badge…) plus already-styled versions of `DataTable` and `ResourceForm`. You need this when you want a good-looking admin panel "out of the box", with Tailwind CSS — it's the package the `create-basalt --ui` scaffold uses.

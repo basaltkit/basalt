@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/cache-tiered",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Multi-level (tiered) cache driver for @basaltkit/cache \u2014 an in-process near cache in front of a far cache (Redis), with read backfill and write/invalidation fan-out. Zero dependencies.",
   "license": "MIT",
   "type": "module",

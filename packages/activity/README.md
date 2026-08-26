@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/activity
 
 Activity log for Basalt applications: a feed in the style of "Maria published project X 5 minutes ago", built with a fluent API and automatically associated with the current user and tenant.

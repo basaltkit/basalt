@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/i18n
 
 Internationalization for Basalt: **locale resolved from context** (per user/tenant), **typed message catalogs** with interpolation and plurals, and **formatting** (numbers, currency, dates, relative time, lists) via native `Intl`. **Zero dependencies**. You need this module when your application serves users in multiple languages/regions.

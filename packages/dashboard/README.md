@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/dashboard
 
 "Headless" (no graphical interface) model of a complete admin panel: billing metrics (MRR, ARR, churn), job queue and audit summaries, and a section registry that organizes resources into navigation. You need it when you want to assemble the management panel for a SaaS product — the "Overview" page with numbers, the resource list in the sidebar, queue status.

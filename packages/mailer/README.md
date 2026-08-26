@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/mailer
 
 Email layer for the Basalt framework: define typed emails once and send them via SMTP, an API provider (Resend or Amazon SES), to the console (development), or to memory (tests). You need this module whenever your application has to send emails — welcome messages, invoices, password recovery, etc.

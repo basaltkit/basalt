@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/queue-rabbitmq
 
 **RabbitMQ** driver for [`@basaltkit/queue`](https://www.npmjs.com/package/@basaltkit/queue): runs your jobs over AMQP instead of Redis/BullMQ, without changing a single line of your job code. You need this package when your messaging infrastructure is already RabbitMQ (or when you want a dedicated message broker, with native routing and dead-lettering).

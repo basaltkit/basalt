@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/flags
 
 Feature flags for Basalt: switches that let you turn parts of the application on or off (for everyone, for a specific customer, for a user, or for a gradual percentage of people) without deploying new code. You need this module when you want to roll out features safely and in a controlled way.

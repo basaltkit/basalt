@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/cache-tiered
 
 **Multi-level (tiered)** cache driver for [`@basaltkit/cache`](https://www.npmjs.com/package/@basaltkit/cache): puts an in-process *near cache* in front of a shared *far cache* (Redis), cutting network round-trips on hot keys. **Zero dependencies** — it composes the drivers you already have. You need this module when the same data is read many times per request/instance and you want to avoid hitting Redis every time.

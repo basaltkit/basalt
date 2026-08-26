@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/api-keys-ui
 
 Self-contained HTML page to **manage API keys** for [`@basaltkit/auth`](https://www.npmjs.com/package/@basaltkit/auth): create (shows the key **once**), list and revoke — **zero dependencies, no build step**. You need this module when you want to give users a screen to manage their API keys without building the UI from scratch.

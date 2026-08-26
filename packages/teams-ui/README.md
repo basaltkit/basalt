@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/teams-ui
 
 Self-contained HTML page for **managing a team** in [`@basaltkit/teams`](https://www.npmjs.com/package/@basaltkit/teams): invite/revoke invitations and list/change-role/remove members — **zero dependencies, no build step**. You need this module when you want to give admins a team management screen without building the UI from scratch.

@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/testing",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Testing kit for Basalt apps: createTestApp with user/tenant impersonation, mail and queue fakes with assertions, and time travel.",
   "license": "MIT",
   "type": "module",

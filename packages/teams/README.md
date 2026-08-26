@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/teams
 
 Teams for Basalt applications: makes each tenant multi-user, with hierarchical roles (owner/admin/member), email invitations with acceptance and revocation, member management, and a route guard by team role.

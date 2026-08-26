@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/queue
 
 Job queues for Basalt applications: define declarative "jobs" with Zod validation, run them in the background with BullMQ/Redis in production, and synchronously in development and tests — without changing a line of code.

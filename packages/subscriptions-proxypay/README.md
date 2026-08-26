@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/subscriptions-proxypay
 
 [ProxyPay](https://developer.proxypay.co.ao) payment gateway driver for [`@basaltkit/subscriptions`](https://github.com/basaltkit/basalt/tree/main/packages/subscriptions) — **reference-based Multicaixa / EMIS payments for Angola (AOA)**.

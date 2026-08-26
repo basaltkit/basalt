@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/auth
 
 Complete authentication for Basalt applications: user registration and login, JWT tokens with secure renewal, sessions, email verification, password recovery, two-factor authentication (MFA/TOTP), social login (Google, GitHub, or any OpenID Connect provider), and API keys — all with ready-to-use HTTP routes.

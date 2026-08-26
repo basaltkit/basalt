@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/admin
 
 Headless engine (no graphical interface) for admin panels: starting from a Zod data schema, it automatically derives table columns, form fields, and validation rules. You need it whenever you want to build an admin panel to manage your application's data — it's the foundation that the `@basaltkit/admin-react` and `@basaltkit/admin-shadcn` packages render on screen.

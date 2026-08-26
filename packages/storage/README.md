@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/storage
 
 Basalt's file storage layer: stores, reads and deletes files (uploads, reports, images, invoices…) with the same API, whether they live on local disk or in an S3-compatible cloud service (AWS S3, MinIO, Cloudflare R2). You need this module whenever your application deals with files.

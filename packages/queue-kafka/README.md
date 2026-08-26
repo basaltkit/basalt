@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/queue-kafka
 
 **Apache Kafka** driver for [`@basaltkit/queue`](https://www.npmjs.com/package/@basaltkit/queue): runs your jobs by producing and consuming messages on Kafka topics, without changing your job code. You need this package when your data platform is already built on Kafka and you want to process background work on the same infrastructure.

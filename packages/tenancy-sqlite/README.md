@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/tenancy-sqlite
 
 Durable, SQLite-backed implementation of the [`@basaltkit/tenancy`](https://github.com/basaltkit/basalt/tree/main/packages/tenancy) `TenantSource`, on Node's built-in `node:sqlite`. Zero external dependencies.

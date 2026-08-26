@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/permissions",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Authorization for Basalt, Spatie-style: roles, permissions with wildcards, policies, tenant scoping, super admin and route guards.",
   "license": "MIT",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/admin-react",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "React binding for @basaltkit/admin: DataTable and ResourceForm rendered from Zod-derived view models, plus data-source hooks.",
   "license": "MIT",
   "type": "module",

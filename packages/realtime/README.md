@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/realtime
 
 Real-time communication for Basalt: **server-to-client push** over WebSocket or SSE, with **per-tenant channels**, **presence** (who's online), and an **event bridge** that connects your app's domain hooks directly to connected clients. You need this module when you want live updates — notifications, feeds, dashboards, collaboration — without the client polling.

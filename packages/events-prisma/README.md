@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/events-prisma
 
 Prisma-backed implementation of the [`@basaltkit/events`](https://github.com/basaltkit/basalt/tree/main/packages/events) `OutboxStore` (the transactional outbox) — the production reference backend for PostgreSQL/MySQL. Bring your own `PrismaClient`; the package ships a reference schema.

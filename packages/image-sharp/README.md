@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/image-sharp
 
 **Image processing engine** for [`@basaltkit/storage`](https://www.npmjs.com/package/@basaltkit/storage), backed by [sharp](https://sharp.pixelplumbing.com). It implements the storage `ImageProcessor` contract so `disk.image(...)` can resize, rotate, and re-encode to WebP/AVIF/JPEG/PNG.

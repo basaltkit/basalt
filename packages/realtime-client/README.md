@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/realtime-client
 
 A **browser** client for [`@basaltkit/realtime`](https://www.npmjs.com/package/@basaltkit/realtime): subscribes to channels, receives real-time events over **WebSocket** or **SSE**, and reconnects on its own. **Zero dependencies** — uses the browser's native `WebSocket`/`EventSource`.

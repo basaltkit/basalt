@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/queue-sqs",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Amazon SQS driver for @basaltkit/queue: native delayed delivery, app-level retries with backoff and a dead-letter queue (no priority \u2014 SQS has none).",
   "license": "MIT",
   "type": "module",

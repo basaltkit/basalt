@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/admin-react
 
 Ready-to-use React components for the `@basaltkit/admin` engine: a table (`DataTable`) and a form (`ResourceForm`) generated automatically from your Zod schemas, plus a hook (`useList`) for loading data. You need this when you want to put an admin panel on screen with React, without writing tables and forms by hand.

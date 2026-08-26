@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/teams-sqlite",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Durable, SQLite-backed implementations of the @basaltkit/teams stores (memberships, invitations) built on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",
