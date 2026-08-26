@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/teams-ui",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A self-contained HTML page to manage @basaltkit/teams: invite/revoke invitations and list/change-role/remove members \u2014 zero dependencies, no build.",
   "license": "MIT",
   "type": "module",

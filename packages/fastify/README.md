@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/fastify
 
 Official Basalt adapter for [Fastify](https://fastify.dev): takes Basalt's typed routes and serves them on a Fastify server, with per-request context, standardized errors and an idempotency plugin. You need this when you want to build an HTTP API in Node.js with Basalt using Fastify as the engine.

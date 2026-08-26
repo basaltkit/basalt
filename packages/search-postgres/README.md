@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/search-postgres
 
 **PostgreSQL full-text search** driver for [`@basaltkit/search`](https://www.npmjs.com/package/@basaltkit/search): uses Postgres's `tsvector`/`tsquery`/`ts_rank`, with tenant isolation. You need this module when you already have Postgres and want relevant search **without** an external service (Meilisearch/Elastic).

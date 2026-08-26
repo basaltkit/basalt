@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/audit-viewer
 
 **Read-only** viewer for the audit trail produced by [`@basaltkit/audit`](https://www.npmjs.com/package/@basaltkit/audit): **per-tenant**, filterable and paginated queries, with aggregated **statistics**, and a self-contained **HTML page** to browse it. You need this module when you want to give admins (or yourself) a way to review who did what — for support, compliance, or debugging.

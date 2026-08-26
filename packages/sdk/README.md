@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/sdk
 
 Type-safe HTTP client for Basalt APIs: describe your endpoints once with Zod and get a client where every call has the right input/output types, structured errors, and automatic session-token refresh. You need this on the frontend (React, Vue, etc.) or in any code that calls your API.

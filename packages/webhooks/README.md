@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/webhooks
 
 Outbound webhooks for the Basalt framework: deliver events from your application to other systems' URLs, with cryptographic signing, automatic retries and per-tenant subscriptions. You need this module when *your customers* (or other services) want to be notified over HTTP when something happens in your application.

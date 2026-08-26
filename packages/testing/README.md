@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/testing
 
 Testing kit for Basalt applications: boots the application in memory with `createTestApp`, makes HTTP requests impersonating users and tenants, replaces mail and queue with fake versions that support assertions, and travels through time. You need it whenever you want to write automated tests for your application without real servers, databases, or external services.

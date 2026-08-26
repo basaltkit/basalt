@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/storage",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Object storage layer for Basalt: MinIO/S3 and local drivers under one contract, automatic tenant isolation, and temporary signed URLs.",
   "license": "MIT",
   "type": "module",

@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/tenancy
 
 Multi-tenancy for Basalt applications: automatically identifies which customer (tenant) each request belongs to — by subdomain, custom domain, header, or route — and makes it available at `ctx().tenant` throughout the application.

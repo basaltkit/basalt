@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/generator
 
 Code generator ("scaffolding") for Basalt applications: the `basalt make:*` commands create all the files for a resource for you — schema, repository, service, plugin, HTTP routes, and test — already wired together and compiling. You need this whenever you're adding a new "entity" to the application (Projects, Customers, Invoices…) and don't want to write the same skeleton by hand.

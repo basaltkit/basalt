@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/scheduler
 
 Task scheduler for Basalt applications: define, with a fluent, readable API (`daily().at('03:00')`), tasks that run automatically at set times — backups, reports, cleanups, billing.

@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/image-sharp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "sharp-backed image processor for @basaltkit/storage \u2014 resize/rotate/blur and JPEG/PNG/WebP/AVIF encoding behind the engine-neutral ImageProcessor contract.",
   "license": "MIT",
   "type": "module",

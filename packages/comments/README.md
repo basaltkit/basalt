@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/comments
 
 Per-resource comments for Basalt: **threads** (nested replies), **@mentions**, and **resolve/reopen**, isolated by tenant, emitting **events** that connect to [`@basaltkit/realtime`](https://www.npmjs.com/package/@basaltkit/realtime) (live discussion) and [`@basaltkit/notifications`](https://www.npmjs.com/package/@basaltkit/notifications) (notify who was mentioned). You need this module when you want collaboration — commenting on a note, a project, a task.

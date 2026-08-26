@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/auth-saml",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "SAML 2.0 SSO for @basaltkit/auth \u2014 SP-initiated login over @node-saml/node-saml (vetted XML-DSig), plugging into Auth.socialLogin.",
   "license": "MIT",
   "type": "module",

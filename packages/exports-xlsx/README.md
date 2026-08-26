@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/exports-xlsx
 
 **XLSX** formatter for [`@basaltkit/exports`](https://www.npmjs.com/package/@basaltkit/exports): writes a valid `.xlsx` (Office Open XML) — **zero dependencies**. Bring your own Excel writer without dragging in heavy libraries. You need this module when users want to export to Excel, not just CSV.

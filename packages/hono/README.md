@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/hono
 
 The Basalt adapter for [Hono](https://hono.dev): the same typed routes, enrichers, and guards you'd use with Fastify or Express, running on Hono — on Node.js, Bun, Deno, or *edge* platforms (Cloudflare Workers, Vercel Edge, …). You need this when you want to take your Basalt API outside classic Node, or when you're already using Hono.

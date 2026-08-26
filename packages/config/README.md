@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/config
 
 Central, namespace-organized configuration for Basalt applications, with dot-path reads (`config.get('mail.from')`). You need this when you want a single place to store and query your application's settings (addresses, ports, service options).
