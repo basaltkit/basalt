@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/search-elasticsearch
 
 [Elasticsearch](https://www.elastic.co/elasticsearch) / [OpenSearch](https://opensearch.org) driver for [`@basaltkit/search`](https://github.com/basaltkit/basalt/tree/main/packages/search).

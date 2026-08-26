@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/queue-sqs
 
 **Amazon SQS** driver for [`@basaltkit/queue`](https://www.npmjs.com/package/@basaltkit/queue): runs your jobs on AWS-managed SQS queues, without changing your job code. You need this package when you run on AWS and want a serverless queue, with no Redis or broker to maintain.

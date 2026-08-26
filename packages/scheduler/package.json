@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/scheduler",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Fluent Basalt scheduler: schedule.job(X).daily().at('03:00'), timezones, withoutOverlapping and @basaltkit/queue integration.",
   "license": "MIT",
   "type": "module",

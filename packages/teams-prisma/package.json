@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/teams-prisma",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Prisma-backed implementations of the @basaltkit/teams stores (memberships, invitations) \u2014 the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",

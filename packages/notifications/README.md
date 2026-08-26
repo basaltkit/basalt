@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/notifications
 
 Multi-channel notifications for the Basalt framework: define a notification once and deliver it by email, in-app (the "bell"), or through custom channels (SMS, push, etc.). You need this module when you want to let users know something happened — "invoice paid", "new comment", "subscription expiring".

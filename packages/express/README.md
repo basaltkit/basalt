@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/express
 
 Basalt adapter for [Express](https://expressjs.com): the same typed routes, enrichers, and guards you'd use in Fastify or Hono, running on an Express server. You need it when you already use Express (or want its huge middleware ecosystem) and want Basalt's validation, per-request context, and standardized errors.

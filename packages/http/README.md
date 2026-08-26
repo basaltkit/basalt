@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/http
 
 Basalt's neutral HTTP core: defines typed routes, validates request data, and handles errors in a standardized way — the same code then works on Fastify, Express, or Hono. You need it whenever you want to define routes or use the security, health, metrics, tracing, and OpenAPI plugins.

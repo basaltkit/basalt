@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/cache
 
 Basalt's cache layer: stores the results of slow operations (database queries, external API calls, heavy computations) so they can be returned instantly next time. You need this module when your application repeats the same work over and over and you want to make it faster and cheaper.

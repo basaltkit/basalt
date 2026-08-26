@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/auth-saml
 
 SAML 2.0 single sign-on for [`@basaltkit/auth`](https://www.npmjs.com/package/@basaltkit/auth). SP-initiated

@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/realtime",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Realtime for Basalt: server-to-client push over WebSocket/SSE with per-tenant channels, presence, an events bridge, and a pluggable backplane (in-memory or Redis pub/sub).",
   "license": "MIT",
   "type": "module",

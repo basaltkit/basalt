@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/auth-prisma
 
 **Prisma-backed** implementations of every [`@basaltkit/auth`](https://github.com/basaltkit/basalt/tree/main/packages/auth)

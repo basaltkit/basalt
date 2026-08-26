@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/cli
 
 Terminal command framework (the `basalt` command) for Basalt applications: define your own commands, run them against the already-booted application, and inspect HTTP routes and scheduled tasks. You need it when you want to give your application its own "command line" — for example `basalt routes` or `basalt db:seed`.

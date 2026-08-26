@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/exports
 
 Data export for Basalt: turns **typed** export definitions into **CSV / TSV / JSON / NDJSON** files (native, **zero dependencies**), through a formatter seam where XLSX/PDF plug in later. Designed to run **asynchronously** with `@basaltkit/queue` and store the result with `@basaltkit/files`/`@basaltkit/storage`. You need this module when users export data or generate reports.

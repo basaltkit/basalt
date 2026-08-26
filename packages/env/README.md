@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/env
 
 Typed validation of environment variables with [Zod](https://zod.dev): the application fails immediately at startup, with a single report of **all** problems, instead of crashing later in the middle of a request. You need this in any application that reads `process.env` (which is to say, practically all of them).

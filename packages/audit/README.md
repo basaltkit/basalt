@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/audit
 
 Audit trail for Basalt applications: automatically records, in an immutable history, who did what and when — from lifecycle hooks, domain events, and manual records.

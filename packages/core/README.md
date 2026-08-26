@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://basaltkit-docs.pages.dev">
+    <img src="https://basaltkit-docs.pages.dev/social-card.png" alt="Basalt" width="440">
+  </a>
+</p>
+
 # @basaltkit/core
 
 The foundation of the Basalt framework: the "engine" that boots your application, wires the pieces together (plugins), holds the shared services (container), and maintains the context of each request. You need this whenever you create a Basalt application — every other `@basaltkit/*` package builds on top of it.
