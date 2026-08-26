@@ -1,14 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 200" role="img" aria-labelledby="t">
-  <title id="t">Basalt — horizontal logo (light)</title>
-  <!-- Brandmark -->
-  <g transform="translate(20,25) scale(0.75)" stroke="#0E1116" stroke-width="2" stroke-linejoin="round">
-    <polygon points="127.5,27.37 155,75 127.5,122.63 72.5,122.63 45,75 72.5,27.37" fill="#7B8B99"/>
-    <polygon points="45,75 72.5,122.63 72.5,167.63 45,120" fill="#2C3843"/>
-    <polygon points="72.5,122.63 127.5,122.63 127.5,167.63 72.5,167.63" fill="#3C4C59"/>
-    <polygon points="127.5,122.63 155,75 155,120 127.5,167.63" fill="#232E38"/>
-    <line x1="100" y1="124.5" x2="100" y2="165.6" stroke="#FF5A1F" stroke-width="4" stroke-linecap="round"/>
-    <line x1="100" y1="127" x2="100" y2="163" stroke="#FFB347" stroke-width="1.6" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" role="img" aria-labelledby="t">
+  <title id="t">Basalt — horizontal logo for light backgrounds</title>
+  <defs>
+    <linearGradient id="lit" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9AA8B5"/><stop offset="1" stop-color="#5E6E7C"/></linearGradient>
+    <linearGradient id="lit2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7B8B99"/><stop offset="1" stop-color="#4A5A6A"/></linearGradient>
+    <linearGradient id="shadow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3C4C59"/><stop offset="1" stop-color="#1B242D"/></linearGradient>
+    <linearGradient id="shadow2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2C3843"/><stop offset="1" stop-color="#141B22"/></linearGradient>
+    <linearGradient id="molten" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFC15E"/><stop offset=".45" stop-color="#FF5A1F"/><stop offset="1" stop-color="#B23A10"/></linearGradient>
+    <linearGradient id="molten2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF7A2E"/><stop offset="1" stop-color="#8E2E0E"/></linearGradient>
+  </defs>
+  <g transform="translate(14,16) scale(0.84)">
+    <g stroke="#0E1116" stroke-width="1.8" stroke-linejoin="round">
+      <polygon points="52.37,72.5 100,45 100,100" fill="url(#lit)"/>
+      <polygon points="100,45 147.63,72.5 100,100" fill="url(#lit2)"/>
+      <polygon points="52.37,72.5 100,100 52.37,127.5" fill="url(#shadow)"/>
+      <polygon points="52.37,127.5 100,100 100,155" fill="url(#shadow2)"/>
+      <polygon points="100,100 147.63,72.5 147.63,127.5" fill="url(#molten)"/>
+      <polygon points="100,100 147.63,127.5 100,155" fill="url(#molten2)"/>
+    </g>
+    <polyline points="100,45 147.63,72.5 147.63,127.5" fill="none" stroke="#FFB347" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+    <line x1="100" y1="100" x2="100" y2="155" stroke="#FFD27A" stroke-width="1.8" stroke-linecap="round" opacity="0.85"/>
   </g>
-  <!-- Wordmark -->
-  <text x="196" y="132" font-family="'Helvetica Neue', 'Arial Nova', Arial, sans-serif" font-size="104" font-weight="600" letter-spacing="-3" fill="#14181F">Basalt</text>
+  <text x="204" y="132" font-family="'Helvetica Neue','Arial Nova',Arial,sans-serif" font-size="104" font-weight="600" letter-spacing="-3" fill="#14181F">Basalt</text>
 </svg>

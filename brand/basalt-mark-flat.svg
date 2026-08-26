@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-labelledby="t">
+  <title id="t">Basalt — flat mark (favicon / small sizes)</title>
+  <!-- Flat 3-face variant: no gradients or glow, so it stays legible to 16px. -->
+  <g stroke="#0B0E13" stroke-width="2" stroke-linejoin="round">
+    <polygon points="52.37,72.5 100,45 147.63,72.5 100,100" fill="#8B9AA7"/>
+    <polygon points="52.37,72.5 100,100 100,155 52.37,127.5" fill="#2C3843"/>
+    <polygon points="100,100 147.63,72.5 147.63,127.5 100,155" fill="#FF5A1F"/>
+  </g>
+  <line x1="100" y1="100" x2="100" y2="155" stroke="#FFB347" stroke-width="3" stroke-linecap="round"/>
+</svg>

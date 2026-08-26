@@ -202,7 +202,7 @@ O repositório inclui GitHub Actions que fazem gate a cada PR:
 `pnpm lint` (ESLint), `pnpm typecheck`, e `pnpm test:coverage` (V8, thresholds
 impostos) correm todos em CI, a par de `pnpm audit`, CodeQL e um job de integração
 com Postgres. As versões movem-se em [lockstep](https://github.com/basaltkit/basalt/blob/main/VERSIONING.md)
-em todo o `@basaltkit/*`, por isso um só intervalo cobre todo o toolkit.
+em todo o `@basaltkit/*`, por isso um só intervalo cobre toda a stack.
 
 ## Roadmap
 

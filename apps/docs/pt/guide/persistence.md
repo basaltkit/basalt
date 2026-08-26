@@ -323,7 +323,7 @@ class PrismaUserSource implements UserSource {
 `@basaltkit/auth-sqlite` e `@basaltkit/auth-prisma` são referências compactas e
 totalmente testadas para os seis stores de auth — lê qualquer uma quando construíres uma
 para outra base de dados ou ORM. A mesma abordagem aplica-se a todos os outros contratos
-de store no toolkit.
+de store na stack.
 
 ## O que fazer antes de ir para produção
 
