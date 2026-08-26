@@ -7,6 +7,8 @@ export interface ProjectOptions {
   ui: boolean
   /** Scaffold the `basalt` CLI entrypoint (code generators + built-in commands). */
   cli: boolean
+  /** Expose opted-in routes as MCP tools (@basaltkit/mcp) over HTTP at `/mcp`. */
+  mcp: boolean
 }
 
 /** Base release line for @basaltkit/* deps. */
@@ -35,6 +37,7 @@ export function packageJson(options: ProjectOptions): string {
   if (options.tenancy) dependencies['@basaltkit/tenancy'] = BASALT_VERSION
   if (options.auth) dependencies['@basaltkit/auth'] = BASALT_VERSION
   if (options.billing) dependencies['@basaltkit/subscriptions'] = BASALT_VERSION
+  if (options.mcp) dependencies['@basaltkit/mcp'] = BASALT_VERSION
   if (options.cli) {
     // Runtime deps: app.ts uses commandsPlugin (@basaltkit/cli); prisma powers
     // prismaPlugin + `basalt prisma:sync`. @basaltkit/generator is dev-only (below).
@@ -195,7 +198,19 @@ export function appTs(options: ProjectOptions): string {
     imports.push(`import { commandsPlugin, type CommandDefinition } from '@basaltkit/cli'`)
     plugins.push(`...(options.commands && options.commands.length > 0 ? [commandsPlugin(options.commands)] : [])`)
   }
-  plugins.push(`fastifyPlugin({ routes: ${routesExpression} })`)
+  let adapterRoutesExpr = routesExpression
+  if (options.mcp) {
+    imports.push(`import { mcpPlugin, mcpRoutes } from '@basaltkit/mcp'`)
+    // The MCP server scans the SAME app routes for `meta.mcp` (see routes.ts); the
+    // `/mcp` transport is added to the adapter so agents POST JSON-RPC to it. Tool
+    // calls run through the neutral pipeline, so tenancy/auth apply unchanged.
+    plugins.push(`mcpPlugin({ routes: ${routesExpression}, serverInfo: { name: '${options.name}', version: '0.1.0' } })`)
+    adapterRoutesExpr =
+      routesExpression === 'appRoutes'
+        ? '[...appRoutes, ...mcpRoutes()]'
+        : routesExpression.replace(/]$/, ', ...mcpRoutes()]')
+  }
+  plugins.push(`fastifyPlugin({ routes: ${adapterRoutesExpr} })`)
 
   const commandsField = options.cli
     ? `\n  /** Dev/CLI commands (make:*, ai:*, prisma:sync) — passed ONLY by bin/basalt.ts. */\n  commands?: CommandDefinition[]`
@@ -233,6 +248,14 @@ export function routesTs(options: ProjectOptions): string {
         ]
       : []),
   ]
+  // Opt these read-only routes in as MCP tools when MCP is enabled. Only safe,
+  // non-mutating endpoints are exposed — auth routes are deliberately left out.
+  const overviewMeta = options.mcp
+    ? `\n    meta: { mcp: { name: 'overview', description: 'List what this API exposes: name, status and available endpoints.' } },`
+    : ''
+  const healthMeta = options.mcp
+    ? `\n    meta: { mcp: { name: 'health', description: 'Liveness check — returns ok and the current request id.' } },`
+    : ''
   return `import { ctx } from '@basaltkit/core'
 import { route } from '@basaltkit/fastify'
 
@@ -240,7 +263,7 @@ export const appRoutes = [
   // Friendly index so \`GET /\` is never a bare 404 — lists what the API exposes.
   route({
     method: 'GET',
-    url: '/',
+    url: '/',${overviewMeta}
     async handler() {
       return {
         name: '${options.name}',
@@ -251,7 +274,7 @@ export const appRoutes = [
   }),
   route({
     method: 'GET',
-    url: '/health',
+    url: '/health',${healthMeta}
     async handler() {
       return { ok: true, requestId: ctx().requestId${
         options.tenancy ? ', tenant: ctx().tenant?.id ?? null' : ''
@@ -353,6 +376,7 @@ export function readme(options: ProjectOptions): string {
     ...(options.billing ? ['subscriptions with plans and feature limits'] : []),
     ...(options.ui ? ['web UI (React + shadcn/ui on @basaltkit/admin-shadcn + @basaltkit/sdk)'] : []),
     ...(options.cli ? ['`basalt` CLI with code generators (`make:*`) and built-in commands'] : []),
+    ...(options.mcp ? ['MCP server — read-only routes exposed as AI-agent tools at `/mcp`'] : []),
   ]
   return `# ${options.name}
 
@@ -395,6 +419,26 @@ pnpm --filter ${options.name}-web dev   # terminal 2 — UI on http://localhost:
 
 Open <http://localhost:5180>. The Vite dev server proxies \`/api\` to the API,
 so there is no CORS to configure${options.auth ? '. Register, then sign in' : ''}.
+`
+    : ''
+}${
+  options.mcp
+    ? `
+## MCP server
+
+Read-only routes marked with \`meta.mcp\` in \`src/routes.ts\` (the overview and
+health endpoints) are exposed as [Model Context Protocol](https://modelcontextprotocol.io)
+tools over HTTP at \`POST /mcp\`. Point any MCP client at it:
+
+\`\`\`bash
+# list the tools
+curl -s localhost:3000/mcp -H 'content-type: application/json' \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+\`\`\`
+
+Tool calls run through the same neutral pipeline as HTTP, so validation, tenancy
+and auth apply unchanged. Add \`meta: { mcp: true }\` to any route to expose it —
+keep mutations and auth flows off unless an agent should really call them.
 `
     : ''
 }`

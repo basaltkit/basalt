@@ -46,6 +46,7 @@ Multi-tenancy? (Y/n) y
 Authentication? (Y/n) y
 Subscriptions / billing? (y/N) n
 Web UI (React + shadcn)? (y/N) n
+MCP server (routes as AI-agent tools)? (y/N) n
 'basalt' CLI (code generators)? (y/N) n
 Install dependencies now? (y/N) y
 Initialize a git repository? (y/N) y
@@ -89,6 +90,7 @@ Usage: npm create basalt <name> [options]
 | `--billing` | off | Includes subscriptions/plans (`@basaltkit/subscriptions`, example `free` and `pro` plans) |
 | `--ui` | off | Generates the `web/` frontend (React + shadcn via `@basaltkit/admin-shadcn` + `@basaltkit/sdk`). **Forces pnpm** — see note below |
 | `--cli` | off | Generates the `basalt` CLI (`bin/basalt.ts`, `pnpm basalt` script, `make:*` generators from `@basaltkit/generator`) |
+| `--mcp` | off | Exposes read-only routes as MCP tools (`@basaltkit/mcp`) over HTTP at `POST /mcp` — the overview and health endpoints are opted in via `meta.mcp` |
 | `--install` | off | Installs dependencies at the end (with the detected/chosen manager) |
 | `--git` | off | Runs `git init` + first commit ("Initial commit from create-basalt") |
 | `--pm=<manager>` | autodetect | Package manager: `pnpm` \| `npm` \| `yarn` \| `bun` |
@@ -202,6 +204,7 @@ Exported from `create-basalt` (in addition to the `create-basalt` executable):
 | `billing` | `boolean` | No | `false` | Include subscriptions |
 | `ui` | `boolean` | No | `false` | Generate the `web/` frontend |
 | `cli` | `boolean` | No | `false` | Generate the `basalt` CLI |
+| `mcp` | `boolean` | No | `false` | Expose read-only routes as MCP tools at `/mcp` |
 
 `CreateProjectResult`:
 
