@@ -1,6 +1,6 @@
 # Introdução
 
-O Basalt é um toolkit "baterias incluídas" para construir aplicações SaaS em
+O Basalt é uma framework modular "baterias incluídas" para construir aplicações SaaS em
 Node.js. Não é mais uma framework HTTP — o Fastify já faz isso bem. Preenche a
 camada entre o servidor e um produto SaaS acabado: **tenancy, faturação,
 autenticação, permissões, auditoria, filas, notificações** — integrados com uma

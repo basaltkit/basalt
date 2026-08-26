@@ -1,6 +1,6 @@
 # Introduction
 
-Basalt is a batteries-included toolkit for building SaaS applications on
+Basalt is a batteries-included, modular framework for building SaaS applications on
 Node.js. It is not another HTTP framework — Fastify already does that well. It
 fills the layer between the server and a finished SaaS product: **tenancy,
 billing, auth, permissions, audit, queues, notifications** — integrated with

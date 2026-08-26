@@ -1,6 +1,6 @@
 # Basalt beyond SaaS
 
-Basalt is marketed as a multi-tenant SaaS toolkit, but that's just the headline.
+Basalt is marketed as a multi-tenant SaaS framework, but that's just the headline.
 Underneath, it's a **general-purpose TypeScript backend framework** — the
 SaaS-specific parts are opt-in plugins you can leave out entirely.
 

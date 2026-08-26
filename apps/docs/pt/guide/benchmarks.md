@@ -4,7 +4,7 @@
 
 Resposta curta: **no Fastify, cerca de 10–17% de overhead de débito** — pelo
 container, arranque de plugins, contexto de pedido, metadados de rota e pipeline
-de validação. Significativo mas modesto — trocas isso por todo o toolkit
+de validação. Significativo mas modesto — trocas isso por toda a stack
 `@basaltkit/*`. O harness reprodutível vive em
 [`apps/bench`](https://github.com/basaltkit/basalt/tree/main/apps/bench).
 

@@ -57,8 +57,11 @@ const search =
 
 export default defineConfig({
   title: 'Basalt',
-  description: 'The complete toolkit for building SaaS on Node.js.',
+  description: 'The modular framework for SaaS on Node.js.',
   lang: 'en-US',
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+  ],
   // Served at the domain root (Cloudflare Pages / Netlify / Vercel), so base is '/'.
   cleanUrls: true,
   lastUpdated: true,
@@ -76,7 +79,7 @@ export default defineConfig({
       label: 'Português',
       lang: 'pt-PT',
       link: '/pt/',
-      description: 'O toolkit completo para construir SaaS em Node.js.',
+      description: 'A framework modular para SaaS em Node.js.',
       themeConfig: {
         nav: [
           { text: 'Guia', link: '/pt/guide/getting-started' },
@@ -202,6 +205,8 @@ export default defineConfig({
   },
 
   themeConfig: {
+    logo: '/logo.svg',
+    siteTitle: 'Basalt',
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Cookbook', link: '/cookbook/notes-saas' },
