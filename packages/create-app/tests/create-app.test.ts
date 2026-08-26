@@ -163,6 +163,39 @@ describe('createProject', () => {
     expect(pkg.scripts).not.toHaveProperty('basalt')
   })
 
+  it('wires the MCP server with --mcp (dep, plugin, /mcp transport, opted-in routes)', async () => {
+    const result = await createProject({
+      name: 'withmcp',
+      dir: join(root, 'withmcp'),
+      auth: true,
+      mcp: true,
+    })
+
+    const pkg = JSON.parse(await read(result.dir, 'package.json'))
+    expect(pkg.dependencies).toHaveProperty('@basaltkit/mcp')
+
+    const app = await read(result.dir, 'src/app.ts')
+    expect(app).toContain("import { mcpPlugin, mcpRoutes } from '@basaltkit/mcp'")
+    // The MCP server scans the app routes; the /mcp transport is added to the adapter.
+    expect(app).toContain('mcpPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes()]')
+    expect(app).toContain('...mcpRoutes()] })')
+
+    const routes = await read(result.dir, 'src/routes.ts')
+    // Only the read-only routes are exposed as tools; auth flows are not.
+    expect(routes).toContain("meta: { mcp: { name: 'overview'")
+    expect(routes).toContain("meta: { mcp: { name: 'health'")
+  })
+
+  it('omits MCP by default', async () => {
+    const result = await createProject({ name: 'nomcp', dir: join(root, 'nomcp') })
+    const pkg = JSON.parse(await read(result.dir, 'package.json'))
+    expect(pkg.dependencies).not.toHaveProperty('@basaltkit/mcp')
+    const app = await read(result.dir, 'src/app.ts')
+    expect(app).not.toContain('@basaltkit/mcp')
+    const routes = await read(result.dir, 'src/routes.ts')
+    expect(routes).not.toContain('meta: { mcp')
+  })
+
   it('omits the web UI by default', async () => {
     const result = await createProject({ name: 'noui', dir: join(root, 'noui') })
     expect(result.files.some((f) => f.startsWith('web/'))).toBe(false)
