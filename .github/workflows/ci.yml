@@ -38,6 +38,11 @@ jobs:
       - name: Test
         run: pnpm test
 
+  # LINT TEMPORARILY DISABLED — ESLint is incompatible with the current TypeScript
+  # version (typescript-eslint does not yet support TS>=7). `pnpm lint` is a
+  # documented no-op; the job is kept for trivial re-enabling (restore the `lint`
+  # script, or switch to `pnpm lint:eslint`) once official support lands. typecheck
+  # still runs in the `test`/`typecheck` jobs.
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -49,6 +54,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Temporarily a no-op (see the comment above and eslint.config.mjs).
+      # Re-enable: switch to `pnpm lint:eslint`.
       - run: pnpm lint
 
   coverage:
