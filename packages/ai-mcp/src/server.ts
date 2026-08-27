@@ -67,5 +67,8 @@ export function createAiMcpHttpServer(options: HttpStartOptions = {}): Promise<H
   if (options.port !== undefined) httpOptions.port = options.port
   if (options.host !== undefined) httpOptions.host = options.host
   if (options.path !== undefined) httpOptions.path = options.path
+  if (options.allowedHosts !== undefined) httpOptions.allowedHosts = options.allowedHosts
+  if (options.allowedOrigins !== undefined) httpOptions.allowedOrigins = options.allowedOrigins
+  if (options.allowRequest !== undefined) httpOptions.allowRequest = options.allowRequest
   return serveHttp(server, httpOptions)
 }
