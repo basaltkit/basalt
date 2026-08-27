@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/mcp-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zero-dependency Model Context Protocol core for Basalt: the JSON-RPC 2.0 + MCP wire types, a transport-neutral server/dispatcher over function-shaped tools/resources/prompts (with progress + cancellation plumbing), and a stdio transport. Shared by the runtime @basaltkit/mcp and the dev-only AI bridge.",
   "license": "MIT",
   "type": "module",

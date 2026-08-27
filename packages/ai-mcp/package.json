@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/ai-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dev-only MCP bridge that exposes Basalt's AI developer workflows (analyze, doctor — plan/make/review to follow) to MCP clients (Claude Desktop/Code) over stdio. Never a runtime dependency of an app: it only uses the framework's official public APIs.",
   "license": "MIT",
   "type": "module",

@@ -1,5 +1,40 @@
 # @basaltkit/ai
 
+## 1.1.0
+
+### Minor Changes
+
+- 552cbe8: AI MCP bridge — M2 (provider workflows), RFC 0001 §E / §D.1(2).
+  
+  - **`@basaltkit/ai`** threads streaming, progress and cancellation through the workflow engine:
+    - `GenerateOptions` gains `signal?: AbortSignal`, forwarded into each provider's fetch (Anthropic/Ollama/OpenAI-compatible) and honoured by `fetchWithRetry` (a cancelled request fails immediately, never retried).
+    - `createPlan` and `reviewImplementation` (and `runMake`, for consistency) accept `{ signal?, onProgress? }`. With `onProgress`, generation streams via `provider.stream` and emits each fragment; without it, the one-shot `generate` path is unchanged. Cancellation is raced at the workflow layer so it's prompt even if a provider ignores the signal. New exports: `runGeneration`, `generateText`, `withAbort`, `throwIfAborted`, `abortError`, `isAbortError`, and the `WorkflowProgress` / `OnProgress` / `WorkflowRunOptions` types.
+    - New `providerEnvFrom(env)` (the env-record form of `providerEnvFromProcess`).
+    - New framework-free **`@basaltkit/ai/workflows`** subpath exposing `createProvider`, `providerEnvFrom(FromProcess)`, `createPlan`, `reviewImplementation` (+ types) **without** the `basalt ai` CLI wiring — so dev-only, out-of-process consumers use them without pulling `@basaltkit/core`/`http` into their graph.
+  - **`@basaltkit/ai-mcp`** (debuts at 0.1.0) gains the two provider-backed tools: `basalt_plan` (natural language → `ArchitecturePlan`) and `basalt_review` (LLM critique → verdict). Both stream MCP `notifications/progress` and honour `notifications/cancelled` via the tool context's `signal`. Provider config is read from the client-supplied `env` and used only in-memory — never logged or persisted. Still boundary-clean: only `@basaltkit/ai` + `@basaltkit/mcp-core`.
+- 552cbe8: AI MCP bridge — M1 (read-only), RFC 0001 §E.
+  
+  - **New `@basaltkit/ai-mcp`** (dev-only, debuts at 0.1.0): a Model Context Protocol server that exposes Basalt's AI developer workflows to MCP clients (Claude Desktop/Code) over stdio, via the `basalt-ai-mcp` bin. M1 is read-only — no AI provider, no file writes:
+    - Tools: `basalt_analyze` (stack, data model, diagnostics) and `basalt_doctor` (diagnostics + in-memory auto-fix previews).
+    - Resources: `basalt://project/{context,analysis,diagnostics}` and `basalt://knowledge/architecture`.
+    - Depends only on `@basaltkit/ai` + `@basaltkit/mcp-core`; it never pulls the framework runtime (`@basaltkit/core`/`http`) or the runtime `@basaltkit/mcp` into its graph (enforced by a boundary test).
+  - **`@basaltkit/ai`** gains a framework-free `@basaltkit/ai/analysis` subpath that re-exports the read-only surface (`detectProject`, `analyze`, `runDoctor`, `planFix`, `BASALT_KNOWLEDGE`, …) **without** the `basalt ai` CLI wiring. The main barrel re-exports `aiCommands`, which imports `@basaltkit/cli` → `@basaltkit/core`; the new subpath lets dev-only, out-of-process consumers use analyze/doctor without dragging the framework runtime into their dependency graph.
+- 552cbe8: AI MCP bridge — M3 (safe make), RFC 0001 §E / §D.1(3).
+  
+  - **`@basaltkit/ai`** adds a safe-preview to `runMake`: a dry-run now stats every target and returns `MakeResult.preview.perFile[]` (`{ path, action: 'create' | 'overwrite', diff }`) with unified diffs, plus `preview.clashes`. The preview writes nothing; `prisma db push`/`migrate` stays strictly opt-in. New `FilePreview`/`MakePreview` types and a dependency-free unified-diff generator. `runMake` (and its make types) are now reachable from the framework-free `@basaltkit/ai/workflows` subpath.
+  - **`@basaltkit/generator`** adds a framework-free **`@basaltkit/generator/resource`** subpath exposing `generateResource`/`writeGenerated`/`registerResourceInApp`/`names`/`FileExistsError` (+ types) **without** `generatorCommands` — which imports `@basaltkit/cli` (→ `@basaltkit/core`). `@basaltkit/ai`'s make engine now imports this subpath, so `runMake` no longer pulls the framework runtime, and dev-only consumers stay boundary-clean.
+  - **`@basaltkit/ai-mcp`** (debuts at 0.1.0) gains the `basalt_make` tool with a safety layer (`src/safety.ts`): **preview is the default and writes nothing**; `mode:'apply'` is explicit and refuses to overwrite a clash unless `force:true`; `prisma db push` runs only when `migrate:true` (double-gated); all writes are **confined to the launch workspace** (rejects `../` traversal, absolute paths, and symlink escapes before any write); an `apply` is confirmed via MCP elicitation when the client supports it, with the explicit preview→apply two-call flow as the floor. Plan↔make correlation is stateless — the client carries the full `ArchitecturePlan`. Progress via `ctx.progress`, cancellation via `ctx.signal`.
+- 552cbe8: MCP foundations (RFC 0001 M0): extract a zero-dependency `@basaltkit/mcp-core` and grow the AI data contracts.
+  
+  - **New `@basaltkit/mcp-core`** (zero runtime dependencies): the JSON-RPC 2.0 + MCP wire protocol, a transport-neutral `McpServer` that dispatches over function-shaped tools/resources/prompts (with `AbortSignal` cancellation and progress plumbing), and a stdio transport. This is the shared wire that lets the runtime MCP surface and the forthcoming dev-only AI bridge reuse one protocol implementation without dragging the framework runtime into a developer's toolchain.
+  - **`@basaltkit/mcp`** now builds its route-tools on top of `@basaltkit/mcp-core`. Public API and behaviour are unchanged (patch); the wire dispatch is delegated to the shared core.
+  - **`@basaltkit/ai`** exports runtime `zod` schemas and a `toJsonSchema()` for its public data contracts (`ArchitecturePlan`, `MakeResult`, `AnalysisReport`, `ProjectContext`, `AgentReview`) — also available at the `@basaltkit/ai/schema` subpath. `parsePlan`/`parseReview` now validate their coerced output against these schemas, and `ArchitecturePlan`/`MakeResult` carry a `schemaVersion` for cross-process round-trips. Adds `zod` as a dependency of this dev-only package.
+
+### Patch Changes
+
+- Updated dependencies [552cbe8]
+  - @basaltkit/generator@1.2.0
+
 ## 0.11.0
 
 ### Minor Changes
