@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/generator",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Code scaffolding for Basalt apps (basalt make): generates a full resource vertical \u2014 schema, repository, service, DI plugin, typed routes and test.",
   "license": "MIT",
   "type": "module",
