@@ -1,5 +1,12 @@
 # @basaltkit/mcp
 
+## 1.0.3
+
+### Patch Changes
+
+- Updated dependencies [f197518]
+  - @basaltkit/mcp-core@0.3.0
+
 ## 1.0.2
 
 ### Patch Changes
