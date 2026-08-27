@@ -101,6 +101,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       method: 'POST',
       headers: this.headers(),
       body: this.requestBody(options, true),
+      ...(options.signal ? { signal: options.signal } : {}),
     })
     if (!res.ok) {
       throw new Error(`OpenAICompatibleProvider: ${res.status} — ${safeError(await res.text())}`)
@@ -113,6 +114,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       method: 'POST',
       headers: this.headers(),
       body: this.requestBody(options, false),
+      ...(options.signal ? { signal: options.signal } : {}),
     })
     if (!ok) {
       const detail = safeError(body)

@@ -1,4 +1,4 @@
-import { names } from '@basaltkit/generator'
+import { names } from '@basaltkit/generator/resource'
 import type { PlanEntity, PlanField, PlanRelation } from '../plan/types.js'
 
 /**

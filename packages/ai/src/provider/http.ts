@@ -1,3 +1,4 @@
+import { throwIfAborted, isAbortError } from './abort.js'
 import type { FetchLike } from './types.js'
 
 export interface RetryOptions {
@@ -25,7 +26,7 @@ function isRetryableStatus(status: number): boolean {
 export async function fetchWithRetry(
   fetchImpl: FetchLike,
   url: string,
-  init: { method?: string; headers?: Record<string, string>; body?: string },
+  init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
   options: RetryOptions = {},
 ): Promise<{ ok: boolean; status: number; body: string }> {
   const retries = options.retries ?? 2
@@ -33,6 +34,7 @@ export async function fetchWithRetry(
   let lastError: unknown
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    throwIfAborted(init.signal)
     try {
       const res = await fetchImpl(url, init)
       if (isRetryableStatus(res.status) && attempt < retries) {
@@ -41,6 +43,8 @@ export async function fetchWithRetry(
       }
       return { ok: res.ok, status: res.status, body: await res.text() }
     } catch (error) {
+      // A cancelled request must fail immediately — never retried.
+      if (isAbortError(error) || init.signal?.aborted) throw error
       lastError = error
       if (attempt >= retries) throw error
       await sleep(baseDelayMs * 2 ** attempt)

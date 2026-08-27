@@ -1,4 +1,4 @@
-import { names } from '@basaltkit/generator'
+import { names } from '@basaltkit/generator/resource'
 
 /**
  * The RBAC permissions for a resource — the exact `<plural>.<action>` strings its

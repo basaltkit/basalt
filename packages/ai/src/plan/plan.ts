@@ -1,5 +1,7 @@
 import type { ProjectContext } from '../context/project.js'
 import type { AIProvider } from '../provider/types.js'
+import { ArchitecturePlanSchema } from '../schema/index.js'
+import { runGeneration, type OnProgress, type WorkflowRunOptions } from '../generate.js'
 import { buildPlanContext } from './context.js'
 import { BASALT_KNOWLEDGE } from './knowledge.js'
 import type { ArchitecturePlan, PlanEntity, PlanRelation, PlanStep, PlanStepKind } from './types.js'
@@ -7,6 +9,10 @@ import type { ArchitecturePlan, PlanEntity, PlanRelation, PlanStep, PlanStepKind
 export interface CreatePlanOptions {
   temperature?: number
   maxTokens?: number
+  /** Abort the request. */
+  signal?: AbortSignal
+  /** Receive streamed progress. When set, a streaming provider streams. */
+  onProgress?: OnProgress
 }
 
 const STEP_KINDS: PlanStepKind[] = [
@@ -33,17 +39,24 @@ export async function createPlan(
   request: string,
   options: CreatePlanOptions = {},
 ): Promise<ArchitecturePlan> {
-  const raw = await provider.generate({
-    messages: [
-      { role: 'system', content: BASALT_KNOWLEDGE },
-      {
-        role: 'user',
-        content: `REQUEST:\n${request}\n\n${buildPlanContext(ctx)}\n\nReturn the plan as a single JSON object only.`,
-      },
-    ],
-    temperature: options.temperature ?? 0,
-    maxTokens: options.maxTokens ?? 4096,
-  })
+  const run: WorkflowRunOptions = {}
+  if (options.signal) run.signal = options.signal
+  if (options.onProgress) run.onProgress = options.onProgress
+  const raw = await runGeneration(
+    provider,
+    {
+      messages: [
+        { role: 'system', content: BASALT_KNOWLEDGE },
+        {
+          role: 'user',
+          content: `REQUEST:\n${request}\n\n${buildPlanContext(ctx)}\n\nReturn the plan as a single JSON object only.`,
+        },
+      ],
+      temperature: options.temperature ?? 0,
+      maxTokens: options.maxTokens ?? 4096,
+    },
+    run,
+  )
   return parsePlan(raw, request)
 }
 
@@ -57,7 +70,11 @@ export function parsePlan(raw: string, request: string): ArchitecturePlan {
     throw new Error(`ai:plan — the model did not return valid JSON. Got: ${raw.slice(0, 160)}…`)
   }
 
-  return {
+  // Coerce first (tolerant of fences, missing arrays and loose shapes), then
+  // validate the coerced object against the schema. `schemaVersion` defaults in
+  // when absent; an incoming version (a plan round-tripped from a client) is kept.
+  const coerced = {
+    ...(typeof obj['schemaVersion'] === 'number' ? { schemaVersion: obj['schemaVersion'] } : {}),
     request,
     summary: typeof obj['summary'] === 'string' ? obj['summary'] : '',
     entities: normalizeEntities(obj['entities']),
@@ -67,6 +84,10 @@ export function parsePlan(raw: string, request: string): ArchitecturePlan {
     tenantScoped: obj['tenantScoped'] === true,
     warnings: stringArray(obj['warnings']),
   }
+  // The zod output is runtime-identical to ArchitecturePlan (optional keys are
+  // omitted, never `undefined`); the cast only bridges the `| undefined` that
+  // `z.infer` adds to optionals under `exactOptionalPropertyTypes`.
+  return ArchitecturePlanSchema.parse(coerced) as ArchitecturePlan
 }
 
 /** Strip markdown fences and isolate the outermost JSON object. */

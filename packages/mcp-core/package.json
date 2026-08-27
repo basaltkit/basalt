@@ -1,0 +1,45 @@
+{
+  "name": "@basaltkit/mcp-core",
+  "version": "0.1.0",
+  "description": "Zero-dependency Model Context Protocol core for Basalt: the JSON-RPC 2.0 + MCP wire types, a transport-neutral server/dispatcher over function-shaped tools/resources/prompts (with progress + cancellation plumbing), and a stdio transport. Shared by the runtime @basaltkit/mcp and the dev-only AI bridge.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/mcp-core"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/mcp-core#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "mcp",
+    "model-context-protocol",
+    "json-rpc",
+    "stdio",
+    "ai"
+  ]
+}

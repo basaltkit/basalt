@@ -16,11 +16,25 @@ export { fetchWithRetry, type RetryOptions } from './provider/http.js'
 export { globalSseFetch, parseSseContent, type SseFetch, type SseResponse } from './provider/sse.js'
 export {
   createProvider,
+  providerEnvFrom,
   providerEnvFromProcess,
   type CreateProviderOptions,
   type ProviderEnv,
   type ProviderName,
 } from './provider/factory.js'
+
+// Workflow progress + cancellation (spec §D.1(2)).
+export {
+  runGeneration,
+  generateText,
+  withAbort,
+  throwIfAborted,
+  abortError,
+  isAbortError,
+  type OnProgress,
+  type WorkflowProgress,
+  type WorkflowRunOptions,
+} from './generate.js'
 
 // Project context — stack/schema/config detection (spec §18, Context Engineering).
 export {
@@ -111,6 +125,8 @@ export {
 export type {
   MakeOptions,
   MakeResult,
+  MakePreview,
+  FilePreview,
   Migration,
   ResourceBuild,
   ReviewItem,
@@ -128,3 +144,18 @@ export type { AgentReview, ReviewIssue } from './review/types.js'
 // Rendering + CLI wiring.
 export { renderAnalysis, renderDoctor, type LineWriter } from './render.js'
 export { aiCommands, type AiCommandsOptions } from './commands.js'
+
+// Runtime schemas + JSON Schema derivation for the public data contracts (also
+// available at the `@basaltkit/ai/schema` subpath).
+export {
+  PLAN_SCHEMA_VERSION,
+  MAKE_SCHEMA_VERSION,
+  toJsonSchema,
+  ArchitecturePlanSchema,
+  MakeResultSchema,
+  AnalysisReportSchema,
+  ProjectContextSchema,
+  AgentReviewSchema,
+  DiagnosticSchema,
+  DetectedStackSchema,
+} from './schema/index.js'
