@@ -128,3 +128,18 @@ export type { AgentReview, ReviewIssue } from './review/types.js'
 // Rendering + CLI wiring.
 export { renderAnalysis, renderDoctor, type LineWriter } from './render.js'
 export { aiCommands, type AiCommandsOptions } from './commands.js'
+
+// Runtime schemas + JSON Schema derivation for the public data contracts (also
+// available at the `@basaltkit/ai/schema` subpath).
+export {
+  PLAN_SCHEMA_VERSION,
+  MAKE_SCHEMA_VERSION,
+  toJsonSchema,
+  ArchitecturePlanSchema,
+  MakeResultSchema,
+  AnalysisReportSchema,
+  ProjectContextSchema,
+  AgentReviewSchema,
+  DiagnosticSchema,
+  DetectedStackSchema,
+} from './schema/index.js'

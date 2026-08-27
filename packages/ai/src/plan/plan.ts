@@ -1,5 +1,6 @@
 import type { ProjectContext } from '../context/project.js'
 import type { AIProvider } from '../provider/types.js'
+import { ArchitecturePlanSchema } from '../schema/index.js'
 import { buildPlanContext } from './context.js'
 import { BASALT_KNOWLEDGE } from './knowledge.js'
 import type { ArchitecturePlan, PlanEntity, PlanRelation, PlanStep, PlanStepKind } from './types.js'
@@ -57,7 +58,11 @@ export function parsePlan(raw: string, request: string): ArchitecturePlan {
     throw new Error(`ai:plan — the model did not return valid JSON. Got: ${raw.slice(0, 160)}…`)
   }
 
-  return {
+  // Coerce first (tolerant of fences, missing arrays and loose shapes), then
+  // validate the coerced object against the schema. `schemaVersion` defaults in
+  // when absent; an incoming version (a plan round-tripped from a client) is kept.
+  const coerced = {
+    ...(typeof obj['schemaVersion'] === 'number' ? { schemaVersion: obj['schemaVersion'] } : {}),
     request,
     summary: typeof obj['summary'] === 'string' ? obj['summary'] : '',
     entities: normalizeEntities(obj['entities']),
@@ -67,6 +72,10 @@ export function parsePlan(raw: string, request: string): ArchitecturePlan {
     tenantScoped: obj['tenantScoped'] === true,
     warnings: stringArray(obj['warnings']),
   }
+  // The zod output is runtime-identical to ArchitecturePlan (optional keys are
+  // omitted, never `undefined`); the cast only bridges the `| undefined` that
+  // `z.infer` adds to optionals under `exactOptionalPropertyTypes`.
+  return ArchitecturePlanSchema.parse(coerced) as ArchitecturePlan
 }
 
 /** Strip markdown fences and isolate the outermost JSON object. */

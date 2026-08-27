@@ -8,6 +8,7 @@ import {
 } from '@basaltkit/generator'
 import type { ProjectContext } from '../context/project.js'
 import type { ArchitecturePlan, PlanEntity } from '../plan/types.js'
+import { MAKE_SCHEMA_VERSION } from '../schema/index.js'
 import { domainFields, injectPrismaFields, injectZodFields } from './fields.js'
 import {
   externalRelationTargets,
@@ -111,6 +112,7 @@ export async function runMake(
   const followUps = buildFollowUps(plan, resources, schema, migration)
   const review = reviewBuild(ctx, plan, resources, schema, migration)
   return {
+    schemaVersion: MAKE_SCHEMA_VERSION,
     request: plan.request,
     dryRun: options.dryRun === true,
     resources,

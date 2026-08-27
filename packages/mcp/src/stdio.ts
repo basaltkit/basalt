@@ -1,6 +1,6 @@
 import type { Container } from '@basaltkit/core'
+import { serveStdio } from '@basaltkit/mcp-core'
 import { MCP, type McpServer } from './server.js'
-import { fail, RPC_ERRORS, type JsonRpcRequest } from './protocol.js'
 
 export interface McpStdioOptions {
   /** Static headers applied to every tool call (e.g. a service tenant/token) — stdio has no per-request headers. */
@@ -19,7 +19,9 @@ export interface McpStdioHandle {
 /**
  * Serve MCP over stdio — newline-delimited JSON-RPC on stdin/stdout, the
  * transport local agents (Claude Desktop, IDEs) speak. Requires `mcpPlugin` so
- * the `MCP` server is in the container. Pure Node streams; no SDK.
+ * the `MCP` server is in the container. The transport itself lives in the
+ * zero-dependency `@basaltkit/mcp-core`; this wrapper resolves the runtime
+ * server from the container.
  *
  * ```ts
  * const app = await buildApp().boot()
@@ -31,38 +33,5 @@ export function serveMcpStdio(
   options: McpStdioOptions = {},
 ): McpStdioHandle {
   const server: McpServer = app.container.get(MCP)
-  const input: NodeJS.ReadableStream = options.input ?? process.stdin
-  const output = options.output ?? process.stdout
-  const headers = options.headers ?? {}
-
-  let buffer = ''
-  const emit = (line: string): void => {
-    output.write(`${line}\n`)
-  }
-
-  const onData = (chunk: Buffer | string): void => {
-    buffer += chunk.toString()
-    let newline: number
-    while ((newline = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, newline).trim()
-      buffer = buffer.slice(newline + 1)
-      if (!line) continue
-      void handleLine(line)
-    }
-  }
-
-  const handleLine = async (line: string): Promise<void> => {
-    let message: JsonRpcRequest
-    try {
-      message = JSON.parse(line)
-    } catch {
-      emit(JSON.stringify(fail(null, RPC_ERRORS.PARSE_ERROR, 'Parse error')))
-      return
-    }
-    const response = await server.handleMessage(message, { headers })
-    if (response !== null) emit(JSON.stringify(response))
-  }
-
-  input.on('data', onData)
-  return { close: () => input.off('data', onData) }
+  return serveStdio(server, options)
 }

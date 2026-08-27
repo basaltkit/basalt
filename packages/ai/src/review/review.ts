@@ -1,6 +1,7 @@
 import type { MakeResult } from '../make/types.js'
 import type { ArchitecturePlan } from '../plan/types.js'
 import type { AIProvider } from '../provider/types.js'
+import { AgentReviewSchema } from '../schema/index.js'
 import { REVIEW_KNOWLEDGE } from './knowledge.js'
 import type { AgentReview, ReviewIssue } from './types.js'
 
@@ -67,11 +68,13 @@ export function parseReview(raw: string): AgentReview {
     throw new Error(`ai review — the model did not return valid JSON. Got: ${raw.slice(0, 160)}…`)
   }
   const issues = normalizeIssues(obj['issues'])
-  return {
+  // Coerce first, then validate. `approved` is derived from the issues here, not
+  // trusted from the model.
+  return AgentReviewSchema.parse({
     approved: !issues.some((i) => i.severity === 'error'),
     summary: typeof obj['summary'] === 'string' ? obj['summary'] : '',
     issues,
-  }
+  })
 }
 
 function normalizeIssues(value: unknown): ReviewIssue[] {

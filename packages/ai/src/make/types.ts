@@ -72,6 +72,11 @@ export interface ReviewResult {
 }
 
 export interface MakeResult {
+  /**
+   * Serialization contract version. `runMake` always sets it; optional on the
+   * type so older, unversioned results still satisfy the interface.
+   */
+  schemaVersion?: number
   request: string
   dryRun: boolean
   resources: ResourceBuild[]
