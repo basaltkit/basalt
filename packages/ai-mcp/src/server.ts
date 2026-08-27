@@ -4,6 +4,7 @@ import { analyzeTool } from './tools/analyze.js'
 import { doctorTool } from './tools/doctor.js'
 import { planTool } from './tools/plan.js'
 import { reviewTool } from './tools/review.js'
+import { makeTool } from './tools/make.js'
 import { projectResources } from './resources/project.js'
 import { knowledgeResources } from './resources/knowledge.js'
 
@@ -21,7 +22,7 @@ export type AiMcpOptions = SessionOptions
 export function buildAiMcpServer(options: AiMcpOptions = {}): McpServer {
   const session = createSession(options)
   return new McpServer({
-    tools: [analyzeTool(session), doctorTool(session), planTool(session), reviewTool(session)],
+    tools: [analyzeTool(session), doctorTool(session), planTool(session), reviewTool(session), makeTool(session)],
     resources: [...projectResources(session), ...knowledgeResources()],
     serverInfo: SERVER_INFO,
   })

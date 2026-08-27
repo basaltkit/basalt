@@ -125,6 +125,8 @@ export {
 export type {
   MakeOptions,
   MakeResult,
+  MakePreview,
+  FilePreview,
   Migration,
   ResourceBuild,
   ReviewItem,

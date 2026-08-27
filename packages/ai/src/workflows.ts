@@ -48,5 +48,19 @@ export {
 } from './review/review.js'
 export type { AgentReview, ReviewIssue } from './review/types.js'
 
-// Type of the input a review consumes (a make result). Type-only — no runtime pull.
-export type { MakeResult } from './make/types.js'
+// Implementation — execute a plan (scaffold + review gate). Safe by default:
+// dry-run detects clashes and attaches diffs; writes never touch the DB unless
+// `migrate` is set. Framework-free via `@basaltkit/generator/resource`.
+export { runMake } from './make/make.js'
+export type {
+  MakeOptions,
+  MakeResult,
+  MakePreview,
+  FilePreview,
+  ResourceBuild,
+  SchemaMerge,
+  Migration,
+  ReviewResult,
+  ReviewItem,
+  ReviewStatus,
+} from './make/types.js'

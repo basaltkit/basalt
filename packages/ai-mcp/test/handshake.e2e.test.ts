@@ -54,7 +54,7 @@ describe('stdio handshake (piped streams — the transport the bin drives)', () 
     expect(init.capabilities.resources).toBeDefined()
 
     const tools = lines.find((l) => l.id === 2)!.result.tools.map((t: { name: string }) => t.name).sort()
-    expect(tools).toEqual(['basalt_analyze', 'basalt_doctor', 'basalt_plan', 'basalt_review'])
+    expect(tools).toEqual(['basalt_analyze', 'basalt_doctor', 'basalt_make', 'basalt_plan', 'basalt_review'])
 
     const resources = lines.find((l) => l.id === 3)!.result.resources.map((r: { uri: string }) => r.uri)
     expect(resources).toContain('basalt://project/context')

@@ -15,8 +15,17 @@ const pkg = JSON.parse(readFileSync(path.join(here, '..', 'package.json'), 'utf8
   dependencies?: Record<string, string>
 }
 
-/** Extract static + dynamic import/export specifiers from a module's source. */
-function specifiersOf(code: string): string[] {
+/**
+ * Extract static + dynamic import/export specifiers from a module's source.
+ * Strips block/line comments and backtick template literals first, so codegen
+ * string content (e.g. `import { db } from '@basaltkit/prisma'` emitted *into*
+ * generated files) is never mistaken for a real import of this package.
+ */
+function specifiersOf(source: string): string[] {
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/`(?:\\.|[^`\\])*`/g, '``')
+    .replace(/^\s*\/\/.*$/gm, '')
   const out: string[] = []
   for (const m of code.matchAll(/(?:import|export)[\s\S]*?from\s*['"]([^'"]+)['"]/g)) out.push(m[1]!)
   for (const m of code.matchAll(/import\(\s*['"]([^'"]+)['"]\s*\)/g)) out.push(m[1]!)
@@ -92,9 +101,11 @@ describe('dev-only boundary', () => {
   it('never transitively imports the framework runtime (core/http) or the runtime mcp/cli', () => {
     const entries = [path.join(here, '..', 'src', 'index.ts'), path.join(here, '..', 'src', 'bin.ts')]
     const bare = walk(entries)
-    // sanity: the walk actually reached the framework-free ai subpaths (analyze/doctor + plan/review)
+    // sanity: the walk reached the framework-free ai subpaths AND recursed transitively
+    // through workflows into the generator's framework-free /resource subpath.
     expect(bare.has('@basaltkit/ai/analysis')).toBe(true)
     expect(bare.has('@basaltkit/ai/workflows')).toBe(true)
+    expect(bare.has('@basaltkit/generator/resource')).toBe(true)
     for (const forbidden of FORBIDDEN) {
       expect([...bare].some((s) => s === forbidden || s.startsWith(`${forbidden}/`))).toBe(false)
     }

@@ -219,6 +219,17 @@ export const ReviewResultSchema = z.object({
   ok: z.boolean(),
 })
 
+export const FilePreviewSchema = z.object({
+  path: z.string(),
+  action: z.enum(['create', 'overwrite']),
+  diff: z.string(),
+})
+
+export const MakePreviewSchema = z.object({
+  perFile: z.array(FilePreviewSchema),
+  clashes: z.array(z.string()),
+})
+
 export const MakeResultSchema = z.object({
   schemaVersion: z.number().int().default(MAKE_SCHEMA_VERSION),
   request: z.string(),
@@ -228,6 +239,7 @@ export const MakeResultSchema = z.object({
   migration: MigrationSchema.optional(),
   followUps: z.array(z.string()),
   review: ReviewResultSchema,
+  preview: MakePreviewSchema.optional(),
 })
 
 // --- AgentReview (review/types.ts) -----------------------------------------

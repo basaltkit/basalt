@@ -5,11 +5,14 @@ import {
   registerResourceInApp,
   writeGenerated,
   type GeneratedFile,
-} from '@basaltkit/generator'
+} from '@basaltkit/generator/resource'
 import type { ProjectContext } from '../context/project.js'
 import type { ArchitecturePlan, PlanEntity } from '../plan/types.js'
 import { MAKE_SCHEMA_VERSION } from '../schema/index.js'
 import { throwIfAborted } from '../generate.js'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { unifiedDiff } from './diff.js'
 import { domainFields, injectPrismaFields, injectZodFields } from './fields.js'
 import {
   externalRelationTargets,
@@ -32,6 +35,7 @@ import {
 import { injectAuditPlugin, injectAuditService, injectPermissionGuards } from './wire.js'
 import type {
   MakeOptions,
+  MakePreview,
   MakeResult,
   Migration,
   ResourceBuild,
@@ -115,6 +119,9 @@ export async function runMake(
 
   const followUps = buildFollowUps(plan, resources, schema, migration)
   const review = reviewBuild(ctx, plan, resources, schema, migration)
+  // Safe preview (dry-run only): stat every target and attach a unified diff, so a
+  // caller sees exactly what an apply would create/overwrite before anything is written.
+  const preview = options.dryRun ? await buildPreview(resources, baseDir) : undefined
   return {
     schemaVersion: MAKE_SCHEMA_VERSION,
     request: plan.request,
@@ -124,6 +131,7 @@ export async function runMake(
     ...(migration ? { migration } : {}),
     followUps,
     review,
+    ...(preview ? { preview } : {}),
   }
 }
 
@@ -414,6 +422,29 @@ function hasTenantId(resource: ResourceBuild): boolean {
   const model = resource.files.find((f) => f.path.endsWith('.prisma'))
   if (!model) return false
   return /^[ \t]*tenantId[ \t]+/m.test(model.content)
+}
+
+async function readFileOrNull(target: string): Promise<string | null> {
+  try {
+    return await readFile(target, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/** Stat every generated file and build a per-file plan (create|overwrite) with a unified diff. */
+async function buildPreview(resources: ResourceBuild[], baseDir: string): Promise<MakePreview> {
+  const perFile: MakePreview['perFile'] = []
+  const clashes: string[] = []
+  for (const resource of resources) {
+    for (const file of resource.files) {
+      const existing = await readFileOrNull(join(baseDir, file.path))
+      const action: 'create' | 'overwrite' = existing !== null ? 'overwrite' : 'create'
+      if (existing !== null) clashes.push(file.path)
+      perFile.push({ path: file.path, action, diff: unifiedDiff(existing ?? '', file.content, file.path) })
+    }
+  }
+  return { perFile, clashes }
 }
 
 function kebab(name: string): string {
