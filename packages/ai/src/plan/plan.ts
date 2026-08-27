@@ -1,6 +1,7 @@
 import type { ProjectContext } from '../context/project.js'
 import type { AIProvider } from '../provider/types.js'
 import { ArchitecturePlanSchema } from '../schema/index.js'
+import { runGeneration, type OnProgress, type WorkflowRunOptions } from '../generate.js'
 import { buildPlanContext } from './context.js'
 import { BASALT_KNOWLEDGE } from './knowledge.js'
 import type { ArchitecturePlan, PlanEntity, PlanRelation, PlanStep, PlanStepKind } from './types.js'
@@ -8,6 +9,10 @@ import type { ArchitecturePlan, PlanEntity, PlanRelation, PlanStep, PlanStepKind
 export interface CreatePlanOptions {
   temperature?: number
   maxTokens?: number
+  /** Abort the request. */
+  signal?: AbortSignal
+  /** Receive streamed progress. When set, a streaming provider streams. */
+  onProgress?: OnProgress
 }
 
 const STEP_KINDS: PlanStepKind[] = [
@@ -34,17 +39,24 @@ export async function createPlan(
   request: string,
   options: CreatePlanOptions = {},
 ): Promise<ArchitecturePlan> {
-  const raw = await provider.generate({
-    messages: [
-      { role: 'system', content: BASALT_KNOWLEDGE },
-      {
-        role: 'user',
-        content: `REQUEST:\n${request}\n\n${buildPlanContext(ctx)}\n\nReturn the plan as a single JSON object only.`,
-      },
-    ],
-    temperature: options.temperature ?? 0,
-    maxTokens: options.maxTokens ?? 4096,
-  })
+  const run: WorkflowRunOptions = {}
+  if (options.signal) run.signal = options.signal
+  if (options.onProgress) run.onProgress = options.onProgress
+  const raw = await runGeneration(
+    provider,
+    {
+      messages: [
+        { role: 'system', content: BASALT_KNOWLEDGE },
+        {
+          role: 'user',
+          content: `REQUEST:\n${request}\n\n${buildPlanContext(ctx)}\n\nReturn the plan as a single JSON object only.`,
+        },
+      ],
+      temperature: options.temperature ?? 0,
+      maxTokens: options.maxTokens ?? 4096,
+    },
+    run,
+  )
   return parsePlan(raw, request)
 }
 

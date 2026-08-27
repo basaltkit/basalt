@@ -2,12 +2,17 @@ import type { MakeResult } from '../make/types.js'
 import type { ArchitecturePlan } from '../plan/types.js'
 import type { AIProvider } from '../provider/types.js'
 import { AgentReviewSchema } from '../schema/index.js'
+import { runGeneration, type OnProgress, type WorkflowRunOptions } from '../generate.js'
 import { REVIEW_KNOWLEDGE } from './knowledge.js'
 import type { AgentReview, ReviewIssue } from './types.js'
 
 export interface ReviewOptions {
   temperature?: number
   maxTokens?: number
+  /** Abort the request. */
+  signal?: AbortSignal
+  /** Receive streamed progress. When set, a streaming provider streams. */
+  onProgress?: OnProgress
 }
 
 /** Files worth sending to the reviewer — the ones that carry the behaviour. */
@@ -47,14 +52,21 @@ export async function reviewImplementation(
   result: MakeResult,
   options: ReviewOptions = {},
 ): Promise<AgentReview> {
-  const raw = await provider.generate({
-    messages: [
-      { role: 'system', content: REVIEW_KNOWLEDGE },
-      { role: 'user', content: `${buildReviewContext(plan, result)}\n\nReturn the verdict as a single JSON object.` },
-    ],
-    temperature: options.temperature ?? 0,
-    maxTokens: options.maxTokens ?? 2048,
-  })
+  const run: WorkflowRunOptions = {}
+  if (options.signal) run.signal = options.signal
+  if (options.onProgress) run.onProgress = options.onProgress
+  const raw = await runGeneration(
+    provider,
+    {
+      messages: [
+        { role: 'system', content: REVIEW_KNOWLEDGE },
+        { role: 'user', content: `${buildReviewContext(plan, result)}\n\nReturn the verdict as a single JSON object.` },
+      ],
+      temperature: options.temperature ?? 0,
+      maxTokens: options.maxTokens ?? 2048,
+    },
+    run,
+  )
   return parseReview(raw)
 }
 

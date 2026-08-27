@@ -16,6 +16,10 @@
     "./analysis": {
       "types": "./dist/analysis.d.ts",
       "import": "./dist/analysis.js"
+    },
+    "./workflows": {
+      "types": "./dist/workflows.d.ts",
+      "import": "./dist/workflows.js"
     }
   },
   "files": [

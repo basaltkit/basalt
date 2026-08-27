@@ -1,4 +1,5 @@
 import type { GeneratedFile } from '@basaltkit/generator'
+import type { OnProgress } from '../generate.js'
 
 export interface MakeOptions {
   /** Skip writing to disk — return what would be generated. */
@@ -15,6 +16,10 @@ export interface MakeOptions {
   schemaPath?: string
   /** After merging models, run `prisma db push` (creates tables + regenerates the client). */
   migrate?: boolean
+  /** Abort the operation (checked at each resource boundary). */
+  signal?: AbortSignal
+  /** Receive coarse progress as each resource is built. */
+  onProgress?: OnProgress
 }
 
 /** How the generated models were merged into prisma/schema.prisma. */

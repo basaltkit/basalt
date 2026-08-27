@@ -9,6 +9,7 @@ import {
 import type { ProjectContext } from '../context/project.js'
 import type { ArchitecturePlan, PlanEntity } from '../plan/types.js'
 import { MAKE_SCHEMA_VERSION } from '../schema/index.js'
+import { throwIfAborted } from '../generate.js'
 import { domainFields, injectPrismaFields, injectZodFields } from './fields.js'
 import {
   externalRelationTargets,
@@ -58,11 +59,14 @@ export async function runMake(
   if (entities.length === 0) {
     throw new Error('ai:make — the plan has no entity to generate.')
   }
+  throwIfAborted(options.signal)
   const baseDir = options.baseDir ?? process.cwd()
   const prismaDefault = ctx.stack.orm === 'prisma'
 
   const resources: ResourceBuild[] = []
   for (const entity of entities) {
+    throwIfAborted(options.signal)
+    options.onProgress?.({ message: `Building ${entity.name}…` })
     const gen = findGeneratorCommand(plan, entity.name)
     const prisma = options.prisma ?? gen?.prisma ?? prismaDefault
     const softDelete = options.softDelete ?? gen?.softDelete ?? false

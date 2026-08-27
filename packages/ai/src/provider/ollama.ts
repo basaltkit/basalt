@@ -44,6 +44,7 @@ export class OllamaProvider implements AIProvider {
     const { ok, status, body } = await fetchWithRetry(this.fetchImpl, this.baseUrl + '/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      ...(options.signal ? { signal: options.signal } : {}),
       body: JSON.stringify({
         model: this.model,
         stream: false,

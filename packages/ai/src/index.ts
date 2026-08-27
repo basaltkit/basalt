@@ -16,11 +16,25 @@ export { fetchWithRetry, type RetryOptions } from './provider/http.js'
 export { globalSseFetch, parseSseContent, type SseFetch, type SseResponse } from './provider/sse.js'
 export {
   createProvider,
+  providerEnvFrom,
   providerEnvFromProcess,
   type CreateProviderOptions,
   type ProviderEnv,
   type ProviderName,
 } from './provider/factory.js'
+
+// Workflow progress + cancellation (spec §D.1(2)).
+export {
+  runGeneration,
+  generateText,
+  withAbort,
+  throwIfAborted,
+  abortError,
+  isAbortError,
+  type OnProgress,
+  type WorkflowProgress,
+  type WorkflowRunOptions,
+} from './generate.js'
 
 // Project context — stack/schema/config detection (spec §18, Context Engineering).
 export {

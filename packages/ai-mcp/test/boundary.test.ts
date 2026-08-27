@@ -92,8 +92,9 @@ describe('dev-only boundary', () => {
   it('never transitively imports the framework runtime (core/http) or the runtime mcp/cli', () => {
     const entries = [path.join(here, '..', 'src', 'index.ts'), path.join(here, '..', 'src', 'bin.ts')]
     const bare = walk(entries)
-    // sanity: the walk actually reached the dependency graph
-    expect([...bare].some((s) => s.startsWith('@basaltkit/'))).toBe(true)
+    // sanity: the walk actually reached the framework-free ai subpaths (analyze/doctor + plan/review)
+    expect(bare.has('@basaltkit/ai/analysis')).toBe(true)
+    expect(bare.has('@basaltkit/ai/workflows')).toBe(true)
     for (const forbidden of FORBIDDEN) {
       expect([...bare].some((s) => s === forbidden || s.startsWith(`${forbidden}/`))).toBe(false)
     }
