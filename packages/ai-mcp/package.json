@@ -1,0 +1,53 @@
+{
+  "name": "@basaltkit/ai-mcp",
+  "version": "0.1.0",
+  "description": "Dev-only MCP bridge that exposes Basalt's AI developer workflows (analyze, doctor — plan/make/review to follow) to MCP clients (Claude Desktop/Code) over stdio. Never a runtime dependency of an app: it only uses the framework's official public APIs.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "basalt-ai-mcp": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/ai": "workspace:^",
+    "@basaltkit/mcp-core": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/ai-mcp"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/ai-mcp#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "developer-experience",
+    "stdio",
+    "claude"
+  ]
+}
