@@ -39,5 +39,8 @@ jobs:
           pr-title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # setup-node's generated .npmrc reads the token from NODE_AUTH_TOKEN;
+          # passing it as NPM_TOKEN left ${NODE_AUTH_TOKEN} empty → anonymous
+          # publish → E404. The secret name stays NPM_TOKEN.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
