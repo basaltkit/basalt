@@ -1,4 +1,4 @@
-import { names } from '@basaltkit/generator'
+import { names } from '@basaltkit/generator/resource'
 import type { PlanField } from '../plan/types.js'
 import { canonicalType, domainFields, type CanonicalType } from './fields.js'
 

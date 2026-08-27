@@ -1,4 +1,4 @@
-import { names } from '@basaltkit/generator'
+import { names } from '@basaltkit/generator/resource'
 
 /** Human summary for a generated CRUD route, from its method + url. */
 function summaryFor(method: string, url: string, singular: string, plural: string): string {

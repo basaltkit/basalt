@@ -6,6 +6,7 @@ import {
   envExample,
   envTs,
   gitignore,
+  mcpJson,
   basaltBin,
   packageJson,
   pnpmWorkspaceYaml,
@@ -90,6 +91,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     'src/server.ts': serverTs(),
     'tests/app.test.ts': appTest(options),
     ...(options.cli ? { 'bin/basalt.ts': basaltBin() } : {}),
+    ...(options.mcp ? { '.mcp.json': mcpJson(options) } : {}),
     ...(options.ui ? uiFiles(options) : {}),
   }
 

@@ -47,6 +47,12 @@ export interface PlanStep {
 }
 
 export interface ArchitecturePlan {
+  /**
+   * Serialization contract version. Producers (`createPlan`/`parsePlan`) always
+   * set it; it is optional on the type so hand-constructed plans and older,
+   * unversioned plans round-tripped from a client still satisfy the interface.
+   */
+  schemaVersion?: number
   request: string
   summary: string
   entities: PlanEntity[]

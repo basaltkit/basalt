@@ -1,16 +1,14 @@
 import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
-import { collectTools, type McpTool, type ToolCallContext } from './tools.js'
 import {
-  fail,
-  isNotification,
-  negotiateVersion,
-  ok,
-  RPC_ERRORS,
-  type JsonRpcRequest,
-  type JsonRpcResponse,
-} from './protocol.js'
+  McpServer as CoreServer,
+  type CallContext,
+  type McpToolDef,
+  type McpToolResult,
+} from '@basaltkit/mcp-core'
+import { collectTools, type McpTool, type ToolCallContext } from './tools.js'
+import { type JsonRpcRequest, type JsonRpcResponse } from './protocol.js'
 
 export interface McpServerInfo {
   name: string
@@ -24,90 +22,60 @@ export interface McpServerOptions {
   filter?: (route: BasaltRoute) => boolean
 }
 
+/** Adapt a route-backed {@link McpTool} to the core's function-shaped {@link McpToolDef}. */
+function toToolDef(tool: McpTool): McpToolDef {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+    invoke: (args, invokeCtx) =>
+      tool.invoke(args, invokeCtx.headers ? { headers: invokeCtx.headers } : {}),
+  }
+}
+
 /**
  * A Basalt app as an MCP server. Tools are the routes opted in with `meta.mcp`;
  * `handleMessage` implements the MCP JSON-RPC surface, transport-independently,
  * so the HTTP route and the stdio server share one code path.
+ *
+ * The wire dispatch is delegated to the zero-dependency `@basaltkit/mcp-core`
+ * server — this class stays the framework-aware adapter that turns routes into
+ * function tools and preserves the package's public surface.
  */
 export class McpServer {
   readonly serverInfo: McpServerInfo
-  private readonly tools: Map<string, McpTool>
+  private readonly core: CoreServer
 
   constructor(options: McpServerOptions) {
     this.serverInfo = options.serverInfo ?? { name: 'basalt', version: '0.1.0' }
     const filterOpt = options.filter ? { filter: options.filter } : {}
-    this.tools = new Map(
-      collectTools(options.routes, options.container, filterOpt).map((tool) => [tool.name, tool]),
-    )
+    const tools = collectTools(options.routes, options.container, filterOpt).map(toToolDef)
+    this.core = new CoreServer({ tools, serverInfo: this.serverInfo })
   }
 
   /** Tool descriptors, as returned by `tools/list`. */
   listTools() {
-    return [...this.tools.values()].map(({ name, description, inputSchema }) => ({
-      name,
-      description,
-      inputSchema,
-    }))
+    return this.core.listTools()
   }
 
-  async callTool(name: string, args: Record<string, unknown>, ctx?: ToolCallContext) {
-    const tool = this.tools.get(name)
-    if (!tool) throw new Error(`Unknown tool: ${name}`)
-    return tool.invoke(args, ctx)
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    callCtx?: ToolCallContext,
+  ): Promise<McpToolResult> {
+    return this.core.callTool(name, args, (callCtx ?? {}) as CallContext)
   }
 
   /**
    * Handle one JSON-RPC message. Returns the response, or `null` for a
-   * notification (which by spec gets no reply).
+   * notification (which by spec gets no reply). `callCtx` may carry per-request
+   * `headers` (and, over stdio, a `notify` hook) — both forwarded to the core.
    */
   async handleMessage(
     message: JsonRpcRequest,
     callCtx?: ToolCallContext,
   ): Promise<JsonRpcResponse | null> {
-    if (message?.jsonrpc !== '2.0' || typeof message.method !== 'string') {
-      return fail(message?.id ?? null, RPC_ERRORS.INVALID_REQUEST, 'Invalid JSON-RPC request')
-    }
-    const notification = isNotification(message)
-    const id = message.id ?? null
-
-    try {
-      switch (message.method) {
-        case 'initialize': {
-          const params = (message.params ?? {}) as { protocolVersion?: unknown }
-          return ok(id, {
-            protocolVersion: negotiateVersion(params.protocolVersion),
-            capabilities: { tools: { listChanged: false } },
-            serverInfo: this.serverInfo,
-          })
-        }
-        case 'notifications/initialized':
-        case 'notifications/cancelled':
-          return null // notifications: no response
-        case 'ping':
-          return ok(id, {})
-        case 'tools/list':
-          return ok(id, { tools: this.listTools() })
-        case 'tools/call': {
-          const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown }
-          if (typeof params.name !== 'string') {
-            return fail(id, RPC_ERRORS.INVALID_PARAMS, 'tools/call requires a string `name`')
-          }
-          if (!this.tools.has(params.name)) {
-            return fail(id, RPC_ERRORS.INVALID_PARAMS, `Unknown tool: ${params.name}`)
-          }
-          const args = (params.arguments ?? {}) as Record<string, unknown>
-          const result = await this.callTool(params.name, args, callCtx)
-          return ok(id, result)
-        }
-        default:
-          if (notification) return null
-          return fail(id, RPC_ERRORS.METHOD_NOT_FOUND, `Method not found: ${message.method}`)
-      }
-    } catch (error) {
-      if (notification) return null
-      const messageText = error instanceof Error ? error.message : 'Internal error'
-      return fail(id, RPC_ERRORS.INTERNAL_ERROR, messageText)
-    }
+    return this.core.handleMessage(message, (callCtx ?? {}) as CallContext)
   }
 }
 

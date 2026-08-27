@@ -21,16 +21,20 @@ export interface CreateProviderOptions {
   fetch?: FetchLike
 }
 
+/** Read the provider-relevant vars off an env record into a typed {@link ProviderEnv}. */
+export function providerEnvFrom(env: Record<string, string | undefined>): ProviderEnv {
+  return {
+    ...(env.AI_PROVIDER !== undefined ? { AI_PROVIDER: env.AI_PROVIDER } : {}),
+    ...(env.AI_MODEL !== undefined ? { AI_MODEL: env.AI_MODEL } : {}),
+    ...(env.AI_API_KEY !== undefined ? { AI_API_KEY: env.AI_API_KEY } : {}),
+    ...(env.AI_BASE_URL !== undefined ? { AI_BASE_URL: env.AI_BASE_URL } : {}),
+    ...(env.AI_STREAM !== undefined ? { AI_STREAM: env.AI_STREAM } : {}),
+  }
+}
+
 /** Read the provider-relevant vars off `process.env` into a typed {@link ProviderEnv}. */
 export function providerEnvFromProcess(): ProviderEnv {
-  const e = process.env
-  return {
-    ...(e.AI_PROVIDER !== undefined ? { AI_PROVIDER: e.AI_PROVIDER } : {}),
-    ...(e.AI_MODEL !== undefined ? { AI_MODEL: e.AI_MODEL } : {}),
-    ...(e.AI_API_KEY !== undefined ? { AI_API_KEY: e.AI_API_KEY } : {}),
-    ...(e.AI_BASE_URL !== undefined ? { AI_BASE_URL: e.AI_BASE_URL } : {}),
-    ...(e.AI_STREAM !== undefined ? { AI_STREAM: e.AI_STREAM } : {}),
-  }
+  return providerEnvFrom(process.env)
 }
 
 /**

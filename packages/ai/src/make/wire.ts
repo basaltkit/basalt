@@ -1,4 +1,4 @@
-import { names } from '@basaltkit/generator'
+import { names } from '@basaltkit/generator/resource'
 
 /**
  * Fase 4 auto-wiring: turn the plan's permissions and audit events into real code

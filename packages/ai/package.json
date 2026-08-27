@@ -8,6 +8,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.js"
+    },
+    "./analysis": {
+      "types": "./dist/analysis.d.ts",
+      "import": "./dist/analysis.js"
+    },
+    "./workflows": {
+      "types": "./dist/workflows.d.ts",
+      "import": "./dist/workflows.js"
     }
   },
   "files": [
@@ -20,7 +32,8 @@
   },
   "dependencies": {
     "@basaltkit/cli": "workspace:^",
-    "@basaltkit/generator": "workspace:^"
+    "@basaltkit/generator": "workspace:^",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",

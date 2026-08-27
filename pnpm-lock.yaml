@@ -509,6 +509,31 @@ importers:
       '@basaltkit/generator':
         specifier: workspace:^
         version: link:../generator
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@basaltkit/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(@vitest/coverage-v8@4.1.11)(jsdom@30.0.1(@noble/hashes@1.8.0))(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/ai-mcp:
+    dependencies:
+      '@basaltkit/ai':
+        specifier: workspace:^
+        version: link:../ai
+      '@basaltkit/mcp-core':
+        specifier: workspace:^
+        version: link:../mcp-core
     devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^
@@ -1371,6 +1396,9 @@ importers:
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
+      '@basaltkit/mcp-core':
+        specifier: workspace:^
+        version: link:../mcp-core
     devDependencies:
       '@basaltkit/express':
         specifier: workspace:^
@@ -1408,6 +1436,21 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+
+  packages/mcp-core:
+    devDependencies:
+      '@basaltkit/tsconfig':
+        specifier: workspace:^
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(@vitest/coverage-v8@4.1.11)(jsdom@30.0.1(@noble/hashes@1.8.0))(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
 
   packages/notifications:
     dependencies:

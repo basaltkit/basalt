@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./resource": {
+      "types": "./dist/resource.d.ts",
+      "import": "./dist/resource.js"
     }
   },
   "files": [

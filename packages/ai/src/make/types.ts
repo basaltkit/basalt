@@ -1,4 +1,5 @@
-import type { GeneratedFile } from '@basaltkit/generator'
+import type { GeneratedFile } from '@basaltkit/generator/resource'
+import type { OnProgress } from '../generate.js'
 
 export interface MakeOptions {
   /** Skip writing to disk — return what would be generated. */
@@ -15,6 +16,10 @@ export interface MakeOptions {
   schemaPath?: string
   /** After merging models, run `prisma db push` (creates tables + regenerates the client). */
   migrate?: boolean
+  /** Abort the operation (checked at each resource boundary). */
+  signal?: AbortSignal
+  /** Receive coarse progress as each resource is built. */
+  onProgress?: OnProgress
 }
 
 /** How the generated models were merged into prisma/schema.prisma. */
@@ -57,6 +62,22 @@ export interface ResourceBuild {
   note?: string
 }
 
+/** One file the build would write, with the change it would make. */
+export interface FilePreview {
+  path: string
+  /** `create` = the file does not exist; `overwrite` = it exists and would be replaced. */
+  action: 'create' | 'overwrite'
+  /** Unified diff of the change (empty old side for a new file). */
+  diff: string
+}
+
+/** A dry-run preview: exactly what would be written, and which files clash. */
+export interface MakePreview {
+  perFile: FilePreview[]
+  /** Paths that already exist and would be overwritten (an apply needs `force`). */
+  clashes: string[]
+}
+
 export type ReviewStatus = 'pass' | 'warn' | 'fail'
 
 export interface ReviewItem {
@@ -72,6 +93,11 @@ export interface ReviewResult {
 }
 
 export interface MakeResult {
+  /**
+   * Serialization contract version. `runMake` always sets it; optional on the
+   * type so older, unversioned results still satisfy the interface.
+   */
+  schemaVersion?: number
   request: string
   dryRun: boolean
   resources: ResourceBuild[]
@@ -82,4 +108,6 @@ export interface MakeResult {
   /** Manual follow-ups the scaffold can't do yet. */
   followUps: string[]
   review: ReviewResult
+  /** Dry-run only: the exact per-file plan (clash flags + diffs). Absent on apply. */
+  preview?: MakePreview
 }

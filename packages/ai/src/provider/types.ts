@@ -16,6 +16,8 @@ export interface GenerateOptions {
   temperature?: number
   /** Hard cap on output tokens. */
   maxTokens?: number
+  /** Abort the in-flight request. Providers forward it to the underlying fetch. */
+  signal?: AbortSignal
 }
 
 export interface AIProvider {
@@ -36,7 +38,7 @@ export interface AIProvider {
  */
 export type FetchLike = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string },
+  init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>
 
 /**
