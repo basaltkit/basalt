@@ -184,6 +184,22 @@ describe('createProject', () => {
     // Only the read-only routes are exposed as tools; auth flows are not.
     expect(routes).toContain("meta: { mcp: { name: 'overview'")
     expect(routes).toContain("meta: { mcp: { name: 'health'")
+
+    // Dev bridge: @basaltkit/ai-mcp is a DEVDEPENDENCY, never a runtime dependency.
+    expect(pkg.devDependencies).toHaveProperty('@basaltkit/ai-mcp')
+    expect(pkg.dependencies).not.toHaveProperty('@basaltkit/ai-mcp')
+
+    // A Claude Code / MCP client config registers the dev bridge for this project.
+    expect(result.files).toContain('.mcp.json')
+    const mcpConfig = JSON.parse(await read(result.dir, '.mcp.json'))
+    expect(mcpConfig.mcpServers['basalt-ai']).toEqual({
+      command: 'npx',
+      args: ['-y', '@basaltkit/ai-mcp', '--cwd=.'],
+    })
+
+    const readmeText = await read(result.dir, 'README.md')
+    expect(readmeText).toContain('basalt-ai-mcp')
+    expect(readmeText).toContain('devDependency')
   })
 
   it('omits MCP by default', async () => {
@@ -194,6 +210,9 @@ describe('createProject', () => {
     expect(app).not.toContain('@basaltkit/mcp')
     const routes = await read(result.dir, 'src/routes.ts')
     expect(routes).not.toContain('meta: { mcp')
+    // no dev bridge either
+    expect(pkg.devDependencies).not.toHaveProperty('@basaltkit/ai-mcp')
+    expect(result.files).not.toContain('.mcp.json')
   })
 
   it('omits the web UI by default', async () => {

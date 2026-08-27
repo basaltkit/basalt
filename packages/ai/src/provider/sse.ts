@@ -18,7 +18,7 @@ export interface SseResponse {
 
 export type SseFetch = (
   url: string,
-  init: { method?: string; headers?: Record<string, string>; body?: string },
+  init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<SseResponse>
 
 /** Default {@link SseFetch} backed by the global `fetch` + its streaming body. */
@@ -29,6 +29,7 @@ export const globalSseFetch: SseFetch = async (url, init) => {
     method: init.method,
     headers: init.headers,
     body: init.body,
+    ...(init.signal ? { signal: init.signal } : {}),
   })) as { ok: boolean; status: number; text(): Promise<string>; body: unknown }
 
   const stream = res.body as AsyncIterable<Uint8Array> | null

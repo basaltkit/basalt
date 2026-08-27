@@ -65,6 +65,7 @@ export class AnthropicProvider implements AIProvider {
         'x-api-key': this.apiKey,
         'anthropic-version': API_VERSION,
       },
+      ...(options.signal ? { signal: options.signal } : {}),
       body: JSON.stringify({
         model: this.model,
         max_tokens: options.maxTokens ?? 4096,

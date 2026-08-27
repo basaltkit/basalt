@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/http": "workspace:^"
+    "@basaltkit/http": "workspace:^",
+    "@basaltkit/mcp-core": "workspace:^"
   },
   "peerDependencies": {
     "zod": "^3.24.0 || ^4.0.0"
