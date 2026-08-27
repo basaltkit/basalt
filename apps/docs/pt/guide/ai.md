@@ -150,6 +150,15 @@ Qualquer issue de severidade `error` bloqueia (o comando sai ≠ 0); warnings n�
 Ele avalia o vertical de backend nos seus próprios termos — julga, nunca reescreve
 código.
 
+## Usar a partir do teu editor (MCP)
+
+Preferes conduzir estes fluxos a partir do **Claude Code** ou **Claude Desktop** em
+vez do terminal? O [`@basaltkit/ai-mcp`](./ai-mcp) é uma ponte MCP só-de-dev que
+expõe `analyze`, `doctor`, `plan`, `review` e o `make` (seguro, preview primeiro)
+como ferramentas MCP — o mesmo motor, no teu editor. Corre `claude mcp add
+basalt-ai -- npx -y @basaltkit/ai-mcp --cwd="$PWD"` e pede-lhe para planear uma
+funcionalidade.
+
 ## Porque é que ser só-dev importa
 
 O `@basaltkit/ai` e o `@basaltkit/generator` são `devDependencies`, registados só

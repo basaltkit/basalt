@@ -146,6 +146,14 @@ issues by dimension (tenancy, security, RBAC, validation, tests, fit). Any
 error-severity issue blocks (the command exits non-zero); warnings don't. It
 reviews the backend vertical on its own terms — it judges, it never rewrites code.
 
+## Use it from your editor (MCP)
+
+Prefer to drive these workflows from **Claude Code** or **Claude Desktop** instead
+of the terminal? [`@basaltkit/ai-mcp`](./ai-mcp) is a dev-only MCP bridge that
+exposes `analyze`, `doctor`, `plan`, `review` and (safe, preview-first) `make` as
+MCP tools — the same engine, in your editor. Run `claude mcp add basalt-ai -- npx
+-y @basaltkit/ai-mcp --cwd="$PWD"` and ask it to plan a feature.
+
 ## Why dev-only matters
 
 `@basaltkit/ai` and `@basaltkit/generator` are `devDependencies`, registered in

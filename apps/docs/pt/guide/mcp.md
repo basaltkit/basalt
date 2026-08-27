@@ -8,8 +8,11 @@ HTTP, portanto **validação, tenancy e auth aplicam-se sem alteração** — o 
 mais uma porta de entrada, não um atalho que as ignora.
 
 ::: tip Runtime, não codegen
-Este é um pacote **runtime**, separado da camada dev-only [`@basaltkit/ai`](./ai).
-O Basalt fala o JSON-RPC do MCP diretamente — sem SDK externo.
+Este é um pacote **runtime**: expõe *as rotas da tua app* a agentes em produção. É
+separado da camada só-de-dev [`@basaltkit/ai`](./ai) / [`@basaltkit/ai-mcp`](./ai-mcp)
+(que expõe *fluxos de desenvolvimento* ao teu editor) e é construído sobre o
+[`@basaltkit/mcp-core`](./mcp-core) (sem dependências). O Basalt fala o JSON-RPC do
+MCP diretamente — sem SDK externo.
 :::
 
 ## Expor rotas como tools
