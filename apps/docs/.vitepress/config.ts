@@ -114,7 +114,9 @@ export default defineConfig({
               text: 'Experiência de desenvolvimento',
               items: [
                 { text: 'Desenvolvimento assistido por IA', link: '/pt/guide/ai' },
+                { text: 'IA no teu editor (ponte MCP)', link: '/pt/guide/ai-mcp' },
                 { text: 'MCP (Model Context Protocol)', link: '/pt/guide/mcp' },
+                { text: 'Construir um servidor MCP (mcp-core)', link: '/pt/guide/mcp-core' },
                 { text: 'Testes', link: '/pt/guide/testing' },
               ],
             },
@@ -241,7 +243,9 @@ export default defineConfig({
           text: 'Developer Experience',
           items: [
             { text: 'AI-assisted development', link: '/guide/ai' },
+            { text: 'AI in your editor (MCP bridge)', link: '/guide/ai-mcp' },
             { text: 'MCP (Model Context Protocol)', link: '/guide/mcp' },
+            { text: 'Building an MCP server (mcp-core)', link: '/guide/mcp-core' },
             { text: 'Testing', link: '/guide/testing' },
           ],
         },

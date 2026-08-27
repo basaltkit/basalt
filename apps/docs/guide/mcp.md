@@ -7,8 +7,11 @@ through the *same* neutral request pipeline as HTTP, so **validation, tenancy an
 auth apply unchanged** — MCP is just another way in, not a bypass.
 
 ::: tip Runtime, not codegen
-This is a **runtime** package, separate from the dev-only [`@basaltkit/ai`](./ai)
-layer. Basalt speaks MCP's JSON-RPC directly — no external SDK.
+This is a **runtime** package: it exposes *your app's routes* to agents in
+production. It's separate from the dev-only [`@basaltkit/ai`](./ai) /
+[`@basaltkit/ai-mcp`](./ai-mcp) layer (which exposes *dev workflows* to your
+editor), and it's built on the zero-dependency [`@basaltkit/mcp-core`](./mcp-core).
+Basalt speaks MCP's JSON-RPC directly — no external SDK.
 :::
 
 ## Expose routes as tools
