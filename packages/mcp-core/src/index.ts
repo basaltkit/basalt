@@ -40,3 +40,6 @@ export {
   type ServeStdioOptions,
   type StdioHandle,
 } from './stdio.js'
+
+// Optional HTTP transport (opt-in; stdio stays primary).
+export { serveHttp, type ServeHttpOptions, type HttpHandle } from './http.js'

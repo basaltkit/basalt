@@ -40,18 +40,20 @@ describe('stdio handshake (piped streams — the transport the bin drives)', () 
     send({ jsonrpc: '2.0', id: 3, method: 'resources/list' })
     send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'basalt_analyze', arguments: {} } })
     send({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'basalt_doctor', arguments: {} } })
+    send({ jsonrpc: '2.0', id: 6, method: 'prompts/list' })
     await flush()
     await flush()
     await flush()
 
-    // five responses; the notification produced none
-    expect(lines).toHaveLength(5)
+    // six responses; the notification produced none
+    expect(lines).toHaveLength(6)
 
     const init = lines.find((l) => l.id === 1)!.result
     expect(init.serverInfo).toEqual({ name: 'basalt-ai-mcp', version: '0.1.0' })
-    // capabilities advertise BOTH tools and resources
+    // capabilities advertise tools, resources AND prompts
     expect(init.capabilities.tools).toBeDefined()
     expect(init.capabilities.resources).toBeDefined()
+    expect(init.capabilities.prompts).toBeDefined()
 
     const tools = lines.find((l) => l.id === 2)!.result.tools.map((t: { name: string }) => t.name).sort()
     expect(tools).toEqual(['basalt_analyze', 'basalt_doctor', 'basalt_make', 'basalt_plan', 'basalt_review'])
@@ -66,6 +68,9 @@ describe('stdio handshake (piped streams — the transport the bin drives)', () 
     const doctor = lines.find((l) => l.id === 5)!.result
     expect(doctor.structuredContent.hasErrors).toBe(true)
     expect(doctor.structuredContent.fixes.length).toBeGreaterThan(0)
+
+    const prompts = lines.find((l) => l.id === 6)!.result.prompts.map((p: { name: string }) => p.name)
+    expect(prompts).toContain('plan-feature')
 
     handle.close()
   })

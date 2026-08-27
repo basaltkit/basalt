@@ -19,7 +19,10 @@ const BASALT_VERSION = '^1.0.0'
  * package that advances past the base line needs its own range or a fresh app
  * can't install it. Add an entry when a package crosses a minor.
  */
-const VERSIONS: Record<string, string> = {}
+const VERSIONS: Record<string, string> = {
+  // ai-mcp is on the 0.x line (published separately from the 1.x framework base).
+  '@basaltkit/ai-mcp': '^0.1.0',
+}
 
 /** The dependency range for a @basalt package (override, else the base line). */
 export const versionOf = (pkg: string): string => VERSIONS[pkg] ?? BASALT_VERSION
@@ -63,6 +66,12 @@ export function packageJson(options: ProjectOptions): string {
     // Dev-only: only bin/basalt.ts imports the code generator — the runtime server
     // never does, so the app runs completely without the codegen/AI layer.
     devDependencies['@basaltkit/generator'] = versionOf('@basaltkit/generator')
+  }
+  if (options.mcp) {
+    // Dev-only AI bridge: exposes analyze/plan/make to MCP clients (Claude
+    // Code/Desktop) via the `basalt-ai-mcp` bin. NEVER a runtime dependency — the
+    // app ships and runs without it (see `.mcp.json` for the client config).
+    devDependencies['@basaltkit/ai-mcp'] = versionOf('@basaltkit/ai-mcp')
   }
 
   return `${JSON.stringify(
@@ -439,9 +448,39 @@ curl -s localhost:3000/mcp -H 'content-type: application/json' \\
 Tool calls run through the same neutral pipeline as HTTP, so validation, tenancy
 and auth apply unchanged. Add \`meta: { mcp: true }\` to any route to expose it —
 keep mutations and auth flows off unless an agent should really call them.
+
+### AI dev tools
+
+This project is also wired for AI-assisted development. \`.mcp.json\` registers the
+**dev-only** \`basalt-ai-mcp\` bridge (a \`devDependency\` — never shipped in your
+app's runtime) with MCP clients such as Claude Code and Claude Desktop. It exposes
+\`basalt_analyze\`, \`basalt_doctor\`, \`basalt_plan\`, \`basalt_review\` and
+\`basalt_make\` (preview by default, writes confined to this project) plus workflow
+prompts. Claude Code picks up \`.mcp.json\` automatically; for Claude Desktop add the
+same server to its config with \`--cwd=<absolute project path>\`.
 `
     : ''
 }`
+}
+
+/**
+ * A Claude Code / generic MCP client config that registers the dev-only
+ * `basalt-ai-mcp` bridge for this project. Claude Code reads `.mcp.json` at the
+ * project root automatically; Claude Desktop uses the same server entry.
+ */
+export function mcpJson(_options: ProjectOptions): string {
+  return `${JSON.stringify(
+    {
+      mcpServers: {
+        'basalt-ai': {
+          command: 'npx',
+          args: ['-y', '@basaltkit/ai-mcp', '--cwd=.'],
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`
 }
 
 export function gitignore(): string {
