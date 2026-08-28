@@ -28,8 +28,8 @@ the questions:
 | `--billing` | off | Include subscriptions/plans (`@basaltkit/subscriptions`) |
 | `--ui` | off | Add a React + shadcn `web/` frontend — see [Web UI](/guide/web-ui). Forces pnpm |
 | `--cli` | off | Add the `basalt` CLI (`make:*` generators + built-in commands) |
-| `--install` | off | Install dependencies at the end |
-| `--git` | off | `git init` + an initial commit |
+| `--install` / `--no-install` | on in a TTY, off in CI | Install dependencies at the end |
+| `--git` / `--no-git` | on in a TTY, off in CI | `git init` + an initial commit |
 | `--pm=<mgr>` | autodetect | Force `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `--dir=<path>` | `./<name>` | Destination folder |
 | `-y`, `--yes` | — | Accept all defaults, no prompts |
@@ -39,8 +39,10 @@ pnpm create basalt my-saas --billing --cli --install --git   # full stack, insta
 npm create basalt service-api --no-tenancy --no-auth         # minimal API
 ```
 
-By default the scaffolder only writes files — it doesn't install dependencies or
-touch git unless you add `--install` / `--git`. So the usual next steps are:
+In an interactive terminal the scaffolder installs dependencies and runs
+`git init` by default (`--no-install` / `--no-git` to opt out); in CI or piped
+runs it only writes files unless you pass `--install` / `--git`. The usual next
+steps are:
 
 ```bash
 cd my-saas
