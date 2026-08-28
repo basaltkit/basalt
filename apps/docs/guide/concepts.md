@@ -75,6 +75,15 @@ records real `A depends on B` resolutions since `enableGraph()` and never forces
 eager construction. Handy for spotting a service pulling in something it
 shouldn't, or just seeing how the container fits together.
 
+### Lifetimes are enforced
+
+A `singleton` outlives every request scope, so its factory must not resolve
+`scoped` tokens — that would freeze one request's instance into an app-wide
+service. The container fails loudly with `CaptiveDependencyError`
+(`DI_CAPTIVE_DEPENDENCY`) instead of capturing silently. Resolve the
+scope-dependent service at use time (e.g. from `ctx().container`) rather than
+at construction.
+
 ## Context (AsyncLocalStorage)
 
 `ctx()` returns the active request/job context anywhere in the call stack —

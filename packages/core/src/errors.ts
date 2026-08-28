@@ -38,6 +38,25 @@ export class CircularDependencyError extends BasaltError {
   }
 }
 
+/**
+ * A `scoped` token was resolved while a `singleton` was being built. The
+ * singleton outlives every scope, so it would permanently capture ONE scope's
+ * instance (e.g. request 1's per-request service served to every later
+ * request) — the classic captive dependency. Fails loudly instead of
+ * capturing silently. Inject the scope-dependent service per call (resolve it
+ * from `ctx().container` at use time), or make the dependency transient.
+ */
+export class CaptiveDependencyError extends BasaltError {
+  constructor(scopedToken: string, singletonToken: string) {
+    super(
+      'DI_CAPTIVE_DEPENDENCY',
+      `Scoped token "${scopedToken}" was resolved inside the factory of singleton "${singletonToken}". ` +
+        'A singleton outlives every scope, so this would permanently capture one scope\'s instance. ' +
+        'Resolve the scoped service at use time (e.g. from ctx().container) instead of at construction.',
+    )
+  }
+}
+
 export class PluginDependencyError extends BasaltError {
   constructor(message: string) {
     super('PLUGIN_DEPENDENCY', message)

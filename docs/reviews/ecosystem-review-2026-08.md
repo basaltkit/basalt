@@ -284,3 +284,40 @@ The three-layer separation is intact and, in places, exemplary:
 - **Depth.** ~20 of 85 packages were read closely (core, http, fastify, the MCP/AI trio,
   tenancy, testing, create-app, cli, prisma); the rest were assessed via the dependency graph
   and barrels. Findings are ranked by value, not exhaustiveness.
+
+---
+
+## Addendum (2026-08-28) — implementation status & new finding
+
+Implemented from this review: **A1** (+ **A3** boundary test, PR #234), **Q1**
+(adapter-parametrizable harness + cross-adapter conformance, PR #235), **A2 + S1**
+(PR #237), and the batch **D1 / stripper port / neutral 404** (PR #239). **Q2 was
+disproven** on test-first verification: cycle detection is sound across scopes —
+any true cycle re-enters some (container, token) pair and that container's own
+stack catches it; the probes are pinned in
+`packages/core/tests/container-cross-scope.test.ts` and no Container change was
+made.
+
+### 🟡 NEW (found during Q2, resolved) — Captive dependency in the Container
+
+- **Problem.** `packages/core/src/container.ts`: a singleton's instance is
+  memoized on its *owning* container (`binding.owner.singletons`, line ~70) but
+  built by the *calling* container (`this.build`, factory receives `this`,
+  line ~99). A singleton factory resolving a `scoped` token therefore captured
+  the resolving scope's instance — request 1's per-request service frozen into
+  an app-wide singleton and served to every later request. Verified empirically.
+- **Blast radius.** Zero: no package or scaffold template registers `.scoped()`
+  bindings; all 53 in-repo singleton factories resolve only other singletons.
+  Entirely latent — which made a fail-loud fix non-breaking by construction.
+- **Resolution (implemented).** Option (b), fail-loud: the container throws the
+  new `CaptiveDependencyError` (`DI_CAPTIVE_DEPENDENCY`) when a scoped token is
+  resolved while a singleton build is in flight — O(1) allocation-free guard
+  (per-container singleton-build counter + one compare on the scoped path;
+  micro-benched at no measurable cost). Option (a) (build against
+  `binding.owner`) was rejected: it does NOT fail closed — the owner would mint
+  owner-level "scoped" instances (a different silent wrongness) — and it changes
+  which container factories observe. Option (c) (doctor rule) is deferred:
+  blocked on AST signals, and a runtime guarantee beats a heuristic. Deliberate
+  escapes remain possible (a singleton managing its own `createScope()`), and
+  legitimate graphs are untouched (tested). Docs: concepts guide (EN/PT);
+  changeset: core minor.

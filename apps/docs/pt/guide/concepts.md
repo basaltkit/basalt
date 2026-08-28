@@ -75,6 +75,15 @@ grava as resoluções reais `A depende de B` desde o `enableGraph()` e nunca for
 construção eager. Útil para detetar um serviço que puxa algo que não devia, ou só
 para ver como o container encaixa.
 
+### Lifetimes são impostos
+
+Um `singleton` sobrevive a todos os scopes de pedido, por isso a sua factory
+não pode resolver tokens `scoped` — isso congelaria a instância de um pedido
+num serviço da app inteira. O container falha alto com
+`CaptiveDependencyError` (`DI_CAPTIVE_DEPENDENCY`) em vez de capturar em
+silêncio. Resolve o serviço dependente do scope no momento de uso (p.ex. via
+`ctx().container`) e não na construção.
+
 ## Contexto (AsyncLocalStorage)
 
 O `ctx()` devolve o contexto de pedido/job ativo em qualquer ponto da call stack
