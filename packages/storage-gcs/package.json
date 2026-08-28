@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/storage-gcs",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Google Cloud Storage driver for @basaltkit/storage \u2014 put/get/list/delete/signed URLs over @google-cloud/storage, with an injectable client for testing.",
   "license": "MIT",
   "type": "module",
