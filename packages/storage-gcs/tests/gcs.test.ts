@@ -26,7 +26,8 @@ class FakeGcsBucket implements GcsBucketLike {
         store.delete(path)
       },
       async getSignedUrl(config): Promise<[string]> {
-        return [`https://gcs.test/${path}?expires=${config.expires}`]
+        const cd = config.responseDisposition ? `&rd=${config.responseDisposition}` : ''
+        return [`https://gcs.test/${path}?expires=${config.expires}${cd}`]
       },
     }
   }
@@ -68,7 +69,11 @@ describe('GcsStorageDriver', () => {
   it('signs a temporary URL and works through a Disk', async () => {
     const { driver } = make()
     await driver.put('r.pdf', 'data')
-    expect(await driver.temporaryUrl('r.pdf', 60_000)).toContain('gcs.test/r.pdf')
+    const url = await driver.temporaryUrl('r.pdf', 60_000)
+    expect(url).toContain('gcs.test/r.pdf')
+    // secure default: signed URL pins Content-Disposition: attachment (S-3)
+    expect(url).toContain('rd=attachment')
+    expect(await driver.temporaryUrl('r.pdf', 60_000, { disposition: 'inline' })).toContain('rd=inline')
 
     const disk = new Disk('gcs', driver, { scope: null })
     await disk.put('x.txt', 'via disk')

@@ -1,4 +1,4 @@
-import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
+import { type TemporaryUrlOptions, StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
 
 /** The subset of an `@azure/storage-blob` BlockBlobClient this driver uses. */
 export interface AzureBlobLike {
@@ -6,7 +6,7 @@ export interface AzureBlobLike {
   downloadToBuffer(): Promise<Buffer>
   exists(): Promise<boolean>
   deleteIfExists(): Promise<{ succeeded: boolean }>
-  generateSasUrl(options: { permissions: string; expiresOn: Date }): Promise<string>
+  generateSasUrl(options: { permissions: string; expiresOn: Date; contentDisposition?: string }): Promise<string>
 }
 
 /** The subset of an `@azure/storage-blob` ContainerClient this driver uses. */
@@ -68,10 +68,14 @@ export class AzureBlobStorageDriver implements StorageDriver {
     return names
   }
 
-  async temporaryUrl(path: string, expiresInMs: number): Promise<string> {
-    return (await this.container())
-      .getBlockBlobClient(path)
-      .generateSasUrl({ permissions: 'r', expiresOn: new Date(Date.now() + expiresInMs) })
+  async temporaryUrl(path: string, expiresInMs: number, options?: TemporaryUrlOptions): Promise<string> {
+    return (await this.container()).getBlockBlobClient(path).generateSasUrl({
+      permissions: 'r',
+      expiresOn: new Date(Date.now() + expiresInMs),
+      // SAS-pinned response header: uploaded HTML/SVG downloads instead of
+      // rendering on the storage origin ('attachment' is the Disk default).
+      contentDisposition: options?.disposition ?? 'attachment',
+    })
   }
 
   async disconnect(): Promise<void> {}
