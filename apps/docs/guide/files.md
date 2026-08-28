@@ -26,6 +26,8 @@ export const app = await createApp({
     fastifyPlugin({ routes: [...fileRoutes()] }), // GET /files, GET /files/:id, POST /files/:id/url, DELETE /files/:id
     filesPlugin({
       disk: 'uploads',                                   // a disk name or a Disk instance
+      // Optional — uploads are capped at 25 MiB even with no validate at all
+      // (DEFAULT_MAX_FILE_SIZE); set your own cap and an allowlist:
       validate: { maxSize: 5_000_000, allowedTypes: ['image/*', 'application/pdf'] },
       maxTotalBytes: 1_000_000_000,                      // per-tenant quota (1 GB)
     }),

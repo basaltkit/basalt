@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { HookBus, runWithContext } from '@basaltkit/core'
 import { Disk, type StorageDriver } from '@basaltkit/storage'
 import {
+  DEFAULT_MAX_FILE_SIZE,
   FileNotFoundError,
   FileTenantRequiredError,
   FileTooLargeError,
@@ -139,5 +140,22 @@ describe('Files lifecycle', () => {
     expect(await files.get(record.id, 'acme')).toBeNull()
     expect(driver.files.has(`tenants/acme/${record.path}`)).toBe(false)
     expect(deleted).toBe(true)
+  })
+})
+
+describe('secure defaults (review 2026-08-b, S-3)', () => {
+  it('uploads have a size cap even when no validate option is given', async () => {
+    const { files } = setup() // NO validate — the default cap must exist
+    const oversized = Buffer.alloc(DEFAULT_MAX_FILE_SIZE + 1)
+    await expect(
+      files.upload(oversized, { name: 'huge.bin', contentType: 'application/octet-stream', tenantId: 'acme' }),
+    ).rejects.toBeInstanceOf(FileTooLargeError)
+  })
+
+  it('an explicit maxSize still overrides the default (raise or lower)', async () => {
+    const { files } = setup({ validate: { maxSize: 4 } })
+    await expect(
+      files.upload(Buffer.alloc(5), { name: 'x.bin', contentType: 'application/octet-stream', tenantId: 'acme' }),
+    ).rejects.toBeInstanceOf(FileTooLargeError)
   })
 })

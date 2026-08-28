@@ -1,4 +1,4 @@
-import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
+import { type TemporaryUrlOptions, StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
 
 /** The subset of a `@google-cloud/storage` File this driver uses. */
 export interface GcsFileLike {
@@ -6,7 +6,7 @@ export interface GcsFileLike {
   download(): Promise<[Buffer]>
   exists(): Promise<[boolean]>
   delete(): Promise<unknown>
-  getSignedUrl(config: { action: 'read'; expires: number }): Promise<[string]>
+  getSignedUrl(config: { action: 'read'; expires: number; responseDisposition?: string }): Promise<[string]>
 }
 
 /** The subset of a `@google-cloud/storage` Bucket this driver uses. */
@@ -69,10 +69,14 @@ export class GcsStorageDriver implements StorageDriver {
     return files.map((file) => file.name)
   }
 
-  async temporaryUrl(path: string, expiresInMs: number): Promise<string> {
-    const [url] = await (await this.bucket())
-      .file(path)
-      .getSignedUrl({ action: 'read', expires: Date.now() + expiresInMs })
+  async temporaryUrl(path: string, expiresInMs: number, options?: TemporaryUrlOptions): Promise<string> {
+    const [url] = await (await this.bucket()).file(path).getSignedUrl({
+      action: 'read',
+      expires: Date.now() + expiresInMs,
+      // Signed response header: uploaded HTML/SVG downloads instead of
+      // rendering on the storage origin ('attachment' is the Disk default).
+      responseDisposition: options?.disposition ?? 'attachment',
+    })
     return url
   }
 

@@ -52,6 +52,13 @@ export interface RealtimePluginOptions {
   maxSubscriptionsPerConnection?: number
   /** Max channel-name length (DoS bound). Default 256. */
   maxChannelLength?: number
+  /**
+   * Called when a bridged broadcast fails (e.g. the backplane is down). The
+   * bridge is fire-and-forget by design — a realtime push is cosmetic and must
+   * never fail the domain write that emitted the hook — so failures land here
+   * instead of propagating. Default: logs to console with the rule's context.
+   */
+  onBridgeError?: (error: unknown, info: { hook: string; channel: string; event: string }) => void
 }
 
 export function realtimePlugin(options: RealtimePluginOptions = {}) {
@@ -73,12 +80,24 @@ export function realtimePlugin(options: RealtimePluginOptions = {}) {
       await hub.start()
       const realtime = container.get(REALTIME)
 
+      const onBridgeError =
+        options.onBridgeError ??
+        ((error: unknown, info: { hook: string; channel: string; event: string }) =>
+          console.error(
+            `[basalt:realtime] bridge broadcast failed (hook "${info.hook}" -> channel "${info.channel}", event "${info.event}"):`,
+            error,
+          ))
       for (const rule of options.bridge ?? []) {
         hooks.on(rule.hook, (payload) => {
           const tenantId = rule.tenant(payload)
           if (tenantId === undefined) return
           const channel = typeof rule.channel === 'function' ? rule.channel(payload) : rule.channel
-          return realtime.to(tenantId).channel(channel).emit(rule.event, rule.data ? rule.data(payload) : payload)
+          // Fire-and-forget: a realtime push is a cosmetic fan-out — it must
+          // never fail (or slow down) the domain write that emitted the hook.
+          // Failures stay observable via onBridgeError. (Review 2026-08-b, Q-1.)
+          void Promise.resolve(
+            realtime.to(tenantId).channel(channel).emit(rule.event, rule.data ? rule.data(payload) : payload),
+          ).catch((error: unknown) => onBridgeError(error, { hook: rule.hook, channel, event: rule.event }))
         })
       }
     },

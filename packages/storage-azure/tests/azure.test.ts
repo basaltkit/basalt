@@ -26,7 +26,8 @@ class FakeAzureContainer implements AzureContainerLike {
         return { succeeded: store.delete(path) }
       },
       async generateSasUrl(options): Promise<string> {
-        return `https://azure.test/${path}?sas&expires=${options.expiresOn.getTime()}`
+        const cd = options.contentDisposition ? `&rscd=${options.contentDisposition}` : ''
+        return `https://azure.test/${path}?sas&expires=${options.expiresOn.getTime()}${cd}`
       },
     }
   }
@@ -68,7 +69,11 @@ describe('AzureBlobStorageDriver', () => {
   it('signs a SAS URL and works through a Disk', async () => {
     const { driver } = make()
     await driver.put('r.pdf', 'data')
-    expect(await driver.temporaryUrl('r.pdf', 60_000)).toContain('azure.test/r.pdf')
+    const url = await driver.temporaryUrl('r.pdf', 60_000)
+    expect(url).toContain('azure.test/r.pdf')
+    // secure default: SAS pins Content-Disposition: attachment (S-3)
+    expect(url).toContain('rscd=attachment')
+    expect(await driver.temporaryUrl('r.pdf', 60_000, { disposition: 'inline' })).toContain('rscd=inline')
 
     const disk = new Disk('azure', driver, { scope: null })
     await disk.put('x.txt', 'via disk')

@@ -146,7 +146,15 @@ Hand a client a time-limited URL straight to the object, no proxying:
 
 ```ts
 const url = await disk.temporaryUrl('reports/q1.pdf', '15m')
+// top-level rendering (e.g. a PDF preview tab) is a deliberate opt-in:
+const preview = await disk.temporaryUrl('reports/q1.pdf', '15m', { disposition: 'inline' })
 ```
+
+Signed URLs serve `Content-Disposition: attachment` **by default** — an
+uploaded HTML or SVG file downloads instead of rendering on the storage/CDN
+origin (a stored-XSS vector when that origin shares cookies with your app).
+Embedded uses (`<img>`, `<video>`) render regardless of disposition, so
+avatars and previews inside pages keep working.
 
 The expiry accepts a duration string (`'500ms'`, `'30s'`, `'15m'`, `'2h'`,
 `'7d'`) or milliseconds. Supported by `s3`, GCS and Azure; the `local` driver

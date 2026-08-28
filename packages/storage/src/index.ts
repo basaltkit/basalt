@@ -5,7 +5,7 @@ import {
   tryCtx,
   type DurationInput,
 } from '@basaltkit/core'
-import type { PutOptions, StorageDriver } from './driver.js'
+import type { TemporaryUrlOptions, PutOptions, StorageDriver } from './driver.js'
 import { ImagePipeline, type ImageProcessor } from './image.js'
 import { LocalStorageDriver } from './drivers/local.js'
 import { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
@@ -17,7 +17,7 @@ import {
   UnknownDiskError,
 } from './errors.js'
 
-export type { StorageDriver, PutOptions } from './driver.js'
+export type { StorageDriver, PutOptions, TemporaryUrlOptions } from './driver.js'
 export {
   ImagePipeline,
   type ImageProcessor,
@@ -145,10 +145,19 @@ export class Disk {
     return this.driver.list(this.path(prefix))
   }
 
-  /** Pre-signed URL: `disk.temporaryUrl('report.pdf', '15m')`. */
-  temporaryUrl(path: string, expiresIn: DurationInput): Promise<string> {
+  /**
+   * Pre-signed URL: `disk.temporaryUrl('report.pdf', '15m')`.
+   *
+   * Served as `Content-Disposition: attachment` by default (fail-closed
+   * against uploaded HTML/SVG rendering on the storage origin); pass
+   * `{ disposition: 'inline' }` when top-level rendering is deliberate.
+   * Embedded uses (<img> etc.) render regardless of disposition.
+   */
+  temporaryUrl(path: string, expiresIn: DurationInput, options: TemporaryUrlOptions = {}): Promise<string> {
     if (!this.driver.temporaryUrl) throw new TemporaryUrlUnsupportedError(this.driver.name)
-    return this.driver.temporaryUrl(this.path(path), parseDuration(expiresIn))
+    return this.driver.temporaryUrl(this.path(path), parseDuration(expiresIn), {
+      disposition: options.disposition ?? 'attachment',
+    })
   }
 
   private path(path: string): string {

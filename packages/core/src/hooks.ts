@@ -57,16 +57,37 @@ export class HookBus {
     }
   }
 
-  /** Runs the handlers in series, in priority order, then the onAny handlers. */
+  /**
+   * Runs the handlers in series, in priority order, then the onAny handlers.
+   *
+   * Handlers are ISOLATED (same contract as EventBus.emit): one failure never
+   * starves the remaining handlers or the onAny observers (audit/devtools) —
+   * every registered handler always runs. Failures still surface to the
+   * emitter afterwards: a single failure rethrows the original error, several
+   * become an AggregateError. Nothing is ever swallowed silently.
+   */
   async emit<K extends keyof BasaltHooks & string>(
     hook: K,
     payload: BasaltHooks[K],
   ): Promise<void> {
+    const errors: unknown[] = []
     for (const { handler } of [...(this.handlers.get(hook) ?? [])]) {
-      await handler(payload)
+      try {
+        await handler(payload)
+      } catch (error) {
+        errors.push(error)
+      }
     }
     for (const handler of [...this.anyHandlers]) {
-      await handler(hook, payload)
+      try {
+        await handler(hook, payload)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) {
+      throw new AggregateError(errors, `Failure in ${errors.length} handler(s) of hook "${hook}"`)
     }
   }
 }

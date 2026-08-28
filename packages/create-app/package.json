@@ -22,10 +22,25 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@basaltkit/auth": "workspace:^",
+    "@basaltkit/cli": "workspace:^",
+    "@basaltkit/config": "workspace:^",
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/env": "workspace:^",
+    "@basaltkit/events": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/generator": "workspace:^",
+    "@basaltkit/logger": "workspace:^",
+    "@basaltkit/mcp": "workspace:^",
+    "@basaltkit/prisma": "workspace:^",
+    "@basaltkit/subscriptions": "workspace:^",
+    "@basaltkit/tenancy": "workspace:^",
+    "@basaltkit/testing": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.3.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "zod": "^4.0.0"
   },
   "publishConfig": {
     "access": "public"

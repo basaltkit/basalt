@@ -234,3 +234,48 @@ describe('Realtime service + events bridge', () => {
     await app.shutdown()
   })
 })
+
+describe('bridge failures do not fail the domain write (review 2026-08-b, Q-1)', () => {
+  /** Backplane whose publish always rejects — a "Redis is down" stand-in. */
+  const downBackplane = () => ({
+    async start() {},
+    async publish() {
+      throw new Error('backplane down')
+    },
+    subscribe() {},
+    async close() {},
+  })
+
+  it('hooks.emit resolves even when the broadcast rejects, and the failure is observable', async () => {
+    const failures: unknown[] = []
+    const app = await createApp({
+      plugins: [
+        realtimePlugin({
+          backplane: downBackplane() as never,
+          onBridgeError: (error) => void failures.push(error),
+          bridge: [
+            bridgeRule({
+              hook: 'test:note_created',
+              tenant: (p) => p.tenantId,
+              channel: 'notes',
+              event: 'created',
+              data: (p) => p.note,
+            }),
+          ],
+        }),
+      ],
+    }).boot()
+
+    // The domain write's hook emission must NOT reject because a cosmetic
+    // realtime fan-out failed.
+    await expect(
+      app.hooks.emit('test:note_created', { tenantId: 'acme', note: { id: 7 } }),
+    ).resolves.toBeUndefined()
+
+    // ...but the failure is not swallowed silently either.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(failures).toHaveLength(1)
+    expect((failures[0] as Error).message).toBe('backplane down')
+    await app.shutdown()
+  })
+})
