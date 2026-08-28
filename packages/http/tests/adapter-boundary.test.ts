@@ -33,9 +33,12 @@ const ALLOWLIST = new Set([
   '@basaltkit/fastify',
   '@basaltkit/express',
   '@basaltkit/hono',
-  // The test harness drives requests through Fastify's inject() and exposes
-  // FASTIFY/FastifyInstance. Adapter-parametrizing it is finding Q1 in
-  // docs/reviews/ecosystem-review-2026-08.md — remove this entry when Q1 lands.
+  // The test harness is adapter-parametrizable (finding Q1): it keeps
+  // @basaltkit/fastify as a hard dependency because 'fastify' is the
+  // backward-compatible default driver (in-process inject), and declares
+  // @basaltkit/express + @basaltkit/hono as *optional* peers for the
+  // adapter: 'express' | 'hono' drivers. Dev-facing by definition — this
+  // entry is permanent, not a debt marker.
   '@basaltkit/testing',
 ])
 

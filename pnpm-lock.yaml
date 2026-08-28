@@ -2249,12 +2249,27 @@ importers:
         specifier: ^5.12.1
         version: 5.12.1
     devDependencies:
+      '@basaltkit/express':
+        specifier: workspace:^
+        version: link:../express
+      '@basaltkit/hono':
+        specifier: workspace:^
+        version: link:../hono
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
       '@types/node':
         specifier: ^26.3.0
         version: 26.3.0
+      express:
+        specifier: ^5.0.0
+        version: 5.2.1
+      hono:
+        specifier: ^4.13.4
+        version: 4.13.4
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
