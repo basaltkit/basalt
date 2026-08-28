@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/express",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Express adapter for Basalt: run the same typed routes, enrichers and guards on Express that you would on Fastify or Hono.",
   "license": "MIT",
   "type": "module",
