@@ -28,3 +28,14 @@ export class HttpError extends BasaltError {
     super(code, message)
   }
 }
+
+/**
+ * The neutral not-found body every adapter serves for an unmatched route
+ * (unless the adapter plugin is given `notFound: false`). One shape across
+ * Fastify, Express and Hono — same `{ error: { code, message } }` contract as
+ * validation and HttpError responses, and no framework-fingerprinting HTML or
+ * plain-text defaults.
+ */
+export const NOT_FOUND_RESPONSE = {
+  error: { code: 'NOT_FOUND', message: 'Route not found.' },
+} as const

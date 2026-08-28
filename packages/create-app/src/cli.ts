@@ -4,6 +4,7 @@ import { stdin, stdout } from 'node:process'
 import {
   createProject,
   detectPackageManager,
+  resolveRunDefaults,
   runWizard,
   ttyPrompter,
   TargetNotEmptyError,
@@ -21,8 +22,12 @@ Options:
   --ui            Scaffold a web/ frontend (React + shadcn + SDK)
   --cli           Scaffold the 'basalt' CLI (code generators + commands)
   --mcp           Expose read-only routes as MCP tools at /mcp
-  --install       Install dependencies after scaffolding
+  --install       Install dependencies (default: yes in an interactive
+                  terminal, skipped in CI/non-TTY; --no-install to opt out)
+  --no-install    Never install dependencies
   --git           Initialize a git repository with a first commit
+                  (same default rule as --install; --no-git to opt out)
+  --no-git        Never initialize a git repository
   --pm=<manager>  Package manager: pnpm | npm | yarn | bun (default: auto-detect)
   -y, --yes       Skip prompts and accept defaults
   -h, --help      Show this help
@@ -39,8 +44,9 @@ interface Flags {
   ui: boolean
   cli: boolean
   mcp: boolean
-  install: boolean
-  git: boolean
+  /** Tri-state: undefined = decide from the environment (TTY yes, CI no). */
+  install?: boolean
+  git?: boolean
   yes: boolean
   pm?: PackageManager
 }
@@ -53,8 +59,6 @@ function parseArgs(argv: string[]): Flags {
     ui: false,
     cli: false,
     mcp: false,
-    install: false,
-    git: false,
     yes: false,
   }
   for (const token of argv) {
@@ -65,7 +69,9 @@ function parseArgs(argv: string[]): Flags {
     else if (token === '--cli') flags.cli = true
     else if (token === '--mcp') flags.mcp = true
     else if (token === '--install') flags.install = true
+    else if (token === '--no-install') flags.install = false
     else if (token === '--git') flags.git = true
+    else if (token === '--no-git') flags.git = false
     else if (token === '-y' || token === '--yes') flags.yes = true
     else if (token.startsWith('--dir=')) flags.dir = token.slice('--dir='.length)
     else if (token.startsWith('--pm=')) flags.pm = token.slice('--pm='.length) as PackageManager
@@ -148,7 +154,17 @@ try {
   console.log(`\nCreated ${result.options.name} in ${result.dir}\n`)
   for (const file of result.files) console.log(`  ${file}`)
 
-  if (flags.git) {
+  const run_ = resolveRunDefaults({
+    install: flags.install,
+    git: flags.git,
+    isTTY: Boolean(stdin.isTTY),
+    ci: Boolean(process.env['CI']),
+  })
+  if (flags.install === undefined && !run_.interactive) {
+    console.log('\nSkipping dependency install (CI/non-interactive) — pass --install to force it.')
+  }
+
+  if (run_.git) {
     console.log('\nInitializing git repository…')
     const ok =
       (await run('git', ['init', '-q'], result.dir)) &&
@@ -163,14 +179,14 @@ try {
     )
   }
 
-  if (flags.install) {
+  if (run_.install) {
     console.log(`\nInstalling dependencies with ${pm}…`)
     const ok = await run(pm, ['install'], result.dir)
     if (!ok) console.log(`  (install failed — run "${pm} install" yourself)`)
   }
 
   const steps = [`cd ${result.dir}`]
-  if (!flags.install) steps.push(`${pm} install`)
+  if (!run_.install) steps.push(`${pm} install`)
   steps.push(`${pm} run dev${flags.ui ? '        # API on :3000' : ''}`)
   // `web` is wired as a pnpm workspace member (pnpm-workspace.yaml), so its dev
   // server is launched with a pnpm filter regardless of the root package manager.

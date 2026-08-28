@@ -123,3 +123,24 @@ describe('urlencoded body (adapter compatibility)', () => {
     await a.shutdown()
   })
 })
+
+describe('neutral 404', () => {
+  it('serves the shared JSON body for unmatched routes by default', async () => {
+    const res = await fetch(`${base}/definitely-not-a-route`)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(await res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Route not found.' } })
+  })
+
+  it('notFound: false keeps the Express default (HTML)', async () => {
+    const own = await createApp({ plugins: [testPlugin, expressPlugin({ routes, notFound: false })] }).boot()
+    const server2 = own.container.get(EXPRESS).listen(0)
+    await new Promise<void>((resolve) => server2.once('listening', resolve))
+    const base2 = `http://127.0.0.1:${(server2.address() as AddressInfo).port}`
+    const res = await fetch(`${base2}/definitely-not-a-route`)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type') ?? '').not.toContain('application/json')
+    await new Promise<void>((resolve) => server2.close(() => resolve()))
+    await own.shutdown()
+  })
+})

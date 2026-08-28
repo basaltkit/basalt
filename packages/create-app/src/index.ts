@@ -62,6 +62,28 @@ export function detectPackageManager(
   return 'npm'
 }
 
+/**
+ * Resolve whether to install dependencies / init git when the flag was not
+ * given explicitly (D1, ecosystem review 2026-08): interactive terminals
+ * default to YES — `npm create basalt my-app` should end in a runnable app —
+ * while CI and non-TTY runs default to NO, so automation never gets a
+ * surprise install. An explicit `--install`/`--no-install` (or git flag)
+ * always wins over the environment.
+ */
+export function resolveRunDefaults(input: {
+  install?: boolean | undefined
+  git?: boolean | undefined
+  isTTY: boolean
+  ci: boolean
+}): { install: boolean; git: boolean; interactive: boolean } {
+  const interactive = input.isTTY && !input.ci
+  return {
+    interactive,
+    install: input.install ?? interactive,
+    git: input.git ?? interactive,
+  }
+}
+
 /** Generates a ready-to-run Basalt app. Does not install dependencies. */
 export async function createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
   const options: ProjectOptions = {

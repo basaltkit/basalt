@@ -78,9 +78,11 @@ pnpm create basalt my-saas -y                 # aceita todos os defaults, sem pe
 ```
 
 Multi-tenancy e autenticação estão **ativos por defeito** — desativa com
-`--no-tenancy` / `--no-auth`. O scaffolder não instala dependências nem mexe no
-git a menos que peças; adiciona `--install --git`, ou fá-lo tu no passo
-seguinte. A lista completa de flags vive em [Instalação](/pt/guide/installation).
+`--no-tenancy` / `--no-auth`. Num terminal interativo o scaffolder também
+instala dependências e inicializa o git por defeito (desativa com
+`--no-install` / `--no-git`); em CI ou execuções piped salta ambos a menos que
+passes `--install` / `--git`. A lista completa de flags vive em
+[Instalação](/pt/guide/installation).
 
 ### 2. Instalar e configurar
 

@@ -1,5 +1,6 @@
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
+  NOT_FOUND_RESPONSE,
   HttpServerCollector,
   HTTP_SERVER,
   runRoute,
@@ -166,6 +167,13 @@ export interface HonoPluginOptions {
   /** Bring your own Hono app; otherwise a fresh one is created. */
   app?: Hono<any>
   /**
+   * Serve the neutral JSON body (`NOT_FOUND_RESPONSE` from @basaltkit/http)
+   * for unmatched routes, identical across all adapters, instead of Hono's
+   * text default. Default: true. An app calling `hono.notFound(…)` later
+   * still wins (Hono keeps the last handler); pass false to opt out entirely.
+   */
+  notFound?: boolean
+  /**
    * Maximum request body size in bytes. A request whose `Content-Length`
    * exceeds this is rejected with 413 before the body is read — Hono/edge has
    * no default cap, so without this a large upload is unbounded. Default: 1 MiB.
@@ -221,6 +229,10 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
           return undefined
         })
         registerRoutes(app, routes, container, enrichers, guards)
+        // Neutral JSON 404 (an app's own later `notFound` call replaces it).
+        if (options.notFound !== false) {
+          app.notFound((context: Context) => context.json(NOT_FOUND_RESPONSE, 404))
+        }
         for (const { method, url, handler } of collector.extraRoutes) {
           app.on(method, url, async (context: Context) => {
             const reply = new HonoReply(context)

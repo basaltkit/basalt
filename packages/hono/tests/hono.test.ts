@@ -147,3 +147,29 @@ describe('urlencoded body (adapter compatibility)', () => {
     await app.shutdown()
   })
 })
+
+describe('neutral 404', () => {
+  it('serves the shared JSON body for unmatched routes by default', async () => {
+    const res = await call('/definitely-not-a-route')
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(await res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Route not found.' } })
+  })
+
+  it("an app's later notFound() call replaces the neutral default (last wins)", async () => {
+    const own = await createApp({ plugins: [testPlugin, honoPlugin({ routes })] }).boot()
+    const hono = own.container.get(HONO)
+    hono.notFound((c) => c.json({ custom: true }, 404))
+    const res = await hono.fetch(new Request('http://local/definitely-not-a-route'))
+    expect(await res.json()).toEqual({ custom: true })
+    await own.shutdown()
+  })
+
+  it('notFound: false keeps the Hono default (text)', async () => {
+    const own = await createApp({ plugins: [testPlugin, honoPlugin({ routes, notFound: false })] }).boot()
+    const res = await own.container.get(HONO).fetch(new Request('http://local/definitely-not-a-route'))
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type') ?? '').not.toContain('application/json')
+    await own.shutdown()
+  })
+})
