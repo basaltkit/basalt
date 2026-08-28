@@ -123,6 +123,8 @@ model Subscription {
   cancelAtPeriodEnd Boolean?
   canceledAt        DateTime?
   gatewayRef        String?
+  pendingPlan       String?
+  pendingPeriod     String?
 
   @@map("subscriptions")
 }
