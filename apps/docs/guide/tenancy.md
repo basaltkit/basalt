@@ -262,6 +262,30 @@ await SendEmail.dispatch({ userId })       // tenant restored in the worker
 logger.info('done')                        // log carries tenantId
 ```
 
+## Fail-closed scoping in your repositories
+
+Database rows are the one place isolation is YOUR job: a repository that
+forgets the `tenantId` filter returns every tenant's rows — and with Prisma,
+`where: { tenantId: ctx.tenant?.id }` silently drops the filter when the
+tenant is `undefined`. The scoping helpers fail closed instead:
+
+```ts
+import { requireTenantId, tenantScoped, TenantRequiredError } from '@basaltkit/tenancy'
+
+// Throws TenantRequiredError (HTTP 400) when no tenant is in context —
+// never an unscoped query:
+const rows = await db.project.findMany({ where: tenantScoped({ archived: false }) })
+
+// The context tenant always wins: a tenantId smuggled in from client input
+// cannot widen the scope. Without a context tenant, an explicit id is
+// honoured (system jobs); with neither, it throws.
+const tenantId = requireTenantId(explicitId)
+```
+
+`requireTenant()` returns the whole `Tenant` under the same rules. For a real
+usage, see `@basaltkit/activity`'s `tenantScoped: 'required'` option — the
+fail-closed variant of its query scoping.
+
 ## Running code in a tenant
 
 Outside a request — in a job, a script, or maintenance — there's no resolver, so

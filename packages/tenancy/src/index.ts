@@ -31,6 +31,12 @@ export {
   type TenantRef,
   type ResolutionRequest,
 } from './resolvers.js'
+export {
+  requireTenant,
+  requireTenantId,
+  tenantScoped,
+  TenantRequiredError,
+} from './scoped.js'
 
 declare module '@basaltkit/core' {
   interface RequestContext {

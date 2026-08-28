@@ -19,7 +19,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@basaltkit/cli": "workspace:^",
     "@basaltkit/core": "workspace:^"
   },
   "peerDependencies": {
@@ -31,6 +30,7 @@
     }
   },
   "devDependencies": {
+    "@basaltkit/cli": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@electric-sql/pglite": "^0.5.7",
     "@types/node": "^26.3.0",

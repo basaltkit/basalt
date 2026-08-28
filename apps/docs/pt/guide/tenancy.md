@@ -264,6 +264,31 @@ await SendEmail.dispatch({ userId })       // tenant restaurado no worker
 logger.info('done')                        // o log transporta tenantId
 ```
 
+## Scoping fail-closed nos teus repositórios
+
+As linhas da base de dados são o único sítio onde o isolamento é trabalho TEU:
+um repositório que esqueça o filtro `tenantId` devolve as linhas de todos os
+tenants — e com Prisma, `where: { tenantId: ctx.tenant?.id }` descarta
+silenciosamente o filtro quando o tenant é `undefined`. Os helpers de scoping
+falham fechado em vez disso:
+
+```ts
+import { requireTenantId, tenantScoped, TenantRequiredError } from '@basaltkit/tenancy'
+
+// Lança TenantRequiredError (HTTP 400) quando não há tenant no contexto —
+// nunca uma query sem scope:
+const rows = await db.project.findMany({ where: tenantScoped({ archived: false }) })
+
+// O tenant do contexto ganha sempre: um tenantId vindo de input do cliente
+// não consegue alargar o scope. Sem tenant no contexto, um id explícito é
+// honrado (jobs de sistema); sem nenhum dos dois, lança.
+const tenantId = requireTenantId(explicitId)
+```
+
+O `requireTenant()` devolve o `Tenant` completo com as mesmas regras. Para um
+uso real, vê a opção `tenantScoped: 'required'` do `@basaltkit/activity` — a
+variante fail-closed do scoping das suas queries.
+
 ## Correr código num tenant
 
 Fora de um pedido — num job, num script, ou em manutenção — não há resolver, por isso
