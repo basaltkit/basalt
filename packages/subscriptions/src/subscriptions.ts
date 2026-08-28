@@ -157,7 +157,16 @@ export class Subscriptions {
       ...(trialDays !== undefined ? { trialDays } : {}),
     })
 
-    const record: SubscriptionRecord = { billableId, plan: planName, period, status: 'incomplete' }
+    // Never overwrite a live subscription with a mere checkout *intent*: an
+    // abandoned checkout must not change the plan, drop the gateway ref, or
+    // reset the status (that combination allowed plan escalation via the next
+    // legitimately-signed renewal webhook). The intent rides in pendingPlan /
+    // pendingPeriod and is only promoted by handleWebhook when the gateway
+    // confirms payment with a NEW gateway ref.
+    const existing = await this.store.get(billableId)
+    const record: SubscriptionRecord = existing
+      ? { ...existing, pendingPlan: planName, pendingPeriod: period }
+      : { billableId, plan: planName, period, status: 'incomplete' }
     await this.store.save(record)
     await this.hooks?.emit('billing:checkout_started', { billableId, plan: planName, url: session.url })
     return { url: session.url }
@@ -321,6 +330,13 @@ export class Subscriptions {
     try {
       const record = await this.store.get(event.billableId)
       if (record) {
+        // Is this event about a DIFFERENT gateway subscription than the one on
+        // file? Computed BEFORE the ref is learned, so a first-ever ref counts
+        // as new. Only such an event may complete a pending plan change — a
+        // renewal of the current subscription (same ref, or no ref at all) can
+        // never promote the pending plan. Fail-closed against escalation via
+        // an abandoned checkout.
+        const refIsNew = event.gatewayRef !== undefined && event.gatewayRef !== record.gatewayRef
         // Learn the gateway subscription id from the first event that carries
         // it — a Checkout-created subscription has no local ref until now.
         if (event.gatewayRef && !record.gatewayRef) record.gatewayRef = event.gatewayRef
@@ -330,6 +346,16 @@ export class Subscriptions {
         } else if (event.type === 'payment.failed') {
           record.status = 'past_due'
         } else if (event.type === 'payment.succeeded') {
+          if (record.pendingPlan !== undefined && refIsNew && event.gatewayRef !== undefined) {
+            // The gateway confirmed the NEW checkout: promote the intent and
+            // adopt the new subscription ref (it supersedes the old one).
+            record.plan = record.pendingPlan
+            record.period = record.pendingPeriod ?? record.period
+            record.gatewayRef = event.gatewayRef
+            delete record.pendingPlan
+            delete record.pendingPeriod
+            delete record.trialEndsAt
+          }
           record.status = 'active'
           record.cancelAtPeriodEnd = false
         }

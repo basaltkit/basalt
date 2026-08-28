@@ -13,6 +13,15 @@ export interface SubscriptionRecord {
   canceledAt?: number
   /** Reference in the payment gateway (e.g. Stripe subscription id). */
   gatewayRef?: string
+  /**
+   * Plan intent of an in-flight hosted Checkout (set by `checkout()` when a
+   * subscription already exists). Promoted to `plan` ONLY when the gateway
+   * confirms payment with a NEW `gatewayRef` — a renewal of the current
+   * subscription can never activate it. This is the fail-closed guard against
+   * plan escalation via an abandoned checkout.
+   */
+  pendingPlan?: string
+  pendingPeriod?: BillingPeriod
 }
 
 export interface SubscriptionStore {

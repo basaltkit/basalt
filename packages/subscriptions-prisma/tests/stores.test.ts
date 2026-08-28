@@ -10,6 +10,7 @@ import {
 interface SubRow {
   billableId: string; plan: string; period: string; status: string
   trialEndsAt: Date | null; cancelAtPeriodEnd: boolean | null; canceledAt: Date | null; gatewayRef: string | null
+  pendingPlan: string | null; pendingPeriod: string | null
 }
 interface UsageRow { billableId: string; feature: string; periodKey: string; value: number }
 
@@ -111,6 +112,19 @@ describe('PrismaSubscriptionStore', () => {
 
     await store.save({ billableId: 'z', plan: 'pro', period: 'monthly', status: 'active', cancelAtPeriodEnd: false })
     expect((await store.get('z'))?.cancelAtPeriodEnd).toBe(false)
+  })
+  it('round-trips and clears the pending-plan intent (escalation guard)', async () => {
+    const store = new PrismaSubscriptionStore(makeFakeClient())
+    await store.save({
+      billableId: 'acme', plan: 'basic', period: 'monthly', status: 'active',
+      gatewayRef: 'sub_1', pendingPlan: 'enterprise', pendingPeriod: 'yearly',
+    })
+    expect(await store.get('acme')).toMatchObject({ pendingPlan: 'enterprise', pendingPeriod: 'yearly' })
+    // promotion clears the intent — null must actually overwrite
+    await store.save({ billableId: 'acme', plan: 'enterprise', period: 'yearly', status: 'active', gatewayRef: 'sub_2' })
+    const promoted = await store.get('acme')
+    expect(promoted?.pendingPlan).toBeUndefined()
+    expect(promoted?.pendingPeriod).toBeUndefined()
   })
 })
 

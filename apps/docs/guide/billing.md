@@ -236,6 +236,19 @@ Wire the gateway into the plugin and register the ready-made billing routes.
 `billingRoutes` gives you hosted **Checkout** and the self-service **Portal**;
 `billingWebhookRoute` gives you the endpoint Stripe calls back.
 
+Checkout, Portal and the invoice routes are **authenticated by default**
+(`meta: { auth: true }`, enforced by `@basaltkit/auth`'s guard) — they mint
+live payment-management URLs and payment history for the current tenant and
+must never be anonymous. If (and only if) authentication happens at an outer
+edge, opt out deliberately with `billingRoutes({ ..., auth: false })` /
+`invoiceRoutes({ auth: false })`. The webhook route is the exception: it is
+authenticated by the gateway **signature**, never by a session.
+
+An abandoned Checkout can never change the live subscription: `checkout()`
+records the intent as `pendingPlan`, and the plan only switches when the
+gateway confirms payment for a **new** gateway subscription — a renewal of the
+current subscription (same `gatewayRef`) can't activate an escalated plan.
+
 ```ts
 import { createApp } from '@basaltkit/core'
 import { fastifyPlugin, route } from '@basaltkit/fastify'
