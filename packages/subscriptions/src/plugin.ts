@@ -1,6 +1,5 @@
 import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
-import { route as httpRoute } from '@basaltkit/http'
-import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/fastify'
+import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/http'
 import { Invoices, renderInvoiceHtml, InvoiceNotFoundError, type InvoicesOptions } from './invoice.js'
 import { z } from 'zod'
 import type { BillingGateway } from './gateway.js'
@@ -172,14 +171,14 @@ export function invoiceRoutes(): BasaltRoute[] {
     return invoice
   }
   return [
-    httpRoute({
+    route({
       method: 'GET',
       url: '/billing/invoices',
       async handler() {
         return { data: await invoicesService().list(billable()) }
       },
     }),
-    httpRoute({
+    route({
       method: 'GET',
       url: '/billing/invoices/:id',
       params: z.object({ id: z.string() }),
@@ -187,7 +186,7 @@ export function invoiceRoutes(): BasaltRoute[] {
         return own(params.id)
       },
     }),
-    httpRoute({
+    route({
       method: 'GET',
       url: '/billing/invoices/:id/html',
       params: z.object({ id: z.string() }),
