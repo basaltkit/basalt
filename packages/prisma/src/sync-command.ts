@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
+import type { CommandDefinition } from './command.js'
 
 /** The @basalt domains that ship a Prisma reference schema. */
 const DOMAINS = ['auth', 'teams', 'subscriptions', 'permissions', 'comments', 'audit', 'activity', 'notifications', 'tenancy', 'events', 'webhooks']
@@ -72,7 +72,7 @@ function discoverSchemas(domains: string[]): { pkg: string; domain: string; sche
  * - `--schema=<path>` — override the schema path.
  */
 export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): CommandDefinition {
-  return defineCommand({
+  return {
     name: 'prisma:sync',
     description: 'Merge @basaltkit/*-prisma models into your prisma/schema.prisma',
     async handle({ io, flags }) {
@@ -135,5 +135,5 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
       }
       return 0
     },
-  })
+  }
 }

@@ -57,13 +57,17 @@ interface ManifestLike {
  * non-allowlisted packages. Returned as human-readable violation strings so a
  * failure names the package, the field and the adapter.
  */
-export function manifestViolations(manifests: ManifestLike[]): string[] {
+export function manifestViolations(
+  manifests: ManifestLike[],
+  forbidden: string[] = ADAPTERS,
+  allowlist: Set<string> = ALLOWLIST,
+): string[] {
   const out: string[] = []
   for (const manifest of manifests) {
-    if (ALLOWLIST.has(manifest.name)) continue
+    if (allowlist.has(manifest.name)) continue
     for (const field of RUNTIME_FIELDS) {
       for (const dep of Object.keys(manifest[field] ?? {})) {
-        if (ADAPTERS.includes(dep)) out.push(`${manifest.name} → ${field} → ${dep}`)
+        if (forbidden.includes(dep)) out.push(`${manifest.name} → ${field} → ${dep}`)
       }
     }
   }
@@ -182,12 +186,17 @@ function sourceFiles(dir: string): string[] {
 }
 
 /** Adapter specifiers statically imported anywhere under a package's src/. */
-export function srcImportViolations(packageName: string, srcDir: string): string[] {
-  if (ALLOWLIST.has(packageName) || !existsSync(srcDir)) return []
+export function srcImportViolations(
+  packageName: string,
+  srcDir: string,
+  forbidden: string[] = ADAPTERS,
+  allowlist: Set<string> = ALLOWLIST,
+): string[] {
+  if (allowlist.has(packageName) || !existsSync(srcDir)) return []
   const out: string[] = []
   for (const file of sourceFiles(srcDir)) {
     for (const spec of specifiersOf(readFileSync(file, 'utf8'))) {
-      if (ADAPTERS.some((a) => spec === a || spec.startsWith(`${a}/`))) {
+      if (forbidden.some((a) => spec === a || spec.startsWith(`${a}/`))) {
         out.push(`${packageName} → ${path.relative(srcDir, file)} → ${spec}`)
       }
     }
@@ -270,5 +279,48 @@ describe('adapter-agnostic boundary', () => {
       { name: '@basaltkit/testing', dependencies: { '@basaltkit/fastify': 'workspace:^' } },
     ])
     expect(violations).toEqual([])
+  })
+})
+
+/**
+ * Sibling rule (ecosystem review 2026-08, finding A2): runtime packages must
+ * not depend on `@basaltkit/cli` either — command factories use the structural
+ * `'commands'` metadata contract instead (see tenancy/queue/scheduler/prisma).
+ * The CLI as a devDependency (e.g. prisma's contract-parity test) stays legal.
+ */
+const CLI = ['@basaltkit/cli']
+const CLI_ALLOWLIST = new Set([
+  // The CLI is its own package.
+  '@basaltkit/cli',
+  // Dev-only by design (never a runtime dependency of a user's app — the
+  // AI/codegen boundary): they wire `basalt` commands and may use the CLI.
+  '@basaltkit/ai',
+  '@basaltkit/generator',
+])
+
+describe('dev-only CLI boundary', () => {
+  it('no runtime package declares @basaltkit/cli in a consumer-facing dependency field', () => {
+    const violations = manifestViolations(
+      repoManifests().map(({ manifest }) => manifest),
+      CLI,
+      CLI_ALLOWLIST,
+    )
+    expect(violations).toEqual([])
+  })
+
+  it('no runtime package statically imports @basaltkit/cli in src/', () => {
+    const violations = repoManifests().flatMap(({ manifest, dir }) =>
+      srcImportViolations(manifest.name, path.join(dir, 'src'), CLI, CLI_ALLOWLIST),
+    )
+    expect(violations).toEqual([])
+  })
+
+  it('flags a synthetic violation (proof the rule fires)', () => {
+    const violations = manifestViolations(
+      [{ name: '@basaltkit/example', dependencies: { '@basaltkit/cli': 'workspace:^' } }],
+      CLI,
+      CLI_ALLOWLIST,
+    )
+    expect(violations).toEqual(['@basaltkit/example → dependencies → @basaltkit/cli'])
   })
 })

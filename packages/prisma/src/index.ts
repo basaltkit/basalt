@@ -49,6 +49,11 @@ export {
   type PrismaMigratorOptions,
 } from './migrate.js'
 export {
+  type CommandDefinition,
+  type CommandContext,
+  type CommandIo,
+} from './command.js'
+export {
   tenantMigrateCommand,
   type TenantMigrateCommandConfig,
 } from './migrate-command.js'

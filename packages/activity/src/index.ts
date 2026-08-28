@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
+import { requireTenantId } from '@basaltkit/tenancy'
 
 export interface ActivityRecord {
   readonly id: string
@@ -109,13 +110,25 @@ export class ActivityBuilder {
 
 export interface ActivityOptions {
   store?: ActivityStore
-  /** Scope queries to ctx().tenant automatically. Default: true. */
-  tenantScoped?: boolean
+  /**
+   * Scope queries to ctx().tenant automatically. Default: true.
+   *
+   * - `true` (default): auto-scope when a tenant is in context; with NO tenant
+   *   in context the query runs unscoped (fail-open, historical behavior).
+   * - `'required'`: fail-closed via @basaltkit/tenancy's `requireTenantId` —
+   *   the context tenant always wins (a caller-supplied `query.tenantId`
+   *   cannot widen the scope), an explicit `query.tenantId` is honoured when
+   *   no tenant is in context, and otherwise the query THROWS
+   *   `TenantRequiredError` instead of silently returning every tenant's
+   *   records. Recommended for tenant-facing apps.
+   * - `false`: never auto-scope.
+   */
+  tenantScoped?: boolean | 'required'
 }
 
 export class Activity {
   private readonly store: ActivityStore
-  private readonly tenantScoped: boolean
+  private readonly tenantScoped: boolean | 'required'
 
   constructor(options: ActivityOptions = {}) {
     this.store = options.store ?? new MemoryActivityStore()
@@ -146,6 +159,12 @@ export class Activity {
   }
 
   async query(query: ActivityQuery): Promise<ActivityRecord[]> {
+    if (this.tenantScoped === 'required') {
+      // Fail-closed reference usage of @basaltkit/tenancy's helper: context
+      // tenant wins, explicit query.tenantId is a fallback, no tenant at all
+      // throws TenantRequiredError instead of querying unscoped.
+      return this.store.query({ ...query, tenantId: requireTenantId(query.tenantId) })
+    }
     const tenant = tryCtx()?.['tenant'] as { id?: string } | undefined
     const scoped =
       this.tenantScoped && query.tenantId === undefined && tenant?.id !== undefined
