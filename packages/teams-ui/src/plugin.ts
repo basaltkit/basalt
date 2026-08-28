@@ -1,4 +1,4 @@
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { teamsPageHtml, type TeamsPageOptions } from './html.js'
 
 export interface TeamsUiOptions extends TeamsPageOptions {

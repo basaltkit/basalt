@@ -1,5 +1,5 @@
 import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
-import type { RequestEnricher, RouteGuard } from '@basaltkit/fastify'
+import type { RequestEnricher, RouteGuard } from '@basaltkit/http'
 import { Auth, AuthRequiredError, type AuthOptions } from './auth.js'
 import { publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'

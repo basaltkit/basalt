@@ -1,6 +1,6 @@
 import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
 import { AUDIT } from '@basaltkit/audit'
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { AuditViewer, type AuditViewerOptions, type ViewerQuery } from './viewer.js'
 import { auditViewerHtml, type AuditViewerHtmlOptions } from './html.js'

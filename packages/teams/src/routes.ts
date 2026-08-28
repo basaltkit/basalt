@@ -1,5 +1,5 @@
 import { ctx, BasaltError, type Container } from '@basaltkit/core'
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { TEAMS } from './plugin.js'
 

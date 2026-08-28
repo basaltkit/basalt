@@ -1,5 +1,5 @@
 import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
-import type { RouteGuard } from '@basaltkit/fastify'
+import type { RouteGuard } from '@basaltkit/http'
 import { InsufficientTeamRoleError, NotATeamMemberError, Teams, type TeamsOptions } from './teams.js'
 import type { Membership, PublicInvitation, TeamRole } from './stores.js'
 

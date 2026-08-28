@@ -1,5 +1,5 @@
 import { ctx, type Container } from '@basaltkit/core'
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { SUBSCRIPTIONS, type Plans } from '@basaltkit/subscriptions'
 import { billingPageHtml, type BillingPageOptions } from './html.js'
 

@@ -6,7 +6,7 @@ import {
   type Delegation,
   type DelegationStore,
 } from './delegation.js'
-import type { RouteGuard } from '@basaltkit/fastify'
+import type { RouteGuard } from '@basaltkit/http'
 import { AuthRequiredGuardError } from './errors.js'
 
 export { AuthRequiredGuardError, PermissionDeniedError } from './errors.js'

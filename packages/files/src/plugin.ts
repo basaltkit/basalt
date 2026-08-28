@@ -1,6 +1,6 @@
 import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
 import { STORAGE, type Disk } from '@basaltkit/storage'
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { Files, type FileValidation, type FilesOptions } from './files.js'
 import type { FileRecord, FileStore } from './store.js'

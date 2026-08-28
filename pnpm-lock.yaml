@@ -553,13 +553,16 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
+      '@basaltkit/http':
         specifier: workspace:^
-        version: link:../fastify
+        version: link:../http
     devDependencies:
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
@@ -648,13 +651,16 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
+      '@basaltkit/http':
         specifier: workspace:^
-        version: link:../fastify
+        version: link:../http
     devDependencies:
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
@@ -679,10 +685,13 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
+    devDependencies:
       '@basaltkit/fastify':
         specifier: workspace:^
         version: link:../fastify
-    devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -771,9 +780,9 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
+      '@basaltkit/http':
         specifier: workspace:^
-        version: link:../fastify
+        version: link:../http
       '@basaltkit/subscriptions':
         specifier: workspace:^
         version: link:../subscriptions
@@ -781,6 +790,9 @@ importers:
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
@@ -865,13 +877,16 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
+      '@basaltkit/http':
         specifier: workspace:^
-        version: link:../fastify
+        version: link:../http
     devDependencies:
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
@@ -1183,13 +1198,16 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
+      '@basaltkit/http':
         specifier: workspace:^
-        version: link:../fastify
+        version: link:../http
       '@basaltkit/storage':
         specifier: workspace:^
         version: link:../storage
     devDependencies:
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -1518,10 +1536,13 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
+    devDependencies:
       '@basaltkit/fastify':
         specifier: workspace:^
         version: link:../fastify
-    devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -1907,9 +1928,6 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
-        specifier: workspace:^
-        version: link:../fastify
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
@@ -1917,6 +1935,9 @@ importers:
       '@basaltkit/express':
         specifier: workspace:^
         version: link:../express
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/hono':
         specifier: workspace:^
         version: link:../hono
@@ -2047,13 +2068,16 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
+      '@basaltkit/http':
         specifier: workspace:^
-        version: link:../fastify
+        version: link:../http
     devDependencies:
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
@@ -2114,13 +2138,16 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
+      '@basaltkit/http':
         specifier: workspace:^
-        version: link:../fastify
+        version: link:../http
     devDependencies:
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/teams':
         specifier: workspace:^
         version: link:../teams
