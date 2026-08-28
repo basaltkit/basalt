@@ -1,4 +1,4 @@
-import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
+import type { CommandDefinition } from './command.js'
 import { migrateTenants, prismaMigrator, type MigrateFn, type MigrateTarget } from './migrate.js'
 
 export interface TenantMigrateCommandConfig {
@@ -16,7 +16,7 @@ export interface TenantMigrateCommandConfig {
  * non-zero if any tenant failed.
  */
 export function tenantMigrateCommand(config: TenantMigrateCommandConfig): CommandDefinition {
-  return defineCommand({
+  return {
     name: 'tenant:migrate',
     description: 'Run database migrations for every tenant',
     async handle({ io }) {
@@ -42,5 +42,5 @@ export function tenantMigrateCommand(config: TenantMigrateCommandConfig): Comman
       io.log(`Done: ${results.length - failed.length} migrated, ${failed.length} failed.`)
       return failed.length > 0 ? 1 : 0
     },
-  })
+  }
 }

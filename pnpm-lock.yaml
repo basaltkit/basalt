@@ -335,6 +335,9 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
+      '@basaltkit/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
     devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^
@@ -1597,9 +1600,6 @@ importers:
 
   packages/prisma:
     dependencies:
-      '@basaltkit/cli':
-        specifier: workspace:^
-        version: link:../cli
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
@@ -1607,6 +1607,9 @@ importers:
         specifier: '>=5.0.0 <8'
         version: 6.19.3(prisma@7.9.1(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(magicast@0.5.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@7.0.2))(typescript@7.0.2)
     devDependencies:
+      '@basaltkit/cli':
+        specifier: workspace:^
+        version: link:../cli
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
