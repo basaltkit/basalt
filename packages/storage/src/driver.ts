@@ -27,6 +27,17 @@ export interface StorageDriver {
   /** Lists file paths under the given prefix. */
   list(prefix: string): Promise<string[]>
   /** Optional: pre-signed URL valid for `expiresInMs`. */
-  temporaryUrl?(path: string, expiresInMs: number): Promise<string>
+  temporaryUrl?(path: string, expiresInMs: number, options?: TemporaryUrlOptions): Promise<string>
   disconnect(): Promise<void>
+}
+
+/**
+ * How a pre-signed URL serves the object. The Disk layer always passes an
+ * explicit value — 'attachment' unless the caller deliberately opts into
+ * 'inline' — so a client-declared text/html or SVG object can never render
+ * top-level off the bucket/CDN origin (stored-XSS vector; review 2026-08-b,
+ * S-3). Embedded uses (<img>, <video>) are unaffected by disposition.
+ */
+export interface TemporaryUrlOptions {
+  disposition?: 'attachment' | 'inline'
 }

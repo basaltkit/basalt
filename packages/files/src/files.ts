@@ -3,6 +3,9 @@ import { BasaltError, runWithContext, tryCtx, type DurationInput, type HookBus }
 import type { Disk } from '@basaltkit/storage'
 import { MemoryFileStore, type FilePatch, type FileRecord, type FileStore } from './store.js'
 
+/** Default upload cap (25 MiB) applied when `validate.maxSize` is not set. */
+export const DEFAULT_MAX_FILE_SIZE = 25 * 1024 * 1024
+
 export class FileTooLargeError extends BasaltError {
   readonly status = 413
   constructor(size: number, max: number) {
@@ -90,7 +93,9 @@ export class Files {
     this.disk = options.disk
     this.store = options.store ?? new MemoryFileStore()
     this.hooks = options.hooks
-    this.validation = options.validate ?? {}
+    // Secure by default (review 2026-08-b, S-3): uploads are capped even when
+    // the app configures nothing. Raise (or set Infinity) via validate.maxSize.
+    this.validation = { maxSize: DEFAULT_MAX_FILE_SIZE, ...options.validate }
     this.maxTotalBytes = options.maxTotalBytes
     this.checkQuota = options.checkQuota
     this.now = options.now ?? Date.now
@@ -140,11 +145,22 @@ export class Files {
     return { record, content }
   }
 
-  async temporaryUrl(id: string, expiresIn: DurationInput, tenantId?: string): Promise<string> {
+  /**
+   * Signed download URL — served `Content-Disposition: attachment` by default
+   * so an uploaded HTML/SVG file can never render top-level on the storage
+   * origin; pass `{ disposition: 'inline' }` when in-browser rendering is
+   * deliberate (embedded <img>/<video> uses render regardless).
+   */
+  async temporaryUrl(
+    id: string,
+    expiresIn: DurationInput,
+    tenantId?: string,
+    options: { disposition?: 'attachment' | 'inline' } = {},
+  ): Promise<string> {
     const resolved = this.tenant(tenantId)
     const record = await this.store.find(resolved, id)
     if (!record) throw new FileNotFoundError()
-    return this.inTenant(resolved, () => this.disk.temporaryUrl(record.path, expiresIn))
+    return this.inTenant(resolved, () => this.disk.temporaryUrl(record.path, expiresIn, options))
   }
 
   async delete(id: string, tenantId?: string): Promise<void> {

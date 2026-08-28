@@ -1,5 +1,6 @@
 export {
   Files,
+  DEFAULT_MAX_FILE_SIZE,
   FileTooLargeError,
   FileTypeNotAllowedError,
   StorageQuotaExceededError,

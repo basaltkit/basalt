@@ -981,6 +981,48 @@ importers:
 
   packages/create-app:
     devDependencies:
+      '@basaltkit/auth':
+        specifier: workspace:^
+        version: link:../auth
+      '@basaltkit/cli':
+        specifier: workspace:^
+        version: link:../cli
+      '@basaltkit/config':
+        specifier: workspace:^
+        version: link:../config
+      '@basaltkit/core':
+        specifier: workspace:^
+        version: link:../core
+      '@basaltkit/env':
+        specifier: workspace:^
+        version: link:../env
+      '@basaltkit/events':
+        specifier: workspace:^
+        version: link:../events
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
+      '@basaltkit/generator':
+        specifier: workspace:^
+        version: link:../generator
+      '@basaltkit/logger':
+        specifier: workspace:^
+        version: link:../logger
+      '@basaltkit/mcp':
+        specifier: workspace:^
+        version: link:../mcp
+      '@basaltkit/prisma':
+        specifier: workspace:^
+        version: link:../prisma
+      '@basaltkit/subscriptions':
+        specifier: workspace:^
+        version: link:../subscriptions
+      '@basaltkit/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
+      '@basaltkit/testing':
+        specifier: workspace:^
+        version: link:../testing
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -993,6 +1035,9 @@ importers:
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@26.3.0)(@vitest/coverage-v8@4.1.11)(jsdom@30.0.1(@noble/hashes@1.8.0))(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/dashboard:
     dependencies:
