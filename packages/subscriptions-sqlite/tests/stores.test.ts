@@ -36,6 +36,17 @@ describe('SqliteSubscriptionStore', () => {
     await store.save({ billableId: 'acme', plan: 'enterprise', period: 'monthly', status: 'active' }) // upsert
     expect((await store.get('acme'))?.plan).toBe('enterprise')
 
+    // pending-plan intent (escalation guard) round-trips and clears
+    await store.save({
+      billableId: 'acme', plan: 'enterprise', period: 'monthly', status: 'active',
+      gatewayRef: 'sub_1', pendingPlan: 'mega', pendingPeriod: 'yearly',
+    })
+    expect(await store.get('acme')).toMatchObject({ pendingPlan: 'mega', pendingPeriod: 'yearly', gatewayRef: 'sub_1' })
+    await store.save({ billableId: 'acme', plan: 'mega', period: 'yearly', status: 'active', gatewayRef: 'sub_2' })
+    const promoted = await store.get('acme')
+    expect(promoted?.pendingPlan).toBeUndefined()
+    expect(promoted?.pendingPeriod).toBeUndefined()
+
     expect((await store.all()).map((s) => s.billableId)).toEqual(['acme', 'globex'])
 
     // cancelAtPeriodEnd: false round-trips as false (not undefined)

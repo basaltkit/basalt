@@ -38,6 +38,8 @@ interface PSubscription {
   cancelAtPeriodEnd: boolean | null
   canceledAt: Date | null
   gatewayRef: string | null
+  pendingPlan?: string | null
+  pendingPeriod?: string | null
 }
 interface PUsage {
   billableId: string
@@ -87,6 +89,8 @@ const toSubscription = (r: PSubscription): SubscriptionRecord => {
   if (r.cancelAtPeriodEnd !== null) rec.cancelAtPeriodEnd = r.cancelAtPeriodEnd
   if (r.canceledAt !== null) rec.canceledAt = ms(r.canceledAt)
   if (r.gatewayRef !== null) rec.gatewayRef = r.gatewayRef
+  if (r.pendingPlan != null) rec.pendingPlan = r.pendingPlan
+  if (r.pendingPeriod != null) rec.pendingPeriod = r.pendingPeriod as BillingPeriod
   return rec
 }
 
@@ -98,6 +102,10 @@ const subscriptionData = (record: SubscriptionRecord): Record<string, unknown> =
   cancelAtPeriodEnd: record.cancelAtPeriodEnd ?? null,
   canceledAt: record.canceledAt !== undefined ? at(record.canceledAt) : null,
   gatewayRef: record.gatewayRef ?? null,
+  // Always written (null clears): the pending-plan intent must not survive
+  // its own promotion (see @basaltkit/subscriptions' escalation guard).
+  pendingPlan: record.pendingPlan ?? null,
+  pendingPeriod: record.pendingPeriod ?? null,
 })
 
 export class PrismaSubscriptionStore implements SubscriptionStore {
