@@ -28,6 +28,7 @@ export {
   ContextUnavailableError,
   UnknownTokenError,
   CircularDependencyError,
+  CaptiveDependencyError,
   PluginDependencyError,
   ConfigValidationError,
   LifecycleError,

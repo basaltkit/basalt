@@ -1,4 +1,4 @@
-import { CircularDependencyError, UnknownTokenError } from './errors.js'
+import { CaptiveDependencyError, CircularDependencyError, UnknownTokenError } from './errors.js'
 import type { Token } from './token.js'
 
 export type Lifetime = 'singleton' | 'scoped' | 'transient'
@@ -24,7 +24,13 @@ export class Container {
   private readonly singletons = new Map<symbol, unknown>()
   private readonly scopedInstances = new Map<symbol, unknown>()
   /** Resolution stack for cycle detection — keyed by token symbol, not description. */
-  private readonly resolving: { key: symbol; description: string }[] = []
+  private readonly resolving: { key: symbol; description: string; lifetime: Lifetime }[] = []
+  /**
+   * How many `singleton` builds are in flight on this container — O(1),
+   * allocation-free guard for captive dependencies (a scoped resolution while
+   * this is > 0 would be memoized into a singleton that outlives the scope).
+   */
+  private singletonBuilds = 0
   /** Dependency-graph recorder (devtools) — only set on the root once enabled. */
   private graphRecorder?: {
     nodes: Map<symbol, { description: string; lifetime: Lifetime }>
@@ -72,6 +78,9 @@ export class Container {
         return store.get(token.key) as T
       }
       case 'scoped': {
+        if (this.singletonBuilds > 0) {
+          throw new CaptiveDependencyError(token.description, this.enclosingSingleton())
+        }
         if (!this.scopedInstances.has(token.key)) {
           this.scopedInstances.set(token.key, this.build(token, binding))
         }
@@ -94,12 +103,23 @@ export class Container {
       const parent = this.resolving[this.resolving.length - 1]
       if (parent) recorder.edges.add(`${parent.description}\u0000${token.description}`)
     }
-    this.resolving.push({ key: token.key, description: token.description })
+    this.resolving.push({ key: token.key, description: token.description, lifetime: binding.lifetime })
+    if (binding.lifetime === 'singleton') this.singletonBuilds += 1
     try {
       return binding.factory(this)
     } finally {
+      if (binding.lifetime === 'singleton') this.singletonBuilds -= 1
       this.resolving.pop()
     }
+  }
+
+  /** Description of the innermost in-flight singleton build (error path only). */
+  private enclosingSingleton(): string {
+    for (let i = this.resolving.length - 1; i >= 0; i--) {
+      const frame = this.resolving[i]!
+      if (frame.lifetime === 'singleton') return frame.description
+    }
+    return '(unknown)'
   }
 
   private findBinding(key: symbol): Binding | undefined {
