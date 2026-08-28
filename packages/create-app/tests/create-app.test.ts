@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createProject, detectPackageManager, TargetNotEmptyError } from '../src/index.js'
+import { createProject, detectPackageManager, TargetNotEmptyError, resolveRunDefaults } from '../src/index.js'
 
 let root: string
 
@@ -267,5 +267,31 @@ describe('createProject', () => {
 
     const without = await createProject({ name: 'b', dir: join(root, 'b'), tenancy: false })
     expect(await read(without.dir, 'tests/app.test.ts')).not.toContain('x-tenant-id')
+  })
+})
+
+describe('resolveRunDefaults (D1 — TTY installs by default, CI never surprises)', () => {
+  it('interactive terminal defaults to install + git', () => {
+    expect(resolveRunDefaults({ isTTY: true, ci: false })).toEqual({
+      interactive: true,
+      install: true,
+      git: true,
+    })
+  })
+
+  it('CI and non-TTY default to NO install/git', () => {
+    expect(resolveRunDefaults({ isTTY: true, ci: true })).toMatchObject({ install: false, git: false })
+    expect(resolveRunDefaults({ isTTY: false, ci: false })).toMatchObject({ install: false, git: false })
+  })
+
+  it('explicit flags always win over the environment', () => {
+    expect(resolveRunDefaults({ install: true, git: true, isTTY: false, ci: true })).toMatchObject({
+      install: true,
+      git: true,
+    })
+    expect(resolveRunDefaults({ install: false, git: false, isTTY: true, ci: false })).toMatchObject({
+      install: false,
+      git: false,
+    })
   })
 })

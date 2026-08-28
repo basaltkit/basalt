@@ -278,7 +278,10 @@ Workers/Deno-deploy; use HTTP-based drivers there.
 - Each **adapter** maps its framework's request/response to the neutral shape,
   invokes `runRoute`, and maps thrown errors with the shared `toErrorResponse`
   — so a validation failure is `400 HTTP_VALIDATION` and an `HttpError(404)` is a
-  404 with the same body on all three.
+  404 with the same body on all three. Unmatched routes get the same treatment:
+  every adapter serves the neutral `404 { "error": { "code": "NOT_FOUND", … } }`
+  instead of its framework's default (opt out with `notFound: false` on the
+  adapter plugin).
 - The handler's `request` / `reply` are the neutral types; reach the underlying
   framework object via `request.raw` when you truly need it.
 

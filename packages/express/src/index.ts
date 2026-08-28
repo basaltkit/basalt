@@ -1,5 +1,6 @@
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
+  NOT_FOUND_RESPONSE,
   HttpServerCollector,
   HTTP_SERVER,
   runRoute,
@@ -116,6 +117,13 @@ export interface ExpressPluginOptions {
   routes?: BasaltRoute[]
   /** Bring your own Express app; otherwise one is created with `express.json()`. */
   app?: Express
+  /**
+   * Serve the neutral JSON body (`NOT_FOUND_RESPONSE` from @basaltkit/http)
+   * for unmatched routes, identical across all adapters, instead of Express's
+   * HTML default. Default: true. Pass false to keep Express's own handling
+   * (e.g. when the app mounts its own catch-all after boot).
+   */
+  notFound?: boolean
 }
 
 /**
@@ -168,6 +176,13 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
             const reply = new ExpressReply(res)
             const result = await handler({ request: toNeutralRequest(req), reply })
             if (!reply.sent) reply.send(result)
+          })
+        }
+        // Mounted last, so anything unmatched gets the neutral JSON 404
+        // instead of Express's HTML default.
+        if (options.notFound !== false) {
+          app.use((_req: Request, res: Response) => {
+            if (!res.headersSent) res.status(404).json(NOT_FOUND_RESPONSE)
           })
         }
       })

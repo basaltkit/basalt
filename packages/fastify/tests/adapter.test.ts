@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { createApp, createToken, ctx } from '@basaltkit/core'
+import { createApp, createToken, ctx, definePlugin } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin, HttpError, route } from '../src/index.js'
 
 const routes = [
@@ -171,5 +171,47 @@ describe('fastify anti-slowloris default (security)', () => {
     const b = await createApp({ plugins: [fastifyPlugin({ fastify: { requestTimeout: 5_000 } })] }).boot()
     expect((b.container.get(FASTIFY).initialConfig as { requestTimeout?: number }).requestTimeout).toBe(5_000) // override wins
     await b.shutdown()
+  })
+})
+
+describe('neutral 404 (unmatched routes)', () => {
+  it('serves the shared JSON body by default', async () => {
+    const app = await createApp({ plugins: [fastifyPlugin({ routes })] }).boot()
+    const res = await app.container.get(FASTIFY).inject({ method: 'GET', url: '/nope' })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Route not found.' } })
+    await app.shutdown()
+  })
+
+  it("an app's own setNotFoundHandler (set during plugin boot) wins over the neutral default", async () => {
+    // The supported pattern: set the handler in a plugin's boot phase — it
+    // lands before the adapter's app:booted mount, and the adapter's guarded
+    // set then keeps the app's handler. (Setting one *after* app:booted fails
+    // loudly with Fastify's duplicate-handler error — use notFound: false.)
+    const withOwn = createApp({
+      plugins: [
+        fastifyPlugin({ routes }),
+        definePlugin({
+          name: 'test:own-404',
+          boot({ container }) {
+            container.get(FASTIFY).setNotFoundHandler((_req, reply) => {
+              void reply.code(404).send({ custom: true })
+            })
+          },
+        }),
+      ],
+    })
+    await withOwn.boot()
+    const res = await withOwn.container.get(FASTIFY).inject({ method: 'GET', url: '/nope' })
+    expect(res.json()).toEqual({ custom: true })
+    await withOwn.shutdown()
+  })
+
+  it('notFound: false keeps the Fastify default', async () => {
+    const app = await createApp({ plugins: [fastifyPlugin({ routes, notFound: false })] }).boot()
+    const res = await app.container.get(FASTIFY).inject({ method: 'GET', url: '/nope' })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toHaveProperty('message') // fastify's own shape
+    await app.shutdown()
   })
 })

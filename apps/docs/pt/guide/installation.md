@@ -28,8 +28,8 @@ Passa flags para saltar as perguntas:
 | `--billing` | desativado | Inclui subscrições/planos (`@basaltkit/subscriptions`) |
 | `--ui` | desativado | Adiciona um frontend `web/` React + shadcn — vê [Web UI](/pt/guide/web-ui). Força pnpm |
 | `--cli` | desativado | Adiciona a CLI `basalt` (geradores `make:*` + comandos embutidos) |
-| `--install` | desativado | Instala dependências no fim |
-| `--git` | desativado | `git init` + um commit inicial |
+| `--install` / `--no-install` | ativo em TTY, desativado em CI | Instala dependências no fim |
+| `--git` / `--no-git` | ativo em TTY, desativado em CI | `git init` + um commit inicial |
 | `--pm=<mgr>` | autodeteção | Força `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `--dir=<path>` | `./<name>` | Pasta de destino |
 | `-y`, `--yes` | — | Aceita todos os defaults, sem perguntas |
@@ -39,9 +39,10 @@ pnpm create basalt my-saas --billing --cli --install --git   # stack completa, i
 npm create basalt service-api --no-tenancy --no-auth         # API mínima
 ```
 
-Por defeito o scaffolder apenas escreve ficheiros — não instala dependências nem
-mexe no git a menos que adiciones `--install` / `--git`. Por isso os passos
-seguintes habituais são:
+Num terminal interativo o scaffolder instala dependências e corre `git init`
+por defeito (`--no-install` / `--no-git` para desativar); em CI ou execuções
+piped apenas escreve ficheiros a menos que passes `--install` / `--git`. Os
+passos seguintes habituais são:
 
 ```bash
 cd my-saas

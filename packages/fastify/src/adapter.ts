@@ -1,5 +1,6 @@
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
+  NOT_FOUND_RESPONSE,
   HttpServerCollector,
   HTTP_SERVER,
   runRoute,
@@ -70,6 +71,14 @@ export interface FastifyPluginOptions {
   routes?: BasaltRoute[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
   fastify?: FastifyServerOptions
+  /**
+   * Serve the neutral JSON body (`NOT_FOUND_RESPONSE` from @basaltkit/http)
+   * for unmatched routes, identical across all adapters. Default: true.
+   * A `setNotFoundHandler` registered during a plugin's boot phase wins (the
+   * adapter's set is guarded); to register one after app:booted instead,
+   * pass `notFound: false` here — Fastify allows only one handler.
+   */
+  notFound?: boolean
 }
 
 export function fastifyPlugin(options: FastifyPluginOptions = {}) {
@@ -122,7 +131,18 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       const instance = container.get(FASTIFY)
       registerRoutes(instance, routes, container, enrichers, guards)
       // Mount edge-plugin hooks/routes once every plugin has registered them.
-      hooks.on('app:booted', () => mountCollector(instance, collector))
+      hooks.on('app:booted', () => {
+        mountCollector(instance, collector)
+        if (options.notFound !== false) {
+          try {
+            instance.setNotFoundHandler((_request, reply) => {
+              void reply.code(404).send(NOT_FOUND_RESPONSE)
+            })
+          } catch {
+            // The app registered its own not-found handler — keep it.
+          }
+        }
+      })
       // Expose routes to tooling (CLI `basalt routes`, OpenAPI, SDK). The Zod
       // schemas ride along so the OpenAPI generator needs no duplicate wiring.
       for (const definition of routes) {

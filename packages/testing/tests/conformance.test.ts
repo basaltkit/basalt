@@ -164,12 +164,11 @@ describe.each(ADAPTERS)('neutral HTTP contract on $name', ({ name, plugin }) => 
     expect(boom.json()).toEqual({ error: { code: 'TEAPOT', message: "I'm a teapot" } })
   })
 
-  it('unknown routes are 404 (status parity; body is each framework default)', async () => {
+  it('unknown routes serve the neutral JSON 404 — full body parity', async () => {
     await boot()
-    // The *body* of a framework-level 404 is not part of the neutral contract
-    // today (fastify: JSON, express: HTML, hono: text) — reviewed as a known
-    // divergence, asserted here only at the status level.
     const missing = await app.get('/definitely-not-a-route')
     expect(missing.statusCode).toBe(404)
+    expect(missing.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Route not found.' } })
+    expect(String(missing.headers['content-type'])).toContain('application/json')
   })
 })

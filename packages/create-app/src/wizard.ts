@@ -112,8 +112,8 @@ export async function runWizard(prompter: Prompter, options: WizardOptions = {})
     pm = 'pnpm'
   }
 
-  const install = await prompter.confirm({ message: 'Install dependencies now?', initial: false })
-  const git = await prompter.confirm({ message: 'Initialize a git repository?', initial: false })
+  const install = await prompter.confirm({ message: 'Install dependencies now?', initial: true })
+  const git = await prompter.confirm({ message: 'Initialize a git repository?', initial: true })
 
   const enabled = FEATURES.filter((f) => featureSet.has(f.value)).map((f) => f.label)
   prompter.note(

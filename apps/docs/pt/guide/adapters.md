@@ -283,7 +283,10 @@ baseados em HTTP.
 - Cada **adaptador** mapeia o request/response da sua framework para o formato
   neutro, invoca `runRoute`, e mapeia os erros lançados com o partilhado
   `toErrorResponse` — por isso uma falha de validação é `400 HTTP_VALIDATION` e
-  um `HttpError(404)` é um 404 com o mesmo corpo nos três.
+  um `HttpError(404)` é um 404 com o mesmo corpo nos três. Rotas não
+  correspondidas recebem o mesmo tratamento: todos os adapters servem o neutro
+  `404 { "error": { "code": "NOT_FOUND", … } }` em vez do default da sua
+  framework (desativa com `notFound: false` no plugin do adapter).
 - O `request` / `reply` do handler são os tipos neutros; alcança o objeto
   subjacente da framework via `request.raw` quando realmente precisares.
 
