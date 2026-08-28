@@ -1,5 +1,5 @@
 import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { AUTH } from './plugin.js'
 import { OAuth, type OAuthOptions, type OAuthProvider, stripTrailingSlashes } from './oauth.js'

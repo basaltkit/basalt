@@ -20,11 +20,12 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/http": "workspace:^",
     "@basaltkit/subscriptions": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/auth": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.3.0",

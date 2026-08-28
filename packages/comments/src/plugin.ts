@@ -1,5 +1,5 @@
 import { createToken, ctx, definePlugin, BasaltError, type Container } from '@basaltkit/core'
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { Comments, type CommentsOptions } from './comments.js'
 import type { Comment } from './store.js'

@@ -1,4 +1,4 @@
-import { route, type BasaltRoute } from '@basaltkit/fastify'
+import { route, type BasaltRoute } from '@basaltkit/http'
 import { apiKeysPageHtml, type ApiKeysPageOptions } from './html.js'
 
 export interface ApiKeysUiOptions extends ApiKeysPageOptions {

@@ -1,7 +1,7 @@
 {
   "name": "@basaltkit/teams-ui",
   "version": "1.0.1",
-  "description": "A self-contained HTML page to manage @basaltkit/teams: invite/revoke invitations and list/change-role/remove members \u2014 zero dependencies, no build.",
+  "description": "A self-contained HTML page to manage @basaltkit/teams: invite/revoke invitations and list/change-role/remove members — zero dependencies, no build.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -20,10 +20,11 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/fastify": "workspace:^"
+    "@basaltkit/http": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/auth": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
     "@basaltkit/teams": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
