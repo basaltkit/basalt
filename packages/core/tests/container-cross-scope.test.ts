@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Container, createToken, CircularDependencyError } from '../src/index.js'
+import { Container, createToken, CircularDependencyError, CaptiveDependencyError } from '../src/index.js'
 
 /**
  * Cross-scope cycle detection (ecosystem review 2026-08, finding Q2).
@@ -75,5 +75,71 @@ describe('cycle detection across scopes', () => {
     expect(s1.get(A).name).toBe('a1')
     expect(s2.get(A).name).toBe('a2')
     expect(s1.get(A).name).toBe('a1') // memoized per scope
+  })
+})
+
+describe('captive dependency guard (fail-loud, review follow-up)', () => {
+  const SCOPED = createToken<Service>('request-service')
+  const SINGLETON = createToken<{ captured?: Service }>('app-service')
+
+  it('throws when a singleton factory resolves a scoped token through a scope', () => {
+    const root = new Container()
+    root.scoped(SCOPED, () => ({ name: 'per-request' }))
+    root.singleton(SINGLETON, (c) => ({ captured: c.get(SCOPED) }))
+    const scope = root.createScope()
+    expect(() => scope.get(SINGLETON)).toThrowError(CaptiveDependencyError)
+    try {
+      scope.get(SINGLETON)
+    } catch (error) {
+      const captive = error as CaptiveDependencyError
+      expect(captive.code).toBe('DI_CAPTIVE_DEPENDENCY')
+      expect(captive.message).toContain('request-service')
+      expect(captive.message).toContain('app-service')
+    }
+  })
+
+  it('throws at the root too (a root-resolved scoped token is equally captive)', () => {
+    const root = new Container()
+    root.scoped(SCOPED, () => ({ name: 'per-request' }))
+    root.singleton(SINGLETON, (c) => ({ captured: c.get(SCOPED) }))
+    expect(() => root.get(SINGLETON)).toThrowError(CaptiveDependencyError)
+  })
+
+  it('throws transitively: singleton → transient → scoped is still captive', () => {
+    const root = new Container()
+    root.scoped(SCOPED, () => ({ name: 'per-request' }))
+    root.transient(B, (c) => ({ name: c.get(SCOPED).name }))
+    root.singleton(SINGLETON, (c) => ({ captured: c.get(B) }))
+    expect(() => root.createScope().get(SINGLETON)).toThrowError(CaptiveDependencyError)
+  })
+
+  it('legit graphs are untouched: singleton → singleton/transient, scoped → singleton', () => {
+    const root = new Container()
+    root.singleton(A, () => ({ name: 'a' }))
+    root.transient(B, () => ({ name: 'b' }))
+    root.singleton(SINGLETON, (c) => ({ captured: { name: `${c.get(A).name}${c.get(B).name}` } }))
+    root.scoped(SCOPED, (c) => ({ name: `scoped+${c.get(A).name}` }))
+    const scope = root.createScope()
+    expect(scope.get(SINGLETON).captured?.name).toBe('ab')
+    expect(scope.get(SCOPED).name).toBe('scoped+a')
+  })
+
+  it('a singleton managing its OWN scope deliberately is allowed', () => {
+    const root = new Container()
+    root.scoped(SCOPED, () => ({ name: 'per-run' }))
+    root.singleton(SINGLETON, (c) => {
+      const ownScope = (c as Container).createScope()
+      return { captured: ownScope.get(SCOPED) }
+    })
+    expect(root.get(SINGLETON).captured?.name).toBe('per-run')
+  })
+
+  it('the guard resets after a build — later scoped resolutions work normally', () => {
+    const root = new Container()
+    root.scoped(SCOPED, () => ({ name: 'per-request' }))
+    root.singleton(A, () => ({ name: 'a' }))
+    const scope = root.createScope()
+    expect(scope.get(A).name).toBe('a')
+    expect(scope.get(SCOPED).name).toBe('per-request')
   })
 })
