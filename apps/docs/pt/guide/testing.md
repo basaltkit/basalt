@@ -28,6 +28,30 @@ describe('health', () => {
 })
 ```
 
+## Correr a mesma suite em Express ou Hono
+
+O `createTestApp` usa por omissão o `inject` in-process do Fastify. Passa
+`adapter` para conduzir os mesmos pedidos por outro adapter — útil para testes
+de conformidade de código que segue o contrato neutro do `@basaltkit/http`:
+
+```ts
+import { expressPlugin } from '@basaltkit/express'
+import { createTestApp } from '@basaltkit/testing'
+
+const app = await createTestApp({
+  adapter: 'express', // ou 'hono'; por omissão 'fastify'
+  plugins: [expressPlugin({ routes: [health] })],
+})
+const res = await app.get('/health') // mesmos helpers, mesma forma de resposta
+```
+
+Passa o plugin do adapter correspondente em `plugins`, tal como com o
+`fastifyPlugin`. Todos os drivers devolvem a mesma forma `TestResponse`
+(`statusCode`, `headers`, `body`, `json()`). O `'express'` escuta numa porta
+local efémera (fechada no `shutdown()`); `'hono'` e `'fastify'` nunca abrem um
+socket. `@basaltkit/express`/`@basaltkit/hono` são peers opcionais — instala o
+que usares como devDependency.
+
 ## Agir como um utilizador ou tenant
 
 Salta o login por completo — personifica o utilizador/tenant de onde o pedido devia

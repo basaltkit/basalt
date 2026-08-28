@@ -28,6 +28,30 @@ describe('health', () => {
 })
 ```
 
+## Run the same suite on Express or Hono
+
+`createTestApp` defaults to Fastify's in-process `inject`. Pass `adapter` to
+drive the identical requests through another adapter — useful for conformance
+tests of code that targets the neutral `@basaltkit/http` contract:
+
+```ts
+import { expressPlugin } from '@basaltkit/express'
+import { createTestApp } from '@basaltkit/testing'
+
+const app = await createTestApp({
+  adapter: 'express', // or 'hono'; default 'fastify'
+  plugins: [expressPlugin({ routes: [health] })],
+})
+const res = await app.get('/health') // same helpers, same response shape
+```
+
+Pass the matching adapter plugin in `plugins`, exactly as with `fastifyPlugin`.
+Every driver returns the same `TestResponse` shape (`statusCode`, `headers`,
+`body`, `json()`). `'express'` listens on an ephemeral local port (closed on
+`shutdown()`); `'hono'` and `'fastify'` never open a socket.
+`@basaltkit/express`/`@basaltkit/hono` are optional peers — install the one you
+use as a devDependency.
+
 ## Act as a user or tenant
 
 Skip login entirely — impersonate the user/tenant a request should come from.
