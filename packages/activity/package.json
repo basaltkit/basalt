@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/activity",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "User-facing activity log for Basalt, Spatie Activitylog-style: fluent builder, causer/tenant from context and queryable feeds.",
   "license": "MIT",
   "type": "module",
