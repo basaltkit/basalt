@@ -80,6 +80,14 @@ export interface BillingRoutesOptions {
   cancelUrl: string
   /** Where the Customer Portal returns the customer. Default: successUrl. */
   portalReturnUrl?: string
+  /**
+   * Require an authenticated user on checkout/portal (`meta.auth`, enforced by
+   * @basaltkit/auth's guard). Default: **true** — these routes mint live
+   * payment-management URLs for the current tenant and must never be
+   * anonymous. Set `false` ONLY when authentication happens at an outer edge
+   * (gateway/proxy) — a deliberate, documented opt-out.
+   */
+  auth?: boolean
 }
 
 /**
@@ -91,10 +99,14 @@ export interface BillingRoutesOptions {
  */
 export function billingRoutes(options: BillingRoutesOptions): BasaltRoute[] {
   const portalReturn = options.portalReturnUrl ?? options.successUrl
+  // Secure by default: payment-management routes require an authenticated
+  // user. (Ecosystem review 2026-08-b, finding S-1.)
+  const authMeta = options.auth === false ? undefined : { auth: true }
   return [
     route({
       method: 'POST',
       url: '/billing/checkout',
+      ...(authMeta ? { meta: authMeta } : {}),
       body: z.object({
         plan: z.string(),
         period: z.enum(['monthly', 'yearly']).optional(),
@@ -113,6 +125,7 @@ export function billingRoutes(options: BillingRoutesOptions): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/billing/portal',
+      ...(authMeta ? { meta: authMeta } : {}),
       body: z.object({ returnUrl: z.string().url().optional() }).optional(),
       async handler({ body }) {
         return subscriptions().portal(billable(), { returnUrl: body?.returnUrl ?? portalReturn })
@@ -164,7 +177,10 @@ const invoicesService = (): Invoices => (ctx().container as Container).get(INVOI
  * Ownership is enforced against the current tenant; another tenant's invoice
  * reads as 404. Issuing/finalizing invoices stays server-side via `INVOICES`.
  */
-export function invoiceRoutes(): BasaltRoute[] {
+export function invoiceRoutes(options: { auth?: boolean } = {}): BasaltRoute[] {
+  // Same secure-by-default rule as billingRoutes: invoices are the tenant's
+  // payment history; anonymous access was the S-1 vulnerability class.
+  const authMeta = options.auth === false ? undefined : { auth: true }
   const own = async (id: string) => {
     const invoice = await invoicesService().get(id)
     if (!invoice || invoice.billableId !== billable()) throw new InvoiceNotFoundError(id)
@@ -174,6 +190,7 @@ export function invoiceRoutes(): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/billing/invoices',
+      ...(authMeta ? { meta: authMeta } : {}),
       async handler() {
         return { data: await invoicesService().list(billable()) }
       },
@@ -181,6 +198,7 @@ export function invoiceRoutes(): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/billing/invoices/:id',
+      ...(authMeta ? { meta: authMeta } : {}),
       params: z.object({ id: z.string() }),
       async handler({ params }) {
         return own(params.id)
@@ -189,6 +207,7 @@ export function invoiceRoutes(): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/billing/invoices/:id/html',
+      ...(authMeta ? { meta: authMeta } : {}),
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
         const invoice = await own(params.id)

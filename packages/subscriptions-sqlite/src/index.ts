@@ -63,7 +63,9 @@ export function migrate(db: DatabaseSync): void {
       trial_ends_at        INTEGER,
       cancel_at_period_end INTEGER,
       canceled_at          INTEGER,
-      gateway_ref          TEXT
+      gateway_ref          TEXT,
+      pending_plan         TEXT,
+      pending_period       TEXT
     );
 
     CREATE TABLE IF NOT EXISTS usage_counters (
@@ -103,6 +105,19 @@ export function migrate(db: DatabaseSync): void {
       updated_at         INTEGER NOT NULL
     );
   `)
+  // Schema evolution for databases created before the pending-plan guard
+  // (@basaltkit/subscriptions escalation fix): ADD COLUMN is a no-op error
+  // when the column already exists — same pattern as auth-sqlite.
+  for (const ddl of [
+    'ALTER TABLE subscriptions ADD COLUMN pending_plan TEXT',
+    'ALTER TABLE subscriptions ADD COLUMN pending_period TEXT',
+  ]) {
+    try {
+      db.exec(ddl)
+    } catch {
+      // column already exists
+    }
+  }
 }
 
 // --- subscriptions ----------------------------------------------------------
@@ -116,6 +131,8 @@ interface SubscriptionRow {
   cancel_at_period_end: number | null
   canceled_at: number | null
   gateway_ref: string | null
+  pending_plan: string | null
+  pending_period: string | null
 }
 
 const toSubscription = (r: SubscriptionRow): SubscriptionRecord => {
@@ -129,6 +146,8 @@ const toSubscription = (r: SubscriptionRow): SubscriptionRecord => {
   if (r.cancel_at_period_end !== null) rec.cancelAtPeriodEnd = r.cancel_at_period_end === 1
   if (r.canceled_at !== null) rec.canceledAt = r.canceled_at
   if (r.gateway_ref !== null) rec.gatewayRef = r.gateway_ref
+  if (r.pending_plan !== null) rec.pendingPlan = r.pending_plan
+  if (r.pending_period !== null) rec.pendingPeriod = r.pending_period as BillingPeriod
   return rec
 }
 
@@ -146,12 +165,13 @@ export class SqliteSubscriptionStore implements SubscriptionStore {
     this.db
       .prepare(
         `INSERT INTO subscriptions
-           (billable_id, plan, period, status, trial_ends_at, cancel_at_period_end, canceled_at, gateway_ref)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (billable_id, plan, period, status, trial_ends_at, cancel_at_period_end, canceled_at, gateway_ref, pending_plan, pending_period)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(billable_id) DO UPDATE SET
            plan = excluded.plan, period = excluded.period, status = excluded.status,
            trial_ends_at = excluded.trial_ends_at, cancel_at_period_end = excluded.cancel_at_period_end,
-           canceled_at = excluded.canceled_at, gateway_ref = excluded.gateway_ref`,
+           canceled_at = excluded.canceled_at, gateway_ref = excluded.gateway_ref,
+           pending_plan = excluded.pending_plan, pending_period = excluded.pending_period`,
       )
       .run(
         record.billableId,
@@ -162,6 +182,8 @@ export class SqliteSubscriptionStore implements SubscriptionStore {
         record.cancelAtPeriodEnd === undefined ? null : bool(record.cancelAtPeriodEnd),
         orNull(record.canceledAt),
         orNull(record.gatewayRef),
+        orNull(record.pendingPlan),
+        orNull(record.pendingPeriod),
       )
   }
 
