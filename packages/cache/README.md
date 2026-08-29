@@ -214,6 +214,8 @@ const cacheB = new Cache(new RedisCacheDriver(redis))
 | `onMissingScope` | `'global' \| 'error'` | `'error'` when tenancy is active, else `'global'` — see below | What a read/write does when `scope()` resolves `undefined`. `'global'` shares one namespace; `'error'` throws `MissingCacheScopeError`. |
 | `now` | `() => number` | `Date.now` | Injectable clock (ms) for the stale-while-revalidate windows. For tests. |
 
+A value of `undefined` is a real cached value, not a miss: `remember()` with a factory that returns `undefined` computes it **once** and serves the cached `undefined` afterwards. `get()` still reports its `fallback` for such an entry, because `get` cannot distinguish "cached undefined" from "absent".
+
 `SwrOptions` (the object form of `remember`'s second argument):
 
 | Field | Type | Purpose |
@@ -265,6 +267,21 @@ tenant-scoped cache, build a second `Cache` with `scope: null`.
 ### `cachePlugin(options?: CachePluginOptions)`
 
 Registers `Cache` in the container under the `CACHE` token and disconnects the driver on application `shutdown`.
+
+#### Drivers
+
+**`MemoryCacheDriver`** — the default, and **bounded**: cache keys usually embed ids, slugs or query fingerprints, so unbounded growth on user-influenced keys is an OOM vector. It holds at most `maxEntries` live entries (default **10 000**), evicting already-expired entries first and then the least recently used (`get` counts as a use).
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `maxEntries` | `number` | `10_000` | Live-entry cap before eviction; `Infinity` disables it. |
+
+It also exposes `size` (live entry count) for diagnostics and tests.
+
+**`RedisCacheDriver`** — values are `JSON.stringify`/`JSON.parse`'d, so store plain data (`Date` comes back as a string; `Map`/class instances do not survive). Two details worth knowing:
+
+- **Prefix flushes are glob-escaped.** The scope segment carries user-controlled data (a tenant id or slug), so `flushPrefix` escapes Redis glob metacharacters (`\ * ? [ ] ^`) before `SCAN MATCH`. Without it, a tenant named `a*` would match — and delete — other tenants' keys.
+- **Tag indexes are sorted sets** under `__tagz__:<tag>`, scored by each member's expiry, plus a reverse index `__tagsof__:<key>`. Expired members are pruned on write and `delete` unregisters the key from its tags, so the index tracks the live key set instead of growing forever. Upgrading from the older plain sets (`__tags__:`) leaves inert orphans — clear them once with `DEL __tags__:*`.
 
 #### `CachePluginOptions` (extends `CacheOptions`)
 

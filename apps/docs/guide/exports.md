@@ -100,5 +100,11 @@ exportsPlugin({ formatters: [xlsxFormatter] })
 await exports.run(usersExport, users, 'xlsx') // users.xlsx
 ```
 
+Cell text is XML-escaped, and characters XML 1.0 forbids outright (`0x00`–`0x08`,
+`0x0B`, `0x0C`, `0x0E`–`0x1F` — easily present in user-supplied data) are written
+with OOXML's `_xHHHH_` escape rather than passed through, which would make the
+sheet unparseable and Excel refuse to open it. Tab, newline and carriage return
+are legal XML and stay verbatim.
+
 To add another format (PDF, ODS…), implement `ExportFormatter.render(headers,
 rows) → Buffer` and register it the same way — no export definition changes.

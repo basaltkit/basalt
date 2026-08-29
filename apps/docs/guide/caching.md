@@ -118,6 +118,25 @@ await cache.tags('plans').flush()   // drops every key tagged 'plans'
 `driver` is `'memory'`, `'redis'` (with `url`), or a custom `CacheDriver`
 instance.
 
+### The memory driver is bounded
+
+`MemoryCacheDriver` is the default, so it must not grow without limit: cache
+keys usually embed ids, slugs or query fingerprints, and unbounded growth on
+user-influenced keys is an OOM waiting to happen. It holds at most **10 000
+entries**, evicting already-expired ones first and then the least recently used
+(`get` counts as a use, so hot keys survive).
+
+```ts
+import { MemoryCacheDriver, cachePlugin } from '@basaltkit/cache'
+
+cachePlugin({ driver: new MemoryCacheDriver({ maxEntries: 50_000 }) })
+cachePlugin({ driver: new MemoryCacheDriver({ maxEntries: Infinity }) }) // no cap
+```
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `maxEntries` | `number` | `10_000` | Live-entry cap before eviction; `Infinity` disables it |
+
 ### Swap memory → Redis
 
 Production is a one-line change — point at a Redis server:
@@ -239,6 +258,17 @@ function always wins over this detection.
 - **The factory runs more often than expected across a fleet** — stampede
   dedupe and SWR revalidation are **per process**; two replicas may compute
   concurrently. Within one process a key computes exactly once.
+- **Entries disappear before their TTL on the memory driver** — you are past
+  `maxEntries` (10 000 by default) and the LRU is evicting. Raise the cap, or
+  move to Redis.
+- **A factory returning `undefined` used to rerun every call** — it doesn't any
+  more: `undefined` is stored behind an internal marker, so it is a real cache
+  hit. `cache.get(key, fallback)` still returns your fallback for it, because a
+  cached `undefined` and a miss are indistinguishable through `get`.
+- **Redis tag flushes stopped matching after an upgrade** — tag indexes moved
+  from plain sets (`__tags__:`) to sorted sets scored by expiry (`__tagz__:`),
+  so expired members are pruned instead of accumulating forever. The old keys
+  are inert orphans; clear them once with `DEL __tags__:*`.
 
 
 ## Conditional requests (ETags)

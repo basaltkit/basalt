@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/sdk",
   "version": "1.0.2",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Type-safe HTTP client for Basalt APIs: endpoints defined with Zod drive an inferred client with typed errors and transparent token refresh. Frontend-friendly (only Zod).",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

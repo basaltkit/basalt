@@ -98,13 +98,20 @@ procura a política registada para esse recurso e deixa o check dela decidir. As
 políticas podem ser registadas à partida via a opção `policies` ou mais tarde
 com `gate.register(...)`; os checks podem ser async.
 
-::: warning Sem política ⇒ o check cai para RBAC
-Se nenhuma política estiver registada para o recurso (ou a política não tiver
-check para essa ação), passar um recurso **não** falha o check — o Gate volta
-às strings de permissão concedidas, exatamente como se nenhum recurso tivesse
-sido passado. Um utilizador com `project:update` concedido passaria mesmo num
-projeto que não é dele. Se a posse tem de ser imposta, garante que a política
-está registada — e testa o caso de negação.
+::: danger Sem política ⇒ o check falha fechado
+Passar um recurso é uma declaração explícita de que deve ser uma regra ABAC a
+decidir, por isso se nenhuma política estiver registada para esse recurso — ou
+se a política não tiver check para essa ação — o Gate lança `MissingPolicyError`
+(`PERMISSION_POLICY_MISSING`) em vez de responder a partir do RBAC. Antes caía
+silenciosamente, o que significava que um erro de escrita (`project:updat`, ou
+`projects:update` para uma política registada como `project`) saltava por
+completo a regra de posse e uma concessão ampla `project:*` autorizava o pedido.
+
+O erro nomeia a permissão e lista as políticas registadas. Corrige registando o
+check, corrigindo a escrita de `resource:action`, ou removendo o argumento do
+recurso se o que querias era RBAC simples. Para repor o comportamento histórico
+— em apps que passam recursos oportunisticamente — define
+`onMissingPolicy: 'rbac'`.
 :::
 
 ## Proteger rotas
@@ -215,6 +222,7 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | `temporaryGrants` | `TemporaryGrantStore` | desligado | Ativa `grantTemporarily()` |
 | `delegations` | `DelegationStore` | desligado | Ativa `delegate()` |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
+| `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | O que `can(user, perm, resource)` faz quando nenhum check de política corresponde a `resource:action`: `'error'` lança `MissingPolicyError` (falha fechada), `'rbac'` volta às strings de permissão concedidas |
 
 O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e
 reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
@@ -226,14 +234,21 @@ reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | O check falhou — nada concede a permissão no scope atual nem no global |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | Uma rota com `meta.can` foi chamada sem utilizador autenticado no contexto |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | O `meta.can` tem uma forma não aplicável (`true`, um número, um array vazio/misto) — falha fechada em cada pedido |
+| `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | O `can`/`authorize` recebeu um recurso mas nenhum check de política corresponde a `resource:action` — a regra ABAC que pretendias seria saltada |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Uma rota declara `meta.can` (ou `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) e nenhum guard registado reclama essa chave |
 
 - **`PERMISSION_DENIED` para um utilizador que "tem o role"** — verifica o
   *scope*: um role atribuído no tenant `acme` não se aplica em `globex` nem
   globalmente. Atribui em `GLOBAL_SCOPE` para staff cross-tenant.
+- **`PERMISSION_POLICY_MISSING` depois de um upgrade** — essa chamada
+  `can(user, perm, resource)` já estava a responder silenciosamente a partir do
+  RBAC. Confere a escrita das duas metades de `resource:action` contra o
+  `definePolicy`, regista o check em falta, ou — se aquela chamada é mesmo RBAC
+  simples — deixa de passar o recurso. `onMissingPolicy: 'rbac'` repõe o
+  comportamento antigo por completo.
 - **Um check de política parece ignorado** — a política só corre quando um
-  *recurso* é passado a `can`/`authorize` e há uma política registada para o
-  nome do recurso; caso contrário o check cai para RBAC (vê o aviso acima).
+  *recurso* é passado a `can`/`authorize`; `can(user, 'project:update')` sem
+  recurso é RBAC puro por design e nunca consulta uma política.
 - **`HTTP_UNGUARDED_ROUTE_META` no boot** — regista o `permissionsPlugin` ou,
   se a autorização acontece genuinamente numa edge exterior, opta por sair
   explicitamente com a opção do adapter `allowUnguardedMeta: true` (ou

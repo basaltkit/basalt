@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/queue-kafka",
   "version": "1.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Kafka driver for @basaltkit/queue: produce/consume jobs with retry and dead-letter topics (no delayed delivery or priority \u2014 Kafka has neither).",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

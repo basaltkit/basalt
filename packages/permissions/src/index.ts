@@ -7,9 +7,9 @@ import {
   type DelegationStore,
 } from './delegation.js'
 import type { RouteGuard } from '@basaltkit/http'
-import { AuthRequiredGuardError, InvalidCanMetaError } from './errors.js'
+import { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError } from './errors.js'
 
-export { AuthRequiredGuardError, InvalidCanMetaError, PermissionDeniedError } from './errors.js'
+export { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError, PermissionDeniedError } from './errors.js'
 import { PermissionDeniedError } from './errors.js'
 
 /** Global scope key — role/permission grants outside any tenant. */
@@ -127,6 +127,14 @@ export interface GateOptions {
   delegations?: DelegationStore
   /** Injectable clock (tests). Default `Date.now`. */
   now?: () => number
+  /**
+   * What to do when `can()` is given a resource but no policy check matches
+   * `resource:action`. `'error'` (default) throws {@link MissingPolicyError} —
+   * passing a resource is an explicit ABAC intent, and silently answering from
+   * RBAC means the ownership rule never runs. `'rbac'` restores the historic
+   * fall-through for apps that pass resources opportunistically.
+   */
+  onMissingPolicy?: 'error' | 'rbac'
 }
 
 const defaultScope = (): string => {
@@ -163,6 +171,11 @@ export class Gate {
       const policy = resourceName ? this.policies.get(resourceName) : undefined
       const check = action ? policy?.checks[action] : undefined
       if (check) return check(user, resource as never)
+      // A resource was passed, so ABAC was intended. Falling through to RBAC here
+      // silently drops the ownership check — fail closed unless opted out.
+      if ((this.options.onMissingPolicy ?? 'error') === 'error') {
+        throw new MissingPolicyError(permission, [...this.policies.keys()])
+      }
     }
 
     if (await this.canDirect(user.id, permission)) return true

@@ -4,7 +4,14 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import { type AuditEntry, type AuditQuery, type AuditStore, patternMatches } from '@basaltkit/audit'
+import {
+  AUDIT_SCAN_PAGE,
+  type AuditEntry,
+  type AuditQuery,
+  type AuditStore,
+  exactEventMatch,
+  patternMatches,
+} from '@basaltkit/audit'
 
 /**
  * Durable, SQLite-backed implementation of the `@basaltkit/audit` `AuditStore`, on
@@ -88,8 +95,10 @@ export class SqliteAuditStore implements AuditStore {
   }
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {
-    // Exact filters push down to SQL; the event wildcard and the limit are
-    // applied after, because the limit must count only pattern-matched rows.
+    // Exact filters — including an event name with no wildcard — push down to SQL,
+    // and so does the limit. Only a wildcard pattern still needs matching in code,
+    // and then rows are read in bounded LIMIT/OFFSET pages: a `limit: 50` query must
+    // never SELECT the whole (unbounded) trail into memory.
     const where: string[] = []
     const args: Bindable[] = []
     if (query.tenantId !== undefined) {
@@ -104,17 +113,34 @@ export class SqliteAuditStore implements AuditStore {
       where.push('at >= ?')
       args.push(query.since)
     }
-    const sql =
+    const exact = exactEventMatch(query.event)
+    if (exact !== undefined) {
+      where.push('event = ?')
+      args.push(exact)
+    }
+    const base =
       'SELECT * FROM audit_entries' +
       (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
       ' ORDER BY at DESC, rowid DESC' // newest first, ties by insertion order
-    const rows = this.db.prepare(sql).all(...args) as unknown as AuditRow[]
-    let entries = rows.map(toEntry)
-    if (query.event !== undefined) {
-      const pattern = query.event
-      entries = entries.filter((e) => patternMatches(pattern, e.event))
+
+    const read = (limit: number | undefined, offset: number): AuditEntry[] => {
+      const sql = limit === undefined ? base : `${base} LIMIT ${limit} OFFSET ${offset}`
+      return (this.db.prepare(sql).all(...args) as unknown as AuditRow[]).map(toEntry)
     }
-    return query.limit !== undefined ? entries.slice(0, query.limit) : entries
+
+    if (query.event === undefined || exact !== undefined) return read(query.limit, 0)
+
+    const pattern = query.event
+    const out: AuditEntry[] = []
+    for (let offset = 0; ; offset += AUDIT_SCAN_PAGE) {
+      const page = read(AUDIT_SCAN_PAGE, offset)
+      for (const entry of page) {
+        if (!patternMatches(pattern, entry.event)) continue
+        out.push(entry)
+        if (query.limit !== undefined && out.length >= query.limit) return out
+      }
+      if (page.length < AUDIT_SCAN_PAGE) return out
+    }
   }
 }
 

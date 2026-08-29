@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/hono",
   "version": "1.4.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Hono adapter for Basalt: run the same typed routes, enrichers and guards on Hono (Node, Bun, Deno, edge) as on Fastify or Express.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

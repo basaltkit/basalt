@@ -69,12 +69,38 @@ export function patternMatches(pattern: string, name: string): boolean {
   return patternSegments.length === nameSegments.length
 }
 
+/** How deep the redactors walk a payload before dropping the rest. */
+const MAX_REDACT_DEPTH = 6
+/** Stand-in for a subtree deeper than {@link MAX_REDACT_DEPTH}. */
+const TRUNCATED = '[truncated]'
+
+/**
+ * The event filter a driver may push into SQL as an equality. A pattern with a
+ * wildcard must still be matched in code; so must one containing `.`, because
+ * {@link patternMatches} treats `.` and `:` as interchangeable separators and an
+ * equality would miss `a:b` for the pattern `a.b`.
+ */
+export function exactEventMatch(pattern: string | undefined): string | undefined {
+  if (pattern === undefined) return undefined
+  return /[*.]/.test(pattern) ? undefined : pattern
+}
+
+/**
+ * Rows a driver reads per round-trip when a wildcard pattern forces a scan.
+ * Bounds peak memory: a limited query no longer materialises the whole trail.
+ */
+export const AUDIT_SCAN_PAGE = 500
+
 /** Object keys whose values are masked before an entry is persisted. */
 const SENSITIVE_KEY = /pass(word|wd)?|secret|token|authorization|api[-_]?key|credential|cookie|session|otp|mfa/i
 
 /** Recursively masks sensitive fields so secrets/PII never reach the trail. */
 export function redactSensitive(value: unknown, depth = 0): unknown {
-  if (depth > 6 || value === null || typeof value !== 'object') return value
+  // Past the depth bound the subtree is dropped, NOT passed through: event
+  // payloads are arbitrary, and returning the raw value here let a secret nested
+  // deeper than the limit reach the trail in cleartext.
+  if (value === null || typeof value !== 'object') return value
+  if (depth > MAX_REDACT_DEPTH) return TRUNCATED
   if (Array.isArray(value)) return value.map((v) => redactSensitive(v, depth + 1))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
@@ -108,13 +134,14 @@ export function pseudonymize(value: string): string {
  * entries correlatable.
  */
 export function redactSensitiveAndPii(value: unknown, depth = 0): unknown {
-  if (depth > 6 || value === null) return value
+  if (value === null) return value
   // Bound the length before the regex: a real email is <= 254 chars (RFC 5321),
   // so only test plausibly-email-length strings — arbitrary logged values never
   // reach the regex, avoiding ReDoS on attacker-influenceable input.
   if (typeof value === 'string')
     return value.length <= 320 && EMAIL_VALUE.test(value) ? pseudonymize(value) : value
   if (typeof value !== 'object') return value
+  if (depth > MAX_REDACT_DEPTH) return TRUNCATED
   if (Array.isArray(value)) return value.map((v) => redactSensitiveAndPii(v, depth + 1))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {

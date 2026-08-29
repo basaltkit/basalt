@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/logger",
   "version": "1.2.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Structured logger on top of Pino: automatic enrichment with requestId/tenantId via AsyncLocalStorage and redaction of sensitive fields.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

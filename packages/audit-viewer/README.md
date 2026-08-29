@@ -65,21 +65,29 @@ auditViewerRoutes({ title: 'Audit — Acme', apiBase: '/admin' })
 
 ## API reference
 
-### `auditViewerPlugin({ bucketMs?, topN? })`
+### `auditViewerPlugin({ bucketMs?, topN?, maxScan? })`
 
-Registers the `AUDIT_VIEWER` token. `bucketMs` is the timeline bucket size (default 1 day); `topN` limits the per-event/actor tables (default 20).
+Registers the `AUDIT_VIEWER` token.
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `bucketMs` | `number` | `86_400_000` (1 day) | Timeline bucket size. |
+| `topN` | `number` | `20` | Rows returned by the per-event / per-actor breakdowns. |
+| `maxScan` | `number` | `10_000` | Upper bound on rows read from the store per call. |
+
+`maxScan` exists because the trail is unbounded and these routes forward client input: an unbounded read is an OOM vector. When a call hits the bound, the result carries `truncated: true` and `total` means "matches within the window", not a grand total.
 
 ### `class AuditViewer`
 
 | Method | Description |
 |---|---|
-| `page(query)` | `{ entries, total, limit, offset }`. |
-| `stats(query)` | `{ total, byEvent, byActor, bySource, timeline }`. |
+| `page(query)` | `{ entries, total, limit, offset, truncated }`. |
+| `stats(query)` | `{ total, truncated, byEvent, byActor, bySource, timeline }`. |
 | `get(id, tenantId?)` | A single entry, or `null`. |
 
 `ViewerQuery`: `event` (wildcard), `actorId`, `tenantId`, `source` (`hook`/`event`/`manual`), `since`, `until`, `limit`, `offset`. Without `tenantId`, it uses `ctx().tenant.id` (otherwise `AuditTenantRequiredError`).
 
-> Note: the extra filtering (source/until) and the aggregation happen in memory over the result of `Audit.trail`. For very large trails, use an `AuditStore` with rich database querying.
+> Note: the extra filtering (source/until) and the aggregation happen in memory over the result of `Audit.trail`, bounded by `maxScan`. `truncated: true` means the trail had more matches than the window — raise `maxScan`, narrow the query (`since`/`until`/`event`), or use an `AuditStore` with richer database querying.
 
 ## Content-Security-Policy
 

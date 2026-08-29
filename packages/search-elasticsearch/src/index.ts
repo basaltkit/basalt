@@ -114,13 +114,16 @@ export class ElasticsearchDriver implements SearchDriver {
     return `${this.prefix}${assertValidIndexName(name)}`
   }
 
-  /** Compound document id for the JSON body (`_id`). */
+  /**
+   * The document's `_id`: each segment percent-encoded, the `:` separator kept
+   * literal. ONE definition for both the bulk body and the URL path — they used to
+   * differ, so a document indexed singly and in bulk landed under two different ids
+   * (and `remove()` could not delete a bulk-indexed one) whenever a segment carried
+   * a URL-special character. Encoding the segments also removes the `:` ambiguity:
+   * tenant `a:b` + id `c` no longer collides with tenant `a` + id `b:c`. Plain
+   * UUID/slug ids are unaffected — `encodeURIComponent` leaves them untouched.
+   */
   private pk(tenantId: string, id: string): string {
-    return `${tenantId}:${id}`
-  }
-
-  /** Same compound id for a URL path — each part encoded, the `:` kept literal. */
-  private urlId(tenantId: string, id: string): string {
     return `${encodeURIComponent(tenantId)}:${encodeURIComponent(id)}`
   }
 
@@ -176,7 +179,7 @@ export class ElasticsearchDriver implements SearchDriver {
   }
 
   async index(indexName: string, document: SearchDocument): Promise<void> {
-    const id = this.urlId(document.tenantId, document.id)
+    const id = this.pk(document.tenantId, document.id)
     await this.request('PUT', `/${this.idx(indexName)}/_doc/${id}${this.refreshQuery()}`, document)
   }
 
@@ -192,7 +195,7 @@ export class ElasticsearchDriver implements SearchDriver {
   }
 
   async remove(indexName: string, tenantId: string, id: string): Promise<void> {
-    const docId = this.urlId(tenantId, id)
+    const docId = this.pk(tenantId, id)
     try {
       await this.request('DELETE', `/${this.idx(indexName)}/_doc/${docId}${this.refreshQuery()}`)
     } catch (error) {

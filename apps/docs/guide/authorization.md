@@ -95,13 +95,20 @@ When you pass a resource, the Gate splits the permission into
 its check decide. Policies can be registered up front via the `policies` option
 or later with `gate.register(...)`; checks may be async.
 
-::: warning No policy ⇒ the check falls through to RBAC
-If no policy is registered for the resource (or the policy has no check for
-that action), passing a resource does **not** fail the check — the Gate falls
-back to the granted permission strings, exactly as if no resource were passed.
-A user granted `project:update` would pass even for a project they don't own.
-If ownership must be enforced, make sure the policy is registered — and test
-the deny case.
+::: danger No policy ⇒ the check fails closed
+Passing a resource is an explicit statement that an ABAC rule should decide, so
+if no policy is registered for that resource — or the policy has no check for
+that action — the Gate throws `MissingPolicyError` (`PERMISSION_POLICY_MISSING`)
+instead of answering from RBAC. It used to fall through silently, which meant a
+typo (`project:updat`, or `projects:update` for a policy registered as
+`project`) skipped the ownership rule entirely and a broad `project:*` grant
+allowed the request.
+
+The error names the permission and lists the registered policies. Fix it by
+registering the check, correcting the `resource:action` spelling, or dropping
+the resource argument if plain RBAC is what you meant. To restore the historic
+fall-through — for apps that pass resources opportunistically — set
+`onMissingPolicy: 'rbac'`.
 :::
 
 ## Protect routes
@@ -209,6 +216,7 @@ a delegation ignores the delegator's own incoming delegations).
 | `temporaryGrants` | `TemporaryGrantStore` | off | Enables `grantTemporarily()` |
 | `delegations` | `DelegationStore` | off | Enables `delegate()` |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
+| `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`: `'error'` throws `MissingPolicyError` (fail closed), `'rbac'` falls back to the granted permission strings |
 
 The plugin registers the Gate under the `GATE` token, adds the `meta.can` guard,
 and claims the `can` key in the adapters' boot-time guarded-meta check.
@@ -220,14 +228,20 @@ and claims the `can` key in the adapters' boot-time guarded-meta check.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | The check failed — nothing grants the permission in the current or global scope |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route was hit with no authenticated user in context |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` has an unenforceable shape (`true`, a number, an empty/mixed array) — fails closed on every request |
+| `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | `can`/`authorize` got a resource but no policy check matches `resource:action` — the ABAC rule you intended would be skipped |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` (or `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claims that key |
 
 - **`PERMISSION_DENIED` for a user who "has the role"** — check the *scope*:
   a role assigned in tenant `acme` doesn't apply in `globex` or globally.
   Assign in `GLOBAL_SCOPE` for cross-tenant staff.
+- **`PERMISSION_POLICY_MISSING` after an upgrade** — a `can(user, perm, resource)`
+  call was already silently answering from RBAC. Check the spelling of both
+  halves of `resource:action` against `definePolicy`, register the missing
+  check, or — if that call really is plain RBAC — stop passing the resource.
+  `onMissingPolicy: 'rbac'` restores the old behaviour wholesale.
 - **A policy check seems ignored** — the policy only runs when a *resource* is
-  passed to `can`/`authorize` and a policy is registered for the resource name;
-  otherwise the check falls through to RBAC (see the warning above).
+  passed to `can`/`authorize`; `can(user, 'project:update')` with no resource is
+  pure RBAC by design and never consults a policy.
 - **`HTTP_UNGUARDED_ROUTE_META` at boot** — register `permissionsPlugin`, or,
   if authorization genuinely happens at an outer edge, opt out explicitly with
   the adapter option `allowUnguardedMeta: true` (or `['can']`). See the

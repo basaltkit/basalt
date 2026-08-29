@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Container, BasaltError, runWithContext, type RequestContext } from '@basaltkit/core'
 import type { ZodType } from 'zod'
-import { RequestValidationError, type ValidationIssue } from './errors.js'
+import { RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 
@@ -105,6 +105,13 @@ export async function runRoute(
 
   return runWithContext(context, async () => {
     const scoped = context.container
+    // Fail closed: guards that cannot run must never be silently skipped.
+    if (!scoped && (pipeline.guards?.length ?? 0) > 0) {
+      throw new GuardsWithoutContainerError(
+        `${definition.method} ${definition.url}`,
+        pipeline.guards?.length ?? 0,
+      )
+    }
     if (scoped) {
       for (const enrich of pipeline.enrichers ?? []) await enrich({ request, context, container: scoped })
       for (const guard of pipeline.guards ?? []) await guard({ route: definition, request, context, container: scoped })

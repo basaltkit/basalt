@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/dashboard",
   "version": "1.4.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Headless admin dashboard model for Basalt: billing metrics (MRR/ARR/churn), queue/audit summaries and a section registry binding admin resources to the SDK.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

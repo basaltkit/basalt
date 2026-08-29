@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/subscriptions",
   "version": "2.7.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Billing for Basalt, Cashier/Soulbscription-style: declarative plans, subscriptions with trials, feature flags, usage limits, gateway drivers and idempotent webhooks.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
