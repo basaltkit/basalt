@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createApp, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
-import { LATEST_PROTOCOL_VERSION, McpServer, MCP, mcpPlugin, RPC_ERRORS } from '../src/index.js'
+import { LATEST_PROTOCOL_VERSION, McpServer, MCP, mcpPlugin, mcpRoutes, RPC_ERRORS } from '../src/index.js'
 
 const routes: BasaltRoute[] = [
   route({
@@ -151,5 +151,17 @@ describe('mcpPlugin', () => {
     const names = server.listTools().map((t) => t.name).sort()
     expect(names).toEqual(['get_hello', 'get_item'])
     await app.shutdown()
+  })
+})
+
+describe('mcpRoutes rate-limit meta (A-2)', () => {
+  it('stamps meta.rateLimit on the /mcp route so securityPlugin gives it a dedicated budget', () => {
+    const [r] = mcpRoutes({ rateLimit: { limit: 5, windowMs: 60_000 } })
+    expect(r!.meta).toMatchObject({ rateLimit: { limit: 5, windowMs: 60_000 } })
+  })
+
+  it('emits no rateLimit meta by default', () => {
+    const [r] = mcpRoutes()
+    expect(r!.meta?.['rateLimit']).toBeUndefined()
   })
 })

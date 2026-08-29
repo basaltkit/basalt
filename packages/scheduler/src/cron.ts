@@ -14,6 +14,44 @@ export interface CronFields {
   dayOfWeek: string
 }
 
+const FIELD_BOUNDS: [name: string, min: number, max: number][] = [
+  ['minute', 0, 59],
+  ['hour', 0, 23],
+  ['day-of-month', 1, 31],
+  ['month', 1, 12],
+  ['day-of-week', 0, 6],
+]
+
+/**
+ * Validates one cron field against the syntax {@link fieldMatches} actually
+ * supports: asterisk, asterisk-slash-n steps, single values, `a-b` ranges and comma lists.
+ * Anything else (names like MON, out-of-range values, `5-1`) previously became
+ * NaN comparisons — a job that silently NEVER fires. Fail at parse time instead.
+ */
+function assertField(expression: string, field: string, name: string, min: number, max: number): void {
+  const invalid = (detail: string): never => {
+    throw new CronParseError(expression, `${name} field "${field}": ${detail}`)
+  }
+  if (field === '*') return
+  for (const part of field.split(',')) {
+    const step = /^\*\/(\d+)$/.exec(part)
+    if (step) {
+      if (Number(step[1]) < 1) invalid('step must be >= 1')
+      continue
+    }
+    const range = /^(\d+)-(\d+)$/.exec(part)
+    if (range) {
+      const [from, to] = [Number(range[1]), Number(range[2])]
+      if (from > to) invalid(`range ${from}-${to} is reversed`)
+      if (from < min || to > max) invalid(`range ${from}-${to} outside ${min}-${max}`)
+      continue
+    }
+    if (!/^\d+$/.test(part)) invalid(`"${part}" is not supported (use *, */n, n, a-b or comma lists; names like MON are not)`)
+    const value = Number(part)
+    if (value < min || value > max) invalid(`${value} outside ${min}-${max}`)
+  }
+}
+
 export function parseCron(expression: string): CronFields {
   const parts = expression.trim().split(/\s+/)
   if (parts.length !== 5) {
@@ -26,6 +64,10 @@ export function parseCron(expression: string): CronFields {
     string,
     string,
   ]
+  parts.forEach((field, i) => {
+    const [name, min, max] = FIELD_BOUNDS[i]!
+    assertField(expression, field, name, min, max)
+  })
   return { minute, hour, dayOfMonth, month, dayOfWeek }
 }
 

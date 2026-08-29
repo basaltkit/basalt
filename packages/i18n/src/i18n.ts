@@ -37,15 +37,20 @@ const contextLocale = (): string | undefined => {
 export class I18n<C extends Catalog> {
   constructor(private readonly options: I18nOptions<C>) {}
 
-  /** The locale for the current request (raw — used for formatting). */
+  /** The locale for the current request, validated — an invalid value falls back to `defaultLocale`. */
   locale(): string {
     const resolve = this.options.resolveLocale ?? contextLocale
-    return resolve() ?? this.options.defaultLocale
+    return this.intlLocale(resolve() ?? this.options.defaultLocale)
   }
 
   /** A translator pinned to an explicit locale. */
-  in(locale: string): Translator<C> {
-    const catalogLocale = this.catalogLocale(locale)
+  in(requested: string): Translator<C> {
+    // The locale usually comes from a user/tenant record (client-controlled).
+    // An invalid BCP-47 tag (`en_US`, `!!`) makes every Intl constructor throw
+    // RangeError — a self-inflicted 500 on any page that formats. Fail soft to
+    // the default locale instead.
+    const locale = this.intlLocale(requested)
+    const catalogLocale = this.catalogLocale(requested)
     return {
       locale,
       t: (key, params = {}) => {
@@ -79,11 +84,22 @@ export class I18n<C extends Catalog> {
     return this.in(this.locale()).list(items, options)
   }
 
+  /** `locale` when it is a valid Intl (BCP-47) tag, otherwise `defaultLocale`. */
+  private intlLocale(locale: string): string {
+    try {
+      return Intl.getCanonicalLocales(locale).length > 0 ? locale : this.options.defaultLocale
+    } catch {
+      return this.options.defaultLocale
+    }
+  }
+
   /** Negotiates a requested locale down to one we have a catalog for. */
   private catalogLocale(locale: string): string {
-    if (this.options.locales[locale]) return locale
+    // Object.hasOwn: a locale of `__proto__`/`constructor` must not resolve
+    // Object.prototype members as if they were catalogs.
+    if (Object.hasOwn(this.options.locales, locale)) return locale
     const language = locale.split('-')[0]!
-    if (this.options.locales[language]) return language
+    if (Object.hasOwn(this.options.locales, language)) return language
     return this.options.defaultLocale
   }
 }

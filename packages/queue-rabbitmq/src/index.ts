@@ -18,6 +18,12 @@ export interface AmqpChannel {
   ): Promise<unknown>
   ack(message: AmqpMessage): void
   prefetch(count: number): Promise<unknown> | void
+  /**
+   * Confirm channels only (amqplib `createConfirmChannel`): resolves when the
+   * broker has confirmed every outstanding publish. The driver awaits this
+   * before acking, closing the publish-lost/ack-done job-loss window.
+   */
+  waitForConfirms?(): Promise<void>
   close(): Promise<void>
 }
 
@@ -30,6 +36,8 @@ export interface AmqpConnection {
   /** amqplib connections are EventEmitters; optional so test fakes stay tiny. */
   on?(event: 'error', listener: (error: unknown) => void): void
   createChannel(): Promise<AmqpChannel>
+  /** Preferred when present: publisher-confirm channel (amqplib supports it). */
+  createConfirmChannel?(): Promise<AmqpChannel>
   close(): Promise<void>
 }
 
@@ -67,6 +75,12 @@ export interface RabbitmqDriverOptions {
   onError?: (error: unknown, info: { source: 'connection' | 'channel' }) => void
   /** Max priority level for priority queues (`x-max-priority`). Default 10. */
   maxPriority?: number
+  /**
+   * On `close()`, how long to wait for in-flight job handlers to finish before
+   * tearing the channel down anyway. Default 10_000 ms. Unfinished jobs stay
+   * unacked, so the broker redelivers them.
+   */
+  drainTimeoutMs?: number
   /** Injectable connector — defaults to amqplib. Tests pass a fake. */
   connect?: AmqpConnect
 }
@@ -96,10 +110,20 @@ export class RabbitmqQueueDriver implements QueueDriver {
   private readonly asserted = new Set<string>()
   private readonly maxPriority: number
   private readonly connect: AmqpConnect
+  private readonly onError: (error: unknown, info: { source: 'connection' | 'channel' }) => void
+  private readonly drainTimeoutMs: number
+  /** In-flight message handlers — close() drains these before tearing down. */
+  private readonly inflight = new Set<Promise<void>>()
+  private closing = false
 
   constructor(private readonly options: RabbitmqDriverOptions) {
     this.maxPriority = options.maxPriority ?? 10
     this.connect = options.connect ?? defaultConnect
+    this.drainTimeoutMs = options.drainTimeoutMs ?? 10_000
+    this.onError =
+      options.onError ??
+      ((error: unknown, info: { source: 'connection' | 'channel' }) =>
+        console.error(`[basalt:queue] rabbitmq ${info.source} error:`, error))
   }
 
   setExecutor(executor: JobExecutor): void {
@@ -130,6 +154,9 @@ export class RabbitmqQueueDriver implements QueueDriver {
     } else {
       channel.sendToQueue(queue, content, publish)
     }
+    // On a confirm channel, only report the job as dispatched once the broker
+    // has taken responsibility for the message.
+    await channel.waitForConfirms?.()
   }
 
   startWorker(queue: string, options: { concurrency?: number } = {}): void {
@@ -138,12 +165,31 @@ export class RabbitmqQueueDriver implements QueueDriver {
       await this.ensureTopology(channel, queue)
       await channel.prefetch(options.concurrency ?? 1)
       await channel.consume(queue, (message) => {
-        if (message) void this.handle(channel, queue, message)
+        if (!message) return
+        // handle() never rejects; track it so close() can drain in-flight work.
+        const pending = this.handle(channel, queue, message).finally(() => this.inflight.delete(pending))
+        this.inflight.add(pending)
       })
-    })()
+    })().catch((error) => {
+      // A broker-connect/consume failure at boot must be visible — otherwise the
+      // app reports healthy with zero workers (and the rejection would be fatal).
+      this.onError(error, { source: 'connection' })
+    })
   }
 
   async close(): Promise<void> {
+    this.closing = true
+    // Drain: let in-flight handlers finish (bounded), so their acks land on a
+    // live channel. Anything unfinished stays unacked and gets redelivered.
+    if (this.inflight.size > 0) {
+      let timer: NodeJS.Timeout | undefined
+      const deadline = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, this.drainTimeoutMs)
+        timer.unref?.()
+      })
+      await Promise.race([Promise.allSettled([...this.inflight]).then(() => undefined), deadline])
+      if (timer) clearTimeout(timer)
+    }
     const channel = await this.channelPromise?.catch(() => undefined)
     await channel?.close()
     await this.connection?.close()
@@ -152,28 +198,43 @@ export class RabbitmqQueueDriver implements QueueDriver {
   // --- internals -----------------------------------------------------------
 
   private async handle(channel: AmqpChannel, queue: string, message: AmqpMessage): Promise<void> {
+    // Shutting down: don't start new work and don't ack — the broker holds the
+    // durable copy and redelivers it once this consumer goes away.
+    if (this.closing) return
     const headers = message.properties.headers ?? {}
     const jobName = String(headers[HEADER.job] ?? '')
+    let failed = false
     try {
       await this.executor?.(jobName, decode(message.content))
-      channel.ack(message)
     } catch {
-      const attempt = Number(headers[HEADER.attempt] ?? 1)
-      // Clamp the max-attempts read from the (untrusted) message to a hard
-      // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
-      const attempts = Math.min(Number(headers[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
-      if (attempt < attempts) {
-        // Re-enqueue via the delay queue with the next attempt and a backoff TTL.
-        channel.sendToQueue(this.delayQueue(queue), message.content, {
-          persistent: true,
-          headers: { ...headers, [HEADER.attempt]: attempt + 1 },
-          expiration: String(this.backoffDelay(headers, attempt)),
-        })
-      } else {
-        channel.sendToQueue(this.deadQueue(queue), message.content, { persistent: true, headers })
+      failed = true
+    }
+    try {
+      if (failed) {
+        const attempt = Number(headers[HEADER.attempt] ?? 1)
+        // Clamp the max-attempts read from the (untrusted) message to a hard
+        // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
+        const attempts = Math.min(Number(headers[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
+        if (attempt < attempts) {
+          // Re-enqueue via the delay queue with the next attempt and a backoff TTL.
+          channel.sendToQueue(this.delayQueue(queue), message.content, {
+            persistent: true,
+            headers: { ...headers, [HEADER.attempt]: attempt + 1 },
+            expiration: String(this.backoffDelay(headers, attempt)),
+          })
+        } else {
+          channel.sendToQueue(this.deadQueue(queue), message.content, { persistent: true, headers })
+        }
+        // On a confirm channel, wait until the broker owns the re-routed copy —
+        // acking before the publish is confirmed is a silent job-loss window.
+        await channel.waitForConfirms?.()
       }
-      // Either way the message has been re-routed, so remove it from the queue.
       channel.ack(message)
+    } catch (error) {
+      // Publish unconfirmed or ack failed: the durable copy is still on the
+      // broker (nothing was acked), so redelivery keeps the job — surface the
+      // fault instead of throwing into the consume callback (fatal).
+      this.onError(error, { source: 'channel' })
     }
   }
 
@@ -205,15 +266,13 @@ export class RabbitmqQueueDriver implements QueueDriver {
   private async channel(): Promise<AmqpChannel> {
     if (!this.channelPromise) {
       this.channelPromise = (async () => {
-        const onError =
-          this.options.onError ??
-          ((error: unknown, info: { source: 'connection' | 'channel' }) =>
-            console.error(`[basalt:queue] rabbitmq ${info.source} error:`, error))
         this.connection = await this.connect(this.options.url)
         // Unlistened EventEmitter 'error' events are fatal in Node (Q-2).
-        this.connection.on?.('error', (error) => onError(error, { source: 'connection' }))
-        const channel = await this.connection.createChannel()
-        channel.on?.('error', (error) => onError(error, { source: 'channel' }))
+        this.connection.on?.('error', (error) => this.onError(error, { source: 'connection' }))
+        // Prefer a publisher-confirm channel: sendToQueue can then be awaited
+        // via waitForConfirms, so ack only happens after the broker took over.
+        const channel = await (this.connection.createConfirmChannel?.() ?? this.connection.createChannel())
+        channel.on?.('error', (error) => this.onError(error, { source: 'channel' }))
         return channel
       })()
     }

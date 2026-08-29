@@ -233,6 +233,13 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 
 **Automatic `dispatch` doesn't filter by tenant** — The tenant is read from the request context (`ctx().tenant.id`). Outside a request (e.g. in a job), there's no tenant in the context and the event also goes to global endpoints; in that case, dispatch manually with `webhooks.dispatch(event, data, tenantId)`.
 
+## Tenant scoping (anti-widening)
+
+With a tenant in the ambient request context, `register`, `list`, `unregister`
+and `dispatch` are forced to that tenant — a caller-supplied `tenantId` can
+never widen the scope. Explicit arguments / system-wide behavior apply only
+with no ambient tenant (jobs, CLI, single-tenant apps).
+
 ## How it connects to other modules
 
 - **@basaltkit/core** — the container (`WEBHOOKS` token), `definePlugin` and the request context from which `tenantId` comes during automatic dispatch.

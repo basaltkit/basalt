@@ -35,6 +35,11 @@ import { mailerPlugin } from '@basaltkit/mailer'
 app.use(mailerPlugin({ /* … */ })) // the mail channel wires itself when a mailer is present
 app.use(notificationsPlugin())      // the inApp channel is on by default
 
+// Without a `driver`, mail goes to the log driver (stdout). In production it
+// REDACTS message bodies — reset links and tokens must not end up retained by a
+// log aggregator (opt back in with `logBody: true`). A typo'd driver name now
+// fails loud instead of silently logging your outbound mail.
+
 await container.get(NOTIFIER).notify(InvoicePaid, recipient, { amount: 90, number: 'A-1' })
 // { sent: [{ channel: 'mail' }, { channel: 'inApp' }], skipped: [], failed: [] }
 ```

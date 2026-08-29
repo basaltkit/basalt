@@ -36,6 +36,11 @@ import { mailerPlugin } from '@basaltkit/mailer'
 app.use(mailerPlugin({ /* … */ })) // o canal mail liga-se sozinho quando há um mailer
 app.use(notificationsPlugin())      // o canal inApp está ligado por omissão
 
+// Sem `driver`, o mail vai para o driver log (stdout). Em produção o corpo da
+// mensagem é REDIGIDO — links de reset e tokens não devem ficar retidos num
+// agregador de logs (volta a ativar com `logBody: true`). Um nome de driver com
+// typo agora falha alto em vez de registar silenciosamente o teu email.
+
 await container.get(NOTIFIER).notify(InvoicePaid, recipient, { amount: 90, number: 'A-1' })
 // { sent: [{ channel: 'mail' }, { channel: 'inApp' }], skipped: [], failed: [] }
 ```

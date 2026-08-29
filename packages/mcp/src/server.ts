@@ -114,6 +114,15 @@ export function mcpPlugin(options: McpPluginOptions) {
 export interface McpRoutesOptions {
   /** Endpoint path. Default `/mcp`. */
   path?: string
+  /**
+   * Rate-limit budget for the `/mcp` endpoint, applied as the route's
+   * `meta.rateLimit` (enforced by `securityPlugin` in a dedicated bucket).
+   * Recommended for exposed deployments: tool calls are often heavier than
+   * plain endpoints, and note that a tool route's OWN `meta.rateLimit` is a
+   * property of its HTTP registration — it does NOT apply when the route is
+   * invoked as a tool through `/mcp`.
+   */
+  rateLimit?: { limit: number; windowMs: number }
 }
 
 /**
@@ -129,6 +138,7 @@ export function mcpRoutes(options: McpRoutesOptions = {}): BasaltRoute[] {
       method: 'POST',
       url: path,
       body: z.unknown(),
+      ...(options.rateLimit ? { meta: { rateLimit: options.rateLimit } } : {}),
       async handler({ request, reply }) {
         const server = (ctx().container as Container).get(MCP)
         const response = await server.handleMessage(request.body as JsonRpcRequest, {

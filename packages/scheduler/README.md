@@ -257,6 +257,15 @@ Exported for tooling and tests; you don't usually need them:
 
 - `SCHEDULER: Token<Scheduler>` — to get the Scheduler from the container: `app.container.get(SCHEDULER)`.
 
+## Multiple replicas — `.onOneServer()`
+
+`withoutOverlapping()` guards one process only. On N replicas, mark an entry
+`.onOneServer()` and pass `schedulerPlugin({ lock })` an atomic cross-replica
+lock (`ScheduleLock`: `acquire(key, ttlMs)` — e.g. Redis `SET key v PX ttl NX`).
+Exactly one replica runs the entry per tick; using `.onOneServer()` without a
+`lock` fails loud at boot. Cron expressions are validated at definition time
+(`CronParseError` on unsupported syntax like `MON` or out-of-range values).
+
 ## Common errors and solutions (FAQ)
 
 **My `daily().at('03:00')` task runs at the wrong time.**

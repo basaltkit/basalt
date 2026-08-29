@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createApp } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, apiKeyRoutes, apiKeysPlugin, authPlugin, authRoutes } from '@basaltkit/auth'
-import { apiKeysPageHtml, apiKeysUiRoutes } from '../src/index.js'
+import { apiKeysPageCsp, apiKeysPageHtml, apiKeysUiRoutes } from '../src/index.js'
 
 describe('apiKeysPageHtml', () => {
   it('renders a self-contained page that calls the API-key routes', () => {
@@ -60,5 +60,40 @@ describe('apiKeysUiRoutes', () => {
   it('honours a custom path', () => {
     const routes = apiKeysUiRoutes({ path: '/settings/keys' })
     expect(routes[0]).toMatchObject({ method: 'GET', url: '/settings/keys' })
+  })
+})
+
+describe('escaping + route-scoped CSP (S-5)', () => {
+  it('escapes the title in text/attribute positions', () => {
+    const html = apiKeysPageHtml({ title: '</title><script>alert(1)</script>' })
+    expect(html).not.toContain('<script>alert(1)')
+  })
+
+  it('embedded JSON cannot terminate the inline script block', () => {
+    const html = apiKeysPageHtml({ apiBase: '</script><svg onload=alert(1)>' })
+    expect(html.match(/<\/script>/g)).toHaveLength(1) // only the genuine closer
+  })
+
+  it('the client-side esc helper also escapes quotes (no attribute breakout)', () => {
+    expect(apiKeysPageHtml()).toContain(`[&<>"']`)
+  })
+
+  it('exports a CSP whose sha256 matches the inline script exactly', async () => {
+    const { createHash } = await import('node:crypto')
+    const html = apiKeysPageHtml({ apiBase: '/account' })
+    const csp = apiKeysPageCsp({ apiBase: '/account' })
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1]!
+    expect(csp).toContain(`'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`)
+    expect(csp).toContain("default-src 'none'")
+  })
+
+  it('serves the page with the route-scoped CSP header by default', async () => {
+    const { app, server } = await boot()
+    await server.inject({ method: 'POST', url: '/auth/register', payload: { email: 'c@d.test', password: 'password123' } })
+    const token = (await server.inject({ method: 'POST', url: '/auth/login', payload: { email: 'c@d.test', password: 'password123' } })).json().accessToken
+    const page = await server.inject({ method: 'GET', url: '/apikeys/ui', headers: { authorization: `Bearer ${token}` } })
+    expect(page.statusCode).toBe(200)
+    expect(String(page.headers['content-security-policy'])).toContain('sha256-')
+    await app.shutdown()
   })
 })
