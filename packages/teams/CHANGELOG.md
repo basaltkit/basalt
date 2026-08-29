@@ -1,5 +1,13 @@
 # @basaltkit/teams
 
+## 1.4.1
+
+### Patch Changes
+
+- a76d591: `teamsPlugin` claims `'teamRole'` in the `http:guarded-meta` bucket so the adapters' new boot check knows `meta.teamRole` is enforced. No API or behavior change in this package itself.
+- Updated dependencies [a76d591]
+  - @basaltkit/http@1.12.0
+
 ## 1.4.0
 
 ### Minor Changes
