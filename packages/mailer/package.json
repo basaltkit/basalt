@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/mailer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Mail layer for Basalt: typed declarative mails with Zod, SMTP/log/memory drivers, tenant-aware sender and queue integration.",
   "license": "MIT",
   "type": "module",
