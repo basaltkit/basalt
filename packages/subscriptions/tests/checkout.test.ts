@@ -98,7 +98,8 @@ describe('Checkout & Portal (HTTP)', () => {
         fakeTenancyPlugin,
         subscriptionsPlugin({ plans, gateway }),
         fastifyPlugin({
-          routes: billingRoutes({ successUrl: 'https://app.test/ok', cancelUrl: 'https://app.test/no' }),
+          // auth: false — this test exercises the checkout mechanics; the auth default has its own suite (billing-auth.test.ts).
+          routes: billingRoutes({ successUrl: 'https://app.test/ok', cancelUrl: 'https://app.test/no', auth: false }),
         }),
       ],
     }).boot()

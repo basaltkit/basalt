@@ -94,6 +94,7 @@ The worker's concurrency is passed as `partitionsConsumedConcurrently` — actua
 | `retrySuffix` | `string` | `'.retry'` | Suffix for the retry topic. |
 | `deadSuffix` | `string` | `'.dead'` | Suffix for the dead-letter topic. |
 | `client` | `KafkaClient` | kafkajs | Injectable client — used in tests without a broker. |
+| `onError` | `(error, { source, queue? }) => void` | contextual `console.error` | Infrastructure-fault hook (same pattern as rabbitmq/sqs): a worker's connect/subscribe/run failing at boot (`source: 'consumer'` — previously an unhandled, process-fatal rejection and an invisible zero-worker app), or a retry/dead-letter re-publish failing (`source: 'producer'` — reported, then rethrown so the offset is not committed and Kafka redelivers; a producer outage cannot silently lose a failing job). |
 
 Implements the `QueueDriver` contract from `@basaltkit/queue`.
 

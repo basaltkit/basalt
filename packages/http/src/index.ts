@@ -73,3 +73,9 @@ export {
 } from './sse.js'
 
 export { escapeHtml, scriptJson, pageCsp, cspHash, type PageCspOptions } from './html.js'
+export {
+  GUARDED_META_BUCKET,
+  GUARDED_META_KEYS,
+  UnguardedRouteMetaError,
+  assertRoutesGuarded,
+} from './guarded-meta.js'

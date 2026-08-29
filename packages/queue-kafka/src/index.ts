@@ -55,6 +55,14 @@ export interface KafkaDriverOptions {
   deadSuffix?: string
   /** Injectable client — defaults to kafkajs. Tests pass a fake. */
   client?: KafkaClient
+  /**
+   * Called on infrastructure faults the driver cannot recover in line — a
+   * worker's connect/subscribe/run failing at boot (otherwise the app reports
+   * healthy with ZERO workers and the rejection is process-fatal), or a
+   * retry/dead-letter re-publish failing inside the consume callback. Same
+   * pattern as the rabbitmq/sqs drivers. Default: console.error with context.
+   */
+  onError?: (error: unknown, info: { source: 'consumer' | 'producer'; queue?: string }) => void
 }
 
 const defaultClient = async (options: KafkaDriverOptions): Promise<KafkaClient> => {
@@ -97,10 +105,19 @@ export class KafkaQueueDriver implements QueueDriver {
   private readonly retrySuffix: string
   private readonly deadSuffix: string
 
+  private readonly onError: (error: unknown, info: { source: 'consumer' | 'producer'; queue?: string }) => void
+
   constructor(private readonly options: KafkaDriverOptions) {
     this.groupId = options.groupId ?? 'basalt-queue'
     this.retrySuffix = options.retrySuffix ?? '.retry'
     this.deadSuffix = options.deadSuffix ?? '.dead'
+    this.onError =
+      options.onError ??
+      ((error, info) =>
+        console.error(
+          `[basalt:queue] kafka ${info.source} error${info.queue ? ` (queue "${info.queue}")` : ''}:`,
+          error,
+        ))
   }
 
   setExecutor(executor: JobExecutor): void {
@@ -128,7 +145,7 @@ export class KafkaQueueDriver implements QueueDriver {
   }
 
   startWorker(queue: string, options: { concurrency?: number } = {}): void {
-    void (async () => {
+    ;(async () => {
       const consumer = (await this.client()).consumer({ groupId: this.groupId })
       this.consumers.push(consumer)
       await consumer.connect()
@@ -138,7 +155,12 @@ export class KafkaQueueDriver implements QueueDriver {
         eachMessage: ({ message }) => this.handle(queue, message),
         ...(options.concurrency !== undefined ? { partitionsConsumedConcurrently: options.concurrency } : {}),
       })
-    })()
+    })().catch((error) => {
+      // A broker-connect/subscribe failure at boot must be VISIBLE — otherwise
+      // the app reports healthy with zero workers, and the floating rejection
+      // would be process-fatal by Node's default.
+      this.onError(error, { source: 'consumer', queue })
+    })
   }
 
   async close(): Promise<void> {
@@ -162,14 +184,24 @@ export class KafkaQueueDriver implements QueueDriver {
       // Clamp the max-attempts read from the (untrusted) message to a hard
       // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
       const attempts = Math.min(Number(headers[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
-      const producer = await this.producer()
-      if (attempt < attempts) {
-        await producer.send({
-          topic: this.retryTopic(queue),
-          messages: [{ value, headers: { ...headers, [HEADER.attempt]: String(attempt + 1) } }],
-        })
-      } else {
-        await producer.send({ topic: this.deadTopic(queue), messages: [{ value, headers }] })
+      try {
+        const producer = await this.producer()
+        if (attempt < attempts) {
+          await producer.send({
+            topic: this.retryTopic(queue),
+            messages: [{ value, headers: { ...headers, [HEADER.attempt]: String(attempt + 1) } }],
+          })
+        } else {
+          await producer.send({ topic: this.deadTopic(queue), messages: [{ value, headers }] })
+        }
+      } catch (publishError) {
+        // The failed job could not be re-routed. Surface the fault, then
+        // RETHROW so eachMessage rejects and the offset is NOT committed —
+        // kafkajs redelivers the message (at-least-once) instead of the job
+        // silently vanishing on a producer outage. (Rabbitmq keeps the message
+        // unacked for the same reason; Kafka's equivalent is not committing.)
+        this.onError(publishError, { source: 'producer', queue })
+        throw publishError
       }
     }
     // Offsets auto-commit after eachMessage resolves — a re-routed failure is

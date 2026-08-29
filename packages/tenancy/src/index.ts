@@ -140,6 +140,10 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
     register({ container, hooks }) {
       container.singleton(TENANCY, () => new Tenancy(options.source, options.resolvers, hooks))
       registerTenantCommands(container, options)
+      // Marker other plugins read to adopt tenant-safe defaults (e.g.
+      // @basaltkit/cache fails closed on a missing tenant scope when this app
+      // is multi-tenant). String-keyed metadata — no package coupling.
+      ensureMetadata(container).add('tenancy:active', true)
 
       // Request enricher consumed by the HTTP adapter: resolves the tenant,
       // attaches it to the context and fires the switch hook.

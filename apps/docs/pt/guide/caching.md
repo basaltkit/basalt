@@ -28,6 +28,17 @@ Cada chave é prefixada com o tenant de `ctx().tenant`, por isso os tenants nunc
 as entradas uns dos outros. `cache.flush()` limpa apenas as chaves deste tenant —
 nunca faz um `FLUSHALL`.
 
+::: warning Fail-closed fora do contexto de tenant (apps multi-tenant)
+Quando o `tenancyPlugin` está registado, uma operação de cache **sem scope de
+tenant resolúvel** — um job em background ou uma tarefa de boot fora do contexto
+do pedido — lança `MissingCacheScopeError` em vez de ler e escrever
+silenciosamente num namespace partilhado por todos os tenants. Apps
+single-tenant (sem plugin de tenancy) não são afetadas. Para correr um job para
+um tenant específico, envolve-o em `runWithContext({ tenant })`; se a partilha
+entre tenants for mesmo intencional, volta a optar com
+`cachePlugin({ onMissingScope: 'global' })`.
+:::
+
 ## get / put
 
 ```ts
@@ -128,10 +139,14 @@ primeiro hit e reabastece as camadas mais rápidas; escritas e invalidações es
 por todas as camadas. Não tem lacunas de capacidade — o que quer que as camadas
 suportem (tags, prefix flush), o driver tiered suporta por delegação.
 
-::: tip Invalidação entre instâncias
-Uma invalidação local só limpa o near cache **deste** nó. Para remover o near cache
-em todo o lado, dispara a invalidação a partir de um evento partilhado, ou mantém o
-`backfillTtlMs` curto para limitar a desatualização.
+::: tip A desatualização entre instâncias é limitada por `backfillTtlMs`
+Não há um bus de invalidação entre instâncias — em vez disso, **cada escrita numa
+camada near é limitada a `backfillTtlMs`** (tanto os backfills de leitura como os
+`set()` diretos; a última camada, partilhada, mantém o TTL completo). Depois de
+outra réplica atualizar ou apagar uma chave, nenhuma instância serve a sua cópia
+local por mais tempo do que este limite. Mantém-no curto para dados que mudam
+frequentemente; `backfillTtlMs: null` remove o limite por completo e só é seguro
+com uma única réplica.
 :::
 
 ## Escrever um driver

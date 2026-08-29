@@ -43,6 +43,9 @@ export function teamsPlugin(options: TeamsPluginOptions = {}) {
         }
       }
       metadata.add('http:guards', guard)
+      // Claim `meta.teamRole` for the adapters' boot check (routes declaring
+      // it without this plugin fail loud at boot instead of serving unchecked).
+      metadata.add('http:guarded-meta', 'teamRole')
     },
   })
 }

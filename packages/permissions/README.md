@@ -256,7 +256,7 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 
 ### Route guard
 
-`permissionsPlugin` registers a guard: any route with `meta: { can: 'some:permission' }` requires a `ctx().user` (otherwise 401) with that permission (otherwise 403). The guard only accepts a single string in `meta.can`.
+`permissionsPlugin` registers a guard: any route with `meta: { can: 'some:permission' }` requires a `ctx().user` (otherwise 401) with that permission (otherwise 403). `meta.can` accepts a single permission string or an array — the caller must hold **all** of them. Any other shape (`can: true`, an empty/mixed array) throws `InvalidCanMetaError` (`PERMISSION_META_INVALID`, 500) on every request: an unenforceable declaration fails closed, never open. The plugin also claims `'can'` in the `http:guarded-meta` bucket, so declaring `meta.can` without registering `permissionsPlugin` fails loud at boot (see `@basaltkit/http`).
 
 ## Common errors and solutions (FAQ)
 

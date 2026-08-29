@@ -60,6 +60,19 @@ route({
 })
 ```
 
+`meta.can` accepts a single permission string or an **array — the caller must
+hold all of them**:
+
+```ts
+meta: { can: ['reports:read', 'reports:export'] } // 403 unless the user has BOTH
+```
+
+Any other shape (`can: true`, a number, an empty or mixed array) is
+unenforceable and **fails closed**: the guard throws `InvalidCanMetaError`
+(`PERMISSION_META_INVALID`, HTTP 500) on every request instead of silently
+skipping the check. And declaring `meta.can` without registering
+`permissionsPlugin` fails at **boot** — see the adapters guide.
+
 ## Tenant scoping
 
 Grants are **per tenant** by default: `projects:*` granted in `acme` doesn't apply in

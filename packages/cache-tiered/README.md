@@ -43,7 +43,7 @@ Everything else (`cache.remember`, tags, `flush`) works the same — `TieredCach
 - **`delete` / `flushPrefix` / `flushTags`** — fan out to all layers.
 - **No gaps** — whatever your layers support (tags, flush by prefix), this driver supports, by delegation.
 
-> Cross-instance consistency: local invalidations only clear the L1 of **this** instance. To invalidate L1 across all nodes, trigger the invalidation from a shared event (or use a short `backfillTtlMs` to limit the window of stale data).
+> Cross-instance consistency: there is no invalidation bus — instead, every write to a near layer (read backfills **and** direct `set()`s) is clamped to `backfillTtlMs`, while the last (shared) layer keeps the full TTL. After another instance updates or deletes a key, no node serves its local copy for longer than that bound. Keep it short for hot-changing data; `backfillTtlMs: null` removes the bound and is only safe single-replica.
 
 ## Options
 

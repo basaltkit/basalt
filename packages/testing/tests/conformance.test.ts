@@ -75,7 +75,9 @@ const guard: RouteGuard = ({ route: definition, request }) => {
 const guardPlugin = definePlugin({
   name: 'test:guard',
   register({ container }) {
-    ensureMetadata(container).add('http:guards', guard)
+    const metadata = ensureMetadata(container)
+    metadata.add('http:guards', guard)
+    metadata.add('http:guarded-meta', 'auth') // this guard enforces meta.auth — claim it for the boot check
   },
 })
 

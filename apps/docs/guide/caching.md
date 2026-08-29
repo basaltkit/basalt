@@ -28,6 +28,16 @@ Every key is prefixed with the tenant from `ctx().tenant`, so tenants never see
 each other's entries. `cache.flush()` clears only this tenant's keys — it never
 does a `FLUSHALL`.
 
+::: warning Fail-closed outside tenant context (multi-tenant apps)
+When `tenancyPlugin` is registered, a cache operation with **no resolvable
+tenant scope** — a background job or boot task running outside request context —
+throws `MissingCacheScopeError` instead of silently reading and writing one
+namespace shared across all tenants. Single-tenant apps (no tenancy plugin) are
+unaffected. To run a job for a specific tenant, wrap it in
+`runWithContext({ tenant })`; if cross-tenant sharing is genuinely intended,
+opt back in with `cachePlugin({ onMissingScope: 'global' })`.
+:::
+
 ## get / put
 
 ```ts
@@ -126,10 +136,13 @@ backfills the faster layers; writes and invalidations fan out to all layers. It
 has no capability gaps — whatever the layers support (tags, prefix flush), the
 tiered driver supports by delegation.
 
-::: tip Cross-instance invalidation
-A local invalidation only clears **this** node's near cache. To drop the near
-cache everywhere, trigger invalidation from a shared event, or keep
-`backfillTtlMs` short to bound staleness.
+::: tip Cross-instance staleness is bounded by `backfillTtlMs`
+There is no invalidation bus between instances — instead, **every write to a
+near layer is clamped to `backfillTtlMs`** (both read backfills and direct
+`set()`s; the last, shared layer keeps the full TTL). After another replica
+updates or deletes a key, no instance serves its local copy for longer than
+this bound. Keep it short for hot-changing data; `backfillTtlMs: null` removes
+the bound entirely and is only safe single-replica.
 :::
 
 ## Writing a driver

@@ -19,6 +19,7 @@ const testPlugin = definePlugin({
     const metadata = ensureMetadata(container)
     metadata.add('http:enrichers', enricher)
     metadata.add('http:guards', guard)
+    metadata.add('http:guarded-meta', 'auth') // this guard enforces meta.auth — claim it for the boot check
   },
 })
 
@@ -97,7 +98,7 @@ describe('honoPlugin', () => {
 })
 
 describe('body limit (HTTP HIGH-2)', () => {
-  const mk = (bodyLimit: number) => createApp({ plugins: [honoPlugin({ routes, bodyLimit })] }).boot()
+  const mk = (bodyLimit: number) => createApp({ plugins: [testPlugin, honoPlugin({ routes, bodyLimit })] }).boot()
 
   it('rejects a body whose Content-Length exceeds the limit with 413', async () => {
     const small = await mk(16)

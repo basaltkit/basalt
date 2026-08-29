@@ -91,6 +91,12 @@ Routes are typed from their Zod schemas and protected declaratively through
 (`meta: { auth: true }` demands a user, `meta: { can: '…' }` demands a
 permission). A guard rejects by throwing — you never write that check by hand.
 
+Declaring security meta without the plugin that enforces it fails **at boot**
+(`UnguardedRouteMetaError`) instead of silently serving the route open. When
+authentication genuinely happens at an outer edge, opt out per adapter with
+`fastifyPlugin({ routes, allowUnguardedMeta: true })` (Express and Hono take
+the same option; pass `['auth']` to waive a single key).
+
 `src/routes.ts`:
 
 ```ts

@@ -211,6 +211,7 @@ const cacheB = new Cache(new RedisCacheDriver(redis))
 |---|---|---|---|---|
 | `prefix` | `string` | No | `'basalt'` | Root prefix for all keys. |
 | `scope` | `(() => string \| undefined) \| null` | No | reads `ctx().tenant.id` → `tenant:<id>` | Dynamic prefix segment, resolved on each operation. `null` disables tenant isolation. |
+| `onMissingScope` | `'global' \| 'error'` | No | `'error'` when `tenancyPlugin` is registered, else `'global'` | What an operation does when the scope resolves to `undefined` (e.g. a background job outside request context). In multi-tenant apps the default fails CLOSED (`MissingCacheScopeError`) instead of silently sharing one namespace across tenants; single-tenant apps keep the global namespace. Explicit values always win. |
 
 ### `cachePlugin(options?: CachePluginOptions)`
 

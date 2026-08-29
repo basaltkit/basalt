@@ -63,6 +63,19 @@ route({
 })
 ```
 
+O `meta.can` aceita uma string de permissão ou um **array — o caller tem de as
+ter todas**:
+
+```ts
+meta: { can: ['reports:read', 'reports:export'] } // 403 a menos que o utilizador tenha AMBAS
+```
+
+Qualquer outra forma (`can: true`, um número, um array vazio ou misto) não é
+aplicável e **falha fechada**: o guard lança `InvalidCanMetaError`
+(`PERMISSION_META_INVALID`, HTTP 500) em cada pedido em vez de saltar o check
+silenciosamente. E declarar `meta.can` sem registar o `permissionsPlugin` falha
+no **boot** — vê o guia de adapters.
+
 ## Scoping por tenant
 
 As concessões são **por tenant** por omissão: `projects:*` concedido em `acme` não se

@@ -7,9 +7,9 @@ import {
   type DelegationStore,
 } from './delegation.js'
 import type { RouteGuard } from '@basaltkit/http'
-import { AuthRequiredGuardError } from './errors.js'
+import { AuthRequiredGuardError, InvalidCanMetaError } from './errors.js'
 
-export { AuthRequiredGuardError, PermissionDeniedError } from './errors.js'
+export { AuthRequiredGuardError, InvalidCanMetaError, PermissionDeniedError } from './errors.js'
 import { PermissionDeniedError } from './errors.js'
 
 /** Global scope key — role/permission grants outside any tenant. */
@@ -276,15 +276,35 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
     register({ container }) {
       container.singleton(GATE, () => new Gate(options))
 
-      // Guard: routes declaring meta.can require the permission.
+      // Guard: routes declaring meta.can require the permission(s). A string
+      // requires that permission; an array requires ALL of them (all-of). Any
+      // other shape (true, a number, an empty/mixed array) is unenforceable and
+      // fails CLOSED with InvalidCanMetaError instead of silently skipping the
+      // check — the historic `typeof !== 'string' → return` was a fail-open.
       const guard: RouteGuard = async ({ route, context, container: c }) => {
         const required = route.meta?.['can']
-        if (typeof required !== 'string') return
+        if (required === undefined) return
+        const permissions =
+          typeof required === 'string' && required.length > 0
+            ? [required]
+            : Array.isArray(required) &&
+                required.length > 0 &&
+                required.every((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+              ? required
+              : null
+        if (permissions === null) {
+          throw new InvalidCanMetaError(`${route.method} ${route.url}`, required)
+        }
         const user = context.user as PolicyUser | undefined
         if (!user) throw new AuthRequiredGuardError()
-        await c.get(GATE).authorize(user, required)
+        const gate = c.get(GATE)
+        for (const permission of permissions) await gate.authorize(user, permission)
       }
-      ensureMetadata(container).add('http:guards', guard)
+      const metadata = ensureMetadata(container)
+      metadata.add('http:guards', guard)
+      // Claim `meta.can` for the adapters' boot check (routes declaring it
+      // without this plugin fail loud at boot instead of serving unchecked).
+      metadata.add('http:guarded-meta', 'can')
     },
   })
 }

@@ -125,6 +125,9 @@ queuePlugin({ driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) =>
 
 import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
 queuePlugin({ driver: new KafkaQueueDriver({ brokers: ['localhost:9092'] }), jobs, workers })
+// Infrastructure faults (worker connect/subscribe failing at boot, a retry/dead-letter
+// re-publish failing) surface through onError — same pattern as rabbitmq/sqs:
+// new KafkaQueueDriver({ brokers, onError: (error, { source, queue }) => log.error(…) })
 ```
 
 ## Capability checks

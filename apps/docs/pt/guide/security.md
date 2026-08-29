@@ -258,23 +258,28 @@ decidir por ti. Acerta nestas em cada deployment.
 
 ### 1. Autorização é explícita — declara um guard, não só a intenção
 
-O `meta.can` (ou `meta.teamRole`) de uma rota documenta *o que* a rota precisa,
-mas o **guard que o aplica tem de estar de facto registado**. Uma rota
-declarada-mas-sem-guard está **aberta**: não há um default-deny implícito que
-bloqueie um pedido só porque uma permissão foi nomeada.
+O `meta.auth` / `meta.can` / `meta.teamRole` de uma rota documenta *o que* a
+rota precisa, mas o **guard que o aplica tem de estar de facto registado**. Uma
+rota declarada-mas-sem-guard estaria **aberta** — por isso os adapters recusam
+arrancá-la: no arranque verificam que cada chave de meta de segurança declarada
+tem um guard registado a reclamá-la (via o bucket `http:guarded-meta`) e falham
+alto, listando todas as rotas em falta.
 
 ```ts
-// ❌ o meta diz "admin", mas nada o aplica → a rota é pública
+// ❌ o meta diz "admin", mas nada o aplica → UnguardedRouteMetaError no BOOT
 route({ method: 'POST', url: '/admin/purge', meta: { can: 'admin' }, handler })
 
-// ✅ regista o guard que lê o meta e rejeita callers não autorizados
-app.use(authorizationPlugin())        // aplica meta.can em cada rota
-app.use(teamsPlugin())                // aplica meta.teamRole
+// ✅ regista o plugin cujo guard aplica a chave
+authPlugin(…)         // aplica meta.auth
+permissionsPlugin(…)  // aplica meta.can
+teamsPlugin(…)        // aplica meta.teamRole
 ```
 
-Trata "uma rota com permissão no `meta` mas sem guard correspondente no pipeline"
-como um bug. Um bom padrão é um check de CI que falha quando alguma rota declara
-`meta.can`/`meta.teamRole` e o plugin que o aplica está ausente.
+Se a proteção acontecer genuinamente numa edge/gateway exterior, opta por sair
+explicitamente com a opção do adapter `allowUnguardedMeta: true` (ou
+`['auth', …]` para chaves específicas). Um plugin de guard próprio que aplique
+uma destas chaves deve reclamá-la:
+`ensureMetadata(container).add('http:guarded-meta', 'auth')`.
 
 ### 2. Nunca confies num tenant vindo do cliente — verifica a membership
 
