@@ -1,5 +1,11 @@
 # @basaltkit/tenancy
 
+## 1.4.1
+
+### Patch Changes
+
+- a76d591: `tenancyPlugin` adds a `tenancy:active` entry to the metadata registry — a string-keyed marker other plugins read to adopt tenant-safe defaults (first consumer: `@basaltkit/cache`, which now fails closed on a missing tenant scope in multi-tenant apps). No behavior change in this package.
+
 ## 1.4.0
 
 ### Minor Changes
