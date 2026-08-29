@@ -52,7 +52,12 @@ const app = await createApp({
 ```
 
 Sem `connection` (e sem `driver`), o plugin usa o driver **sync**: `dispatch` executa
-`handle` inline no mesmo processo — sem Redis, ideal para dev e testes. A `queue` de
+`handle` inline no mesmo processo — sem Redis, ideal para dev e testes. Conhece a
+semântica antes de dependeres dele: é **at-most-once** (um job que esgota os
+retries inline perde-se), erros do handler **rejeitam a chamada `dispatch()`**
+(o teu request falha em vez de haver retry em background), e não se destina a
+produção — um deploy de produção que caia nele sem `connection` Redis regista um
+aviso no boot (passa `driver: new SyncQueueDriver()` para optar deliberadamente). A `queue` de
 um worker **tem de corresponder** à `queue` de um job, ou o job vai parar ao backend
 mas ninguém o consome.
 
@@ -109,6 +114,11 @@ para usar outro backend.
 ```ts
 import { RabbitmqQueueDriver } from '@basaltkit/queue-rabbitmq'
 queuePlugin({ driver: new RabbitmqQueueDriver({ url: process.env.AMQP_URL! }), jobs, workers })
+// Segurança de entrega: o driver prefere um canal com publisher confirms e só
+// faz ack depois de o broker confirmar qualquer re-publicação de retry/dead-letter
+// — sem janela de perda de jobs. close() drena handlers em curso (drainTimeoutMs,
+// default 10s); o que não terminar fica sem ack e é reentregue. Erros do broker —
+// incluindo falha de ligação no arranque do worker — chegam via onError.
 
 import { SqsQueueDriver } from '@basaltkit/queue-sqs'
 queuePlugin({ driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q] }), jobs, workers })

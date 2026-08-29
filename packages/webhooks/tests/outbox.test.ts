@@ -23,7 +23,9 @@ const flush = () => new Promise((r) => setImmediate(r))
 describe('webhookOutboxDispatch + Outbox (at-least-once)', () => {
   it('retries a failed entry and publishes once the webhook succeeds', async () => {
     const wh = fakeWebhooks()
-    const outbox = new Outbox(new MemoryOutboxStore())
+    // backoff: false — this test exercises the retry MECHANICS with back-to-back
+    // flushes; the default backoff would (correctly) skip the immediate retry.
+    const outbox = new Outbox(new MemoryOutboxStore(), { backoff: false })
     const dispatch = webhookOutboxDispatch(wh.manager)
     await outbox.enqueue('order.created', { id: 'o1' }, 'acme')
 

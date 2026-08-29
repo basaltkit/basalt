@@ -321,6 +321,13 @@ All implement `MailDriver` (`name`, `send(message)`, `disconnect()`):
 
 **I set up `useQueue` and nothing gets sent** — With the queue active, `send()` only delivers to the dispatcher; it's the worker that has to call `mailer.deliver(message)`.
 
+## Log driver safety
+
+Without a `driver`, mail goes to the log driver. In production it redacts
+message bodies (reset links/tokens must not be retained by log aggregators);
+pass `logBody: true` to opt back in. An unrecognized `driver` string now throws
+instead of silently falling back to logging your outbound mail.
+
 ## How it connects to other modules
 
 - **@basaltkit/core** — provides `createApp`, the dependency container where `MAILER` is registered, and the context (`ctx`) used by `tenantFrom`.

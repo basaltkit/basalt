@@ -71,3 +71,5 @@ export {
   type SseResponse,
   type SseSink,
 } from './sse.js'
+
+export { escapeHtml, scriptJson, pageCsp, cspHash, type PageCspOptions } from './html.js'

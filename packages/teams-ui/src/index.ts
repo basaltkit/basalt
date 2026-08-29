@@ -1,2 +1,2 @@
-export { teamsPageHtml, type TeamsPageOptions } from './html.js'
+export { teamsPageCsp, teamsPageHtml, type TeamsPageOptions } from './html.js'
 export { teamsUiRoutes, type TeamsUiOptions } from './plugin.js'

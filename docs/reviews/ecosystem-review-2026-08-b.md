@@ -212,3 +212,127 @@ MCP tool authorization **has real parity** (see verification section) — the de
 - **UI XSS findings are latent** (boot-time constant inputs today); labeled as traps, not live holes, except the default-CSP breakage which is live.
 - **Not re-audited:** the auth/permissions internals and the http security edge (closed in the prior security audit + Pass A); admin-react/shadcn (React auto-escaping, `grep` clean for `dangerouslySetInnerHTML`/`eval`).
 - **Depth:** this pass went deep on subscriptions, storage/files, queue/events/scheduler/realtime, mailer/i18n/UI, MCP, and the scaffold path; ranked by risk, not exhaustive.
+
+---
+
+## Implementation-status addendum — 🟡 batch (2026-08-29)
+
+_All 🔴/🟠 items were closed in PRs #243–#247. This addendum records the disposition of the
+remaining 🟡 findings (A-1, A-2, P-1, Q-4, Q-5, Q-6, Q-7, S-5, S-6, S-7) plus opportunistic
+🟢 Q-8 pins. Every premise was re-verified on current `main` before acting; every implemented
+bug-class item has failing-first test evidence; full `turbo typecheck` + `turbo test` green._
+
+| Finding | Disposition | Shipped as |
+| --- | --- | --- |
+| A-1 driver signatures fail-open | **Implemented (scoped)** | webhooks minor |
+| A-2 `/mcp` rate limiting | **Minimal** (premise partially stale) | mcp minor |
+| P-1 bench in CI | **Deferred** | — |
+| Q-4 scheduler distributed lock | **Implemented** | scheduler minor |
+| Q-5 outbox at-least-once | **Implemented** | events minor |
+| Q-6 sync queue driver | **Implemented (minimal)** | queue patch |
+| Q-7 rabbit ack-before-confirm | **Implemented** | queue-rabbitmq minor |
+| S-5 UI escaping/CSP | **Implemented** | http + 4 UI packages minor |
+| S-6 LogMailDriver bodies | **Implemented** | mailer minor |
+| S-7 i18n locale → Intl | **Implemented** | i18n patch |
+| Q-8 cluster (🟢) | **2 pins implemented**, rest still pinned | scheduler minor, queue-sqs minor |
+
+### Per-finding notes
+
+- **A-1 — Implemented, scoped to the genuinely fail-open surface.** Premise re-verified:
+  `WebhookManager.list(tenantId?)` and `dispatch(event, data, tenantId?)` trusted the caller's
+  argument with no ambient-context check — inside a tenant request, `list()` returned every
+  tenant's endpoints and `dispatch()` fanned a tenant's event data out to other tenants'
+  endpoints. Both now follow the `Audit.trail()`/`requireTenantId` anti-widening rule (context
+  tenant always wins; explicit args/system-wide behavior only with no ambient tenant, so
+  single-tenant apps are untouched). **Declined** the follow-up of making `audit`/`comments`
+  delegate to tenancy's helpers: both already fail closed with identical semantics locally, and
+  adding a `@basaltkit/tenancy` dependency to deduplicate ~10 lines increases coupling for zero
+  behavioral gain — the service-layer boundary stands, as leaned in the original finding.
+- **A-2 — Minimal; original premise is stale on current main.** `handleMessage` processes exactly
+  ONE JSON-RPC message per HTTP request (an array body fails `INVALID_REQUEST`), so the
+  per-request limiter counts tool calls 1:1 — no bundling amplification. The real residual found
+  during re-verification: a tool route's own `meta.rateLimit` applies only to its direct HTTP
+  registration, not when invoked via `/mcp` (rate limiting lives in `securityPlugin`'s edge hook,
+  not in `runRoute`). Shipped the review's own minimal proposal: `mcpRoutes({ rateLimit })`
+  stamps `meta.rateLimit` on `/mcp` (reusing the existing per-route override mechanism, no
+  bespoke limiter) + docs EN/PT stating the bypass explicitly.
+- **P-1 — Deferred, guardrail applied.** The gap is real (bench harness runs in no workflow), but
+  everything I could ship from here is speculative: a GitHub Actions workflow I cannot execute or
+  validate, producing throughput numbers on shared runners that are noise even as "signal", plus
+  a micro-bench script with no consumer. No perf regression exists today (hand-benched for the
+  captive-guard fix). Recommendation stands for when it's picked up deliberately: deterministic
+  micro-bench (Container resolution + `runRoute` ops/sec) as `workflow_dispatch` + weekly
+  schedule, numbers-as-output, never a PR gate.
+- **Q-4 — Implemented as a lock *contract*, not an implementation.** `ScheduleEntry.onOneServer()`
+  + `ScheduleLock { acquire(key, ttlMs) }` + `schedulerPlugin({ lock, lockTtlMs })`. One replica
+  acquires a per-entry-per-minute key and runs; others skip (counted in `skippedByLock`).
+  Deliberately no `release` — the key covers the tick window so a fast first run can't be
+  followed by a late replica re-running the same minute. Fail-loud at boot if `.onOneServer()` is
+  used without a lock. No new dependency: the framework ships the contract and docs show the
+  5-line ioredis `SET NX PX` implementation. Not built: leader election/Raft, a cache-contract
+  `add()` extension (would ripple through every cache driver + conformance suite for one
+  consumer).
+- **Q-5 — Implemented within the existing outbox design.** Capture awaited (a failed outbox write
+  now fails `emit()` — the transactional-outbox contract), concurrent flushes coalesce,
+  process-local exponential backoff (no store/schema change — a deliberate trade-off: a relay
+  restart permits one immediate retry, still at-least-once; avoids a breaking `OutboxStore`
+  contract change and an events-prisma migration), `onDead` fired once per exhausted entry,
+  `onFlushError` for store-level faults in the timer/shutdown paths. Found and fixed en route: a
+  double-count where `MemoryOutboxStore.markFailed` mutates the shared entry object.
+- **Q-6 — Implemented minimally, per the framework-norms constraint.** `executed[]` capped at
+  1000; boot warning when the sync driver is selected implicitly in production (explicit
+  `driver: new SyncQueueDriver()` stays silent); semantics documented (at-most-once, errors
+  reject `dispatch()`). **Deliberately kept** the error-rethrow behavior — it's what makes the
+  driver useful in tests/dev, and silently converting it to fire-and-forget would be its own
+  dev/prod surprise; the warning + docs address the inversion.
+- **Q-7 — Implemented.** Confirm channel preferred (`createConfirmChannel` when the connection
+  offers it), `waitForConfirms` awaited after every publish and BEFORE ack in the failure path —
+  a nacked/lost re-publish leaves the message unacked for broker redelivery (at-least-once,
+  window closed). `close()` drains in-flight handlers with a `drainTimeoutMs` deadline;
+  mid-shutdown deliveries stay unacked; `handle()` can no longer throw into the consume callback
+  (ack/publish faults → `onError`); `startWorker` connect failures surface via `onError` instead
+  of an invisible zero-worker boot. 6 failing-first tests, including the unconfirmed-publish
+  no-ack case and the drain-before-teardown case.
+- **S-5 — Implemented as a sweep + one shared primitive set.** New in `@basaltkit/http`:
+  `escapeHtml` (single charset `& < > " '`), `scriptJson` (`</script>`-breakout-safe JSON, plus
+  U+2028/9), `pageCsp`/`cspHash`. All four UI packages: server-side `title`/`roles` escaped,
+  embedded state via `scriptJson`, client `esc()` unified to include quotes, and — beyond the
+  review's docs-only proposal, because the CSP breakage was the one *live* item — each route now
+  serves a **route-scoped CSP by default** with the page's inline script allowed only by sha256
+  hash (`…PageCsp()` exports; `csp: string | false` opt-out). `style-src 'unsafe-inline'` is the
+  accepted residual (hash sources can't cover `style=""` attributes). CSP + escaping documented
+  in `admin-pages` guide (EN/PT) and each README. No template engine introduced.
+- **S-6 — Implemented.** `LogMailDriver` redacts bodies when `NODE_ENV=production` (metadata
+  still logged; `logBody: true` to opt back in — dev/test unchanged so magic links still print
+  locally), and `mailerPlugin` throws on an unrecognized `driver` string instead of silently
+  falling through to logging outbound mail.
+- **S-7 — Implemented.** Resolved locale validated via `Intl.getCanonicalLocales` (fallback to
+  `defaultLocale`); catalog negotiation uses `Object.hasOwn` (no `__proto__`/`constructor`
+  prototype traversal). `Translator.locale` now reports the effective locale.
+- **Q-8 (🟢) — two highest-surprise pins done while in those files:** cron field validation
+  (`parseCron` rejects names/out-of-range/reversed-range/`*/0` with `CronParseError` instead of a
+  job that silently never fires) and SQS receive-error visibility (`onError` + `errorPauseMs`
+  pause instead of a silent hot spin). **Still pinned, not fixed:** cron DOM/DOW AND-vs-OR
+  divergence from POSIX, DST skip/double-run documentation, app-level drain deadline, SQS
+  visibility-timeout heartbeat for long jobs, `Scheduler.safeTick` swallowing (mitigated: tick
+  aggregates; entries have `onFailure`).
+
+### Newly flagged while implementing
+
+- `MemoryOutboxStore.markFailed` mutates the entry object it previously returned from
+  `pending()` — any relay-side read of `entry.attempts` after marking sees the post-increment
+  value (memory store only; Prisma/SQLite return copies). Worked around in `Outbox.doFlush`;
+  worth normalizing to return-copies if the store is ever touched again.
+- The four UI pages embed `headers` values (e.g. `x-tenant-id`) in page source by design — now
+  documented as "never put secrets in `headers`" in the admin-pages guide.
+
+### Changesets in this batch
+
+`i18n-locale-validation` (patch) · `mailer-log-driver-redaction` (minor) ·
+`queue-sync-driver-bounds` (patch) · `queue-rabbitmq-confirms-drain` (minor) ·
+`queue-sqs-receive-errors` (minor) · `events-outbox-at-least-once` (minor) ·
+`scheduler-one-server-lock` (minor) · `webhooks-anti-widening-scope` (minor) ·
+`http-html-helpers` (minor) · `ui-packages-escaping-csp` (4× minor) ·
+`mcp-rate-limit-option` (minor). Docs EN+PT updated: scheduler, queues, persistence
+(outbox), i18n, notifications (mailer), mcp, admin-pages, webhooks; READMEs for all
+touched packages.

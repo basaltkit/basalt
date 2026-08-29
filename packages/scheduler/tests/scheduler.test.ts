@@ -147,3 +147,87 @@ describe('Scheduler', () => {
     await app.shutdown()
   })
 })
+
+describe('multi-replica one-server locking (Q-4)', () => {
+  /** Shared "Redis": first acquire of a key wins, per (key, until-expiry). */
+  const sharedLock = () => {
+    const held = new Map<string, number>()
+    return {
+      calls: [] as string[],
+      async acquire(key: string, ttlMs: number): Promise<boolean> {
+        this.calls.push(key)
+        const now = Date.now()
+        const until = held.get(key)
+        if (until !== undefined && until > now) return false
+        held.set(key, now + ttlMs)
+        return true
+      },
+    }
+  }
+
+  it('runs a .onOneServer() entry on exactly one of N replicas per tick', async () => {
+    const lock = sharedLock()
+    const runs: string[] = []
+    const replicas = [1, 2, 3].map((n) => {
+      const scheduler = new Scheduler({ lock })
+      scheduler.call('reconcile-billing', () => void runs.push(`replica-${n}`)).everyMinute().onOneServer()
+      return scheduler
+    })
+    const instant = new Date('2026-08-29T03:00:00Z')
+    await Promise.all(replicas.map((s) => s.tick(instant)))
+    expect(runs).toHaveLength(1) // not 3
+    expect(lock.calls[0]).toContain('reconcile-billing')
+  })
+
+  it('a fast first run does not let a second replica re-acquire within the same tick window', async () => {
+    const lock = sharedLock()
+    const runs: number[] = []
+    const a = new Scheduler({ lock })
+    a.call('job', () => void runs.push(1)).everyMinute().onOneServer()
+    const b = new Scheduler({ lock })
+    b.call('job', () => void runs.push(2)).everyMinute().onOneServer()
+    const instant = new Date('2026-08-29T03:00:00Z')
+    await a.tick(instant) // finishes instantly
+    await b.tick(instant) // late replica, same minute
+    expect(runs).toEqual([1]) // the lock is held for the window, not released on completion
+  })
+
+  it('entries without onOneServer() are unaffected by the lock', async () => {
+    const lock = sharedLock()
+    const runs: number[] = []
+    const scheduler = new Scheduler({ lock })
+    scheduler.call('local', () => void runs.push(1)).everyMinute()
+    await scheduler.tick(new Date('2026-08-29T03:00:00Z'))
+    expect(runs).toEqual([1])
+    expect(lock.calls).toEqual([]) // no lock traffic
+  })
+
+  it('schedulerPlugin fails loud at boot when onOneServer() is used without a lock', async () => {
+    await expect(
+      createApp({
+        plugins: [
+          schedulerPlugin({
+            autostart: false,
+            define: (schedule) => void schedule.call('x', () => {}).everyMinute().onOneServer(),
+          }),
+        ],
+      }).boot(),
+    ).rejects.toThrow(/onOneServer|lock/i)
+  })
+})
+
+describe('cron field validation (Q-8 pin)', () => {
+  it('rejects unsupported/typo fields instead of silently never firing', async () => {
+    const { parseCron, CronParseError } = await import('../src/cron.js')
+    for (const bad of ['a b c d e', 'MON * * * *', '61 * * * *', '*/0 * * * *', '5-1 * * * *', '* 24 * * *', '* * 0 * *', '* * * 13 *', '* * * * 7']) {
+      expect(() => parseCron(bad), bad).toThrow(CronParseError)
+    }
+  })
+
+  it('accepts the full supported syntax', async () => {
+    const { parseCron } = await import('../src/cron.js')
+    for (const good of ['* * * * *', '*/15 0 1,15 * 1-5', '0 3 * * 0', '59 23 31 12 6']) {
+      expect(() => parseCron(good), good).not.toThrow()
+    }
+  })
+})

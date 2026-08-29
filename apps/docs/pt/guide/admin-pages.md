@@ -153,3 +153,19 @@ route({
 
 Como estas páginas fazem fetch same-origin sem segredos embebidos, é seguro
 servi-las a partir da origin da tua app.
+
+### Content-Security-Policy
+
+Cada página traz blocos `<style>`/`<script>` inline que o `DEFAULT_CSP` global
+do `securityPlugin` bloquearia. NÃO precisas de desativar o CSP globalmente:
+cada `*UiRoutes()`/`auditViewerRoutes()` define por defeito um CSP **por rota**
+na sua própria resposta — tudo bloqueado, o script inline da página permitido
+apenas pelo seu hash sha256 (exportado como `apiKeysPageCsp`, `teamsPageCsp`,
+`billingPageCsp`, `auditViewerCsp`). Passa `csp: '…'` para substituir ou
+`csp: false` para desativar. Se servires tu mesmo a string `…PageHtml()`,
+define o header `…PageCsp()` correspondente nessa rota.
+
+Os inputs server-side (`title`, `roles`) são escapados em HTML, e o estado
+embebido (`apiBase`, `headers`, `roles`) é serializado de forma a não conseguir
+terminar o bloco de script — mas os valores de `headers` continuam a aparecer no
+código-fonte da página, portanto nunca ponhas segredos neles.

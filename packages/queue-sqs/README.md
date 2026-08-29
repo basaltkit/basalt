@@ -93,6 +93,12 @@ A `delay` above **900s (15 min)** throws `SqsDelayTooLongError` instead of silen
 
 Exported constants/errors: `SQS_MAX_DELAY_SECONDS` (900) and `SqsDelayTooLongError`.
 
+## Receive errors
+
+A failing `ReceiveMessage` call surfaces through `onError` (default:
+`console.error`) and the poller pauses `errorPauseMs` (default 1 s) before
+retrying — a persistent fault is visible, not a silent hot spin.
+
 ## How it connects to other modules
 
 - **`@basaltkit/queue`** — this is a driver for that package; the jobs API comes from there.

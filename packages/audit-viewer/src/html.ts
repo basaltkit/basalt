@@ -1,7 +1,57 @@
+import { escapeHtml, pageCsp, scriptJson } from '@basaltkit/http'
+
 export interface AuditViewerHtmlOptions {
   /** Base path where the audit JSON API is mounted. Default '' (same origin). */
   apiBase?: string
   title?: string
+}
+
+
+// The inline script, built separately so the page and its CSP hash (see
+// auditViewerCsp) come from the exact same source text. Embedded state uses
+// scriptJson (cannot terminate the script block); API responses render through
+// esc(), whose charset includes quotes for attribute positions.
+const pageScript = (apiBase: string): string => `
+const API = ${scriptJson(apiBase)};
+let offset = 0; const LIMIT = 50;
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function params() {
+  const f = new FormData(document.getElementById('filters'));
+  const q = new URLSearchParams();
+  for (const [k, v] of f) if (v) q.set(k, v);
+  q.set('limit', LIMIT); q.set('offset', offset);
+  return q.toString();
+}
+async function load() {
+  const [page, stats] = await Promise.all([
+    fetch(API + '/audit?' + params()).then((r) => r.json()),
+    fetch(API + '/audit/stats?' + params()).then((r) => r.json()),
+  ]);
+  document.getElementById('rows').innerHTML = (page.entries || []).map((e) =>
+    '<tr><td class="muted">' + new Date(e.at).toLocaleString() + '</td><td><code>' + esc(e.event) +
+    '</code></td><td>' + esc(e.source) + '</td><td>' + esc(e.actorId || '') + '</td></tr>').join('');
+  const top = (stats.byEvent || []).slice(0, 3).map((x) => esc(x.event) + ' (' + x.count + ')').join(', ');
+  document.getElementById('stats').innerHTML = '<span><b>' + (stats.total || 0) + '</b> entries</span>' + (top ? '<span>Top: ' + top + '</span>' : '');
+  document.getElementById('page').textContent = 'showing ' + offset + '–' + (offset + (page.entries || []).length) + ' of ' + (page.total || 0);
+}
+document.getElementById('filters').addEventListener('submit', (e) => { e.preventDefault(); offset = 0; load(); });
+document.getElementById('next').addEventListener('click', () => { offset += LIMIT; load(); });
+document.getElementById('prev').addEventListener('click', () => { offset = Math.max(0, offset - LIMIT); load(); });
+load();
+`
+
+/**
+ * The Content-Security-Policy matching {@link auditViewerHtml}: everything
+ * locked down, the page's inline script allowed by sha256 hash. Served by
+ * default from `auditViewerRoutes` so the page works under `securityPlugin`
+ * without weakening the app-wide policy.
+ */
+export function auditViewerCsp(options: AuditViewerHtmlOptions = {}): string {
+  const apiBase = options.apiBase ?? ''
+  return pageCsp({
+    scripts: [pageScript(apiBase)],
+    ...(/^https?:\/\//.test(apiBase) ? { connect: [new URL(apiBase).origin] } : {}),
+  })
 }
 
 /**
@@ -11,7 +61,7 @@ export interface AuditViewerHtmlOptions {
  */
 export function auditViewerHtml(options: AuditViewerHtmlOptions = {}): string {
   const apiBase = options.apiBase ?? ''
-  const title = options.title ?? 'Audit trail'
+  const title = escapeHtml(options.title ?? 'Audit trail')
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -45,34 +95,7 @@ export function auditViewerHtml(options: AuditViewerHtmlOptions = {}): string {
 <div id="stats"></div>
 <table><thead><tr><th>When</th><th>Event</th><th>Source</th><th>Actor</th></tr></thead><tbody id="rows"></tbody></table>
 <div class="nav"><button id="prev">Prev</button><span id="page" class="muted"></span><button id="next">Next</button></div>
-<script>
-const API = ${JSON.stringify(apiBase)};
-let offset = 0; const LIMIT = 50;
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-function params() {
-  const f = new FormData(document.getElementById('filters'));
-  const q = new URLSearchParams();
-  for (const [k, v] of f) if (v) q.set(k, v);
-  q.set('limit', LIMIT); q.set('offset', offset);
-  return q.toString();
-}
-async function load() {
-  const [page, stats] = await Promise.all([
-    fetch(API + '/audit?' + params()).then((r) => r.json()),
-    fetch(API + '/audit/stats?' + params()).then((r) => r.json()),
-  ]);
-  document.getElementById('rows').innerHTML = (page.entries || []).map((e) =>
-    '<tr><td class="muted">' + new Date(e.at).toLocaleString() + '</td><td><code>' + esc(e.event) +
-    '</code></td><td>' + esc(e.source) + '</td><td>' + esc(e.actorId || '') + '</td></tr>').join('');
-  const top = (stats.byEvent || []).slice(0, 3).map((x) => esc(x.event) + ' (' + x.count + ')').join(', ');
-  document.getElementById('stats').innerHTML = '<span><b>' + (stats.total || 0) + '</b> entries</span>' + (top ? '<span>Top: ' + top + '</span>' : '');
-  document.getElementById('page').textContent = 'showing ' + offset + '–' + (offset + (page.entries || []).length) + ' of ' + (page.total || 0);
-}
-document.getElementById('filters').addEventListener('submit', (e) => { e.preventDefault(); offset = 0; load(); });
-document.getElementById('next').addEventListener('click', () => { offset += LIMIT; load(); });
-document.getElementById('prev').addEventListener('click', () => { offset = Math.max(0, offset - LIMIT); load(); });
-load();
-</script>
+<script>${pageScript(apiBase)}</script>
 </body>
 </html>`
 }

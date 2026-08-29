@@ -131,3 +131,31 @@ describe('SqsQueueDriver', () => {
     await driver.close()
   })
 })
+
+describe('receive-error visibility (Q-8 pin)', () => {
+  it('a failing receive surfaces through onError and backs off instead of hot-spinning silently', async () => {
+    let calls = 0
+    const errors: { queue: string }[] = []
+    const api = {
+      async sendMessage() {},
+      async receiveMessages(): Promise<never[]> {
+        calls++
+        throw new Error('AccessDenied')
+      },
+      async deleteMessage() {},
+    }
+    const driver = new SqsQueueDriver({
+      queueUrl: (q) => `https://sqs/${q}`,
+      api,
+      errorPauseMs: 5,
+      onError: (_e, info) => void errors.push(info),
+    })
+    driver.startWorker('orders')
+    await new Promise((r) => setTimeout(r, 30))
+    await driver.close()
+    expect(errors.length).toBeGreaterThan(0)
+    expect(errors[0]).toEqual({ queue: 'orders' })
+    // ~30ms / 5ms pause → a handful of attempts, not thousands of hot spins
+    expect(calls).toBeLessThan(20)
+  })
+})

@@ -183,6 +183,14 @@ Connections are lazy-safe: `callTool` / `listTools` connect on demand, so
 The HTTP transport is a neutral `route()`, verified on all three adapters — the
 same tool surface regardless of the server underneath.
 
+On an exposed deployment, give `/mcp` its own rate-limit budget:
+`mcpRoutes({ rateLimit: { limit: 30, windowMs: 60_000 } })` stamps
+`meta.rateLimit` on the route, and `securityPlugin` enforces it in a dedicated
+bucket. Note that a tool route's own `meta.rateLimit` belongs to its direct HTTP
+registration — it is not applied when the route is invoked as a tool through
+`/mcp`, so the `/mcp` budget is the throttle for tool traffic. (Auth and guards
+DO run identically on both paths.)
+
 
 ## Testing with the MCP Inspector
 

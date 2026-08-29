@@ -40,10 +40,16 @@ const endpoint = await hooks.register({
   active: true,            // set false to disable without deleting
 })
 
-await hooks.list()          // every endpoint
+await hooks.list()          // every endpoint (no tenant in context)
 await hooks.list('acme')    // only tenant "acme"'s endpoints
 await hooks.unregister(endpoint.id)
 ```
+
+Scoping is **anti-widening**: inside a request with a tenant in context,
+`register`, `list`, `unregister` and `dispatch` are forced to that tenant — a
+caller-supplied `tenantId` (which may carry client input) can never widen or
+switch the scope. The explicit argument and the system-wide behavior above apply
+only where there is no ambient tenant (jobs, CLI, single-tenant apps).
 
 Event patterns match like this:
 

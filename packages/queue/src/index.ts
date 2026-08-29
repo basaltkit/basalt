@@ -63,11 +63,26 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
     register({ container }) {
       registerQueueCommands(container)
       container.singleton(QUEUE, () => {
-        const driver =
-          options.driver ??
-          (options.connection
-            ? new BullmqQueueDriver({ connection: options.connection })
-            : new SyncQueueDriver())
+        let driver = options.driver
+        if (!driver) {
+          if (options.connection) {
+            driver = new BullmqQueueDriver({ connection: options.connection })
+          } else {
+            driver = new SyncQueueDriver()
+            if (process.env['NODE_ENV'] === 'production') {
+              // The silent default without a Redis connection is the inline sync
+              // driver: at-most-once, no background retries, handler errors
+              // propagate into the dispatching request. Deliberate sync use in
+              // production stays possible — pass `driver: new SyncQueueDriver()`
+              // explicitly to silence this.
+              console.warn(
+                '[basalt:queue] No `connection` (Redis) configured — falling back to the inline sync driver. ' +
+                  'Jobs run at-most-once inside the dispatching request and are lost on failure. ' +
+                  'Configure a Redis `connection` for production, or pass `driver: new SyncQueueDriver()` to opt in explicitly.',
+              )
+            }
+          }
+        }
         const manager = new QueueManager(driver, {
           ...(options.onUnsupported !== undefined ? { onUnsupported: options.onUnsupported } : {}),
           ...(options.removeOnComplete !== undefined ? { removeOnComplete: options.removeOnComplete } : {}),

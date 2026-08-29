@@ -8,6 +8,25 @@ export type { CronFields, ZonedParts } from './cron.js'
 type Task = () => void | Promise<void>
 
 /**
+ * Cross-replica mutex for `.onOneServer()` entries. `acquire` must be ATOMIC
+ * across processes (e.g. Redis `SET key value PX ttl NX`): it returns true for
+ * exactly one caller per key until the TTL expires. There is deliberately no
+ * `release` — the key covers the tick window, so a fast first run cannot be
+ * followed by a late replica re-acquiring and running the same minute again.
+ *
+ * ioredis example:
+ *
+ *     const lock: ScheduleLock = {
+ *       async acquire(key, ttlMs) {
+ *         return (await redis.set(key, '1', 'PX', ttlMs, 'NX')) === 'OK'
+ *       },
+ *     }
+ */
+export interface ScheduleLock {
+  acquire(key: string, ttlMs: number): Promise<boolean>
+}
+
+/**
  * A scheduled entry, built fluently:
  *
  * schedule.job(ReconcileBilling).daily().at('03:00').timezone('UTC')
@@ -23,6 +42,7 @@ export class ScheduleEntry {
   }
   private tz = 'UTC'
   private noOverlap = false
+  private oneServer = false
   private failureHandler: ((error: unknown) => void) | undefined
   private running = false
   /** count of executions skipped due to overlap — visible for observability/tests */
@@ -101,6 +121,23 @@ export class ScheduleEntry {
     return this
   }
 
+  /**
+   * On a horizontally-scaled deployment, run this entry on ONE replica per tick
+   * instead of on every pod. Requires a `lock` on the Scheduler (see
+   * {@link ScheduleLock}) — without one, boot fails loud rather than silently
+   * running the job N times. `runNow()`/`schedule:run` bypass the lock (a manual
+   * trigger is deliberate).
+   */
+  onOneServer(): this {
+    this.oneServer = true
+    return this
+  }
+
+  /** @internal whether this entry asked for cross-replica locking. */
+  get wantsOneServer(): boolean {
+    return this.oneServer
+  }
+
   onFailure(handler: (error: unknown) => void): this {
     this.failureHandler = handler
     return this
@@ -138,10 +175,39 @@ export class ScheduleEntry {
   }
 }
 
+export interface SchedulerOptions {
+  /** Cross-replica lock for `.onOneServer()` entries. */
+  lock?: ScheduleLock
+  /**
+   * TTL for each per-entry, per-tick lock key. Default 60_000 (one tick window
+   * — the key embeds the minute, so it only needs to outlive clock skew).
+   */
+  lockTtlMs?: number
+}
+
 export class Scheduler {
   private readonly entries: ScheduleEntry[] = []
   private timer: NodeJS.Timeout | undefined
   private interval: NodeJS.Timeout | undefined
+  private readonly lock: ScheduleLock | undefined
+  private readonly lockTtlMs: number
+  /** ticks skipped because another replica held the lock — for observability/tests */
+  skippedByLock = 0
+
+  constructor(options: SchedulerOptions = {}) {
+    this.lock = options.lock
+    this.lockTtlMs = options.lockTtlMs ?? 60_000
+  }
+
+  /** @internal true when any entry requested `.onOneServer()`. */
+  get needsLock(): boolean {
+    return this.entries.some((entry) => entry.wantsOneServer)
+  }
+
+  /** @internal whether a lock was configured. */
+  get hasLock(): boolean {
+    return this.lock !== undefined
+  }
 
   /** Schedules the dispatch of a @basaltkit/queue job. */
   job<T>(job: JobDefinition<T>, ...payload: T extends void ? [] : [T]): ScheduleEntry {
@@ -185,6 +251,19 @@ export class Scheduler {
     await Promise.all(
       due.map(async (entry) => {
         try {
+          if (entry.wantsOneServer && this.lock) {
+            // One key per entry per tick window: exactly one replica acquires
+            // it; the others skip this minute's run. A lock-store failure is
+            // treated as a task failure (visible), not as permission to run on
+            // every replica at once.
+            const minute = new Date(date)
+            minute.setSeconds(0, 0)
+            const key = `basalt:schedule:${entry.name}:${minute.toISOString()}`
+            if (!(await this.lock.acquire(key, this.lockTtlMs))) {
+              this.skippedByLock++
+              return
+            }
+          }
           await entry.run()
         } catch (error) {
           errors.push(error)
@@ -232,7 +311,7 @@ export class Scheduler {
 
 export const SCHEDULER = createToken<Scheduler>('scheduler')
 
-export interface SchedulerPluginOptions {
+export interface SchedulerPluginOptions extends SchedulerOptions {
   /** Callback that defines the schedules — receives the Scheduler at boot. */
   define?: (schedule: Scheduler) => void
   /** Starts the timer at boot. Default: true (turn off in tests). */
@@ -243,12 +322,27 @@ export function schedulerPlugin(options: SchedulerPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:scheduler',
     register({ container }) {
-      container.singleton(SCHEDULER, () => new Scheduler())
+      container.singleton(
+        SCHEDULER,
+        () =>
+          new Scheduler({
+            ...(options.lock ? { lock: options.lock } : {}),
+            ...(options.lockTtlMs !== undefined ? { lockTtlMs: options.lockTtlMs } : {}),
+          }),
+      )
       registerScheduleRunCommand(container)
     },
     boot({ container }) {
       const scheduler = container.get(SCHEDULER)
       options.define?.(scheduler)
+      if (scheduler.needsLock && !scheduler.hasLock) {
+        // Fail closed at boot: silently running the entry on every replica is
+        // exactly the failure mode .onOneServer() exists to prevent.
+        throw new Error(
+          'schedulerPlugin: an entry uses .onOneServer() but no `lock` was configured. ' +
+            'Pass `schedulerPlugin({ lock })` with an atomic cross-replica lock (e.g. Redis SET NX PX) — see ScheduleLock.',
+        )
+      }
       // Expose entries to tooling (CLI `basalt schedule:list`).
       const metadata = ensureMetadata(container)
       for (const entry of scheduler.list()) metadata.add('schedule:entries', entry)

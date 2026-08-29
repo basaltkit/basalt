@@ -179,3 +179,120 @@ describe('crash-safety (Q-2): amqplib error emitters are listened to', () => {
     ])
   })
 })
+
+describe('publisher confirms + graceful shutdown (Q-7)', () => {
+  class ConfirmChannel extends FakeChannel {
+    confirmWaits = 0
+    failConfirms = false
+    async waitForConfirms(): Promise<void> {
+      this.confirmWaits++
+      if (this.failConfirms) throw new Error('nack: broker refused the publish')
+    }
+  }
+
+  const confirmDriver = (channel: ConfirmChannel, onError?: (e: unknown, i: { source: string }) => void) =>
+    new RabbitmqQueueDriver({
+      url: 'amqp://test',
+      ...(onError ? { onError: onError as never } : {}),
+      connect: async () => ({
+        createChannel: async () => {
+          throw new Error('plain channel must not be used when confirms are available')
+        },
+        createConfirmChannel: async () => channel,
+        close: async () => {},
+      }),
+    })
+
+  it('prefers a confirm channel when the connection offers one', async () => {
+    const ch = new ConfirmChannel()
+    await confirmDriver(ch).add('q', 'job', {}, { attempts: 1 })
+    expect(ch.sent).toHaveLength(1)
+    expect(ch.confirmWaits).toBeGreaterThan(0) // publish awaited broker confirmation
+  })
+
+  it('does NOT ack when the retry publish is unconfirmed — the durable copy must survive', async () => {
+    const ch = new ConfirmChannel()
+    const errors: unknown[] = []
+    const driver = confirmDriver(ch, (e) => void errors.push(e))
+    driver.setExecutor(async () => {
+      throw new Error('handler boom')
+    })
+    driver.startWorker('q')
+    await ch.ready
+    ch.failConfirms = true // broker nacks the re-route publish
+    ch.deliver({ 'x-basalt-job': 'j', 'x-basalt-attempt': 1, 'x-basalt-attempts': 3 }, {})
+    await tick()
+    expect(ch.acked).toBe(0) // job-loss window closed: unacked → broker redelivers
+    expect(errors.length).toBeGreaterThan(0) // and the failure is observable
+  })
+
+  it('close() drains in-flight handlers before tearing the channel down', async () => {
+    const ch = new FakeChannel()
+    const driver = driverWith(ch)
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    driver.setExecutor(async () => gate)
+    driver.startWorker('q')
+    await ch.ready
+    ch.deliver({ 'x-basalt-job': 'j', 'x-basalt-attempt': 1, 'x-basalt-attempts': 1 }, {})
+    await tick()
+    expect(ch.acked).toBe(0) // still in flight
+    const closing = driver.close()
+    let closed = false
+    void closing.then(() => (closed = true))
+    await tick()
+    expect(closed).toBe(false) // close waits for the handler
+    release()
+    await closing
+    expect(ch.acked).toBe(1) // the in-flight job finished and acked before close
+  })
+
+  it('messages arriving after close() begins are left unacked for redelivery', async () => {
+    const ch = new FakeChannel()
+    const driver = driverWith(ch)
+    const seen: string[] = []
+    driver.setExecutor(async (name) => void seen.push(name))
+    driver.startWorker('q')
+    await ch.ready
+    const closing = driver.close()
+    ch.deliver({ 'x-basalt-job': 'late', 'x-basalt-attempt': 1, 'x-basalt-attempts': 1 }, {})
+    await closing
+    await tick()
+    expect(seen).toEqual([]) // not processed
+    expect(ch.acked).toBe(0) // not acked → broker redelivers elsewhere
+  })
+
+  it('a broker-connect failure in startWorker surfaces through onError instead of an unhandled rejection', async () => {
+    const errors: { source: string }[] = []
+    const driver = new RabbitmqQueueDriver({
+      url: 'amqp://down',
+      onError: (_e, info) => void errors.push(info),
+      connect: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+    })
+    driver.startWorker('q')
+    await tick()
+    expect(errors).toMatchObject([{ source: 'connection' }])
+  })
+
+  it('an ack that throws (channel torn down) is routed to onError, never an unhandled rejection', async () => {
+    const ch = new FakeChannel()
+    ch.ack = () => {
+      throw new Error('channel closed')
+    }
+    const errors: unknown[] = []
+    const driver = new RabbitmqQueueDriver({
+      url: 'amqp://test',
+      onError: (e) => void errors.push(e),
+      connect: async () => ({ createChannel: async () => ch, close: async () => {} }),
+    })
+    driver.setExecutor(async () => {})
+    driver.startWorker('q')
+    await ch.ready
+    ch.deliver({ 'x-basalt-job': 'j', 'x-basalt-attempt': 1, 'x-basalt-attempts': 1 }, {})
+    await tick()
+    expect(errors.length).toBe(1)
+    expect(ch.sent).toHaveLength(0) // no publish storm onto the dead channel
+  })
+})

@@ -153,3 +153,19 @@ route({
 
 Because these pages fetch same-origin with no embedded secrets, they're safe to
 serve from your app's origin.
+
+### Content-Security-Policy
+
+Each page ships inline `<style>`/`<script>` blocks that the app-wide
+`DEFAULT_CSP` from `securityPlugin` would block. You do NOT need to disable CSP
+globally: every `*UiRoutes()`/`auditViewerRoutes()` sets a **route-scoped** CSP
+on its own response by default — everything locked down, the page's inline
+script allowed only by its sha256 hash (exported as `apiKeysPageCsp`,
+`teamsPageCsp`, `billingPageCsp`, `auditViewerCsp`). Pass `csp: '…'` to override
+or `csp: false` to opt out. If you serve the raw `…PageHtml()` string yourself,
+set the matching `…PageCsp()` header on that route.
+
+Server-side inputs (`title`, `roles`) are HTML-escaped, and embedded state
+(`apiBase`, `headers`, `roles`) is serialized so it cannot terminate the script
+block — but `headers` values still end up in the page source, so never put
+secrets in them.

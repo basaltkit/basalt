@@ -205,3 +205,46 @@ describe('HTML layout', () => {
     expect(driver.sent[0]!.html).toBeUndefined()
   })
 })
+
+describe('log driver body redaction (S-6)', () => {
+  it('redacts the body in production by default — reset links must not land in log aggregators', async () => {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      const lines: string[] = []
+      const mailer = new Mailer(new LogMailDriver((line) => void lines.push(line)), {
+        from: 'noreply@basalt.dev',
+      })
+      await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com' })
+      expect(lines[0]).toContain('welcome') // metadata stays
+      expect(lines[0]).toContain('ada@example.com')
+      expect(lines[0]).not.toContain('Hello Ada') // body redacted
+      expect(lines[0]).toContain('redacted')
+    } finally {
+      process.env.NODE_ENV = prev
+    }
+  })
+
+  it('logs the body in production only with an explicit logBody: true', async () => {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      const lines: string[] = []
+      const mailer = new Mailer(new LogMailDriver((line) => void lines.push(line), { logBody: true }), {
+        from: 'noreply@basalt.dev',
+      })
+      await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com' })
+      expect(lines[0]).toContain('Welcome, Ada!')
+    } finally {
+      process.env.NODE_ENV = prev
+    }
+  })
+
+  it('mailerPlugin fails loud on an unrecognized driver instead of silently logging mail', async () => {
+    const app = await createApp({
+      plugins: [mailerPlugin({ driver: 'smpt' as never, from: 'noreply@basalt.dev' })],
+    }).boot()
+    expect(() => app.container.get(MAILER)).toThrow(/[Uu]nknown mail driver/)
+    await app.shutdown()
+  })
+})

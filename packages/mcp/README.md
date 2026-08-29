@@ -112,3 +112,11 @@ createApp({ plugins: [mcpClientPlugin({ servers: {
 `pnpm --filter @basaltkit/mcp test` — protocol conformance, an HTTP round-trip on
 **all three adapters** (client → server → route handler, with tenancy), and stdio
 server + client round-trips.
+
+## Rate limiting `/mcp`
+
+`mcpRoutes({ rateLimit: { limit, windowMs } })` stamps `meta.rateLimit` on the
+endpoint so `securityPlugin` enforces a dedicated budget. A tool route's own
+`meta.rateLimit` applies to its direct HTTP registration only — not when it is
+invoked as a tool through `/mcp` — so this budget is the throttle for tool
+traffic.

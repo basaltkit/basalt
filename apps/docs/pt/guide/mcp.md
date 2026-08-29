@@ -186,6 +186,14 @@ O transporte HTTP é um `route()` neutro, verificado nos três adaptadores — a
 superfície de tools independentemente do servidor por baixo.
 
 
+Num deployment exposto, dá ao `/mcp` o seu próprio orçamento de rate limit:
+`mcpRoutes({ rateLimit: { limit: 30, windowMs: 60_000 } })` aplica
+`meta.rateLimit` à rota, e o `securityPlugin` impõe-no num bucket dedicado.
+Nota que o `meta.rateLimit` próprio de uma rota-ferramenta pertence ao seu
+registo HTTP direto — não é aplicado quando a rota é invocada como tool através
+do `/mcp`, portanto o orçamento do `/mcp` é o throttle do tráfego de tools.
+(Auth e guards correm de forma idêntica em ambos os caminhos.)
+
 ## Testar com o MCP Inspector
 
 O [MCP Inspector](https://github.com/modelcontextprotocol/inspector) liga-se ao

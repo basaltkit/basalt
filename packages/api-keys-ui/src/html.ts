@@ -1,7 +1,75 @@
+import { escapeHtml, pageCsp, scriptJson } from '@basaltkit/http'
+
 export interface ApiKeysPageOptions {
   /** Base path where the API-key JSON routes are mounted. Default '' (same origin). */
   apiBase?: string
   title?: string
+}
+
+// The inline script, built separately so the page and its CSP hash (see
+// apiKeysPageCsp) are computed from the exact same source text. Server-side
+// state is embedded with scriptJson (a crafted value cannot terminate the
+// script block); API responses are rendered client-side through esc(), whose
+// charset includes quotes because the values land in quoted attributes.
+const pageScript = (apiBase: string): string => `
+const API = ${scriptJson(apiBase)};
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const opts = { credentials: 'same-origin', headers: { 'content-type': 'application/json' } };
+
+async function list() {
+  const keys = await fetch(API + '/apikeys', opts).then((r) => r.json());
+  const rows = document.getElementById('rows');
+  if (!Array.isArray(keys) || keys.length === 0) {
+    rows.innerHTML = '<tr><td colspan="4" class="empty muted">No API keys yet.</td></tr>';
+    return;
+  }
+  rows.innerHTML = keys.map((k) =>
+    '<tr><td><code>' + esc(k.prefix) + '…</code></td>' +
+    '<td>' + esc((k.scopes || []).join(', ')) + '</td>' +
+    '<td class="muted">' + (k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : 'never') + '</td>' +
+    '<td><button class="link" data-id="' + esc(k.id) + '">Revoke</button></td></tr>').join('');
+  for (const b of rows.querySelectorAll('button[data-id]')) {
+    b.addEventListener('click', async () => {
+      if (!confirm('Revoke this key? Any client using it will stop working.')) return;
+      await fetch(API + '/apikeys/' + b.dataset.id, { ...opts, method: 'DELETE' });
+      list();
+    });
+  }
+}
+
+document.getElementById('create').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const scopes = String(f.get('scopes') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const body = JSON.stringify({ name: f.get('name'), ...(scopes.length ? { scopes } : {}) });
+  const created = await fetch(API + '/apikeys', { ...opts, method: 'POST', body }).then((r) => r.json());
+  if (created && created.key) {
+    document.getElementById('newkey').textContent = created.key;
+    document.getElementById('reveal').style.display = 'block';
+  }
+  e.target.reset();
+  list();
+});
+
+document.getElementById('copy').addEventListener('click', () => {
+  navigator.clipboard && navigator.clipboard.writeText(document.getElementById('newkey').textContent);
+});
+
+list();
+`
+
+/**
+ * The Content-Security-Policy matching {@link apiKeysPageHtml}: everything
+ * locked down, the page's inline script allowed by sha256 hash. Served by
+ * default from `apiKeysUiRoutes` so the page works under `securityPlugin`
+ * without weakening the app-wide policy.
+ */
+export function apiKeysPageCsp(options: ApiKeysPageOptions = {}): string {
+  const apiBase = options.apiBase ?? ''
+  return pageCsp({
+    scripts: [pageScript(apiBase)],
+    ...(/^https?:\/\//.test(apiBase) ? { connect: [new URL(apiBase).origin] } : {}),
+  })
 }
 
 /**
@@ -12,7 +80,7 @@ export interface ApiKeysPageOptions {
  */
 export function apiKeysPageHtml(options: ApiKeysPageOptions = {}): string {
   const apiBase = options.apiBase ?? ''
-  const title = options.title ?? 'API keys'
+  const title = escapeHtml(options.title ?? 'API keys')
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -62,52 +130,7 @@ export function apiKeysPageHtml(options: ApiKeysPageOptions = {}): string {
   <tbody id="rows"></tbody>
 </table>
 
-<script>
-const API = ${JSON.stringify(apiBase)};
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const opts = { credentials: 'same-origin', headers: { 'content-type': 'application/json' } };
-
-async function list() {
-  const keys = await fetch(API + '/apikeys', opts).then((r) => r.json());
-  const rows = document.getElementById('rows');
-  if (!Array.isArray(keys) || keys.length === 0) {
-    rows.innerHTML = '<tr><td colspan="4" class="empty muted">No API keys yet.</td></tr>';
-    return;
-  }
-  rows.innerHTML = keys.map((k) =>
-    '<tr><td><code>' + esc(k.prefix) + '…</code></td>' +
-    '<td>' + esc((k.scopes || []).join(', ')) + '</td>' +
-    '<td class="muted">' + (k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : 'never') + '</td>' +
-    '<td><button class="link" data-id="' + esc(k.id) + '">Revoke</button></td></tr>').join('');
-  for (const b of rows.querySelectorAll('button[data-id]')) {
-    b.addEventListener('click', async () => {
-      if (!confirm('Revoke this key? Any client using it will stop working.')) return;
-      await fetch(API + '/apikeys/' + b.dataset.id, { ...opts, method: 'DELETE' });
-      list();
-    });
-  }
-}
-
-document.getElementById('create').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const scopes = String(f.get('scopes') || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const body = JSON.stringify({ name: f.get('name'), ...(scopes.length ? { scopes } : {}) });
-  const created = await fetch(API + '/apikeys', { ...opts, method: 'POST', body }).then((r) => r.json());
-  if (created && created.key) {
-    document.getElementById('newkey').textContent = created.key;
-    document.getElementById('reveal').style.display = 'block';
-  }
-  e.target.reset();
-  list();
-});
-
-document.getElementById('copy').addEventListener('click', () => {
-  navigator.clipboard && navigator.clipboard.writeText(document.getElementById('newkey').textContent);
-});
-
-list();
-</script>
+<script>${pageScript(apiBase)}</script>
 </body>
 </html>`
 }

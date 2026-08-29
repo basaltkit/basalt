@@ -48,7 +48,41 @@ schedule.call('digest', sendDigest)
 ```
 
 Sem `onFailure`, os erros são agregados sem crashar o processo. Precisas de cron cru?
-`schedule.call('x', fn).cron('*/5 * * * *')` é o escape hatch.
+`schedule.call('x', fn).cron('*/5 * * * *')` é o escape hatch — a expressão é
+validada no momento da definição (sintaxe suportada: `*`, `*/n`, valores únicos,
+intervalos `a-b`, listas com vírgulas; nomes como `MON` são rejeitados com um
+`CronParseError` em vez de nunca dispararem silenciosamente).
+
+## Múltiplas réplicas: `.onOneServer()`
+
+`withoutOverlapping()` protege UM processo. Num deployment escalado
+horizontalmente cada réplica tem o seu próprio scheduler, por isso uma entrada
+`daily()` simples corre em todos os pods — N× a tua reconciliação de billing.
+Marca a entrada com `.onOneServer()` e dá ao plugin um lock atómico entre
+réplicas (qualquer store com set-if-absent + TTL; Redis como exemplo):
+
+```ts
+import { schedulerPlugin, type ScheduleLock } from '@basaltkit/scheduler'
+
+const lock: ScheduleLock = {
+  async acquire(key, ttlMs) {
+    return (await redis.set(key, '1', 'PX', ttlMs, 'NX')) === 'OK'
+  },
+}
+
+schedulerPlugin({
+  lock,
+  define: (schedule) => {
+    schedule.job(ReconcileBilling).daily().at('03:00').onOneServer()
+  },
+})
+```
+
+Exatamente uma réplica adquire a chave por entrada e por minuto e corre a
+tarefa; as outras saltam esse tick. Usar `.onOneServer()` sem `lock` falha alto
+no boot — correr silenciosamente em todas as réplicas é precisamente o modo de
+falha que isto existe para prevenir. Triggers manuais (`runNow`,
+`basalt schedule:run`) ignoram o lock de propósito.
 
 ## Integração com queue & testes
 

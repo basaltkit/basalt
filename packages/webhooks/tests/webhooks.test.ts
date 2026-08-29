@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createApp } from '@basaltkit/core'
+import { createApp, runWithContext } from '@basaltkit/core'
 import { defineEvent, EVENTS, eventsPlugin } from '@basaltkit/events'
 import {
   MemoryWebhookStore,
@@ -201,5 +201,48 @@ describe('webhooksPlugin', () => {
 
     expect(delivered).toContain('ep:invoice.paid')
     await app.shutdown()
+  })
+})
+
+describe('ambient-tenant fail-closed scoping (A-1)', () => {
+  const managerWith = async () => {
+    const store = new MemoryWebhookStore()
+    const fetchImpl = vi.fn(async () => okResponse())
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: publicDns })
+    const manager = new WebhookManager(store, deliverer)
+    const acme = await store.add({ url: 'https://acme.example/hook', events: ['*'], tenantId: 'acme' })
+    const globex = await store.add({ url: 'https://globex.example/hook', events: ['*'], tenantId: 'globex' })
+    return { store, manager, fetchImpl, acme, globex }
+  }
+  const asTenant = <T>(id: string, fn: () => T): T =>
+    runWithContext({ tenant: { id } } as never, fn)
+
+  it('list() inside a tenant context is forced to that tenant — a caller-supplied id cannot widen it', async () => {
+    const { manager } = await managerWith()
+    const listed = await asTenant('acme', () => manager.list())
+    expect(listed.map((e) => e.tenantId)).toEqual(['acme'])
+    // anti-widening: client input forwarded as the argument is overridden
+    const widened = await asTenant('acme', () => manager.list('globex'))
+    expect(widened.map((e) => e.tenantId)).toEqual(['acme'])
+  })
+
+  it('dispatch() inside a tenant context cannot deliver that tenant event to other tenants endpoints', async () => {
+    const { manager, fetchImpl } = await managerWith()
+    await asTenant('acme', () => manager.dispatch('invoice.paid', { secret: 'acme-data' }))
+    const urls = fetchImpl.mock.calls.map((c) => String((c as unknown[])[0]))
+    expect(urls.some((u) => u.includes('globex.example'))).toBe(false)
+    expect(urls.some((u) => u.includes('acme.example'))).toBe(true)
+  })
+
+  it('without a tenant in context, explicit arguments and system-wide behavior are unchanged', async () => {
+    const { manager } = await managerWith()
+    expect((await manager.list()).length).toBe(2) // system scope preserved (single-tenant apps)
+    expect((await manager.list('globex')).map((e) => e.tenantId)).toEqual(['globex'])
+  })
+
+  it('unregister() in a tenant context cannot delete another tenant endpoint', async () => {
+    const { manager, store, globex } = await managerWith()
+    await asTenant('acme', () => manager.unregister(globex.id))
+    expect((await store.list()).length).toBe(2) // no cross-tenant delete
   })
 })

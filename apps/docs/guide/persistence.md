@@ -254,6 +254,14 @@ outboxPlugin({
 })
 ```
 
+Relay semantics (since events 1.1): the automatic capture is **awaited** — if
+the outbox write fails, the `emit()` call fails, instead of the event being
+silently dropped while the outbox promises at-least-once. Overlapping flush
+ticks coalesce (a slow dispatch can't double-deliver its own batch), failed
+entries retry with exponential backoff (`backoff` option; process-local, no
+schema change), and an entry that exhausts `maxAttempts` is reported through
+`onDead` (default: `console.error`) and left in the store with its `lastError`.
+
 The SQLite backend keeps a partial index on un-published rows so the relay's
 "what's pending?" scan stays cheap. The Prisma backend puts the outbox in your
 primary database — the point of the pattern: enqueue the event **in the same

@@ -330,6 +330,14 @@ The sync driver always runs immediately. Delays, timed backoff, and priority onl
 **Do I need Redis to run the tests?**
 No. Without `connection`, the plugin uses `SyncQueueDriver`. You can also instantiate the driver directly and inspect `driver.executed`.
 
+## Sync driver semantics
+
+The inline sync driver (the default without a `connection`) is at-most-once:
+handler errors reject `dispatch()` and an exhausted job is lost. Selecting it
+implicitly in production logs a boot warning — pass `driver: new
+SyncQueueDriver()` to opt in deliberately. Its `executed[]` history is capped
+at 1000 entries.
+
 ## How it connects to other modules
 
 - **`@basaltkit/core`** — provides `createApp`/`definePlugin` (`queuePlugin` is a core plugin), the ALS context (`runWithContext`/`ctx`) propagated to workers, `parseDuration` (formats `'30s'`, `'10m'`), and the base `BasaltError` class.

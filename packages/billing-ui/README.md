@@ -74,6 +74,16 @@ Subdomain-based apps need nothing extra.
 - `billingUiRoutes({ plans, path?, apiBase?, title?, headers? })` — the routes (`plans` is the same object you gave to `subscriptionsPlugin`).
 - `billingPageHtml(options)` — the HTML as a string, for serving it your own way.
 
+## Content-Security-Policy
+
+The route sets a route-scoped CSP by default: everything locked down and the
+page's inline script allowed only by sha256 hash (exported as `billingPageCsp`). It
+works under `securityPlugin`'s strict app-wide CSP — do not disable CSP
+globally. Override with `csp: '…'` or opt out with `csp: false`; if you serve
+the raw HTML string yourself, set the matching CSP header on that route.
+Server-side inputs are HTML-escaped and embedded state cannot terminate the
+script block.
+
 ## How it connects to other modules
 
 - **`@basaltkit/subscriptions`** — plans, Checkout, Portal, subscription state.

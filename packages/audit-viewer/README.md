@@ -81,6 +81,16 @@ Registers the `AUDIT_VIEWER` token. `bucketMs` is the timeline bucket size (defa
 
 > Note: the extra filtering (source/until) and the aggregation happen in memory over the result of `Audit.trail`. For very large trails, use an `AuditStore` with rich database querying.
 
+## Content-Security-Policy
+
+The route sets a route-scoped CSP by default: everything locked down and the
+page's inline script allowed only by sha256 hash (exported as `auditViewerCsp`). It
+works under `securityPlugin`'s strict app-wide CSP — do not disable CSP
+globally. Override with `csp: '…'` or opt out with `csp: false`; if you serve
+the raw HTML string yourself, set the matching CSP header on that route.
+Server-side inputs are HTML-escaped and embedded state cannot terminate the
+script block.
+
 ## How it connects to other modules
 
 - **`@basaltkit/audit`** — the immutable source of the trail (this module only reads it).

@@ -106,6 +106,13 @@ Registers the `I18N` token. `locales` is `{ [locale]: catalog }`.
 
 > Note: through the `I18N` token, the catalog's generic type is erased. Import the instance created with `defineMessages` directly from your module to keep the key names/types.
 
+## Locale validation
+
+The resolved locale is client-controlled data: an invalid BCP-47 tag
+(`en_US`, `!!`) falls back to `defaultLocale` before reaching `Intl`, so a bad
+profile field cannot 500 every formatted page. Catalog lookup uses
+`Object.hasOwn`, so `__proto__`/`constructor` never resolve prototype members.
+
 ## How it connects to other modules
 
 - **`@basaltkit/core`** — provides the request context from which the locale comes.

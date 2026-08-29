@@ -61,6 +61,14 @@ export interface SqsDriverOptions {
   waitTimeSeconds?: number
   /** Visibility timeout while a message is being processed, seconds. Default 30. */
   visibilityTimeout?: number
+  /**
+   * A receive call failed (network/credentials/queue gone). Without this the
+   * poller used to retry silently and immediately — a hot spin with zero log
+   * output on a persistent fault. Default: console.error with context.
+   */
+  onError?: (error: unknown, info: { queue: string }) => void
+  /** Pause between consecutive failed receives, ms. Default 1000. */
+  errorPauseMs?: number
   /** Injectable SQS API — defaults to the AWS SDK. Tests pass a fake. */
   api?: SqsApi
 }
@@ -92,11 +100,17 @@ export class SqsQueueDriver implements QueueDriver {
   private readonly deadSuffix: string
   private readonly waitTimeSeconds: number
   private readonly visibilityTimeout: number
+  private readonly onError: (error: unknown, info: { queue: string }) => void
+  private readonly errorPauseMs: number
 
   constructor(private readonly options: SqsDriverOptions) {
     this.deadSuffix = options.deadSuffix ?? '-dead'
     this.waitTimeSeconds = options.waitTimeSeconds ?? 20
     this.visibilityTimeout = options.visibilityTimeout ?? 30
+    this.onError =
+      options.onError ??
+      ((error, info) => console.error(`[basalt:queue] sqs receive error (queue "${info.queue}"):`, error))
+    this.errorPauseMs = options.errorPauseMs ?? 1000
   }
 
   setExecutor(executor: JobExecutor): void {
@@ -148,8 +162,15 @@ export class SqsQueueDriver implements QueueDriver {
           waitTimeSeconds: this.waitTimeSeconds,
           visibilityTimeout: this.visibilityTimeout,
         })
-      } catch {
+      } catch (error) {
         if (!this.running) break
+        // Surface the fault and back off — a persistent error must not become
+        // a silent, CPU-burning hot spin against the SQS endpoint.
+        this.onError(error, { queue })
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, this.errorPauseMs)
+          timer.unref?.()
+        })
         continue
       }
       for (const message of messages) await this.handle(queue, message)

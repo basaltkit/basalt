@@ -70,3 +70,29 @@ describe('i18nPlugin', () => {
     await app.shutdown()
   })
 })
+
+describe('hostile/invalid locales (S-7)', () => {
+  it('falls back to the default locale when the resolved locale is not a valid Intl locale', () => {
+    // en_US (underscore) and '!!' both make Intl constructors throw RangeError.
+    for (const bad of ['en_US', '!!', '']) {
+      const i18n = make(() => bad)
+      expect(i18n.n(1234.5)).toBe('1,234.5') // formatted via defaultLocale, not a 500
+      expect(i18n.currency(9.9, 'USD')).toBe('$9.90')
+      expect(i18n.date(new Date('2026-01-05T00:00:00Z'), { timeZone: 'UTC', year: 'numeric' })).toBe('2026')
+    }
+  })
+
+  it('in() with an invalid locale formats with the default locale instead of throwing', () => {
+    const i18n = make()
+    expect(() => i18n.in('en_US').n(1)).not.toThrow()
+    expect(i18n.in('en_US').locale).toBe('en')
+  })
+
+  it('__proto__/constructor locales cannot reach prototype members via the catalog lookup', () => {
+    const i18n = make(() => '__proto__')
+    // catalog negotiation must not treat Object.prototype members as catalogs
+    expect(i18n.t('hi', { name: 'Ada' })).toBe('Hi Ada')
+    const i18n2 = make(() => 'constructor')
+    expect(i18n2.t('hi', { name: 'Ada' })).toBe('Hi Ada')
+  })
+})
