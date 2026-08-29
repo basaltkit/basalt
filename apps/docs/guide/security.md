@@ -318,6 +318,26 @@ createApp({
 route({ method: 'POST', url: '/tenants', meta: { central: true }, /* … */ })
 ```
 
+By default the guard checks membership **existence** — any membership record
+passes, so custom roles absent from `roleRank` are not rejected; pass
+`role: 'member'` (or higher) to enforce rank semantics. Two more options:
+
+```ts
+tenantMembershipPlugin({
+  // WHO-based escape: platform admins / support cross tenants legitimately.
+  // Prefer this over meta.central when the exemption is about the caller —
+  // central disables the guard for everyone on that route.
+  exempt: ({ user }) => (user as { platformAdmin?: boolean })?.platformAdmin === true,
+
+  // Opt-in decision cache: without it, each authenticated tenant request costs
+  // one indexed membership lookup (usually fine). Cached decisions are dropped
+  // immediately by the team:joined/role_changed/member_removed hooks in the
+  // same process; ttlMs only bounds staleness for changes made on ANOTHER
+  // replica — a member removed elsewhere may retain access for up to ttlMs.
+  cache: { ttlMs: 30_000 },
+})
+```
+
 ### 3. Automatic tenant scoping covers the ORM — not raw SQL or nested writes
 
 The Prisma tenancy extension scopes standard model operations and **fails

@@ -322,6 +322,27 @@ createApp({
 route({ method: 'POST', url: '/tenants', meta: { central: true }, /* … */ })
 ```
 
+Por omissão o guard verifica a **existência** de membership — qualquer registo
+de membership passa, por isso roles personalizados ausentes do `roleRank` não
+são rejeitados; passa `role: 'member'` (ou superior) para impor semântica de
+rank. Mais duas opções:
+
+```ts
+tenantMembershipPlugin({
+  // Escape baseado em QUEM chama: admins de plataforma / suporte cruzam
+  // tenants legitimamente. Prefere isto a meta.central quando a exceção é
+  // sobre o chamador — central desativa o guard para toda a gente nessa rota.
+  exempt: ({ user }) => (user as { platformAdmin?: boolean })?.platformAdmin === true,
+
+  // Cache de decisão opt-in: sem ela, cada pedido autenticado com tenant custa
+  // um lookup indexado de membership (normalmente ok). Decisões em cache são
+  // descartadas de imediato pelos hooks team:joined/role_changed/member_removed
+  // no mesmo processo; ttlMs apenas limita a staleness de alterações feitas
+  // NOUTRA réplica — um membro removido noutro lado pode manter acesso até ttlMs.
+  cache: { ttlMs: 30_000 },
+})
+```
+
 ### 3. O scoping automático de tenant cobre o ORM — não SQL bruto nem writes aninhados
 
 A extensão de tenancy do Prisma limita as operações de modelo padrão e **falha
