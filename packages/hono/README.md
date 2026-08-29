@@ -224,6 +224,7 @@ In this mode errors are still standardized (each handler wraps `toErrorResponse`
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
 | `app` | `Hono` | No | `new Hono()` | Bring your own Hono app; otherwise a new one is created. |
 
 Behavior: registers the Hono app on the `HONO` token and an `HttpServerCollector` on the `HTTP_SERVER` token. On the `app:booted` event it mounts, in order: *after-hooks* middleware (metrics/tracing, measuring duration), *pre-hooks* middleware (security/CORS/rate limit; if one of these responds, the route doesn't run), the Basalt routes, and the extra edge plugin routes (`/livez`, `/metrics`, `/openapi.json`, …). Publishes the routes to the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.

@@ -142,3 +142,14 @@ describe('tenancyPlugin + fastify (end to end)', () => {
     await app.shutdown()
   })
 })
+
+describe('tenancy:active metadata marker', () => {
+  it('registering tenancyPlugin advertises multi-tenancy for other plugins (e.g. cache fail-closed defaults)', async () => {
+    const app = await createApp({
+      plugins: [tenancyPlugin({ source: source(), resolvers: [headerResolver()] })],
+    }).boot()
+    const { ensureMetadata } = await import('@basaltkit/core')
+    expect(ensureMetadata(app.container).get('tenancy:active')).toEqual([true])
+    await app.shutdown()
+  })
+})

@@ -124,3 +124,77 @@ describe('KafkaQueueDriver', () => {
     expect(kafka.prod.sent).toHaveLength(0) // nothing re-produced
   })
 })
+
+describe('infrastructure-fault observability (onError — sibling pattern of rabbitmq/sqs)', () => {
+  it('a worker connect failure at boot surfaces via onError, never as an unhandled rejection', async () => {
+    const kafka = new FakeKafka()
+    kafka.cons.connect = async () => {
+      throw new Error('broker unreachable')
+    }
+    const seen: { error: unknown; info: { source: string; queue?: string } }[] = []
+    const driver = new KafkaQueueDriver({
+      brokers: ['x:9092'],
+      client: kafka,
+      onError: (error, info) => seen.push({ error, info }),
+    })
+    const unhandled: unknown[] = []
+    const trap = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', trap)
+    try {
+      driver.startWorker('mail')
+      await new Promise((r) => setTimeout(r, 20))
+    } finally {
+      process.off('unhandledRejection', trap)
+    }
+    expect(unhandled).toEqual([])
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.info).toEqual({ source: 'consumer', queue: 'mail' })
+    expect((seen[0]!.error as Error).message).toBe('broker unreachable')
+  })
+
+  it('a failed retry re-publish surfaces via onError AND rethrows (offset must not commit — job not lost)', async () => {
+    const kafka = new FakeKafka()
+    const seen: { source: string; queue?: string }[] = []
+    const driver = new KafkaQueueDriver({
+      brokers: ['x:9092'],
+      client: kafka,
+      onError: (_error, info) => seen.push(info),
+    })
+    driver.setExecutor(async () => {
+      throw new Error('job failed')
+    })
+    driver.startWorker('mail')
+    await kafka.cons.ready
+    kafka.prod.send = async () => {
+      throw new Error('producer down')
+    }
+    await expect(
+      kafka.cons.deliver('mail', { 'x-basalt-job': 'send', 'x-basalt-attempt': '1', 'x-basalt-attempts': '3' }, { to: 'x' }),
+    ).rejects.toThrow('producer down')
+    expect(seen).toEqual([{ source: 'producer', queue: 'mail' }])
+  })
+
+  it('default onError logs with context instead of crashing (no option passed)', async () => {
+    const kafka = new FakeKafka()
+    kafka.cons.subscribe = async () => {
+      throw new Error('acl denied')
+    }
+    const driver = driverWith(kafka)
+    const unhandled: unknown[] = []
+    const trap = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', trap)
+    const errors: unknown[][] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => void errors.push(args)
+    try {
+      driver.startWorker('mail')
+      await new Promise((r) => setTimeout(r, 20))
+    } finally {
+      console.error = original
+      process.off('unhandledRejection', trap)
+    }
+    expect(unhandled).toEqual([])
+    expect(errors.length).toBe(1)
+    expect(String(errors[0]![0])).toContain('kafka')
+  })
+})

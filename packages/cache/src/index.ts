@@ -2,6 +2,7 @@ import {
   BasaltError,
   createToken,
   definePlugin,
+  ensureMetadata,
   parseDuration,
   tryCtx,
   type DurationInput,
@@ -284,7 +285,17 @@ export function cachePlugin(options: CachePluginOptions = {}) {
             : options.driver === 'redis'
               ? RedisCacheDriver.fromUrl(options.url as string)
               : new MemoryCacheDriver()
-        return new Cache(driver, options)
+        // Fail closed by default in multi-tenant apps: when @basaltkit/tenancy
+        // is registered (its 'tenancy:active' metadata marker), an operation
+        // with no resolvable tenant scope throws instead of silently sharing
+        // one global namespace across tenants. Single-tenant apps (no tenancy)
+        // are untouched, and an explicit `onMissingScope`/custom `scope` wins.
+        const tenancyActive = ensureMetadata(container).get('tenancy:active').length > 0
+        const resolved: CacheOptions =
+          options.onMissingScope === undefined && options.scope === undefined && tenancyActive
+            ? { ...options, onMissingScope: 'error' }
+            : options
+        return new Cache(driver, resolved)
       })
     },
     async shutdown() {

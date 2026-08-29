@@ -75,6 +75,9 @@ export function authPlugin(options: AuthPluginOptions) {
         if (route.meta?.['auth'] === true && !context.user) throw new AuthRequiredError()
       }
       metadata.add('http:guards', guard)
+      // Claim `meta.auth` so the adapters' boot check knows this key is
+      // enforced (routes declaring it without this plugin fail loud at boot).
+      metadata.add('http:guarded-meta', 'auth')
     },
   })
 }

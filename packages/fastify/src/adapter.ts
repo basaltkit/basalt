@@ -14,6 +14,8 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
+  GUARDED_META_BUCKET,
+  assertRoutesGuarded,
 } from '@basaltkit/http'
 import Fastify, {
   type FastifyError,
@@ -69,6 +71,13 @@ class FastifyReplyAdapter implements HttpReply {
 }
 export interface FastifyPluginOptions {
   routes?: BasaltRoute[]
+  /**
+   * Waives the boot-time check that every route declaring security meta
+   * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
+   * `true` to waive everything (e.g. authentication handled at an outer
+   * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   */
+  allowUnguardedMeta?: boolean | string[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
   fastify?: FastifyServerOptions
   /**
@@ -128,6 +137,13 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       const metadata = ensureMetadata(container)
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
+      // Fail loud BEFORE traffic if a route declares security meta (auth/can/
+      // teamRole) that no registered guard enforces — it would serve open.
+      assertRoutesGuarded(
+        routes,
+        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
+        options.allowUnguardedMeta,
+      )
       const instance = container.get(FASTIFY)
       registerRoutes(instance, routes, container, enrichers, guards)
       // Mount edge-plugin hooks/routes once every plugin has registered them.

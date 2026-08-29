@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, runWithContext } from '@basaltkit/core'
+import { createApp, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
 import { Cache, CACHE, cachePlugin, MemoryCacheDriver, MissingCacheScopeError } from '../src/index.js'
 
 const makeCache = (options = {}) => new Cache(new MemoryCacheDriver(), options)
@@ -120,6 +120,62 @@ describe('Cache (driver memory)', () => {
     const app = await createApp({ plugins: [cachePlugin({ driver })] }).boot()
     await app.container.get(CACHE).put('k', 1)
     expect(await driver.get('basalt:k')).toBe(1) // wrote through the provided instance
+    await app.shutdown()
+  })
+})
+
+describe('tenancy-aware onMissingScope default (fail closed when tenancy is active)', () => {
+  /** Simulates @basaltkit/tenancy's presence via its metadata marker. */
+  const fakeTenancyMarker = definePlugin({
+    name: 'fake-tenancy-marker',
+    register({ container }) {
+      ensureMetadata(container).add('tenancy:active', true)
+    },
+  })
+
+  it('with tenancy active, an operation OUTSIDE tenant context throws MissingCacheScopeError', async () => {
+    const app = await createApp({ plugins: [fakeTenancyMarker, cachePlugin({ driver: 'memory' })] }).boot()
+    const cache = app.container.get(CACHE)
+    await expect(cache.put('plan-limits', { max: 5 })).rejects.toBeInstanceOf(MissingCacheScopeError)
+    await expect(cache.get('plan-limits')).rejects.toBeInstanceOf(MissingCacheScopeError)
+    await app.shutdown()
+  })
+
+  it('with tenancy active, operations INSIDE tenant context still work (scoped)', async () => {
+    const app = await createApp({ plugins: [fakeTenancyMarker, cachePlugin({ driver: 'memory' })] }).boot()
+    const cache = app.container.get(CACHE)
+    await runWithContext({ tenant: { id: 't1' } } as never, async () => {
+      await cache.put('k', 'v')
+      expect(await cache.get('k')).toBe('v')
+    })
+    await app.shutdown()
+  })
+
+  it('without tenancy, the global namespace keeps working (single-tenant apps unaffected)', async () => {
+    const app = await createApp({ plugins: [cachePlugin({ driver: 'memory' })] }).boot()
+    const cache = app.container.get(CACHE)
+    await cache.put('k', 'v')
+    expect(await cache.get('k')).toBe('v')
+    await app.shutdown()
+  })
+
+  it("an explicit onMissingScope: 'global' opts out even with tenancy active", async () => {
+    const app = await createApp({
+      plugins: [fakeTenancyMarker, cachePlugin({ driver: 'memory', onMissingScope: 'global' })],
+    }).boot()
+    const cache = app.container.get(CACHE)
+    await cache.put('k', 'v')
+    expect(await cache.get('k')).toBe('v')
+    await app.shutdown()
+  })
+
+  it('a custom scope function is left alone (the caller owns its semantics)', async () => {
+    const app = await createApp({
+      plugins: [fakeTenancyMarker, cachePlugin({ driver: 'memory', scope: () => undefined })],
+    }).boot()
+    const cache = app.container.get(CACHE)
+    await cache.put('k', 'v') // custom scope → historic 'global' default stands
+    expect(await cache.get('k')).toBe('v')
     await app.shutdown()
   })
 })

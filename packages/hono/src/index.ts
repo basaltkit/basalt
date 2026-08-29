@@ -14,6 +14,8 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
+  GUARDED_META_BUCKET,
+  assertRoutesGuarded,
   type SseProducer,
 } from '@basaltkit/http'
 import { Hono, type Context, type Next } from 'hono'
@@ -164,6 +166,13 @@ export function registerRoutes(
 
 export interface HonoPluginOptions {
   routes?: BasaltRoute[]
+  /**
+   * Waives the boot-time check that every route declaring security meta
+   * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
+   * `true` to waive everything (e.g. authentication handled at an outer
+   * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   */
+  allowUnguardedMeta?: boolean | string[]
   /** Bring your own Hono app; otherwise a fresh one is created. */
   app?: Hono<any>
   /**
@@ -200,6 +209,13 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
       const metadata = ensureMetadata(container)
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
+      // Fail loud BEFORE traffic if a route declares security meta (auth/can/
+      // teamRole) that no registered guard enforces — it would serve open.
+      assertRoutesGuarded(
+        routes,
+        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
+        options.allowUnguardedMeta,
+      )
 
       // Mount once edge plugins have registered their hooks/routes.
       const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT

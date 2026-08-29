@@ -14,6 +14,8 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
+  GUARDED_META_BUCKET,
+  assertRoutesGuarded,
 } from '@basaltkit/http'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
@@ -115,6 +117,13 @@ export function registerRoutes(
 
 export interface ExpressPluginOptions {
   routes?: BasaltRoute[]
+  /**
+   * Waives the boot-time check that every route declaring security meta
+   * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
+   * `true` to waive everything (e.g. authentication handled at an outer
+   * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   */
+  allowUnguardedMeta?: boolean | string[]
   /** Bring your own Express app; otherwise one is created with `express.json()`. */
   app?: Express
   /**
@@ -151,6 +160,13 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
       const metadata = ensureMetadata(container)
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
+      // Fail loud BEFORE traffic if a route declares security meta (auth/can/
+      // teamRole) that no registered guard enforces — it would serve open.
+      assertRoutesGuarded(
+        routes,
+        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
+        options.allowUnguardedMeta,
+      )
       const router = app as unknown as Record<string, Register>
 
       // Mount everything once edge plugins have registered their hooks/routes,

@@ -254,23 +254,27 @@ can't decide them for you. Get these right in every deployment.
 
 ### 1. Authorization is explicit — declare a guard, don't just declare intent
 
-A route's `meta.can` (or `meta.teamRole`) documents *what* the route needs, but
-the **guard that enforces it must actually be registered**. A declared-but-
-unguarded route is **open**: there is no implicit default-deny that blocks a
-request just because a permission was named.
+A route's `meta.auth` / `meta.can` / `meta.teamRole` documents *what* the route
+needs, but the **guard that enforces it must actually be registered**. A
+declared-but-unguarded route would be **open** — so the adapters refuse to boot
+it: at startup they verify that every declared security meta key has a
+registered guard claiming it (via the `http:guarded-meta` bucket) and fail loud
+listing every offending route.
 
 ```ts
-// ❌ meta says "admin", but nothing enforces it → the route is public
+// ❌ meta says "admin", but nothing enforces it → UnguardedRouteMetaError at BOOT
 route({ method: 'POST', url: '/admin/purge', meta: { can: 'admin' }, handler })
 
-// ✅ register the guard that reads meta and rejects unauthorized callers
-app.use(authorizationPlugin())        // enforces meta.can on every route
-app.use(teamsPlugin())                // enforces meta.teamRole
+// ✅ register the plugin whose guard enforces the key
+authPlugin(…)         // enforces meta.auth
+permissionsPlugin(…)  // enforces meta.can
+teamsPlugin(…)        // enforces meta.teamRole
 ```
 
-Treat "a route with a permission in `meta` but no matching guard in the
-pipeline" as a bug. A good pattern is a CI check that fails when any route
-declares `meta.can`/`meta.teamRole` while the enforcing plugin is absent.
+If protection genuinely happens at an outer edge/gateway, opt out explicitly
+with the adapter option `allowUnguardedMeta: true` (or `['auth', …]` for
+specific keys). A custom guard plugin that enforces one of these keys should
+claim it: `ensureMetadata(container).add('http:guarded-meta', 'auth')`.
 
 ### 2. Never trust a client-supplied tenant — verify membership
 
