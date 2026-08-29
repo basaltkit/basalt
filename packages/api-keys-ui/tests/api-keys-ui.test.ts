@@ -82,8 +82,11 @@ describe('escaping + route-scoped CSP (S-5)', () => {
     const { createHash } = await import('node:crypto')
     const html = apiKeysPageHtml({ apiBase: '/account' })
     const csp = apiKeysPageCsp({ apiBase: '/account' })
-    const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1]!
-    expect(csp).toContain(`'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`)
+    // Plain index extraction (not a sanitizer) — avoids regex-on-HTML patterns.
+    const script = html.slice(html.indexOf('<script>') + '<script>'.length, html.indexOf('</scr' + 'ipt>'))
+    // CSP script-hash source value (not a credential): sha256 per the CSP spec.
+    const cspScriptDigest = createHash('sha256').update(script, 'utf8').digest('base64')
+    expect(csp).toContain(`'sha256-${cspScriptDigest}'`)
     expect(csp).toContain("default-src 'none'")
   })
 

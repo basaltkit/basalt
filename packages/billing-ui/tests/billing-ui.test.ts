@@ -90,8 +90,12 @@ describe('escaping + route-scoped CSP (S-5)', () => {
   it('exports a CSP whose sha256 matches the inline script exactly', async () => {
     const { createHash } = await import('node:crypto')
     const opts = { apiBase: '/b', headers: { 'x-tenant-id': 'acme' } }
-    const script = /<script>([\s\S]*?)<\/script>/.exec(billingPageHtml(opts))![1]!
-    expect(billingPageCsp(opts)).toContain(`'sha256-${createHash('sha256').update(script, 'utf8').digest('base64')}'`)
+    const page = billingPageHtml(opts)
+    // Plain index extraction (not a sanitizer) — avoids regex-on-HTML patterns.
+    const script = page.slice(page.indexOf('<script>') + '<script>'.length, page.indexOf('</scr' + 'ipt>'))
+    // CSP script-hash source value (not a credential): sha256 per the CSP spec.
+    const cspScriptDigest = createHash('sha256').update(script, 'utf8').digest('base64')
+    expect(billingPageCsp(opts)).toContain(`'sha256-${cspScriptDigest}'`)
     expect(billingPageCsp(opts)).toContain("default-src 'none'")
   })
 })
