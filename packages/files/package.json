@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/files",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "File uploads for Basalt: validation (type/size), per-tenant storage quota, metadata records, signed URLs, and hooks (antivirus/thumbnails) over @basaltkit/storage.",
   "license": "MIT",
   "type": "module",
