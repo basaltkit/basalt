@@ -37,12 +37,17 @@ pnpm add zod
 import { defineMail } from '@basaltkit/mailer'
 import { z } from 'zod'
 
+import { defineMail, html } from '@basaltkit/mailer'
+
 export const WelcomeEmail = defineMail({
   name: 'welcome',
   schema: z.object({ name: z.string() }),
   subject: ({ name }) => `Welcome, ${name}!`,
   text: ({ name }) => `Hello ${name}`,
-  html: ({ name }) => `<h1>Hello ${name}</h1>`,
+  // Use the html`` tag for HTML bodies: every ${interpolation} is
+  // HTML-escaped, so user data can't inject markup into mail sent from your
+  // own domain. (Plain template strings are NOT escaped — prefer html``.)
+  html: ({ name }) => html`<h1>Hello ${name}</h1>`,
 })
 ```
 
