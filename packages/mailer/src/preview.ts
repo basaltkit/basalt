@@ -1,3 +1,4 @@
+import { escapeHtml } from './html.js'
 import { createServer, type Server } from 'node:http'
 import { Mailer, type MailerOptions } from './index.js'
 import { MemoryMailDriver } from './drivers/memory.js'
@@ -34,8 +35,6 @@ export interface PreviewResponse {
   body: string
 }
 
-const escapeHtml = (value: string): string =>
-  value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
 const nameOf = (p: MailPreview): string => p.mail.name
 

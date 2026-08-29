@@ -7,6 +7,8 @@ import type {
 
 /** The subset of an amqplib channel this driver uses. */
 export interface AmqpChannel {
+  /** amqplib channels are EventEmitters; optional so test fakes stay tiny. */
+  on?(event: 'error', listener: (error: unknown) => void): void
   assertQueue(queue: string, options?: Record<string, unknown>): Promise<unknown>
   sendToQueue(queue: string, content: Uint8Array, options?: Record<string, unknown>): boolean
   consume(
@@ -25,6 +27,8 @@ export interface AmqpMessage {
 }
 
 export interface AmqpConnection {
+  /** amqplib connections are EventEmitters; optional so test fakes stay tiny. */
+  on?(event: 'error', listener: (error: unknown) => void): void
   createChannel(): Promise<AmqpChannel>
   close(): Promise<void>
 }
@@ -55,6 +59,12 @@ const defaultConnect: AmqpConnect = async (url) => {
 export interface RabbitmqDriverOptions {
   /** AMQP URL, e.g. amqp://user:pass@host:5672. */
   url: string
+  /**
+   * Infra errors from the amqplib connection/channel emitters (broker gone,
+   * channel torn down). amqplib surfaces these as EventEmitter 'error' events
+   * — unhandled, they CRASH the process. Default: console.error with context.
+   */
+  onError?: (error: unknown, info: { source: 'connection' | 'channel' }) => void
   /** Max priority level for priority queues (`x-max-priority`). Default 10. */
   maxPriority?: number
   /** Injectable connector — defaults to amqplib. Tests pass a fake. */
@@ -195,8 +205,16 @@ export class RabbitmqQueueDriver implements QueueDriver {
   private async channel(): Promise<AmqpChannel> {
     if (!this.channelPromise) {
       this.channelPromise = (async () => {
+        const onError =
+          this.options.onError ??
+          ((error: unknown, info: { source: 'connection' | 'channel' }) =>
+            console.error(`[basalt:queue] rabbitmq ${info.source} error:`, error))
         this.connection = await this.connect(this.options.url)
-        return this.connection.createChannel()
+        // Unlistened EventEmitter 'error' events are fatal in Node (Q-2).
+        this.connection.on?.('error', (error) => onError(error, { source: 'connection' }))
+        const channel = await this.connection.createChannel()
+        channel.on?.('error', (error) => onError(error, { source: 'channel' }))
+        return channel
       })()
     }
     return this.channelPromise

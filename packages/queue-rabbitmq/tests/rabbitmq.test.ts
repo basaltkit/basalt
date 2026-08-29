@@ -150,3 +150,32 @@ describe('RabbitmqQueueDriver', () => {
     expect(ch.sent).toHaveLength(0) // no retry, no DLQ
   })
 })
+
+describe('crash-safety (Q-2): amqplib error emitters are listened to', () => {
+  it('attaches error listeners on connection and channel, wired to onError', async () => {
+    const connListeners: ((e: unknown) => void)[] = []
+    const chanListeners: ((e: unknown) => void)[] = []
+    const channel = new FakeChannel() as FakeChannel & { on?: (e: 'error', l: (err: unknown) => void) => void }
+    channel.on = (_e, l) => void chanListeners.push(l)
+    const errors: unknown[] = []
+    const driver = new RabbitmqQueueDriver({
+      url: 'amqp://test',
+      onError: (error, info) => void errors.push({ error, info }),
+      connect: async () => ({
+        on: (_e: 'error', l: (err: unknown) => void) => void connListeners.push(l),
+        createChannel: async () => channel,
+        close: async () => {},
+      }),
+    })
+    await driver.add('q', 'job', {}, { attempts: 1 })
+    expect(connListeners).toHaveLength(1)
+    expect(chanListeners).toHaveLength(1)
+    const broken = new Error('broker gone')
+    connListeners[0]!(broken)
+    chanListeners[0]!(new Error('channel torn down'))
+    expect(errors).toMatchObject([
+      { error: broken, info: { source: 'connection' } },
+      { info: { source: 'channel' } },
+    ])
+  })
+})

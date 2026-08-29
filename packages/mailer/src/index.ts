@@ -17,6 +17,7 @@ import {
   type ResolvedMail,
 } from './message.js'
 
+export { escapeHtml, html, raw, SafeHtml } from './html.js'
 export type { MailDriver } from './driver.js'
 export { MemoryMailDriver } from './drivers/memory.js'
 export { LogMailDriver } from './drivers/log.js'
@@ -97,6 +98,9 @@ export class Mailer {
 
   /** Sends a resolved message directly through the driver — used by queue workers. */
   async deliver(message: ResolvedMail): Promise<void> {
+    // A message that round-tripped through a queue is re-checked before it
+    // reaches the driver — same header-injection guard as the send() path.
+    assertHeaderSafe(message)
     return this.driver.send(message)
   }
 
@@ -111,7 +115,11 @@ export class Mailer {
     if (!from) throw new MailIncompleteError('from')
 
     const replyTo = envelope.replyTo ?? this.options.replyTo
-    const rawHtml = mail.html?.(validated)
+    // A mail's html field may return the SafeHtml from an `html\`\`` template;
+    // normalize to a string before layout/driver (SafeHtml stringifies to its
+    // markup).
+    const rawHtmlValue = mail.html?.(validated)
+    const rawHtml = rawHtmlValue === undefined ? undefined : String(rawHtmlValue)
     // Wrap the body in the shared layout (branding), when one is configured.
     const html =
       rawHtml !== undefined && this.options.layout
