@@ -208,10 +208,15 @@ respects each entry's overlap guard and `onFailure` handler.
 
 Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it calls `define`, publishes the entries to the container's metadata (key `schedule:entries`, consumed by `basalt schedule:list`), registers the `schedule:run` command, and starts the timer; on `shutdown` it calls `stop()`.
 
-| Option | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `define` | `(schedule: Scheduler) => void` | No | — | Callback where you declare the schedules (receives the Scheduler at boot). |
-| `autostart` | `boolean` | No | `true` | Starts the timer at boot. Turn off in tests. |
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `define` | `(schedule: Scheduler) => void` | — | Callback where you declare the schedules (receives the Scheduler at boot). |
+| `autostart` | `boolean` | `true` | Starts the timer at boot. Turn it off in tests so the process isn't holding a 60 s interval. |
+| `lock` | `ScheduleLock` | — | Cross-replica mutex, **required** as soon as any entry calls `.onOneServer()`. Boot throws without it. See [`ScheduleLock`](#the-schedulelock-contract). |
+| `lockTtlMs` | `number` | `60_000` | TTL of each per-entry, per-tick lock key. The key already embeds the minute, so this only has to outlive clock skew between replicas — one tick window is the right default. |
+
+`SchedulerOptions` (`lock`, `lockTtlMs`) are the same two the `Scheduler` constructor takes, so a
+hand-built `new Scheduler({ lock })` behaves identically.
 
 ### `class Scheduler`
 
@@ -220,9 +225,12 @@ Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it ca
 | `call` | `(name: string, task: () => void \| Promise<void>) => ScheduleEntry` | Schedules a function with a name. |
 | `job` | `<T>(job: JobDefinition<T>, payload?) => ScheduleEntry` | Schedules the `dispatch` of an `@basaltkit/queue` job (payload required if the job needs one). |
 | `list` | `() => { name, cron, timezone }[]` | Describes all entries. |
-| `tick` | `(date?: Date) => Promise<void>` | Runs the entries due at that instant (default: now). Aggregates failures without `onFailure` into an `AggregateError`. |
-| `start` | `() => void` | Aligns to the next minute and then `tick()`s every 60s. Idempotent. |
+| `names` | `() => string[]` | Names of every entry — used by the CLI to validate/suggest. |
+| `runNow` | `(name: string) => Promise<boolean>` | Runs one entry on demand, **ignoring its cron and its `.onOneServer()` lock** (a manual trigger is deliberate). `false` if no entry has that name. The overlap guard and `onFailure` still apply. |
+| `tick` | `(date?: Date) => Promise<void>` | Runs the entries due at that instant (default: now), concurrently. Aggregates failures without `onFailure` into an `AggregateError`. |
+| `start` | `() => void` | Aligns to the next minute and then `tick()`s every 60s. Idempotent; the timers are `unref`'d. |
 | `stop` | `() => void` | Stops the timers. |
+| `skippedByLock` | `number` | Ticks skipped because another replica held the lock — for observability and tests. |
 
 ### `class ScheduleEntry` (returned by `call`/`job`)
 
@@ -231,7 +239,8 @@ Frequency methods (all return `this`): `everyMinute()`, `everyMinutes(n)`, `hour
 | Method/property | Type | Default | Description |
 |---|---|---|---|
 | `timezone(tz)` | `(tz: string) => this` | `'UTC'` | IANA timezone in which the time is interpreted. |
-| `withoutOverlapping()` | `() => this` | off | Skips the run if the previous one is still in progress. |
+| `withoutOverlapping()` | `() => this` | off | Skips the run if the previous one is still in progress — **in this process only**. |
+| `onOneServer()` | `() => this` | off | Runs the entry on exactly ONE replica per tick instead of on every pod. Requires `schedulerPlugin({ lock })`; boot throws without one. |
 | `onFailure(handler)` | `((error: unknown) => void) => this` | — | Receives the error instead of propagating it. |
 | `describe()` | `() => { name, cron, timezone }` | — | Description of the entry. |
 | `isDue(date)` | `(date: Date) => boolean` | — | Is the entry due at this instant? |
@@ -257,14 +266,111 @@ Exported for tooling and tests; you don't usually need them:
 
 - `SCHEDULER: Token<Scheduler>` — to get the Scheduler from the container: `app.container.get(SCHEDULER)`.
 
+### Errors
+
+| Error | Code | When |
+|---|---|---|
+| `CronParseError` | `CRON_INVALID` | An expression passed to `.cron()` (or built internally) isn't 5 fields, uses unsupported syntax (`MON`, `@daily`, `?`, `L`), has a reversed range (`5-1`), a step below 1, or a value outside its field's bounds. Extends `BasaltError`; raised at **definition** time, so a typo fails at boot rather than becoming a task that silently never fires. |
+| `Error` (plain) | — | At `boot`, when an entry uses `.onOneServer()` but no `lock` was configured. See [Boot-time enforcement](#boot-time-enforcement). |
+| `AggregateError` | — (built-in) | From `tick()`, when one or more due entries failed without an `onFailure` handler — or when a `.onOneServer()` entry's `lock.acquire` rejected. All due entries still ran; `error.errors` holds each failure. Swallowed by the automatic timer path so a failing task can't kill the process. |
+
+### Hooks & callbacks
+
+The scheduler has no hook bus. Two per-entry callbacks and one injected collaborator:
+
+| Callback | Where | Receives | Default when unset |
+|---|---|---|---|
+| `onFailure(handler)` | `ScheduleEntry` | `(error: unknown)` | The error propagates — aggregated into the tick's `AggregateError`, then **swallowed** by the automatic timer. Set it, or a failure in production is invisible. |
+| `lock.acquire` | `SchedulerOptions` | `(key: string, ttlMs: number) => Promise<boolean>` | No lock. Boot throws if any entry needs one. |
+
 ## Multiple replicas — `.onOneServer()`
 
-`withoutOverlapping()` guards one process only. On N replicas, mark an entry
-`.onOneServer()` and pass `schedulerPlugin({ lock })` an atomic cross-replica
-lock (`ScheduleLock`: `acquire(key, ttlMs)` — e.g. Redis `SET key v PX ttl NX`).
-Exactly one replica runs the entry per tick; using `.onOneServer()` without a
-`lock` fails loud at boot. Cron expressions are validated at definition time
-(`CronParseError` on unsupported syntax like `MON` or out-of-range values).
+`withoutOverlapping()` guards one process. It does nothing about the real production problem:
+you run four pods, every pod boots the scheduler, and at 03:00 the nightly billing job runs
+**four times**. Mark the entry `.onOneServer()` and give the plugin a lock:
+
+```ts
+import Redis from 'ioredis'
+import { schedulerPlugin, type ScheduleLock } from '@basaltkit/scheduler'
+
+const redis = new Redis(process.env.REDIS_URL!)
+
+const lock: ScheduleLock = {
+  async acquire(key, ttlMs) {
+    return (await redis.set(key, '1', 'PX', ttlMs, 'NX')) === 'OK'
+  },
+}
+
+schedulerPlugin({
+  lock,
+  define: (schedule) => {
+    schedule.job(ReconcileBilling, { mode: 'full' }).daily().at('03:00').onOneServer()
+  },
+})
+```
+
+### The `ScheduleLock` contract
+
+```ts
+interface ScheduleLock {
+  acquire(key: string, ttlMs: number): Promise<boolean>
+}
+```
+
+One method, and the guarantees it must provide are the whole point:
+
+- **`acquire` must be atomic across processes.** For a given `key`, exactly one caller anywhere
+  in the fleet may get `true` until the TTL expires. Redis `SET key value PX ttl NX` is the
+  canonical implementation. A check-then-set (`GET` then `SET`) is **not** atomic and silently
+  reintroduces the duplicate runs you added the lock to prevent.
+- **The key must actually expire.** The scheduler never deletes it. A store without TTL support
+  would let the first tick's key block that entry forever.
+- **There is deliberately no `release`.** The key covers the whole tick window, so a fast first
+  run cannot be followed by a late replica acquiring the freed key and running the same minute a
+  second time. The TTL is the release.
+
+The key the scheduler builds is `basalt:schedule:<entry name>:<minute, ISO, seconds zeroed>` —
+one key per entry per minute. `lockTtlMs` (default `60_000`) only has to outlive clock skew
+between replicas.
+
+### What happens when acquisition fails
+
+Two distinct cases, and they are treated very differently:
+
+| Case | Behaviour |
+|---|---|
+| `acquire` resolves `false` — another replica won this tick | The entry is skipped on this replica and `scheduler.skippedByLock` increments. This is the normal path on N−1 of your N pods, every tick. Not an error. |
+| `acquire` **rejects** — the lock store is down, times out, or the credentials expired | Treated as a **task failure**: the rejection is collected into the tick's `AggregateError` exactly like a thrown task, so it is visible. The entry does **not** run. It is *not* treated as permission to proceed. |
+
+That last row is the deliberate design choice. Failing open — running everywhere when the lock
+store is unreachable — would mean a Redis outage silently turns one nightly billing run into
+four. Failing closed means a Redis outage skips a tick, which a subsequent tick or a manual
+`basalt schedule:run <name>` can recover.
+
+### Boot-time enforcement
+
+If any entry calls `.onOneServer()` and no `lock` was configured, `boot` **throws**:
+
+```
+schedulerPlugin: an entry uses .onOneServer() but no `lock` was configured.
+Pass `schedulerPlugin({ lock })` with an atomic cross-replica lock (e.g. Redis SET NX PX) — see ScheduleLock.
+```
+
+Failing the deploy is the point: silently running the entry on every replica is exactly the
+failure mode `.onOneServer()` exists to prevent, and it is invisible until the duplicate charges
+land.
+
+### What the lock does not cover
+
+- **`runNow()` / `basalt schedule:run <name>`** bypass the lock entirely — a manual trigger is
+  deliberate, and you asked *this* process to run it.
+- **Entries without `.onOneServer()`** are untouched and still run on every replica.
+- **The lock is per tick, not per run.** If a task overruns its minute, the next minute's key is
+  a different key. Combine with `.withoutOverlapping()` if the same replica must not stack runs,
+  and prefer `schedule.job(...)` so a queue worker (with its own idempotency) does the work.
+
+Cron expressions are validated at definition time — `CronParseError` on unsupported syntax like
+`MON` or out-of-range values, so a typo fails at boot instead of becoming a job that never fires.
 
 ## Common errors and solutions (FAQ)
 
@@ -275,7 +381,16 @@ Times are UTC by default. Add `.timezone('Europe/Lisbon')` (or your IANA timezon
 `cron()` only accepts the classic 5-field format (`min hour day month day-of-week`). 6-field formats (with seconds) are not supported.
 
 **The task runs twice (two servers).**
-The scheduler runs in every process where the plugin starts. If you have multiple replicas, enable the scheduler on only one (e.g. via an environment variable) or schedule `schedule.job(...)` with idempotent jobs.
+The scheduler runs in every process where the plugin starts. Mark the entry `.onOneServer()` and pass `schedulerPlugin({ lock })` an atomic cross-replica lock — see the *Multiple replicas* section above. `withoutOverlapping()` will not help: it guards one process only.
+
+**Boot fails with "an entry uses .onOneServer() but no `lock` was configured".**
+Exactly as intended — booting without the lock would run that entry on every replica. Supply a `ScheduleLock` (Redis `SET key v PX ttl NX`), or drop `.onOneServer()`.
+
+**An `.onOneServer()` entry stopped running everywhere at once.**
+Its lock store is unreachable. A rejecting `acquire` is treated as a task failure (visible in the tick's `AggregateError`), never as permission to run on every replica. Fix the store; a later tick or `basalt schedule:run <name>` recovers the missed run.
+
+**`skippedByLock` keeps climbing.**
+Normal. On N replicas, N−1 of them skip each `.onOneServer()` tick. Only worry if it climbs on *every* replica — that means nobody is acquiring, i.e. a stale key without a TTL.
 
 **A task failed and I didn't see anything.**
 In automatic mode, failures without `onFailure` are silenced so as not to crash the process. Set `onFailure` on each entry (or log inside it).

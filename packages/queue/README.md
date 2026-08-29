@@ -119,7 +119,10 @@ await GenerateInvoice.dispatch({ orderId: 'o-1' }, { delay: '10m' })
 await GenerateInvoice.dispatch({ orderId: 'o-2' }, { priority: 1 })
 ```
 
-Note: with the sync driver, `delay` is ignored — the job runs immediately.
+Note: with the sync driver, `delay` and `priority` are ignored — the job runs immediately.
+That is not silent: the sync driver declares `delayed: false` / `priority: false`, so the
+`onUnsupported` policy fires (by default a one-off `console.warn` per job+feature). Set
+`onUnsupported: 'throw'` in production if a delay is load-bearing.
 
 ### Context propagation (tenant, requestId…)
 
@@ -232,7 +235,14 @@ console.log(driver.executed) // [{ queue: 'default', jobName: 'demo', attempts: 
 | `queue` | `string` | No | `'default'` | Name of the queue the job goes into. |
 | `attempts` | `number` | No | `1` | Maximum number of attempts on failure. |
 | `backoff` | `JobBackoff` | No | — | Wait strategy between attempts. |
+| `removeOnComplete` | `JobRetention` | No | the `queuePlugin` default | Redis retention for this job once it completes — overrides the plugin-wide default. |
+| `removeOnFail` | `JobRetention` | No | the `queuePlugin` default | Redis retention for this job once it fails permanently — overrides the plugin-wide default. |
 | `handle` | `(payload: T) => void \| Promise<void>` | Yes | — | The function that does the work (runs on the worker). |
+
+`JobRetention` = `boolean | number | { age?: DurationInput; count?: number }`. `true` removes
+the job as soon as it finishes, `false` keeps it forever, a number keeps that many most-recent,
+and `{ age, count }` caps by both. Only the BullMQ driver stores finished jobs, so only it
+honours retention; the sync driver stores nothing and ignores it.
 
 The returned object (`JobDefinition<T>`) exposes:
 
@@ -264,6 +274,14 @@ Basalt plugin that registers a `QueueManager` in the container under the `QUEUE`
 | `connection` | `string \| ConnectionOptions` | No | — | Redis URL (`redis://…` or `rediss://…`) or ioredis options. With a value → BullMQ driver; without one → sync driver. |
 | `driver` | `QueueDriver` | No | — | Custom driver — takes precedence over `connection`. |
 | `workers` | `{ queue: string; concurrency?: number }[]` | No | `[]` | Queues whose workers start in this process on boot. |
+| `onUnsupported` | `'throw' \| 'warn' \| 'ignore'` | No | `'warn'` | What happens when a dispatch uses an option the active driver cannot honour (a delay on Kafka, a priority on SQS). `'warn'` logs once per job+feature and proceeds; `'throw'` raises `UnsupportedJobOptionError` — set it in production when the option is load-bearing; `'ignore'` is silent. |
+| `removeOnComplete` | `JobRetention` | No | driver default (BullMQ keeps the last `1000`) | Default Redis retention for completed jobs. A job's own `removeOnComplete` wins. |
+| `removeOnFail` | `JobRetention` | No | driver default (BullMQ `false` — keep all) | Default retention for failed jobs. Keeping all is deliberate (inspection and `queue:retry`); set e.g. `{ age: '14d' }` so failures don't grow unbounded. |
+
+**Failure callbacks live on the driver, not the plugin.** `onError` and `onJobFailed` are
+`BullmqDriverOptions`, and `queuePlugin({ connection })` builds the BullMQ driver **without**
+forwarding them — to override the defaults, construct the driver yourself and pass it as
+`driver`. See [Failure hooks](#failure-hooks) below.
 
 ```ts
 import { QUEUE } from '@basaltkit/queue'
@@ -274,11 +292,22 @@ const manager = app.container.get(QUEUE) // get the QueueManager from the contai
 
 | Method | Signature | Description |
 |---|---|---|
-| `constructor` | `new QueueManager(driver: QueueDriver)` | Creates the manager over a driver. |
+| `constructor` | `new QueueManager(driver: QueueDriver, options?: QueueManagerOptions)` | Creates the manager over a driver. |
 | `register` | `(job) => this` | Registers a job and wires its `dispatch`. |
-| `dispatch` | `<T>(job, payload: T, options?: DispatchOptions) => Promise<void>` | Validates and puts the job on the queue. Auto-registers the job if not registered yet. |
+| `dispatch` | `<T>(job, payload: T, options?: DispatchOptions) => Promise<void>` | Validates, snapshots the request context, checks the driver's capabilities, and enqueues. Auto-registers the job if not registered yet. |
 | `work` | `(queue = 'default', { concurrency? }?) => void` | Starts a worker for the queue (no-op on the sync driver). |
+| `stats` | `(queue = 'default') => Promise<QueueStats \| undefined>` | Job counts per state, or `undefined` when the driver can't introspect (sync). |
+| `retryFailed` | `(queue = 'default', { limit? }?) => Promise<number \| undefined>` | Re-enqueues failed jobs; returns the count, or `undefined` when the driver doesn't support it. |
 | `close` | `() => Promise<void>` | Closes workers and connections. |
+
+`QueueManagerOptions`:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `onUnsupported` | `'throw' \| 'warn' \| 'ignore'` | `'warn'` | Same policy as the plugin option. |
+| `warn` | `(message: string) => void` | `console.warn` | Where `'warn'` diagnostics go — point it at your logger. |
+| `removeOnComplete` | `JobRetention` | driver default | Default retention for completed jobs. |
+| `removeOnFail` | `JobRetention` | driver default | Default retention for failed jobs. |
 
 ### `queuedOn<T>(bus, manager, event, handler, options?): () => void`
 
@@ -294,17 +323,81 @@ Creates the event→job bridge. Returns the subscription cancel function.
 
 ### Drivers
 
-- **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry). Public property `executed: { queue, jobName, attempts }[]` with the execution history. For testing and dev without Redis.
-- **`class BullmqQueueDriver`** — production over Redis. `new BullmqQueueDriver({ connection })`, where `connection` is a Redis URL or ioredis options (`BullmqDriverOptions`). Completed jobs are cleaned up (keeps 1000); failed jobs are kept.
-- **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, `close()`. Helper types: `AddJobOptions`, `JobExecutor`.
+- **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry). Public property `executed: { queue, jobName, attempts }[]` with the execution history (capped at 1000 entries). For testing and dev without Redis.
+- **`class BullmqQueueDriver`** — production over Redis; see the options table below.
+- **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, optional `stats(queue)` / `retryFailed(queue, { limit? })`, `close()`, plus the optional `name` and `capabilities` fields. Helper types: `AddJobOptions`, `JobExecutor`, `QueueStats`, `DriverCapabilities`.
+
+#### `new BullmqQueueDriver(options: BullmqDriverOptions)`
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `connection` | `string \| ConnectionOptions` | — (required) | Redis URL (`redis://…`, `rediss://…` → TLS) or ioredis options. |
+| `onError` | `(error: unknown, info: { queue: string; source: 'worker' \| 'queue' }) => void` | `console.error` with the queue name and source | Infra errors from BullMQ's `Worker`/`Queue` EventEmitters (Redis down, connection reset). Node makes an unlistened `'error'` event **fatal**, so the driver always attaches a listener — override this to route the fault into your logger/alerting. |
+| `onJobFailed` | `(info: { queue: string; job: string; jobId?: string; error: unknown }) => void` | `console.error` naming the job, its id and the queue | A job **exhausted its retries** (BullMQ's `'failed'` event). Without it, permanently-failed jobs are only visible by polling `queue:stats`. |
+
+Retention defaults applied by this driver when neither the job nor the plugin sets one:
+completed → keep the last `1000`; failed → keep all.
+
+#### `DriverCapabilities`
+
+Each driver declares what its backend honours — `{ delayed, priority, retries, backoff }`, all
+`boolean`. `QueueManager.dispatch` compares a dispatch's options against them and applies
+`onUnsupported`. A driver that omits `capabilities` is treated as fully capable.
+
+| Driver | `delayed` | `priority` | `retries` | `backoff` |
+|---|:---:|:---:|:---:|:---:|
+| `bullmq` | ✅ | ✅ | ✅ | ✅ |
+| `sync` | ❌ | ❌ | ✅ | ❌ |
+| [`rabbitmq`](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq) | ✅ | ✅ | ✅ | ✅ |
+| [`sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs) | ✅ (≤ 15 min) | ❌ | ✅ | ✅ |
+| [`kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) | ❌ | ❌ | ✅ | ❌ |
+
+### Failure hooks
+
+The queue has no hook bus of its own — failures are reported through driver callbacks, and every
+one of them has a **non-silent default**, so nothing disappears if you configure nothing.
+
+| Hook | Where it lives | Receives | Default when unset |
+|---|---|---|---|
+| `onError` | `BullmqDriverOptions` | `(error, { queue, source: 'worker' \| 'queue' })` | `console.error` with queue + source |
+| `onJobFailed` | `BullmqDriverOptions` | `({ queue, job, jobId?, error })` | `console.error` naming the job |
+| `warn` | `QueueManagerOptions` | `(message: string)` | `console.warn`, once per job+feature |
+| `onError` | [`RabbitmqDriverOptions`](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq) | `(error, { source: 'connection' \| 'channel' })` | `console.error` |
+| `onError` | [`KafkaDriverOptions`](https://www.npmjs.com/package/@basaltkit/queue-kafka) | `(error, { source: 'consumer' \| 'producer'; queue? })` | `console.error` |
+| `onError` | [`SqsDriverOptions`](https://www.npmjs.com/package/@basaltkit/queue-sqs) | `(error, { queue })` | `console.error`, then an `errorPauseMs` pause |
+
+Only the BullMQ driver has `onJobFailed`; the broker drivers route an exhausted job to their own
+dead-letter destination (`q.dead`, `<topic>.dead`, `<queue>-dead`) instead.
+
+To override the BullMQ callbacks, build the driver yourself — `queuePlugin({ connection })`
+constructs it with the connection only:
+
+```ts
+import { queuePlugin, BullmqQueueDriver } from '@basaltkit/queue'
+
+queuePlugin({
+  jobs: [SendWelcomeEmail],
+  workers: [{ queue: 'default', concurrency: 5 }],
+  driver: new BullmqQueueDriver({
+    connection: process.env.REDIS_URL!,
+    onError: (error, { queue, source }) => logger.error({ err: error, queue, source }, 'queue infra error'),
+    onJobFailed: ({ queue, job, jobId, error }) =>
+      logger.error({ err: error, queue, job, jobId }, 'job failed permanently'),
+  }),
+})
+```
 
 ### Exported errors
 
-| Class | Code | When it occurs |
+| Error | Code | When |
 |---|---|---|
-| `JobValidationError` | `JOB_INVALID` | Payload doesn't pass the `schema` (has `.job` and `.issues`). |
-| `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `dispatch` before registering the job with a manager. |
-| `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | The job reached the worker but isn't registered in that process. |
+| `JobValidationError` | `JOB_INVALID` | The payload failed the job's `schema` — on `dispatch` and again on the worker. Carries `.job` and `.issues`. |
+| `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `job.dispatch()` was called before the job was registered in a `QueueManager`. |
+| `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | A job reached the worker but is not registered in that process — producer and worker registered different job lists. |
+| `UnsupportedJobOptionError` | `QUEUE_UNSUPPORTED_OPTION` | With `onUnsupported: 'throw'`, a dispatch used an option the active driver's `capabilities` do not include. `status = 500`. |
+
+Errors thrown outside these classes come from the driver's client (ioredis, amqplib, kafkajs,
+the AWS SDK) and reach you through that driver's `onError`.
 
 ### Token
 
@@ -326,6 +419,12 @@ The data passed to `dispatch` doesn't match the `schema`. The error includes `is
 
 **In dev, `delay` doesn't work.**
 The sync driver always runs immediately. Delays, timed backoff, and priority only have a real effect with the BullMQ driver (with `connection`).
+
+**`[basalt/queue] The "sync" driver does not support …` in the logs.**
+The `onUnsupported` policy caught a dispatch option the active driver can't honour. It warns once per job+feature. Either switch to a driver that supports it, drop the option, or set `onUnsupported: 'ignore'` if you accept the degradation.
+
+**A job failed for good and nothing was logged.**
+Only the BullMQ driver reports exhausted jobs, via `onJobFailed` (default `console.error`). If you replaced it with a no-op, you removed the only signal. On the broker drivers, inspect the dead-letter destination (`q.dead`, `<topic>.dead`, `<queue>-dead`).
 
 **Do I need Redis to run the tests?**
 No. Without `connection`, the plugin uses `SyncQueueDriver`. You can also instantiate the driver directly and inspect `driver.executed`.

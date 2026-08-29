@@ -291,6 +291,29 @@ Workers/Deno-deploy; use HTTP-based drivers there.
 - The handler's `request` / `reply` are the neutral types; reach the underlying
   framework object via `request.raw` when you truly need it.
 
+## Options reference
+
+All three plugins share the same core options; each accepts its framework's
+native extras.
+
+| Option | Type | Default | Adapters | Why |
+|---|---|---|---|---|
+| `routes` | `BasaltRoute[]` | `[]` | all | The neutral routes to mount. |
+| `allowUnguardedMeta` | `boolean \| string[]` | fail loud at boot | all | Waives the boot check that every route declaring `meta.auth`/`can`/`teamRole` has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). Only for deployments where protection genuinely happens at an outer edge. |
+| `notFound` | `boolean` | `true` (neutral 404 body) | all | Pass `false` to opt out of the shared `404 { error: { code: 'NOT_FOUND' } }` and keep the framework default. |
+| `fastify` | `FastifyServerOptions` | `{}` | fastify | Passed to the `Fastify()` constructor (logger, trustProxy, …). |
+| `app` | native instance | created for you | express, hono | Bring your own `express()` / `new Hono()` and Basalt mounts onto it. |
+| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejects oversized bodies with 413 (`PAYLOAD_TOO_LARGE`) — Hono/edge has no default cap. |
+
+## Failure modes
+
+| You see | It means | Do |
+|---|---|---|
+| `UnguardedRouteMetaError` at boot | a route declares security meta no registered guard enforces | register the enforcing plugin, or `allowUnguardedMeta` (see [Security](/guide/security)) |
+| `400 HTTP_VALIDATION` | body/query/params failed the route's Zod schema | the response lists the part and per-field issues |
+| `404 { code: 'NOT_FOUND' }` on a route you defined | the route wasn't registered on this adapter instance | check it is in `routes: [...]` of the adapter plugin that booted |
+| `413 PAYLOAD_TOO_LARGE` (hono) | body exceeded `bodyLimit` | raise `bodyLimit` deliberately |
+
 ## Edge plugins are neutral too
 
 The edge plugins target a neutral `HttpServer` (the `HTTP_SERVER` token, which

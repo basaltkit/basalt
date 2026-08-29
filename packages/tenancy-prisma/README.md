@@ -73,9 +73,47 @@ A tenant is an **open record** (`{ id, ...anything }`), stored in a `Json` colum
 
 `PrismaTenantSource` implements the full `TenantSource` contract plus writes: `save` (upsert + replace the domain set), `find`, `findByDomain`, `list`, `remove` (cascades domains). **Domains are globally unique** — `save` rejects a domain already owned by a different tenant up front, before any write, so routing stays unambiguous.
 
+## Options reference
+
+`prismaTenantSource(client)` takes the client only — there are no options.
+Resolvers, `required`, `onMigrate` and `onSeed` belong to `tenancyPlugin`.
+
+| Export | Kind | Purpose |
+| --- | --- | --- |
+| `prismaTenantSource(client)` | function | Validates the client and returns a `PrismaTenantSource`. |
+| `PrismaTenantSource` | class | The `TenantSource` implementation plus `save` and `remove`. `new PrismaTenantSource(client)`. |
+| `PrismaTenancyClient` | interface | The two delegates the source touches: `tenant`, `tenantDomain`. |
+
+| Method | Description |
+| --- | --- |
+| `save(tenant)` | Upsert the tenant and replace its domain set. Conflicting domains are rejected **before** any write. |
+| `find(id)` | The tenant record, or `null`. |
+| `findByDomain(domain)` | The tenant owning that domain, or `null`. |
+| `list()` | Every tenant, ordered by `id`. |
+| `remove(id)` | Delete a tenant; its domains cascade. Returns whether one existed. |
+
+## Errors
+
+This package defines no `BasaltError` subclasses and no error codes — it throws
+plain `Error`s for the two conditions it owns:
+
+| Error | Code | HTTP | When |
+| --- | --- | --- | --- |
+| `Error` | — | boot / first use | The client has no `tenant` model. `prismaTenantSource()` fails fast naming the missing model and pointing at `basalt prisma:sync`, instead of a cryptic "reading 'upsert' of undefined". A lazy/proxy client (database-per-tenant) skips the check and is validated on first query. |
+| `Error` | — | 500 | `save()` was given a domain already owned by a **different** tenant. Checked up front, so a rejected save writes nothing. |
+
+The tenancy errors a client sees — `TENANT_REQUIRED`, `TENANCY_NOT_RESOLVED`,
+`TENANT_NOT_FOUND` — come from `@basaltkit/tenancy`.
+
+## Hooks & events
+
+None. `tenancy:switched` is emitted by `@basaltkit/tenancy`.
+
 ## Which backend?
 
 - **`@basaltkit/tenancy-prisma`** — you already run Postgres/MySQL, or need multiple instances sharing one tenant registry.
 - **`@basaltkit/tenancy-sqlite`** — a single node with zero dependencies.
 
 Both implement the identical `TenantSource` contract, so switching is a one-line change. For **database-per-tenant**, pair with [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma).
+
+Guides: [Tenancy](/guide/tenancy) · [Database per tenant](/guide/database-per-tenant) · [Persistence](/guide/persistence).

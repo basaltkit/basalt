@@ -121,6 +121,126 @@ throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
 
 Unintentional errors (any `throw new Error(...)`) become a generic `500` with the `INTERNAL_ERROR` code — the internal message never reaches the client.
 
+### The neutral 404 — `NOT_FOUND_RESPONSE`
+
+Every adapter serves the same JSON body for an unmatched route, instead of Fastify's,
+Express's or Hono's own default (which differ, and fingerprint the framework):
+
+```json
+{ "error": { "code": "NOT_FOUND", "message": "Route not found." } }
+```
+
+`NOT_FOUND_RESPONSE` is that frozen constant. Each adapter plugin installs it at
+`app:booted` and each takes `notFound: false` to opt out (see the adapter READMEs).
+
+### Guarded route meta — fail loud at boot
+
+Three `meta` keys are **security-relevant**, and each one is enforced by a guard that a
+different plugin registers:
+
+| `meta` key | Enforced by | Package |
+|---|---|---|
+| `auth` | `authPlugin` | `@basaltkit/auth` |
+| `can` | `permissionsPlugin` | `@basaltkit/permissions` |
+| `teamRole` | `teamsPlugin` | `@basaltkit/teams` |
+
+Declaring one of those keys is a *request* for protection — the guard is what actually
+enforces it. So a route that declares `meta: { auth: true }` in an app where `authPlugin`
+was never registered would serve **completely open**, silently. Basalt refuses to let that
+happen: every adapter calls `assertRoutesGuarded()` during its boot phase and throws
+`UnguardedRouteMetaError` (code `HTTP_UNGUARDED_ROUTE_META`) **before any traffic is
+served**, listing each offending route and key.
+
+Enforcing plugins claim their key by pushing it into the `'http:guarded-meta'` metadata
+bucket (`GUARDED_META_BUCKET`) — a plain string, so there is no package coupling:
+
+```ts
+ensureMetadata(container).add('http:guarded-meta', 'can')
+```
+
+`meta.<key>` set to `false` or `undefined` is an explicit opt-*off*, not a protection
+request, and is never flagged.
+
+**The escape hatch.** If protection genuinely happens at an outer edge (an API gateway
+that authenticates before Basalt ever sees the request), waive the check with the
+`allowUnguardedMeta` option — it lives on the **adapter plugin**, identically on all
+three:
+
+```ts
+fastifyPlugin({ routes, allowUnguardedMeta: true })       // waive every key
+expressPlugin({ routes, allowUnguardedMeta: ['auth'] })   // waive only meta.auth
+honoPlugin({ routes, allowUnguardedMeta: ['auth', 'can'] })
+```
+
+Type: `boolean | string[]`. Default: unset — fail loud.
+
+### Route `meta` the framework reads
+
+`meta` is free-form, but these keys have framework meaning:
+
+| Key | Type | Read by | Effect |
+|---|---|---|---|
+| `auth` | `boolean` (or plugin-specific) | `@basaltkit/auth` guard | Requires an authenticated user. Boot-checked. |
+| `can` | `string \| string[]` | `@basaltkit/permissions` guard | Requires the permission — an array means **all** are required. Boot-checked. |
+| `teamRole` | plugin-specific | `@basaltkit/teams` guard | Requires a team-membership rank. Boot-checked. |
+| `rateLimit` | `{ limit: number; windowMs: number }` | `securityPlugin` | Per-route bucket at a stricter threshold. |
+| `etag` | `true` | the shared pipeline | Strong `ETag` + `304` on `If-None-Match`, for `GET`/`HEAD`. |
+| `summary` · `description` · `tags` · `operationId` | `string` · `string` · `string[]` · `string` | `openapiPlugin` | Operation metadata in the generated document. |
+
+`meta.can` accepts a permission string (`'projects:delete'`) **or** a non-empty array of
+strings. Anything else — an empty array, a number, an object — is unenforceable, so the
+permissions guard throws `InvalidCanMetaError` (`PERMISSION_META_INVALID`, HTTP 500) on
+**every request** to that route rather than skipping the check. Authorization fails
+closed, loudly.
+
+### Conditional GETs — `meta: { etag: true }`
+
+Opt a read route in and the shared pipeline hashes the serialized body into a strong
+`ETag`; when the client sends a matching `If-None-Match`, it replies `304` with no body.
+No handler changes, identical on every adapter.
+
+```ts
+route({
+  method: 'GET',
+  url: '/projects/:id',
+  meta: { etag: true },
+  params: z.object({ id: z.string() }),
+  async handler({ params }) { return findProject(params.id) },
+})
+```
+
+`computeEtag(body)` and `ifNoneMatchSatisfied(header, etag)` are exported if you want to
+do it by hand. Only `GET`/`HEAD` are considered, and only when the handler returned a
+value without replying itself.
+
+### Server-Sent Events — `sse()`
+
+Return `sse(producer)` from a handler and the adapter streams it against its own
+transport (a Node response on Fastify/Express, a `ReadableStream` on Hono):
+
+```ts
+import { route, sse } from '@basaltkit/http'
+
+const events = route({
+  method: 'GET',
+  url: '/events',
+  async handler() {
+    return sse(
+      async (stream) => {
+        stream.onClose(() => clearInterval(timer))
+        const timer = setInterval(() => stream.send({ event: 'tick', data: { at: Date.now() } }), 1000)
+      },
+      { heartbeatMs: 15_000, maxDurationMs: 300_000 },
+    )
+  },
+})
+```
+
+`stream.send()` returns `false` when the stream is closed **or** the transport's write
+buffer is full — honour it (slow down) instead of growing memory for a slow client.
+`SseOptions`: `heartbeatMs` (comment ping; off when unset) and `maxDurationMs` (hard
+lifetime cap; off when unset).
+
 ### Security plugin — `securityPlugin()`
 
 Applies three edge protections to any adapter: secure headers, CORS, and rate limiting (limiting how many requests each client can make in a time window).
@@ -147,14 +267,50 @@ const app = await createApp({
 }).boot()
 ```
 
-When the limit is exceeded, the client receives `429` with the `RATE_LIMITED` code and the `Retry-After` header. The default storage is in memory (`MemoryRateLimitStore`); for multiple servers in a cluster, implement the `RateLimitStore` interface on top of Redis and pass it in `rateLimit.store`.
+When the limit is exceeded, the client receives `429` with the `RATE_LIMITED` code and the `Retry-After` header. Every response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`.
+
+The default storage is in memory (`MemoryRateLimitStore`) — per process. For a cluster, use the bundled `RedisRateLimitStore`, or implement `RateLimitStore` yourself and pass it in `rateLimit.store`:
+
+```ts
+import { RedisRateLimitStore, securityPlugin } from '@basaltkit/http'
+import { Redis } from 'ioredis'
+
+securityPlugin({
+  rateLimit: { limit: 100, windowMs: 60_000, store: new RedisRateLimitStore(new Redis(process.env.REDIS_URL!)) },
+})
+```
+
+The rate-limit key is **never** taken from `X-Forwarded-For` (a client can spoof it). It
+comes from `request.ip`, which the adapter sets from the socket; when the IP is unknown
+every caller shares one bucket (fail closed). Behind a trusted proxy, configure the
+adapter to populate `request.ip` (on Fastify: `fastify: { trustProxy: true }`).
+
+**Per-route override.** A route carrying `meta.rateLimit` gets its own bucket, keyed by
+client **and** route, at a stricter threshold — so login can be tighter than the rest:
+
+```ts
+route({
+  method: 'POST',
+  url: '/auth/login',
+  meta: { rateLimit: { limit: 5, windowMs: 60_000 } },
+  async handler() { /* … */ },
+})
+```
+
+Anything malformed in `meta.rateLimit` (missing/non-positive `limit` or `windowMs`) is
+ignored and the route falls back to the global bucket.
+
+By default the plugin also sets a **restrictive CSP** — `DEFAULT_CSP`, i.e.
+`default-src 'none'; frame-ancestors 'none'` — which is right for a JSON API but blocks
+a server-rendered page. See [Server-rendered HTML helpers](#server-rendered-html-helpers)
+below for the route-scoped alternative.
 
 ### Health probes — `healthPlugin()`
 
 Creates two Kubernetes-style routes:
 
-- `GET /livez` — "is the process alive?" Always responds `200`, without touching any dependency.
-- `GET /readyz` — "is it ready to receive traffic?" Runs all checks; if any fails, responds `503` with the detail for each one.
+- `GET /livez` — "is the process alive?" Always responds `200 { status: 'ok' }`, without touching any dependency.
+- `GET /readyz` — "is it ready to receive traffic?" Runs every check; if any fails, responds `503`.
 
 ```ts
 import { healthPlugin } from '@basaltkit/http'
@@ -162,10 +318,16 @@ import { healthPlugin } from '@basaltkit/http'
 healthPlugin({
   checks: {
     db: async () => ({ ok: true, detail: 'connected' }),
-    // If the function throws an error, it counts as { ok: false } with the error message
+    // A check that throws counts as { ok: false }. The cause is logged with
+    // console.error server-side; it never reaches the client.
   },
 })
 ```
+
+The body is `{ status: 'ok' | 'unavailable', checks: { <name>: { ok } } }` — **pass/fail
+only**. The `detail` you return from a check is deliberately *not* serialized, because
+`/readyz` is usually unauthenticated and a raw error string leaks DB hosts, ports and
+DSN fragments.
 
 ### Prometheus metrics — `metricsPlugin()`
 
@@ -206,7 +368,9 @@ import { openapiPlugin } from '@basaltkit/http'
 openapiPlugin({ info: { title: 'My API', version: '1.0.0' } })
 ```
 
-Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document. The route's `response` field (schemas per status code) feeds the documented responses.
+Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document. The route's `response` field (schemas per status code) feeds the documented responses, and `meta.summary` / `meta.description` / `meta.tags` / `meta.operationId` enrich the operation. Pass `tags` to the plugin to give those groups top-level names and descriptions.
+
+The document is built on `app:booted` — after every plugin has published its routes, and before the server listens — so plugin order never matters.
 
 The same plugin registers a **`generate:docs`** CLI command that writes the
 document to disk (or stdout) — handy for CI, publishing, or feeding a static docs
@@ -250,11 +414,19 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 
 ### Errors
 
-| Export | Description |
-|---|---|
-| `HttpError(status, code, message)` | Intentional HTTP error, throwable from any layer; becomes a response with that `status`. |
-| `RequestValidationError` | Thrown by the pipeline when validation fails; becomes `400` with `part` and `issues`. |
-| `ValidationIssue` | Type `{ path: string; message: string }`. |
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. The response carries `part` and `issues[]`. |
+| `HttpError(status, code, message)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares `auth`/`can`/`teamRole` and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
+| — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
+| — (no class) | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. `Retry-After` is set. |
+| — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. |
+
+`HttpError` and `RequestValidationError` extend `BasaltError`, so `error.code` is stable
+and safe to branch on. `ValidationIssue` is `{ path: string; message: string }`.
+`UnguardedRouteMetaError` extends `Error` (not `BasaltError`) and carries `code` as a
+readonly field — it is a boot failure, never an HTTP response.
 
 ### Pipeline (Advanced — used by adapters)
 
@@ -283,9 +455,30 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 | `cors` | `CorsOptions \| false` | No | off | CORS + response to `OPTIONS` preflight (204). |
 | `rateLimit` | `RateLimitOptions \| false` | No | off | Rate limiting with `X-RateLimit-*` headers. |
 
-`SecurityHeadersOptions`: `hsts` (default on, `max-age=15552000; includeSubDomains`), `contentTypeOptions` (default `true` → `nosniff`), `frameOptions` (default `'DENY'`), `referrerPolicy` (default `'no-referrer'`), `crossOriginOpenerPolicy` (default `'same-origin'`), `contentSecurityPolicy` (default off).
+`SecurityHeadersOptions`:
 
-`CorsOptions`: `origin` (`boolean | string | string[] | (origin) => boolean`; default reflects any origin), `methods` (default `GET, POST, PUT, PATCH, DELETE, OPTIONS`), `allowedHeaders`, `exposedHeaders`, `credentials`, `maxAge` (default `600`).
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `hsts` | `boolean \| { maxAge?, includeSubDomains?, preload? }` | `true` → `max-age=15552000; includeSubDomains` | Forces HTTPS for the whole domain. `preload` is off unless you ask for it (it's hard to undo). |
+| `contentTypeOptions` | `boolean` | `true` → `nosniff` | Stops the browser MIME-sniffing a JSON response into something executable. |
+| `frameOptions` | `'DENY' \| 'SAMEORIGIN' \| false` | `'DENY'` | Clickjacking. Loosen only if you intentionally frame your own pages. |
+| `referrerPolicy` | `string \| false` | `'no-referrer'` | Keeps URLs (which often carry ids/tokens) out of outbound `Referer` headers. |
+| `crossOriginOpenerPolicy` | `string \| false` | `'same-origin'` | Process-isolates the page from cross-origin openers. |
+| `contentSecurityPolicy` | `string \| false` | `DEFAULT_CSP` = `"default-src 'none'; frame-ancestors 'none'"` | **On by default.** Correct for a JSON API (renders nothing, frames nothing). Pass your own string for HTML routes, or `false` to omit the header — but prefer a route-scoped `pageCsp()` over disabling it app-wide. |
+
+`CorsOptions`:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `origin` | `boolean \| string \| string[] \| (origin) => boolean` | `true` | `true`/unset reflects the request's `Origin` (or `*` when absent) — **unless `credentials` is on**, in which case reflection is refused and you must give an explicit allowlist. `false` disables CORS. |
+| `methods` | `string[]` | `['GET','POST','PUT','PATCH','DELETE','OPTIONS']` | Methods echoed on the preflight. |
+| `allowedHeaders` | `string[]` | echoes `Access-Control-Request-Headers`, else `*` | Request headers the browser may send. |
+| `exposedHeaders` | `string[]` | — | Response headers JS may read (e.g. `X-RateLimit-Remaining`). |
+| `credentials` | `boolean` | `false` | Allows cookies/`Authorization`. Requires an explicit `origin`. |
+| `maxAge` | `number` | `600` | Preflight cache seconds. |
+
+A preflight (`OPTIONS` + `Access-Control-Request-Method`) is answered `204` by the plugin
+and never reaches your route.
 
 `RateLimitOptions`:
 
@@ -297,7 +490,9 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 | `key` | `(request) => string` | No | client IP | Aggregation key (e.g. per user). |
 | `skip` | `(request) => boolean` | No | — | Returns `true` to exempt the request. |
 
-`MemoryRateLimitStore(clock?)` implements `RateLimitStore` (`hit(key, limit, windowMs)` → `RateLimitResult { allowed, limit, remaining, resetAt, retryAfterMs }`; `reset(key)`).
+`MemoryRateLimitStore(clock?)` implements `RateLimitStore` (`hit(key, limit, windowMs)` → `RateLimitResult { allowed, limit, remaining, resetAt, retryAfterMs }`; `reset(key)`). Store methods may be sync or async — the limiter awaits them.
+
+`RedisRateLimitStore(redis, options?)` — takes an ioredis-compatible `RedisLike` client. `RedisRateLimitStoreOptions`: `prefix` (default `'basalt:ratelimit'`) and `now` (clock injection, for tests). Use it whenever more than one process serves traffic.
 
 ### `healthPlugin(options?)`
 
@@ -331,6 +526,7 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 | `info` | `OpenApiInfo` (`{ title, version, description? }`) | Yes | — | Document metadata. |
 | `path` | `string` | No | `'/openapi.json'` | Where to serve the document. |
 | `routes` | `RouteLike[]` | No | routes from the `'http:routes'` bucket | Routes to document. |
+| `tags` | `OpenApiTag[]` (`{ name, description? }`) | No | `[]` | Top-level tag list, so a docs UI can order and describe the groups. A tag used on an operation but missing here is still listed (name only). |
 
 `generateOpenApi(routes, info)` returns the OpenAPI 3.0.3 document as an object. `zodToJsonSchema(schema)` (Advanced) converts a subset of Zod into JSON Schema; unknown types degrade to `{}` without throwing.
 
@@ -348,10 +544,30 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 
 ## Server-rendered HTML helpers
 
-`escapeHtml` (one charset: `& < > " '`, safe in text and quoted attributes),
-`scriptJson` (embed JSON in an inline `<script>` without `</script>` breakout)
-and `pageCsp`/`cspHash` (route-scoped CSP with sha256-hashed inline scripts)
-back the `*-ui` packages and are available for your own HTML routes.
+Three footguns, one shared answer each — these back the `*-ui` packages and are available
+for any HTML route of your own:
+
+| Export | Signature | Purpose |
+|---|---|---|
+| `escapeHtml` | `(value: unknown) => string` | Escapes `& < > " '` — one charset that is safe in text nodes **and** inside single- or double-quoted attributes, so pages don't grow divergent `esc()` helpers with attribute-breakout gaps. |
+| `scriptJson` | `(value: unknown) => string` | `JSON.stringify` is *not* safe inside `<script>`: a string containing `</script>` ends the element (JSON doesn't escape `/`). This escapes `<` plus U+2028/U+2029. |
+| `cspHash` | `(source: string) => string` | The `'sha256-…'` CSP source expression for one inline script/style block. |
+| `pageCsp` | `(options?: PageCspOptions) => string` | A locked-down, **route-scoped** CSP for one self-contained page. |
+
+`PageCspOptions`:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `scripts` | `string[]` | `[]` | The exact source text of each inline `<script>` block; each is sha256-hashed into `script-src`. With none, `script-src 'none'`. |
+| `connect` | `string[]` | `[]` | Extra `connect-src` origins beyond `'self'` (e.g. an absolute `apiBase`). |
+
+The policy it returns is `default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'unsafe-inline'; script-src <hashes>; connect-src 'self' …` (`style-src` must stay `'unsafe-inline'` — hash sources cannot cover `style=""` attributes). Set it as the response's `content-security-policy` header so it overrides
+`securityPlugin`'s app-wide `DEFAULT_CSP` **for that page only** — nobody has to weaken
+CSP globally to render one HTML page.
+
+The UI packages (`@basaltkit/teams-ui`, `billing-ui`, `api-keys-ui`, `audit-viewer`) do
+exactly this and expose a `csp` option: `csp: '<your policy>'` replaces theirs, and
+`csp: false` omits the header entirely so an outer proxy can own it.
 
 ## How it connects to other modules
 
@@ -359,3 +575,5 @@ back the `*-ui` packages and are available for your own HTML routes.
 - **`@basaltkit/fastify` / `@basaltkit/express` / `@basaltkit/hono`** — the adapters: they convert the framework's native request into the neutral `HttpRequest`/`HttpReply`, call `runRoute()`, and register an `HttpServer` on the `HTTP_SERVER` token so this module's edge plugins work on any of them without changes.
 - **Feature plugins** (`@basaltkit/auth`, `@basaltkit/tenancy`, `@basaltkit/permissions`, …) — integrate through the pipeline: register *enrichers* in the `'http:enrichers'` metadata bucket and *guards* in `'http:guards'`, and read the routes' `meta` (e.g. `meta: { auth: true }`).
 - **Tooling** (CLI `basalt routes`, OpenAPI, `@basaltkit/sdk`) — read the routes exposed by the adapters in the `'http:routes'` bucket, including the Zod schemas.
+
+Guides: [Adapters](/guide/adapters) · [Authorization](/guide/authorization) · [OpenAPI](/guide/openapi) · [Security](/guide/security) · [Observability](/guide/observability) · [Web UI](/guide/web-ui)

@@ -1,7 +1,11 @@
 # Going to Production
 
 A checklist for shipping a Basalt app, and where each capability lives. Most of
-it is on by default — this page is about making the deliberate choices.
+it is on by default — this page is about making the deliberate choices, and about
+the handful of things that only bite in production. Each line links to the guide
+that carries the full option table; nothing here restates one.
+
+[[toc]]
 
 ## Checklist
 
@@ -10,11 +14,22 @@ it is on by default — this page is about making the deliberate choices.
 - [ ] **Edge is protected** — `securityPlugin({ rateLimit, cors, headers })`.
 - [ ] **Logins are throttled** — on by default in `@basaltkit/auth`.
 - [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST`.
+- [ ] **The app boots on a cold start with production config** — the boot-time
+      guards below only fire when you actually call `boot()`.
 - [ ] **Health probes wired** — `healthPlugin({ checks })` for `/livez` + `/readyz`.
-- [ ] **Metrics scraped** — `metricsPlugin()` at `/metrics`.
-- [ ] **Tracing exported** — `tracingPlugin({ exporter })` (OTLP).
+- [ ] **Metrics scraped** — `metricsPlugin()` at `/metrics`, and neither it nor
+      `/readyz` is reachable from the internet.
+- [ ] **Tracing exported** — `tracingPlugin({ exporter })` (OTLP), with
+      `serviceName` set on the **exporter** too.
+- [ ] **Nothing important logs to `console.error`** — point the async error
+      callbacks at your logger: realtime `onBridgeError` / `onDeliveryError`, the
+      outbox's `onDead` / `onFlushError`, the queue drivers' `onError` /
+      `onJobFailed`. All default to the console, which most platforms discard.
+      See [Observability](/guide/observability).
 - [ ] **API documented** — `openapiPlugin({ info })`.
 - [ ] **External delivery is reliable** — `outboxPlugin` / `webhooksPlugin`.
+- [ ] **Scheduled work runs once, not once per replica** — `.onOneServer()` with a
+      shared `ScheduleLock`. See [Scheduler](/guide/scheduler).
 - [ ] **Real database** — put your domain data on `@basaltkit/prisma`, and swap the
       framework's in-memory stores (auth, teams, subscriptions, permissions,
       comments, audit, activity, notifications) for their durable
@@ -58,6 +73,24 @@ Pass Fastify server options through `fastifyPlugin({ fastify })`: `bodyLimit`
 (max request size), `requestTimeout`, and `trustProxy` (so rate limiting and
 logging see the real client IP behind a load balancer).
 :::
+
+## What fails loud at boot
+
+Two classes of misconfiguration are caught by `boot()` rather than discovered in
+production. Both throw, so a bad deploy dies on the launch instead of serving
+traffic — which is only useful if your pipeline actually boots the app (a smoke
+test, or the first container failing its readiness probe).
+
+| Error | Code | Means |
+| --- | --- | --- |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | A route declares `meta.auth`, `meta.can` or `meta.teamRole` and **no registered plugin enforces that key** — it would have served unprotected. Register the enforcing plugin (`authPlugin`, `permissionsPlugin`, `teamsPlugin`), or, if the check genuinely happens at an outer edge, opt out explicitly with the adapter's `allowUnguardedMeta: true` (or a list of keys) |
+| `CaptiveDependencyError` | `DI_CAPTIVE_DEPENDENCY` | A `scoped` token was resolved inside a **singleton** factory. The singleton outlives every scope, so it would serve request 1's per-request instance to every later request. Resolve the scoped service at use time (`ctx().container`) instead of at construction |
+
+The unguarded-meta check is why declaring `meta.can` and forgetting
+`permissionsPlugin` is a deploy failure and not a silent authorization hole. It
+covers exactly the keys in `GUARDED_META_KEYS`; a `false`/`undefined` value on a
+route is an explicit opt-off and is never flagged. See
+[Authorization](/guide/authorization) and [Adapters](/guide/adapters).
 
 ## Persistence
 
@@ -124,6 +157,7 @@ With `replicas: []` it returns the primary unchanged, so the same wiring runs in
 dev and in a single-node deploy. Applying `tenancyExtension()`? Extend the
 primary **and** each replica, then wrap the extended clients. (TLS/connection
 details are your database provider's; Basalt only routes the calls.)
+
 ## Sharding the database
 
 Read replicas scale reads; **sharding scales writes and storage** by spreading
@@ -187,10 +221,18 @@ The repo ships GitHub Actions that gate every PR:
 ## Reliability
 
 - **Outbox** (`@basaltkit/events`) — write events to a durable store, relay them to
-  external systems with retries and a dead-letter ceiling. At-least-once
-  delivery that survives crashes. See [Webhooks](/guide/webhooks).
+  external systems with retries, exponential backoff and a dead-letter ceiling.
+  At-least-once delivery that survives crashes — provided the store is durable
+  and `onDead` / `onFlushError` reach a human. Options in
+  [Persistence](/guide/persistence); the delivery side in
+  [Webhooks](/guide/webhooks).
 - **Webhooks** (`@basaltkit/webhooks`) — signed outbound delivery with backoff,
   per-tenant subscriptions, auto-dispatched from domain events.
+- **Queues** (`@basaltkit/queue`) — background work with driver-level `onError` /
+  `onJobFailed` reporting; see [Queues](/guide/queues).
+- **Realtime** (`@basaltkit/realtime`) — pushes are fire-and-forget by design and
+  can never fail a domain write, which also means their failures are only visible
+  through `onBridgeError` / `onDeliveryError`. See [Realtime](/guide/realtime).
 - **Feature flags** (`@basaltkit/flags`) — per-tenant/user targeting and
   deterministic rollouts for safe, gradual releases.
 
@@ -198,11 +240,15 @@ The repo ships GitHub Actions that gate every PR:
 
 `pnpm lint` (ESLint), `pnpm typecheck`, and `pnpm test:coverage` (V8, enforced
 thresholds) all run in CI, alongside `pnpm audit`, CodeQL and a Postgres
-integration job. Versions move in [lockstep](https://github.com/basaltkit/basalt/blob/main/VERSIONING.md)
-across `@basaltkit/*`, so one range covers the whole stack.
+integration job. Each `@basaltkit/*` package is versioned **independently** —
+depend on each with its own `^` range; the "Basalt X.Y" number in the nav is a
+label for a generation of the framework, not a package version. See
+[Versioning & compatibility](/guide/versioning).
 
 ## Roadmap
 
-Toward `1.0`: settling the API surface, first-class OpenTelemetry **metrics**
-export (traces already export via OTLP), and more persistence adapters. Track
-progress on the [repository](https://github.com/basaltkit/basalt).
+Past `1.0` the public API is stable and breaking changes wait for a major. Next
+up: first-class OpenTelemetry **metrics** export (traces already export via
+OTLP), and more persistence adapters. Track progress on the
+[repository](https://github.com/basaltkit/basalt), and see
+[What's new](/guide/whats-new) for the current generation.

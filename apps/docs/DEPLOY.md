@@ -7,14 +7,23 @@ docs are hosted on a free static host instead. VitePress is configured with
 **Build output:** `apps/docs/.vitepress/dist`
 **Build command:** `pnpm --filter docs docs:build`
 
-`docs:build` runs `docs:api` first, which regenerates the **typedoc API
-reference** into `apps/docs/reference/api/` (gitignored). It reads the packages'
-`src/index.ts`, so build the workspace first in CI:
+`docs:build` runs `docs:packages` first, which mirrors every public package's
+`README.md` into `apps/docs/reference/packages/` (gitignored) plus a generated
+sidebar. There is **no typedoc API reference**: the guides and the package
+READMEs are the complete, hand-written reference, so a stale generator can never
+disagree with them. Nothing has to be compiled first:
 
 ```bash
-pnpm -r build            # packages' dist/*.d.ts feed typedoc's type resolution
 pnpm --filter docs docs:build
 ```
+
+::: tip Keeping the reference honest
+Because the READMEs *are* the API reference, a package whose public options,
+error codes or hooks change must have its README updated in the same change —
+see the [Ecosystem overview](/reference/packages). The legacy `docs:api` /
+`docs:build:full` scripts still exist for one-off local typedoc exploration;
+they are not part of the deployed build.
+:::
 
 ## Search — Algolia DocSearch (optional)
 

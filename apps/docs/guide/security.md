@@ -3,6 +3,24 @@
 Basalt is **secure by default** at the HTTP edge and fail-closed on secrets.
 Everything here is zero-dependency and wired through the plugin lifecycle.
 
+## The secure defaults, at a glance
+
+Each of these ships ON by default — you have to opt *out*, never in. This
+table is the map; each row's guide has the details and the opt-out.
+
+| Default | What it prevents | Where |
+|---|---|---|
+| Boot refuses routes whose security meta has no enforcing guard (`UnguardedRouteMetaError`) | "protected" routes silently serving open | this page, below |
+| Billing/invoice routes require an authenticated user (`meta.auth`) | anonymous card/plan management via a forged tenant | [Billing](/guide/billing) |
+| Membership guard on every authenticated tenant request (`tenantMembershipPlugin`) | a valid user of tenant A driving tenant B (`TEAM_NOT_A_MEMBER`) | this page, below |
+| Cache fails closed outside tenant context in multi-tenant apps (`MissingCacheScopeError`) | cross-tenant reads through a shared "global" namespace | [Caching](/guide/caching) |
+| `meta.can` rejects unenforceable shapes (`PERMISSION_META_INVALID`) | a malformed declaration silently skipping authorization | [Authorization](/guide/authorization) |
+| Signed storage URLs serve `Content-Disposition: attachment` | stored XSS via user uploads on a CDN origin | [Storage](/guide/storage) |
+| Mail bodies build through `` html`…` `` with auto-escaped interpolations; log driver redacts bodies in production | markup injection in app mail · reset links in log aggregators | [Notifications](/guide/notifications) |
+| Admin/UI pages carry a route-scoped, hash-locked CSP | inline-script injection — without weakening the app-wide CSP | [Admin pages](/guide/admin-pages) |
+| Rate-limit keys ignore `X-Forwarded-For`; CORS never reflects arbitrary origins with credentials; HSTS/nosniff/frame-deny on | header-spoofed limits · credentialed cross-origin reads · clickjacking | this page, below |
+| Secrets fail closed in production (`secret()`, `AUTH_WEAK_SECRET`) | booting with a guessable signing key | this page, below |
+
 ## Edge protection — `securityPlugin`
 
 One plugin covers rate limiting, CORS and secure response headers. **Secure

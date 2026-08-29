@@ -14,7 +14,9 @@ An HTTP server is the program that receives **HTTP requests** (the messages a br
 
 This module connects Fastify to Basalt. You define each **route** (an address + method, e.g. `POST /projects`) with the `route()` function and [Zod](https://zod.dev) schemas; the adapter handles the rest: it validates the body, query and URL parameters, creates a per-request context (with `requestId` accessible anywhere in the code, even in deeply nested functions, via `ctx()`), and converts errors into JSON responses with a stable format — never exposing internal messages on a `500`.
 
-Since route definitions are neutral (they come from `@basaltkit/http`), the same route code also runs on the Express and Hono adapters. And the edge plugins (security, health, metrics, tracing, OpenAPI) are re-exported here for convenience. The extra piece exclusive to this adapter is `idempotencyPlugin`: safe retries of requests that mutate data (e.g. never charging a card twice).
+Since route definitions are neutral (they come from `@basaltkit/http`), the same route code also runs on the Express and Hono adapters — **the three adapters are equals**. Routes, enrichers, guards, the request context, standardized errors, the neutral 404, ETags, SSE and the boot-time guarded-meta check all behave identically on Fastify, Express and Hono; picking an adapter is picking a runtime, not a feature set. The edge plugins (security, health, metrics, tracing, OpenAPI) are neutral too, and re-exported here for convenience.
+
+One piece genuinely *is* specific to this adapter: `idempotencyPlugin`. It has to capture the outgoing response body to replay it, which it does through Fastify's `onSend` hook — there is no neutral equivalent, so it lives here rather than in `@basaltkit/http`.
 
 ## Installation
 
@@ -71,6 +73,19 @@ curl -X POST http://localhost:3000/projects \
 
 **Step 4** — for a clean shutdown (closes Fastify): `await app.shutdown()`.
 
+### What the plugin configures on the Fastify instance
+
+Beyond mounting routes, `fastifyPlugin` sets three defaults that plain Fastify doesn't:
+
+- **`requestTimeout: 30_000`** — Fastify's own default is `0` (disabled), which leaves the
+  server open to slowloris. Anything you pass in `fastify` wins.
+- **An `application/json` parser that treats an empty body as no body.** Fastify's default
+  throws on an empty body, so a `POST` with `content-type: application/json` and no
+  payload (exactly what an `@basaltkit/sdk` call with no arguments sends) surfaced as a
+  500. Genuinely malformed JSON still gets a `400`.
+- **An `application/x-www-form-urlencoded` parser.** Fastify ships none; HTML forms and the
+  SAML ACS binding need it.
+
 ## Usage guide
 
 ### Typed routes with params, query and errors
@@ -120,7 +135,46 @@ const whoami = route({
 
 If the client sends the `x-request-id` header, that value is used; otherwise a UUID is generated. The response always returns `x-request-id`. Each request also gets its own dependency container *scope* (`ctx().container`) — instances registered as `scoped` are new per request.
 
-### Idempotency — `idempotencyPlugin()` (Fastify-exclusive)
+### Guarded route meta — the boot check
+
+If a route declares `meta.auth`, `meta.can` or `meta.teamRole` and **no registered plugin
+enforces that key**, the route would serve unprotected. `fastifyPlugin` refuses to boot:
+it calls `assertRoutesGuarded()` in its boot phase and throws `UnguardedRouteMetaError`
+(code `HTTP_UNGUARDED_ROUTE_META`), naming every offending route and key, before a single
+request is served.
+
+```
+Refusing to boot: 1 route(s) declare security meta that NO registered guard enforces …
+  - GET /admin declares meta.auth
+```
+
+Fix it by registering the enforcing plugin (`auth` → `authPlugin`, `can` →
+`permissionsPlugin`, `teamRole` → `teamsPlugin`). If protection really does happen at an
+outer edge, waive it explicitly:
+
+```ts
+fastifyPlugin({ routes, allowUnguardedMeta: true })      // waive every key
+fastifyPlugin({ routes, allowUnguardedMeta: ['auth'] })  // waive one key
+```
+
+Express and Hono run the identical check with the identical option.
+
+### The neutral 404
+
+Unmatched routes get the same JSON body on every adapter —
+`{ "error": { "code": "NOT_FOUND", "message": "Route not found." } }` (`NOT_FOUND_RESPONSE`
+from `@basaltkit/http`) — instead of Fastify's own default. It is installed at
+`app:booted`; a `setNotFoundHandler` your app registers during a plugin's **boot** phase
+wins (the adapter's call is guarded). To register one *after* `app:booted`, pass
+`notFound: false` — Fastify allows only one handler.
+
+### Streaming — SSE
+
+A handler returning `sse(producer)` from `@basaltkit/http` is streamed over the raw Node
+response (`reply.hijack()` + `SSE_HEADERS`), with client disconnects relayed to
+`stream.onClose()`. Same handler code as on Express and Hono.
+
+### Idempotency — `idempotencyPlugin()` (Fastify-only)
 
 Idempotency means: repeating the same request doesn't repeat its effect. When the client sends the `Idempotency-Key` header, the first response is stored; any repeat with the same key receives **the same response**, without running the handler again — a network retry never charges a card twice.
 
@@ -152,11 +206,27 @@ curl -X POST http://localhost:3000/charge \
 # Repeat the same command: same response, with the Idempotent-Replayed: true header
 ```
 
-Rules (verified in the package's tests):
+Rules:
 - A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - Responses `>= 500` are **not** stored — genuine failures can still be retried.
-- Keys are isolated by method + route: the same key on two endpoints doesn't collide.
+- Keys are scoped by **caller credential + method + route + key**. The credential is a
+  short sha256 fingerprint of `Authorization` (or `x-session-id`), so one user's cached
+  response can never be replayed to another — a cross-tenant leak.
+- The reservation is taken with an **atomic** `setPending()` before the handler runs. A
+  plain get-then-set has a TOCTOU window where two concurrent first-time requests both
+  execute — the double-charge this plugin exists to prevent.
 - Requests without the header are unaffected.
+- A replay carries `Idempotent-Replayed: true`.
+
+`MemoryIdempotencyStore` is per process. For a cluster (or to survive a restart) use
+`RedisIdempotencyStore`:
+
+```ts
+import { idempotencyPlugin, RedisIdempotencyStore } from '@basaltkit/fastify'
+import { Redis } from 'ioredis'
+
+idempotencyPlugin({ store: new RedisIdempotencyStore(new Redis(process.env.REDIS_URL!)) })
+```
 
 ### Edge plugins (security, health, metrics, tracing, OpenAPI)
 
@@ -225,7 +295,8 @@ fastifyPlugin({
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()`) to register. |
 | `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
-| `fastify` | `FastifyServerOptions` | No | `{}` | Options passed to the `Fastify()` constructor (logger, trustProxy, …). |
+| `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes. Set `false` to register your own `setNotFoundHandler` after `app:booted` — Fastify allows only one. |
+| `fastify` | `FastifyServerOptions` | No | `{}` | Options passed to the `Fastify()` constructor (logger, `trustProxy`, …). Set `trustProxy` behind a proxy so `request.ip` — and therefore the rate-limit key — is the real client. |
 
 Behavior: registers the Fastify instance under the `FASTIFY` token and an `HttpServerCollector` under the `HTTP_SERVER` token; on boot it reads enrichers/guards from the metadata buckets (`'http:enrichers'`, `'http:guards'`), registers the routes, publishes them on the `'http:routes'` bucket (for OpenAPI/CLI/SDK) and mounts the edge plugins' hooks on the `app:booted` event. On `shutdown` it closes Fastify (`close()`).
 
@@ -250,13 +321,30 @@ Dependency injection token (`Token<FastifyInstance>`): `app.container.get(FASTIF
 | `store` | `IdempotencyStore` | No | `new MemoryIdempotencyStore(ttlMs)` | Where to store responses. |
 | `header` | `string` | No | `'idempotency-key'` | Header carrying the key. |
 | `methods` | `string[]` | No | `['POST']` | Protected methods. |
-| `ttlMs` | `number` | No | `86_400_000` (24 h) | Retention time for each record. |
+| `ttlMs` | `number` | No | `86_400_000` (24 h) | Retention time for each record. Only used to build the default store. |
 
-`IdempotencyStore` (interface): `get(key)` → `IdempotencyRecord | 'pending' | undefined`; `setPending(key)`; `complete(key, record)`; `release(key)`. `IdempotencyRecord` = `{ status: number; body: string; contentType?: string }`. `MemoryIdempotencyStore(ttlMs?, clock?)` is the in-memory implementation; for a cluster, implement the interface over Redis.
+`IdempotencyStore` (interface): `get(key)` → `IdempotencyRecord | 'pending' | undefined`; `setPending(key)` → `boolean` (**must be an atomic check-and-set** — Redis `SET NX`, or a single synchronous step in-process); `complete(key, record)`; `release(key)`. `IdempotencyRecord` = `{ status: number; body: string; contentType?: string }`.
+
+`MemoryIdempotencyStore(ttlMs?, clock?)` is the in-process implementation.
+`RedisIdempotencyStore(redis, options?)` is the shared one — `RedisIdempotencyStoreOptions`: `prefix` (default `'basalt:idem'`), `ttlMs` (default 24 h). Both accept any ioredis-compatible `RedisLike` client.
+
+### Errors
+
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
+| `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares `auth`/`can`/`teamRole` with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
+| — | `IDEMPOTENCY_CONFLICT` | 409 | A request with the same `Idempotency-Key` is still in flight. |
+| — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
+| — | `INTERNAL_ERROR` | 500 | Any other thrown error. Logged with its stack via `request.log.error`; the message never reaches the client. |
 
 ### Re-exports from `@basaltkit/http`
 
 For convenience (and backward compatibility), this package re-exports: `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `MemoryRateLimitStore`, `healthPlugin`, `metricsPlugin` + `METRICS`, `tracingPlugin` + `TRACER`, `openapiPlugin`, `generateOpenApi`, `zodToJsonSchema`, `HTTP_SERVER` and the associated types (`BasaltRoute`, `HandlerArgs`, `HttpMethod`, `HttpRequest`, `HttpReply`, `ValidationIssue`, `RequestEnricher`, `RouteGuard`, plugin options, …). See the `@basaltkit/http` README for the option tables.
+
+Not re-exported (import from `@basaltkit/http`): `sse` and the SSE types, `computeEtag`/`ifNoneMatchSatisfied`, `escapeHtml`/`scriptJson`/`pageCsp`/`cspHash`, `NOT_FOUND_RESPONSE`, `DEFAULT_CSP`, `RedisRateLimitStore`, `UnguardedRouteMetaError`, `runRoute`/`toErrorResponse`, `HttpServerCollector`.
 
 ## Common errors and solutions (FAQ)
 
@@ -278,3 +366,6 @@ For convenience (and backward compatibility), this package re-exports: `route`, 
 - **`@basaltkit/http`** — the entire pipeline (validation, enrichers, guards, error mapping) comes from here; this adapter only converts Fastify's request/response into the neutral format and calls `runRoute()`. Routes defined with `route()` run unchanged on the Express and Hono adapters.
 - **`@basaltkit/auth` / `@basaltkit/tenancy` / `@basaltkit/permissions`** — register guards and enrichers on the `'http:guards'`/`'http:enrichers'` buckets, which this adapter applies to all routes; they read the route's `meta` (e.g. `meta: { auth: true }`).
 - **`@basaltkit/sdk` and the CLI (`basalt routes`)** — read the routes published on the `'http:routes'` bucket (with the Zod schemas) to generate clients and documentation, with no duplicated configuration.
+- **`@basaltkit/testing`** — `createTestApp()` drives requests through this adapter by default (`inject()`, no socket); `createTestApp({ adapter: 'express' | 'hono' })` runs the same suite on a sibling.
+
+Guides: [Adapters](/guide/adapters) · [Testing](/guide/testing) · [Security](/guide/security) · [Observability](/guide/observability)

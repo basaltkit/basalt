@@ -71,7 +71,38 @@ Wire the store before its model exists and it **fails fast** with a message nami
 
 ## API
 
-`PrismaOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts)` (unpublished, below the attempt ceiling, oldest first), `markPublished`, `markFailed` (increments `attempts`), `all`. Payloads are JSON-serialized into a text column; time is stored as `DateTime` and exposed as epoch-ms, matching the contract. Re-enqueuing the same `id` replaces the entry, mirroring `MemoryOutboxStore`.
+| Export | Signature | Purpose |
+|---|---|---|
+| `prismaOutboxStore` | `(client: PrismaEventsClient) => { store: PrismaOutboxStore }` | The one you want. Validates the model exists, then returns the store — drop `store` into `outboxPlugin({ store })`. |
+| `PrismaOutboxStore` | `new PrismaOutboxStore(client)` | The store itself, without the model check. |
+| `PrismaEventsClient` | type | The minimal delegate surface used: `outboxEntry.upsert` / `findMany` / `updateMany`. A real `PrismaClient` with the `OutboxEntry` model is assignable, so pass it directly — no cast. |
+
+### Options
+
+`prismaOutboxStore` takes no options object: everything tunable (`maxAttempts`, `backoff`,
+`onDead`, `batchSize`, `intervalMs`, `onFlushError`) lives on `outboxPlugin` /
+`OutboxOptions` in [`@basaltkit/events`](https://www.npmjs.com/package/@basaltkit/events). The
+only decision here is which `PrismaClient` you hand it — and the answer is the one that owns your
+business writes, so the enqueue can join their transaction.
+
+### Contract details
+
+`PrismaOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts)` (unpublished, below the attempt ceiling, oldest first, tie-broken by `id`), `markPublished`, `markFailed` (increments `attempts`), `all`. Payloads are JSON-serialized into a text column; time is stored as `DateTime` and exposed as epoch-ms, matching the contract. Re-enqueuing the same `id` **replaces** the entry (`upsert` resets `attempts` to 0 and clears `publishedAt`/`lastError`), mirroring `MemoryOutboxStore`. `markPublished` and `markFailed` use `updateMany`, so a missing id is a no-op rather than a throw — again matching the memory store.
+
+### Errors
+
+| Error | Code | When |
+|---|---|---|
+| Plain `Error` — *"@basaltkit/events-prisma: the Prisma client has no `outboxEntry` model…"* | — | Thrown by `prismaOutboxStore()` at wiring time when the client lacks the model. The message names the missing delegate and points at `basalt prisma:sync`. A lazy/proxy client (database-per-tenant) skips the check and is validated at first use instead. |
+| Prisma client errors (`PrismaClientKnownRequestError`, …) | — | Propagate from the delegate. They reach you through the outbox's `onFlushError` (store-level, e.g. `pending()` failing) or as the entry's `lastError`. |
+
+This package defines no `BasaltError` subclasses.
+
+### Hooks & events
+
+None — this package is a storage adapter. The outbox's callbacks (`onDead`, `onFlushError`) and
+its retry policy live on `outboxPlugin` / `OutboxOptions` in
+[`@basaltkit/events`](https://www.npmjs.com/package/@basaltkit/events).
 
 ## Which backend?
 
