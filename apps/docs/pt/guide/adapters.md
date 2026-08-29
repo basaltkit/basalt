@@ -304,7 +304,7 @@ nativos da sua framework.
 | Opção | Tipo | Default | Adapters | Porquê |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | `[]` | todos | As rotas neutras a montar. |
-| `allowUnguardedMeta` | `boolean \| string[]` | falha alto no boot | todos | Dispensa o check de boot de que cada rota que declara `meta.auth`/`can`/`teamRole` tem um guard registado a aplicá-la (`UnguardedRouteMetaError` caso contrário). Só para deployments onde a proteção acontece genuinamente numa edge exterior. |
+| `allowUnguardedMeta` | `boolean \| string[]` | falha alto no boot | todos | Dispensa o check de boot de que cada rota que declara uma chave de segurança guardada (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) tem um guard registado a aplicá-la (`UnguardedRouteMetaError` caso contrário). Só para deployments onde a proteção acontece genuinamente numa edge exterior. |
 | `notFound` | `boolean` | `true` (corpo 404 neutro) | todos | Passa `false` para sair do `404 { error: { code: 'NOT_FOUND' } }` partilhado e manter o default da framework. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passado ao construtor `Fastify()` (logger, trustProxy, …). |
 | `app` | instância nativa | criada por ti ou pelo plugin | express, hono | Traz o teu próprio `express()` / `new Hono()` e o Basalt monta-se nele. |

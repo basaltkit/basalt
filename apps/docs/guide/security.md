@@ -272,7 +272,8 @@ can't decide them for you. Get these right in every deployment.
 
 ### 1. Authorization is explicit — declare a guard, don't just declare intent
 
-A route's `meta.auth` / `meta.can` / `meta.teamRole` documents *what* the route
+A route's `meta.auth` / `meta.can` / `meta.teamRole` / `meta.scopes` /
+`meta.subscribed` / `meta.feature` documents *what* the route
 needs, but the **guard that enforces it must actually be registered**. A
 declared-but-unguarded route would be **open** — so the adapters refuse to boot
 it: at startup they verify that every declared security meta key has a
@@ -287,7 +288,15 @@ route({ method: 'POST', url: '/admin/purge', meta: { can: 'admin' }, handler })
 authPlugin(…)         // enforces meta.auth
 permissionsPlugin(…)  // enforces meta.can
 teamsPlugin(…)        // enforces meta.teamRole
+apiKeysPlugin(…)      // enforces meta.scopes
+subscriptionsPlugin(…) // enforces meta.subscribed and meta.feature
 ```
+
+The full guarded set is `auth`, `can`, `teamRole`, `scopes`, `subscribed` and
+`feature` (`GUARDED_META_KEYS`). Keys that *relax* rather than protect are
+deliberately excluded — `meta.central` (skips the tenant-membership check),
+`meta.mcp` (opts a route into MCP exposure) and `meta.rateLimit` (abuse
+throttling, not an authorization boundary).
 
 If protection genuinely happens at an outer edge/gateway, opt out explicitly
 with the adapter option `allowUnguardedMeta: true` (or `['auth', …]` for

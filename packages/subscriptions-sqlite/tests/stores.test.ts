@@ -9,6 +9,7 @@ import {
   SqliteUsageStore,
   SqliteWebhookStore,
   sqliteSubscriptionsStores,
+  migrate,
 } from '../src/index.js'
 
 describe('SqliteSubscriptionStore', () => {
@@ -149,5 +150,43 @@ describe('sqliteSubscriptionsStores + durability', () => {
     expect(await second.usage.get('acme', 'api', 'lifetime')).toBe(7)
     expect(await second.webhooks.markProcessed('evt_persist')).toBe(false) // still claimed
     second.db.close()
+  })
+})
+
+describe('schema evolution', () => {
+  it('adds pending_plan/pending_period to a database created before the escalation guard', async () => {
+    // A pre-1.x subscriptions table: no pending-plan columns at all.
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(':memory:')
+    db.exec(`
+      CREATE TABLE subscriptions (
+        billable_id          TEXT PRIMARY KEY,
+        plan                 TEXT NOT NULL,
+        period               TEXT NOT NULL,
+        status               TEXT NOT NULL,
+        trial_ends_at        INTEGER,
+        cancel_at_period_end INTEGER,
+        canceled_at          INTEGER,
+        gateway_ref          TEXT
+      );
+    `)
+
+    migrate(db)
+
+    const columns = db
+      .prepare('SELECT name FROM pragma_table_info(?)')
+      .all('subscriptions')
+      .map((r) => (r as { name: string }).name)
+    expect(columns).toContain('pending_plan')
+    expect(columns).toContain('pending_period')
+
+    // ...and save(), which always writes both, now succeeds on the old DB.
+    const store = new SqliteSubscriptionStore(db)
+    await store.save({
+      billableId: 'acme', plan: 'pro', period: 'monthly', status: 'incomplete',
+      pendingPlan: 'enterprise', pendingPeriod: 'yearly',
+    })
+    expect(await store.get('acme')).toMatchObject({ pendingPlan: 'enterprise', pendingPeriod: 'yearly' })
+    db.close()
   })
 })

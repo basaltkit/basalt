@@ -295,7 +295,7 @@ reason about it or reuse it.
 |---|---|---|---|
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
-| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares `auth`/`can`/`teamRole` with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `PAYLOAD_TOO_LARGE` | 413 | Declared `Content-Length` exceeds `bodyLimit`. Body shape here is flat (`{ code, message }`), not the nested `{ error: … }` envelope. |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |

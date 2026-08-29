@@ -55,6 +55,18 @@ export interface QueuePluginOptions {
    * and retries) — set e.g. `{ age: '14d' }` so failures don't grow unbounded.
    */
   removeOnFail?: JobRetention
+  /**
+   * Infra errors from the driver's broker client (e.g. Redis down). Forwarded
+   * to the driver built from `connection`; default `console.error` with context.
+   * Ignored when you pass your own `driver` — configure it on the driver then.
+   */
+  onError?: BullmqDriverOptions['onError']
+  /**
+   * A job exhausted its retries. Forwarded to the driver built from
+   * `connection`; default `console.error` with context. Ignored when you pass
+   * your own `driver` — configure it on the driver then.
+   */
+  onJobFailed?: BullmqDriverOptions['onJobFailed']
 }
 
 export function queuePlugin(options: QueuePluginOptions = {}) {
@@ -66,7 +78,11 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
         let driver = options.driver
         if (!driver) {
           if (options.connection) {
-            driver = new BullmqQueueDriver({ connection: options.connection })
+            driver = new BullmqQueueDriver({
+              connection: options.connection,
+              ...(options.onError !== undefined ? { onError: options.onError } : {}),
+              ...(options.onJobFailed !== undefined ? { onJobFailed: options.onJobFailed } : {}),
+            })
           } else {
             driver = new SyncQueueDriver()
             if (process.env['NODE_ENV'] === 'production') {

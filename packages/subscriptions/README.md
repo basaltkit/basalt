@@ -551,7 +551,7 @@ Methods:
 | `handleWebhook` | `(event: WebhookEvent) => Promise<boolean>` | Applies an event idempotently; `false` = duplicate |
 | `expireTrials` | `() => Promise<SubscriptionRecord[]>` | Settles expired local trials (run it in the scheduler) |
 
-`SubscriptionRecord`: `{ billableId, plan, period, status, trialEndsAt?, cancelAtPeriodEnd?, canceledAt?, gatewayRef? }` with `status ∈ 'active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete'`.
+`SubscriptionRecord`: `{ billableId, plan, period, status, trialEndsAt?, cancelAtPeriodEnd?, canceledAt?, gatewayRef?, pendingPlan?, pendingPeriod? }` with `status ∈ 'active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete'`.
 
 ### Errors
 
@@ -613,7 +613,7 @@ Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`
 |---|---|
 | `SUBSCRIPTIONS` | `Token<Subscriptions>` — the billing service |
 | `INVOICES` | `Token<Invoices>` — the invoice engine |
-| `subscriptionsPlugin(options)` | Registers both services and the `meta.subscribed`/`meta.feature` guard |
+| `subscriptionsPlugin(options)` | Registers both services and the `meta.subscribed`/`meta.feature` guard, and claims both keys for the adapters' guarded-meta boot check |
 | `billingRoutes(options)` | `POST /billing/checkout` + `POST /billing/portal` for the current tenant |
 | `invoiceRoutes(options?)` | `GET /billing/invoices`, `/:id`, `/:id/html` for the current tenant |
 | `billingWebhookRoute(gateway)` | `POST /billing/webhook` — signature verified by the driver, idempotent processing |
