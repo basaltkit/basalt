@@ -54,7 +54,7 @@ que declarou o hook.
 
 ```ts
 // mails.ts
-import { defineMail } from '@basaltkit/mailer'
+import { defineMail, html } from '@basaltkit/mailer'
 import { z } from 'zod'
 
 const link = z.object({ url: z.string() })
@@ -63,21 +63,21 @@ export const VerifyEmail = defineMail({
   name: 'verify-email',
   schema: link,
   subject: () => 'Confirm your email',
-  html: ({ url }) => `<p>Confirm your address: <a href="${url}">verify</a></p>`,
+  html: ({ url }) => html`<p>Confirm your address: <a href="${url}">verify</a></p>`,
 })
 
 export const ResetEmail = defineMail({
   name: 'reset-password',
   schema: link,
   subject: () => 'Reset your password',
-  html: ({ url }) => `<p>Reset your password: <a href="${url}">choose a new one</a></p>`,
+  html: ({ url }) => html`<p>Reset your password: <a href="${url}">choose a new one</a></p>`,
 })
 
 export const InviteEmail = defineMail({
   name: 'team-invite',
   schema: link,
   subject: () => 'You have been invited to a team',
-  html: ({ url }) => `<p>Join the team: <a href="${url}">accept invitation</a></p>`,
+  html: ({ url }) => html`<p>Join the team: <a href="${url}">accept invitation</a></p>`,
 })
 ```
 

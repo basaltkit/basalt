@@ -1,3 +1,4 @@
+import type { SafeHtml } from './html.js'
 import { BasaltError } from '@basaltkit/core'
 
 /** Structural schema compatible with Zod. */
@@ -136,7 +137,7 @@ export interface MailDefinition<T = void> {
   readonly schema?: MailSchema<T> | undefined
   subject(data: T): string
   text?(data: T): string
-  html?(data: T): string
+  html?(data: T): string | SafeHtml
 }
 
 /**

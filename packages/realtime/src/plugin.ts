@@ -59,6 +59,15 @@ export interface RealtimePluginOptions {
    * instead of propagating. Default: logs to console with the rule's context.
    */
   onBridgeError?: (error: unknown, info: { hook: string; channel: string; event: string }) => void
+  /**
+   * A local delivery failed (dead socket) — forwarded to the hub. The
+   * connection is pruned and remaining recipients still receive the message.
+   * Default: console.error with context.
+   */
+  onDeliveryError?: (
+    error: unknown,
+    info: { connectionId: string; tenantId: string; channel: string; event: string },
+  ) => void
 }
 
 export function realtimePlugin(options: RealtimePluginOptions = {}) {
@@ -66,6 +75,7 @@ export function realtimePlugin(options: RealtimePluginOptions = {}) {
     name: 'basalt:realtime',
     register({ container }) {
       const hub = new RealtimeHub(options.backplane ?? new MemoryBackplane(), {
+        ...(options.onDeliveryError ? { onDeliveryError: options.onDeliveryError } : {}),
         ...(options.authorize ? { authorize: options.authorize } : {}),
         ...(options.maxSubscriptionsPerConnection !== undefined
           ? { maxSubscriptionsPerConnection: options.maxSubscriptionsPerConnection }

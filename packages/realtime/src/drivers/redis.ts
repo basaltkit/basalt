@@ -36,7 +36,23 @@ export class RedisBackplane implements RealtimeBackplane {
   async subscribe(handler: (message: BackplaneMessage) => void): Promise<void> {
     this.options.subscriber.on('message', (channel, raw) => {
       if (channel !== this.channel) return
-      handler(JSON.parse(raw) as BackplaneMessage)
+      // Never throw into ioredis's 'message' emitter — an escaped exception
+      // there is an uncaughtException (fatal). Malformed or wrong-shaped
+      // payloads are dropped and logged (Q-3).
+      try {
+        const message = JSON.parse(raw) as Partial<BackplaneMessage>
+        if (
+          typeof message?.tenantId !== 'string' ||
+          typeof message.channel !== 'string' ||
+          typeof message.event !== 'string'
+        ) {
+          console.error('[basalt:realtime] dropping malformed backplane message (missing tenantId/channel/event)')
+          return
+        }
+        handler(message as BackplaneMessage)
+      } catch (error) {
+        console.error('[basalt:realtime] dropping unparseable backplane message:', error)
+      }
     })
     await this.options.subscriber.subscribe(this.channel)
   }

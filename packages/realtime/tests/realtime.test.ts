@@ -279,3 +279,60 @@ describe('bridge failures do not fail the domain write (review 2026-08-b, Q-1)',
     await app.shutdown()
   })
 })
+
+describe('deliverLocal crash-safety (review 2026-08-b, Q-3)', () => {
+  class ThrowingConnection extends FakeConnection {
+    override send(): void {
+      throw new Error('socket already closed')
+    }
+  }
+
+  it('one dead socket does not blackhole the rest, is pruned, and is observable', async () => {
+    const failures: { connectionId: string }[] = []
+    const hub = new RealtimeHub(undefined, {
+      onDeliveryError: (_error, info) => void failures.push(info),
+    })
+    await hub.start()
+    const healthy1 = new FakeConnection('a', 'acme', 'u1')
+    const dead = new ThrowingConnection('b', 'acme', 'u2')
+    const healthy2 = new FakeConnection('c', 'acme', 'u3')
+    for (const conn of [healthy1, dead, healthy2]) hub.register(conn)
+    for (const id of ['a', 'b', 'c']) await hub.subscribe(id, 'notes')
+
+    await hub.publish('acme', 'notes', 'created', { id: 1 })
+
+    // Pre-fix: the throw from "b" aborted the loop — "c" received NOTHING and
+    // the exception escaped toward the backplane's message emitter (fatal on
+    // a real ioredis subscriber). Post-fix: everyone else is delivered.
+    expect(healthy1.received).toHaveLength(1)
+    expect(healthy2.received).toHaveLength(1)
+
+    // the failure is observable and the dead connection is pruned
+    expect(failures).toMatchObject([{ connectionId: 'b' }])
+    expect(hub.presence('acme', 'notes')).not.toContain('u2')
+
+    // subsequent broadcasts flow cleanly with no repeat failures
+    await hub.publish('acme', 'notes', 'created', { id: 2 })
+    expect(healthy2.received).toHaveLength(2)
+    expect(failures).toHaveLength(1)
+  })
+
+  it('a malformed backplane message is dropped without crashing (redis driver)', async () => {
+    const { RedisBackplane } = await import('../src/drivers/redis.js')
+    let messageListener!: (channel: string, raw: string) => void
+    const client = {
+      publish: async () => 1,
+      subscribe: async () => 1,
+      on: (_e: 'message', l: (channel: string, raw: string) => void) => void (messageListener = l),
+    }
+    const backplane = new RedisBackplane({ publisher: client, subscriber: client })
+    const seen: unknown[] = []
+    await backplane.subscribe((m) => void seen.push(m))
+    // garbage JSON and a valid-JSON-but-wrong-shape message must both be
+    // dropped, not thrown into ioredis's emitter (which would be fatal)
+    expect(() => messageListener('basalt:realtime', 'not-json{')).not.toThrow()
+    expect(() => messageListener('basalt:realtime', JSON.stringify({ nope: true }))).not.toThrow()
+    messageListener('basalt:realtime', JSON.stringify({ tenantId: 't', channel: 'c', event: 'e', data: 1 }))
+    expect(seen).toEqual([{ tenantId: 't', channel: 'c', event: 'e', data: 1 }])
+  })
+})

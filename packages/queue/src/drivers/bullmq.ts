@@ -16,6 +16,18 @@ function toBullRetention(retention: RetentionOption | undefined, fallback: boole
 export interface BullmqDriverOptions {
   /** Redis URL (redis://... or rediss://...) or ioredis connection options. */
   connection: string | ConnectionOptions
+  /**
+   * Infra errors from BullMQ's Worker/Queue emitters (e.g. Redis down). BullMQ
+   * emits these as EventEmitter 'error' events — unhandled, they CRASH the
+   * process. Default: logged via console.error with full context — observable,
+   * never fatal, never silent. (Same pattern as realtime's onBridgeError.)
+   */
+  onError?: (error: unknown, info: { queue: string; source: 'worker' | 'queue' }) => void
+  /**
+   * A job exhausted its retries (BullMQ 'failed'). Default: console.error —
+   * without this, exhausted jobs were only visible by polling queue stats.
+   */
+  onJobFailed?: (info: { queue: string; job: string; jobId?: string; error: unknown }) => void
 }
 
 export class BullmqQueueDriver implements QueueDriver {
@@ -26,11 +38,24 @@ export class BullmqQueueDriver implements QueueDriver {
   private readonly workers: Worker[] = []
   private executor: JobExecutor | undefined
 
+  private readonly onError: NonNullable<BullmqDriverOptions['onError']>
+  private readonly onJobFailed: NonNullable<BullmqDriverOptions['onJobFailed']>
+
   constructor(options: BullmqDriverOptions) {
     this.connection =
       typeof options.connection === 'string'
         ? parseRedisUrl(options.connection)
         : options.connection
+    this.onError =
+      options.onError ??
+      ((error, info) => console.error(`[basalt:queue] bullmq ${info.source} error (queue "${info.queue}"):`, error))
+    this.onJobFailed =
+      options.onJobFailed ??
+      ((info) =>
+        console.error(
+          `[basalt:queue] job "${info.job}"${info.jobId ? ` (id ${info.jobId})` : ''} on queue "${info.queue}" failed permanently:`,
+          info.error,
+        ))
   }
 
   setExecutor(executor: JobExecutor): void {
@@ -53,12 +78,22 @@ export class BullmqQueueDriver implements QueueDriver {
   }
 
   startWorker(queue: string, options: { concurrency?: number } = {}): void {
-    this.workers.push(
-      new Worker(queue, async (job) => this.executor?.(job.name, job.data), {
-        connection: this.connection,
-        concurrency: options.concurrency ?? 1,
+    const worker = new Worker(queue, async (job) => this.executor?.(job.name, job.data), {
+      connection: this.connection,
+      concurrency: options.concurrency ?? 1,
+    })
+    // Without these listeners an emitted 'error' crashes the process (Node
+    // EventEmitter semantics) and exhausted jobs fail invisibly (Q-2).
+    worker.on('error', (error) => this.onError(error, { queue, source: 'worker' }))
+    worker.on('failed', (job, error) =>
+      this.onJobFailed({
+        queue,
+        job: job?.name ?? '(unknown)',
+        ...(job?.id !== undefined ? { jobId: String(job.id) } : {}),
+        error,
       }),
     )
+    this.workers.push(worker)
   }
 
   async stats(queue: string): Promise<QueueStats> {
@@ -92,6 +127,7 @@ export class BullmqQueueDriver implements QueueDriver {
     let queue = this.queues.get(name)
     if (!queue) {
       queue = new Queue(name, { connection: this.connection })
+      queue.on('error', (error) => this.onError(error, { queue: name, source: 'queue' }))
       this.queues.set(name, queue)
     }
     return queue
