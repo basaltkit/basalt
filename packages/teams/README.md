@@ -248,6 +248,18 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 
 **"Members disappear on restart."** In-memory stores. Implement `MembershipStore` and `InvitationStore` over your database (you can store just the hash of the invitation token, as the comment on the `Invitation` type suggests).
 
+## Tenant isolation guard — `tenantMembershipPlugin`
+
+Binds the authenticated user to the resolved tenant on every request: a valid
+user of tenant A forging `x-tenant-id: B` gets a 403 instead of tenant B's data.
+Default semantics: membership **existence** (custom roles absent from `roleRank`
+still pass); pass `role: 'member'` to enforce rank. `exempt: (context) =>
+boolean` skips the check for platform-admin/support identities (WHO-based —
+prefer it over `meta.central`, which unguards the route for everyone). Opt-in
+`cache: { ttlMs, maxEntries }` caches decisions in-process, invalidated
+immediately by the membership hooks in the same process; `ttlMs` bounds
+staleness only for changes made on another replica.
+
 ## How it connects to other modules
 
 - **@basaltkit/tenancy** — the team IS the set of users of a tenant; routes and the guard read `ctx().tenant.id`.
