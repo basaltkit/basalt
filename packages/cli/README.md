@@ -209,6 +209,8 @@ A Basalt plugin that registers the commands in the `'commands'` metadata bucket,
 
 A minimal argument parser: the first "loose" word is the command; `--key=value` and `--flag` become flags. Returns `{ command: string | undefined, args: string[], flags: Record<string, string | boolean> }`.
 
+A bare `--no-<name>` is the conventional **negation**: it yields `flags['<name>'] === false`, not `flags['no-<name>'] === true`. That is what makes documented opt-outs such as `basalt dev --no-routes` take effect — commands test `flags['routes'] !== false`. Only the bare form negates: `--no-cache=x` still parses as the literal key `no-cache`.
+
 ### `consoleIo(): CommandIo`
 
 A `CommandIo` implementation that writes to the console (`console.log` / `console.error`; `table` renders via `renderTable`). It's the default for `runCli`.

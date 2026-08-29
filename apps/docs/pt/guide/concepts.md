@@ -192,7 +192,8 @@ pedido, por ordem:
 3. **Guards** correm (`http:guards`) — autorizam: um guard recebe
    `{ route, request, context, container }`, lê o `meta` da rota e rejeita
    **lançando**. A auth lê `meta.auth`, as permissions leem `meta.can`, os
-   teams leem `meta.teamRole`.
+   teams leem `meta.teamRole`, as API keys leem `meta.scopes` e as
+   subscrições leem `meta.subscribed`/`meta.feature`.
 4. **Validação** — `body`, `query` e `params` passam por `safeParse` contra os
    schemas Zod da rota; uma falha é um `RequestValidationError`
    (`HTTP_VALIDATION`, 400) com issues por campo.
@@ -217,7 +218,8 @@ trata-os como API.
 
 ### Meta de segurança tem de ser aplicada — o check de boot
 
-`meta: { auth: true }`, `meta.can`, `meta.teamRole` são *pedidos* de proteção;
+`meta: { auth: true }`, `meta.can`, `meta.teamRole`, `meta.scopes`,
+`meta.subscribed` e `meta.feature` são *pedidos* de proteção;
 o guard que um plugin regista é o que os aplica. No boot, os adapters
 verificam que cada chave de meta de segurança declarada tem um guard registado
 a reclamá-la (via `http:guarded-meta`) e recusam arrancar caso contrário
@@ -352,7 +354,7 @@ crash entre a escrita e a publicação), emparelha o bus com o **outbox** — v�
 | Vês | Significa | Faz |
 |---|---|---|
 | `DI_CAPTIVE_DEPENDENCY` no boot | uma factory singleton resolveu um token `scoped` | resolve no momento do uso via `ctx().container` (vê [Lifetimes](#os-lifetimes-sao-impostos-di-captive-dependency)) |
-| `UnguardedRouteMetaError` no boot | uma rota declara `meta.auth`/`can`/`teamRole` mas o plugin que aplica não está registado | regista `authPlugin`/`permissionsPlugin`/`teamsPlugin`, ou opta por sair com `allowUnguardedMeta` |
+| `UnguardedRouteMetaError` no boot | uma rota declara uma chave guardada (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) mas o plugin que aplica não está registado | regista `authPlugin`/`permissionsPlugin`/`teamsPlugin`, ou opta por sair com `allowUnguardedMeta` |
 | `ContextUnavailableError` | `ctx()` chamado fora de qualquer contexto de pedido/job | usa `tryCtx()`, ou envolve trabalho em background em `runWithContext` |
 | erro de boot do plugin a nomear um ciclo | o `dependsOn` forma um loop | quebra o ciclo — normalmente movendo uma subscrição do `register` para o `boot` |
 | `HTTP_VALIDATION` (400) | o body/query/params do pedido falhou o schema Zod da rota | a resposta lista a parte que falhou e as issues por campo |

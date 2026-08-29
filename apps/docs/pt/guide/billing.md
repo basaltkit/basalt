@@ -139,7 +139,8 @@ await subscriptions.get('acme')               // SubscriptionRecord | null
 ```
 
 Um `SubscriptionRecord` é `{ billableId, plan, period, status, trialEndsAt?,
-cancelAtPeriodEnd?, canceledAt?, gatewayRef? }` onde `status` é um de
+cancelAtPeriodEnd?, canceledAt?, gatewayRef?, pendingPlan?, pendingPeriod? }`
+onde `status` é um de
 `active`, `trialing`, `past_due`, `canceled`, `incomplete`.
 
 ## Limites de funcionalidades e medição
@@ -285,10 +286,15 @@ operar sobre a faturação de qualquer tenant. O mesmo se aplica às tuas rotas 
 [guia de segurança](/pt/guide/security).
 :::
 
-Nota que `subscribed` e `feature` **não** fazem parte da verificação de
-guarded-meta da framework (só `auth`, `can` e `teamRole` fazem). Uma rota anotada
-com `meta: { subscribed: 'pro' }` sem o `subscriptionsPlugin` arranca sem queixas
-e serve **sem guarda** — regista o plugin, e cobre o paywall com um teste.
+O `subscribed` e o `feature` **fazem** parte da verificação de guarded-meta da
+framework. O `subscriptionsPlugin` reclama ambas as chaves, por isso uma rota
+anotada com `meta: { subscribed: 'pro' }` sem o plugin já não arranca a servir a
+funcionalidade paga a toda a gente — o adapter recusa arrancar com
+`UnguardedRouteMetaError`, nomeando as rotas em falta. Se o paywall vive mesmo
+numa edge exterior, opta por sair deliberadamente com a opção do adapter
+`allowUnguardedMeta: ['subscribed', 'feature']`. Cobre à mesma o paywall com um
+teste: o check de boot prova que existe um guard *registado*, não que a tua
+matriz de planos está correta.
 
 Um Checkout abandonado nunca muda a subscrição ativa: o `checkout()` regista a
 intenção como `pendingPlan`, e o plano só muda quando a gateway confirma o

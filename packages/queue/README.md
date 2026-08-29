@@ -277,11 +277,13 @@ Basalt plugin that registers a `QueueManager` in the container under the `QUEUE`
 | `onUnsupported` | `'throw' \| 'warn' \| 'ignore'` | No | `'warn'` | What happens when a dispatch uses an option the active driver cannot honour (a delay on Kafka, a priority on SQS). `'warn'` logs once per job+feature and proceeds; `'throw'` raises `UnsupportedJobOptionError` — set it in production when the option is load-bearing; `'ignore'` is silent. |
 | `removeOnComplete` | `JobRetention` | No | driver default (BullMQ keeps the last `1000`) | Default Redis retention for completed jobs. A job's own `removeOnComplete` wins. |
 | `removeOnFail` | `JobRetention` | No | driver default (BullMQ `false` — keep all) | Default retention for failed jobs. Keeping all is deliberate (inspection and `queue:retry`); set e.g. `{ age: '14d' }` so failures don't grow unbounded. |
+| `onError` | `(error, { queue, source }) => void` | No | `console.error` with context | Infra faults from the driver's broker client (Redis down). Forwarded to the driver built from `connection`; ignored when you pass your own `driver`. |
+| `onJobFailed` | `({ queue, job, jobId?, error }) => void` | No | `console.error` with context | A job exhausted its retries. Forwarded to the driver built from `connection`; ignored when you pass your own `driver`. |
 
-**Failure callbacks live on the driver, not the plugin.** `onError` and `onJobFailed` are
-`BullmqDriverOptions`, and `queuePlugin({ connection })` builds the BullMQ driver **without**
-forwarding them — to override the defaults, construct the driver yourself and pass it as
-`driver`. See [Failure hooks](#failure-hooks) below.
+**Failure callbacks work on the shorthand path.** `queuePlugin({ connection, onError,
+onJobFailed })` forwards both to the BullMQ driver it builds. They are ignored when you
+supply your own `driver` — that driver owns its own callbacks, so configure them there.
+See [Failure hooks](#failure-hooks) below.
 
 ```ts
 import { QUEUE } from '@basaltkit/queue'
@@ -359,8 +361,8 @@ one of them has a **non-silent default**, so nothing disappears if you configure
 
 | Hook | Where it lives | Receives | Default when unset |
 |---|---|---|---|
-| `onError` | `BullmqDriverOptions` | `(error, { queue, source: 'worker' \| 'queue' })` | `console.error` with queue + source |
-| `onJobFailed` | `BullmqDriverOptions` | `({ queue, job, jobId?, error })` | `console.error` naming the job |
+| `onError` | `QueuePluginOptions` or `BullmqDriverOptions` | `(error, { queue, source: 'worker' \| 'queue' })` | `console.error` with queue + source |
+| `onJobFailed` | `QueuePluginOptions` or `BullmqDriverOptions` | `({ queue, job, jobId?, error })` | `console.error` naming the job |
 | `warn` | `QueueManagerOptions` | `(message: string)` | `console.warn`, once per job+feature |
 | `onError` | [`RabbitmqDriverOptions`](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq) | `(error, { source: 'connection' \| 'channel' })` | `console.error` |
 | `onError` | [`KafkaDriverOptions`](https://www.npmjs.com/package/@basaltkit/queue-kafka) | `(error, { source: 'consumer' \| 'producer'; queue? })` | `console.error` |
@@ -369,20 +371,33 @@ one of them has a **non-silent default**, so nothing disappears if you configure
 Only the BullMQ driver has `onJobFailed`; the broker drivers route an exhausted job to their own
 dead-letter destination (`q.dead`, `<topic>.dead`, `<queue>-dead`) instead.
 
-To override the BullMQ callbacks, build the driver yourself — `queuePlugin({ connection })`
-constructs it with the connection only:
+Override the BullMQ callbacks right on the plugin — `queuePlugin({ connection })` forwards
+them to the driver it builds:
+
+```ts
+import { queuePlugin } from '@basaltkit/queue'
+
+queuePlugin({
+  connection: process.env.REDIS_URL!,
+  jobs: [SendWelcomeEmail],
+  workers: [{ queue: 'default', concurrency: 5 }],
+  onError: (error, { queue, source }) => logger.error({ err: error, queue, source }, 'queue infra error'),
+  onJobFailed: ({ queue, job, jobId, error }) =>
+    logger.error({ err: error, queue, job, jobId }, 'job failed permanently'),
+})
+```
+
+Passing your own `driver` bypasses that forwarding — a supplied driver owns its callbacks,
+so set them in its constructor:
 
 ```ts
 import { queuePlugin, BullmqQueueDriver } from '@basaltkit/queue'
 
 queuePlugin({
   jobs: [SendWelcomeEmail],
-  workers: [{ queue: 'default', concurrency: 5 }],
   driver: new BullmqQueueDriver({
     connection: process.env.REDIS_URL!,
     onError: (error, { queue, source }) => logger.error({ err: error, queue, source }, 'queue infra error'),
-    onJobFailed: ({ queue, job, jobId, error }) =>
-      logger.error({ err: error, queue, job, jobId }, 'job failed permanently'),
   }),
 })
 ```

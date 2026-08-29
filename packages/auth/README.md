@@ -350,6 +350,8 @@ const app = await createApp({
 }).boot()
 ```
 
+`apiKeysPlugin` claims the `scopes` key in the adapters' boot-time guarded-meta check, so a route declaring `meta.scopes` **without** the plugin registered fails loud at boot (`UnguardedRouteMetaError`) instead of serving unchecked.
+
 The key is presented in the `Authorization: Bearer mk_live_...` or `x-api-key` header. A **scope** is a granular permission on the key (e.g. `reports:read`); `*` means all. After authenticating, `ctx().apiKey` contains `{ id, scopes, tenantId?, userId? }`.
 
 ### Brute-force lockout (LoginThrottle)

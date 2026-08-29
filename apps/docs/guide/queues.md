@@ -119,8 +119,24 @@ rejections that kill the process, and never silent.
 
 ### BullMQ (Redis)
 
-`connection` on `queuePlugin` is shorthand for this driver with default
-handlers. Construct it yourself to route its two failure channels:
+`connection` on `queuePlugin` is shorthand for this driver. Both failure
+channels are configurable **right there** — you do not have to hand-build the
+driver to get observability:
+
+```ts
+queuePlugin({
+  connection: process.env.REDIS_URL!,
+  jobs,
+  workers,
+  onError: (error, { queue, source }) => log.error({ queue, source, error }, 'queue infra error'),
+  onJobFailed: ({ queue, job, jobId, error }) => alertDeadJob(queue, job, jobId, error),
+})
+```
+
+`onError`/`onJobFailed` on `queuePlugin` are forwarded to the driver built from
+`connection`. They are **ignored when you pass your own `driver`** — configure
+them on the driver instead, which is also how you reach any option the shorthand
+doesn't surface:
 
 ```ts
 import { BullmqQueueDriver } from '@basaltkit/queue'
@@ -129,7 +145,6 @@ queuePlugin({
   driver: new BullmqQueueDriver({
     connection: process.env.REDIS_URL!,
     onError: (error, { queue, source }) => log.error({ queue, source, error }, 'queue infra error'),
-    onJobFailed: ({ queue, job, jobId, error }) => alertDeadJob(queue, job, jobId, error),
   }),
   jobs,
   workers,

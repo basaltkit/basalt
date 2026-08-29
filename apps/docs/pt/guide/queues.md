@@ -120,8 +120,24 @@ nunca são silenciosas.
 
 ### BullMQ (Redis)
 
-`connection` no `queuePlugin` é um atalho para este driver com handlers por
-defeito. Constrói-o tu próprio para encaminhar os seus dois canais de falha:
+`connection` no `queuePlugin` é um atalho para este driver. Ambos os canais de
+falha são configuráveis **ali mesmo** — não precisas de construir o driver à mão
+para teres observabilidade:
+
+```ts
+queuePlugin({
+  connection: process.env.REDIS_URL!,
+  jobs,
+  workers,
+  onError: (error, { queue, source }) => log.error({ queue, source, error }, 'queue infra error'),
+  onJobFailed: ({ queue, job, jobId, error }) => alertDeadJob(queue, job, jobId, error),
+})
+```
+
+O `onError`/`onJobFailed` no `queuePlugin` são encaminhados para o driver
+construído a partir de `connection`. São **ignorados quando passas o teu próprio
+`driver`** — configura-os no driver, que é também como chegas a qualquer opção
+que o atalho não exponha:
 
 ```ts
 import { BullmqQueueDriver } from '@basaltkit/queue'
@@ -130,7 +146,6 @@ queuePlugin({
   driver: new BullmqQueueDriver({
     connection: process.env.REDIS_URL!,
     onError: (error, { queue, source }) => log.error({ queue, source, error }, 'queue infra error'),
-    onJobFailed: ({ queue, job, jobId, error }) => alertDeadJob(queue, job, jobId, error),
   }),
   jobs,
   workers,

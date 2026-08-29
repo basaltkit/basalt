@@ -63,6 +63,11 @@ export function subscriptionsPlugin(options: SubscriptionsPluginOptions) {
         }
       }
       ensureMetadata(container).add('http:guards', guard)
+      // Claim both paywall keys for the adapters' boot-time guarded-meta check:
+      // a route declaring `meta.subscribed`/`meta.feature` without this plugin
+      // now fails loud at boot instead of serving the paid feature to everyone.
+      ensureMetadata(container).add('http:guarded-meta', 'subscribed')
+      ensureMetadata(container).add('http:guarded-meta', 'feature')
     },
   })
 }

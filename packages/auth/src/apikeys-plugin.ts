@@ -79,6 +79,9 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         }
       }
       metadata.add('http:guards', guard)
+      // Claim `meta.scopes` for the adapters' boot-time guarded-meta check —
+      // a scope-gated route without this plugin would serve unchecked.
+      metadata.add('http:guarded-meta', 'scopes')
     },
   })
 }

@@ -9,7 +9,38 @@ const plain = route({ method: 'GET', url: '/health', handler: async () => ({}) }
 
 describe('assertRoutesGuarded — security meta declared with no enforcing guard fails at BOOT', () => {
   it('knows the framework security keys', () => {
-    expect([...GUARDED_META_KEYS]).toEqual(['auth', 'can', 'teamRole'])
+    expect([...GUARDED_META_KEYS]).toEqual([
+      'auth',
+      'can',
+      'teamRole',
+      'scopes',
+      'subscribed',
+      'feature',
+    ])
+  })
+
+  it('names the enforcing plugin for every guarded key, so the boot error is actionable', () => {
+    for (const [key, plugin] of [
+      ['auth', 'authPlugin'],
+      ['can', 'permissionsPlugin'],
+      ['teamRole', 'teamsPlugin'],
+      ['scopes', 'apiKeysPlugin'],
+      ['subscribed', 'subscriptionsPlugin'],
+      ['feature', 'subscriptionsPlugin'],
+    ] as const) {
+      const offender = route({
+        method: 'GET',
+        url: `/${key}`,
+        meta: { [key]: key === 'scopes' ? ['read'] : true },
+        handler: async () => ({}),
+      })
+      try {
+        assertRoutesGuarded([offender], new Set())
+        expect.unreachable()
+      } catch (error) {
+        expect((error as Error).message).toContain(plugin)
+      }
+    }
   })
 
   it('throws when meta.auth is declared and nothing claimed "auth"', () => {

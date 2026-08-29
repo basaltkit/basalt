@@ -83,7 +83,7 @@ test, or the first container failing its readiness probe).
 
 | Error | Code | Means |
 | --- | --- | --- |
-| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | A route declares `meta.auth`, `meta.can` or `meta.teamRole` and **no registered plugin enforces that key** — it would have served unprotected. Register the enforcing plugin (`authPlugin`, `permissionsPlugin`, `teamsPlugin`), or, if the check genuinely happens at an outer edge, opt out explicitly with the adapter's `allowUnguardedMeta: true` (or a list of keys) |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | A route declares a guarded security key (`meta.auth`, `can`, `teamRole`, `scopes`, `subscribed`, `feature`) and **no registered plugin enforces that key** — it would have served unprotected. Register the enforcing plugin (`authPlugin`, `permissionsPlugin`, `teamsPlugin`, `apiKeysPlugin`, `subscriptionsPlugin`), or, if the check genuinely happens at an outer edge, opt out explicitly with the adapter's `allowUnguardedMeta: true` (or a list of keys) |
 | `CaptiveDependencyError` | `DI_CAPTIVE_DEPENDENCY` | A `scoped` token was resolved inside a **singleton** factory. The singleton outlives every scope, so it would serve request 1's per-request instance to every later request. Resolve the scoped service at use time (`ctx().container`) instead of at construction |
 
 The unguarded-meta check is why declaring `meta.can` and forgetting
