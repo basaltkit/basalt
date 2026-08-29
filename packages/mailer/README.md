@@ -34,19 +34,17 @@ pnpm add zod
 
 ```ts
 // src/mails/welcome.ts
-import { defineMail } from '@basaltkit/mailer'
-import { z } from 'zod'
-
 import { defineMail, html } from '@basaltkit/mailer'
+import { z } from 'zod'
 
 export const WelcomeEmail = defineMail({
   name: 'welcome',
   schema: z.object({ name: z.string() }),
   subject: ({ name }) => `Welcome, ${name}!`,
   text: ({ name }) => `Hello ${name}`,
-  // Use the html`` tag for HTML bodies: every ${interpolation} is
+  // Use the html tagged template for HTML bodies: every interpolation is
   // HTML-escaped, so user data can't inject markup into mail sent from your
-  // own domain. (Plain template strings are NOT escaped — prefer html``.)
+  // own domain. (Plain template strings are NOT escaped.)
   html: ({ name }) => html`<h1>Hello ${name}</h1>`,
 })
 ```
@@ -101,6 +99,53 @@ mailerPlugin({
 
 // Mailgun — API key + sending domain (region: 'us' | 'eu')
 mailerPlugin({ driver: 'mailgun', mailgun: { apiKey: process.env.MAILGUN_KEY!, domain: 'mg.myapp.com' }, from: 'noreply@myapp.com' })
+```
+
+### Safe HTML bodies — `html`, `raw`, `escapeHtml`
+
+Mail bodies are HTML rendered from data that is usually **user-controlled**:
+names, project titles, comment text. Interpolating that into a plain template
+literal hands an attacker markup inside mail sent from *your* DKIM/SPF-aligned
+domain — phishing content, tracking pixels, XSS in permissive webmail clients.
+
+The safe path is the default path. Write bodies with the `html` tagged template
+literal and every interpolation is escaped for you; forgetting is not possible:
+
+```ts
+import { html, raw, escapeHtml, defineMail } from '@basaltkit/mailer'
+
+defineMail({
+  name: 'comment',
+  subject: () => 'New comment',
+  //  <script> in `body` arrives as visible text, not as markup
+  html: ({ author, body }) => html`<p><b>${author}</b> wrote: ${body}</p>`,
+})
+```
+
+| Export | Signature | What it does |
+|---|---|---|
+| `html` | tagged template → `SafeHtml` | Escapes **every** interpolation. Arrays render item-by-item, `null`/`undefined` render as empty, and a nested `SafeHtml` passes through verbatim so templates compose without double-escaping. |
+| `raw` | `raw(value: string): SafeHtml` | Marks a string as already-trusted so `html` interpolates it **verbatim**. |
+| `escapeHtml` | `escapeHtml(value: string): string` | Escapes `& < > " '` as numeric entities. For hand-composing markup outside a tagged template. |
+| `SafeHtml` | `class` | A fragment of safe HTML. `toString()` returns the markup, so it drops straight into a mail's `html` field — `MailDefinition.html` returns `string \| SafeHtml`. |
+
+**`raw` reintroduces exactly the injection risk `html` removes.** It is the one
+escape hatch, and it is unconditional: whatever you pass is emitted as markup.
+Only use it on fragments **you** built — a rendered MJML document, a layout
+partial, a nested `html` result. Never on schema data, database rows, or
+anything that reached you over the network:
+
+```ts
+html`<div>${raw(renderedMjml)}</div>`     // fine — you produced renderedMjml
+html`<div>${raw(comment.body)}</div>`     // an injection hole, don't
+```
+
+A plain, untagged template literal is **not** escaped — it compiles, it sends,
+and it is exactly the vector above. Reach for the `html` tag every time:
+
+```ts
+html: ({ name }) => `<h1>Hello ${name}</h1>`        // unescaped — avoid
+html: ({ name }) => html`<h1>Hello ${name}</h1>`    // escaped
 ```
 
 ### Layouts & templates
@@ -252,7 +297,7 @@ Creates a typed email definition. `MailDefinition<T>` fields:
 | `schema` | `MailSchema<T>` | No | Schema with `safeParse` (compatible with Zod) to validate the data |
 | `subject` | `(data: T) => string` | Yes | Generates the subject |
 | `text` | `(data: T) => string` | No | Generates the plain-text body |
-| `html` | `(data: T) => string` | No | Generates the HTML body |
+| `html` | `(data: T) => string \| SafeHtml` | No | Generates the HTML body. Return the `SafeHtml` from the `html` tagged template (see *Safe HTML bodies* above). |
 
 ### `class Mailer`
 
@@ -260,10 +305,11 @@ Creates a typed email definition. `MailDefinition<T>` fields:
 
 `MailerOptions`:
 
-| Option | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `from` | `string \| (() => string \| undefined)` | No | — | Default sender; the function is evaluated on each send |
-| `replyTo` | `string` | No | — | Default reply-to address |
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `from` | `string \| (() => string \| undefined)` | — | Default sender. A function is resolved on **every** send — that's how `tenantFrom()` gives each tenant its own sender. |
+| `replyTo` | `string` | — | Default reply-to, overridable per envelope. |
+| `layout` | `(html: string, context: { mail: string; data: unknown }) => string` | — | Wraps every rendered HTML body in shared branding. Runs per send, so it can read `ctx().tenant`. Applied only when the mail has an HTML body. |
 
 Methods:
 
@@ -276,13 +322,46 @@ Methods:
 
 ### `mailerPlugin(options?: MailerPluginOptions)`
 
-Registers a singleton `Mailer` in the container under the token `MAILER`. `MailerPluginOptions` extends `MailerOptions` with:
+Registers a singleton `Mailer` in the container under the token `MAILER`, and
+disconnects the driver on shutdown. `MailerPluginOptions` extends `MailerOptions`
+(`from`, `replyTo`, `layout` — see above) with:
 
-| Option | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `driver` | `'smtp' \| 'log' \| 'memory'` | No | `'log'` | Sending driver |
-| `smtp` | `SmtpDriverOptions` | Yes, if `driver: 'smtp'` | — | `{ url: 'smtp(s)://user:pass@host:port' }` |
-| `sink` | `(line: string) => void` | No | `console.log` | Destination for the `log` driver's lines |
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `driver` | `'smtp' \| 'log' \| 'memory' \| 'resend' \| 'ses' \| 'mailgun'` | `'log'` | Which driver sends. An **unrecognized** name throws at first resolve instead of falling back to `log` — a silent fallback would print every outbound mail, reset links included, to stdout. |
+| `smtp` | `SmtpDriverOptions` | — | Required with `driver: 'smtp'`. `{ url: 'smtp(s)://user:pass@host:port' }`. |
+| `resend` | `ResendDriverOptions` | — | Required with `driver: 'resend'`. `{ apiKey, baseUrl?, fetch? }`. |
+| `ses` | `SesDriverOptions` | — | Required with `driver: 'ses'`. `{ region, accessKeyId, secretAccessKey, sessionToken?, endpoint?, fetch?, now? }`. |
+| `mailgun` | `MailgunDriverOptions` | — | Required with `driver: 'mailgun'`. `{ apiKey, domain, region?, baseUrl?, fetch? }`; `region` defaults to `'us'`. |
+| `sink` | `(line: string) => void` | `console.log` | Where the `log` driver writes its lines. |
+| `logBody` | `boolean` | `true` outside production, `false` when `NODE_ENV === 'production'` | `log` driver only — whether the message body is written to the log. See below. |
+| `previews` | `MailPreview[]` | — | Mails exposed by the `basalt mail:preview` command. Declaring any registers the command; declaring none leaves it unregistered. |
+
+#### `logBody` — what gets redacted
+
+The `log` driver is what you get with no `driver` at all, so a deploy that
+forgot to configure mail would otherwise stream password-reset links, magic
+links and tokens straight into a log aggregator, where they are retained and
+broadly readable. So in production the body is withheld by default.
+
+The **envelope line is always logged**, in both modes:
+
+```
+[mail] welcome → ada@example.com | Welcome, Ada!
+```
+
+That is the mail name, the `to` list, and the subject. What `logBody` controls
+is only the line beneath it — the body:
+
+| `logBody` | Body line |
+|---|---|
+| `true` (default outside production) | `message.text`, falling back to `message.html`, falling back to `(empty body)` |
+| `false` (default in production) | `(body redacted in production — pass 'logBody: true' to log it, or configure a real driver)` |
+
+Set `logBody: true` to opt back in deliberately; set `logBody: false` in
+development to stop bodies reaching your terminal. Note it redacts the *body
+only* — recipients and subjects are still logged, so treat mail logs as
+containing personal data either way.
 
 ### Drivers
 
@@ -290,9 +369,15 @@ All implement `MailDriver` (`name`, `send(message)`, `disconnect()`):
 
 | Driver | Use | Notes |
 |---|---|---|
-| `SmtpMailDriver` | Production | `new SmtpMailDriver({ url })`, sends via nodemailer |
-| `LogMailDriver` | Development | `new LogMailDriver(sink?)`, prints the message |
-| `MemoryMailDriver` | Testing | `sent: ResolvedMail[]` property and `ofMail(name)` method |
+| `SmtpMailDriver` | Production | `new SmtpMailDriver({ url })` — sends via nodemailer. Works with SES SMTP credentials too. |
+| `ResendMailDriver` | Production | `new ResendMailDriver({ apiKey, baseUrl?, fetch? })` — Resend HTTP API, no SDK. |
+| `SesMailDriver` | Production | `new SesMailDriver({ region, accessKeyId, secretAccessKey, … })` — SES v2 over HTTPS with a hand-rolled SigV4 signature (`node:crypto` only, no AWS SDK). |
+| `MailgunMailDriver` | Production | `new MailgunMailDriver({ apiKey, domain, region? })` — Mailgun HTTP API, Basic auth, form-encoded body. |
+| `LogMailDriver` | Development | `new LogMailDriver(sink?, { logBody? })` — prints the envelope; the body honours `logBody`. |
+| `MemoryMailDriver` | Testing | `sent: ResolvedMail[]` property and `ofMail(name)` method. |
+
+Every driver receives the message **after** the shared header-injection guard,
+so a driver never has to re-validate the envelope.
 
 ### Other exports
 
@@ -304,10 +389,41 @@ All implement `MailDriver` (`name`, `send(message)`, `disconnect()`):
 | `tenantFrom(fallback?)` | function | Dynamic sender that reads `ctx().tenant.mailFrom` |
 | `Envelope` | type | `{ to, from?, cc?, bcc?, replyTo? }` |
 | `ResolvedMail` | type | Final message: `{ mail, to[], from, cc[], bcc[], replyTo?, subject, text?, html? }` |
-| `MailValidationError` | error | Code `MAIL_INVALID` — data doesn't pass the schema |
-| `MailIncompleteError` | error | Code `MAIL_INCOMPLETE` — missing `to` or `from` |
+| `html` / `raw` / `escapeHtml` / `SafeHtml` | HTML safety | Escaping tagged template, its trusted-fragment escape hatch, and the manual escaper |
+| `assertHeaderSafe(message)` | function | The header-injection choke point, exported for custom send paths |
+| `renderPreviewResponse(previews, mailer, pathname, query?)` | function | Pure preview router — assertable without a socket |
+| `MailPreview`, `MailPreviewOptions`, `MailPreviewServer`, `PreviewResponse` | types | Preview server types |
 | `MailSchema<T>` | type (Advanced) | Structural schema contract (`safeParse`) |
 | `MailDriver` | type (Advanced) | Contract for writing your own driver |
+
+### Failure modes & troubleshooting
+
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `MailValidationError` | `MAIL_INVALID` | 500 | The data passed to `send()` fails the mail's `schema`. Carries `mail` and the raw `issues`. |
+| `MailIncompleteError` | `MAIL_INCOMPLETE` | 500 | The envelope has no `to`, or no `from` and no configured default. |
+| `MailHeaderInjectionError` | `MAIL_HEADER_INJECTION` | 400 | A CR/LF in the subject, or a malformed/control-character-bearing address in `from`/`to`/`cc`/`bcc`/`replyTo`. Carries `field` and `value`. |
+| `MailDeliveryError` | `MAIL_DELIVERY_FAILED` | 500 | An API driver (Resend, SES, Mailgun) got a non-success response. Carries `driver`, `httpStatus` and `detail`. |
+
+Only `MailHeaderInjectionError` declares a `status`, so it reaches the client as
+a 400 with its code; the others have none and surface as a generic 500
+`INTERNAL_ERROR` through the adapters. Catch and map them if a caller needs to
+tell them apart.
+
+The header guard is a single choke point in `resolve()` — and `deliver()`
+re-runs it, so a message that round-tripped through a queue is re-checked before
+it reaches the driver. Address validation is deliberately conservative rather
+than a full RFC 5322 parser: no control characters, exactly one non-leading,
+non-trailing `@`, no whitespace in the addr-spec. `"Alice" <alice@example.com>`
+is accepted.
+
+- **`MAIL_HEADER_INJECTION` on a legitimate address** — the addr-spec check is
+  strict. Strip the newline your template appended, or use the
+  `"Name" <addr@host>` form rather than free-form text.
+- **Mail silently not sending after `useQueue`** — `send()` only hands off to
+  the dispatcher; the worker must call `mailer.deliver(message)`.
+- **`Unknown mail driver "…"`** — a typo in `driver`. This throws on purpose;
+  falling back to `log` would print your outbound mail.
 
 ## Common errors and solutions (FAQ)
 
@@ -321,12 +437,12 @@ All implement `MailDriver` (`name`, `send(message)`, `disconnect()`):
 
 **I set up `useQueue` and nothing gets sent** — With the queue active, `send()` only delivers to the dispatcher; it's the worker that has to call `mailer.deliver(message)`.
 
-## Log driver safety
+## Hooks & events
 
-Without a `driver`, mail goes to the log driver. In production it redacts
-message bodies (reset links/tokens must not be retained by log aggregators);
-pass `logBody: true` to opt back in. An unrecognized `driver` string now throws
-instead of silently falling back to logging your outbound mail.
+`@basaltkit/mailer` emits **no hooks** — it is a send-side service. Wire it to
+events emitted elsewhere (`team:invited` from `@basaltkit/teams`,
+`billing:*` from `@basaltkit/subscriptions`), or let
+`@basaltkit/notifications` drive it through its `mail` channel.
 
 ## How it connects to other modules
 
@@ -334,3 +450,5 @@ instead of silently falling back to logging your outbound mail.
 - **@basaltkit/notifications** — when the mailer is registered, the notifications plugin automatically creates the `mail` channel, which sends emails through this module (inheriting queueing and per-tenant sender).
 - **@basaltkit/queue** — combine with `useQueue` to send emails in the background with retries.
 - **@basaltkit/subscriptions** — billing hooks (e.g. `billing:trial_expired`) are a natural place to trigger emails defined here.
+
+Guides: [Notifications](/guide/notifications) · [Queues](/guide/queues) · [Security](/guide/security).

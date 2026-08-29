@@ -14,7 +14,7 @@ Basalt adapter for [Express](https://expressjs.com): the same typed routes, enri
 
 This module connects Express to Basalt. **Routes** (address + method, e.g. `POST /echo`) are defined with the `route()` function from `@basaltkit/http`, in a neutral format with [Zod](https://zod.dev) schemas for validation. The adapter converts each Express request into that neutral format, runs the shared pipeline (validation, *enrichers* — functions that enrich the request context, like resolving the tenant — and *guards* — functions that can reject the request, like authentication), and converts errors into JSON responses with a stable format.
 
-The strong point: **portability**. A route written for this adapter runs unchanged on `@basaltkit/fastify` and `@basaltkit/hono`. And the neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@basaltkit/http` work here exactly the same.
+The strong point: **portability**. A route written for this adapter runs unchanged on `@basaltkit/fastify` and `@basaltkit/hono` — **the three adapters are equals**. Routes, enrichers, guards, the per-request context, standardized errors, the neutral 404, ETags (`meta.etag`), SSE, per-route rate limits and the boot-time guarded-meta check all behave identically. The neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@basaltkit/http` work here exactly the same.
 
 ## Installation
 
@@ -70,7 +70,7 @@ curl -X POST http://localhost:3000/echo \
 # → 400 {"error":{"code":"HTTP_VALIDATION","part":"body","issues":[...]}}
 ```
 
-> The plugin already enables `express.json()` for you — you don't need to configure JSON parsing.
+> The plugin enables `express.json()` **and** `express.urlencoded({ extended: false })` for you — you don't need to configure body parsing. (The urlencoded parser is what makes HTML forms and the SAML ACS binding work.)
 
 ## Usage guide
 
@@ -100,6 +100,39 @@ const boom = route({
 ```
 
 The error format is identical to the other adapters: `{ error: { code, message, ... } }`. Unexpected errors respond with `500` and `INTERNAL_ERROR`, without exposing internal details.
+
+### Guarded route meta — the boot check
+
+If a route declares `meta.auth`, `meta.can` or `meta.teamRole` and **no registered plugin
+enforces that key**, the route would serve unprotected. `expressPlugin` refuses to boot:
+it calls `assertRoutesGuarded()` in its boot phase and throws `UnguardedRouteMetaError`
+(code `HTTP_UNGUARDED_ROUTE_META`), naming every offending route and key, before a single
+request is served.
+
+Fix it by registering the enforcing plugin (`auth` → `authPlugin`, `can` →
+`permissionsPlugin`, `teamRole` → `teamsPlugin`). If protection really does happen at an
+outer edge (a gateway that authenticates first), waive it explicitly:
+
+```ts
+expressPlugin({ routes, allowUnguardedMeta: true })      // waive every key
+expressPlugin({ routes, allowUnguardedMeta: ['auth'] })  // waive one key
+```
+
+Fastify and Hono run the identical check with the identical option.
+
+### The neutral 404
+
+Unmatched routes get the same JSON body on every adapter —
+`{ "error": { "code": "NOT_FOUND", "message": "Route not found." } }` (`NOT_FOUND_RESPONSE`
+from `@basaltkit/http`) — instead of Express's HTML default, which fingerprints the
+framework. It is mounted last, at `app:booted`. Pass `notFound: false` to keep Express's
+own handling, e.g. when your app mounts its own catch-all afterwards.
+
+### Streaming — SSE
+
+A handler returning `sse(producer)` from `@basaltkit/http` is streamed straight onto the
+Express response (`res.writeHead(200, SSE_HEADERS)`), with client disconnects relayed to
+`stream.onClose()`. Same handler code as on Fastify and Hono.
 
 ### Enrichers and guards (authentication, tenancy, …)
 
@@ -213,11 +246,26 @@ In this mode each handler already handles its own errors (the wrapper responds w
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
 | `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
-| `app` | `Express` | No | new `express()` | Bring your own Express app; either way, `express.json()` is added. |
+| `app` | `Express` | No | new `express()` | Bring your own Express app; either way, `express.json()` and `express.urlencoded({ extended: false })` are added. |
+| `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes, mounted last. Set `false` to keep Express's HTML default or your own catch-all. |
 
 Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, via `res.on('finish')`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Basalt routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
-> Note: unlike `fastifyPlugin`, this plugin has no `shutdown` step — closing the HTTP server returned by `listen()` is your responsibility.
+> Note: unlike `fastifyPlugin`, this plugin has no `shutdown` step — Basalt never calls `listen()` for you, so closing the server it returns is your responsibility.
+
+### Errors
+
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
+| `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares `auth`/`can`/`teamRole` with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
+| — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
+| — | `INTERNAL_ERROR` | 500 | Any other thrown error. The real message never reaches the client. |
+
+All of these are produced by the shared `@basaltkit/http` pipeline, so the bodies are
+byte-identical to Fastify's and Hono's.
 
 ### `EXPRESS`
 
@@ -235,7 +283,7 @@ Dependency-injection token (`Token<Express>`): `app.container.get(EXPRESS)` retu
 
 ### What to import from where
 
-This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `ExpressPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**.
+This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `ExpressPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `NOT_FOUND_RESPONSE`, `sse`, `securityPlugin`, `RedisRateLimitStore`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, `escapeHtml`/`pageCsp`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**. (Unlike `@basaltkit/fastify`, this package re-exports nothing; that is a naming choice, not a capability gap.)
 
 ## Common errors and solutions (FAQ)
 
@@ -258,3 +306,6 @@ This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `Exp
 - **`@basaltkit/fastify` / `@basaltkit/hono`** — sibling adapters: the same routes, enrichers, guards, and edge plugins run on any of them unchanged; switching frameworks is just switching plugins.
 - **`@basaltkit/auth` / `@basaltkit/tenancy` / `@basaltkit/permissions`** — register guards/enrichers in `'http:guards'`/`'http:enrichers'` and read the routes' `meta` (e.g. `meta: { auth: true }`); this adapter applies them automatically.
 - **`@basaltkit/sdk` and the CLI** — consume the `'http:routes'` bucket (routes + Zod schemas) that this plugin publishes.
+- **`@basaltkit/testing`** — `createTestApp({ adapter: 'express' })` runs your suite against this adapter (it listens on an ephemeral 127.0.0.1 port and fetches, because Express has no in-process inject).
+
+Guides: [Adapters](/guide/adapters) · [Migrating from Express](/guide/migrating-from-express) · [Testing](/guide/testing) · [Security](/guide/security)

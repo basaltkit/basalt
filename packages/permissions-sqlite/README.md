@@ -54,6 +54,38 @@ re-assigning a role or re-granting a permission is a harmless no-op:
 
 Everything is scoped, so `t1` and `t2` never see each other's grants.
 
+## Exports
+
+| Export | Kind | Purpose |
+| --- | --- | --- |
+| `sqliteAccessStore(dbOrLocation?)` | function | Opens (or reuses) a database, applies the schema, returns `{ db, store }`. Defaults to `':memory:'`. |
+| `SqliteAccessStore` | class | The `AccessStore` implementation. `new SqliteAccessStore(db)` — pass a `DatabaseSync` to share one handle with the other `*-sqlite` stores. |
+| `openPermissionsDatabase(location?)` | function | Opens a `DatabaseSync` and migrates it. Defaults to `':memory:'`. |
+| `migrate(db)` | function | Applies the idempotent schema to an existing handle. Safe on every boot. |
+| `SqlitePermissionsStores` | interface | `{ db, store }`. |
+
+`sqliteAccessStore` accepts a single argument — a path or an existing
+`DatabaseSync` — and has no options object. `migrate()` sets
+`journal_mode = WAL` and `busy_timeout = 5000`, so a competing writer waits up
+to 5 s for the lock instead of throwing "database is locked" immediately.
+
+## Errors
+
+This package defines no `BasaltError` subclasses and no error codes. `node:sqlite`
+throws its own errors (locked database, disk I/O) unchanged. The authorization
+errors a client sees — `PERMISSION_DENIED`, `AUTH_REQUIRED`,
+`PERMISSION_META_INVALID` — come from `@basaltkit/permissions`.
+
+The one failure worth naming: on Node 22.x, importing this package without
+`--experimental-sqlite` fails at load with an unknown-builtin error for
+`node:sqlite`. Node 24 needs no flag.
+
+## Hooks & events
+
+None.
+
+Guides: [Authorization](/guide/authorization) · [Persistence](/guide/persistence).
+
 ## License
 
 MIT

@@ -8,6 +8,29 @@ instantâneas e nunca chamam a gateway.
 
 [[toc]]
 
+## Modelo mental
+
+A faturação são cinco peças, e saber qual delas é dona de uma pergunta responde a
+quase todo o resto:
+
+| Peça | É dona de | Fala com a gateway? |
+| --- | --- | --- |
+| **Planos** (`definePlans`) | O catálogo: preço, trial, funcionalidades por plano | Não — um objeto simples, lido de forma síncrona |
+| **`Subscriptions`** (`SUBSCRIPTIONS`) | *A que é que um billable tem direito agora*: plano, período, estado | Só para movimentos de dinheiro (subscribe, checkout, portal, swap, cancel) |
+| **`features(billableId)`** | Imposição: `can`, `limit`, `usage`, `remaining`, `consume` | **Nunca** — lê estado local, por isso é instantâneo em cada pedido |
+| **`Invoices`** (`INVOICES`) | *O que lhes foi cobrado*: linhas, desconto, imposto, totais, estado | Não — domínio puro; chamas `markPaid` quando um pagamento confirma |
+| **Driver de gateway** | Mover dinheiro e verificar webhooks | Ele *é* a gateway |
+
+A direção da verdade importa: **a tua base de dados é o read model.** Um webhook
+da gateway escreve nela (`handleWebhook`), e tudo o resto — guards, verificações
+de funcionalidades, imposição de quotas — lê dela. Nenhum caminho de pedido
+espera pela Stripe.
+
+O **billable** é o id que passares. Por convenção é o id do tenant, e os route
+guards e as rotas HTTP resolvem-no a partir de `ctx().tenant.id`, razão pela qual
+a [imposição de pertença ao tenant](/pt/guide/teams) é estrutural para a
+faturação — vê o aviso na secção do Stripe mais abaixo.
+
 ## Definir planos
 
 Um plano é um preço mais um conjunto de funcionalidades. `definePlans` preserva os
@@ -90,14 +113,9 @@ export const subscriptions = new Subscriptions({
 })
 ```
 
-| Opção | Tipo | Predefinição | Finalidade |
-| --- | --- | --- | --- |
-| `plans` | `Plans` | — | O teu catálogo de planos (obrigatório) |
-| `fallbackPlan` | `string` | — | Plano para quem não tem subscrição |
-| `gateway` | `BillingGateway` | — | Driver Stripe/Paddle para subscrições com cartão |
-| `store` | `SubscriptionStore` | em memória | Onde as subscrições são persistidas |
-| `usage` | `UsageStore` | em memória | Contadores de medição (`consume` atómico) |
-| `webhooks` | `WebhookStore` | em memória | Deduplicação de webhooks por id de evento |
+O construtor falha logo se o `fallbackPlan` não existir no catálogo, por isso uma
+gralha é um erro de arranque e não um silencioso "ninguém tem funcionalidades".
+Todas as opções estão tabeladas em **Referência de opções** mais abaixo.
 
 ## Subscrever e gerir
 
@@ -250,6 +268,27 @@ anónimos. Se (e só se) a autenticação acontecer numa edge exterior, desativa
 deliberadamente com `billingRoutes({ ..., auth: false })` /
 `invoiceRoutes({ auth: false })`. A rota de webhook é a exceção: é autenticada
 pela **assinatura** da gateway, nunca por sessão.
+
+::: danger `meta.auth` sozinho não isola tenants
+`billingRoutes()` e `invoiceRoutes()` autenticam o **utilizador** mas resolvem o
+**billable a partir do tenant** (`ctx().tenant.id`) — e o tenant vem de um header
+ou de um `Host`, ambos controlados pelo cliente. A autenticação prova *quem está
+a chamar*, não *a que tenant pertence*. Regista o
+[`tenantMembershipPlugin()`](/pt/guide/teams) e um utilizador válido do tenant A
+que chame `/billing/checkout`, `/billing/portal` ou `/billing/invoices` com o
+identificador do tenant B é travado com `403 TEAM_NOT_A_MEMBER` **antes de correr
+qualquer código de faturação** — nenhuma sessão de Checkout criada contra o plano
+de B, nenhum URL de Portal para o cartão de B, nenhuma leitura do histórico de
+pagamentos de B. Sem ele, `meta.auth` deixa qualquer utilizador autenticado
+operar sobre a faturação de qualquer tenant. O mesmo se aplica às tuas rotas com
+`meta: { subscribed }` / `meta: { feature }`. Vê [Equipas](/pt/guide/teams) e o
+[guia de segurança](/pt/guide/security).
+:::
+
+Nota que `subscribed` e `feature` **não** fazem parte da verificação de
+guarded-meta da framework (só `auth`, `can` e `teamRole` fazem). Uma rota anotada
+com `meta: { subscribed: 'pro' }` sem o `subscriptionsPlugin` arranca sem queixas
+e serve **sem guarda** — regista o plugin, e cobre o paywall com um teste.
 
 Um Checkout abandonado nunca muda a subscrição ativa: o `checkout()` regista a
 intenção como `pendingPlan`, e o plano só muda quando a gateway confirma o
@@ -538,18 +577,21 @@ export const payments = new ProxyPayGateway({
   apiKey: process.env.PROXYPAY_API_KEY!,        // enviado como `Authorization: Token <key>`
   entity: process.env.PROXYPAY_ENTITY!,         // a tua Entidade Multicaixa
   sandbox: process.env.NODE_ENV !== 'production', // api.sandbox.proxypay.co.ao
-  webhookSecret: process.env.PROXYPAY_WEBHOOK_SECRET, // HMAC-SHA256, opcional
+  // Opcional — predefine para apiKey, que é com o que o ProxyPay assina o callback
+  webhookSecret: process.env.PROXYPAY_WEBHOOK_SECRET,
 })
 ```
 
-| Opção | Tipo | Finalidade |
-| --- | --- | --- |
-| `apiKey` | `string` | Enviado como `Authorization: Token <apiKey>` (obrigatório) |
-| `entity` | `string` | A tua Entidade Multicaixa, atribuída pelo ProxyPay/EMIS (obrigatório) |
-| `sandbox` | `boolean` | Usa o host de sandbox. Predefinição `false` (produção) |
-| `baseUrl` | `string` | Substitui o URL base por completo |
-| `webhookSecret` | `string` | Segredo partilhado para verificação de webhook HMAC-SHA256 |
-| `fetch` | `FetchLike` | Fetch injetado; predefine para o `fetch` global |
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | — (obrigatório) | Enviado como `Authorization: Token <apiKey>` |
+| `entity` | `string` | — (obrigatório) | A tua Entidade Multicaixa, atribuída pelo ProxyPay/EMIS |
+| `sandbox` | `boolean` | `false` | Usa o host de sandbox `api.sandbox.proxypay.co.ao` |
+| `baseUrl` | `string` | derivado de `sandbox` | Substitui o URL base por completo |
+| `webhookSecret` | `string` | **a tua `apiKey`** | HMAC-SHA256 (hex) sobre o corpo raw, no `x-signature`. A verificação está portanto **ligada de origem**; passa `''` para a desativar por completo |
+| `callbackUrl` | `string` | — | Devolvido no webhook como `custom_fields.callback_url`. O destino real de entrega do ProxyPay define-se na conta, no dashboard |
+| `expiryDays` | `number` | `30` | Janela de validade de recurso quando `PaymentRequest.expiresAt` é omitido — o ProxyPay *exige* uma data de fim, por isso é sempre enviada |
+| `fetch` | `FetchLike` | `fetch` global | Fetch injetado |
 
 ### Criar um pagamento e mostrar a referência
 
@@ -624,6 +666,186 @@ Para desenvolvimento e testes, o `FakePaymentGateway` (de
 `@basaltkit/subscriptions`) implementa o mesmo contrato em processo: regista os
 pedidos em `payments` e o seu `verifyWebhook` devolve um `payment.succeeded`
 sintético.
+
+## Referência de opções
+
+### `subscriptionsPlugin(options)`
+
+As mesmas opções de `new Subscriptions(...)` menos `hooks` (o plugin passa o
+`HookBus` da app), mais `invoices`.
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `plans` | `Plans` | — (obrigatório) | O catálogo vindo de `definePlans` ou de `loadPlans(store)`. É consumido de forma síncrona, por isso tem de estar totalmente resolvido antes do arranque |
+| `fallbackPlan` | `string` | — | Plano aplicado a billables sem subscrição (habitualmente `'free'`). Validado na construção — um nome desconhecido lança `UnknownPlanError` de imediato |
+| `gateway` | `BillingGateway` | — | Driver de subscrições com cartão (Stripe, Paddle, Lemon Squeezy). Sem ele tudo continua a funcionar localmente; só `checkout`/`portal` o exigem |
+| `store` | `SubscriptionStore` | em memória | Onde vivem as subscrições — troca por `subscriptions-sqlite`/`-prisma` ou desaparecem no restart |
+| `usage` | `UsageStore` | em memória | Contadores de medição. O predefinido é por processo, por isso uma quota **pode ser ultrapassada** entre réplicas; usa SQLite/Prisma/Redis para um `consume` atómico |
+| `webhooks` | `WebhookStore` | em memória | Deduplicação de eventos da gateway por id. Por processo por predefinição, o que significa que um retry que caia noutra réplica é reprocessado |
+| `invoices` | `InvoicesOptions` | `{}` | Configuração do motor `Invoices` registado sob `INVOICES` (abaixo) |
+
+### `billingRoutes(options)`
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `successUrl` | `string` | — (obrigatório) | Para onde a gateway devolve o cliente depois do Checkout. O corpo do pedido pode sobrepor-se por chamada |
+| `cancelUrl` | `string` | — (obrigatório) | Para onde volta um Checkout abandonado |
+| `portalReturnUrl` | `string` | `successUrl` | Para onde volta o Portal do Cliente |
+| `auth` | `boolean` | `true` | Exige `meta: { auth: true }` em ambas as rotas. Põe `false` **só** quando a autenticação acontece numa borda exterior — estas rotas criam URLs de gestão de pagamento reais |
+
+`POST /billing/checkout` recebe `{ plan, period?, successUrl?, cancelUrl? }` e
+`POST /billing/portal` recebe um `{ returnUrl }` opcional; ambos devolvem
+`{ url }`.
+
+### `invoiceRoutes(options)`
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `auth` | `boolean` | `true` | A mesma regra de `billingRoutes` — as faturas são o histórico de pagamentos do tenant |
+
+As três rotas são só de leitura e verificam a propriedade: uma fatura cujo
+`billableId` não seja o tenant atual lê-se como `404 INVOICE_NOT_FOUND`, nunca
+como os dados de outra pessoa. Emitir e finalizar ficam do lado do servidor,
+através de `INVOICES`.
+
+### `billingWebhookRoute(gateway)`
+
+Recebe a instância da gateway como único argumento — sem opções. Deliberadamente
+**não** é protegida por `meta.auth`: a assinatura da gateway é a autenticação.
+Devolve `200 { received: true, ignored: true }` para um evento que o driver não
+mapeia, e `200 { received: true, duplicate: true }` para um já processado.
+
+### `Invoices` — `InvoicesOptions`
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `store` | `InvoiceStore` | `MemoryInvoiceStore` | Faturas duráveis; é também dono de `nextNumber()`, que tem de alocar de forma atómica |
+| `numberPrefix` | `string` | `'INV'` | Prefixo do número humano da fatura — `INV-2026-0001` |
+| `taxRate` | `number` | `0` | Aplicado a (subtotal − desconto) quando um rascunho omite `tax`. `0.14` = 14% |
+| `now` | `() => number` | `Date.now` | Relógio injetável (testes, retroatividade) |
+| `idFactory` | `() => string` | `randomUUID` | Gerador de ids injetável |
+
+### `Coupons` — `CouponsOptions`
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `store` | `CouponStore` | `MemoryCouponStore` | Registo durável de cupões; `incrementRedemptions` tem de ser atómico ou `maxRedemptions` escapa |
+| `now` | `() => number` | `Date.now` | Relógio injetável, para o `redeemBy` |
+
+### `StripeBillingGateway(options)`
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `secretKey` | `string` | — (obrigatório) | Chave secreta da API do Stripe |
+| `webhookSecret` | `string` | — (obrigatório) | Segredo de assinatura do endpoint (`whsec_…`). Sem ele a verificação falha fechada |
+| `priceId` | `(plan, period) => string` | — (obrigatório) | Mapeia um plano + período para um Price ID do Stripe |
+| `customerId` | `(billableId) => string \| Promise<string>` | — (obrigatório) | Resolve (ou cria) o Customer do Stripe para um billable |
+| `resolveBillableId` | `(event) => string \| undefined` | lê `data.object.metadata.billableId` | Sobrepõe quando os teus eventos levam o id noutro sítio |
+| `tolerance` | `number` (segundos) | `300` | Tolerância do timestamp do webhook — janela de replay |
+| `fetch` | `typeof fetch` | `fetch` global | Cliente HTTP injetado (testes) |
+| `now` | `() => number` | `Date.now` | Relógio injetável em ms |
+| `apiBase` | `string` | `https://api.stripe.com` | Base da API, para mocks |
+
+### `PaddleBillingGateway(options)`
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | — (obrigatório) | Chave da API do Paddle (Bearer) |
+| `webhookSecret` | `string` | — (obrigatório) | Segredo de assinatura das notificações; verifica o esquema `Paddle-Signature` (`ts=…;h1=…`) |
+| `priceId` | `(plan, period) => string` | — (obrigatório) | Mapeia um plano + período para um Price ID do Paddle (`pri_…`) |
+| `customerId` | `(billableId) => string \| Promise<string>` | — (obrigatório) | Customer ID do Paddle (`ctm_…`) |
+| `resolveBillableId` | `(event) => string \| undefined` | lê `data.custom_data.billableId` | Sobrepõe para eventos que levem o id noutro sítio |
+| `tolerance` | `number` (segundos) | `300` | Tolerância do timestamp do webhook |
+| `fetch` / `now` / `apiBase` | — | `fetch` global / `Date.now` / `https://api.paddle.com` | Pontos de injeção para testes |
+
+O Paddle é checkout-first: tanto `createSubscription` como
+`createCheckoutSession` criam uma **transação**, e o id durável da subscrição
+chega mais tarde num webhook `subscription.*` como `gatewayRef`.
+
+### `LemonSqueezyBillingGateway(options)`
+
+| Opção | Tipo | Predefinição | Finalidade |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | — (obrigatório) | Chave da API do Lemon Squeezy (Bearer) |
+| `webhookSecret` | `string` | — (obrigatório) | Verifica o header `X-Signature` (HMAC-SHA256 hex sobre o corpo raw) |
+| `storeId` | `string` | — (obrigatório) | O id da tua loja — necessário para criar checkouts |
+| `variantId` | `(plan, period) => string` | — (obrigatório) | Mapeia um plano + período para um Variant ID |
+| `customerId` | `(billableId) => string \| Promise<string>` | — | **Só obrigatório para o portal**; sem ele o `portal()` não tem nada para abrir |
+| `resolveBillableId` | `(event) => string \| undefined` | lê `meta.custom_data.billableId` | Sobrepõe para eventos que levem o id noutro sítio |
+| `fetch` / `apiBase` | — | `fetch` global / `https://api.lemonsqueezy.com/v1` | Pontos de injeção para testes |
+
+O Lemon Squeezy é merchant of record e checkout-first, com a mesma forma de "o id
+da subscrição chega por webhook" do Paddle. Não tem tolerância de timestamp — o
+esquema `X-Signature` não leva timestamp.
+
+### `ProxyPayGateway(options)` / `AppyPayGateway(options)`
+
+Estes implementam o contrato `PaymentGateway` por referência, não o
+`BillingGateway`. As opções do ProxyPay estão tabeladas em **Construir a
+gateway**, acima; o AppyPay (`@basaltkit/subscriptions-appypay`, pré-lançamento)
+acrescenta OAuth2 (`clientId`, `clientSecret`, `tokenUrl`, `scope?`) e
+`defaultMethod`. A história completa está em
+[Pagamentos por referência e mobile money](/pt/guide/reference-payments).
+
+### Fábricas de stores duráveis
+
+| Fábrica | Pacote | Devolve |
+| --- | --- | --- |
+| `sqliteSubscriptionsStores(dbOrLocation = ':memory:')` | `@basaltkit/subscriptions-sqlite` | `{ db, store, usage, webhooks }` — abre e migra |
+| `prismaSubscriptionsStores(client)` | `@basaltkit/subscriptions-prisma` | `{ store, usage, webhooks }` — lança de imediato se o cliente não tiver o modelo `subscription` |
+| `sqlitePaymentStores(...)` / `prismaPaymentStores(client)` | os mesmos pacotes | O `PaymentStore` + `RecurringStore` para pagamentos por referência |
+| `renderInvoicePdf(invoice, { locale?, businessName? })` | `@basaltkit/subscriptions-pdf` | `Promise<Buffer>` — mantém o pdfkit fora do core |
+
+## Modos de falha e resolução de problemas
+
+| Erro | Código | HTTP | Quando |
+| --- | --- | --- | --- |
+| `NotSubscribedError` | `BILLING_SUBSCRIPTION_REQUIRED` | 402 | `meta.subscribed` não satisfeito; **ou sem tenant no contexto** numa rota de faturação/faturas; ou `swap`/`cancel`/`resume` sem subscrição ativa |
+| `FeatureUnavailableError` | `BILLING_FEATURE_UNAVAILABLE` | 403 | `meta.feature` não concedido; ou `consume()` numa funcionalidade cujo limite é 0 (ou sem plano e sem `fallbackPlan`) |
+| `QuotaExceededError` | `BILLING_QUOTA_EXCEEDED` | 402 | O `consume()` levaria o uso para além do limite — a verificação atómica do store recusou |
+| `GatewayUnsupportedError` | `BILLING_GATEWAY_UNSUPPORTED` | 501 | `checkout()` ou `portal()` sem gateway, ou com uma que não implementa essa capacidade |
+| `UnknownPlanError` | `BILLING_UNKNOWN_PLAN` | — | Um nome de plano ausente do catálogo — incluindo um `fallbackPlan` mal escrito, que lança na construção |
+| `WebhookInvalidError` | `BILLING_WEBHOOK_INVALID` | 400 | A verificação da assinatura falhou — quase sempre um corpo já processado (reserializado) |
+| `WebhookSecretMissingError` | `BILLING_WEBHOOK_SECRET_MISSING` | 500 | `verifyWebhook` sem segredo de assinatura configurado. Falha fechada: um callback sem assinatura nunca é confiável |
+| `PaymentAmountMismatchError` | `BILLING_PAYMENT_AMOUNT_MISMATCH` | 400 | O montante de um pagamento confirmado ≠ o montante pedido para esse id — pagamento a menos ou callback forjado |
+| `StripeRequestError` · `PaddleRequestError` · `LemonSqueezyRequestError` | `BILLING_GATEWAY_ERROR` | — | A API REST da gateway devolveu um não-2xx; o estado original está em `err.httpStatus` |
+| `InvoiceNotFoundError` | `INVOICE_NOT_FOUND` | 404 | Id de fatura desconhecido — **ou** um que pertence a outro tenant, via `invoiceRoutes` |
+| `InvoiceStateError` | `INVOICE_INVALID_STATE` | 409 | `finalize` de algo que não é rascunho, `markPaid` de algo que não está aberto, `void` de uma paga, `addLine` numa finalizada — ou `planLine()` sobre um preço `'custom'` |
+| `CouponInvalidError` | `COUPON_INVALID` | 422 | Forma inválida: os dois/nenhum de `percentOff`/`amountOff`, percentagem fora de 0–100, `amountOff` sem moeda, `maxRedemptions < 1` |
+| `CouponNotRedeemableError` | `COUPON_NOT_REDEEMABLE` | 422 | Expirado (`redeemBy`), limite de resgates atingido, ou a moeda da fatura difere da de um cupão de montante fixo |
+| `CouponNotFoundError` | `COUPON_NOT_FOUND` | 404 | Não existe cupão com esse código |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | arranque | `billingRoutes()`/`invoiceRoutes()` registados com o `auth: true` predefinido mas sem `authPlugin` |
+
+- **`400 BILLING_WEBHOOK_INVALID` que não desaparece** — a assinatura é calculada
+  sobre os bytes intocados do pedido. Configura um parser de corpo raw para
+  `/billing/webhook`; reserializar um objeto já processado muda os bytes e parte
+  o HMAC.
+- **Todos os pedidos recebem `402 BILLING_SUBSCRIPTION_REQUIRED`, mesmo no plano
+  gratuito** — o guard resolve o billable a partir de `ctx().tenant.id`. Sem
+  plugin de tenancy, ou sem identificador de tenant no pedido, não há billable.
+  Verifica primeiro a tenancy; depois verifica se `fallbackPlan` está definido.
+- **Uma quota foi ultrapassada sob carga** — o `UsageStore` em memória é por
+  processo. Só os stores SQLite, Prisma e Redis fazem um check-and-increment
+  realmente atómico (`updateMany` condicional / um único `EVAL` em Lua).
+- **Um webhook foi aplicado duas vezes depois de um retry da gateway** — o
+  `WebhookStore` de deduplicação é em memória por predefinição, por isso um retry
+  que caia noutra réplica parece novo. Usa o `RedisWebhookStore` ou o de
+  SQLite/Prisma. (Dentro de um processo é exato: uma escrita de estado falhada
+  liberta a reserva para o retry poder reprocessar.)
+- **Um utilizador do tenant A abriu o Checkout do tenant B** — `meta.auth` prova
+  identidade, não pertença. Regista o
+  [`tenantMembershipPlugin()`](/pt/guide/teams).
+- **`501 BILLING_GATEWAY_UNSUPPORTED` a partir de `/billing/portal`** — o driver
+  não implementa `createPortalSession` para a tua configuração; o Lemon Squeezy,
+  por exemplo, precisa de `customerId` para abrir um.
+- **Um Checkout abandonado não mudou nada, como esperado** — o `checkout()` só
+  regista `pendingPlan`/`pendingPeriod`. O plano só é promovido quando chega um
+  `payment.succeeded` com um `gatewayRef` **novo**, por isso uma renovação da
+  subscrição existente nunca consegue escalar o plano.
+- **Os trials nunca expiram** — os trials suportados pela gateway são liquidados
+  pelo webhook da gateway e são deliberadamente ignorados pelo `expireTrials()`.
+  Os trials locais (sem gateway) precisam de `expireTrials()` a correr a partir do
+  [scheduler](/pt/guide/scheduler).
 
 ## Hooks de domínio
 

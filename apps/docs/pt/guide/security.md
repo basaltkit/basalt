@@ -3,6 +3,24 @@
 O Basalt é **seguro por omissão** na borda HTTP e fail-closed nos segredos.
 Tudo aqui é zero-dependências e ligado através do ciclo de vida dos plugins.
 
+## Os defaults seguros, num relance
+
+Cada um destes vem LIGADO por omissão — tens de optar por *sair*, nunca por
+entrar. Esta tabela é o mapa; o guia de cada linha tem os detalhes e o opt-out.
+
+| Default | O que previne | Onde |
+|---|---|---|
+| O boot recusa rotas cuja meta de segurança não tem guard a aplicá-la (`UnguardedRouteMetaError`) | rotas "protegidas" a servir abertas em silêncio | nesta página, abaixo |
+| As rotas de billing/faturas exigem utilizador autenticado (`meta.auth`) | gestão anónima de cartões/planos via tenant forjado | [Billing](/pt/guide/billing) |
+| Guard de membership em cada pedido autenticado com tenant (`tenantMembershipPlugin`) | um utilizador válido do tenant A a conduzir o tenant B (`TEAM_NOT_A_MEMBER`) | nesta página, abaixo |
+| A cache falha fechada fora do contexto de tenant em apps multi-tenant (`MissingCacheScopeError`) | leituras cross-tenant através de um namespace "global" partilhado | [Caching](/pt/guide/caching) |
+| `meta.can` rejeita formas não aplicáveis (`PERMISSION_META_INVALID`) | uma declaração malformada a saltar a autorização em silêncio | [Autorização](/pt/guide/authorization) |
+| URLs assinados de storage servem `Content-Disposition: attachment` | stored XSS via uploads de utilizadores numa origem CDN | [Storage](/pt/guide/storage) |
+| Corpos de mail construídos com `` html`…` `` com interpolações auto-escapadas; o log driver redige corpos em produção | injeção de markup no mail da app · links de reset em agregadores de logs | [Notificações](/pt/guide/notifications) |
+| Páginas admin/UI transportam uma CSP route-scoped com hash | injeção de script inline — sem enfraquecer a CSP da app | [Páginas admin](/pt/guide/admin-pages) |
+| As chaves de rate-limit ignoram `X-Forwarded-For`; o CORS nunca reflete origens arbitrárias com credenciais; HSTS/nosniff/frame-deny ligados | limites forjados por header · leituras cross-origin com credenciais · clickjacking | nesta página, abaixo |
+| Os segredos falham fechados em produção (`secret()`, `AUTH_WEAK_SECRET`) | arrancar com uma chave de assinatura adivinhável | nesta página, abaixo |
+
 ## Proteção de borda — `securityPlugin`
 
 Um só plugin cobre rate limiting, CORS e cabeçalhos de resposta seguros. **Os

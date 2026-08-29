@@ -30,9 +30,10 @@ que já corras, ou recorrer a um pacote pronto a usar.
 
 O "backend real" de referência para auth é
 [`@basaltkit/auth-sqlite`](/pt/reference/packages): implementações duráveis de **todos os
-seis** stores de auth — utilizadores, sessões, refresh tokens, tokens de uso único
-(verify/reset), API keys e MFA — sobre o `node:sqlite` embutido do Node. Sem ORM, sem
-ferramenta de migração, sem serviço separado, zero dependências externas.
+sete** stores de auth — utilizadores, sessões, refresh tokens, tokens de uso único
+(verify/reset), API keys, inscrição MFA e versões de token — sobre o `node:sqlite`
+embutido do Node. Sem ORM, sem ferramenta de migração, sem serviço separado, zero
+dependências externas.
 
 ```ts
 import { authPlugin, apiKeysPlugin } from '@basaltkit/auth'
@@ -49,6 +50,7 @@ createApp({
       refreshTokens: s.refreshTokens,
       tokens: s.tokens,   // verificação de email + reset de password
       mfa: s.mfa,
+      // tokenVersions: s.tokenVersions, // opcional: revogação imediata de access tokens
     }),
     apiKeysPlugin({ store: s.apiKeys, users: s.users }),
   ],
@@ -56,10 +58,12 @@ createApp({
 ```
 
 `sqliteAuthStores()` abre (ou cria) o ficheiro, aplica um schema idempotente, e devolve
-todos os stores nomeados para encaixarem diretamente nos plugins. O resto do teu código
-de auth fica intacto — estas classes implementam os mesmos contratos que os stores em
-memória. Cada store também é exportado por si só (`SqliteUserSource`, …) para que
-possas misturar backends.
+todos os stores nomeados para encaixarem diretamente nos plugins — mais o handle `db`
+em bruto. O resto do teu código de auth fica intacto: estas classes implementam os
+mesmos contratos que os stores em memória. Cada store também é exportado por si só
+(`SqliteUserSource`, …) para que possas misturar backends. O `tokenVersions` **não tem
+predefinição em memória** — o auth só verifica versões de token quando lhe passas um
+store, ao custo de uma leitura por pedido verificado.
 
 ::: tip Versão do Node
 `node:sqlite` é estável e sem flags no **Node 24**; no Node 22.x corre com
@@ -74,7 +78,7 @@ primária — os contratos tornam isso uma escolha por store.
 ## Auth em Postgres/MySQL — `@basaltkit/auth-prisma`
 
 Quando a tua app já corre numa base de dados real,
-[`@basaltkit/auth-prisma`](/pt/reference/packages) dá-te os mesmos seis stores de auth
+[`@basaltkit/auth-prisma`](/pt/reference/packages) dá-te os mesmos sete stores de auth
 suportados por **Prisma**. Trazes um `PrismaClient` gerado cujo schema inclua os
 modelos `Auth*` (o pacote traz um `schema.prisma` de referência); os stores só tocam
 nesses delegates, por isso assentam sobre o teu cliente existente sem tomarem posse do
@@ -259,20 +263,89 @@ outboxPlugin({
 })
 ```
 
-Semântica do relay (desde events 1.1): a captura automática é **aguardada** — se
-a escrita no outbox falhar, a chamada `emit()` falha, em vez de o evento ser
-descartado silenciosamente enquanto o outbox promete at-least-once. Ticks de
-flush sobrepostos coalescem (um dispatch lento não consegue entregar em
-duplicado o seu próprio batch), entradas falhadas fazem retry com backoff
-exponencial (opção `backoff`; local ao processo, sem alteração de schema), e uma
-entrada que esgote `maxAttempts` é reportada via `onDead` (default:
-`console.error`) e fica no store com o seu `lastError`.
+### Semântica do relay
+
+O relay é a parte que decide se o "pelo menos uma vez" é real. Quatro
+comportamentos, todos verificáveis em `@basaltkit/events`:
+
+- **A captura é aguardada.** Um padrão em `captureEvents` subscreve no bus do
+  `@basaltkit/events`, e o listener faz `await` da escrita no outbox. Se essa
+  escrita falhar, o `emit()` falha (o bus agrega as falhas dos listeners num
+  `AggregateError`) em vez de o evento ser descartado silenciosamente enquanto o
+  outbox promete at-least-once. O tenant é lido do contexto ambiente
+  (`ctx().tenant.id`), por isso uma entrada registada dentro de um pedido fica
+  automaticamente delimitada por tenant.
+- **Ticks sobrepostos coalescem.** O `flush()` devolve o flush em curso em vez de
+  voltar a selecionar o batch, por isso um dispatch mais lento que `intervalMs`
+  não consegue entregar em duplicado as suas próprias entradas.
+- **As falhas recuam.** Uma entrada falhada é ignorada por este processo até o seu
+  atraso decorrer: `delayMs · 2^(tentativas-1)`, limitado a `maxDelayMs`
+  (`type: 'fixed'` mantém-no constante, `backoff: false` faz retry em cada tick).
+  O calendário é **local ao processo** — sem alteração de schema, e um restart
+  esquece-o, pelo que o pior caso é um retry antecipado. Continua at-least-once.
+- **As entradas mortas são ruidosas.** Uma entrada que atinge `maxAttempts` é
+  excluída dos futuros scans de `pending()` e reportada uma vez através de
+  `onDead(entry, error)`; fica no store com o seu `lastError` para inspeção. Nada
+  a apaga por ti.
+
+::: warning Dois callbacks de erro diferentes
+O `onDead(entry, error)` dispara para **uma entrada** que esgotou as suas tentativas.
+O `onFlushError(error)` dispara quando o **próprio flush** falhou ao nível do store —
+o `pending()` lançou, a base de dados está inacessível — pelo que nenhuma entrada
+chegou sequer a ser selecionada. As falhas de dispatch por entrada nunca chegam ao
+`onFlushError`; são registadas na entrada via `markFailed`. Ambos usam por
+predefinição `console.error`
+(`[basalt:outbox] entry "…" is dead after N attempts:` e
+`[basalt:outbox] flush failed:`) e nenhum pode lançar. Tanto o caminho do
+temporizador como a drenagem no encerramento passam pelo `onFlushError`, que é o que
+impede uma falha da base de dados de se tornar uma rejeição não tratada que mata o
+processo.
+:::
+
+```ts
+outboxPlugin({
+  store: outbox.store,
+  dispatch: (entry) => sendToWebhook(entry),
+  captureEvents: ['order.*', 'invoice.*'],
+  intervalMs: 1000,
+  batchSize: 50,
+  maxAttempts: 10,
+  backoff: { type: 'exponential', delayMs: 1000, maxDelayMs: 60_000 },
+  onDead: (entry, error) => alerts.page('outbox entry dead', { id: entry.id, event: entry.event, error }),
+  onFlushError: (error) => logger.error({ err: error }, 'outbox flush failed'),
+})
+```
+
+`outboxPlugin(options)`:
+
+| Opção | Tipo | Predefinição | Para que serve |
+| --- | --- | --- | --- |
+| `dispatch` | `(entry: OutboxEntry) => void \| Promise<void>` | — (**obrigatório**) | Entrega uma entrada confirmada ao mundo exterior; lançar marca a entrada como falhada e agenda um retry |
+| `store` | `OutboxStore` | `new MemoryOutboxStore()` | Onde vivem as entradas — toda a garantia depende de este ser durável |
+| `captureEvents` | `string[]` | `[]` | Padrões de evento registados automaticamente (`'order.*'`); uma lista não vazia faz o plugin depender de `basalt:events` |
+| `intervalMs` | `number` | — (manual) | Intervalo de polling do relay. Omite para fazeres flush tu via o token `OUTBOX`; o temporizador tem `unref()` por isso nunca mantém o processo vivo |
+| `batchSize` | `number` | `50` | Entradas selecionadas por flush — sobe para throughput, desce para limitar o trabalho de um tick |
+| `maxAttempts` | `number` | `10` | Tentativas antes de uma entrada ficar morta e ser reportada ao `onDead` |
+| `backoff` | `OutboxBackoff \| false` | `{ type: 'exponential', delayMs: 1000, maxDelayMs: 60_000 }` | Ritmo de retry para entradas falhadas; `false` faz retry em cada tick |
+| `onDead` | `(entry, error) => void` | `console.error` | Uma entrada esgotou `maxAttempts` — chama alguém, isto é uma entrega externa perdida |
+| `onFlushError` | `(error) => void` | `console.error` | O flush falhou ao nível do store (tick do temporizador ou drenagem no encerramento). Nunca pode lançar |
+| `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
+
+`backoff` (`OutboxBackoff`):
+
+| Opção | Tipo | Predefinição | Para que serve |
+| --- | --- | --- | --- |
+| `delayMs` | `number` | `1000` | Atraso base antes de repetir uma entrada falhada |
+| `type` | `'fixed' \| 'exponential'` | `'exponential'` | Espaçamento dos retries: a duplicar ou constante |
+| `maxDelayMs` | `number` | `60_000` | Teto para o atraso exponencial |
 
 O backend SQLite mantém um índice parcial sobre as linhas não publicadas para que o
 scan "o que está pendente?" do relay se mantenha barato. O backend Prisma coloca o
 outbox na tua base de dados primária — o objetivo do padrão: enfileira o evento **na
 mesma transação** que a mudança de estado, e os dois nunca podem discordar. `pending`,
 os limites de tentativas e `markPublished`/`markFailed` mantêm as semânticas em
+memória, agora duráveis.
+
 memória, agora duráveis.
 
 ## Webhooks de saída — `@basaltkit/webhooks-sqlite` / `@basaltkit/webhooks-prisma`
@@ -330,9 +403,84 @@ class PrismaUserSource implements UserSource {
 ```
 
 `@basaltkit/auth-sqlite` e `@basaltkit/auth-prisma` são referências compactas e
-totalmente testadas para os seis stores de auth — lê qualquer uma quando construíres uma
+totalmente testadas para os sete stores de auth — lê qualquer uma quando construíres uma
 para outra base de dados ou ORM. A mesma abordagem aplica-se a todos os outros contratos
 de store na stack.
+
+## Referência de opções
+
+Cada backend durável é uma **factory**, não um plugin — chama-la uma vez no
+arranque e passas o resultado ao plugin dono do domínio. As duas famílias têm uma
+assinatura cada:
+
+| Família | Assinatura | Devolve |
+| --- | --- | --- |
+| `sqlite*` | `(dbOrLocation: DatabaseSync \| string = ':memory:')` | `{ db, …stores }` — o handle `node:sqlite` em bruto mais um store por contrato |
+| `prisma*` | `(client: PrismaClient)` | `{ …stores }` — sem handle; o cliente já é teu |
+
+Passar um **caminho** abre (ou cria) o ficheiro e aplica o schema; passar um
+`DatabaseSync` existente migra esse handle, que é como vários domínios partilham
+um só ficheiro. `':memory:'` é a predefinição, e é por isso que uma factory sem
+configuração continua segura em testes.
+
+| Domínio | Factory SQLite | Factory Prisma | Alimenta |
+| --- | --- | --- | --- |
+| Auth | `sqliteAuthStores()` | `prismaAuthStores(client)` | `authPlugin({ users, sessions, refreshTokens, tokens, mfa, tokenVersions })`, `apiKeysPlugin({ store, users })` |
+| Teams | `sqliteTeamsStores()` | `prismaTeamsStores(client)` | `teamsPlugin({ memberships, invitations })` |
+| Subscriptions | `sqliteSubscriptionsStores()` | `prismaSubscriptionsStores(client)` | `subscriptionsPlugin({ store, usage, webhooks })` |
+| Pagamentos | `sqlitePaymentStores()` | `prismaPaymentStores(client)` | os stores do ledger de pagamentos + recorrências |
+| Comments | `sqliteCommentsStore()` | `prismaCommentsStore(client)` | `commentsPlugin({ store })` |
+| Audit | `sqliteAuditStore()` | `prismaAuditStore(client)` | `auditPlugin({ store })` |
+| Activity | `sqliteActivityStore()` | `prismaActivityStore(client)` | `activityPlugin({ store })` |
+| Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
+| Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store })` |
+| Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — devolve a própria source, não `{ store }` |
+| Outbox de eventos | `sqliteOutboxStore()` | `prismaOutboxStore(client)` | `outboxPlugin({ store })` |
+| Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |
+
+Cada pacote também exporta `openXDatabase(location)` e `migrate(db)` se quiseres
+controlar tu a abertura e a migração, e cada classe de store individual
+(`SqliteUserSource`, `PrismaAuditStore`, …) recebe um `DatabaseSync` /
+`PrismaClient` no construtor — por isso podes misturar backends por store.
+
+O único backend com opções de comportamento próprias é o relay do outbox; as suas
+tabelas estão em **Semântica do relay**, acima. Todo o resto é configurado no
+plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
+[Billing](/pt/guide/billing), [Tenancy](/pt/guide/tenancy) e
+[Webhooks](/pt/guide/webhooks).
+
+## Modos de falha e resolução de problemas
+
+| Erro | Código | Quando |
+| --- | --- | --- |
+| `Error: @basaltkit/<pkg>-prisma: the Prisma client has no <model> model.` | — | Uma factory `prisma*` correu contra um cliente cujo schema não tem os modelos. Corre `basalt prisma:sync --push` e depois `prisma generate`. Clientes lazy/proxy (base de dados por tenant) saltam a verificação e falham na primeira utilização |
+| `Error: @basaltkit/tenancy-prisma: domain "…" is already owned by tenant "…".` | — | O `save()` tentou reivindicar um domínio personalizado que pertence a outro tenant. Os domínios são globalmente únicos para o encaminhamento ser inequívoco; o save inteiro é rejeitado antes de qualquer escrita. A source SQLite impõe a mesma regra com uma constraint PRIMARY KEY, dentro de uma transação que faz rollback |
+| `AggregateError` vindo de `bus.emit(...)` | — | Uma escrita de captura do outbox falhou. A captura é aguardada de propósito — o emissor tem de ver a falha em vez de acreditar que um evento perdido foi registado |
+| `EventValidationError` | `EVENT_INVALID` | O schema do evento rejeitou o payload antes de qualquer listener (incluindo a captura do outbox) correr |
+| `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | O `OUTBOX` (ou qualquer token de store) foi resolvido sem o plugin que o regista |
+| `ERR_UNKNOWN_BUILTIN_MODULE` no `import 'node:sqlite'` | — | Um pacote `*-sqlite` em Node 22.x sem `--experimental-sqlite`. Usa Node 24, ou acrescenta a flag; os pacotes declaram `engines.node >= 22.5.0` |
+
+- **"Funcionava em dev e esqueceu tudo depois do deploy"** — um store continua na
+  sua predefinição em memória. As predefinições são silenciosas por design; procura
+  no teu `createApp` os plugins a que nunca passaste um store, e percorre a
+  checklist abaixo.
+- **As entradas do outbox acumulam-se por publicar** — ou não há relay a correr
+  (`intervalMs` por definir e nada chama `OUTBOX.flush()`), ou todas as entradas
+  estão mortas. As entradas mortas são excluídas do `pending()`, por isso a tabela
+  cresce enquanto o relay diz não ter nada a fazer: verifica o `lastError` e se o
+  `onDead` disparou.
+- **Os eventos são registados mas nunca entregues depois de um redeploy** — o
+  store do outbox é durável mas as **subscrições de webhook** não são. O
+  `MemoryWebhookStore` esquece cada endpoint registado, e a entrega para em
+  silêncio.
+- **`SQLITE_BUSY` / contenção de locks sob carga** — um ficheiro SQLite é um só
+  escritor. É esse o trade-off das zero dependências; move o domínio quente para
+  Prisma (ou Redis, no caso de cache/usage/idempotência) quando um único escritor
+  deixar de chegar.
+- **Um store durável continua a não devolver nada para um tenant** — o store é
+  durável, não encaminhado por tenant. Para base de dados por tenant tens de o
+  encaminhar através do cliente do tenant ativo; vê
+  [Base de dados por tenant](/pt/guide/database-per-tenant).
 
 ## O que fazer antes de ir para produção
 

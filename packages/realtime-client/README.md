@@ -46,12 +46,26 @@ Registering a handler with `channel(name).on(event, ...)` **automatically subscr
 
 ### `createRealtimeClient(options)`
 
-| Option | Type | Default | Description |
+| Option | Type | Default | Purpose |
 |---|---|---|---|
-| `url` | `string` | — | Server endpoint (`wss://…` or `https://…/sse`). |
-| `transport` | `'websocket' \| 'sse'` | `'websocket'` | Connection mechanism. |
-| `WebSocketImpl` / `EventSourceImpl` | ctor | globals | Injectable implementation (tests / non-browser). |
-| `reconnect` | `false \| { minDelayMs?, maxDelayMs? }` | `{}` | Reconnection with exponential backoff. `false` disables it. |
+| `url` | `string` | — (required) | Server endpoint (`wss://…` or `https://…/sse`). |
+| `transport` | `'websocket' \| 'sse'` | `'websocket'` | Connection mechanism. WebSocket is bidirectional and can send subscribe/unsubscribe; SSE is receive-only. |
+| `WebSocketImpl` | `new (url: string) => WebSocketLike` | `globalThis.WebSocket` | Injectable constructor for tests or non-browser runtimes. |
+| `EventSourceImpl` | `new (url: string) => EventSourceLike` | `globalThis.EventSource` | Same, for `transport: 'sse'`. |
+| `reconnect` | `false \| { minDelayMs?: number; maxDelayMs?: number }` | `{ minDelayMs: 500, maxDelayMs: 10_000 }` | Auto-reconnect with exponential backoff and jitter (each delay is multiplied by a random factor in `[0.5, 1)` so a server restart doesn't stampede every client at once). `false` disables reconnection entirely. |
+
+Reconnection only happens on a close the client did not initiate — `close()` sets a flag that
+suppresses it and clears any pending timer. A successful open resets the attempt counter.
+
+### Errors
+
+This package exports no error classes and never throws from a handler path. Two failure
+behaviours to know:
+
+| Situation | Behaviour |
+|---|---|
+| No `WebSocket` / `EventSource` available and none injected | `createRealtimeClient` throws a plain `Error` (`'No WebSocket implementation; pass WebSocketImpl.'` / `'No EventSource implementation; pass EventSourceImpl.'`) — synchronously, at construction. |
+| A malformed frame arrives, or the socket emits an error | Routed to the `'error'` lifecycle listeners as the payload. Parse failures never throw into the socket callback, so one bad frame can't tear the connection down. |
 
 Returns a `RealtimeClient`:
 
@@ -69,7 +83,19 @@ Returns a `RealtimeClient`:
 |---|---|
 | `on(event, handler)` | Listens for an event (subscribes to the channel). Returns a function to remove it. |
 | `off(event, handler?)` | Removes a handler (or all handlers for the event). |
-| `subscribe()` / `unsubscribe()` | Manually controls the channel subscription. |
+| `subscribe()` / `unsubscribe()` | Manually controls the channel subscription. `unsubscribe()` also drops every handler registered for that channel. |
+
+Subscriptions are tracked client-side, so they survive a reconnect: on every `open` the client
+re-sends `{ type: 'subscribe', channel }` for each tracked channel. A `subscribe()` issued while
+disconnected is remembered and sent when the connection opens.
+
+### Transports (advanced)
+
+`WebSocketTransport` and `SseTransport` are exported along with the `Transport`,
+`TransportHandlers`, `RealtimeMessage`, `ClientCommand`, `WebSocketLike`, `WebSocketCtor`,
+`EventSourceLike` and `EventSourceCtor` types — implement `Transport` to sit the client on
+another mechanism (`connect(handlers)`, `send(command)`, `close()`, optional `track(event)`).
+`track` is how SSE learns which event names to `addEventListener` for; WebSocket ignores it.
 
 ## WebSocket vs SSE
 
@@ -81,14 +107,33 @@ Returns a `RealtimeClient`:
 `@basaltkit/realtime` decides subscriptions via `hub.subscribe(...)`. Interpret the client's commands in your WebSocket handler:
 
 ```ts
-socket.on('message', (raw) => {
+socket.on('message', async (raw) => {
   const cmd = JSON.parse(raw)
-  if (cmd.type === 'subscribe') hub.subscribe(conn.id, cmd.channel)
+  if (cmd.type === 'subscribe') {
+    // subscribe() resolves false when the server's `authorize` gate or a cap refused it
+    if (!(await hub.subscribe(conn.id, cmd.channel))) socket.close()
+  }
   if (cmd.type === 'unsubscribe') hub.unsubscribe(conn.id, cmd.channel)
 })
 ```
 
-(Always authorize on the server which channels a client can subscribe to — never trust the client.)
+Channel names in these commands come straight from the client, so authorize them on the server:
+pass `realtimePlugin({ authorize })` and honour the boolean `hub.subscribe()` returns. Never
+trust the client.
+
+## Hooks & events
+
+The client's own event surface is the three lifecycle events, plus per-channel message handlers.
+There are no configurable callbacks beyond these.
+
+| Event | `on(...)` | Fires when |
+|---|---|---|
+| `'open'` | `client.on('open', h)` | The transport connected. Every tracked channel is re-subscribed **before** this fires, so a handler here sees a fully restored session. |
+| `'close'` | `client.on('close', h)` | The transport closed. A reconnect is scheduled unless you called `close()` or set `reconnect: false`. |
+| `'error'` | `client.on('error', h)` | The socket errored, or a frame failed to parse. The payload is the underlying error. On SSE an error also triggers `'close'` (and therefore a reconnect). |
+| channel message | `client.channel(n).on(event, h)` | The server pushed `{ channel, event, data }`; the handler receives `data`. |
+
+Every `on(...)` returns its own unsubscribe function.
 
 ## How it connects to other modules
 

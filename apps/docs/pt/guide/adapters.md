@@ -296,6 +296,29 @@ baseados em HTTP.
 - O `request` / `reply` do handler são os tipos neutros; alcança o objeto
   subjacente da framework via `request.raw` quando realmente precisares.
 
+## Referência de opções
+
+Os três plugins partilham as mesmas opções centrais; cada um aceita os extras
+nativos da sua framework.
+
+| Opção | Tipo | Default | Adapters | Porquê |
+|---|---|---|---|---|
+| `routes` | `BasaltRoute[]` | `[]` | todos | As rotas neutras a montar. |
+| `allowUnguardedMeta` | `boolean \| string[]` | falha alto no boot | todos | Dispensa o check de boot de que cada rota que declara `meta.auth`/`can`/`teamRole` tem um guard registado a aplicá-la (`UnguardedRouteMetaError` caso contrário). Só para deployments onde a proteção acontece genuinamente numa edge exterior. |
+| `notFound` | `boolean` | `true` (corpo 404 neutro) | todos | Passa `false` para sair do `404 { error: { code: 'NOT_FOUND' } }` partilhado e manter o default da framework. |
+| `fastify` | `FastifyServerOptions` | `{}` | fastify | Passado ao construtor `Fastify()` (logger, trustProxy, …). |
+| `app` | instância nativa | criada por ti ou pelo plugin | express, hono | Traz o teu próprio `express()` / `new Hono()` e o Basalt monta-se nele. |
+| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejeita bodies grandes demais com 413 (`PAYLOAD_TOO_LARGE`) — o Hono/edge não tem limite por omissão. |
+
+## Modos de falha
+
+| Vês | Significa | Faz |
+|---|---|---|
+| `UnguardedRouteMetaError` no boot | uma rota declara meta de segurança que nenhum guard registado aplica | regista o plugin que a aplica, ou `allowUnguardedMeta` (vê [Segurança](/pt/guide/security)) |
+| `400 HTTP_VALIDATION` | o body/query/params falhou o schema Zod da rota | a resposta lista a parte e as issues por campo |
+| `404 { code: 'NOT_FOUND' }` numa rota que definiste | a rota não foi registada nesta instância do adapter | confirma que está em `routes: [...]` do plugin do adapter que arrancou |
+| `413 PAYLOAD_TOO_LARGE` (hono) | o body excedeu o `bodyLimit` | sobe o `bodyLimit` deliberadamente |
+
 ## Os plugins de edge também são neutros
 
 Os plugins de edge visam um `HttpServer` neutro (o token `HTTP_SERVER`, que cada

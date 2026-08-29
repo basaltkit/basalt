@@ -207,11 +207,60 @@ const cacheB = new Cache(new RedisCacheDriver(redis))
 
 #### `CacheOptions`
 
-| Option | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `prefix` | `string` | No | `'basalt'` | Root prefix for all keys. |
-| `scope` | `(() => string \| undefined) \| null` | No | reads `ctx().tenant.id` → `tenant:<id>` | Dynamic prefix segment, resolved on each operation. `null` disables tenant isolation. |
-| `onMissingScope` | `'global' \| 'error'` | No | `'error'` when `tenancyPlugin` is registered, else `'global'` | What an operation does when the scope resolves to `undefined` (e.g. a background job outside request context). In multi-tenant apps the default fails CLOSED (`MissingCacheScopeError`) instead of silently sharing one namespace across tenants; single-tenant apps keep the global namespace. Explicit values always win. |
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `prefix` | `string` | `'basalt'` | Root prefix for all keys. Change it when two apps share one Redis, so each owns its own key space and `flush()` can't cross the boundary. |
+| `scope` | `(() => string \| undefined) \| null` | reads `ctx().tenant.id` → `tenant:<id>` | Dynamic prefix segment, resolved on **every** operation. Pass `null` for a deliberate global cache; pass your own function to scope by something other than tenant (region, API version). |
+| `onMissingScope` | `'global' \| 'error'` | `'error'` when tenancy is active, else `'global'` — see below | What a read/write does when `scope()` resolves `undefined`. `'global'` shares one namespace; `'error'` throws `MissingCacheScopeError`. |
+| `now` | `() => number` | `Date.now` | Injectable clock (ms) for the stale-while-revalidate windows. For tests. |
+
+`SwrOptions` (the object form of `remember`'s second argument):
+
+| Field | Type | Purpose |
+|---|---|---|
+| `ttl` | `DurationInput` | How long the value stays **fresh** — served with no revalidation. |
+| `staleFor` | `DurationInput` | Extra window after `ttl` in which a stale value is served instantly while one background revalidation runs. After `ttl + staleFor` the entry is hard-expired and the next read blocks on the factory. The driver TTL is set to `ttl + staleFor`. |
+
+#### `onMissingScope` and the `tenancy:active` interaction
+
+The `Cache` class on its own defaults `onMissingScope` to `'global'`. `cachePlugin` **overrides
+that to `'error'`** when three things hold at once:
+
+1. `@basaltkit/tenancy` is registered — it adds a `tenancy:active` marker to the container's
+   metadata at register time, and the cache plugin checks for it;
+2. you did not pass `onMissingScope`; **and**
+3. you did not pass a custom `scope`.
+
+Any explicit `onMissingScope` or `scope` wins — the upgrade only fills a gap you left blank.
+
+The reasoning: in a multi-tenant app, a cache operation that resolves no tenant is a bug almost
+every time (a queue worker, a cron task, a startup hook — code running outside a request). Under
+`'global'` it doesn't fail; it writes a per-tenant value into the shared namespace, where the
+**next tenant reads it**. That is a cross-tenant data leak with no error and no log. Failing
+closed turns it into a stack trace at the call site.
+
+Single-tenant apps are untouched: no tenancy plugin, no marker, so the default stays `'global'`
+and nothing changes.
+
+```ts
+// Multi-tenant: this now throws instead of poisoning the shared namespace.
+cachePlugin({ driver: 'redis', url })   // + tenancyPlugin() registered  → onMissingScope: 'error'
+
+// Deliberate global cache — opt out explicitly, and the scope check never runs.
+cachePlugin({ driver: 'redis', url, scope: null })
+
+// Keep the old permissive behaviour, knowingly.
+cachePlugin({ driver: 'redis', url, onMissingScope: 'global' })
+```
+
+**`flush()` always fails closed**, whatever `onMissingScope` says: if `scope` is not `null` and
+resolves `undefined`, it throws rather than wiping the whole prefix. A mis-scoped `flush()` under
+`'global'` would delete **every tenant's** cache in one call, and no convenience is worth that.
+`scope: null` is exempt — you declared the cache global, so its "everything" is genuinely
+everything you meant.
+
+To flush one tenant, call it inside that tenant's context; to flush the global namespace of a
+tenant-scoped cache, build a second `Cache` with `scope: null`.
 
 ### `cachePlugin(options?: CachePluginOptions)`
 
@@ -219,15 +268,33 @@ Registers `Cache` in the container under the `CACHE` token and disconnects the d
 
 #### `CachePluginOptions` (extends `CacheOptions`)
 
-| Option | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `driver` | `'memory' \| 'redis'` | No | `'memory'` | Which driver to use. |
-| `url` | `string` | Yes, with `driver: 'redis'` | — | Redis connection URL (e.g. `redis://localhost:6379`). |
-| `prefix`, `scope` | — | No | see `CacheOptions` | Inherited from `CacheOptions`. |
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `driver` | `'memory' \| 'redis' \| CacheDriver` | `'memory'` | Built-in driver by name, **or a driver instance** — that is how you plug in [`@basaltkit/cache-tiered`](https://www.npmjs.com/package/@basaltkit/cache-tiered) or your own. An instance is used as-is and `url` is ignored. |
+| `url` | `string` | — | Required with `driver: 'redis'`. Redis connection URL (e.g. `redis://localhost:6379`). |
+| `prefix`, `scope`, `onMissingScope`, `now` | — | see `CacheOptions` | Inherited from `CacheOptions`. |
+
+The plugin registers the `Cache` as a container singleton and `disconnect()`s the driver on
+application `shutdown`.
 
 ### `CACHE`
 
 Dependency injection token: `app.container.get(CACHE)` returns the `Cache` instance.
+
+### Errors
+
+| Error | Code | When |
+|---|---|---|
+| `MissingCacheScopeError` | `CACHE_SCOPE_MISSING` | A tenant-scoped cache resolved no tenant. Raised on a read/write when `onMissingScope: 'error'` (the default once tenancy is registered), and **always** on `flush()` regardless of `onMissingScope`. Extends `BasaltError`. The message names the operation and tells you to establish a tenant or pass `scope: null`. |
+| `DURATION_INVALID` (from `@basaltkit/core`) | `DURATION_INVALID` | A TTL string that `parseDuration` doesn't understand. Accepted forms: a number of ms, or `'500ms'` / `'30s'` / `'5m'` / `'2h'` / `'7d'`. |
+
+There are no other error classes: driver-level faults (a Redis connection error) propagate from
+`ioredis` unchanged.
+
+### Hooks & events
+
+This package emits none. `onMissingScope` is a policy switch, not a callback, and there is no
+hit/miss event bus — measure at the `remember` call site if you need cache metrics.
 
 ### `interface CacheDriver` (Advanced)
 
@@ -271,6 +338,12 @@ This is by design: `remember`'s deduplication is **per process** (it uses an in-
 
 **`flush()` deleted less than I expected.**
 `flush()` only deletes keys under the current prefix + scope (that's the safety guarantee: it never does `FLUSHALL` on Redis). To clear a tenant's keys, call `flush()` inside that tenant's context.
+
+**`CACHE_SCOPE_MISSING` — "Refusing cache operation: a tenant-scoped cache resolved no tenant".**
+Cache code ran outside a tenant context — usually a queue worker, a scheduled task, or a boot hook. Establish the tenant around the call (`runWithContext({ tenant: { id } }, …)`), or, if the value really is global, use a cache built with `scope: null`. Do **not** reach for `onMissingScope: 'global'` to make it go away: that is what makes one tenant's value readable by the next.
+
+**`CACHE_SCOPE_MISSING` on `flush()` even though `onMissingScope` is `'global'`.**
+Deliberate. `flush()` always fails closed, because a mis-scoped whole-namespace wipe would delete every tenant's cache. Only `scope: null` exempts it.
 
 **I configured `driver: 'redis'` and the application fails to boot/use the cache.**
 With `driver: 'redis'`, the `url` option is required. Also verify that the Redis server is reachable at that URL.

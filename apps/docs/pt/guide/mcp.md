@@ -15,6 +15,19 @@ separado da camada só-de-dev [`@basaltkit/ai`](./ai) / [`@basaltkit/ai-mcp`](./
 MCP diretamente — sem SDK externo.
 :::
 
+[[toc]]
+
+## Onde o MCP se encaixa
+
+Quatro pacotes falam MCP, cada um com uma função — esta página é a última linha:
+
+| Camada | Pacote | Função | Runtime? |
+| --- | --- | --- | --- |
+| Inteligência | [`@basaltkit/ai`](./ai) | O CLI `basalt ai`: analyze, doctor, plan, make, review | só-dev |
+| Ponte de dev | [`@basaltkit/ai-mcp`](./ai-mcp) | Expõe esses fluxos de desenvolvimento ao teu editor por MCP | só-dev |
+| Fio | [`@basaltkit/mcp-core`](./mcp-core) | Protocolo sem dependências + servidor genérico + transportes | partilhado |
+| Superfície runtime | **`@basaltkit/mcp`** | **Esta página** — rotas com opt-in tornam-se tools para agentes | runtime |
+
 ## Expor rotas como tools
 
 Marca uma rota com `meta.mcp`, regista o `mcpPlugin` e adiciona `mcpRoutes()` ao
@@ -56,6 +69,18 @@ await createApp({
   da rota, fundidos num único objeto plano.
 - **Mesmo pipeline** — uma `tools/call` corre enrichers, guards e validação antes
   do handler; os headers do pedido (tenant, authorization) propagam para a chamada.
+
+::: warning Os guards aplicam-se — e têm de ser aplicáveis
+Uma rota com `meta.auth` (ou `meta.can` / `meta.teamRole`) mantém esse guard
+quando é invocada como tool: uma `tools/call` sem autenticação recebe o mesmo
+corpo de erro `UNAUTHORIZED` que um pedido HTTP sem autenticação, transportado no
+resultado da tool com `isError: true`. O reverso: se alguma rota declarar
+`meta.auth` e nenhum `authPlugin` estiver registado, a app **recusa arrancar**
+com `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) — vê
+[Segurança](/pt/guide/security). Por HTTP, envia os headers `Authorization` /
+tenant no pedido `POST /mcp`; por stdio, passa `headers` estáticos ao
+`serveMcpStdio`.
+:::
 
 ## Schemas e argumentos das tools
 
@@ -193,6 +218,59 @@ Nota que o `meta.rateLimit` próprio de uma rota-ferramenta pertence ao seu
 registo HTTP direto — não é aplicado quando a rota é invocada como tool através
 do `/mcp`, portanto o orçamento do `/mcp` é o throttle do tráfego de tools.
 (Auth e guards correm de forma idêntica em ambos os caminhos.)
+
+## Referência de opções
+
+As tabelas abaixo são as opções públicas completas dos quatro pontos de entrada.
+
+### `mcpPlugin(options)`
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `routes` | `BasaltRoute[]` | — (obrigatório) | As rotas analisadas à procura de `meta.mcp` — tipicamente o mesmo array que passas ao adaptador |
+| `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | O que o `initialize` reporta aos clientes |
+| `filter` | `(route: BasaltRoute) => boolean` | expõe todas as rotas com opt-in | Um portão ao nível do deployment por cima do `meta.mcp` (ex.: esconder rotas de admin num ambiente) |
+
+### `mcpRoutes(options)`
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `path` | `string` | `'/mcp'` | Onde o endpoint POST de JSON-RPC é montado |
+| `rateLimit` | `{ limit: number; windowMs: number }` | nenhum | Aplica `meta.rateLimit` ao `/mcp` (imposto pelo `securityPlugin` num bucket dedicado) — o **único** rate limit que se aplica a chamadas de tools |
+
+### `serveMcpStdio(app, options)`
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `headers` | `Record<string, string>` | `{}` | Headers estáticos aplicados a **todas** as chamadas de tools — o stdio não tem headers por pedido, é assim que um agente local leva um token/tenant de serviço |
+| `input` | `NodeJS.ReadableStream` | `process.stdin` | Injeta um stream nos testes |
+| `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Injeta um sink nos testes |
+
+Devolve um handle cujo `close()` desliga o listener do stdin.
+
+### `mcpClientPlugin(options)`
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `servers` | `Record<string, { type: 'http'; url; headers? } \| { type: 'stdio'; command; args?; env?; cwd? }>` | — (obrigatório) | Servidores externos nomeados registados sob `MCP_CLIENTS` |
+| `eager` | `boolean` | `true` | Ligar todos os servidores no arranque (falhar cedo) vs. lazily no primeiro `callTool`/`listTools` |
+
+## Modos de falha e resolução de problemas
+
+Falhas ao nível da tool **não** são erros de protocolo: um erro de
+handler/guard/validação volta como um resultado normal com `isError: true`, cujo
+texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
+`{ "code": "UNAUTHORIZED", … }`). Erros de protocolo usam códigos JSON-RPC:
+
+| Sintoma | Causa | Correção |
+| --- | --- | --- |
+| O arranque lança `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | Uma rota declara `meta.auth`/`meta.can`/`meta.teamRole` e nenhum plugin o impõe | Regista `authPlugin` / `permissionsPlugin` / `teamsPlugin` — vê [Segurança](/pt/guide/security) |
+| `isError: true` com um corpo `UNAUTHORIZED`/`FORBIDDEN` | A rota da tool está guardada e a chamada não levou credenciais (ou levou más) | Envia headers `Authorization`/tenant com o `POST /mcp`, ou `serveMcpStdio(app, { headers })` |
+| JSON-RPC `-32602` `Unknown tool: …` | Nome de tool não registado — rota sem `meta.mcp`, excluída pelo `filter`, ou renomeada | Verifica o `tools/list`; lembra os overrides via `meta.mcp.name` |
+| JSON-RPC `-32601` `Method not found` | O cliente chamou um método MCP que o servidor não implementa | Só existem `initialize`, `ping`, `tools/list`, `tools/call` (mais resources/prompts quando registados) |
+| Uma tool ignora o `meta.rateLimit` da sua rota | Os rate limits por rota pertencem ao registo HTTP direto da rota — **não** se aplicam através do `/mcp` | Orçamenta o tráfego de tools com `mcpRoutes({ rateLimit })` |
+| O Claude Desktop mostra um servidor morto/quebrado | Algo imprimiu no stdout — ele é o canal JSON-RPC | `logLevel: 'silent'`, remove `console.log`; vê a checklist de stdio acima |
+| Resposta `202` do `POST /mcp` com corpo vazio | A mensagem era uma *notificação* JSON-RPC — por spec não recebe resposta | Comportamento esperado, não é um erro |
 
 ## Testar com o MCP Inspector
 

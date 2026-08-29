@@ -71,6 +71,42 @@ const invitations = new SqliteInvitationStore(db)
 - **Pending** invitations are those with no `accepted_at` and no `revoked_at`;
   expiry is the caller's concern, exactly as in the in-memory store.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contracts.
+- The `token` column holds the **SHA-256 hash** of the invitation token, never
+  the raw value — `@basaltkit/teams` hashes before it reaches the store.
+
+## Exports
+
+| Export | Kind | Purpose |
+| --- | --- | --- |
+| `sqliteTeamsStores(dbOrLocation?)` | function | Opens (or reuses) a database, applies the schema, returns `{ db, memberships, invitations }`. Defaults to `':memory:'`. |
+| `SqliteMembershipStore` | class | `MembershipStore` over `team_memberships`. `new SqliteMembershipStore(db)`. |
+| `SqliteInvitationStore` | class | `InvitationStore` over `team_invitations`. `new SqliteInvitationStore(db)`. |
+| `openTeamsDatabase(location?)` | function | Opens a `DatabaseSync` and migrates it. Defaults to `':memory:'`. |
+| `migrate(db)` | function | Applies the idempotent schema to an existing handle. |
+| `SqliteTeamsStores` | interface | `{ db, memberships, invitations }`. |
+
+`sqliteTeamsStores` accepts a single argument — a path or an existing
+`DatabaseSync` — and has no options object. `migrate()` sets
+`journal_mode = WAL` and `busy_timeout = 5000`, so a competing writer waits up
+to 5 s for the lock instead of throwing "database is locked" immediately.
+
+## Errors
+
+This package defines no `BasaltError` subclasses and no error codes.
+`node:sqlite` throws its own errors (locked database, constraint violation, disk
+I/O) unchanged. The team errors a client sees — `TEAM_INVITE_INVALID`,
+`TEAM_NOT_A_MEMBER`, `TEAM_ROLE_REQUIRED`, `TEAM_LAST_OWNER` — come from
+`@basaltkit/teams`.
+
+On Node 22.x, importing this package without `--experimental-sqlite` fails at
+load with an unknown-builtin error for `node:sqlite`. Node 24 needs no flag.
+
+## Hooks & events
+
+None. `team:invited` / `team:joined` / `team:role_changed` /
+`team:member_removed` are emitted by `@basaltkit/teams`.
+
+Guides: [Teams](/guide/teams) · [Persistence](/guide/persistence).
 
 ## License
 

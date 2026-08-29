@@ -55,7 +55,37 @@ A tenant is an **open record** — `{ id, ...anything }` — so it's stored as a
 
 `source.db` exposes the raw `DatabaseSync` handle for advanced use.
 
+Other exports:
+
+| Export | Kind | Purpose |
+| --- | --- | --- |
+| `sqliteTenantSource(dbOrLocation?)` | function | Opens (or reuses) a database, applies the schema, returns a `SqliteTenantSource`. Defaults to `':memory:'`. |
+| `SqliteTenantSource` | class | The implementation. `new SqliteTenantSource(db)` to share a handle with the other `*-sqlite` stores. |
+| `openTenancyDatabase(location?)` | function | Opens a `DatabaseSync` and migrates it. |
+| `migrate(db)` | function | Applies the idempotent schema to an existing handle. |
+
+`sqliteTenantSource` accepts a single argument — a path or an existing
+`DatabaseSync` — and has no options object. `migrate()` sets
+`journal_mode = WAL` and `busy_timeout = 5000`, so a competing writer waits up
+to 5 s for the lock instead of throwing "database is locked" immediately.
+
 **Domains are globally unique.** Claiming a domain already owned by a *different* tenant throws, and the whole `save` rolls back — routing must be unambiguous, and the tenant record and its domains never drift apart. Re-saving the *same* tenant with a new `domains` array adds the new ones and drops the missing ones.
+
+## Errors
+
+This package defines no `BasaltError` subclasses and no error codes.
+`node:sqlite` errors propagate unchanged — including the `UNIQUE` violation
+raised when `save()` claims a domain already owned by a different tenant, which
+rolls the whole transaction back. The tenancy errors a client sees —
+`TENANT_REQUIRED`, `TENANCY_NOT_RESOLVED`, `TENANT_NOT_FOUND` — come from
+`@basaltkit/tenancy`.
+
+On Node 22.x, importing this package without `--experimental-sqlite` fails at
+load with an unknown-builtin error for `node:sqlite`. Node 24 needs no flag.
+
+## Hooks & events
+
+None. `tenancy:switched` is emitted by `@basaltkit/tenancy`.
 
 ## Which backend?
 
@@ -63,3 +93,5 @@ A tenant is an **open record** — `{ id, ...anything }` — so it's stored as a
 - **`@basaltkit/tenancy-prisma`** — you already run Postgres/MySQL, or need several instances to share one tenant registry.
 
 Both implement the identical `TenantSource` contract, so switching is a one-line change.
+
+Guides: [Tenancy](/guide/tenancy) · [Creating a tenant](/guide/creating-a-tenant) · [Persistence](/guide/persistence).

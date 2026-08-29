@@ -70,7 +70,7 @@ await Job.dispatch(payload, { delay: '5m' }) // → throws UnsupportedJobOptionE
 // with onUnsupported: 'warn' (default) → warns once and runs immediately
 ```
 
-> If what you need is *streaming*/pub-sub (rather than jobs with retry/delay), the natural fit in Basalt is usually `@basaltkit/events`, not `@basaltkit/queue`.
+**If what you need is *streaming*/pub-sub** (rather than jobs with retry/delay), the natural fit in Basalt is usually `@basaltkit/events`, not `@basaltkit/queue`.
 
 ## How it works
 
@@ -94,9 +94,57 @@ The worker's concurrency is passed as `partitionsConsumedConcurrently` — actua
 | `retrySuffix` | `string` | `'.retry'` | Suffix for the retry topic. |
 | `deadSuffix` | `string` | `'.dead'` | Suffix for the dead-letter topic. |
 | `client` | `KafkaClient` | kafkajs | Injectable client — used in tests without a broker. |
-| `onError` | `(error, { source, queue? }) => void` | contextual `console.error` | Infrastructure-fault hook (same pattern as rabbitmq/sqs): a worker's connect/subscribe/run failing at boot (`source: 'consumer'` — previously an unhandled, process-fatal rejection and an invisible zero-worker app), or a retry/dead-letter re-publish failing (`source: 'producer'` — reported, then rethrown so the offset is not committed and Kafka redelivers; a producer outage cannot silently lose a failing job). |
+| `onError` | `(error: unknown, info: { source: 'consumer' \| 'producer'; queue?: string }) => void` | contextual `console.error` | The driver's single fault channel — see below. |
 
-Implements the `QueueDriver` contract from `@basaltkit/queue`.
+Implements the `QueueDriver` contract from `@basaltkit/queue`. It does **not** implement the optional `stats` / `retryFailed`, so `basalt queue:stats` and `basalt queue:retry` report the operation as unsupported — use your Kafka tooling for consumer-group lag instead.
+
+### Failure hooks
+
+`onError` is the only callback, and its default (`console.error` with the source and queue) is
+never silent. There is no `onJobFailed`: a job that exhausts `attempts` is produced to
+`<topic>.dead`, which *is* the report — monitor that topic.
+
+| `source` | Raised when | What the driver does next |
+|---|---|---|
+| `'consumer'` | A worker's `connect`/`subscribe`/`run` rejected at boot (broker unreachable, missing topic, bad ACLs). | Reports and stops. Without this the rejection would float and be process-fatal, and the app would report healthy with **zero** workers. |
+| `'producer'` | The retry / dead-letter **re-publish itself failed** while handling a failed job. | Reports, then **rethrows** — see below. |
+
+### Redelivery when the DLQ produce fails
+
+The subtle case. A job's handler throws, so the driver tries to re-route the message — to
+`<topic>.retry` if attempts remain, otherwise to `<topic>.dead`. If *that* produce also fails
+(the producer lost its broker connection, the dead topic doesn't exist, the request timed out),
+the failed job exists nowhere but in the message currently being consumed.
+
+kafkajs auto-commits offsets after `eachMessage` **resolves**. So the driver:
+
+1. reports the publish failure through `onError({ source: 'producer', queue })`, then
+2. **rethrows** it, so `eachMessage` rejects and the offset is **not** committed.
+
+Kafka then redelivers the same message and the driver tries the whole thing again — at-least-once
+rather than a job that quietly evaporated during a producer outage. It is the Kafka equivalent of
+RabbitMQ leaving a message unacked.
+
+Two consequences worth planning for:
+
+- **Handlers must be idempotent.** A redelivered message re-runs the handler that already failed,
+  and a message whose re-publish succeeded is never redelivered — but a partition stalls on the
+  failing message while the producer is down, so ordered downstream work backs up behind it.
+- **A normal failure path does commit.** When the re-publish *succeeds*, the failure is
+  considered handled: the offset commits and the retry copy carries the incremented
+  `x-basalt-attempt` header. Redelivery only happens on the produce failure itself.
+
+### Exported errors
+
+This driver throws no error classes of its own. `UnsupportedJobOptionError`
+(`QUEUE_UNSUPPORTED_OPTION`) comes from `@basaltkit/queue` when a `delay`/`priority` dispatch
+meets `onUnsupported: 'throw'`; everything else surfaces through `onError`.
+
+### Hard limits
+
+The attempt counters travel in message headers, which any producer on the topic could write, so
+the consumer clamps the `x-basalt-attempts` it reads to at most **50**. A crafted message cannot
+drive an unbounded retry loop.
 
 ## How it connects to other modules
 

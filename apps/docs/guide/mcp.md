@@ -14,6 +14,19 @@ editor), and it's built on the zero-dependency [`@basaltkit/mcp-core`](./mcp-cor
 Basalt speaks MCP's JSON-RPC directly — no external SDK.
 :::
 
+[[toc]]
+
+## Where MCP fits
+
+Four packages speak MCP, each with one job — this page is the last row:
+
+| Layer | Package | Role | Runtime? |
+| --- | --- | --- | --- |
+| Intelligence | [`@basaltkit/ai`](./ai) | The `basalt ai` CLI: analyze, doctor, plan, make, review | dev-only |
+| Dev bridge | [`@basaltkit/ai-mcp`](./ai-mcp) | Exposes those dev workflows to your editor over MCP | dev-only |
+| Wire | [`@basaltkit/mcp-core`](./mcp-core) | Zero-dependency protocol + generic server + transports | shared |
+| Runtime surface | **`@basaltkit/mcp`** | **This page** — opt-in routes become tools for agents | runtime |
+
 ## Expose routes as tools
 
 Opt a route in with `meta.mcp`, register `mcpPlugin`, and add `mcpRoutes()` to
@@ -55,6 +68,17 @@ await createApp({
   schemas, merged into one flat object.
 - **Same pipeline** — a `tools/call` runs enrichers, guards and validation before
   the handler; request headers (tenant, authorization) propagate into the call.
+
+::: warning Guards apply — and must be enforceable
+A route with `meta.auth` (or `meta.can` / `meta.teamRole`) keeps that guard when
+invoked as a tool: an unauthenticated `tools/call` gets the same `UNAUTHORIZED`
+error body as an unauthenticated HTTP request, carried in the tool result with
+`isError: true`. The flip side: if any route declares `meta.auth` and no
+`authPlugin` is registered, the app **refuses to boot** with
+`UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) — see
+[Security](/guide/security). Over HTTP, pass `Authorization` / tenant headers on
+the `POST /mcp` request; over stdio, pass static `headers` to `serveMcpStdio`.
+:::
 
 ## Tool schemas & arguments
 
@@ -191,6 +215,59 @@ registration — it is not applied when the route is invoked as a tool through
 `/mcp`, so the `/mcp` budget is the throttle for tool traffic. (Auth and guards
 DO run identically on both paths.)
 
+
+## Options reference
+
+The tables below are the complete public options of the four entry points.
+
+### `mcpPlugin(options)`
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `routes` | `BasaltRoute[]` | — (required) | The routes scanned for `meta.mcp` — typically the same array you pass the adapter |
+| `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | What `initialize` reports to clients |
+| `filter` | `(route: BasaltRoute) => boolean` | expose every opted-in route | A deployment-level gate on top of `meta.mcp` (e.g. hide admin routes in one environment) |
+
+### `mcpRoutes(options)`
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `path` | `string` | `'/mcp'` | Where the JSON-RPC POST endpoint mounts |
+| `rateLimit` | `{ limit: number; windowMs: number }` | none | Stamps `meta.rateLimit` on `/mcp` (enforced by `securityPlugin` in a dedicated bucket) — the **only** rate limit that applies to tool calls |
+
+### `serveMcpStdio(app, options)`
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `headers` | `Record<string, string>` | `{}` | Static headers applied to **every** tool call — stdio has no per-request headers, so this is how a local agent carries a service token/tenant |
+| `input` | `NodeJS.ReadableStream` | `process.stdin` | Inject a stream in tests |
+| `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Inject a sink in tests |
+
+Returns a handle whose `close()` detaches the stdin listener.
+
+### `mcpClientPlugin(options)`
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `servers` | `Record<string, { type: 'http'; url; headers? } \| { type: 'stdio'; command; args?; env?; cwd? }>` | — (required) | Named external servers registered under `MCP_CLIENTS` |
+| `eager` | `boolean` | `true` | Connect all servers at boot (fail fast) vs. lazily on first `callTool`/`listTools` |
+
+## Failure modes & troubleshooting
+
+Tool-level failures are **not** protocol errors: a handler/guard/validation
+error comes back as a normal result with `isError: true`, whose text is the same
+error body HTTP would have returned (e.g. `{ "code": "UNAUTHORIZED", … }`).
+Protocol errors use JSON-RPC codes:
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Boot throws `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | A route declares `meta.auth`/`meta.can`/`meta.teamRole` and no plugin enforces it | Register `authPlugin` / `permissionsPlugin` / `teamsPlugin` — see [Security](/guide/security) |
+| `isError: true` with an `UNAUTHORIZED`/`FORBIDDEN` body | The tool's route is guarded and the call carried no (or bad) credentials | Send `Authorization`/tenant headers with `POST /mcp`, or `serveMcpStdio(app, { headers })` |
+| JSON-RPC `-32602` `Unknown tool: …` | Tool name not registered — route missing `meta.mcp`, excluded by `filter`, or renamed | Check `tools/list`; remember overrides via `meta.mcp.name` |
+| JSON-RPC `-32601` `Method not found` | The client called an MCP method the server doesn't implement | Only `initialize`, `ping`, `tools/list`, `tools/call` (plus resources/prompts when registered) exist |
+| A tool ignores its route's `meta.rateLimit` | Per-route rate limits belong to the route's own HTTP registration — they do **not** apply through `/mcp` | Budget tool traffic with `mcpRoutes({ rateLimit })` |
+| Claude Desktop shows a broken/dead server | Something printed to stdout — it is the JSON-RPC channel | `logLevel: 'silent'`, remove `console.log`; see the stdio checklist above |
+| `202` response from `POST /mcp` with empty body | The message was a JSON-RPC *notification* — by spec it gets no reply | Expected behaviour, not an error |
 
 ## Testing with the MCP Inspector
 

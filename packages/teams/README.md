@@ -89,10 +89,33 @@ await teams.addMember('acme', 'ada-id', 'owner')
 
 ### Invitations
 
-- `invite({ tenantId, email, role?, invitedBy? })` creates (or replaces) the invitation — **one pending invitation per email per team**; a new one revokes the previous. Default role: `'member'`. Validity: `inviteTtl` (default `'7d'`).
+- `invite({ tenantId, email, role?, invitedBy?, actingUserId? })` creates (or replaces) the invitation — **one pending invitation per email per team**; a new one revokes the previous. Default role: `'member'`. Validity: `inviteTtl` (default `'7d'`).
 - Returns `{ invitation, token }` — `invitation` is `PublicInvitation` (without the token) and `token` is used to build the link. The `team:invited` hook receives the same pair.
-- `accept(token, userId)` consumes the token (single use) and enrolls the user with the invitation's role. Unknown, used, revoked, or expired token → `TeamInviteInvalidError` (400).
+- Only the **SHA-256 hash** of the token is persisted; the raw value exists solely in the emailed link. A leak of the invitations table can't be replayed to accept an invite.
+- `accept(token, userId, acceptingEmail?)` consumes the token (single use) and enrolls the user with the invitation's role. Unknown, used, revoked, or expired token → `TeamInviteInvalidError` (400).
+- Pass the caller's **verified** email as `acceptingEmail` and acceptance is bound to the invited address, so a forwarded or leaked link can't enroll a different account. A mismatch throws the *same* `TEAM_INVITE_INVALID` as a bad token, so a wrong recipient can't distinguish a real token from a fake one. `teamRoutes()` passes `ctx().user.email` for you; omit it only in trusted server-side flows.
 - `pendingInvites(tenantId)` lists non-expired pending invites; `revokeInvite(id)` cancels one; `invitation(id)` looks one up.
+
+### Privilege-escalation guard (`actingUserId`)
+
+`addMember`, `invite` and `changeRole` accept the acting user. When you pass it,
+the actor must be a member who ranks **at least as high as** the role being
+granted, and at least as high as the target's current role:
+
+```ts
+// admin (rank 2) invites a member — fine
+await teams.invite({ tenantId: 'acme', email: 'x@y.z', role: 'member', actingUserId: 'admin-1' })
+
+// admin tries to mint an owner (rank 3) — InsufficientTeamRoleError
+await teams.invite({ tenantId: 'acme', email: 'x@y.z', role: 'owner', actingUserId: 'admin-1' })
+
+// admin tries to demote an owner — InsufficientTeamRoleError
+await teams.changeRole('acme', 'owner-1', 'member', { actingUserId: 'admin-1' })
+```
+
+Omit `actingUserId` for trusted server-side seeding (creating a tenant's first
+owner). `teamRoutes()` always passes the caller's id, so the HTTP surface is
+guarded by default. A non-member actor gets `NotATeamMemberError`.
 
 ### Members and roles
 
@@ -140,6 +163,11 @@ const myRoute = route({
 
 No tenant or no user in context → `NotATeamMemberError` (403).
 
+`teamsPlugin` also claims `'teamRole'` in the `http:guarded-meta` bucket, so a
+route declaring `meta.teamRole` in an app that never registered `teamsPlugin`
+fails loud **at boot** with `UnguardedRouteMetaError`
+(`HTTP_UNGUARDED_ROUTE_META`) instead of serving unguarded.
+
 ### Mirroring roles into @basaltkit/permissions
 
 Pass a `RoleAssigner` (any object with `assignRole`/`removeRole` — an `AccessStore` from permissions works) and every team join/change/leave is mirrored as a role in the tenant's scope:
@@ -180,20 +208,50 @@ Options (`TeamsOptions`; `TeamsPluginOptions` is the same minus `hooks`) — all
 | `now` | `() => number` | `Date.now` | Injectable clock (tests). |
 | `hooks` | `HookBus` | — | Class only; the plugin injects it. |
 
+### `tenantMembershipPlugin(options)`
+
+The tenant-isolation guard (see below). All options are optional:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `role` | `TeamRole` | — (existence check) | Require a minimum **ranked** role instead of any membership record. Leave unset unless you mean rank semantics — see below. |
+| `exempt` | `(context: Record<string, unknown>) => boolean` | — | WHO-based escape hatch for identities that legitimately cross tenants (platform admin, support impersonation): `({ user }) => user?.platformAdmin === true`. Evaluated per request and **never cached**. Prefer it over `meta.central`, which unguards the route for everyone. |
+| `cache` | `{ ttlMs: number; maxEntries?: number }` | — (off) | Opt-in in-process decision cache. `ttlMs` is required when you pass `cache`; `maxEntries` defaults to **10 000**, oldest evicted. See the staleness note below. |
+
+#### Existence vs rank
+
+By default the guard asks *"does a membership record exist?"*, **not** *"does
+this role outrank `member`?"*. That matters because `rankOf()` returns **0** for
+any role absent from `roleRank` — with rank semantics, a genuine member holding
+a custom role like `billing-contact` would be rejected. Set `role: 'member'`
+only when you deliberately want rank enforcement and every role you use is in
+`roleRank`.
+
+#### Cache staleness
+
+Without a cache, every authenticated tenant-scoped request costs one membership
+lookup — a single indexed primary-key read, usually fine. With a cache,
+decisions are memoized per `(tenantId, userId)` and invalidated **immediately**
+by the `team:joined` / `team:role_changed` / `team:member_removed` hooks, so
+changes made in the same process are always exact. `ttlMs` therefore only bounds
+staleness for changes made on **another replica** — a member removed elsewhere
+may retain access for up to `ttlMs`. Both outcomes are cached, so a *newly added*
+member can also be denied for up to `ttlMs`.
+
 `Teams` methods:
 
 | Method | Returns | Description |
 |---|---|---|
-| `addMember(tenantId, userId, role)` | `Promise<Membership>` | Adds/updates directly (seed the first owner). |
-| `invite(input)` | `Promise<{ invitation, token }>` | Creates/replaces the invitation; emits `team:invited`. |
-| `accept(token, userId)` | `Promise<Membership>` | Consumes the token and enrolls the user. |
+| `addMember(tenantId, userId, role, opts?)` | `Promise<Membership>` | Adds/updates directly (seed the first owner). `opts.actingUserId` enforces the escalation guard. |
+| `invite(input)` | `Promise<{ invitation, token }>` | Creates/replaces the invitation; emits `team:invited`. Only the token hash is stored. |
+| `accept(token, userId, acceptingEmail?)` | `Promise<Membership>` | Consumes the token and enrolls the user. Pass the caller's verified email to bind acceptance to the invited address. |
 | `members(tenantId)` | `Promise<Membership[]>` | Lists the members. |
 | `pendingInvites(tenantId)` | `Promise<PublicInvitation[]>` | Non-expired pending invitations. |
 | `invitation(id)` | `Promise<PublicInvitation \| null>` | One invitation (without the token). |
 | `revokeInvite(id)` | `Promise<void>` | Cancels a pending invitation. |
 | `roleOf(tenantId, userId)` | `Promise<TeamRole \| null>` | User's role (or null). |
 | `can(tenantId, userId, required)` | `Promise<boolean>` | Has the required role or higher? |
-| `changeRole(tenantId, userId, role)` | `Promise<Membership>` | Changes the role; protects the last owner. |
+| `changeRole(tenantId, userId, role, opts?)` | `Promise<Membership>` | Changes the role; protects the last owner. `opts.actingUserId` enforces the escalation guard. |
 | `removeMember(tenantId, userId)` | `Promise<void>` | Removes; protects the last owner. |
 | `rankOf(role)` | `number` | Rank of the role (0 if unknown). |
 
@@ -225,14 +283,32 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 | `OWNER` | The string `'owner'`. |
 | `TEAMS` | Injection token: `container.get(TEAMS)` → `Teams`. |
 
-### Errors
+### Failure modes & troubleshooting
 
-| Error | Code | HTTP |
-|---|---|---|
-| `TeamInviteInvalidError` | `TEAM_INVITE_INVALID` | 400 |
-| `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 |
-| `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 |
-| `LastOwnerError` | `TEAM_LAST_OWNER` | 400 |
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `TeamInviteInvalidError` | `TEAM_INVITE_INVALID` | 400 | Token unknown, already accepted, revoked or expired — **or** redeemed by an account whose email isn't the invited one. Deliberately indistinguishable. |
+| `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 | `tenantMembershipPlugin` found no membership; a `meta.teamRole` route ran with no user **or** no tenant in context; or an `actingUserId` isn't a member of the team. |
+| `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | The role's rank is below what's required — including an actor trying to grant, or re-role someone, above their own rank. |
+| `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | The change would leave the team with no `owner`. |
+| `NoTenantError` | `TEAM_NO_TENANT` | 400 | A `teamRoutes()` endpoint ran with no `ctx().tenant` (or, on accept, no `ctx().user`). Not exported — matched by code. |
+| `InviteNotFoundError` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` for an id that doesn't exist or belongs to another tenant. Not exported — matched by code. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.teamRole` and `teamsPlugin` isn't registered. Raised by the adapter, from `@basaltkit/http`. |
+
+Every runtime error declares a `status`, so adapters return the code above with
+the real error code in the body.
+
+- **`TEAM_NOT_A_MEMBER` right after adding a member on another replica** — the
+  membership cache's `ttlMs` bounds cross-replica staleness in both directions;
+  the decision refreshes within `ttlMs`.
+- **A custom role keeps getting `TEAM_ROLE_REQUIRED`** — roles outside
+  `roleRank` have rank 0. Add the role to the map, or (for the membership
+  guard) rely on the default existence semantics instead of `role:`.
+- **403 on a central route (login, sign-up, tenant creation)** — mark it
+  `meta: { central: true }`, or exempt the calling identity with `exempt`.
+- **`TEAM_INVITE_INVALID` on a link the user swears is fresh** — they may be
+  signed in as a different account than the one invited, and `accept` binds to
+  the invited address.
 
 ## Common issues and solutions (FAQ)
 
@@ -250,15 +326,36 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 
 ## Tenant isolation guard — `tenantMembershipPlugin`
 
-Binds the authenticated user to the resolved tenant on every request: a valid
-user of tenant A forging `x-tenant-id: B` gets a 403 instead of tenant B's data.
-Default semantics: membership **existence** (custom roles absent from `roleRank`
-still pass); pass `role: 'member'` to enforce rank. `exempt: (context) =>
-boolean` skips the check for platform-admin/support identities (WHO-based —
-prefer it over `meta.central`, which unguards the route for everyone). Opt-in
-`cache: { ttlMs, maxEntries }` caches decisions in-process, invalidated
-immediately by the membership hooks in the same process; `ttlMs` bounds
-staleness only for changes made on another replica.
+Binds the authenticated user to the resolved tenant on **every** request: a
+valid user of tenant A forging `x-tenant-id: B` gets a 403 instead of tenant B's
+data. Tenant *resolution* is identification, never authorization — this plugin
+is what closes that gap.
+
+```ts
+import { teamsPlugin, tenantMembershipPlugin } from '@basaltkit/teams'
+
+createApp({
+  plugins: [
+    tenancyPlugin({ source, resolvers: [headerResolver()] }),
+    authPlugin({ users, secret: process.env.AUTH_SECRET! }),
+    teamsPlugin({ memberships, invitations }),
+    tenantMembershipPlugin({
+      exempt: ({ user }) => (user as { platformAdmin?: boolean })?.platformAdmin === true,
+      cache: { ttlMs: 30_000 },
+    }),
+  ],
+})
+```
+
+The guard runs only when **both** a tenant and a user are present, and is
+skipped for:
+
+- routes where no tenant resolved (central/platform routes), and
+- routes that opt out explicitly with `meta: { central: true }` — login, sign-up,
+  tenant creation, invite acceptance.
+
+Its options table, the existence-vs-rank semantics and the cache staleness
+rules are under **API reference → `tenantMembershipPlugin(options)`** above.
 
 ## How it connects to other modules
 
@@ -266,3 +363,5 @@ staleness only for changes made on another replica.
 - **@basaltkit/auth** — identifies who's making the request (`ctx().user.id`), used by the `teamRole` guard and by `accept`.
 - **@basaltkit/permissions** — via the `access` option (`RoleAssigner`), team roles become roles in the tenant's scope, gaining whatever permissions you define for them in the Gate.
 - **@basaltkit/core / @basaltkit/fastify** — container, context, hooks, and execution of guards and routes.
+
+Guides: [Teams](/guide/teams) · [Tenancy](/guide/tenancy) · [Authorization](/guide/authorization) · [Auth](/guide/auth).

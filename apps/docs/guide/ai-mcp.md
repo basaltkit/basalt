@@ -9,11 +9,14 @@ only writes when you say so.
 
 ::: tip It's a bridge, never a runtime dependency.
 `@basaltkit/ai-mcp` only *uses* the framework's official public APIs (via
-[`@basaltkit/ai`](./ai)). It depends solely on `@basaltkit/ai` and the zero-dep
-[`@basaltkit/mcp-core`](./mcp-core) — **never** on `@basaltkit/core`,
-`@basaltkit/http`, or the runtime [`@basaltkit/mcp`](./mcp). It must never be a
-runtime dependency of your app; install it as a `devDependency` (or run it with
-`npx`). A machine test in the repo enforces this.
+[`@basaltkit/ai`](/guide/ai)). It depends solely on `@basaltkit/ai` and the zero-dep
+[`@basaltkit/mcp-core`](/guide/mcp-core) — **never** on `@basaltkit/core`,
+`@basaltkit/http`, `@basaltkit/cli`, or the runtime [`@basaltkit/mcp`](/guide/mcp).
+Install it as a `devDependency` (or run it with `npx`). Two tests enforce this
+mechanically: `packages/ai-mcp/test/boundary.test.ts` walks the transitive import
+graph and fails if it ever reaches the runtime, and
+`packages/ai-mcp/test/dev-only-guard.test.ts` fails if any workspace package lists
+the AI layer outside `devDependencies`.
 :::
 
 [[toc]]
@@ -25,15 +28,21 @@ separate:
 
 | Package | Role | Runtime? |
 | --- | --- | --- |
-| [`@basaltkit/ai`](./ai) | Intelligence — the `basalt ai` CLI, providers, the plan/make/review engine | dev-only |
+| [`@basaltkit/ai`](/guide/ai) | Intelligence — the `basalt ai` CLI, providers, the plan/make/review engine | dev-only |
 | **`@basaltkit/ai-mcp`** | **This page.** A dev-only MCP server exposing those workflows to MCP clients | dev-only |
-| [`@basaltkit/mcp-core`](./mcp-core) | Zero-dependency MCP wire: protocol + generic server + stdio/HTTP transports | shared |
-| [`@basaltkit/mcp`](./mcp) | The app's *runtime* MCP surface — opt-in routes become tools | runtime |
+| [`@basaltkit/mcp-core`](/guide/mcp-core) | Zero-dependency MCP wire: protocol + generic server + stdio/HTTP transports | shared |
+| [`@basaltkit/mcp`](/guide/mcp) | The app's *runtime* MCP surface — opt-in routes become tools | runtime |
 
 `@basaltkit/ai-mcp` and `@basaltkit/mcp` both speak MCP, but they are different
 products: the runtime `mcp` exposes *your app's routes* to agents in production;
 `ai-mcp` exposes *dev workflows* (scaffolding, diagnostics) to your editor while
 you build. Never confuse the two.
+
+The bridge itself is thin. It builds an [`McpServer`](/guide/mcp-core) from
+`mcp-core` with five tools, four resources and four prompts, each of which is a
+thin wrapper over an exported `@basaltkit/ai` function. All the intelligence lives
+one layer down; all the *safety* (workspace confinement, preview-before-write)
+lives here.
 
 ## Quickstart (Claude Code / Desktop)
 
@@ -87,7 +96,7 @@ Once connected, the agent has your project's stack and tools. Try:
 - *"Preview making it, then apply it if it looks safe."* → `basalt_make`
 
 The read-only tools (`analyze`, `doctor`) and `make` **preview** need no API key.
-Planning and review call an LLM — see [Provider setup](#provider-setup-for-plan-review).
+Planning and review call an LLM — see Provider setup below.
 
 ## Scaffold a new app that's MCP-ready
 
@@ -99,13 +108,13 @@ npm create basalt my-saas -- --mcp
 
 This adds `@basaltkit/ai-mcp` to **devDependencies** (never dependencies), writes
 a project-root `.mcp.json`, and documents it in the app's README. See
-[`create-basalt`](./getting-started).
+[`create-basalt`](/guide/getting-started).
 
 ## The tools
 
 Five tools, mapping to the `basalt ai` CLI surface. `structuredContent` mirrors
 the text output on every call, and each tool advertises an `outputSchema` derived
-from [`@basaltkit/ai`](./ai)'s exported Zod schemas.
+from [`@basaltkit/ai`](/guide/ai)'s exported Zod schemas.
 
 | Tool | Purpose | Needs a provider? | Writes files? |
 | --- | --- | --- | --- |
@@ -118,6 +127,11 @@ from [`@basaltkit/ai`](./ai)'s exported Zod schemas.
 <small>\* `basalt_make` needs a provider only when you pass a `request` instead of
 a ready `plan` (it plans internally first).</small>
 
+A tool failure is **never** a protocol error: bad arguments, a missing provider, a
+refused write and a cancellation all come back as a normal result with
+`isError: true` and the reason in `content` — so an agent can read it and adapt.
+Only malformed JSON-RPC produces a real error code.
+
 ### `basalt_analyze`
 
 Static, offline analysis. Input `{ workspaceRoot? }`; output an `AnalysisReport`
@@ -128,7 +142,13 @@ models, diagnostics).
 
 Diagnoses configuration, security and tenancy issues, and **previews** the
 available auto-fixes — the files each would change, computed in memory. It never
-writes. Output `{ diagnostics, hasErrors, fixes: [{ id, status, message, files }] }`.
+writes. Output `{ diagnostics, hasErrors, fixes: [{ id, status, message, files }] }`,
+where `status` is `ready` · `noop` · `unfixable`.
+
+Note that `fixes` only lists rules that are *both* firing *and* auto-fixable —
+which today is just `fastify-logger-off` and `insecure-app-secret`. Everything
+else in `diagnostics` is a manual fix; see the
+[full rule table](/guide/ai).
 
 ### `basalt_plan`
 
@@ -145,13 +165,14 @@ audit events, warnings, `schemaVersion`). Input:
 ```
 
 Read-only — it produces a plan, it changes nothing. Streams progress and can be
-cancelled (see [Long-running operations](#long-running-operations)).
+cancelled (see Long-running operations below).
 
 ### `basalt_review`
 
 An LLM pass over a build result against its plan (tenancy, security, RBAC,
-validation, tests, fit). Input `{ plan, makeResult }`; output an `AgentReview`
-whose `approved` flag is derived from the issues — an error-severity issue blocks.
+validation, tests, fit). Input `{ plan, makeResult }` — both required objects;
+output an `AgentReview` whose `approved` flag is derived from the issues — an
+error-severity issue blocks.
 
 ### `basalt_make`
 
@@ -171,6 +192,9 @@ next section. Input:
 }
 ```
 
+The input schema declares `oneOf: [{ required: ['plan'] }, { required: ['request'] }]`
+— exactly one of the two is the entry point.
+
 Plan↔make correlation is **stateless**: the client carries the full
 `ArchitecturePlan` (with its `schemaVersion`) from `basalt_plan` into `basalt_make`
 — there is no server-side plan store.
@@ -184,6 +208,8 @@ the whole point.
   `mode:"preview"`), the tool returns `preview.perFile[]` — every file it *would*
   write, each with an `action` (`create` | `overwrite`) and a **unified diff** —
   plus `preview.clashes` (paths that already exist). Nothing touches disk.
+- **The preview always runs first.** Even an `apply` computes the dry run before
+  writing, so the confinement check below runs against the real target list.
 - **Apply is explicit.** `mode:"apply"` is required to write.
 - **Overwrites need `force`.** An `apply` refuses to clobber existing files unless
   `force:true`.
@@ -191,10 +217,12 @@ the whole point.
   and never as a default.
 - **Writes are confined to the workspace.** A `workspaceRoot` (or any target path)
   that escapes the launch directory — via `..` traversal, an absolute path, or a
-  symlink — is rejected *before any write*. An agent cannot write outside your
-  project.
+  symlink — is rejected *before any write*. Confinement resolves the nearest
+  **existing** ancestor's realpath, so a symlink escape is caught even for a path
+  that doesn't exist yet. An agent cannot write outside your project.
 - **Confirmation.** When the client supports MCP elicitation, an `apply` is
-  confirmed interactively; the explicit preview → apply two-call flow is the floor.
+  confirmed interactively with a one-line summary of what will be written; the
+  explicit preview → apply two-call flow is the floor.
 
 The recommended loop:
 
@@ -210,14 +238,16 @@ basalt_make(plan, apply)  → write, only when the preview + review look right
 
 ### Resources — pull project state as context
 
-Read-only reflections of your workspace the agent can read directly:
+Read-only reflections of your workspace the agent can read directly. They are
+computed fresh on every `resources/read`, and always against the **server's**
+workspace root (`--cwd`) — resources take no arguments:
 
-| URI | Contents |
-| --- | --- |
-| `basalt://project/context` | The detected `ProjectContext` — stack, Prisma models, app/server/env files |
-| `basalt://project/analysis` | The `AnalysisReport` — capabilities, data-model summary, diagnostics |
-| `basalt://project/diagnostics` | The doctor findings |
-| `basalt://knowledge/architecture` | The BasaltKit conventions the planner is grounded in |
+| URI | MIME | Contents |
+| --- | --- | --- |
+| `basalt://project/context` | `application/json` | The detected `ProjectContext` — stack, Prisma models, app/server/env files |
+| `basalt://project/analysis` | `application/json` | The `AnalysisReport` — capabilities, data-model summary, diagnostics |
+| `basalt://project/diagnostics` | `application/json` | The doctor findings |
+| `basalt://knowledge/architecture` | `text/markdown` | The Basalt conventions the planner is grounded in (`BASALT_KNOWLEDGE`) |
 
 ### Prompts — workflow templates
 
@@ -226,10 +256,10 @@ even a naive agent follows preview-before-write:
 
 | Prompt | Arguments | Guides |
 | --- | --- | --- |
-| `plan-feature` | `request` | analyze → plan → make preview → review → make apply |
-| `scaffold-resource` | `name`, `fields?` | a focused single-entity build |
+| `plan-feature` | `request` (required) | analyze → plan → make preview → review → make apply |
+| `scaffold-resource` | `name` (required), `fields` (optional) | a focused single-entity build |
 | `harden-tenancy` | — | doctor → review tenancy fixes → apply |
-| `add-rbac` | `resource` | wire permission guards for a resource |
+| `add-rbac` | `resource` (required) | wire permission guards for a resource |
 
 In Claude Code, prompts surface as slash commands (e.g. `/plan-feature`).
 
@@ -237,7 +267,7 @@ In Claude Code, prompts surface as slash commands (e.g. `/plan-feature`).
 
 `basalt_plan`, `basalt_review`, and `basalt_make` *with a `request`* call a model.
 Configuration is read from the environment the MCP client launches the server
-with — the same variables the [`@basaltkit/ai` CLI uses](./ai#choose-a-provider):
+with — the same variables the [`@basaltkit/ai` CLI uses](/guide/ai):
 
 | Variable | Meaning |
 | --- | --- |
@@ -245,6 +275,7 @@ with — the same variables the [`@basaltkit/ai` CLI uses](./ai#choose-a-provide
 | `AI_API_KEY` | The vendor key (not needed for Ollama) |
 | `AI_BASE_URL` | Gateway base URL (e.g. an OpenAI-compatible `/v1`) |
 | `AI_MODEL` | Model id override |
+| `AI_STREAM` | `'false'` disables SSE streaming on the OpenAI-compatible provider |
 
 Pass them through the client's `env` block:
 
@@ -261,9 +292,12 @@ Pass them through the client's `env` block:
 ```
 
 ::: warning Keys stay in memory
-The bridge reads provider keys only to construct the provider in-process. It never
-logs, persists, or echoes them. The read-only tools (`analyze`, `doctor`) and
-`make` preview need no key at all.
+The bridge reads provider keys only to construct the provider in-process, and only
+when a provider-backed tool is actually called (the session builds it lazily). It
+never logs, persists, or echoes them — and the `providerHelp` error message that
+guides you when configuration is missing deliberately names only the knobs, never
+a value. The read-only tools (`analyze`, `doctor`) and `make` preview need no key
+at all.
 :::
 
 ## Long-running operations
@@ -275,7 +309,8 @@ protocol:
   emits `notifications/progress` as the model streams and as `make` builds each
   resource. (Live progress requires stdio — see Transports.)
 - **Cancellation** — send `notifications/cancelled` with the request id; the
-  in-flight generation is aborted promptly.
+  in-flight generation is aborted promptly and the tool returns
+  `isError: true` with the text `Cancelled.`
 
 ## Transports
 
@@ -298,6 +333,16 @@ npx @basaltkit/ai-mcp --http=8848 --cwd=.
 The HTTP transport is request/response JSON-RPC over `POST /mcp` (minimal, no SSE);
 use stdio when you need live progress streaming.
 
+::: warning HTTP is guarded, and binds loopback by default
+The HTTP transport binds `127.0.0.1` and rejects requests whose `Host` header
+isn't a loopback name (anti-DNS-rebinding) or whose `Origin`, *when present*, isn't
+a loopback origin (anti-CSRF — a browser always sends `Origin` on a cross-site
+POST, so its absence means a non-browser client). A rejected request gets
+`403` and never reaches a tool. If you deliberately bind elsewhere (`--host=0.0.0.0`
+for CI), you must widen the guard programmatically with `allowedHosts` /
+`allowedOrigins` / `allowRequest` — the bin has no flag for it, on purpose.
+:::
+
 ## Programmatic use
 
 For tests or embedding, build the server without a transport and drive it
@@ -314,34 +359,104 @@ const res = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/l
 Both accept `cwd`, an injectable `createReader` (for tests over an in-memory
 project), and `createProvider` (to inject a mock model — no network).
 
-## Troubleshooting / FAQ
+## Options reference
 
-**"basalt_plan needs an AI provider…"** — set `AI_API_KEY` (and optionally
-`AI_PROVIDER`/`AI_MODEL`) in the client's `env` block, or run Ollama locally
-(`AI_PROVIDER=ollama`). `analyze`/`doctor` and `make` preview don't need one.
+### CLI flags (`basalt-ai-mcp`)
 
-**The agent can't see my project.** — Check `--cwd` points at the project root
-(where `package.json` / `prisma/schema.prisma` live). With `.mcp.json`, `--cwd=.`
-resolves to the directory Claude Code opened.
+| Flag | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `--cwd=<path>` | string | `process.cwd()` | The project root every tool and resource reads. With `.mcp.json`, `--cwd=.` resolves to the directory the client opened |
+| `--http` / `--http=<port>` | boolean / number | stdio (off) | Switch to the HTTP transport. Bare `--http` uses port `0` — an ephemeral port, printed on stdout as `basalt-ai-mcp listening on <url>` |
+| `--host=<host>` | string | `127.0.0.1` | Bind address; only read when `--http` is present. Binding off loopback requires widening the request guard (programmatic only) |
 
-**`basalt_make apply` refused with "without force".** — The target files already
-exist. Review the preview diffs, then re-run `mode:"apply"` with `force:true`.
+### `buildAiMcpServer(options)` · `createAiMcpServer(options)`
 
-**"workspaceRoot escapes the launch directory".** — By design: writes are confined
-to the launch subtree. Use a path inside the project.
+`AiMcpOptions` is the session config; `createAiMcpServer` adds the stdio streams.
 
-**Routes 500 after apply.** — A Prisma model was added but the client wasn't
-regenerated. Re-run `apply` with `migrate:true`, or run `npx prisma db push`
-yourself, then restart the dev server.
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `cwd` | `string` | `process.cwd()` | Workspace root tools and resources default to; also the confinement root for writes |
+| `env` | `Record<string, string \| undefined>` | `process.env` | Where provider config is read from — inject a fixed env instead of the process's |
+| `createReader` | `(root: string) => ProjectReader` | `nodeReader` | How project files are read. Inject an in-memory reader to test without disk |
+| `createProvider` | `() => AIProvider` | built from `env` | Inject a mock model — no network, no keys |
+| `input` | `NodeJS.ReadableStream` | `process.stdin` | stdio only: read JSON-RPC from a different stream (tests) |
+| `output` | `{ write(chunk: string): unknown }` | `process.stdout` | stdio only: write JSON-RPC to a different sink (tests) |
 
-**Is this safe to leave connected?** — Yes. Nothing writes without an explicit
-`mode:"apply"`, overwrites need `force`, DB changes need `migrate`, and all writes
-are confined to the project.
+`createAiMcpServer` returns a `StdioHandle` whose `close()` detaches the stdin
+listener.
+
+### `createAiMcpHttpServer(options)`
+
+`AiMcpOptions` plus `mcp-core`'s `ServeHttpOptions`. Returns a `Promise<HttpHandle>`
+(`{ port, url, close() }`).
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `port` | `number` | `0` | `0` picks an ephemeral port (read it back from `handle.port` / `handle.url`) |
+| `host` | `string` | `'127.0.0.1'` | Bind address. Loopback by default — this is a dev surface |
+| `path` | `string` | `'/mcp'` | JSON-RPC endpoint path. No CLI flag; programmatic only |
+| `allowedHosts` | `string[]` | loopback names only | Extra `Host` hostnames to accept when you deliberately bind off loopback. Compared case-insensitively, port ignored |
+| `allowedOrigins` | `string[]` | loopback origins only | Extra `Origin` values to accept (full scheme + host + port) |
+| `allowRequest` | `(origin, host) => boolean` | — | Full override of the guard; **replaces** the loopback/`allowedHosts`/`allowedOrigins` checks |
+
+### Tool arguments
+
+| Tool | Argument | Type | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `basalt_analyze` · `basalt_doctor` | `workspaceRoot` | `string` | server `cwd` | Analyze a different project root |
+| `basalt_plan` | `request` | `string` | — (required) | What to build, in natural language |
+| `basalt_plan` | `workspaceRoot` | `string` | server `cwd` | Ground the plan in a different project |
+| `basalt_plan` | `temperature` | `number` | `0` | Sampling temperature; `0` keeps plans reproducible |
+| `basalt_plan` | `maxTokens` | `integer` | `4096` | Raise it for a large multi-entity plan that gets truncated |
+| `basalt_review` | `plan` / `makeResult` | object | — (both required) | The `basalt_plan` output and the `basalt_make` output to critique |
+| `basalt_make` | `plan` **or** `request` | object / string | — (exactly one) | A ready plan, or a request to plan first (needs a provider) |
+| `basalt_make` | `workspaceRoot` | `string` | server `cwd` | Must stay inside the launch directory — enforced, not advisory |
+| `basalt_make` | `mode` | `'preview' \| 'apply'` | `'preview'` | `apply` is the only value that writes |
+| `basalt_make` | `force` | `boolean` | `false` | Allow overwriting the paths reported in `preview.clashes` |
+| `basalt_make` | `migrate` | `boolean` | `false` | Run `prisma db push` after writing (apply only) |
+
+## Failure modes & troubleshooting
+
+Tool-level failures ride in the result (`isError: true`); only malformed JSON-RPC
+produces a protocol error code.
+
+| Message | Kind | Where | When |
+| --- | --- | --- | --- |
+| `basalt_plan needs an AI provider — …` (also `basalt_make` / `basalt_review`) | `isError` | `providerHelp` | `createProvider` threw — no `AI_API_KEY`, or an unknown `AI_PROVIDER` |
+| `basalt_plan requires a non-empty "request".` | `isError` | `basalt_plan` | The `request` argument was missing or blank |
+| `basalt_make requires either a "plan" (from basalt_plan) or a "request" to plan.` | `isError` | `basalt_make` | Neither entry point was supplied |
+| `basalt_review requires a "plan" object (from basalt_plan).` / `… a "makeResult" object …` | `isError` | `basalt_review` | A required object argument was missing |
+| `Refused: workspaceRoot '<x>' escapes the launch directory (<root>)` | `isError` | `WorkspaceEscapeError` | `workspaceRoot` resolved outside `--cwd` — by design |
+| `Refused: absolute path not allowed: <p>` · `Refused: path escapes workspace: <p>` · `Refused: path resolves outside workspace via symlink: <p>` | `isError` | `assertConfined` | A target file would land outside the workspace |
+| `Refusing to overwrite N existing file(s) without force:true — …` | `isError` | `basalt_make` | An `apply` hit `preview.clashes`. Review the diffs, then re-run with `force:true` |
+| `Apply cancelled — not confirmed.` | `isError` | `basalt_make` | The client's elicitation prompt was declined |
+| `Cancelled.` | `isError` | any provider-backed tool | A `notifications/cancelled` aborted the in-flight call |
+| `Unknown tool: <name>` | JSON-RPC `-32602` | `mcp-core` | The client called a tool that isn't one of the five |
+| `Method not found: <method>` | JSON-RPC `-32601` | `mcp-core` | An MCP method outside the implemented set |
+| `Forbidden: host/origin not allowed` | HTTP `403` | `serveHttp` | The HTTP guard rejected a foreign `Host`/`Origin` before dispatch |
+
+- **The agent can't see my project** — check `--cwd` points at the project root
+  (where `package.json` / `prisma/schema.prisma` live). Resources always use the
+  server's `--cwd`; only *tools* accept a per-call `workspaceRoot`.
+- **`basalt_doctor` shows errors but almost no `fixes`** — expected. Only two rules
+  have auto-fixers; the rest are deliberate manual decisions.
+- **Routes 500 after `mode:"apply"`** — a Prisma model was added but the client
+  wasn't regenerated. Re-run `apply` with `migrate:true`, or run
+  `npx prisma db push` yourself, then restart the dev server.
+- **Progress never arrives** — you're on the HTTP transport. It's request/response
+  only; server→client notifications need stdio.
+- **The server starts but the client shows nothing** — on stdio, stdout *is* the
+  JSON-RPC channel. Anything else written there corrupts the stream; the bridge
+  itself only prints to stdout in `--http` mode.
+- **Is this safe to leave connected?** — Yes. Nothing writes without an explicit
+  `mode:"apply"`, overwrites need `force`, DB changes need `migrate`, and all writes
+  are confined to the project subtree.
 
 ## See also
 
-- [AI-assisted development](./ai) — the `basalt ai` CLI the bridge is built on.
-- [`@basaltkit/mcp-core`](./mcp-core) — build your own MCP server on the same wire.
-- [MCP (runtime)](./mcp) — expose your app's routes as tools in production.
+- [AI-assisted development](/guide/ai) — the `basalt ai` CLI the bridge is built on,
+  including the full doctor rule table and provider configuration.
+- [`@basaltkit/mcp-core`](/guide/mcp-core) — the protocol layer; build your own MCP server on it.
+- [MCP (runtime)](/guide/mcp) — expose your app's routes as tools in production.
 - Architecture: `docs/rfcs/0001-basaltkit-ai-mcp.md`. Source:
   `packages/ai-mcp/src/**` (tools, resources, prompts, `safety.ts`, `server.ts`, `bin.ts`).
