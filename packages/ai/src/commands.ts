@@ -248,6 +248,9 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         if (
           !result.migration &&
           result.schema?.found &&
+          // `--no-migrate` parses as `migrate: false` (cli parseArgv negation);
+          // the legacy literal key stays accepted for programmatic callers.
+          flags['migrate'] !== false &&
           flags['no-migrate'] !== true &&
           result.resources.some((r) => r.prisma)
         ) {

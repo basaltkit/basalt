@@ -67,7 +67,9 @@ export function generatorCommands(): CommandDefinition[] {
           io.log(`Generated ${written.length} file(s):`)
           for (const path of written) io.log(`  ${path}`)
 
-          if (spec.register && flags['no-register'] !== true) {
+          // `--no-register` now parses as `register: false` (cli parseArgv negation);
+          // the legacy literal key stays accepted for programmatic callers.
+          if (spec.register && flags['register'] !== false && flags['no-register'] !== true) {
             const result = await registerResourceInApp(name, options)
             if (result.registered) {
               io.log('Wired the plugin + routes into src/app.ts.')

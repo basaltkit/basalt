@@ -23,6 +23,9 @@ each one:
 | `meta.auth` | `authPlugin` ([auth guide](/guide/auth)) | `401 AUTH_REQUIRED` |
 | `meta.can` | `permissionsPlugin` (this page) | `403 PERMISSION_DENIED` |
 | `meta.teamRole` | `teamsPlugin` ([teams guide](/guide/teams)) | `403 TEAM_ROLE_REQUIRED` |
+| `meta.scopes` | `apiKeysPlugin` ([auth guide](/guide/auth)) | `403 SCOPE_REQUIRED` |
+| `meta.subscribed` | `subscriptionsPlugin` ([billing guide](/guide/billing)) | `402 NOT_SUBSCRIBED` |
+| `meta.feature` | `subscriptionsPlugin` ([billing guide](/guide/billing)) | `402 FEATURE_UNAVAILABLE` |
 
 Declaring one of these keys without registering the enforcing plugin does not
 silently serve the route unprotected — the adapter refuses to **boot** with
@@ -217,7 +220,7 @@ and claims the `can` key in the adapters' boot-time guarded-meta check.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | The check failed — nothing grants the permission in the current or global scope |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route was hit with no authenticated user in context |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` has an unenforceable shape (`true`, a number, an empty/mixed array) — fails closed on every request |
-| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` (or `auth`/`teamRole`) and no registered guard claims that key |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` (or `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claims that key |
 
 - **`PERMISSION_DENIED` for a user who "has the role"** — check the *scope*:
   a role assigned in tenant `acme` doesn't apply in `globex` or globally.

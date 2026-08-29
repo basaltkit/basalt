@@ -84,7 +84,7 @@ test, ou o primeiro contentor a falhar a sua sonda de readiness).
 
 | Erro | Código | Significa |
 | --- | --- | --- |
-| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | Uma rota declara `meta.auth`, `meta.can` ou `meta.teamRole` e **nenhum plugin registado impõe essa chave** — teria servido sem proteção. Regista o plugin que a impõe (`authPlugin`, `permissionsPlugin`, `teamsPlugin`), ou, se a verificação acontece mesmo numa borda exterior, opta explicitamente por fora com a opção `allowUnguardedMeta: true` do adaptador (ou uma lista de chaves) |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | Uma rota declara uma chave de segurança guardada (`meta.auth`, `can`, `teamRole`, `scopes`, `subscribed`, `feature`) e **nenhum plugin registado impõe essa chave** — teria servido sem proteção. Regista o plugin que a impõe (`authPlugin`, `permissionsPlugin`, `teamsPlugin`, `apiKeysPlugin`, `subscriptionsPlugin`), ou, se a verificação acontece mesmo numa borda exterior, opta explicitamente por fora com a opção `allowUnguardedMeta: true` do adaptador (ou uma lista de chaves) |
 | `CaptiveDependencyError` | `DI_CAPTIVE_DEPENDENCY` | Um token `scoped` foi resolvido dentro da factory de um **singleton**. O singleton sobrevive a cada scope, por isso serviria a instância por pedido do pedido 1 a todos os pedidos seguintes. Resolve o serviço scoped no momento de uso (`ctx().container`) em vez de na construção |
 
 A verificação de meta sem guarda é a razão por que declarar `meta.can` e esquecer

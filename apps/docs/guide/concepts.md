@@ -191,7 +191,8 @@ in order:
 3. **Guards** run (`http:guards`) — authorize: a guard receives
    `{ route, request, context, container }`, reads the route's `meta`, and
    rejects by **throwing**. Auth reads `meta.auth`, permissions reads
-   `meta.can`, teams reads `meta.teamRole`.
+   `meta.can`, teams reads `meta.teamRole`, API keys read `meta.scopes`, and
+   subscriptions read `meta.subscribed`/`meta.feature`.
 4. **Validation** — `body`, `query` and `params` are `safeParse`d against the
    route's Zod schemas; a failure is a `RequestValidationError`
    (`HTTP_VALIDATION`, 400) with per-field issues.
@@ -215,8 +216,8 @@ message**. Codes you'll meet in these docs are real and stable — e.g.
 
 ### Security meta must be enforced — the boot check
 
-`meta: { auth: true }`, `meta.can`, `meta.teamRole` are *requests* for
-protection; the guard a plugin registers is what enforces them. At boot the
+`meta: { auth: true }`, `meta.can`, `meta.teamRole`, `meta.scopes`,
+`meta.subscribed` and `meta.feature` are *requests* for protection; the guard a plugin registers is what enforces them. At boot the
 adapters verify every declared security meta key has a registered guard
 claiming it (via `http:guarded-meta`) and refuse to start otherwise
 (`UnguardedRouteMetaError`), listing every offending route. Escape hatch for
@@ -346,7 +347,7 @@ between the write and the publish), pair the bus with the **outbox** — see
 | You see | It means | Do |
 |---|---|---|
 | `DI_CAPTIVE_DEPENDENCY` at boot | a singleton factory resolved a `scoped` token | resolve at use time via `ctx().container` (see [Lifetimes](#lifetimes-are-enforced-di-captive-dependency)) |
-| `UnguardedRouteMetaError` at boot | a route declares `meta.auth`/`can`/`teamRole` but the enforcing plugin isn't registered | register `authPlugin`/`permissionsPlugin`/`teamsPlugin`, or opt out with `allowUnguardedMeta` |
+| `UnguardedRouteMetaError` at boot | a route declares a guarded key (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) but the enforcing plugin isn't registered | register `authPlugin`/`permissionsPlugin`/`teamsPlugin`, or opt out with `allowUnguardedMeta` |
 | `ContextUnavailableError` | `ctx()` called outside any request/job context | use `tryCtx()`, or wrap background work in `runWithContext` |
 | plugin boot error naming a cycle | `dependsOn` forms a loop | break the cycle — usually by moving a subscription from `register` to `boot` |
 | `HTTP_VALIDATION` (400) | request body/query/params failed the route's Zod schema | the response lists the failing part and per-field issues |

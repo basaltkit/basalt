@@ -24,6 +24,9 @@ cada uma:
 | `meta.auth` | `authPlugin` ([guia de auth](/pt/guide/auth)) | `401 AUTH_REQUIRED` |
 | `meta.can` | `permissionsPlugin` (esta página) | `403 PERMISSION_DENIED` |
 | `meta.teamRole` | `teamsPlugin` ([guia de teams](/pt/guide/teams)) | `403 TEAM_ROLE_REQUIRED` |
+| `meta.scopes` | `apiKeysPlugin` ([guia de auth](/pt/guide/auth)) | `403 SCOPE_REQUIRED` |
+| `meta.subscribed` | `subscriptionsPlugin` ([guia de faturação](/pt/guide/billing)) | `402 NOT_SUBSCRIBED` |
+| `meta.feature` | `subscriptionsPlugin` ([guia de faturação](/pt/guide/billing)) | `402 FEATURE_UNAVAILABLE` |
 
 Declarar uma destas chaves sem registar o plugin que a impõe não serve a rota
 silenciosamente sem proteção — o adapter recusa-se a fazer **boot** com
@@ -223,7 +226,7 @@ reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | O check falhou — nada concede a permissão no scope atual nem no global |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | Uma rota com `meta.can` foi chamada sem utilizador autenticado no contexto |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | O `meta.can` tem uma forma não aplicável (`true`, um número, um array vazio/misto) — falha fechada em cada pedido |
-| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Uma rota declara `meta.can` (ou `auth`/`teamRole`) e nenhum guard registado reclama essa chave |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Uma rota declara `meta.can` (ou `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) e nenhum guard registado reclama essa chave |
 
 - **`PERMISSION_DENIED` para um utilizador que "tem o role"** — verifica o
   *scope*: um role atribuído no tenant `acme` não se aplica em `globex` nem

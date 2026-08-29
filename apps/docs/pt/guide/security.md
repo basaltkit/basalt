@@ -276,7 +276,8 @@ decidir por ti. Acerta nestas em cada deployment.
 
 ### 1. Autorização é explícita — declara um guard, não só a intenção
 
-O `meta.auth` / `meta.can` / `meta.teamRole` de uma rota documenta *o que* a
+O `meta.auth` / `meta.can` / `meta.teamRole` / `meta.scopes` /
+`meta.subscribed` / `meta.feature` de uma rota documenta *o que* a
 rota precisa, mas o **guard que o aplica tem de estar de facto registado**. Uma
 rota declarada-mas-sem-guard estaria **aberta** — por isso os adapters recusam
 arrancá-la: no arranque verificam que cada chave de meta de segurança declarada
@@ -291,7 +292,15 @@ route({ method: 'POST', url: '/admin/purge', meta: { can: 'admin' }, handler })
 authPlugin(…)         // aplica meta.auth
 permissionsPlugin(…)  // aplica meta.can
 teamsPlugin(…)        // aplica meta.teamRole
+apiKeysPlugin(…)      // aplica meta.scopes
+subscriptionsPlugin(…) // aplica meta.subscribed e meta.feature
 ```
+
+O conjunto guardado completo é `auth`, `can`, `teamRole`, `scopes`, `subscribed`
+e `feature` (`GUARDED_META_KEYS`). As chaves que *relaxam* em vez de proteger
+ficam deliberadamente de fora — `meta.central` (salta a verificação de
+pertença ao tenant), `meta.mcp` (opta por expor a rota via MCP) e
+`meta.rateLimit` (travagem de abuso, não uma fronteira de autorização).
 
 Se a proteção acontecer genuinamente numa edge/gateway exterior, opta por sair
 explicitamente com a opção do adapter `allowUnguardedMeta: true` (ou

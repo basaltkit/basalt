@@ -259,7 +259,7 @@ Behavior: registers the Express app under the `EXPRESS` token and an `HttpServer
 |---|---|---|---|
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
-| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares `auth`/`can`/`teamRole` with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
 | — | `INTERNAL_ERROR` | 500 | Any other thrown error. The real message never reaches the client. |

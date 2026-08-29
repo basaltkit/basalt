@@ -11,6 +11,26 @@ describe('parseArgv', () => {
     })
     expect(parseArgv([])).toEqual({ command: undefined, args: [], flags: {} })
   })
+
+  // `basalt dev --no-routes` is documented (CLI README, queue/dev changelogs)
+  // but was a no-op: `--no-routes` landed as `flags['no-routes'] = true` while
+  // dev.ts tests `flags['routes'] !== false`, which is never false.
+  it('negates --no-<flag> into <flag>: false, so documented opt-outs work', () => {
+    expect(parseArgv(['dev', '--no-routes'])).toEqual({
+      command: 'dev',
+      args: [],
+      flags: { routes: false },
+    })
+  })
+
+  it('lets a later explicit flag win over the negation, and vice versa', () => {
+    expect(parseArgv(['dev', '--no-routes', '--routes']).flags).toEqual({ routes: true })
+    expect(parseArgv(['dev', '--routes', '--no-routes']).flags).toEqual({ routes: false })
+  })
+
+  it('only negates the bare form — --no-x=value stays a literal key', () => {
+    expect(parseArgv(['gen', '--no-register=maybe']).flags).toEqual({ 'no-register': 'maybe' })
+  })
 })
 
 describe('renderTable', () => {

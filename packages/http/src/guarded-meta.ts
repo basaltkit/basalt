@@ -7,13 +7,30 @@ import type { BasaltRoute } from './route.js'
  * - `auth` — `@basaltkit/auth`'s `authPlugin`
  * - `can` — `@basaltkit/permissions`' `permissionsPlugin`
  * - `teamRole` — `@basaltkit/teams`' `teamsPlugin`
+ * - `scopes` — `@basaltkit/auth`'s `apiKeysPlugin`
+ * - `subscribed`, `feature` — `@basaltkit/subscriptions`' `subscriptionsPlugin`
  *
  * Declaring one of these on a route is a *request* for protection; the guard is
  * what enforces it. A route that declares a key nobody enforces would silently
  * serve unprotected — the adapters therefore call {@link assertRoutesGuarded}
  * at boot and fail loud instead.
+ *
+ * Deliberately NOT in this set: `central` (a tenant-membership *opt-out* — a
+ * missing plugin removes a bypass, never a check), `mcp` (an exposure opt-in)
+ * and `rateLimit` (abuse throttling, not an authorization boundary, and legal
+ * to declare with `securityPlugin`'s optional rate limiter switched off).
  */
-export const GUARDED_META_KEYS = ['auth', 'can', 'teamRole'] as const
+export const GUARDED_META_KEYS = ['auth', 'can', 'teamRole', 'scopes', 'subscribed', 'feature'] as const
+
+/** Which plugin enforces each guarded key — used to make the boot error actionable. */
+const ENFORCED_BY: Record<string, string> = {
+  auth: 'authPlugin',
+  can: 'permissionsPlugin',
+  teamRole: 'teamsPlugin',
+  scopes: 'apiKeysPlugin',
+  subscribed: 'subscriptionsPlugin',
+  feature: 'subscriptionsPlugin',
+}
 
 /**
  * Metadata bucket where enforcing plugins claim the meta key(s) their guards
@@ -25,10 +42,16 @@ export const GUARDED_META_BUCKET = 'http:guarded-meta'
 export class UnguardedRouteMetaError extends Error {
   readonly code = 'HTTP_UNGUARDED_ROUTE_META'
   constructor(offenders: { route: string; key: string }[]) {
-    const lines = offenders.map(({ route, key }) => `  - ${route} declares meta.${key}`).join('\n')
+    const lines = offenders
+      .map(({ route, key }) => {
+        const plugin = ENFORCED_BY[key]
+        return `  - ${route} declares meta.${key}${plugin ? ` (enforced by ${plugin})` : ''}`
+      })
+      .join('\n')
+    const needed = [...new Set(offenders.map(({ key }) => ENFORCED_BY[key]).filter(Boolean))]
     super(
       `Refusing to boot: ${offenders.length} route(s) declare security meta that NO registered guard enforces — they would serve unprotected:\n${lines}\n` +
-        `Register the enforcing plugin (auth → authPlugin, can → permissionsPlugin, teamRole → teamsPlugin), ` +
+        `Register the enforcing plugin${needed.length > 0 ? ` (${needed.join(', ')})` : ''}, ` +
         `or, if protection genuinely happens at an outer edge, opt out explicitly with the adapter option ` +
         `allowUnguardedMeta: true (or ['<key>', …]).`,
     )

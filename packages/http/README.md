@@ -135,14 +135,17 @@ Express's or Hono's own default (which differ, and fingerprint the framework):
 
 ### Guarded route meta — fail loud at boot
 
-Three `meta` keys are **security-relevant**, and each one is enforced by a guard that a
-different plugin registers:
+Six `meta` keys are **security-relevant**, and each one is enforced by a guard that a
+plugin registers:
 
 | `meta` key | Enforced by | Package |
 |---|---|---|
 | `auth` | `authPlugin` | `@basaltkit/auth` |
 | `can` | `permissionsPlugin` | `@basaltkit/permissions` |
 | `teamRole` | `teamsPlugin` | `@basaltkit/teams` |
+| `scopes` | `apiKeysPlugin` | `@basaltkit/auth` |
+| `subscribed` | `subscriptionsPlugin` | `@basaltkit/subscriptions` |
+| `feature` | `subscriptionsPlugin` | `@basaltkit/subscriptions` |
 
 Declaring one of those keys is a *request* for protection — the guard is what actually
 enforces it. So a route that declares `meta: { auth: true }` in an app where `authPlugin`
@@ -160,6 +163,11 @@ ensureMetadata(container).add('http:guarded-meta', 'can')
 
 `meta.<key>` set to `false` or `undefined` is an explicit opt-*off*, not a protection
 request, and is never flagged.
+
+Route-meta keys that *relax* a check rather than request one are deliberately **not**
+guarded: `central` (skips `tenantMembershipPlugin`'s check — a missing plugin removes a
+bypass, never a check), `mcp` (opts a route into MCP exposure) and `rateLimit` (abuse
+throttling, not an authorization boundary).
 
 **The escape hatch.** If protection genuinely happens at an outer edge (an API gateway
 that authenticates before Basalt ever sees the request), waive the check with the
@@ -418,7 +426,7 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 |---|---|---|---|
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. The response carries `part` and `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. |
-| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares `auth`/`can`/`teamRole` and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
 | — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
 | — (no class) | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. `Retry-After` is set. |
 | — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. |

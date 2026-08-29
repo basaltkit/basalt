@@ -135,7 +135,8 @@ await subscriptions.get('acme')               // SubscriptionRecord | null
 ```
 
 A `SubscriptionRecord` is `{ billableId, plan, period, status, trialEndsAt?,
-cancelAtPeriodEnd?, canceledAt?, gatewayRef? }` where `status` is one of
+cancelAtPeriodEnd?, canceledAt?, gatewayRef?, pendingPlan?, pendingPeriod? }`
+where `status` is one of
 `active`, `trialing`, `past_due`, `canceled`, `incomplete`.
 
 ## Feature limits and metering
@@ -277,11 +278,15 @@ operate on any tenant's billing. The same applies to your own
 [Teams](/guide/teams) and the [security guide](/guide/security).
 :::
 
-Note that `subscribed` and `feature` are **not** part of the framework's
-guarded-meta check (only `auth`, `can` and `teamRole` are). A route annotated
-`meta: { subscribed: 'pro' }` with `subscriptionsPlugin` missing boots happily
-and serves **unguarded** — register the plugin, and cover the paywall with a
-test.
+`subscribed` and `feature` **are** part of the framework's guarded-meta check.
+`subscriptionsPlugin` claims both keys, so a route annotated
+`meta: { subscribed: 'pro' }` with the plugin missing no longer boots and serves
+the paid feature to everyone — the adapter refuses to start with
+`UnguardedRouteMetaError`, naming the offending routes. If the paywall genuinely
+lives at an outer edge, opt out deliberately with the adapter option
+`allowUnguardedMeta: ['subscribed', 'feature']`. Still cover the paywall with a
+test: the boot check proves a guard is *registered*, not that your plan matrix is
+right.
 
 An abandoned Checkout can never change the live subscription: `checkout()`
 records the intent as `pendingPlan`, and the plan only switches when the
