@@ -1,8 +1,76 @@
 # Multi-tenancy
 
-`@basaltkit/tenancy` makes every request tenant-aware. Once the tenant is
-resolved, it lives in the context — and cache, storage, queue, logger and your
-Prisma client all scope to it automatically.
+`@basaltkit/tenancy` makes every request tenant-aware: a **resolver** identifies
+the tenant from the incoming request, a **`TenantSource`** loads its record, and
+the result lives in the request context — where cache, storage, queue, logger and
+your Prisma client pick it up automatically. It is decoupled from auth and teams:
+resolving a tenant answers *which* tenant a request is about, never *whether the
+caller may act on it*.
+
+[[toc]]
+
+## Mental model
+
+Four pieces, in the order they run:
+
+| Piece | Runs | Responsibility |
+| --- | --- | --- |
+| `TenantResolver` | per request, in the order you list them | Maps the request to a `TenantRef` — `{ id }` or `{ domain }` |
+| `TenantSource` | once a resolver produced a ref | Loads the tenant record (`find` / `findByDomain`). A ref that loads nothing falls through to the **next** resolver |
+| `ctx().tenant` | for the rest of the request | The resolved open record — `undefined` when nothing matched |
+| `tenancy:switched` | on every entry into a tenant | Lets cache, storage and the db client re-attach their per-tenant instance |
+
+Outside a request there is no resolver, so you enter a tenant explicitly with
+`tenancy.run(id, fn)` — jobs, CLI commands and maintenance scripts all go through
+it, and the same hook fires.
+
+::: danger Resolution is identification, never authorization
+A resolved tenant only says which tenant the request *claims* to be about. It
+does not check that the caller belongs to it — with `headerResolver` a logged-in
+user of tenant A can simply send `x-tenant-id: b`. Enforce membership separately
+with `tenantMembershipPlugin` from [Teams](/guide/teams), which rejects
+non-members app-wide with `403 TEAM_NOT_A_MEMBER`.
+:::
+
+## Quickstart
+
+A complete app that boots and serves one tenant-aware route:
+
+```ts
+import { createApp, ctx } from '@basaltkit/core'
+import { fastifyPlugin, route, FASTIFY } from '@basaltkit/fastify'
+import { tenancyPlugin, MemoryTenantSource, headerResolver } from '@basaltkit/tenancy'
+
+const app = await createApp({
+  plugins: [
+    tenancyPlugin({
+      source: new MemoryTenantSource().add({ id: 'acme', name: 'Acme Inc', plan: 'pro' }),
+      resolvers: [headerResolver()], // x-tenant-id: acme
+    }),
+    fastifyPlugin({
+      routes: [
+        route({
+          method: 'GET',
+          url: '/whoami',
+          async handler() {
+            const tenant = ctx().tenant
+            return { tenant: tenant?.id ?? null, plan: tenant?.plan ?? 'free' }
+          },
+        }),
+      ],
+    }),
+  ],
+}).boot()
+
+await app.container.get(FASTIFY).listen({ port: 3000 })
+```
+
+```bash
+curl http://localhost:3000/whoami -H 'x-tenant-id: acme'
+# → {"tenant":"acme","plan":"pro"}
+curl http://localhost:3000/whoami
+# → {"tenant":null,"plan":"free"}   (no tenant resolved — see `required` below)
+```
 
 ## Resolvers
 
@@ -115,7 +183,7 @@ manages that: register a domain (unverified), prove ownership with a DNS TXT rec
 and only **verified** domains resolve.
 
 ```ts
-import { CustomDomains } from '@basaltkit/tenancy'
+import { CustomDomains, findByVerifiedDomain } from '@basaltkit/tenancy'
 
 const domains = new CustomDomains({ store }) // store defaults to in-memory
 
@@ -262,29 +330,65 @@ await SendEmail.dispatch({ userId })       // tenant restored in the worker
 logger.info('done')                        // log carries tenantId
 ```
 
-## Fail-closed scoping in your repositories
+## Fail-closed scoping — the `tenantScoped()` family
 
-Database rows are the one place isolation is YOUR job: a repository that
-forgets the `tenantId` filter returns every tenant's rows — and with Prisma,
-`where: { tenantId: ctx.tenant?.id }` silently drops the filter when the
-tenant is `undefined`. The scoping helpers fail closed instead:
+Database rows are the one place isolation is YOUR job: a repository that forgets
+the `tenantId` filter returns every tenant's rows — and with Prisma,
+`where: { tenantId: ctx().tenant?.id }` silently **drops** the filter when the
+tenant is `undefined`, turning a bug into a cross-tenant data leak that returns
+`200 OK`. The three helpers exported from `@basaltkit/tenancy` never do that:
+when there is nothing to scope to they **throw** rather than return `undefined`.
+
+| Helper | Signature | Returns | Throws when |
+| --- | --- | --- | --- |
+| `requireTenant()` | `() => Tenant` | The whole tenant record of the active context | No tenant in context |
+| `requireTenantId(fallback?)` | `(fallback?: string) => string` | The context tenant's id; else `fallback` | No context tenant **and** no `fallback` |
+| `tenantScoped(where?)` | `<W>(where?: W) => W & { tenantId: string }` | Your `where` clause with `tenantId` merged in **last** | No tenant to scope to |
+
+All three throw `TenantRequiredError` (`400 TENANT_REQUIRED`).
 
 ```ts
-import { requireTenantId, tenantScoped, TenantRequiredError } from '@basaltkit/tenancy'
+import { requireTenant, requireTenantId, tenantScoped, TenantRequiredError } from '@basaltkit/tenancy'
 
-// Throws TenantRequiredError (HTTP 400) when no tenant is in context —
-// never an unscoped query:
+// A query that can never run unscoped:
 const rows = await db.project.findMany({ where: tenantScoped({ archived: false }) })
+// → { archived: false, tenantId: 'acme' }
 
-// The context tenant always wins: a tenantId smuggled in from client input
-// cannot widen the scope. Without a context tenant, an explicit id is
-// honoured (system jobs); with neither, it throws.
-const tenantId = requireTenantId(explicitId)
+// The whole record, when you need more than the id:
+const plan = requireTenant().plan
+
+// System code (a job, a CLI command) may pin one tenant deliberately:
+const tenantId = requireTenantId(job.tenantId)
 ```
 
-`requireTenant()` returns the whole `Tenant` under the same rules. For a real
-usage, see `@basaltkit/activity`'s `tenantScoped: 'required'` option — the
-fail-closed variant of its query scoping.
+Three guarantees are worth stating exactly, because they are what makes the
+family safe to use on input-derived data:
+
+- **The context tenant always wins.** `tenantScoped()` spreads `tenantId`
+  **last**, so a `tenantId` smuggled into `where` by client input cannot widen
+  or switch the scope: `tenantScoped({ tenantId: 'globex' })` inside Acme's
+  context still yields `{ tenantId: 'acme' }`.
+- **An explicit id is honoured only when there is no context tenant.** That is
+  the system-code path — a queue worker or `basalt` command pinning one tenant.
+  Inside a request it can never override the resolved tenant.
+- **With neither, it throws.** The value is always a real tenant id, never a
+  filter that silently disappears. That is the whole point: a `400` beats a
+  cross-tenant read.
+
+::: tip The same shape elsewhere
+`@basaltkit/activity` exposes the same idea as a query option:
+`new Activity({ tenantScoped: 'required' })` makes its trail queries throw
+instead of silently returning every tenant's rows. Several packages ship their
+own fail-closed variant of the check — `SEARCH_TENANT_REQUIRED`,
+`FILE_TENANT_REQUIRED`, `COMMENT_TENANT_REQUIRED`, `AUDIT_TENANT_REQUIRED` —
+all with the same meaning: pass a `tenantId` or run inside a tenant context.
+:::
+
+Cache goes further and fails closed for you: registering `tenancyPlugin` sets
+the `tenancy:active` marker, and `@basaltkit/cache` reads it to flip its
+`onMissingScope` default from `'global'` to `'error'`, so an un-scoped cache
+read or write in a multi-tenant app raises `MissingCacheScopeError` instead of
+sharing one entry across tenants. See [Caching](/guide/caching).
 
 ## Running code in a tenant
 
@@ -321,6 +425,35 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
   logger.info(`working for tenant ${tenant.id}`)
 })
 ```
+
+## CLI commands
+
+`tenancyPlugin` registers five commands into the CLI bucket, so they show up as
+soon as `@basaltkit/cli` is present — no extra wiring:
+
+| Command | Needs | What it does |
+| --- | --- | --- |
+| `basalt tenant:list` | `source.list()` | Tabulates every tenant (scalar fields only) |
+| `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` | Persists a new tenant; every flag becomes a field |
+| `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Runs your per-tenant migration hook inside each tenant's context |
+| `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Runs your per-tenant seed hook inside each tenant's context |
+| `basalt tenant:run <id> <command> [args…]` | — | Runs any other registered command inside one tenant's context |
+
+`onMigrate` / `onSeed` are where the DB-specific work goes — the framework only
+iterates tenants and enters each context:
+
+```ts
+tenancyPlugin({
+  source: tenants,
+  resolvers: [subdomainResolver({ base: 'basalt.app' })],
+  onMigrate: async (tenant) => { await migrateSchemaFor(tenant.id) },
+  onSeed: async (tenant) => { await ctx().db.plan.create({ data: { name: 'free' } }) },
+})
+```
+
+A missing hook is reported (`No migrate hook configured. …`) with exit code 1
+rather than silently doing nothing; a `TenantSource` that doesn't implement
+`list()` / `create()` is reported the same way.
 
 ## Isolation modes
 
@@ -426,3 +559,86 @@ basalt tenant:migrate
 
 The default migrator shells out to `prisma migrate deploy` with each tenant's
 scoped connection URL; pass `migrate` to override it.
+
+## Options reference
+
+`tenancyPlugin(options)`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `source` | `TenantSource` | — (required) | Where tenant records are loaded from — `MemoryTenantSource` in dev, `tenancy-sqlite`/`tenancy-prisma` (or your own table) in production |
+| `resolvers` | `TenantResolver[]` | — (required) | Tried in order; the first ref that loads an existing tenant wins, so you can layer a header resolver behind a subdomain one |
+| `required` | `boolean` | `false` | Reject a request that resolved no tenant with `404 TENANCY_NOT_RESOLVED`, instead of running it tenant-less. Leave `false` when you also serve central routes (landing page, sign-up) |
+| `onMigrate` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:migrate`, run inside each tenant's context |
+| `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |
+
+The built-in resolver factories:
+
+| Factory | Option | Type | Default | Purpose |
+| --- | --- | --- | --- | --- |
+| `subdomainResolver({ base })` | `base` | `string` | — (required) | The apex your tenants live under. `acme.basalt.app` → `{ id: 'acme' }`; `www`, the bare base, and nested subdomains (`a.b.basalt.app`) are ignored |
+| `domainResolver()` | — | — | — | Whole `Host` → `{ domain }`, resolved through `source.findByDomain`. For customer-owned domains; requires that method |
+| `headerResolver({ header })` | `header` | `string` | `'x-tenant-id'` | Reads a request header → `{ id: <value> }`. Change it when your gateway already injects a different header |
+| `routeResolver({ param })` | `param` | `string` | `'tenant'` | Reads a route param → `{ id: params.tenant }`. For path-based tenancy (`/t/:tenant/…`) |
+
+Every factory returns a plain `TenantResolver` — `(request) => TenantRef | null`
+— so a custom one drops into the same array. The `Host` value is canonicalised
+(lower-cased, port and trailing dots stripped, IDNA-encoded) before matching, so
+`Victim.com:443`, `victim.com.` and a unicode homograph all key the same way.
+
+`new CustomDomains(options)`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `store` | `DomainStore` | `new MemoryDomainStore()` | Where registered domains live. A durable implementation **must** back `add()` with a UNIQUE constraint — that insert is the anti-hijack gate |
+| `now` | `() => number` | `Date.now` | Injectable clock (tests) |
+| `token` | `() => string` | 24 random bytes, base64url | Verification-token generator (tests) |
+| `resolveTxt` | `(host) => Promise<string[][]>` | `node:dns/promises` `resolveTxt` | DNS lookup used by `verify()`; stub it in tests |
+
+`domains.verify(tenantId, domain, { force })` short-circuits on an
+already-verified domain unless `force` is set. Run it with `force: true` on a
+schedule: a domain whose DNS was later removed or repointed is **un**-verified on
+a failed re-check and stops resolving — the defence against dangling-domain
+takeover.
+
+## Failure modes & troubleshooting
+
+| Error | Code | HTTP | When |
+| --- | --- | --- | --- |
+| `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` ran with no tenant in context and no explicit fallback |
+| `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` and no resolver produced a ref that loaded a tenant |
+| `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, or `forEach()` on a `TenantSource` without `list()` |
+| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` for a domain another tenant already registered |
+| `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` for a domain that isn't registered |
+| `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | A tenant acted on a domain belonging to a **different** tenant |
+| `MissingCacheScopeError` | `CACHE_SCOPE_MISSING` | 500 | A cache read/write ran with no tenant while tenancy is active — see [Caching](/guide/caching) |
+| `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 | `tenantMembershipPlugin` found no membership for the user in the resolved tenant — see [Teams](/guide/teams) |
+
+- **`TENANT_REQUIRED` on a background job or a script** — there is no resolver
+  outside a request. Wrap the work in `tenancy.run(tenantId, …)`, or pass the id
+  explicitly: `requireTenantId(job.tenantId)`.
+- **`TENANT_REQUIRED` on a legitimately central route** (sign-up, landing page,
+  platform admin) — those routes shouldn't be calling `tenantScoped()` at all.
+  Query the unscoped table deliberately, and keep `required: false` on the plugin.
+- **`TENANCY_NOT_RESOLVED` although the header/subdomain looks right** — the ref
+  resolved but the record didn't load. An unknown id falls through *silently* to
+  the next resolver, so this is almost always a tenant missing from the source
+  (or, with `domainResolver`, a domain that was never **verified**). Check with
+  `basalt tenant:list`.
+- **`403 TEAM_NOT_A_MEMBER` right after switching tenants** — expected, and the
+  point: the tenant resolved, the membership check then refused it. Tenant
+  resolution is identification, never authorization — see [Teams](/guide/teams).
+- **A custom domain stopped resolving on its own** — a scheduled
+  `verify(…, { force: true })` re-check failed and un-verified it. Re-publish the
+  `_basalt-verify.<domain>` TXT record.
+
+## Events
+
+| Hook | Payload |
+| --- | --- |
+| `tenancy:switched` | `{ tenant }` — emitted on every entry into a tenant context, by the HTTP enricher and by `tenancy.run()` |
+
+Durable tenant registries and the per-tenant database options are covered in
+[Persistence](/guide/persistence); the end-to-end sign-up flow is in the
+[multi-tenant SaaS cookbook](/cookbook/multi-tenant-saas) and
+[Creating a tenant](/guide/creating-a-tenant).

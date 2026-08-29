@@ -7,6 +7,8 @@ autenticação, permissões, auditoria, filas, notificações** — integrados c
 coerência ponta-a-ponta rara em Node.js, e com inferência de TypeScript da rota
 até ao cliente.
 
+[[toc]]
+
 :::tip Experimenta no browser
 Sem configuração local — arranca um servidor Basalt executável num WebContainer do StackBlitz:
 
@@ -92,10 +94,20 @@ pnpm install
 cp .env.example .env
 ```
 
-O `.env` gerado contém `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` e — com auth — um
-`APP_SECRET` (validado por `src/env.ts` com `@basaltkit/env`). Vem com um default
-de desenvolvimento; define o teu próprio antes de produção, e nota que a auth
-requer um segredo de **pelo menos 16 caracteres**.
+O `.env.example` lista `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` e — com auth — um
+`APP_SECRET` comentado. Todos são declarados e validados em `src/env.ts` com o
+[`@basaltkit/env`](/pt/guide/config), e todos têm predefinições de
+desenvolvimento, por isso a app arranca mesmo com um ambiente vazio. O
+`APP_SECRET` usa `secret({ minLength: 32 })`: recai num valor descartável em
+desenvolvimento e **recusa arrancar em produção** enquanto não definires um a
+sério com pelo menos 32 caracteres (`openssl rand -base64 48`).
+
+::: tip Dica: o `.env` não é carregado por ti
+O `defineEnv` lê o `process.env` e mais nada — copiar o ficheiro não torna os
+seus valores visíveis. Exporta as variáveis, arranca com
+`node --env-file=.env` (Node 22+), ou deixa o teu gestor de processos
+injetá-las. Vê [Configuração](/pt/guide/config).
+:::
 
 ### 3. Correr
 
@@ -118,13 +130,16 @@ curl http://localhost:3000/health
 # { "ok": true, "requestId": "…", "tenant": null }
 ```
 
-Com auth ativa (o default), as rotas `/auth/*` já estão ligadas. Regista-te,
-inicia sessão e depois chama uma rota autenticada com o token devolvido:
+Com auth ativa (o default), o `authRoutes()` e o `mfaRoutes()` já estão ligados —
+registo, login, refresh, logout, me, verificação de email, reposição de password
+e inscrição TOTP. Regista-te, inicia sessão e depois chama uma rota autenticada
+com o token devolvido:
 
 ```bash
 curl -X POST http://localhost:3000/auth/register \
   -H 'content-type: application/json' \
   -d '{"email":"ada@example.com","password":"secretpassword1"}'
+# → 202 { "ok": true } — a mesma resposta quer o email já exista quer não
 
 curl -X POST http://localhost:3000/auth/login \
   -H 'content-type: application/json' \
@@ -181,12 +196,16 @@ tenancy e mais).
 
 ## Para onde a seguir
 
-- [Instalação](/pt/guide/installation) — gestores de pacotes, requisitos e como
-  adicionar o Basalt a uma app existente.
+- [Instalação](/pt/guide/installation) — todas as flags do scaffolder, os
+  requisitos, a CLI `basalt` e como adicionar o Basalt a uma app existente.
+- [Configuração](/pt/guide/config) — o `src/env.ts`, segredos que falham
+  fechados e o repositório de definições.
 - [Conceitos Fundamentais](/pt/guide/concepts) — plugins, o container de DI,
   contexto de pedido e hooks.
 - [Adaptadores HTTP](/pt/guide/adapters) — as mesmas rotas em Fastify, Express
   ou Hono.
+- [Testes](/pt/guide/testing) — arranca a app no processo, personifica um
+  utilizador ou tenant, faz fake de mail e fila, viaja no tempo.
 - [Web UI e componentes](/pt/guide/web-ui) — um SDK type-safe e tabelas/formulários
   de admin.
 - [Construir um SaaS de notas](/pt/cookbook/notes-saas) — um passo-a-passo completo

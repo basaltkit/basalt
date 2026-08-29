@@ -111,24 +111,135 @@ to use another backend.
 | **Kafka** | `@basaltkit/queue-kafka` | ❌ | ❌ | ✅ | ❌ |
 | **Sync** (dev/test) | `@basaltkit/queue` | ❌ | ❌ | ✅ | ❌ |
 
+Every bundled driver follows the same observability norm: **infrastructure
+faults — broker down, a worker's connect failing at boot, a retry re-publish
+failing — surface through an `onError`-family option with a contextual
+`console.error` default (prefix `[basalt:queue]`)**. They are never unhandled
+rejections that kill the process, and never silent.
+
+### BullMQ (Redis)
+
+`connection` on `queuePlugin` is shorthand for this driver with default
+handlers. Construct it yourself to route its two failure channels:
+
+```ts
+import { BullmqQueueDriver } from '@basaltkit/queue'
+
+queuePlugin({
+  driver: new BullmqQueueDriver({
+    connection: process.env.REDIS_URL!,
+    onError: (error, { queue, source }) => log.error({ queue, source, error }, 'queue infra error'),
+    onJobFailed: ({ queue, job, jobId, error }) => alertDeadJob(queue, job, jobId, error),
+  }),
+  jobs,
+  workers,
+})
+```
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `connection` | `string \| ConnectionOptions` | — (required) | Redis URL (`redis://`/`rediss://`, TLS inferred) or ioredis options. |
+| `onError` | `(error, { queue, source: 'worker' \| 'queue' }) => void` | `console.error` with context | BullMQ emits infra errors (Redis down) as EventEmitter `'error'` events — unhandled, they **crash the process**. The driver always attaches a listener; this option routes it to your logger/alerting. |
+| `onJobFailed` | `({ queue, job, jobId?, error }) => void` | `console.error` with context | Fires when a job exhausts its retries (BullMQ `'failed'`). Without it, permanently failed jobs were only visible by polling `queue:stats`. |
+
+### RabbitMQ
+
 ```ts
 import { RabbitmqQueueDriver } from '@basaltkit/queue-rabbitmq'
+
 queuePlugin({ driver: new RabbitmqQueueDriver({ url: process.env.AMQP_URL! }), jobs, workers })
-// Delivery safety: the driver prefers a publisher-confirm channel and only acks
-// a message after the broker confirms any retry/dead-letter re-publish — no
-// job-loss window. close() drains in-flight handlers (drainTimeoutMs, default
-// 10s); anything unfinished stays unacked and is redelivered. Broker errors —
-// including a connect failure when the worker starts — surface through onError.
-
-import { SqsQueueDriver } from '@basaltkit/queue-sqs'
-queuePlugin({ driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q] }), jobs, workers })
-
-import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
-queuePlugin({ driver: new KafkaQueueDriver({ brokers: ['localhost:9092'] }), jobs, workers })
-// Infrastructure faults (worker connect/subscribe failing at boot, a retry/dead-letter
-// re-publish failing) surface through onError — same pattern as rabbitmq/sqs:
-// new KafkaQueueDriver({ brokers, onError: (error, { source, queue }) => log.error(…) })
 ```
+
+Retries and backoff use a per-queue delay queue (`<queue>.delay`) whose messages
+TTL-expire back into the main queue; exhausted jobs land in `<queue>.dead`.
+Priority uses `x-max-priority`. Delivery safety: the driver prefers a
+**publisher-confirm channel** and only acks a message after the broker has
+confirmed any retry/dead-letter re-publish — acking before the publish is
+confirmed would be a silent job-loss window. `close()` drains in-flight handlers
+first; anything unfinished stays unacked, so the broker redelivers it.
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `url` | `string` | — (required) | AMQP URL, e.g. `amqp://user:pass@host:5672`. |
+| `onError` | `(error, { source: 'connection' \| 'channel' }) => void` | `console.error` with context | amqplib surfaces broker faults as EventEmitter `'error'` events — unhandled, they **crash the process**. Also receives a worker's connect/consume failure at boot (otherwise the app would report healthy with zero workers) and a failed re-publish/ack after a job failure (the durable copy stays on the broker and is redelivered). |
+| `maxPriority` | `number` | `10` | `x-max-priority` for the priority queues. |
+| `drainTimeoutMs` | `number` | `10_000` | How long `close()` waits for in-flight handlers so their acks land on a live channel. Past it, unfinished jobs stay unacked and are redelivered — bounded shutdown without job loss. |
+| `connect` | `AmqpConnect` | amqplib | Injectable connector — tests run without a broker. |
+
+::: tip Mixed delays at scale
+The delay queue relies on per-message TTL, which only releases a message at the
+queue head (head-of-line blocking). For many different delays on one queue,
+prefer RabbitMQ's delayed-message-exchange plugin.
+:::
+
+### Amazon SQS
+
+```ts
+import { SqsQueueDriver } from '@basaltkit/queue-sqs'
+
+queuePlugin({ driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q] }), jobs, workers })
+```
+
+SQS has native per-message delay (≤ 15 minutes) but no priority. Retries and
+backoff are handled at the app level for parity with the other drivers: a failed
+message is re-sent with an incremented attempt and a `DelaySeconds` backoff
+(clamped to 15 min); an exhausted job goes to the dead-letter queue
+(`<queue><deadSuffix>`). The `queueUrl` resolver must map every queue name —
+**including the DLQ names** — to its SQS URL.
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `queueUrl` | `(queue: string) => string` | — (required) | Resolves queue names (and `<queue>-dead`) to SQS URLs. |
+| `region` | `string` | SDK default | AWS region for the default client. |
+| `deadSuffix` | `string` | `'-dead'` | Suffix of the dead-letter queue's name. |
+| `waitTimeSeconds` | `number` | `20` | Long-poll wait per receive. |
+| `visibilityTimeout` | `number` | `30` | How long a received message stays hidden while processed. |
+| `onError` | `(error, { queue }) => void` | `console.error` with context | A receive call failed (network, credentials, queue deleted). Without it the poller used to retry immediately and silently — a hot spin with zero log output on a persistent fault. |
+| `errorPauseMs` | `number` | `1000` | Pause between consecutive failed receives — bounds the retry rate against a broken endpoint. |
+| `api` | `SqsApi` | AWS SDK | Injectable API — tests run without AWS. |
+
+A user-requested `delay` over 15 minutes throws `SqsDelayTooLongError` at
+dispatch (a *backoff* delay is clamped instead, so retries never throw).
+
+### Kafka
+
+```ts
+import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
+
+queuePlugin({ driver: new KafkaQueueDriver({ brokers: ['localhost:9092'] }), jobs, workers })
+```
+
+Kafka is a log, not a task queue, and the driver is deliberately honest about
+that: no `delayed`, no `priority`, no `backoff` (Kafka cannot defer a message).
+Retries publish to a retry topic (`<queue>.retry`) the worker also consumes;
+exhausted jobs go to `<queue>.dead`. Worker `concurrency` maps to
+`partitionsConsumedConcurrently`, so effective parallelism is bounded by the
+topic's partition count.
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `brokers` | `string[]` | — (required) | Kafka bootstrap brokers. |
+| `clientId` | `string` | `'basalt'` | kafkajs client id. |
+| `groupId` | `string` | `'basalt-queue'` | Consumer group workers join. |
+| `retrySuffix` | `string` | `'.retry'` | Suffix of the retry topic. |
+| `deadSuffix` | `string` | `'.dead'` | Suffix of the dead-letter topic. |
+| `onError` | `(error, { source: 'consumer' \| 'producer', queue? }) => void` | `console.error` with context | `source: 'consumer'`: the worker's connect/subscribe/run failed at boot — without this the app reports healthy with **zero workers** and the floating rejection is process-fatal. `source: 'producer'`: a retry/dead-letter re-publish failed inside the consume callback (see below). |
+| `client` | `KafkaClient` | kafkajs | Injectable client — tests run without a broker. |
+
+When a failed job's re-publish to the retry/dead topic itself fails (producer or
+broker outage), the driver reports it through `onError` and then **rethrows so
+the message's offset is not committed** — Kafka redelivers the message
+(at-least-once) instead of the job silently vanishing. Expect redelivery during
+a producer outage, never loss. (RabbitMQ keeps the message unacked for the same
+reason; not committing the offset is Kafka's equivalent.)
+
+### Sync (dev/test)
+
+The inline driver's semantics are covered [above](#register-it): at-most-once,
+handler errors reject `dispatch()`, and an implicit production fallback warns at
+boot. For test assertions it records every execution in `driver.executed`
+(`{ queue, jobName, attempts }`), capped at the **1000** most recent entries
+(oldest evicted) so a long-lived process on this driver cannot leak memory.
 
 ## Capability checks
 
@@ -215,6 +326,23 @@ await bus.emit(OrderCreated, { orderId: 'o-1' })
 | `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `dispatch` before the job was registered with a manager (add it to `jobs`) |
 | `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | A job reached a worker that hasn't registered it (producer/worker job lists differ) |
 | `UnsupportedJobOptionError` | — | A dispatch requested an option the driver can't honor, under `onUnsupported: 'throw'` |
+| `SqsDelayTooLongError` | — | A `delay` over SQS's 15-minute maximum (`@basaltkit/queue-sqs`, thrown at `dispatch`) |
+
+## Failure modes & troubleshooting
+
+| If you see | It means | Do |
+| --- | --- | --- |
+| Boot warning `[basalt:queue] No 'connection' (Redis) configured…` in production | The plugin silently fell back to the inline sync driver: at-most-once, no background retries, handler errors fail the dispatching request | Configure a Redis `connection`, or pass `driver: new SyncQueueDriver()` to opt in deliberately |
+| `dispatch()` rejects with your handler's error | Sync-driver semantics: errors propagate to the dispatcher by design (a broker driver would return immediately and retry in background) | Expected in dev/test; use a broker driver where you need background retries |
+| A job is enqueued but never runs | No worker declared for the job's `queue`, or the worker `queue` name doesn't match the job's | Align `defineJob({ queue })` with `workers: [{ queue }]` |
+| `UnknownJobError` in worker logs | The job reached a worker that hasn't registered it — producer and worker `jobs` lists differ | Register the same `jobs` array in both processes |
+| Repeated `[basalt:queue] bullmq worker error (queue "…")` | Redis infra fault (connectivity, failover); BullMQ reconnects on its own | Route `onError` to alerting; check Redis |
+| `[basalt:queue] job "…" on queue "…" failed permanently` | The job exhausted its `attempts`; it stays in the failed set (default retention keeps all) | Inspect, fix the cause, `basalt queue:retry --queue <q>`; route `onJobFailed` to alerting |
+| `UnsupportedJobOptionError` at dispatch | The driver can't honor a requested option (e.g. `delay` on Kafka) under `onUnsupported: 'throw'` | Drop the option or switch drivers |
+| `SqsDelayTooLongError` at dispatch | A `delay` beyond SQS's 15-minute cap | Cap the delay, or use BullMQ/RabbitMQ for long delays |
+| `[basalt:queue] kafka consumer error (queue "…")` at boot | The worker's broker connect/subscribe failed — the process stays up but consumes **nothing** | Fix brokers/network and restart the worker; alert on this log line |
+| The same Kafka message is redelivered repeatedly, with `[basalt:queue] kafka producer error` alongside | A failed job's retry/dead-letter re-publish is failing, so the driver refuses to commit the offset — redelivery instead of silent loss | Restore the producer/broker; the backlog drains itself |
+| `[basalt:queue] rabbitmq channel error` after a job failure | The retry re-publish wasn't confirmed or the ack failed; nothing was acked, so the broker redelivers the durable copy | Check broker health; no action needed for the job itself |
 
 ## Writing a driver
 
@@ -285,5 +413,7 @@ queuePlugin({ driver: new MyQueueDriver(), jobs, workers })
 
 ## See also
 
+- [Scheduled tasks](/guide/scheduler) — dispatch jobs on a cron schedule with
+  `schedule.job(...)`.
 - [Notes SaaS cookbook](/cookbook/notes-saas) — queues wired into a real app
   (BullMQ + Redis, mailer off the request).

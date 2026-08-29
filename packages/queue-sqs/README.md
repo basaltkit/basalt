@@ -76,28 +76,64 @@ A `delay` above **900s (15 min)** throws `SqsDelayTooLongError` instead of silen
 - The worker long-polls (`ReceiveMessage`), runs the handler, and deletes the message (`DeleteMessage`) on success.
 - On failure: if attempts remain, it redelivers with `DelaySeconds` (the backoff, capped at 15 min) and deletes the original; if attempts are exhausted, it sends the message to the **dead-letter queue** `emails-dead` (configurable suffix) and deletes the original.
 
-> You must create the SQS queues (main and dead-letter) beforehand and map them in the `queueUrl` resolver — including the `<queue><deadSuffix>`.
+**You must create the SQS queues** (main and dead-letter) beforehand and map them in the `queueUrl` resolver — including the `<queue><deadSuffix>` one.
 
 ## API reference
 
 ### `new SqsQueueDriver(options)`
 
-| Option | Type | Default | Description |
+| Option | Type | Default | Purpose |
 |---|---|---|---|
-| `queueUrl` | `(queue: string) => string` | — (required) | Maps a queue name to its SQS URL. Must also resolve the dead-letter queue. |
-| `region` | `string` | (SDK) | AWS region. |
-| `deadSuffix` | `string` | `'-dead'` | Suffix for the dead-letter queue name. |
-| `waitTimeSeconds` | `number` | `20` | Long-poll duration. |
-| `visibilityTimeout` | `number` | `30` | Visibility timeout while the message is being processed. |
-| `api` | `SqsApi` | AWS SDK | Injectable API — used in tests without AWS. |
+| `queueUrl` | `(queue: string) => string` | — (required) | Maps a queue name to its SQS URL. Must also resolve `<queue><deadSuffix>` — the driver calls it for the DLQ too. |
+| `region` | `string` | (SDK's chain) | AWS region passed to `SQSClient`. Omit to let the standard AWS resolution decide. |
+| `deadSuffix` | `string` | `'-dead'` | Suffix appended to the queue name to derive the dead-letter queue. |
+| `waitTimeSeconds` | `number` | `20` | Long-poll duration per `ReceiveMessage`. 20 is SQS's maximum and the cheapest setting — lower it only if you need a faster shutdown. |
+| `visibilityTimeout` | `number` | `30` | How long a received message stays hidden from other consumers. Must exceed your slowest handler, or the job is delivered twice. |
+| `onError` | `(error: unknown, info: { queue: string }) => void` | `console.error` with the queue | A `ReceiveMessage` call failed — see below. |
+| `errorPauseMs` | `number` | `1000` | Pause after a failed receive before polling again. This is what keeps a persistent fault from becoming a CPU-burning hot spin against the SQS endpoint. |
+| `api` | `SqsApi` | `@aws-sdk/client-sqs` | Injectable API (`sendMessage` / `receiveMessages` / `deleteMessage`) — tests pass a fake so no AWS is needed. |
 
-Exported constants/errors: `SQS_MAX_DELAY_SECONDS` (900) and `SqsDelayTooLongError`.
+The driver implements `add`, `startWorker`, `setExecutor`, `close` and `capabilities`; it does
+**not** implement the optional `stats` / `retryFailed`, so `basalt queue:stats` and
+`basalt queue:retry` report the operation as unsupported. Also exported:
+`SQS_MAX_DELAY_SECONDS` (`900`), `SqsDelayTooLongError`, and the `SqsApi` / `SqsMessage` types.
 
-## Receive errors
+### Failure hooks
 
-A failing `ReceiveMessage` call surfaces through `onError` (default:
-`console.error`) and the poller pauses `errorPauseMs` (default 1 s) before
-retrying — a persistent fault is visible, not a silent hot spin.
+`onError` is the only callback and it fires on exactly one thing: a failed **receive**
+(credentials expired, network partition, queue deleted, throttling). The default is
+`console.error`, so a persistent fault is always visible.
+
+After reporting, the poller waits `errorPauseMs` and polls again — it never gives up, because a
+transient AWS error must not silently stop the worker. There is no `onJobFailed`: a job that
+exhausts `attempts` is sent to `<queue><deadSuffix>`, which *is* the report. Alarm on that
+queue's `ApproximateNumberOfMessagesVisible`.
+
+Handler failures never reach `onError` — they are caught and turned into a redelivery (with the
+backoff as `DelaySeconds`) or a DLQ send, after which the original is deleted.
+
+If *that* re-send or the delete itself throws, the exception escapes the message loop and ends
+**this poller**. The original message was never deleted, so SQS makes it visible again after
+`visibilityTimeout` and another poller picks it up — the job is not lost. But with
+`concurrency: 1` there is no other poller, so the worker stops consuming that queue until the
+process restarts. Run more than one poller per queue if you need the worker to survive a
+transient send failure, and alarm on queue depth.
+
+### Exported errors
+
+| Error | Code | When |
+|---|---|---|
+| `SqsDelayTooLongError` | — (plain `Error`, `name: 'SqsDelayTooLongError'`) | A **user-supplied** `dispatch(payload, { delay })` exceeded SQS's 900 s ceiling. Thrown from `add()`, so the dispatch fails loudly instead of being silently truncated. |
+| `UnsupportedJobOptionError` | `QUEUE_UNSUPPORTED_OPTION` | From `@basaltkit/queue`, when a `priority` dispatch meets `onUnsupported: 'throw'` (SQS declares `priority: false`). |
+
+A **backoff** delay that computes above 900 s is clamped to 900 s rather than throwing — the
+retry is not something the caller asked for at that moment, so failing it would be worse than
+retrying sooner.
+
+### Hard limits
+
+Attempt counters travel in message attributes, so the consumer clamps the `x-basalt-attempts` it
+reads to at most **50** — a crafted message cannot drive an unbounded retry loop.
 
 ## How it connects to other modules
 

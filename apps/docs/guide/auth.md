@@ -2,9 +2,37 @@
 
 `@basaltkit/auth` provides complete server-side authentication with the data in
 **your** database — no vendor lock-in. Password hashing, JWT with refresh
-rotation, sessions, MFA (TOTP), API keys and ready-made routes.
+rotation, sessions, MFA (TOTP), passkeys, social login, API keys and ready-made
+routes. It answers *who is calling*; it deliberately does not answer *what they
+may do* — that is [authorization](/guide/authorization) — and it is decoupled
+from the HTTP framework, so the same wiring works on Fastify, Express and Hono
+(see [Adapters](/guide/adapters)).
 
 [[toc]]
+
+## Mental model
+
+Five pieces, and you only ever wire the first two by hand:
+
+| Piece | Registered by | What it does |
+| --- | --- | --- |
+| **Enricher** | `authPlugin` | Reads `Authorization: Bearer <jwt>` or `x-session-id` and sets `ctx().user`. **No** credentials → the request stays anonymous, no error. An *explicitly* invalid or expired token → `401` |
+| **Guard** | `authPlugin` | A route declaring `meta: { auth: true }` requires `ctx().user` — anonymous → `401 AUTH_REQUIRED` |
+| **Enricher + guard** | `apiKeysPlugin` | Authenticates `mk_`-prefixed bearers / `x-api-key` into `ctx().apiKey`, and enforces `meta.scopes` |
+| **`Auth` service** | `authPlugin`, token `AUTH` | Everything the routes call: register, login, refresh, sessions, verification, reset, MFA. Reach it with `app.container.get(AUTH)` |
+| **Routes** | `authRoutes()` · `mfaRoutes()` · `apiKeyRoutes()` · `oauthRoutes()` | Thin, replaceable wrappers over the service |
+
+Two token lifetimes carry the session: a short **access token** (JWT, 15m) sent
+on every request, and a long **refresh token** (30d) exchanged for a new pair.
+Refresh is rotating with reuse detection — replaying a consumed token revokes the
+whole family.
+
+::: tip `meta.auth` is a request for protection, and it is checked at boot
+`authPlugin` claims the `auth` meta key. A route that declares `meta.auth`
+while `authPlugin` is **not** registered would serve unprotected, so every
+adapter refuses to boot with `UnguardedRouteMetaError`
+(`HTTP_UNGUARDED_ROUTE_META`) instead — detailed under *Guarding routes* below.
+:::
 
 ## Setup
 
@@ -12,8 +40,8 @@ The quickest start uses the in-memory stores — perfect for experimenting, but
 everything disappears on restart. Register the plugin and the ready-made routes:
 
 ```ts
-import { createApp, ctx } from '@basaltkit/core'
-import { fastifyPlugin, route } from '@basaltkit/fastify'
+import { createApp } from '@basaltkit/core'
+import { fastifyPlugin, FASTIFY } from '@basaltkit/fastify'
 import { authPlugin, authRoutes, MemoryUserSource } from '@basaltkit/auth'
 
 const app = await createApp({
@@ -27,6 +55,8 @@ const app = await createApp({
     fastifyPlugin({ routes: authRoutes() }),
   ],
 }).boot()
+
+await app.container.get(FASTIFY).listen({ port: 3000 })
 ```
 
 ::: warning The `secret` is the vault's key
@@ -132,18 +162,33 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 
 | Endpoint | Body | Notes |
 | --- | --- | --- |
-| `POST /auth/register` | `{ email, password }` | → `EmailTakenError` (409) if taken |
+| `POST /auth/register` | `{ email, password }` | Always `202 { ok: true }` — enumeration-safe (see below) |
 | `POST /auth/login` | `{ email, password, mfaCode? }` | → `{ user, accessToken, refreshToken }` |
 | `POST /auth/refresh` | `{ refreshToken }` | new token pair; kills the family on reuse |
-| `POST /auth/logout` | `{ refreshToken }` | revokes the refresh family |
-| `GET /auth/me` | — | requires `Authorization: Bearer <jwt>` |
+| `POST /auth/logout` | `{ refreshToken }` | `204`; revokes the refresh family |
+| `GET /auth/me` | — | `meta.auth` — requires `Authorization: Bearer <jwt>` |
 | `POST /auth/verify/request` · `POST /auth/verify` | `{ email }` · `{ token }` | email verification |
 | `POST /auth/password/forgot` · `POST /auth/password/reset` | `{ email }` · `{ token, password }` | password reset |
 
-The `verify/request` and `password/forgot` routes always answer `200` so the
-response never reveals whether an account exists; the token is emailed via the
-`auth:verify_requested` / `auth:password_reset_requested` hooks, never returned
-over HTTP. A completed password reset revokes every session and refresh token.
+`password` is validated at `min(8)` and `email` as an email address on every
+route that takes them — a shorter password is a `400` validation error, not a
+weak account.
+
+::: tip Nothing here reveals whether an account exists
+`POST /auth/register` answers the same `202 { ok: true }` for a fresh signup and
+for an email that is already taken, and does *equivalent work* (it still hashes
+the password) so the timing matches too. The collision is signalled out-of-band
+through the `auth:register_existing_email` hook — email the address "you already
+have an account, sign in or reset your password" instead of leaking existence in
+the HTTP response. Set `enumerationSafeRegister: false` to get the older
+`409 AUTH_EMAIL_TAKEN` behaviour; the lower-level `auth.register()` always throws
+on a duplicate regardless.
+
+`verify/request` and `password/forgot` answer `200` for the same reason; their
+tokens are emailed via the `auth:verify_requested` /
+`auth:password_reset_requested` hooks, never returned over HTTP. A completed
+password reset revokes every session and refresh token.
+:::
 
 ### The register → login → refresh flow (HTTP)
 
@@ -224,6 +269,34 @@ route({
 
 A request with no credentials stays anonymous (no error); an explicit invalid or
 expired token returns `401 AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED`.
+
+### `meta.auth` is verified at boot
+
+Declaring `meta.auth` is a *request* for protection; the guard `authPlugin`
+registers is what enforces it. A route that asks for protection nobody enforces
+would serve unprotected and answer `200` — so every adapter calls the guarded-meta
+check while registering routes and **refuses to boot**:
+
+```
+UnguardedRouteMetaError: Refusing to boot: 1 route(s) declare security meta that
+NO registered guard enforces — they would serve unprotected:
+  - GET /me declares meta.auth
+```
+
+The error carries `code: 'HTTP_UNGUARDED_ROUTE_META'` and names every offender.
+The fix is normally to register the enforcing plugin: `auth` → `authPlugin`,
+`can` → `permissionsPlugin`, `teamRole` → `teamsPlugin`. When protection genuinely
+happens at an outer edge (an API gateway that already authenticates), opt out
+explicitly on the adapter:
+
+```ts
+fastifyPlugin({ routes, allowUnguardedMeta: ['auth'] }) // or `true` for every key
+```
+
+`meta: { auth: false }` is an explicit opt-*off*, not a protection request, and is
+never flagged. The same option exists on `expressPlugin` and `honoPlugin` — see
+[Adapters](/guide/adapters) — and the guard/meta split is laid out in
+[Authorization](/guide/authorization).
 
 ## Multi-factor authentication (TOTP)
 
@@ -522,28 +595,144 @@ authPlugin({
 })
 ```
 
-## Error codes
+## Options reference
 
-| Error | Code | HTTP |
-| --- | --- | --- |
-| `InvalidCredentialsError` | `AUTH_INVALID_CREDENTIALS` | 401 |
-| `EmailTakenError` | `AUTH_EMAIL_TAKEN` | 409 |
-| `RefreshInvalidError` / `RefreshReusedError` | `AUTH_REFRESH_INVALID` / `AUTH_REFRESH_REUSED` | 401 |
-| `AuthRequiredError` | `AUTH_REQUIRED` | 401 |
-| `TokenInvalidError` / `TokenExpiredError` | `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` | 401 |
-| `AuthTokenInvalidError` (verify/reset links) | `AUTH_TOKEN_INVALID` | 400 |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 |
-| `MfaRequiredError` / `MfaInvalidCodeError` / `MfaNotEnrolledError` | `AUTH_MFA_*` | 401 / 401 / 400 |
-| `AccountLockedError` | `AUTH_LOCKED` | 429 |
-| `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 |
+`authPlugin(options)` — every option of the `Auth` service except `hooks`, which
+the plugin supplies:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `users` | `UserSource` | — (required) | Where accounts live. `MemoryUserSource` in dev; `auth-sqlite`/`auth-prisma`, or your own four methods over your tables |
+| `secret` | `string` | — (required) | HS256 signing key for access tokens. Rejected empty, and rejected under 32 chars when `NODE_ENV=production` (`AUTH_WEAK_SECRET`) |
+| `hasher` | `PasswordHasher` | `new ScryptPasswordHasher()` | Password hashing. Swap for an argon2id implementation without touching call sites |
+| `sessions` | `SessionStore` | in-memory | Cookie/`x-session-id` sessions — swap for durability |
+| `refreshTokens` | `RefreshTokenStore` | in-memory | Refresh-token families; in-memory means every redeploy logs everyone out |
+| `tokens` | `AuthTokenStore` | in-memory | Email-verification and password-reset tokens |
+| `mfa` | `MfaStore` | in-memory | TOTP enrollment state and recovery codes |
+| `accessTtl` | `DurationInput` | `'15m'` | Access-token lifetime. Short by design — the refresh token is what carries the session |
+| `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
+| `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime |
+| `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
+| `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
+| `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
+| `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
+| `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
+| `tokenVersions` | `TokenVersionStore` | — (off) | Opt-in access-token **revocation**: tokens carry a `tv` claim that `resetPassword`/`revokeAllTokens` bump, killing outstanding tokens before their TTL. Costs one store read per authenticated request |
+| `mfaEncryptionKey` | `string \| Buffer` | — (plaintext) | Encrypts TOTP secrets at rest with AES-256-GCM (`v1:` envelopes), so a database leak can't recover a live second factor. Existing plaintext rows keep working and are encrypted on next write |
+| `mfaIssuer` | `string` | `'Basalt'` | Issuer name shown in the authenticator app |
+
+`new LoginThrottle(options)`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `maxAttempts` | `number` | `5` | Failed attempts allowed inside the window |
+| `windowMs` | `number` | `900_000` (15m) | Rolling window; a successful login clears the counter |
+| `clock` | `() => number` | `Date.now` | Injectable clock (tests) |
+
+`apiKeysPlugin(options)`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `store` | `ApiKeyStore` | in-memory | Where key hashes live — durable in production, or keys die on redeploy |
+| `header` | `string` | `'x-api-key'` | Alternative header to `Authorization: Bearer mk_…` |
+| `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
+| `now` | `() => number` | `Date.now` | Injectable clock (tests) |
+
+`webauthnPlugin(options)` and its `config`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `verifier` | `WebAuthnVerifier` | — (required) | The crypto boundary you implement over `@simplewebauthn/server`, so the framework carries no WebAuthn dependency |
+| `credentials` | `PasskeyStore` | `new MemoryPasskeyStore()` | Registered passkeys — swap for a durable store |
+| `challenges` | `WebAuthnChallengeStore` | `new MemoryWebAuthnChallengeStore()` | Single-use ceremony challenges |
+| `config.rpId` | `string` | — (required) | Relying Party ID — your registrable domain, e.g. `'example.com'` |
+| `config.rpName` | `string` | — (required) | Human-readable name shown in the OS prompt |
+| `config.origin` | `string \| string[]` | — (required) | Expected origin(s), e.g. `'https://example.com'` |
+| `config.challengeTtlMs` | `number` | `300_000` (5m) | How long a challenge stays usable |
+| `config.userVerification` | `'required' \| 'preferred' \| 'discouraged'` | `'preferred'` | Whether the authenticator must verify the user (PIN/biometric) |
+| `config.timeoutMs` | `number` | `60_000` | Ceremony timeout advertised to the browser |
+| `config.pubKeyCredParams` | `PublicKeyParam[]` | ES256 + RS256 | Override the accepted signature algorithms |
+
+`oauthPlugin(options)` and `oauthRoutes(options)`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `providers` | `OAuthProvider[]` | — (required) | `googleProvider()`, `githubProvider()`, `oidcProvider()` / `discoverOidcProvider()` — one entry per IdP |
+| `secret` | `string` | — (required) | HMAC key that signs the CSRF `state`; typically the same `APP_SECRET` |
+| `stateTtlMs` | `number` | `600_000` (10m) | How long a signed `state` stays valid — the window for completing the redirect |
+| `fetch` | `typeof fetch` | global `fetch` | Injected HTTP client (tests) |
+| `now` | `() => number` | `Date.now` | Injectable clock (tests) |
+| `callbackBaseUrl` (routes) | `string` | — (required) | Public base URL of your app; the redirect URI is `${callbackBaseUrl}/auth/oauth/:provider/callback` and must be registered with each provider |
+| `successRedirect` (routes) | `string` | — (JSON response) | Bounce the browser here with `#access_token=…&refresh_token=…` instead of returning JSON — the SPA flow |
+
+Register `oauthPlugin` **after** `authPlugin`: the service resolves `AUTH` to log
+users in.
+
+## Failure modes & troubleshooting
+
+| Error | Code | HTTP | When |
+| --- | --- | --- | --- |
+| `InvalidCredentialsError` | `AUTH_INVALID_CREDENTIALS` | 401 | Unknown email or wrong password — deliberately indistinguishable, and equal-cost |
+| `EmailTakenError` | `AUTH_EMAIL_TAKEN` | 409 | `auth.register()` on an existing email (the *route* stays enumeration-safe unless you set `enumerationSafeRegister: false`) |
+| `AuthRequiredError` | `AUTH_REQUIRED` | 401 | A `meta.auth` route (or an MFA route) ran with no `ctx().user` |
+| `TokenInvalidError` / `TokenExpiredError` | `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` | 401 | The presented **access token** is malformed/wrongly signed, or past its TTL |
+| `AuthTokenInvalidError` | `AUTH_TOKEN_INVALID` | 400 | A verification or reset **link** token is unknown, already used, or expired |
+| `RefreshInvalidError` | `AUTH_REFRESH_INVALID` | 401 | Refresh token unknown, revoked or expired |
+| `RefreshReusedError` | `AUTH_REFRESH_REUSED` | 401 | A **consumed** refresh token came back — theft indicator; the whole family is revoked |
+| `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correct, MFA enabled, no `mfaCode` supplied. Not counted as a failed attempt |
+| `MfaInvalidCodeError` | `AUTH_MFA_INVALID` | 401 | Wrong TOTP or recovery code — this **does** count toward the throttle |
+| `MfaNotEnrolledError` | `AUTH_MFA_NOT_ENROLLED` | 400 | Activating/disabling MFA with no enrollment in progress |
+| `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset |
+| `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars under `NODE_ENV=production` |
+| `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`) |
+| `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` for a key outside the caller's tenant/user scope — a 404, never a 403, so key ids can't be probed |
+| `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | The passkey challenge expired or was already used (they are single-use) |
+| `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | The verifier rejected the browser's response |
+| `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for |
+| `PasskeyNotFoundError` | `PASSKEY_NOT_FOUND` | 404 | No stored credential matches the presented id |
+| `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | The signature counter did not increase — the authenticator may be cloned |
+| `PasskeyExistsError` | `PASSKEY_EXISTS` | 409 | That credential is already registered |
+| `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | `:provider` isn't in the `providers` array |
+| `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, or older than `stateTtlMs` |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange or the profile fetch failed |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.auth` and `authPlugin` isn't registered |
+
+- **Every request is anonymous even with a valid `Authorization` header** — check
+  the bearer isn't `mk_`-prefixed (those belong to `apiKeysPlugin`), and that
+  `authPlugin` is registered *before* the adapter plugin so its enricher is in the
+  pipeline.
+- **`401 AUTH_REQUIRED` on a route you thought was public** — `meta.auth` was left
+  on it. And if the app refuses to *boot* with `HTTP_UNGUARDED_ROUTE_META`, it is
+  the opposite problem: the meta is there, the plugin isn't.
+- **`AUTH_REFRESH_REUSED` right after a normal-looking login** — two clients (or a
+  retried request) refreshed with the same token. Rotation is single-use per
+  token; serialize refreshes on the client, don't retry them blindly.
+- **Everyone is logged out after a redeploy** — the `Memory*` stores are per
+  process. Move `refreshTokens`/`sessions` to `auth-sqlite` or `auth-prisma`.
+- **`AUTH_UPDATE_UNSUPPORTED` on verification or reset** — your custom
+  `UserSource` omits `update()`. It is optional for login, required for these.
+- **`AUTH_LOCKED` for a user who typed the right password** — the *IP* budget can
+  trip first under shared NAT or a load test. Tune `ipLoginThrottle`, and remember
+  both throttles are in-process: with several replicas the effective budget is
+  per replica.
+- **`AUTH_WEAK_SECRET` only in production** — the length floor is enforced when
+  `NODE_ENV=production`; a dev-length secret boots locally and fails on deploy.
 
 ## Events
 
-Each step emits an event — `auth:login`, `auth:login_failed`, `auth:registered`,
-`auth:logout`, `auth:verify_requested`, `auth:email_verified`,
-`auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`,
-`auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked` — consumed for
-free by [audit](/reference/packages) and notifications.
+| Hook | Payload | Typical use |
+| --- | --- | --- |
+| `auth:registered` | `{ user }` | Welcome email, provisioning |
+| `auth:register_existing_email` | `{ email }` | The out-of-band "you already have an account" email — the signal the HTTP response deliberately withholds |
+| `auth:login` · `auth:login_failed` | `{ user }` · `{ email }` | Audit trail, alerting |
+| `auth:logout` | `{ user }` | Audit trail |
+| `auth:verify_requested` · `auth:email_verified` | `{ user, token }` · `{ user }` | **Email the token** — it is never returned over HTTP |
+| `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Email the token**; the second confirms the change |
+| `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Security notification |
+| `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Audit trail |
 
-For the full end-to-end wiring (email plumbing, teams, and billing), see the
+They are consumed for free by audit and notifications (see
+[Packages](/reference/packages)). For the full end-to-end wiring — email
+plumbing, teams and billing — see the
 [account lifecycle cookbook](/cookbook/account-lifecycle).

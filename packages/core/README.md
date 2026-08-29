@@ -150,6 +150,62 @@ scopeA.get(COUNTER).n = 10 // does not affect scopeB
 
 The container detects cycles (A needs B which needs A) and throws `CircularDependencyError` with the full chain; an unregistered token throws `UnknownTokenError`.
 
+### Captive dependencies — `CaptiveDependencyError`
+
+A **captive dependency** is a short-lived service that gets trapped inside a long-lived
+one. Concretely: a `singleton` resolves a `scoped` token *inside its factory*. The
+singleton is built exactly once and lives for the whole process; the scoped instance it
+grabbed belongs to whichever scope happened to be active at that moment — usually the
+very first request. From then on every later request is served that first request's
+object. If the scoped service carries the current user or the current tenant, this is a
+cross-tenant data leak that no test written against a single request will ever catch.
+
+Basalt refuses to build it. Resolving a `scoped` token while a `singleton` factory is in
+flight throws `CaptiveDependencyError` (code `DI_CAPTIVE_DEPENDENCY`), naming both tokens:
+
+```ts
+const REQUEST_USER = createToken<User>('request:user')   // scoped
+const REPORTS = createToken<Reports>('reports')          // singleton
+
+container.scoped(REQUEST_USER, () => loadUserFromContext())
+container.singleton(REPORTS, (c) => new Reports(c.get(REQUEST_USER)))
+//                                              ^^^^^^^^^^^^^^^^^^^^
+// throws CaptiveDependencyError: Scoped token "request:user" was resolved
+// inside the factory of singleton "reports".
+```
+
+**How to fix it** — resolve the scoped service *at use time* instead of at construction:
+
+```ts
+// Option A: read it from the per-request scope when the method runs.
+container.singleton(REPORTS, () => new Reports(() => (ctx().container as Container).get(REQUEST_USER)))
+
+// Option B: make the consumer scoped too, so it is rebuilt per request.
+container.scoped(REPORTS, (c) => new Reports(c.get(REQUEST_USER)))
+
+// Option C: make the dependency transient, if a fresh one per call is correct.
+container.transient(REQUEST_USER, () => loadUserFromContext())
+```
+
+The check is an O(1), allocation-free counter of in-flight singleton builds — there is no
+cost on the happy path. `transient` dependencies of a singleton are unaffected: they are
+rebuilt on every resolution, so nothing is captured.
+
+### Devtools: seeing the graph
+
+Recording is off by default (zero overhead). Turn it on and the container remembers every
+`A depends on B` edge it actually resolves — it never forces eager construction:
+
+```ts
+import { renderDependencyGraph } from '@basaltkit/core'
+
+container.enableGraph()
+// ... let the app boot and serve a request ...
+container.describe()          // [{ token, lifetime, instantiated }] — every reachable binding
+container.dependencyGraph()   // { nodes: [{ token, lifetime }], edges: [{ from, to }] }
+console.log(renderDependencyGraph(container.dependencyGraph())) // a Mermaid `graph TD`
+```
+
 ### Hooks (notifications between plugins)
 
 `HookBus` lets one plugin announce events ("hooks") and others react, without knowing about each other. The application itself emits `app:registered`, `app:booted`, and `app:shutdown`.
@@ -274,6 +330,24 @@ For production, use `OtlpHttpExporter` (sends to `http://<collector>:4318/v1/tra
 
 ## API reference
 
+### Plugin lifecycle phases
+
+`BasaltApp.phase` walks a fixed path, and each transition means something concrete:
+
+| Phase | What has happened | What is safe here |
+|---|---|---|
+| `created` | `createApp()` returned; nothing has run. | Nothing yet — `container.get()` will find no bindings. |
+| `registering` | Every plugin's `register()` is running, in `dependsOn` order. | Register bindings. **No I/O** — the services you depend on may not be registered yet. |
+| — | `app:registered` is emitted. | Every binding exists. |
+| `booting` | Every plugin's `boot()` is running, in the same order. | Resolve services, connect, subscribe to hooks, publish metadata. Adapters run their guarded-meta check here. |
+| `ready` | `app:booted` is emitted, then `boot()` returns. | Serve traffic. Edge plugins mount their hooks/routes on this hook, which is why plugin order doesn't matter for them. |
+| `shutting-down` | Every `shutdown()` runs in **reverse** boot order. | Close connections. A failure here doesn't stop the others; they aggregate. |
+| `stopped` | `app:shutdown` emitted, done. | `shutdown()` is idempotent — calling it again is a no-op. |
+
+`boot()` may be called only once per app; a second call throws `LifecycleError`. Anything
+that must observe *all* plugins (an OpenAPI document, an adapter mounting edge routes)
+belongs on the `app:booted` hook, not in a `boot()` body.
+
 ### `createToken<T>(description)` / `Token<T>`
 
 Creates a typed DI token. The type `T` only exists at compile time (there is no runtime reflection). Two tokens with the same description are **different** (each has its own `symbol`).
@@ -289,6 +363,9 @@ Creates a typed DI token. The type `T` only exists at compile time (there is no 
 | `get(token)` | Resolves the service. Throws `UnknownTokenError` or `CircularDependencyError`. |
 | `has(token)` | `true` if a binding exists (here or in the parent container). |
 | `createScope()` | Creates a child container: inherits bindings, does not inherit `scoped` instances. |
+| `enableGraph()` | Starts recording the dependency graph (off by default). Returns `this`. |
+| `dependencyGraph()` | The `{ nodes, edges }` observed so far. Empty until `enableGraph()`. |
+| `describe()` | `BindingInfo[]` — `{ token, lifetime, instantiated }` for every reachable binding. |
 
 `Factory<T>` = `(container: Container) => T`. `Lifetime` = `'singleton' | 'scoped' | 'transient'`.
 
@@ -322,7 +399,12 @@ Members of `BasaltApp`: `container`, `hooks`, `phase` (`LifecyclePhase` = `'crea
 |---|---|
 | `on(hook, handler, { priority? })` | Subscribes; higher `priority` runs first (default 0). Returns a function to cancel. |
 | `onAny(handler)` | Receives `(hook, payload)` from every emission, after the specific handlers. |
-| `emit(hook, payload)` | Runs handlers **in series** by priority; `await`s each one. |
+| `emit(hook, payload)` | Runs handlers **in series** by priority, `await`ing each, then the `onAny` observers. |
+
+Handlers are **isolated**: one throwing never starves the remaining handlers or the
+`onAny` observers (audit, devtools) — every registered handler always runs. Failures still
+surface to the emitter afterwards: a single failure rethrows the original error, several
+become an `AggregateError`. Nothing is ever swallowed silently.
 
 ### Context
 
@@ -340,16 +422,20 @@ Members of `BasaltApp`: `container`, `hooks`, `phase` (`LifecyclePhase` = `'crea
 
 ### Errors
 
-All extend `BasaltError`, which has a stable `code` (you can safely do `if (error.code === '...')`):
+All extend `BasaltError`, which has a stable `code` (you can safely do `if (error.code === '...')`). None of them carries an HTTP status — `@basaltkit/core` knows nothing about HTTP, so an adapter maps anything without a numeric `status` to `500 INTERNAL_ERROR`:
 
-| Class | `code` |
-|---|---|
-| `ContextUnavailableError` | `CONTEXT_UNAVAILABLE` |
-| `UnknownTokenError` | `DI_UNKNOWN_TOKEN` |
-| `CircularDependencyError` | `DI_CIRCULAR_DEPENDENCY` |
-| `PluginDependencyError` | `PLUGIN_DEPENDENCY` |
-| `ConfigValidationError` (fields `plugin`, `issues`) | `CONFIG_INVALID` |
-| `LifecycleError` | `LIFECYCLE` |
+| Class | `code` | When |
+|---|---|---|
+| `ContextUnavailableError` | `CONTEXT_UNAVAILABLE` | `ctx()` called outside `runWithContext` — use `tryCtx()` when a context is optional. |
+| `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | `container.get(TOKEN)` with nothing registered for it. |
+| `CircularDependencyError` | `DI_CIRCULAR_DEPENDENCY` | A resolution cycle; the message lists the full chain. |
+| `CaptiveDependencyError` | `DI_CAPTIVE_DEPENDENCY` | A `scoped` token was resolved inside a `singleton` factory — see above. |
+| `PluginDependencyError` | `PLUGIN_DEPENDENCY` | Duplicate plugin name, a missing `dependsOn`, or a plugin cycle. |
+| `ConfigValidationError` (fields `plugin`, `issues`) | `CONFIG_INVALID` | The plugin's `config` slice failed its `configSchema`, at boot. |
+| `LifecycleError` | `LIFECYCLE` | `boot()` called more than once. |
+| `BasaltError` | `DURATION_INVALID` | `parseDuration` got something it can't parse. |
+
+`shutdown()` does not use a `BasaltError`: if several plugins fail to shut down it throws a native `AggregateError` — every other plugin still shuts down first.
 
 ### Metrics
 
@@ -396,4 +482,7 @@ All extend `BasaltError`, which has a stable `code` (you can safely do `if (erro
 - **`@basaltkit/config`** — provides `configPlugin`, which registers a `ConfigRepository` in the core container via the `CONFIG` token.
 - **`@basaltkit/env`** — uses core's `BasaltError` for its `EnvValidationError`; usually the first step before assembling the `config` object you pass to `createApp`.
 - **`@basaltkit/events`** — provides `eventsPlugin` (an event bus on the `EVENTS` token) and `outboxPlugin`; both are core plugins, and the outbox uses `tryCtx()` to read the tenant from the context.
+- **`@basaltkit/http` and the adapters** — the request pipeline creates a `RequestContext` per request and a per-request container scope (`ctx().container`), which is where `scoped` bindings live.
 - Any package in the ecosystem extends the `BasaltHooks` and `RequestContext` types via *module augmentation* to add typed hooks and context fields.
+
+Guides: [Concepts](/guide/concepts) · [Adapters](/guide/adapters) · [Configuration](/guide/config) · [Observability](/guide/observability)

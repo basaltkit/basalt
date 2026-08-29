@@ -14,7 +14,7 @@ The Basalt adapter for [Hono](https://hono.dev): the same typed routes, enricher
 
 This module connects Hono to Basalt. **Routes** (a path + HTTP method, e.g. `POST /echo`) are defined with the `route()` function from `@basaltkit/http`, with [Zod](https://zod.dev) schemas that validate the body, query, and URL parameters — and give you TypeScript types for free. The adapter converts each Hono request into Basalt's neutral format, runs the shared pipeline (validation, *enrichers* — functions that enrich the request context — and *guards* — functions that can reject it, e.g. authentication), and returns responses with errors in a stable format.
 
-The main benefit is **portability**: a route written here runs unchanged on `@basaltkit/fastify` and `@basaltkit/express`; and the neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@basaltkit/http` work on Hono exactly the same way.
+The main benefit is **portability**: a route written here runs unchanged on `@basaltkit/fastify` and `@basaltkit/express` — **the three adapters are equals**. Routes, enrichers, guards, the per-request context, standardized errors, the neutral 404, ETags (`meta.etag`), SSE, per-route rate limits and the boot-time guarded-meta check all behave identically. The neutral edge plugins (security, health, metrics, tracing, OpenAPI) from `@basaltkit/http` work on Hono exactly the same way.
 
 ## Installation
 
@@ -110,6 +110,57 @@ Unexpected errors respond with `500` and `{ error: { code: 'INTERNAL_ERROR', ...
 ### Request body: what the adapter interprets
 
 The adapter reads the body based on `Content-Type`: `application/json` → JSON object; forms (`form`) → Hono's `parseBody()`; other text → string; empty or invalid body → `undefined` (Zod validation handles the rest). `GET`/`HEAD` requests never have a body.
+
+### Body-size limit — `bodyLimit`
+
+Hono and edge runtimes impose **no** default cap on a request body, so an upload is
+unbounded unless something stops it. The plugin installs a guard that rejects any request
+whose `Content-Length` exceeds the limit with `413` and
+`{ code: 'PAYLOAD_TOO_LARGE', message: … }` — **before the body is read**.
+
+```ts
+import { DEFAULT_BODY_LIMIT, honoPlugin } from '@basaltkit/hono'
+
+honoPlugin({ routes, bodyLimit: 5 * 1024 * 1024 }) // 5 MiB
+DEFAULT_BODY_LIMIT // 1_048_576 — 1 MiB, the default
+```
+
+> Note this checks the declared `Content-Length`; it is a cheap first line of defence, not
+> a streaming byte counter.
+
+### Guarded route meta — the boot check
+
+If a route declares `meta.auth`, `meta.can` or `meta.teamRole` and **no registered plugin
+enforces that key**, the route would serve unprotected. `honoPlugin` refuses to boot: it
+calls `assertRoutesGuarded()` in its boot phase and throws `UnguardedRouteMetaError`
+(code `HTTP_UNGUARDED_ROUTE_META`), naming every offending route and key, before a single
+request is served.
+
+Fix it by registering the enforcing plugin (`auth` → `authPlugin`, `can` →
+`permissionsPlugin`, `teamRole` → `teamsPlugin`). If protection really does happen at an
+outer edge (a Worker in front, a gateway), waive it explicitly:
+
+```ts
+honoPlugin({ routes, allowUnguardedMeta: true })      // waive every key
+honoPlugin({ routes, allowUnguardedMeta: ['auth'] })  // waive one key
+```
+
+Fastify and Express run the identical check with the identical option.
+
+### The neutral 404
+
+Unmatched routes get the same JSON body on every adapter —
+`{ "error": { "code": "NOT_FOUND", "message": "Route not found." } }` (`NOT_FOUND_RESPONSE`
+from `@basaltkit/http`) — instead of Hono's plain-text default. An app that calls
+`hono.notFound(…)` *later* still wins (Hono keeps the last handler); pass `notFound: false`
+to opt out entirely.
+
+### Streaming — SSE
+
+A handler returning `sse(producer)` from `@basaltkit/http` becomes a `Response` backed by a
+web `ReadableStream`, so it streams on Node, Bun, Deno and edge alike. Client aborts
+(`request.signal`) are relayed to `stream.onClose()`. Same handler code as on Fastify and
+Express.
 
 ### Enrichers and guards (authentication, tenancy, …)
 
@@ -226,10 +277,29 @@ In this mode errors are still standardized (each handler wraps `toErrorResponse`
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
 | `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
 | `app` | `Hono` | No | `new Hono()` | Bring your own Hono app; otherwise a new one is created. |
+| `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes. A later `hono.notFound(…)` of your own still wins; `false` opts out entirely. |
+| `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` = `1_048_576` (1 MiB) | Maximum request body in bytes. A request whose `Content-Length` exceeds it is rejected `413 PAYLOAD_TOO_LARGE` before the body is read — Hono/edge has no default cap of its own. |
 
 Behavior: registers the Hono app on the `HONO` token and an `HttpServerCollector` on the `HTTP_SERVER` token. On the `app:booted` event it mounts, in order: *after-hooks* middleware (metrics/tracing, measuring duration), *pre-hooks* middleware (security/CORS/rate limit; if one of these responds, the route doesn't run), the Basalt routes, and the extra edge plugin routes (`/livez`, `/metrics`, `/openapi.json`, …). Publishes the routes to the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
-> Note: this plugin has no `shutdown` step of its own — stopping the server (`serve` from `@hono/node-server`, etc.) is your responsibility.
+> Note: this plugin has no `shutdown` step of its own — Basalt never starts a listener for you, so stopping the server (`serve` from `@hono/node-server`, etc.) is your responsibility.
+
+### `DEFAULT_BODY_LIMIT`
+
+`1_048_576` (1 MiB) — the default for `honoPlugin({ bodyLimit })`, exported so you can
+reason about it or reuse it.
+
+### Errors
+
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
+| `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares `auth`/`can`/`teamRole` with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
+| — | `PAYLOAD_TOO_LARGE` | 413 | Declared `Content-Length` exceeds `bodyLimit`. Body shape here is flat (`{ code, message }`), not the nested `{ error: … }` envelope. |
+| — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
+| — | `INTERNAL_ERROR` | 500 | Any other thrown error. The real message never reaches the client. |
 
 ### `HONO`
 
@@ -247,7 +317,7 @@ Dependency injection token (`Token<Hono>`): `app.container.get(HONO)` returns th
 
 ### What to import from where
 
-This package only exports `honoPlugin`, `registerRoutes`, `HONO`, and `HonoPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `securityPlugin`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**.
+This package exports `honoPlugin`, `registerRoutes`, `HONO`, `DEFAULT_BODY_LIMIT`, and `HonoPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `NOT_FOUND_RESPONSE`, `sse`, `securityPlugin`, `RedisRateLimitStore`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, `escapeHtml`/`pageCsp`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**. (Unlike `@basaltkit/fastify`, this package re-exports nothing; that is a naming choice, not a capability gap.)
 
 ## Common errors and solutions (FAQ)
 
@@ -272,3 +342,6 @@ This package only exports `honoPlugin`, `registerRoutes`, `HONO`, and `HonoPlugi
 - **`@basaltkit/fastify` / `@basaltkit/express`** — sibling adapters: the same routes, enrichers, guards, and edge plugins run on any of them without changes; switching frameworks (or runtime — Node → edge) is just switching the plugin.
 - **`@basaltkit/auth` / `@basaltkit/tenancy` / `@basaltkit/permissions`** — register guards/enrichers on `'http:guards'`/`'http:enrichers'` and read the routes' `meta` (e.g. `meta: { auth: true }`); this adapter applies them automatically.
 - **`@basaltkit/sdk` and the CLI** — consume the `'http:routes'` bucket (routes + Zod schemas) that this plugin publishes.
+- **`@basaltkit/testing`** — `createTestApp({ adapter: 'hono' })` runs your suite against this adapter in-process (`hono.fetch(new Request(…))`, no socket).
+
+Guides: [Adapters](/guide/adapters) · [Testing](/guide/testing) · [Security](/guide/security) · [Production](/guide/production)

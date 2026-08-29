@@ -64,8 +64,10 @@ a leading slash, a `..` segment, or control characters is rejected with
 `StorageInvalidKeyError` — so a user-supplied key can never escape its prefix or
 collide with another tenant's.
 
-Uploads are unrestricted by default; pass opt-in limits to `put` to cap size and
-constrain the content type (enforced at the facade, before any driver runs):
+Uploads are unrestricted by default **at this layer** (the higher-level
+[`@basaltkit/files`](/guide/files) pipeline caps uploads at 25 MiB even when you
+configure nothing); pass opt-in limits to `put` to cap size and constrain the
+content type (enforced at the facade, before any driver runs):
 
 ```ts
 await disk.put(key, buffer, {
@@ -164,14 +166,70 @@ or run MinIO locally with an `s3` disk).
 `@basaltkit/files` builds an upload pipeline on top of this (validation, quota,
 metadata) — see the [File uploads guide](/guide/files).
 
-## Errors
+## Image pipeline
+
+Every disk exposes a fluent image pipeline when `storagePlugin` is given an
+`imageProcessor` (from `@basaltkit/image-sharp` — kept out of the core so apps
+that never process images carry no native dependency):
+
+```ts
+import { SharpImageProcessor } from '@basaltkit/image-sharp'
+
+storagePlugin({ disks: { /* … */ }, imageProcessor: new SharpImageProcessor() })
+
+await disk.image('avatar.png').resize(256, 256).webp().save('avatar.webp')
+```
+
+Without a processor, the pipeline's terminal throws
+`ImageProcessingUnavailableError`.
+
+## Options reference
+
+### `storagePlugin(options)`
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `disks` | `Record<string, DiskConfig>` | — (required) | The named disks; each picks a driver |
+| `default` | `string` | first declared disk | Disk returned by `storage.disk()` with no argument |
+| `imageProcessor` | `ImageProcessor` | none | Engine behind `disk.image(…)` — pass `SharpImageProcessor` from `@basaltkit/image-sharp` |
+
+### `DiskConfig` (per disk)
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `driver` | `'local' \| 's3' \| StorageDriver` | — (required) | `'local'` needs `root`; `'s3'` takes the S3 options; an instance plugs in GCS/Azure/custom |
+| `scope` | `(() => string \| undefined) \| null` | `tenants/<ctx().tenant.id>` | Dynamic path prefix resolved on **every** operation — automatic tenant isolation. `null` disables it |
+
+### `PutOptions` (per `put`)
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `contentType` | `string` | none | Stored/served content type (S3 sets `Content-Type`) |
+| `maxBytes` | `number` | uncapped | Facade-enforced size cap — rejects with `STORAGE_TOO_LARGE` before any driver runs |
+| `allowedContentTypes` | `readonly string[]` | any | Facade-enforced allowlist — a missing or unlisted `contentType` rejects with `STORAGE_CONTENT_TYPE` |
+
+### `TemporaryUrlOptions` (per `temporaryUrl`)
+
+| Option | Type | Default | Why |
+| --- | --- | --- | --- |
+| `disposition` | `'attachment' \| 'inline'` | `'attachment'` | Fail-closed against uploaded HTML/SVG rendering top-level on the storage/CDN origin (stored XSS). Opt into `'inline'` only when top-level rendering is deliberate |
+
+The disposition default is honoured by all three signing drivers — S3
+(`ResponseContentDisposition`), GCS (`responseDisposition`) and Azure (SAS
+`contentDisposition`).
+
+## Failure modes & troubleshooting
 
 | Class | Code | When |
 | --- | --- | --- |
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` on a file that doesn't exist |
-| `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | A path escapes the disk root (`../…`) — local driver blocks traversal |
+| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | The key starts with `/`/`\\`, contains a `..` segment or control characters — the facade choke point rejects it on **every** operation, for every driver, before the tenant prefix is applied |
+| `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | A path escapes the disk root — the local driver's own second line of defence |
+| `StorageTooLargeError` | `STORAGE_TOO_LARGE` | `put` with `maxBytes` set and a larger payload |
+| `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` with `allowedContentTypes` set and a missing/unlisted content type |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `disk('name')` for a disk that isn't declared |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` on a driver without support (e.g. `local`) |
+| `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | `disk.image(…)` terminal with no `imageProcessor` configured |
 
 All extend `BasaltError` and carry the `code` above.
 

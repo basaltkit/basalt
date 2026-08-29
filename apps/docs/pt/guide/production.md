@@ -1,21 +1,36 @@
 # Ir para Produção
 
 Uma checklist para pôr uma app Basalt em produção, e onde vive cada capacidade.
-A maior parte está ligada por omissão — esta página é sobre fazer as escolhas
-deliberadas.
+A maior parte está ligada por predefinição — esta página é sobre fazer as
+escolhas deliberadas, e sobre o punhado de coisas que só mordem em produção. Cada
+linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
+
+[[toc]]
 
 ## Checklist
 
 - [ ] **Segredos são fail-closed** — assina com `secret()` para que a produção
-      recuse placeholders. Ver [Segurança](/pt/guide/security#fail-closed-secrets-secret).
+      recuse placeholders. Ver [Segurança](/pt/guide/security#segredos-fail-closed-secret).
 - [ ] **A borda está protegida** — `securityPlugin({ rateLimit, cors, headers })`.
-- [ ] **Logins são limitados** — ligado por omissão em `@basaltkit/auth`.
+- [ ] **Logins são limitados** — ligado por predefinição em `@basaltkit/auth`.
 - [ ] **Mutações são idempotentes** — `idempotencyPlugin()` para `POST`.
+- [ ] **A app arranca a frio com a configuração de produção** — as guardas de boot
+      abaixo só disparam quando chamas mesmo `boot()`.
 - [ ] **Sondas de saúde ligadas** — `healthPlugin({ checks })` para `/livez` + `/readyz`.
-- [ ] **Métricas recolhidas** — `metricsPlugin()` em `/metrics`.
-- [ ] **Tracing exportado** — `tracingPlugin({ exporter })` (OTLP).
+- [ ] **Métricas recolhidas** — `metricsPlugin()` em `/metrics`, e nem ele nem o
+      `/readyz` estão acessíveis a partir da internet.
+- [ ] **Tracing exportado** — `tracingPlugin({ exporter })` (OTLP), com o
+      `serviceName` definido também no **exporter**.
+- [ ] **Nada de importante escreve para `console.error`** — aponta os callbacks de
+      erro assíncronos para o teu logger: `onBridgeError` / `onDeliveryError` do
+      realtime, `onDead` / `onFlushError` do outbox, `onError` / `onJobFailed` dos
+      drivers de fila. Todos usam a consola por predefinição, que a maioria das
+      plataformas descarta. Ver [Observabilidade](/pt/guide/observability).
 - [ ] **API documentada** — `openapiPlugin({ info })`.
 - [ ] **Entrega externa é fiável** — `outboxPlugin` / `webhooksPlugin`.
+- [ ] **O trabalho agendado corre uma vez, não uma vez por réplica** —
+      `.onOneServer()` com um `ScheduleLock` partilhado. Ver
+      [Scheduler](/pt/guide/scheduler).
 - [ ] **Base de dados real** — põe os dados do teu domínio em `@basaltkit/prisma`, e
       troca os stores em memória do framework (auth, teams, subscriptions, permissions,
       comments, audit, activity, notifications) pelos seus backends duráveis
@@ -54,11 +69,29 @@ export function buildApp() {
 }
 ```
 
-::: tip Dica
+::: tip Limites de pedido
 Passa opções do servidor Fastify através de `fastifyPlugin({ fastify })`: `bodyLimit`
 (tamanho máximo do pedido), `requestTimeout`, e `trustProxy` (para que o rate
 limiting e o logging vejam o IP real do cliente por detrás de um load balancer).
 :::
+
+## O que falha ruidosamente no boot
+
+Duas classes de má configuração são apanhadas pelo `boot()` em vez de descobertas
+em produção. Ambas lançam, por isso um deploy mau morre no arranque em vez de
+servir tráfego — o que só é útil se a tua pipeline arrancar mesmo a app (um smoke
+test, ou o primeiro contentor a falhar a sua sonda de readiness).
+
+| Erro | Código | Significa |
+| --- | --- | --- |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | Uma rota declara `meta.auth`, `meta.can` ou `meta.teamRole` e **nenhum plugin registado impõe essa chave** — teria servido sem proteção. Regista o plugin que a impõe (`authPlugin`, `permissionsPlugin`, `teamsPlugin`), ou, se a verificação acontece mesmo numa borda exterior, opta explicitamente por fora com a opção `allowUnguardedMeta: true` do adaptador (ou uma lista de chaves) |
+| `CaptiveDependencyError` | `DI_CAPTIVE_DEPENDENCY` | Um token `scoped` foi resolvido dentro da factory de um **singleton**. O singleton sobrevive a cada scope, por isso serviria a instância por pedido do pedido 1 a todos os pedidos seguintes. Resolve o serviço scoped no momento de uso (`ctx().container`) em vez de na construção |
+
+A verificação de meta sem guarda é a razão por que declarar `meta.can` e esquecer
+o `permissionsPlugin` é uma falha de deploy e não um buraco silencioso de
+autorização. Cobre exatamente as chaves em `GUARDED_META_KEYS`; um valor
+`false`/`undefined` numa rota é uma desativação explícita e nunca é assinalado. Ver
+[Autorização](/pt/guide/authorization) e [Adaptadores](/pt/guide/adapters).
 
 ## Persistência
 
@@ -126,6 +159,7 @@ Com `replicas: []` devolve o primary inalterado, por isso a mesma montagem corre
 em dev e num deploy de nó único. Usas `tenancyExtension()`? Estende o primary **e**
 cada réplica, depois embrulha os clients estendidos. (TLS/detalhes de ligação são
 do teu fornecedor de base de dados; o Basalt só encaminha as chamadas.)
+
 ## Fazer sharding da base de dados
 
 As réplicas escalam leituras; o **sharding escala escritas e armazenamento**,
@@ -190,10 +224,19 @@ O repositório inclui GitHub Actions que fazem gate a cada PR:
 ## Fiabilidade
 
 - **Outbox** (`@basaltkit/events`) — escreve eventos num store durável, retransmite-os
-  para sistemas externos com retries e um teto de dead-letter. Entrega
-  at-least-once que sobrevive a crashes. Ver [Webhooks](/pt/guide/webhooks).
+  para sistemas externos com retries, backoff exponencial e um teto de dead-letter.
+  Entrega at-least-once que sobrevive a crashes — desde que o store seja durável e
+  o `onDead` / `onFlushError` cheguem a um humano. As opções estão em
+  [Persistence](/pt/guide/persistence); o lado da entrega em
+  [Webhooks](/pt/guide/webhooks).
 - **Webhooks** (`@basaltkit/webhooks`) — entrega de saída assinada com backoff,
   subscrições por tenant, despachados automaticamente a partir de eventos de domínio.
+- **Filas** (`@basaltkit/queue`) — trabalho em segundo plano com reporte `onError` /
+  `onJobFailed` ao nível do driver; ver [Filas](/pt/guide/queues).
+- **Realtime** (`@basaltkit/realtime`) — os pushes são fire-and-forget por design e
+  nunca podem falhar uma escrita de domínio, o que também significa que as suas
+  falhas só são visíveis através do `onBridgeError` / `onDeliveryError`. Ver
+  [Realtime](/pt/guide/realtime).
 - **Feature flags** (`@basaltkit/flags`) — targeting por tenant/utilizador e
   rollouts determinísticos para lançamentos seguros e graduais.
 
@@ -201,11 +244,15 @@ O repositório inclui GitHub Actions que fazem gate a cada PR:
 
 `pnpm lint` (ESLint), `pnpm typecheck`, e `pnpm test:coverage` (V8, thresholds
 impostos) correm todos em CI, a par de `pnpm audit`, CodeQL e um job de integração
-com Postgres. As versões movem-se em [lockstep](https://github.com/basaltkit/basalt/blob/main/VERSIONING.md)
-em todo o `@basaltkit/*`, por isso um só intervalo cobre toda a stack.
+com Postgres. Cada pacote `@basaltkit/*` é versionado de forma **independente** —
+depende de cada um com o seu próprio intervalo `^`; o número "Basalt X.Y" na
+navegação é uma etiqueta para uma geração da framework, não a versão de um pacote.
+Ver [Versionamento e compatibilidade](/pt/guide/versioning).
 
 ## Roadmap
 
-Rumo a `1.0`: estabilizar a superfície da API, exportação de **métricas**
-OpenTelemetry de primeira classe (os traces já exportam via OTLP), e mais adaptadores
-de persistência. Acompanha o progresso no [repositório](https://github.com/basaltkit/basalt).
+Passado o `1.0`, a API pública é estável e as mudanças breaking esperam por um
+major. A seguir: exportação de **métricas** OpenTelemetry de primeira classe (os
+traces já exportam via OTLP), e mais adaptadores de persistência. Acompanha o
+progresso no [repositório](https://github.com/basaltkit/basalt), e vê
+[Novidades](/pt/guide/whats-new) para a geração atual.

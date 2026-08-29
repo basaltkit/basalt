@@ -7,6 +7,8 @@ billing, auth, permissions, audit, queues, notifications** — integrated with
 an end-to-end coherence rare on Node.js, and TypeScript inference from the route
 to the client.
 
+[[toc]]
+
 :::tip Try it in the browser
 No local setup needed — boot a runnable Basalt server in a StackBlitz WebContainer:
 
@@ -89,10 +91,20 @@ pnpm install
 cp .env.example .env
 ```
 
-The generated `.env` holds `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` and — with
-auth — an `APP_SECRET` (validated by `src/env.ts` with `@basaltkit/env`). It
-ships a development default; set your own before production, and note that auth
-requires a secret of **at least 16 characters**.
+`.env.example` lists `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` and — with auth — a
+commented-out `APP_SECRET`. All of them are declared and validated in
+`src/env.ts` with [`@basaltkit/env`](/guide/config), and all have development
+defaults, so the app boots even with an empty environment. `APP_SECRET` uses
+`secret({ minLength: 32 })`: it falls back to a throwaway value in development
+and **refuses to boot in production** until you set a real one of at least 32
+characters (`openssl rand -base64 48`).
+
+::: tip `.env` is not loaded for you
+`defineEnv` reads `process.env` and nothing else — copying the file does not
+make its values visible. Export the variables, launch with
+`node --env-file=.env` (Node 22+), or let your process manager inject them.
+See [Configuration](/guide/config).
+:::
 
 ### 3. Run
 
@@ -115,13 +127,16 @@ curl http://localhost:3000/health
 # { "ok": true, "requestId": "…", "tenant": null }
 ```
 
-With auth on (the default), the `/auth/*` routes are already wired. Register, log
-in, then call an authenticated route with the returned token:
+With auth on (the default), `authRoutes()` and `mfaRoutes()` are already wired —
+register, login, refresh, logout, me, email verification, password reset and
+TOTP enrolment. Register, log in, then call an authenticated route with the
+returned token:
 
 ```bash
 curl -X POST http://localhost:3000/auth/register \
   -H 'content-type: application/json' \
   -d '{"email":"ada@example.com","password":"secretpassword1"}'
+# → 202 { "ok": true } — the same answer whether or not the email already exists
 
 curl -X POST http://localhost:3000/auth/login \
   -H 'content-type: application/json' \
@@ -177,10 +192,14 @@ full map (SQLite and Prisma backends for auth, teams, audit, tenancy and more).
 
 ## Where to next
 
-- [Installation](/guide/installation) — package managers, requirements, and
-  adding Basalt to an existing app.
+- [Installation](/guide/installation) — every scaffolder flag, the requirements,
+  the `basalt` CLI, and adding Basalt to an existing app.
+- [Configuration](/guide/config) — `src/env.ts`, fail-closed secrets and the
+  settings repository.
 - [Core Concepts](/guide/concepts) — plugins, the DI container, request context
   and hooks.
 - [HTTP Adapters](/guide/adapters) — the same routes on Fastify, Express or Hono.
+- [Testing](/guide/testing) — boot the app in-process, impersonate a user or
+  tenant, fake mail and queue, travel through time.
 - [Web UI & components](/guide/web-ui) — a type-safe SDK and admin tables/forms.
 - [Build a notes SaaS](/cookbook/notes-saas) — a complete end-to-end walkthrough.

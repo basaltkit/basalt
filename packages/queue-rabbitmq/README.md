@@ -80,26 +80,75 @@ The driver declares these `capabilities`, so, combined with `onUnsupported`, a j
 
 ### `new RabbitmqQueueDriver(options)`
 
-| Option | Type | Default | Description |
+| Option | Type | Default | Purpose |
 |---|---|---|---|
 | `url` | `string` | — (required) | AMQP URL, e.g. `amqp://user:pass@host:5672`. |
-| `maxPriority` | `number` | `10` | Maximum priority level (`x-max-priority`). |
-| `connect` | `(url) => Promise<AmqpConnection>` | amqplib | Injectable connector — used in tests so no broker is needed. |
+| `maxPriority` | `number` | `10` | Maximum priority level declared as `x-max-priority` on the main queue. Raise it only if you actually use more levels — RabbitMQ allocates a sub-queue per level. |
+| `drainTimeoutMs` | `number` | `10_000` | How long `close()` waits for in-flight handlers to finish so their acks land on a live channel. Anything unfinished stays **unacked** and the broker redelivers it. Raise it if your handlers are long-running. |
+| `onError` | `(error: unknown, info: { source: 'connection' \| 'channel' }) => void` | `console.error` with the source | The single fault channel for this driver — see below. |
+| `connect` | `(url: string) => Promise<AmqpConnection>` | `amqplib` | Injectable connector; tests pass a fake so no broker is needed. |
 
-Implements the `QueueDriver` contract from `@basaltkit/queue` (`add`, `startWorker`, `setExecutor`, `close`, `capabilities`).
+Implements the `QueueDriver` contract from `@basaltkit/queue` (`add`, `startWorker`, `setExecutor`, `close`, `capabilities`). It does **not** implement the optional `stats` / `retryFailed`, so `basalt queue:stats` and `basalt queue:retry` report the operation as unsupported.
+
+### Failure hooks
+
+`onError` is the only callback, and its default (`console.error`) is deliberately never silent —
+amqplib surfaces broker faults as EventEmitter `'error'` events, and an unlistened one is
+**fatal** in Node.
+
+| `source` | Raised when |
+|---|---|
+| `'connection'` | The amqplib connection emitted `'error'`, **or** a worker failed to connect/assert/consume at boot. Without this the app would report healthy with zero workers and the rejection would kill the process. |
+| `'channel'` | The channel emitted `'error'`, **or** a retry/dead-letter re-publish went unconfirmed / the `ack` itself threw. Nothing was acked in that case, so the broker still owns the job and redelivers it. |
+
+There is no `onJobFailed` here: a job that exhausts `attempts` is routed to `q.dead`, which *is*
+the report. Watch that queue's depth.
+
+### Exported errors
+
+This driver throws no error classes of its own — every fault reaches you through `onError`, and
+option-compatibility errors (`UnsupportedJobOptionError`, `QUEUE_UNSUPPORTED_OPTION`) come from
+`@basaltkit/queue` before the driver is ever called.
+
+### Hard limits
+
+Attempt and backoff values travel in message headers, which a broker client other than yours
+could forge, so the consumer clamps what it reads: at most **50** attempts and a backoff TTL of
+at most **24 h** (the exponent is capped at 16). A crafted message cannot turn the retry loop
+into an amplification attack.
 
 ## Important caveat
 
 `q.delay` uses a **per-message TTL**, and RabbitMQ only releases a message once it reaches the *head* of the queue (head-of-line blocking). For widely varying delays at large scale, a message with a long TTL can block the ones behind it. If you need mixed delays at high throughput, consider the [RabbitMQ Delayed Message Exchange plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange) — the driver's model stays the same, only the delay mechanism changes.
 
-## Delivery guarantees
+## Delivery guarantees: publisher confirms before ack
 
-The driver prefers a publisher-confirm channel (amqplib
-`createConfirmChannel`) and only acks a message after the broker confirms any
-retry/dead-letter re-publish — no ack-before-confirm job-loss window. `close()`
-drains in-flight handlers (`drainTimeoutMs`, default 10 s); unfinished work
-stays unacked and is redelivered. Worker-boot failures (broker unreachable)
-surface through `onError` instead of an unhandled rejection.
+This is the property that makes the driver safe to lose a broker under, so it is worth being
+precise about the ordering.
+
+On connect the driver asks for a **publisher-confirm channel** (`createConfirmChannel`) and
+falls back to a plain channel only if the client doesn't offer one. On a confirm channel,
+`sendToQueue` returning does **not** mean the broker has the message — `waitForConfirms()`
+resolving does.
+
+- **Dispatching.** `add()` publishes and then awaits `waitForConfirms()`. `dispatch()` therefore
+  resolves only once the broker has taken responsibility for the job — a caller that got a
+  resolved promise can trust the job exists.
+- **Failing a job.** When a handler throws, the consumer re-publishes the message (to `q.delay`
+  for another attempt, or to `q.dead` when `attempts` is exhausted), awaits
+  `waitForConfirms()`, and **only then** acks the original. Acking first would open a window
+  where the original is gone and the copy never arrived — the job silently vanishes.
+- **When the confirm never comes.** If `waitForConfirms()` rejects, or the `ack` itself throws,
+  the driver reports through `onError({ source: 'channel' })` and returns. Nothing was acked, so
+  the durable original is still on the broker and gets redelivered. The cost of a broker blip is
+  a duplicate delivery, never a lost job — **make your handlers idempotent**.
+- **Shutting down.** `close()` stops accepting new messages, drains in-flight handlers for up to
+  `drainTimeoutMs` (default 10 s) so their acks land on a live channel, then tears the channel
+  and connection down. Whatever didn't finish stays unacked and is redelivered.
+
+On a plain (non-confirm) channel `waitForConfirms` is absent and simply skipped: publishes are
+fire-and-forget and the ack-before-confirm window reopens. Use a client that supports
+`createConfirmChannel` — amqplib does.
 
 ## How it connects to other modules
 

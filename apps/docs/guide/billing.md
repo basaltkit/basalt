@@ -7,6 +7,29 @@ quotas read local state, so they are instant and never call the gateway.
 
 [[toc]]
 
+## Mental model
+
+Billing is five pieces, and knowing which one owns a question answers most of
+the rest:
+
+| Piece | Owns | Talks to the gateway? |
+| --- | --- | --- |
+| **Plans** (`definePlans`) | The catalog: price, trial, features per plan | No — a plain object, read synchronously |
+| **`Subscriptions`** (`SUBSCRIPTIONS`) | *What a billable is entitled to right now*: plan, period, status | Only for money moves (subscribe, checkout, portal, swap, cancel) |
+| **`features(billableId)`** | Enforcement: `can`, `limit`, `usage`, `remaining`, `consume` | **Never** — reads local state, so it's instant on every request |
+| **`Invoices`** (`INVOICES`) | *What they were charged*: line items, discount, tax, totals, status | No — pure domain; you call `markPaid` when a payment confirms |
+| **Gateway driver** | Moving money and verifying webhooks | It *is* the gateway |
+
+The direction of truth matters: **your database is the read model.** A gateway
+webhook writes into it (`handleWebhook`), and everything else — guards, feature
+checks, quota enforcement — reads from it. No request path ever waits on
+Stripe.
+
+The **billable** is whatever id you pass. By convention it is the tenant id, and
+the route guards and the HTTP routes resolve it from `ctx().tenant.id`, which is
+why [tenant-membership enforcement](/guide/teams) is load-bearing for billing —
+see the warning in the Stripe section below.
+
 ## Define plans
 
 A plan is a price plus a set of features. `definePlans` preserves the exact
@@ -86,14 +109,9 @@ export const subscriptions = new Subscriptions({
 })
 ```
 
-| Option | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `plans` | `Plans` | — | Your plan catalog (required) |
-| `fallbackPlan` | `string` | — | Plan for those with no subscription |
-| `gateway` | `BillingGateway` | — | Stripe/Paddle driver for card subscriptions |
-| `store` | `SubscriptionStore` | in-memory | Where subscriptions are persisted |
-| `usage` | `UsageStore` | in-memory | Metering counters (atomic `consume`) |
-| `webhooks` | `WebhookStore` | in-memory | Webhook dedupe by event id |
+The constructor fails fast on a `fallbackPlan` that isn't in the catalog, so a
+typo is a boot error rather than a silent "nobody has any features". Every
+option is tabled in **Options reference** below.
 
 ## Subscribe and manage
 
@@ -243,6 +261,27 @@ must never be anonymous. If (and only if) authentication happens at an outer
 edge, opt out deliberately with `billingRoutes({ ..., auth: false })` /
 `invoiceRoutes({ auth: false })`. The webhook route is the exception: it is
 authenticated by the gateway **signature**, never by a session.
+
+::: danger `meta.auth` alone does not isolate tenants
+`billingRoutes()` and `invoiceRoutes()` authenticate the **user** but resolve
+the **billable from the tenant** (`ctx().tenant.id`) — and the tenant comes from
+a header or a `Host`, both client-controlled. Authentication proves *who is
+calling*, not *which tenant they belong to*. Register
+[`tenantMembershipPlugin()`](/guide/teams) and a valid user of tenant A calling
+`/billing/checkout`, `/billing/portal` or `/billing/invoices` with tenant B's
+identifier is stopped with `403 TEAM_NOT_A_MEMBER` **before any billing code
+runs** — no Checkout session minted against B's plan, no Portal URL to B's card,
+no read of B's payment history. Without it, `meta.auth` lets any logged-in user
+operate on any tenant's billing. The same applies to your own
+`meta: { subscribed }` / `meta: { feature }` routes. See
+[Teams](/guide/teams) and the [security guide](/guide/security).
+:::
+
+Note that `subscribed` and `feature` are **not** part of the framework's
+guarded-meta check (only `auth`, `can` and `teamRole` are). A route annotated
+`meta: { subscribed: 'pro' }` with `subscriptionsPlugin` missing boots happily
+and serves **unguarded** — register the plugin, and cover the paywall with a
+test.
 
 An abandoned Checkout can never change the live subscription: `checkout()`
 records the intent as `pendingPlan`, and the plan only switches when the
@@ -531,18 +570,21 @@ export const payments = new ProxyPayGateway({
   apiKey: process.env.PROXYPAY_API_KEY!,        // sent as `Authorization: Token <key>`
   entity: process.env.PROXYPAY_ENTITY!,         // your Multicaixa Entity (Entidade)
   sandbox: process.env.NODE_ENV !== 'production', // api.sandbox.proxypay.co.ao
-  webhookSecret: process.env.PROXYPAY_WEBHOOK_SECRET, // HMAC-SHA256, optional
+  // Optional — defaults to apiKey, which is what ProxyPay signs the callback with
+  webhookSecret: process.env.PROXYPAY_WEBHOOK_SECRET,
 })
 ```
 
-| Option | Type | Purpose |
-| --- | --- | --- |
-| `apiKey` | `string` | Sent as `Authorization: Token <apiKey>` (required) |
-| `entity` | `string` | Your Multicaixa Entity, assigned by ProxyPay/EMIS (required) |
-| `sandbox` | `boolean` | Use the sandbox host. Default `false` (production) |
-| `baseUrl` | `string` | Override the base URL entirely |
-| `webhookSecret` | `string` | Shared secret for HMAC-SHA256 webhook verification |
-| `fetch` | `FetchLike` | Injected fetch; defaults to the global `fetch` |
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | — (required) | Sent as `Authorization: Token <apiKey>` |
+| `entity` | `string` | — (required) | Your Multicaixa Entity, assigned by ProxyPay/EMIS |
+| `sandbox` | `boolean` | `false` | Use the sandbox host `api.sandbox.proxypay.co.ao` |
+| `baseUrl` | `string` | derived from `sandbox` | Override the base URL entirely |
+| `webhookSecret` | `string` | **your `apiKey`** | HMAC-SHA256 (hex) over the raw body, in `x-signature`. Verification is therefore **on out of the box**; pass `''` to disable it entirely |
+| `callbackUrl` | `string` | — | Echoed back on the webhook as `custom_fields.callback_url`. ProxyPay's real delivery target is set account-wide in the dashboard |
+| `expiryDays` | `number` | `30` | Fallback validity window when `PaymentRequest.expiresAt` is omitted — ProxyPay *requires* an end date, so one is always sent |
+| `fetch` | `FetchLike` | global `fetch` | Injected fetch |
 
 ### Create a payment and show the reference
 
@@ -615,6 +657,182 @@ fallback in the ProxyPay driver — rely on the webhook.
 For development and tests, `FakePaymentGateway` (from `@basaltkit/subscriptions`)
 implements the same contract in-process: it records requests in `payments` and
 its `verifyWebhook` returns a synthetic `payment.succeeded`.
+
+## Options reference
+
+### `subscriptionsPlugin(options)`
+
+The same options as `new Subscriptions(...)` minus `hooks` (the plugin passes
+the app's `HookBus`), plus `invoices`.
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `plans` | `Plans` | — (required) | The catalog from `definePlans` or `loadPlans(store)`. Consumed synchronously, so it must be fully resolved before boot |
+| `fallbackPlan` | `string` | — | Plan applied to billables with no subscription (usually `'free'`). Validated at construction — an unknown name throws `UnknownPlanError` immediately |
+| `gateway` | `BillingGateway` | — | Card-subscription driver (Stripe, Paddle, Lemon Squeezy). Without one, everything still works locally; only `checkout`/`portal` require it |
+| `store` | `SubscriptionStore` | in-memory | Where subscriptions live — swap for `subscriptions-sqlite`/`-prisma` or they vanish on restart |
+| `usage` | `UsageStore` | in-memory | Metering counters. The default is per-process, so a quota **can be overshot** across replicas; use SQLite/Prisma/Redis for atomic `consume` |
+| `webhooks` | `WebhookStore` | in-memory | Gateway-event dedupe by event id. Per-process by default, which means a retry landing on another replica is reprocessed |
+| `invoices` | `InvoicesOptions` | `{}` | Config for the `Invoices` engine registered under `INVOICES` (below) |
+
+### `billingRoutes(options)`
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `successUrl` | `string` | — (required) | Where the gateway returns the customer after Checkout. The request body may override it per call |
+| `cancelUrl` | `string` | — (required) | Where an abandoned Checkout returns to |
+| `portalReturnUrl` | `string` | `successUrl` | Where the Customer Portal returns to |
+| `auth` | `boolean` | `true` | Requires `meta: { auth: true }` on both routes. Set `false` **only** when authentication happens at an outer edge — these routes mint live payment-management URLs |
+
+`POST /billing/checkout` takes `{ plan, period?, successUrl?, cancelUrl? }` and
+`POST /billing/portal` takes an optional `{ returnUrl }`; both return `{ url }`.
+
+### `invoiceRoutes(options)`
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `auth` | `boolean` | `true` | Same rule as `billingRoutes` — invoices are the tenant's payment history |
+
+All three routes are read-only and ownership-checked: an invoice whose
+`billableId` isn't the current tenant reads as `404 INVOICE_NOT_FOUND`, never as
+someone else's data. Issuing and finalizing stay server-side through `INVOICES`.
+
+### `billingWebhookRoute(gateway)`
+
+Takes the gateway instance as its only argument — no options. It is deliberately
+**not** `meta.auth`-protected: the gateway signature is the authentication.
+Returns `200 { received: true, ignored: true }` for an event the driver doesn't
+map, and `200 { received: true, duplicate: true }` for one already processed.
+
+### `Invoices` — `InvoicesOptions`
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `store` | `InvoiceStore` | `MemoryInvoiceStore` | Durable invoices; also owns `nextNumber()`, which must allocate atomically |
+| `numberPrefix` | `string` | `'INV'` | Human invoice number prefix — `INV-2026-0001` |
+| `taxRate` | `number` | `0` | Applied to (subtotal − discount) when a draft omits `tax`. `0.14` = 14% |
+| `now` | `() => number` | `Date.now` | Injectable clock (tests, backdating) |
+| `idFactory` | `() => string` | `randomUUID` | Injectable id generator |
+
+### `Coupons` — `CouponsOptions`
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `store` | `CouponStore` | `MemoryCouponStore` | Durable coupon registry; `incrementRedemptions` must be atomic or `maxRedemptions` leaks |
+| `now` | `() => number` | `Date.now` | Injectable clock, for `redeemBy` |
+
+### `StripeBillingGateway(options)`
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `secretKey` | `string` | — (required) | Stripe secret API key |
+| `webhookSecret` | `string` | — (required) | Endpoint signing secret (`whsec_…`). Verification fails closed without it |
+| `priceId` | `(plan, period) => string` | — (required) | Maps a plan + period to a Stripe Price ID |
+| `customerId` | `(billableId) => string \| Promise<string>` | — (required) | Resolves (or creates) the Stripe Customer for a billable |
+| `resolveBillableId` | `(event) => string \| undefined` | reads `data.object.metadata.billableId` | Override when your events carry the id elsewhere |
+| `tolerance` | `number` (seconds) | `300` | Webhook timestamp tolerance — replay window |
+| `fetch` | `typeof fetch` | global `fetch` | Injected HTTP client (tests) |
+| `now` | `() => number` | `Date.now` | Injectable clock in ms |
+| `apiBase` | `string` | `https://api.stripe.com` | API base, for mocks |
+
+### `PaddleBillingGateway(options)`
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | — (required) | Paddle API key (Bearer) |
+| `webhookSecret` | `string` | — (required) | Notification signing secret; verifies the `Paddle-Signature` (`ts=…;h1=…`) scheme |
+| `priceId` | `(plan, period) => string` | — (required) | Maps a plan + period to a Paddle Price ID (`pri_…`) |
+| `customerId` | `(billableId) => string \| Promise<string>` | — (required) | Paddle Customer ID (`ctm_…`) |
+| `resolveBillableId` | `(event) => string \| undefined` | reads `data.custom_data.billableId` | Override for events carrying the id elsewhere |
+| `tolerance` | `number` (seconds) | `300` | Webhook timestamp tolerance |
+| `fetch` / `now` / `apiBase` | — | global `fetch` / `Date.now` / `https://api.paddle.com` | Injection points for tests |
+
+Paddle is checkout-first: both `createSubscription` and `createCheckoutSession`
+create a **transaction**, and the durable subscription id arrives later on a
+`subscription.*` webhook as `gatewayRef`.
+
+### `LemonSqueezyBillingGateway(options)`
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `apiKey` | `string` | — (required) | Lemon Squeezy API key (Bearer) |
+| `webhookSecret` | `string` | — (required) | Verifies the `X-Signature` header (HMAC-SHA256 hex over the raw body) |
+| `storeId` | `string` | — (required) | Your store id — needed to create checkouts |
+| `variantId` | `(plan, period) => string` | — (required) | Maps a plan + period to a Variant ID |
+| `customerId` | `(billableId) => string \| Promise<string>` | — | **Required for the portal only**; omit it and `portal()` has nothing to open |
+| `resolveBillableId` | `(event) => string \| undefined` | reads `meta.custom_data.billableId` | Override for events carrying the id elsewhere |
+| `fetch` / `apiBase` | — | global `fetch` / `https://api.lemonsqueezy.com/v1` | Injection points for tests |
+
+Lemon Squeezy is a merchant of record and checkout-first, with the same
+"subscription id arrives by webhook" shape as Paddle. It has no timestamp
+tolerance — the `X-Signature` scheme carries no timestamp.
+
+### `ProxyPayGateway(options)` / `AppyPayGateway(options)`
+
+These implement the reference-based `PaymentGateway` contract, not
+`BillingGateway`. ProxyPay's options are tabled under **Construct the gateway**
+above; AppyPay (`@basaltkit/subscriptions-appypay`, pre-release) adds OAuth2
+(`clientId`, `clientSecret`, `tokenUrl`, `scope?`) and `defaultMethod`. The full
+story is in [Reference & mobile-money payments](/guide/reference-payments).
+
+### Durable store factories
+
+| Factory | Package | Returns |
+| --- | --- | --- |
+| `sqliteSubscriptionsStores(dbOrLocation = ':memory:')` | `@basaltkit/subscriptions-sqlite` | `{ db, store, usage, webhooks }` — opens and migrates |
+| `prismaSubscriptionsStores(client)` | `@basaltkit/subscriptions-prisma` | `{ store, usage, webhooks }` — throws immediately if the client has no `subscription` model |
+| `sqlitePaymentStores(...)` / `prismaPaymentStores(client)` | same packages | The `PaymentStore` + `RecurringStore` for reference payments |
+| `renderInvoicePdf(invoice, { locale?, businessName? })` | `@basaltkit/subscriptions-pdf` | `Promise<Buffer>` — keeps pdfkit out of the core |
+
+## Failure modes & troubleshooting
+
+| Error | Code | HTTP | When |
+| --- | --- | --- | --- |
+| `NotSubscribedError` | `BILLING_SUBSCRIPTION_REQUIRED` | 402 | `meta.subscribed` unmet; **or no tenant in context** on a billing/invoice route; or `swap`/`cancel`/`resume` with no active subscription |
+| `FeatureUnavailableError` | `BILLING_FEATURE_UNAVAILABLE` | 403 | `meta.feature` not granted; or `consume()` on a feature whose limit is 0 (or with no plan and no `fallbackPlan`) |
+| `QuotaExceededError` | `BILLING_QUOTA_EXCEEDED` | 402 | `consume()` would take usage past the limit — the store's atomic check refused |
+| `GatewayUnsupportedError` | `BILLING_GATEWAY_UNSUPPORTED` | 501 | `checkout()` or `portal()` with no gateway, or one that doesn't implement that capability |
+| `UnknownPlanError` | `BILLING_UNKNOWN_PLAN` | — | A plan name absent from the catalog — including a mistyped `fallbackPlan`, which throws at construction |
+| `WebhookInvalidError` | `BILLING_WEBHOOK_INVALID` | 400 | Signature verification failed — almost always a parsed (re-serialized) body |
+| `WebhookSecretMissingError` | `BILLING_WEBHOOK_SECRET_MISSING` | 500 | `verifyWebhook` with no signing secret configured. Fails closed: an unsigned callback is never trusted |
+| `PaymentAmountMismatchError` | `BILLING_PAYMENT_AMOUNT_MISMATCH` | 400 | A confirmed payment's amount ≠ the amount requested for that payment id — underpayment or a forged callback |
+| `StripeRequestError` · `PaddleRequestError` · `LemonSqueezyRequestError` | `BILLING_GATEWAY_ERROR` | — | The gateway's REST API returned a non-2xx; the original status is on `err.httpStatus` |
+| `InvoiceNotFoundError` | `INVOICE_NOT_FOUND` | 404 | Unknown invoice id — **or** one belonging to another tenant, via `invoiceRoutes` |
+| `InvoiceStateError` | `INVOICE_INVALID_STATE` | 409 | `finalize` a non-draft, `markPaid` a non-open, `void` a paid one, `addLine` to a finalized one — or `planLine()` on a `'custom'` price |
+| `CouponInvalidError` | `COUPON_INVALID` | 422 | Bad shape: both/neither of `percentOff`/`amountOff`, percent outside 0–100, `amountOff` without a currency, `maxRedemptions < 1` |
+| `CouponNotRedeemableError` | `COUPON_NOT_REDEEMABLE` | 422 | Expired (`redeemBy`), redemption cap reached, or the invoice currency differs from a fixed-amount coupon's |
+| `CouponNotFoundError` | `COUPON_NOT_FOUND` | 404 | No coupon with that code |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | `billingRoutes()`/`invoiceRoutes()` registered with their default `auth: true` but no `authPlugin` |
+
+- **`400 BILLING_WEBHOOK_INVALID` that won't go away** — the signature is
+  computed over the untouched request bytes. Configure a raw-body parser for
+  `/billing/webhook`; re-serializing a parsed object changes the bytes and breaks
+  the HMAC.
+- **Every request gets `402 BILLING_SUBSCRIPTION_REQUIRED`, even on the free
+  plan** — the guard resolves the billable from `ctx().tenant.id`. No tenancy
+  plugin, or no tenant identifier on the request, means no billable. Check
+  tenancy first; then check that `fallbackPlan` is set.
+- **A quota was overshot under load** — the in-memory `UsageStore` is
+  per-process. Only the SQLite, Prisma and Redis stores do a real atomic
+  check-and-increment (conditional `updateMany` / a single Lua `EVAL`).
+- **A webhook was applied twice after a gateway retry** — the dedupe
+  `WebhookStore` defaults to in-memory, so a retry landing on another replica
+  looks fresh. Use `RedisWebhookStore` or the SQLite/Prisma one. (Within one
+  process it is exact: a failed state write releases the claim so the retry can
+  reprocess.)
+- **A user of tenant A opened Checkout for tenant B** — `meta.auth` proves
+  identity, not membership. Register
+  [`tenantMembershipPlugin()`](/guide/teams).
+- **`501 BILLING_GATEWAY_UNSUPPORTED` from `/billing/portal`** — the driver
+  doesn't implement `createPortalSession` for your configuration; Lemon Squeezy,
+  for instance, needs `customerId` to open one.
+- **An abandoned Checkout changed nothing, as intended** — `checkout()` only
+  records `pendingPlan`/`pendingPeriod`. The plan is promoted only when a
+  `payment.succeeded` arrives with a **new** `gatewayRef`, so a renewal of the
+  existing subscription can never escalate the plan.
+- **Trials never expire** — gateway-backed trials are settled by the gateway's
+  webhook and are deliberately ignored by `expireTrials()`. Local (gateway-less)
+  trials need `expireTrials()` run from the [scheduler](/guide/scheduler).
 
 ## Domain hooks
 

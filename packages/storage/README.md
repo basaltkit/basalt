@@ -98,6 +98,38 @@ await disk.put('report.pdf', pdfBuffer, { contentType: 'application/pdf' })
 const text = (await disk.get('docs/read-me.txt')).toString()
 ```
 
+### Upload limits (opt-in, per call)
+
+`put()` accepts two facade-enforced guards. They run in `Disk.put`, **before**
+the driver is touched, so every driver — local, S3, GCS, Azure, your own — gets
+the same behaviour:
+
+```ts
+await disk.put('avatar.png', bytes, {
+  contentType: 'image/png',
+  maxBytes: 2 * 1024 * 1024,                 // → STORAGE_TOO_LARGE above 2 MiB
+  allowedContentTypes: ['image/png', 'image/jpeg'], // → STORAGE_CONTENT_TYPE otherwise
+})
+```
+
+Both are **opt-in and have no default**: this package caps nothing on its own.
+The cap is enforced for the `Buffer | string` inputs the driver contract accepts,
+whose byte length is known up front.
+
+If you want a size limit that applies by default, use
+[`@basaltkit/files`](https://www.npmjs.com/package/@basaltkit/files) on top —
+its upload pipeline applies `DEFAULT_MAX_FILE_SIZE` = **25 MiB
+(26 214 400 bytes)** when you configure nothing. Requests are separately capped
+by your HTTP adapter's body limit.
+
+### Key validation
+
+Every path goes through one guard before scoping, so a key can never escape its
+tenant prefix or defeat prefix-based `list()` isolation. Keys that start with
+`/` or `\`, contain a `..` segment, or carry NUL/control characters throw
+`StorageInvalidKeyError` (`STORAGE_INVALID_KEY`). Ordinary nested keys like
+`avatars/123/pic.png` are untouched.
+
 ### Listing, checking and deleting
 
 ```ts
@@ -146,6 +178,28 @@ const url = await storage.disk('invoices').temporaryUrl('2026/01.pdf', '15m')
 ```
 
 The expiration accepts milliseconds or strings like `'500ms'`, `'30s'`, `'15m'`, `'2h'`, `'7d'`. On the `local` driver this call throws `TemporaryUrlUnsupportedError`.
+
+#### Content disposition — attachment by default
+
+`Disk.temporaryUrl` always passes an **explicit** disposition down to the driver:
+`'attachment'` unless you deliberately ask for `'inline'`. The value is pinned
+into the signature itself — `ResponseContentDisposition` on S3,
+`responseDisposition` on GCS, `contentDisposition` on the Azure SAS — so the
+storage origin/CDN cannot be talked out of it.
+
+```ts
+// default — the browser downloads the object, it never renders top-level
+await disk.temporaryUrl('user-upload.svg', '15m')
+
+// deliberate opt-in — only for content you know is safe to render
+await disk.temporaryUrl('brochure.pdf', '15m', { disposition: 'inline' })
+```
+
+Why it is fail-closed: a user can upload a file and *declare* it
+`text/html` or `image/svg+xml`. Served inline off the bucket origin, that is
+stored XSS on the storage domain. `attachment` neutralises it. Embedded uses
+(`<img>`, `<video>`) render regardless of disposition, so avatars and media are
+unaffected.
 
 ### Automatic tenant isolation
 
@@ -225,7 +279,8 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | `exists` | `exists(path: string): Promise<boolean>` | Checks whether the file exists. |
 | `delete` | `delete(path: string): Promise<boolean>` | Deletes; `true` if it existed. |
 | `list` | `list(prefix?: string): Promise<string[]>` | Lists paths under the prefix (recursive, sorted). Prefix defaults to `''`. |
-| `temporaryUrl` | `temporaryUrl(path: string, expiresIn: DurationInput): Promise<string>` | Pre-signed URL; throws `TemporaryUrlUnsupportedError` if the driver doesn't support it. |
+| `temporaryUrl` | `temporaryUrl(path: string, expiresIn: DurationInput, options?: TemporaryUrlOptions): Promise<string>` | Pre-signed URL, served `attachment` unless `{ disposition: 'inline' }`; throws `TemporaryUrlUnsupportedError` if the driver doesn't support it. |
+| `image` | `image(path: string): ImagePipeline` | Opens the lazy image pipeline for `path`. |
 
 #### `DiskOptions`
 
@@ -235,9 +290,17 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 
 #### `PutOptions`
 
-| Option | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `contentType` | `string` | No | — | File's Content-Type (used by the `s3` driver; ignored by `local`). |
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `contentType` | `string` | — | Content type stored with the object (S3/GCS/Azure; ignored by `local`). Also what `allowedContentTypes` is checked against. |
+| `maxBytes` | `number` | — (uncapped) | Facade-enforced upload cap. Over it → `STORAGE_TOO_LARGE`, before the driver runs. Opt-in — set it on user-supplied content. |
+| `allowedContentTypes` | `readonly string[]` | — (anything) | Facade-enforced allowlist. A missing or unlisted `contentType` → `STORAGE_CONTENT_TYPE`. Exact matches only, no wildcards (use `@basaltkit/files` for `image/*`). |
+
+#### `TemporaryUrlOptions`
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `disposition` | `'attachment' \| 'inline'` | `'attachment'` | How the signed URL serves the object. Leave it alone for user-uploaded content; `'inline'` only when top-level rendering is deliberate. |
 
 ### `class Storage`
 
@@ -256,13 +319,16 @@ Registers `Storage` in the container under the `STORAGE` token and disconnects a
 |---|---|---|---|---|
 | `disks` | `Record<string, DiskConfig>` | Yes | — | Map of disk name → configuration. |
 | `default` | `string` | No | first registered disk | Disk returned by `storage.disk()` with no argument. |
+| `imageProcessor` | `ImageProcessor` | No | — | Engine shared by every disk's `.image(...)` pipeline. Pass `new SharpImageProcessor()` from `@basaltkit/image-sharp`; without it the pipeline terminals throw `ImageProcessingUnavailableError`. |
 
 #### `DiskConfig`
 
-One of two forms (both also accept `scope` from `DiskOptions`):
+One of three forms (all also accept `scope` from `DiskOptions`):
 
 - `{ driver: 'local', root: string }` — `root` is the root folder on the filesystem.
 - `{ driver: 's3', ...S3DriverOptions }` — see below.
+- `{ driver: <a StorageDriver instance> }` — any custom driver, e.g.
+  `@basaltkit/storage-gcs` or `@basaltkit/storage-azure`.
 
 ### `STORAGE`
 
@@ -290,16 +356,34 @@ Dependency injection token: `app.container.get(STORAGE)` returns the `Storage`.
 
 Contract for building your own driver: `name` (readable string, used in errors), `put`, `get`, `exists`, `delete`, `list`, `temporaryUrl?` (optional, receives the expiration in milliseconds) and `disconnect`.
 
-### Exported errors
+### Errors
 
-| Class | Code | When it happens |
-|---|---|---|
-| `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` on a file that doesn't exist. |
-| `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | Path tries to escape the disk's root (`../…`). |
-| `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `storage.disk('name')` for a disk that isn't declared. |
-| `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` on a driver without support (e.g. `local`). |
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | 500 | `get()` on a path that doesn't exist. |
+| `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | 500 | The `local` driver resolved a path outside its `root` (`../…`). |
+| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | 500 | The key starts with `/` or `\`, has a `..` segment, or contains NUL/control characters. Checked for every driver. |
+| `StorageTooLargeError` | `STORAGE_TOO_LARGE` | 500 | `put()` content exceeds the `maxBytes` you passed. |
+| `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | 500 | `put()` `contentType` is missing from, or absent in, `allowedContentTypes`. |
+| `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | 500 | `storage.disk('name')` for a disk that isn't declared. |
+| `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | 500 | `temporaryUrl()` on a driver without support (e.g. `local`). |
+| `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | 500 | An image-pipeline terminal ran with no `imageProcessor` configured. |
 
-All extend `BasaltError` from `@basaltkit/core` and have a `code` property with the code above.
+All extend `BasaltError` from `@basaltkit/core` and carry the `code` above.
+
+None of them declare an HTTP `status`, so the adapters' shared error mapper
+turns them into a generic **500 `INTERNAL_ERROR`** with the message withheld —
+storage failures are not a client-facing contract. Catch them in your handler
+and translate deliberately (a missing file is usually your 404, a rejected
+upload usually your 413/415). `@basaltkit/files` already does this: its
+equivalents carry 413/415/402/404/400.
+
+### Hooks & events
+
+`@basaltkit/storage` emits **no hooks** — it is a passive I/O layer. The upload
+lifecycle events (`file:uploaded`, `file:deleted`, `file:scanned`) live in
+[`@basaltkit/files`](https://www.npmjs.com/package/@basaltkit/files), which is
+built on top of this package.
 
 ## Common errors and solutions (FAQ)
 
@@ -327,3 +411,5 @@ A `Buffer` is raw bytes. Convert it: `buffer.toString()` for text, `JSON.parse(b
 - **`@basaltkit/tenancy`** — with the tenancy plugin identifying each request's tenant, disks isolate files per tenant automatically.
 - **`@basaltkit/http` / `@basaltkit/express` / `@basaltkit/fastify` / `@basaltkit/hono`** — in upload/download routes, get `Storage` from the container and use `disk.put`/`disk.get`/`disk.temporaryUrl`.
 - **`@basaltkit/prisma`** — a common pattern: store the file on a disk and its path/metadata in the database.
+
+Guides: [Storage](/guide/storage) · [Files & uploads](/guide/files) · [Tenancy](/guide/tenancy).

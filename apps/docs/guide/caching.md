@@ -65,6 +65,37 @@ promises. Two servers can still run the factory at the same time, but within one
 process it runs exactly once even under 100 concurrent misses.
 :::
 
+### Stale-while-revalidate (SWR)
+
+Pass `{ ttl, staleFor }` instead of a plain TTL and `remember` trades a bounded
+amount of staleness for never blocking a hot read on the factory:
+
+```ts
+// Fresh for 1 minute; for the next 10 minutes a stale copy is served
+// instantly while ONE background refresh runs.
+const stats = await cache.remember(
+  'dashboard-stats',
+  { ttl: '1m', staleFor: '10m' },
+  () => computeExpensiveStats(),
+)
+```
+
+A read lands in one of three windows:
+
+| Window | Age of entry | Behaviour |
+| --- | --- | --- |
+| Fresh | `< ttl` | Served from cache, factory never runs |
+| Stale | `ttl` … `ttl + staleFor` | Served **immediately**, one background revalidation refreshes the entry |
+| Expired | `> ttl + staleFor` | Hard miss — the read blocks on the factory like a plain `remember` |
+
+Background revalidation reuses the same per-process dedupe as stampede
+protection — at most one refresh per key is in flight, and a failed refresh
+keeps serving the stale value (it never surfaces as an unhandled rejection).
+SWR entries are stored as a small envelope carrying the freshness windows; the
+driver-level TTL is `ttl + staleFor`, so an expired entry really disappears. A
+raw value written by `put()` or a plain `remember` is served as fresh —
+switching a key to SWR needs no migration.
+
 ## forget / flush
 
 ```ts
@@ -164,6 +195,50 @@ class MyCacheDriver implements CacheDriver {
 
 `TieredCacheDriver` is a small reference implementation — it's pure composition
 over other drivers.
+
+
+## Options reference
+
+`cachePlugin(options)` — everything is optional:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `driver` | `'memory' \| 'redis' \| CacheDriver` | `'memory'` | Storage backend; pass an instance for tiered/custom drivers |
+| `url` | `string` | — | Redis connection URL — **required** with `driver: 'redis'` |
+| `prefix` | `string` | `'basalt'` | Root prefix for every key |
+| `scope` | `(() => string \| undefined) \| null` | reads `ctx().tenant.id` → `tenant:<id>` | Dynamic prefix segment resolved on every operation — the per-tenant isolation. `null` = a deliberate **global** cache (no scoping, no fail-closed) |
+| `onMissingScope` | `'global' \| 'error'` | see below | What a read/write does when the scope fn resolves nothing: `'global'` shares one namespace, `'error'` throws `MissingCacheScopeError`. `flush()` **always** fails closed, regardless |
+| `now` | `() => number` | `Date.now` | Injectable clock for the SWR freshness windows (tests) |
+
+**How the `onMissingScope` default is chosen.** When
+[`tenancyPlugin`](/guide/tenancy) is registered, it publishes a
+`'tenancy:active'` metadata marker; `cachePlugin` reads it and defaults to
+`'error'` — a multi-tenant app fails closed instead of silently sharing one
+namespace across tenants. Without the marker (single-tenant app) the default
+stays `'global'`. An explicit `onMissingScope` value or a custom `scope`
+function always wins over this detection.
+
+## Failure modes & troubleshooting
+
+| Error | Code | When |
+| --- | --- | --- |
+| `MissingCacheScopeError` | `CACHE_SCOPE_MISSING` | A tenant-scoped cache resolved no tenant: any read/write with `onMissingScope: 'error'` (the default under `tenancyPlugin`), and **every** `flush()` with an unresolved scope |
+
+- **`CACHE_SCOPE_MISSING` from a background job, seed script or boot task** —
+  the code runs outside a request, so no tenant was resolved. Run it inside a
+  tenant context (`tenancy.run(tenantId, …)` /
+  `runWithContext({ tenant })`), or — only if the data is genuinely shared —
+  opt out with `onMissingScope: 'global'` or a dedicated `scope: null` cache.
+- **`flush()` throws even with `onMissingScope: 'global'`** — intended: with no
+  scope resolved, a flush would wipe the whole namespace, i.e. **every**
+  tenant's keys at once, so it always fails closed. Only `scope: null` (a
+  deliberately global cache) flushes without a tenant.
+- **Values come back subtly wrong on Redis** — JSON round-trip: `Date`
+  becomes a string, `Map`/class instances don't survive. Store plain data (see
+  the warning under [Drivers](#drivers)).
+- **The factory runs more often than expected across a fleet** — stampede
+  dedupe and SWR revalidation are **per process**; two replicas may compute
+  concurrently. Within one process a key computes exactly once.
 
 
 ## Conditional requests (ETags)

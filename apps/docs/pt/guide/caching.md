@@ -67,6 +67,39 @@ em curso. Dois servidores podem ainda executar a factory ao mesmo tempo, mas den
 de um processo ela corre exatamente uma vez, mesmo sob 100 misses concorrentes.
 :::
 
+### Stale-while-revalidate (SWR)
+
+Passa `{ ttl, staleFor }` em vez de um TTL simples e o `remember` troca uma
+quantidade limitada de desatualização por nunca bloquear uma leitura quente na
+factory:
+
+```ts
+// Fresh for 1 minute; for the next 10 minutes a stale copy is served
+// instantly while ONE background refresh runs.
+const stats = await cache.remember(
+  'dashboard-stats',
+  { ttl: '1m', staleFor: '10m' },
+  () => computeExpensiveStats(),
+)
+```
+
+Uma leitura cai numa de três janelas:
+
+| Janela | Idade da entrada | Comportamento |
+| --- | --- | --- |
+| Fresca | `< ttl` | Servida do cache, a factory nunca corre |
+| Stale | `ttl` … `ttl + staleFor` | Servida **imediatamente**, uma revalidação em background atualiza a entrada |
+| Expirada | `> ttl + staleFor` | Miss a sério — a leitura bloqueia na factory como num `remember` simples |
+
+A revalidação em background reutiliza a mesma deduplicação por processo da
+proteção contra stampede — no máximo um refresh por chave em curso, e um
+refresh falhado continua a servir o valor stale (nunca aparece como unhandled
+rejection). As entradas SWR são guardadas num pequeno envelope com as janelas
+de frescura; o TTL ao nível do driver é `ttl + staleFor`, por isso uma entrada
+expirada desaparece mesmo. Um valor cru escrito por `put()` ou por um
+`remember` simples é servido como fresco — mudar uma chave para SWR não precisa
+de migração.
+
 ## forget / flush
 
 ```ts
@@ -168,6 +201,52 @@ class MyCacheDriver implements CacheDriver {
 
 `TieredCacheDriver` é uma pequena implementação de referência — é composição pura
 sobre outros drivers.
+
+
+## Referência de opções
+
+`cachePlugin(options)` — tudo é opcional:
+
+| Opção | Tipo | Omissão | Propósito |
+| --- | --- | --- | --- |
+| `driver` | `'memory' \| 'redis' \| CacheDriver` | `'memory'` | Backend de armazenamento; passa uma instância para drivers tiered/personalizados |
+| `url` | `string` | — | URL de conexão Redis — **obrigatório** com `driver: 'redis'` |
+| `prefix` | `string` | `'basalt'` | Prefixo raiz de todas as chaves |
+| `scope` | `(() => string \| undefined) \| null` | lê `ctx().tenant.id` → `tenant:<id>` | Segmento dinâmico do prefixo, resolvido em cada operação — o isolamento por tenant. `null` = cache **global** deliberado (sem scoping, sem fail-closed) |
+| `onMissingScope` | `'global' \| 'error'` | vê abaixo | O que uma leitura/escrita faz quando a função de scope não resolve nada: `'global'` partilha um namespace, `'error'` lança `MissingCacheScopeError`. O `flush()` falha **sempre** fechado, independentemente |
+| `now` | `() => number` | `Date.now` | Relógio injetável para as janelas de frescura SWR (testes) |
+
+**Como a omissão de `onMissingScope` é escolhida.** Quando o
+[`tenancyPlugin`](/pt/guide/tenancy) está registado, publica um marcador de
+metadata `'tenancy:active'`; o `cachePlugin` lê-o e passa a omissão para
+`'error'` — uma app multi-tenant falha fechada em vez de partilhar
+silenciosamente um namespace entre tenants. Sem o marcador (app single-tenant)
+a omissão continua `'global'`. Um `onMissingScope` explícito ou uma função
+`scope` personalizada ganham sempre a esta deteção.
+
+## Modos de falha e troubleshooting
+
+| Erro | Código | Quando |
+| --- | --- | --- |
+| `MissingCacheScopeError` | `CACHE_SCOPE_MISSING` | Um cache scoped por tenant não resolveu tenant nenhum: qualquer leitura/escrita com `onMissingScope: 'error'` (a omissão sob `tenancyPlugin`), e **todos** os `flush()` com scope por resolver |
+
+- **`CACHE_SCOPE_MISSING` num job em background, seed script ou tarefa de
+  boot** — o código corre fora de um pedido, por isso nenhum tenant foi
+  resolvido. Corre-o dentro de um contexto de tenant
+  (`tenancy.run(tenantId, …)` / `runWithContext({ tenant })`), ou — só se os
+  dados forem genuinamente partilhados — opta por sair com
+  `onMissingScope: 'global'` ou um cache dedicado com `scope: null`.
+- **O `flush()` lança mesmo com `onMissingScope: 'global'`** — intencional: sem
+  scope resolvido, um flush limparia o namespace inteiro, ou seja, as chaves de
+  **todos** os tenants de uma vez, por isso falha sempre fechado. Só
+  `scope: null` (um cache deliberadamente global) faz flush sem tenant.
+- **Valores voltam subtilmente errados no Redis** — ida e volta JSON: um `Date`
+  volta como string, `Map`/instâncias de classe não sobrevivem. Guarda dados
+  simples (vê o aviso em [Drivers](#drivers)).
+- **A factory corre mais vezes do que o esperado numa frota** — a deduplicação
+  de stampede e a revalidação SWR são **por processo**; duas réplicas podem
+  computar em simultâneo. Dentro de um processo, cada chave computa exatamente
+  uma vez.
 
 
 ## Pedidos condicionais (ETags)

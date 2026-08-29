@@ -49,7 +49,8 @@ import { REALTIME_HUB, websocketConnection } from '@basaltkit/realtime'
 const hub = app.container.get(REALTIME_HUB)
 const conn = websocketConnection({ tenantId: tenant.id, userId: user.id }, socket)
 hub.register(conn)
-hub.subscribe(conn.id, 'notes') // subscribe to the channels this client has access to
+// subscribe() is async and returns false when refused (authorize gate, caps, bad name)
+if (!(await hub.subscribe(conn.id, 'notes'))) socket.close()
 
 socket.on('close', () => hub.unregister(conn.id))
 ```
@@ -65,7 +66,7 @@ const conn = sseConnection(
   { write: (chunk) => reply.raw.write(chunk), end: () => reply.raw.end() },
 )
 hub.register(conn)
-hub.subscribe(conn.id, 'notes')
+if (!(await hub.subscribe(conn.id, 'notes'))) reply.raw.end()
 reply.raw.on('close', () => hub.unregister(conn.id))
 ```
 
@@ -99,6 +100,40 @@ realtimePlugin({
 
 `bridgeRule` validates the types against the hook's payload, so `p` has the right type.
 
+`BridgeRule` fields:
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `hook` | `keyof BasaltHooks & string` | — (required) | The core hook to listen to. |
+| `tenant` | `(payload) => string \| undefined` | — (required) | Which tenant receives the push. Return `undefined` to skip this event — that is the intended way to filter. |
+| `channel` | `string \| ((payload) => string)` | — (required) | Target channel; a function lets you shard per record (`` (p) => `notes:${p.folderId}` ``). |
+| `event` | `string` | — (required) | Event name the client listens for. |
+| `data` | `(payload) => unknown` | the whole hook payload | What to send. **Set this** when the hook payload contains fields the client shouldn't see. |
+
+## Authorizing subscriptions
+
+By default the hub accepts any channel name a connection asks for, within its tenant. That is
+fine when every channel in a tenant is readable by every member of it — and a data leak the
+moment it isn't (a user's private channel, an admin feed). Pass `authorize`:
+
+```ts
+realtimePlugin({
+  authorize: (connection, channel) => {
+    if (channel.startsWith('user:')) return channel === `user:${connection.userId}`
+    if (channel.startsWith('admin:')) return isAdmin(connection.userId)
+    return true
+  },
+})
+```
+
+The gate runs server-side on every `hub.subscribe()`, before the connection is attached, and may
+be async. A refusal makes `subscribe()` resolve `false` — your adapter decides whether to close
+the socket or just ignore the request. Never trust a channel name that came from the client
+without this.
+
+The two caps (`maxSubscriptionsPerConnection`, `maxChannelLength`) are enforced in the same
+place, so a client that loops `subscribe` cannot grow the hub's maps without bound.
+
 ## Presence
 
 ```ts
@@ -127,12 +162,48 @@ realtimePlugin({
 
 ### `realtimePlugin(options?)`
 
-| Option | Type | Default | Description |
+| Option | Type | Default | Purpose |
 |---|---|---|---|
-| `backplane` | `RealtimeBackplane` | `MemoryBackplane` | Fan-out across instances. |
-| `bridge` | `BridgeRule[]` | `[]` | Hook → channel rules (use `bridgeRule(...)`). |
+| `backplane` | `RealtimeBackplane` | `new MemoryBackplane()` | Fan-out across instances. The memory backplane loops straight back and only serves one process. |
+| `bridge` | `BridgeRule[]` | `[]` | Hook → channel rules (build them with `bridgeRule(...)`). |
+| `authorize` | `(connection: Connection, channel: string) => boolean \| Promise<boolean>` | allow all | **Server-side subscription gate.** Set this whenever a channel carries anything not readable by every member of the tenant — without it, any authenticated connection can subscribe to any channel name inside its tenant. Return `false` to refuse. |
+| `maxSubscriptionsPerConnection` | `number` | `1000` | Cap on distinct channels one connection may hold. A DoS bound: without it a client can subscribe in a loop and grow the hub's maps unbounded. |
+| `maxChannelLength` | `number` | `256` | Cap on a channel name's length. Same reason; empty names are refused too. |
+| `onBridgeError` | `(error: unknown, info: { hook: string; channel: string; event: string }) => void` | `console.error` naming the hook, channel and event | A bridged broadcast failed — see [Failure hooks](#failure-hooks). |
+| `onDeliveryError` | `(error: unknown, info: { connectionId: string; tenantId: string; channel: string; event: string }) => void` | `console.error` naming the connection, tenant, channel and event | A single client's `send` threw — see [Failure hooks](#failure-hooks). |
 
-Registers the `REALTIME` (`Realtime`) and `REALTIME_HUB` (`RealtimeHub`) tokens.
+Registers the `REALTIME` (`Realtime`) and `REALTIME_HUB` (`RealtimeHub`) tokens, `start()`s the
+hub on boot (subscribing the backplane), wires the bridge rules to the core hook bus, and
+`close()`s the hub on shutdown.
+
+`authorize`, `maxSubscriptionsPerConnection`, `maxChannelLength` and `onDeliveryError` are
+forwarded to the hub — they are also `RealtimeHubOptions`, so a hand-built `new RealtimeHub(backplane, options)`
+takes exactly the same four.
+
+### Failure hooks
+
+Realtime has no error classes. Both failure paths are **callbacks with a non-silent default**,
+because a realtime push is cosmetic fan-out and must never fail the domain write that triggered
+it — but it must not vanish either.
+
+| Hook | Fires when | Default | What happens regardless |
+|---|---|---|---|
+| `onBridgeError` | A `bridge` rule's broadcast rejected — typically the backplane is down (Redis unreachable). | `console.error` with hook → channel, event | The hook handler is fire-and-forget: the failure is caught, so the domain write that emitted the hook still succeeds. Clients simply miss that push. |
+| `onDeliveryError` | One connection's `send()` **threw** during local delivery — a dead or closing socket. | `console.error` with the connection, tenant, channel and event | That connection is **pruned** (`unregister`), and every remaining subscriber still receives the message. One dead socket never stops the fan-out, and never throws into the backplane's message emitter (fatal on a real ioredis subscriber). |
+
+Point both at your logger in production — a permanently failing bridge means clients are
+silently stale, and a spike in delivery errors means sockets are dying faster than they are
+being unregistered.
+
+Separately, the `RedisBackplane` drops malformed or unparseable messages arriving on the shared
+pub/sub channel and logs them with `console.error`; it never throws into ioredis's `'message'`
+emitter, where an escaped exception would be an `uncaughtException`.
+
+### Errors
+
+| Error | Code | When |
+|---|---|---|
+| — | — | This package exports no error classes. Refusals are reported as return values (`hub.subscribe(...)` resolves `false`) and faults as callbacks (`onBridgeError`, `onDeliveryError`). |
 
 ### `class Realtime`
 
@@ -144,7 +215,29 @@ Registers the `REALTIME` (`Realtime`) and `REALTIME_HUB` (`RealtimeHub`) tokens.
 
 ### `class RealtimeHub`
 
-`register(conn)` · `unregister(connId)` · `subscribe(connId, channel)` · `unsubscribe(connId, channel)` · `publish(tenantId, channel, event, data)` · `presence(tenantId, channel)` · `count(tenantId, channel)` · `start()` · `close()`.
+`new RealtimeHub(backplane?, options?: RealtimeHubOptions)`.
+
+| Method | Signature | Description |
+|---|---|---|
+| `start` | `() => Promise<void>` | Subscribes the backplane so cross-instance messages reach local connections. The plugin calls it at boot. |
+| `register` | `(connection: Connection) => void` | Tracks a live connection. |
+| `unregister` | `(connectionId: string) => void` | Drops the connection and all its subscriptions/presence. |
+| `subscribe` | `(connectionId: string, channel: string) => Promise<boolean>` | Attaches a connection to a channel. **Returns whether it was accepted** — `false` when the connection is unknown, the name is empty or longer than `maxChannelLength`, `maxSubscriptionsPerConnection` is reached, or `authorize` refused. Idempotent (a repeat returns `true`). |
+| `unsubscribe` | `(connectionId: string, channel: string) => void` | Detaches from one channel. |
+| `publish` | `(tenantId, channel, event, data) => Promise<void>` | Publishes to every subscriber across all instances. |
+| `presence` | `(tenantId, channel) => string[]` | Distinct user ids on **this node**. |
+| `count` | `(tenantId, channel) => number` | Connection count on **this node**. |
+| `close` | `() => Promise<void>` | Closes every connection and the backplane. |
+
+**`subscribe()` is `async` and its `false` is the security signal.** Adapters **must** check it
+and refuse or close the client — ignoring the result turns a denied `authorize` into a silent
+no-op that looks like a working subscription.
+
+### `interface Connection`
+
+What a transport hands the hub: `id`, `tenantId`, optional `userId`, `send(message)`, `close()`.
+The hub never touches a socket directly, which is what keeps the core framework-neutral and
+unit-testable with fakes. `userId` is what makes a connection visible in `presence()`.
 
 ### Transports
 

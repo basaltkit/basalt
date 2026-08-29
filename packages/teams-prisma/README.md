@@ -100,6 +100,42 @@ over it.
 so a real `PrismaClient` is assignable and can be passed directly — Prisma's
 generated method generics can't be reproduced by a hand-written interface.
 
+## Exports
+
+| Export | Kind | Purpose |
+| --- | --- | --- |
+| `prismaTeamsStores(client)` | function | Validates the client and returns `{ memberships, invitations }` for `teamsPlugin`. |
+| `PrismaMembershipStore` | class | `MembershipStore` over the `TeamMembership` model. `new PrismaMembershipStore(client)`. |
+| `PrismaInvitationStore` | class | `InvitationStore` over the `TeamInvitation` model. `new PrismaInvitationStore(client)`. |
+| `PrismaTeamsClient` | interface | The two delegates the stores touch: `teamMembership`, `teamInvitation`. |
+| `PrismaTeamsStores` | interface | `{ memberships, invitations }`. |
+
+`prismaTeamsStores` takes the client only — there are no options. Role ranks,
+invite TTL and the escalation guard all belong to `teamsPlugin`.
+
+The `token` column holds the **SHA-256 hash** of the invitation token, never the
+raw value — `@basaltkit/teams` hashes before it reaches the store, so the
+`@unique` index is on the hash.
+
+## Errors
+
+This package defines no `BasaltError` subclasses and no error codes.
+
+| Error | Code | HTTP | When |
+| --- | --- | --- | --- |
+| `Error` | — | boot / first use | The client has no `teamMembership` model. `prismaTeamsStores()` fails fast with a message naming the missing model and pointing at `basalt prisma:sync`, instead of a cryptic "reading 'create' of undefined". A lazy/proxy client (database-per-tenant) skips the check and is validated on first query. |
+
+Prisma's own errors (connection, unique constraint) propagate unchanged. The
+team errors a client sees — `TEAM_INVITE_INVALID`, `TEAM_NOT_A_MEMBER`,
+`TEAM_ROLE_REQUIRED`, `TEAM_LAST_OWNER` — come from `@basaltkit/teams`.
+
+## Hooks & events
+
+None. `team:invited` / `team:joined` / `team:role_changed` /
+`team:member_removed` are emitted by `@basaltkit/teams`.
+
+Guides: [Teams](/guide/teams) · [Persistence](/guide/persistence).
+
 ## License
 
 MIT

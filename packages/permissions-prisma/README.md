@@ -44,6 +44,19 @@ const p = prismaAccessStore(prisma)   // pass your client directly, no cast
 createApp({ plugins: [permissionsPlugin({ store: p.store })] })
 ```
 
+## Exports
+
+| Export | Kind | Purpose |
+| --- | --- | --- |
+| `prismaAccessStore(client)` | function | Validates the client and returns `{ store }`, named to drop straight into `permissionsPlugin({ store })`. |
+| `PrismaAccessStore` | class | The `AccessStore` implementation. `new PrismaAccessStore(client)` — use it directly to share a client across stores. |
+| `PrismaPermissionsClient` | interface | The three delegates the store touches: `permUserRole`, `permUserPermission`, `permRolePermission`. |
+| `PrismaPermissionsStores` | interface | `{ store: PrismaAccessStore }`. |
+
+`prismaAccessStore` takes the client only — there are no options to configure.
+Everything else (scope semantics, wildcards, super-admin) belongs to
+`@basaltkit/permissions`.
+
 ## Notes
 
 - Role assignments and permission grants are **sets** — every write is a
@@ -51,6 +64,24 @@ createApp({ plugins: [permissionsPlugin({ store: p.store })] })
 - Everything is **scoped**; grants never leak between scopes.
 - `PrismaPermissionsClient` types delegate **arguments** as `any` (returns stay
   precise) so a real `PrismaClient` is assignable and passes directly.
+
+## Errors
+
+This package defines no `BasaltError` subclasses and no error codes.
+
+| Error | Code | HTTP | When |
+| --- | --- | --- | --- |
+| `Error` | — | boot / first use | The client has no `permUserRole` model. `prismaAccessStore()` fails fast with a message naming the missing model and pointing at `basalt prisma:sync`, instead of a cryptic "reading 'findMany' of undefined". A lazy/proxy client (database-per-tenant) skips the check and is validated on first query. |
+
+Prisma's own errors (connection, constraint) propagate unchanged. The
+authorization errors a client sees — `PERMISSION_DENIED`, `AUTH_REQUIRED`,
+`PERMISSION_META_INVALID` — come from `@basaltkit/permissions`.
+
+## Hooks & events
+
+None.
+
+Guides: [Authorization](/guide/authorization) · [Persistence](/guide/persistence).
 
 ## License
 

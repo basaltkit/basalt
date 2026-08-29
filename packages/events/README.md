@@ -212,27 +212,66 @@ Creates a `BasaltEvent<T>`: `{ name, schema? }`. `T` defaults to `void` (event w
 
 `eventsPlugin()` returns the `basalt:events` plugin, which registers a singleton `EventBus` in the container under the token `EVENTS` (`Token<EventBus>`).
 
-### `EventValidationError`
+### Errors
 
-Thrown by `emit` when the payload fails the schema, **before** any listener runs. Extends `BasaltError` with `code: 'EVENT_INVALID'`; fields `event` (name) and `issues` (validation details).
+| Error | Code | When |
+|---|---|---|
+| `EventValidationError` | `EVENT_INVALID` | `emit()` was given a payload that fails the event's schema. Thrown **before** any listener runs, so there are no partial effects. Extends `BasaltError`; carries `event` (the name) and `issues` (the validation details). |
+| `AggregateError` | — (built-in) | One or more listeners threw. All matching listeners still ran; `error.errors` holds each individual failure. Also how a failing `captureEvents` write reaches the emitter. |
+
+The outbox itself throws nothing — its failures are per-entry (`markFailed`, then `onDead`) or
+store-level (`onFlushError`).
 
 ### `Outbox`
 
 `new Outbox(store, options?)`:
 
-| Option (`OutboxOptions`) | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `maxAttempts` | `number` | no | `10` | Attempts before an entry becomes "dead" (excluded from future flushes). |
-| `now` | `() => number` | no | `Date.now` | Clock (useful in tests). |
+| Option (`OutboxOptions`) | Type | Default | Purpose |
+|---|---|---|---|
+| `maxAttempts` | `number` | `10` | Attempts before an entry is left as **dead** — `pending()` stops selecting it, so it is never flushed again. It stays in the store with its `lastError` for inspection. |
+| `backoff` | `OutboxBackoff \| false` | `{ delayMs: 1000, type: 'exponential', maxDelayMs: 60_000 }` | Retry spacing for failed entries. `false` retries on every flush — only sensible when the dispatch target is cheap and local. |
+| `onDead` | `(entry: OutboxEntry, error: unknown) => void` | `console.error` naming the event, id and attempt count | Called **once**, at the moment an entry exhausts `maxAttempts`. Dead events should never be silent — this is where you page someone. The `entry` passed carries the post-increment `attempts`. |
+| `now` | `() => number` | `Date.now` | Injectable clock; tests drive the backoff windows with it. |
+
+`OutboxBackoff`:
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `delayMs` | `number` | `1000` | Base delay before retrying a failed entry. |
+| `type` | `'fixed' \| 'exponential'` | `'exponential'` | `'exponential'` doubles per attempt; `'fixed'` keeps `delayMs` constant. |
+| `maxDelayMs` | `number` | `60_000` | Ceiling for the exponential delay (the exponent is also clamped at 16, so the delay can never overflow to `Infinity`). |
+
+**Backoff is process-local.** It is tracked in the relay process's memory — no store or schema
+change. After a failure, *this* process skips the entry until its delay elapses; another replica,
+or this one after a restart, may retry it sooner. Worst case is one extra immediate retry.
+Delivery stays at-least-once either way.
 
 | Method | Parameters | Returns | Description |
 |---|---|---|---|
 | `enqueue(event, payload, tenantId?)` | `string`, `unknown`, `string?` | `Promise<OutboxEntry>` | Writes an entry with `createdAt = now()`. |
-| `flush(dispatch, batchSize?)` | `OutboxDispatch`, `number` (default `50`) | `Promise<FlushResult>` | Delivers up to `batchSize` pending entries (FIFO); marks success/failure per entry. |
+| `flush(dispatch, batchSize?)` | `OutboxDispatch`, `number` (default `50`) | `Promise<FlushResult>` | Delivers up to `batchSize` pending entries (FIFO); marks success/failure per entry. **Overlap-safe** — see below. |
+
+**Overlapping-tick coalescing.** `flush()` keeps the in-flight promise: while one flush is
+running, every further call returns *that* promise instead of selecting a batch of its own. This
+matters because a slow dispatch (a webhook endpoint that takes 8 s) under a 1 s `intervalMs`
+would otherwise have eight timers all reading the same un-published rows and delivering each
+entry eight times. With coalescing, the extra ticks simply await the running flush and get its
+`FlushResult`. It does **not** coordinate across processes — two replays on two replicas can
+still both deliver, which is why delivery is at-least-once and receivers must be idempotent.
 
 `OutboxDispatch` = `(entry: OutboxEntry) => void | Promise<void>`; `FlushResult` = `{ published: number; failed: number }`.
 
 `OutboxEntry`: `id`, `event`, `payload`, `tenantId?`, `createdAt`, `attempts`, `publishedAt?`, `lastError?`.
+
+### Outbox failure hooks
+
+| Hook | Fires when | Default | Receives |
+|---|---|---|---|
+| `onDead` | An entry exhausts `maxAttempts` — once per entry, at that transition. | `console.error` with event, id and attempts | `(entry: OutboxEntry, error: unknown)` |
+| `onFlushError` | A timer/shutdown flush threw at the store level (not a per-entry dispatch failure). | `console.error` `[basalt:outbox] flush failed:` | `(error: unknown)` |
+
+Neither may throw. Both have non-silent defaults, so an unconfigured app still surfaces the
+fault instead of losing it.
 
 ### `OutboxStore` / `MemoryOutboxStore`
 
@@ -249,10 +288,31 @@ Returns the `basalt:outbox` plugin; registers `Outbox` under the token `OUTBOX` 
 | `captureEvents` | `string[]` | no | `[]` | Event patterns to capture automatically (requires `eventsPlugin`). |
 | `intervalMs` | `number` | no | — | Automatic flush interval, in ms. Omit for manual flush via `OUTBOX`. |
 | `batchSize` | `number` | no | `50` | Maximum entries per flush. |
-| `maxAttempts` | `number` | no | `10` | Inherited from `OutboxOptions`. |
-| `now` | `() => number` | no | `Date.now` | Inherited from `OutboxOptions`. |
+| `onFlushError` | `(error: unknown) => void` | no | `console.error` prefixed `[basalt:outbox] flush failed:` | A **timer or shutdown flush failed at the store level** — e.g. `pending()` threw because the database is unreachable. Per-entry dispatch failures are *not* this: those are caught inside the flush and recorded on the entry. Must never throw. |
+| `maxAttempts`, `backoff`, `onDead`, `now` | — | no | see `OutboxOptions` | Inherited from `OutboxOptions`. |
 
-On `shutdown`, the plugin stops the timer and performs one last `flush` (best-effort).
+On `shutdown`, the plugin stops the timer and performs one last best-effort `flush`; if that one
+throws, it goes to `onFlushError` too.
+
+#### Why `onFlushError` exists
+
+The timer calls `void outbox.flush(dispatch, batchSize).catch(onFlushError)`. Without the catch,
+a store outage would produce an unhandled promise rejection on every tick — process-fatal under
+Node's default. With it, the relay keeps ticking and you get one report per failed tick. Route it
+to your logger and alert on a sustained rate: a store that can't be read is a relay that has
+silently stopped delivering.
+
+#### Awaited capture
+
+Listeners installed by `captureEvents` are **awaited**. If the outbox write fails, the failure
+propagates into `EventBus.emit`, which aggregates listener failures into an `AggregateError` —
+so the emitter finds out. This is deliberate and it is the whole contract: the outbox promises
+that nothing is lost after commit, so a capture that silently dropped the event while the caller
+believed it was recorded would break the one guarantee the pattern exists to provide.
+
+The practical consequence: `emit()` is now as slow and as failure-prone as your outbox store. Put
+the store in the same database as your business writes (`@basaltkit/events-prisma`) so the write
+is local and can join the same transaction.
 
 ## Common errors and solutions (FAQ)
 
@@ -264,22 +324,32 @@ On `shutdown`, the plugin stops the timer and performs one last `flush` (best-ef
 
 **Plugin "basalt:outbox" depends on "basalt:events"** — You used `captureEvents` without adding `eventsPlugin()` to the application. Add it to the `plugins` list.
 
-**Captured events don't show up in the store right away** — Capture does `void outbox.enqueue(...)` (async, unawaited). In tests, let the event loop turn before checking: `await new Promise((r) => setTimeout(r, 0))`.
+**`emit()` threw an `AggregateError` mentioning the outbox** — Capture listeners are *awaited*, so a failing outbox write fails the emit. That is intentional (nothing may be silently dropped after commit). Fix the store; don't swallow the error.
 
 **I lost outbox entries after restarting** — You're using `MemoryOutboxStore`, which only lives in memory. In production implement `OutboxStore` over a database and write the `enqueue` in the same transaction as the state change.
 
-**An entry stopped being delivered** — It reached `maxAttempts` and became "dead". Query `store.all()` and look at `attempts` and `lastError` to diagnose; fix the cause and re-forward manually if needed.
+**An entry stopped being delivered** — It reached `maxAttempts` and became "dead". `onDead` fired once at that moment (default `console.error`). Query `store.all()` and look at `attempts` and `lastError` to diagnose; fix the cause and re-enqueue it if needed.
+
+**Nothing is being delivered and there are no per-entry errors** — The flush itself is failing before it reads a batch. Check `onFlushError` output (default `console.error`, `[basalt:outbox] flush failed:`) — that is a store-level fault, not a dispatch fault.
+
+**A retry didn't happen as soon as I expected** — `backoff` (default exponential from 1 s, capped at 60 s) holds the entry back in *this* process. Pass `backoff: false` to retry on every flush.
 
 **The same event was delivered twice** — Delivery is *at-least-once* by definition (e.g. a crash between `dispatch` and `markPublished`). The receiver should be idempotent — use `entry.id` to deduplicate.
 
-## Outbox reliability semantics
+## Outbox reliability semantics, in one place
 
-Automatic capture (`captureEvents`) is awaited: if the outbox write fails, the
-`emit()` fails — nothing is silently dropped. Flushes coalesce (no
-double-delivery from overlapping ticks), failed entries retry with exponential
-`backoff` (process-local), and entries that exhaust `maxAttempts` are reported
-once through `onDead` (default `console.error`) and stay in the store with
-their `lastError`.
+- **Capture is awaited.** A failed outbox write fails the `emit()` that triggered it — nothing is
+  silently dropped between "the caller thinks it's recorded" and "it's recorded".
+- **Flushes coalesce.** Overlapping timer ticks share one in-flight flush, so a slow dispatch
+  can't cause the same batch to be delivered N times. Per process only.
+- **Failed entries back off.** Exponential from 1 s, capped at 60 s, tracked in the relay
+  process's memory; a restart forgets it (worst case: one immediate retry).
+- **Dead entries are reported once.** `onDead` fires at the `maxAttempts` transition; the entry
+  stays in the store with its `lastError`.
+- **Store faults are reported per tick.** `onFlushError` catches them so the relay keeps running
+  instead of dying on an unhandled rejection.
+- **Delivery is at-least-once.** A crash between `dispatch` and `markPublished` redelivers.
+  Receivers must deduplicate on `entry.id`.
 
 ## How it connects to other modules
 

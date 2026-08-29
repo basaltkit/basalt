@@ -143,6 +143,55 @@ await tenancy.forEach(
 
 `run()` accepts either the `Tenant` object or the `id` (which is loaded from the source; if it doesn't exist, it throws `TenantNotFoundError`).
 
+### Fail-closed scoping — `tenantScoped()` and friends
+
+Identifying the tenant is only half the job; every query still has to *use* it.
+The risk is specific and silent: with Prisma,
+`where: { tenantId: undefined }` doesn't filter — it drops the condition and
+returns **every** tenant's rows. A helper that returns `undefined` when there is
+no tenant is therefore a cross-tenant leak waiting for one missing context.
+
+The `tenantScoped()` family fails closed instead. All three throw
+`TenantRequiredError` (`TENANT_REQUIRED`, HTTP **400**) rather than producing a
+filter that quietly disappears:
+
+```ts
+import { requireTenant, requireTenantId, tenantScoped } from '@basaltkit/tenancy'
+
+// The whole Tenant record, or throw
+const tenant = requireTenant()
+
+// Just the id, or throw
+const id = requireTenantId()
+
+// A `where` clause that is always scoped
+const rows = await db.project.findMany({ where: tenantScoped({ archived: false }) })
+// → { archived: false, tenantId: '<context tenant>' }
+```
+
+| Function | Signature | Behaviour |
+|---|---|---|
+| `requireTenant()` | `(): Tenant` | The active context's tenant, or throws. |
+| `requireTenantId(fallback?)` | `(fallback?: string): string` | The context tenant id; else `fallback`; else throws. |
+| `tenantScoped(where?)` | `<W>(where?: W): W & { tenantId: string }` | Your `where` with `tenantId` spread **last**. |
+
+Two properties matter:
+
+**Anti-widening.** A tenant in context always wins over `fallback`. `fallback`
+may carry client input, and it must never be able to widen or switch the scope
+of a request. It is honoured only when there is no context tenant at all — which
+is what lets system code (jobs, CLI commands) pin one tenant deliberately.
+
+**Non-overridable filter.** `tenantScoped` spreads `tenantId` **last**, so a
+`tenantId` smuggled into `where` by client input cannot override the context
+tenant. (When there is no context tenant, a string `where.tenantId` is used as
+the `fallback` — the same anti-widening rule, one level down.)
+
+Use them everywhere a repository touches tenant-owned data. `requireTenantId()`
+inside a queue job throws unless you wrapped the job body in
+`tenancy.run(tenantId, …)` — which is the point: a background job that lost its
+tenant should fail, not read the whole table.
+
 ### Reacting to tenant changes (hook)
 
 Whenever execution enters a tenant context (in a resolved HTTP request or via `run`), the `tenancy:switched` hook fires:
@@ -190,6 +239,13 @@ it inside `<id>`'s context — e.g. `basalt tenant:run acme queue:retry`.
 | `source` | `TenantSource` | Yes | — | Where tenants are loaded from. |
 | `resolvers` | `TenantResolver[]` | Yes | — | Tried in order; the first one that loads a tenant wins. |
 | `required` | `boolean` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. |
+| `onMigrate` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant migration work for `basalt tenant:migrate`. The framework iterates tenants and enters each context; you do the DB-specific part. Without it the command errors. |
+| `onSeed` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant seeding for `basalt tenant:seed`, same contract. |
+
+The plugin also adds the `tenancy:active` marker to the container metadata.
+Other packages read it — string-keyed, so no package coupling — to adopt
+tenant-safe defaults; `@basaltkit/cache`, for example, fails closed on a missing
+tenant scope once the app is known to be multi-tenant.
 
 The plugin registers the facade in the container under the `TENANCY` token, and an HTTP enricher that resolves the tenant for each request, places it in `ctx().tenant`, and emits `tenancy:switched`.
 
@@ -225,8 +281,60 @@ A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promis
 | `MemoryTenantSource` | In-memory source with a chainable `.add(tenant)` — dev/tests. |
 | `ResolutionRequest`, `TenantRef`, `TenantResolver` | Resolver types. Advanced. |
 | `TENANCY` | Injection token: `container.get(TENANCY)` → `Tenancy`. |
-| `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED`, HTTP 404 — a request with no tenant when `required: true`. |
-| `TenantNotFoundError` | `TENANT_NOT_FOUND` — a nonexistent id passed to `run()`. |
+| `requireTenant`, `requireTenantId`, `tenantScoped` | Fail-closed scoping helpers — see above. |
+| `CustomDomains`, `MemoryDomainStore`, `DomainStore`, `CustomDomain`, `DnsVerification`, `CustomDomainsOptions` | Custom-domain registration + DNS TXT ownership verification. |
+| `normalizeDomain(input)` | Canonicalizes a domain/Host: lowercase, trim, strip port and trailing dots, IDNA-encode. The same function backs registration, lookup and the Host resolver, so a domain keys identically however it was typed. |
+| `findByVerifiedDomain(customDomains, find)` | Builds a `findByDomain` that resolves **only verified** domains — wire it into your `TenantSource` so a forged Host header can never resolve. |
+
+### Custom domains
+
+`CustomDomains` adds ownership proof around the domain resolver: register a
+domain (unverified), publish the returned `_basalt-verify.<domain>` TXT record,
+then `verify()`. Only verified domains resolve, via `findByVerifiedDomain`.
+`verify(tenantId, domain, { force: true })` re-checks an already-verified domain
+and **un-verifies** it if the record is gone — run it on a schedule to defend
+against dangling-domain takeover.
+
+`CustomDomainsOptions`:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `store` | `DomainStore` | `MemoryDomainStore` | Where domain records live. A durable store **must** back `add()` with a UNIQUE constraint — it is the atomic uniqueness gate that stops a second tenant stealing a domain. |
+| `now` | `() => number` | `Date.now` | Injectable clock. |
+| `token` | `() => string` | 24 random bytes, base64url | Verification-token generator. |
+| `resolveTxt` | `(hostname) => Promise<string[][]>` | `node:dns/promises` `resolveTxt` | Injectable DNS lookup (tests, or a custom resolver). |
+
+### Failure modes & troubleshooting
+
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `requireTenant()` / `requireTenantId()` / `tenantScoped()` ran with no tenant in context and no fallback. Fails closed rather than querying unscoped. |
+| `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | No resolver produced a tenant and the plugin was configured `required: true`. |
+| `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `run()` was given an id absent from the source — also raised by `forEach()` when the source has no `list()`. |
+| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | The domain is already registered (by any tenant). |
+| `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | Acting on a domain that isn't registered. |
+| `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | Acting on a domain that belongs to a different tenant. |
+
+`TenantNotFoundError` declares no `status`, so adapters surface it as a generic
+500 `INTERNAL_ERROR`; the others carry the code above.
+
+- **`TENANT_REQUIRED` inside a queue job** — jobs don't inherit the request
+  context. Wrap the body in `tenancy.run(tenantId, …)`, or pass an explicit
+  fallback to `requireTenantId(id)`.
+- **`ctx().tenant` is undefined even though the header is set** — the resolver
+  produced a ref, but `source.find()` returned `null`; an unknown id falls
+  through to the next resolver rather than failing.
+- **A verified custom domain stopped resolving** — a `force` re-check found the
+  TXT record missing and un-verified it. Re-publish the record and verify again.
+
+### Hooks & events
+
+| Hook | Payload | When |
+|---|---|---|
+| `tenancy:switched` | `{ tenant: Tenant }` | Whenever execution enters a tenant context — a resolved HTTP request, or `tenancy.run()` (including each iteration of `forEach()`). |
+
+The plugin also declares `ctx().tenant?: Tenant` on `RequestContext`, so the
+context is typed everywhere once this package is installed.
 
 ## Common errors and solutions (FAQ)
 
@@ -255,4 +363,8 @@ A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promis
 - **Never trust a tenant header coming from the browser in production.** `headerResolver` is great for development and internal traffic, but a user can manually send `x-tenant-id: another-customer`. In production, prefer `subdomainResolver`/`domainResolver` (DNS is under your control) and always verify that the authenticated user **belongs** to the resolved tenant (the `teamRole` guard from `@basaltkit/teams` does this).
 - **Isolate tenant data in your queries.** This module identifies the tenant; it's up to your code to use `ctx().tenant.id` in every database query. A query without a tenant filter is a data leak between customers.
 - **Use `required: true` in application areas** so that a misrouted request fails loudly (404) instead of running with no tenant and touching global data.
-- **Be careful with custom domains:** only accept a domain in `findByDomain` after the customer has proven they control it (e.g. a DNS record), otherwise someone could point a domain at your application and impersonate another tenant.
+- **Be careful with custom domains:** only accept a domain in `findByDomain` after the customer has proven they control it. `CustomDomains` + `findByVerifiedDomain` do exactly this — without them, someone can point a domain at your application and impersonate another tenant.
+- **Scope with `tenantScoped()`, not by hand.** A hand-written `where` that
+  forgets `tenantId`, or supplies `undefined`, reads every tenant's rows.
+
+Guides: [Tenancy](/guide/tenancy) · [Creating a tenant](/guide/creating-a-tenant) · [Database per tenant](/guide/database-per-tenant) · [Teams](/guide/teams) · [Authorization](/guide/authorization).

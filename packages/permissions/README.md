@@ -210,12 +210,32 @@ await gate.authorize(ctx().user!, 'billing:write')
 
 Options (`GateOptions` = `PermissionsPluginOptions`):
 
-| Name | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `store` | `AccessStore` | Yes | — | Where grants live (your DB in production). |
-| `superAdmin` | `(user) => boolean \| Promise<boolean>` | No | — | Shortcut: `true` authorizes everything. |
-| `scope` | `() => string` | No | `ctx().tenant.id` or `'global'` | Current scope for checks. |
-| `policies` | `Policy<never>[]` | No | `[]` | Policies registered upfront. |
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `store` | `AccessStore` | — (required) | Where role assignments and grants live. Swap `MemoryAccessStore` for `permissions-sqlite`/`permissions-prisma` in production. |
+| `superAdmin` | `(user) => boolean \| Promise<boolean>` | — | Short-circuits every check when it returns `true` (Laravel's `Gate::before`). Runs before policies, grants and delegations — keep it cheap and narrow. |
+| `scope` | `() => string` | `ctx().tenant.id`, falling back to `GLOBAL_SCOPE` | The scope a check runs in. Override to key grants by something other than the tenant (a workspace, a project). |
+| `policies` | `Policy<never>[]` | `[]` | Policies registered at construction; `gate.register(policy)` adds more later. |
+| `temporaryGrants` | `TemporaryGrantStore` | — | Enables `grantTemporarily()`. Without it that method throws a plain `Error`, and temporary grants are never consulted. |
+| `delegations` | `DelegationStore` | — | Enables `delegate()`. Without it that method throws a plain `Error`, and delegations are never consulted. |
+| `now` | `() => number` | `Date.now` | Injectable clock — expiry of temporary grants and delegations is evaluated against it. |
+
+#### Scope resolution and `TENANT_REQUIRED`
+
+The default scope reads `ctx().tenant?.id` and **falls back to
+`GLOBAL_SCOPE`** when there is no tenant. That is deliberate: a permission check
+outside a tenant (a CLI command, a central route) still has a well-defined
+answer, and every check consults the current scope *and* `global`.
+
+The consequence: this package never throws `TENANT_REQUIRED`. A request that
+*should* have been tenant-scoped but wasn't does not fail loudly here — it
+quietly evaluates against global grants only. If an operation must not run
+unscoped, assert it yourself with `requireTenant()` / `requireTenantId()` from
+[`@basaltkit/tenancy`](https://www.npmjs.com/package/@basaltkit/tenancy), which
+throw `TenantRequiredError` (`TENANT_REQUIRED`, HTTP 400). And to bind the
+caller to the resolved tenant at all, register
+`tenantMembershipPlugin` from `@basaltkit/teams` — permissions answer *what* a
+user may do, not *which* tenant they belong to.
 
 `Gate` methods:
 
@@ -225,6 +245,8 @@ Options (`GateOptions` = `PermissionsPluginOptions`):
 | `authorize(user, permission, resource?)` | `Promise<void>` | Like `can`, but throws `PermissionDeniedError` (403). |
 | `hasRole(user, role)` | `Promise<boolean>` | Does the user have the role (in the current scope or global)? |
 | `register(policy)` | `this` | Registers a policy after construction. |
+| `grantTemporarily(userId, permissions, options?)` | `Promise<TemporaryGrant>` | Time-boxed extra permissions. `options`: `{ expiresAt?, ttlMs?, scope?, grantedBy?, reason? }` — `expiresAt` wins over `ttlMs`, and with neither the grant expires immediately. Requires a `temporaryGrants` store. |
+| `delegate({ from, to, permissions, scope?, expiresAt? })` | `Promise<Delegation>` | Lets `to` act with a subset of `from`'s authority. `permissions` accepts patterns; `'*'` means everything the delegator can do. Omit `expiresAt` for an open-ended delegation. Requires a `delegations` store. |
 
 ### `AccessStore` interface
 
@@ -251,12 +273,68 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 | `GATE` | DI token for the Gate in the container. |
 | `PolicyUser` | Minimal user type: `{ id: string; [key: string]: unknown }`. |
 | `Policy`, `PolicyCheck` | Policy types. Advanced. |
-| `PermissionDeniedError` | `PERMISSION_DENIED`, HTTP 403. |
-| `AuthRequiredGuardError` | `AUTH_REQUIRED`, HTTP 401 — a `meta.can` route without a user. |
+| `TemporaryGrant`, `TemporaryGrantStore`, `MemoryTemporaryGrantStore` | Time-boxed grants: the record, the contract, the in-process implementation. |
+| `Delegation`, `DelegationStore`, `MemoryDelegationStore` | Delegation: the record, the contract, the in-process implementation. |
 
-### Route guard
+### Route guard — `meta.can`
 
-`permissionsPlugin` registers a guard: any route with `meta: { can: 'some:permission' }` requires a `ctx().user` (otherwise 401) with that permission (otherwise 403). `meta.can` accepts a single permission string or an array — the caller must hold **all** of them. Any other shape (`can: true`, an empty/mixed array) throws `InvalidCanMetaError` (`PERMISSION_META_INVALID`, 500) on every request: an unenforceable declaration fails closed, never open. The plugin also claims `'can'` in the `http:guarded-meta` bucket, so declaring `meta.can` without registering `permissionsPlugin` fails loud at boot (see `@basaltkit/http`).
+`permissionsPlugin` registers a route guard. A route carrying `meta.can`
+requires an authenticated `ctx().user` (otherwise **401 `AUTH_REQUIRED`**) who
+holds the declared permission (otherwise **403 `PERMISSION_DENIED`**).
+
+`meta.can` accepts `string | string[]`:
+
+```ts
+meta: { can: 'projects:delete' }                       // one permission
+meta: { can: ['projects:delete', 'billing:read'] }     // ALL of them (all-of, not any-of)
+```
+
+An array is **conjunctive** — the guard calls `gate.authorize()` once per entry
+and every one must pass. There is no any-of form; express that as a wildcard
+permission, or check inside the handler.
+
+Anything else is **unenforceable and fails closed**: `can: true`, `can: 42`,
+`can: []`, `can: ['a', 3]`, `can: ['']` all throw `InvalidCanMetaError`
+(`PERMISSION_META_INVALID`, HTTP **500**) on *every* request to that route. This
+replaced a historic fail-open where a non-string simply skipped the check —
+a route that declares authorization it cannot enforce must never serve.
+
+The plugin also claims `'can'` in the `http:guarded-meta` bucket, so a route
+declaring `meta.can` in an app that never registered `permissionsPlugin` fails
+loud **at boot** with `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`)
+rather than serving unchecked. See `@basaltkit/http` for the
+`allowUnguardedMeta` escape hatch.
+
+### Failure modes & troubleshooting
+
+| Error | Code | HTTP | When |
+|---|---|---|---|
+| `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route ran with no `ctx().user`. |
+| `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | `gate.authorize()` (or the guard) found the user lacks the permission. Carries the permission in its message. |
+| `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` is not a non-empty string or a non-empty array of non-empty strings. Names the route and describes what it received. |
+| `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` and `permissionsPlugin` isn't registered. Raised by the adapter, from `@basaltkit/http`. |
+
+All three runtime errors declare a `status`, so adapters return the code above
+with the real error code in the body.
+
+- **`PERMISSION_META_INVALID` after refactoring a route** — you most likely
+  wrote `can: true` or a computed array that came out empty. Both are
+  unenforceable; the guard refuses rather than skipping.
+- **403 on a permission you definitely granted** — check the *scope*. A grant in
+  `'acme'` only applies when the check runs in the `acme` tenant; use
+  `GLOBAL_SCOPE` for grants that apply everywhere.
+- **A delegated user is denied something the delegator can do** — delegation is
+  bounded by the delegator's *direct* permissions and doesn't chain. If the
+  delegator only holds it by delegation themselves, it doesn't pass through.
+- **Temporary grant expired instantly** — `grantTemporarily` with neither
+  `ttlMs` nor `expiresAt` sets `expiresAt` to now.
+
+### Hooks & events
+
+`@basaltkit/permissions` emits **no hooks**. Membership-driven role changes are
+emitted by `@basaltkit/teams` (`team:joined`, `team:role_changed`,
+`team:member_removed`); wire the Gate's store to teams via the `access` option
+there to mirror them into role grants.
 
 ## Common errors and solutions (FAQ)
 
@@ -276,3 +354,5 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 - **@basaltkit/tenancy** — sets `ctx().tenant`; the Gate uses it as the default scope, isolating permissions per tenant.
 - **@basaltkit/teams** — can mirror team memberships as roles: `MemoryAccessStore` (or your own `AccessStore`) satisfies teams' `RoleAssigner` interface, so "being an admin of the acme team" automatically becomes the `admin` role in the `acme` scope.
 - **@basaltkit/core / @basaltkit/fastify** — container, context, and execution of the HTTP guards.
+
+Guides: [Authorization](/guide/authorization) · [Teams](/guide/teams) · [Tenancy](/guide/tenancy) · [Auth](/guide/auth).
