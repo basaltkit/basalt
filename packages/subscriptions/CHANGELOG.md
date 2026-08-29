@@ -1,5 +1,18 @@
 # @basaltkit/subscriptions
 
+## 2.8.0
+
+### Minor Changes
+
+- 59cf29c: `subscriptionsPlugin` claims `meta.subscribed` and `meta.feature` in the adapters' guarded-meta boot check.
+  
+  The plugin registered a guard for both keys but never claimed them, so — together with their absence from `@basaltkit/http`'s `GUARDED_META_KEYS` — a paywalled route in an app that forgot `subscriptionsPlugin` booted and served the paid feature to everyone. Registering the plugin now makes those routes boot; omitting it fails loud instead of failing open. Requires `@basaltkit/http` with the extended key set.
+
+### Patch Changes
+
+- Updated dependencies [59cf29c]
+  - @basaltkit/http@1.13.0
+
 ## 2.7.0
 
 ### Minor Changes

@@ -1,5 +1,18 @@
 # @basaltkit/auth
 
+## 1.7.0
+
+### Minor Changes
+
+- 59cf29c: `apiKeysPlugin` claims `meta.scopes` in the adapters' guarded-meta boot check.
+  
+  The plugin registered a guard enforcing `meta.scopes` but never claimed the key, so a scope-gated route in an app without `apiKeysPlugin` served with no scope check at all. It now claims it: the same route fails loud at boot when the plugin is missing. Requires `@basaltkit/http` with the extended key set.
+
+### Patch Changes
+
+- Updated dependencies [59cf29c]
+  - @basaltkit/http@1.13.0
+
 ## 1.6.4
 
 ### Patch Changes
