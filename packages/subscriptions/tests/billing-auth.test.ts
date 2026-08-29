@@ -43,7 +43,9 @@ const fakeAuthPlugin = definePlugin({
       }
     }
     ensureMetadata(container).add('http:enrichers', enricher)
-    ensureMetadata(container).add('http:guards', guard)
+    const metadata = ensureMetadata(container)
+    metadata.add('http:guards', guard)
+    metadata.add('http:guarded-meta', 'auth') // enforces meta.auth — claim it for the boot check
   },
 })
 

@@ -212,6 +212,7 @@ In this mode each handler already handles its own errors (the wrapper responds w
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
 | `app` | `Express` | No | new `express()` | Bring your own Express app; either way, `express.json()` is added. |
 
 Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, via `res.on('finish')`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Basalt routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.

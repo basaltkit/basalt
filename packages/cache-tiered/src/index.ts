@@ -7,9 +7,13 @@ export interface TieredCacheOptions {
    */
   layers: CacheDriver[]
   /**
-   * TTL (ms) applied when backfilling a faster layer from a slower hit — the
-   * remaining TTL isn't known there, so this bounds how long the near cache
-   * keeps it. Default 60000 (1 minute). Set `null` for no expiry.
+   * Upper bound (ms) on how long the NEAR layers keep an entry. Applied when
+   * backfilling a faster layer from a slower hit (the remaining TTL isn't known
+   * there) AND as a clamp on direct writes to every layer except the last — so
+   * after another replica updates or deletes a key, no replica serves its local
+   * copy for longer than this bound. There is no cross-replica invalidation
+   * bus; this bound IS the coherence contract. Default 60000 (1 minute).
+   * Set `null` for no bound (single-replica deployments only).
    */
   backfillTtlMs?: number | null
 }
@@ -44,7 +48,20 @@ export class TieredCacheDriver implements CacheDriver {
   }
 
   async set(key: string, value: unknown, ttlMs?: number, tags?: string[]): Promise<void> {
-    await Promise.all(this.layers.map((layer) => layer.set(key, value, ttlMs, tags)))
+    // Clamp the near layers to the staleness bound: an entry written here with
+    // its full TTL would keep serving on THIS replica long after another
+    // replica updated or deleted it (there is no invalidation bus). The last
+    // (shared) layer keeps the caller's TTL — it is the source of truth.
+    await Promise.all(
+      this.layers.map((layer, index) =>
+        layer.set(key, value, index < this.layers.length - 1 ? this.clamp(ttlMs) : ttlMs, tags),
+      ),
+    )
+  }
+
+  private clamp(ttlMs: number | undefined): number | undefined {
+    if (this.backfillTtlMs === undefined) return ttlMs
+    return ttlMs === undefined ? this.backfillTtlMs : Math.min(ttlMs, this.backfillTtlMs)
   }
 
   async delete(key: string): Promise<boolean> {

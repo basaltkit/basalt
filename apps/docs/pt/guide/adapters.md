@@ -93,6 +93,12 @@ depois correm os **guards** (`meta: { auth: true }` exige um utilizador,
 `meta: { can: '…' }` exige uma permissão). Um guard rejeita lançando uma exceção
 — nunca escreves essa verificação à mão.
 
+Declarar meta de segurança sem o plugin que a aplica falha **no boot**
+(`UnguardedRouteMetaError`) em vez de servir a rota aberta silenciosamente.
+Quando a autenticação acontece genuinamente numa edge exterior, opta por sair
+por adapter com `fastifyPlugin({ routes, allowUnguardedMeta: true })` (Express e
+Hono aceitam a mesma opção; passa `['auth']` para dispensar uma única chave).
+
 `src/routes.ts`:
 
 ```ts

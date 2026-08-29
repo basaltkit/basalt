@@ -10,6 +10,8 @@ import { INVOICES, invoiceRoutes, subscriptionsPlugin, definePlans, FakeBillingG
 const plans = definePlans({ pro: { price: 2900, features: {} } })
 
 // Trust x-tenant-id so the routes have a current tenant.
+// The invoice routes here run auth: false — this suite tests cross-adapter rendering parity;
+// the auth-by-default behavior has its own suite (billing-auth.test.ts).
 const tenancy = definePlugin({
   name: 'fake-tenancy',
   register({ container }) {
@@ -39,7 +41,7 @@ async function seed(container: Container): Promise<string> {
 type Live = { url: string; close: () => Promise<void>; container: Container }
 
 async function fastifyLive(): Promise<Live> {
-  const app = await createApp({ plugins: [...basePlugins(), fastifyPlugin({ routes: invoiceRoutes() })] }).boot()
+  const app = await createApp({ plugins: [...basePlugins(), fastifyPlugin({ routes: invoiceRoutes({ auth: false }) })] }).boot()
   const server = app.container.get(FASTIFY)
   await server.listen({ port: 0, host: '127.0.0.1' })
   const addr = server.server.address()
@@ -48,7 +50,7 @@ async function fastifyLive(): Promise<Live> {
 }
 
 async function expressLive(): Promise<Live> {
-  const app = await createApp({ plugins: [...basePlugins(), expressPlugin({ routes: invoiceRoutes() })] }).boot()
+  const app = await createApp({ plugins: [...basePlugins(), expressPlugin({ routes: invoiceRoutes({ auth: false }) })] }).boot()
   const server = app.container.get(EXPRESS).listen(0, '127.0.0.1')
   await new Promise<void>((r) => server.once('listening', () => r()))
   const addr = server.address()
@@ -57,7 +59,7 @@ async function expressLive(): Promise<Live> {
 }
 
 async function honoLive(): Promise<Live> {
-  const app = await createApp({ plugins: [...basePlugins(), honoPlugin({ routes: invoiceRoutes() })] }).boot()
+  const app = await createApp({ plugins: [...basePlugins(), honoPlugin({ routes: invoiceRoutes({ auth: false }) })] }).boot()
   const { server, port } = await new Promise<{ server: { close: (cb: () => void) => void }; port: number }>((resolve) => {
     const s = serve({ fetch: app.container.get(HONO).fetch, port: 0, hostname: '127.0.0.1' }, (info) =>
       resolve({ server: s as unknown as { close: (cb: () => void) => void }, port: info.port }),

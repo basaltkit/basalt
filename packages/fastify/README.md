@@ -224,6 +224,7 @@ fastifyPlugin({
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()`) to register. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
 | `fastify` | `FastifyServerOptions` | No | `{}` | Options passed to the `Fastify()` constructor (logger, trustProxy, …). |
 
 Behavior: registers the Fastify instance under the `FASTIFY` token and an `HttpServerCollector` under the `HTTP_SERVER` token; on boot it reads enrichers/guards from the metadata buckets (`'http:enrichers'`, `'http:guards'`), registers the routes, publishes them on the `'http:routes'` bucket (for OpenAPI/CLI/SDK) and mounts the edge plugins' hooks on the `app:booted` event. On `shutdown` it closes Fastify (`close()`).

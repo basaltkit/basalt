@@ -131,3 +131,72 @@ describe('permissionsPlugin + fastify guard (end to end)', () => {
     await app.shutdown()
   })
 })
+
+describe('meta.can shapes: string[] (all-of) and fail-closed invalid declarations', () => {
+  /** Test-only authentication: trusts the x-user-id header. */
+  const fakeAuthPlugin = definePlugin({
+    name: 'fake-auth-2',
+    register({ container }) {
+      const enricher: RequestEnricher = ({ request, context }) => {
+        const userId = request.headers['x-user-id']
+        if (typeof userId === 'string') context.user = { id: userId, email: `${userId}@x.dev` }
+      }
+      ensureMetadata(container).add('http:enrichers', enricher)
+    },
+  })
+
+  const bootWith = async (canMeta: unknown) => {
+    const store = new MemoryAccessStore()
+    await store.grantToUser('u-both', ['reports:read', 'reports:export'], 'global')
+    await store.grantToUser('u-one', ['reports:read'], 'global')
+    const app = await createApp({
+      plugins: [
+        fakeAuthPlugin,
+        permissionsPlugin({ store }),
+        fastifyPlugin({
+          routes: [
+            route({
+              method: 'GET',
+              url: '/report',
+              meta: { can: canMeta as never },
+              async handler() {
+                return { ok: true }
+              },
+            }),
+          ],
+        }),
+      ],
+    }).boot()
+    return { app, server: app.container.get(FASTIFY) }
+  }
+
+  it('can: [a, b] requires ALL listed permissions (all-of)', async () => {
+    const { app, server } = await bootWith(['reports:read', 'reports:export'])
+
+    const both = await server.inject({ method: 'GET', url: '/report', headers: { 'x-user-id': 'u-both' } })
+    expect(both.statusCode).toBe(200)
+
+    const one = await server.inject({ method: 'GET', url: '/report', headers: { 'x-user-id': 'u-one' } })
+    expect(one.statusCode).toBe(403)
+    expect(one.json().error.code).toBe('PERMISSION_DENIED')
+
+    const anonymous = await server.inject({ method: 'GET', url: '/report' })
+    expect(anonymous.statusCode).toBe(401)
+    await app.shutdown()
+  })
+
+  it.each([
+    ['can: true', true],
+    ['can: 42', 42],
+    ['can: {} (object)', { any: 'thing' }],
+    ['can: [] (empty array)', []],
+    ['can: mixed array', ['reports:read', 7]],
+  ])('%s fails CLOSED (500 PERMISSION_META_INVALID), never silently open', async (_name, meta) => {
+    const { app, server } = await bootWith(meta)
+    // Even a fully-privileged user must NOT slip through an invalid declaration.
+    const res = await server.inject({ method: 'GET', url: '/report', headers: { 'x-user-id': 'u-both' } })
+    expect(res.statusCode).toBe(500)
+    expect(res.json().error.code).toBe('PERMISSION_META_INVALID')
+    await app.shutdown()
+  })
+})

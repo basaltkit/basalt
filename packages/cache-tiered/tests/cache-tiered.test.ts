@@ -81,3 +81,45 @@ describe('TieredCacheDriver', () => {
     expect(() => new TieredCacheDriver({ layers: [] })).toThrow(/at least one layer/)
   })
 })
+
+describe('cross-replica staleness bound (backfillTtlMs clamps EVERY near-layer write)', () => {
+  it('a replica does not serve its own stale L1 beyond backfillTtlMs after another replica updates', async () => {
+    // Two replicas: separate near caches, one shared far cache.
+    const far = new MemoryCacheDriver()
+    const nearA = new MemoryCacheDriver()
+    const nearB = new MemoryCacheDriver()
+    const replicaA = new TieredCacheDriver({ layers: [nearA, far], backfillTtlMs: 30 })
+    const replicaB = new TieredCacheDriver({ layers: [nearB, far], backfillTtlMs: 30 })
+
+    // B writes with a LONG ttl — the near layer must still be clamped to 30ms.
+    await replicaB.set('plan', 'v1', 60 * 60 * 1000)
+    expect(await replicaB.get('plan')).toBe('v1')
+
+    // A updates the shared value.
+    await replicaA.set('plan', 'v2', 60 * 60 * 1000)
+
+    // Within the bound B may serve v1 (documented near-cache staleness)...
+    // ...but past backfillTtlMs B's near entry must expire and re-read the far cache.
+    await new Promise((r) => setTimeout(r, 45))
+    expect(await replicaB.get('plan')).toBe('v2')
+  })
+
+  it('the far (last) layer keeps the full TTL — the clamp applies only to near layers', async () => {
+    const far = new MemoryCacheDriver()
+    const near = new MemoryCacheDriver()
+    const tiered = new TieredCacheDriver({ layers: [near, far], backfillTtlMs: 20 })
+    await tiered.set('k', 'v', 10 * 60 * 1000)
+    await new Promise((r) => setTimeout(r, 35))
+    // Near expired (clamped), far still holds it: read backfills and serves.
+    expect(await tiered.get('k')).toBe('v')
+  })
+
+  it('backfillTtlMs: null keeps the old behavior (no clamp, full TTL everywhere)', async () => {
+    const far = new MemoryCacheDriver()
+    const near = new MemoryCacheDriver()
+    const tiered = new TieredCacheDriver({ layers: [near, far], backfillTtlMs: null })
+    await tiered.set('k', 'v', 60_000)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(await near.get('k')).toBe('v') // near still holds it — deliberate opt-out
+  })
+})

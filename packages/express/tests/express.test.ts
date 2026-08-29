@@ -22,6 +22,7 @@ const testPlugin = definePlugin({
     const metadata = ensureMetadata(container)
     metadata.add('http:enrichers', enricher)
     metadata.add('http:guards', guard)
+    metadata.add('http:guarded-meta', 'auth') // this guard enforces meta.auth — claim it for the boot check
   },
 })
 
