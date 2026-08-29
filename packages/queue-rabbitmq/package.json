@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/queue-rabbitmq",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "RabbitMQ driver for @basaltkit/queue: AMQP jobs with retries, backoff, delayed delivery and priority via dead-letter queues.",
   "license": "MIT",
   "type": "module",
