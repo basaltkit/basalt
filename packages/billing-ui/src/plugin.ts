@@ -1,13 +1,18 @@
 import { ctx, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { SUBSCRIPTIONS, type Plans } from '@basaltkit/subscriptions'
-import { billingPageHtml, type BillingPageOptions } from './html.js'
+import { billingPageCsp, billingPageHtml, type BillingPageOptions } from './html.js'
 
 export interface BillingUiOptions extends BillingPageOptions {
   /** The plans to show. Pass the same `Plans` you gave `subscriptionsPlugin`. */
   plans: Plans
   /** Where to mount the page. Default `/billing/ui`. */
   path?: string
+  /**
+   * Content-Security-Policy for the page. Default: the hash-locked
+   * {@link billingPageCsp}. Pass a string to override, or `false` to send none.
+   */
+  csp?: string | false
 }
 
 interface PlanSummary {
@@ -35,6 +40,7 @@ const tenantId = (): string | undefined => (ctx() as { tenant?: { id: string } }
  */
 export function billingUiRoutes(options: BillingUiOptions): BasaltRoute[] {
   const html = billingPageHtml(options)
+  const csp = options.csp === false ? undefined : (options.csp ?? billingPageCsp(options))
   const plans = summarize(options.plans)
 
   return [
@@ -53,6 +59,7 @@ export function billingUiRoutes(options: BillingUiOptions): BasaltRoute[] {
       url: options.path ?? '/billing/ui',
       meta: { auth: true },
       async handler({ reply }) {
+        if (csp !== undefined) reply.header('content-security-policy', csp)
         return reply.header('content-type', 'text/html; charset=utf-8').send(html)
       },
     }),

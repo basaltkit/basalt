@@ -272,6 +272,15 @@ On `shutdown`, the plugin stops the timer and performs one last `flush` (best-ef
 
 **The same event was delivered twice** — Delivery is *at-least-once* by definition (e.g. a crash between `dispatch` and `markPublished`). The receiver should be idempotent — use `entry.id` to deduplicate.
 
+## Outbox reliability semantics
+
+Automatic capture (`captureEvents`) is awaited: if the outbox write fails, the
+`emit()` fails — nothing is silently dropped. Flushes coalesce (no
+double-delivery from overlapping ticks), failed entries retry with exponential
+`backoff` (process-local), and entries that exhaust `maxAttempts` are reported
+once through `onDead` (default `console.error`) and stay in the store with
+their `lastError`.
+
 ## How it connects to other modules
 
 - **`@basaltkit/core`** — `eventsPlugin` and `outboxPlugin` are core plugins; `EVENTS` and `OUTBOX` are container tokens; `EventValidationError` extends `BasaltError`. The outbox reads the tenant from the core context (`tryCtx()?.tenant?.id`) when writing captured events. Note the difference from the core's `HookBus`: hooks are the framework's internal infrastructure (lifecycle, extensions); `EventBus` is for events **from your business domain**, with validation and wildcards.

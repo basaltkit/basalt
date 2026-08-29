@@ -49,13 +49,25 @@ export class WebhookManager {
   unregister(id: string): Promise<void> {
     return this.store.remove(id, currentTenantId())
   }
+  /**
+   * Lists endpoints. Anti-widening: a tenant in the ambient context always wins
+   * — a caller-supplied `tenantId` (which may carry client input) can never
+   * widen or switch the scope. With no context tenant, an explicit `tenantId`
+   * is honoured, and no argument at all keeps the system-wide/single-tenant
+   * behavior (same model as `Audit.trail()` and `requireTenantId`).
+   */
   list(tenantId?: string): Promise<WebhookEndpoint[]> {
-    return this.store.list(tenantId)
+    return this.store.list(currentTenantId() ?? tenantId)
   }
 
-  /** Delivers to every endpoint subscribed to `event` (optionally tenant-scoped). */
+  /**
+   * Delivers to every endpoint subscribed to `event`. Scoping follows the same
+   * anti-widening rule as {@link list}: inside a tenant context the delivery is
+   * FORCED to that tenant's endpoints (plus tenant-agnostic ones) — a tenant's
+   * event data can never fan out to another tenant's endpoint.
+   */
   async dispatch(event: string, data: unknown, tenantId?: string): Promise<DeliveryResult[]> {
-    const endpoints = await this.store.forEvent(event, tenantId)
+    const endpoints = await this.store.forEvent(event, currentTenantId() ?? tenantId)
     return Promise.all(endpoints.map((endpoint) => this.deliverer.deliver(endpoint, event, data)))
   }
 }

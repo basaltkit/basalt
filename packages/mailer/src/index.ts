@@ -20,7 +20,7 @@ import {
 export { escapeHtml, html, raw, SafeHtml } from './html.js'
 export type { MailDriver } from './driver.js'
 export { MemoryMailDriver } from './drivers/memory.js'
-export { LogMailDriver } from './drivers/log.js'
+export { LogMailDriver, type LogMailDriverOptions } from './drivers/log.js'
 export { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 export { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
 export { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
@@ -170,11 +170,40 @@ export interface MailerPluginOptions extends MailerOptions {
   /** Sink for the 'log' driver. Default: console.log */
   sink?: (line: string) => void
   /**
+   * 'log' driver only: include the full message body in the log line. Default:
+   * true outside production, false in production (bodies carry reset links and
+   * tokens that must not be retained by log aggregators).
+   */
+  logBody?: boolean
+  /**
    * Mails to expose through the `mail:preview` CLI command (a browser dev
    * server). Each carries sample data; the preview reuses the mailer's own
    * schema validation and `layout`.
    */
   previews?: MailPreview[]
+}
+
+// Fail loud on a typo'd/unrecognized driver name: silently falling back to the
+// log driver would print every outbound mail (reset links included) to stdout.
+function createDriver(options: MailerPluginOptions): MailDriver {
+  switch (options.driver ?? 'log') {
+    case 'smtp':
+      return new SmtpMailDriver(options.smtp as SmtpDriverOptions)
+    case 'resend':
+      return new ResendMailDriver(options.resend as ResendDriverOptions)
+    case 'ses':
+      return new SesMailDriver(options.ses as SesDriverOptions)
+    case 'mailgun':
+      return new MailgunMailDriver(options.mailgun as MailgunDriverOptions)
+    case 'memory':
+      return new MemoryMailDriver()
+    case 'log':
+      return new LogMailDriver(options.sink, options.logBody !== undefined ? { logBody: options.logBody } : {})
+    default:
+      throw new Error(
+        `Unknown mail driver "${String(options.driver)}". Valid drivers: smtp, resend, ses, mailgun, memory, log.`,
+      )
+  }
 }
 
 export function mailerPlugin(options: MailerPluginOptions = {}) {
@@ -184,18 +213,7 @@ export function mailerPlugin(options: MailerPluginOptions = {}) {
     register({ container }) {
       registerPreviewCommand(container, options)
       container.singleton(MAILER, () => {
-        driver =
-          options.driver === 'smtp'
-            ? new SmtpMailDriver(options.smtp as SmtpDriverOptions)
-            : options.driver === 'resend'
-              ? new ResendMailDriver(options.resend as ResendDriverOptions)
-              : options.driver === 'ses'
-                ? new SesMailDriver(options.ses as SesDriverOptions)
-                : options.driver === 'mailgun'
-                  ? new MailgunMailDriver(options.mailgun as MailgunDriverOptions)
-                  : options.driver === 'memory'
-                    ? new MemoryMailDriver()
-                    : new LogMailDriver(options.sink)
+        driver = createDriver(options)
         return new Mailer(driver, options)
       })
     },

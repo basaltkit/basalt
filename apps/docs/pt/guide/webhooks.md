@@ -45,6 +45,13 @@ await hooks.list('acme')    // só os endpoints do tenant "acme"
 await hooks.unregister(endpoint.id)
 ```
 
+O scoping é **anti-alargamento**: dentro de um request com tenant no contexto,
+`register`, `list`, `unregister` e `dispatch` ficam forçados a esse tenant — um
+`tenantId` passado pelo chamador (que pode transportar input do cliente) nunca
+consegue alargar ou trocar o âmbito. O argumento explícito e o comportamento
+system-wide acima aplicam-se apenas onde não há tenant ambiente (jobs, CLI,
+apps single-tenant).
+
 Os padrões de evento correspondem assim:
 
 - `'invoice.paid'` — apenas esse evento exato

@@ -4,7 +4,7 @@ import { Audit, MemoryAuditStore, auditPlugin, type AuditEntry } from '@basaltki
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
-import { AuditTenantRequiredError, AuditViewer, auditViewerHtml, auditViewerPlugin, auditViewerRoutes } from '../src/index.js'
+import { AuditTenantRequiredError, AuditViewer, auditViewerCsp, auditViewerHtml, auditViewerPlugin, auditViewerRoutes } from '../src/index.js'
 
 let counter = 0
 const entry = (over: Partial<AuditEntry> & { event: string }): AuditEntry => ({
@@ -114,5 +114,27 @@ describe('HTTP routes', () => {
     expect(page.headers['content-type']).toContain('text/html')
 
     await app.shutdown()
+  })
+})
+
+describe('escaping + route-scoped CSP (S-5)', () => {
+  it('escapes the title and keeps embedded JSON inside the script block', () => {
+    const html = auditViewerHtml({ title: '</title><script>alert(1)</script>', apiBase: '</script><svg>' })
+    expect(html).not.toContain('<script>alert(1)')
+    expect(html.match(/<\/script>/g)).toHaveLength(1)
+  })
+
+  it('the client-side esc helper escapes quotes', () => {
+    expect(auditViewerHtml()).toContain(`[&<>"']`)
+  })
+
+  it('exports a CSP whose sha256 matches the inline script exactly', async () => {
+    const { createHash } = await import('node:crypto')
+    const page = auditViewerHtml({ apiBase: '/a' })
+    // Plain index extraction (not a sanitizer) — avoids regex-on-HTML patterns.
+    const script = page.slice(page.indexOf('<script>') + '<script>'.length, page.indexOf('</scr' + 'ipt>'))
+    // CSP script-hash source value (not a credential): sha256 per the CSP spec.
+    const cspScriptDigest = createHash('sha256').update(script, 'utf8').digest('base64')
+    expect(auditViewerCsp({ apiBase: '/a' })).toContain(`'sha256-${cspScriptDigest}'`)
   })
 })

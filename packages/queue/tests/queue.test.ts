@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { createApp, ctx, runWithContext } from '@basaltkit/core'
 import { defineEvent, EventBus } from '@basaltkit/events'
@@ -240,5 +240,32 @@ describe('job retention (removeOnComplete / removeOnFail)', () => {
     await manager.dispatch(job, undefined)
     expect(driver.last?.removeOnComplete).toBe(false) // job wins over global 50
     expect(driver.last?.removeOnFail).toEqual({ ageMs: 7 * 24 * 3600 * 1000, count: 500 })
+  })
+})
+
+describe('sync driver bounds and default-selection warning (Q-6)', () => {
+  it('caps the executed[] history so a long-running process cannot leak unboundedly', async () => {
+    const driver = new SyncQueueDriver()
+    driver.setExecutor(async () => {})
+    for (let i = 0; i < 1100; i++) await driver.add('default', 'job', {}, { attempts: 1 })
+    expect(driver.executed.length).toBeLessThanOrEqual(1000)
+    // still records the most recent executions
+    expect(driver.executed[driver.executed.length - 1]).toMatchObject({ jobName: 'job' })
+  })
+
+  it('warns when the sync driver is silently selected as the default in production', async () => {
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    const warnings: string[] = []
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation((m: unknown) => void warnings.push(String(m)))
+    try {
+      const app = await createApp({ plugins: [queuePlugin({})] }).boot()
+      app.container.get(QUEUE) // instantiation point
+      expect(warnings.join('\n')).toMatch(/sync .*driver|inline/i)
+      await app.shutdown()
+    } finally {
+      warnSpy.mockRestore()
+      process.env.NODE_ENV = prev
+    }
   })
 })

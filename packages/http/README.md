@@ -346,6 +346,13 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 
 **"`/readyz` responds 503."** Some check returned `ok: false` or threw an error; the response body carries the detail per check in `checks`.
 
+## Server-rendered HTML helpers
+
+`escapeHtml` (one charset: `& < > " '`, safe in text and quoted attributes),
+`scriptJson` (embed JSON in an inline `<script>` without `</script>` breakout)
+and `pageCsp`/`cspHash` (route-scoped CSP with sha256-hashed inline scripts)
+back the `*-ui` packages and are available for your own HTML routes.
+
 ## How it connects to other modules
 
 - **`@basaltkit/core`** — provides the foundation this module uses: `createApp`/plugins (`definePlugin`), the dependency-injection container (`Container`, tokens), the per-request context (`ctx()`/`runWithContext`), `MetricsRegistry`, `Tracer`, and `BasaltError`.

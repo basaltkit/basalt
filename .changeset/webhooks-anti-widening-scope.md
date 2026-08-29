@@ -1,0 +1,5 @@
+---
+"@basaltkit/webhooks": minor
+---
+
+**Security (A-1): `list()` and `dispatch()` are forced to the ambient tenant — fail-closed against scope widening.** `register`/`unregister` already bound themselves to the context tenant, but `list(tenantId?)` and `dispatch(event, data, tenantId?)` trusted the caller's argument outright: a route handler forwarding client input (or simply calling `hooks.list()` inside a tenant request) returned every tenant's endpoints, and a manual `dispatch()` without the argument delivered one tenant's event data to every other tenant's endpoints. Both now follow the same anti-widening rule as `Audit.trail()` and `requireTenantId`: a tenant in the ambient context always wins over any caller-supplied `tenantId`; the explicit argument and the system-wide behavior remain available only where there is no ambient tenant (jobs, CLI relays, single-tenant apps — unchanged there). Flagged as a behavior change in the previously fail-open branch; it is the security-correct direction.

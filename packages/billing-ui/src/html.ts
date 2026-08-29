@@ -1,3 +1,5 @@
+import { escapeHtml, pageCsp, scriptJson } from '@basaltkit/http'
+
 export interface BillingPageOptions {
   /** Base path where the billing JSON routes are mounted. Default '' (same origin). */
   apiBase?: string
@@ -6,52 +8,16 @@ export interface BillingPageOptions {
   headers?: Record<string, string>
 }
 
-/**
- * A self-contained HTML page (no dependencies, no build) showing the current
- * subscription and the available plans, with Subscribe / Switch (hosted
- * Checkout) and Manage-billing (Customer Portal) actions. It reads
- * `GET {apiBase}/billing/info` and posts to `/billing/checkout` and
- * `/billing/portal` (see `billingUiRoutes` and `@basaltkit/subscriptions`'
- * `billingRoutes`). Assumes an authenticated browser session.
- */
-export function billingPageHtml(options: BillingPageOptions = {}): string {
-  const apiBase = options.apiBase ?? ''
-  const title = options.title ?? 'Billing'
-  const headers = options.headers ?? {}
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${title}</title>
-<style>
-  :root { color-scheme: light dark; --bd: #8884; --accent: #4f46e5; --ok: #16a34a; }
-  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 2rem 1.5rem; max-width: 900px; margin-inline: auto; }
-  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
-  .status { border: 1px solid var(--bd); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
-  .plans { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
-  .plan { border: 1px solid var(--bd); border-radius: 10px; padding: 1.1rem; display: flex; flex-direction: column; gap: .5rem; }
-  .plan.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  .plan h3 { margin: 0; font-size: 1.05rem; text-transform: capitalize; }
-  .price { font-size: 1.5rem; font-weight: 600; }
-  .price small { font-size: .8rem; font-weight: 400; opacity: .6; }
-  ul { margin: .25rem 0; padding-left: 1.1rem; opacity: .8; }
-  button { padding: .5rem .9rem; border: 1px solid var(--bd); border-radius: 8px; cursor: pointer; background: transparent; color: inherit; font: inherit; margin-top: auto; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .badge { font-size: .75rem; padding: .1rem .5rem; border-radius: 99px; border: 1px solid var(--bd); }
-  .badge.ok { color: var(--ok); border-color: var(--ok); }
-  .muted { opacity: .6; }
-</style>
-</head>
-<body>
-<h1>${title}</h1>
-<div class="status" id="status"><span class="muted">Loading…</span></div>
-<div class="plans" id="plans"></div>
 
-<script>
-const API = ${JSON.stringify(apiBase)};
-const HEADERS = ${JSON.stringify(headers)};
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// The inline script, built separately so the page and its CSP hash (see
+// billingPageCsp) come from the exact same source text. Server-side state is
+// embedded with scriptJson (headers may carry per-tenant data — a crafted
+// value cannot terminate the script block); API responses render through
+// esc(), whose charset includes quotes for attribute positions.
+const pageScript = (apiBase: string, headers: Record<string, string>): string => `
+const API = ${scriptJson(apiBase)};
+const HEADERS = ${scriptJson(headers)};
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const opts = (extra) => ({ credentials: 'same-origin', headers: { 'content-type': 'application/json', ...HEADERS }, ...extra });
 
 function priceLabel(price) {
@@ -95,7 +61,65 @@ async function load() {
   }
 }
 load();
-</script>
+`
+
+/**
+ * The Content-Security-Policy matching {@link billingPageHtml}: everything
+ * locked down, the page's inline script allowed by sha256 hash. Served by
+ * default from `billingUiRoutes` so the page works under `securityPlugin`
+ * without weakening the app-wide policy.
+ */
+export function billingPageCsp(options: BillingPageOptions = {}): string {
+  const apiBase = options.apiBase ?? ''
+  return pageCsp({
+    scripts: [pageScript(apiBase, options.headers ?? {})],
+    ...(/^https?:\/\//.test(apiBase) ? { connect: [new URL(apiBase).origin] } : {}),
+  })
+}
+
+/**
+ * A self-contained HTML page (no dependencies, no build) showing the current
+ * subscription and the available plans, with Subscribe / Switch (hosted
+ * Checkout) and Manage-billing (Customer Portal) actions. It reads
+ * `GET {apiBase}/billing/info` and posts to `/billing/checkout` and
+ * `/billing/portal` (see `billingUiRoutes` and `@basaltkit/subscriptions`'
+ * `billingRoutes`). Assumes an authenticated browser session.
+ */
+export function billingPageHtml(options: BillingPageOptions = {}): string {
+  const apiBase = options.apiBase ?? ''
+  const title = escapeHtml(options.title ?? 'Billing')
+  const headers = options.headers ?? {}
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${title}</title>
+<style>
+  :root { color-scheme: light dark; --bd: #8884; --accent: #4f46e5; --ok: #16a34a; }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 2rem 1.5rem; max-width: 900px; margin-inline: auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+  .status { border: 1px solid var(--bd); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .plans { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
+  .plan { border: 1px solid var(--bd); border-radius: 10px; padding: 1.1rem; display: flex; flex-direction: column; gap: .5rem; }
+  .plan.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .plan h3 { margin: 0; font-size: 1.05rem; text-transform: capitalize; }
+  .price { font-size: 1.5rem; font-weight: 600; }
+  .price small { font-size: .8rem; font-weight: 400; opacity: .6; }
+  ul { margin: .25rem 0; padding-left: 1.1rem; opacity: .8; }
+  button { padding: .5rem .9rem; border: 1px solid var(--bd); border-radius: 8px; cursor: pointer; background: transparent; color: inherit; font: inherit; margin-top: auto; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .badge { font-size: .75rem; padding: .1rem .5rem; border-radius: 99px; border: 1px solid var(--bd); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .muted { opacity: .6; }
+</style>
+</head>
+<body>
+<h1>${title}</h1>
+<div class="status" id="status"><span class="muted">Loading…</span></div>
+<div class="plans" id="plans"></div>
+
+<script>${pageScript(apiBase, headers)}</script>
 </body>
 </html>`
 }

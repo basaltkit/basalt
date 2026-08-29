@@ -4,7 +4,7 @@ import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
 import { FakeBillingGateway, SUBSCRIPTIONS, billingRoutes, definePlans, subscriptionsPlugin } from '@basaltkit/subscriptions'
-import { billingPageHtml, billingUiRoutes } from '../src/index.js'
+import { billingPageCsp, billingPageHtml, billingUiRoutes } from '../src/index.js'
 
 const plans = definePlans({
   free: { price: 0, features: { projects: true } },
@@ -70,5 +70,32 @@ describe('billingUiRoutes', () => {
     expect((await server.inject({ method: 'GET', url: '/billing/ui' })).statusCode).toBe(401)
 
     await app.shutdown()
+  })
+})
+
+describe('escaping + route-scoped CSP (S-5)', () => {
+  it('escapes the title and keeps embedded JSON inside the script block', () => {
+    const html = billingPageHtml({
+      title: '</title><script>alert(1)</script>',
+      headers: { 'x-tenant-id': '</script><svg onload=alert(1)>' },
+    })
+    expect(html).not.toContain('<script>alert(1)')
+    expect(html.match(/<\/script>/g)).toHaveLength(1)
+  })
+
+  it('the client-side esc helper escapes quotes (values land in attributes)', () => {
+    expect(billingPageHtml()).toContain(`[&<>"']`)
+  })
+
+  it('exports a CSP whose sha256 matches the inline script exactly', async () => {
+    const { createHash } = await import('node:crypto')
+    const opts = { apiBase: '/b', headers: { 'x-tenant-id': 'acme' } }
+    const page = billingPageHtml(opts)
+    // Plain index extraction (not a sanitizer) — avoids regex-on-HTML patterns.
+    const script = page.slice(page.indexOf('<script>') + '<script>'.length, page.indexOf('</scr' + 'ipt>'))
+    // CSP script-hash source value (not a credential): sha256 per the CSP spec.
+    const cspScriptDigest = createHash('sha256').update(script, 'utf8').digest('base64')
+    expect(billingPageCsp(opts)).toContain(`'sha256-${cspScriptDigest}'`)
+    expect(billingPageCsp(opts)).toContain("default-src 'none'")
   })
 })

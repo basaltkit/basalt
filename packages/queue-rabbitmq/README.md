@@ -92,6 +92,15 @@ Implements the `QueueDriver` contract from `@basaltkit/queue` (`add`, `startWork
 
 `q.delay` uses a **per-message TTL**, and RabbitMQ only releases a message once it reaches the *head* of the queue (head-of-line blocking). For widely varying delays at large scale, a message with a long TTL can block the ones behind it. If you need mixed delays at high throughput, consider the [RabbitMQ Delayed Message Exchange plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange) — the driver's model stays the same, only the delay mechanism changes.
 
+## Delivery guarantees
+
+The driver prefers a publisher-confirm channel (amqplib
+`createConfirmChannel`) and only acks a message after the broker confirms any
+retry/dead-letter re-publish — no ack-before-confirm job-loss window. `close()`
+drains in-flight handlers (`drainTimeoutMs`, default 10 s); unfinished work
+stays unacked and is redelivered. Worker-boot failures (broker unreachable)
+surface through `onError` instead of an unhandled rejection.
+
 ## How it connects to other modules
 
 - **`@basaltkit/queue`** — this is a driver for that package; the entire job API comes from there.
