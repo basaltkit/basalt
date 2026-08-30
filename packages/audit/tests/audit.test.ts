@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@basaltkit/core'
+import { createApp, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
 import { defineEvent, EVENTS, eventsPlugin } from '@basaltkit/events'
 import { z } from 'zod'
-import { AUDIT, auditPlugin, patternMatches, piiMinimizingRedactor, pseudonymize, redactSensitiveAndPii } from '../src/index.js'
+import { AUDIT, Audit, auditPlugin, MemoryAuditStore, patternMatches, piiMinimizingRedactor, pseudonymize, redactSensitiveAndPii } from '../src/index.js'
 
 describe('patternMatches', () => {
   it('handles hook (:) and event (.) separators with * and **', () => {
@@ -16,6 +16,23 @@ describe('patternMatches', () => {
 
 const boot = async (options = {}) => {
   const app = await createApp({ plugins: [eventsPlugin(), auditPlugin(options)] }).boot()
+  return { app, audit: app.container.get(AUDIT), bus: app.container.get(EVENTS) }
+}
+
+/**
+ * Stands in for `@basaltkit/tenancy` without depending on it: the plugin's only
+ * observable signal to other packages is the `tenancy:active` metadata marker.
+ */
+const fakeTenancyMarker = definePlugin({
+  name: 'fake-tenancy-marker',
+  register({ container }) {
+    ensureMetadata(container).add('tenancy:active', true)
+  },
+})
+
+/** A multi-tenant app: tenancy registered, so audit reads fail closed. */
+const bootMultiTenant = async (options = {}) => {
+  const app = await createApp({ plugins: [fakeTenancyMarker, eventsPlugin(), auditPlugin(options)] }).boot()
   return { app, audit: app.container.get(AUDIT), bus: app.container.get(EVENTS) }
 }
 
@@ -89,8 +106,8 @@ describe('auditPlugin', () => {
     expect((await audit.systemTrail({ tenantId: 'victim' })).map((e) => e.tenantId)).toEqual(['victim'])
   })
 
-  it('trail() refuses a silent broad read with no tenant in context (PII F2)', async () => {
-    const { app, audit } = await boot()
+  it('trail() refuses a silent broad read with no tenant in context WHEN TENANCY IS ACTIVE (PII F2)', async () => {
+    const { app, audit } = await bootMultiTenant()
     await runWithContext({ tenant: { id: 'acme' } }, () => app.hooks.emit('auth:login', { user: { id: 'a' } }))
 
     // No tenant context and no explicit tenantId → must not return everything.
@@ -166,6 +183,40 @@ describe('auditPlugin', () => {
     expect(user['email']).toBe(pseudonymize('alice@example.com'))
     expect(user['email']).not.toContain('alice@example.com')
     expect(user['id']).toBe('u1')
+  })
+})
+
+describe('beyond-SaaS: audit does not require tenancy', () => {
+  it('with NO tenancy registered, an unscoped trail() is the everyday read and must not throw', async () => {
+    const { app, audit } = await boot()
+    await app.hooks.emit('auth:login', { user: { id: 'u1' } })
+    await audit.record('order.shipped', { orderId: 'o-1' })
+
+    // @basaltkit/audit is a GENERIC package: an app without tenancyPlugin has no
+    // tenant dimension, so `trail()` is simply "read the trail" — pushing the
+    // developer to the system-only escape hatch would break the beyond-SaaS promise.
+    const trail = await audit.trail()
+    expect(trail.map((entry) => entry.event)).toEqual(['order.shipped', 'auth:login'])
+    expect(trail.every((entry) => entry.tenantId === undefined)).toBe(true)
+    // filters keep working on the unscoped path
+    expect((await audit.trail({ event: 'auth:**' })).map((e) => e.event)).toEqual(['auth:login'])
+    await app.shutdown()
+  })
+
+  it('with tenancy ACTIVE and a tenant in context, trail() still auto-scopes and cannot be widened', async () => {
+    const { app, audit } = await bootMultiTenant()
+    await runWithContext({ tenant: { id: 'acme' } }, () => app.hooks.emit('auth:login', { user: { id: 'a' } }))
+    await runWithContext({ tenant: { id: 'victim' } }, () => app.hooks.emit('auth:login', { user: { id: 'v' } }))
+
+    const scoped = await runWithContext({ tenant: { id: 'acme' } }, () => audit.trail({ tenantId: 'victim' }))
+    expect(scoped.map((e) => e.tenantId)).toEqual(['acme'])
+    await app.shutdown()
+  })
+
+  it('a bare `new Audit(store)` is fail-open — the tenancy signal comes from the plugin, never a tenancy import', async () => {
+    const audit = new Audit(new MemoryAuditStore())
+    await audit.record('order.shipped', { orderId: 'o-1' })
+    expect((await audit.trail()).map((e) => e.event)).toEqual(['order.shipped'])
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@basaltkit/core'
+import { createApp, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
 import {
   MeilisearchDriver,
   MemorySearchDriver,
@@ -90,9 +90,45 @@ describe('Search service', () => {
     expect(res.total).toBe(3)
   })
 
-  it('throws when no tenant can be determined', async () => {
-    const search = new Search({ driver: await seed() })
+  it('throws when no tenant can be determined AND the app is multi-tenant', async () => {
+    const search = new Search({ driver: await seed() }, () => true)
     await expect(search.search('notes', 'quick')).rejects.toBeInstanceOf(TenantRequiredError)
+  })
+})
+
+describe('beyond-SaaS: search does not require tenancy', () => {
+  /** Stands in for @basaltkit/tenancy: its only cross-package signal. */
+  const fakeTenancyMarker = definePlugin({
+    name: 'fake-tenancy-marker',
+    register({ container }) {
+      ensureMetadata(container).add('tenancy:active', true)
+    },
+  })
+
+  it('with NO tenancy, index() and search() agree on one scope and never throw', async () => {
+    const search = new Search({ driver: new MemorySearchDriver() })
+    // No tenantId anywhere — a single-tenant app should not have to invent one.
+    await search.index('notes', { id: 'n1', title: 'the quick brown fox' })
+    await search.bulk('notes', [{ id: 'n2', title: 'quick start' }])
+
+    const res = await search.search('notes', 'quick')
+    expect(res.total).toBe(2)
+    expect(res.hits.map((h) => h.id).sort()).toEqual(['n1', 'n2'])
+
+    await search.remove('notes', 'n1')
+    expect((await search.search('notes', 'quick')).total).toBe(1)
+  })
+
+  it('searchPlugin wires the tenancy signal from the container marker', async () => {
+    const single = await createApp({ plugins: [searchPlugin({ driver: new MemorySearchDriver() })] }).boot()
+    await single.container.get(SEARCH).search('notes', 'x') // must not throw
+    await single.shutdown()
+
+    const multi = await createApp({
+      plugins: [fakeTenancyMarker, searchPlugin({ driver: new MemorySearchDriver() })],
+    }).boot()
+    await expect(multi.container.get(SEARCH).search('notes', 'x')).rejects.toBeInstanceOf(TenantRequiredError)
+    await multi.shutdown()
   })
 })
 

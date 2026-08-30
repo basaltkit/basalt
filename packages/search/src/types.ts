@@ -1,7 +1,22 @@
-/** A document to index. Always carries an `id` and the owning `tenantId`. */
+/**
+ * A document as the driver sees it: `tenantId` is always resolved by the time
+ * it reaches the driver. Callers pass a {@link SearchInput}.
+ */
 export interface SearchDocument {
   id: string
   tenantId: string
+  [field: string]: unknown
+}
+
+/**
+ * A document as callers provide it. `tenantId` is optional: `Search` resolves
+ * it from the ambient tenant, and in an app with no `tenancyPlugin` falls back
+ * to {@link SINGLE_TENANT_SCOPE} — so a non-SaaS app indexes and queries the
+ * same scope without inventing a tenant id.
+ */
+export interface SearchInput {
+  id: string
+  tenantId?: string
   [field: string]: unknown
 }
 

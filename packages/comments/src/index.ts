@@ -2,6 +2,7 @@ export {
   Comments,
   CommentNotFoundError,
   CommentTenantRequiredError,
+  SINGLE_TENANT_SCOPE,
   type CommentsOptions,
   type AddCommentInput,
   type ResourceComments,

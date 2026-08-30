@@ -1,6 +1,7 @@
 export {
   defineIndex,
   type SearchDocument,
+  type SearchInput,
   type IndexDefinition,
   type SearchQuery,
   type SearchHit,
@@ -8,7 +9,7 @@ export {
   type SearchDriver,
 } from './types.js'
 export { MemorySearchDriver } from './memory.js'
-export { Search, TenantRequiredError, type SearchOptions } from './search.js'
+export { Search, SINGLE_TENANT_SCOPE, TenantRequiredError, type SearchOptions } from './search.js'
 export {
   MeilisearchDriver,
   MeilisearchError,

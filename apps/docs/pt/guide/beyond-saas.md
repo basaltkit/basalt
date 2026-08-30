@@ -23,6 +23,50 @@ Se não registares o `tenancyPlugin` / `subscriptionsPlugin` / `teamsPlugin`, el
 simplesmente não existem na tua app. O `ctx().tenant` fica `undefined` e, como
 nunca corres queries tenant-scoped, nada rebenta.
 
+## A regra: um package genérico nunca *exige* tenancy
+
+Isto é uma regra rígida, não uma intenção:
+
+> **Um package genérico tem de funcionar numa app que nunca regista o
+> `tenancyPlugin`.** Pode apertar o comportamento quando a tenancy *está*
+> registada — nunca pode depender dela.
+
+Vários packages são deliberadamente fail-closed quanto a tenants: o
+`Audit.trail()` recusa uma leitura cross-tenant sem âmbito, o `Cache.flush()`
+recusa limpar um namespace que não consegue delimitar, `Files`/`Comments`/
+`Search` recusam ler sem tenant. Numa app multi-tenant isso é exatamente o
+correto. Numa app *single-tenant* não há tenant nenhum para encontrar, por isso
+uma versão incondicional dessa regra faria a chamada do dia-a-dia rebentar
+sempre.
+
+Por isso a verificação é condicional. O `tenancyPlugin` adiciona um marcador
+`tenancy:active` ao [buckets de metadata](./concepts.md#buckets-de-metadata-como-os-packages-cooperam) do
+container, e os packages genéricos leem esse marcador — um sinal por chave de
+texto, nunca um import, para que nenhum deles dependa de `@basaltkit/tenancy`:
+
+| App | Comportamento |
+| --- | --- |
+| Sem `tenancyPlugin` | As chamadas sem âmbito são o caminho normal e funcionam. Não existe dimensão de tenant, logo nada a pode atravessar. |
+| Com `tenancyPlugin` | O âmbito por tenant é forçado a partir de `ctx().tenant`; uma chamada que não consiga resolver um tenant falha fechada. |
+
+```ts
+// App single-tenant — sem tenancyPlugin em lado nenhum.
+const audit = app.container.get(AUDIT)
+await audit.record('order.shipped', { orderId: 'o-1' })
+await audit.trail()          // ✅ lê simplesmente o trail
+await cache.flush()          // ✅ limpa o namespace da própria app
+await files.list()           // ✅ não precisa de tenantId
+```
+
+Adiciona o `tenancyPlugin` mais tarde e as mesmas chamadas apertam sozinhas —
+não reescreves nada.
+
+Duas suites de testes em `apps/beyond-saas` garantem isto em cada corrida de CI:
+uma arranca uma app com os plugins genéricos e **sem tenancy** e exercita o
+caminho principal de leitura/escrita de cada package; a outra verifica que nenhum
+package genérico declara `@basaltkit/tenancy`, `-teams` ou `-subscriptions` como
+dependência de runtime.
+
 ## Uma API mínima, sem SaaS
 
 ```ts

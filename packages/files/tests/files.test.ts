@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_FILE_SIZE,
   FileNotFoundError,
   FileTenantRequiredError,
+  SINGLE_TENANT_SCOPE,
   FileTooLargeError,
   FileTypeNotAllowedError,
   Files,
@@ -100,7 +101,34 @@ describe('Files.upload', () => {
       files.upload(png, { name: 'ctx.png', contentType: 'image/png' }),
     )
     expect(record.tenantId).toBe('acme')
-    await expect(files.upload(png, { name: 'x.png', contentType: 'image/png' })).rejects.toBeInstanceOf(FileTenantRequiredError)
+  })
+
+  it('with tenancy ACTIVE and no resolvable tenant, upload still fails closed', async () => {
+    const { driver, hooks } = setup()
+    const multiTenant = new Files({ disk: new Disk('uploads', driver), hooks }, () => true)
+    await expect(multiTenant.upload(png, { name: 'x.png', contentType: 'image/png' })).rejects.toBeInstanceOf(
+      FileTenantRequiredError,
+    )
+  })
+})
+
+describe('beyond-SaaS: files does not require tenancy', () => {
+  it('with NO tenancy, the whole upload/read/delete path works unscoped', async () => {
+    const { driver, files } = setup()
+
+    const record = await files.upload(png, { name: 'a.png', contentType: 'image/png' })
+    expect(record.tenantId).toBe(SINGLE_TENANT_SCOPE)
+    expect(await files.list()).toHaveLength(1)
+    expect((await files.get(record.id))?.name).toBe('a.png')
+    expect((await files.download(record.id)).content.equals(png)).toBe(true)
+    expect(await files.temporaryUrl(record.id, '5m')).toContain(record.path)
+    expect((await files.markScanned(record.id, { clean: true })).scanned).toBe(true)
+
+    // Storage paths stay unprefixed — identical to using @basaltkit/storage directly.
+    expect(await driver.exists(record.path)).toBe(true)
+
+    await files.delete(record.id)
+    expect(await files.list()).toHaveLength(0)
   })
 })
 

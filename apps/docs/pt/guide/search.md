@@ -2,7 +2,10 @@
 
 O `@basaltkit/search` dá à tua app pesquisa full-text que é **restrita ao tenant
 por construção** — cada query é forçada ao tenant de quem a faz, por isso os
-resultados nunca vazam entre tenants. Traz um driver em memória para dev/testes e
+resultados nunca vazam entre tenants. Numa app sem `tenancyPlugin` não há tenant
+a que delimitar: o `tenantId` passa a opcional no `index()` e no `search()`, e
+ambos resolvem para um único âmbito interno `'default'`, por isso concordam
+sempre (vê [Para além do SaaS](/pt/guide/beyond-saas)). Traz um driver em memória para dev/testes e
 um driver Meilisearch para produção, atrás de uma única API.
 
 [[toc]]

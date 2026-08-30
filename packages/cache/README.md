@@ -244,6 +244,12 @@ closed turns it into a stack trace at the call site.
 Single-tenant apps are untouched: no tenancy plugin, no marker, so the default stays `'global'`
 and nothing changes.
 
+`flush()` follows the same gate. It wipes a whole prefix, so in a multi-tenant app an unresolved
+scope must fail closed — otherwise one mis-scoped call clears every tenant's cache. Without
+tenancy, the prefix *is* this app's own cache and clearing it is exactly what `flush()` means, so
+it proceeds. An explicit `onMissingScope: 'error'` keeps `flush()` fail-closed either way, and
+`scope: null` (a deliberate global cache) may always flush its namespace.
+
 ```ts
 // Multi-tenant: this now throws instead of poisoning the shared namespace.
 cachePlugin({ driver: 'redis', url })   // + tenancyPlugin() registered  → onMissingScope: 'error'

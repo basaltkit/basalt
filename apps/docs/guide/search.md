@@ -2,7 +2,10 @@
 
 `@basaltkit/search` gives your app full-text search that is **tenant-scoped by
 construction** — every query is forced to the caller's tenant, so results never
-leak between tenants. It ships an in-memory driver for dev/test and a
+leak between tenants. In an app with no `tenancyPlugin` there is no tenant to
+scope to: `tenantId` becomes optional on both `index()` and `search()`, and both
+resolve to one internal `'default'` scope, so they always agree
+(see [Beyond SaaS](/guide/beyond-saas)). It ships an in-memory driver for dev/test and a
 Meilisearch driver for production, behind one API.
 
 [[toc]]
