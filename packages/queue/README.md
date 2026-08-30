@@ -20,15 +20,20 @@ This module gives you three things you'd normally have to build by hand:
 
 1. **Declarative, type-safe jobs** — you define each job once with `defineJob` (name, validation schema, number of attempts) and then call `MyJob.dispatch(data)` anywhere in the application. Data is validated with Zod *before* entering the queue, so invalid data never reaches the worker.
 2. **Context propagation** — information from the current request (`requestId`, `tenantId`, `userId`, etc.) automatically travels along with the job and is restored inside the worker. Your logs and tenant checks work in the worker the same way they did in the HTTP request.
-3. **Two interchangeable drivers** — in production, use **BullMQ** (over Redis, with real retries and delays); in development and tests, use the **sync** driver, which runs the job immediately, in the same process, without needing Redis installed.
+3. **Interchangeable drivers** — in production, use **BullMQ** (over Redis, with real retries and delays), or RabbitMQ/SQS/Kafka through a driver package; in development and tests, use the **sync** driver, which runs the job immediately, in the same process, without needing Redis installed. The core itself is backend-neutral: it depends on no broker client.
 
 ## Installation
 
 ```bash
 pnpm add @basaltkit/queue
+
+# only if you use the BullMQ/Redis driver (`connection` or `BullmqQueueDriver`):
+pnpm add bullmq
 ```
 
-The package depends on `@basaltkit/core` and `@basaltkit/events` (installed automatically). For production you also need an accessible **Redis** server (BullMQ stores the queues there). For development and tests you need nothing.
+The package depends on `@basaltkit/core` and `@basaltkit/events` (installed automatically). For development and tests you need nothing else — the sync driver has no dependencies.
+
+`bullmq` is an **optional peer dependency**, not a dependency: `@basaltkit/queue` is the driver-agnostic core, so an application running on [RabbitMQ](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq), [SQS](https://www.npmjs.com/package/@basaltkit/queue-sqs), [Kafka](https://www.npmjs.com/package/@basaltkit/queue-kafka) or the sync driver never installs (or loads) BullMQ and its ioredis transitive weight. Install `bullmq` yourself the moment you pass `connection` or construct `BullmqQueueDriver`; forget it and boot fails with a `MissingQueueDriverPackageError` telling you exactly that. For production with BullMQ you also need an accessible **Redis** server (it stores the queues there).
 
 ## Get started in 5 minutes
 
@@ -399,7 +404,7 @@ Creates the event→job bridge. Returns the subscription cancel function.
 ### Drivers
 
 - **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry). Public property `executed: { queue, jobName, attempts }[]` with the execution history (capped at 1000 entries). For testing and dev without Redis.
-- **`class BullmqQueueDriver`** — production over Redis; see the options table below.
+- **`class BullmqQueueDriver`** — production over Redis; see the options table below. Imported from its own entry point, `@basaltkit/queue/bullmq` (one import path per backend, like the RabbitMQ/SQS/Kafka driver packages), and requires the optional `bullmq` peer.
 - **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, optional `stats(queue)` / `retryFailed(queue, { limit? })` / `list(queue, options)`, `close()`, plus the optional `name` and `capabilities` fields. Helper types: `AddJobOptions`, `JobExecutor`, `QueueStats`, `DriverCapabilities`, `JobState`, `JobSummary`, `JobEnvelope`, `ListJobsOptions`.
 
   The three optional methods are a deliberate pattern: a driver **omits** what its
@@ -416,6 +421,12 @@ Creates the event→job bridge. Returns the subscription cancel function.
   | [`kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) | ❌ | ❌ | ❌ | Reading is non-destructive, but a log has no per-message state — any job states would be invented. |
 
 #### `new BullmqQueueDriver(options: BullmqDriverOptions)`
+
+```ts
+import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'   // needs `pnpm add bullmq`
+```
+
+(The `BullmqDriverOptions` **type** is also re-exported from `@basaltkit/queue` — types are erased at build, so they cost nothing.)
 
 | Option | Type | Default | Purpose |
 |---|---|---|---|
@@ -477,7 +488,8 @@ Passing your own `driver` bypasses that forwarding — a supplied driver owns it
 so set them in its constructor:
 
 ```ts
-import { queuePlugin, BullmqQueueDriver } from '@basaltkit/queue'
+import { queuePlugin } from '@basaltkit/queue'
+import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'
 
 queuePlugin({
   jobs: [SendWelcomeEmail],
@@ -496,6 +508,7 @@ queuePlugin({
 | `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `job.dispatch()` was called before the job was registered in a `QueueManager`. |
 | `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | A job reached the worker but is not registered in that process — producer and worker registered different job lists. |
 | `UnsupportedJobOptionError` | `QUEUE_UNSUPPORTED_OPTION` | With `onUnsupported: 'throw'`, a dispatch used an option the active driver's `capabilities` do not include. `status = 500`. |
+| `MissingQueueDriverPackageError` | `QUEUE_MISSING_DRIVER_PACKAGE` | `queuePlugin({ connection })` selected the BullMQ driver but the optional `bullmq` peer is not installed. Thrown at boot, with the fix in the message; `.cause` holds the original resolution error. |
 
 Errors thrown outside these classes come from the driver's client (ioredis, amqplib, kafkajs,
 the AWS SDK) and reach you through that driver's `onError`.
