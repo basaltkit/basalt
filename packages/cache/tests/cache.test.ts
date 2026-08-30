@@ -5,13 +5,40 @@ import { Cache, CACHE, cachePlugin, MemoryCacheDriver, MissingCacheScopeError } 
 const makeCache = (options = {}) => new Cache(new MemoryCacheDriver(), options)
 
 describe('Cache — tenant-scope safety', () => {
-  it('flush() fails closed when no tenant scope resolves (never wipes every tenant)', async () => {
-    const cache = makeCache() // default scope reads ctx().tenant, absent here
+  it('flush() fails closed when no tenant scope resolves in a MULTI-TENANT app', async () => {
+    const cache = new Cache(new MemoryCacheDriver(), {}, () => true) // tenancy active
     await expect(cache.flush()).rejects.toBeInstanceOf(MissingCacheScopeError)
     // a deliberate global cache (scope:null) may flush its whole namespace
-    await expect(makeCache({ scope: null }).flush()).resolves.toBeUndefined()
+    await expect(new Cache(new MemoryCacheDriver(), { scope: null }, () => true).flush()).resolves.toBeUndefined()
     // and a properly-scoped flush works
     await runWithContext({ tenant: { id: 'acme' } }, () => cache.flush())
+  })
+
+  it("flush() also fails closed on an explicit onMissingScope:'error', tenancy or not", async () => {
+    await expect(makeCache({ onMissingScope: 'error' }).flush()).rejects.toBeInstanceOf(MissingCacheScopeError)
+  })
+
+  it('beyond-SaaS: with NO tenancy, flush() clears this app\'s own namespace instead of throwing', async () => {
+    const cache = makeCache() // single-tenant app: nothing to cross
+    await cache.put('k', 'v')
+    await expect(cache.flush()).resolves.toBeUndefined()
+    expect(await cache.get('k')).toBeUndefined()
+  })
+
+  it('beyond-SaaS: cachePlugin without tenancy leaves flush() open, with tenancy closed', async () => {
+    const single = await createApp({ plugins: [cachePlugin({ driver: 'memory' })] }).boot()
+    await expect(single.container.get(CACHE).flush()).resolves.toBeUndefined()
+    await single.shutdown()
+
+    const marker = definePlugin({
+      name: 'fake-tenancy-marker',
+      register({ container }) {
+        ensureMetadata(container).add('tenancy:active', true)
+      },
+    })
+    const multi = await createApp({ plugins: [marker, cachePlugin({ driver: 'memory' })] }).boot()
+    await expect(multi.container.get(CACHE).flush()).rejects.toBeInstanceOf(MissingCacheScopeError)
+    await multi.shutdown()
   })
 
   it("onMissingScope:'error' fails closed on read/write without a tenant", async () => {

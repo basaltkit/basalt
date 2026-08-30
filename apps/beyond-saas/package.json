@@ -1,0 +1,36 @@
+{
+  "name": "beyond-saas",
+  "private": true,
+  "type": "module",
+  "description": "Regression net for the beyond-SaaS promise: boots a Basalt app WITHOUT tenancyPlugin and exercises every generic package's primary read/write paths. Enforces that the SaaS layer stays opt-in — the tenancy analogue of packages/http/tests/adapter-boundary.test.ts.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@basaltkit/activity": "workspace:*",
+    "@basaltkit/audit": "workspace:*",
+    "@basaltkit/audit-viewer": "workspace:*",
+    "@basaltkit/cache": "workspace:*",
+    "@basaltkit/comments": "workspace:*",
+    "@basaltkit/core": "workspace:*",
+    "@basaltkit/events": "workspace:*",
+    "@basaltkit/exports": "workspace:*",
+    "@basaltkit/files": "workspace:*",
+    "@basaltkit/flags": "workspace:*",
+    "@basaltkit/i18n": "workspace:*",
+    "@basaltkit/mailer": "workspace:*",
+    "@basaltkit/notifications": "workspace:*",
+    "@basaltkit/permissions": "workspace:*",
+    "@basaltkit/queue": "workspace:*",
+    "@basaltkit/scheduler": "workspace:*",
+    "@basaltkit/search": "workspace:*",
+    "@basaltkit/storage": "workspace:*",
+    "@basaltkit/tsconfig": "workspace:*",
+    "@basaltkit/webhooks": "workspace:*",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "zod": "^3.24.0 || ^4.0.0"
+  }
+}

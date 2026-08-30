@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, runWithContext } from '@basaltkit/core'
+import { createApp, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
 import { Audit, MemoryAuditStore, auditPlugin, type AuditEntry } from '@basaltkit/audit'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
-import { AuditTenantRequiredError, AuditViewer, auditViewerCsp, auditViewerHtml, auditViewerPlugin, auditViewerRoutes } from '../src/index.js'
+import { AUDIT_VIEWER, AuditTenantRequiredError, AuditViewer, auditViewerCsp, auditViewerHtml, auditViewerPlugin, auditViewerRoutes } from '../src/index.js'
 
 let counter = 0
 const entry = (over: Partial<AuditEntry> & { event: string }): AuditEntry => ({
@@ -71,7 +71,38 @@ describe('AuditViewer', () => {
 
     const page = await runWithContext({ tenant: { id: 'acme' } } as never, () => viewer.page())
     expect(page.total).toBe(4)
-    await expect(viewer.page()).rejects.toBeInstanceOf(AuditTenantRequiredError)
+    // In a MULTI-TENANT app an unscoped read is still refused.
+    const multiTenant = new AuditViewer(new Audit(await seededStore()), { bucketMs: 1000 }, () => true)
+    await expect(multiTenant.page()).rejects.toBeInstanceOf(AuditTenantRequiredError)
+  })
+})
+
+describe('beyond-SaaS: the viewer does not require tenancy', () => {
+  /** Stands in for @basaltkit/tenancy: its only cross-package signal. */
+  const fakeTenancyMarker = definePlugin({
+    name: 'fake-tenancy-marker',
+    register({ container }) {
+      ensureMetadata(container).add('tenancy:active', true)
+    },
+  })
+
+  it('with NO tenancy, page()/stats()/get() read the whole trail instead of throwing', async () => {
+    const viewer = new AuditViewer(new Audit(await seededStore()), { bucketMs: 1000 })
+
+    const page = await viewer.page()
+    expect(page.total).toBe(5) // every entry, no tenant dimension to scope to
+    expect((await viewer.stats()).total).toBe(5)
+    expect((await viewer.get('e5'))?.event).toBe('secret:read')
+  })
+
+  it('auditViewerPlugin wires the tenancy signal from the container marker', async () => {
+    const single = await createApp({ plugins: [auditPlugin(), auditViewerPlugin()] }).boot()
+    await single.container.get(AUDIT_VIEWER).page() // must not throw
+    await single.shutdown()
+
+    const multi = await createApp({ plugins: [fakeTenancyMarker, auditPlugin(), auditViewerPlugin()] }).boot()
+    await expect(multi.container.get(AUDIT_VIEWER).page()).rejects.toBeInstanceOf(AuditTenantRequiredError)
+    await multi.shutdown()
   })
 })
 

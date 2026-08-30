@@ -387,11 +387,16 @@ trazem a sua própria variante fail-closed da verificação — `SEARCH_TENANT_R
 com o mesmo significado: passa um `tenantId` ou corre dentro de um contexto de tenant.
 :::
 
-A cache vai mais longe e falha fechado por ti: registar o `tenancyPlugin` define o
-marcador `tenancy:active`, e o `@basaltkit/cache` lê-o para trocar a predefinição do
-seu `onMissingScope` de `'global'` para `'error'`, pelo que uma leitura ou escrita de
-cache sem âmbito numa app multi-tenant levanta `MissingCacheScopeError` em vez de
-partilhar uma entrada entre tenants. Vê [Caching](/pt/guide/caching).
+Estas verificações são **condicionais à tenancy estar registada**. O
+`tenancyPlugin` define um marcador `tenancy:active` na metadata do container, e
+cada package genérico lê-o para decidir se falha fechado: com tenancy ligada,
+`SEARCH_TENANT_REQUIRED` / `FILE_TENANT_REQUIRED` / `COMMENT_TENANT_REQUIRED` /
+`AUDIT_TENANT_REQUIRED` / `MissingCacheScopeError` aplicam-se; sem tenancy, não
+existe dimensão de tenant e as mesmas chamadas funcionam sem âmbito. É a
+[regra beyond-SaaS](/pt/guide/beyond-saas) — um package genérico nunca *exige*
+tenancy. O `@basaltkit/cache` foi o primeiro a usar o marcador, trocando a
+predefinição do seu `onMissingScope` de `'global'` para `'error'` em apps
+multi-tenant; vê [Caching](/pt/guide/caching).
 
 ## Correr código num tenant
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
 
 /** One immutable line of the trail. */
@@ -168,6 +168,16 @@ export class Audit {
     private readonly store: AuditStore,
     /** Scrubs each payload before it is stored. Default masks common secret keys. */
     private readonly redact: AuditRedactor = defaultAuditRedactor,
+    /**
+     * Whether the host app is multi-tenant, i.e. whether `@basaltkit/tenancy`
+     * is registered. `auditPlugin` wires this to the container's
+     * `'tenancy:active'` metadata marker; it is a *signal*, never an import —
+     * `@basaltkit/audit` is a generic package and must not depend on tenancy.
+     *
+     * Defaults to `false`: a hand-built `new Audit(store)` behaves like a
+     * single-tenant app, which is the only thing it can safely assume.
+     */
+    private readonly tenancyActive: () => boolean = () => false,
   ) {}
 
   /** Manual entry — for actions no hook covers. */
@@ -183,18 +193,25 @@ export class Audit {
   }
 
   /**
-   * Reads the audit trail, **always scoped to the current tenant**.
+   * Reads the audit trail — the everyday read.
    *
-   * Security model (PII F2):
+   * Tenant scoping (PII F2), applied only where a tenant dimension exists:
    * - When a tenant is present in the ambient context, the read is FORCED to
    *   that tenant. Any caller-supplied `query.tenantId` is ignored/overridden
    *   (the context tenant is spread LAST so it always wins), so a tenant-facing
    *   handler that forwards client input — e.g. `trail({ tenantId: req.query.tenantId })`
    *   — can never widen the scope and read another tenant's trail.
-   * - When there is NO tenant in context, an explicit single-tenant read
-   *   (`trail({ tenantId })`) is honoured, but a broad/unscoped read is refused:
-   *   returning every tenant's records must be a deliberate, system-only act via
-   *   {@link systemTrail}, never the silent default.
+   * - With no tenant in context, an explicit single-tenant read
+   *   (`trail({ tenantId })`) is honoured.
+   * - With no tenant in context and no explicit `tenantId`, the behavior depends
+   *   on whether the app is multi-tenant at all:
+   *   - **Tenancy registered** (`@basaltkit/tenancy` present): the read is
+   *     REFUSED. Returning every tenant's records must be a deliberate,
+   *     system-only act via {@link systemTrail}, never the silent default.
+   *   - **No tenancy** (single-tenant/non-SaaS app): there is no tenant
+   *     dimension to scope to, so this is simply "read the trail" and returns
+   *     the rows. `@basaltkit/audit` is a general-purpose package; it must work
+   *     without the opt-in SaaS layer.
    */
   async trail(query: AuditQuery = {}): Promise<AuditEntry[]> {
     const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
@@ -207,9 +224,14 @@ export class Audit {
       // No context, but the caller explicitly pinned a single tenant.
       return this.store.query(query)
     }
-    // No tenant to scope to and no explicit tenant pinned: refuse to silently
-    // return every tenant's records. Cross-tenant/system reads go through
-    // systemTrail() so broad access is always deliberate.
+    if (!this.tenancyActive()) {
+      // Single-tenant app: no tenant dimension, so an unscoped read is correct
+      // and is the everyday call. Nothing to widen — every entry is "ours".
+      return this.store.query(query)
+    }
+    // Multi-tenant app with no tenant to scope to and no explicit tenant
+    // pinned: refuse to silently return every tenant's records. Cross-tenant /
+    // system reads go through systemTrail() so broad access is deliberate.
     throw new Error(
       'Audit.trail() requires a tenant in context or an explicit `tenantId`. ' +
         'For a deliberate system-wide, cross-tenant read use Audit.systemTrail().',
@@ -277,7 +299,17 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:audit',
     register({ container, hooks }) {
-      container.singleton(AUDIT, () => new Audit(options.store ?? new MemoryAuditStore(), options.redact ?? defaultAuditRedactor))
+      // The 'tenancy:active' marker is set by tenancyPlugin. Reading it here
+      // (a string-keyed metadata bucket, not an import) is how a generic
+      // package learns the app is multi-tenant without depending on
+      // @basaltkit/tenancy — the same signal @basaltkit/cache uses. It is
+      // resolved per call, so plugin registration order does not matter.
+      const metadata = ensureMetadata(container)
+      const tenancyActive = () => metadata.get('tenancy:active').length > 0
+      container.singleton(
+        AUDIT,
+        () => new Audit(options.store ?? new MemoryAuditStore(), options.redact ?? defaultAuditRedactor, tenancyActive),
+      )
 
       hooks.onAny(async (hook, payload) => {
         if (!hookPatterns.some((pattern) => patternMatches(pattern, hook))) return

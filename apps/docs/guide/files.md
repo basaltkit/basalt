@@ -23,13 +23,19 @@ size → validate content type → check quota → write bytes → save record �
 `file:uploaded`. If validation or the quota rejects, **nothing is written** —
 neither bytes nor record.
 
-Every operation is tenant-scoped. The tenant comes from the explicit
-`tenantId` argument, or from `ctx().tenant.id`, and there is no third option:
-with neither, the call throws `FileTenantRequiredError`
+In a **multi-tenant** app every operation is tenant-scoped. The tenant comes
+from the explicit `tenantId` argument, or from `ctx().tenant.id`, and there is no
+third option: with neither, the call throws `FileTenantRequiredError`
 (`400 FILE_TENANT_REQUIRED`) rather than falling back to a global namespace.
 Storage access is then wrapped in that tenant's context, so the disk's default
 `tenants/<id>/` prefix applies even when `upload` runs from a background job
 with no ambient request.
+
+In a **single-tenant** app — no `tenancyPlugin` — there is no tenant dimension,
+so nothing to fail closed about: `upload`/`list`/`get`/`download`/`delete` work
+with no `tenantId`, records are filed under one internal `'default'` scope, and
+storage paths stay unprefixed, exactly as if you used `@basaltkit/storage`
+directly. See [Beyond SaaS](/guide/beyond-saas).
 
 ## Quickstart
 

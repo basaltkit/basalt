@@ -1,8 +1,8 @@
-import { createToken, definePlugin } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import type { BasaltHooks } from '@basaltkit/core'
 import { MemorySearchDriver } from './memory.js'
 import { Search } from './search.js'
-import type { IndexDefinition, SearchDocument, SearchDriver } from './types.js'
+import type { IndexDefinition, SearchDriver, SearchInput } from './types.js'
 
 export const SEARCH = createToken<Search>('search')
 
@@ -18,9 +18,9 @@ export interface SyncRule<K extends keyof BasaltHooks & string = keyof BasaltHoo
   hook: K
   index: string
   /** Build the document to upsert. Return null to skip. */
-  document?: (payload: BasaltHooks[K]) => SearchDocument | null
+  document?: (payload: BasaltHooks[K]) => SearchInput | null
   /** Or the identifiers to remove. Return null to skip. */
-  remove?: (payload: BasaltHooks[K]) => { tenantId: string; id: string } | null
+  remove?: (payload: BasaltHooks[K]) => { tenantId?: string; id: string } | null
 }
 
 /** Type-checks a sync rule against its hook, then erases the generic. */
@@ -48,7 +48,10 @@ export function searchPlugin(options: SearchPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:search',
     register({ container }) {
-      container.singleton(SEARCH, () => new Search({ driver }))
+      // 'tenancy:active' is tenancyPlugin's marker: how a generic package
+      // learns the app is multi-tenant without importing @basaltkit/tenancy.
+      const metadata = ensureMetadata(container)
+      container.singleton(SEARCH, () => new Search({ driver }, () => metadata.get('tenancy:active').length > 0))
     },
     async boot({ container, hooks }) {
       const search = container.get(SEARCH)

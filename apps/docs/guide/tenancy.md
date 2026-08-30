@@ -384,11 +384,16 @@ own fail-closed variant of the check — `SEARCH_TENANT_REQUIRED`,
 all with the same meaning: pass a `tenantId` or run inside a tenant context.
 :::
 
-Cache goes further and fails closed for you: registering `tenancyPlugin` sets
-the `tenancy:active` marker, and `@basaltkit/cache` reads it to flip its
-`onMissingScope` default from `'global'` to `'error'`, so an un-scoped cache
-read or write in a multi-tenant app raises `MissingCacheScopeError` instead of
-sharing one entry across tenants. See [Caching](/guide/caching).
+These checks are **conditional on tenancy being registered**. `tenancyPlugin`
+sets a `tenancy:active` marker in the container metadata, and every generic
+package reads it to decide whether to fail closed: with tenancy on,
+`SEARCH_TENANT_REQUIRED` / `FILE_TENANT_REQUIRED` / `COMMENT_TENANT_REQUIRED` /
+`AUDIT_TENANT_REQUIRED` / `MissingCacheScopeError` all apply; with tenancy off,
+there is no tenant dimension and the same calls simply work unscoped. That is
+the [beyond-SaaS rule](/guide/beyond-saas) — a generic package never *requires*
+tenancy. `@basaltkit/cache` was the first to use the marker, flipping its
+`onMissingScope` default from `'global'` to `'error'` in multi-tenant apps; see
+[Caching](/guide/caching).
 
 ## Running code in a tenant
 

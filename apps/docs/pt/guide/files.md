@@ -23,13 +23,19 @@ tamanho → validar content type → verificar quota → escrever bytes → grav
 registo → emitir `file:uploaded`. Se a validação ou a quota rejeitarem, **nada é
 escrito** — nem bytes nem registo.
 
-Todas as operações são delimitadas por tenant. O tenant vem do argumento
-explícito `tenantId`, ou de `ctx().tenant.id`, e não há terceira opção: sem
-nenhum dos dois, a chamada lança `FileTenantRequiredError`
+Numa app **multi-tenant**, todas as operações são delimitadas por tenant. O
+tenant vem do argumento explícito `tenantId`, ou de `ctx().tenant.id`, e não há
+terceira opção: sem nenhum dos dois, a chamada lança `FileTenantRequiredError`
 (`400 FILE_TENANT_REQUIRED`) em vez de cair para um namespace global. O acesso ao
 armazenamento é depois embrulhado no contexto desse tenant, por isso o prefixo
 `tenants/<id>/` do disco aplica-se mesmo quando o `upload` corre a partir de um
 job em background sem pedido ambiente.
+
+Numa app **single-tenant** — sem `tenancyPlugin` — não existe dimensão de tenant,
+logo não há nada a fechar: `upload`/`list`/`get`/`download`/`delete` funcionam sem
+`tenantId`, os registos ficam num único âmbito interno `'default'`, e os caminhos
+de armazenamento ficam sem prefixo, tal como se usasses o `@basaltkit/storage`
+diretamente. Vê [Para além do SaaS](/pt/guide/beyond-saas).
 
 ## Arranque rápido
 

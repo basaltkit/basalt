@@ -1,4 +1,4 @@
-import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { STORAGE, type Disk } from '@basaltkit/storage'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
@@ -28,6 +28,9 @@ export function filesPlugin(options: FilesPluginOptions) {
   return definePlugin({
     name: 'basalt:files',
     register({ container, hooks }) {
+      // 'tenancy:active' is tenancyPlugin's marker: how a generic package
+      // learns the app is multi-tenant without importing @basaltkit/tenancy.
+      const metadata = ensureMetadata(container)
       container.singleton(FILES, () => {
         const disk = typeof options.disk === 'string' ? container.get(STORAGE).disk(options.disk) : options.disk
         return new Files({
@@ -37,7 +40,7 @@ export function filesPlugin(options: FilesPluginOptions) {
           ...(options.validate ? { validate: options.validate } : {}),
           ...(options.maxTotalBytes !== undefined ? { maxTotalBytes: options.maxTotalBytes } : {}),
           ...(options.checkQuota ? { checkQuota: options.checkQuota } : {}),
-        })
+        }, () => metadata.get('tenancy:active').length > 0)
       })
     },
   })

@@ -1,10 +1,51 @@
 import { describe, expect, it } from 'vitest'
-import { HookBus, createApp } from '@basaltkit/core'
+import { HookBus, createApp, definePlugin, ensureMetadata } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
-import { Comments, commentRoutes, commentsPlugin } from '../src/index.js'
+import { COMMENTS, CommentTenantRequiredError, Comments, SINGLE_TENANT_SCOPE, commentRoutes, commentsPlugin } from '../src/index.js'
 import type { Comment } from '../src/index.js'
+
+describe('beyond-SaaS: comments does not require tenancy', () => {
+  /** Stands in for @basaltkit/tenancy: its only cross-package signal. */
+  const fakeTenancyMarker = definePlugin({
+    name: 'fake-tenancy-marker',
+    register({ container }) {
+      ensureMetadata(container).add('tenancy:active', true)
+    },
+  })
+
+  it('with NO tenancy, the whole thread lifecycle works unscoped', async () => {
+    const comments = new Comments()
+    const thread = comments.on('note', '1')
+
+    const c = await thread.add({ authorId: 'u1', body: 'first' })
+    expect(c.tenantId).toBe(SINGLE_TENANT_SCOPE)
+    expect(await thread.list()).toHaveLength(1)
+    expect(await thread.tree()).toHaveLength(1)
+    expect((await comments.get(c.id))?.body).toBe('first')
+    expect((await comments.edit(c.id, 'edited')).body).toBe('edited')
+    expect((await comments.resolve(c.id, 'u1')).resolvedBy).toBe('u1')
+    expect((await comments.reopen(c.id)).resolvedAt).toBeUndefined()
+    await comments.remove(c.id)
+    expect(await thread.list()).toHaveLength(0)
+  })
+
+  it('with tenancy ACTIVE and no resolvable tenant, it still fails closed', async () => {
+    const multiTenant = new Comments({}, () => true)
+    expect(() => multiTenant.on('note', '1')).toThrow(CommentTenantRequiredError)
+  })
+
+  it('commentsPlugin wires the tenancy signal from the container marker', async () => {
+    const single = await createApp({ plugins: [commentsPlugin()] }).boot()
+    expect(await single.container.get(COMMENTS).on('note', '1').list()).toEqual([])
+    await single.shutdown()
+
+    const multi = await createApp({ plugins: [fakeTenancyMarker, commentsPlugin()] }).boot()
+    expect(() => multi.container.get(COMMENTS).on('note', '1')).toThrow(CommentTenantRequiredError)
+    await multi.shutdown()
+  })
+})
 
 describe('Comments service', () => {
   it('adds comments, extracts mentions, and emits events', async () => {

@@ -75,6 +75,13 @@ const matchesType = (contentType: string, allowed: string[]): boolean =>
 const storagePath = (id: string): string => `files/${id}`
 
 /**
+ * Store key every record is filed under when the app has no tenancy at all.
+ * The {@link FileStore} contract is tenant-keyed, so a single-tenant app still
+ * needs one stable key — it just shouldn't have to invent it.
+ */
+export const SINGLE_TENANT_SCOPE = 'default'
+
+/**
  * Upload pipeline over a storage {@link Disk}: validates size/type, enforces a
  * per-tenant quota, writes the bytes, records metadata, and emits hooks. Every
  * operation is tenant-scoped; storage access runs in the resolved tenant's
@@ -89,7 +96,16 @@ export class Files {
   private readonly checkQuota: FilesOptions['checkQuota']
   private readonly now: () => number
 
-  constructor(options: FilesOptions) {
+  constructor(
+    options: FilesOptions,
+    /**
+     * Whether the host app registered `@basaltkit/tenancy`. `filesPlugin` wires
+     * this to the container's `'tenancy:active'` metadata marker — a signal,
+     * not an import, so this generic package never depends on the opt-in SaaS
+     * layer. Defaults to `false` (single-tenant).
+     */
+    private readonly tenancyActive: () => boolean = () => false,
+  ) {
     this.disk = options.disk
     this.store = options.store ?? new MemoryFileStore()
     this.hooks = options.hooks
@@ -103,9 +119,10 @@ export class Files {
 
   async upload(content: Buffer, input: UploadInput): Promise<FileRecord> {
     const tenantId = this.tenant(input.tenantId)
+    const scope = tenantId ?? SINGLE_TENANT_SCOPE
     const size = content.length
     this.validate(input.contentType, size)
-    await this.enforceQuota(tenantId, size)
+    await this.enforceQuota(scope, size)
 
     const id = randomUUID()
     const path = storagePath(id)
@@ -114,7 +131,7 @@ export class Files {
 
     const record: FileRecord = {
       id,
-      tenantId,
+      tenantId: scope,
       name: input.name,
       contentType: input.contentType,
       size,
@@ -130,16 +147,16 @@ export class Files {
   }
 
   async get(id: string, tenantId?: string): Promise<FileRecord | null> {
-    return this.store.find(this.tenant(tenantId), id)
+    return this.store.find(this.scope(tenantId), id)
   }
 
   async list(tenantId?: string): Promise<FileRecord[]> {
-    return this.store.list(this.tenant(tenantId))
+    return this.store.list(this.scope(tenantId))
   }
 
   async download(id: string, tenantId?: string): Promise<{ record: FileRecord; content: Buffer }> {
     const resolved = this.tenant(tenantId)
-    const record = await this.store.find(resolved, id)
+    const record = await this.store.find(resolved ?? SINGLE_TENANT_SCOPE, id)
     if (!record) throw new FileNotFoundError()
     const content = await this.inTenant(resolved, () => this.disk.get(record.path))
     return { record, content }
@@ -158,23 +175,24 @@ export class Files {
     options: { disposition?: 'attachment' | 'inline' } = {},
   ): Promise<string> {
     const resolved = this.tenant(tenantId)
-    const record = await this.store.find(resolved, id)
+    const record = await this.store.find(resolved ?? SINGLE_TENANT_SCOPE, id)
     if (!record) throw new FileNotFoundError()
     return this.inTenant(resolved, () => this.disk.temporaryUrl(record.path, expiresIn, options))
   }
 
   async delete(id: string, tenantId?: string): Promise<void> {
     const resolved = this.tenant(tenantId)
-    const record = await this.store.find(resolved, id)
+    const scope = resolved ?? SINGLE_TENANT_SCOPE
+    const record = await this.store.find(scope, id)
     if (!record) return
     await this.inTenant(resolved, () => this.disk.delete(record.path))
-    await this.store.delete(resolved, id)
-    await this.hooks?.emit('file:deleted', { tenantId: resolved, id })
+    await this.store.delete(scope, id)
+    await this.hooks?.emit('file:deleted', { tenantId: scope, id })
   }
 
   /** Records the result of an out-of-band scan (antivirus, moderation, …). */
   async markScanned(id: string, result: { clean: boolean; detail?: string }, tenantId?: string): Promise<FileRecord> {
-    const resolved = this.tenant(tenantId)
+    const resolved = this.scope(tenantId)
     const record = await this.store.find(resolved, id)
     if (!record) throw new FileNotFoundError()
     const patch: FilePatch = { scanned: true, metadata: { ...record.metadata, scan: result } }
@@ -200,14 +218,32 @@ export class Files {
     await this.checkQuota?.(tenantId, size)
   }
 
-  private tenant(explicit?: string): string {
+  /**
+   * The tenant a call is scoped to, or `undefined` when the app has no tenancy.
+   *
+   * With `@basaltkit/tenancy` registered an unresolvable tenant is an error: an
+   * unscoped read or write would cross tenants. Without it there is no tenant
+   * dimension and nothing to cross.
+   */
+  private tenant(explicit?: string): string | undefined {
     const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (!id) throw new FileTenantRequiredError()
-    return id
+    if (id) return id
+    if (this.tenancyActive()) throw new FileTenantRequiredError()
+    return undefined
   }
 
-  /** Runs a storage op in the resolved tenant's context so the disk scopes correctly. */
-  private inTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
+  /** The {@link FileStore} key: the tenant, or {@link SINGLE_TENANT_SCOPE}. */
+  private scope(explicit?: string): string {
+    return this.tenant(explicit) ?? SINGLE_TENANT_SCOPE
+  }
+
+  /**
+   * Runs a storage op in the resolved tenant's context so the disk scopes
+   * correctly. With no tenancy there is no tenant context to synthesize — the
+   * disk keeps its own (unscoped) default, so paths match plain `@basaltkit/storage`.
+   */
+  private inTenant<T>(tenantId: string | undefined, fn: () => Promise<T>): Promise<T> {
+    if (tenantId === undefined) return fn()
     return runWithContext({ tenant: { id: tenantId } } as never, fn)
   }
 }

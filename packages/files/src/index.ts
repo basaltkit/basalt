@@ -6,6 +6,7 @@ export {
   StorageQuotaExceededError,
   FileNotFoundError,
   FileTenantRequiredError,
+  SINGLE_TENANT_SCOPE,
   type FilesOptions,
   type FileValidation,
   type UploadInput,

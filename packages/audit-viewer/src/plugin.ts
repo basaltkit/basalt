@@ -1,4 +1,4 @@
-import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { AUDIT } from '@basaltkit/audit'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
@@ -13,7 +13,13 @@ export function auditViewerPlugin(options: AuditViewerPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:audit-viewer',
     register({ container }) {
-      container.singleton(AUDIT_VIEWER, () => new AuditViewer(container.get(AUDIT), options))
+      // 'tenancy:active' is tenancyPlugin's marker: how a generic package
+      // learns the app is multi-tenant without importing @basaltkit/tenancy.
+      const metadata = ensureMetadata(container)
+      container.singleton(
+        AUDIT_VIEWER,
+        () => new AuditViewer(container.get(AUDIT), options, () => metadata.get('tenancy:active').length > 0),
+      )
     },
   })
 }

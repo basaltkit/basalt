@@ -23,6 +23,48 @@ If you don't register `tenancyPlugin` / `subscriptionsPlugin` / `teamsPlugin`,
 they simply don't exist in your app. `ctx().tenant` stays `undefined`, and since
 you never run tenant-scoped queries, nothing breaks.
 
+## The rule: a generic package never *requires* tenancy
+
+This is a hard rule, not an aspiration:
+
+> **A generic package must work in an app that never registers `tenancyPlugin`.**
+> It may tighten its behaviour when tenancy *is* registered — it must never
+> depend on it.
+
+Several packages are deliberately fail-closed about tenants: `Audit.trail()`
+refuses an unscoped cross-tenant read, `Cache.flush()` refuses to wipe a
+namespace it can't scope, `Files`/`Comments`/`Search` refuse to read without a
+tenant. In a multi-tenant app that is exactly right. In a *single-tenant* app
+there is no tenant to find, so an unconditional version of that rule would make
+the everyday call throw forever.
+
+So the check is conditional. `tenancyPlugin` adds a `tenancy:active` marker to
+the container's [metadata registry](./concepts.md#metadata-buckets-how-packages-cooperate), and the
+generic packages read that marker — a string-keyed signal, never an import, so
+none of them depends on `@basaltkit/tenancy`:
+
+| App | Behaviour |
+| --- | --- |
+| No `tenancyPlugin` | Unscoped calls are the everyday path and just work. There is no tenant dimension, so nothing can cross it. |
+| `tenancyPlugin` registered | Tenant scoping is forced from `ctx().tenant`; a call that can't resolve a tenant fails closed. |
+
+```ts
+// Single-tenant app — no tenancyPlugin anywhere.
+const audit = app.container.get(AUDIT)
+await audit.record('order.shipped', { orderId: 'o-1' })
+await audit.trail()          // ✅ just reads the trail
+await cache.flush()          // ✅ clears this app's own namespace
+await files.list()           // ✅ no tenantId needed
+```
+
+Add `tenancyPlugin` later and the same calls tighten automatically — you don't
+rewrite them.
+
+Two test suites in `apps/beyond-saas` enforce this on every CI run: one boots an
+app with the generic plugins and **no tenancy** and exercises each package's
+primary read/write path; the other asserts that no generic package lists
+`@basaltkit/tenancy`, `-teams` or `-subscriptions` as a runtime dependency.
+
 ## A minimal, SaaS-free API
 
 ```ts

@@ -1,4 +1,4 @@
-import { createToken, ctx, definePlugin, BasaltError, type Container } from '@basaltkit/core'
+import { createToken, ctx, definePlugin, BasaltError, type Container, ensureMetadata } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { Comments, type CommentsOptions } from './comments.js'
@@ -24,7 +24,13 @@ export function commentsPlugin(options: CommentsPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:comments',
     register({ container, hooks }) {
-      container.singleton(COMMENTS, () => new Comments({ ...options, hooks }))
+      // 'tenancy:active' is tenancyPlugin's marker: how a generic package
+      // learns the app is multi-tenant without importing @basaltkit/tenancy.
+      const metadata = ensureMetadata(container)
+      container.singleton(
+        COMMENTS,
+        () => new Comments({ ...options, hooks }, () => metadata.get('tenancy:active').length > 0),
+      )
     },
   })
 }
