@@ -6,6 +6,31 @@ them — on Redis (BullMQ) in production, inline in dev/test, or on RabbitMQ,
 Kafka, or Amazon SQS through a driver package. The backend is one line to swap;
 your jobs never change.
 
+## Install
+
+```bash
+pnpm add @basaltkit/queue
+
+# add the client for the backend you picked — BullMQ/Redis here:
+pnpm add bullmq
+```
+
+The core depends on **no** broker client. Every backend's client is an
+**optional peer dependency**, installed only by the apps that choose it:
+
+| Backend | Package | Client to install |
+| --- | --- | --- |
+| BullMQ (Redis) | `@basaltkit/queue` | `bullmq` |
+| RabbitMQ | `@basaltkit/queue-rabbitmq` | `amqplib` |
+| Amazon SQS | `@basaltkit/queue-sqs` | `@aws-sdk/client-sqs` |
+| Kafka | `@basaltkit/queue-kafka` | `kafkajs` |
+| Sync (dev/test) | `@basaltkit/queue` | — nothing |
+
+So an app on SQS never installs (or loads) BullMQ and its ioredis weight. If you
+select BullMQ without `bullmq` installed, boot fails with a
+`MissingQueueDriverPackageError` that names the fix — never a bare
+`ERR_MODULE_NOT_FOUND`.
+
 [[toc]]
 
 ## Define a job
@@ -119,9 +144,9 @@ rejections that kill the process, and never silent.
 
 ### BullMQ (Redis)
 
-`connection` on `queuePlugin` is shorthand for this driver. Both failure
-channels are configurable **right there** — you do not have to hand-build the
-driver to get observability:
+`connection` on `queuePlugin` is shorthand for this driver, and needs `bullmq`
+installed (see [Install](#install)). Both failure channels are configurable
+**right there** — you do not have to hand-build the driver to get observability:
 
 ```ts
 queuePlugin({
@@ -139,7 +164,7 @@ them on the driver instead, which is also how you reach any option the shorthand
 doesn't surface:
 
 ```ts
-import { BullmqQueueDriver } from '@basaltkit/queue'
+import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'   // needs `pnpm add bullmq`
 
 queuePlugin({
   driver: new BullmqQueueDriver({

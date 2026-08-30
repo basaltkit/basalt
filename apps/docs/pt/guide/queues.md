@@ -6,6 +6,31 @@ os workers processam-nos — em Redis (BullMQ) em produção, inline em dev/test
 em RabbitMQ, Kafka ou Amazon SQS através de um pacote de driver. O backend troca-se
 numa linha; os teus jobs nunca mudam.
 
+## Instalação
+
+```bash
+pnpm add @basaltkit/queue
+
+# adiciona o cliente do backend que escolheste — BullMQ/Redis aqui:
+pnpm add bullmq
+```
+
+O núcleo **não** depende de nenhum cliente de broker. O cliente de cada backend é
+uma **peer dependency opcional**, instalada apenas pelas apps que o escolhem:
+
+| Backend | Pacote | Cliente a instalar |
+| --- | --- | --- |
+| BullMQ (Redis) | `@basaltkit/queue` | `bullmq` |
+| RabbitMQ | `@basaltkit/queue-rabbitmq` | `amqplib` |
+| Amazon SQS | `@basaltkit/queue-sqs` | `@aws-sdk/client-sqs` |
+| Kafka | `@basaltkit/queue-kafka` | `kafkajs` |
+| Sync (dev/testes) | `@basaltkit/queue` | — nada |
+
+Assim, uma app em SQS nunca instala (nem carrega) o BullMQ e o peso do ioredis que
+ele arrasta. Se escolheres BullMQ sem ter `bullmq` instalado, o boot falha com um
+`MissingQueueDriverPackageError` que indica a correção — nunca um
+`ERR_MODULE_NOT_FOUND` cru.
+
 [[toc]]
 
 ## Definir um job
@@ -120,9 +145,10 @@ nunca são silenciosas.
 
 ### BullMQ (Redis)
 
-`connection` no `queuePlugin` é um atalho para este driver. Ambos os canais de
-falha são configuráveis **ali mesmo** — não precisas de construir o driver à mão
-para teres observabilidade:
+`connection` no `queuePlugin` é um atalho para este driver, e precisa de `bullmq`
+instalado (ver [Instalação](#instalacao)). Ambos os canais de falha são
+configuráveis **ali mesmo** — não precisas de construir o driver à mão para teres
+observabilidade:
 
 ```ts
 queuePlugin({
@@ -140,7 +166,7 @@ construído a partir de `connection`. São **ignorados quando passas o teu próp
 que o atalho não exponha:
 
 ```ts
-import { BullmqQueueDriver } from '@basaltkit/queue'
+import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'   // precisa de `pnpm add bullmq`
 
 queuePlugin({
   driver: new BullmqQueueDriver({
