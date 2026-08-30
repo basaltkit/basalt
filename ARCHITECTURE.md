@@ -118,7 +118,7 @@ basalt/
 │   ├── fastify/            # HTTP adapter + typed routing
 │   ├── prisma/             # Prisma extensions (tenancy scoping, raw-query guard, RLS helpers, soft-delete)
 │   ├── cache/              # Multi-driver cache with tags
-│   ├── queue/              # BullMQ with a first-class developer experience
+│   ├── queue/              # driver-agnostic core (BullMQ/RabbitMQ/SQS/Kafka/sync)
 │   ├── jobs/               # Declarative job definition
 │   ├── scheduler/          # Fluent cron
 │   ├── storage/            # Object storage abstraction

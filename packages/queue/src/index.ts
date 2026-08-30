@@ -1,11 +1,15 @@
-import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { BasaltError, createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import {
   DEFAULT_LIST_LIMIT,
   DEFAULT_LIST_STATES,
   type JobState,
   type QueueDriver,
 } from './driver.js'
-import { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
+// TYPE-ONLY on purpose — see `loadBullmqDriver` below. Turning this into a
+// value import (or re-exporting the class from this barrel) would pull `bullmq`
+// into every consumer of `@basaltkit/queue` again; `tests/lazy-bullmq.test.ts`
+// and the driver-agnostic boundary test both fail if it ever happens.
+import type { BullmqDriverOptions } from './drivers/bullmq.js'
 import { SyncQueueDriver } from './drivers/sync.js'
 import type { JobDefinition, JobRetention } from './job.js'
 import { QueueManager, type UnsupportedPolicy } from './manager.js'
@@ -29,7 +33,13 @@ export {
 } from './manager.js'
 export { queuedOn, type QueuedListenerOptions } from './bridge.js'
 export { SyncQueueDriver } from './drivers/sync.js'
-export { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
+/**
+ * The BullMQ driver's *types* stay on the barrel (erased at build, so they cost
+ * a consumer nothing). The CLASS lives at its own entry point:
+ * `import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'` — the same
+ * shape as the RabbitMQ/SQS/Kafka driver packages, one import path per backend.
+ */
+export type { BullmqDriverOptions } from './drivers/bullmq.js'
 export {
   readJobEnvelope,
   DEFAULT_LIST_STATES,
@@ -47,6 +57,41 @@ export {
 } from './driver.js'
 
 export const QUEUE = createToken<QueueManager>('queue')
+
+/**
+ * `bullmq` is an OPTIONAL peer dependency of this package, not a dependency:
+ * `@basaltkit/queue` is the driver-agnostic core, and an app on SQS, RabbitMQ,
+ * Kafka or the sync driver must neither install nor load BullMQ (and its
+ * ioredis weight) to use it. Only the `queuePlugin({ connection })` shorthand
+ * needs it, so only that path resolves the module — once, cached here.
+ */
+type BullmqDriverModule = typeof import('./drivers/bullmq.js')
+
+let bullmqDriverModule: BullmqDriverModule | undefined
+
+/** Actionable guidance instead of a bare ERR_MODULE_NOT_FOUND from deep inside the driver. */
+const MISSING_BULLMQ =
+  '`queuePlugin({ connection })` selects the BullMQ driver, which needs the `bullmq` package — ' +
+  'an optional peer dependency of @basaltkit/queue that is not installed. ' +
+  'Either install it (`pnpm add bullmq`), or pass an explicit `driver:` — ' +
+  '`@basaltkit/queue-rabbitmq`, `@basaltkit/queue-sqs`, `@basaltkit/queue-kafka`, ' +
+  'or `new SyncQueueDriver()` for dev/tests.'
+
+export class MissingQueueDriverPackageError extends BasaltError {
+  constructor(options?: ErrorOptions) {
+    super('QUEUE_MISSING_DRIVER_PACKAGE', MISSING_BULLMQ, options)
+  }
+}
+
+async function loadBullmqDriver(): Promise<BullmqDriverModule> {
+  if (bullmqDriverModule) return bullmqDriverModule
+  try {
+    bullmqDriverModule = await import('./drivers/bullmq.js')
+  } catch (error) {
+    throw new MissingQueueDriverPackageError({ cause: error })
+  }
+  return bullmqDriverModule
+}
 
 export interface QueuePluginOptions {
   /** Jobs known to this process (producer and/or worker). */
@@ -91,13 +136,25 @@ export interface QueuePluginOptions {
 export function queuePlugin(options: QueuePluginOptions = {}) {
   return definePlugin({
     name: 'basalt:queue',
-    register({ container }) {
+    async register({ container }) {
+      // Resolve the BullMQ driver MODULE here — `BasaltApp.boot()` awaits
+      // `register`, so the class is in hand before anything can resolve QUEUE,
+      // and the container factory below stays synchronous. This is still a
+      // bindings-only phase: loading a module is not I/O against the world —
+      // no Redis connection is opened until the singleton is first resolved.
+      // Doing it in `boot` instead would leave a hole: a plugin booting earlier
+      // that resolves QUEUE would hit an unloaded driver.
+      if (!options.driver && options.connection) await loadBullmqDriver()
+
       registerQueueCommands(container)
       container.singleton(QUEUE, () => {
         let driver = options.driver
         if (!driver) {
           if (options.connection) {
-            driver = new BullmqQueueDriver({
+            // Defensive: only reachable if `register`'s promise was dropped by
+            // a non-standard host instead of awaited.
+            if (!bullmqDriverModule) throw new MissingQueueDriverPackageError()
+            driver = new bullmqDriverModule.BullmqQueueDriver({
               connection: options.connection,
               ...(options.onError !== undefined ? { onError: options.onError } : {}),
               ...(options.onJobFailed !== undefined ? { onJobFailed: options.onJobFailed } : {}),

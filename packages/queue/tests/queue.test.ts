@@ -3,7 +3,6 @@ import { z } from 'zod'
 import { createApp, ctx, runWithContext } from '@basaltkit/core'
 import { defineEvent, EventBus } from '@basaltkit/events'
 import {
-  BullmqQueueDriver,
   defineJob,
   JobNotRegisteredError,
   JobValidationError,
@@ -16,6 +15,9 @@ import {
   type AddJobOptions,
   type QueueDriver,
 } from '../src/index.js'
+// The BullMQ driver class lives at its own entry point (`@basaltkit/queue/bullmq`)
+// so the barrel never pulls the optional `bullmq` peer — see driver-boundary.test.ts.
+import { BullmqQueueDriver } from '../src/drivers/bullmq.js'
 
 /** Records the options each job was enqueued with. */
 class SpyDriver implements QueueDriver {

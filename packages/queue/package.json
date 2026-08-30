@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Basalt queues on top of BullMQ: declarative jobs with Zod payloads, context propagation (tenant/requestId) to workers and a sync driver for tests.",
+  "description": "Driver-agnostic Basalt queues: declarative jobs with Zod payloads, context propagation (tenant/requestId) to workers, a BullMQ/Redis driver behind an optional peer, and a sync driver for tests.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./bullmq": {
+      "types": "./dist/drivers/bullmq.d.ts",
+      "import": "./dist/drivers/bullmq.js"
     }
   },
   "files": [
@@ -24,12 +28,20 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/events": "workspace:^",
+    "@basaltkit/events": "workspace:^"
+  },
+  "peerDependencies": {
     "bullmq": "^6.2.1"
+  },
+  "peerDependenciesMeta": {
+    "bullmq": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.3.0",
+    "bullmq": "^6.2.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "zod": "^3.24.0 || ^4.0.0"
