@@ -1,5 +1,22 @@
 # @basaltkit/search-postgres
 
+## 1.0.3
+
+### Patch Changes
+
+- 104cfb3: Package-manifest hygiene: a uniform `engines.node`, `sideEffects: false` everywhere, and one zod range.
+  
+  Three metadata inconsistencies the ecosystem review surfaced, fixed in one sweep — no runtime code changes.
+  
+  - **`engines.node` was declared on 11 of 85 packages.** Only the `*-sqlite` ones carried `>=22.5.0` (they need `node:sqlite`); the other 74 declared nothing, so `npm install` could not warn anyone on an unsupported runtime. Every package now declares `>=22.5.0` — the floor CI actually exercises, and the floor the sqlite packages already required.
+  - **`sideEffects` was absent from all 85.** No package relies on import-time side effects (there is not a single bare `import '@basaltkit/…'` in the tree), so every one now declares `"sideEffects": false` and bundlers can drop unused imports from an app's build.
+  - **zod range divergence.** 42 packages allowed `^3.24.0 || ^4.0.0`; `@basaltkit/ai` and `@basaltkit/create-app` pinned `^4.0.0` alone — the only external-dependency inconsistency in the monorepo, and enough to force a duplicate zod into an app that is still on 3.x. Both now use the shared range.
+- 104cfb3: `register()` no longer emits an invalid `CREATE INDEX` for a schema-qualified table.
+  
+  `assertValidTableName` accepts `schema.table`, but `register()` built the index name by appending to it — `CREATE INDEX IF NOT EXISTS app.search_tsv_idx …`. Index names cannot be schema-qualified in Postgres, so that is a syntax error and `register()` failed outright for anyone using a non-default schema. The separator is now flattened (`app_search_tsv_idx`); the index still lands in the table's own schema, and unqualified names are byte-for-byte unchanged.
+- Updated dependencies [104cfb3]
+  - @basaltkit/search@1.3.2
+
 ## 1.0.1
 
 ### Patch Changes
