@@ -204,7 +204,8 @@ Individual artifacts are available as `make:schema`, `make:repository`,
 | `upgrade` | Apply framework upgrade codemods. `--dry` to preview, `--only=<id>`, `--dir=<path>` |
 | `publish` | Copy a stub group into the app (`dockerfile`, `ci`, `editorconfig`). Run with no id to list; `--force` to overwrite |
 
-Registering `queuePlugin` adds `queue:work`, `queue:stats` and `queue:retry` —
+Registering `queuePlugin` adds `queue:work`, `queue:stats`, `queue:retry` and
+`queue:jobs` —
 see [Queues & jobs](/guide/queues).
 
 ## Failure modes & troubleshooting

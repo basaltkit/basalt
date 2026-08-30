@@ -72,6 +72,22 @@ await Job.dispatch(payload, { delay: '5m' }) // → throws UnsupportedJobOptionE
 
 **If what you need is *streaming*/pub-sub** (rather than jobs with retry/delay), the natural fit in Basalt is usually `@basaltkit/events`, not `@basaltkit/queue`.
 
+### Inspection: no `list()` / `queue:jobs`
+
+This driver deliberately does **not** implement the queue's optional
+`list(queue, options)` capability, so `basalt queue:jobs` reports it as
+unsupported.
+
+Here the reason is not destructiveness — reading a Kafka topic does not remove
+records — but **meaning**. Kafka has no per-message state: there is no
+`waiting`/`active`/`completed`/`failed` set, no broker-assigned job id, and no
+way to tell a record still to be processed from one processed an hour ago. A
+`list()` would return an arbitrary window of the log within retention, dressed
+up in job states it invented. That would make the same API mean something
+different depending on the driver, which is the coupling this API exists to
+remove. Use your Kafka tooling (`kafka-console-consumer`, a UI) plus the
+`<topic>.retry` / `<topic>.dead` topics instead.
+
 ## How it works
 
 For each queue `t`:

@@ -98,7 +98,7 @@ Without registering anything, `runCli` always provides:
 | `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile`, `ci`, `editorconfig` (run with no id to list) |
 
 If you also install `@basaltkit/generator`, you gain the `make:*` commands. Feature
-plugins register their own: `queue:work|stats|retry` (`@basaltkit/queue`),
+plugins register their own: `queue:work|stats|retry|jobs` (`@basaltkit/queue`),
 `tenant:list|create|migrate|seed|run` (`@basaltkit/tenancy`), `generate:docs`
 (`@basaltkit/http`), and `mail:preview` (`@basaltkit/mailer`).
 
