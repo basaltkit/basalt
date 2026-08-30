@@ -195,17 +195,35 @@ If a job reaches a worker that hasn't registered it, `UnknownJobError` is thrown
 
 ### CLI commands (`basalt queue:*`)
 
-Registering `queuePlugin` also wires three CLI commands (run via the `@basaltkit/cli` runner):
+Registering `queuePlugin` also wires four CLI commands (run via the `@basaltkit/cli` runner):
 
 ```bash
 basalt queue:work --queue=default --concurrency=5   # run a worker until Ctrl+C
 basalt queue:stats --queue=billing                  # waiting/active/completed/failed/delayed
 basalt queue:retry --queue=billing --limit=100      # re-enqueue failed jobs
+basalt queue:jobs  --queue=billing --states=failed  # list individual jobs
 ```
 
-`queue:stats` and `queue:retry` need a driver that can introspect job state — the
-**BullMQ** driver (a Redis `connection`). With the inline `sync` driver they
-report the operation as unsupported (it keeps no job state), rather than guessing.
+`queue:jobs` flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--queue` | `default` | Queue to inspect. |
+| `--states` | `completed,failed,waiting,active` | Comma-separated states from `waiting`, `active`, `completed`, `failed`, `delayed`. An unknown state is rejected with the valid list, never silently dropped. |
+| `--limit` | `20` | Maximum rows in **total** (newest first), capped at `1000`. |
+| `--payload` | off | Also print each job's payload (truncated). **Off by default: payloads can contain personal data.** |
+
+```
+id    name           state      attempts  age
+1042  email.welcome  completed  1         3s
+1041  email.welcome  failed     3         2m
+2 job(s) on "billing" (completed, failed, waiting, active, limit 20). Payloads hidden — add --payload to include them.
+```
+
+`queue:stats`, `queue:retry` and `queue:jobs` need a driver that can introspect job
+state — the **BullMQ** driver (a Redis `connection`). With the inline `sync` driver,
+or a broker driver that cannot read a job without consuming it (RabbitMQ, SQS, Kafka),
+they report the operation as unsupported rather than guessing.
 
 ### Manual use without a plugin (e.g. in tests)
 
@@ -300,6 +318,7 @@ const manager = app.container.get(QUEUE) // get the QueueManager from the contai
 | `work` | `(queue = 'default', { concurrency? }?) => void` | Starts a worker for the queue (no-op on the sync driver). |
 | `stats` | `(queue = 'default') => Promise<QueueStats \| undefined>` | Job counts per state, or `undefined` when the driver can't introspect (sync). |
 | `retryFailed` | `(queue = 'default', { limit? }?) => Promise<number \| undefined>` | Re-enqueues failed jobs; returns the count, or `undefined` when the driver doesn't support it. |
+| `list` | `(queue = 'default', options?: ListJobsOptions) => Promise<JobSummary[] \| undefined>` | Lists individual jobs, newest first, payload already unwrapped from the dispatch envelope. `undefined` when the driver can't list. |
 | `close` | `() => Promise<void>` | Closes workers and connections. |
 
 `QueueManagerOptions`:
@@ -310,6 +329,60 @@ const manager = app.container.get(QUEUE) // get the QueueManager from the contai
 | `warn` | `(message: string) => void` | `console.warn` | Where `'warn'` diagnostics go — point it at your logger. |
 | `removeOnComplete` | `JobRetention` | driver default | Default retention for completed jobs. |
 | `removeOnFail` | `JobRetention` | driver default | Default retention for failed jobs. |
+
+### Listing jobs — `manager.list(queue?, options?)`
+
+The supported way to see *which* jobs are on a queue, without reaching into the
+broker's own client (which re-couples your app to one backend):
+
+```ts
+import { QUEUE } from '@basaltkit/queue'
+
+const jobs = await app.container.get(QUEUE).list('billing', { states: ['failed'], limit: 10 })
+if (!jobs) {
+  // the active driver cannot list — handle it, don't assume an empty queue
+} else {
+  for (const job of jobs) console.log(job.id, job.name, job.state, job.payload)
+}
+```
+
+`ListJobsOptions`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `states` | `JobState[]` | `['completed', 'failed', 'waiting', 'active']` | Which states to look in. `JobState` = `'waiting' \| 'active' \| 'completed' \| 'failed' \| 'delayed'` — the same vocabulary as `QueueStats`. |
+| `limit` | `number` | `20` (max `1000`) | Maximum jobs returned in **total**, newest first — not per state. Each state is read up to `limit` and the merged result is truncated, so one busy state can't starve the others. |
+
+**Why `completed` and `failed` are in the default.** A worker drains `waiting` in
+milliseconds, so a healthy queue shows `waiting: 0, active: 0` almost always.
+Defaulting to only those would answer "did my job run?" with an empty list on a
+queue that is working perfectly. `delayed` is *not* in the default — it is a
+separate question; ask for it explicitly.
+
+`JobSummary` (driver-neutral — never the backend's own job object):
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Backend-assigned job id. |
+| `name` | `string` | The job name from `defineJob({ name })`. |
+| `state` | `JobState` | Where the job was found. |
+| `attemptsMade` | `number` | Attempts so far (`0` before the first run). |
+| `timestamp` | `number` | Creation time, epoch ms. |
+| `payload` | `unknown` | **Your** payload — already unwrapped from the `{ payload, context }` dispatch envelope. |
+| `context` | `RequestContext \| undefined` | The request context captured at dispatch (`requestId`, `tenantId`, …), when there was one. |
+| `failedReason` | `string \| undefined` | Why it failed — only for `state: 'failed'`. |
+
+**A `JobSummary` carries the job's payload, so it can carry personal data.** Treat
+the result like the records it came from: never log it wholesale, and if you expose
+it over HTTP, require authentication (`meta: { auth: true }`), authorize it per
+tenant, and put raw payloads behind an explicit opt-in. `basalt queue:jobs` follows
+the same rule — it hides payloads unless you pass `--payload`.
+
+`readJobEnvelope(data)` is exported for custom drivers implementing `list`: it
+opens the `{ payload, context }` envelope defensively, treating anything that
+isn't one (an older producer, a hand-written job) as the payload itself.
+`DEFAULT_LIST_STATES`, `DEFAULT_LIST_LIMIT` and `MAX_LIST_LIMIT` are exported so
+a custom driver defaults the same way BullMQ does.
 
 ### `queuedOn<T>(bus, manager, event, handler, options?): () => void`
 
@@ -327,7 +400,20 @@ Creates the event→job bridge. Returns the subscription cancel function.
 
 - **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry). Public property `executed: { queue, jobName, attempts }[]` with the execution history (capped at 1000 entries). For testing and dev without Redis.
 - **`class BullmqQueueDriver`** — production over Redis; see the options table below.
-- **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, optional `stats(queue)` / `retryFailed(queue, { limit? })`, `close()`, plus the optional `name` and `capabilities` fields. Helper types: `AddJobOptions`, `JobExecutor`, `QueueStats`, `DriverCapabilities`.
+- **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, optional `stats(queue)` / `retryFailed(queue, { limit? })` / `list(queue, options)`, `close()`, plus the optional `name` and `capabilities` fields. Helper types: `AddJobOptions`, `JobExecutor`, `QueueStats`, `DriverCapabilities`, `JobState`, `JobSummary`, `JobEnvelope`, `ListJobsOptions`.
+
+  The three optional methods are a deliberate pattern: a driver **omits** what its
+  backend cannot do, `QueueManager` returns `undefined`, and the caller gets an
+  honest "unsupported" instead of a guess. Omit `list` rather than implement it
+  with a destructive read — merely *looking* at a queue must never change it.
+
+  | Driver | `stats` | `retryFailed` | `list` | Why |
+  |---|:---:|:---:|:---:|---|
+  | `bullmq` | ✅ | ✅ | ✅ | Redis keeps jobs; reading them is non-destructive. |
+  | `sync` | ❌ | ❌ | ❌ | Runs inline and stores nothing. |
+  | [`rabbitmq`](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq) | ❌ | ❌ | ❌ | AMQP has no non-destructive read: `basic.get`/consume hide the message from real workers and mark it redelivered. |
+  | [`sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs) | ❌ | ❌ | ❌ | `ReceiveMessage` starts the visibility timeout and bumps `ApproximateReceiveCount` — peeking could redrive jobs to the DLQ. |
+  | [`kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) | ❌ | ❌ | ❌ | Reading is non-destructive, but a log has no per-message state — any job states would be invented. |
 
 #### `new BullmqQueueDriver(options: BullmqDriverOptions)`
 
@@ -440,6 +526,13 @@ The `onUnsupported` policy caught a dispatch option the active driver can't hono
 
 **A job failed for good and nothing was logged.**
 Only the BullMQ driver reports exhausted jobs, via `onJobFailed` (default `console.error`). If you replaced it with a no-op, you removed the only signal. On the broker drivers, inspect the dead-letter destination (`q.dead`, `<topic>.dead`, `<queue>-dead`).
+
+**How do I see what's actually on the queue?**
+`basalt queue:stats` for the counts and `basalt queue:jobs` for the individual jobs
+(or `QUEUE`'s `manager.stats()` / `manager.list()` in code). Don't open the broker's
+own client — that couples your app to one backend and hands you the raw dispatch
+envelope instead of your payload. On a driver that can't introspect, both return
+`undefined` / print "Not supported" — an honest gap, not an empty queue.
 
 **Do I need Redis to run the tests?**
 No. Without `connection`, the plugin uses `SyncQueueDriver`. You can also instantiate the driver directly and inspect `driver.executed`.

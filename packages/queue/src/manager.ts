@@ -5,7 +5,16 @@ import {
   tryCtx,
   type RequestContext,
 } from '@basaltkit/core'
-import type { AddJobOptions, DriverCapabilities, QueueDriver, QueueStats, RetentionOption } from './driver.js'
+import type {
+  AddJobOptions,
+  DriverCapabilities,
+  JobEnvelope,
+  JobSummary,
+  ListJobsOptions,
+  QueueDriver,
+  QueueStats,
+  RetentionOption,
+} from './driver.js'
 import {
   validatePayload,
   type DispatchOptions,
@@ -74,11 +83,6 @@ const FEATURE_LABELS: Record<keyof DriverCapabilities, string> = {
 
 /** Context fields serialized along with the payload and restored in the worker. */
 const SNAPSHOT_FIELDS = ['requestId', 'correlationId', 'traceId', 'userId', 'tenantId'] as const
-
-interface JobEnvelope {
-  payload: unknown
-  context?: RequestContext | undefined
-}
 
 export interface QueueManagerOptions {
   /** Reaction when a job uses an option the driver can't honor. Default 'warn'. */
@@ -178,6 +182,22 @@ export class QueueManager implements JobDispatcher {
    */
   async retryFailed(queue = 'default', options: { limit?: number } = {}): Promise<number | undefined> {
     return this.driver.retryFailed?.(queue, options)
+  }
+
+  /**
+   * Lists individual jobs on the queue — newest first, with each job's own
+   * payload already unwrapped from the dispatch envelope. Returns `undefined`
+   * when the driver can't list (the sync driver keeps no state; a broker that
+   * cannot read a message without consuming it deliberately omits `list`).
+   *
+   * This is the supported alternative to reaching around the framework into
+   * the broker's own client, which couples the app to one backend.
+   *
+   * A summary carries the job's payload, so it can carry personal data —
+   * treat the result as sensitive (see the queues guide).
+   */
+  async list(queue = 'default', options: ListJobsOptions = {}): Promise<JobSummary[] | undefined> {
+    return this.driver.list?.(queue, options)
   }
 
   async close(): Promise<void> {

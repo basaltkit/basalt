@@ -312,11 +312,15 @@ the queue is created; that's BullMQ, not leftover jobs.)
 
 ## Inspecting a queue — "did my job actually run?"
 
-The supported way is the CLI:
+Two supported commands, and they answer different questions — **counts** and
+**which jobs**:
 
 ```bash
 basalt queue:stats --queue orders
 # → { waiting, active, completed, failed, delayed }
+
+basalt queue:jobs --queue orders
+# → id / name / state / attempts / age, newest first
 ```
 
 **Read the numbers with the lifecycle in mind**, because this is where most
@@ -340,15 +344,56 @@ alarm: you conclude "nothing ran" when everything ran.
 `failed` climbing → jobs are exhausting their attempts; wire `onJobFailed`.
 :::
 
-### Going under the hood
+### Listing the individual jobs
 
-If you inspect the backend directly (e.g. BullMQ's `Queue#getJobs`) instead of
-the CLI, two things bite:
+`queue:stats` gives you numbers; `queue:jobs` gives you the jobs themselves:
 
-1. **Ask for the right states.** `getJobs(['waiting','active'])` returns `[]` on
-   a healthy queue — include `'completed'` (and `'failed'`).
-2. **`job.data` is an envelope, not your payload.** `dispatch` wraps it so the
-   request context survives the hop:
+```bash
+basalt queue:jobs --queue orders --states failed --limit 10
+```
+
+```
+id    name             state   attempts  age  reason
+1041  order.reconcile  failed  3         2m   Timeout after 30000ms
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--queue` | `default` | Which queue to inspect. |
+| `--states` | `completed,failed,waiting,active` | Comma-separated: `waiting`, `active`, `completed`, `failed`, `delayed`. An unknown state is rejected with the valid list. |
+| `--limit` | `20` | Maximum rows in **total** (newest first), capped at `1000`. |
+| `--payload` | off | Also print each job's payload. Off by default — see the warning below. |
+
+**Why `completed` and `failed` are in the default states.** Per the lifecycle
+above, a healthy queue has `waiting: 0, active: 0`. Defaulting to only those
+would print "no jobs" on a queue that is working perfectly — the same false
+alarm as reading only those counters. `delayed` is deliberately *not* in the
+default: it is a separate question, so ask for it (`--states delayed`).
+
+In code, the same thing through the `QUEUE` manager:
+
+```ts
+import { QUEUE } from '@basaltkit/queue'
+
+const jobs = await ctx().container.get(QUEUE).list('orders', {
+  states: ['failed'],
+  limit: 10,
+})
+
+if (!jobs) {
+  // The active driver cannot list — an honest "unsupported", NOT an empty queue.
+} else {
+  for (const job of jobs) {
+    console.log(job.id, job.name, job.state, job.attemptsMade, job.payload)
+  }
+}
+```
+
+Each entry is a driver-neutral `JobSummary` — `{ id, name, state, attemptsMade,
+timestamp, payload, context?, failedReason? }`. Two things it does *for* you:
+
+1. **`payload` is your data, already unwrapped.** `dispatch` wraps what you pass
+   in an envelope so the request context survives the hop to the worker:
 
    ```jsonc
    {
@@ -357,16 +402,51 @@ the CLI, two things bite:
    }
    ```
 
-   So your data is at `job.data.payload`, not `job.data`.
+   `list()` opens that for you: `job.payload` is your object and `job.context`
+   is the captured context. (Read the broker directly and you get the raw
+   envelope, so your data sits at `job.data.payload`.)
+2. **It is the same shape on every driver.** No BullMQ `Job` leaks through, so
+   the code above doesn't break when you change brokers.
 
 ::: warning Job payloads are data
-A payload can hold whatever you dispatched — including personal data. Any
-endpoint you build to inspect a queue must be authenticated (`meta: { auth: true }`),
-and should return counts by default, with raw payloads behind an explicit flag.
-Point the backend client at the **same** connection your app uses: a bare
-`new Queue('orders')` silently defaults to `localhost:6379` and, wherever Redis
-lives elsewhere, reads a different queue and reports it as empty.
+A payload can hold whatever you dispatched — including personal data. That's why
+`basalt queue:jobs` **hides payloads unless you pass `--payload`**, and why
+`list()` should be treated like the records it came from: don't log the result
+wholesale. Any endpoint you build on top of it must be authenticated
+(`meta: { auth: true }`) and authorized per tenant, and should return counts by
+default with raw payloads behind an explicit flag.
 :::
+
+### Which drivers can do this
+
+`stats()` / `retryFailed()` / `list()` are **optional** driver capabilities. A
+driver that can't do one omits it, the manager returns `undefined`, and the CLI
+prints "Not supported" — an honest gap instead of a guess.
+
+| Driver | Can list jobs? | Why |
+|---|:---:|---|
+| `bullmq` | ✅ | Redis keeps the jobs; reading them changes nothing. |
+| `sync` | ❌ | Runs inline and stores nothing. |
+| `rabbitmq` | ❌ | AMQP has no non-destructive read — `basic.get`/consume hide the message from real workers and mark it redelivered. |
+| `sqs` | ❌ | `ReceiveMessage` starts the visibility timeout and bumps `ApproximateReceiveCount`; peeking could redrive jobs into the DLQ. |
+| `kafka` | ❌ | Reading is harmless, but a log has no per-message state — any `waiting`/`completed` would be invented. |
+
+The rule the framework follows: **looking at a queue must never change it.** A
+`list()` built on a destructive read would be a debugging command that perturbs
+production, so those drivers omit it and point you at their own tooling and
+dead-letter destinations instead.
+
+### Going under the hood (and why you shouldn't need to)
+
+Before `queue:jobs` existed, the only way to see individual jobs was the broker's
+own client — roughly 20 lines of ioredis + `new Queue()` + `getJobs()` + teardown.
+That works, and it also couples your app to one broker and hands you the raw
+envelope. Prefer `list()`. If you do go direct, the two classic traps are asking
+only for `['waiting','active']` (empty on a healthy queue) and forgetting that
+your data is at `job.data.payload`. And point the client at the **same**
+connection your app uses: a bare `new Queue('orders')` silently defaults to
+`localhost:6379` and, wherever Redis lives elsewhere, reads a different queue and
+reports it as empty.
 
 ## Run domain events on the queue
 

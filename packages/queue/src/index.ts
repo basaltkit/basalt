@@ -1,7 +1,12 @@
 import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_LIST_STATES,
+  type JobState,
+  type QueueDriver,
+} from './driver.js'
 import { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
 import { SyncQueueDriver } from './drivers/sync.js'
-import type { QueueDriver } from './driver.js'
 import type { JobDefinition, JobRetention } from './job.js'
 import { QueueManager, type UnsupportedPolicy } from './manager.js'
 
@@ -25,7 +30,21 @@ export {
 export { queuedOn, type QueuedListenerOptions } from './bridge.js'
 export { SyncQueueDriver } from './drivers/sync.js'
 export { BullmqQueueDriver, type BullmqDriverOptions } from './drivers/bullmq.js'
-export type { QueueDriver, QueueStats, AddJobOptions, JobExecutor, DriverCapabilities } from './driver.js'
+export {
+  readJobEnvelope,
+  DEFAULT_LIST_STATES,
+  DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
+  type QueueDriver,
+  type QueueStats,
+  type AddJobOptions,
+  type JobExecutor,
+  type DriverCapabilities,
+  type JobState,
+  type JobSummary,
+  type JobEnvelope,
+  type ListJobsOptions,
+} from './driver.js'
 
 export const QUEUE = createToken<QueueManager>('queue')
 
@@ -121,15 +140,55 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
   })
 }
 
+/** The states `queue:jobs --states` accepts — the driver-neutral vocabulary. */
+const LIST_STATES: readonly JobState[] = ['waiting', 'active', 'completed', 'failed', 'delayed']
+
+/** Parses `--states failed,waiting`. Throws on an unknown state rather than silently dropping it. */
+function parseStates(raw: string | boolean | undefined): JobState[] | undefined {
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined
+  const states = raw.split(',').map((part) => part.trim()).filter(Boolean)
+  const unknown = states.filter((state) => !LIST_STATES.includes(state as JobState))
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown job state(s): ${unknown.join(', ')}. Valid states: ${LIST_STATES.join(', ')}.`,
+    )
+  }
+  return states as JobState[]
+}
+
+/** Compact age for the CLI table ('3s', '12m', '4h', '2d') — friendlier than an epoch. */
+function formatAge(timestamp: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - timestamp) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h`
+  return `${Math.round(seconds / 86_400)}d`
+}
+
+/** One-line, length-capped rendering of an arbitrary value for a table cell. */
+function preview(value: unknown, max = 120): string {
+  let text: string
+  try {
+    text = typeof value === 'string' ? value : JSON.stringify(value)
+  } catch {
+    text = String(value)
+  }
+  text = (text ?? String(value)).replace(/\s+/g, ' ')
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
 /**
- * Registers `queue:work`, `queue:stats` and `queue:retry` into the CLI command
- * bucket. Commands resolve the manager lazily, so they work with whatever driver
+ * Registers `queue:work`, `queue:stats`, `queue:retry` and `queue:jobs` into the
+ * CLI command bucket. Commands resolve the manager lazily, so they work with whatever driver
  * the app configured. Registered structurally to avoid a hard @basaltkit/cli dep.
  */
 function registerQueueCommands(container: Container): void {
   const manager = () => container.get(QUEUE)
   const unsupported =
     'Not supported by the active queue driver — the inline sync driver keeps no job state. Use the BullMQ driver (a Redis `connection`).'
+  const unsupportedList =
+    'Not supported by the active queue driver — listing jobs needs a backend that can read a job WITHOUT consuming it. ' +
+    'Use the BullMQ driver (a Redis `connection`); the sync driver keeps no job state, and the RabbitMQ/SQS/Kafka drivers cannot list non-destructively.'
 
   ensureMetadata(container).add('commands', {
     name: 'queue:work',
@@ -181,6 +240,58 @@ function registerQueueCommands(container: Container): void {
         return
       }
       io.log(`Re-enqueued ${retried} failed job(s) on "${queue}".`)
+    },
+  })
+
+  ensureMetadata(container).add('commands', {
+    name: 'queue:jobs',
+    description:
+      'List individual jobs on a queue (id/name/state/attempts); --payload also prints their data',
+    async handle({
+      io,
+      flags,
+    }: {
+      io: { log(m: string): void; table(rows: Record<string, unknown>[]): void }
+      flags: Record<string, string | boolean>
+    }) {
+      const queue = typeof flags['queue'] === 'string' ? flags['queue'] : 'default'
+      const states = parseStates(flags['states'])
+      const limit = typeof flags['limit'] === 'string' ? Number(flags['limit']) : undefined
+      const jobs = await manager().list(queue, {
+        ...(states !== undefined ? { states } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      })
+      if (!jobs) {
+        io.log(unsupportedList)
+        return
+      }
+      const asked = (states ?? DEFAULT_LIST_STATES).join(', ')
+      if (jobs.length === 0) {
+        io.log(`No jobs on "${queue}" in ${asked}.`)
+        return
+      }
+      // Payloads can hold personal data, so they are NOT printed by default —
+      // `--payload` is the deliberate opt-in (same posture as the docs' warning).
+      const withPayload = flags['payload'] === true || flags['payload'] === 'true'
+      const now = Date.now()
+      const anyFailed = jobs.some((job) => job.failedReason !== undefined)
+      io.table(
+        jobs.map((job) => ({
+          id: job.id,
+          name: job.name,
+          state: job.state,
+          attempts: job.attemptsMade,
+          age: formatAge(job.timestamp, now),
+          ...(anyFailed ? { reason: job.failedReason ? preview(job.failedReason, 60) : '' } : {}),
+          ...(withPayload ? { payload: preview(job.payload) } : {}),
+        })),
+      )
+      io.log(
+        `${jobs.length} job(s) on "${queue}" (${asked}, limit ${limit ?? DEFAULT_LIST_LIMIT}).` +
+          (withPayload
+            ? ' Payloads shown — they can contain personal data.'
+            : ' Payloads hidden — add --payload to include them.'),
+      )
     },
   })
 }

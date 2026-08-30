@@ -1,5 +1,18 @@
-import { Queue, Worker, type ConnectionOptions, type JobsOptions } from 'bullmq'
-import type { AddJobOptions, JobExecutor, QueueDriver, QueueStats, RetentionOption } from '../driver.js'
+import { Queue, Worker, type ConnectionOptions, type Job, type JobsOptions } from 'bullmq'
+import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_LIST_STATES,
+  MAX_LIST_LIMIT,
+  readJobEnvelope,
+  type AddJobOptions,
+  type JobExecutor,
+  type JobState,
+  type JobSummary,
+  type ListJobsOptions,
+  type QueueDriver,
+  type QueueStats,
+  type RetentionOption,
+} from '../driver.js'
 
 type KeepJobs = { age?: number; count?: number }
 
@@ -118,6 +131,33 @@ export class BullmqQueueDriver implements QueueDriver {
     return retried
   }
 
+  /**
+   * Reads jobs WITHOUT consuming them — Redis keeps finished jobs (subject to
+   * retention), so inspection here is non-destructive, which is why BullMQ can
+   * offer `list` at all.
+   *
+   * One `getJobs` per state, each capped at `limit`: that keeps every job's
+   * state known without an extra `job.getState()` round-trip per job, and
+   * stops one busy state (usually `completed`) from starving the others. The
+   * merged result is sorted newest-first and truncated to `limit`.
+   */
+  async list(queue: string, options: ListJobsOptions = {}): Promise<JobSummary[]> {
+    const requested = options.states?.length ? options.states : DEFAULT_LIST_STATES
+    const states = [...new Set(requested)]
+    const limit = Math.min(Math.max(1, Math.trunc(options.limit ?? DEFAULT_LIST_LIMIT)), MAX_LIST_LIMIT)
+
+    const summaries: JobSummary[] = []
+    for (const state of states) {
+      const jobs = await this.queue(queue).getJobs([state], 0, limit - 1)
+      for (const job of jobs) {
+        // getJobs can yield holes when a job is removed mid-read (retention).
+        if (job) summaries.push(toSummary(job, state))
+      }
+    }
+    summaries.sort((a, b) => b.timestamp - a.timestamp)
+    return summaries.slice(0, limit)
+  }
+
   async close(): Promise<void> {
     await Promise.all(this.workers.map((worker) => worker.close()))
     await Promise.all([...this.queues.values()].map((queue) => queue.close()))
@@ -131,6 +171,25 @@ export class BullmqQueueDriver implements QueueDriver {
       this.queues.set(name, queue)
     }
     return queue
+  }
+}
+
+/**
+ * BullMQ `Job` → driver-neutral {@link JobSummary}. The BullMQ object never
+ * escapes the driver, and `job.data` (the dispatch envelope) is opened so the
+ * caller sees its own payload.
+ */
+function toSummary(job: Job, state: JobState): JobSummary {
+  const { payload, context } = readJobEnvelope(job.data)
+  return {
+    id: String(job.id ?? ''),
+    name: job.name,
+    state,
+    attemptsMade: job.attemptsMade ?? 0,
+    timestamp: job.timestamp ?? 0,
+    payload,
+    ...(context !== undefined ? { context } : {}),
+    ...(job.failedReason ? { failedReason: job.failedReason } : {}),
   }
 }
 

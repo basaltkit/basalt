@@ -207,7 +207,8 @@ O `runCli` oferece sempre estes, além do que qualquer plugin registe:
 | `upgrade` | Aplica os codemods de atualização da framework. `--dry` para pré-visualizar, `--only=<id>`, `--dir=<path>` |
 | `publish` | Copia um grupo de stubs para a app (`dockerfile`, `ci`, `editorconfig`). Corre sem id para listar; `--force` para sobrescrever |
 
-Registar o `queuePlugin` acrescenta `queue:work`, `queue:stats` e `queue:retry` —
+Registar o `queuePlugin` acrescenta `queue:work`, `queue:stats`, `queue:retry` e
+`queue:jobs` —
 vê [Filas e jobs](/pt/guide/queues).
 
 ## Modos de falha e resolução de problemas
