@@ -1,5 +1,21 @@
 # @basaltkit/queue-rabbitmq
 
+## 1.2.2
+
+### Patch Changes
+
+- 8d25857: Document why these drivers deliberately omit the queue's new optional `list()`
+  capability (so `basalt queue:jobs` reports it as unsupported rather than faking
+  it): AMQP has no non-destructive read (`basic.get`/consume hide the message from
+  real workers and mark it redelivered); SQS's `ReceiveMessage` starts the
+  visibility timeout and bumps `ApproximateReceiveCount`, so peeking could redrive
+  jobs into the DLQ; and Kafka, while non-destructive to read, is a log with no
+  per-message state, so any job states would be invented. Looking at a queue must
+  never change it. The CLI README now lists `queue:jobs` among the plugin-registered
+  commands.
+- Updated dependencies [8d25857]
+  - @basaltkit/queue@1.5.0
+
 ## 1.2.1
 
 ### Patch Changes
