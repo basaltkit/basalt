@@ -1,5 +1,28 @@
 # @basaltkit/audit
 
+## 1.3.0
+
+### Minor Changes
+
+- 104cfb3: The redactors truncate past their depth limit instead of passing the raw subtree through.
+  
+  Both `redactSensitive` and `redactSensitiveAndPii` stopped at depth 6 by returning the value **unchanged**. Audit payloads are arbitrary and the default subscription is `events: ['**']`, so a `password` nested seven levels deep was persisted to the trail in cleartext — verified. Objects past the bound now become `'[truncated]'`; primitives (whose keys were already checked one level up) are unaffected, so nothing within the limit changes.
+  
+  Also adds `exactEventMatch()` and `AUDIT_SCAN_PAGE`, the shared helpers the store drivers use to push a query's limit down into the database.
+
+### Patch Changes
+
+- 104cfb3: Package-manifest hygiene: a uniform `engines.node`, `sideEffects: false` everywhere, and one zod range.
+  
+  Three metadata inconsistencies the ecosystem review surfaced, fixed in one sweep — no runtime code changes.
+  
+  - **`engines.node` was declared on 11 of 85 packages.** Only the `*-sqlite` ones carried `>=22.5.0` (they need `node:sqlite`); the other 74 declared nothing, so `npm install` could not warn anyone on an unsupported runtime. Every package now declares `>=22.5.0` — the floor CI actually exercises, and the floor the sqlite packages already required.
+  - **`sideEffects` was absent from all 85.** No package relies on import-time side effects (there is not a single bare `import '@basaltkit/…'` in the tree), so every one now declares `"sideEffects": false` and bundlers can drop unused imports from an app's build.
+  - **zod range divergence.** 42 packages allowed `^3.24.0 || ^4.0.0`; `@basaltkit/ai` and `@basaltkit/create-app` pinned `^4.0.0` alone — the only external-dependency inconsistency in the monorepo, and enough to force a duplicate zod into an app that is still on 3.x. Both now use the shared range.
+- Updated dependencies [104cfb3]
+  - @basaltkit/core@1.3.1
+  - @basaltkit/events@1.1.1
+
 ## 1.2.0
 
 ### Minor Changes
