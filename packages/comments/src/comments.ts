@@ -21,6 +21,13 @@ export interface CommentNode extends Comment {
   replies: CommentNode[]
 }
 
+/**
+ * Store key every comment is filed under when the app has no tenancy at all.
+ * The {@link CommentStore} contract is tenant-keyed, so a single-tenant app
+ * still needs one stable key — it just shouldn't have to invent it.
+ */
+export const SINGLE_TENANT_SCOPE = 'default'
+
 export interface CommentsOptions {
   store?: CommentStore
   hooks?: HookBus
@@ -64,7 +71,16 @@ export class Comments {
   private readonly mentionPattern: RegExp
   private readonly now: () => number
 
-  constructor(options: CommentsOptions = {}) {
+  constructor(
+    options: CommentsOptions = {},
+    /**
+     * Whether the host app registered `@basaltkit/tenancy`. `commentsPlugin`
+     * wires this to the container's `'tenancy:active'` metadata marker — a
+     * signal, not an import, so this generic package never depends on the
+     * opt-in SaaS layer. Defaults to `false` (single-tenant).
+     */
+    private readonly tenancyActive: () => boolean = () => false,
+  ) {
     this.store = options.store ?? new MemoryCommentStore()
     this.hooks = options.hooks
     this.mentionPattern = options.mentionPattern ?? /@([\w-]+)/g
@@ -153,9 +169,17 @@ export class Comments {
     return [...ids]
   }
 
+  /**
+   * The tenant a call is scoped to.
+   *
+   * With `@basaltkit/tenancy` registered an unresolvable tenant is an error: an
+   * unscoped read or write would cross tenants. Without it there is no tenant
+   * dimension, so every comment shares {@link SINGLE_TENANT_SCOPE}.
+   */
   private tenant(explicit?: string): string {
     const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (!id) throw new CommentTenantRequiredError()
-    return id
+    if (id) return id
+    if (this.tenancyActive()) throw new CommentTenantRequiredError()
+    return SINGLE_TENANT_SCOPE
   }
 }

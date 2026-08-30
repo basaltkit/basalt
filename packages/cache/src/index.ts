@@ -37,8 +37,9 @@ export interface CacheOptions {
    * What to do when the scope function resolves nothing (no tenant in context):
    * `'global'` (default) shares one namespace — convenient but a per-tenant value
    * cached without a tenant leaks to others; `'error'` fails closed (throws
-   * {@link MissingCacheScopeError}) on read/write. `flush()` ALWAYS fails closed
-   * regardless, so a mis-scoped call can't wipe every tenant's cache.
+   * {@link MissingCacheScopeError}) on read/write. In a multi-tenant app (or
+   * with an explicit `'error'`), `flush()` fails closed too, so a mis-scoped
+   * call can't wipe every tenant's cache.
    */
   onMissingScope?: 'global' | 'error'
   /** Injectable clock (ms) for stale-while-revalidate windows. Default: Date.now. */
@@ -115,6 +116,12 @@ export class Cache {
   constructor(
     private readonly driver: CacheDriver,
     options: CacheOptions = {},
+    /**
+     * Whether the host app registered `@basaltkit/tenancy`. `cachePlugin` wires
+     * this to the container's `'tenancy:active'` metadata marker — a signal,
+     * not an import. Defaults to `false` (single-tenant).
+     */
+    private readonly tenancyActive: () => boolean = () => false,
   ) {
     this.prefix = options.prefix ?? 'basalt'
     this.scope = options.scope === undefined ? defaultScope : options.scope
@@ -158,9 +165,15 @@ export class Cache {
 
   /** Clears only the keys under this prefix/scope — never the entire Redis. */
   async flush(): Promise<void> {
-    // Always fail closed: a whole-namespace wipe with an unresolved tenant scope
-    // would delete EVERY tenant's cache. `scope:null` (deliberate global) is fine.
-    if (this.scope !== null && this.scope() === undefined) throw new MissingCacheScopeError('flush')
+    // Fail closed where a wipe could cross a boundary: with tenancy registered
+    // (or an explicit onMissingScope:'error'), an unresolved scope would delete
+    // EVERY tenant's cache. In a single-tenant app the whole prefix IS this
+    // app's cache, which is exactly what flush() means — so it proceeds.
+    // `scope:null` (deliberate global) is fine either way.
+    const failClosed = this.tenancyActive() || this.onMissingScope === 'error'
+    if (failClosed && this.scope !== null && this.scope() === undefined) {
+      throw new MissingCacheScopeError('flush')
+    }
     await this.driver.flushPrefix(this.root())
   }
 
@@ -318,12 +331,12 @@ export function cachePlugin(options: CachePluginOptions = {}) {
         // with no resolvable tenant scope throws instead of silently sharing
         // one global namespace across tenants. Single-tenant apps (no tenancy)
         // are untouched, and an explicit `onMissingScope`/custom `scope` wins.
-        const tenancyActive = ensureMetadata(container).get('tenancy:active').length > 0
+        const tenancyActive = () => ensureMetadata(container).get('tenancy:active').length > 0
         const resolved: CacheOptions =
-          options.onMissingScope === undefined && options.scope === undefined && tenancyActive
+          options.onMissingScope === undefined && options.scope === undefined && tenancyActive()
             ? { ...options, onMissingScope: 'error' }
             : options
-        return new Cache(driver, resolved)
+        return new Cache(driver, resolved, tenancyActive)
       })
     },
     async shutdown() {

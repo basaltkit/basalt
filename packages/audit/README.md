@@ -117,6 +117,35 @@ await audit.trail({ since: Date.now() - 86_400_000 }) // last 24h
 await audit.trail({ limit: 50 })                 // at most 50
 ```
 
+#### `trail()` vs `systemTrail()` — how the tenant scope is decided
+
+`@basaltkit/audit` is a **general-purpose** package: it works with or without
+`@basaltkit/tenancy`, and `trail()` is always the everyday read. What it does
+when it can't resolve a tenant depends on whether the app is multi-tenant at all
+— detected through tenancy's `tenancy:active` metadata marker, not an import.
+
+| Situation | `trail()` |
+|---|---|
+| Tenant in `ctx()` | **Forced** to that tenant. A caller-supplied `tenantId` is overridden, so forwarding client input can never widen the scope. |
+| No context tenant, explicit `trail({ tenantId })` | Honoured — a system job or CLI pinning one tenant deliberately. |
+| No context tenant, no `tenantId`, **no `tenancyPlugin`** | Returns the trail. A single-tenant app has no tenant dimension, so there is nothing to cross. |
+| No context tenant, no `tenantId`, **`tenancyPlugin` registered** | **Throws.** Returning every tenant's records must be deliberate — use `systemTrail()`. |
+
+`systemTrail(query)` is the **system-only** escape hatch: it reads across all
+tenants, bypassing the auto-scoping above. Use it from trusted platform/admin
+tooling only, and never pass client-controlled input into it — that re-opens
+exactly the cross-tenant exposure `trail()` closes.
+
+```ts
+// Single-tenant app (no tenancyPlugin): this is the normal read.
+await audit.trail()
+
+// Multi-tenant app: scoped automatically inside a request…
+await audit.trail()                    // → only ctx().tenant's entries
+// …and a platform-wide read is spelled out.
+await audit.systemTrail({ event: 'billing:**' })
+```
+
 Event patterns support segments separated by `:` (hooks) or `.` (events): `*` matches one segment, `**` matches one or more. E.g.: `auth:*` matches `auth:login`; `order.**` matches `order.created` and `order.item.added`; `**` matches everything.
 
 ### Custom store (production)

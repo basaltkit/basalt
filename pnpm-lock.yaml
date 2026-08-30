@@ -151,6 +151,81 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  apps/beyond-saas:
+    devDependencies:
+      '@basaltkit/activity':
+        specifier: workspace:*
+        version: link:../../packages/activity
+      '@basaltkit/audit':
+        specifier: workspace:*
+        version: link:../../packages/audit
+      '@basaltkit/audit-viewer':
+        specifier: workspace:*
+        version: link:../../packages/audit-viewer
+      '@basaltkit/cache':
+        specifier: workspace:*
+        version: link:../../packages/cache
+      '@basaltkit/comments':
+        specifier: workspace:*
+        version: link:../../packages/comments
+      '@basaltkit/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@basaltkit/events':
+        specifier: workspace:*
+        version: link:../../packages/events
+      '@basaltkit/exports':
+        specifier: workspace:*
+        version: link:../../packages/exports
+      '@basaltkit/files':
+        specifier: workspace:*
+        version: link:../../packages/files
+      '@basaltkit/flags':
+        specifier: workspace:*
+        version: link:../../packages/flags
+      '@basaltkit/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
+      '@basaltkit/mailer':
+        specifier: workspace:*
+        version: link:../../packages/mailer
+      '@basaltkit/notifications':
+        specifier: workspace:*
+        version: link:../../packages/notifications
+      '@basaltkit/permissions':
+        specifier: workspace:*
+        version: link:../../packages/permissions
+      '@basaltkit/queue':
+        specifier: workspace:*
+        version: link:../../packages/queue
+      '@basaltkit/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
+      '@basaltkit/search':
+        specifier: workspace:*
+        version: link:../../packages/search
+      '@basaltkit/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      '@basaltkit/tsconfig':
+        specifier: workspace:*
+        version: link:../../tooling/tsconfig
+      '@basaltkit/webhooks':
+        specifier: workspace:*
+        version: link:../../packages/webhooks
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(@vitest/coverage-v8@4.1.11)(jsdom@30.0.1(@noble/hashes@1.8.0))(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   apps/docs:
     devDependencies:
       typedoc:

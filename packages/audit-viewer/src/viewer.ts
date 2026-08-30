@@ -72,6 +72,15 @@ export class AuditViewer {
   constructor(
     private readonly audit: Audit,
     options: AuditViewerOptions = {},
+    /**
+     * Whether the host app is multi-tenant, i.e. whether `@basaltkit/tenancy`
+     * is registered. `auditViewerPlugin` wires this to the container's
+     * `'tenancy:active'` metadata marker — a signal, not an import, so this
+     * generic package never depends on the opt-in SaaS layer.
+     *
+     * Defaults to `false`: a hand-built viewer behaves single-tenant.
+     */
+    private readonly tenancyActive: () => boolean = () => false,
   ) {
     this.bucketMs = options.bucketMs ?? DAY
     this.topN = options.topN ?? 20
@@ -120,7 +129,7 @@ export class AuditViewer {
   private async match(query: ViewerQuery): Promise<{ entries: AuditEntry[]; truncated: boolean }> {
     const tenantId = this.tenant(query.tenantId)
     const trail = await this.audit.trail({
-      tenantId,
+      ...(tenantId !== undefined ? { tenantId } : {}),
       limit: this.maxScan,
       ...(query.event !== undefined ? { event: query.event } : {}),
       ...(query.actorId !== undefined ? { actorId: query.actorId } : {}),
@@ -138,9 +147,20 @@ export class AuditViewer {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, this.topN)
   }
 
-  private tenant(explicit?: string): string {
+  /**
+   * The tenant to scope a read to, or `undefined` when the app has no tenant
+   * dimension at all.
+   *
+   * In a multi-tenant app an unresolvable tenant is an error — an unscoped read
+   * would cross tenants. In a single-tenant app (no `tenancyPlugin`) there is
+   * nothing to scope to and nothing to cross, so the read proceeds unscoped;
+   * `Audit.trail()` applies the same rule one layer down and still forces the
+   * ambient tenant whenever one exists.
+   */
+  private tenant(explicit?: string): string | undefined {
     const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (!id) throw new AuditTenantRequiredError()
-    return id
+    if (id) return id
+    if (this.tenancyActive()) throw new AuditTenantRequiredError()
+    return undefined
   }
 }
