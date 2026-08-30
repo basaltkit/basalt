@@ -138,3 +138,38 @@ describe('escaping + route-scoped CSP (S-5)', () => {
     expect(auditViewerCsp({ apiBase: '/a' })).toContain(`'sha256-${cspScriptDigest}'`)
   })
 })
+
+describe('F-5 · the viewer bounds how much of the trail it reads', () => {
+  const bulk = async (n: number): Promise<Audit> => {
+    const store = new MemoryAuditStore()
+    for (let i = 0; i < n; i++) {
+      await store.append(entry({ id: `b${i}`, event: 'order:created', tenantId: 'acme', at: i }))
+    }
+    return new Audit(store)
+  }
+
+  it('reads at most maxScan rows and flags the result as truncated', async () => {
+    const viewer = new AuditViewer(await bulk(50), { maxScan: 10 })
+    const page = await viewer.page({ tenantId: 'acme', limit: 5 })
+
+    expect(page.entries).toHaveLength(5)
+    expect(page.total).toBe(10)
+    expect(page.truncated).toBe(true)
+  })
+
+  it('is not truncated when the trail fits inside the window', async () => {
+    const viewer = new AuditViewer(await bulk(5), { maxScan: 10 })
+    const page = await viewer.page({ tenantId: 'acme' })
+
+    expect(page.total).toBe(5)
+    expect(page.truncated).toBe(false)
+  })
+
+  it('flags truncation on stats as well', async () => {
+    const viewer = new AuditViewer(await bulk(50), { maxScan: 10 })
+    const stats = await viewer.stats({ tenantId: 'acme' })
+
+    expect(stats.total).toBe(10)
+    expect(stats.truncated).toBe(true)
+  })
+})

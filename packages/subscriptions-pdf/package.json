@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/subscriptions-pdf",
   "version": "0.1.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Render @basaltkit/subscriptions invoices to PDF with pdfkit \u2014 a printable invoice from the same Invoice object, kept out of the dependency-free core.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

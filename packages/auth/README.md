@@ -385,12 +385,12 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `secret` | `string` | Yes | — | Secret that signs the JWTs (HS256). |
 | `hasher` | `PasswordHasher` | No | `ScryptPasswordHasher` | Password hashing algorithm. |
 | `sessions` | `SessionStore` | No | `MemorySessionStore` | Session storage. |
-| `refreshTokens` | `RefreshTokenStore` | No | `MemoryRefreshTokenStore` | Refresh token storage. |
+| `refreshTokens` | `RefreshTokenStore` | No | `MemoryRefreshTokenStore` | Refresh token storage. `markUsed` must be a **compare-and-swap** — see below. |
 | `accessTtl` | `DurationInput` | No | `'15m'` | Access token validity. |
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
 | `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
-| `tokens` | `AuthTokenStore` | No | `MemoryAuthTokenStore` | Verification/reset tokens. |
+| `tokens` | `AuthTokenStore` | No | `MemoryAuthTokenStore` | Verification/reset tokens. `markUsed` must be a **compare-and-swap** — see below. |
 | `verificationTtl` | `DurationInput` | No | `'24h'` | Email verification link validity. |
 | `resetTtl` | `DurationInput` | No | `'1h'` | Password reset link validity. |
 | `mfa` | `MfaStore` | No | `MemoryMfaStore` | Per-user MFA state. |
@@ -447,6 +447,14 @@ Options (`ApiKeysPluginOptions`):
 | `oauthPlugin`, `oauthRoutes` | Social-login plugin (`{ secret, providers }`) and its routes (`{ callbackBaseUrl, successRedirect? }`). |
 | `googleProvider`, `githubProvider`, `oidcProvider`, `discoverOidcProvider` | OAuth 2.0 / OpenID Connect providers. Each takes `{ clientId, clientSecret, scopes? }`. |
 | In-memory stores | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore` — dev/testing. |
+
+#### Single-use tokens are consumed with a compare-and-swap
+
+`AuthTokenStore.markUsed` and `RefreshTokenStore.markUsed` return `Promise<boolean | void>`: mark the token used **only if it is still unused**, and return whether *this* call did it. `Auth.refresh()` treats `false` as reuse — it revokes the family and throws `AUTH_REFRESH_REUSED`; the verification/reset path treats it as a spent token (`AUTH_TOKEN_INVALID`).
+
+This matters because `refresh()` reads the record, checks `usedAt`, then writes. With an unconditional `UPDATE … WHERE token = ?` those are two operations, so two concurrent refreshes of the same token — the legitimate client and a thief racing it — both read `usedAt = null` and both succeed, and reuse detection never fires. The shipped stores use a conditional update (`WHERE token = ? AND used_at IS NULL`, `where: { token, usedAt: null }`) and report the affected row count.
+
+If you implement your own store, do the same. Returning `void` keeps the older read-then-write behaviour: it still compiles and runs, but without the race protection.
 
 ### Exported errors
 

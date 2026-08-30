@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/core",
   "version": "1.3.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Foundation of the Basalt ecosystem: token-based DI container, plugin system, lifecycle, hooks and context via AsyncLocalStorage.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

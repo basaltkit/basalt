@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/i18n",
   "version": "1.0.2",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Internationalization for Basalt: context-resolved locale (per user/tenant), typed message catalogs with interpolation and plurals, and Intl-based formatting. Zero dependencies.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

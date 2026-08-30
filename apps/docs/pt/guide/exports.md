@@ -100,6 +100,13 @@ exportsPlugin({ formatters: [xlsxFormatter] })
 await exports.run(usersExport, users, 'xlsx') // users.xlsx
 ```
 
+O texto das células é escapado para XML, e os caracteres que o XML 1.0 proíbe
+por completo (`0x00`–`0x08`, `0x0B`, `0x0C`, `0x0E`–`0x1F` — facilmente presentes
+em dados vindos do utilizador) são escritos com o escape `_xHHHH_` do OOXML em
+vez de passarem tal e qual, o que tornaria a folha impossível de ler e faria o
+Excel recusar-se a abrir o ficheiro. Tab, newline e carriage return são XML
+legal e ficam intactos.
+
 Para adicionar outro formato (PDF, ODS…), implementa `ExportFormatter.render(headers,
 rows) → Buffer` e regista-o da mesma forma — sem alterações à definição de
 exportação.

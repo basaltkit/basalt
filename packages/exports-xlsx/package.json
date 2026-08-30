@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/exports-xlsx",
   "version": "1.0.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "XLSX formatter for @basaltkit/exports \u2014 writes a valid single-sheet .xlsx (Office Open XML) with a built-in ZIP writer. Zero dependencies.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

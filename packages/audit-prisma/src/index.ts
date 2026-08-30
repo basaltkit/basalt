@@ -1,4 +1,11 @@
-import { type AuditEntry, type AuditQuery, type AuditStore, patternMatches } from '@basaltkit/audit'
+import {
+  AUDIT_SCAN_PAGE,
+  type AuditEntry,
+  type AuditQuery,
+  type AuditStore,
+  exactEventMatch,
+  patternMatches,
+} from '@basaltkit/audit'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/audit` `AuditStore` for
@@ -59,22 +66,40 @@ export class PrismaAuditStore implements AuditStore {
   }
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {
-    // Exact filters push down; the event wildcard and the limit are applied after
-    // (the limit must count only pattern-matched rows).
+    // Exact filters — including an event name with no wildcard — push down to the
+    // database, and so does the limit. Only a wildcard pattern still needs matching
+    // in code, and then the rows are read in bounded pages: a `limit: 50` query must
+    // never materialise the whole (unbounded) trail.
     const where: Record<string, unknown> = {}
     if (query.tenantId !== undefined) where.tenantId = query.tenantId
     if (query.actorId !== undefined) where.actorId = query.actorId
     if (query.since !== undefined) where.at = { gte: at(query.since) }
-    const rows = await this.client.auditEntry.findMany({
-      where,
-      orderBy: [{ at: 'desc' }, { id: 'desc' }], // newest first, deterministic ties
-    })
-    let entries = rows.map(toEntry)
-    if (query.event !== undefined) {
-      const pattern = query.event
-      entries = entries.filter((e) => patternMatches(pattern, e.event))
+    const exact = exactEventMatch(query.event)
+    if (exact !== undefined) where.event = exact
+    const orderBy = [{ at: 'desc' }, { id: 'desc' }] // newest first, deterministic ties
+    const needsPatternMatch = query.event !== undefined && exact === undefined
+
+    if (!needsPatternMatch) {
+      const rows = await this.client.auditEntry.findMany({
+        where,
+        orderBy,
+        ...(query.limit !== undefined ? { take: query.limit } : {}),
+      })
+      return rows.map(toEntry)
     }
-    return query.limit !== undefined ? entries.slice(0, query.limit) : entries
+
+    const pattern = query.event as string
+    const out: AuditEntry[] = []
+    for (let skip = 0; ; skip += AUDIT_SCAN_PAGE) {
+      const rows = await this.client.auditEntry.findMany({ where, orderBy, take: AUDIT_SCAN_PAGE, skip })
+      for (const row of rows) {
+        const entry = toEntry(row)
+        if (!patternMatches(pattern, entry.event)) continue
+        out.push(entry)
+        if (query.limit !== undefined && out.length >= query.limit) return out
+      }
+      if (rows.length < AUDIT_SCAN_PAGE) return out
+    }
   }
 }
 

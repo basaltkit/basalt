@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/fastify",
   "version": "1.8.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Official Basalt HTTP adapter on top of Fastify: Zod-typed routes, per-request context via AsyncLocalStorage and standardized errors.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

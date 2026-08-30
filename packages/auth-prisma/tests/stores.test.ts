@@ -1,3 +1,4 @@
+import { Auth } from '@basaltkit/auth'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   PrismaApiKeyStore,
@@ -70,6 +71,8 @@ function makeFakeClient(): PrismaAuthClient {
       async updateMany({ where, data }) {
         const row = refresh.get(where.token)
         if (!row) return { count: 0 }
+        // Honour the `usedAt: null` predicate — the store relies on it for CAS.
+        if (where.usedAt === null && row.usedAt != null) return { count: 0 }
         row.usedAt = data.usedAt
         return { count: 1 }
       },
@@ -96,6 +99,8 @@ function makeFakeClient(): PrismaAuthClient {
       async updateMany({ where, data }) {
         const row = tokens.get(where.token)
         if (!row) return { count: 0 }
+        // Honour the `usedAt: null` predicate — the store relies on it for CAS.
+        if (where.usedAt === null && row.usedAt != null) return { count: 0 }
         row.usedAt = data.usedAt
         return { count: 1 }
       },
@@ -375,5 +380,44 @@ describe('PrismaTokenVersionStore', () => {
     expect(await store.increment('u1')).toBe(1)
     expect(await store.increment('u1')).toBe(2)
     expect(await store.get('u1')).toBe(2)
+  })
+})
+
+
+describe('F-1 · Prisma refresh/auth token consumption is a compare-and-swap', () => {
+  it('markUsed reports whether THIS call consumed the refresh token', async () => {
+    const stores = prismaAuthStores(makeFakeClient())
+    await stores.refreshTokens.create({ token: 'r1', userId: 'u1', familyId: 'f1', expiresAt: Date.now() + 60_000 })
+
+    expect(await stores.refreshTokens.markUsed('r1')).toBe(true)
+    expect(await stores.refreshTokens.markUsed('r1')).toBe(false)
+  })
+
+  it('markUsed reports whether THIS call consumed a single-use auth token', async () => {
+    const stores = prismaAuthStores(makeFakeClient())
+    await stores.tokens.create({ token: 't1', userId: 'u1', purpose: 'reset_password', expiresAt: Date.now() + 60_000 })
+
+    expect(await stores.tokens.markUsed('t1')).toBe(true)
+    expect(await stores.tokens.markUsed('t1')).toBe(false)
+  })
+
+  it('two concurrent refreshes of the same token: exactly one wins', async () => {
+    const stores = prismaAuthStores(makeFakeClient())
+    const auth = new Auth({
+      secret: 'test-secret-test-secret-test-secret',
+      users: stores.users,
+      refreshTokens: stores.refreshTokens,
+      tokens: stores.tokens,
+    })
+    await auth.register('a@b.com', 'correct-horse-battery')
+    const { tokens } = await auth.login('a@b.com', 'correct-horse-battery')
+
+    const results = await Promise.allSettled([
+      auth.refresh(tokens.refreshToken),
+      auth.refresh(tokens.refreshToken),
+    ])
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1)
   })
 })

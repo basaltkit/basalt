@@ -58,14 +58,14 @@ createApp({ plugins: [auditPlugin({ store: a.store })] })
 
 - **Append-only by contract** — no update or delete.
 - Queries return **newest-first** with the same filters as the in-memory store
-  (`tenantId`, `actorId`, `since`, and the event wildcard `auth:**`). The wildcard
-  and `limit` are applied after the exact filters, so `limit` counts only
-  pattern-matched rows.
+  (`tenantId`, `actorId`, `since`, and the event wildcard `auth:**`). `limit`
+  always counts only pattern-matched rows.
 - The `payload` is stored as JSON text and round-trips unchanged.
 - For **database-per-tenant**, route the store through the active tenant's client
   — see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).
 - `PrismaAuditClient` types delegate **arguments** as `any` (returns stay precise)
   so a real `PrismaClient` is assignable and passes directly.
+- **Query pushdown.** Every exact filter — tenant, actor, `since`, and an event name with **no** wildcard — plus the `limit` go into the database (`take` / `LIMIT`). Only a wildcard pattern still needs matching in code, and then rows are read in bounded 500-row pages that stop as soon as the limit is satisfied, so a `limit: 50` query never materialises the whole trail. A pattern containing `.` is deliberately not pushed down: `patternMatches` treats `.` and `:` as interchangeable separators, so an equality would miss `a:b` for `a.b`.
 
 ## License
 

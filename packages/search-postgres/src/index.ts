@@ -62,7 +62,10 @@ export class PostgresSearchDriver implements SearchDriver {
         `idx text NOT NULL, tenant_id text NOT NULL, id text NOT NULL, ` +
         `document jsonb NOT NULL, tsv tsvector, PRIMARY KEY (idx, tenant_id, id))`,
     )
-    await this.client.query(`CREATE INDEX IF NOT EXISTS ${this.table}_tsv_idx ON ${this.table} USING gin(tsv)`)
+    // Index names are NOT schema-qualifiable in Postgres — `CREATE INDEX … app.x_idx`
+    // is a syntax error. The index lands in the table's own schema automatically.
+    const indexName = `${this.table.replace('.', '_')}_tsv_idx`
+    await this.client.query(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${this.table} USING gin(tsv)`)
   }
 
   async index(indexName: string, document: SearchDocument): Promise<void> {

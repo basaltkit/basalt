@@ -213,8 +213,14 @@ export class PrismaAuthTokenStore implements AuthTokenStore {
     return r ? toAuthToken(r) : null
   }
 
-  async markUsed(token: string): Promise<void> {
-    await this.client.authToken.updateMany({ where: { token }, data: { usedAt: new Date() } })
+  async markUsed(token: string): Promise<boolean> {
+    // Conditional update = compare-and-swap. `count === 0` means it was already
+    // consumed, so the caller must reject instead of trusting its earlier read.
+    const { count } = await this.client.authToken.updateMany({
+      where: { token, usedAt: null },
+      data: { usedAt: new Date() },
+    })
+    return count > 0
   }
 
   async deleteForUser(userId: string, purpose: AuthTokenPurpose): Promise<void> {
@@ -294,8 +300,13 @@ export class PrismaRefreshTokenStore implements RefreshTokenStore {
     return r ? toRefresh(r) : null
   }
 
-  async markUsed(token: string): Promise<void> {
-    await this.client.authRefreshToken.updateMany({ where: { token }, data: { usedAt: new Date() } })
+  async markUsed(token: string): Promise<boolean> {
+    // Conditional update = compare-and-swap; `count === 0` is a reuse signal.
+    const { count } = await this.client.authRefreshToken.updateMany({
+      where: { token, usedAt: null },
+      data: { usedAt: new Date() },
+    })
+    return count > 0
   }
 
   async revokeFamily(familyId: string): Promise<void> {

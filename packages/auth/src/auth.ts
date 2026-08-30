@@ -374,7 +374,12 @@ export class Auth {
     }
     if (Date.now() >= record.expiresAt) throw new RefreshInvalidError()
 
-    await this.refreshTokens.markUsed(hashed)
+    // Compare-and-swap: `false` means another caller consumed this exact token
+    // between our read and this write — the very race reuse detection exists for.
+    if ((await this.refreshTokens.markUsed(hashed)) === false) {
+      await this.refreshTokens.revokeFamily(record.familyId)
+      throw new RefreshReusedError()
+    }
     return this.issueTokens(record.userId, record.familyId)
   }
 
@@ -621,7 +626,9 @@ export class Auth {
     if (!record || record.purpose !== purpose || record.usedAt !== undefined || Date.now() >= record.expiresAt) {
       throw new AuthTokenInvalidError()
     }
-    await this.tokens.markUsed(hashed)
+    // Compare-and-swap: a concurrent consumer of this single-use token wins, and
+    // this call is rejected as if the token had already been spent.
+    if ((await this.tokens.markUsed(hashed)) === false) throw new AuthTokenInvalidError()
     return record
   }
 

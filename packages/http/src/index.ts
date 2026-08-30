@@ -6,7 +6,13 @@ export {
   type HttpRequest,
   type HttpReply,
 } from './route.js'
-export { HttpError, RequestValidationError, NOT_FOUND_RESPONSE, type ValidationIssue } from './errors.js'
+export {
+  GuardsWithoutContainerError,
+  HttpError,
+  RequestValidationError,
+  NOT_FOUND_RESPONSE,
+  type ValidationIssue,
+} from './errors.js'
 export {
   runRoute,
   toErrorResponse,

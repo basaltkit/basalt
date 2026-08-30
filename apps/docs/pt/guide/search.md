@@ -178,6 +178,11 @@ Cria uma tabela com índice GIN para todos os índices, alimenta os campos
 pesquisáveis para `to_tsvector`, ordena com `ts_rank` e restringe cada query ao
 tenant — a mesma garantia de isolamento, sem infraestrutura adicional.
 
+A `table` pode ser qualificada com schema (`table: 'app.search'`); o índice GIN
+é nomeado com o separador achatado (`app_search_tsv_idx`), porque o Postgres não
+permite um nome de índice qualificado com schema. Continua a ficar no schema da
+própria tabela.
+
 ## Elasticsearch / OpenSearch
 
 Para relevância em grande escala, o `@basaltkit/search-elasticsearch` aponta
@@ -195,9 +200,12 @@ searchPlugin({
 
 `register` mapeia os campos pesquisáveis como `text` (com um sub-campo
 `.keyword`) e os campos filtráveis como `keyword`; `search` usa `multi_match` com
-um `track_total_hits` exato. Os documentos recebem um id composto `<tenantId>:<id>` e
-**cada pesquisa carrega um filtro `tenantId` obrigatório** — a mesma garantia de
-isolamento de qualquer outro driver.
+um `track_total_hits` exato. Os documentos recebem um id composto
+`<tenantId>:<id>` — com **cada segmento percent-encoded**, para que um `:` dentro
+de um id de tenant ou de documento não faça o tenant `a:b` + id `c` colidir com o
+tenant `a` + id `b:c` — e **cada pesquisa carrega um filtro `tenantId`
+obrigatório**, a mesma garantia de isolamento de qualquer outro driver. Ids
+simples de UUID/slug não são alterados pela codificação.
 
 ::: warning Aviso: password vs API key
 `username` + `password` usam **Basic auth** HTTP. `apiKey` envia o header

@@ -23,13 +23,19 @@ export interface ViewerQuery {
 
 export interface AuditPage {
   entries: AuditEntry[]
+  /** Matches found within the scan window — see `truncated`. */
   total: number
   limit: number
   offset: number
+  /** True when the scan hit `maxScan`: there are more matches than `total` reports. */
+  truncated: boolean
 }
 
 export interface AuditStats {
+  /** Entries counted within the scan window — see `truncated`. */
   total: number
+  /** True when the scan hit `maxScan`: the aggregates cover only the newest rows. */
+  truncated: boolean
   byEvent: { event: string; count: number }[]
   byActor: { actorId: string; count: number }[]
   bySource: Record<string, number>
@@ -42,9 +48,16 @@ export interface AuditViewerOptions {
   bucketMs?: number
   /** How many rows the byEvent/byActor breakdowns return. Default 20. */
   topN?: number
+  /**
+   * Upper bound on rows read from the store per call. The trail is unbounded, so
+   * an unbounded read is an OOM vector on any endpoint that forwards client input.
+   * Results past the bound are reported via `truncated`. Default 10 000.
+   */
+  maxScan?: number
 }
 
 const DAY = 86_400_000
+const DEFAULT_MAX_SCAN = 10_000
 
 /**
  * Read-only lens over the append-only audit trail: tenant-scoped, filterable,
@@ -54,6 +67,7 @@ const DAY = 86_400_000
 export class AuditViewer {
   private readonly bucketMs: number
   private readonly topN: number
+  private readonly maxScan: number
 
   constructor(
     private readonly audit: Audit,
@@ -61,22 +75,23 @@ export class AuditViewer {
   ) {
     this.bucketMs = options.bucketMs ?? DAY
     this.topN = options.topN ?? 20
+    this.maxScan = options.maxScan ?? DEFAULT_MAX_SCAN
   }
 
   async page(query: ViewerQuery = {}): Promise<AuditPage> {
-    const all = await this.match(query)
+    const { entries: all, truncated } = await this.match(query)
     const limit = query.limit ?? 50
     const offset = query.offset ?? 0
-    return { entries: all.slice(offset, offset + limit), total: all.length, limit, offset }
+    return { entries: all.slice(offset, offset + limit), total: all.length, limit, offset, truncated }
   }
 
   async get(id: string, tenantId?: string): Promise<AuditEntry | null> {
-    const all = await this.match({ ...(tenantId !== undefined ? { tenantId } : {}) })
-    return all.find((entry) => entry.id === id) ?? null
+    const { entries } = await this.match({ ...(tenantId !== undefined ? { tenantId } : {}) })
+    return entries.find((entry) => entry.id === id) ?? null
   }
 
   async stats(query: ViewerQuery = {}): Promise<AuditStats> {
-    const all = await this.match(query)
+    const { entries: all, truncated } = await this.match(query)
     const byEvent = new Map<string, number>()
     const byActor = new Map<string, number>()
     const bySource: Record<string, number> = {}
@@ -92,6 +107,7 @@ export class AuditViewer {
 
     return {
       total: all.length,
+      truncated,
       byEvent: this.top(byEvent).map(([event, count]) => ({ event, count })),
       byActor: this.top(byActor).map(([actorId, count]) => ({ actorId, count })),
       bySource,
@@ -100,19 +116,22 @@ export class AuditViewer {
   }
 
   /** Matching entries (newest first), after the extra source/until filters. */
-  private async match(query: ViewerQuery): Promise<AuditEntry[]> {
+  /** Reads at most `maxScan` rows and reports whether the trail had more. */
+  private async match(query: ViewerQuery): Promise<{ entries: AuditEntry[]; truncated: boolean }> {
     const tenantId = this.tenant(query.tenantId)
     const trail = await this.audit.trail({
       tenantId,
+      limit: this.maxScan,
       ...(query.event !== undefined ? { event: query.event } : {}),
       ...(query.actorId !== undefined ? { actorId: query.actorId } : {}),
       ...(query.since !== undefined ? { since: query.since } : {}),
     })
-    return trail.filter(
+    const entries = trail.filter(
       (entry) =>
         (query.source === undefined || entry.source === query.source) &&
         (query.until === undefined || entry.at <= query.until),
     )
+    return { entries, truncated: trail.length >= this.maxScan }
   }
 
   private top(counts: Map<string, number>): [string, number][] {

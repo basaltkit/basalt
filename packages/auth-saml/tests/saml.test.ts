@@ -7,6 +7,7 @@ import {
   SamlResponseInvalidError,
   type SamlClient,
   type SamlProvider,
+  samlClientConfig,
 } from '../src/index.js'
 
 const SECRET = 'x'.repeat(32)
@@ -86,5 +87,40 @@ describe('extractEmail', () => {
     expect(extractEmail({ nameID: 'c@x.com' })).toBe('c@x.com')
     expect(extractEmail({ nameID: 'not-an-email' })).toBeUndefined()
     expect(extractEmail({ department: 'd@x.com' }, 'department')).toBe('d@x.com')
+  })
+})
+
+describe('F-2 · SAML assertion replay protection', () => {
+  const provider = {
+    name: 'idp',
+    entryPoint: 'https://idp.example/sso',
+    idpCert: 'CERT',
+    issuer: 'https://sp.example',
+    callbackUrl: 'https://sp.example/auth/saml/idp/callback',
+  }
+
+  it('binds the response to an AuthnRequest by default (node-saml defaults to never)', () => {
+    expect(samlClientConfig(provider)['validateInResponseTo']).toBe('ifPresent')
+  })
+
+  it('still requires signed assertions', () => {
+    expect(samlClientConfig(provider)['wantAssertionsSigned']).toBe(true)
+  })
+
+  it('is an explicit, documented opt-out', () => {
+    expect(samlClientConfig(provider, { validateInResponseTo: 'never' })['validateInResponseTo']).toBe('never')
+  })
+
+  it('accepts a shared cacheProvider for multi-replica deployments', () => {
+    const cacheProvider = {
+      saveAsync: async () => null,
+      getAsync: async () => null,
+      removeAsync: async () => null,
+    }
+    expect(samlClientConfig(provider, { cacheProvider })['cacheProvider']).toBe(cacheProvider)
+  })
+
+  it('omits cacheProvider when none is given (node-saml uses its in-process cache)', () => {
+    expect('cacheProvider' in samlClientConfig(provider)).toBe(false)
   })
 })

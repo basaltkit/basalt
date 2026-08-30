@@ -59,7 +59,7 @@ describe('MemoryAuthTokenStore', () => {
     await store.create(rec())
     await store.markUsed('t1')
     expect((await store.find('t1'))?.usedAt).toBeTypeOf('number')
-    await expect(store.markUsed('missing')).resolves.toBeUndefined()
+    await expect(store.markUsed('missing')).resolves.toBe(false)
   })
 
   it('deleteForUser removes only the matching user+purpose, keeping others', async () => {
@@ -201,7 +201,7 @@ describe('MemoryRefreshTokenStore', () => {
     await store.create(rec())
     await store.markUsed('r1')
     expect((await store.find('r1'))?.usedAt).toBeTypeOf('number')
-    await expect(store.markUsed('missing')).resolves.toBeUndefined()
+    await expect(store.markUsed('missing')).resolves.toBe(false)
   })
 
   it('revokeFamily removes only the named family', async () => {

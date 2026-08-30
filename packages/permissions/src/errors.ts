@@ -34,3 +34,23 @@ export class InvalidCanMetaError extends BasaltError {
 
 const describe = (value: unknown): string =>
   Array.isArray(value) ? 'array with non-string or no entries' : `type ${typeof value}`
+
+/**
+ * `can(user, 'doc:update', resource)` was called with a resource, but no policy
+ * check matched — a typo'd resource or action. Historically this fell through to
+ * pure RBAC, so the ownership rule the author wrote never ran and a broad grant
+ * ("doc:*") silently allowed the request. Fails closed instead.
+ */
+export class MissingPolicyError extends BasaltError {
+  readonly status = 500
+  constructor(permission: string, registered: string[]) {
+    super(
+      'PERMISSION_POLICY_MISSING',
+      `No policy check for "${permission}", but a resource was passed — the ABAC rule you intended would be skipped ` +
+        `and the decision would fall back to plain RBAC. Register the check with definePolicy(), fix the ` +
+        `resource:action spelling, or drop the resource argument. ` +
+        `Registered policies: ${registered.length ? registered.join(', ') : '(none)'}. ` +
+        `To restore the old fall-through, set onMissingPolicy: 'rbac'.`,
+    )
+  }
+}

@@ -45,11 +45,11 @@ are exported too.
 
 - **Append-only by contract** — one `audit_entries` table, no update or delete.
 - Queries return **newest-first** with the same filters as the in-memory store:
-  `tenantId`, `actorId`, `since`, and the **event wildcard** (`auth:**`). The
-  wildcard and `limit` are applied after the exact filters, so `limit` counts
-  only pattern-matched rows.
+  `tenantId`, `actorId`, `since`, and the **event wildcard** (`auth:**`).
+  `limit` always counts only pattern-matched rows.
 - The `payload` is stored as JSON text and round-trips unchanged.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contract.
+- **Query pushdown.** Every exact filter — tenant, actor, `since`, and an event name with **no** wildcard — plus the `limit` go into the database (`take` / `LIMIT`). Only a wildcard pattern still needs matching in code, and then rows are read in bounded 500-row pages that stop as soon as the limit is satisfied, so a `limit: 50` query never materialises the whole trail. A pattern containing `.` is deliberately not pushed down: `patternMatches` treats `.` and `:` as interchangeable separators, so an equality would miss `a:b` for `a.b`.
 
 ## License
 

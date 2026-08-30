@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/tenancy",
   "version": "1.4.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Multi-tenancy for Basalt: pluggable tenant resolvers (subdomain, domain, header, route), tenant context via AsyncLocalStorage and lifecycle hooks.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/ai",
   "version": "1.1.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "AI-native developer experience for Basalt: a provider-agnostic engine plus `basalt ai` CLI that understands the project's stack, analyzes it, and diagnoses issues \u2014 following the framework's own conventions, not inventing new ones.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -33,7 +37,7 @@
   "dependencies": {
     "@basaltkit/cli": "workspace:^",
     "@basaltkit/generator": "workspace:^",
-    "zod": "^4.0.0"
+    "zod": "^3.24.0 || ^4.0.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",

@@ -145,6 +145,10 @@ await gate.can({ id: 'u9' }, 'project:update', { ownerId: 'u9' })    // true
 await gate.can({ id: 'u9' }, 'project:update', { ownerId: 'other-user' }) // false
 ```
 
+**Passing a resource fails closed.** If no policy is registered for that resource — or the policy has no check for that action — `can()` throws `MissingPolicyError` (`PERMISSION_POLICY_MISSING`) instead of answering from the granted permission strings. It used to fall through silently, which meant a typo (`project:updat`, or `projects:update` for a policy registered as `project`) skipped the ownership rule entirely and a broad `project:*` grant allowed the request. The error names the permission and lists the registered policies.
+
+Fix it by registering the check, correcting the `resource:action` spelling, or dropping the resource argument if plain RBAC is what you meant. `onMissingPolicy: 'rbac'` restores the historic fall-through. `can()` **without** a resource is untouched pure RBAC.
+
 ### Super admin
 
 A function that, when it returns `true` for a user, authorizes everything (equivalent to Laravel's `Gate::before`):
@@ -219,6 +223,7 @@ Options (`GateOptions` = `PermissionsPluginOptions`):
 | `temporaryGrants` | `TemporaryGrantStore` | — | Enables `grantTemporarily()`. Without it that method throws a plain `Error`, and temporary grants are never consulted. |
 | `delegations` | `DelegationStore` | — | Enables `delegate()`. Without it that method throws a plain `Error`, and delegations are never consulted. |
 | `now` | `() => number` | `Date.now` | Injectable clock — expiry of temporary grants and delegations is evaluated against it. |
+| `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`. `'error'` throws `MissingPolicyError` (fail closed); `'rbac'` falls back to the granted permission strings. |
 
 #### Scope resolution and `TENANT_REQUIRED`
 
@@ -312,14 +317,19 @@ rather than serving unchecked. See `@basaltkit/http` for the
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route ran with no `ctx().user`. |
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | `gate.authorize()` (or the guard) found the user lacks the permission. Carries the permission in its message. |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` is not a non-empty string or a non-empty array of non-empty strings. Names the route and describes what it received. |
+| `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | `can`/`authorize` was given a resource but no policy check matches `resource:action` — the ABAC rule you intended would be skipped. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` and `permissionsPlugin` isn't registered. Raised by the adapter, from `@basaltkit/http`. |
 
-All three runtime errors declare a `status`, so adapters return the code above
+All four runtime errors declare a `status`, so adapters return the code above
 with the real error code in the body.
 
 - **`PERMISSION_META_INVALID` after refactoring a route** — you most likely
   wrote `can: true` or a computed array that came out empty. Both are
   unenforceable; the guard refuses rather than skipping.
+- **`PERMISSION_POLICY_MISSING` after an upgrade** — that `can(user, perm, resource)`
+  call was already answering silently from RBAC. Check both halves of
+  `resource:action` against `definePolicy`, register the missing check, or stop
+  passing the resource if the call really is plain RBAC.
 - **403 on a permission you definitely granted** — check the *scope*. A grant in
   `'acme'` only applies when the check runs in the `acme` tenant; use
   `GLOBAL_SCOPE` for grants that apply everywhere.

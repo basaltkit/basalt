@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/comments-prisma",
   "version": "1.0.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Prisma-backed implementation of the @basaltkit/comments CommentStore \u2014 the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

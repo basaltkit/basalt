@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/realtime-client",
   "version": "1.0.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Browser client for @basaltkit/realtime: subscribe to per-tenant channels over WebSocket or SSE, route events, and auto-reconnect. Zero dependencies.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

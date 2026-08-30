@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/billing-ui",
   "version": "1.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "A self-contained HTML page for @basaltkit/subscriptions: show the current plan and available plans, subscribe/switch via hosted Checkout, and manage billing via the Customer Portal. Zero dependencies.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/env",
   "version": "1.0.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Typed environment variable validation with Zod \u2014 fails at boot with an aggregated report.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

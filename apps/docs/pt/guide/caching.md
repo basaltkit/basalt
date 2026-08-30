@@ -122,6 +122,26 @@ await cache.tags('plans').flush()   // remove todas as chaves com a tag 'plans'
 `driver` é `'memory'`, `'redis'` (com `url`), ou uma instância `CacheDriver`
 personalizada.
 
+### O driver de memória é limitado
+
+O `MemoryCacheDriver` é o driver por omissão, por isso não pode crescer sem
+limite: as chaves de cache costumam embeber ids, slugs ou fingerprints de
+queries, e crescimento ilimitado sobre chaves influenciadas pelo utilizador é um
+OOM à espera de acontecer. Guarda no máximo **10 000 entradas**, despejando
+primeiro as já expiradas e depois as menos recentemente usadas (um `get` conta
+como uso, por isso as chaves quentes sobrevivem).
+
+```ts
+import { MemoryCacheDriver, cachePlugin } from '@basaltkit/cache'
+
+cachePlugin({ driver: new MemoryCacheDriver({ maxEntries: 50_000 }) })
+cachePlugin({ driver: new MemoryCacheDriver({ maxEntries: Infinity }) }) // sem limite
+```
+
+| Opção | Tipo | Omissão | Propósito |
+| --- | --- | --- | --- |
+| `maxEntries` | `number` | `10_000` | Limite de entradas vivas antes do despejo; `Infinity` desliga-o |
+
 ### Trocar memory → Redis
 
 Produção é uma mudança de uma linha — aponta para um servidor Redis:
@@ -247,6 +267,19 @@ a omissão continua `'global'`. Um `onMissingScope` explícito ou uma função
   de stampede e a revalidação SWR são **por processo**; duas réplicas podem
   computar em simultâneo. Dentro de um processo, cada chave computa exatamente
   uma vez.
+- **Entradas desaparecem antes do TTL no driver de memória** — passaste o
+  `maxEntries` (10 000 por omissão) e o LRU está a despejar. Sobe o limite, ou
+  passa para Redis.
+- **Uma factory que devolve `undefined` corria em cada chamada** — já não: o
+  `undefined` é guardado atrás de um marcador interno, por isso é um hit real de
+  cache. O `cache.get(key, fallback)` continua a devolver o teu fallback para
+  ele, porque através do `get` um `undefined` em cache e um miss são
+  indistinguíveis.
+- **Os flushes por tag no Redis deixaram de encontrar chaves após um upgrade** —
+  os índices de tags passaram de sets simples (`__tags__:`) para sorted sets
+  pontuados pela expiração (`__tagz__:`), para que os membros expirados sejam
+  podados em vez de se acumularem para sempre. As chaves antigas são órfãs
+  inertes; limpa-as uma vez com `DEL __tags__:*`.
 
 
 ## Pedidos condicionais (ETags)

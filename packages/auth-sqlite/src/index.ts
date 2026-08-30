@@ -228,8 +228,12 @@ export class SqliteAuthTokenStore implements AuthTokenStore {
     return row ? toAuthToken(row) : null
   }
 
-  async markUsed(token: string): Promise<void> {
-    this.db.prepare('UPDATE auth_tokens SET used_at = ? WHERE token = ?').run(nowMs(), token)
+  async markUsed(token: string): Promise<boolean> {
+    // Conditional update = compare-and-swap; 0 rows changed means already consumed.
+    const { changes } = this.db
+      .prepare('UPDATE auth_tokens SET used_at = ? WHERE token = ? AND used_at IS NULL')
+      .run(nowMs(), token)
+    return Number(changes) > 0
   }
 
   async deleteForUser(userId: string, purpose: AuthTokenPurpose): Promise<void> {
@@ -320,8 +324,12 @@ export class SqliteRefreshTokenStore implements RefreshTokenStore {
     return row ? toRefresh(row) : null
   }
 
-  async markUsed(token: string): Promise<void> {
-    this.db.prepare('UPDATE auth_refresh_tokens SET used_at = ? WHERE token = ?').run(nowMs(), token)
+  async markUsed(token: string): Promise<boolean> {
+    // Conditional update = compare-and-swap; 0 rows changed is a reuse signal.
+    const { changes } = this.db
+      .prepare('UPDATE auth_refresh_tokens SET used_at = ? WHERE token = ? AND used_at IS NULL')
+      .run(nowMs(), token)
+    return Number(changes) > 0
   }
 
   async revokeFamily(familyId: string): Promise<void> {

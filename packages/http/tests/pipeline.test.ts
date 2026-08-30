@@ -118,3 +118,32 @@ describe('toErrorResponse', () => {
     })
   })
 })
+
+describe('🟢 guards that cannot run must not be skipped', () => {
+  const guarded = route({
+    method: 'GET',
+    url: '/secret',
+    meta: { auth: true },
+    handler: async () => ({ ok: true }),
+  })
+
+  it('fails closed when the pipeline has guards but no container', async () => {
+    const reply = new CaptureReply()
+    await expect(
+      runRoute(guarded, makeRequest(), reply, { guards: [async () => { throw new Error('denied') }] }),
+    ).rejects.toMatchObject({ code: 'HTTP_GUARDS_UNRUNNABLE' })
+  })
+
+  it('names the route and the number of unrunnable guards', async () => {
+    const error = await runRoute(guarded, makeRequest(), new CaptureReply(), {
+      guards: [async () => {}, async () => {}],
+    }).catch((e: unknown) => e)
+    expect((error as Error).message).toContain('GET /secret')
+    expect((error as Error).message).toContain('2 route guard(s)')
+  })
+
+  it('a pipeline with no guards and no container still runs (the common case)', async () => {
+    const result = await runRoute(guarded, makeRequest(), new CaptureReply(), {})
+    expect(result).toEqual({ ok: true })
+  })
+})

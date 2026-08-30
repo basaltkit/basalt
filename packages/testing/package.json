@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/testing",
   "version": "1.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Testing kit for Basalt apps: createTestApp with user/tenant impersonation, mail and queue fakes with assertions, and time travel.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

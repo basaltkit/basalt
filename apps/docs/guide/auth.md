@@ -241,6 +241,21 @@ const next = await auth.refresh(tokens.refreshToken) // old token now dead
 await auth.refresh(tokens.refreshToken)
 ```
 
+Consumption is a **compare-and-swap**, not a read-then-write: `markUsed` marks
+the token used only if it is still unused and reports whether *this* call did
+it. Two concurrent refreshes of the same token — the legitimate client and a
+thief racing it — resolve to exactly one winner and one `RefreshReusedError`;
+without the CAS both would succeed and reuse detection would never fire. The
+same applies to the single-use verification and reset tokens.
+
+::: tip Writing your own store
+`AuthTokenStore.markUsed` and `RefreshTokenStore.markUsed` return
+`Promise<boolean | void>`. Make the update conditional (`WHERE token = ? AND
+used_at IS NULL`) and return whether it changed a row. Returning `void` keeps
+the older read-then-write behaviour — it still compiles and runs, but without
+the race protection.
+:::
+
 Passwords are hashed with **scrypt** (memory-hard, zero dependencies); an
 argon2id driver can be swapped in via the `PasswordHasher` contract
 (`hasher: new MyArgon2Hasher()`).
@@ -500,6 +515,28 @@ samlPlugin({ providers: [{ name: 'okta', entryPoint, idpCert, issuer, callbackUr
 // routes: GET /auth/saml/:provider/login · POST …/acs · GET …/metadata
 ```
 
+Assertions must be signed (`wantAssertionsSigned`) **and** bound to a login this
+app started: `validateInResponseTo` defaults to `'ifPresent'`, so a response
+carrying an `InResponseTo` must match an outstanding, not-yet-consumed
+AuthnRequest. That closes the window in which a captured `SAMLResponse` can be
+replayed until its `NotOnOrAfter`.
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute` |
+| `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'ifPresent'` | Replay protection — bind the response to an AuthnRequest this SP issued |
+| `cacheProvider` | `SamlCacheProvider` | node-saml's in-process cache | Where outstanding AuthnRequest ids live — **required on multi-replica deployments** |
+| `createClient` | `(provider) => SamlClient` | node-saml | Factory for the underlying client (tests) |
+| `host` | `string` | — | Host used when building the AuthnRequest |
+
+::: warning Multi-replica SAML needs a shared `cacheProvider`
+The request ids default to an **in-process** cache. Across several replicas
+without sticky sessions, a login started on one replica and returning to another
+fails with `AUTH_SAML_RESPONSE_INVALID`. Pass a shared `cacheProvider` (Redis,
+your database), or opt out with `validateInResponseTo: 'never'` and accept the
+replay window.
+:::
+
 ## Password reset (end-to-end)
 
 The module never sends email — it emits a hook carrying a single-use token
@@ -696,6 +733,7 @@ users in.
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | `:provider` isn't in the `providers` array |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, or older than `stateTtlMs` |
 | `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange or the profile fetch failed |
+| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The assertion failed validation — bad signature, expired, or (with `validateInResponseTo`) an `InResponseTo` this replica never issued |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.auth` and `authPlugin` isn't registered |
 
 - **Every request is anonymous even with a valid `Authorization` header** — check

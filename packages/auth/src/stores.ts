@@ -74,7 +74,14 @@ export interface AuthTokenRecord {
 export interface AuthTokenStore {
   create(record: AuthTokenRecord): Promise<void>
   find(token: string): Promise<AuthTokenRecord | null>
-  markUsed(token: string): Promise<void>
+  /**
+   * Consumes the token. MUST be a compare-and-swap: mark it used only if it is
+   * still unused, and return whether THIS call did the consuming — `false` means
+   * a concurrent caller got there first. Returning `void` keeps the pre-CAS
+   * behaviour (the caller then trusts its earlier read), so third-party stores
+   * written against the old contract keep working, without the race protection.
+   */
+  markUsed(token: string): Promise<boolean | void>
   /** Invalidate outstanding tokens of a purpose for a user before issuing a new one. */
   deleteForUser(userId: string, purpose: AuthTokenPurpose): Promise<void>
 }
@@ -88,9 +95,11 @@ export class MemoryAuthTokenStore implements AuthTokenStore {
   async find(token: string): Promise<AuthTokenRecord | null> {
     return this.records.get(token) ?? null
   }
-  async markUsed(token: string): Promise<void> {
+  async markUsed(token: string): Promise<boolean> {
     const record = this.records.get(token)
-    if (record) record.usedAt = Date.now()
+    if (!record || record.usedAt !== undefined) return false
+    record.usedAt = Date.now()
+    return true
   }
   async deleteForUser(userId: string, purpose: AuthTokenPurpose): Promise<void> {
     for (const [token, record] of this.records) {
@@ -312,7 +321,14 @@ export interface RefreshRecord {
 export interface RefreshTokenStore {
   create(record: RefreshRecord): Promise<void>
   find(token: string): Promise<RefreshRecord | null>
-  markUsed(token: string): Promise<void>
+  /**
+   * Consumes the refresh token. MUST be a compare-and-swap: mark it used only if
+   * it is still unused, and return whether THIS call did the consuming. Reuse
+   * detection depends on it — a plain `UPDATE … WHERE token = ?` lets two
+   * concurrent refreshes of a stolen+legitimate token both succeed. Returning
+   * `void` keeps the pre-CAS behaviour for stores written against the old contract.
+   */
+  markUsed(token: string): Promise<boolean | void>
   /** Revokes every token of a family — fired on reuse detection. */
   revokeFamily(familyId: string): Promise<void>
   /** Revokes every token of a user — fired on password reset. Optional. */
@@ -330,9 +346,11 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
     return this.records.get(token) ?? null
   }
 
-  async markUsed(token: string): Promise<void> {
+  async markUsed(token: string): Promise<boolean> {
     const record = this.records.get(token)
-    if (record) record.usedAt = Date.now()
+    if (!record || record.usedAt !== undefined) return false
+    record.usedAt = Date.now()
+    return true
   }
 
   async revokeFamily(familyId: string): Promise<void> {

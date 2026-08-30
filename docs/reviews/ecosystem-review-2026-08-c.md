@@ -247,3 +247,68 @@ for the confidential server-side flow (client_secret + HMAC-signed, expiring, pr
   drift found — a positive, not a gap.
 - **Depth:** ~30 of 85 packages read closely this pass; the rest via the dependency graph, the
   hygiene script, and the prior two passes. Ranked by risk, not exhaustiveness.
+
+---
+
+## Implementation status — 🟡 (13) and 🟢 (8)
+
+_Appended after the batch landed. The 🟠 five shipped in #253; the four docs-surfaced
+bugs in #256. Every 🟡/🟢 premise below was **re-verified against `main` at HEAD
+`59cf29c6`** before deciding — none had gone stale, and two turned out to be bigger
+than written._
+
+### 🟡 Recommended
+
+| # | Outcome | What landed |
+| --- | --- | --- |
+| **F-1** | **Implemented** | `markUsed` is now a compare-and-swap across `auth`/`auth-prisma`/`auth-sqlite`. Failing-first on the **real** sqlite store: `Promise.allSettled([refresh(t), refresh(t)])` returned **two** valid token pairs → now exactly one winner + one `RefreshReusedError`, family revoked. Contract widened to `Promise<boolean \| void>`; `void` keeps third-party stores compiling with the old (unprotected) semantics. Same fix applied to the verification/reset single-use tokens, which had the identical race. |
+| **F-2** | **Implemented (minimal)** | `validateInResponseTo` defaults to `'ifPresent'` (node-saml defaults to `never`); `cacheProvider` and `SamlCacheProvider` exported. `samlClientConfig()` exported as a testable seam so the defaults are assertable without a live IdP. The multi-replica caveat is the load-bearing part and is documented in the changeset, the guide and the README: an in-process request-id cache breaks SP-initiated login across replicas, so a shared provider (or an explicit `'never'`) is required. |
+| **F-3** | **Implemented** | Both redactors return `'[truncated]'` past depth 6 instead of the raw subtree. Failing-first: a `password` nested 8 deep serialised in cleartext. Primitives at the bound are untouched — their key was already checked one level up — so nothing within the limit changed. |
+| **F-4** | **Implemented** | `can(user, perm, resource)` with no matching policy check now throws `MissingPolicyError` (`PERMISSION_POLICY_MISSING`) instead of answering from RBAC. Failing-first: with `doc:*` granted, `can(u, 'doc:updat', {ownerId:'someone-else'})` returned `true`. Default-`error` is defensible here because the **route guard never passes a resource** — only an explicit application call does, and that is an unambiguous ABAC intent. `onMissingPolicy: 'rbac'` is the documented opt-out. |
+| **F-5** | **Implemented** | Exact filters *including a wildcard-free event name* now push into SQL with `take`/`LIMIT`; a wildcard pattern scans in bounded 500-row pages that stop at the limit. Sharpened premise: a pattern containing `.` is deliberately **not** pushed down, because `patternMatches` treats `.` and `:` as interchangeable and an equality would miss `a:b` for `a.b`. `audit-viewer` — which genuinely needs more than a page for its aggregates — gained `maxScan` (10 000) plus `truncated` on `AuditPage`/`AuditStats`, so `total` stops silently lying. |
+| **F-6** | **Implemented** | Redis glob metacharacters escaped in `flushPrefix`. Failing-first: tenant `a*` flushed tenant `ab`'s keys. |
+| **F-7** | **Implemented — and the premise was understated** | The ES driver had **two** id builders: `bulk()` used the raw `${tenantId}:${id}`, `index()`/`remove()` a percent-encoded form. So beyond the `:` collision the review found, the *same* document indexed singly vs in bulk landed under two different `_id`s, and `remove()` could not delete a bulk-indexed one, for any id containing a URL-special char. One definition now, the encoded form — which also closes F-7's `a:b`+`c` vs `a`+`b:c` collision. UUID/slug ids are byte-identical, so no re-index for the common case. |
+| **F-8** | **Implemented** | `MemoryCacheDriver` is an LRU bounded at 10 000 entries (expired evicted first; `get` counts as a use), `maxEntries` configurable, `Infinity` to disable. No timer: eviction is amortised into `set`, so the library starts no background work. |
+| **F-9** | **Implemented (redesigned)** | The obvious fix — `SREM` on delete + `EXPIRE … GT` on the tag set — doesn't work: `GT` treats "no TTL" as infinite, so a fresh tag set never gets one. Tag indexes are now **sorted sets** scored by member expiry (`__tagz__:`), pruned with `ZREMRANGEBYSCORE` on write, plus a reverse index so `delete` unregisters the key. Bounded by the live key set, and no Redis-7 dependency. Namespace change documented (old `__tags__:` sets are inert orphans). |
+| **F-10** | **Implemented** | `undefined` is stored behind an internal marker, so a `remember()` factory returning `undefined` computes once instead of on every call, and `put(key, undefined)` no longer writes the invalid literal `undefined` to Redis. `get()` still reports the fallback — through `get` a cached `undefined` and a miss are legitimately indistinguishable. |
+| **F-11** | **Implemented** | `${table.replace('.', '_')}_tsv_idx`. Failing-first: `register()` with `table: 'app.search'` emitted a schema-qualified index name, i.e. a syntax error — `register()` failed outright for anyone on a non-default schema. |
+| **F-12** | **Implemented** | Uniform `engines.node: ">=22.5.0"` across all 85 packages (was on 11). `>=22.5.0` rather than the root's `>=22`: it is the floor the `*-sqlite` packages genuinely need and the floor CI exercises, so one honest number beats two. |
+| **F-13** | **Implemented** | `ai` and `create-app` aligned to `"^3.24.0 \|\| ^4.0.0"`. |
+
+### 🟢 Nice to have
+
+| Item | Outcome | Reasoning |
+| --- | --- | --- |
+| Pipeline skips guards when `container` is absent | **Implemented** | `GuardsWithoutContainerError` (`HTTP_GUARDS_UNRUNNABLE`). Cheap, and it removes a fail-open *shape* from the one function every adapter routes through. |
+| XLSX XML control chars | **Implemented** | `_xHHHH_` OOXML escaping (literal `_xHHHH_` escaped first so it round-trips); tab/LF/CR left verbatim. Failing-first: a `0x00` in a cell made the sheet unparseable. |
+| `sideEffects` absent in all 85 | **Implemented** | `"sideEffects": false` everywhere. Verified safe first: there is not a single bare `import '@basaltkit/…'` in the tree. |
+| Search: no read-side field allowlist, no `limit` cap | **Deferred, with reasoning** | `@basaltkit/search` ships **no HTTP routes** — nothing in the framework forwards `req.query.limit` into `search()`. A library-level clamp would be paternalistic and would silently truncate legitimate large reads; the allowlist belongs in the caller's response mapping. Revisit if search ever ships a route. |
+| Audit append-only enforced by DB triggers | **Deferred, with reasoning** | `BEFORE UPDATE/DELETE … RAISE(ABORT)` would also block legitimate retention/pruning, and the package has no prune API to exempt — so the trigger would harden the contract by making a needed future capability impossible. Worth doing *together with* a retention API, not before it. |
+| Cache serialization diverges memory-vs-Redis | **Deferred (already documented)** | The guide's Drivers warning and the failure-modes table already state it. Normalising (JSON round-trip in memory too) would slow the fast path to make dev match prod — the wrong trade for a documented difference. |
+| OAuth has no PKCE | **Deferred, with reasoning** | Confidential server-side flow with a `client_secret`, and the `state` is HMAC-signed, expiring and provider-bound. PKCE adds no attack-surface reduction here; OAuth 2.1's "universal" recommendation targets public clients. Reconsider if a public-client/native flow is ever shipped. |
+| UI CHANGELOGs non-monotonic | **Deferred (scheduling)** | Purely cosmetic, and a release publish was in flight touching exactly those files. Not worth a merge conflict. |
+
+### Newly flagged (found while implementing, not in the original review)
+
+- **`ElasticsearchDriver.index()` and `bulk()` wrote different `_id`s** for the same
+  document (fixed above, under F-7). Silent duplicates + an undeletable document
+  for any id containing a URL-special character. This was a live bug, not a
+  theoretical collision.
+- **`AuditViewer.stats()` cannot be fixed by limit-pushdown alone** — aggregates need
+  more than one page. Bounded with `maxScan` + `truncated` rather than pretending
+  `total` is exact.
+
+### Verification
+
+- `pnpm turbo run typecheck` — **133/133**.
+- `pnpm turbo run test` — **132/132**.
+- Uncached per-suite: cache 32, audit 21, audit-prisma 6, audit-sqlite 9, audit-viewer 12,
+  auth 131, auth-prisma 16, auth-sqlite 17, auth-saml 12, permissions 26, http 147,
+  search-postgres 10, search-elasticsearch 18, exports-xlsx 7.
+- `pnpm --filter docs docs:build` — green.
+- Failing-first evidence recorded for every bug-class item: 8 red (cache), 4 red (audit
+  redaction), 3 red (audit-prisma), 3 red (audit-sqlite, via `git stash` of the source),
+  4 red (auth CAS), 3 red (permissions), 1 red (search-postgres), 2 red (ES ids),
+  3 red (xlsx), 2 red (http pipeline, via `git stash`).
+- 14 changesets: 10 feature/fix (advisory house style where a default tightens) plus the
+  84-package manifest-hygiene patch.

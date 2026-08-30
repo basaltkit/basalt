@@ -16,16 +16,18 @@ function makeFakeClient(): PrismaAuditClient {
         rows.push(row)
         return row
       },
-      async findMany({ where }) {
+      async findMany({ where, take, skip }) {
         let out = rows.filter(
           (r) =>
             (where.tenantId === undefined || r.tenantId === where.tenantId) &&
             (where.actorId === undefined || r.actorId === where.actorId) &&
+            (where.event === undefined || r.event === where.event) &&
             (where.at?.gte === undefined || r.at.getTime() >= where.at.gte.getTime()),
         )
         // orderBy [{at:'desc'},{id:'desc'}]
         out = out.sort((a, b) => b.at.getTime() - a.at.getTime() || (a.id < b.id ? 1 : -1))
-        return out
+        const from = skip ?? 0
+        return out.slice(from, take === undefined ? undefined : from + take)
       },
     },
   }

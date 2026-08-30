@@ -56,3 +56,29 @@ describe('xlsxFormatter', () => {
     expect(unzipStore(result.content)['xl/worksheets/sheet1.xml']).toContain('Ada')
   })
 })
+
+describe('XLSX cells carrying XML control characters', () => {
+  const sheetOf = async (value: string): Promise<string> => {
+    const buf = (await xlsxFormatter.render(['Note'], [[value]])) as Buffer
+    return unzipStore(buf)['xl/worksheets/sheet1.xml'] as string
+  }
+
+  it('never emits a raw control char (which makes the sheet invalid XML)', async () => {
+    const sheet = await sheetOf(`bad${String.fromCharCode(0)}value${String.fromCharCode(8)}here`)
+    expect(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(sheet)).toBe(false)
+  })
+
+  it('escapes them the OOXML way (_xHHHH_) instead of dropping the value', async () => {
+    const sheet = await sheetOf(`a${String.fromCharCode(0)}b`)
+    expect(sheet).toContain('a_x0000_b')
+  })
+
+  it('escapes a literal _xHHHH_ so the encoding round-trips unambiguously', async () => {
+    expect(await sheetOf('_x0041_')).toContain('_x005F_x0041_')
+  })
+
+  it('leaves tab / newline / carriage return (legal XML) alone', async () => {
+    const sheet = await sheetOf('a\tb\nc')
+    expect(sheet).toContain('a\tb\nc')
+  })
+})

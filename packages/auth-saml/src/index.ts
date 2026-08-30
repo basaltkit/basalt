@@ -58,17 +58,58 @@ export interface SamlOptions {
   createClient?: (provider: SamlProvider) => SamlClient
   /** Host used when building the AuthnRequest (optional). */
   host?: string
+  /**
+   * Assertion-replay protection. Default `'ifPresent'`: a response carrying an
+   * `InResponseTo` must match an AuthnRequest this SP issued and not yet consumed.
+   *
+   * The request ids live in `cacheProvider` — node-saml's **in-process** cache by
+   * default. Across several replicas without sticky sessions, a login started on
+   * one replica and returning to another will fail with `AUTH_SAML_RESPONSE_INVALID`;
+   * pass a shared `cacheProvider` (Redis, your database…), or set `'never'` to opt
+   * out and accept the replay window.
+   */
+  validateInResponseTo?: ValidateInResponseToMode
+  /** Shared store for outstanding AuthnRequest ids — required on multi-replica deployments. */
+  cacheProvider?: SamlCacheProvider
 }
 
-function defaultCreateClient(p: SamlProvider): SamlClient {
-  return new SAML({
+/**
+ * Replay protection: bind each SAMLResponse to an AuthnRequest this SP issued.
+ * `ifPresent` (the default here — node-saml's own default is `never`) rejects a
+ * response whose `InResponseTo` is unknown or already consumed, closing the
+ * window in which a captured assertion can be replayed until its `NotOnOrAfter`.
+ */
+export type ValidateInResponseToMode = 'never' | 'ifPresent' | 'always'
+
+/** node-saml's request-id cache contract, re-exported so apps can supply a shared one. */
+export interface SamlCacheProvider {
+  saveAsync(key: string, value: string): Promise<unknown>
+  getAsync(key: string): Promise<string | null>
+  removeAsync(key: string | null): Promise<string | null>
+}
+
+/**
+ * The node-saml configuration this package builds for a provider. Exported so the
+ * security-relevant defaults are assertable without constructing a real client.
+ */
+export function samlClientConfig(p: SamlProvider, options: SamlOptions = {}): Record<string, unknown> {
+  return {
     callbackUrl: p.callbackUrl,
     entryPoint: p.entryPoint,
     issuer: p.issuer,
     idpCert: p.idpCert,
     // Require the IdP to sign assertions — never trust an unsigned response.
     wantAssertionsSigned: true,
-  } as ConstructorParameters<typeof SAML>[0]) as unknown as SamlClient
+    // Reject replays of a captured assertion (see ValidateInResponseToMode).
+    validateInResponseTo: options.validateInResponseTo ?? 'ifPresent',
+    ...(options.cacheProvider ? { cacheProvider: options.cacheProvider } : {}),
+  }
+}
+
+function defaultCreateClient(p: SamlProvider, options: SamlOptions): SamlClient {
+  return new SAML(
+    samlClientConfig(p, options) as unknown as ConstructorParameters<typeof SAML>[0],
+  ) as unknown as SamlClient
 }
 
 const EMAIL_CLAIMS = [
@@ -106,7 +147,7 @@ export class Saml {
     providers: SamlProvider[],
     private readonly options: SamlOptions = {},
   ) {
-    const create = options.createClient ?? defaultCreateClient
+    const create = options.createClient ?? ((p: SamlProvider) => defaultCreateClient(p, options))
     for (const p of providers) {
       this.providers.set(p.name, p)
       this.clients.set(p.name, create(p))

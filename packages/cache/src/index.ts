@@ -69,6 +69,32 @@ function isEnvelope(value: unknown): value is SwrEnvelope {
   return typeof value === 'object' && value !== null && (value as { __swr?: unknown }).__swr === 1
 }
 
+/**
+ * Marker stored in place of a literal `undefined`. Drivers report a miss as
+ * `undefined`, so an undefined VALUE would be indistinguishable from "not cached"
+ * — the factory would rerun on every call (and on Redis, `JSON.stringify(undefined)`
+ * writes the invalid literal `undefined`). Storing the marker makes the hit real.
+ */
+const UNDEFINED_MARKER = { __undefined: 1 } as const
+
+function isUndefinedMarker(value: unknown): boolean {
+  return (
+    typeof value === 'object' && value !== null && (value as { __undefined?: unknown }).__undefined === 1
+  )
+}
+
+/** Value as written to the driver: `undefined` becomes the marker. */
+function wrap(value: unknown): unknown {
+  return value === undefined ? UNDEFINED_MARKER : value
+}
+
+/** Value as read back from the driver: markers and SWR envelopes are unwrapped. */
+function unwrap(stored: unknown): unknown {
+  if (isEnvelope(stored)) return stored.v
+  if (isUndefinedMarker(stored)) return undefined
+  return stored
+}
+
 function isSwr(value: DurationInput | SwrOptions): value is SwrOptions {
   return typeof value === 'object' && value !== null && 'staleFor' in value
 }
@@ -100,14 +126,14 @@ export class Cache {
   async get<T>(key: string, fallback: T): Promise<T>
   async get<T>(key: string, fallback?: T): Promise<T | undefined> {
     const stored = await this.driver.get(this.key(key))
-    const value = isEnvelope(stored) ? stored.v : stored
+    const value = unwrap(stored)
     return value === undefined ? fallback : (value as T)
   }
 
   async put(key: string, value: unknown, ttl?: DurationInput): Promise<void> {
     await this.driver.set(
       this.key(key),
-      value,
+      wrap(value),
       ttl === undefined ? undefined : parseDuration(ttl),
     )
   }
@@ -145,7 +171,7 @@ export class Cache {
       put: async (key: string, value: unknown, ttl?: DurationInput): Promise<void> => {
         await this.driver.set(
           this.key(key),
-          value,
+          wrap(value),
           ttl === undefined ? undefined : parseDuration(ttl),
           scopedTags,
         )
@@ -172,10 +198,12 @@ export class Cache {
 
     // Plain hard-TTL remember (no staleFor): unchanged cache-aside with raw values.
     if (!isSwr(ttlOrOptions)) {
-      const cached = isEnvelope(stored) ? stored.v : stored
-      if (cached !== undefined) return cached as T
+      // A driver miss is `undefined`; anything else is a hit, INCLUDING a stored
+      // undefined-marker — so a factory that legitimately returns undefined is
+      // cached once instead of rerunning on every call.
+      if (stored !== undefined) return unwrap(stored) as T
       return this.compute(fullKey, () => factory(), (value) =>
-        this.driver.set(fullKey, value, parseDuration(ttlOrOptions), tags),
+        this.driver.set(fullKey, wrap(value), parseDuration(ttlOrOptions), tags),
       )
     }
 
@@ -205,7 +233,7 @@ export class Cache {
       // Hard-expired → fall through to a blocking recompute.
     } else if (stored !== undefined) {
       // A raw value written by put()/plain remember(): treat as fresh, no windows.
-      return stored as T
+      return unwrap(stored) as T
     }
 
     return this.compute(fullKey, () => factory(), store)
