@@ -1,5 +1,31 @@
 # @basaltkit/audit-viewer
 
+## 1.2.0
+
+### Minor Changes
+
+- 104cfb3: The viewer bounds how much of the trail it reads, and says when it hit the bound.
+  
+  `page()`, `get()` and `stats()` all called `audit.trail()` with no limit — the aggregates genuinely need more than one page, but "all of it" is unbounded on a trail that only ever grows. Every call now reads at most `maxScan` rows (default **10 000**, configurable on `auditViewerPlugin`/`new AuditViewer`).
+  
+  `AuditPage` and `AuditStats` gain `truncated: boolean`, true when the scan hit the bound — so `total` is honestly "matches within the window" rather than a silently wrong grand total, and a UI can say so. Trails smaller than `maxScan` behave exactly as before.
+
+### Patch Changes
+
+- 104cfb3: Package-manifest hygiene: a uniform `engines.node`, `sideEffects: false` everywhere, and one zod range.
+  
+  Three metadata inconsistencies the ecosystem review surfaced, fixed in one sweep — no runtime code changes.
+  
+  - **`engines.node` was declared on 11 of 85 packages.** Only the `*-sqlite` ones carried `>=22.5.0` (they need `node:sqlite`); the other 74 declared nothing, so `npm install` could not warn anyone on an unsupported runtime. Every package now declares `>=22.5.0` — the floor CI actually exercises, and the floor the sqlite packages already required.
+  - **`sideEffects` was absent from all 85.** No package relies on import-time side effects (there is not a single bare `import '@basaltkit/…'` in the tree), so every one now declares `"sideEffects": false` and bundlers can drop unused imports from an app's build.
+  - **zod range divergence.** 42 packages allowed `^3.24.0 || ^4.0.0`; `@basaltkit/ai` and `@basaltkit/create-app` pinned `^4.0.0` alone — the only external-dependency inconsistency in the monorepo, and enough to force a duplicate zod into an app that is still on 3.x. Both now use the shared range.
+- Updated dependencies [104cfb3]
+- Updated dependencies [104cfb3]
+- Updated dependencies [104cfb3]
+  - @basaltkit/audit@1.3.0
+  - @basaltkit/http@1.14.0
+  - @basaltkit/core@1.3.1
+
 ## 1.1.0
 
 ### Minor Changes

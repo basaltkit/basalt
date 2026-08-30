@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/notifications-sqlite",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Durable, SQLite-backed implementation of the @basaltkit/notifications InAppStore (in-app notifications), on Node's built-in node:sqlite. Zero external dependencies.",
   "license": "MIT",
   "type": "module",

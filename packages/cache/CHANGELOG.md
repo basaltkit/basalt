@@ -1,5 +1,30 @@
 # @basaltkit/cache
 
+## 1.4.0
+
+### Minor Changes
+
+- 104cfb3: Four cache fixes: glob-injected tenant ids, an unbounded default driver, leaking tag indexes, and `undefined` treated as a miss.
+  
+  **Advisory — the memory driver is now bounded and the Redis tag layout changed.**
+  
+  - **Cross-tenant flush via a glob in the tenant id.** `RedisCacheDriver.flushPrefix` interpolated the scope straight into `SCAN MATCH ${prefix}*`. The scope defaults to the raw tenant id, and tenant ids are often user-chosen slugs — a tenant named `a*` matched, and **deleted**, every other tenant's keys under that prefix. Glob metacharacters (`\ * ? [ ] ^`) are now escaped, so a scope is always matched literally.
+  - **The default driver was unbounded.** `MemoryCacheDriver` is the default and had no cap, reaping only on `get` — high key cardinality (ids, slugs, query fingerprints) grew until the process died. It is now an LRU bounded at **10 000 entries**, evicting already-expired entries first. Pass `new MemoryCacheDriver({ maxEntries })`, or `Infinity`, to change or remove the cap. Apps holding more than 10 000 live keys in process memory will start seeing evictions — that is the intended bound, but raise it if you were relying on the old behaviour.
+  - **Redis tag indexes grew forever.** Tag membership was a plain `SET` that nothing ever removed from: `delete` did not unregister the key, and Redis never reports that a member expired. Tags are now **sorted sets** scored by expiry, expired members are pruned on write, and `delete` removes the key from its tags via a reverse index. The namespace moved from `__tags__:` to `__tagz__:`; the old sets are inert orphans — clear them once with `DEL __tags__:*` after upgrading.
+  - **A cached `undefined` was indistinguishable from a miss.** `remember()` with a factory that legitimately returns `undefined` recomputed on every single call, and `put(key, undefined)` wrote the invalid literal `undefined` to Redis. Undefined values now round-trip through an internal marker; `get()` still reports your fallback for them.
+
+### Patch Changes
+
+- 104cfb3: Package-manifest hygiene: a uniform `engines.node`, `sideEffects: false` everywhere, and one zod range.
+  
+  Three metadata inconsistencies the ecosystem review surfaced, fixed in one sweep — no runtime code changes.
+  
+  - **`engines.node` was declared on 11 of 85 packages.** Only the `*-sqlite` ones carried `>=22.5.0` (they need `node:sqlite`); the other 74 declared nothing, so `npm install` could not warn anyone on an unsupported runtime. Every package now declares `>=22.5.0` — the floor CI actually exercises, and the floor the sqlite packages already required.
+  - **`sideEffects` was absent from all 85.** No package relies on import-time side effects (there is not a single bare `import '@basaltkit/…'` in the tree), so every one now declares `"sideEffects": false` and bundlers can drop unused imports from an app's build.
+  - **zod range divergence.** 42 packages allowed `^3.24.0 || ^4.0.0`; `@basaltkit/ai` and `@basaltkit/create-app` pinned `^4.0.0` alone — the only external-dependency inconsistency in the monorepo, and enough to force a duplicate zod into an app that is still on 3.x. Both now use the shared range.
+- Updated dependencies [104cfb3]
+  - @basaltkit/core@1.3.1
+
 ## 1.3.0
 
 ### Minor Changes

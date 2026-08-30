@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/flags",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "engines": {
     "node": ">=22.5.0"
   },
