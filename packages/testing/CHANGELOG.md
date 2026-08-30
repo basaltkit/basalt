@@ -1,5 +1,12 @@
 # @basaltkit/testing
 
+## 1.1.2
+
+### Patch Changes
+
+- Updated dependencies [ffd3565]
+  - @basaltkit/queue@2.0.0
+
 ## 1.1.1
 
 ### Patch Changes
