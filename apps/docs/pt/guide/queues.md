@@ -318,6 +318,65 @@ ignora a retenção — não guarda nada. (As chaves de estrutura da própria fi
 `bull:<queue>:*`, existem sempre depois de a fila ser criada; isso é do BullMQ,
 não são jobs esquecidos.)
 
+## Inspecionar uma queue — «o meu job chegou mesmo a correr?»
+
+A forma suportada é o CLI:
+
+```bash
+basalt queue:stats --queue orders
+# → { waiting, active, completed, failed, delayed }
+```
+
+**Lê os números com o ciclo de vida em mente**, porque é aqui que a maior parte
+da depuração se perde:
+
+```
+dispatch ──▶ waiting ──▶ active ──▶ completed   ← os jobs terminados estão AQUI
+                 │            └────▶ failed      (depois de esgotar as tentativas)
+                 └── delayed (quando o dispatch leva `delay`)
+```
+
+Um worker esvazia a `waiting` em milissegundos, por isso uma queue saudável
+mostra `waiting: 0, active: 0` quase sempre. Isso é **sucesso, não silêncio** —
+o trabalho está em `completed`. Inspecionar só `waiting`/`active` é o falso
+alarme clássico: conclui-se «não correu nada» quando correu tudo.
+
+::: tip Ler isto bem
+`waiting` a subir e `completed` parado → **nenhum worker está a consumir**
+(confirma que `workers: [{ queue }]` bate com o `defineJob({ queue })`).
+`completed` a subir → o worker está a trabalhar.
+`failed` a subir → os jobs estão a esgotar as tentativas; liga o `onJobFailed`.
+:::
+
+### Ir por baixo do capô
+
+Se inspecionares o backend diretamente (por exemplo o `Queue#getJobs` do BullMQ)
+em vez do CLI, há duas armadilhas:
+
+1. **Pede os estados certos.** `getJobs(['waiting','active'])` devolve `[]` numa
+   queue saudável — inclui `'completed'` (e `'failed'`).
+2. **`job.data` é um envelope, não o teu payload.** O `dispatch` embrulha-o para
+   o contexto do pedido sobreviver ao salto:
+
+   ```jsonc
+   {
+     "payload": { /* exatamente o que passaste ao dispatch() */ },
+     "context": { /* requestId, tenantId, … — restaurados à volta do handle() */ }
+   }
+   ```
+
+   Ou seja, os teus dados estão em `job.data.payload`, não em `job.data`.
+
+::: warning Os payloads dos jobs são dados
+Um payload pode conter tudo o que despachaste — incluindo dados pessoais.
+Qualquer endpoint que construas para inspecionar uma queue tem de ser
+autenticado (`meta: { auth: true }`) e deve devolver contagens por omissão, com
+os payloads crus atrás de uma flag explícita. Aponta o cliente do backend para a
+**mesma** ligação que a tua app usa: um `new Queue('orders')` simples usa
+`localhost:6379` por omissão e, onde o Redis viva noutro sítio, lê uma queue
+diferente e reporta-a como vazia.
+:::
+
 ## Executar domain events na queue
 
 `queuedOn` faz a ponte `@basaltkit/events` → queue: `emit` apenas enfileira um job, e

@@ -22,17 +22,18 @@ O versionamento funciona em dois níveis, de propósito:
   ainda está em `1.x`. Depende de cada um com um range `^`; cada pacote é
   construído e testado contra o `@basaltkit/core` atual. A versão exata e atual de
   cada pacote está na página [Ecossistema](./ecosystem).
-- **O framework como um todo tem uma "release do Basalt"** — atualmente **1.5**
+- **O framework como um todo tem uma "release do Basalt"** — atualmente **1.6**
   (o número no nav). É um marcador amigável para uma *geração* do framework, usado
   apenas para comunicação e para estes docs — a `1.0` foi a primeira release
   estável, e as gerações seguintes acrescentaram escala, tempo-real, passwordless
   e IA/MCP, sendo a **1.4** a vaga da toolchain TypeScript 7 e reforço de segurança,
-  e a **1.5** a experiência de desenvolvimento IA no teu editor sobre MCP
-  (ver [Novidades](./whats-new)). **Não** é a versão de nenhum pacote em particular.
+  a **1.5** a experiência de desenvolvimento IA no teu editor sobre MCP, e a
+  **1.6** a release em que as promessas da framework passaram a garantias
+  impostas por CI (ver [Novidades](./whats-new)). **Não** é a versão de nenhum pacote em particular.
 
 ::: tip De que número dependo?
 Depende das versões dos **pacotes** — são essas que o npm instala e resolve. O
-número da **release do Basalt** (ex.: "Basalt 1.5") é só uma etiqueta amigável
+número da **release do Basalt** (ex.: "Basalt 1.6") é só uma etiqueta amigável
 para "que geração do framework estes docs descrevem".
 :::
 

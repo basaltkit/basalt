@@ -310,6 +310,64 @@ Left unset, the defaults above apply. The **sync** driver ignores retention — 
 stores nothing. (The queue's own `bull:<queue>:*` structure keys always exist once
 the queue is created; that's BullMQ, not leftover jobs.)
 
+## Inspecting a queue — "did my job actually run?"
+
+The supported way is the CLI:
+
+```bash
+basalt queue:stats --queue orders
+# → { waiting, active, completed, failed, delayed }
+```
+
+**Read the numbers with the lifecycle in mind**, because this is where most
+debugging goes wrong:
+
+```
+dispatch ──▶ waiting ──▶ active ──▶ completed   ← finished jobs live HERE
+                 │            └────▶ failed      (after exhausting attempts)
+                 └── delayed (when dispatched with `delay`)
+```
+
+A worker drains `waiting` in milliseconds, so a healthy queue shows
+`waiting: 0, active: 0` almost always. That is **success, not silence** — the
+work is in `completed`. Inspecting only `waiting`/`active` is the classic false
+alarm: you conclude "nothing ran" when everything ran.
+
+::: tip Reading it right
+`waiting` climbing and `completed` flat → **no worker is consuming** (check
+`workers: [{ queue }]` matches `defineJob({ queue })`).
+`completed` climbing → the worker is working.
+`failed` climbing → jobs are exhausting their attempts; wire `onJobFailed`.
+:::
+
+### Going under the hood
+
+If you inspect the backend directly (e.g. BullMQ's `Queue#getJobs`) instead of
+the CLI, two things bite:
+
+1. **Ask for the right states.** `getJobs(['waiting','active'])` returns `[]` on
+   a healthy queue — include `'completed'` (and `'failed'`).
+2. **`job.data` is an envelope, not your payload.** `dispatch` wraps it so the
+   request context survives the hop:
+
+   ```jsonc
+   {
+     "payload": { /* exactly what you passed to dispatch() */ },
+     "context": { /* requestId, tenantId, … — restored around handle() */ }
+   }
+   ```
+
+   So your data is at `job.data.payload`, not `job.data`.
+
+::: warning Job payloads are data
+A payload can hold whatever you dispatched — including personal data. Any
+endpoint you build to inspect a queue must be authenticated (`meta: { auth: true }`),
+and should return counts by default, with raw payloads behind an explicit flag.
+Point the backend client at the **same** connection your app uses: a bare
+`new Queue('orders')` silently defaults to `localhost:6379` and, wherever Redis
+lives elsewhere, reads a different queue and reports it as empty.
+:::
+
 ## Run domain events on the queue
 
 `queuedOn` bridges `@basaltkit/events` → queue: `emit` just enqueues a job, and

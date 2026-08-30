@@ -1,15 +1,98 @@
-# Novidades no Basalt 1.5
+# Novidades no Basalt 1.6
 
-> *"Basalt 1.5" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.6" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são versionados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que entrou e a versão do
 > pacote que o traz.*
 
-O Basalt 1.5 traz a experiência de desenvolvimento IA da framework **para dentro do
-teu editor e de qualquer cliente MCP** — Claude Desktop, Claude Code, ou o teu — e
-conclui a migração para TypeScript 7 em todo o repositório.
+O Basalt 1.6 é a release em que **a framework garante o que promete**. Três ciclos
+de revisão de arquitetura pegaram nos princípios declarados do projeto —
+neutralidade de adaptador, a fronteira dev-only da IA, «o SaaS é opcional»,
+seguro-por-omissão — e transformaram cada um de convenção que era preciso lembrar
+num **tripwire de CI que reprova o build**. Pelo caminho, as revisões encontraram
+e corrigiram bugs reais que esses princípios deviam ter evitado.
 
 ## Destaques
+
+### As promessas passaram a garantias
+Cinco novas fronteiras impostas por máquina, cada uma com um teste que reprova o build:
+- **Neutralidade de adaptador** — nenhum pacote de funcionalidade pode depender de
+  um adaptador HTTP concreto. Dez tinham derivado para importar o contrato de rotas
+  *através* do `@basaltkit/fastify`, forçando o Fastify em apps Express/Hono; todos
+  repontados para `@basaltkit/http`. Uma suite de conformidade cross-adapter corre
+  agora o mesmo contrato neutro nos três.
+  *(o `@basaltkit/testing` ganhou `createTestApp({ adapter })`.)*
+- **O SaaS é opcional** — um pacote genérico nunca pode *exigir* tenancy. Seis
+  tinham começado a exigir: o `audit.trail()` rebentava em todas as chamadas numa
+  app sem tenancy, empurrando-te para um método que a doc trata como escape hatch
+  perigoso; o `search` chegava a exigir `tenantId` na escrita enquanto as leituras
+  rebentavam. A nova `apps/beyond-saas` arranca uma app real com 18 plugins
+  genéricos e **zero tenancy** para manter isto honesto.
+  Ver [Para além do SaaS](/pt/guide/beyond-saas).
+- **A camada de IA continua dev-only** — um teste ao grafo de imports mantém o
+  `@basaltkit/ai` e o `@basaltkit/ai-mcp` fora do runtime de qualquer aplicação.
+- **Segurança de lifetimes na DI** — o container falha agora ruidosamente perante
+  uma *captive dependency* (um singleton que congelaria as instâncias de um scope
+  de pedido para toda a app) em vez de servir objetos velhos em silêncio.
+  *(`@basaltkit/core` 1.3)*
+- **Guards declarados têm de ser impostos** — uma rota que declare `meta.auth`,
+  `can`, `teamRole`, `scopes`, `subscribed` ou `feature` sem plugin que os imponha
+  **falha no arranque**, nomeando o plugin que resolve, em vez de servir tráfego
+  desprotegido. Opt-out deliberado com `allowUnguardedMeta`.
+
+### Segurança
+- **Billing**: as rotas de checkout/portal/faturas eram servidas **sem
+  autenticação** (qualquer pessoa abria o portal de pagamento de um tenant), e o
+  `checkout()` sobrescrevia a subscrição, pelo que um webhook genuinamente assinado
+  podia **ativar um plano escalado**. Ambos corrigidos, com a escalada reproduzida
+  primeiro como teste. *(`@basaltkit/subscriptions` 2.7)*
+- **Reuso de refresh token**: o `markUsed` era ler-depois-escrever, por isso dois
+  refreshes concorrentes devolviam **dois** pares de tokens válidos. Agora é um
+  compare-and-swap em todos os stores. *(`@basaltkit/auth` 1.8)*
+- XSS armazenado via URLs assinadas de ficheiros fechado (`Content-Disposition:
+  attachment` por omissão), as UIs renderizadas no servidor ganharam **CSP
+  route-scoped com hash**, os corpos de email são redigidos em produção, e o
+  `html\`\`` torna o escape o caminho por omissão no email HTML.
+
+### Fiabilidade sob carga
+As implantações multi-réplica ganharam as garantias que lhes faltavam: o
+`.onOneServer()` + `ScheduleLock` do scheduler (fim das execuções duplicadas em
+cada réplica), um outbox de eventos que honra mesmo o at-least-once, confirmações
+do publisher **antes do ack** no RabbitMQ (fechando uma janela de perda de jobs), e
+redelivery no Kafka em vez de perda silenciosa. Cinco caminhos de crash de processo
+foram eliminados — um WebSocket morto ou um soluço do Redis podiam antes derrubar
+uma escrita de domínio.
+
+### As docs são agora a referência oficial
+Com a geração de API abandonada, os guias *são* a referência: 27 guias (EN + PT)
+reescritos num único arco didático — o que é → modelo mental → quickstart
+executável → receitas → tabela completa de opções → modos de falha com os códigos
+de erro reais — e os [Conceitos centrais](/pt/guide/concepts) documentam a API
+interna (lifetimes do container, fases dos plugins, o pipeline de rotas, os
+metadata buckets, escrever o teu próprio guard/enricher) ao ponto de se construir
+um pacote de terceiros só com as docs. Escrevê-las destapou mais quatro bugs reais.
+
+## Atualização
+
+Os pacotes são independentes — sobe só o que usas. Duas coisas a saber:
+
+1. **A verificação no arranque é nova.** Se a tua app declara `meta.auth` (ou
+   `can`, `teamRole`, `scopes`, `subscribed`, `feature`) numa rota mas nunca
+   regista o plugin que os impõe, ela **falha agora no arranque**, com o plugin
+   nomeado. Essa rota estava a ser servida desprotegida; regista o plugin, ou faz
+   opt-out com `allowUnguardedMeta` se a tua edge trata disso.
+2. **Alguns defaults apertaram** (documentados pacote a pacote): as URLs de
+   ficheiros são `attachment` por omissão, os corpos de email são redigidos em
+   produção, o scoping da cache fecha *quando a tenancy está ativa*, e o `meta.can`
+   rejeita valores não-string em vez de saltar a verificação em silêncio.
+
+---
+
+## Anteriormente — Basalt 1.5
+
+> A experiência de desenvolvimento IA **no teu editor e em qualquer cliente MCP** —
+> Claude Desktop, Claude Code, ou o teu — mais a migração para TypeScript 7 em todo
+> o repositório.
 
 ### Desenvolvimento IA sobre MCP
 - **`@basaltkit/ai-mcp`** — uma ponte MCP **dev-only** que expõe os workflows de IA
@@ -56,7 +139,7 @@ conclui a migração para TypeScript 7 em todo o repositório.
   a uma referência avançada de cada tool, resource, prompt, transporte e do modelo de
   safe-make.
 
-## Atualização
+### Atualização (1.5)
 
 Os pacotes são independentes — sobe só o que usas. Esta vaga é aditiva: o novo
 `@basaltkit/ai-mcp` e o `@basaltkit/mcp-core` são tooling **dev-only** totalmente

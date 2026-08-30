@@ -1,14 +1,93 @@
-# What's new in Basalt 1.5
+# What's new in Basalt 1.6
 
-> *"Basalt 1.5" is the umbrella label for this wave of work; the `@basaltkit/*`
+> *"Basalt 1.6" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
 
-Basalt 1.5 brings the framework's AI developer experience **into your editor and
-any MCP client** — Claude Desktop, Claude Code, or your own — and finishes the
-TypeScript 7 move across the whole repository.
+Basalt 1.6 is the release where **the framework guarantees what it promises**.
+Three architecture review cycles took the project's stated principles — adapter
+neutrality, the dev-only AI boundary, "SaaS is opt-in", secure-by-default — and
+turned each one from a convention people had to remember into a **CI tripwire
+that fails the build**. Along the way the reviews found, and fixed, real bugs
+those principles were supposed to prevent.
 
 ## Highlights
+
+### Promises became guarantees
+Five new machine-enforced boundaries, each with a test that fails the build:
+- **Adapter neutrality** — no feature package may depend on a specific HTTP
+  adapter. Ten packages had drifted into importing the route contract *through*
+  `@basaltkit/fastify`, forcing Fastify into Express/Hono apps; all repointed to
+  `@basaltkit/http`. A cross-adapter conformance suite now runs the same neutral
+  contract on all three. *(`@basaltkit/testing` gained `createTestApp({ adapter })`.)*
+- **SaaS is opt-in** — a generic package may never *require* tenancy. Six had
+  started to: `audit.trail()` threw on every call in a non-tenant app, pushing
+  you to a method the docs call a dangerous escape hatch; `search` even required
+  `tenantId` on write while reads threw. The new `apps/beyond-saas` boots a real
+  app with 18 generic plugins and **no tenancy** to keep it honest.
+  See [Beyond SaaS](/guide/beyond-saas).
+- **The AI layer stays dev-only** — an import-graph test keeps `@basaltkit/ai`
+  and `@basaltkit/ai-mcp` out of any application runtime.
+- **DI lifetime safety** — the container now fails loudly on a *captive
+  dependency* (a singleton that would freeze one request scope's instances
+  app-wide) instead of silently serving stale objects. *(`@basaltkit/core` 1.3)*
+- **Declared guards must be enforced** — a route that declares `meta.auth`,
+  `can`, `teamRole`, `scopes`, `subscribed` or `feature` with no plugin to
+  enforce it now **fails at boot**, naming the plugin that fixes it, instead of
+  serving unprotected traffic. Opt out deliberately with `allowUnguardedMeta`.
+
+### Security
+- **Billing**: checkout/portal/invoice routes shipped **without auth** (anyone
+  could open a tenant's payment portal), and `checkout()` overwrote the
+  subscription so a genuinely-signed webhook could **activate an escalated
+  plan**. Both fixed, with the escalation reproduced as a test first.
+  *(`@basaltkit/subscriptions` 2.7)*
+- **Refresh-token reuse**: `markUsed` was read-then-write, so two concurrent
+  refreshes each returned a **valid** token pair. Now a compare-and-swap across
+  all stores. *(`@basaltkit/auth` 1.8)*
+- Stored-XSS via signed file URLs closed (`Content-Disposition: attachment` by
+  default), server-rendered UIs got a **route-scoped, hash-locked CSP**, mail
+  bodies are redacted in production, and `html\`\`` makes escaping the default
+  path for HTML mail.
+
+### Reliability under load
+Multi-replica deployments got the guarantees they were missing: the scheduler's
+`.onOneServer()` + `ScheduleLock` (no more every-replica double-runs), an event
+outbox that actually honours at-least-once, RabbitMQ publisher **confirms before
+ack** (closing a job-loss window), and Kafka redelivery instead of silent loss.
+Five process-crash paths were eliminated — one dead WebSocket or a Redis blip
+could previously take down a domain write.
+
+### The docs are now the official reference
+With API generation dropped, the guides *are* the reference: 27 guides (EN + PT)
+rewritten to one didactic arc — what it is → mental model → runnable quickstart →
+recipes → full options table → failure modes keyed on real error codes — and
+[Core concepts](/guide/concepts) documents the internal API (container lifetimes,
+plugin phases, the route pipeline, metadata buckets, writing your own
+guard/enricher) well enough to build a third-party package from the docs alone.
+Writing them surfaced four more real bugs.
+
+## Upgrading
+
+Packages are independent — bump only what you use. Two things to know:
+
+1. **The boot check is new.** If your app declares `meta.auth` (or `can`,
+   `teamRole`, `scopes`, `subscribed`, `feature`) on a route but never registers
+   the enforcing plugin, it now **fails at boot** with the plugin named. That
+   route was serving unprotected before; register the plugin, or opt out with
+   `allowUnguardedMeta` if your edge handles it.
+2. **Some defaults tightened** (documented per package): file URLs default to
+   `attachment`, mail bodies are redacted in production, cache scoping fails
+   closed *when tenancy is active*, and `meta.can` rejects non-string values
+   instead of silently skipping the check.
+
+---
+
+## Previously — Basalt 1.5
+
+> The AI developer experience **in your editor and any MCP client** — Claude
+> Desktop, Claude Code, or your own — plus the TypeScript 7 move across the whole
+> repository.
 
 ### AI development over MCP
 - **`@basaltkit/ai-mcp`** — a **dev-only** MCP bridge that exposes Basalt's AI
@@ -52,7 +131,7 @@ TypeScript 7 move across the whole repository.
   advanced reference of every tool, resource, prompt, transport and the safe-make
   model.
 
-## Upgrading
+### Upgrading (1.5)
 
 Packages are independent — bump only what you use. This wave is additive: the new
 `@basaltkit/ai-mcp` and `@basaltkit/mcp-core` are brand-new **dev-only** tooling,
