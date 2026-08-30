@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/api-keys-ui",
   "version": "1.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "A self-contained HTML page to manage @basaltkit/auth API keys: create (show once), list and revoke — zero dependencies, no build.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

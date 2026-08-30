@@ -6,6 +6,20 @@ const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
 const escapeXml = (value: string): string =>
   value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c] as string)
 
+/**
+ * Characters XML 1.0 forbids outright (only tab, LF and CR are legal below 0x20).
+ * A single one of them in a cell makes the whole sheet unparseable — Excel refuses
+ * to open the file — so they are encoded with OOXML's `_xHHHH_` escape instead.
+ * A literal `_xHHHH_` in the data is escaped first, so the encoding round-trips.
+ */
+const XML_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g
+const LITERAL_ESCAPE = /_(x[0-9A-Fa-f]{4})_/g
+
+const escapeControlChars = (value: string): string =>
+  value
+    .replace(LITERAL_ESCAPE, '_x005F_$1_')
+    .replace(XML_CONTROL, (c) => `_x${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}_`)
+
 /** 0 → A, 25 → Z, 26 → AA … */
 function columnName(index: number): string {
   let name = ''
@@ -21,7 +35,7 @@ function cell(value: unknown, ref: string): string {
   if (value === null || value === undefined || value === '') return `<c r="${ref}"/>`
   if (typeof value === 'number' && Number.isFinite(value)) return `<c r="${ref}"><v>${value}</v></c>`
   const text = value instanceof Date ? value.toISOString() : String(value)
-  return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(text)}</t></is></c>`
+  return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(escapeControlChars(text))}</t></is></c>`
 }
 
 function sheetXml(headers: string[], rows: unknown[][]): string {

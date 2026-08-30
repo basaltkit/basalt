@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/teams",
   "version": "1.4.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Teams for Basalt: multi-user tenants with roles, email invitations (accept/revoke), membership management and a teamRole route guard.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

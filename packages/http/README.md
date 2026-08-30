@@ -405,6 +405,8 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 })
 ```
 
+Enrichers and guards need the container scope, so a pipeline that carries **guards but no container** throws `GuardsWithoutContainerError` (`HTTP_GUARDS_UNRUNNABLE`, 500) naming the route and how many guards could not run. Skipping them silently would let the request reach the handler unauthorized. A pipeline with no guards and no container runs normally.
+
 ## API reference
 
 ### `route(config)` → `BasaltRoute`

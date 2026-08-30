@@ -315,6 +315,7 @@ nativos da sua framework.
 | Vês | Significa | Faz |
 |---|---|---|
 | `UnguardedRouteMetaError` no boot | uma rota declara meta de segurança que nenhum guard registado aplica | regista o plugin que a aplica, ou `allowUnguardedMeta` (vê [Segurança](/pt/guide/security)) |
+| `500 HTTP_GUARDS_UNRUNNABLE` | o pipeline da rota tem guards mas não tem container, por isso nenhum deles pôde correr | passa `container` ao pipeline — todos os adapters do kit passam; só pipelines feitos à mão chegam aqui |
 | `400 HTTP_VALIDATION` | o body/query/params falhou o schema Zod da rota | a resposta lista a parte e as issues por campo |
 | `404 { code: 'NOT_FOUND' }` numa rota que definiste | a rota não foi registada nesta instância do adapter | confirma que está em `routes: [...]` do plugin do adapter que arrancou |
 | `413 PAYLOAD_TOO_LARGE` (hono) | o body excedeu o `bodyLimit` | sobe o `bodyLimit` deliberadamente |

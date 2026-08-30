@@ -56,7 +56,7 @@ new PostgresSearchDriver({ client: fakePgClient })
 | Option | Default | Description |
 |---|---|---|
 | `client` | — (required) | Already-connected `pg` `Pool`/`Client`. |
-| `table` | `basalt_search` | Table shared by all indexes. |
+| `table` | `basalt_search` | Table shared by all indexes. May be schema-qualified (`app.search`); the GIN index is then named with the separator flattened (`app_search_tsv_idx`), because Postgres does not allow schema-qualified index names. |
 | `language` | `english` | Text-search configuration (stemming/stop-words). |
 
 ## How it connects to other modules

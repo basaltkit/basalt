@@ -182,7 +182,7 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `tenantId` | `string` | No | all | Filters by tenant. |
 | `actorId` | `string` | No | all | Filters by actor. |
 | `since` | `number` | No | since forever | Only entries with `at >= since`. |
-| `limit` | `number` | No | no limit | Maximum number of results. |
+| `limit` | `number` | No | no limit | Maximum number of results. The SQL-backed stores push it into the database, so a limited query never loads the whole trail. |
 
 ### `interface AuditStore`
 
@@ -191,9 +191,20 @@ Storage contract, **append-only by contract** (no update/delete):
 - `append(entry: AuditEntry): Promise<void>`
 - `query(query: AuditQuery): Promise<AuditEntry[]>` — must return most recent first and apply filters/limit.
 
+Two helpers exist so a driver can push the limit down safely:
+
+- `exactEventMatch(pattern?: string): string | undefined` — the event filter that may be pushed into SQL as an equality. Returns `undefined` for a pattern containing `*` (a wildcard) **or** `.` (because `patternMatches` treats `.` and `:` as interchangeable, so an equality would miss `a:b` for the pattern `a.b`); those must still be matched in code.
+- `AUDIT_SCAN_PAGE: number` — rows a driver should read per round-trip when a wildcard forces a scan (500). Bounds peak memory.
+
 ### `class MemoryAuditStore`
 
 In-memory implementation of `AuditStore` (freezes each entry; filters and reverses on query). Ideal for dev and tests; does not persist.
+
+### Redaction
+
+Payloads are scrubbed before they are persisted. `redactSensitive` masks values under secret-looking keys (`password`, `token`, `api_key`, `authorization`, …) as `'[redacted]'`; the opt-in `redactSensitiveAndPii` / `piiMinimizingRedactor` additionally replaces email/phone-shaped values with a stable `pii_<hash>` pseudonym.
+
+Both walk **6 levels deep**. Anything deeper is replaced with `'[truncated]'` — not passed through. Payloads are arbitrary and the default subscription is `events: ['**']`, so returning the raw subtree meant a secret nested seven levels down reached the trail in cleartext. If your payloads are deeply nested, flatten them before recording rather than relying on depth.
 
 ### `patternMatches(pattern: string, name: string): boolean`
 
@@ -224,6 +235,9 @@ The defaults only cover `auth/billing/tenancy/permission`. Pass `hooks: [...]` w
 
 **I lost the history after restarting.**
 `MemoryAuditStore` is volatile. In production, implement `AuditStore` over a database.
+
+**A deeply-nested field comes back as `'[truncated]'`.**
+The redactors stop at 6 levels and drop everything below, so a secret can never slip past the depth bound. Flatten the payload (or record the interesting fields explicitly) if you need that data in the trail.
 
 **Can I edit or delete an entry?**
 No — the contract is append-only and entries are frozen. This is a feature, not a limitation: it's what gives the trail evidentiary value.

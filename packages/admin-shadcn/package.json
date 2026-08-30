@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/admin-shadcn",
   "version": "1.0.1",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "shadcn/ui-styled React components for @basaltkit/admin: Button/Input/Table/Card/Badge primitives and styled DataTable/ResourceForm rendering the Zod-derived view models.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

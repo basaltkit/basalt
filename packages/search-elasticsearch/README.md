@@ -73,6 +73,11 @@ the searchable fields with `track_total_hits` for an exact total; filters become
 
 ## Notes
 
+- **Document ids are `<encodeURIComponent(tenantId)>:<encodeURIComponent(id)>`**,
+  built once and used identically by `index()`, `bulk()` and `remove()`. Encoding
+  the segments keeps tenant `a:b` + id `c` distinct from tenant `a` + id `b:c`
+  (which previously overwrote one tenant's document with another's). UUID/slug
+  ids are unaffected.
 - The **fetch client is injectable** (`options.fetch`) — the global `fetch` is
   used by default. No hard HTTP dependency.
 - Leave `refresh: false` in production and let the cluster's refresh interval

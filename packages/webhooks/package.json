@@ -1,9 +1,13 @@
 {
   "name": "@basaltkit/webhooks",
   "version": "1.4.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Outbound webhooks for Basalt: signed delivery with retries and backoff, per-tenant subscriptions, and automatic dispatch from domain events.",
   "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
