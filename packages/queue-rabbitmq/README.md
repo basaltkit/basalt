@@ -76,6 +76,21 @@ The attempt number travels in the message headers (`x-basalt-attempt`), so the w
 
 The driver declares these `capabilities`, so, combined with `onUnsupported`, a job that requests something unsupported **fails loudly** instead of being silently ignored.
 
+### Inspection: no `list()` / `queue:jobs`
+
+This driver deliberately does **not** implement the queue's optional
+`list(queue, options)` capability, so `basalt queue:jobs` reports it as
+unsupported instead of returning something misleading.
+
+AMQP has no non-destructive read. `basic.get` and a consumer both *deliver* the
+message to the caller, making it invisible to real workers until it is acked or
+nacked; nacking it back marks it `redelivered`, and the management API's
+`POST /api/queues/.../get` is documented as "not meant to be used as a normal
+way of consuming". Implementing `list()` on top of that would mean **inspecting
+a queue changes it** — a debugging command that can perturb production work is
+worse than no command. The gap is honest; use RabbitMQ's own management UI to
+browse, and `q.dead` to inspect exhausted jobs.
+
 ## API reference
 
 ### `new RabbitmqQueueDriver(options)`

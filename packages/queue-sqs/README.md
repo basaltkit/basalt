@@ -70,6 +70,20 @@ await SendWelcome.dispatch({ email: 'ada@acme.test' }, { delay: '2m' })
 
 A `delay` above **900s (15 min)** throws `SqsDelayTooLongError` instead of silently truncating it. And since the driver declares `priority: false`, a dispatch with priority is caught by `@basaltkit/queue`'s `onUnsupported` policy.
 
+### Inspection: no `list()` / `queue:jobs`
+
+This driver deliberately does **not** implement the queue's optional
+`list(queue, options)` capability, so `basalt queue:jobs` reports it as
+unsupported rather than faking it.
+
+`ReceiveMessage` is the only way to read an SQS message, and it is destructive
+in every way that matters: it starts the **visibility timeout** (hiding the
+message from real workers) and increments `ApproximateReceiveCount`, which is
+exactly what a redrive policy uses to move a message to the dead-letter queue.
+A "peek" implemented this way could push jobs to the DLQ *just for looking at
+them*. Use the SQS console's poll-for-messages view when you must inspect, and
+the `<queue>-dead` queue for exhausted jobs.
+
 ## How it works
 
 - The job is sent to the `emails` queue with attributes (`x-basalt-job`, `x-basalt-attempt`, `x-basalt-attempts`).

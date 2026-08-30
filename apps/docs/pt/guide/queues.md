@@ -320,11 +320,15 @@ não são jobs esquecidos.)
 
 ## Inspecionar uma queue — «o meu job chegou mesmo a correr?»
 
-A forma suportada é o CLI:
+Dois comandos suportados, que respondem a perguntas diferentes — **contagens** e
+**que jobs**:
 
 ```bash
 basalt queue:stats --queue orders
 # → { waiting, active, completed, failed, delayed }
+
+basalt queue:jobs --queue orders
+# → id / name / state / attempts / age, do mais recente para o mais antigo
 ```
 
 **Lê os números com o ciclo de vida em mente**, porque é aqui que a maior parte
@@ -348,15 +352,59 @@ alarme clássico: conclui-se «não correu nada» quando correu tudo.
 `failed` a subir → os jobs estão a esgotar as tentativas; liga o `onJobFailed`.
 :::
 
-### Ir por baixo do capô
+### Listar os jobs individuais
 
-Se inspecionares o backend diretamente (por exemplo o `Queue#getJobs` do BullMQ)
-em vez do CLI, há duas armadilhas:
+O `queue:stats` dá-te números; o `queue:jobs` dá-te os próprios jobs:
 
-1. **Pede os estados certos.** `getJobs(['waiting','active'])` devolve `[]` numa
-   queue saudável — inclui `'completed'` (e `'failed'`).
-2. **`job.data` é um envelope, não o teu payload.** O `dispatch` embrulha-o para
-   o contexto do pedido sobreviver ao salto:
+```bash
+basalt queue:jobs --queue orders --states failed --limit 10
+```
+
+```
+id    name             state   attempts  age  reason
+1041  order.reconcile  failed  3         2m   Timeout after 30000ms
+```
+
+| Flag | Por omissão | O que faz |
+|---|---|---|
+| `--queue` | `default` | Que queue inspecionar. |
+| `--states` | `completed,failed,waiting,active` | Separados por vírgula: `waiting`, `active`, `completed`, `failed`, `delayed`. Um estado desconhecido é rejeitado com a lista válida. |
+| `--limit` | `20` | Máximo de linhas no **total** (mais recentes primeiro), limitado a `1000`. |
+| `--payload` | desligado | Mostra também o payload de cada job. Desligado por omissão — vê o aviso abaixo. |
+
+**Porque é que `completed` e `failed` estão nos estados por omissão.** Pelo ciclo
+de vida acima, uma queue saudável tem `waiting: 0, active: 0`. Usar só esses por
+omissão mostraria «nenhum job» numa queue que está a funcionar na perfeição — o
+mesmo falso alarme de ler só esses contadores. O `delayed` fica deliberadamente
+**fora** do conjunto por omissão: é uma pergunta à parte, por isso pede-o
+(`--states delayed`).
+
+Em código, o mesmo através do manager no token `QUEUE`:
+
+```ts
+import { QUEUE } from '@basaltkit/queue'
+
+const jobs = await ctx().container.get(QUEUE).list('orders', {
+  states: ['failed'],
+  limit: 10,
+})
+
+if (!jobs) {
+  // O driver ativo não consegue listar — é um «não suportado» honesto, NÃO uma queue vazia.
+} else {
+  for (const job of jobs) {
+    console.log(job.id, job.name, job.state, job.attemptsMade, job.payload)
+  }
+}
+```
+
+Cada entrada é um `JobSummary` neutro em relação ao driver — `{ id, name, state,
+attemptsMade, timestamp, payload, context?, failedReason? }`. Faz duas coisas
+*por ti*:
+
+1. **O `payload` são os teus dados, já desembrulhados.** O `dispatch` embrulha o
+   que lhe passas num envelope para o contexto do pedido sobreviver ao salto até
+   ao worker:
 
    ```jsonc
    {
@@ -365,17 +413,52 @@ em vez do CLI, há duas armadilhas:
    }
    ```
 
-   Ou seja, os teus dados estão em `job.data.payload`, não em `job.data`.
+   O `list()` abre-o por ti: `job.payload` é o teu objeto e `job.context` é o
+   contexto capturado. (Se leres o broker diretamente ficas com o envelope cru,
+   ou seja, os teus dados estão em `job.data.payload`.)
+2. **É a mesma forma em qualquer driver.** Nenhum `Job` do BullMQ escapa, por
+   isso o código acima não parte quando trocas de broker.
 
 ::: warning Os payloads dos jobs são dados
-Um payload pode conter tudo o que despachaste — incluindo dados pessoais.
-Qualquer endpoint que construas para inspecionar uma queue tem de ser
-autenticado (`meta: { auth: true }`) e deve devolver contagens por omissão, com
-os payloads crus atrás de uma flag explícita. Aponta o cliente do backend para a
-**mesma** ligação que a tua app usa: um `new Queue('orders')` simples usa
-`localhost:6379` por omissão e, onde o Redis viva noutro sítio, lê uma queue
-diferente e reporta-a como vazia.
+Um payload pode conter tudo o que despachaste — incluindo dados pessoais. É por
+isso que o `basalt queue:jobs` **esconde os payloads a menos que passes
+`--payload`**, e que o resultado de `list()` deve ser tratado como os registos de
+onde veio: não faças log do resultado em bloco. Qualquer endpoint que construas
+por cima tem de ser autenticado (`meta: { auth: true }`) e autorizado por tenant,
+e deve devolver contagens por omissão, com os payloads crus atrás de uma flag
+explícita.
 :::
+
+### Que drivers conseguem fazer isto
+
+`stats()` / `retryFailed()` / `list()` são capacidades **opcionais** do driver. Um
+driver que não consegue uma delas omite-a, o manager devolve `undefined` e o CLI
+imprime «Not supported» — uma lacuna honesta em vez de um palpite.
+
+| Driver | Consegue listar jobs? | Porquê |
+|---|:---:|---|
+| `bullmq` | ✅ | O Redis guarda os jobs; lê-los não altera nada. |
+| `sync` | ❌ | Corre inline e não guarda nada. |
+| `rabbitmq` | ❌ | O AMQP não tem leitura não destrutiva — `basic.get`/consume escondem a mensagem dos workers reais e marcam-na como `redelivered`. |
+| `sqs` | ❌ | O `ReceiveMessage` arranca o visibility timeout e incrementa o `ApproximateReceiveCount`; espreitar podia empurrar jobs para a DLQ. |
+| `kafka` | ❌ | Ler é inofensivo, mas um log não tem estado por mensagem — qualquer `waiting`/`completed` seria inventado. |
+
+A regra que a framework segue: **olhar para uma queue nunca a pode alterar.** Um
+`list()` construído sobre uma leitura destrutiva seria um comando de depuração
+que perturba produção, por isso esses drivers omitem-no e remetem-te para as
+ferramentas próprias e para os destinos de dead-letter deles.
+
+### Ir por baixo do capô (e porque não devias precisar)
+
+Antes de existir o `queue:jobs`, a única forma de ver jobs individuais era o
+cliente do próprio broker — umas 20 linhas de ioredis + `new Queue()` +
+`getJobs()` + teardown. Funciona, e também acopla a tua app a um broker e
+entrega-te o envelope cru. Prefere o `list()`. Se mesmo assim fores direto ao
+backend, as duas armadilhas clássicas são pedir só `['waiting','active']` (vazio
+numa queue saudável) e esquecer que os teus dados estão em `job.data.payload`. E
+aponta o cliente para a **mesma** ligação que a tua app usa: um `new
+Queue('orders')` simples usa `localhost:6379` por omissão e, onde o Redis viva
+noutro sítio, lê uma queue diferente e reporta-a como vazia.
 
 ## Executar domain events na queue
 
