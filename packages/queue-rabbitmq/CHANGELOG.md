@@ -1,5 +1,12 @@
 # @basaltkit/queue-rabbitmq
 
+## 1.2.3
+
+### Patch Changes
+
+- Updated dependencies [ffd3565]
+  - @basaltkit/queue@2.0.0
+
 ## 1.2.2
 
 ### Patch Changes
