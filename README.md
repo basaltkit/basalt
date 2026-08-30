@@ -5,15 +5,22 @@
   </picture>
 </p>
 
-**The modular framework for SaaS on Node.js.** Batteries-included,
-self-hosted, no vendor lock-in — tenancy, auth, billing, permissions, queues,
-storage and audit, integrated end to end, with TypeScript inference from the
-route to the client.
+**The modular backend framework for Node.js — with the SaaS batteries included.**
+A DI container, a plugin lifecycle and a framework-neutral HTTP core, plus
+opt-in building blocks: auth, queues, storage, cache, search, realtime, audit —
+and, when you need them, tenancy, teams and billing. Self-hosted, no vendor
+lock-in, TypeScript inference from the route to the client.
 
-Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
+Runs on **Fastify, Express or Hono** (swap adapters without touching your
+routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.4 — the TypeScript-7 toolchain & hardening release. 82 packages, each versioned independently. 🎉** The public API is
-> stable and covered by [semantic versioning](https://basaltkit-docs.pages.dev/guide/versioning):
+> **Status: Basalt 1.6 — the release where the framework guarantees what it
+> promises. 84 packages, each versioned independently. 🎉** Three architecture
+> review cycles turned the project's promises into machine-enforced rules:
+> adapter neutrality, the dev-only AI boundary, "a generic package never
+> requires tenancy", DI lifetime safety and boot-time fail-loud for declared
+> guards are now **CI tripwires**, not conventions. The public API is stable and
+> covered by [semantic versioning](https://basaltkit-docs.pages.dev/guide/versioning):
 > breaking changes only in a new major, features in a minor, fixes in a patch.
 > In-memory stores are the dev default; every stateful domain has a durable
 > backend — auth, teams, subscriptions, permissions, comments, audit, activity
@@ -25,12 +32,19 @@ Built on Fastify, Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 ## Quick start
 
 ```bash
-npx create-basalt my-saas   # tenancy + auth by default
-cd my-saas && pnpm install && pnpm dev
+npx create-basalt my-app    # installs and git-inits by default (interactive)
+cd my-app && pnpm dev
 ```
 
-Flags: `--billing` (plans), `--ui` (React + shadcn frontend), `--cli` (the
-`basalt` generator entrypoint), `--install`, `--git`.
+| Flag | What it adds |
+|---|---|
+| `--billing` | subscription plans + billing routes |
+| `--ui` | React + shadcn frontend |
+| `--cli` | the `basalt` generator entrypoint |
+| `--mcp` | MCP server (expose routes as agent tools) + the dev-only AI bridge |
+| `--no-tenancy` / `--no-auth` | leave the SaaS/auth layers out — see [Beyond SaaS](https://basaltkit-docs.pages.dev/guide/beyond-saas) |
+| `--no-install` / `--no-git` | skip the defaults (they're off in CI/non-TTY anyway) |
+| `--yes` | accept every default, no prompts |
 
 ## Production-ready by default
 
@@ -48,7 +62,8 @@ through the plugin lifecycle. See the [Going to Production](https://github.com/b
 | Tracing | `tracingPlugin` — W3C trace-context, OTLP export (no OTel SDK) |
 | API docs | `openapiPlugin` — OpenAPI 3.0 from your Zod schemas |
 | Reliable delivery | `outboxPlugin` (at-least-once) + `webhooksPlugin` (signed) |
-| Quality gates | CI lint (ESLint), coverage thresholds, `pnpm audit`, CodeQL |
+| Quality gates | Coverage thresholds, `pnpm audit`, CodeQL, secret scanning ([lint is paused](https://basaltkit-docs.pages.dev/guide/versioning) until `typescript-eslint` supports TS 7) |
+| Architecture gates | CI tripwires: adapter neutrality, dev-only AI boundary, no-tenancy-in-generic-packages, DI lifetime safety, cross-adapter conformance |
 | Supply chain | Dependabot, npm provenance, independent per-package versioning |
 
 ## Packages
@@ -126,13 +141,16 @@ the `saas` keyword on npm.
 ```bash
 pnpm install
 pnpm build       # turbo, topological
-pnpm test        # 1000+ tests across 86 suites
+pnpm test        # 1837 tests across 244 files
 pnpm typecheck
 ```
 
-Monorepo layout: `packages/*` (publishable `@basaltkit/*`), `apps/*` (the
-`playground` reference app), `tooling/*` (shared config). Each `@basaltkit/*` package is versioned independently (changesets capture
-changelogs).
+Monorepo layout: `packages/*` (the publishable `@basaltkit/*`), `tooling/*`
+(shared config) and `apps/*` — `playground` (reference app), `docs` (the
+VitePress site), `beyond-saas` (the no-tenancy guarantee, exercised as a real
+app), `pg-integration` (tests against a real PostgreSQL), `bench` and
+`admin-demo`. Each `@basaltkit/*` package is versioned independently (changesets
+capture changelogs).
 
 ## License
 

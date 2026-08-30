@@ -22,17 +22,18 @@ Versioning works on two levels, on purpose:
   package is built and tested against the current `@basaltkit/core`. The exact,
   current version of every package is on the [Ecosystem](./ecosystem) page.
 - **The framework as a whole has one "Basalt release" version** — currently
-  **1.5** (the number in the nav). It's a human-friendly marker for a *generation*
+  **1.6** (the number in the nav). It's a human-friendly marker for a *generation*
   of the framework, used only for communication and these docs — `1.0` was the
   first stable release, and later generations layered on scaling, real-time,
   passwordless and AI/MCP, with **1.4** the TypeScript-7 toolchain and
-  security-hardening wave, and **1.5** the AI developer experience in your editor
-  over MCP (see [What's new](./whats-new)). It is **not** the
+  security-hardening wave, **1.5** the AI developer experience in your editor over MCP, and **1.6** the
+  release where the framework's promises became CI-enforced guarantees (see
+  [What's new](./whats-new)). It is **not** the
   version of any single package.
 
 ::: tip Which number do I depend on?
 Depend on the **package** versions — those are what npm installs and resolves.
-The **Basalt release** number (e.g. "Basalt 1.5") is just a friendly label for
+The **Basalt release** number (e.g. "Basalt 1.6") is just a friendly label for
 "which generation of the framework these docs describe."
 :::
 
