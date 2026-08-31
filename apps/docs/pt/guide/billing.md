@@ -143,6 +143,171 @@ cancelAtPeriodEnd?, canceledAt?, gatewayRef?, pendingPlan?, pendingPeriod? }`
 onde `status` é um de
 `active`, `trialing`, `past_due`, `canceled`, `incomplete`.
 
+## Duas portas para uma subscrição
+
+O `subscribe()` e o `checkout()` iniciam ambos uma subscrição e **não** se
+comportam da mesma maneira. Escolher o errado é a razão mais comum para uma
+subscrição "nunca funcionar, sem dizer porquê".
+
+| | `subscribe()` | `checkout()` |
+| --- | --- | --- |
+| Estado que deixa | `active`, ou `trialing` se o plano tiver trial | **`incomplete`** |
+| Quem confirma o pagamento | ninguém — decidiste tu, ou o plano é gratuito | a gateway, mais tarde, por webhook |
+| `subscribed()` logo a seguir | `true` | **`false`** |
+| Usa quando | concedes do lado do servidor, planos gratuitos, seeds, dev e testes | pagamentos self-service com cartão |
+
+### `subscribe()` — ativo no instante em que retorna
+
+```ts
+import { SUBSCRIPTIONS } from '@basaltkit/subscriptions'
+
+const subscriptions = app.container.get(SUBSCRIPTIONS)
+
+const record = await subscriptions.subscribe('acme', 'pro')
+record.status                                 // 'trialing' — o plano pro declara trial: '14d'
+await subscriptions.subscribed('acme')        // true — um trial válido conta como subscrito
+await subscriptions.subscribed('acme', 'pro') // true
+
+// Um plano sem trial fica logo em 'active'
+await subscriptions.subscribe('acme', 'scale')  // status: 'active'
+
+// Anual em vez do mensal por omissão
+await subscriptions.subscribe('acme', 'pro', { period: 'yearly' })
+
+// Um plano gratuito nunca toca na gateway
+await subscriptions.subscribe('acme', 'free')   // status: 'active', sem chamada à gateway
+```
+
+Os planos pagos continuam a chamar o `createSubscription` da gateway para obter
+um `gatewayRef` — mas o registo local é escrito como ativo de qualquer forma,
+porque és *tu* a afirmar que a subscrição existe.
+
+### `checkout()` — dois passos, e não termina quando retorna
+
+```ts
+const { url } = await subscriptions.checkout('acme', 'pro', {
+  successUrl: 'https://app.example.com/thank-you',
+  cancelUrl: 'https://app.example.com/pricing',
+})
+
+await subscriptions.get('acme')          // { status: 'incomplete', … }
+await subscriptions.subscribed('acme')   // false  ← ainda false, e bem
+```
+
+O fluxo só fecha quando a gateway responde:
+
+```
+checkout()  →  incomplete  →  [o cliente paga na gateway]
+                                        ↓
+                          POST /billing/webhook  (payment.succeeded)
+                                        ↓
+                                     active
+```
+
+::: danger Um URL não é uma subscrição
+O `checkout()` devolver um URL significa que foi criada uma página de pagamento
+— e mais nada. Enquanto não chegar um webhook `payment.succeeded`, o registo
+fica em `incomplete` e todos os guards `meta.subscribed` continuam a responder
+**402 `BILLING_SUBSCRIPTION_REQUIRED`**. Se estás a testar localmente e nunca
+acontece um pagamento real, esse webhook nunca chega sozinho — vê
+[Desenvolvimento local](#desenvolvimento-local-sem-gateway-real) abaixo.
+:::
+
+Aquele registo `incomplete` é deliberado, tal como o facto de um segundo
+checkout não sobrepor uma subscrição viva. Um checkout abandonado estaciona a
+intenção em `pendingPlan` / `pendingPeriod`; só um webhook com um `gatewayRef`
+**novo** a promove. Sem essa regra, iniciar um checkout para um plano barato e
+abandoná-lo podia despromover — ou, pior, escalar — uma subscrição existente na
+próxima renovação legitimamente assinada.
+
+### Que estados contam como subscrito
+
+```ts
+await subscriptions.subscribed('acme')  // true para 'active' e para um 'trialing' válido
+```
+
+| Estado | `subscribed()` | Como se chega aqui |
+| --- | :---: | --- |
+| `active` | ✅ | `subscribe()`, ou um webhook `payment.succeeded` |
+| `trialing` | ✅ (enquanto `trialEndsAt` for futuro) | `subscribe()` num plano com `trial` |
+| `incomplete` | ❌ | `checkout()`, à espera da gateway |
+| `past_due` | ❌ | um webhook `payment.failed` |
+| `canceled` | ❌ | `cancel({ atPeriodEnd: false })`, ou um webhook `subscription.canceled` |
+
+## Desenvolvimento local sem gateway real
+
+O `FakeBillingGateway` deixa toda a superfície funcionar sem conta na Stripe.
+Cria sessões de checkout e devolve URLs plausíveis — mas ninguém paga em
+`https://fake.test/checkout/…`, portanto **nunca é enviado nenhum webhook** e um
+`checkout()` nunca sai de `incomplete` por si.
+
+Duas formas de obter uma subscrição ativa localmente.
+
+### A via curta — `subscribe()`
+
+Ideal para testes, seeds e "só preciso deste tenant no plano pro":
+
+```ts
+// src/seed.ts, ou uma rota só de dev
+await app.container.get(SUBSCRIPTIONS).subscribe('demo', 'pro')
+```
+
+```ts
+// num teste
+const app = await buildApp({ logLevel: 'silent' }).boot()
+const subscriptions = app.container.get(SUBSCRIPTIONS)
+await subscriptions.subscribe('demo', 'pro')
+expect(await subscriptions.subscribed('demo', 'pro')).toBe(true)
+```
+
+### A via fiel — envia tu o webhook
+
+Exercita o mesmo caminho que a produção usa, que é o que queres quando o que
+estás mesmo a testar é o tratamento do webhook:
+
+```bash
+# 1. inicia o checkout (precisa de auth + tenant — ver abaixo)
+curl -X POST localhost:3000/billing/checkout \
+  -H 'content-type: application/json' \
+  -H 'x-tenant-id: demo' \
+  -H "authorization: Bearer $TOKEN" \
+  -d '{"plan":"pro"}'
+# → { "url": "https://fake.test/checkout/fake_cs_1" }   ... o estado é agora 'incomplete'
+
+# 2. faz de gateway: confirma o pagamento
+curl -X POST localhost:3000/billing/webhook \
+  -H 'content-type: application/json' \
+  -H 'x-billing-signature: valid' \
+  -d '{"id":"evt_1","type":"payment.succeeded","billableId":"demo","gatewayRef":"fake_sub_1"}'
+# → { "received": true, "duplicate": false }            ... o estado é agora 'active'
+```
+
+O `FakeBillingGateway.verifyWebhook` aceita qualquer corpo JSON cujo header de
+assinatura seja literalmente `valid`, e rejeita tudo o resto com
+`BILLING_WEBHOOK_INVALID`. Os ids de evento são deduplicados de forma durável,
+por isso repetir o `evt_1` devolve `{ duplicate: true }` e não muda nada — que é
+exatamente como as repetições de uma gateway real devem comportar-se.
+
+Os outros tipos de evento funcionam da mesma maneira:
+
+```bash
+# uma renovação falhada → past_due
+-d '{"id":"evt_2","type":"payment.failed","billableId":"demo"}'
+
+# o cliente cancelou na gateway → canceled
+-d '{"id":"evt_3","type":"subscription.canceled","billableId":"demo"}'
+```
+
+::: tip O billable é o tenant, não o utilizador
+O `billingRoutes` resolve o billable a partir de `context.tenant.id`. Um pedido
+sem tenant falha com 402 `BILLING_SUBSCRIPTION_REQUIRED` mesmo com o chamador
+perfeitamente autenticado — a mensagem é sobre o *tenant* não ter subscrição.
+Envia `x-tenant-id`, ou o que os resolvers do teu `tenancyPlugin` esperarem.
+
+As rotas de escrita também têm `auth: true` por omissão, portanto um
+`POST /billing/checkout` sem autenticação é 401 antes de se chegar a isto.
+:::
+
 ## Limites de funcionalidades e medição
 
 `features(billableId)` devolve a API de aplicação. Lê apenas estado local, por
@@ -505,8 +670,48 @@ subscriptionsPlugin({
 ### Prisma (`@basaltkit/subscriptions-prisma`)
 
 Para PostgreSQL, MySQL e afins. Traz um `PrismaClient` cujo schema inclua os
-modelos `Subscription`, `UsageCounter` e `WebhookEvent` (um
-`prisma/schema.prisma` acompanha o pacote).
+modelos `Subscription`, `UsageCounter` e `WebhookEvent`. Um
+`prisma/schema.prisma` acompanha o pacote — copia-o, em vez de o reescreveres:
+
+```prisma
+model Subscription {
+  billableId        String    @id
+  plan              String
+  period            String
+  status            String
+  trialEndsAt       DateTime?
+  cancelAtPeriodEnd Boolean?
+  canceledAt        DateTime?
+  gatewayRef        String?
+  // O plano que um checkout PRETENDIA, guardado até a gateway confirmar o
+  // pagamento. Escrito em TODAS as gravações — ver o aviso abaixo.
+  pendingPlan       String?
+  pendingPeriod     String?
+
+  @@map("subscriptions")
+}
+```
+
+::: danger Uma cópia desatualizada deste modelo parte todas as gravações
+O store escreve o registo completo em cada gravação, incluindo `pendingPlan` e
+`pendingPeriod`. Um schema copiado antes dessas colunas existirem — chegaram com
+o endurecimento da intenção de checkout — falha em **todas** as gravações de
+subscrição com:
+
+```
+Invalid `prisma.subscription.upsert()` invocation:
+  pendingPlan: null,
+  ~~~~~~~~~~~
+Unknown argument `pendingPlan`.
+```
+
+Nada consegue ficar ativo, por isso o sintoma visível é o *guard* a queixar-se —
+um 402 `BILLING_SUBSCRIPTION_REQUIRED` permanente — enquanto a falha real
+aconteceu antes, no Prisma. Se as subscrições nunca ativam, verifica este modelo
+primeiro.
+
+Acrescenta as duas colunas e corre `npx prisma db push` (ou gera uma migração).
+:::
 
 ```ts
 import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
@@ -822,6 +1027,15 @@ acrescenta OAuth2 (`clientId`, `clientSecret`, `tokenUrl`, `scope?`) e
 | `CouponNotFoundError` | `COUPON_NOT_FOUND` | 404 | Não existe cupão com esse código |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | arranque | `billingRoutes()`/`invoiceRoutes()` registados com o `auth: true` predefinido mas sem `authPlugin` |
 
+- **Uma subscrição que nunca fica ativa** — percorre esta lista, é quase sempre
+  uma de três coisas. (1) Chamaste `checkout()` e nenhum webhook o confirmou, por
+  isso o registo ainda está `incomplete` — vê
+  [Duas portas](#duas-portas-para-uma-subscricao). (2) O teu modelo `Subscription`
+  do Prisma não tem `pendingPlan` / `pendingPeriod`, por isso todas as gravações
+  rebentam e nada é guardado. (3) O pedido não traz tenant, e o guard está a
+  perguntar por um billable que não existe. Descobre qual lendo o registo
+  diretamente: `await subscriptions.get(tenantId)` — `null` significa que nunca
+  se escreveu nada, `incomplete` significa que falta o webhook.
 - **`400 BILLING_WEBHOOK_INVALID` que não desaparece** — a assinatura é calculada
   sobre os bytes intocados do pedido. Configura um parser de corpo raw para
   `/billing/webhook`; reserializar um objeto já processado muda os bytes e parte

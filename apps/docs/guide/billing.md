@@ -139,6 +139,172 @@ cancelAtPeriodEnd?, canceledAt?, gatewayRef?, pendingPlan?, pendingPeriod? }`
 where `status` is one of
 `active`, `trialing`, `past_due`, `canceled`, `incomplete`.
 
+## Two doors into a subscription
+
+`subscribe()` and `checkout()` both start a subscription and they do **not**
+behave the same way. Reaching for the wrong one is the most common reason a
+subscription "silently never works".
+
+| | `subscribe()` | `checkout()` |
+| --- | --- | --- |
+| Status it leaves behind | `active`, or `trialing` if the plan has a trial | **`incomplete`** |
+| Who confirms the payment | nobody — you decided, or the plan is free | the gateway, later, via webhook |
+| `subscribed()` immediately after | `true` | **`false`** |
+| Reach for it when | granting server-side, free plans, seeding, dev and tests | real self-service card payments |
+
+### `subscribe()` — active the moment it returns
+
+```ts
+import { SUBSCRIPTIONS } from '@basaltkit/subscriptions'
+
+const subscriptions = app.container.get(SUBSCRIPTIONS)
+
+const record = await subscriptions.subscribe('acme', 'pro')
+record.status                             // 'trialing' — the pro plan declares trial: '14d'
+await subscriptions.subscribed('acme')       // true — a valid trial counts as subscribed
+await subscriptions.subscribed('acme', 'pro') // true
+
+// A plan with no trial lands straight on 'active'
+await subscriptions.subscribe('acme', 'scale')  // status: 'active'
+
+// Yearly instead of the monthly default
+await subscriptions.subscribe('acme', 'pro', { period: 'yearly' })
+
+// A free plan never touches the gateway at all
+await subscriptions.subscribe('acme', 'free')   // status: 'active', no gateway call
+```
+
+Paid plans still call the gateway's `createSubscription` to get a
+`gatewayRef` — but the local record is written as active regardless, because
+*you* are asserting the subscription exists.
+
+### `checkout()` — two steps, and it is not finished when it returns
+
+```ts
+const { url } = await subscriptions.checkout('acme', 'pro', {
+  successUrl: 'https://app.example.com/thank-you',
+  cancelUrl: 'https://app.example.com/pricing',
+})
+
+await subscriptions.get('acme')          // { status: 'incomplete', … }
+await subscriptions.subscribed('acme')   // false  ← still false, and correctly so
+```
+
+The flow completes only when the gateway calls back:
+
+```
+checkout()  →  incomplete  →  [customer pays on the gateway]
+                                        ↓
+                          POST /billing/webhook  (payment.succeeded)
+                                        ↓
+                                     active
+```
+
+::: danger A URL is not a subscription
+`checkout()` returning a URL means a payment page was created — nothing more.
+Until a `payment.succeeded` webhook arrives, the record stays `incomplete` and
+every `meta.subscribed` guard keeps answering **402
+`BILLING_SUBSCRIPTION_REQUIRED`**. If you are testing locally and no real
+payment ever happens, that webhook never arrives on its own — see
+[Local development](#local-development-without-a-real-gateway) below.
+:::
+
+That `incomplete` record is deliberate, and so is the fact that a second
+checkout does not overwrite a live subscription. An abandoned checkout parks its
+intent in `pendingPlan` / `pendingPeriod`; only a webhook carrying a **new**
+`gatewayRef` promotes it. Without that rule, starting a checkout for a cheap
+plan and abandoning it could downgrade — or, worse, escalate — an existing
+subscription on the next legitimately-signed renewal.
+
+### Which status counts as subscribed
+
+```ts
+await subscriptions.subscribed('acme')  // true for 'active' and a valid 'trialing'
+```
+
+| Status | `subscribed()` | How you get here |
+| --- | :---: | --- |
+| `active` | ✅ | `subscribe()`, or a `payment.succeeded` webhook |
+| `trialing` | ✅ (while `trialEndsAt` is in the future) | `subscribe()` on a plan with `trial` |
+| `incomplete` | ❌ | `checkout()`, awaiting the gateway |
+| `past_due` | ❌ | a `payment.failed` webhook |
+| `canceled` | ❌ | `cancel({ atPeriodEnd: false })`, or a `subscription.canceled` webhook |
+
+## Local development without a real gateway
+
+`FakeBillingGateway` lets the whole surface run with no Stripe account. It
+creates checkout sessions and returns plausible URLs — but nobody ever pays at
+`https://fake.test/checkout/…`, so **no webhook is ever sent** and a
+`checkout()` never leaves `incomplete` on its own.
+
+Two ways to get an active subscription locally.
+
+### The short way — `subscribe()`
+
+Best for tests, seeds and "I just need this tenant on the pro plan":
+
+```ts
+// src/seed.ts, or a dev-only route
+await app.container.get(SUBSCRIPTIONS).subscribe('demo', 'pro')
+```
+
+```ts
+// in a test
+const app = await buildApp({ logLevel: 'silent' }).boot()
+const subscriptions = app.container.get(SUBSCRIPTIONS)
+await subscriptions.subscribe('demo', 'pro')
+expect(await subscriptions.subscribed('demo', 'pro')).toBe(true)
+```
+
+### The faithful way — post the webhook yourself
+
+Exercises the same code path production uses, which is what you want when the
+thing you are actually testing is the webhook handling:
+
+```bash
+# 1. start the checkout (needs auth + a tenant — see below)
+curl -X POST localhost:3000/billing/checkout \
+  -H 'content-type: application/json' \
+  -H 'x-tenant-id: demo' \
+  -H "authorization: Bearer $TOKEN" \
+  -d '{"plan":"pro"}'
+# → { "url": "https://fake.test/checkout/fake_cs_1" }   ... status is now 'incomplete'
+
+# 2. play the gateway: confirm the payment
+curl -X POST localhost:3000/billing/webhook \
+  -H 'content-type: application/json' \
+  -H 'x-billing-signature: valid' \
+  -d '{"id":"evt_1","type":"payment.succeeded","billableId":"demo","gatewayRef":"fake_sub_1"}'
+# → { "received": true, "duplicate": false }            ... status is now 'active'
+```
+
+`FakeBillingGateway.verifyWebhook` accepts any JSON body whose signature header
+is literally `valid`, and rejects everything else with
+`BILLING_WEBHOOK_INVALID`. The event ids are deduplicated durably, so replaying
+`evt_1` returns `{ duplicate: true }` and changes nothing — which is exactly how
+a real gateway's retries are meant to behave.
+
+The other event types work the same way:
+
+```bash
+# a failed renewal → past_due
+-d '{"id":"evt_2","type":"payment.failed","billableId":"demo"}'
+
+# the customer cancelled at the gateway → canceled
+-d '{"id":"evt_3","type":"subscription.canceled","billableId":"demo"}'
+```
+
+::: tip The billable is the tenant, not the user
+`billingRoutes` resolves the billable from `context.tenant.id`. A request with
+no tenant fails with 402 `BILLING_SUBSCRIPTION_REQUIRED` even when the caller is
+perfectly authenticated — the message is about the *tenant* having no
+subscription. Send `x-tenant-id`, or whatever your `tenancyPlugin` resolvers
+expect.
+
+The write routes also default to `auth: true`, so an unauthenticated
+`POST /billing/checkout` is a 401 before any of this is reached.
+:::
+
 ## Feature limits and metering
 
 `features(billableId)` returns the enforcement API. It reads local state only,
@@ -497,8 +663,48 @@ subscriptionsPlugin({
 ### Prisma (`@basaltkit/subscriptions-prisma`)
 
 For PostgreSQL, MySQL and friends. Bring a `PrismaClient` whose schema includes
-the `Subscription`, `UsageCounter` and `WebhookEvent` models (a
-`prisma/schema.prisma` ships with the package).
+the `Subscription`, `UsageCounter` and `WebhookEvent` models. A
+`prisma/schema.prisma` ships with the package — copy it rather than retyping it:
+
+```prisma
+model Subscription {
+  billableId        String    @id
+  plan              String
+  period            String
+  status            String
+  trialEndsAt       DateTime?
+  cancelAtPeriodEnd Boolean?
+  canceledAt        DateTime?
+  gatewayRef        String?
+  // The plan a checkout INTENDED, held until the gateway confirms payment.
+  // Written on EVERY save — see the warning below.
+  pendingPlan       String?
+  pendingPeriod     String?
+
+  @@map("subscriptions")
+}
+```
+
+::: danger A stale copy of this model breaks every write
+The store writes the full record on every save, `pendingPlan` and
+`pendingPeriod` included. A schema copied before those columns existed — they
+arrived with the checkout-intent hardening — fails on **every** subscription
+write with:
+
+```
+Invalid `prisma.subscription.upsert()` invocation:
+  pendingPlan: null,
+  ~~~~~~~~~~~
+Unknown argument `pendingPlan`.
+```
+
+Nothing can ever become active, so the visible symptom is the *guard*
+complaining — a permanent 402 `BILLING_SUBSCRIPTION_REQUIRED` — while the real
+failure happened earlier, in Prisma. If subscriptions never activate, check this
+model first.
+
+Add the two columns and `npx prisma db push` (or generate a migration).
+:::
 
 ```ts
 import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
@@ -809,6 +1015,15 @@ story is in [Reference & mobile-money payments](/guide/reference-payments).
 | `CouponNotFoundError` | `COUPON_NOT_FOUND` | 404 | No coupon with that code |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | `billingRoutes()`/`invoiceRoutes()` registered with their default `auth: true` but no `authPlugin` |
 
+- **A subscription that never becomes active** — work down this list, it is
+  almost always one of three things. (1) You called `checkout()` and no webhook
+  ever confirmed it, so the record is still `incomplete` — see
+  [Two doors](#two-doors-into-a-subscription). (2) Your Prisma `Subscription`
+  model is missing `pendingPlan` / `pendingPeriod`, so every write throws and
+  nothing is ever stored. (3) The request carries no tenant, so the guard is
+  asking about a billable that does not exist. Check which by reading the record
+  directly: `await subscriptions.get(tenantId)` — `null` means nothing was ever
+  written, `incomplete` means the webhook is missing.
 - **`400 BILLING_WEBHOOK_INVALID` that won't go away** — the signature is
   computed over the untouched request bytes. Configure a raw-body parser for
   `/billing/webhook`; re-serializing a parsed object changes the bytes and breaks
