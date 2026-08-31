@@ -88,6 +88,7 @@ export {
 export {
   reportHttpError,
   httpErrorReporter,
+  consoleSink,
   type HttpErrorReport,
   type HttpErrorReporter,
   type HttpLogSink,

@@ -30,22 +30,32 @@ It lives in `@basaltkit/http` (`reportHttpError`, `httpErrorReporter`,
 `HttpErrorReport`, `HttpErrorReporter`, `HttpLogSink`), so the three adapters
 cannot drift apart. Each adapter's suite asserts the same behaviour.
 
-### Untrusted fields are sanitised
+### Structured by design, not sanitised after the fact
 
-Method, URL and the error message all come from the request, and interpolating
-them into a log line raised two real issues that CodeQL caught on review:
+Method, URL and the error message all come from the request. Interpolating them
+into one string raised two real issues, both flagged by CodeQL:
 
-- **Format-string injection** (high). `console` and pino both treat the first
-  argument as a printf format string. A URL containing `%s` made the logger
-  consume the *next* argument — the error object, whose stack is the whole
-  reason a 5xx is logged — as a substitution.
+- **Format-string injection** (high). `console` and pino treat the first argument
+  as a printf format string. A URL containing `%s` made the logger consume the
+  *next* argument — the error object, whose stack is the whole reason a 5xx is
+  logged — as a substitution.
 - **Log forging** (medium). A newline in the URL ended the line and started
-  another, letting a request write a convincing fake entry attributed to some
-  other request.
+  another, letting a request write a convincing fake entry.
 
-Control characters are now replaced with spaces, `%` is doubled so the result
-can never act as a format specifier, and each field is capped so one enormous
-URL cannot flood the log. Ordinary URLs are untouched and stay readable.
+The sink is therefore called as `(fields, message)` — pino's own signature —
+with `message` always a literal and request data confined to `fields`. Both
+classes are removed rather than escaped: a value that never reaches the format
+position cannot be interpreted, and pino (JSON) and the console
+(`util.inspect`) both quote it when serialising.
+
+`consoleSink` is exported and adapts the console to that contract, flipping the
+argument order so the message still reads first in a terminal.
+
+An escaping-based version was tried first. It was correct and tested, but static
+analysis cannot recognise a custom sanitiser, so the alert never cleared. Passing
+the values as printf arguments was tried too, and is worse than it looks: pino
+**silently drops arguments beyond the placeholders**, so the stack would have
+been thrown away.
 
 ### Overriding it
 

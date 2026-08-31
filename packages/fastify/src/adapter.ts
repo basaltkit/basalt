@@ -6,6 +6,7 @@ import {
   runRoute,
   toErrorResponse,
   reportHttpError,
+  consoleSink,
   type HttpErrorReporter,
   type HttpLogSink,
   type HttpReply,
@@ -337,7 +338,7 @@ function report(
  */
 function sinkFor(request: FastifyRequest): HttpLogSink {
   const log = request.log as unknown as { level?: unknown }
-  return typeof log.level === 'string' ? (request.log as unknown as HttpLogSink) : console
+  return typeof log.level === 'string' ? (request.log as unknown as HttpLogSink) : consoleSink
 }
 
 function makeErrorHandler(onError?: HttpErrorReporter) {

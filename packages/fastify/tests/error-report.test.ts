@@ -114,10 +114,15 @@ describe('HTTP error reporting on Fastify', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       expect((await server.inject({ method: 'GET', url: '/boom' })).statusCode).toBe(500)
-      const record = lines.map((l) => JSON.parse(l)).find((r) => String(r.msg).includes('/boom'))
+      const record = lines.map((l) => JSON.parse(l)).find((r) => r.url === '/boom')
       expect(record, 'the report should reach pino').toBeDefined()
       expect(record.level).toBe(50) // pino's "error"
-      expect(record.msg).toContain('GET /boom → 500 INTERNAL_ERROR')
+      // Structured fields, not an interpolated sentence — this is why the sink
+      // contract is `(fields, message)`.
+      expect(record.msg).toBe('[basalt:http] request failed')
+      expect(record).toMatchObject({ method: 'GET', url: '/boom', status: 500, code: 'INTERNAL_ERROR' })
+      // pino's `err` serialiser renders the stack we logged the 5xx for.
+      expect(record.err.message).toBe('handler exploded')
       // and NOT duplicated to the console
       expect(spy).not.toHaveBeenCalled()
     } finally {
@@ -139,7 +144,9 @@ describe('HTTP error reporting on Fastify', () => {
     try {
       expect((await server.inject({ method: 'GET', url: '/boom' })).statusCode).toBe(500)
       expect(spy).toHaveBeenCalled()
-      expect(String(spy.mock.calls[0]![0])).toContain('GET /boom → 500')
+      // Message first for the console, detail after — the readable order.
+      expect(spy.mock.calls[0]![0]).toBe('[basalt:http] request failed')
+      expect(spy.mock.calls[0]![1]).toMatchObject({ method: 'GET', url: '/boom', status: 500 })
     } finally {
       spy.mockRestore()
       await app.shutdown()

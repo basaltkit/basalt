@@ -303,10 +303,17 @@ do `LogLevel` (o tipo `Level` do próprio Pino omite-o). Vê
 
 ## Erros HTTP — `onError` no adapter
 
-Um pedido que falha é reportado pelo adapter: **5xx com o objeto do erro** (a
-stack é o que interessa — é um bug) e **4xx como uma linha de aviso** (a stack de
-uma falha de validação é ruído; o código e a mensagem é que são informação).
-Ambos passam pela mesma política no Fastify, no Express e no Hono.
+Um pedido que falha é reportado pelo adapter: **5xx para `error` levando o objeto
+do erro** (a stack é o que interessa — é um bug) e **4xx para `warn` com o código
+e a razão** (a stack de uma falha de validação é ruído). Ambos passam pela mesma
+política no Fastify, no Express e no Hono.
+
+Os relatos são **estruturados**, nunca uma frase interpolada: o sink é chamado
+como `(fields, message)` — a assinatura do próprio pino — em que `message` é
+sempre um literal e os dados do pedido vivem em `fields`. Isto é uma propriedade
+de segurança tanto como de formatação: um `%s` ou uma quebra de linha num URL
+nunca chega a uma format string, portanto a injeção de format string e a forja de
+logs são **eliminadas** em vez de escapadas.
 
 ```ts
 fastifyPlugin({

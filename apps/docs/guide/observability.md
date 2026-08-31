@@ -292,10 +292,16 @@ for the env plumbing.
 
 ## HTTP errors — `onError` on the adapter
 
-A request that fails is reported by the adapter: **5xx with the error object**
-(the stack is the point — it is a bug) and **4xx as a single warning line** (a
-validation failure's stack is noise; its code and message are the information).
-Both go through the same policy on Fastify, Express and Hono.
+A request that fails is reported by the adapter: **5xx to `error` carrying the
+error object** (the stack is the point — it is a bug) and **4xx to `warn` with
+its code and reason** (a validation failure's stack is noise). Both go through
+the same policy on Fastify, Express and Hono.
+
+Reports are **structured**, never an interpolated sentence: the sink is called as
+`(fields, message)` — pino's own signature — where `message` is always a literal
+and the request data lives in `fields`. That is a security property as much as a
+formatting one: a `%s` or a newline in a URL can never reach a format string, so
+format-string injection and log forging are removed rather than escaped.
 
 ```ts
 fastifyPlugin({
