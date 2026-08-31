@@ -34,10 +34,23 @@ import { describe, expect, it } from 'vitest'
  *     forbidden client through a chain of *static* imports. A peer dependency
  *     that the barrel still pulls at module scope is a crash, not a saving:
  *     the manifest says "optional" while `import '@basaltkit/queue'` throws
- *     ERR_MODULE_NOT_FOUND. Driver modules themselves may import their client
- *     statically — they are only reached through `await import()` or a
- *     dedicated subpath entry (`@basaltkit/queue/bullmq`), never from the
- *     barrel. `import type` is erased at build and does not count.
+ *     ERR_MODULE_NOT_FOUND. `import type` is erased at build and does not
+ *     count.
+ *
+ *     CARVE-OUT — a client declared as a REQUIRED (non-optional) peer of the
+ *     package importing it may be imported statically. The harm this half
+ *     guards against is a *broken promise*: a manifest offering optionality
+ *     that the barrel then revokes at load time. A dedicated driver package
+ *     makes no such promise — `@basaltkit/queue-bullmq` exists only to bind
+ *     BullMQ, its consumer asked for exactly that, and failing at import when
+ *     a required peer is absent is ordinary npm behaviour rather than a
+ *     surprise. Without this carve-out the rule would force every driver
+ *     package's synchronous contract methods (`QueueDriver.startWorker` is
+ *     `void`, and `new Worker(...)` cannot be awaited inside it) into
+ *     fire-and-forget async — trading a real behavioural regression for a
+ *     purity that buys the consumer nothing. The satellites that predate this
+ *     rule (rabbitmq/sqs/kafka) still load their client lazily; both shapes
+ *     are legal, and neither is imposed.
  *
  * Modeled on `packages/http/tests/adapter-boundary.test.ts` (adapter
  * neutrality) and `apps/beyond-saas/tests/saas-boundary.test.ts` (SaaS
@@ -91,9 +104,15 @@ const BACKEND_CLIENTS = [
  * `drivers/`, with satellite packages alongside) whose default backend is a
  * hard dependency and is re-exported from the barrel. They are frozen here
  * rather than fixed in the same change because each is an independent breaking
- * change for its own package (optional peer + `pnpm add <client>` in the
- * upgrade note) and deserves its own release and docs pass. The remedy is
- * identical to the one applied to queue — see `packages/queue/src/index.ts`.
+ * change for its own package and deserves its own release and docs pass.
+ *
+ * The remedy queue settled on is EXTRACTION, not an optional peer: the default
+ * backend moves to its own satellite (`@basaltkit/queue-bullmq`) exporting both
+ * the driver and a one-line plugin, leaving the core a pure contract. The
+ * optional-peer step it took first (2.0.0) removed the forced install but left
+ * the driver's source, its lazy-load machinery and a missing-package error
+ * inside the core — complexity that existed only to work around the structure.
+ * Prefer extraction when fixing the three below; see `packages/queue-bullmq/`.
  */
 const ALLOWLIST = new Map<string, string>([
   [
@@ -122,7 +141,20 @@ export interface ManifestLike {
   dependencies?: Record<string, string>
   optionalDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   devDependencies?: Record<string, string>
+}
+
+/**
+ * Peers the package REQUIRES — the ones it may therefore import statically
+ * (see the carve-out in the header). An optional peer is excluded by
+ * definition: optionality is the promise this rule stops the barrel breaking.
+ */
+export function requiredPeersOf(manifest: ManifestLike): string[] {
+  const meta = manifest.peerDependenciesMeta ?? {}
+  return Object.keys(manifest.peerDependencies ?? {}).filter(
+    (name) => meta[name]?.optional !== true,
+  )
 }
 
 /** Pure checker for half 1, so a failure names the package, the field and the client. */
@@ -227,6 +259,7 @@ export function eagerClientImports(
   entry: string,
   forbidden: string[] = BACKEND_CLIENTS,
   allowlist: ReadonlyMap<string, string> = ALLOWLIST,
+  requiredPeers: readonly string[] = [],
 ): string[] {
   if (allowlist.has(packageName) || !existsSync(entry)) return []
   const out: string[] = []
@@ -235,7 +268,7 @@ export function eagerClientImports(
     if (seen.has(file)) return
     seen.add(file)
     for (const specifier of staticSpecifiersOf(readFileSync(file, 'utf8'))) {
-      if (forbidden.includes(specifier)) {
+      if (forbidden.includes(specifier) && !requiredPeers.includes(specifier)) {
         out.push(`${packageName} → ${[...chain, specifier].join(' → ')}`)
       } else if (specifier.startsWith('.')) {
         const next = resolveRelative(file, specifier)
@@ -273,22 +306,50 @@ describe('driver-agnostic boundary', () => {
     expect(forcedClientViolations(repoPackages().map(({ manifest }) => manifest))).toEqual([])
   })
 
-  it("no package's main entry statically reaches a concrete backend client", () => {
+  it("no package's main entry statically reaches a client it does not require", () => {
     const violations = repoPackages().flatMap(({ manifest, dir }) =>
-      eagerClientImports(manifest.name, path.join(dir, 'src', 'index.ts')),
+      eagerClientImports(
+        manifest.name,
+        path.join(dir, 'src', 'index.ts'),
+        BACKEND_CLIENTS,
+        ALLOWLIST,
+        requiredPeersOf(manifest),
+      ),
     )
     expect(violations).toEqual([])
   })
 
-  it('@basaltkit/queue declares bullmq as an OPTIONAL peer (the shape this rule wants)', () => {
-    const manifest = JSON.parse(
-      readFileSync(path.join(packagesDir, 'queue', 'package.json'), 'utf8'),
-    ) as ManifestLike & { peerDependenciesMeta?: Record<string, { optional?: boolean }> }
+  const manifestOf = (dir: string): ManifestLike =>
+    JSON.parse(readFileSync(path.join(packagesDir, dir, 'package.json'), 'utf8')) as ManifestLike
+
+  it('@basaltkit/queue knows nothing about bullmq, in any manifest field', () => {
+    // The core is the driver CONTRACT. After the extraction there is no field
+    // — not even devDependencies — in which its default backend may reappear;
+    // an optional peer would already be a regression to the previous shape.
+    const manifest = manifestOf('queue')
+    for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies'] as const) {
+      expect(manifest[field]?.['bullmq'], `bullmq must not be in ${field}`).toBeUndefined()
+    }
+  })
+
+  it('@basaltkit/queue-bullmq declares bullmq as a REQUIRED peer (the carve-out shape)', () => {
+    const manifest = manifestOf('queue-bullmq')
     expect(manifest.dependencies?.['bullmq']).toBeUndefined()
     expect(manifest.peerDependencies?.['bullmq']).toBeDefined()
-    expect(manifest.peerDependenciesMeta?.['bullmq']?.optional).toBe(true)
-    // devDependency kept so this package's own suite can exercise the driver.
+    // NOT optional: this package exists only to bind BullMQ, which is what
+    // licenses its barrel to import the client statically.
+    expect(manifest.peerDependenciesMeta?.['bullmq']?.optional).not.toBe(true)
     expect(manifest.devDependencies?.['bullmq']).toBeDefined()
+    // It depends on the core, never the reverse — the satellite direction.
+    expect(manifest.dependencies?.['@basaltkit/queue']).toBeDefined()
+  })
+
+  it('every queue driver package is a satellite of the core, never the reverse', () => {
+    const core = manifestOf('queue')
+    for (const satellite of ['queue-bullmq', 'queue-rabbitmq', 'queue-sqs', 'queue-kafka']) {
+      expect(manifestOf(satellite).dependencies?.['@basaltkit/queue']).toBeDefined()
+      expect(core.dependencies?.[`@basaltkit/${satellite}`]).toBeUndefined()
+    }
   })
 
   // Negative assertions: prove the checkers fire, so a green run above means
@@ -337,13 +398,29 @@ describe('driver-agnostic boundary', () => {
     expect(staticSpecifiersOf(`// import { Queue } from 'bullmq'`)).toEqual([])
   })
 
-  it('follows a relative chain from the entry (proof the graph walk works)', () => {
-    // queue's own driver module DOES import bullmq statically — legal, because
-    // the barrel only reaches it lazily. Point the walk straight at it to show
-    // the walker sees such an import when it is actually reachable.
-    const driverEntry = path.join(packagesDir, 'queue', 'src', 'drivers', 'bullmq.ts')
-    expect(eagerClientImports('@basaltkit/synthetic', driverEntry)).toEqual([
-      '@basaltkit/synthetic → bullmq.ts → bullmq',
+  it('sees the static import, and the carve-out is the ONLY thing that spares it', () => {
+    // queue-bullmq's barrel imports bullmq statically. Called with no required
+    // peers — the pre-carve-out behaviour — the walker still flags it, proving
+    // the graph walk works and that green below is earned, not vacuous.
+    const entry = path.join(packagesDir, 'queue-bullmq', 'src', 'index.ts')
+    expect(eagerClientImports('@basaltkit/synthetic', entry)).toEqual([
+      '@basaltkit/synthetic → index.ts → bullmq',
     ])
+    // Declaring it a REQUIRED peer, and only that, makes the same import legal.
+    expect(
+      eagerClientImports('@basaltkit/synthetic', entry, BACKEND_CLIENTS, ALLOWLIST, ['bullmq']),
+    ).toEqual([])
+  })
+
+  it('an OPTIONAL peer never earns the carve-out', () => {
+    expect(requiredPeersOf({ name: 'x', peerDependencies: { bullmq: '^6.0.0' } })).toEqual(['bullmq'])
+    expect(
+      requiredPeersOf({
+        name: 'x',
+        peerDependencies: { bullmq: '^6.0.0' },
+        peerDependenciesMeta: { bullmq: { optional: true } },
+      }),
+    ).toEqual([])
+    expect(requiredPeersOf({ name: 'x' })).toEqual([])
   })
 })

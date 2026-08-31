@@ -1,8 +1,17 @@
+// A STATIC import of the client is deliberate here, and is the one shape
+// `@basaltkit/queue` itself must never have. This package exists only to bind
+// BullMQ: `bullmq` is a REQUIRED peer, so a consumer who installed
+// `@basaltkit/queue-bullmq` asked for it by name. The alternative — a lazy
+// `await import()` like the rabbitmq/sqs/kafka satellites use — would force
+// `startWorker` (a `void` method on the driver contract, which cannot await)
+// into fire-and-forget async. See the carve-out in
+// `packages/queue/tests/driver-boundary.test.ts`, which enforces exactly this.
 import { Queue, Worker, type ConnectionOptions, type Job, type JobsOptions } from 'bullmq'
 import {
   DEFAULT_LIST_LIMIT,
   DEFAULT_LIST_STATES,
   MAX_LIST_LIMIT,
+  queuePlugin,
   readJobEnvelope,
   type AddJobOptions,
   type JobExecutor,
@@ -10,9 +19,10 @@ import {
   type JobSummary,
   type ListJobsOptions,
   type QueueDriver,
+  type QueuePluginOptions,
   type QueueStats,
   type RetentionOption,
-} from '../driver.js'
+} from '@basaltkit/queue'
 
 type KeepJobs = { age?: number; count?: number }
 
@@ -205,4 +215,49 @@ function parseRedisUrl(url: string): ConnectionOptions {
     // required by BullMQ for workers
     maxRetriesPerRequest: null,
   }
+}
+
+/**
+ * Everything {@link queuePlugin} accepts, minus `driver` (this plugin IS the
+ * driver choice), plus the BullMQ connection and its crash-safety hooks.
+ */
+export interface BullmqQueuePluginOptions
+  extends Omit<QueuePluginOptions, 'driver'>,
+    BullmqDriverOptions {}
+
+/**
+ * The BullMQ-backed queue plugin — jobs on Redis in one line:
+ *
+ * ```ts
+ * bullmqQueuePlugin({
+ *   connection: process.env.REDIS_URL!,
+ *   jobs: [SendWelcome],
+ *   workers: [{ queue: 'welcome', concurrency: 5 }],
+ * })
+ * ```
+ *
+ * Each backend ships its own plugin of this shape (`rabbitmqQueuePlugin`,
+ * `sqsQueuePlugin`, `kafkaQueuePlugin`), so no backend is privileged in the
+ * core's API and `@basaltkit/queue` stays a pure contract. Use
+ * `queuePlugin({ driver })` directly for a driver you wrote yourself.
+ *
+ * The driver is built here, when the app is DEFINED, which is safe because the
+ * constructor performs no I/O: it parses the connection string and stores the
+ * handlers, while the underlying `Queue`/`Worker` objects — and therefore every
+ * Redis socket — are created lazily on first use. The one visible consequence
+ * is welcome: a malformed connection string throws at definition time instead
+ * of at the first dispatch.
+ */
+export function bullmqQueuePlugin(options: BullmqQueuePluginOptions) {
+  // Split by the CORE's keys, not the driver's: a new driver option then flows
+  // through untouched, and only a change to QueuePluginOptions needs an edit here.
+  const { jobs, workers, onUnsupported, removeOnComplete, removeOnFail, ...driver } = options
+  return queuePlugin({
+    ...(jobs !== undefined ? { jobs } : {}),
+    ...(workers !== undefined ? { workers } : {}),
+    ...(onUnsupported !== undefined ? { onUnsupported } : {}),
+    ...(removeOnComplete !== undefined ? { removeOnComplete } : {}),
+    ...(removeOnFail !== undefined ? { removeOnFail } : {}),
+    driver: new BullmqQueueDriver(driver),
+  })
 }

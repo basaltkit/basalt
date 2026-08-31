@@ -4,10 +4,12 @@ import { vi } from 'vitest'
 
 /**
  * The BullMQ driver's crash-safety hooks (`onError`/`onJobFailed`, queue 1.3.0)
- * were only reachable by hand-building the driver: `queuePlugin({ connection })`
- * constructed `new BullmqQueueDriver({ connection })` and dropped everything
- * else, and `QueuePluginOptions` did not even accept the callbacks. On the
- * documented shorthand path the observability work was therefore dead code.
+ * must survive the one-line plugin path. They were once dead code there: the
+ * old `queuePlugin({ connection })` shorthand built the driver itself and
+ * dropped the callbacks, which `QueuePluginOptions` did not even accept. The
+ * plugin now lives in this package, beside the driver it configures, so the
+ * two cannot drift apart again — but the hooks still reach it through a
+ * wrapper, and a wrapper is exactly where options get silently forgotten.
  */
 
 class FakeWorker extends EventEmitter {
@@ -36,19 +38,20 @@ class FakeQueue extends EventEmitter {
 vi.mock('bullmq', () => ({ Worker: FakeWorker, Queue: FakeQueue }))
 
 const { createApp } = await import('@basaltkit/core')
-const { QUEUE, queuePlugin } = await import('../src/index.js')
+const { QUEUE } = await import('@basaltkit/queue')
+const { bullmqQueuePlugin } = await import('../src/index.js')
 
 beforeEach(() => {
   FakeWorker.instances = []
   FakeQueue.instances = []
 })
 
-describe('queuePlugin({ connection }) forwards the driver observability hooks', () => {
+describe('bullmqQueuePlugin forwards the driver observability hooks', () => {
   it("routes a worker 'error' to the plugin-level onError", async () => {
     const errors: { error: unknown; info: { queue: string; source: string } }[] = []
     const app = await createApp({
       plugins: [
-        queuePlugin({
+        bullmqQueuePlugin({
           connection: 'redis://localhost:6379',
           workers: [{ queue: 'emails' }],
           onError: (error, info) => void errors.push({ error, info }),
@@ -70,7 +73,7 @@ describe('queuePlugin({ connection }) forwards the driver observability hooks', 
     const dead: { queue: string; job: string; jobId?: string }[] = []
     const app = await createApp({
       plugins: [
-        queuePlugin({
+        bullmqQueuePlugin({
           connection: 'redis://localhost:6379',
           workers: [{ queue: 'emails' }],
           onJobFailed: (info) => void dead.push(info),
@@ -88,7 +91,7 @@ describe('queuePlugin({ connection }) forwards the driver observability hooks', 
     const errors: { info: { source: string } }[] = []
     const app = await createApp({
       plugins: [
-        queuePlugin({
+        bullmqQueuePlugin({
           connection: 'redis://localhost:6379',
           onError: (error, info) => void errors.push({ info }),
         }),

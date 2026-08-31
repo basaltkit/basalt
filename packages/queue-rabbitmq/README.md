@@ -24,12 +24,12 @@ pnpm add @basaltkit/queue-rabbitmq amqplib
 
 ## Get started in 5 minutes
 
-Define jobs as always (with `@basaltkit/queue`) and pass the driver to `queuePlugin`:
+Define jobs as always (with `@basaltkit/queue`) and register this package's plugin:
 
 ```ts
 import { createApp } from '@basaltkit/core'
-import { queuePlugin, defineJob } from '@basaltkit/queue'
-import { RabbitmqQueueDriver } from '@basaltkit/queue-rabbitmq'
+import { defineJob } from '@basaltkit/queue'
+import { rabbitmqQueuePlugin } from '@basaltkit/queue-rabbitmq'
 
 const SendWelcome = defineJob<{ email: string }>({
   name: 'send-welcome',
@@ -43,8 +43,8 @@ const SendWelcome = defineJob<{ email: string }>({
 
 const app = await createApp({
   plugins: [
-    queuePlugin({
-      driver: new RabbitmqQueueDriver({ url: process.env.AMQP_URL! }),
+    rabbitmqQueuePlugin({
+      url: process.env.AMQP_URL!,
       jobs: [SendWelcome],
       workers: [{ queue: 'emails', concurrency: 10 }],
       onUnsupported: 'throw', // optional: fail if a job requests something the driver can't do
@@ -164,6 +164,24 @@ resolving does.
 On a plain (non-confirm) channel `waitForConfirms` is absent and simply skipped: publishes are
 fire-and-forget and the ack-before-confirm window reopens. Use a client that supports
 `createConfirmChannel` — amqplib does.
+
+### The plugin, and the driver underneath it
+
+`rabbitmqQueuePlugin` is the one-line path: it builds the driver and hands it to
+`queuePlugin` from `@basaltkit/queue`, so it accepts every core option
+(`jobs`, `workers`, `onUnsupported`, `removeOnComplete`, `removeOnFail`)
+alongside the driver options documented above. Every backend ships a plugin of
+this shape, so no backend is privileged in the core's API.
+
+`RabbitmqQueueDriver` stays exported for the rarer cases — sharing one driver
+between plugins, wrapping it, or testing it directly:
+
+```ts
+import { queuePlugin } from '@basaltkit/queue'
+import { RabbitmqQueueDriver } from '@basaltkit/queue-rabbitmq'
+
+queuePlugin({ driver: new RabbitmqQueueDriver({ /* … */ }), jobs, workers })
+```
 
 ## How it connects to other modules
 
