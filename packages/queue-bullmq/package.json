@@ -1,0 +1,57 @@
+{
+  "name": "@basaltkit/queue-bullmq",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "BullMQ/Redis driver and plugin for @basaltkit/queue: background jobs with retries, backoff, delayed delivery, priority and non-destructive job inspection.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/queue": "workspace:^"
+  },
+  "peerDependencies": {
+    "bullmq": "^6.2.1"
+  },
+  "devDependencies": {
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.3.0",
+    "bullmq": "^6.2.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/queue-bullmq"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/queue-bullmq#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "queue",
+    "jobs",
+    "bullmq",
+    "redis"
+  ]
+}

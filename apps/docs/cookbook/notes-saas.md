@@ -494,13 +494,14 @@ const dashboard = await cache.remember('admin:dashboard', '30s', () => this.buil
 the request, via a BullMQ (Redis) queue:
 
 ```ts
-import { queuePlugin, defineJob, QUEUE } from '@basaltkit/queue'
+import { defineJob, QUEUE } from '@basaltkit/queue'
+import { bullmqQueuePlugin } from '@basaltkit/queue-bullmq'
 
 const SendWelcome = defineJob('welcome', z.object({ email: z.string() }), async ({ email }) => {
   await mailer.send({ to: email, subject: 'Welcome!' })
 })
 
-queuePlugin({ connection: env.REDIS_URL, jobs: [SendWelcome], workers: [{ queue: 'welcome', concurrency: 5 }] })
+bullmqQueuePlugin({ connection: env.REDIS_URL, jobs: [SendWelcome], workers: [{ queue: 'welcome', concurrency: 5 }] })
 
 // dispatch from a domain-event listener (in your plugin's boot):
 bus.on('note.created', () => void container.get(QUEUE).dispatch(SendWelcome, { email }))

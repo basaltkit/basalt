@@ -34,7 +34,7 @@ class FakeQueue extends EventEmitter {
 
 vi.mock('bullmq', () => ({ Worker: FakeWorker, Queue: FakeQueue }))
 
-const { BullmqQueueDriver } = await import('../src/drivers/bullmq.js')
+const { BullmqQueueDriver } = await import('../src/index.js')
 
 beforeEach(() => {
   FakeWorker.instances = []
@@ -90,5 +90,23 @@ describe('BullMQ driver crash-safety and failure visibility', () => {
     expect(spy).toHaveBeenCalledTimes(2)
     expect(String(spy.mock.calls[0])).toContain('[basalt:queue]')
     spy.mockRestore()
+  })
+})
+
+describe('BullMQ driver capabilities', () => {
+  // Moved here from the core's queue.test.ts when the driver was extracted:
+  // @basaltkit/queue no longer knows any concrete backend, so each driver
+  // package asserts the contract it claims to honour.
+  it('declares the full set — BullMQ supports every optional capability', () => {
+    expect(new BullmqQueueDriver({ connection: 'redis://localhost:6379' }).capabilities).toEqual({
+      delayed: true,
+      priority: true,
+      retries: true,
+      backoff: true,
+    })
+  })
+
+  it('identifies itself as "bullmq" for diagnostics', () => {
+    expect(new BullmqQueueDriver({ connection: 'redis://localhost:6379' }).name).toBe('bullmq')
   })
 })

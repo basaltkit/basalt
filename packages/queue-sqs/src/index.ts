@@ -4,6 +4,7 @@ import type {
   JobExecutor,
   QueueDriver,
 } from '@basaltkit/queue'
+import { queuePlugin, type QueuePluginOptions } from '@basaltkit/queue'
 
 /** SQS caps per-message delay at 15 minutes. */
 export const SQS_MAX_DELAY_SECONDS = 900
@@ -292,4 +293,40 @@ const defaultApi = async (options: SqsDriverOptions): Promise<SqsApi> => {
       await client.send(new sdk.DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: receiptHandle }))
     },
   }
+}
+
+/**
+ * Everything {@link queuePlugin} accepts, minus `driver` (this plugin IS the
+ * driver choice), plus every SQS driver option.
+ */
+export interface SqsQueuePluginOptions
+  extends Omit<QueuePluginOptions, 'driver'>,
+    SqsDriverOptions {}
+
+/**
+ * The SQS-backed queue plugin — one line to put an app's jobs on SQS:
+ *
+ * ```ts
+ * sqsQueuePlugin({ queueUrlFor: (q) => `${process.env.SQS_PREFIX}${q}`, jobs: [SendWelcome], workers: [{ queue: 'welcome' }] })
+ * ```
+ *
+ * Every backend ships a plugin of this shape (`bullmqQueuePlugin`, `rabbitmqQueuePlugin`, `kafkaQueuePlugin`), so no backend is
+ * privileged in the core's API and `@basaltkit/queue` stays a pure contract.
+ * Use `queuePlugin({ driver })` directly for a driver you wrote yourself.
+ *
+ * Building the driver here, when the app is DEFINED, is safe: the constructor
+ * only reads defaults, and every connection is opened lazily on first use.
+ */
+export function sqsQueuePlugin(options: SqsQueuePluginOptions) {
+  // Split by the CORE's keys, not the driver's: a new driver option then flows
+  // through untouched, and only a change to QueuePluginOptions needs an edit here.
+  const { jobs, workers, onUnsupported, removeOnComplete, removeOnFail, ...driver } = options
+  return queuePlugin({
+    ...(jobs !== undefined ? { jobs } : {}),
+    ...(workers !== undefined ? { workers } : {}),
+    ...(onUnsupported !== undefined ? { onUnsupported } : {}),
+    ...(removeOnComplete !== undefined ? { removeOnComplete } : {}),
+    ...(removeOnFail !== undefined ? { removeOnFail } : {}),
+    driver: new SqsQueueDriver(driver),
+  })
 }

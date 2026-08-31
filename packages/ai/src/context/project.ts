@@ -118,7 +118,14 @@ const PLUGIN_TO_CAPABILITY: Record<string, keyof DetectedStack> = {
   subscriptionsPlugin: 'subscriptions',
   paymentsPlugin: 'payments',
   storagePlugin: 'storage',
+  // Every queue backend ships its own plugin wrapping `queuePlugin`, and an app
+  // that picked one never names the core factory. Detecting only `queuePlugin`
+  // would report "no queue" for the most common setups.
   queuePlugin: 'queue',
+  bullmqQueuePlugin: 'queue',
+  rabbitmqQueuePlugin: 'queue',
+  sqsQueuePlugin: 'queue',
+  kafkaQueuePlugin: 'queue',
   searchPlugin: 'search',
   auditPlugin: 'audit',
   eventsPlugin: 'events',

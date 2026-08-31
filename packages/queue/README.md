@@ -27,13 +27,23 @@ This module gives you three things you'd normally have to build by hand:
 ```bash
 pnpm add @basaltkit/queue
 
-# only if you use the BullMQ/Redis driver (`connection` or `BullmqQueueDriver`):
-pnpm add bullmq
+# plus the backend you run in production — BullMQ/Redis here:
+pnpm add @basaltkit/queue-bullmq bullmq
 ```
 
-The package depends on `@basaltkit/core` and `@basaltkit/events` (installed automatically). For development and tests you need nothing else — the sync driver has no dependencies.
+The package depends on `@basaltkit/core` and `@basaltkit/events` (installed automatically). For development and tests you need nothing else — the sync driver ships here and has no dependencies.
 
-`bullmq` is an **optional peer dependency**, not a dependency: `@basaltkit/queue` is the driver-agnostic core, so an application running on [RabbitMQ](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq), [SQS](https://www.npmjs.com/package/@basaltkit/queue-sqs), [Kafka](https://www.npmjs.com/package/@basaltkit/queue-kafka) or the sync driver never installs (or loads) BullMQ and its ioredis transitive weight. Install `bullmq` yourself the moment you pass `connection` or construct `BullmqQueueDriver`; forget it and boot fails with a `MissingQueueDriverPackageError` telling you exactly that. For production with BullMQ you also need an accessible **Redis** server (it stores the queues there).
+**This package contains no broker client, and no backend is privileged in its API.** Each backend is a separate package that carries its driver *and* a one-line plugin, and declares its client as a peer dependency you install yourself:
+
+| Backend | Package | Plugin | Client |
+| --- | --- | --- | --- |
+| BullMQ (Redis) | [`@basaltkit/queue-bullmq`](https://www.npmjs.com/package/@basaltkit/queue-bullmq) | `bullmqQueuePlugin` | `bullmq` |
+| RabbitMQ | [`@basaltkit/queue-rabbitmq`](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq) | `rabbitmqQueuePlugin` | `amqplib` |
+| Amazon SQS | [`@basaltkit/queue-sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs) | `sqsQueuePlugin` | `@aws-sdk/client-sqs` |
+| Kafka | [`@basaltkit/queue-kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) | `kafkaQueuePlugin` | `kafkajs` |
+| Sync (dev/tests) | `@basaltkit/queue` | `queuePlugin` | — nothing |
+
+So an app on SQS never installs (or loads) BullMQ and its ioredis transitive weight. For production with BullMQ you also need an accessible **Redis** server (it stores the queues there).
 
 ## Get started in 5 minutes
 
@@ -80,15 +90,19 @@ const app = await createApp({
 await SendWelcomeEmail.dispatch({ userId: 'u-123' })
 ```
 
-Done. In dev, `handle` runs immediately. When you want real production behavior, add the Redis connection and the workers:
+Done. In dev, `handle` runs immediately. When you want real production behavior, swap `queuePlugin` for your backend's plugin and declare the workers:
 
 ```ts
-queuePlugin({
+import { bullmqQueuePlugin } from '@basaltkit/queue-bullmq'
+
+bullmqQueuePlugin({
   jobs: [SendWelcomeEmail],
-  connection: 'redis://localhost:6379',        // activates the BullMQ driver
+  connection: 'redis://localhost:6379',
   workers: [{ queue: 'default', concurrency: 5 }], // this process processes the queue
 })
 ```
+
+Only that import changes between backends — the job code never does.
 
 ## Usage guide
 
@@ -183,10 +197,10 @@ One process can only **produce** (call `dispatch`) and another only **consume** 
 
 ```ts
 // API process (produces only)
-queuePlugin({ jobs: [SendWelcomeEmail, GenerateInvoice], connection: process.env.REDIS_URL! })
+bullmqQueuePlugin({ jobs: [SendWelcomeEmail, GenerateInvoice], connection: process.env.REDIS_URL! })
 
 // worker process (consumes)
-queuePlugin({
+bullmqQueuePlugin({
   jobs: [SendWelcomeEmail, GenerateInvoice],
   connection: process.env.REDIS_URL!,
   workers: [
@@ -294,19 +308,16 @@ Basalt plugin that registers a `QueueManager` in the container under the `QUEUE`
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `jobs` | `JobDefinition[]` | No | `[]` | Jobs known to this process (producer and/or worker). |
-| `connection` | `string \| ConnectionOptions` | No | — | Redis URL (`redis://…` or `rediss://…`) or ioredis options. With a value → BullMQ driver; without one → sync driver. |
-| `driver` | `QueueDriver` | No | — | Custom driver — takes precedence over `connection`. |
+| `driver` | `QueueDriver` | No | sync driver | The backend. Omit it and jobs run inline on the sync driver (right for dev/tests, wrong for production). You rarely set this by hand — your backend's plugin (`bullmqQueuePlugin` and friends) does it for you. |
 | `workers` | `{ queue: string; concurrency?: number }[]` | No | `[]` | Queues whose workers start in this process on boot. |
 | `onUnsupported` | `'throw' \| 'warn' \| 'ignore'` | No | `'warn'` | What happens when a dispatch uses an option the active driver cannot honour (a delay on Kafka, a priority on SQS). `'warn'` logs once per job+feature and proceeds; `'throw'` raises `UnsupportedJobOptionError` — set it in production when the option is load-bearing; `'ignore'` is silent. |
-| `removeOnComplete` | `JobRetention` | No | driver default (BullMQ keeps the last `1000`) | Default Redis retention for completed jobs. A job's own `removeOnComplete` wins. |
+| `removeOnComplete` | `JobRetention` | No | driver default (BullMQ keeps the last `1000`) | Default retention for completed jobs, on backends that keep them. A job's own `removeOnComplete` wins. |
 | `removeOnFail` | `JobRetention` | No | driver default (BullMQ `false` — keep all) | Default retention for failed jobs. Keeping all is deliberate (inspection and `queue:retry`); set e.g. `{ age: '14d' }` so failures don't grow unbounded. |
-| `onError` | `(error, { queue, source }) => void` | No | `console.error` with context | Infra faults from the driver's broker client (Redis down). Forwarded to the driver built from `connection`; ignored when you pass your own `driver`. |
-| `onJobFailed` | `({ queue, job, jobId?, error }) => void` | No | `console.error` with context | A job exhausted its retries. Forwarded to the driver built from `connection`; ignored when you pass your own `driver`. |
 
-**Failure callbacks work on the shorthand path.** `queuePlugin({ connection, onError,
-onJobFailed })` forwards both to the BullMQ driver it builds. They are ignored when you
-supply your own `driver` — that driver owns its own callbacks, so configure them there.
-See [Failure hooks](#failure-hooks) below.
+**Connection options live on your backend's plugin, not here.** Each driver package exports a
+plugin that takes these same keys *plus* its own connection settings and failure hooks —
+`bullmqQueuePlugin({ connection, onError, onJobFailed, jobs, workers })`. That keeps this core
+free of any one backend's vocabulary. See [Failure hooks](#failure-hooks) below.
 
 ```ts
 import { QUEUE } from '@basaltkit/queue'
@@ -404,7 +415,7 @@ Creates the event→job bridge. Returns the subscription cancel function.
 ### Drivers
 
 - **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry). Public property `executed: { queue, jobName, attempts }[]` with the execution history (capped at 1000 entries). For testing and dev without Redis.
-- **`class BullmqQueueDriver`** — production over Redis; see the options table below. Imported from its own entry point, `@basaltkit/queue/bullmq` (one import path per backend, like the RabbitMQ/SQS/Kafka driver packages), and requires the optional `bullmq` peer.
+- **`class BullmqQueueDriver`** — production over Redis; see the options table below. Lives in its own package, [`@basaltkit/queue-bullmq`](https://www.npmjs.com/package/@basaltkit/queue-bullmq), alongside `bullmqQueuePlugin`, exactly like the RabbitMQ/SQS/Kafka driver packages.
 - **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, optional `stats(queue)` / `retryFailed(queue, { limit? })` / `list(queue, options)`, `close()`, plus the optional `name` and `capabilities` fields. Helper types: `AddJobOptions`, `JobExecutor`, `QueueStats`, `DriverCapabilities`, `JobState`, `JobSummary`, `JobEnvelope`, `ListJobsOptions`.
 
   The three optional methods are a deliberate pattern: a driver **omits** what its
@@ -423,7 +434,7 @@ Creates the event→job bridge. Returns the subscription cancel function.
 #### `new BullmqQueueDriver(options: BullmqDriverOptions)`
 
 ```ts
-import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'   // needs `pnpm add bullmq`
+import { BullmqQueueDriver } from '@basaltkit/queue-bullmq'
 ```
 
 (The `BullmqDriverOptions` **type** is also re-exported from `@basaltkit/queue` — types are erased at build, so they cost nothing.)
@@ -468,13 +479,12 @@ one of them has a **non-silent default**, so nothing disappears if you configure
 Only the BullMQ driver has `onJobFailed`; the broker drivers route an exhausted job to their own
 dead-letter destination (`q.dead`, `<topic>.dead`, `<queue>-dead`) instead.
 
-Override the BullMQ callbacks right on the plugin — `queuePlugin({ connection })` forwards
-them to the driver it builds:
+Set the BullMQ callbacks right on its plugin, beside `jobs` and `workers`:
 
 ```ts
-import { queuePlugin } from '@basaltkit/queue'
+import { bullmqQueuePlugin } from '@basaltkit/queue-bullmq'
 
-queuePlugin({
+bullmqQueuePlugin({
   connection: process.env.REDIS_URL!,
   jobs: [SendWelcomeEmail],
   workers: [{ queue: 'default', concurrency: 5 }],
@@ -484,12 +494,12 @@ queuePlugin({
 })
 ```
 
-Passing your own `driver` bypasses that forwarding — a supplied driver owns its callbacks,
-so set them in its constructor:
+Building the driver yourself works too — it then owns its callbacks, so set them in its
+constructor:
 
 ```ts
 import { queuePlugin } from '@basaltkit/queue'
-import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'
+import { BullmqQueueDriver } from '@basaltkit/queue-bullmq'
 
 queuePlugin({
   jobs: [SendWelcomeEmail],
@@ -508,7 +518,6 @@ queuePlugin({
 | `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `job.dispatch()` was called before the job was registered in a `QueueManager`. |
 | `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | A job reached the worker but is not registered in that process — producer and worker registered different job lists. |
 | `UnsupportedJobOptionError` | `QUEUE_UNSUPPORTED_OPTION` | With `onUnsupported: 'throw'`, a dispatch used an option the active driver's `capabilities` do not include. `status = 500`. |
-| `MissingQueueDriverPackageError` | `QUEUE_MISSING_DRIVER_PACKAGE` | `queuePlugin({ connection })` selected the BullMQ driver but the optional `bullmq` peer is not installed. Thrown at boot, with the fix in the message; `.cause` holds the original resolution error. |
 
 Errors thrown outside these classes come from the driver's client (ioredis, amqplib, kafkajs,
 the AWS SDK) and reach you through that driver's `onError`.

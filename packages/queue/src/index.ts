@@ -1,15 +1,10 @@
-import { BasaltError, createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import {
   DEFAULT_LIST_LIMIT,
   DEFAULT_LIST_STATES,
   type JobState,
   type QueueDriver,
 } from './driver.js'
-// TYPE-ONLY on purpose — see `loadBullmqDriver` below. Turning this into a
-// value import (or re-exporting the class from this barrel) would pull `bullmq`
-// into every consumer of `@basaltkit/queue` again; `tests/lazy-bullmq.test.ts`
-// and the driver-agnostic boundary test both fail if it ever happens.
-import type { BullmqDriverOptions } from './drivers/bullmq.js'
 import { SyncQueueDriver } from './drivers/sync.js'
 import type { JobDefinition, JobRetention } from './job.js'
 import { QueueManager, type UnsupportedPolicy } from './manager.js'
@@ -33,13 +28,6 @@ export {
 } from './manager.js'
 export { queuedOn, type QueuedListenerOptions } from './bridge.js'
 export { SyncQueueDriver } from './drivers/sync.js'
-/**
- * The BullMQ driver's *types* stay on the barrel (erased at build, so they cost
- * a consumer nothing). The CLASS lives at its own entry point:
- * `import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'` — the same
- * shape as the RabbitMQ/SQS/Kafka driver packages, one import path per backend.
- */
-export type { BullmqDriverOptions } from './drivers/bullmq.js'
 export {
   readJobEnvelope,
   DEFAULT_LIST_STATES,
@@ -54,51 +42,32 @@ export {
   type JobSummary,
   type JobEnvelope,
   type ListJobsOptions,
+  // Needed by every driver package to map the neutral retention onto its
+  // backend's own vocabulary — part of the contract, not an internal detail.
+  type RetentionOption,
 } from './driver.js'
 
 export const QUEUE = createToken<QueueManager>('queue')
 
-/**
- * `bullmq` is an OPTIONAL peer dependency of this package, not a dependency:
- * `@basaltkit/queue` is the driver-agnostic core, and an app on SQS, RabbitMQ,
- * Kafka or the sync driver must neither install nor load BullMQ (and its
- * ioredis weight) to use it. Only the `queuePlugin({ connection })` shorthand
- * needs it, so only that path resolves the module — once, cached here.
- */
-type BullmqDriverModule = typeof import('./drivers/bullmq.js')
-
-let bullmqDriverModule: BullmqDriverModule | undefined
-
-/** Actionable guidance instead of a bare ERR_MODULE_NOT_FOUND from deep inside the driver. */
-const MISSING_BULLMQ =
-  '`queuePlugin({ connection })` selects the BullMQ driver, which needs the `bullmq` package — ' +
-  'an optional peer dependency of @basaltkit/queue that is not installed. ' +
-  'Either install it (`pnpm add bullmq`), or pass an explicit `driver:` — ' +
-  '`@basaltkit/queue-rabbitmq`, `@basaltkit/queue-sqs`, `@basaltkit/queue-kafka`, ' +
-  'or `new SyncQueueDriver()` for dev/tests.'
-
-export class MissingQueueDriverPackageError extends BasaltError {
-  constructor(options?: ErrorOptions) {
-    super('QUEUE_MISSING_DRIVER_PACKAGE', MISSING_BULLMQ, options)
-  }
-}
-
-async function loadBullmqDriver(): Promise<BullmqDriverModule> {
-  if (bullmqDriverModule) return bullmqDriverModule
-  try {
-    bullmqDriverModule = await import('./drivers/bullmq.js')
-  } catch (error) {
-    throw new MissingQueueDriverPackageError({ cause: error })
-  }
-  return bullmqDriverModule
-}
-
 export interface QueuePluginOptions {
   /** Jobs known to this process (producer and/or worker). */
   jobs?: JobDefinition<unknown>[]
-  /** Redis connection → BullMQ driver. No connection → sync driver (dev/test). */
-  connection?: BullmqDriverOptions['connection']
-  /** Custom driver — overrides `connection`. */
+  /**
+   * The backend. Omit it and jobs run on the inline {@link SyncQueueDriver},
+   * which is right for dev and tests and wrong for production.
+   *
+   * Every real backend ships its own plugin wrapping this one, so you rarely
+   * write `driver` by hand:
+   *
+   * ```ts
+   * import { bullmqQueuePlugin } from '@basaltkit/queue-bullmq'
+   * bullmqQueuePlugin({ connection: process.env.REDIS_URL!, jobs })
+   * ```
+   *
+   * `@basaltkit/queue-rabbitmq`, `@basaltkit/queue-sqs` and
+   * `@basaltkit/queue-kafka` expose the same shape. Pass `driver` directly for
+   * a driver of your own.
+   */
   driver?: QueueDriver
   /** Queues to start workers for in this process at boot. */
   workers?: { queue: string; concurrency?: number }[]
@@ -109,9 +78,10 @@ export interface QueuePluginOptions {
    */
   onUnsupported?: UnsupportedPolicy
   /**
-   * Default retention for completed jobs in Redis (BullMQ). `true` removes on
-   * finish, a number keeps that many, `{ age: '7d', count: 500 }` caps both.
-   * Default: keep the last 1000. A job can override via `defineJob`.
+   * Default retention for completed jobs, for drivers whose backend keeps them
+   * (BullMQ/Redis today). `true` removes on finish, a number keeps that many,
+   * `{ age: '7d', count: 500 }` caps both. Default: keep the last 1000. A job
+   * can override via `defineJob`.
    */
   removeOnComplete?: JobRetention
   /**
@@ -119,60 +89,29 @@ export interface QueuePluginOptions {
    * and retries) — set e.g. `{ age: '14d' }` so failures don't grow unbounded.
    */
   removeOnFail?: JobRetention
-  /**
-   * Infra errors from the driver's broker client (e.g. Redis down). Forwarded
-   * to the driver built from `connection`; default `console.error` with context.
-   * Ignored when you pass your own `driver` — configure it on the driver then.
-   */
-  onError?: BullmqDriverOptions['onError']
-  /**
-   * A job exhausted its retries. Forwarded to the driver built from
-   * `connection`; default `console.error` with context. Ignored when you pass
-   * your own `driver` — configure it on the driver then.
-   */
-  onJobFailed?: BullmqDriverOptions['onJobFailed']
 }
 
 export function queuePlugin(options: QueuePluginOptions = {}) {
   return definePlugin({
     name: 'basalt:queue',
-    async register({ container }) {
-      // Resolve the BullMQ driver MODULE here — `BasaltApp.boot()` awaits
-      // `register`, so the class is in hand before anything can resolve QUEUE,
-      // and the container factory below stays synchronous. This is still a
-      // bindings-only phase: loading a module is not I/O against the world —
-      // no Redis connection is opened until the singleton is first resolved.
-      // Doing it in `boot` instead would leave a hole: a plugin booting earlier
-      // that resolves QUEUE would hit an unloaded driver.
-      if (!options.driver && options.connection) await loadBullmqDriver()
-
+    register({ container }) {
       registerQueueCommands(container)
       container.singleton(QUEUE, () => {
         let driver = options.driver
         if (!driver) {
-          if (options.connection) {
-            // Defensive: only reachable if `register`'s promise was dropped by
-            // a non-standard host instead of awaited.
-            if (!bullmqDriverModule) throw new MissingQueueDriverPackageError()
-            driver = new bullmqDriverModule.BullmqQueueDriver({
-              connection: options.connection,
-              ...(options.onError !== undefined ? { onError: options.onError } : {}),
-              ...(options.onJobFailed !== undefined ? { onJobFailed: options.onJobFailed } : {}),
-            })
-          } else {
-            driver = new SyncQueueDriver()
-            if (process.env['NODE_ENV'] === 'production') {
-              // The silent default without a Redis connection is the inline sync
-              // driver: at-most-once, no background retries, handler errors
-              // propagate into the dispatching request. Deliberate sync use in
-              // production stays possible — pass `driver: new SyncQueueDriver()`
-              // explicitly to silence this.
-              console.warn(
-                '[basalt:queue] No `connection` (Redis) configured — falling back to the inline sync driver. ' +
-                  'Jobs run at-most-once inside the dispatching request and are lost on failure. ' +
-                  'Configure a Redis `connection` for production, or pass `driver: new SyncQueueDriver()` to opt in explicitly.',
-              )
-            }
+          driver = new SyncQueueDriver()
+          if (process.env['NODE_ENV'] === 'production') {
+            // The silent default without a driver is the inline sync driver:
+            // at-most-once, no background retries, handler errors propagate
+            // into the dispatching request. Deliberate sync use in production
+            // stays possible — pass `driver: new SyncQueueDriver()` explicitly
+            // to silence this.
+            console.warn(
+              '[basalt:queue] No `driver` configured — falling back to the inline sync driver. ' +
+                'Jobs run at-most-once inside the dispatching request and are lost on failure. ' +
+                'Use a backend plugin for production (`bullmqQueuePlugin` from @basaltkit/queue-bullmq, ' +
+                'or the rabbitmq/sqs/kafka equivalents), or pass `driver: new SyncQueueDriver()` to opt in explicitly.',
+            )
           }
         }
         const manager = new QueueManager(driver, {
@@ -242,10 +181,10 @@ function preview(value: unknown, max = 120): string {
 function registerQueueCommands(container: Container): void {
   const manager = () => container.get(QUEUE)
   const unsupported =
-    'Not supported by the active queue driver — the inline sync driver keeps no job state. Use the BullMQ driver (a Redis `connection`).'
+    'Not supported by the active queue driver — the inline sync driver keeps no job state. Use the BullMQ driver (`bullmqQueuePlugin` from @basaltkit/queue-bullmq).'
   const unsupportedList =
     'Not supported by the active queue driver — listing jobs needs a backend that can read a job WITHOUT consuming it. ' +
-    'Use the BullMQ driver (a Redis `connection`); the sync driver keeps no job state, and the RabbitMQ/SQS/Kafka drivers cannot list non-destructively.'
+    'Use the BullMQ driver (`bullmqQueuePlugin` from @basaltkit/queue-bullmq); the sync driver keeps no job state, and the RabbitMQ/SQS/Kafka drivers cannot list non-destructively.'
 
   ensureMetadata(container).add('commands', {
     name: 'queue:work',

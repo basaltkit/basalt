@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import type { JobState } from '../src/index.js'
+import type { JobState } from '@basaltkit/queue'
 
 /**
  * `BullmqQueueDriver.list` — the only driver that can list jobs, because Redis
@@ -41,7 +41,7 @@ class FakeWorker extends EventEmitter {
 
 vi.mock('bullmq', () => ({ Worker: FakeWorker, Queue: FakeQueue }))
 
-const { BullmqQueueDriver } = await import('../src/drivers/bullmq.js')
+const { BullmqQueueDriver } = await import('../src/index.js')
 const driver = () => new BullmqQueueDriver({ connection: 'redis://localhost:6379' })
 
 const job = (over: Partial<FakeJob> & { id: string; timestamp: number }): FakeJob => ({

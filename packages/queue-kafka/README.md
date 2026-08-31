@@ -26,8 +26,8 @@ pnpm add @basaltkit/queue-kafka kafkajs
 
 ```ts
 import { createApp } from '@basaltkit/core'
-import { queuePlugin, defineJob } from '@basaltkit/queue'
-import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
+import { defineJob } from '@basaltkit/queue'
+import { kafkaQueuePlugin } from '@basaltkit/queue-kafka'
 
 const IndexDocument = defineJob<{ id: string }>({
   name: 'index-document',
@@ -40,8 +40,9 @@ const IndexDocument = defineJob<{ id: string }>({
 
 const app = await createApp({
   plugins: [
-    queuePlugin({
-      driver: new KafkaQueueDriver({ brokers: ['localhost:9092'], clientId: 'my-app' }),
+    kafkaQueuePlugin({
+      brokers: ['localhost:9092'],
+      clientId: 'my-app',
       jobs: [IndexDocument],
       workers: [{ queue: 'indexing', concurrency: 4 }],
     }),
@@ -65,7 +66,7 @@ Kafka is a **distributed log**, not a *task queue* — and the driver is deliber
 Since the driver **declares** this, a job that requests `delay` or `priority` is caught by `@basaltkit/queue`'s `onUnsupported` policy:
 
 ```ts
-queuePlugin({ driver: new KafkaQueueDriver({ brokers }), onUnsupported: 'throw' })
+kafkaQueuePlugin({ brokers, onUnsupported: 'throw' })
 await Job.dispatch(payload, { delay: '5m' }) // → throws UnsupportedJobOptionError
 // with onUnsupported: 'warn' (default) → warns once and runs immediately
 ```
@@ -161,6 +162,24 @@ meets `onUnsupported: 'throw'`; everything else surfaces through `onError`.
 The attempt counters travel in message headers, which any producer on the topic could write, so
 the consumer clamps the `x-basalt-attempts` it reads to at most **50**. A crafted message cannot
 drive an unbounded retry loop.
+
+### The plugin, and the driver underneath it
+
+`kafkaQueuePlugin` is the one-line path: it builds the driver and hands it to
+`queuePlugin` from `@basaltkit/queue`, so it accepts every core option
+(`jobs`, `workers`, `onUnsupported`, `removeOnComplete`, `removeOnFail`)
+alongside the driver options documented above. Every backend ships a plugin of
+this shape, so no backend is privileged in the core's API.
+
+`KafkaQueueDriver` stays exported for the rarer cases — sharing one driver
+between plugins, wrapping it, or testing it directly:
+
+```ts
+import { queuePlugin } from '@basaltkit/queue'
+import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
+
+queuePlugin({ driver: new KafkaQueueDriver({ /* … */ }), jobs, workers })
+```
 
 ## How it connects to other modules
 

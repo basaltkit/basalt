@@ -9,27 +9,28 @@ numa linha; os teus jobs nunca mudam.
 ## Instalação
 
 ```bash
-pnpm add @basaltkit/queue
-
-# adiciona o cliente do backend que escolheste — BullMQ/Redis aqui:
-pnpm add bullmq
+# o núcleo, mais o backend que escolheste e o seu cliente
+pnpm add @basaltkit/queue @basaltkit/queue-bullmq bullmq
 ```
 
-O núcleo **não** depende de nenhum cliente de broker. O cliente de cada backend é
-uma **peer dependency opcional**, instalada apenas pelas apps que o escolhem:
+O núcleo **não** conhece nenhum broker. Cada backend é um pacote separado que
+traz o seu driver *e* o seu plugin, e o cliente é uma peer dependency que
+instalas tu:
 
-| Backend | Pacote | Cliente a instalar |
-| --- | --- | --- |
-| BullMQ (Redis) | `@basaltkit/queue` | `bullmq` |
-| RabbitMQ | `@basaltkit/queue-rabbitmq` | `amqplib` |
-| Amazon SQS | `@basaltkit/queue-sqs` | `@aws-sdk/client-sqs` |
-| Kafka | `@basaltkit/queue-kafka` | `kafkajs` |
-| Sync (dev/testes) | `@basaltkit/queue` | — nada |
+| Backend | Pacote | Plugin | Cliente a instalar |
+| --- | --- | --- | --- |
+| BullMQ (Redis) | `@basaltkit/queue-bullmq` | `bullmqQueuePlugin` | `bullmq` |
+| RabbitMQ | `@basaltkit/queue-rabbitmq` | `rabbitmqQueuePlugin` | `amqplib` |
+| Amazon SQS | `@basaltkit/queue-sqs` | `sqsQueuePlugin` | `@aws-sdk/client-sqs` |
+| Kafka | `@basaltkit/queue-kafka` | `kafkaQueuePlugin` | `kafkajs` |
+| Sync (dev/testes) | `@basaltkit/queue` | `queuePlugin` | — nada |
 
-Assim, uma app em SQS nunca instala (nem carrega) o BullMQ e o peso do ioredis que
-ele arrasta. Se escolheres BullMQ sem ter `bullmq` instalado, o boot falha com um
-`MissingQueueDriverPackageError` que indica a correção — nunca um
-`ERR_MODULE_NOT_FOUND` cru.
+Assim, uma app em SQS nunca instala (nem carrega) o BullMQ e o peso do ioredis
+que ele arrasta, e o `@basaltkit/queue` sozinho dá-te o driver sync — tudo o que
+dev e testes precisam.
+
+Nenhum backend é privilegiado: os quatro plugins têm a mesma forma, e o
+`queuePlugin` do núcleo é o que todos envolvem.
 
 [[toc]]
 
@@ -57,31 +58,45 @@ dispatch.
 
 ## Registá-lo
 
-`queuePlugin` regista um `QueueManager` sob o token `QUEUE`, arranca os workers
-declarados no `boot`, e fecha tudo no `shutdown`:
+O plugin do teu backend regista um `QueueManager` sob o token `QUEUE`, arranca os
+workers declarados no `boot`, e fecha tudo no `shutdown`:
 
 ```ts
 import { createApp } from '@basaltkit/core'
-import { queuePlugin } from '@basaltkit/queue'
+import { bullmqQueuePlugin } from '@basaltkit/queue-bullmq'
 import { SendWelcome } from './jobs/send-welcome.js'
 
 const app = await createApp({
   plugins: [
-    queuePlugin({
-      connection: process.env.REDIS_URL,     // → driver BullMQ. Omite para o driver sync.
-      jobs: [SendWelcome],                    // jobs que este processo produz e/ou executa
-      workers: [{ queue: 'welcome', concurrency: 5 }], // arranca um worker para esta queue
+    bullmqQueuePlugin({
+      connection: process.env.REDIS_URL!,               // URL Redis ou opções ioredis
+      jobs: [SendWelcome],                              // jobs que este processo produz e/ou executa
+      workers: [{ queue: 'welcome', concurrency: 5 }],  // arranca um worker para esta queue
     }),
   ],
 }).boot()
 ```
 
-Sem `connection` (e sem `driver`), o plugin usa o driver **sync**: `dispatch` executa
+Trocar de backend é trocar esse import: `rabbitmqQueuePlugin`, `sqsQueuePlugin` e
+`kafkaQueuePlugin` aceitam as mesmas chaves `jobs`/`workers` ao lado das suas
+próprias opções de ligação. Os teus jobs nunca mudam.
+
+Usa o `queuePlugin` do núcleo diretamente quando queres o driver **sync**, ou um
+driver teu:
+
+```ts
+import { queuePlugin } from '@basaltkit/queue'
+
+queuePlugin({ jobs: [SendWelcome] })              // driver sync — dev e testes
+queuePlugin({ driver: myDriver, jobs, workers })  // um driver escrito por ti
+```
+
+Sem `driver`, o plugin usa o driver **sync**: `dispatch` executa
 `handle` inline no mesmo processo — sem Redis, ideal para dev e testes. Conhece a
 semântica antes de dependeres dele: é **at-most-once** (um job que esgota os
 retries inline perde-se), erros do handler **rejeitam a chamada `dispatch()`**
 (o teu request falha em vez de haver retry em background), e não se destina a
-produção — um deploy de produção que caia nele sem `connection` Redis regista um
+produção — um deploy de produção que caia nele sem `driver` regista um
 aviso no boot (passa `driver: new SyncQueueDriver()` para optar deliberadamente). A `queue` de
 um worker **tem de corresponder** à `queue` de um job, ou o job vai parar ao backend
 mas ninguém o consome.
@@ -95,12 +110,12 @@ lança `UnknownJobError`. Só o consumidor declara `workers`:
 
 ```ts
 // processo da API — só produz (sem `workers`)
-queuePlugin({ jobs: [SendWelcome, GenerateInvoice], connection: process.env.REDIS_URL })
+bullmqQueuePlugin({ jobs: [SendWelcome, GenerateInvoice], connection: process.env.REDIS_URL! })
 
 // processo worker — consome
-queuePlugin({
+bullmqQueuePlugin({
   jobs: [SendWelcome, GenerateInvoice],
-  connection: process.env.REDIS_URL,
+  connection: process.env.REDIS_URL!,
   workers: [
     { queue: 'welcome', concurrency: 5 },
     { queue: 'billing', concurrency: 2 },
@@ -125,12 +140,12 @@ await SendWelcome.dispatch({ userId: 'u-1' }, { delay: '5m', priority: 5 })
 
 ## Drivers
 
-O backend é escolhido pelo driver. `connection` opta por BullMQ; passa um `driver`
-para usar outro backend.
+O backend é escolhido pelo plugin que registas — cada um constrói o seu driver
+por ti. Recorre a `queuePlugin({ driver })` só para um driver teu.
 
 | Driver | Pacote | `delayed` | `priority` | `retries` | `backoff` |
 | --- | --- | :---: | :---: | :---: | :---: |
-| **BullMQ** (Redis) | `@basaltkit/queue` | ✅ | ✅ | ✅ | ✅ |
+| **BullMQ** (Redis) | `@basaltkit/queue-bullmq` | ✅ | ✅ | ✅ | ✅ |
 | **RabbitMQ** | `@basaltkit/queue-rabbitmq` | ✅ | ✅ | ✅ | ✅ |
 | **Amazon SQS** | `@basaltkit/queue-sqs` | ✅ (≤15 min) | ❌ | ✅ | ✅ |
 | **Kafka** | `@basaltkit/queue-kafka` | ❌ | ❌ | ✅ | ❌ |
@@ -145,13 +160,14 @@ nunca são silenciosas.
 
 ### BullMQ (Redis)
 
-`connection` no `queuePlugin` é um atalho para este driver, e precisa de `bullmq`
-instalado (ver [Instalação](#instalacao)). Ambos os canais de falha são
-configuráveis **ali mesmo** — não precisas de construir o driver à mão para teres
-observabilidade:
+O `bullmqQueuePlugin` precisa de `bullmq` instalado (ver
+[Instalação](#instalacao)). Todas as opções do driver ficam no plugin, ao lado de
+`jobs`/`workers`, por isso a observabilidade não te custa nada extra:
 
 ```ts
-queuePlugin({
+import { bullmqQueuePlugin } from '@basaltkit/queue-bullmq'
+
+bullmqQueuePlugin({
   connection: process.env.REDIS_URL!,
   jobs,
   workers,
@@ -160,22 +176,14 @@ queuePlugin({
 })
 ```
 
-O `onError`/`onJobFailed` no `queuePlugin` são encaminhados para o driver
-construído a partir de `connection`. São **ignorados quando passas o teu próprio
-`driver`** — configura-os no driver, que é também como chegas a qualquer opção
-que o atalho não exponha:
+A classe do driver também é exportada, para o caso raro em que o constróis tu
+(partilhar um driver entre dois plugins, ou envolvê-lo):
 
 ```ts
-import { BullmqQueueDriver } from '@basaltkit/queue/bullmq'   // precisa de `pnpm add bullmq`
+import { BullmqQueueDriver } from '@basaltkit/queue-bullmq'
+import { queuePlugin } from '@basaltkit/queue'
 
-queuePlugin({
-  driver: new BullmqQueueDriver({
-    connection: process.env.REDIS_URL!,
-    onError: (error, { queue, source }) => log.error({ queue, source, error }, 'queue infra error'),
-  }),
-  jobs,
-  workers,
-})
+queuePlugin({ driver: new BullmqQueueDriver({ connection: process.env.REDIS_URL! }), jobs, workers })
 ```
 
 | Opção | Tipo | Predefinição | Porquê |
@@ -187,9 +195,9 @@ queuePlugin({
 ### RabbitMQ
 
 ```ts
-import { RabbitmqQueueDriver } from '@basaltkit/queue-rabbitmq'
+import { rabbitmqQueuePlugin } from '@basaltkit/queue-rabbitmq'
 
-queuePlugin({ driver: new RabbitmqQueueDriver({ url: process.env.AMQP_URL! }), jobs, workers })
+rabbitmqQueuePlugin({ url: process.env.AMQP_URL!, jobs, workers })
 ```
 
 Retries e backoff usam uma delay queue por fila (`<queue>.delay`) cujas
@@ -218,9 +226,9 @@ diferentes na mesma fila, prefere o plugin delayed-message-exchange do RabbitMQ.
 ### Amazon SQS
 
 ```ts
-import { SqsQueueDriver } from '@basaltkit/queue-sqs'
+import { sqsQueuePlugin } from '@basaltkit/queue-sqs'
 
-queuePlugin({ driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q] }), jobs, workers })
+sqsQueuePlugin({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q], jobs, workers })
 ```
 
 O SQS tem delay nativo por mensagem (≤ 15 minutos) mas não tem prioridade.
@@ -248,9 +256,9 @@ disso, para que os retries nunca lancem).
 ### Kafka
 
 ```ts
-import { KafkaQueueDriver } from '@basaltkit/queue-kafka'
+import { kafkaQueuePlugin } from '@basaltkit/queue-kafka'
 
-queuePlugin({ driver: new KafkaQueueDriver({ brokers: ['localhost:9092'] }), jobs, workers })
+kafkaQueuePlugin({ brokers: ['localhost:9092'], jobs, workers })
 ```
 
 O Kafka é um log, não uma task queue, e o driver é deliberadamente honesto
@@ -317,12 +325,12 @@ Com o driver BullMQ, os jobs terminados ficam no Redis para os poderes
 inspecionar e re-tentar. Por predefinição os **concluídos** mantêm os últimos
 **1000**, e os **falhados** ficam **para sempre** — ou seja, o conjunto de
 falhados pode crescer sem limite. Controla isso com `removeOnComplete` /
-`removeOnFail`, globalmente no `queuePlugin` ou por job:
+`removeOnFail`, globalmente no plugin ou por job:
 
 ```ts
 // Predefinição global para todos os jobs
-queuePlugin({
-  connection: process.env.REDIS_URL,
+bullmqQueuePlugin({
+  connection: process.env.REDIS_URL!,
   jobs: [SendWelcome],
   removeOnComplete: { age: '7d' },   // mantém concluídos 7 dias
   removeOnFail: { age: '14d' },      // falhados deixam de crescer para sempre
