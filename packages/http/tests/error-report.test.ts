@@ -69,6 +69,51 @@ describe('HTTP error reporting policy', () => {
     expect(log.warn.mock.calls[0]![0]).toContain('just a string')
   })
 
+  // CodeQL flagged all three of these on the first version of this file, and it
+  // was right: method, URL and the error message all come from the request.
+  describe('untrusted fields cannot corrupt the log', () => {
+    it('cannot forge a second log line (js/log-injection)', () => {
+      const log = sink()
+      const forged = '/x\nWARN  [basalt:http] GET /admin → 200 OK'
+      reportHttpError({ ...report(400), url: forged }, log)
+      const line = String(log.warn.mock.calls[0]![0])
+      expect(line).not.toContain('\n')
+      expect(line.split('\n')).toHaveLength(1)
+      // The text survives, flattened — evidence is kept, structure is not.
+      expect(line).toContain('/admin')
+    })
+
+    it('cannot make the logger eat the error object (js/tainted-format-string)', () => {
+      // `console` and pino both treat the first argument as a format string. An
+      // unescaped `%s` here would consume the SECOND argument — the error whose
+      // stack is the entire reason we log a 500.
+      const log = sink()
+      const boom = new Error('boom')
+      reportHttpError({ ...report(500, boom), url: '/x?q=%s%d%j%o' }, log)
+      const [line, second] = log.error.mock.calls[0]!
+      // Every run of `%` must be even-length: that is what "all escaped" means.
+      // Asserting the absence of `%s` would be wrong — the escaped form `%%s`
+      // contains it as a substring while being perfectly safe.
+      const runs = String(line).match(/%+/g) ?? []
+      expect(runs.length).toBeGreaterThan(0)
+      expect(runs.every((run) => run.length % 2 === 0)).toBe(true)
+      // The error still arrives as its own argument, stack intact.
+      expect(second).toBe(boom)
+    })
+
+    it('caps a huge field instead of flooding the log', () => {
+      const log = sink()
+      reportHttpError({ ...report(400), url: `/${'a'.repeat(10_000)}` }, log)
+      expect(String(log.warn.mock.calls[0]![0]).length).toBeLessThan(1_000)
+    })
+
+    it('keeps ordinary URLs completely readable', () => {
+      const log = sink()
+      reportHttpError({ ...report(404), url: '/plans/pro?expand=features' }, log)
+      expect(String(log.warn.mock.calls[0]![0])).toContain('/plans/pro?expand=features')
+    })
+  })
+
   it('httpErrorReporter binds a sink and defaults to console', () => {
     const log = sink()
     httpErrorReporter(log)(report(500))

@@ -41,6 +41,46 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Longest a single interpolated value may be before it is cut. */
+const MAX_FIELD = 200
+
+const DEL = 0x7f
+const FIRST_PRINTABLE = 0x20
+
+/**
+ * Neutralises a value before it is interpolated into a log line.
+ *
+ * Everything interpolated here — method, URL, and an error message that often
+ * quotes the request — is attacker-controlled, and two real problems follow:
+ *
+ *  - **Log forging.** A newline in the URL ends the line and starts another, so
+ *    a request can write whatever it likes into the log, including a convincing
+ *    fake entry attributed to some other request.
+ *  - **Format-string injection.** Both `console` and pino treat the first
+ *    argument as a printf-style format string. A URL containing `%s` would make
+ *    the logger consume the NEXT argument — which, for a 5xx, is the error
+ *    object itself — as a substitution, corrupting the record and swallowing
+ *    the stack we logged it for.
+ *
+ * Control characters become spaces, `%` is doubled so the result can never act
+ * as a format specifier, and the whole thing is capped so a single enormous URL
+ * cannot flood the log.
+ *
+ * Written as a scan rather than a regex on purpose: a character class of literal
+ * control characters is unreadable in review and easy to get subtly wrong.
+ */
+function safe(value: unknown, max = MAX_FIELD): string {
+  let out = ''
+  for (const character of String(value)) {
+    const point = character.codePointAt(0) ?? 0
+    if (point < FIRST_PRINTABLE || point === DEL) out += ' '
+    else if (character === '%') out += '%%'
+    else out += character
+    if (out.length > max) return `${out.slice(0, max)}…`
+  }
+  return out
+}
+
 /**
  * 5xx with the error object (stack included — it is a bug, you need the trace);
  * 4xx as a one-line warning (the stack of a validation failure is noise, the
@@ -52,10 +92,15 @@ function messageOf(error: unknown): string {
 export function reportHttpError(report: HttpErrorReport, sink: HttpLogSink = console): void {
   const { error, status, code, method, url } = report
   try {
+    // Every interpolated field is sanitised, because they all originate in the
+    // request. `status` is the one value the framework itself produced, and it
+    // is still coerced rather than trusted — `HttpErrorReport` is a plain object
+    // that an adapter could fill in wrongly.
+    const line = `[basalt:http] ${safe(method, 16)} ${safe(url)} → ${Number(status)} ${safe(code, 64)}`
     if (status >= 500) {
-      sink.error(`[basalt:http] ${method} ${url} → ${status} ${code}`, error)
+      sink.error(line, error)
     } else if (status >= 400) {
-      sink.warn(`[basalt:http] ${method} ${url} → ${status} ${code}: ${messageOf(error)}`)
+      sink.warn(`${line}: ${safe(messageOf(error), 500)}`)
     }
   } catch {
     // Deliberately swallowed — see above.

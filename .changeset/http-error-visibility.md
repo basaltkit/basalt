@@ -30,6 +30,23 @@ It lives in `@basaltkit/http` (`reportHttpError`, `httpErrorReporter`,
 `HttpErrorReport`, `HttpErrorReporter`, `HttpLogSink`), so the three adapters
 cannot drift apart. Each adapter's suite asserts the same behaviour.
 
+### Untrusted fields are sanitised
+
+Method, URL and the error message all come from the request, and interpolating
+them into a log line raised two real issues that CodeQL caught on review:
+
+- **Format-string injection** (high). `console` and pino both treat the first
+  argument as a printf format string. A URL containing `%s` made the logger
+  consume the *next* argument — the error object, whose stack is the whole
+  reason a 5xx is logged — as a substitution.
+- **Log forging** (medium). A newline in the URL ended the line and started
+  another, letting a request write a convincing fake entry attributed to some
+  other request.
+
+Control characters are now replaced with spaces, `%` is doubled so the result
+can never act as a format specifier, and each field is capped so one enormous
+URL cannot flood the log. Ordinary URLs are untouched and stay readable.
+
 ### Overriding it
 
 `fastifyPlugin`, `expressPlugin` and `honoPlugin` all accept `onError`:
