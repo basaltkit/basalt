@@ -44,8 +44,16 @@ function messageOf(error: unknown): string {
 /** Longest a single interpolated value may be before it is cut. */
 const MAX_FIELD = 200
 
-const DEL = 0x7f
-const FIRST_PRINTABLE = 0x20
+/**
+ * Unicode's "Other, control" category — C0, C1 and DEL, i.e. everything that can
+ * break a log line apart. `\p{Cc}` rather than a hand-written character range:
+ * it says what it means, and a literal range of control characters is both
+ * unreadable in review and easy to get subtly wrong.
+ */
+const CONTROL_CHARACTERS = /\p{Cc}/gu
+
+/** Any `%`, so the composed line can never be read as a printf format specifier. */
+const PERCENT = /%/g
 
 /**
  * Neutralises a value before it is interpolated into a log line.
@@ -62,23 +70,12 @@ const FIRST_PRINTABLE = 0x20
  *    object itself — as a substitution, corrupting the record and swallowing
  *    the stack we logged it for.
  *
- * Control characters become spaces, `%` is doubled so the result can never act
- * as a format specifier, and the whole thing is capped so a single enormous URL
- * cannot flood the log.
- *
- * Written as a scan rather than a regex on purpose: a character class of literal
- * control characters is unreadable in review and easy to get subtly wrong.
+ * Control characters become spaces, `%` is doubled, and the result is capped so
+ * a single enormous URL cannot flood the log. Ordinary URLs pass through intact.
  */
 function safe(value: unknown, max = MAX_FIELD): string {
-  let out = ''
-  for (const character of String(value)) {
-    const point = character.codePointAt(0) ?? 0
-    if (point < FIRST_PRINTABLE || point === DEL) out += ' '
-    else if (character === '%') out += '%%'
-    else out += character
-    if (out.length > max) return `${out.slice(0, max)}…`
-  }
-  return out
+  const text = String(value).replace(CONTROL_CHARACTERS, ' ').replace(PERCENT, '%%')
+  return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
 /**
