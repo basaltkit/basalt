@@ -41,9 +41,12 @@ export default defineConfig({
         'packages/generator/**',
         // (2) External-service drivers — need live infra; covered by integration.
         //     The in-memory drivers in the same folders stay in the gate.
+        //     Note: a driver that lives in its OWN package (queue-bullmq,
+        //     queue-rabbitmq, queue-sqs, queue-kafka) is already excluded by the
+        //     `**/index.ts` rule above, since its barrel IS the driver. Only
+        //     drivers still sitting inside a multi-driver core need a line here.
         'packages/*/src/drivers/redis.ts',
         'packages/*/src/drivers/s3.ts',
-        'packages/*/src/drivers/bullmq.ts',
         // (3) CLI command module inside an otherwise-libraried package.
         'packages/prisma/src/sync-command.ts',
       ],
