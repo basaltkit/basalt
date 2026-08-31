@@ -15,9 +15,6 @@ import {
   type AddJobOptions,
   type QueueDriver,
 } from '../src/index.js'
-// The BullMQ driver class lives at its own entry point (`@basaltkit/queue/bullmq`)
-// so the barrel never pulls the optional `bullmq` peer — see driver-boundary.test.ts.
-import { BullmqQueueDriver } from '../src/drivers/bullmq.js'
 
 /** Records the options each job was enqueued with. */
 class SpyDriver implements QueueDriver {
@@ -42,14 +39,11 @@ describe('driver capabilities (compatibility check)', () => {
   const delayed = defineJob({ name: 'delayed', handle: () => {} })
   const retrying = defineJob({ name: 'retrying', attempts: 3, handle: () => {} })
 
+  // Only the sync driver is asserted here: this package no longer knows any
+  // concrete backend. Each driver package asserts its own capabilities — see
+  // packages/queue-bullmq/tests/bullmq.test.ts.
   it('declares capabilities per backend', () => {
     expect(new SyncQueueDriver().capabilities).toEqual({ delayed: false, priority: false, retries: true, backoff: false })
-    expect(new BullmqQueueDriver({ connection: 'redis://localhost:6379' }).capabilities).toEqual({
-      delayed: true,
-      priority: true,
-      retries: true,
-      backoff: true,
-    })
   })
 
   it("throws on an unsupported option when policy is 'throw'", async () => {

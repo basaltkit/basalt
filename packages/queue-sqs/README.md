@@ -28,8 +28,8 @@ SQS identifies queues by **URL**, so you pass a `queueUrl` resolver that maps a 
 
 ```ts
 import { createApp } from '@basaltkit/core'
-import { queuePlugin, defineJob } from '@basaltkit/queue'
-import { SqsQueueDriver } from '@basaltkit/queue-sqs'
+import { defineJob } from '@basaltkit/queue'
+import { sqsQueuePlugin } from '@basaltkit/queue-sqs'
 
 const QUEUE_URLS: Record<string, string> = {
   emails: 'https://sqs.eu-west-1.amazonaws.com/123456789012/emails',
@@ -48,8 +48,9 @@ const SendWelcome = defineJob<{ email: string }>({
 
 const app = await createApp({
   plugins: [
-    queuePlugin({
-      driver: new SqsQueueDriver({ region: 'eu-west-1', queueUrl: (q) => QUEUE_URLS[q]! }),
+    sqsQueuePlugin({
+      region: 'eu-west-1',
+      queueUrl: (q) => QUEUE_URLS[q]!,
       jobs: [SendWelcome],
       workers: [{ queue: 'emails', concurrency: 5 }],
     }),
@@ -148,6 +149,24 @@ retrying sooner.
 
 Attempt counters travel in message attributes, so the consumer clamps the `x-basalt-attempts` it
 reads to at most **50** — a crafted message cannot drive an unbounded retry loop.
+
+### The plugin, and the driver underneath it
+
+`sqsQueuePlugin` is the one-line path: it builds the driver and hands it to
+`queuePlugin` from `@basaltkit/queue`, so it accepts every core option
+(`jobs`, `workers`, `onUnsupported`, `removeOnComplete`, `removeOnFail`)
+alongside the driver options documented above. Every backend ships a plugin of
+this shape, so no backend is privileged in the core's API.
+
+`SqsQueueDriver` stays exported for the rarer cases — sharing one driver
+between plugins, wrapping it, or testing it directly:
+
+```ts
+import { queuePlugin } from '@basaltkit/queue'
+import { SqsQueueDriver } from '@basaltkit/queue-sqs'
+
+queuePlugin({ driver: new SqsQueueDriver({ /* … */ }), jobs, workers })
+```
 
 ## How it connects to other modules
 

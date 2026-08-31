@@ -4,6 +4,7 @@ import type {
   JobExecutor,
   QueueDriver,
 } from '@basaltkit/queue'
+import { queuePlugin, type QueuePluginOptions } from '@basaltkit/queue'
 
 /** The subset of an amqplib channel this driver uses. */
 export interface AmqpChannel {
@@ -289,3 +290,39 @@ export class RabbitmqQueueDriver implements QueueDriver {
 
 const encode = (data: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(data))
 const decode = (content: Uint8Array): unknown => JSON.parse(new TextDecoder().decode(content))
+
+/**
+ * Everything {@link queuePlugin} accepts, minus `driver` (this plugin IS the
+ * driver choice), plus every RabbitMQ driver option.
+ */
+export interface RabbitmqQueuePluginOptions
+  extends Omit<QueuePluginOptions, 'driver'>,
+    RabbitmqDriverOptions {}
+
+/**
+ * The RabbitMQ-backed queue plugin — one line to put an app's jobs on RabbitMQ:
+ *
+ * ```ts
+ * rabbitmqQueuePlugin({ url: process.env.AMQP_URL!, jobs: [SendWelcome], workers: [{ queue: 'welcome' }] })
+ * ```
+ *
+ * Every backend ships a plugin of this shape (`bullmqQueuePlugin`, `sqsQueuePlugin`, `kafkaQueuePlugin`), so no backend is
+ * privileged in the core's API and `@basaltkit/queue` stays a pure contract.
+ * Use `queuePlugin({ driver })` directly for a driver you wrote yourself.
+ *
+ * Building the driver here, when the app is DEFINED, is safe: the constructor
+ * only reads defaults, and every connection is opened lazily on first use.
+ */
+export function rabbitmqQueuePlugin(options: RabbitmqQueuePluginOptions) {
+  // Split by the CORE's keys, not the driver's: a new driver option then flows
+  // through untouched, and only a change to QueuePluginOptions needs an edit here.
+  const { jobs, workers, onUnsupported, removeOnComplete, removeOnFail, ...driver } = options
+  return queuePlugin({
+    ...(jobs !== undefined ? { jobs } : {}),
+    ...(workers !== undefined ? { workers } : {}),
+    ...(onUnsupported !== undefined ? { onUnsupported } : {}),
+    ...(removeOnComplete !== undefined ? { removeOnComplete } : {}),
+    ...(removeOnFail !== undefined ? { removeOnFail } : {}),
+    driver: new RabbitmqQueueDriver(driver),
+  })
+}
