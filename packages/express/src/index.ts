@@ -5,6 +5,8 @@ import {
   HTTP_SERVER,
   runRoute,
   toErrorResponse,
+  reportHttpError,
+  type HttpErrorReporter,
   type HttpReply,
   type HttpRequest,
   type BasaltRoute,
@@ -75,6 +77,7 @@ function basaltHandler(
   container: Container | undefined,
   enrichers: RequestEnricher[],
   guards: RouteGuard[],
+  onError?: HttpErrorReporter,
 ) {
   return async (req: Request, res: Response): Promise<void> => {
     const reply = new ExpressReply(res)
@@ -96,6 +99,11 @@ function basaltHandler(
       if (!reply.sent) reply.send(result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
+      // This adapter previously reported nothing at all — a 500 reached the
+      // client and left no trace whatsoever on the server.
+      const entry = { error, status, code: body.error.code, method: req.method, url: req.originalUrl }
+      if (onError) onError(entry)
+      else reportHttpError(entry)
       if (!res.headersSent) res.status(status).json(body)
     }
   }
@@ -108,10 +116,14 @@ export function registerRoutes(
   container?: Container,
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
+  onError?: HttpErrorReporter,
 ): void {
   const router = app as unknown as Record<string, Register>
   for (const definition of routes) {
-    router[definition.method.toLowerCase()]!(definition.url, basaltHandler(definition, container, enrichers, guards))
+    router[definition.method.toLowerCase()]!(
+      definition.url,
+      basaltHandler(definition, container, enrichers, guards, onError),
+    )
   }
 }
 
@@ -132,6 +144,12 @@ export interface ExpressPluginOptions {
    * HTML default. Default: true. Pass false to keep Express's own handling
    * (e.g. when the app mounts its own catch-all after boot).
    */
+  /**
+   * Where failed requests are reported. Default: 5xx via `console.error` (with
+   * the stack) and 4xx via `console.warn`, prefixed `[basalt:http]`. Pass your
+   * own to route them into a real logger, or `() => {}` to silence them.
+   */
+  onError?: HttpErrorReporter
   notFound?: boolean
 }
 
@@ -186,7 +204,7 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
           if (await collector.runPre(toNeutralRequest(req), reply)) return
           next()
         })
-        registerRoutes(app, routes, container, enrichers, guards)
+        registerRoutes(app, routes, container, enrichers, guards, options.onError)
         for (const { method, url, handler } of collector.extraRoutes) {
           router[method.toLowerCase()]!(url, async (req: Request, res: Response) => {
             const reply = new ExpressReply(res)

@@ -301,6 +301,54 @@ O `'silent'` desliga toda a saída — útil para comandos de CLI e testes. Faz 
 do `LogLevel` (o tipo `Level` do próprio Pino omite-o). Vê
 [Configuração](/pt/guide/config) para a canalização do env.
 
+## Erros HTTP — `onError` no adapter
+
+Um pedido que falha é reportado pelo adapter: **5xx para `error` levando o objeto
+do erro** (a stack é o que interessa — é um bug) e **4xx para `warn` com o código
+e a razão** (a stack de uma falha de validação é ruído). Ambos passam pela mesma
+política no Fastify, no Express e no Hono.
+
+Os relatos são **estruturados**, nunca uma frase interpolada: o sink é chamado
+como `(fields, message)` — a assinatura do próprio pino — em que `message` é
+sempre um literal e os dados do pedido vivem em `fields`. Isto é uma propriedade
+de segurança tanto como de formatação: um `%s` ou uma quebra de linha num URL
+nunca chega a uma format string, portanto a injeção de format string e a forja de
+logs são **eliminadas** em vez de escapadas.
+
+```ts
+fastifyPlugin({
+  routes,
+  onError: ({ error, status, code, method, url }) => {
+    logger.error({ err: error, status, code, method, url }, 'request failed')
+  },
+})
+```
+
+Passa `() => {}` para os silenciar. A mesma opção existe no `expressPlugin` e no
+`honoPlugin`.
+
+**Onde o default escreve.** No Fastify é o logger do próprio Fastify, para os
+registos continuarem estruturados nas apps que configuraram pino — e a consola
+nas que não configuraram, já que um servidor criado com `logger: false` (o
+default do Fastify) instala um logger no-op que engoliria o relato. O Express e
+o Hono usam a consola.
+
+::: warning Dois loggers, não um
+O logger do Fastify e o `@basaltkit/logger` são sistemas separados. O token
+`LOGGER` é para o teu código; o default do adapter escreve no do Fastify. Definir
+um nível no `loggerPlugin` **não** muda o que o adapter reporta — liga o
+`onError` ao teu logger se os quiseres no mesmo sítio.
+:::
+
+**Os erros de cliente também são reportados, de propósito.** Antes eram
+silenciosos, o que se defende para um 404 de um scanner e não serve de nada
+quando estás a tentar perceber porque é que o teu pedido voltou 400 sem nada no
+terminal. Se for ruidoso para ti, filtra no teu próprio reporter — a decisão é da
+app, não do default do framework.
+
+O corpo da resposta nunca muda: é o `toErrorResponse` que decide o que o cliente
+vê, e um 500 continua a dizer apenas `Internal server error.`
+
 ## Correlação de pedidos
 
 Cada pedido carrega um `requestId` e um `correlationId` no
@@ -314,7 +362,8 @@ Os mesmos identificadores são o que torna legíveis as superfícies assíncrona
 põe o teu logger por trás dos callbacks `onBridgeError` / `onDeliveryError` do
 realtime ([Realtime](/pt/guide/realtime)), do `onDead` / `onFlushError` do outbox
 ([Persistence](/pt/guide/persistence)) e do `onError` / `onJobFailed` das filas
-([Filas](/pt/guide/queues)) em vez de os deixares no `console.error`.
+([Filas](/pt/guide/queues)) em vez de os deixares no `console.error`. O `onError` do
+adapter HTTP (acima) é da mesma família.
 
 ## Referência de opções
 

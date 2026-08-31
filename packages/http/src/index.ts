@@ -85,3 +85,11 @@ export {
   UnguardedRouteMetaError,
   assertRoutesGuarded,
 } from './guarded-meta.js'
+export {
+  reportHttpError,
+  httpErrorReporter,
+  consoleSink,
+  type HttpErrorReport,
+  type HttpErrorReporter,
+  type HttpLogSink,
+} from './error-report.js'
