@@ -5,6 +5,9 @@ import {
   HTTP_SERVER,
   runRoute,
   toErrorResponse,
+  reportHttpError,
+  type HttpErrorReporter,
+  type HttpLogSink,
   type HttpReply,
   type HttpRequest,
   type BasaltRoute,
@@ -88,6 +91,20 @@ export interface FastifyPluginOptions {
    * pass `notFound: false` here — Fastify allows only one handler.
    */
   notFound?: boolean
+  /**
+   * Where failed requests are reported — 5xx with the stack, 4xx as a one-line
+   * warning. Pass your own to route them into a real logger, or `() => {}` to
+   * silence them entirely.
+   *
+   * By default they go to Fastify's own logger, so records stay structured for
+   * apps that configured pino, and to the console for apps that did not (a
+   * server built with `logger: false`, Fastify's default, installs a no-op
+   * logger that would swallow them).
+   *
+   * Note this is Fastify's logger, not `@basaltkit/logger` — the two are
+   * separate, and setting a level on `loggerPlugin` does not affect these.
+   */
+  onError?: HttpErrorReporter
 }
 
 export function fastifyPlugin(options: FastifyPluginOptions = {}) {
@@ -99,7 +116,7 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
         // Anti-slowloris default: cap how long the whole request may take to arrive.
         // Fastify's default is 0 (disabled); a caller-supplied value always wins.
         const instance = Fastify({ requestTimeout: 30_000, ...(options.fastify ?? {}) })
-        instance.setErrorHandler(errorHandler)
+        instance.setErrorHandler(makeErrorHandler(options.onError))
         // Fastify's default JSON parser throws on an empty body — but a POST to a
         // bodiless route (e.g. an @basaltkit/sdk call with no payload) still sends
         // `content-type: application/json` with an empty body, which surfaced as a
@@ -145,7 +162,7 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
         options.allowUnguardedMeta,
       )
       const instance = container.get(FASTIFY)
-      registerRoutes(instance, routes, container, enrichers, guards)
+      registerRoutes(instance, routes, container, enrichers, guards, options.onError)
       // Mount edge-plugin hooks/routes once every plugin has registered them.
       hooks.on('app:booted', () => {
         mountCollector(instance, collector)
@@ -186,12 +203,13 @@ export function registerRoutes(
   container?: Container,
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
+  onError?: HttpErrorReporter,
 ): void {
   for (const definition of routes) {
     instance.route({
       method: definition.method,
       url: definition.url,
-      handler: wrapHandler(definition, container, enrichers, guards),
+      handler: wrapHandler(definition, container, enrichers, guards, onError),
     })
   }
 }
@@ -215,6 +233,7 @@ function wrapHandler(
   container: Container | undefined,
   enrichers: RequestEnricher[],
   guards: RouteGuard[],
+  onError?: HttpErrorReporter,
 ) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const neutralReply = new FastifyReplyAdapter(reply)
@@ -246,6 +265,9 @@ function wrapHandler(
       }
     } catch (error) {
       const { status, body } = toErrorResponse(error)
+      // This site used to swallow everything, including 500s: an error thrown
+      // inside the route pipeline never reached `setErrorHandler` below.
+      report(onError, error, status, body.error.code, request)
 
       if (!reply.sent) {
         reply.code(status).send(body)
@@ -284,9 +306,47 @@ function mountCollector(instance: FastifyInstance, collector: HttpServerCollecto
   }
 }
 
-function errorHandler(error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) {
-  const { status, body } = toErrorResponse(error)
-  // unintentional errors: log with stack, respond without leaking details
-  if (status === 500) request.log.error(error)
-  return reply.code(status).send(body)
+/**
+ * Reports through the caller's reporter, or through Fastify's own logger.
+ * Keeping `request.log` as the default sink preserves structured output for
+ * apps that configured pino, while the level policy itself stays in
+ * @basaltkit/http so all three adapters agree on it.
+ */
+function report(
+  onError: HttpErrorReporter | undefined,
+  error: unknown,
+  status: number,
+  code: string,
+  request: FastifyRequest,
+): void {
+  const entry = { error, status, code, method: request.method, url: request.url }
+  if (onError) onError(entry)
+  else reportHttpError(entry, sinkFor(request))
+}
+
+/**
+ * Fastify's own logger when it is real, the console when it is not.
+ *
+ * Constructed with `logger: false` — Fastify's default, and what a scaffolded
+ * Basalt app gets, since neither `create-basalt` nor the playground turns it on
+ * — Fastify installs a no-op logger. Writing reports there would discard them
+ * silently, so "observable by default" would hold only for apps that had
+ * already configured pino: precisely the ones that needed the help least.
+ *
+ * The no-op logger exposes no `level`; pino always does.
+ */
+function sinkFor(request: FastifyRequest): HttpLogSink {
+  const log = request.log as unknown as { level?: unknown }
+  return typeof log.level === 'string' ? (request.log as unknown as HttpLogSink) : console
+}
+
+function makeErrorHandler(onError?: HttpErrorReporter) {
+  return function errorHandler(error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) {
+    const { status, body } = toErrorResponse(error)
+    // Every status is reported now, not only 500 — a 400 the client sees but
+    // the server never records is exactly what makes debugging feel blind.
+    // The response body still leaks nothing: `toErrorResponse` decides that.
+    report(onError, error, status, body.error.code, request)
+    return reply.code(status).send(body)
+  }
 }

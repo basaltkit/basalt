@@ -290,6 +290,46 @@ interface BuildAppOptions { logLevel?: LogLevel }
 `LogLevel` (Pino's own `Level` type omits it). See [Configuration](/guide/config)
 for the env plumbing.
 
+## HTTP errors — `onError` on the adapter
+
+A request that fails is reported by the adapter: **5xx with the error object**
+(the stack is the point — it is a bug) and **4xx as a single warning line** (a
+validation failure's stack is noise; its code and message are the information).
+Both go through the same policy on Fastify, Express and Hono.
+
+```ts
+fastifyPlugin({
+  routes,
+  onError: ({ error, status, code, method, url }) => {
+    logger.error({ err: error, status, code, method, url }, 'request failed')
+  },
+})
+```
+
+Pass `() => {}` to silence them. The same option exists on `expressPlugin` and
+`honoPlugin`.
+
+**Where the default writes.** On Fastify it is Fastify's own logger, so records
+stay structured for apps that configured pino — and the console for apps that
+did not, since a server built with `logger: false` (Fastify's default) installs
+a no-op logger that would swallow the report. Express and Hono use the console.
+
+::: warning Two loggers, not one
+Fastify's logger and `@basaltkit/logger` are separate systems. The `LOGGER`
+token is for your own code; the adapter's default writes to Fastify's. Setting a
+level on `loggerPlugin` does **not** change what the adapter reports — wire
+`onError` to your logger if you want them in one place.
+:::
+
+**Client errors are reported too, deliberately.** They used to be silent, which
+is defensible for a 404 from a scanner and useless while you are trying to work
+out why your own request came back 400 with nothing in the terminal. If that is
+noisy for you, filter in your own reporter — the decision belongs to the app,
+not to the framework's default.
+
+The response body never changes: `toErrorResponse` decides what the client sees,
+and a 500 still says only `Internal server error.`
+
 ## Request correlation
 
 Every request carries a `requestId` and a `correlationId` in the
@@ -303,7 +343,8 @@ The same identifiers are what make the async surfaces legible: put your logger
 behind the realtime `onBridgeError` / `onDeliveryError` callbacks
 ([Realtime](/guide/realtime)), the outbox's `onDead` / `onFlushError`
 ([Persistence](/guide/persistence)) and the queue's `onError` / `onJobFailed`
-([Queues](/guide/queues)) instead of leaving them on `console.error`.
+([Queues](/guide/queues)) instead of leaving them on `console.error`. The HTTP
+adapter's own `onError` (above) is the same family.
 
 ## Options reference
 

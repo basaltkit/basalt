@@ -5,6 +5,8 @@ import {
   HTTP_SERVER,
   runRoute,
   toErrorResponse,
+  reportHttpError,
+  type HttpErrorReporter,
   type HttpReply,
   type HttpRequest,
   type BasaltRoute,
@@ -130,6 +132,7 @@ function handlerFor(
   container: Container | undefined,
   enrichers: RequestEnricher[],
   guards: RouteGuard[],
+  onError?: HttpErrorReporter,
 ) {
   return async (context: Context): Promise<Response> => {
     const reply = new HonoReply(context)
@@ -143,6 +146,11 @@ function handlerFor(
       return toResponse(reply, reply.sent ? reply.payload : result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
+      // This adapter previously reported nothing at all — a 500 reached the
+      // client and left no trace whatsoever on the server.
+      const entry = { error, status, code: body.error.code, method: context.req.method, url: context.req.url }
+      if (onError) onError(entry)
+      else reportHttpError(entry)
       return new Response(JSON.stringify(body), {
         status,
         headers: { 'content-type': 'application/json' },
@@ -158,9 +166,10 @@ export function registerRoutes(
   container?: Container,
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
+  onError?: HttpErrorReporter,
 ): void {
   for (const definition of routes) {
-    app.on(definition.method, definition.url, handlerFor(definition, container, enrichers, guards))
+    app.on(definition.method, definition.url, handlerFor(definition, container, enrichers, guards, onError))
   }
 }
 
@@ -181,6 +190,12 @@ export interface HonoPluginOptions {
    * text default. Default: true. An app calling `hono.notFound(…)` later
    * still wins (Hono keeps the last handler); pass false to opt out entirely.
    */
+  /**
+   * Where failed requests are reported. Default: 5xx via `console.error` (with
+   * the stack) and 4xx via `console.warn`, prefixed `[basalt:http]`. Pass your
+   * own to route them into a real logger, or `() => {}` to silence them.
+   */
+  onError?: HttpErrorReporter
   notFound?: boolean
   /**
    * Maximum request body size in bytes. A request whose `Content-Length`
@@ -244,7 +259,7 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
           await next()
           return undefined
         })
-        registerRoutes(app, routes, container, enrichers, guards)
+        registerRoutes(app, routes, container, enrichers, guards, options.onError)
         // Neutral JSON 404 (an app's own later `notFound` call replaces it).
         if (options.notFound !== false) {
           app.notFound((context: Context) => context.json(NOT_FOUND_RESPONSE, 404))
