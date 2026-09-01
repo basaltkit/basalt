@@ -350,6 +350,63 @@ errado para qualquer coisa lenta — passa a parte lenta para um job em fila e
 deixa a rota responder.
 :::
 
+### Quando o provisionamento é mais longo que o pedido
+
+O `onProvision` corre inline por omissão: o `create()` espera por ele, e quem
+chama sabe que o tenant está utilizável quando a chamada retorna. É o certo para
+um schema e um punhado de migrações, e errado assim que o trabalho passa a durar
+mais do que um pedido HTTP.
+
+Passa a `provision: 'deferred'` e o `create()` retorna assim que o registo é
+escrito, marcado como `provisioning`:
+
+```ts
+tenancyPlugin({ source, resolvers, onProvision, provision: 'deferred' })
+```
+
+```ts
+const tenant = await tenancy.create({ id: 'acme' })
+tenant.status                                    // 'provisioning'
+// …e os pedidos para ele recebem 503
+```
+
+**Nada é agendado por ti, e isso é de propósito.** O trabalho em segundo plano
+corre noutro processo, onde um closure deste não chega — por isso o worker
+volta a entrar com o id:
+
+```ts
+// jobs/provision-tenant.ts
+export const ProvisionTenant = defineJob({
+  name: 'tenant.provision',
+  handle: ({ id }: { id: string }) => ctx().container.get(TENANCY).provision(id),
+})
+
+// onde quer que cries o tenant
+await tenancy.create({ id })                     // retorna já, em 'provisioning'
+await ctx().container.get(QUEUE).dispatch(ProvisionTenant, { id })
+```
+
+O `provision(id)` corre o `onProvision`, muda o estado para `ready` e emite o
+`tenancy:created` — a mesma meta que o caminho inline atravessa. Mantém-no
+idempotente: depois de uma falha o estado fica `failed`, e uma nova tentativa
+tem de conseguir terminar o trabalho.
+
+Este desenho mantém o `@basaltkit/queue` completamente fora do
+`@basaltkit/tenancy`. O dispatch é da app, portanto qualquer agendador serve —
+uma fila, um cron, um `basalt tenant:run` à mão.
+
+### O estado, e porquê 503
+
+| Estado | Serve pedidos | Como lá chega |
+| --- | :---: | --- |
+| *(nenhum)* | ✅ | Todos os tenants criados antes de existir provisionamento. **Tratados como prontos** — qualquer outra coisa poria uma frota em produção offline na atualização |
+| `ready` | ✅ | O `onProvision` teve sucesso |
+| `provisioning` | ❌ 503 | O `create()` escreveu o registo; o trabalho ainda não acabou |
+| `failed` | ❌ 503 | O `onProvision` lançou. O registo é mantido, não apagado — é a evidência de que o tenant foi tentado |
+
+**503, e não 404.** O tenant existe; apenas ainda não serve, e o 503 é o estado
+que um cliente pode voltar a tentar. Um 404 diria o contrário.
+
 ## Ler o tenant
 
 O tenant resolvido vive no contexto do pedido — sem passagem de argumentos. É o
