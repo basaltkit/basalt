@@ -12,8 +12,11 @@ import {
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantCreateUnsupportedError,
+  TenantNotReadyError,
+  isTenantReady,
   type Tenant,
   type TenantSource,
+  type TenantStatus,
 } from './tenant.js'
 
 export {
@@ -21,8 +24,11 @@ export {
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantCreateUnsupportedError,
+  TenantNotReadyError,
+  isTenantReady,
   type Tenant,
   type TenantSource,
+  type TenantStatus,
 } from './tenant.js'
 export {
   subdomainResolver,
@@ -67,6 +73,8 @@ export class Tenancy {
     private readonly resolvers: TenantResolver[],
     private readonly hooks?: HookBus,
     private readonly onProvision?: (tenant: Tenant) => void | Promise<void>,
+    /** 'deferred' → `create()` returns before provisioning; see `provision()`. */
+    private readonly provisionMode: 'inline' | 'deferred' = 'inline',
   ) {}
 
   /** The tenant of the active context, if any. */
@@ -106,12 +114,68 @@ export class Tenancy {
     // whole flow to MemoryTenantSource, i.e. to tests.
     const persist = this.source.create ?? this.source.save
     if (!persist) throw new TenantCreateUnsupportedError()
-    const created = await persist.call(this.source, tenant)
-    if (this.onProvision) {
-      await this.run(created, () => this.onProvision!(created))
+
+    // Nothing to provision means nothing to wait for and nothing to gate on.
+    // Stamping a status here would mark the record `provisioning` forever,
+    // because nothing would ever clear it.
+    if (!this.onProvision) {
+      const created = await persist.call(this.source, tenant)
+      await this.hooks?.emit('tenancy:created', { tenant: created })
+      return created
     }
-    await this.hooks?.emit('tenancy:created', { tenant: created })
-    return created
+
+    const created = await persist.call(this.source, { ...tenant, status: 'provisioning' })
+    // Deferred: the record exists and is marked, so the resolver already
+    // answers 503 for it. A job calls `provision(id)` to finish the work.
+    if (this.provisionMode === 'deferred') return created
+    return this.provision(created)
+  }
+
+  /**
+   * Runs `onProvision` for a tenant and flips its status to `ready` — or
+   * `failed`, then rethrows.
+   *
+   * Public because background provisioning happens in ANOTHER PROCESS. A job
+   * handler cannot receive a closure from the process that created the tenant,
+   * so the worker re-enters here with the id and the app's own `onProvision`:
+   *
+   * ```ts
+   * defineJob({
+   *   name: 'tenant.provision',
+   *   handle: ({ id }) => ctx().container.get(TENANCY).provision(id),
+   * })
+   * ```
+   *
+   * Idempotent by requirement, not by construction: `onProvision` may run again
+   * after a failure, so write it with `CREATE SCHEMA IF NOT EXISTS` and
+   * `migrate deploy`.
+   */
+  async provision(tenantOrId: Tenant | string): Promise<Tenant> {
+    const tenant =
+      typeof tenantOrId === 'string' ? await this.source.find(tenantOrId) : tenantOrId
+    if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
+    if (!this.onProvision) return tenant
+
+    try {
+      await this.run(tenant, () => this.onProvision!(tenant))
+    } catch (error) {
+      // Marked, not deleted: the record is the only record that this tenant was
+      // attempted at all, and the resolver now answers 503 instead of letting
+      // requests hit storage that does not exist.
+      await this.writeStatus(tenant, 'failed')
+      throw error
+    }
+    const ready = await this.writeStatus(tenant, 'ready')
+    await this.hooks?.emit('tenancy:created', { tenant: ready })
+    return ready
+  }
+
+  /** Persists a status transition, preferring the upsert when the source has one. */
+  private async writeStatus(tenant: Tenant, status: TenantStatus): Promise<Tenant> {
+    const write = this.source.save ?? this.source.create
+    const next = { ...tenant, status }
+    if (!write) return next
+    return write.call(this.source, next)
   }
 
   /** Runs the resolvers in order; the first ref that loads a tenant wins. */
@@ -211,6 +275,36 @@ export interface TenancyPluginOptions {
    * runs inline, so an HTTP handler calling `create()` waits for it.
    */
   onProvision?: (tenant: Tenant) => void | Promise<void>
+  /**
+   * When `onProvision` runs.
+   *
+   * `'inline'` (default) — `create()` waits for it, so the caller knows the
+   * tenant is usable when it returns. Right for a schema and a few migrations.
+   *
+   * `'deferred'` — `create()` returns as soon as the record is written, marked
+   * `provisioning`; the resolver answers **503** for that tenant until someone
+   * calls `tenancy.provision(id)`. Use it when provisioning is slow enough to
+   * outlive an HTTP request.
+   *
+   * Deferred does NOT schedule anything by itself, and deliberately so:
+   * background work runs in another process, where a closure from this one
+   * cannot reach. You dispatch the job and it calls back in:
+   *
+   * ```ts
+   * const ProvisionTenant = defineJob({
+   *   name: 'tenant.provision',
+   *   handle: ({ id }: { id: string }) => ctx().container.get(TENANCY).provision(id),
+   * })
+   *
+   * app.hooks.on('tenancy:created', …)          // fires when provisioning finishes
+   * await tenancy.create({ id })                // returns immediately
+   * await queue.dispatch(ProvisionTenant, { id })
+   * ```
+   *
+   * That keeps `@basaltkit/queue` out of this package entirely — the app owns
+   * the dispatch, and any scheduler works.
+   */
+  provision?: 'inline' | 'deferred'
 }
 
 export function tenancyPlugin(options: TenancyPluginOptions) {
@@ -219,7 +313,14 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
     register({ container, hooks }) {
       container.singleton(
         TENANCY,
-        () => new Tenancy(options.source, options.resolvers, hooks, options.onProvision),
+        () =>
+          new Tenancy(
+            options.source,
+            options.resolvers,
+            hooks,
+            options.onProvision,
+            options.provision ?? 'inline',
+          ),
       )
       registerTenantCommands(container, options)
       // Marker other plugins read to adopt tenant-safe defaults (e.g.
@@ -248,6 +349,13 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           if (!tenant) {
             if (options.required) throw new TenancyNotResolvedError()
             return
+          }
+          // A tenant that is still provisioning (or failed) exists but cannot
+          // serve. Without this the request would reach a schema that is not
+          // there yet and die on a raw database error — the whole reason the
+          // status exists.
+          if (!isTenantReady(tenant)) {
+            throw new TenantNotReadyError(tenant.id, tenant['status'] as TenantStatus)
           }
           context.tenant = tenant
           await hooks.emit('tenancy:switched', { tenant })

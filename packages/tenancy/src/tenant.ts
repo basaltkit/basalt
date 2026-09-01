@@ -7,6 +7,21 @@ export interface Tenant {
 }
 
 /** Where tenants are loaded from — the app's database in production. */
+/**
+ * Where a tenant is in its lifecycle.
+ *
+ * A record with **no** status is treated as `ready`. Every tenant that existed
+ * before provisioning was introduced has no status, and they must keep serving
+ * traffic — a stricter default would 503 an entire production estate on upgrade.
+ */
+export type TenantStatus = 'provisioning' | 'ready' | 'failed'
+
+/** True unless the tenant is explicitly mid-provisioning or failed. */
+export function isTenantReady(tenant: Tenant): boolean {
+  const status = tenant['status'] as TenantStatus | undefined
+  return status === undefined || status === 'ready'
+}
+
 export interface TenantSource {
   find(id: string): Promise<Tenant | null>
   /** Required by the domain resolver (custom domains). */
@@ -58,6 +73,15 @@ export class MemoryTenantSource implements TenantSource {
     this.tenants.set(tenant.id, tenant)
     return tenant
   }
+
+  /**
+   * Upsert. Present so status transitions work here too — `tenancy.create()`
+   * writes `provisioning`, then `ready`, and needs a second write for that.
+   */
+  async save(tenant: Tenant): Promise<Tenant> {
+    this.tenants.set(tenant.id, tenant)
+    return tenant
+  }
 }
 
 /** Request could not be mapped to a tenant. Maps to HTTP 404 in the adapter. */
@@ -74,6 +98,23 @@ export class TenancyNotResolvedError extends BasaltError {
 export class TenantNotFoundError extends BasaltError {
   constructor(id: string) {
     super('TENANT_NOT_FOUND', `Tenant "${id}" does not exist in the tenant source.`)
+  }
+}
+
+/**
+ * The request resolved to a tenant whose storage is not ready yet. 503 rather
+ * than 404: the tenant exists, it is simply not serving — and 503 is the status
+ * a client may retry.
+ */
+export class TenantNotReadyError extends BasaltError {
+  readonly status = 503
+  constructor(id: string, status: TenantStatus) {
+    super(
+      'TENANT_NOT_READY',
+      status === 'failed'
+        ? `Tenant "${id}" failed to provision and is not serving requests. Re-run provisioning once the cause is fixed.`
+        : `Tenant "${id}" is still being provisioned. Retry shortly.`,
+    )
   }
 }
 
