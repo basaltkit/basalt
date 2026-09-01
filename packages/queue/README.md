@@ -33,6 +33,8 @@ pnpm add @basaltkit/queue-bullmq bullmq
 
 The package depends on `@basaltkit/core` and `@basaltkit/events` (installed automatically). For development and tests you need nothing else — the sync driver ships here and has no dependencies.
 
+**Keep this package whichever backend you pick.** It is not one of the backends — it is the contract they all implement, and the package your job code imports: `defineJob`, `dispatch`, the `QUEUE` token, `QueueManager`, workers, context propagation, and the sync driver. A backend package **depends on** it; it never replaces it.
+
 **This package contains no broker client, and no backend is privileged in its API.** Each backend is a separate package that carries its driver *and* a one-line plugin, and declares its client as a peer dependency you install yourself:
 
 | Backend | Package | Plugin | Client |
@@ -41,7 +43,7 @@ The package depends on `@basaltkit/core` and `@basaltkit/events` (installed auto
 | RabbitMQ | [`@basaltkit/queue-rabbitmq`](https://www.npmjs.com/package/@basaltkit/queue-rabbitmq) | `rabbitmqQueuePlugin` | `amqplib` |
 | Amazon SQS | [`@basaltkit/queue-sqs`](https://www.npmjs.com/package/@basaltkit/queue-sqs) | `sqsQueuePlugin` | `@aws-sdk/client-sqs` |
 | Kafka | [`@basaltkit/queue-kafka`](https://www.npmjs.com/package/@basaltkit/queue-kafka) | `kafkaQueuePlugin` | `kafkajs` |
-| Sync (dev/tests) | `@basaltkit/queue` | `queuePlugin` | — nothing |
+| **none** — inline, dev/tests | *(already in this package)* | `queuePlugin` | — nothing |
 
 So an app on SQS never installs (or loads) BullMQ and its ioredis transitive weight. For production with BullMQ you also need an accessible **Redis** server (it stores the queues there).
 

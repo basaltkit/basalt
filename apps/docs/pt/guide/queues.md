@@ -13,9 +13,16 @@ numa linha; os teus jobs nunca mudam.
 pnpm add @basaltkit/queue @basaltkit/queue-bullmq bullmq
 ```
 
-O núcleo **não** conhece nenhum broker. Cada backend é um pacote separado que
-traz o seu driver *e* o seu plugin, e o cliente é uma peer dependency que
-instalas tu:
+**O `@basaltkit/queue` é sempre necessário.** Não é um dos backends — é o
+contrato que todos implementam, e o pacote que o teu código de jobs importa:
+
+| Vem de | O quê |
+| --- | --- |
+| **`@basaltkit/queue`** — sempre | `defineJob`, `dispatch`, o token `QUEUE`, o `QueueManager`, os workers, a propagação de contexto, e o driver sync |
+| **um pacote de backend** — um deles | o driver e o seu plugin: *onde* esses jobs correm de facto |
+
+O pacote do backend **depende** do núcleo; não o substitui. Adicionar um é
+escolher um destino de execução, não trocar de biblioteca.
 
 | Backend | Pacote | Plugin | Cliente a instalar |
 | --- | --- | --- | --- |
@@ -23,14 +30,16 @@ instalas tu:
 | RabbitMQ | `@basaltkit/queue-rabbitmq` | `rabbitmqQueuePlugin` | `amqplib` |
 | Amazon SQS | `@basaltkit/queue-sqs` | `sqsQueuePlugin` | `@aws-sdk/client-sqs` |
 | Kafka | `@basaltkit/queue-kafka` | `kafkaQueuePlugin` | `kafkajs` |
-| Sync (dev/testes) | `@basaltkit/queue` | `queuePlugin` | — nada |
+| **nenhum** — inline, dev/testes | *(o núcleo já o tem)* | `queuePlugin` | — nada |
 
-Assim, uma app em SQS nunca instala (nem carrega) o BullMQ e o peso do ioredis
-que ele arrasta, e o `@basaltkit/queue` sozinho dá-te o driver sync — tudo o que
-dev e testes precisam.
+O núcleo **não** conhece nenhum broker, por isso uma app em SQS nunca instala —
+nem carrega — o BullMQ e o peso do ioredis. E sem nenhum pacote de backend
+continuas a ter uma fila a funcionar: o driver sync, que é tudo o que dev e
+testes precisam.
 
-Nenhum backend é privilegiado: os quatro plugins têm a mesma forma, e o
-`queuePlugin` do núcleo é o que todos envolvem.
+O ganho é que o teu código de jobs nunca menciona o backend. Trocar RabbitMQ por
+Redis é um import mudado no `app.ts`; cada `defineJob` e cada `dispatch` ficam
+exatamente como estão escritos.
 
 [[toc]]
 
