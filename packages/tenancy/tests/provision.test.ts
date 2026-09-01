@@ -127,7 +127,7 @@ describe('provisioning a new tenant', () => {
     await expect(tenancy.create({ id: 'acme' })).rejects.toBeInstanceOf(
       TenantCreateUnsupportedError,
     )
-    await expect(tenancy.create({ id: 'acme' })).rejects.toThrow(/does not implement create/)
+    await expect(tenancy.create({ id: 'acme' })).rejects.toThrow(/neither create\(\) nor save\(\)/)
     await app.shutdown()
   })
 
@@ -136,6 +136,81 @@ describe('provisioning a new tenant', () => {
     await tenancy.create({ id: 'acme', name: 'Acme', domain: 'acme.test' } as Tenant)
     const stored = await source.find('acme')
     expect(stored).toMatchObject({ id: 'acme', name: 'Acme', domain: 'acme.test' })
+    await app.shutdown()
+  })
+})
+
+/**
+ * The durable sources — `@basaltkit/tenancy-prisma` and
+ * `@basaltkit/tenancy-sqlite` — implement `save()` (an upsert), not `create()`.
+ * Requiring `create()` limited this whole flow to `MemoryTenantSource`, which is
+ * to say to tests: a real app on Prisma got TENANT_CREATE_UNSUPPORTED from a
+ * source that persists tenants perfectly well.
+ *
+ * Shipped that way in 1.5.0 and caught in a real app, because every test here
+ * used the one source that happens to have `create()`.
+ */
+describe('sources that persist through save() instead of create()', () => {
+  const saveOnly = () => {
+    const rows = new Map<string, Tenant>()
+    return {
+      rows,
+      source: {
+        find: async (id: string) => rows.get(id) ?? null,
+        save: async (tenant: Tenant) => {
+          rows.set(tenant.id, tenant)
+          return tenant
+        },
+      } satisfies TenantSource,
+    }
+  }
+
+  it('creates and provisions through save()', async () => {
+    const { source, rows } = saveOnly()
+    const order: string[] = []
+    const app = await createApp({
+      plugins: [
+        tenancyPlugin({
+          source,
+          resolvers: [headerResolver()],
+          onProvision: () => void order.push('provision'),
+        }),
+      ],
+    }).boot()
+    app.hooks.on('tenancy:created', () => void order.push('created'))
+
+    const tenant = await app.container.get(TENANCY).create({ id: 'acme', name: 'Acme' })
+
+    expect(tenant).toMatchObject({ id: 'acme', name: 'Acme' })
+    expect(rows.get('acme')).toMatchObject({ id: 'acme' })
+    expect(order).toEqual(['provision', 'created'])
+    await app.shutdown()
+  })
+
+  it('prefers create() when a source offers both', async () => {
+    // `create` is the stricter of the two (it may reject a duplicate), so it
+    // wins wherever it exists.
+    const calls: string[] = []
+    const source: TenantSource = {
+      find: async () => null,
+      create: async (t) => {
+        calls.push('create')
+        return t
+      },
+      save: async (t) => {
+        calls.push('save')
+        return t
+      },
+    }
+    const { app, tenancy } = await boot({ source })
+    await tenancy.create({ id: 'acme' })
+    expect(calls).toEqual(['create'])
+    await app.shutdown()
+  })
+
+  it('names both ways out when a source can do neither', async () => {
+    const { app, tenancy } = await boot({ source: { find: async () => null } })
+    await expect(tenancy.create({ id: 'acme' })).rejects.toThrow(/neither create\(\) nor save\(\)/)
     await app.shutdown()
   })
 })

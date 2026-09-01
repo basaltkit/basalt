@@ -13,8 +13,20 @@ export interface TenantSource {
   findByDomain?(domain: string): Promise<Tenant | null>
   /** Required by tenancy.forEach() and `basalt tenant:list`. */
   list?(): Promise<Tenant[]>
-  /** Required by `basalt tenant:create`. Persists and returns the new tenant. */
+  /**
+   * Persists and returns the new tenant, failing if it already exists.
+   * `MemoryTenantSource` implements this.
+   */
   create?(tenant: Tenant): Promise<Tenant>
+  /**
+   * Upsert — what the durable sources (`@basaltkit/tenancy-prisma`,
+   * `@basaltkit/tenancy-sqlite`) implement instead of `create`.
+   *
+   * `tenancy.create()` accepts either: it prefers `create` when a source has
+   * it, and falls back to `save`. Without that, the whole provisioning flow
+   * would work only with the in-memory source — which is to say, only in tests.
+   */
+  save?(tenant: Tenant): Promise<Tenant>
 }
 
 /** In-memory source — tests, dev and small single-node setups. */
@@ -70,8 +82,10 @@ export class TenantCreateUnsupportedError extends BasaltError {
   constructor() {
     super(
       'TENANT_CREATE_UNSUPPORTED',
-      'The configured TenantSource does not implement create(). MemoryTenantSource and the ' +
-        'Prisma/SQLite sources do; a read-only source (e.g. one backed by a static config) cannot.',
+      'The configured TenantSource can persist neither way: it implements neither create() nor ' +
+        'save(). MemoryTenantSource has create(); @basaltkit/tenancy-prisma and ' +
+        '@basaltkit/tenancy-sqlite have save(). A read-only source (e.g. one backed by a static ' +
+        'config file) has neither and cannot create tenants.',
     )
   }
 }

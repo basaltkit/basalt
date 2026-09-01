@@ -126,3 +126,34 @@ describe('prismaTenantSource', () => {
     )
   })
 })
+
+/**
+ * This source implements `save()`, not `create()` — and `tenancy.create()`
+ * originally required `create()`, so provisioning worked only with
+ * `MemoryTenantSource`. Shipped that way in tenancy 1.5.0 and found in a real
+ * app: `TENANT_CREATE_UNSUPPORTED` from a source that persists tenants fine.
+ *
+ * Asserted here, against the real source, because a fake with the right shape
+ * is exactly what failed to catch it.
+ */
+describe('usable by tenancy.create()', () => {
+  it('creates, provisions and announces through save()', async () => {
+    const { Tenancy } = await import('@basaltkit/tenancy')
+
+    const source = prismaTenantSource(makeFakeClient())
+    const provisioned: string[] = []
+    const announced: string[] = []
+    // Minimal hook bus — this asserts the source, not the container wiring.
+    const hooks = { emit: async (_n: string, p: { tenant: { id: string } }) => void announced.push(p.tenant.id) }
+
+    const tenancy = new Tenancy(source, [], hooks as never, (t) => void provisioned.push(t.id))
+    const tenant = await tenancy.create({ id: 'acme', name: 'Acme' })
+
+    expect(tenant).toMatchObject({ id: 'acme', name: 'Acme' })
+    expect(await source.find('acme')).toMatchObject({ id: 'acme' })
+    expect(provisioned).toEqual(['acme'])
+    // 'tenancy:switched' fires when provisioning enters the context, then
+    // 'tenancy:created' — the last one is the announcement.
+    expect(announced.at(-1)).toBe('acme')
+  })
+})
