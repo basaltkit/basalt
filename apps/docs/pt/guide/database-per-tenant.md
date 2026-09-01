@@ -72,10 +72,27 @@ scope falha ruidosamente em vez de tocar silenciosamente nos dados errados.
 
 ## Provisionar um novo tenant
 
-Antes do primeiro pedido de um tenant, o seu armazenamento tem de existir. Persiste o
-registo, cria o seu armazenamento, depois migra-o — para **schema-per-tenant** isso é
-`provisionTenantSchema` + uma migração; para **database-per-tenant** crias a base de
-dados fora de banda (a tua infra/fornecedor), depois migra-la da mesma forma:
+Antes do primeiro pedido de um tenant, o storage dele tem de existir. Declara-o
+uma vez como `onProvision` no `tenancyPlugin` e todos os caminhos de criação o
+correm — vê [No sign-up](/pt/guide/tenancy#no-sign-up-—-provisionar-um-tenant-sob-demanda):
+
+```ts
+tenancyPlugin({
+  source, resolvers,
+  async onProvision(tenant) {
+    const admin = new PrismaClient()
+    await provisionTenantSchema(admin, tenantSchema(tenant.id))
+    await migrateTenants({
+      tenants: [tenant.id],
+      target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },
+    })
+  },
+})
+
+await tenancy.create({ id, name })   // persiste → provisiona → emite tenancy:created
+```
+
+Os mesmos passos escritos à mão, quando os queres fora do plugin:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
