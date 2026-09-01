@@ -100,8 +100,13 @@ export class Tenancy {
    * idempotent so that a retry finishes the job.
    */
   async create(tenant: Tenant): Promise<Tenant> {
-    if (!this.source.create) throw new TenantCreateUnsupportedError()
-    const created = await this.source.create(tenant)
+    // `create` when the source has it, `save` otherwise. The two durable
+    // sources (tenancy-prisma, tenancy-sqlite) expose only `save`, an upsert
+    // with the same signature — so requiring `create` would have limited this
+    // whole flow to MemoryTenantSource, i.e. to tests.
+    const persist = this.source.create ?? this.source.save
+    if (!persist) throw new TenantCreateUnsupportedError()
+    const created = await persist.call(this.source, tenant)
     if (this.onProvision) {
       await this.run(created, () => this.onProvision!(created))
     }
@@ -297,7 +302,7 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
       }
       // Checked here as well as in the service, so the CLI answers with a clean
       // line instead of a stack trace.
-      if (!options.source.create) {
+      if (!options.source.create && !options.source.save) {
         io.error(new TenantCreateUnsupportedError().message)
         return 1
       }
