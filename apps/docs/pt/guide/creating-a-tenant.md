@@ -207,18 +207,32 @@ Aqui está a função de serviço que cria o tenant e semeia o seu owner:
 
 ```ts
 import { TEAMS } from '@basaltkit/teams'
-import { tenants } from './tenancy' // a tua source durável do Nível 2/3
+import { TENANCY } from '@basaltkit/tenancy'
 
 export async function onboard(app, userId: string, input: { id: string; name: string }) {
-  // 2. persiste o tenant para os resolvers poderem encaminhar para ele a partir de agora
-  await tenants.save({ id: input.id, name: input.name })
+  // 2. cria o tenant ATRAVÉS DO SERVIÇO — ele persiste o registo, corre o
+  //    `onProvision` (schema + migrações) e emite o `tenancy:created`, por esta
+  //    ordem. Chamar `tenants.save()` aqui escreveria a linha e saltaria o
+  //    provisionamento, deixando um tenant encaminhável e partido.
+  const tenant = await app.container.get(TENANCY).create({ id: input.id, name: input.name })
 
   // 3. o criador torna-se o primeiro owner do tenant
-  await app.container.get(TEAMS).addMember(input.id, userId, 'owner')
+  await app.container.get(TEAMS).addMember(tenant.id, userId, 'owner')
 
-  return { id: input.id, name: input.name }
+  return tenant
 }
 ```
+
+Declara o provisionamento uma vez, no plugin — vê
+[No sign-up](/pt/guide/tenancy#no-sign-up-—-provisionar-um-tenant-sob-demanda):
+
+```ts
+tenancyPlugin({ source, resolvers, onProvision })
+```
+
+Se o provisionamento for mais longo que o pedido, acrescenta
+`provision: 'deferred'`: o `create()` passa a retornar já, e o tenant responde
+**503** até um job chamar o `tenancy.provision(id)`.
 
 E aqui está a rota que exige um utilizador com sessão e a chama. O `meta.auth`
 diz ao Basalt que esta rota precisa de autenticação; `ctx().user` é o utilizador

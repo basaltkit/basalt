@@ -199,18 +199,32 @@ Here's the service function that creates the tenant and seeds its owner:
 
 ```ts
 import { TEAMS } from '@basaltkit/teams'
-import { tenants } from './tenancy' // your durable source from Level 2/3
+import { TENANCY } from '@basaltkit/tenancy'
 
 export async function onboard(app, userId: string, input: { id: string; name: string }) {
-  // 2. persist the tenant so resolvers can route to it from now on
-  await tenants.save({ id: input.id, name: input.name })
+  // 2. create the tenant THROUGH THE SERVICE — it persists the record, runs
+  //    `onProvision` (schema + migrations) and emits `tenancy:created`, in that
+  //    order. Calling `tenants.save()` here would write the row and skip the
+  //    provisioning, leaving a tenant that is routable and broken.
+  const tenant = await app.container.get(TENANCY).create({ id: input.id, name: input.name })
 
   // 3. the creator becomes the tenant's first owner
-  await app.container.get(TEAMS).addMember(input.id, userId, 'owner')
+  await app.container.get(TEAMS).addMember(tenant.id, userId, 'owner')
 
-  return { id: input.id, name: input.name }
+  return tenant
 }
 ```
+
+Declare the provisioning once, on the plugin — see
+[At sign-up](/guide/tenancy#at-sign-up-—-provision-a-tenant-on-demand):
+
+```ts
+tenancyPlugin({ source, resolvers, onProvision })
+```
+
+If provisioning is slow enough to outlive the request, add
+`provision: 'deferred'`: `create()` then returns immediately and the tenant
+answers **503** until a job calls `tenancy.provision(id)`.
 
 And here's the route that requires a signed-in user and calls it. `meta.auth`
 tells Basalt this route needs authentication; `ctx().user` is the logged-in user:
