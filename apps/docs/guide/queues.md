@@ -13,9 +13,16 @@ your jobs never change.
 pnpm add @basaltkit/queue @basaltkit/queue-bullmq bullmq
 ```
 
-The core knows **no** broker. Each backend is a separate package carrying its
-driver *and* its plugin, and its client is a peer dependency you install
-yourself:
+**`@basaltkit/queue` is always required.** It is not one of the backends — it is
+the contract they all implement, and the package your job code imports:
+
+| You get from | What |
+| --- | --- |
+| **`@basaltkit/queue`** — always | `defineJob`, `dispatch`, the `QUEUE` token, `QueueManager`, workers, context propagation, and the sync driver |
+| **a backend package** — one of them | the driver and its plugin: *where* those jobs actually run |
+
+The backend package **depends on** the core; it does not replace it. Adding one
+is choosing an execution target, not swapping libraries.
 
 | Backend | Package | Plugin | Client to install |
 | --- | --- | --- | --- |
@@ -23,13 +30,15 @@ yourself:
 | RabbitMQ | `@basaltkit/queue-rabbitmq` | `rabbitmqQueuePlugin` | `amqplib` |
 | Amazon SQS | `@basaltkit/queue-sqs` | `sqsQueuePlugin` | `@aws-sdk/client-sqs` |
 | Kafka | `@basaltkit/queue-kafka` | `kafkaQueuePlugin` | `kafkajs` |
-| Sync (dev/test) | `@basaltkit/queue` | `queuePlugin` | — nothing |
+| **none** — inline, dev/tests | *(the core already has it)* | `queuePlugin` | — nothing |
 
-So an app on SQS never installs (or loads) BullMQ and its ioredis weight, and
-`@basaltkit/queue` on its own gives you the sync driver — all dev and tests need.
+The core knows **no** broker, so an app on SQS never installs — or loads —
+BullMQ and its ioredis weight. And with no backend package at all you still have
+a working queue: the sync driver, which is all dev and tests need.
 
-No backend is privileged: the four plugins take the same shape, and the core's
-`queuePlugin` is what they all wrap.
+The payoff is that your job code never mentions the backend. Swapping RabbitMQ
+for Redis is one changed import in `app.ts`; every `defineJob` and every
+`dispatch` stays exactly as written.
 
 [[toc]]
 
