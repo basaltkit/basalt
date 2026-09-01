@@ -344,6 +344,63 @@ migration. That is fine for a schema and a handful of migrations, and wrong for
 anything slow — hand the slow part to a queued job and let the route return.
 :::
 
+### When provisioning outlives the request
+
+`onProvision` runs inline by default: `create()` waits for it, and the caller
+knows the tenant is usable when it returns. That is right for a schema and a
+handful of migrations, and wrong once the work is slow enough to outlive an HTTP
+request.
+
+Switch to `provision: 'deferred'` and `create()` returns as soon as the record is
+written, marked `provisioning`:
+
+```ts
+tenancyPlugin({ source, resolvers, onProvision, provision: 'deferred' })
+```
+
+```ts
+const tenant = await tenancy.create({ id: 'acme' })
+tenant.status                                    // 'provisioning'
+// …and requests routed to it get 503 until it is finished
+```
+
+**Nothing is scheduled for you, and that is deliberate.** Background work runs in
+another process, where a closure from this one cannot reach — so the worker
+re-enters with the id:
+
+```ts
+// jobs/provision-tenant.ts
+export const ProvisionTenant = defineJob({
+  name: 'tenant.provision',
+  handle: ({ id }: { id: string }) => ctx().container.get(TENANCY).provision(id),
+})
+
+// wherever you create the tenant
+await tenancy.create({ id })                     // returns immediately, 'provisioning'
+await ctx().container.get(QUEUE).dispatch(ProvisionTenant, { id })
+```
+
+`provision(id)` runs `onProvision`, flips the status to `ready` and emits
+`tenancy:created` — the same finish line the inline path crosses. Keep it
+idempotent: after a failure the status is `failed`, and a retry has to be able to
+complete the job.
+
+That design keeps `@basaltkit/queue` out of `@basaltkit/tenancy` entirely. The
+app owns the dispatch, so any scheduler works — a queue, a cron, a manual
+`basalt tenant:run`.
+
+### The status, and why 503
+
+| Status | Serves requests | How it gets there |
+| --- | :---: | --- |
+| *(none)* | ✅ | Every tenant created before provisioning existed. **Treated as ready** — anything else would take a production estate offline on upgrade |
+| `ready` | ✅ | `onProvision` succeeded |
+| `provisioning` | ❌ 503 | `create()` wrote the record; the work has not finished |
+| `failed` | ❌ 503 | `onProvision` threw. The record is kept, not deleted — it is the evidence the tenant was attempted |
+
+**503, not 404.** The tenant exists; it is simply not serving yet, and 503 is the
+status a client may retry. A 404 would say the opposite.
+
 ## Reading the tenant
 
 The resolved tenant lives in the request context — no argument passing. It's the
