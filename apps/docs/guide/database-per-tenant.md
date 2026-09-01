@@ -73,10 +73,30 @@ fails loudly instead of silently touching the wrong data.
 
 ## Provisioning a new tenant
 
-Before a tenant's first request, its storage has to exist. Persist the record,
-create its storage, then migrate it — for **schema-per-tenant** that's
-`provisionTenantSchema` + a migration; for **database-per-tenant** you create the
-database out of band (your infra/provider), then migrate it the same way:
+Before a tenant's first request, its storage has to exist. Declare it once as
+`onProvision` on `tenancyPlugin` and every creation path runs it — see
+[At sign-up](/guide/tenancy#at-sign-up-—-provision-a-tenant-on-demand):
+
+```ts
+tenancyPlugin({
+  source, resolvers,
+  async onProvision(tenant) {
+    const admin = new PrismaClient()
+    await provisionTenantSchema(admin, tenantSchema(tenant.id))
+    await migrateTenants({
+      tenants: [tenant.id],
+      target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },
+    })
+  },
+})
+
+await tenancy.create({ id, name })   // persists → provisions → emits tenancy:created
+```
+
+The same steps written by hand, when you want them outside the plugin — for
+**schema-per-tenant** that's `provisionTenantSchema` + a migration; for
+**database-per-tenant** you create the database out of band (your
+infra/provider), then migrate it the same way:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -98,7 +118,10 @@ export async function provisionTenant(id: string, name: string) {
 ```
 
 Once the record exists, `subdomainResolver` / `domainResolver` route the new
-tenant's traffic immediately, and the pool builds its client on first use.
+tenant's traffic **immediately**, and the pool builds its client on first use.
+That is precisely why provisioning should not be a step you remember to call:
+between `save()` and the migration there is a window in which the tenant is
+reachable and broken. `tenancy.create()` closes it by doing both.
 
 ## Durable stores, one per tenant
 

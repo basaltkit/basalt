@@ -11,6 +11,7 @@ import type { ResolutionRequest, TenantRef, TenantResolver } from './resolvers.j
 import {
   TenancyNotResolvedError,
   TenantNotFoundError,
+  TenantCreateUnsupportedError,
   type Tenant,
   type TenantSource,
 } from './tenant.js'
@@ -19,6 +20,7 @@ export {
   MemoryTenantSource,
   TenancyNotResolvedError,
   TenantNotFoundError,
+  TenantCreateUnsupportedError,
   type Tenant,
   type TenantSource,
 } from './tenant.js'
@@ -46,6 +48,16 @@ declare module '@basaltkit/core' {
   interface BasaltHooks {
     /** Emitted whenever execution enters a tenant context. */
     'tenancy:switched': { tenant: Tenant }
+    /**
+     * A tenant was created AND provisioned — emitted by `tenancy.create()`
+     * after `onProvision` has resolved, so a listener may assume the tenant's
+     * storage exists and is usable (send the welcome email, seed demo data,
+     * notify the admin panel).
+     *
+     * It does NOT fire if provisioning threw. That is deliberate: a listener
+     * that reacts to a half-built tenant is worse than one that never runs.
+     */
+    'tenancy:created': { tenant: Tenant }
   }
 }
 
@@ -54,6 +66,7 @@ export class Tenancy {
     private readonly source: TenantSource,
     private readonly resolvers: TenantResolver[],
     private readonly hooks?: HookBus,
+    private readonly onProvision?: (tenant: Tenant) => void | Promise<void>,
   ) {}
 
   /** The tenant of the active context, if any. */
@@ -63,6 +76,37 @@ export class Tenancy {
 
   async find(id: string): Promise<Tenant | null> {
     return this.source.find(id)
+  }
+
+  /**
+   * Registers a tenant and brings its storage into existence.
+   *
+   * Use this rather than `source.create()` directly. The source only persists
+   * the record; a tenant whose row exists but whose schema does not is
+   * immediately routable by `subdomainResolver`/`domainResolver` and fails on
+   * its very first request with a raw database error. Going through here runs
+   * `onProvision` before anyone can reach it.
+   *
+   * `onProvision` runs INSIDE the new tenant's context, like `onMigrate` and
+   * `onSeed`, so `ctx().tenant` and any tenant-scoped client resolve correctly.
+   * Entering the context opens no connection by itself, so provisioning work on
+   * an admin connection (`CREATE SCHEMA`) is still fine.
+   *
+   * If provisioning throws, the error propagates and `tenancy:created` does not
+   * fire — but **the tenant record has already been written**, because the
+   * source persisted it first. That half-state is not rolled back: deleting is
+   * not something every `TenantSource` can do, and a failed delete on top of a
+   * failed provision loses the evidence. Provisioning is expected to be
+   * idempotent so that a retry finishes the job.
+   */
+  async create(tenant: Tenant): Promise<Tenant> {
+    if (!this.source.create) throw new TenantCreateUnsupportedError()
+    const created = await this.source.create(tenant)
+    if (this.onProvision) {
+      await this.run(created, () => this.onProvision!(created))
+    }
+    await this.hooks?.emit('tenancy:created', { tenant: created })
+    return created
   }
 
   /** Runs the resolvers in order; the first ref that loads a tenant wins. */
@@ -132,13 +176,46 @@ export interface TenancyPluginOptions {
   onMigrate?: (tenant: Tenant) => void | Promise<void>
   /** Per-tenant seed hook for `basalt tenant:seed`, run inside each tenant's context. */
   onSeed?: (tenant: Tenant) => void | Promise<void>
+  /**
+   * Brings a NEW tenant's storage into existence — create the schema or
+   * database, then migrate it. Runs inside the new tenant's context, from
+   * `tenancy.create()` and from `basalt tenant:create`, before anything can
+   * route a request to it.
+   *
+   * This is what makes self-service signup work: a tenant created from an admin
+   * panel has no operator standing by to run `basalt tenant:migrate`, and
+   * without provisioning its first request hits storage that does not exist.
+   *
+   * ```ts
+   * tenancyPlugin({
+   *   source, resolvers,
+   *   async onProvision(tenant) {
+   *     const admin = new PrismaClient()
+   *     await provisionTenantSchema(admin, tenantSchema(tenant.id))
+   *     await migrateTenants({
+   *       tenants: [tenant.id],
+   *       target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },
+   *     })
+   *   },
+   * })
+   * ```
+   *
+   * Make it idempotent (`CREATE SCHEMA IF NOT EXISTS`, `migrate deploy`): if it
+   * throws, the tenant record already exists and a retry has to be able to
+   * finish the job. Keep it quick, or hand the slow part to a queued job — this
+   * runs inline, so an HTTP handler calling `create()` waits for it.
+   */
+  onProvision?: (tenant: Tenant) => void | Promise<void>
 }
 
 export function tenancyPlugin(options: TenancyPluginOptions) {
   return definePlugin({
     name: 'basalt:tenancy',
     register({ container, hooks }) {
-      container.singleton(TENANCY, () => new Tenancy(options.source, options.resolvers, hooks))
+      container.singleton(
+        TENANCY,
+        () => new Tenancy(options.source, options.resolvers, hooks, options.onProvision),
+      )
       registerTenantCommands(container, options)
       // Marker other plugins read to adopt tenant-safe defaults (e.g.
       // @basaltkit/cache fails closed on a missing tenant scope when this app
@@ -218,14 +295,23 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
         io.error('Usage: basalt tenant:create <id> [--name=… --anyField=…]')
         return 1
       }
+      // Checked here as well as in the service, so the CLI answers with a clean
+      // line instead of a stack trace.
       if (!options.source.create) {
-        io.error('The configured TenantSource does not implement create().')
+        io.error(new TenantCreateUnsupportedError().message)
         return 1
       }
       const fields: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(flags)) fields[key] = value
-      const tenant = await options.source.create({ id, ...fields })
-      io.log(`Created tenant "${tenant.id}".`)
+      // Through the SERVICE, not the source: that is what runs `onProvision`
+      // and emits `tenancy:created`, so this command and an admin panel calling
+      // `tenancy.create()` produce an identical tenant.
+      const tenant = await tenancy().create({ id, ...fields } as Tenant)
+      io.log(
+        options.onProvision
+          ? `Created and provisioned tenant "${tenant.id}".`
+          : `Created tenant "${tenant.id}". No onProvision hook configured — its storage was NOT created.`,
+      )
     },
   })
 

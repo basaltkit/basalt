@@ -19,6 +19,7 @@ Four pieces, in the order they run:
 | `TenantSource` | once a resolver produced a ref | Loads the tenant record (`find` / `findByDomain`). A ref that loads nothing falls through to the **next** resolver |
 | `ctx().tenant` | for the rest of the request | The resolved open record — `undefined` when nothing matched |
 | `tenancy:switched` | on every entry into a tenant | Lets cache, storage and the db client re-attach their per-tenant instance |
+| `tenancy:created` | once, after a new tenant is created **and provisioned** | Welcome email, audit entry, notifying a panel — a listener may assume the tenant's storage exists |
 
 Outside a request there is no resolver, so you enter a tenant explicitly with
 `tenancy.run(id, fn)` — jobs, CLI commands and maintenance scripts all go through
@@ -256,34 +257,92 @@ two models with `basalt prisma:sync --push`, then pass your generated
 
 ### At sign-up — provision a tenant on demand
 
-A real SaaS creates tenants when a customer signs up. Do it in a service/route:
-persist the record, then (for schema- or database-per-tenant) provision its
-storage, and optionally seed it — all inside the new tenant's context.
+A real SaaS creates tenants when a customer signs up, and the person clicking
+**Create** in a panel usually has neither the knowledge nor the access to run a
+migration afterwards. Declare `onProvision` **once**, and every creation path —
+an admin route, `basalt tenant:create`, a seed script — brings the tenant's
+storage into existence before anything can route a request to it.
 
 ```ts
-import { ctx } from '@basaltkit/core'
-import { TENANCY } from '@basaltkit/tenancy'
-import { provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
+// src/app.ts
+import { provisionTenantSchema, tenantSchema, migrateTenants } from '@basaltkit/prisma'
 
-export async function createTenant(input: { id: string; name: string; domains?: string[] }) {
-  // 1. persist the tenant (shared-database mode stops here)
-  await tenants.save(input)
+tenancyPlugin({
+  source,
+  resolvers: [subdomainResolver({ base: 'example.com' })],
 
-  // 2. schema-per-tenant only: create its schema, then migrate it
-  await provisionTenantSchema(db, tenantSchema(input.id))
-  //    …run migrations against tenant_<id> (or the `basalt tenant:migrate` command below)
+  async onProvision(tenant) {
+    const admin = new PrismaClient()
+    await provisionTenantSchema(admin, tenantSchema(tenant.id))   // CREATE SCHEMA IF NOT EXISTS
+    await migrateTenants({
+      tenants: [tenant.id],
+      target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },
+    })
+  },
+})
+```
 
-  // 3. optionally seed starter data *inside* the new tenant
-  await app.container.get(TENANCY).run(input.id, async () => {
-    await ctx().db.setting.create({ data: { key: 'onboarded', value: 'true' } })
-  })
+Then create through the **service**, never through the source:
 
-  return input
+```ts
+// src/modules/tenants/tenants.routes.ts
+route({
+  method: 'POST',
+  url: '/tenants',
+  meta: { auth: true },                       // admin-guarded
+  body: z.object({ id: z.string().min(1), name: z.string() }),
+  async handler({ body }) {
+    // persists → provisions → emits tenancy:created, in that order
+    return ctx().container.get(TENANCY).create(body)
+  },
+})
+```
+
+```bash
+basalt tenant:create acme --name=Acme
+# → Created and provisioned tenant "acme".
+```
+
+::: warning `source.create()` skips all of this
+The source only writes the row. A tenant whose record exists but whose schema
+does not is routable **immediately** — `subdomainResolver` will send it traffic
+the moment it is saved — and its first request dies on a raw database error.
+Going through `tenancy.create()` is what closes that window.
+:::
+
+`onProvision` runs inside the new tenant's context, so `ctx().tenant` and any
+tenant-scoped client resolve correctly — the same contract as `onMigrate` and
+`onSeed`. Seeding starter data belongs here too:
+
+```ts
+async onProvision(tenant) {
+  await provisionTenantSchema(admin, tenantSchema(tenant.id))
+  await migrateTenants({ tenants: [tenant.id], target })
+  await ctx().db.setting.create({ data: { key: 'onboarded', value: 'true' } })
 }
 ```
 
-Expose it as an admin-guarded route (`POST /tenants`); the `subdomainResolver` /
-`domainResolver` route the new tenant's traffic the moment the record exists.
+React to the finished tenant with the hook — it fires only after provisioning
+succeeded, so you can safely touch the new tenant's data:
+
+```ts
+app.hooks.on('tenancy:created', async ({ tenant }) => {
+  await mailer.send({ to: owner(tenant), subject: `${tenant.name} is ready` })
+})
+```
+
+::: danger Make `onProvision` idempotent
+If it throws, the error reaches your caller and `tenancy:created` does **not**
+fire — but the tenant record was already written, because the source persists
+first. That half-state is deliberately not rolled back: not every
+`TenantSource` can delete, and a failed delete on top of a failed provision
+destroys the evidence. Write it so a retry can finish the job —
+`CREATE SCHEMA IF NOT EXISTS`, `migrate deploy`.
+
+It also runs **inline**: an HTTP handler calling `create()` waits for the whole
+migration. That is fine for a schema and a handful of migrations, and wrong for
+anything slow — hand the slow part to a queued job and let the route return.
+:::
 
 ## Reading the tenant
 

@@ -64,3 +64,14 @@ export class TenantNotFoundError extends BasaltError {
     super('TENANT_NOT_FOUND', `Tenant "${id}" does not exist in the tenant source.`)
   }
 }
+
+/** `tenancy.create()` (or `basalt tenant:create`) on a source that cannot persist. */
+export class TenantCreateUnsupportedError extends BasaltError {
+  constructor() {
+    super(
+      'TENANT_CREATE_UNSUPPORTED',
+      'The configured TenantSource does not implement create(). MemoryTenantSource and the ' +
+        'Prisma/SQLite sources do; a read-only source (e.g. one backed by a static config) cannot.',
+    )
+  }
+}
