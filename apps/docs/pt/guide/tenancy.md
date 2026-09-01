@@ -19,6 +19,7 @@ Quatro peças, pela ordem em que correm:
 | `TenantSource` | assim que um resolver produz uma referência | Carrega o registo do tenant (`find` / `findByDomain`). Uma referência que não carrega nada cai para o resolver **seguinte** |
 | `ctx().tenant` | no resto do pedido | O registo aberto resolvido — `undefined` quando nada correspondeu |
 | `tenancy:switched` | em cada entrada num tenant | Permite à cache, ao storage e ao db client reanexar a sua instância por tenant |
+| `tenancy:created` | uma vez, depois de um tenant novo ser criado **e provisionado** | Email de boas-vindas, entrada de auditoria, notificar um painel — um listener pode assumir que o storage do tenant já existe |
 
 Fora de um pedido não há resolver, por isso entras num tenant explicitamente com
 `tenancy.run(id, fn)` — jobs, comandos da CLI e scripts de manutenção passam todos
@@ -258,34 +259,96 @@ passa o teu `PrismaClient` gerado. A mesma superfície `save`/`find`/`findByDoma
 
 ### No sign-up — provisionar um tenant sob demanda
 
-Um SaaS real cria tenants quando um cliente se regista. Fá-lo num serviço/rota:
-persiste o registo, depois (para schema- ou database-per-tenant) provisiona o seu
-storage, e opcionalmente semeia-o — tudo dentro do contexto do novo tenant.
+Um SaaS real cria tenants quando um cliente se regista, e quem carrega em
+**Criar** num painel normalmente não tem nem o conhecimento nem o acesso para
+correr uma migração a seguir. Declara o `onProvision` **uma vez**, e todos os
+caminhos de criação — uma rota de admin, o `basalt tenant:create`, um script de
+seed — passam a trazer o storage do tenant à existência antes de alguém lhe
+poder encaminhar um pedido.
 
 ```ts
-import { ctx } from '@basaltkit/core'
-import { TENANCY } from '@basaltkit/tenancy'
-import { provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
+// src/app.ts
+import { provisionTenantSchema, tenantSchema, migrateTenants } from '@basaltkit/prisma'
 
-export async function createTenant(input: { id: string; name: string; domains?: string[] }) {
-  // 1. persiste o tenant (o modo shared-database para aqui)
-  await tenants.save(input)
+tenancyPlugin({
+  source,
+  resolvers: [subdomainResolver({ base: 'example.com' })],
 
-  // 2. só schema-per-tenant: cria o seu schema, depois migra-o
-  await provisionTenantSchema(db, tenantSchema(input.id))
-  //    …corre migrações contra tenant_<id> (ou o comando `basalt tenant:migrate` abaixo)
+  async onProvision(tenant) {
+    const admin = new PrismaClient()
+    await provisionTenantSchema(admin, tenantSchema(tenant.id))   // CREATE SCHEMA IF NOT EXISTS
+    await migrateTenants({
+      tenants: [tenant.id],
+      target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },
+    })
+  },
+})
+```
 
-  // 3. opcionalmente semeia dados iniciais *dentro* do novo tenant
-  await app.container.get(TENANCY).run(input.id, async () => {
-    await ctx().db.setting.create({ data: { key: 'onboarded', value: 'true' } })
-  })
+Depois cria através do **serviço**, nunca através da source:
 
-  return input
+```ts
+// src/modules/tenants/tenants.routes.ts
+route({
+  method: 'POST',
+  url: '/tenants',
+  meta: { auth: true },                       // protegida por admin
+  body: z.object({ id: z.string().min(1), name: z.string() }),
+  async handler({ body }) {
+    // persiste → provisiona → emite tenancy:created, por esta ordem
+    return ctx().container.get(TENANCY).create(body)
+  },
+})
+```
+
+```bash
+basalt tenant:create acme --name=Acme
+# → Created and provisioned tenant "acme".
+```
+
+::: warning O `source.create()` salta tudo isto
+A source só escreve a linha. Um tenant cujo registo existe mas cujo schema não
+existe é encaminhável **imediatamente** — o `subdomainResolver` manda-lhe tráfego
+no momento em que é gravado — e o primeiro pedido morre num erro cru da base de
+dados. Passar pelo `tenancy.create()` é o que fecha essa janela.
+:::
+
+O `onProvision` corre dentro do contexto do novo tenant, portanto o
+`ctx().tenant` e qualquer cliente com scope de tenant resolvem corretamente — o
+mesmo contrato do `onMigrate` e do `onSeed`. Semear dados iniciais também
+pertence aqui:
+
+```ts
+async onProvision(tenant) {
+  await provisionTenantSchema(admin, tenantSchema(tenant.id))
+  await migrateTenants({ tenants: [tenant.id], target })
+  await ctx().db.setting.create({ data: { key: 'onboarded', value: 'true' } })
 }
 ```
 
-Expõe-o como uma rota protegida por admin (`POST /tenants`); o `subdomainResolver` /
-`domainResolver` encaminham o tráfego do novo tenant no momento em que o registo existe.
+Reage ao tenant já pronto com o hook — ele só dispara depois de o
+provisionamento ter tido sucesso, por isso podes tocar nos dados do novo tenant
+com segurança:
+
+```ts
+app.hooks.on('tenancy:created', async ({ tenant }) => {
+  await mailer.send({ to: owner(tenant), subject: `${tenant.name} está pronto` })
+})
+```
+
+::: danger Faz o `onProvision` idempotente
+Se ele lançar, o erro chega a quem chamou e o `tenancy:created` **não** dispara —
+mas o registo do tenant já foi escrito, porque a source persiste primeiro. Esse
+meio-estado não é revertido de propósito: nem toda a `TenantSource` sabe apagar,
+e um delete falhado por cima de um provisionamento falhado destrói a evidência.
+Escreve-o de forma a que uma nova tentativa consiga terminar o trabalho —
+`CREATE SCHEMA IF NOT EXISTS`, `migrate deploy`.
+
+Também corre **inline**: um handler HTTP que chame `create()` espera pela
+migração toda. Isso é aceitável para um schema e um punhado de migrações, e
+errado para qualquer coisa lenta — passa a parte lenta para um job em fila e
+deixa a rota responder.
+:::
 
 ## Ler o tenant
 
