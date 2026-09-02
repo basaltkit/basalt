@@ -224,6 +224,80 @@ proxy. Row-level scoping keeps tenants apart with one database. Reach for
 database/schema-per-tenant when the isolation guarantee has to be physical.
 :::
 
+## Serving central and tenant routes from one app
+
+Most apps are not purely multi-tenant. There is a landing page, a sign-up form,
+an admin area and a health check that belong to **nobody** — plus the tenant
+routes that belong to exactly one. Both live in the same process.
+
+`prismaPlugin` covers this in a single registration: `client` is used when the
+context has no tenant, and the per-tenant mode when it does.
+
+```ts
+prismaPlugin({
+  // No tenant resolved → this client (the central database / `public` schema).
+  client: prisma,
+  // Tenant resolved → a client connected with `?schema=tenant_<id>`.
+  schemaPerTenant: {
+    url: process.env.DATABASE_URL!,
+    createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+  },
+  destroy: (client) => client.$disconnect(),
+})
+```
+
+`db()` now returns the right client on both kinds of request, so one handler
+serves both without branching:
+
+```ts
+route({ method: 'GET', url: '/users', meta: { tenant: false }, handler: async () =>
+  db<PrismaClient>().authUser.findMany(),  // central on the apex, tenant on a subdomain
+})
+```
+
+On `app.example.com` that lists the central users; on `acme.example.com`, Acme's.
+Same route, same query, no `if`.
+
+### Routes you did not write
+
+Packages mount their own routes — `authRoutes()`, `mfaRoutes()`, `billingRoutes()`
+— so you cannot put `meta` on them by hand. Map over them instead:
+
+```ts
+const central = <T extends { meta?: Record<string, unknown> }>(routes: T[]): T[] =>
+  routes.map((r) => ({ ...r, meta: { ...r.meta, tenant: false } }))
+
+fastifyPlugin({ routes: [...central(authRoutes()), ...central(mfaRoutes())] })
+```
+
+`tenant: false` lifts the *requirement*, not the resolution — a request to
+`acme.example.com/auth/login` still resolves Acme, so the auth stores read Acme's
+schema. The result is one set of auth routes serving two populations:
+
+| Request | Authenticates against |
+| --- | --- |
+| `app.example.com/auth/login` | central users |
+| `acme.example.com/auth/login` | Acme's users |
+
+A central user cannot log in on a tenant subdomain, and a tenant user cannot log
+in on the apex — not because a handler checks, but because the two look in
+different schemas.
+
+::: warning This trades a loud failure for a quiet one
+Without `client`, a tenant route reached with no tenant throws `DB_UNAVAILABLE`.
+With `client` set, that same route would quietly query the **central** database
+instead — the mistake still happens, but silently, and against the wrong data.
+
+What keeps that safe is refusing the request before the handler runs: set
+`required: true` on `tenancyPlugin`, and mark only the routes that genuinely
+belong in the central context. See
+[separating central routes from tenant routes](/guide/tenancy#separating-central-routes-from-tenant-routes).
+
+So `meta: { tenant: false }` is a claim you are making about the route: *this
+one is meaningful without a tenant.* Marking a tenant-only route that way is how
+you build the silent-wrong-data bug this option is otherwise protecting you from.
+:::
+
 ## Migrating every tenant
 
 N databases means a schema change has to reach all of them. `migrateTenants`

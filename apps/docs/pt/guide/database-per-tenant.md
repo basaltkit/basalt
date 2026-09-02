@@ -220,6 +220,83 @@ Recorre a database/schema-per-tenant quando a garantia de isolamento tiver de se
 física.
 :::
 
+## Servir rotas centrais e de tenant na mesma app
+
+A maioria das apps não é puramente multi-tenant. Há uma landing page, um
+formulário de registo, uma área de administração e um health check que não são
+de **ninguém** — e as rotas de tenant, que são de exatamente um. Vivem os dois
+no mesmo processo.
+
+O `prismaPlugin` cobre isto num único registo: o `client` é usado quando o
+contexto não tem tenant, e o modo por tenant quando tem.
+
+```ts
+prismaPlugin({
+  // Sem tenant resolvido → este cliente (a base central / schema `public`).
+  client: prisma,
+  // Com tenant resolvido → um cliente ligado com `?schema=tenant_<id>`.
+  schemaPerTenant: {
+    url: process.env.DATABASE_URL!,
+    createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+  },
+  destroy: (client) => client.$disconnect(),
+})
+```
+
+O `db()` passa a devolver o cliente certo nos dois tipos de pedido, portanto o
+mesmo handler serve os dois sem ramificar:
+
+```ts
+route({ method: 'GET', url: '/users', meta: { tenant: false }, handler: async () =>
+  db<PrismaClient>().authUser.findMany(),  // central no domínio, tenant no subdomínio
+})
+```
+
+Em `app.example.com` lista os utilizadores centrais; em `acme.example.com`, os da
+Acme. A mesma rota, a mesma query, sem um `if`.
+
+### Rotas que não escreveste
+
+Os pacotes montam as suas próprias rotas — `authRoutes()`, `mfaRoutes()`,
+`billingRoutes()` — por isso não lhes podes pôr `meta` à mão. Mapeia-as:
+
+```ts
+const central = <T extends { meta?: Record<string, unknown> }>(routes: T[]): T[] =>
+  routes.map((r) => ({ ...r, meta: { ...r.meta, tenant: false } }))
+
+fastifyPlugin({ routes: [...central(authRoutes()), ...central(mfaRoutes())] })
+```
+
+O `tenant: false` levanta a *exigência*, não a resolução — um pedido a
+`acme.example.com/auth/login` continua a resolver a Acme, portanto os stores de
+auth leem o schema da Acme. O resultado é um só conjunto de rotas de auth a
+servir duas populações:
+
+| Pedido | Autentica contra |
+| --- | --- |
+| `app.example.com/auth/login` | utilizadores centrais |
+| `acme.example.com/auth/login` | utilizadores da Acme |
+
+Um utilizador central não entra num subdomínio de tenant, e um de tenant não
+entra no domínio principal — não porque um handler verifique, mas porque os dois
+procuram em schemas diferentes.
+
+::: warning Isto troca uma falha ruidosa por uma silenciosa
+Sem `client`, uma rota de tenant alcançada sem tenant lança `DB_UNAVAILABLE`.
+Com o `client` definido, essa mesma rota passaria a consultar a base **central**
+em silêncio — o erro continua a acontecer, mas calado e contra os dados errados.
+
+O que mantém isto seguro é recusar o pedido antes de o handler correr: põe
+`required: true` no `tenancyPlugin` e marca apenas as rotas que pertencem mesmo
+ao contexto central. Vê
+[separar rotas centrais de rotas de tenant](/pt/guide/tenancy#separar-rotas-centrais-de-rotas-de-tenant).
+
+Ou seja, o `meta: { tenant: false }` é uma afirmação que fazes sobre a rota:
+*esta faz sentido sem tenant.* Marcar assim uma rota que é só de tenant é
+precisamente como se constrói o bug de dados errados em silêncio de que esta
+opção te está a proteger.
+:::
+
 ## Migrar todos os tenants
 
 N bases de dados significa que uma mudança de schema tem de chegar a todas elas.
