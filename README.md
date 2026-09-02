@@ -18,7 +18,10 @@ routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 > 89 packages, each versioned independently. 🎉** The queue, storage, cache and
 > mailer cores each shipped one backend's client to every consumer; all four are
 > now separate packages, and the tripwire that recorded the debt has an empty
-> allowlist. Before that, three architecture
+> allowlist. The same wave made multi-tenant persistence fail loudly: a
+> schema-per-tenant setup on MySQL/SQLite, migrations read from the wrong
+> history, and a migration that "succeeded" without creating a single table are
+> all refused now instead of surfacing later as missing data. Before that, three architecture
 > review cycles turned the project's promises into machine-enforced rules:
 > adapter neutrality, the dev-only AI boundary, "a generic package never
 > requires tenancy", DI lifetime safety and boot-time fail-loud for declared
