@@ -369,7 +369,7 @@ most from being shared across instances:
 
 | Concern | In-memory (default) | Durable / shared |
 | --- | --- | --- |
-| Cache | `MemoryCacheDriver` | `RedisCacheDriver` (`@basaltkit/cache`), tiered (`@basaltkit/cache-tiered`) |
+| Cache | `MemoryCacheDriver` (`@basaltkit/cache`) | `redisCache()` (`@basaltkit/cache-redis`), tiered (`@basaltkit/cache-tiered`) |
 | Usage metering | `MemoryUsageStore` | `RedisUsageStore` — atomic `consume()` via Lua |
 | Webhook idempotency | `MemoryWebhookStore` | `RedisWebhookStore` — `SET NX EX` across restarts |
 | Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@basaltkit/http`) — one atomic counter shared across instances |

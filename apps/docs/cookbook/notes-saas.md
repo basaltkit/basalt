@@ -483,8 +483,9 @@ subscriptionsPlugin({ plans, fallbackPlan: 'basic', store: subStore, usage: new 
 
 ```ts
 import { cachePlugin, CACHE } from '@basaltkit/cache'
+import { redisCache } from '@basaltkit/cache-redis'
 
-cachePlugin({ driver: 'redis', url: env.REDIS_URL })
+cachePlugin({ driver: redisCache(env.REDIS_URL) })
 
 // in a service:
 const dashboard = await cache.remember('admin:dashboard', '30s', () => this.build())

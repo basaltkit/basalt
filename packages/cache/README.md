@@ -180,10 +180,11 @@ In normal HTTP requests you don't need to call `runWithContext` — the framewor
 
 ```ts
 import { Redis } from 'ioredis'
-import { Cache, RedisCacheDriver } from '@basaltkit/cache'
+import { Cache } from '@basaltkit/cache'
+import { redisCache, RedisCacheDriver } from '@basaltkit/cache-redis'
 
 // From a URL:
-const cacheA = new Cache(RedisCacheDriver.fromUrl('redis://localhost:6379'))
+const cacheA = new Cache(redisCache('redis://localhost:6379'))
 
 // Or reusing your own ioredis connection:
 const redis = new Redis('redis://localhost:6379')
