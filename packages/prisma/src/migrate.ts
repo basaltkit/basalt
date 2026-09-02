@@ -1,6 +1,15 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { provisionTenantSchema, schemaUrl, tenantSchema, type SchemaProvisioner, assertSchemaPerTenantSupported } from './schema.js'
+import {
+  provisionTenantSchema,
+  schemaUrl,
+  tenantSchema,
+  type SchemaProvisioner,
+  assertSchemaPerTenantSupported,
+  canInspect,
+  countTenantTables,
+  EmptyTenantSchemaError,
+} from './schema.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -44,6 +53,20 @@ export interface MigrateTenantsOptions {
   concurrency?: number
   /** Called as each tenant finishes (for progress output). */
   onResult?: (result: TenantMigrationResult) => void
+  /**
+   * After migrating, check that the tenant's schema actually has tables, and
+   * report `ok: false` when it does not. Default: true.
+   *
+   * This exists because a successful exit code is not evidence that anything
+   * was applied: `prisma migrate deploy` exits 0 when it finds no migrations,
+   * leaving a schema that holds `_prisma_migrations` and nothing else. Without
+   * the check that tenant is marked ready, and the damage only surfaces later,
+   * as a query against a table that was never created.
+   *
+   * Only runs in schema mode, and only when `provision` can also read (a
+   * `PrismaClient` can). Set to false if a tenant legitimately starts empty.
+   */
+  verifyTables?: boolean
 }
 
 /**
@@ -81,6 +104,16 @@ export async function migrateTenants(
           await provisionTenantSchema(target.provision, schema)
         }
         await migrate({ tenantId, url, ...(schema ? { schema } : {}) })
+        if (
+          options.verifyTables !== false &&
+          target.mode === 'schema' &&
+          schema &&
+          canInspect(target.provision)
+        ) {
+          if ((await countTenantTables(target.provision, schema)) === 0) {
+            throw new EmptyTenantSchemaError(schema)
+          }
+        }
         result.ok = true
       } catch (error) {
         result.error = error instanceof Error ? error.message : String(error)

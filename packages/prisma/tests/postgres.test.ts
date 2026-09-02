@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  countTenantTables,
+  migrateTenants,
   provisionTenantSchema,
   rlsPolicySql,
   setTenantConfigSql,
   tenantConfigParams,
   tenantSchema,
   type SchemaProvisioner,
+  type SchemaInspector,
 } from '../src/index.js'
 
 // pglite instantiates a Postgres in WebAssembly; a cold start on a CI runner can
@@ -67,6 +70,80 @@ describe.skipIf(!Ctor)('PostgreSQL integration (pglite)', () => {
         [schema],
       )
       expect(found).toBe(1)
+    })
+  })
+
+  /** pglite as a client that can both provision and read back, like PrismaClient. */
+  const admin = (): SchemaProvisioner & SchemaInspector => ({
+    async $executeRawUnsafe(query: string) {
+      await db.exec(query)
+      return 0
+    },
+    async $queryRawUnsafe<T>(query: string, ...values: unknown[]) {
+      const { rows } = await db.query<unknown>(query, values)
+      return rows as T
+    },
+  })
+
+  describe('countTenantTables', () => {
+    it('counts the tenant\'s own tables against a real information_schema', async () => {
+      const schema = tenantSchema('acme')
+      await provisionTenantSchema(provisioner(), schema)
+      await db.exec(`CREATE TABLE "${schema}".project (id text primary key)`)
+      await db.exec(`CREATE TABLE "${schema}".invoice (id text primary key)`)
+
+      expect(await countTenantTables(admin(), schema)).toBe(2)
+    })
+
+    it('does not count _prisma_migrations, which is what a no-op deploy leaves behind', async () => {
+      const schema = tenantSchema('globex')
+      await provisionTenantSchema(provisioner(), schema)
+      await db.exec(`CREATE TABLE "${schema}"._prisma_migrations (id text primary key)`)
+
+      expect(await countTenantTables(admin(), schema)).toBe(0)
+    })
+
+    it('does not count another tenant\'s tables', async () => {
+      const acme = tenantSchema('acme')
+      const globex = tenantSchema('globex')
+      await provisionTenantSchema(provisioner(), acme)
+      await provisionTenantSchema(provisioner(), globex)
+      await db.exec(`CREATE TABLE "${acme}".project (id text primary key)`)
+
+      expect(await countTenantTables(admin(), globex)).toBe(0)
+    })
+  })
+
+  describe('migrateTenants verifyTables', () => {
+    it('fails the tenant when a clean-exiting migration produced nothing', async () => {
+      // Reproduces the real failure end to end: the migrator succeeds and
+      // creates only Prisma's bookkeeping table, as `migrate deploy` does when
+      // its migrations directory is empty.
+      const provision = admin()
+      const [result] = await migrateTenants({
+        tenants: ['acme'],
+        target: { mode: 'schema', url: 'postgresql://host/app', provision },
+        migrate: async ({ schema }) => {
+          await db.exec(`CREATE TABLE "${schema}"._prisma_migrations (id text primary key)`)
+        },
+      })
+
+      expect(result?.ok).toBe(false)
+      expect(result?.error).toContain('no tables')
+    })
+
+    it('passes the tenant when the migration created real tables', async () => {
+      const provision = admin()
+      const [result] = await migrateTenants({
+        tenants: ['acme'],
+        target: { mode: 'schema', url: 'postgresql://host/app', provision },
+        migrate: async ({ schema }) => {
+          await db.exec(`CREATE TABLE "${schema}"._prisma_migrations (id text primary key)`)
+          await db.exec(`CREATE TABLE "${schema}".auth_users (id text primary key)`)
+        },
+      })
+
+      expect(result?.ok).toBe(true)
     })
   })
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApp } from '@basaltkit/core'
 import { commandsPlugin, memoryIo, runCli } from '@basaltkit/cli'
 import {
+  countTenantTables,
   migrateTenants,
   prismaMigrateArgs,
   tenantMigrateCommand,
@@ -173,5 +174,120 @@ describe('prismaMigrateArgs', () => {
   it('never emits a flag for an option that was not set', () => {
     expect(prismaMigrateArgs({ env: { FOO: 'bar' } })).not.toContain('--config')
     expect(prismaMigrateArgs({ env: { FOO: 'bar' } })).not.toContain('--schema')
+  })
+})
+
+/** A PrismaClient stand-in that can both provision and be read back. */
+function fakeAdmin(tablesBySchema: Record<string, number>) {
+  const executed: string[] = []
+  return {
+    executed,
+    async $executeRawUnsafe(query: string) {
+      executed.push(query)
+      return 0
+    },
+    async $queryRawUnsafe(_query: string, ...values: unknown[]) {
+      const schema = values[0] as string
+      // Mirrors Postgres: COUNT(*) comes back as a bigint.
+      return [{ count: BigInt(tablesBySchema[schema] ?? 0) }]
+    },
+  }
+}
+
+describe('verifyTables', () => {
+  const migrate: MigrateFn = async () => {}
+
+  it('fails a tenant whose schema came out empty, even though the migration exited cleanly', async () => {
+    // The exact shape of the bug: `prisma migrate deploy` finds no migrations,
+    // exits 0, and leaves only `_prisma_migrations` behind.
+    const provision = fakeAdmin({ tenant_acme: 0 })
+    const [result] = await migrateTenants({
+      tenants: ['acme'],
+      target: { mode: 'schema', url: 'postgresql://host/app', provision },
+      migrate,
+    })
+
+    expect(result?.ok).toBe(false)
+    expect(result?.error).toContain('no tables')
+    expect(result?.error).toContain('configPath')
+  })
+
+  it('passes when the schema has tables', async () => {
+    const provision = fakeAdmin({ tenant_acme: 7 })
+    const [result] = await migrateTenants({
+      tenants: ['acme'],
+      target: { mode: 'schema', url: 'postgresql://host/app', provision },
+      migrate,
+    })
+
+    expect(result?.ok).toBe(true)
+    expect(result?.error).toBeUndefined()
+  })
+
+  it('reports the empty tenant without aborting the others', async () => {
+    const provision = fakeAdmin({ tenant_acme: 7, tenant_globex: 0, tenant_initech: 3 })
+    const results = await migrateTenants({
+      tenants: ['acme', 'globex', 'initech'],
+      target: { mode: 'schema', url: 'postgresql://host/app', provision },
+      migrate,
+    })
+
+    expect(results.map((r) => r.ok)).toEqual([true, false, true])
+  })
+
+  it('can be turned off', async () => {
+    const provision = fakeAdmin({ tenant_acme: 0 })
+    const [result] = await migrateTenants({
+      tenants: ['acme'],
+      target: { mode: 'schema', url: 'postgresql://host/app', provision },
+      migrate,
+      verifyTables: false,
+    })
+
+    expect(result?.ok).toBe(true)
+  })
+
+  it('is skipped when the provisioner cannot read back', async () => {
+    // A write-only SchemaProvisioner is still a valid thing to pass.
+    const provision: SchemaProvisioner = { async $executeRawUnsafe() { return 0 } }
+    const [result] = await migrateTenants({
+      tenants: ['acme'],
+      target: { mode: 'schema', url: 'postgresql://host/app', provision },
+      migrate,
+    })
+
+    expect(result?.ok).toBe(true)
+  })
+
+  it('is skipped in database mode, where there is no client to ask', async () => {
+    const [result] = await migrateTenants({
+      tenants: ['acme'],
+      target: { mode: 'database', urlFor: (id) => `postgresql://host/${id}` },
+      migrate,
+    })
+
+    expect(result?.ok).toBe(true)
+  })
+})
+
+describe('countTenantTables', () => {
+  it('excludes Prisma\'s bookkeeping table from the count', async () => {
+    const seen: unknown[][] = []
+    const client = {
+      async $queryRawUnsafe<T>(_q: string, ...values: unknown[]) {
+        seen.push(values)
+        return [{ count: 4n }] as T
+      },
+    }
+
+    expect(await countTenantTables(client, 'tenant_acme')).toBe(4)
+    expect(seen[0]).toEqual(['tenant_acme', '_prisma_migrations'])
+  })
+
+  it('refuses an unsafe schema name rather than interpolating it', async () => {
+    const client = { async $queryRawUnsafe<T>() { return [{ count: 0n }] as T } }
+    await expect(countTenantTables(client, 'tenant"; DROP SCHEMA x --')).rejects.toThrow(
+      /Cannot derive a PostgreSQL schema/,
+    )
   })
 })

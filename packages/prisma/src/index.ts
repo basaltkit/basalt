@@ -35,12 +35,16 @@ export {
   tenantSchema,
   schemaUrl,
   provisionTenantSchema,
+  countTenantTables,
+  canInspect,
   providerOf,
   assertSchemaPerTenantSupported,
   InvalidTenantSchemaError,
+  EmptyTenantSchemaError,
   SchemaPerTenantUnsupportedError,
   type TenantSchemaOptions,
   type SchemaProvisioner,
+  type SchemaInspector,
   type DatabaseProvider,
 } from './schema.js'
 export {
