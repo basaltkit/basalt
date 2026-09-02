@@ -238,7 +238,7 @@ it inside `<id>`'s context — e.g. `basalt tenant:run acme queue:retry`.
 |---|---|---|---|---|
 | `source` | `TenantSource` | Yes | — | Where tenants are loaded from. |
 | `resolvers` | `TenantResolver[]` | Yes | — | Tried in order; the first one that loads a tenant wins. |
-| `required` | `boolean` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. |
+| `required` | `boolean \| { except: (string \| RegExp)[] }` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. `{ except: ['/health'] }` exempts those paths (matched without the query string) and guards everything else. |
 | `onMigrate` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant migration work for `basalt tenant:migrate`. The framework iterates tenants and enters each context; you do the DB-specific part. Without it the command errors. |
 | `onSeed` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant seeding for `basalt tenant:seed`, same contract. |
 

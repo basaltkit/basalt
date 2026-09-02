@@ -11,6 +11,7 @@ import {
   TENANCY,
   tenancyPlugin,
   TenantNotFoundError,
+  isTenantRequired,
 } from '../src/index.js'
 
 const source = () =>
@@ -90,9 +91,23 @@ describe('tenancyPlugin + fastify (end to end)', () => {
         return { tenant: ctx().tenant?.id ?? null }
       },
     }),
+    route({
+      method: 'GET',
+      url: '/health',
+      async handler() {
+        return { ok: true }
+      },
+    }),
+    route({
+      method: 'GET',
+      url: '/public/pricing',
+      async handler() {
+        return { ok: true }
+      },
+    }),
   ]
 
-  const boot = async (required: boolean) => {
+  const boot = async (required: boolean | { except: (string | RegExp)[] }) => {
     const app = await createApp({
       plugins: [
         tenancyPlugin({ source: source(), resolvers: [headerResolver()], required }),
@@ -135,6 +150,33 @@ describe('tenancyPlugin + fastify (end to end)', () => {
     await app.shutdown()
   })
 
+  it('required: { except } lets public paths through and still guards the rest', async () => {
+    // A health check has no tenant to send, and neither does a load balancer.
+    // Without an exemption, `required: true` is unusable for any app that has
+    // one — which is every app.
+    const { app, server } = await boot({ except: ['/health', /^\/public\//] })
+
+    const health = await server.inject({ method: 'GET', url: '/health' })
+    expect(health.statusCode).toBe(200)
+
+    const publicPath = await server.inject({ method: 'GET', url: '/public/pricing' })
+    expect(publicPath.statusCode).toBe(200)
+
+    // Anything not exempt is still refused.
+    const guarded = await server.inject({ method: 'GET', url: '/whoami' })
+    expect(guarded.statusCode).toBe(404)
+    expect(guarded.json().error.code).toBe('TENANCY_NOT_RESOLVED')
+
+    await app.shutdown()
+  })
+
+  it('matches the exempt path ignoring the query string', async () => {
+    const { app, server } = await boot({ except: ['/health'] })
+    const res = await server.inject({ method: 'GET', url: '/health?probe=1' })
+    expect(res.statusCode).toBe(200)
+    await app.shutdown()
+  })
+
   it('TENANCY token exposes the facade', async () => {
     const { app } = await boot(false)
     const tenancy = app.container.get(TENANCY)
@@ -151,5 +193,49 @@ describe('tenancy:active metadata marker', () => {
     const { ensureMetadata } = await import('@basaltkit/core')
     expect(ensureMetadata(app.container).get('tenancy:active')).toEqual([true])
     await app.shutdown()
+  })
+})
+
+describe('isTenantRequired', () => {
+  it('is off unless asked for', () => {
+    expect(isTenantRequired(undefined, '/whoami')).toBe(false)
+    expect(isTenantRequired(false, '/whoami')).toBe(false)
+  })
+
+  it('true applies everywhere', () => {
+    expect(isTenantRequired(true, '/health')).toBe(true)
+    expect(isTenantRequired(true, undefined)).toBe(true)
+  })
+
+  it('exempts an exact path', () => {
+    const required = { except: ['/health'] }
+    expect(isTenantRequired(required, '/health')).toBe(false)
+    expect(isTenantRequired(required, '/healthz')).toBe(true)
+    expect(isTenantRequired(required, '/whoami')).toBe(true)
+  })
+
+  it('ignores the query string', () => {
+    expect(isTenantRequired({ except: ['/health'] }, '/health?probe=1')).toBe(false)
+  })
+
+  // Each adapter reports the URL differently, and an exemption that works on
+  // two of them is a bug on the third.
+  it.each([
+    ['fastify / express', '/health?probe=1'],
+    ['hono (absolute URL)', 'http://localhost:3000/health?probe=1'],
+    ['hono, no query', 'https://app.example.com/health'],
+  ])('matches on %s', (_adapter, url) => {
+    expect(isTenantRequired({ except: ['/health'] }, url)).toBe(false)
+  })
+
+  it('accepts regular expressions', () => {
+    const required = { except: [/^\/public\//] }
+    expect(isTenantRequired(required, '/public/pricing')).toBe(false)
+    expect(isTenantRequired(required, 'http://host/public/pricing')).toBe(false)
+    expect(isTenantRequired(required, '/private/pricing')).toBe(true)
+  })
+
+  it('fails closed when there is no URL to match', () => {
+    expect(isTenantRequired({ except: ['/health'] }, undefined)).toBe(true)
   })
 })

@@ -421,8 +421,30 @@ export async function currentTenant() {
 
 Set `required: true` on the plugin to reject unresolved requests up front with a
 `404 TENANCY_NOT_RESOLVED` — misrouted requests fail loudly instead of running
-against global data. Keep it `false` for central routes (landing page, sign-up)
-and handle the absent tenant in the handler.
+against global data.
+
+`true` applies to **every** route, which most apps cannot live with: a health
+check has no tenant to send, and neither does a landing page or a public pricing
+endpoint. Exempt them by path instead of giving up the guard everywhere:
+
+```ts
+tenancyPlugin({
+  source: tenants,
+  resolvers: [headerResolver()],
+  required: { except: ['/', '/health', '/openapi.json', /^\/public\//] },
+})
+```
+
+Entries are exact strings or regular expressions, matched against the path
+without its query string — so `/health` still covers `/health?probe=1`. A URL
+that cannot be matched at all is treated as **required**, so the guard fails
+closed.
+
+Exempting a path only lifts the tenant requirement. Auth, subscription checks
+and every other guard still run.
+
+Keeping `required: false` is still valid when central routes outnumber tenant
+ones, but then every handler is responsible for the absent tenant itself.
 
 You can also read the tenant through the `TENANCY` facade — handy in services
 that don't otherwise touch `ctx()`:
@@ -689,7 +711,7 @@ scoped connection URL; pass `migrate` to override it.
 | --- | --- | --- | --- |
 | `source` | `TenantSource` | — (required) | Where tenant records are loaded from — `MemoryTenantSource` in dev, `tenancy-sqlite`/`tenancy-prisma` (or your own table) in production |
 | `resolvers` | `TenantResolver[]` | — (required) | Tried in order; the first ref that loads an existing tenant wins, so you can layer a header resolver behind a subdomain one |
-| `required` | `boolean` | `false` | Reject a request that resolved no tenant with `404 TENANCY_NOT_RESOLVED`, instead of running it tenant-less. Leave `false` when you also serve central routes (landing page, sign-up) |
+| `required` | `boolean \| { except: (string \| RegExp)[] }` | `false` | Reject a request that resolved no tenant with `404 TENANCY_NOT_RESOLVED`, instead of running it tenant-less. `{ except }` exempts paths (health checks, landing pages) while still guarding the rest |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:migrate`, run inside each tenant's context |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |
 | `onProvision` | `(tenant) => void \| Promise<void>` | — | Brings a NEW tenant's storage into existence, inside its context, from `tenancy.create()` and `basalt tenant:create`. Without it a tenant is routable before its schema exists |

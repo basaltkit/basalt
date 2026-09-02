@@ -232,11 +232,60 @@ export class Tenancy {
 
 export const TENANCY = createToken<Tenancy>('tenancy')
 
+/**
+ * Whether this request must carry a tenant.
+ *
+ * Exported for tests; the path is compared without its query string, so
+ * `/health` still matches `/health?probe=1`.
+ */
+export function isTenantRequired(
+  required: TenancyPluginOptions['required'],
+  url: string | undefined,
+): boolean {
+  if (!required) return false
+  if (required === true) return true
+  const path = pathOf(url)
+  return !required.except.some((pattern) =>
+    typeof pattern === 'string' ? pattern === path : pattern.test(path),
+  )
+}
+
+/**
+ * The pathname, whatever shape the adapter reports.
+ *
+ * Fastify and Express give a path with its query (`/health?probe=1`); Hono
+ * gives an absolute URL (`http://host/health`). Comparing the raw string would
+ * quietly match on two adapters and never on the third.
+ */
+function pathOf(url: string | undefined): string {
+  const raw = url ?? ''
+  try {
+    return new URL(raw).pathname
+  } catch {
+    return raw.split('?')[0] ?? ''
+  }
+}
+
 export interface TenancyPluginOptions {
   source: TenantSource
   resolvers: TenantResolver[]
-  /** Reject requests without a tenant (404 TENANCY_NOT_RESOLVED). Default: false. */
-  required?: boolean
+  /**
+   * Reject requests without a tenant (404 `TENANCY_NOT_RESOLVED`). Default: false.
+   *
+   * `true` applies to every route, which is rarely what an app can live with:
+   * a health check has no tenant to send, and neither does a landing page or a
+   * public pricing endpoint. Pass `{ except }` to exempt those paths — exact
+   * strings or regular expressions, matched against the path without its query
+   * string.
+   *
+   * ```ts
+   * required: { except: ['/', '/health', /^\/public\//] }
+   * ```
+   *
+   * Exempting a path only lifts the tenant requirement. Auth, subscription and
+   * every other guard still apply.
+   */
+  required?: boolean | { except: (string | RegExp)[] }
   /**
    * Per-tenant migration hook for `basalt tenant:migrate`. The framework iterates
    * tenants and runs this inside each one's context; you provide the DB-specific
@@ -347,7 +396,9 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             ...(request.url !== undefined ? { url: request.url } : {}),
           })
           if (!tenant) {
-            if (options.required) throw new TenancyNotResolvedError()
+            if (isTenantRequired(options.required, request.url)) {
+              throw new TenancyNotResolvedError()
+            }
             return
           }
           // A tenant that is still provisioning (or failed) exists but cannot
