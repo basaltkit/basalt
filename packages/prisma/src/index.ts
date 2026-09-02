@@ -7,7 +7,7 @@ import {
 } from '@basaltkit/core'
 import { TenantClientPool } from './pool.js'
 import type { ShardRouter } from './sharding.js'
-import { schemaUrl, tenantSchema } from './schema.js'
+import { schemaUrl, tenantSchema, assertSchemaPerTenantSupported } from './schema.js'
 
 export {
   tenancyExtension,
@@ -35,9 +35,13 @@ export {
   tenantSchema,
   schemaUrl,
   provisionTenantSchema,
+  providerOf,
+  assertSchemaPerTenantSupported,
   InvalidTenantSchemaError,
+  SchemaPerTenantUnsupportedError,
   type TenantSchemaOptions,
   type SchemaProvisioner,
+  type DatabaseProvider,
 } from './schema.js'
 export {
   migrateTenants,
@@ -136,6 +140,11 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
       // Schema-per-tenant is sugar over the per-tenant pool: build a client
       // whose URL carries the tenant's schema.
       const schemaConfig = options.schemaPerTenant
+      // Fail at BOOT, not at the first tenant: the URL is known here, so a
+      // MySQL/SQLite connection configured for schema-per-tenant is a
+      // configuration error we can name now rather than a CREATE SCHEMA syntax
+      // error much later, far from its cause.
+      if (schemaConfig) assertSchemaPerTenantSupported(schemaConfig.url)
       const createTenantClient: ((tenantId: string) => TClient | Promise<TClient>) | undefined =
         options.forTenant ??
         (schemaConfig

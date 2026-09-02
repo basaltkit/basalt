@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { provisionTenantSchema, schemaUrl, tenantSchema, type SchemaProvisioner } from './schema.js'
+import { provisionTenantSchema, schemaUrl, tenantSchema, type SchemaProvisioner, assertSchemaPerTenantSupported } from './schema.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -55,6 +55,11 @@ export async function migrateTenants(
   options: MigrateTenantsOptions,
 ): Promise<TenantMigrationResult[]> {
   const { tenants, target } = options
+  // Checked ONCE, before any worker starts. In schema mode every tenant shares
+  // the same base URL, so an unsupported database is a configuration error for
+  // the whole run — not a per-tenant failure to be collected N times. This is
+  // therefore the one thing that legitimately aborts `migrateTenants`.
+  if (target.mode === 'schema') assertSchemaPerTenantSupported(target.url)
   const migrate = options.migrate ?? prismaMigrator()
   const concurrency = Math.max(1, options.concurrency ?? 5)
   const results: TenantMigrationResult[] = new Array(tenants.length)
