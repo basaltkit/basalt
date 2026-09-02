@@ -64,3 +64,52 @@ export async function provisionTenantSchema(
   }
   await client.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schema}"`)
 }
+
+/** The Prisma connectors we can tell apart from a connection URL. */
+export type DatabaseProvider = 'postgresql' | 'mysql' | 'sqlite' | 'sqlserver' | 'mongodb' | 'unknown'
+
+/**
+ * The provider behind a connection URL, by scheme.
+ *
+ * Deliberately shallow: this exists to answer one question — "can this database
+ * do schema-per-tenant?" — not to model dialects. Prisma already abstracts those,
+ * and the two places Basalt is provider-specific are precisely the two Prisma
+ * does NOT abstract, because they have no cross-dialect equivalent.
+ */
+export function providerOf(url: string): DatabaseProvider {
+  const scheme = url.slice(0, Math.max(0, url.indexOf(':'))).toLowerCase()
+  if (scheme === 'postgresql' || scheme === 'postgres') return 'postgresql'
+  if (scheme === 'mysql') return 'mysql'
+  if (scheme === 'file' || scheme === 'sqlite') return 'sqlite'
+  if (scheme === 'sqlserver') return 'sqlserver'
+  if (scheme === 'mongodb' || scheme === 'mongodb+srv') return 'mongodb'
+  return 'unknown'
+}
+
+export class SchemaPerTenantUnsupportedError extends BasaltError {
+  constructor(provider: DatabaseProvider) {
+    super(
+      'PRISMA_SCHEMA_PER_TENANT_UNSUPPORTED',
+      `Schema-per-tenant needs PostgreSQL; this connection is ${provider}. ` +
+        'It relies on a schema being a namespace INSIDE a database, selected by the ' +
+        "connection's search_path — in MySQL a \"schema\" IS a database, and SQLite has no " +
+        'equivalent. Use database-per-tenant instead: `forTenant` on prismaPlugin, or ' +
+        "`{ mode: 'database', urlFor }` when migrating. It gives stronger isolation anyway.",
+    )
+  }
+}
+
+/**
+ * Fails loud when schema-per-tenant is configured against a database that cannot
+ * do it — at boot, or when a migration target is resolved.
+ *
+ * Without this the first symptom is a raw `CREATE SCHEMA` syntax error from the
+ * driver, at tenant-creation time, far from the configuration that caused it.
+ * An `unknown` scheme is allowed through: a proxy or custom URL should not be
+ * refused on a guess.
+ */
+export function assertSchemaPerTenantSupported(url: string): void {
+  const provider = providerOf(url)
+  if (provider === 'postgresql' || provider === 'unknown') return
+  throw new SchemaPerTenantUnsupportedError(provider)
+}
