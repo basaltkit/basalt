@@ -3,6 +3,7 @@ import { createApp } from '@basaltkit/core'
 import { commandsPlugin, memoryIo, runCli } from '@basaltkit/cli'
 import {
   migrateTenants,
+  prismaMigrateArgs,
   tenantMigrateCommand,
   type MigrateFn,
   type SchemaProvisioner,
@@ -121,5 +122,56 @@ describe('tenant:migrate command', () => {
     const { code, io } = await runCommand([], async () => {})
     expect(code).toBe(0)
     expect(io.lines).toContain('No tenants to migrate.')
+  })
+})
+
+describe('prismaMigrateArgs', () => {
+  it('defaults to a bare `migrate deploy`', () => {
+    expect(prismaMigrateArgs()).toEqual(['prisma', 'migrate', 'deploy'])
+  })
+
+  it('passes schemaPath as --schema', () => {
+    expect(prismaMigrateArgs({ schemaPath: './prisma/tenants/schema.prisma' })).toEqual([
+      'prisma',
+      'migrate',
+      'deploy',
+      '--schema',
+      './prisma/tenants/schema.prisma',
+    ])
+  })
+
+  it('passes configPath as --config, so tenant migrations can live outside the central history', () => {
+    // The reason this option exists: `migrations.path` belongs to the config,
+    // not the schema, so --schema alone leaves Prisma reading the central
+    // migrations and a tenant ends up with only `_prisma_migrations`.
+    expect(prismaMigrateArgs({ configPath: './prisma/tenants/prisma.config.ts' })).toEqual([
+      'prisma',
+      'migrate',
+      'deploy',
+      '--config',
+      './prisma/tenants/prisma.config.ts',
+    ])
+  })
+
+  it('accepts both, with --config first', () => {
+    expect(
+      prismaMigrateArgs({
+        configPath: './prisma/tenants/prisma.config.ts',
+        schemaPath: './prisma/tenants/schema.prisma',
+      }),
+    ).toEqual([
+      'prisma',
+      'migrate',
+      'deploy',
+      '--config',
+      './prisma/tenants/prisma.config.ts',
+      '--schema',
+      './prisma/tenants/schema.prisma',
+    ])
+  })
+
+  it('never emits a flag for an option that was not set', () => {
+    expect(prismaMigrateArgs({ env: { FOO: 'bar' } })).not.toContain('--config')
+    expect(prismaMigrateArgs({ env: { FOO: 'bar' } })).not.toContain('--schema')
   })
 })
