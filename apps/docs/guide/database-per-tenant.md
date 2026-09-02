@@ -15,12 +15,51 @@ becomes tenant-isolated for free.
 | Model | How | Isolation | When |
 | --- | --- | --- | --- |
 | Shared DB, row scoping | one client, `tenancyExtension()` adds `tenant_id` filters | logical | most apps; cheapest to run |
-| **Schema-per-tenant** | one database, one PostgreSQL schema per tenant | strong | isolation without N databases |
+| **Schema-per-tenant** | one database, one PostgreSQL schema per tenant | strong | isolation without N databases — **PostgreSQL only**, see [compatibility](#which-strategy-works-on-which-database) |
 | **Database-per-tenant** | a separate database per tenant | strongest | compliance, noisy-neighbor, per-tenant backups |
 
 `prismaPlugin` supports all three. This guide covers the latter two — where the
 per-tenant *client* is the isolation boundary — and how the durable stores ride
 on it.
+
+## Which strategy works on which database
+
+Basalt is database-agnostic where the strategy allows it, and honest where it
+does not. Two of the three isolation models work on any Prisma connector; the
+third is a PostgreSQL feature and is not abstracted away.
+
+| Strategy | PostgreSQL | MySQL / MariaDB | SQLite | Use instead |
+| --- | :---: | :---: | :---: | --- |
+| **Shared DB + `tenant_id`** | ✅ | ✅ | ✅ | — the default, and fully portable |
+| **Database-per-tenant** | ✅ | ✅ | ✅ (one file per tenant) | — you supply `urlFor()`, so any connector works |
+| **Schema-per-tenant** | ✅ | ❌ | ❌ | **`mode: 'database'`** |
+| **Row-Level Security** (defence in depth) | ✅ | ❌ | ❌ | the `tenant_id` scoping alone, which is already fail-closed |
+
+### Why schema-per-tenant is PostgreSQL-only
+
+It rests on two things PostgreSQL has and the others do not: a **schema** as a
+namespace *inside* a database, and a connection whose `search_path` selects it.
+Basalt uses Prisma's `?schema=` parameter for the second and
+`CREATE SCHEMA IF NOT EXISTS` for the first.
+
+In MySQL a "schema" **is** a database — the words are synonyms — so there is
+nothing to namespace *within* a database. SQLite has no equivalent at all.
+
+We deliberately do **not** paper over this. An abstraction that quietly turned
+`mode: 'schema'` into a separate database on MySQL would be doing
+database-per-tenant under a name that says otherwise: different backup story,
+different connection limits, different migration cost. Choosing that should be
+your decision, written in your config, not a translation you never saw.
+
+**On MySQL, pick `mode: 'database'`.** It gives you stronger isolation than
+schema-per-tenant anyway, and it is fully supported.
+
+### Why RLS is PostgreSQL-only
+
+`CREATE POLICY`, `ALTER TABLE … ENABLE ROW LEVEL SECURITY` and
+`current_setting()` have no MySQL or SQLite equivalent. RLS is defence in depth
+*under* the `tenant_id` scoping, never a replacement for it — so an app without
+it is not unprotected, it simply has one layer instead of two.
 
 ## The per-tenant client pool
 
