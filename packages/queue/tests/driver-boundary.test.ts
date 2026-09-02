@@ -115,11 +115,15 @@ const BACKEND_CLIENTS = [
  * Prefer extraction when fixing the three below; see `packages/queue-bullmq/`.
  */
 const ALLOWLIST = new Map<string, string>([
-  [
-    '@basaltkit/mailer',
-    "KNOWN DEBT: 'nodemailer' is a hard dependency for drivers/smtp.ts; the log/" +
-      'memory/resend/mailgun/ses drivers pay for it. Make it an optional peer.',
-  ],
+  // Empty, and that is the point: every entry that was here has been paid off.
+  // queue→bullmq, storage→@aws-sdk/client-s3, cache→ioredis and mailer→nodemailer
+  // were each extracted into their own package, so no core forces a backend
+  // client on consumers who never use it.
+  //
+  // Adding an entry means a package ships a client its consumers cannot avoid.
+  // Prefer EXTRACTION — see packages/queue-bullmq, storage-s3, cache-redis,
+  // mailer-smtp for the shape. If you must add one, justify it in more than 40
+  // characters; the test below enforces that much.
 ])
 
 /** Manifest fields a package manager installs into every consumer's tree. */
@@ -365,12 +369,22 @@ describe('driver-agnostic boundary', () => {
   })
 
   it('allowlisted packages are exempt, and every entry carries a justification', () => {
-    // Uses whichever package is still allowlisted. Was `@basaltkit/cache` until
-    // its ioredis debt was paid; if the last entry ever goes too, this becomes a
-    // synthetic name and the ALLOWLIST loop below simply has nothing to check.
+    // The allowlist is empty now that all four debts are paid, so this proves
+    // the EXEMPTION MECHANISM against a synthetic entry rather than a real
+    // package. The loop below then has nothing to iterate, which is the point:
+    // an empty allowlist is the goal state, not a gap in the test.
+    const synthetic = new Map([['@basaltkit/example', 'justified for the purposes of this test only']])
     expect(
-      forcedClientViolations([{ name: '@basaltkit/mailer', dependencies: { nodemailer: '^9.0.0' } }]),
+      forcedClientViolations(
+        [{ name: '@basaltkit/example', dependencies: { nodemailer: '^9.0.0' } }],
+        BACKEND_CLIENTS,
+        synthetic,
+      ),
     ).toEqual([])
+    // …and the same manifest without the exemption is still a violation.
+    expect(
+      forcedClientViolations([{ name: '@basaltkit/example', dependencies: { nodemailer: '^9.0.0' } }]),
+    ).toEqual(['@basaltkit/example → dependencies → nodemailer'])
     for (const [name, reason] of ALLOWLIST) {
       expect(reason.length, `allowlist entry ${name} must justify itself`).toBeGreaterThan(40)
     }

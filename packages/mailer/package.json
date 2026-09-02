@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Mail layer for Basalt: typed declarative mails with Zod, SMTP/log/memory drivers, tenant-aware sender and queue integration.",
+  "description": "Driver-agnostic Basalt mailer: typed mail definitions, previews, queueing and HTTP-API drivers (Resend, SES, Mailgun) plus log/memory. SMTP ships as @basaltkit/mailer-smtp.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -23,13 +23,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@basaltkit/core": "workspace:^",
-    "nodemailer": "^9.0.5"
+    "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.3.0",
-    "@types/nodemailer": "^8.0.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "zod": "^3.24.0 || ^4.0.0"

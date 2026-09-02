@@ -2,7 +2,6 @@ import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/co
 import type { MailDriver } from './driver.js'
 import { LogMailDriver } from './drivers/log.js'
 import { MemoryMailDriver } from './drivers/memory.js'
-import { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 import { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
 import { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
 import { MailgunMailDriver, type MailgunDriverOptions } from './drivers/mailgun.js'
@@ -21,7 +20,6 @@ export { escapeHtml, html, raw, SafeHtml } from './html.js'
 export type { MailDriver } from './driver.js'
 export { MemoryMailDriver } from './drivers/memory.js'
 export { LogMailDriver, type LogMailDriverOptions } from './drivers/log.js'
-export { SmtpMailDriver, type SmtpDriverOptions } from './drivers/smtp.js'
 export { ResendMailDriver, type ResendDriverOptions } from './drivers/resend.js'
 export { SesMailDriver, type SesDriverOptions } from './drivers/ses.js'
 export { MailgunMailDriver, type MailgunDriverOptions } from './drivers/mailgun.js'
@@ -158,9 +156,18 @@ export const tenantFrom =
 export const MAILER = createToken<Mailer>('mailer')
 
 export interface MailerPluginOptions extends MailerOptions {
-  driver?: 'smtp' | 'log' | 'memory' | 'resend' | 'ses' | 'mailgun'
-  /** Required with the 'smtp' driver. */
-  smtp?: SmtpDriverOptions
+  /**
+   * A built-in driver by name, or any `MailDriver` instance.
+   *
+   * SMTP used to be reachable here as `'smtp'`, which is why this package
+   * depended on nodemailer and shipped it to every app — including those on
+   * Resend, SES or Mailgun, which are plain HTTP APIs needing no SMTP client.
+   * Use `smtpMailer({ host })` from `@basaltkit/mailer-smtp` instead.
+   *
+   * The instance form is also how a driver of your own plugs in; before this
+   * there was no way to supply one.
+   */
+  driver?: 'log' | 'memory' | 'resend' | 'ses' | 'mailgun' | MailDriver
   /** Required with the 'resend' driver. */
   resend?: ResendDriverOptions
   /** Required with the 'ses' driver. */
@@ -186,9 +193,10 @@ export interface MailerPluginOptions extends MailerOptions {
 // Fail loud on a typo'd/unrecognized driver name: silently falling back to the
 // log driver would print every outbound mail (reset links included) to stdout.
 function createDriver(options: MailerPluginOptions): MailDriver {
+  // An instance wins outright — that is how @basaltkit/mailer-smtp and any
+  // driver you write plug in.
+  if (typeof options.driver === 'object') return options.driver
   switch (options.driver ?? 'log') {
-    case 'smtp':
-      return new SmtpMailDriver(options.smtp as SmtpDriverOptions)
     case 'resend':
       return new ResendMailDriver(options.resend as ResendDriverOptions)
     case 'ses':
@@ -200,8 +208,18 @@ function createDriver(options: MailerPluginOptions): MailDriver {
     case 'log':
       return new LogMailDriver(options.sink, options.logBody !== undefined ? { logBody: options.logBody } : {})
     default:
+      // TypeScript already rejects `'smtp'`, but a JS caller or an untyped
+      // config file will not — so name the move rather than calling it unknown.
+      if (options.driver === ('smtp' as unknown)) {
+        throw new Error(
+          "The 'smtp' driver moved to @basaltkit/mailer-smtp. Install it and pass an instance: " +
+            'mailerPlugin({ driver: smtpMailer({ host, port }) }). It left the core so apps on ' +
+            'Resend, SES or Mailgun stop installing nodemailer.',
+        )
+      }
       throw new Error(
-        `Unknown mail driver "${String(options.driver)}". Valid drivers: smtp, resend, ses, mailgun, memory, log.`,
+        `Unknown mail driver "${String(options.driver)}". Valid drivers: resend, ses, mailgun, memory, log — ` +
+          'or a MailDriver instance, e.g. smtpMailer() from @basaltkit/mailer-smtp.',
       )
   }
 }
