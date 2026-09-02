@@ -66,14 +66,13 @@ For production with S3/MinIO, just change the disk's configuration:
 storagePlugin({
   default: 'uploads',
   disks: {
-    uploads: {
-      driver: 's3',
+    uploads: s3Disk({
       bucket: 'my-app',
       region: 'eu-west-1',
       // For MinIO or another S3-compatible service:
       // endpoint: 'http://localhost:9000',
       credentials: { accessKeyId: '…', secretAccessKey: '…' },
-    },
+    }),
   },
 })
 ```
@@ -157,7 +156,7 @@ const app = await createApp({
       default: 'uploads',
       disks: {
         uploads: { driver: 'local', root: './storage/uploads' },
-        invoices: { driver: 's3', bucket: 'company-invoices', region: 'eu-west-1' },
+        invoices: s3Disk({ bucket: 'company-invoices', region: 'eu-west-1' }),
       },
     }),
   ],
@@ -326,7 +325,7 @@ Registers `Storage` in the container under the `STORAGE` token and disconnects a
 One of three forms (all also accept `scope` from `DiskOptions`):
 
 - `{ driver: 'local', root: string }` — `root` is the root folder on the filesystem.
-- `{ driver: 's3', ...S3DriverOptions }` — see below.
+- `s3Disk({ ...S3DriverOptions })` from [`@basaltkit/storage-s3`](https://www.npmjs.com/package/@basaltkit/storage-s3) — see below.
 - `{ driver: <a StorageDriver instance> }` — any custom driver, e.g.
   `@basaltkit/storage-gcs` or `@basaltkit/storage-azure`.
 
