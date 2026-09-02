@@ -14,8 +14,11 @@ lock-in, TypeScript inference from the route to the client.
 Runs on **Fastify, Express or Hono** (swap adapters without touching your
 routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.6 — the release where the framework guarantees what it
-> promises. 84 packages, each versioned independently. 🎉** Three architecture
+> **Status: Basalt 1.7 — the release where no core forces a backend on you.
+> 89 packages, each versioned independently. 🎉** The queue, storage, cache and
+> mailer cores each shipped one backend's client to every consumer; all four are
+> now separate packages, and the tripwire that recorded the debt has an empty
+> allowlist. Before that, three architecture
 > review cycles turned the project's promises into machine-enforced rules:
 > adapter neutrality, the dev-only AI boundary, "a generic package never
 > requires tenancy", DI lifetime safety and boot-time fail-loud for declared
