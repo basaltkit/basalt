@@ -169,11 +169,12 @@ Para reutilizar uma conexão `ioredis` existente em vez de um URL, passa uma ins
 
 ```ts
 import { Redis } from 'ioredis'
-import { cachePlugin, RedisCacheDriver } from '@basaltkit/cache'
+import { cachePlugin } from '@basaltkit/cache'
+import { RedisCacheDriver } from '@basaltkit/cache-redis'
 
 const redis = new Redis(process.env.REDIS_URL!)
 cachePlugin({ driver: new RedisCacheDriver(redis) })
-// ou a partir de um URL: RedisCacheDriver.fromUrl(process.env.REDIS_URL!)
+// ou a partir de um URL: redisCache(process.env.REDIS_URL!)
 ```
 
 ### Multinível (tiered)
@@ -184,12 +185,13 @@ idas e voltas à rede, enquanto o Redis continua a ser a fonte da verdade entre
 instâncias:
 
 ```ts
-import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@basaltkit/cache'
+import { cachePlugin, MemoryCacheDriver } from '@basaltkit/cache'
+import { redisCache } from '@basaltkit/cache-redis'
 import { TieredCacheDriver } from '@basaltkit/cache-tiered'
 
 cachePlugin({
   driver: new TieredCacheDriver({
-    layers: [new MemoryCacheDriver(), RedisCacheDriver.fromUrl(process.env.REDIS_URL!)],
+    layers: [new MemoryCacheDriver(), redisCache(process.env.REDIS_URL!)],
     backfillTtlMs: 30_000, // quanto tempo o near cache mantém um valor lido do Redis (predefinição 60000)
   }),
 })

@@ -377,7 +377,7 @@ partilhado entre instâncias:
 
 | Preocupação | Em memória (predefinição) | Durável / partilhado |
 | --- | --- | --- |
-| Cache | `MemoryCacheDriver` | `RedisCacheDriver` (`@basaltkit/cache`), tiered (`@basaltkit/cache-tiered`) |
+| Cache | `MemoryCacheDriver` | `redisCache()` (`@basaltkit/cache-redis`), tiered (`@basaltkit/cache-tiered`) |
 | Usage metering | `MemoryUsageStore` | `RedisUsageStore` — `consume()` atómico via Lua |
 | Idempotência de webhook | `MemoryWebhookStore` | `RedisWebhookStore` — `SET NX EX` entre restarts |
 | Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@basaltkit/http`) — um contador atómico partilhado entre instâncias |

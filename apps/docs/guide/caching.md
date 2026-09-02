@@ -164,11 +164,12 @@ To reuse an existing `ioredis` connection instead of a URL, pass a
 
 ```ts
 import { Redis } from 'ioredis'
-import { cachePlugin, RedisCacheDriver } from '@basaltkit/cache'
+import { cachePlugin } from '@basaltkit/cache'
+import { RedisCacheDriver } from '@basaltkit/cache-redis'
 
 const redis = new Redis(process.env.REDIS_URL!)
 cachePlugin({ driver: new RedisCacheDriver(redis) })
-// or from a URL: RedisCacheDriver.fromUrl(process.env.REDIS_URL!)
+// or from a URL: redisCache(process.env.REDIS_URL!)
 ```
 
 ### Multi-level (tiered)
@@ -178,12 +179,13 @@ cache (Redis) — hot keys are served from memory, cutting network round-trips,
 while Redis stays the source of truth across instances:
 
 ```ts
-import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@basaltkit/cache'
+import { cachePlugin, MemoryCacheDriver } from '@basaltkit/cache'
+import { redisCache } from '@basaltkit/cache-redis'
 import { TieredCacheDriver } from '@basaltkit/cache-tiered'
 
 cachePlugin({
   driver: new TieredCacheDriver({
-    layers: [new MemoryCacheDriver(), RedisCacheDriver.fromUrl(process.env.REDIS_URL!)],
+    layers: [new MemoryCacheDriver(), redisCache(process.env.REDIS_URL!)],
     backfillTtlMs: 30_000, // how long the near cache keeps a value read from Redis (default 60000)
   }),
 })
