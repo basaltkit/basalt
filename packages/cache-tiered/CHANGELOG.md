@@ -1,5 +1,12 @@
 # @basaltkit/cache-tiered
 
+## 1.1.2
+
+### Patch Changes
+
+- Updated dependencies [416f98d]
+  - @basaltkit/cache@2.0.0
+
 ## 1.1.1
 
 ### Patch Changes
