@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/storage-s3",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "engines": { "node": ">=22.5.0" },
   "description": "S3-compatible storage driver for @basaltkit/storage: AWS S3, MinIO, Cloudflare R2 and friends, with presigned temporary URLs.",
   "license": "MIT",
