@@ -1,5 +1,5 @@
 import { Redis } from 'ioredis'
-import type { CacheDriver } from '../driver.js'
+import type { CacheDriver } from '@basaltkit/cache'
 
 /**
  * Namespace for tag indexes, outside the value key space. Each tag is a SORTED
@@ -90,4 +90,19 @@ export class RedisCacheDriver implements CacheDriver {
   async disconnect(): Promise<void> {
     await this.redis.quit()
   }
+}
+
+/**
+ * A Redis-backed cache driver, ready for `cachePlugin({ driver })`.
+ *
+ * ```ts
+ * cachePlugin({ driver: redisCache(process.env.REDIS_URL!) })
+ * ```
+ *
+ * The `driver: 'redis'` + `url` shorthand this replaces lived in the core, which
+ * meant every consumer of `@basaltkit/cache` installed ioredis (1.5 MB) — even
+ * apps running only the in-memory driver.
+ */
+export function redisCache(url: string): RedisCacheDriver {
+  return RedisCacheDriver.fromUrl(url)
 }

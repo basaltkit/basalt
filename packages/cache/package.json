@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Basalt cache layer: Redis and Memory drivers, tags, TTL, stampede protection and automatic per-tenant isolation.",
+  "description": "Driver-agnostic Basalt cache: tags, stale-while-revalidate, tenant scoping and an in-memory driver. Shared backends ship as their own packages (@basaltkit/cache-redis, -tiered).",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -23,8 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@basaltkit/core": "workspace:^",
-    "ioredis": "^6.0.0"
+    "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
