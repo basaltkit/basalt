@@ -1,4 +1,134 @@
-# What's new in Basalt 1.6
+# What's new in Basalt 1.7
+
+> *"Basalt 1.7" is the umbrella label for this wave of work; the `@basaltkit/*`
+> packages ship independently (see [Versioning](/guide/versioning)). Below is what
+> landed and the package version that carries it.*
+
+Basalt 1.7 is the release where **you stop paying for backends you never use**,
+and where multi-tenant persistence stops failing quietly. The four capability
+cores each forced one backend's client on every consumer; all four are now
+separate packages, and the tripwire that recorded them as known debt has an empty
+allowlist. Then a run of real-world use found four ways a tenant could end up with
+the wrong data — or no data — while every layer reported success.
+
+## Highlights
+
+### A core defines the contract, a backend is a package
+`queue`, `storage`, `cache` and `mailer` each shipped a **string shorthand** for
+one backend — `connection`, `driver: 's3'`, `driver: 'redis'`, `driver: 'smtp'`.
+A string cannot be resolved lazily, so the shorthand *is* what forced the
+dependency: an app on Azure Blob still installed 4.4 MB of AWS SDK, and one
+sending mail through Resend still installed an SMTP client it never opened.
+
+| Core | Was forced on everyone | Now |
+| --- | --- | --- |
+| `@basaltkit/queue` **2.x** | `bullmq` | `@basaltkit/queue-bullmq` **1.0** |
+| `@basaltkit/storage` **2.x** | `@aws-sdk/client-s3` — **4.4 MB** | `@basaltkit/storage-s3` **1.0** |
+| `@basaltkit/cache` **2.x** | `ioredis` — **1.5 MB** | `@basaltkit/cache-redis` **1.0** |
+| `@basaltkit/mailer` **2.x** | `nodemailer` — **688 KB** | `@basaltkit/mailer-smtp` **1.0** |
+
+An app using local storage, the in-memory cache and Resend drops **6.5 MB** of
+client libraries it never called. It also ends an inconsistency that had become
+hard to defend: adding a fifth queue backend was easy, adding a second
+*first-class* one was not, because the core had a favourite. Migration is one
+import and one line per capability — see [Driver packages](/guide/driver-packages).
+
+### Multi-tenant persistence fails loudly now
+Four separate ways a tenant could be served wrong data, all found by using the
+framework rather than reading it:
+
+- **Schema-per-tenant on a database that cannot do it.** It relies on a schema
+  being a namespace *inside* a database. In MySQL a "schema" **is** a database;
+  SQLite has no equivalent. Configuring it there used to surface as a raw
+  `CREATE SCHEMA` syntax error at tenant-creation time, far from the config that
+  caused it. Now refused where the configuration is read — at boot, and before any
+  migration runs. *(`@basaltkit/prisma` 1.5)*
+- **Migrations read from the wrong history.** `migrations.path` belongs to your
+  `prisma.config.ts`, not to the schema file, so pointing `--schema` at the tenant
+  models left Prisma applying the **central** migration history. Pass
+  `configPath` instead. *(`@basaltkit/prisma` 1.5)*
+- **A migration that succeeded without doing anything.** `prisma migrate deploy`
+  exits 0 when it finds no migrations, so a missing or empty migrations directory
+  looked exactly like success: the tenant came up holding `_prisma_migrations` and
+  not one table of its own, marked ready. `migrateTenants` now counts the tenant's
+  own tables and reports `ok: false`. It counts *tables*, not migrations, because
+  `db push` is a legitimate strategy with no migration history at all.
+  *(`@basaltkit/prisma` 1.6)*
+- **Which strategy works on which database** is now stated in the docs, per
+  strategy and per engine, instead of being inferable from an error message.
+
+### Central and tenant routes in one app
+`required: true` rejected any request that resolved no tenant — on **every**
+route, which no app can live with: a health check has no tenant to send, and a
+load balancer will never set the header. Two ways out now, and they compose:
+
+```ts
+// Deny by default…
+tenancyPlugin({ source, resolvers, required: true })
+
+// …and let each route say what it is, next to its handler.
+route({ method: 'GET', url: '/pricing',  meta: { tenant: false }, handler })
+route({ method: 'GET', url: '/invoices', meta: { tenant: true },  handler })
+```
+
+`meta.tenant` overrides the app-wide default in both directions, so the decision
+lives with the route and survives a rename — unlike a path list in another file,
+which stops matching silently. `required: { except: [...] }` remains for paths
+you do not own, such as routes mounted by another package.
+*(`@basaltkit/tenancy` 1.7 and 1.8; `@basaltkit/http` 1.16 now passes the route to
+enrichers, so this behaves identically on Fastify, Express and Hono.)*
+
+One app can also serve **both** worlds from one `prismaPlugin` registration —
+`client` for the tenant-less context, `schemaPerTenant` for the rest — so the same
+`/auth/login` authenticates central users on the apex and tenant users on a
+subdomain, because the two look in different schemas rather than because a handler
+checks. See
+[Serving central and tenant routes from one app](/guide/database-per-tenant#serving-central-and-tenant-routes-from-one-app).
+
+### A failed request is visible on every adapter
+Whether an error reached your terminal used to depend on which adapter you had
+mounted — exactly the difference the neutral pipeline exists to erase. Express and
+Hono logged **nothing at all**: a 500 left no server-side trace. Fastify logged
+5xx only, and only from one of its two catch sites. Now every 4xx and 5xx is
+reported on all three, as structured fields rather than an interpolated string.
+*(`@basaltkit/http` 1.15)*
+
+### `main` is protected
+`verify` (Node 22 and 24), `coverage`, `analyze` and CodeQL are now **required**
+checks, enforced for administrators, with direct pushes blocked. Before this the
+branch was unprotected.
+
+## Upgrading
+
+Packages are independent — bump only what you use. The four capability majors are
+the only breaking changes, and each is one import and one line:
+
+```diff
+-queuePlugin({ connection: REDIS_URL, jobs, workers })
++bullmqQueuePlugin({ connection: REDIS_URL, jobs, workers })
+
+-storagePlugin({ disks: { docs: { driver: 's3', bucket } } })
++storagePlugin({ disks: { docs: s3Disk({ bucket }) } })
+
+-cachePlugin({ driver: 'redis', url })
++cachePlugin({ driver: redisCache(url) })
+
+-mailerPlugin({ driver: 'smtp', smtp: { url }, from })
++mailerPlugin({ driver: smtpMailer({ url }), from })
+```
+
+You are **not** affected if you already passed a driver instance, used
+`driver: 'local'`, the default in-memory cache, or the `log`/`memory` mailer
+drivers. TypeScript flags every case at compile time, because the removed strings
+left their unions. Full detail in [Driver packages](/guide/driver-packages).
+
+One behaviour change worth knowing: `migrateTenants` now reports `ok: false` for a
+tenant whose migration produced no tables. If a tenant legitimately starts empty,
+pass `verifyTables: false`.
+
+---
+
+## Previously — Basalt 1.6
 
 > *"Basalt 1.6" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
@@ -11,7 +141,6 @@ turned each one from a convention people had to remember into a **CI tripwire
 that fails the build**. Along the way the reviews found, and fixed, real bugs
 those principles were supposed to prevent.
 
-## Highlights
 
 ### Promises became guarantees
 Five new machine-enforced boundaries, each with a test that fails the build:
@@ -67,7 +196,7 @@ plugin phases, the route pipeline, metadata buckets, writing your own
 guard/enricher) well enough to build a third-party package from the docs alone.
 Writing them surfaced four more real bugs.
 
-## Upgrading
+### Upgrading to 1.6
 
 Packages are independent — bump only what you use. Two things to know:
 

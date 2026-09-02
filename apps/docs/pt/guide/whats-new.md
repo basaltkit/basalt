@@ -1,4 +1,141 @@
-# Novidades no Basalt 1.6
+# Novidades no Basalt 1.7
+
+> *"Basalt 1.7" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> `@basaltkit/*` são publicados de forma independente (ver
+> [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
+> pacote que o traz.*
+
+O Basalt 1.7 é a versão em que **deixas de pagar por backends que nunca usas** e
+em que a persistência multi-tenant deixa de falhar em silêncio. Cada um dos
+quatro núcleos de capacidade impunha o cliente de um backend a toda a gente; os
+quatro passaram a pacotes separados, e a lista de exceções do teste que os
+registava como dívida conhecida está vazia. Depois, o uso a sério encontrou
+quatro maneiras de um tenant acabar com os dados errados — ou sem dados nenhuns —
+com todas as camadas a comunicar sucesso.
+
+## Destaques
+
+### O núcleo define o contrato, o backend é um pacote
+O `queue`, o `storage`, a `cache` e o `mailer` traziam um **atalho de string**
+para um backend — `connection`, `driver: 's3'`, `driver: 'redis'`,
+`driver: 'smtp'`. Uma string não pode ser resolvida preguiçosamente, portanto o
+atalho *é* o que forçava a dependência: uma app em Azure Blob instalava à mesma
+4,4 MB de SDK da AWS, e uma que enviava email pelo Resend instalava um cliente
+SMTP que nunca abria.
+
+| Núcleo | Era imposto a todos | Agora |
+| --- | --- | --- |
+| `@basaltkit/queue` **2.x** | `bullmq` | `@basaltkit/queue-bullmq` **1.0** |
+| `@basaltkit/storage` **2.x** | `@aws-sdk/client-s3` — **4,4 MB** | `@basaltkit/storage-s3` **1.0** |
+| `@basaltkit/cache` **2.x** | `ioredis` — **1,5 MB** | `@basaltkit/cache-redis` **1.0** |
+| `@basaltkit/mailer` **2.x** | `nodemailer` — **688 KB** | `@basaltkit/mailer-smtp` **1.0** |
+
+Uma app que use storage local, a cache em memória e o Resend deixa de instalar
+**6,5 MB** de bibliotecas cliente que nunca chamou. Também acaba com uma
+incoerência difícil de defender: acrescentar um quinto backend de filas era
+fácil, acrescentar um segundo de *primeira classe* não era, porque o núcleo tinha
+um preferido. A migração é um import e uma linha por capacidade — ver
+[Pacotes de driver](/pt/guide/driver-packages).
+
+### A persistência multi-tenant passa a falhar ruidosamente
+Quatro maneiras distintas de servir dados errados a um tenant, todas encontradas
+a usar o framework e não a lê-lo:
+
+- **Schema-por-tenant numa base que não o consegue fazer.** Assenta em um schema
+  ser um namespace *dentro* de uma base de dados. Em MySQL um "schema" **é** uma
+  base de dados; o SQLite não tem equivalente. Configurá-lo aí aparecia como um
+  erro de sintaxe de `CREATE SCHEMA` na criação do tenant, longe da configuração
+  que o causou. Agora é recusado onde a configuração é lida — no arranque, e antes
+  de qualquer migração correr. *(`@basaltkit/prisma` 1.5)*
+- **Migrações lidas do histórico errado.** O `migrations.path` pertence ao teu
+  `prisma.config.ts`, não ao ficheiro de schema, portanto apontar o `--schema`
+  para os modelos do tenant deixava o Prisma a aplicar o histórico **central**.
+  Passa antes o `configPath`. *(`@basaltkit/prisma` 1.5)*
+- **Uma migração que teve sucesso sem fazer nada.** O `prisma migrate deploy` sai
+  com código 0 quando não encontra migrações, por isso uma pasta em falta ou vazia
+  era indistinguível de sucesso: o tenant nascia com a tabela
+  `_prisma_migrations` e nem uma sua, marcado como pronto. O `migrateTenants`
+  passa a contar as tabelas do tenant e a comunicar `ok: false`. Conta *tabelas* e
+  não migrações, porque o `db push` é uma estratégia legítima sem histórico
+  nenhum. *(`@basaltkit/prisma` 1.6)*
+- **Que estratégia funciona em que base de dados** passa a estar escrito na
+  documentação, por estratégia e por motor, em vez de se deduzir de uma mensagem
+  de erro.
+
+### Rotas centrais e de tenant na mesma app
+O `required: true` rejeitava qualquer pedido que não resolvesse tenant — em
+**todas** as rotas, o que nenhuma app aguenta: um health check não tem tenant para
+enviar, e um load balancer nunca põe o header. Agora há duas saídas, e compõem-se:
+
+```ts
+// Negar por omissão…
+tenancyPlugin({ source, resolvers, required: true })
+
+// …e cada rota diz o que é, ao lado do handler.
+route({ method: 'GET', url: '/pricing',  meta: { tenant: false }, handler })
+route({ method: 'GET', url: '/invoices', meta: { tenant: true },  handler })
+```
+
+O `meta.tenant` sobrepõe-se ao default da app nos dois sentidos, portanto a
+decisão vive com a rota e sobrevive a um rename — ao contrário de uma lista de
+caminhos noutro ficheiro, que deixa de coincidir em silêncio. O
+`required: { except: [...] }` fica para caminhos que não são teus, como rotas
+montadas por outro pacote. *(`@basaltkit/tenancy` 1.7 e 1.8; o `@basaltkit/http`
+1.16 passa a rota aos enrichers, por isso isto comporta-se igual em Fastify,
+Express e Hono.)*
+
+A mesma app também pode servir os **dois** mundos a partir de um único registo do
+`prismaPlugin` — `client` para o contexto sem tenant, `schemaPerTenant` para o
+resto — de modo que o mesmo `/auth/login` autentica utilizadores centrais no
+domínio e utilizadores do tenant num subdomínio, porque os dois procuram em
+schemas diferentes e não porque um handler verifica. Ver
+[Servir rotas centrais e de tenant na mesma app](/pt/guide/database-per-tenant#servir-rotas-centrais-e-de-tenant-na-mesma-app).
+
+### Um pedido falhado é visível em todos os adaptadores
+Se um erro chegava ao teu terminal dependia do adaptador que tinhas montado —
+exatamente a diferença que o pipeline neutro existe para apagar. O Express e o
+Hono não registavam **nada**: um 500 não deixava rasto do lado do servidor. O
+Fastify registava só 5xx, e só num dos seus dois pontos de captura. Agora todos os
+4xx e 5xx são reportados nos três, em campos estruturados em vez de uma string
+interpolada. *(`@basaltkit/http` 1.15)*
+
+### A `main` está protegida
+O `verify` (Node 22 e 24), a `coverage`, o `analyze` e o CodeQL passaram a ser
+verificações **obrigatórias**, impostas também aos administradores, com pushes
+diretos bloqueados. Antes disto o branch estava desprotegido.
+
+## Atualização
+
+Os pacotes são independentes — sobe só o que usas. Os quatro majors de capacidade
+são as únicas mudanças breaking, e cada uma é um import e uma linha:
+
+```diff
+-queuePlugin({ connection: REDIS_URL, jobs, workers })
++bullmqQueuePlugin({ connection: REDIS_URL, jobs, workers })
+
+-storagePlugin({ disks: { docs: { driver: 's3', bucket } } })
++storagePlugin({ disks: { docs: s3Disk({ bucket }) } })
+
+-cachePlugin({ driver: 'redis', url })
++cachePlugin({ driver: redisCache(url) })
+
+-mailerPlugin({ driver: 'smtp', smtp: { url }, from })
++mailerPlugin({ driver: smtpMailer({ url }), from })
+```
+
+**Não** és afetado se já passavas uma instância de driver, se usavas
+`driver: 'local'`, a cache em memória por omissão, ou os drivers `log`/`memory` do
+mailer. O TypeScript assinala todos os casos em tempo de compilação, porque as
+strings removidas saíram das respetivas uniões. Detalhe completo em
+[Pacotes de driver](/pt/guide/driver-packages).
+
+Uma mudança de comportamento a reter: o `migrateTenants` passa a comunicar
+`ok: false` para um tenant cuja migração não produziu tabelas. Se um tenant
+começar legitimamente vazio, passa `verifyTables: false`.
+
+---
+
+## Anteriormente — Basalt 1.6
 
 > *"Basalt 1.6" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são versionados de forma independente (ver
@@ -12,7 +149,6 @@ seguro-por-omissão — e transformaram cada um de convenção que era preciso l
 num **tripwire de CI que reprova o build**. Pelo caminho, as revisões encontraram
 e corrigiram bugs reais que esses princípios deviam ter evitado.
 
-## Destaques
 
 ### As promessas passaram a garantias
 Cinco novas fronteiras impostas por máquina, cada uma com um teste que reprova o build:
@@ -72,7 +208,7 @@ interna (lifetimes do container, fases dos plugins, o pipeline de rotas, os
 metadata buckets, escrever o teu próprio guard/enricher) ao ponto de se construir
 um pacote de terceiros só com as docs. Escrevê-las destapou mais quatro bugs reais.
 
-## Atualização
+### Atualizar para 1.6
 
 Os pacotes são independentes — sobe só o que usas. Duas coisas a saber:
 
