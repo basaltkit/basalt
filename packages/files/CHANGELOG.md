@@ -1,5 +1,12 @@
 # @basaltkit/files
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [e19b765]
+  - @basaltkit/storage@2.0.0
+
 ## 1.2.0
 
 ### Minor Changes
