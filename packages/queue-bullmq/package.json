@@ -26,13 +26,13 @@
     "@basaltkit/queue": "workspace:^"
   },
   "peerDependencies": {
-    "bullmq": "^6.2.1"
+    "bullmq": "^6.3.2"
   },
   "devDependencies": {
     "@basaltkit/core": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.3.0",
-    "bullmq": "^6.2.1",
+    "@types/node": "^26.4.0",
+    "bullmq": "^6.3.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },
