@@ -428,8 +428,32 @@ export async function currentTenant() {
 
 Define `required: true` no plugin para rejeitar pedidos não resolvidos à partida com um
 `404 TENANCY_NOT_RESOLVED` — pedidos mal encaminhados falham ruidosamente em vez de
-correrem contra dados globais. Mantém-no `false` para rotas centrais (landing page,
-sign-up) e trata o tenant ausente no handler.
+correrem contra dados globais.
+
+O `true` aplica-se a **todas** as rotas, o que a maioria das apps não aguenta: um
+health check não tem tenant nenhum para enviar, e uma landing page ou um endpoint
+público de preços também não. Isenta-os por caminho, em vez de abdicares da
+proteção em todo o lado:
+
+```ts
+tenancyPlugin({
+  source: tenants,
+  resolvers: [headerResolver()],
+  required: { except: ['/', '/health', '/openapi.json', /^\/public\//] },
+})
+```
+
+As entradas são strings exatas ou expressões regulares, comparadas com o caminho
+sem a query string — por isso `/health` cobre também `/health?probe=1`. Um URL
+que não se consiga comparar é tratado como **obrigatório**, portanto a proteção
+falha fechada.
+
+Isentar um caminho levanta apenas a exigência de tenant. A autenticação, as
+verificações de subscrição e todas as outras proteções continuam a correr.
+
+Manter `required: false` continua válido quando as rotas centrais são mais do que
+as de tenant, mas nesse caso cada handler fica responsável por tratar o tenant
+ausente.
 
 Também podes ler o tenant através da fachada `TENANCY` — útil em serviços
 que de outra forma não tocam em `ctx()`:
@@ -699,7 +723,7 @@ de cada tenant; passa `migrate` para o sobrepor.
 | --- | --- | --- | --- |
 | `source` | `TenantSource` | — (obrigatório) | De onde são carregados os registos dos tenants — `MemoryTenantSource` em dev, `tenancy-sqlite`/`tenancy-prisma` (ou a tua própria tabela) em produção |
 | `resolvers` | `TenantResolver[]` | — (obrigatório) | Tentados por ordem; vence a primeira referência que carrega um tenant existente, para poderes pôr um resolver de header atrás de um de subdomínio |
-| `required` | `boolean` | `false` | Rejeita um pedido que não resolveu nenhum tenant com `404 TENANCY_NOT_RESOLVED`, em vez de o correr sem tenant. Deixa `false` quando também serves rotas centrais (landing page, sign-up) |
+| `required` | `boolean \| { except: (string \| RegExp)[] }` | `false` | Rejeita um pedido que não resolveu nenhum tenant com `404 TENANCY_NOT_RESOLVED`, em vez de o correr sem tenant. `{ except }` isenta caminhos (health checks, landing pages) e continua a proteger o resto |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:migrate`, corrido dentro do contexto de cada tenant |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:seed`, corrido dentro do contexto de cada tenant |
 
