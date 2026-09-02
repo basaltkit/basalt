@@ -297,6 +297,37 @@ define sempre `DATABASE_URL` com o URL scoped do tenant, portanto o
 `env('DATABASE_URL')` resolve para o tenant certo em cada execução.
 :::
 
+### Sair com sucesso não prova que aconteceu alguma coisa
+
+O `prisma migrate deploy` sai com código 0 quando **não** encontra migrações
+para aplicar. Se a pasta de migrações não existir ou estiver vazia — um clone
+novo, um `.gitignore` que a apanhou, um config a apontar para a errada —, o
+tenant é provisionado, o migrator comunica sucesso, e o schema fica com a tabela
+`_prisma_migrations` e mais nenhuma. O tenant é marcado como pronto, e o estrago
+só aparece muito mais tarde, numa query a uma tabela que nunca foi criada.
+
+O `migrateTenants` verifica isto. Depois de cada tenant migrar, conta as tabelas
+no schema desse tenant, ignorando a `_prisma_migrations`, e comunica `ok: false`
+quando a contagem é zero:
+
+```
+PRISMA_TENANT_SCHEMA_EMPTY: The migration reported success but tenant schema
+"tenant_acme" has no tables.
+```
+
+Corre em modo schema quando o `provision` também consegue ler a base de dados —
+um `PrismaClient` consegue, por isso `provision: admin` chega. É uma query ao
+`information_schema` por tenant e, como qualquer outra falha, é comunicada por
+tenant sem abortar o resto da execução. Passa `verifyTables: false` se um tenant
+começar legitimamente vazio.
+
+::: tip É por isto que a verificação conta tabelas, e não migrações
+O `prisma db push` cria as tabelas diretamente a partir do `schema.prisma`, sem
+histórico de migrações nenhum. Perguntar "as migrações foram aplicadas?" daria
+uma falha falsa nessa estratégia; perguntar "o tenant tem tabelas?" é a pergunta
+certa nas duas.
+:::
+
 Liga-o como um comando de CLI com `tenantMigrateCommand(...)` para que o `deploy` possa
 correr `basalt tenant:migrate` depois de enviar novos modelos de store (os modelos
 `Auth*`, `Perm*`, `Comment` … do schema de referência de cada pacote `*-prisma`).

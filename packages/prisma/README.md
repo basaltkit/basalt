@@ -297,6 +297,7 @@ Returns `Promise<TenantMigrationResult[]>` — one result per tenant, in the sam
 | `migrate` | `MigrateFn` | No | `prismaMigrator()` | Runs a tenant's migration. |
 | `concurrency` | `number` | No | `5` | Max tenants migrated in parallel. |
 | `onResult` | `(result: TenantMigrationResult) => void` | No | — | Called as each tenant finishes. |
+| `verifyTables` | `boolean` | No | `true` | After migrating, check the tenant's schema actually has tables and report `ok: false` if not. Schema mode only, and only when `provision` can also read (a `PrismaClient` can). |
 
 `MigrateTarget` is one of two shapes:
 
@@ -337,6 +338,7 @@ Returns a `CommandDefinition` (`@basaltkit/cli`) named `tenant:migrate`.
 | `DbUnavailableError` | Code `DB_UNAVAILABLE` — `db()` outside context. |
 | `MissingTenantError` | Code `PRISMA_TENANT_MISSING` — query without a tenant with `onMissingTenant: 'error'`. |
 | `InvalidTenantSchemaError` | Code `PRISMA_INVALID_SCHEMA` — tenant id without a valid schema identifier. |
+| `EmptyTenantSchemaError` | Code `PRISMA_TENANT_SCHEMA_EMPTY` — the migration exited cleanly but produced no tables. |
 
 ## Common errors and solutions (FAQ)
 
@@ -363,6 +365,11 @@ Adjust `max` on `prismaPlugin` (default 10) and make sure you pass `destroy: (cl
 
 **`prismaMigrator` fails with "command not found" or can't find the schema.**
 It needs the Prisma CLI available (`pnpm add -D prisma`), and if `schema.prisma` isn't in the usual place, pass `schemaPath`.
+
+**`PRISMA_TENANT_SCHEMA_EMPTY` after a migration that reported success.**
+The migration ran and created nothing. `prisma migrate deploy` exits 0 when it finds no migrations to apply, so a missing or empty migrations directory looks like success — this check is what turns it back into a failure. Confirm the directory exists and has at least one migration, and that `prismaMigrator` points at the config that owns it via `configPath`. Generate a first migration with `prisma migrate diff --from-empty --to-schema-datamodel <tenant schema> --script`.
+
+If a tenant legitimately starts with no tables, pass `verifyTables: false`.
 
 **A freshly provisioned tenant has only the `_prisma_migrations` table.**
 Its migrations were read from the wrong directory. `migrations.path` is a property of your `prisma.config.ts`, not of the schema file, so `schemaPath` alone points Prisma at the tenant *models* while it keeps applying the *central* migration history. Give the tenants their own config and pass `configPath`:

@@ -52,6 +52,57 @@ export interface SchemaProvisioner {
 }
 
 /**
+ * Reads back what a migration actually produced. `PrismaClient` satisfies both
+ * this and `SchemaProvisioner`, so passing `provision: admin` is enough.
+ */
+export interface SchemaInspector {
+  $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>
+}
+
+/** True when the client can be used to inspect a schema, not just write to it. */
+export function canInspect(client: unknown): client is SchemaInspector {
+  return typeof (client as SchemaInspector | null)?.$queryRawUnsafe === 'function'
+}
+
+export class EmptyTenantSchemaError extends BasaltError {
+  constructor(schema: string) {
+    super(
+      'PRISMA_TENANT_SCHEMA_EMPTY',
+      `The migration reported success but tenant schema "${schema}" has no tables. ` +
+        'Almost always the migration history is missing or empty: `prisma migrate deploy` ' +
+        'exits 0 when it finds no migrations to apply, having created only ' +
+        '`_prisma_migrations`. Check that the migrations directory exists and is not empty, ' +
+        'and that `prismaMigrator` points at the config that owns it (`configPath`) rather ' +
+        'than at the central one.',
+    )
+  }
+}
+
+/**
+ * Counts the tenant's own tables, ignoring Prisma's bookkeeping table.
+ *
+ * `information_schema` is queried from whatever connection the caller already
+ * has: schemas live inside one database, so an admin client on the base URL can
+ * see every tenant without connecting per schema.
+ */
+export async function countTenantTables(
+  client: SchemaInspector,
+  schema: string,
+): Promise<number> {
+  if (!SAFE_IDENTIFIER.test(schema)) {
+    throw new InvalidTenantSchemaError(schema, 'unsafe schema name')
+  }
+  const rows = await client.$queryRawUnsafe<{ count: bigint | number | string }[]>(
+    'SELECT COUNT(*) AS count FROM information_schema.tables ' +
+      'WHERE table_schema = $1 AND table_name <> $2',
+    schema,
+    '_prisma_migrations',
+  )
+  // Postgres COUNT(*) arrives as bigint, which Prisma surfaces as a JS BigInt.
+  return Number(rows[0]?.count ?? 0)
+}
+
+/**
  * Creates the tenant's schema if it does not exist. The schema name is
  * validated (`[a-z0-9_]`) before interpolation, so quoting is safe.
  */

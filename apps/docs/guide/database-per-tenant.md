@@ -301,6 +301,37 @@ always sets `DATABASE_URL` to the tenant's scoped URL, so `env('DATABASE_URL')`
 resolves to the right tenant on every run.
 :::
 
+### A clean exit is not proof anything happened
+
+`prisma migrate deploy` exits 0 when it finds **no** migrations to apply. If the
+migrations directory is missing or empty — a fresh clone, a `.gitignore` that
+caught it, a config pointing at the wrong one — the tenant is provisioned, the
+migrator reports success, and the schema comes up holding `_prisma_migrations`
+and nothing else. The tenant is then marked ready, and the damage surfaces much
+later as a query against a table that was never created.
+
+`migrateTenants` checks for this. After each tenant migrates it counts the
+tables in that tenant's schema, ignoring `_prisma_migrations`, and reports
+`ok: false` when the count is zero:
+
+```
+PRISMA_TENANT_SCHEMA_EMPTY: The migration reported success but tenant schema
+"tenant_acme" has no tables.
+```
+
+It runs in schema mode when `provision` can also read the database — a
+`PrismaClient` can, so `provision: admin` is enough. It is one `information_schema`
+query per tenant, and like every other failure it is reported per tenant without
+aborting the rest of the run. Pass `verifyTables: false` if a tenant legitimately
+starts empty.
+
+::: tip This is why the check counts tables, not migrations
+`prisma db push` creates the tables straight from `schema.prisma`, with no
+migration history at all. Asking "were migrations applied?" would report a false
+failure for that strategy; asking "does the tenant have tables?" is the right
+question for both.
+:::
+
 Wire it as a CLI command with `tenantMigrateCommand(...)` so `deploy` can run
 `basalt tenant:migrate` after shipping new store models (the `Auth*`, `Perm*`,
 `Comment` … models from each `*-prisma` package's reference schema). It prints a
