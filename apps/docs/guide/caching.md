@@ -141,12 +141,20 @@ cachePlugin({ driver: new MemoryCacheDriver({ maxEntries: Infinity }) }) // no c
 
 Production is a one-line change — point at a Redis server:
 
+```bash
+pnpm add @basaltkit/cache-redis ioredis
+```
+
 ```ts
-cachePlugin({ driver: 'redis', url: process.env.REDIS_URL }) // e.g. redis://localhost:6379
+import { redisCache } from '@basaltkit/cache-redis'
+```
+
+```ts
+cachePlugin({ driver: redisCache(process.env.REDIS_URL!) }) // e.g. redis://localhost:6379
 ```
 
 ::: warning
-With `driver: 'redis'` the `url` option is required, and Redis serializes values
+Redis serializes values
 with `JSON.stringify`/`JSON.parse` — store plain data. Class instances, `Map`,
 and `Date` don't survive the round-trip (a `Date` comes back as a string).
 :::
@@ -223,7 +231,6 @@ over other drivers.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `driver` | `'memory' \| 'redis' \| CacheDriver` | `'memory'` | Storage backend; pass an instance for tiered/custom drivers |
-| `url` | `string` | — | Redis connection URL — **required** with `driver: 'redis'` |
 | `prefix` | `string` | `'basalt'` | Root prefix for every key |
 | `scope` | `(() => string \| undefined) \| null` | reads `ctx().tenant.id` → `tenant:<id>` | Dynamic prefix segment resolved on every operation — the per-tenant isolation. `null` = a deliberate **global** cache (no scoping, no fail-closed) |
 | `onMissingScope` | `'global' \| 'error'` | see below | What a read/write does when the scope fn resolves nothing: `'global'` shares one namespace, `'error'` throws `MissingCacheScopeError`. `flush()` **always** fails closed, regardless |

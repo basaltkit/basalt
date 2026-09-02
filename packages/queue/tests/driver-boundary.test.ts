@@ -116,11 +116,6 @@ const BACKEND_CLIENTS = [
  */
 const ALLOWLIST = new Map<string, string>([
   [
-    '@basaltkit/cache',
-    "KNOWN DEBT: 'ioredis' is a hard dependency for drivers/redis.ts; the memory " +
-      'driver and @basaltkit/cache-tiered consumers pay for it. Make it an optional peer.',
-  ],
-  [
     '@basaltkit/mailer',
     "KNOWN DEBT: 'nodemailer' is a hard dependency for drivers/smtp.ts; the log/" +
       'memory/resend/mailgun/ses drivers pay for it. Make it an optional peer.',
@@ -370,8 +365,11 @@ describe('driver-agnostic boundary', () => {
   })
 
   it('allowlisted packages are exempt, and every entry carries a justification', () => {
+    // Uses whichever package is still allowlisted. Was `@basaltkit/cache` until
+    // its ioredis debt was paid; if the last entry ever goes too, this becomes a
+    // synthetic name and the ALLOWLIST loop below simply has nothing to check.
     expect(
-      forcedClientViolations([{ name: '@basaltkit/cache', dependencies: { ioredis: '^6.0.0' } }]),
+      forcedClientViolations([{ name: '@basaltkit/mailer', dependencies: { nodemailer: '^9.0.0' } }]),
     ).toEqual([])
     for (const [name, reason] of ALLOWLIST) {
       expect(reason.length, `allowlist entry ${name} must justify itself`).toBeGreaterThan(40)

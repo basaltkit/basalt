@@ -63,7 +63,7 @@ For production with Redis, just change the plugin options:
 ```ts
 import { cachePlugin } from '@basaltkit/cache'
 
-cachePlugin({ driver: 'redis', url: 'redis://localhost:6379' })
+cachePlugin({ driver: redisCache('redis://localhost:6379') })
 ```
 
 ## Usage guide
@@ -252,13 +252,13 @@ it proceeds. An explicit `onMissingScope: 'error'` keeps `flush()` fail-closed e
 
 ```ts
 // Multi-tenant: this now throws instead of poisoning the shared namespace.
-cachePlugin({ driver: 'redis', url })   // + tenancyPlugin() registered  → onMissingScope: 'error'
+cachePlugin({ driver: redisCache(url) })   // + tenancyPlugin() registered  → onMissingScope: 'error'
 
 // Deliberate global cache — opt out explicitly, and the scope check never runs.
-cachePlugin({ driver: 'redis', url, scope: null })
+cachePlugin({ driver: redisCache(url), scope: null })
 
 // Keep the old permissive behaviour, knowingly.
-cachePlugin({ driver: 'redis', url, onMissingScope: 'global' })
+cachePlugin({ driver: redisCache(url), onMissingScope: 'global' })
 ```
 
 **`flush()` always fails closed**, whatever `onMissingScope` says: if `scope` is not `null` and
@@ -294,7 +294,6 @@ It also exposes `size` (live entry count) for diagnostics and tests.
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `driver` | `'memory' \| 'redis' \| CacheDriver` | `'memory'` | Built-in driver by name, **or a driver instance** — that is how you plug in [`@basaltkit/cache-tiered`](https://www.npmjs.com/package/@basaltkit/cache-tiered) or your own. An instance is used as-is and `url` is ignored. |
-| `url` | `string` | — | Required with `driver: 'redis'`. Redis connection URL (e.g. `redis://localhost:6379`). |
 | `prefix`, `scope`, `onMissingScope`, `now` | — | see `CacheOptions` | Inherited from `CacheOptions`. |
 
 The plugin registers the `Cache` as a container singleton and `disconnect()`s the driver on
@@ -368,8 +367,8 @@ Cache code ran outside a tenant context — usually a queue worker, a scheduled 
 **`CACHE_SCOPE_MISSING` on `flush()` even though `onMissingScope` is `'global'`.**
 Deliberate. `flush()` always fails closed, because a mis-scoped whole-namespace wipe would delete every tenant's cache. Only `scope: null` exempts it.
 
-**I configured `driver: 'redis'` and the application fails to boot/use the cache.**
-With `driver: 'redis'`, the `url` option is required. Also verify that the Redis server is reachable at that URL.
+**I passed `driver: 'redis'` and TypeScript rejects it.**
+That shorthand was removed in 2.0.0 — it is why this package used to depend on ioredis and ship 1.5 MB to everyone. Install [`@basaltkit/cache-redis`](https://www.npmjs.com/package/@basaltkit/cache-redis) and pass a driver instead: `cachePlugin({ driver: redisCache(url) })`. Also verify the Redis server is reachable at that URL.
 
 ## How it connects to other modules
 
