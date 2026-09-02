@@ -253,6 +253,50 @@ await migrateTenants({
 O migrator predefinido delega em `prisma migrate deploy` com o URL scoped de cada
 tenant como `DATABASE_URL`; passa a tua própria função `migrate` para o substituir.
 
+### Onde vivem as migrações dos tenants
+
+Os tenants costumam ter o seu próprio ficheiro de schema e, por isso, o seu
+próprio histórico de migrações — separado do central. Apontar para os *modelos*
+do tenant não chega para apanhar as *migrações* do tenant:
+
+```ts
+// Errado: o --schema muda os modelos, mas o `migrations.path` pertence ao teu
+// prisma.config.ts, por isso o Prisma continua a aplicar o histórico CENTRAL.
+prismaMigrator({ schemaPath: './prisma/tenants/schema.prisma' })
+```
+
+O sintoma é inconfundível assim que o conheces: um tenant acabado de provisionar
+fica com a tabela `_prisma_migrations` e nem uma tabela sua. O Prisma aplicou um
+histórico que nada tem a ver com estes modelos.
+
+Dá aos tenants um config que fixe os dois, e passa `configPath`:
+
+```ts
+// prisma/tenants/prisma.config.ts
+import { defineConfig, env } from 'prisma/config'
+
+export default defineConfig({
+  // Relativo à pasta DESTE ficheiro — não à raiz do projeto. O config na raiz
+  // usa caminhos relativos à raiz, o que torna isto fácil de falhar.
+  schema: 'schema.prisma',
+  migrations: { path: 'migrations' },
+  datasource: { url: env('DATABASE_URL') },
+})
+```
+
+```ts
+prismaMigrator({ configPath: './prisma/tenants/prisma.config.ts' })
+```
+
+Gera essa primeira migração a partir do schema do tenant com
+`prisma migrate diff --from-empty --to-schema-datamodel prisma/tenants/schema.prisma --script`.
+
+::: tip O Prisma ignora o `.env` quando carrega um config
+Por isso o config tem de ler o URL do ambiente, como acima. O `prismaMigrator`
+define sempre `DATABASE_URL` com o URL scoped do tenant, portanto o
+`env('DATABASE_URL')` resolve para o tenant certo em cada execução.
+:::
+
 Liga-o como um comando de CLI com `tenantMigrateCommand(...)` para que o `deploy` possa
 correr `basalt tenant:migrate` depois de enviar novos modelos de store (os modelos
 `Auth*`, `Perm*`, `Comment` … do schema de referência de cada pacote `*-prisma`).
