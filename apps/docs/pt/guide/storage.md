@@ -2,8 +2,9 @@
 
 `@basaltkit/storage` dá a cada backend uma só API — um **Disk** com
 `put`/`get`/`exists`/`delete`/`list` e `temporaryUrl`s assinados — e faz o scope de
-cada path por tenant automaticamente. O disco local e o S3 vêm no núcleo; o Google
-Cloud Storage e o Azure Blob são pacotes de driver drop-in.
+cada path por tenant automaticamente. O driver do sistema de ficheiros vem no
+núcleo; todos os backends de cloud — S3, Google Cloud Storage, Azure Blob — são
+pacotes de driver drop-in, por isso instalas apenas o SDK que usas mesmo.
 
 [[toc]]
 
@@ -88,7 +89,7 @@ storagePlugin({
   default: 'uploads',
   disks: {
     uploads:  { driver: 'local', root: './storage/uploads' },
-    invoices: { driver: 's3', bucket: 'company-invoices', region: 'eu-west-1' },
+    invoices: s3Disk({ bucket: 'company-invoices', region: 'eu-west-1' }),
   },
 })
 
@@ -101,15 +102,19 @@ await storage.disk('invoices').put('2026/01.pdf', invoice) // pelo nome
 
 ## Drivers
 
-O backend é escolhido por disco. `local` e `s3` são strings; os drivers de cloud são
-instâncias (traz o SDK como peer dependency):
+O backend é escolhido por disco. O `local` é a única string — não precisa de
+biblioteca cliente nenhuma, só de `fs`. Todos os drivers de cloud chegam como
+instância, do seu próprio pacote, com o SDK como peer dependency que instalas:
 
 ```ts
+import { s3Disk } from '@basaltkit/storage-s3'
 import { GcsStorageDriver } from '@basaltkit/storage-gcs'
 import { AzureBlobStorageDriver } from '@basaltkit/storage-azure'
 
 storagePlugin({
   disks: {
+    uploads: { driver: 'local', root: './storage' },
+    s3:      s3Disk({ bucket: 'my-bucket', region: 'eu-west-1' }),
     gcs:   { driver: new GcsStorageDriver({ bucket: 'my-bucket', projectId: 'my-project' }) },
     azure: { driver: new AzureBlobStorageDriver({ container: 'uploads', connectionString: process.env.AZURE_STORAGE_CONNECTION_STRING }) },
   },
@@ -119,26 +124,33 @@ storagePlugin({
 | Driver | Pacote | Notas |
 | --- | --- | --- |
 | Local | `@basaltkit/storage` | Sistema de ficheiros — dev e nó único. Sem `temporaryUrl` |
-| S3 | `@basaltkit/storage` | AWS S3, MinIO, Cloudflare R2 (compatível com S3) |
+| S3 | `@basaltkit/storage-s3` | AWS S3, MinIO, Cloudflare R2 (peers: `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`) |
 | GCS | `@basaltkit/storage-gcs` | Google Cloud Storage (peer: `@google-cloud/storage`) |
 | Azure Blob | `@basaltkit/storage-azure` | Azure Blob (URLs assinados SAS; peer: `@azure/storage-blob`) |
 
 ### S3, MinIO e Cloudflare R2
 
-O driver `s3` comunica com qualquer serviço compatível com S3. Para a AWS, `bucket`
+```bash
+pnpm add @basaltkit/storage-s3 @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
+```
+
+O `s3Disk()` comunica com qualquer serviço compatível com S3. Para a AWS, `bucket`
 (e normalmente `region`) chega — as credenciais vêm da cadeia AWS padrão. Para MinIO
 ou R2, define um `endpoint`:
 
 ```ts
+import { s3Disk } from '@basaltkit/storage-s3'
+```
+
+```ts
 storagePlugin({
   disks: {
-    uploads: {
-      driver: 's3',
+    uploads: s3Disk({
       bucket: 'my-app',
       region: 'eu-west-1',
       endpoint: 'http://localhost:9000',          // MinIO / R2 — forcePathStyle passa a true automaticamente
       credentials: { accessKeyId: '…', secretAccessKey: '…' }, // omite para usar o ambiente AWS
-    },
+    }),
   },
 })
 ```

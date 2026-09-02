@@ -50,18 +50,3 @@ describe('Disk.temporaryUrl disposition (secure by default)', () => {
     expect(calls[0]?.options?.disposition).toBe('inline')
   })
 })
-
-describe('S3 presign carries the disposition (real presigner, offline)', () => {
-  it('attachment by default, inline on opt-out', async () => {
-    const { S3StorageDriver } = await import('../src/drivers/s3.js')
-    const driver = new S3StorageDriver({
-      bucket: 'test-bucket',
-      region: 'us-east-1',
-      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
-    } as never)
-    const url = await driver.temporaryUrl!('tenants/acme/x.html', 60_000, { disposition: 'attachment' })
-    expect(url).toContain('response-content-disposition=attachment')
-    const inline = await driver.temporaryUrl!('tenants/acme/x.pdf', 60_000, { disposition: 'inline' })
-    expect(inline).toContain('response-content-disposition=inline')
-  })
-})

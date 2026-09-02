@@ -1,0 +1,38 @@
+{
+  "name": "@basaltkit/storage-s3",
+  "version": "0.0.0",
+  "engines": { "node": ">=22.5.0" },
+  "description": "S3-compatible storage driver for @basaltkit/storage: AWS S3, MinIO, Cloudflare R2 and friends, with presigned temporary URLs.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "@basaltkit/storage": "workspace:^" },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.1116.0",
+    "@aws-sdk/s3-request-presigner": "^3.1116.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1116.0",
+    "@aws-sdk/s3-request-presigner": "^3.1116.0",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/storage-s3"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/storage-s3#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": ["basalt", "typescript", "storage", "s3", "minio", "r2"]
+}

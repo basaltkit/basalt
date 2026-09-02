@@ -8,7 +8,6 @@ import {
 import type { TemporaryUrlOptions, PutOptions, StorageDriver } from './driver.js'
 import { ImagePipeline, type ImageProcessor } from './image.js'
 import { LocalStorageDriver } from './drivers/local.js'
-import { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
 import {
   StorageContentTypeError,
   StorageInvalidKeyError,
@@ -27,7 +26,6 @@ export {
   type ResizeOptions,
 } from './image.js'
 export { LocalStorageDriver } from './drivers/local.js'
-export { S3StorageDriver, type S3DriverOptions } from './drivers/s3.js'
 export {
   ImageProcessingUnavailableError,
   StorageContentTypeError,
@@ -192,8 +190,14 @@ export const STORAGE = createToken<Storage>('storage')
 
 export type DiskConfig =
   | ({ driver: 'local'; root: string } & DiskOptions)
-  | ({ driver: 's3' } & S3DriverOptions & DiskOptions)
-  /** A custom driver instance — e.g. `@basaltkit/storage-gcs`, `-azure`. */
+  /**
+   * A driver instance — every backend but `local` arrives this way:
+   * `@basaltkit/storage-s3`, `-azure`, `-gcs`, or one you wrote.
+   *
+   * S3 used to have a `{ driver: 's3' }` shorthand here, which is why this
+   * package depended on the AWS SDK and shipped 4.4 MB to consumers who never
+   * touched S3. Use `s3Disk({ bucket })` from `@basaltkit/storage-s3` instead.
+   */
   | ({ driver: StorageDriver } & DiskOptions)
 
 export interface StoragePluginOptions {
@@ -216,12 +220,12 @@ export function storagePlugin(options: StoragePluginOptions) {
       container.singleton(STORAGE, () => {
         const storage = new Storage(options.default)
         for (const [name, config] of Object.entries(options.disks)) {
+          // `local` is the only string left: it needs no client library, just
+          // `fs`. Everything else arrives as an instance from its own package.
           const driver: StorageDriver =
-            typeof config.driver !== 'string'
-              ? config.driver
-              : config.driver === 'local'
-                ? new LocalStorageDriver({ root: config.root })
-                : new S3StorageDriver(config as S3DriverOptions)
+            typeof config.driver === 'string'
+              ? new LocalStorageDriver({ root: config.root })
+              : config.driver
           drivers.push(driver)
           storage.add(
             new Disk(name, driver, {

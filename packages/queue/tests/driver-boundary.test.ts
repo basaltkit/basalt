@@ -121,12 +121,6 @@ const ALLOWLIST = new Map<string, string>([
       'driver and @basaltkit/cache-tiered consumers pay for it. Make it an optional peer.',
   ],
   [
-    '@basaltkit/storage',
-    "KNOWN DEBT: '@aws-sdk/client-s3' + presigner are hard dependencies for " +
-      'drivers/s3.ts; the local driver and the azure/gcs satellite users pay for it. ' +
-      'Make them optional peers.',
-  ],
-  [
     '@basaltkit/mailer',
     "KNOWN DEBT: 'nodemailer' is a hard dependency for drivers/smtp.ts; the log/" +
       'memory/resend/mailgun/ses drivers pay for it. Make it an optional peer.',

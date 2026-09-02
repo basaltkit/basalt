@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Object storage layer for Basalt: MinIO/S3 and local drivers under one contract, automatic tenant isolation, and temporary signed URLs.",
+  "description": "Driver-agnostic Basalt storage: disks, scoping, image pipeline and a local-filesystem driver. Cloud backends ship as their own packages (@basaltkit/storage-s3, -azure, -gcs).",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -23,8 +23,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1116.0",
-    "@aws-sdk/s3-request-presigner": "^3.1116.0",
     "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {

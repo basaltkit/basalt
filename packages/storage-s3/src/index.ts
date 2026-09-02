@@ -7,8 +7,13 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { StorageFileNotFoundError } from '../errors.js'
-import type { PutOptions, StorageDriver, TemporaryUrlOptions } from '../driver.js'
+import {
+  StorageFileNotFoundError,
+  type DiskOptions,
+  type PutOptions,
+  type StorageDriver,
+  type TemporaryUrlOptions,
+} from '@basaltkit/storage'
 
 export interface S3DriverOptions {
   bucket: string
@@ -123,4 +128,29 @@ function isNotFound(error: unknown): boolean {
   const name = (error as { name?: string }).name
   const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
   return name === 'NoSuchKey' || name === 'NotFound' || status === 404
+}
+
+/**
+ * An S3 disk, ready to hand to `storagePlugin({ disks })`.
+ *
+ * ```ts
+ * storagePlugin({
+ *   disks: {
+ *     documents: s3Disk({ bucket: 'docs', region: 'eu-west-1' }),
+ *     uploads: s3Disk({ bucket: 'up', endpoint: 'http://localhost:9000' }), // MinIO
+ *   },
+ * })
+ * ```
+ *
+ * This is the shape `@basaltkit/storage-azure` and `@basaltkit/storage-gcs`
+ * already use — a driver instance, not a string. The `{ driver: 's3' }`
+ * shorthand it replaces lived in the core, which meant every consumer installed
+ * the AWS SDK (4.4 MB) whether or not they used S3.
+ */
+export function s3Disk(options: S3DriverOptions & DiskOptions) {
+  const { scope, ...driverOptions } = options
+  return {
+    driver: new S3StorageDriver(driverOptions),
+    ...(scope !== undefined ? { scope } : {}),
+  }
 }
