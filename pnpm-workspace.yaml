@@ -46,6 +46,16 @@ minimumReleaseAgeExclude:
 
 # Force zod 4 across the tree while ranges stay `^3 || ^4` (library compat).
 overrides:
+  # GHSA-3f6p-5ww8-9rcr (high): mysql2 < 3.22.0 can be downgraded to the
+  # mysql_clear_password auth plugin by a hostile server, leaking the password
+  # in plaintext. It reaches us inside Prisma (@prisma/client > prisma > mysql2),
+  # which pins an older range — so an override is the only way to raise it.
+  #
+  # Overridden rather than ignored: unlike every entry in `auditConfig` above,
+  # this one is NOT build-only. It travels in @basaltkit/prisma's dependency
+  # tree, so an app using @basaltkit/prisma against MySQL would really be
+  # exposed. This repo runs Postgres/SQLite, which is why nothing here breaks.
+  mysql2: ^3.24.2
   jsdom: ^30.0.1
   '@types/node': ^26.3.0
   tailwind-merge: ^3.6.0
