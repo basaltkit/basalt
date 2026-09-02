@@ -105,6 +105,24 @@ describe('tenancyPlugin + fastify (end to end)', () => {
         return { ok: true }
       },
     }),
+    // Declarada como central na própria rota.
+    route({
+      method: 'GET',
+      url: '/central',
+      meta: { tenant: false },
+      async handler() {
+        return { central: true }
+      },
+    }),
+    // Declarada como de tenant, mesmo quando o default da app é permissivo.
+    route({
+      method: 'GET',
+      url: '/tenant-only',
+      meta: { tenant: true },
+      async handler() {
+        return { tenant: ctx().tenant?.id ?? null }
+      },
+    }),
   ]
 
   const boot = async (required: boolean | { except: (string | RegExp)[] }) => {
@@ -177,6 +195,48 @@ describe('tenancyPlugin + fastify (end to end)', () => {
     await app.shutdown()
   })
 
+  describe('route meta.tenant', () => {
+    it('meta: { tenant: false } serves a central route even with required: true', async () => {
+      const { app, server } = await boot(true)
+
+      const central = await server.inject({ method: 'GET', url: '/central' })
+      expect(central.statusCode).toBe(200)
+      expect(central.json()).toEqual({ central: true })
+
+      // Every other route is still guarded.
+      const guarded = await server.inject({ method: 'GET', url: '/whoami' })
+      expect(guarded.statusCode).toBe(404)
+
+      await app.shutdown()
+    })
+
+    it('meta: { tenant: true } guards one route even with required off', async () => {
+      const { app, server } = await boot(false)
+
+      const guarded = await server.inject({ method: 'GET', url: '/tenant-only' })
+      expect(guarded.statusCode).toBe(404)
+      expect(guarded.json().error.code).toBe('TENANCY_NOT_RESOLVED')
+
+      // The app-wide default is still permissive for everything else.
+      const permissive = await server.inject({ method: 'GET', url: '/whoami' })
+      expect(permissive.statusCode).toBe(200)
+      expect(permissive.json()).toEqual({ tenant: null })
+
+      await app.shutdown()
+    })
+
+    it('the route still resolves its tenant normally when one is sent', async () => {
+      const { app, server } = await boot(false)
+      const res = await server.inject({
+        method: 'GET',
+        url: '/tenant-only',
+        headers: { 'x-tenant-id': 'acme' },
+      })
+      expect(res.json()).toEqual({ tenant: 'acme' })
+      await app.shutdown()
+    })
+  })
+
   it('TENANCY token exposes the facade', async () => {
     const { app } = await boot(false)
     const tenancy = app.container.get(TENANCY)
@@ -237,5 +297,25 @@ describe('isTenantRequired', () => {
 
   it('fails closed when there is no URL to match', () => {
     expect(isTenantRequired({ except: ['/health'] }, undefined)).toBe(true)
+  })
+})
+
+describe('isTenantRequired with route meta', () => {
+  it('meta wins over the app-wide default, in both directions', () => {
+    expect(isTenantRequired(true, '/anything', { tenant: false })).toBe(false)
+    expect(isTenantRequired(false, '/anything', { tenant: true })).toBe(true)
+    expect(isTenantRequired({ except: ['/x'] }, '/x', { tenant: true })).toBe(true)
+  })
+
+  it('falls back to the default when the route says nothing', () => {
+    expect(isTenantRequired(true, '/anything', {})).toBe(true)
+    expect(isTenantRequired(true, '/anything', undefined)).toBe(true)
+    expect(isTenantRequired(false, '/anything', { other: 'meta' })).toBe(false)
+  })
+
+  it('ignores a non-boolean meta.tenant rather than guessing', () => {
+    // `meta` is free-form, so another plugin could put anything under this key.
+    expect(isTenantRequired(true, '/anything', { tenant: 'yes' })).toBe(true)
+    expect(isTenantRequired(false, '/anything', { tenant: 'no' })).toBe(false)
   })
 })
