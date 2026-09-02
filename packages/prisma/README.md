@@ -164,7 +164,22 @@ const app = await createApp({
 
 The pool is **LRU** (*least recently used*): when the limit is exceeded, the tenant client that's gone longest without use is closed (via `destroy`). Active tenants always reuse the same client.
 
-You can combine `client` (for the central, tenant-less context) with `forTenant`/`schemaPerTenant` (for requests with a tenant) in the same plugin.
+You can combine `client` (for the central, tenant-less context) with `forTenant`/`schemaPerTenant` (for requests with a tenant) in the same plugin. That is what lets one app serve both worlds:
+
+```ts
+prismaPlugin({
+  client: prisma,                                    // no tenant → central database
+  schemaPerTenant: { url, createClient },            // tenant → ?schema=tenant_<id>
+  destroy: (client) => client.$disconnect(),
+})
+
+// One handler, both worlds — central on the apex, tenant on a subdomain.
+route({ method: 'GET', url: '/users', meta: { tenant: false }, handler: async () =>
+  db<PrismaClient>().authUser.findMany(),
+})
+```
+
+Note the trade-off: without `client`, a tenant route reached with no tenant throws `DB_UNAVAILABLE`; with it, that route would quietly query the **central** database instead. Pair it with `required: true` on `tenancyPlugin` and mark only genuinely central routes with `meta: { tenant: false }` — see [Serving central and tenant routes from one app](https://basaltkit.dev/guide/database-per-tenant#serving-central-and-tenant-routes-from-one-app).
 
 ### `db()` — the current context's client
 
