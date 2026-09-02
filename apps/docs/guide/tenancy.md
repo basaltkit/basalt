@@ -692,6 +692,8 @@ scoped connection URL; pass `migrate` to override it.
 | `required` | `boolean` | `false` | Reject a request that resolved no tenant with `404 TENANCY_NOT_RESOLVED`, instead of running it tenant-less. Leave `false` when you also serve central routes (landing page, sign-up) |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:migrate`, run inside each tenant's context |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |
+| `onProvision` | `(tenant) => void \| Promise<void>` | — | Brings a NEW tenant's storage into existence, inside its context, from `tenancy.create()` and `basalt tenant:create`. Without it a tenant is routable before its schema exists |
+| `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — `create()` waits, so the tenant is usable when it returns. `'deferred'` — `create()` returns immediately with status `provisioning` and the resolver answers 503 until `tenancy.provision(id)` runs |
 
 The built-in resolver factories:
 
@@ -729,6 +731,8 @@ takeover.
 | `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` ran with no tenant in context and no explicit fallback |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` and no resolver produced a ref that loaded a tenant |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, or `forEach()` on a `TenantSource` without `list()` |
+| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning` or `failed`. 503, not 404: the tenant exists and the client may retry |
+| `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` on a source implementing neither `create()` nor `save()` — e.g. one backed by a static config file |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` for a domain another tenant already registered |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` for a domain that isn't registered |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | A tenant acted on a domain belonging to a **different** tenant |
@@ -758,6 +762,7 @@ takeover.
 | Hook | Payload |
 | --- | --- |
 | `tenancy:switched` | `{ tenant }` — emitted on every entry into a tenant context, by the HTTP enricher and by `tenancy.run()` |
+| `tenancy:created` | `{ tenant }` — emitted once a new tenant is created **and provisioned**, so a listener may assume its storage exists. Does not fire if `onProvision` threw |
 
 Durable tenant registries and the per-tenant database options are covered in
 [Persistence](/guide/persistence); the end-to-end sign-up flow is in the

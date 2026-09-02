@@ -19,6 +19,7 @@ Quatro peças, pela ordem em que correm:
 | `TenantSource` | assim que um resolver produz uma referência | Carrega o registo do tenant (`find` / `findByDomain`). Uma referência que não carrega nada cai para o resolver **seguinte** |
 | `ctx().tenant` | no resto do pedido | O registo aberto resolvido — `undefined` quando nada correspondeu |
 | `tenancy:switched` | em cada entrada num tenant | Permite à cache, ao storage e ao db client reanexar a sua instância por tenant |
+| `tenancy:created` | `{ tenant }` — emitido quando um tenant novo é criado **e provisionado**, portanto um listener pode assumir que o storage dele existe. Não dispara se o `onProvision` lançar |
 | `tenancy:created` | uma vez, depois de um tenant novo ser criado **e provisionado** | Email de boas-vindas, entrada de auditoria, notificar um painel — um listener pode assumir que o storage do tenant já existe |
 
 Fora de um pedido não há resolver, por isso entras num tenant explicitamente com
@@ -565,6 +566,8 @@ que o `@basaltkit/cli` está presente — sem ligação extra:
 | `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` | Persiste um novo tenant; cada flag torna-se um campo |
 | `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Corre o teu hook de migração por tenant dentro do contexto de cada um |
 | `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Corre o teu hook de seed por tenant dentro do contexto de cada um |
+| `onProvision` | `(tenant) => void \| Promise<void>` | — | Traz o storage de um tenant NOVO à existência, dentro do contexto dele, a partir do `tenancy.create()` e do `basalt tenant:create`. Sem isto o tenant é encaminhável antes de o schema existir |
+| `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — o `create()` espera, portanto o tenant está utilizável quando retorna. `'deferred'` — o `create()` retorna já, com estado `provisioning`, e o resolver responde 503 até correr o `tenancy.provision(id)` |
 | `basalt tenant:run <id> <command> [args…]` | — | Corre qualquer outro comando registado dentro do contexto de um tenant |
 
 O `onMigrate` / `onSeed` são onde vai o trabalho específico da base de dados — a
@@ -737,6 +740,8 @@ a tomada de domínios pendentes.
 | `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` correram sem tenant no contexto e sem fallback explícito |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` e nenhum resolver produziu uma referência que carregasse um tenant |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, ou `forEach()` sobre um `TenantSource` sem `list()` |
+| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | Um pedido resolveu para um tenant com estado `provisioning` ou `failed`. 503, e não 404: o tenant existe e o cliente pode voltar a tentar |
+| `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` numa source que não implementa nem `create()` nem `save()` — por exemplo uma baseada num ficheiro de configuração estático |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` para um domínio que outro tenant já registou |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` para um domínio que não está registado |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | Um tenant agiu sobre um domínio pertencente a um tenant **diferente** |
