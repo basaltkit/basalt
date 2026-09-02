@@ -21,6 +21,12 @@ export type RequestEnricher = (info: {
   request: HttpRequest
   context: RequestContext
   container: Container
+  /**
+   * The route being served, so an enricher can honour its `meta` — tenancy
+   * uses `meta.tenant` to tell central routes from tenant ones. Optional
+   * because enrichers written before this existed do not read it.
+   */
+  route?: BasaltRoute
 }) => void | Promise<void>
 
 /**
@@ -113,7 +119,8 @@ export async function runRoute(
       )
     }
     if (scoped) {
-      for (const enrich of pipeline.enrichers ?? []) await enrich({ request, context, container: scoped })
+      for (const enrich of pipeline.enrichers ?? [])
+        await enrich({ route: definition, request, context, container: scoped })
       for (const guard of pipeline.guards ?? []) await guard({ route: definition, request, context, container: scoped })
     }
     const result = await definition.handler({

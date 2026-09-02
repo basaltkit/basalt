@@ -27,6 +27,12 @@ cada uma:
 | `meta.scopes` | `apiKeysPlugin` ([guia de auth](/pt/guide/auth)) | `403 SCOPE_REQUIRED` |
 | `meta.subscribed` | `subscriptionsPlugin` ([guia de faturação](/pt/guide/billing)) | `402 NOT_SUBSCRIBED` |
 | `meta.feature` | `subscriptionsPlugin` ([guia de faturação](/pt/guide/billing)) | `402 FEATURE_UNAVAILABLE` |
+| `meta.tenant` | `tenancyPlugin` ([guia de tenancy](/pt/guide/tenancy)) | `404 TENANCY_NOT_RESOLVED` |
+
+O `meta.tenant` é o caso à parte: não é um guard mas um *requisito*, lido durante
+a resolução do tenant, e funciona nos dois sentidos — `false` marca a rota como
+central, `true` exige tenant mesmo quando o default da app está desligado. Por
+isso não é abrangido pela verificação de arranque abaixo.
 
 Declarar uma destas chaves sem registar o plugin que a impõe não serve a rota
 silenciosamente sem proteção — o adapter recusa-se a fazer **boot** com

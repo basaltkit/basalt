@@ -26,6 +26,12 @@ each one:
 | `meta.scopes` | `apiKeysPlugin` ([auth guide](/guide/auth)) | `403 SCOPE_REQUIRED` |
 | `meta.subscribed` | `subscriptionsPlugin` ([billing guide](/guide/billing)) | `402 NOT_SUBSCRIBED` |
 | `meta.feature` | `subscriptionsPlugin` ([billing guide](/guide/billing)) | `402 FEATURE_UNAVAILABLE` |
+| `meta.tenant` | `tenancyPlugin` ([tenancy guide](/guide/tenancy)) | `404 TENANCY_NOT_RESOLVED` |
+
+`meta.tenant` is the odd one out: it is not a guard but a *requirement*, read
+while the tenant is resolved, and it works in both directions — `false` marks a
+route central, `true` requires a tenant even when the app-wide default is off.
+It is therefore not covered by the boot check below.
 
 Declaring one of these keys without registering the enforcing plugin does not
 silently serve the route unprotected — the adapter refuses to **boot** with

@@ -239,6 +239,13 @@ it inside `<id>`'s context — e.g. `basalt tenant:run acme queue:retry`.
 | `source` | `TenantSource` | Yes | — | Where tenants are loaded from. |
 | `resolvers` | `TenantResolver[]` | Yes | — | Tried in order; the first one that loads a tenant wins. |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. `{ except: ['/health'] }` exempts those paths (matched without the query string) and guards everything else. |
+
+A route can override `required` for itself with `meta.tenant` — `false` marks it central, `true` requires a tenant even when the app-wide default is off:
+
+```ts
+route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
+```
+
 | `onMigrate` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant migration work for `basalt tenant:migrate`. The framework iterates tenants and enters each context; you do the DB-specific part. Without it the command errors. |
 | `onSeed` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant seeding for `basalt tenant:seed`, same contract. |
 

@@ -448,6 +448,38 @@ sem a query string — por isso `/health` cobre também `/health?probe=1`. Um UR
 que não se consiga comparar é tratado como **obrigatório**, portanto a proteção
 falha fechada.
 
+### Separar rotas centrais de rotas de tenant
+
+Uma lista de caminhos funciona, mas põe a decisão num ficheiro diferente da rota
+que descreve: muda-se o URL e a exceção deixa de coincidir em silêncio. Declara
+antes na própria rota, com `meta.tenant`:
+
+```ts
+// Rota central: nunca tem tenant.
+route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
+
+// Rota de tenant: recusa o pedido se nenhum for resolvido.
+route({ method: 'GET', url: '/invoices', meta: { tenant: true }, handler })
+```
+
+O `meta.tenant` sobrepõe-se ao `required` da app nos dois sentidos, por isso a
+combinação que a maioria das apps quer é **negar por omissão, abrir rota a
+rota**:
+
+```ts
+tenancyPlugin({ source: tenants, resolvers: [headerResolver()], required: true })
+```
+
+Todas as rotas passam a precisar de tenant, e as poucas centrais — health check,
+landing page, registo, criação de tenants — dizem-no ao lado do handler, onde
+quem revê o código as vê. O `required: { except }` continua disponível e a
+funcionar; usa-o para caminhos que não são teus, como rotas montadas por outro
+pacote.
+
+Uma rota com `meta: { tenant: false }` continua a *resolver* o tenant quando ele
+existe, portanto o `ctx().tenant` está preenchido em
+`acme.example.com/pricing`. O que se levanta é só a exigência.
+
 Isentar um caminho levanta apenas a exigência de tenant. A autenticação, as
 verificações de subscrição e todas as outras proteções continuam a correr.
 
