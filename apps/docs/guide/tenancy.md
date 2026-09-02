@@ -440,6 +440,36 @@ without its query string — so `/health` still covers `/health?probe=1`. A URL
 that cannot be matched at all is treated as **required**, so the guard fails
 closed.
 
+### Separating central routes from tenant routes
+
+A path list works, but it puts the decision in a different file from the route
+it describes: rename the URL and the exemption silently stops matching. Declare
+it on the route instead, with `meta.tenant`:
+
+```ts
+// A central route: no tenant, ever.
+route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
+
+// A tenant route: refuse the request if none resolved.
+route({ method: 'GET', url: '/invoices', meta: { tenant: true }, handler })
+```
+
+`meta.tenant` overrides the app-wide `required` in both directions, so the
+combination most apps want is **deny by default, opt out per route**:
+
+```ts
+tenancyPlugin({ source: tenants, resolvers: [headerResolver()], required: true })
+```
+
+Every route now needs a tenant, and the handful of central ones — health check,
+landing page, sign-up, tenant creation — say so next to their handler, where a
+reviewer sees it. `required: { except }` remains available and still works; use
+it for paths you do not own, such as routes mounted by another package.
+
+A route that declares `meta: { tenant: false }` still *resolves* a tenant when
+one is present, so `ctx().tenant` is populated on `acme.example.com/pricing`.
+Only the requirement is lifted.
+
 Exempting a path only lifts the tenant requirement. Auth, subscription checks
 and every other guard still run.
 

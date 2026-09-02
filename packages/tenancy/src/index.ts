@@ -241,7 +241,14 @@ export const TENANCY = createToken<Tenancy>('tenancy')
 export function isTenantRequired(
   required: TenancyPluginOptions['required'],
   url: string | undefined,
+  meta?: Record<string, unknown> | undefined,
 ): boolean {
+  // The route's own declaration wins over any app-wide default: `meta.tenant`
+  // sits next to the handler, so a central route stays central through a
+  // rename, and a reviewer sees the decision without opening the app config.
+  const declared = meta?.['tenant']
+  if (declared === false) return false
+  if (declared === true) return true
   if (!required) return false
   if (required === true) return true
   const path = pathOf(url)
@@ -284,6 +291,13 @@ export interface TenancyPluginOptions {
    *
    * Exempting a path only lifts the tenant requirement. Auth, subscription and
    * every other guard still apply.
+   *
+   * A route can also declare this for itself, which overrides whatever is set
+   * here — see `meta.tenant` on the route:
+   *
+   * ```ts
+   * route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
+   * ```
    */
   required?: boolean | { except: (string | RegExp)[] }
   /**
@@ -384,10 +398,12 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
         async ({
           request,
           context,
+          route,
         }: {
           request: { headers?: ResolutionRequest['headers']; params?: unknown; url?: string }
           context: { tenant?: Tenant }
           container: unknown
+          route?: { meta?: Record<string, unknown> | undefined }
         }) => {
           const tenancy = container.get(TENANCY)
           const tenant = await tenancy.resolve({
@@ -396,7 +412,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             ...(request.url !== undefined ? { url: request.url } : {}),
           })
           if (!tenant) {
-            if (isTenantRequired(options.required, request.url)) {
+            if (isTenantRequired(options.required, request.url, route?.meta)) {
               throw new TenancyNotResolvedError()
             }
             return
