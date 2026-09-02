@@ -1,5 +1,73 @@
 # @basaltkit/prisma
 
+## 1.5.0
+
+### Minor Changes
+
+- 7b3d2fc: **`prismaMigrator` can now point at a `prisma.config.ts` (`configPath`).**
+  
+  Tenants usually keep their own schema file, and therefore their own migration
+  history. `schemaPath` could not express that, because `migrations.path` is a
+  property of the *config*, not of the schema: `--schema` moved the models while
+  Prisma went on applying the central migration history.
+  
+  The failure was quiet and easy to misread — a freshly provisioned tenant came up
+  holding `_prisma_migrations` and none of its own tables, which looks like a
+  broken schema path rather than a migration history pointing somewhere else.
+  
+  ```ts
+  prismaMigrator({ configPath: './prisma/tenants/prisma.config.ts' })
+  ```
+  
+  Both options may be set; `--config` is passed first. Two Prisma behaviours are
+  worth knowing, since neither is guessable and both bite here: paths inside a
+  config file resolve against **that file's own directory**, not the project root;
+  and a loaded config makes Prisma skip its usual `.env` loading, so the config
+  must read its URL from the environment. `prismaMigrator` always sets
+  `DATABASE_URL` to the tenant's scoped URL, so `env('DATABASE_URL')` resolves to
+  the right tenant.
+  
+  Also exports `prismaMigrateArgs(options)`, the pure argv builder, so the flag
+  wiring is unit-testable without a Prisma CLI or a live database.
+- 72d6416: **Fail loud when schema-per-tenant is configured against a database that cannot
+  do it.**
+  
+  Schema-per-tenant is a PostgreSQL feature: it relies on a schema being a
+  namespace *inside* a database, selected by the connection's `search_path`. In
+  MySQL a "schema" **is** a database; SQLite has no equivalent. Until now,
+  configuring it against either surfaced as a raw `CREATE SCHEMA` syntax error
+  from the driver — at tenant-creation time, far from the configuration that
+  caused it.
+  
+  Now it is refused where the configuration is read:
+  
+  - **at boot**, when `prismaPlugin({ schemaPerTenant })` is given a non-PostgreSQL
+    URL;
+  - **before any migration runs**, in `migrateTenants({ target: { mode: 'schema' } })`.
+  
+  The message names the alternative — database-per-tenant, via `forTenant` or
+  `{ mode: 'database', urlFor }` — which gives stronger isolation anyway.
+  
+  New exports: `providerOf(url)`, `assertSchemaPerTenantSupported(url)`,
+  `SchemaPerTenantUnsupportedError` (`PRISMA_SCHEMA_PER_TENANT_UNSUPPORTED`) and
+  the `DatabaseProvider` type.
+  
+  ### Deliberately not a capability layer
+  
+  This is a guard, not an abstraction. Translating `mode: 'schema'` into a separate
+  database on MySQL would be doing database-per-tenant under a name that says
+  otherwise — different backups, different connection limits, different migration
+  cost — and that belongs in your config as a decision, not in the framework as a
+  silent substitution.
+  
+  An **unknown** URL scheme is allowed through: `prisma://` and custom poolers
+  cannot be classified, and refusing them on a guess would block valid setups.
+  
+  `migrateTenants` normally reports a failing tenant and carries on. This check is
+  the one exception, and intentionally so: in schema mode every tenant shares the
+  base URL, so an unsupported database is a configuration error for the whole run.
+  Collecting N identical failures would bury the cause.
+
 ## 1.4.3
 
 ### Patch Changes
