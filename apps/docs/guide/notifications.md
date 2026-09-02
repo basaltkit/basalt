@@ -156,10 +156,10 @@ unchanged, so your magic links still print locally. Opt back in explicitly with
 
 ```ts
 import { mailerPlugin, tenantFrom } from '@basaltkit/mailer'
+import { smtpMailer } from '@basaltkit/mailer-smtp'
 
 mailerPlugin({
-  driver: 'smtp',
-  smtp: { /* … */ },
+  driver: smtpMailer({ url: process.env.SMTP_URL! }),
   from: tenantFrom('noreply@acme.io'),  // reads ctx().tenant.mailFrom, else the fallback
   layout: (body, { mail }) => `<!doctype html><body>${body}</body>`, // shared branding wrapper
 })

@@ -83,9 +83,13 @@ Hello Ada
 5. **In production**, switch the plugin to a real driver — SMTP, or an API
    provider (**Resend** or **Amazon SES**, both over HTTPS, no SDK):
 
+> **SMTP lives in its own package.** `pnpm add @basaltkit/mailer-smtp nodemailer`, then
+> `import { smtpMailer } from '@basaltkit/mailer-smtp'`. It left the core so apps sending
+> through Resend, SES or Mailgun — plain HTTP APIs — stop installing nodemailer.
+
 ```ts
 // SMTP (any mail server)
-mailerPlugin({ driver: 'smtp', smtp: { url: 'smtps://user:password@smtp.example.com:465' }, from: 'noreply@myapp.com' })
+mailerPlugin({ driver: smtpMailer({ url: 'smtps://user:password@smtp.example.com:465' }), from: 'noreply@myapp.com' })
 
 // Resend — https API, just an API key
 mailerPlugin({ driver: 'resend', resend: { apiKey: process.env.RESEND_API_KEY! }, from: 'noreply@myapp.com' })
@@ -159,8 +163,7 @@ wraps every mail's HTML body once:
 
 ```ts
 mailerPlugin({
-  driver: 'smtp',
-  smtp: { url: process.env.SMTP_URL! },
+  driver: smtpMailer({ url: process.env.SMTP_URL! }),
   from: 'noreply@myapp.com',
   layout: (body, { mail }) => `<!doctype html><html><body style="font-family:sans-serif">
     <img src="https://myapp.com/logo.png" height="32"/>
@@ -214,7 +217,7 @@ In a multi-tenant SaaS application (several customers on the same application), 
 ```ts
 import { mailerPlugin, tenantFrom } from '@basaltkit/mailer'
 
-mailerPlugin({ driver: 'smtp', smtp: { url: process.env.SMTP_URL! }, from: tenantFrom('fallback@myapp.com') })
+mailerPlugin({ driver: smtpMailer({ url: process.env.SMTP_URL! }), from: tenantFrom('fallback@myapp.com') })
 ```
 
 Inside a request whose context has `tenant.mailFrom`, that address is used; otherwise, the fallback is used.
@@ -257,8 +260,7 @@ import { mailerPlugin, definePreview } from '@basaltkit/mailer'
 import { WelcomeEmail, InvoiceEmail } from './mails.js'
 
 mailerPlugin({
-  driver: 'smtp',
-  smtp: { url: process.env.SMTP_URL! },
+  driver: smtpMailer({ url: process.env.SMTP_URL! }),
   from: 'noreply@myapp.com',
   layout: (body, { mail }) => `<html><body>${body}<footer>${mail}</footer></body></html>`,
   previews: [
@@ -329,7 +331,6 @@ disconnects the driver on shutdown. `MailerPluginOptions` extends `MailerOptions
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `driver` | `'smtp' \| 'log' \| 'memory' \| 'resend' \| 'ses' \| 'mailgun'` | `'log'` | Which driver sends. An **unrecognized** name throws at first resolve instead of falling back to `log` — a silent fallback would print every outbound mail, reset links included, to stdout. |
-| `smtp` | `SmtpDriverOptions` | — | Required with `driver: 'smtp'`. `{ url: 'smtp(s)://user:pass@host:port' }`. |
 | `resend` | `ResendDriverOptions` | — | Required with `driver: 'resend'`. `{ apiKey, baseUrl?, fetch? }`. |
 | `ses` | `SesDriverOptions` | — | Required with `driver: 'ses'`. `{ region, accessKeyId, secretAccessKey, sessionToken?, endpoint?, fetch?, now? }`. |
 | `mailgun` | `MailgunDriverOptions` | — | Required with `driver: 'mailgun'`. `{ apiKey, domain, region?, baseUrl?, fetch? }`; `region` defaults to `'us'`. |
@@ -433,7 +434,7 @@ is accepted.
 
 **`MailValidationError` (`MAIL_INVALID`)** — The data passed to `send()` doesn't match the email's `schema` (e.g. a number where text was expected). The error includes the Zod `issues` pointing to the offending field.
 
-**Emails aren't arriving in development** — You're probably on the `log` driver (the default), which only prints to the console. This is intentional; use `driver: 'smtp'` for real sending.
+**Emails aren't arriving in development** — You're probably on the `log` driver (the default), which only prints to the console. This is intentional; use `smtpMailer()` from `@basaltkit/mailer-smtp` for real sending.
 
 **I set up `useQueue` and nothing gets sent** — With the queue active, `send()` only delivers to the dispatcher; it's the worker that has to call `mailer.deliver(message)`.
 

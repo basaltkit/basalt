@@ -1,10 +1,10 @@
 {
-  "name": "@basaltkit/mailer",
-  "version": "1.4.1",
+  "name": "@basaltkit/mailer-smtp",
+  "version": "0.0.0",
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Driver-agnostic Basalt mailer: typed mail definitions, previews, queueing and HTTP-API drivers (Resend, SES, Mailgun) plus log/memory. SMTP ships as @basaltkit/mailer-smtp.",
+  "description": "SMTP driver for @basaltkit/mailer, built on nodemailer — any SMTP server, including Mailpit and MailHog in development.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -23,14 +23,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@basaltkit/core": "workspace:^"
+    "@basaltkit/mailer": "workspace:^"
+  },
+  "peerDependencies": {
+    "nodemailer": "^9.0.5"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.3.0",
+    "@types/nodemailer": "^7.0.4",
+    "nodemailer": "^9.0.5",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
-    "zod": "^3.24.0 || ^4.0.0"
+    "vitest": "^4.1.11"
   },
   "publishConfig": {
     "access": "public"
@@ -38,14 +42,15 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/basaltkit/basalt.git",
-    "directory": "packages/mailer"
+    "directory": "packages/mailer-smtp"
   },
-  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/mailer#readme",
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/mailer-smtp#readme",
   "bugs": "https://github.com/basaltkit/basalt/issues",
   "keywords": [
     "basalt",
     "typescript",
     "mailer",
-    "email"
+    "smtp",
+    "nodemailer"
   ]
 }
