@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/cache-redis",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "engines": { "node": ">=22.5.0" },
   "description": "Redis cache driver for @basaltkit/cache: a shared cache across processes, with atomic SWR and tag invalidation.",
   "license": "MIT",
