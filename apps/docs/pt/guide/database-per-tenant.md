@@ -15,11 +15,51 @@ por isso **todos** os domínios com estado — auth, permissões, comentários, 
 | Modelo | Como | Isolamento | Quando |
 | --- | --- | --- | --- |
 | DB partilhada, scope por linha | um cliente, `tenancyExtension()` adiciona filtros `tenant_id` | lógico | a maioria das apps; o mais barato de correr |
-| **Schema-per-tenant** | uma base de dados, um schema PostgreSQL por tenant | forte | isolamento sem N bases de dados |
+| **Schema-per-tenant** | uma base de dados, um schema PostgreSQL por tenant | forte | isolamento sem N bases de dados — **só PostgreSQL**, vê [compatibilidade](#que-estrategia-funciona-em-que-base-de-dados) |
 | **Database-per-tenant** | uma base de dados separada por tenant | o mais forte | conformidade, noisy-neighbor, backups por tenant |
 
 `prismaPlugin` suporta os três. Este guia cobre os dois últimos — onde o *cliente*
 por tenant é a fronteira de isolamento — e como os stores duráveis assentam sobre ele.
+
+## Que estratégia funciona em que base de dados
+
+O Basalt é agnóstico à base de dados onde a estratégia o permite, e honesto onde
+não permite. Dois dos três modelos de isolamento funcionam em qualquer conector
+do Prisma; o terceiro é uma funcionalidade do PostgreSQL e não é abstraída.
+
+| Estratégia | PostgreSQL | MySQL / MariaDB | SQLite | Usa em alternativa |
+| --- | :---: | :---: | :---: | --- |
+| **Base partilhada + `tenant_id`** | ✅ | ✅ | ✅ | — é o default, e é totalmente portável |
+| **Database-per-tenant** | ✅ | ✅ | ✅ (um ficheiro por tenant) | — a `urlFor()` é tua, por isso qualquer conector serve |
+| **Schema-per-tenant** | ✅ | ❌ | ❌ | **`mode: 'database'`** |
+| **Row-Level Security** (defesa em profundidade) | ✅ | ❌ | ❌ | o scoping por `tenant_id` sozinho, que já falha fechado |
+
+### Porque é que o schema-per-tenant é só PostgreSQL
+
+Assenta em duas coisas que o PostgreSQL tem e as outras não: um **schema** como
+espaço de nomes *dentro* de uma base de dados, e uma ligação cujo `search_path` o
+seleciona. O Basalt usa o parâmetro `?schema=` do Prisma para o segundo e o
+`CREATE SCHEMA IF NOT EXISTS` para o primeiro.
+
+Em MySQL um "schema" **é** uma base de dados — as palavras são sinónimos — logo
+não há nada para separar *dentro* de uma base. O SQLite não tem equivalente
+nenhum.
+
+Deliberadamente **não** disfarçamos isto. Uma abstração que transformasse em
+silêncio o `mode: 'schema'` numa base separada em MySQL estaria a fazer
+database-per-tenant com um nome que diz o contrário: outra história de backups,
+outros limites de ligações, outro custo de migração. Escolher isso tem de ser
+decisão tua, escrita na tua configuração, e não uma tradução que nunca viste.
+
+**Em MySQL, escolhe `mode: 'database'`.** Dá-te isolamento mais forte do que o
+schema-per-tenant de qualquer forma, e é totalmente suportado.
+
+### Porque é que o RLS é só PostgreSQL
+
+O `CREATE POLICY`, o `ALTER TABLE … ENABLE ROW LEVEL SECURITY` e o
+`current_setting()` não têm equivalente em MySQL nem em SQLite. O RLS é defesa em
+profundidade *por baixo* do scoping por `tenant_id`, nunca um substituto — por
+isso uma app sem ele não está desprotegida, tem apenas uma camada em vez de duas.
 
 ## O pool de clientes por tenant
 
