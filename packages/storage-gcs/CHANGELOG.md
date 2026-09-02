@@ -1,5 +1,12 @@
 # @basaltkit/storage-gcs
 
+## 1.1.2
+
+### Patch Changes
+
+- Updated dependencies [e19b765]
+  - @basaltkit/storage@2.0.0
+
 ## 1.1.1
 
 ### Patch Changes
