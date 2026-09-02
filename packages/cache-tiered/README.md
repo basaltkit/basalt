@@ -23,12 +23,13 @@ No runtime dependencies beyond `@basaltkit/cache`.
 ## Usage
 
 ```ts
-import { cachePlugin, MemoryCacheDriver, RedisCacheDriver } from '@basaltkit/cache'
+import { cachePlugin, MemoryCacheDriver } from '@basaltkit/cache'
+import { redisCache } from '@basaltkit/cache-redis'
 import { TieredCacheDriver } from '@basaltkit/cache-tiered'
 
 cachePlugin({
   driver: new TieredCacheDriver({
-    layers: [new MemoryCacheDriver(), RedisCacheDriver.fromUrl(process.env.REDIS_URL!)],
+    layers: [new MemoryCacheDriver(), redisCache(process.env.REDIS_URL!)],
     backfillTtlMs: 30_000, // no replica serves a local copy older than 30s
   }),
 })
