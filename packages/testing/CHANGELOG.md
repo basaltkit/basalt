@@ -1,5 +1,12 @@
 # @basaltkit/testing
 
+## 1.1.3
+
+### Patch Changes
+
+- Updated dependencies [48579dd]
+  - @basaltkit/mailer@2.0.0
+
 ## 1.1.2
 
 ### Patch Changes
