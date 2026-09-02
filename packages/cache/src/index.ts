@@ -9,11 +9,9 @@ import {
 } from '@basaltkit/core'
 import type { CacheDriver } from './driver.js'
 import { MemoryCacheDriver } from './drivers/memory.js'
-import { RedisCacheDriver } from './drivers/redis.js'
 
 export type { CacheDriver } from './driver.js'
 export { MemoryCacheDriver } from './drivers/memory.js'
-export { RedisCacheDriver } from './drivers/redis.js'
 
 export class MissingCacheScopeError extends BasaltError {
   constructor(op: string) {
@@ -308,10 +306,15 @@ export class Cache {
 export const CACHE = createToken<Cache>('cache')
 
 export interface CachePluginOptions extends CacheOptions {
-  /** 'memory' (default), 'redis' (needs `url`), or a custom `CacheDriver` instance. */
-  driver?: 'memory' | 'redis' | CacheDriver
-  /** Required with the 'redis' driver. */
-  url?: string
+  /**
+   * `'memory'` (default) or a `CacheDriver` instance.
+   *
+   * Redis used to be reachable here as `driver: 'redis'` with a `url`, which is
+   * why this package depended on ioredis and shipped 1.5 MB to consumers who
+   * only ever used the in-memory driver. Use `redisCache(url)` from
+   * `@basaltkit/cache-redis` instead.
+   */
+  driver?: 'memory' | CacheDriver
 }
 
 export function cachePlugin(options: CachePluginOptions = {}) {
@@ -320,12 +323,11 @@ export function cachePlugin(options: CachePluginOptions = {}) {
     name: 'basalt:cache',
     register({ container }) {
       container.singleton(CACHE, () => {
+        // `memory` is the only string left: it needs no client library, so it
+        // costs a consumer nothing. Every other backend arrives as an instance
+        // from its own package.
         driver =
-          typeof options.driver === 'object'
-            ? options.driver
-            : options.driver === 'redis'
-              ? RedisCacheDriver.fromUrl(options.url as string)
-              : new MemoryCacheDriver()
+          typeof options.driver === 'object' ? options.driver : new MemoryCacheDriver()
         // Fail closed by default in multi-tenant apps: when @basaltkit/tenancy
         // is registered (its 'tenancy:active' metadata marker), an operation
         // with no resolvable tenant scope throws instead of silently sharing
