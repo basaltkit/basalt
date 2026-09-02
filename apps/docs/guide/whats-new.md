@@ -1,61 +1,43 @@
-# What's new in Basalt 1.7
+# What's new in Basalt 1.8
 
-> *"Basalt 1.7" is the umbrella label for this wave of work; the `@basaltkit/*`
+> *"Basalt 1.8" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
 
-Basalt 1.7 is the release where **you stop paying for backends you never use**,
-and where multi-tenant persistence stops failing quietly. The four capability
-cores each forced one backend's client on every consumer; all four are now
-separate packages, and the tripwire that recorded them as known debt has an empty
-allowlist. Then a run of real-world use found four ways a tenant could end up with
-the wrong data — or no data — while every layer reported success.
+Basalt 1.8 is the release where **multi-tenant persistence stops failing quietly**.
+Every item here came out of using the framework to build a real multi-tenant app,
+not out of reading it: four distinct ways a tenant could end up with the wrong
+data — or no data at all — while every layer reported success.
 
 ## Highlights
 
-### A core defines the contract, a backend is a package
-`queue`, `storage`, `cache` and `mailer` each shipped a **string shorthand** for
-one backend — `connection`, `driver: 's3'`, `driver: 'redis'`, `driver: 'smtp'`.
-A string cannot be resolved lazily, so the shorthand *is* what forced the
-dependency: an app on Azure Blob still installed 4.4 MB of AWS SDK, and one
-sending mail through Resend still installed an SMTP client it never opened.
-
-| Core | Was forced on everyone | Now |
-| --- | --- | --- |
-| `@basaltkit/queue` **2.x** | `bullmq` | `@basaltkit/queue-bullmq` **1.0** |
-| `@basaltkit/storage` **2.x** | `@aws-sdk/client-s3` — **4.4 MB** | `@basaltkit/storage-s3` **1.0** |
-| `@basaltkit/cache` **2.x** | `ioredis` — **1.5 MB** | `@basaltkit/cache-redis` **1.0** |
-| `@basaltkit/mailer` **2.x** | `nodemailer` — **688 KB** | `@basaltkit/mailer-smtp` **1.0** |
-
-An app using local storage, the in-memory cache and Resend drops **6.5 MB** of
-client libraries it never called. It also ends an inconsistency that had become
-hard to defend: adding a fifth queue backend was easy, adding a second
-*first-class* one was not, because the core had a favourite. Migration is one
-import and one line per capability — see [Driver packages](/guide/driver-packages).
-
-### Multi-tenant persistence fails loudly now
-Four separate ways a tenant could be served wrong data, all found by using the
-framework rather than reading it:
-
+### A tenant is never served the wrong data quietly
 - **Schema-per-tenant on a database that cannot do it.** It relies on a schema
   being a namespace *inside* a database. In MySQL a "schema" **is** a database;
   SQLite has no equivalent. Configuring it there used to surface as a raw
   `CREATE SCHEMA` syntax error at tenant-creation time, far from the config that
-  caused it. Now refused where the configuration is read — at boot, and before any
-  migration runs. *(`@basaltkit/prisma` 1.5)*
+  caused it. Now refused where the configuration is read — at boot, and once
+  before any migration runs. *(`@basaltkit/prisma` 1.5)*
 - **Migrations read from the wrong history.** `migrations.path` belongs to your
   `prisma.config.ts`, not to the schema file, so pointing `--schema` at the tenant
-  models left Prisma applying the **central** migration history. Pass
-  `configPath` instead. *(`@basaltkit/prisma` 1.5)*
+  models left Prisma applying the **central** migration history. The tenant came
+  up holding `_prisma_migrations` and none of its own tables. Pass `configPath`
+  instead. *(`@basaltkit/prisma` 1.5)*
 - **A migration that succeeded without doing anything.** `prisma migrate deploy`
   exits 0 when it finds no migrations, so a missing or empty migrations directory
-  looked exactly like success: the tenant came up holding `_prisma_migrations` and
-  not one table of its own, marked ready. `migrateTenants` now counts the tenant's
-  own tables and reports `ok: false`. It counts *tables*, not migrations, because
-  `db push` is a legitimate strategy with no migration history at all.
-  *(`@basaltkit/prisma` 1.6)*
+  looked exactly like success — and the tenant was marked ready.
+  `migrateTenants` now counts the tenant's own tables and reports `ok: false`.
+  It counts *tables*, not migrations, because `db push` is a legitimate strategy
+  with no migration history at all. *(`@basaltkit/prisma` 1.6)*
 - **Which strategy works on which database** is now stated in the docs, per
-  strategy and per engine, instead of being inferable from an error message.
+  strategy and per engine, instead of being inferable from an error message. See
+  [Which strategy works on which database](/guide/database-per-tenant#which-strategy-works-on-which-database).
+
+This is deliberately a set of **guards, not abstractions**. Translating
+`mode: 'schema'` into a separate database on MySQL would be doing
+database-per-tenant under a name that says otherwise — different backups,
+different connection limits, different migration cost. That belongs in your
+config as a decision, not in the framework as a silent substitution.
 
 ### Central and tenant routes in one app
 `required: true` rejected any request that resolved no tenant — on **every**
@@ -75,15 +57,75 @@ route({ method: 'GET', url: '/invoices', meta: { tenant: true },  handler })
 lives with the route and survives a rename — unlike a path list in another file,
 which stops matching silently. `required: { except: [...] }` remains for paths
 you do not own, such as routes mounted by another package.
-*(`@basaltkit/tenancy` 1.7 and 1.8; `@basaltkit/http` 1.16 now passes the route to
-enrichers, so this behaves identically on Fastify, Express and Hono.)*
+*(`@basaltkit/tenancy` 1.7 and 1.8)*
 
-One app can also serve **both** worlds from one `prismaPlugin` registration —
-`client` for the tenant-less context, `schemaPerTenant` for the rest — so the same
-`/auth/login` authenticates central users on the apex and tenant users on a
-subdomain, because the two look in different schemas rather than because a handler
-checks. See
-[Serving central and tenant routes from one app](/guide/database-per-tenant#serving-central-and-tenant-routes-from-one-app).
+`@basaltkit/http` 1.16 passes the route being served to **enrichers**, not just
+guards — which is what makes the above possible, and why it behaves identically
+on Fastify, Express and Hono rather than through three parallel implementations.
+
+### One app, both worlds
+`prismaPlugin` already accepted `client` (for the tenant-less context) alongside
+`schemaPerTenant`, but that was one undocumented sentence — so in practice it was
+undiscoverable. With both set, `db()` returns the central client on central
+requests and the tenant's client on tenant ones:
+
+```ts
+route({ method: 'GET', url: '/users', meta: { tenant: false }, handler: async () =>
+  db<PrismaClient>().authUser.findMany(),  // central on the apex, tenant on a subdomain
+})
+```
+
+The same `/auth/login` then authenticates central users on the apex and tenant
+users on a subdomain — because the two look in different schemas, not because a
+handler checks. Routes mounted by other packages (`authRoutes()`, `mfaRoutes()`)
+are covered by mapping `meta` over them. See
+[Serving central and tenant routes from one app](/guide/database-per-tenant#serving-central-and-tenant-routes-from-one-app),
+including the trade-off: with `client` set, a mis-scoped tenant route reads the
+central database instead of failing loudly, and `required: true` is what keeps
+that safe.
+
+## Upgrading
+
+Packages are independent — bump only what you use. Nothing here is a breaking
+change, but two behaviours tightened:
+
+1. **`migrateTenants` can now fail a tenant it previously passed.** A migration
+   that produced no tables reports `ok: false` with
+   `PRISMA_TENANT_SCHEMA_EMPTY`. That is almost always a missing or misdirected
+   migration history — but if a tenant legitimately starts empty, pass
+   `verifyTables: false`.
+2. **Schema-per-tenant is refused at boot on MySQL and SQLite.** It never worked
+   there; it used to fail later and less clearly. Move to database-per-tenant
+   (`forTenant`, or `{ mode: 'database', urlFor }`), which gives stronger
+   isolation anyway.
+
+---
+
+## Previously — Basalt 1.7
+
+> *The release where **no core forces a backend on you** — and where a failed
+> request became visible on every adapter.*
+
+### A core defines the contract, a backend is a package
+`queue`, `storage`, `cache` and `mailer` each shipped a **string shorthand** for
+one backend — `connection`, `driver: 's3'`, `driver: 'redis'`, `driver: 'smtp'`.
+A string cannot be resolved lazily, so the shorthand *is* what forced the
+dependency: an app on Azure Blob still installed 4.4 MB of AWS SDK, and one
+sending mail through Resend still installed an SMTP client it never opened.
+
+| Core | Was forced on everyone | Now |
+| --- | --- | --- |
+| `@basaltkit/queue` **2.x** | `bullmq` | `@basaltkit/queue-bullmq` **1.0** |
+| `@basaltkit/storage` **2.x** | `@aws-sdk/client-s3` — **4.4 MB** | `@basaltkit/storage-s3` **1.0** |
+| `@basaltkit/cache` **2.x** | `ioredis` — **1.5 MB** | `@basaltkit/cache-redis` **1.0** |
+| `@basaltkit/mailer` **2.x** | `nodemailer` — **688 KB** | `@basaltkit/mailer-smtp` **1.0** |
+
+An app using local storage, the in-memory cache and Resend drops **6.5 MB** of
+client libraries it never called. It also ends an inconsistency that had become
+hard to defend: adding a fifth queue backend was easy, adding a second
+*first-class* one was not, because the core had a favourite. The repo-wide
+driver-boundary tripwire's allowlist, which recorded exactly these four as known
+debt, is now empty.
 
 ### A failed request is visible on every adapter
 Whether an error reached your terminal used to depend on which adapter you had
@@ -98,10 +140,9 @@ reported on all three, as structured fields rather than an interpolated string.
 checks, enforced for administrators, with direct pushes blocked. Before this the
 branch was unprotected.
 
-## Upgrading
-
-Packages are independent — bump only what you use. The four capability majors are
-the only breaking changes, and each is one import and one line:
+### Upgrading to 1.7
+The four capability majors are the only breaking changes, and each is one import
+and one line:
 
 ```diff
 -queuePlugin({ connection: REDIS_URL, jobs, workers })
@@ -121,10 +162,6 @@ You are **not** affected if you already passed a driver instance, used
 `driver: 'local'`, the default in-memory cache, or the `log`/`memory` mailer
 drivers. TypeScript flags every case at compile time, because the removed strings
 left their unions. Full detail in [Driver packages](/guide/driver-packages).
-
-One behaviour change worth knowing: `migrateTenants` now reports `ok: false` for a
-tenant whose migration produced no tables. If a tenant legitimately starts empty,
-pass `verifyTables: false`.
 
 ---
 

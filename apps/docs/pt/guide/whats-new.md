@@ -1,19 +1,115 @@
-# Novidades no Basalt 1.7
+# Novidades no Basalt 1.8
 
-> *"Basalt 1.7" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.8" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são publicados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
 > pacote que o traz.*
 
-O Basalt 1.7 é a versão em que **deixas de pagar por backends que nunca usas** e
-em que a persistência multi-tenant deixa de falhar em silêncio. Cada um dos
-quatro núcleos de capacidade impunha o cliente de um backend a toda a gente; os
-quatro passaram a pacotes separados, e a lista de exceções do teste que os
-registava como dívida conhecida está vazia. Depois, o uso a sério encontrou
-quatro maneiras de um tenant acabar com os dados errados — ou sem dados nenhuns —
-com todas as camadas a comunicar sucesso.
+O Basalt 1.8 é a versão em que **a persistência multi-tenant deixa de falhar em
+silêncio**. Tudo o que está aqui saiu de usar o framework para construir uma app
+multi-tenant a sério, e não de o ler: quatro maneiras distintas de um tenant
+acabar com os dados errados — ou sem dados nenhuns — com todas as camadas a
+comunicar sucesso.
 
 ## Destaques
+
+### Nunca mais se servem dados errados a um tenant em silêncio
+- **Schema-por-tenant numa base que não o consegue fazer.** Assenta em um schema
+  ser um namespace *dentro* de uma base de dados. Em MySQL um "schema" **é** uma
+  base de dados; o SQLite não tem equivalente. Configurá-lo aí aparecia como um
+  erro de sintaxe de `CREATE SCHEMA` na criação do tenant, longe da configuração
+  que o causou. Agora é recusado onde a configuração é lida — no arranque, e uma
+  vez antes de qualquer migração correr. *(`@basaltkit/prisma` 1.5)*
+- **Migrações lidas do histórico errado.** O `migrations.path` pertence ao teu
+  `prisma.config.ts`, não ao ficheiro de schema, portanto apontar o `--schema`
+  para os modelos do tenant deixava o Prisma a aplicar o histórico **central**. O
+  tenant nascia com a tabela `_prisma_migrations` e nenhuma das suas. Passa antes
+  o `configPath`. *(`@basaltkit/prisma` 1.5)*
+- **Uma migração que teve sucesso sem fazer nada.** O `prisma migrate deploy` sai
+  com código 0 quando não encontra migrações, por isso uma pasta em falta ou
+  vazia era indistinguível de sucesso — e o tenant era marcado como pronto. O
+  `migrateTenants` passa a contar as tabelas do tenant e a comunicar `ok: false`.
+  Conta *tabelas* e não migrações, porque o `db push` é uma estratégia legítima
+  sem histórico nenhum. *(`@basaltkit/prisma` 1.6)*
+- **Que estratégia funciona em que base de dados** passa a estar escrito na
+  documentação, por estratégia e por motor, em vez de se deduzir de uma mensagem
+  de erro. Ver
+  [Que estratégia funciona em que base de dados](/pt/guide/database-per-tenant#que-estrategia-funciona-em-que-base-de-dados).
+
+Isto é deliberadamente um conjunto de **proteções, não de abstrações**. Traduzir
+`mode: 'schema'` para uma base separada em MySQL seria fazer
+database-per-tenant com um nome que diz outra coisa — backups diferentes, limites
+de ligações diferentes, custo de migração diferente. Isso pertence à tua
+configuração como decisão, não ao framework como substituição silenciosa.
+
+### Rotas centrais e de tenant na mesma app
+O `required: true` rejeitava qualquer pedido que não resolvesse tenant — em
+**todas** as rotas, o que nenhuma app aguenta: um health check não tem tenant
+para enviar, e um load balancer nunca põe o header. Agora há duas saídas, e
+compõem-se:
+
+```ts
+// Negar por omissão…
+tenancyPlugin({ source, resolvers, required: true })
+
+// …e cada rota diz o que é, ao lado do handler.
+route({ method: 'GET', url: '/pricing',  meta: { tenant: false }, handler })
+route({ method: 'GET', url: '/invoices', meta: { tenant: true },  handler })
+```
+
+O `meta.tenant` sobrepõe-se ao default da app nos dois sentidos, portanto a
+decisão vive com a rota e sobrevive a um rename — ao contrário de uma lista de
+caminhos noutro ficheiro, que deixa de coincidir em silêncio. O
+`required: { except: [...] }` fica para caminhos que não são teus, como rotas
+montadas por outro pacote. *(`@basaltkit/tenancy` 1.7 e 1.8)*
+
+O `@basaltkit/http` 1.16 passa a rota servida aos **enrichers**, e não só aos
+guards — é isso que torna o acima possível, e a razão de se comportar igual em
+Fastify, Express e Hono em vez de por três implementações paralelas.
+
+### Uma app, os dois mundos
+O `prismaPlugin` já aceitava o `client` (para o contexto sem tenant) ao lado do
+`schemaPerTenant`, mas isso era uma frase sem exemplo — na prática, indescobrível.
+Com os dois definidos, o `db()` devolve o cliente central nos pedidos centrais e o
+do tenant nos de tenant:
+
+```ts
+route({ method: 'GET', url: '/users', meta: { tenant: false }, handler: async () =>
+  db<PrismaClient>().authUser.findMany(),  // central no domínio, tenant no subdomínio
+})
+```
+
+O mesmo `/auth/login` passa a autenticar utilizadores centrais no domínio e
+utilizadores do tenant num subdomínio — porque os dois procuram em schemas
+diferentes, e não porque um handler verifica. As rotas montadas por outros
+pacotes (`authRoutes()`, `mfaRoutes()`) resolvem-se mapeando o `meta` sobre elas.
+Ver
+[Servir rotas centrais e de tenant na mesma app](/pt/guide/database-per-tenant#servir-rotas-centrais-e-de-tenant-na-mesma-app),
+incluindo o compromisso: com o `client` definido, uma rota de tenant mal marcada
+lê a base central em vez de falhar ruidosamente, e é o `required: true` que
+mantém isso seguro.
+
+## Atualização
+
+Os pacotes são independentes — sobe só o que usas. Nada aqui é breaking, mas dois
+comportamentos apertaram:
+
+1. **O `migrateTenants` pode agora reprovar um tenant que antes passava.** Uma
+   migração que não produziu tabelas comunica `ok: false` com
+   `PRISMA_TENANT_SCHEMA_EMPTY`. Isso é quase sempre um histórico de migrações em
+   falta ou mal apontado — mas se um tenant começar legitimamente vazio, passa
+   `verifyTables: false`.
+2. **O schema-por-tenant é recusado no arranque em MySQL e SQLite.** Nunca
+   funcionou lá; apenas falhava mais tarde e de forma menos clara. Passa a
+   database-per-tenant (`forTenant`, ou `{ mode: 'database', urlFor }`), que dá
+   isolamento mais forte de qualquer maneira.
+
+---
+
+## Anteriormente — Basalt 1.7
+
+> *A versão em que **nenhum núcleo te impõe um backend** — e em que um pedido
+> falhado passou a ser visível em todos os adaptadores.*
 
 ### O núcleo define o contrato, o backend é um pacote
 O `queue`, o `storage`, a `cache` e o `mailer` traziam um **atalho de string**
@@ -34,62 +130,8 @@ Uma app que use storage local, a cache em memória e o Resend deixa de instalar
 **6,5 MB** de bibliotecas cliente que nunca chamou. Também acaba com uma
 incoerência difícil de defender: acrescentar um quinto backend de filas era
 fácil, acrescentar um segundo de *primeira classe* não era, porque o núcleo tinha
-um preferido. A migração é um import e uma linha por capacidade — ver
-[Pacotes de driver](/pt/guide/driver-packages).
-
-### A persistência multi-tenant passa a falhar ruidosamente
-Quatro maneiras distintas de servir dados errados a um tenant, todas encontradas
-a usar o framework e não a lê-lo:
-
-- **Schema-por-tenant numa base que não o consegue fazer.** Assenta em um schema
-  ser um namespace *dentro* de uma base de dados. Em MySQL um "schema" **é** uma
-  base de dados; o SQLite não tem equivalente. Configurá-lo aí aparecia como um
-  erro de sintaxe de `CREATE SCHEMA` na criação do tenant, longe da configuração
-  que o causou. Agora é recusado onde a configuração é lida — no arranque, e antes
-  de qualquer migração correr. *(`@basaltkit/prisma` 1.5)*
-- **Migrações lidas do histórico errado.** O `migrations.path` pertence ao teu
-  `prisma.config.ts`, não ao ficheiro de schema, portanto apontar o `--schema`
-  para os modelos do tenant deixava o Prisma a aplicar o histórico **central**.
-  Passa antes o `configPath`. *(`@basaltkit/prisma` 1.5)*
-- **Uma migração que teve sucesso sem fazer nada.** O `prisma migrate deploy` sai
-  com código 0 quando não encontra migrações, por isso uma pasta em falta ou vazia
-  era indistinguível de sucesso: o tenant nascia com a tabela
-  `_prisma_migrations` e nem uma sua, marcado como pronto. O `migrateTenants`
-  passa a contar as tabelas do tenant e a comunicar `ok: false`. Conta *tabelas* e
-  não migrações, porque o `db push` é uma estratégia legítima sem histórico
-  nenhum. *(`@basaltkit/prisma` 1.6)*
-- **Que estratégia funciona em que base de dados** passa a estar escrito na
-  documentação, por estratégia e por motor, em vez de se deduzir de uma mensagem
-  de erro.
-
-### Rotas centrais e de tenant na mesma app
-O `required: true` rejeitava qualquer pedido que não resolvesse tenant — em
-**todas** as rotas, o que nenhuma app aguenta: um health check não tem tenant para
-enviar, e um load balancer nunca põe o header. Agora há duas saídas, e compõem-se:
-
-```ts
-// Negar por omissão…
-tenancyPlugin({ source, resolvers, required: true })
-
-// …e cada rota diz o que é, ao lado do handler.
-route({ method: 'GET', url: '/pricing',  meta: { tenant: false }, handler })
-route({ method: 'GET', url: '/invoices', meta: { tenant: true },  handler })
-```
-
-O `meta.tenant` sobrepõe-se ao default da app nos dois sentidos, portanto a
-decisão vive com a rota e sobrevive a um rename — ao contrário de uma lista de
-caminhos noutro ficheiro, que deixa de coincidir em silêncio. O
-`required: { except: [...] }` fica para caminhos que não são teus, como rotas
-montadas por outro pacote. *(`@basaltkit/tenancy` 1.7 e 1.8; o `@basaltkit/http`
-1.16 passa a rota aos enrichers, por isso isto comporta-se igual em Fastify,
-Express e Hono.)*
-
-A mesma app também pode servir os **dois** mundos a partir de um único registo do
-`prismaPlugin` — `client` para o contexto sem tenant, `schemaPerTenant` para o
-resto — de modo que o mesmo `/auth/login` autentica utilizadores centrais no
-domínio e utilizadores do tenant num subdomínio, porque os dois procuram em
-schemas diferentes e não porque um handler verifica. Ver
-[Servir rotas centrais e de tenant na mesma app](/pt/guide/database-per-tenant#servir-rotas-centrais-e-de-tenant-na-mesma-app).
+um preferido. A lista de exceções do teste de fronteira de drivers, que
+registava exatamente estes quatro como dívida conhecida, está agora vazia.
 
 ### Um pedido falhado é visível em todos os adaptadores
 Se um erro chegava ao teu terminal dependia do adaptador que tinhas montado —
@@ -104,10 +146,9 @@ O `verify` (Node 22 e 24), a `coverage`, o `analyze` e o CodeQL passaram a ser
 verificações **obrigatórias**, impostas também aos administradores, com pushes
 diretos bloqueados. Antes disto o branch estava desprotegido.
 
-## Atualização
-
-Os pacotes são independentes — sobe só o que usas. Os quatro majors de capacidade
-são as únicas mudanças breaking, e cada uma é um import e uma linha:
+### Atualizar para 1.7
+Os quatro majors de capacidade são as únicas mudanças breaking, e cada uma é um
+import e uma linha:
 
 ```diff
 -queuePlugin({ connection: REDIS_URL, jobs, workers })
@@ -128,10 +169,6 @@ são as únicas mudanças breaking, e cada uma é um import e uma linha:
 mailer. O TypeScript assinala todos os casos em tempo de compilação, porque as
 strings removidas saíram das respetivas uniões. Detalhe completo em
 [Pacotes de driver](/pt/guide/driver-packages).
-
-Uma mudança de comportamento a reter: o `migrateTenants` passa a comunicar
-`ok: false` para um tenant cuja migração não produziu tabelas. Se um tenant
-começar legitimamente vazio, passa `verifyTables: false`.
 
 ---
 
