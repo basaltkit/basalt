@@ -314,6 +314,7 @@ Default migrator: runs `npx prisma migrate deploy` in a child process, with the 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `schemaPath` | `string` | No | Prisma's default location | Path to `schema.prisma` (`--schema`). |
+| `configPath` | `string` | No | Prisma's default location | Path to a `prisma.config.ts` (`--config`). Needed when tenant migrations live outside the central `migrations` directory. |
 | `env` | `Record<string, string>` | No | — | Extra environment variables for the child process. |
 
 ### `tenantMigrateCommand(config: TenantMigrateCommandConfig)`
@@ -362,6 +363,25 @@ Adjust `max` on `prismaPlugin` (default 10) and make sure you pass `destroy: (cl
 
 **`prismaMigrator` fails with "command not found" or can't find the schema.**
 It needs the Prisma CLI available (`pnpm add -D prisma`), and if `schema.prisma` isn't in the usual place, pass `schemaPath`.
+
+**A freshly provisioned tenant has only the `_prisma_migrations` table.**
+Its migrations were read from the wrong directory. `migrations.path` is a property of your `prisma.config.ts`, not of the schema file, so `schemaPath` alone points Prisma at the tenant *models* while it keeps applying the *central* migration history. Give the tenants their own config and pass `configPath`:
+
+```ts
+// prisma/tenants/prisma.config.ts — paths here resolve against THIS file's
+// directory, not the project root.
+export default defineConfig({
+  schema: 'schema.prisma',
+  migrations: { path: 'migrations' },
+  datasource: { url: env('DATABASE_URL') },
+})
+```
+
+```ts
+prismaMigrator({ configPath: './prisma/tenants/prisma.config.ts' })
+```
+
+A loaded config also makes Prisma skip its usual `.env` loading, so the config must read its URL from the environment — `prismaMigrator` always sets `DATABASE_URL` to the tenant's URL.
 
 ## How it connects to other modules
 

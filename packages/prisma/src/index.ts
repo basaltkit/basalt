@@ -45,6 +45,7 @@ export {
 } from './schema.js'
 export {
   migrateTenants,
+  prismaMigrateArgs,
   prismaMigrator,
   type MigrateTarget,
   type MigrateFn,

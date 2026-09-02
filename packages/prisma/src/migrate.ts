@@ -108,6 +108,23 @@ function resolveTarget(
 export interface PrismaMigratorOptions {
   /** Path to schema.prisma, if not the default location. */
   schemaPath?: string
+  /**
+   * Path to a `prisma.config.ts` (`--config`). Use this when the tenant
+   * migrations live somewhere other than the central `migrations` directory.
+   *
+   * `schemaPath` alone cannot express that: `migrations.path` is a property of
+   * the *config*, not of the schema, so Prisma keeps reading the central
+   * migration history even when `--schema` points at the tenant models. The
+   * result is a tenant database that gets `_prisma_migrations` and none of the
+   * tables. Point `configPath` at a config that pins both.
+   *
+   * Two Prisma behaviours worth knowing, because neither is guessable:
+   * paths inside a config file resolve against **that file's own directory**,
+   * not the project root; and a loaded config makes Prisma skip its usual `.env`
+   * loading, so the config must read its URL from the environment (this
+   * migrator always sets `DATABASE_URL` for the tenant).
+   */
+  configPath?: string
   /** Extra env for the child process. */
   env?: Record<string, string>
 }
@@ -119,10 +136,19 @@ export interface PrismaMigratorOptions {
  */
 export function prismaMigrator(options: PrismaMigratorOptions = {}): MigrateFn {
   return async ({ url }) => {
-    const args = ['prisma', 'migrate', 'deploy']
-    if (options.schemaPath) args.push('--schema', options.schemaPath)
-    await execFileAsync('npx', args, {
+    await execFileAsync('npx', prismaMigrateArgs(options), {
       env: { ...process.env, ...options.env, DATABASE_URL: url },
     })
   }
+}
+
+/**
+ * The argv `prismaMigrator` shells out with. Split out so the flag wiring is
+ * unit-testable without a Prisma CLI or a live database.
+ */
+export function prismaMigrateArgs(options: PrismaMigratorOptions = {}): string[] {
+  const args = ['prisma', 'migrate', 'deploy']
+  if (options.configPath) args.push('--config', options.configPath)
+  if (options.schemaPath) args.push('--schema', options.schemaPath)
+  return args
 }

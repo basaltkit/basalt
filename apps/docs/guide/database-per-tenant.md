@@ -257,6 +257,50 @@ await migrateTenants({
 The default migrator shells out to `prisma migrate deploy` with each tenant's
 scoped URL as `DATABASE_URL`; pass your own `migrate` fn to override it.
 
+### Where the tenant migrations live
+
+Tenants usually have their own schema file, and therefore their own migration
+history — separate from the central one. Pointing at the tenant *models* is not
+enough to pick up the tenant *migrations*:
+
+```ts
+// Wrong: --schema moves the models, but `migrations.path` belongs to your
+// prisma.config.ts, so Prisma still applies the CENTRAL migration history.
+prismaMigrator({ schemaPath: './prisma/tenants/schema.prisma' })
+```
+
+The symptom is unmistakable once you know it: a freshly provisioned tenant
+comes up holding `_prisma_migrations` and not one table of its own. Prisma
+applied a history that has nothing to do with these models.
+
+Give the tenants a config that pins both, and pass `configPath`:
+
+```ts
+// prisma/tenants/prisma.config.ts
+import { defineConfig, env } from 'prisma/config'
+
+export default defineConfig({
+  // Relative to THIS file's directory — not the project root. The config at
+  // your project root uses root-relative paths, which makes this easy to miss.
+  schema: 'schema.prisma',
+  migrations: { path: 'migrations' },
+  datasource: { url: env('DATABASE_URL') },
+})
+```
+
+```ts
+prismaMigrator({ configPath: './prisma/tenants/prisma.config.ts' })
+```
+
+Generate that first migration from the tenant schema with
+`prisma migrate diff --from-empty --to-schema-datamodel prisma/tenants/schema.prisma --script`.
+
+::: tip Prisma skips `.env` when a config is loaded
+So the config must read its URL from the environment, as above. `prismaMigrator`
+always sets `DATABASE_URL` to the tenant's scoped URL, so `env('DATABASE_URL')`
+resolves to the right tenant on every run.
+:::
+
 Wire it as a CLI command with `tenantMigrateCommand(...)` so `deploy` can run
 `basalt tenant:migrate` after shipping new store models (the `Auth*`, `Perm*`,
 `Comment` … models from each `*-prisma` package's reference schema). It prints a
