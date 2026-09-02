@@ -14,15 +14,16 @@ lock-in, TypeScript inference from the route to the client.
 Runs on **Fastify, Express or Hono** (swap adapters without touching your
 routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.7 — the release where no core forces a backend on you.
-> 89 packages, each versioned independently. 🎉** The queue, storage, cache and
-> mailer cores each shipped one backend's client to every consumer; all four are
-> now separate packages, and the tripwire that recorded the debt has an empty
-> allowlist. The same wave made multi-tenant persistence fail loudly: a
-> schema-per-tenant setup on MySQL/SQLite, migrations read from the wrong
-> history, and a migration that "succeeded" without creating a single table are
-> all refused now instead of surfacing later as missing data. Before that, three architecture
-> review cycles turned the project's promises into machine-enforced rules:
+> **Status: Basalt 1.8 — the release where multi-tenant persistence fails loudly.
+> 89 packages, each versioned independently. 🎉** Four ways a tenant could be
+> served the wrong data — or none — while every layer reported success are now
+> refused where the mistake is made: schema-per-tenant on a database that cannot
+> do it, migrations read from the central history, a migration that "succeeded"
+> without creating a table, and central-vs-tenant routes that could not be told
+> apart. Before that, 1.7 ended backend lock-in: the queue, storage, cache and
+> mailer cores each shipped one backend's client to every consumer, and all four
+> are now separate packages with the tripwire's allowlist empty. Earlier still, three
+> architecture review cycles turned the project's promises into machine-enforced rules:
 > adapter neutrality, the dev-only AI boundary, "a generic package never
 > requires tenancy", DI lifetime safety and boot-time fail-loud for declared
 > guards are now **CI tripwires**, not conventions. The public API is stable and
