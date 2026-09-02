@@ -158,10 +158,10 @@ imprimir localmente. Volta a optar explicitamente com `logBody: true`.
 
 ```ts
 import { mailerPlugin, tenantFrom } from '@basaltkit/mailer'
+import { smtpMailer } from '@basaltkit/mailer-smtp'
 
 mailerPlugin({
-  driver: 'smtp',
-  smtp: { /* … */ },
+  driver: smtpMailer({ url: process.env.SMTP_URL! }),
   from: tenantFrom('noreply@acme.io'),  // lê ctx().tenant.mailFrom, senão o fallback
   layout: (body, { mail }) => `<!doctype html><body>${body}</body>`, // wrapper de branding partilhado
 })

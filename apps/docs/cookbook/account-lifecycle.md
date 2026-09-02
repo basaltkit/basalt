@@ -332,10 +332,11 @@ break the HMAC — see the [Subscriptions guide](/guide/billing).
 ## 9. The assembled app
 
 ```ts
+import { smtpMailer } from '@basaltkit/mailer-smtp'
 const app = await createApp({
   plugins: [
     tenancyPlugin({ source: tenants, resolvers: [headerResolver()] }),
-    mailerPlugin({ driver: 'smtp', smtp: { /* … */ }, from: 'no-reply@acme.test' }),
+    mailerPlugin({ driver: smtpMailer({ /* … */ }), from: 'no-reply@acme.test' }),
     authPlugin({ users, secret: process.env.JWT_SECRET!, mfaIssuer: 'Acme' }),
     apiKeysPlugin({ users }),
     teamsPlugin({ access }),
