@@ -672,6 +672,9 @@ importers:
         specifier: workspace:^
         version: link:../events
     devDependencies:
+      '@basaltkit/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
