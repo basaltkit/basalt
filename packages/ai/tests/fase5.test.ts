@@ -58,7 +58,7 @@ describe('renderPrismaRepository', () => {
   })
 
   it('non-tenant: no tenant helper, update/delete by unique id', () => {
-    const src = renderPrismaRepository('Especialidade', [{ name: 'codigo', type: 'String' }], {
+    const src = renderPrismaRepository('Speciality', [{ name: 'code', type: 'String' }], {
       softDelete: false,
       tenantScoped: false,
       keepName: false,
@@ -67,17 +67,17 @@ describe('renderPrismaRepository', () => {
     expect(src).toContain("import { createToken } from '@basaltkit/core'")
     expect(src).toContain('this.records.update({ where: { id }, data: input })')
     expect(src).toContain('this.records.delete({ where: { id } })')
-    expect(src).toContain('codigo: r.codigo,')
+    expect(src).toContain('code: r.code,')
   })
 
   it('keepName includes the base name column', () => {
-    const src = renderPrismaRepository('Etiqueta', [{ name: 'cor', type: 'String' }], {
+    const src = renderPrismaRepository('Tag', [{ name: 'colour', type: 'String' }], {
       softDelete: false,
       tenantScoped: true,
       keepName: true,
     })
     expect(src).toContain('name: r.name,')
-    expect(src).toContain('cor: r.cor,')
+    expect(src).toContain('colour: r.colour,')
   })
 })
 
@@ -85,29 +85,33 @@ describe('renderPrismaRepository', () => {
 describe('base name column', () => {
   it('is dropped when the entity has its own fields and none is `name`', async () => {
     const p = plan(
-      [{ name: 'Cliente', tenantScoped: true, fields: [{ name: 'nome', type: 'String' }, { name: 'email', type: 'String' }] }],
+      // `label` and `email` — deliberately NOT a field called `name`, which is
+      // the whole distinction this test draws.
+      [{ name: 'Client', tenantScoped: true, fields: [{ name: 'label', type: 'String' }, { name: 'email', type: 'String' }] }],
       [],
-      [{ order: 1, kind: 'generator', title: 'x', detail: '', command: 'basalt make:resource Cliente --prisma' }],
+      [{ order: 1, kind: 'generator', title: 'x', detail: '', command: 'basalt make:resource Client --prisma' }],
     )
     const res = (await runMake(ctx, p, { dryRun: true, baseDir: '/p' })).resources[0]
     const model = res?.files.find((f) => f.path.endsWith('.prisma'))?.content ?? ''
     const schema = res?.files.find((f) => f.path.endsWith('.schema.ts'))?.content ?? ''
     expect(model).not.toMatch(/^\s*name\s+String/m)
-    expect(model).toMatch(/nome\s+String/)
+    expect(model).toMatch(/label\s+String/)
     expect(schema).not.toContain('name: z.string()')
-    expect(schema).toContain('nome: z.string()')
+    expect(schema).toContain('label: z.string()')
   })
 
   it('is kept when the entity has a `name` field', async () => {
     const p = plan(
-      [{ name: 'Etiqueta', tenantScoped: true, fields: [{ name: 'name', type: 'String' }, { name: 'cor', type: 'String' }] }],
+      [{ name: 'Tag', tenantScoped: true, fields: [{ name: 'name', type: 'String' }, { name: 'colour', type: 'String' }] }],
       [],
-      [{ order: 1, kind: 'generator', title: 'x', detail: '', command: 'basalt make:resource Etiqueta --prisma' }],
+      [{ order: 1, kind: 'generator', title: 'x', detail: '', command: 'basalt make:resource Tag --prisma' }],
     )
     const res = (await runMake(ctx, p, { dryRun: true, baseDir: '/p' })).resources[0]
     const model = res?.files.find((f) => f.path.endsWith('.prisma'))?.content ?? ''
     expect(model.match(/^\s*name\s+String/gm)?.length).toBe(1) // exactly one, no duplicate
-    expect(model).not.toMatch(/nome/)
+    // The entity's own other field still lands — the base column is dropped,
+    // not the declared ones.
+    expect(model).toMatch(/colour\s+String/)
   })
 })
 
@@ -116,7 +120,7 @@ describe('multi-entity permission guards', () => {
   it('guards each entity with its own namespace, not a shared one', async () => {
     const p = plan(
       [
-        { name: 'Paciente', tenantScoped: true, fields: [{ name: 'nome', type: 'String' }] },
+        { name: 'Paciente', tenantScoped: true, fields: [{ name: 'name', type: 'String' }] },
         { name: 'Medico', tenantScoped: true, fields: [{ name: 'crm', type: 'String' }] },
       ],
       ['consultas.view'], // deliberately a mismatched flat list

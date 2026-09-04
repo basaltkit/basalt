@@ -37,12 +37,12 @@ const projecto = () => {
 }
 
 const io = () => {
-  const linhas: string[] = []
+  const rows: string[] = []
   return {
-    linhas,
+    rows,
     io: {
-      log: (m: string) => linhas.push(m),
-      error: (m: string) => linhas.push(`ERRO ${m}`),
+      log: (m: string) => rows.push(m),
+      error: (m: string) => rows.push(`ERRO ${m}`),
       confirm: async () => true,
     },
   }
@@ -51,10 +51,10 @@ const io = () => {
 const correr = async (cwd: string, comando: ReturnType<typeof prismaSyncCommand>, flags = {}) => {
   const anterior = process.cwd()
   process.chdir(cwd)
-  const registo = io()
+  const calls = io()
   try {
-    const codigo = await comando.handle({ io: registo.io as never, flags, args: [] } as never)
-    return { codigo, linhas: registo.linhas }
+    const codigo = await comando.handle({ io: calls.io as never, flags, args: [] } as never)
+    return { codigo, rows: calls.rows }
   } finally {
     process.chdir(anterior)
   }
@@ -100,11 +100,11 @@ describe('F-19 · declared targets', () => {
       },
     })
 
-    const { linhas } = await correr(p.raiz, comando, { yes: true })
-    const texto = linhas.join('\n')
+    const { rows } = await correr(p.raiz, comando, { yes: true })
+    const text = rows.join('\n')
 
-    expect(texto).toContain('central')
-    expect(texto).toContain('tenant')
+    expect(text).toContain('central')
+    expect(text).toContain('tenant')
   })
 
   it('still honours --only, filtering inside each target', async () => {
@@ -135,13 +135,13 @@ describe('F-19 · declared targets', () => {
       },
     })
 
-    const { codigo, linhas } = await correr(p.raiz, comando, {
+    const { codigo, rows } = await correr(p.raiz, comando, {
       yes: true,
       schema: 'prisma/schema.prisma',
     })
 
     expect(codigo).toBe(1)
-    expect(linhas.join('\n')).toMatch(/--schema/)
+    expect(rows.join('\n')).toMatch(/--schema/)
   })
 })
 

@@ -70,10 +70,10 @@ function fakeClient(): PrismaFilesClient {
   }
 }
 
-const registo = (over: Partial<FileRecord> = {}): FileRecord => ({
+const aRecord = (over: Partial<FileRecord> = {}): FileRecord => ({
   id: 'f1',
   tenantId: 'acme',
-  name: 'contrato.pdf',
+  name: 'contract.pdf',
   contentType: 'application/pdf',
   size: 2048,
   path: 'files/f1',
@@ -90,32 +90,32 @@ describe('F-27 · PrismaFileStore', () => {
   })
 
   it('round-trips a record through the database types', async () => {
-    await store.create(registo({ uploadedBy: 'u1', metadata: { origem: 'portal' } }))
-    const lido = await store.find('acme', 'f1')
+    await store.create(aRecord({ uploadedBy: 'u1', metadata: { source: 'portal' } }))
+    const read = await store.find('acme', 'f1')
 
     // size returns as a number even though the column is BigInt, and createdAt
     // as epoch ms even though the column is a Date. A store that leaked either
     // would fail at the first `record.size > limit`.
-    expect(lido?.size).toBe(2048)
-    expect(typeof lido?.size).toBe('number')
-    expect(lido?.createdAt).toBe(1_700_000_000_000)
-    expect(lido?.metadata).toEqual({ origem: 'portal' })
-    expect(lido?.uploadedBy).toBe('u1')
+    expect(read?.size).toBe(2048)
+    expect(typeof read?.size).toBe('number')
+    expect(read?.createdAt).toBe(1_700_000_000_000)
+    expect(read?.metadata).toEqual({ source: 'portal' })
+    expect(read?.uploadedBy).toBe('u1')
   })
 
   it('omits absent optionals instead of returning null', async () => {
-    await store.create(registo())
-    const lido = await store.find('acme', 'f1')
+    await store.create(aRecord())
+    const read = await store.find('acme', 'f1')
     // The columns are nullable; the contract's fields are optional. Handing back
     // `uploadedBy: null` would satisfy neither the type nor `?? fallback`.
-    expect(lido).not.toHaveProperty('uploadedBy')
-    expect(lido).not.toHaveProperty('metadata')
-    expect(lido).not.toHaveProperty('scannedAt')
+    expect(read).not.toHaveProperty('uploadedBy')
+    expect(read).not.toHaveProperty('metadata')
+    expect(read).not.toHaveProperty('scannedAt')
   })
 
   it('never returns another tenant a file', async () => {
-    await store.create(registo({ tenantId: 'acme' }))
-    await store.create(registo({ tenantId: 'globex', id: 'f2' }))
+    await store.create(aRecord({ tenantId: 'acme' }))
+    await store.create(aRecord({ tenantId: 'globex', id: 'f2' }))
 
     expect(await store.find('globex', 'f1')).toBeNull()
     expect((await store.list('acme')).map((f) => f.id)).toEqual(['f1'])
@@ -125,35 +125,35 @@ describe('F-27 · PrismaFileStore', () => {
   })
 
   it('lists newest first', async () => {
-    await store.create(registo({ id: 'velho', createdAt: 1_000 }))
-    await store.create(registo({ id: 'novo', createdAt: 2_000 }))
-    expect((await store.list('acme')).map((f) => f.id)).toEqual(['novo', 'velho'])
+    await store.create(aRecord({ id: 'older', createdAt: 1_000 }))
+    await store.create(aRecord({ id: 'newer', createdAt: 2_000 }))
+    expect((await store.list('acme')).map((f) => f.id)).toEqual(['newer', 'older'])
   })
 
   it('writes a key present in the patch and leaves an absent one alone', async () => {
-    await store.create(registo({ metadata: { origem: 'portal' } }))
+    await store.create(aRecord({ metadata: { source: 'portal' } }))
 
     await store.update('acme', 'f1', { scannedAt: 1_700_000_001_000 })
-    let lido = await store.find('acme', 'f1')
-    expect(lido?.scannedAt).toBe(1_700_000_001_000)
-    expect(lido?.metadata).toEqual({ origem: 'portal' })
+    let read = await store.find('acme', 'f1')
+    expect(read?.scannedAt).toBe(1_700_000_001_000)
+    expect(read?.metadata).toEqual({ source: 'portal' })
 
     // An explicit `undefined` clears the column — that is how a caller drops a
     // stale scan result — while the metadata it did not mention survives.
     await store.update('acme', 'f1', { scannedAt: undefined })
-    lido = await store.find('acme', 'f1')
-    expect(lido).not.toHaveProperty('scannedAt')
-    expect(lido?.metadata).toEqual({ origem: 'portal' })
+    read = await store.find('acme', 'f1')
+    expect(read).not.toHaveProperty('scannedAt')
+    expect(read?.metadata).toEqual({ source: 'portal' })
   })
 
   it('returns null updating a file that is not there', async () => {
-    expect(await store.update('acme', 'inexistente', { scannedAt: 1 })).toBeNull()
+    expect(await store.update('acme', 'missing', { scannedAt: 1 })).toBeNull()
   })
 
   it('sums a tenant quota in the database', async () => {
-    await store.create(registo({ id: 'a', size: 1_000 }))
-    await store.create(registo({ id: 'b', size: 2_500 }))
-    await store.create(registo({ id: 'c', size: 10, tenantId: 'globex' }))
+    await store.create(aRecord({ id: 'a', size: 1_000 }))
+    await store.create(aRecord({ id: 'b', size: 2_500 }))
+    await store.create(aRecord({ id: 'c', size: 10, tenantId: 'globex' }))
 
     // Summed by the database rather than by listing and adding up: a quota check
     // runs on every upload, and a tenant with fifty thousand files should not
@@ -164,6 +164,6 @@ describe('F-27 · PrismaFileStore', () => {
 
   it('reports zero for a tenant with nothing stored', async () => {
     // Prisma's aggregate returns null, not 0n, when no row matched.
-    expect(await store.totalSize('vazio')).toBe(0)
+    expect(await store.totalSize('empty-tenant')).toBe(0)
   })
 })

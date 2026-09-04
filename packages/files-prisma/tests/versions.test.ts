@@ -40,9 +40,9 @@ function fakeClient(): PrismaFileVersionsClient & { rows: VRow[] } {
       async create({ data }) {
         // The composite primary key, enforced: this is the whole reason the
         // read-then-insert in `append` is safe.
-        const chave = (r: { tenantId: string; groupId: string; version: number }): string =>
+        const key = (r: { tenantId: string; groupId: string; version: number }): string =>
           `${r.tenantId}::${r.groupId}::${r.version}`
-        if (rows.some((r) => chave(r) === chave(data))) {
+        if (rows.some((r) => key(r) === key(data))) {
           throw new Error('Unique constraint failed on the fields: (tenantId, groupId, version)')
         }
         rows.push({ ...data } as VRow)
@@ -56,7 +56,7 @@ describe('F-28 · PrismaFileVersionStore', () => {
   it('numbers revisions and reads them back newest first', async () => {
     const store = new PrismaFileVersionStore(fakeClient())
 
-    await store.append('acme', 'g1', 'f1', { note: 'primeira minuta', by: 'ana' })
+    await store.append('acme', 'g1', 'f1', { note: 'first draft', by: 'ana' })
     await store.append('acme', 'g1', 'f2', { note: 'após reunião', by: 'rui' })
 
     expect((await store.history('acme', 'g1')).map((v) => v.version)).toEqual([2, 1])
@@ -100,7 +100,7 @@ describe('F-28 · PrismaFileVersionStore', () => {
         client.rows.push({
           tenantId: 'acme',
           groupId: 'g1',
-          fileId: 'concorrente',
+          fileId: 'competing',
           version: 2,
           note: null,
           by: null,

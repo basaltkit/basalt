@@ -64,12 +64,12 @@ export class MemoryFileVersionStore implements FileVersionStore {
     fileId: string,
     meta: { note?: string; by?: string } = {},
   ): Promise<FileVersion> {
-    const anteriores = this.scoped(tenantId, groupId)
+    const previous = this.scoped(tenantId, groupId)
     const row: FileVersion = {
       tenantId,
       groupId,
       fileId,
-      version: anteriores.length === 0 ? 1 : Math.max(...anteriores.map((r) => r.version)) + 1,
+      version: previous.length === 0 ? 1 : Math.max(...previous.map((r) => r.version)) + 1,
       ...(meta.note !== undefined ? { note: meta.note } : {}),
       ...(meta.by !== undefined ? { by: meta.by } : {}),
       createdAt: Date.now(),

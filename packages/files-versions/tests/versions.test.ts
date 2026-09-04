@@ -30,7 +30,7 @@ class FakeDriver implements StorageDriver {
   async disconnect(): Promise<void> {}
 }
 
-const disco = (): Disk => new Disk('uploads', new FakeDriver())
+const disk = (): Disk => new Disk('uploads', new FakeDriver())
 
 /**
  * A1 · documents have revisions; files do not.
@@ -49,44 +49,44 @@ describe('F-28 · FileVersions', () => {
 
   beforeEach(() => {
     store = new MemoryFileVersionStore()
-    versions = new FileVersions({ files: new Files({ disk: disco() }), store })
+    versions = new FileVersions({ files: new Files({ disk: disk() }), store })
   })
 
-  const carregar = (groupId: string, texto: string, extra: Record<string, unknown> = {}) =>
-    versions.addVersion(groupId, buf(texto), {
-      name: 'contrato.pdf',
+  const upload = (groupId: string, text: string, extra: Record<string, unknown> = {}) =>
+    versions.addVersion(groupId, buf(text), {
+      name: 'contract.pdf',
       contentType: 'application/pdf',
       ...extra,
     })
 
   it('numbers revisions from one, and the store assigns the number', async () => {
-    const { groupId, version } = await versions.create(buf('minuta 1'), {
-      name: 'contrato.pdf',
+    const { groupId, version } = await versions.create(buf('draft 1'), {
+      name: 'contract.pdf',
       contentType: 'application/pdf',
     })
     expect(version.version).toBe(1)
 
-    expect((await carregar(groupId, 'minuta 2')).version.version).toBe(2)
-    expect((await carregar(groupId, 'minuta 3')).version.version).toBe(3)
+    expect((await upload(groupId, 'draft 2')).version.version).toBe(2)
+    expect((await upload(groupId, 'draft 3')).version.version).toBe(3)
   })
 
   it('keeps every earlier revision readable, with its own bytes', async () => {
     // The reason this package exists. Uploading a new draft must not touch the
     // one a client was sent last month.
-    const { groupId } = await versions.create(buf('minuta de Janeiro'), {
-      name: 'contrato.pdf',
+    const { groupId } = await versions.create(buf('draft de Janeiro'), {
+      name: 'contract.pdf',
       contentType: 'application/pdf',
     })
-    await carregar(groupId, 'minuta de Março')
+    await upload(groupId, 'draft de Março')
 
-    const primeira = await versions.download(groupId, 1)
-    const atual = await versions.download(groupId)
+    const first = await versions.download(groupId, 1)
+    const current = await versions.download(groupId)
 
-    expect(primeira.content.toString()).toBe('minuta de Janeiro')
-    expect(atual.content.toString()).toBe('minuta de Março')
+    expect(first.content.toString()).toBe('draft de Janeiro')
+    expect(current.content.toString()).toBe('draft de Março')
     // Different files, not one file rewritten.
-    expect(primeira.record.id).not.toBe(atual.record.id)
-    expect(primeira.record.path).not.toBe(atual.record.path)
+    expect(first.record.id).not.toBe(current.record.id)
+    expect(first.record.path).not.toBe(current.record.path)
   })
 
   it('records the note and the author of each revision', async () => {
@@ -94,21 +94,21 @@ describe('F-28 · FileVersions', () => {
       name: 'c.pdf',
       contentType: 'application/pdf',
       uploadedBy: 'ana',
-      note: 'primeira minuta',
+      note: 'first draft',
     })
-    await carregar(groupId, 'v2', { uploadedBy: 'rui', note: 'após reunião com o cliente' })
+    await upload(groupId, 'v2', { uploadedBy: 'rui', note: 'após reunião com o client' })
 
-    const historico = await versions.history(groupId)
+    const history = await versions.history(groupId)
     // Newest first: a history is read from the top.
-    expect(historico.map((v) => v.version)).toEqual([2, 1])
-    expect(historico[0]?.note).toBe('após reunião com o cliente')
-    expect(historico[0]?.by).toBe('rui')
-    expect(historico[1]?.by).toBe('ana')
+    expect(history.map((v) => v.version)).toEqual([2, 1])
+    expect(history[0]?.note).toBe('após reunião com o client')
+    expect(history[0]?.by).toBe('rui')
+    expect(history[1]?.by).toBe('ana')
   })
 
   it('reports nothing for a document that does not exist', async () => {
-    expect(await versions.latest('inexistente')).toBeNull()
-    await expect(versions.download('inexistente')).rejects.toThrow(FileVersionNotFoundError)
+    expect(await versions.latest('missing')).toBeNull()
+    await expect(versions.download('missing')).rejects.toThrow(FileVersionNotFoundError)
   })
 
   it('refuses a revision whose file is gone rather than handing back a dangling row', async () => {
@@ -121,8 +121,8 @@ describe('F-28 · FileVersions', () => {
     // which is what a file deleted straight through `Files`, behind this
     // service's back, leaves behind. Returning the version as if it were
     // readable would push the failure to whoever tried to download it.
-    const orfao = new FileVersions({ files: new Files({ disk: disco() }), store })
-    await expect(orfao.latest(groupId)).rejects.toThrow(FileVersionNotFoundError)
+    const orphaned = new FileVersions({ files: new Files({ disk: disk() }), store })
+    await expect(orphaned.latest(groupId)).rejects.toThrow(FileVersionNotFoundError)
   })
 })
 
@@ -152,15 +152,15 @@ describe('F-28 · with tenancy active', () => {
     // is registered: the disk then prefixes every path with the tenant, and an
     // unresolvable tenant is an error rather than a silent unscoped read.
     const store = new MemoryFileVersionStore()
-    const files = new Files({ disk: disco() }, () => true)
+    const files = new Files({ disk: disk() }, () => true)
     const versions = new FileVersions({ files, store })
 
-    const acme = await versions.create(buf('minuta da acme'), {
+    const acme = await versions.create(buf('draft da acme'), {
       name: 'c.pdf',
       contentType: 'application/pdf',
       tenantId: 'acme',
     })
-    await versions.addVersion(acme.groupId, buf('minuta da globex'), {
+    await versions.addVersion(acme.groupId, buf('draft da globex'), {
       name: 'c.pdf',
       contentType: 'application/pdf',
       tenantId: 'globex',
@@ -172,10 +172,10 @@ describe('F-28 · with tenancy active', () => {
     expect((await versions.history(acme.groupId, 'acme')).map((v) => v.version)).toEqual([1])
     expect((await versions.history(acme.groupId, 'globex')).map((v) => v.version)).toEqual([1])
     expect((await versions.download(acme.groupId, undefined, 'acme')).content.toString()).toBe(
-      'minuta da acme',
+      'draft da acme',
     )
     expect((await versions.download(acme.groupId, undefined, 'globex')).content.toString()).toBe(
-      'minuta da globex',
+      'draft da globex',
     )
   })
 })

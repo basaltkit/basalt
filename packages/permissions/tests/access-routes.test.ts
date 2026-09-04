@@ -20,20 +20,20 @@ const montar = async () => {
   await store.grantToUser('u1', ['reports:export'], 'acme')
 
   const app = await createApp({ plugins: [permissionsPlugin({ store })] }).boot()
-  const [rota] = accessRoutes()
+  const [aRoute] = accessRoutes()
 
   /**
    * O handler é chamado dentro de um contexto, e não por HTTP.
    *
-   * Uma primeira versão deste teste inventou um header `x-test-user` e
-   * presumiu que algum plugin o lia — não lê nenhum. O que a rota consome é o
+   * Uma first versão deste teste inventou um header `x-test-user` e
+   * presumiu que algum plugin o lia — não lê nenhum. O que a aRoute consome é o
    * `ctx().user`, que é o que o `authPlugin` lá põe; montá-lo aqui testa a
-   * rota e não um mecanismo de autenticação imaginado.
+   * aRoute e não um mecanismo de autenticação imaginado.
    */
   const pedir = (user: { id: string } | undefined, tenant: string) =>
     runWithContext(
       { ...(user ? { user } : {}), tenant: { id: tenant }, container: app.container },
-      () => (rota!.handler as (a: unknown) => Promise<unknown>)({}),
+      () => (aRoute!.handler as (a: unknown) => Promise<unknown>)({}),
     )
 
   return { app, store, pedir }

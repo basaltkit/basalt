@@ -109,47 +109,47 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
     name: 'prisma:sync',
     description: 'Merge @basaltkit/*-prisma models into your prisma/schema.prisma',
     async handle({ io, flags }) {
-      const alvos = options.targets
+      const targets = options.targets
 
-      if (alvos && typeof flags['schema'] === 'string') {
+      if (targets && typeof flags['schema'] === 'string') {
         // `--schema` names one file; with several declared it cannot mean
         // anything. Picking one would write central models into it — the very
         // mistake `targets` exists to stop.
         io.error('--schema cannot be used with declared targets: it names one schema, and there are several.')
-        io.error(`Declared: ${Object.keys(alvos).join(', ')}. Use --only to narrow by domain instead.`)
+        io.error(`Declared: ${Object.keys(targets).join(', ')}. Use --only to narrow by domain instead.`)
         return 1
       }
 
-      const pedidos =
+      const requested =
         typeof flags['only'] === 'string' ? flags['only'].split(',').map((d) => d.trim()) : null
 
       /** One schema file: read it, add what is missing, write it back. */
-      const sincronizar = async (
+      const syncOne = async (
         nome: string | null,
         schemaPath: string,
-        dominios: string[],
+        domains: string[],
       ): Promise<number | null> => {
-        const caminho = resolve(schemaPath)
+        const path = resolve(schemaPath)
 
         // Read first and ask questions after, rather than `existsSync` then
         // read: the two-step version has a window between the check and the
         // read, and answers a question the read itself already answers.
         let userSchema: string
         try {
-          userSchema = readFileSync(caminho, 'utf8')
+          userSchema = readFileSync(path, 'utf8')
         } catch {
-          io.error(`No schema found at ${caminho}.`)
+          io.error(`No schema found at ${path}.`)
           io.error('Create one first with a `datasource` and `generator` block, then re-run.')
           return null
         }
         const present = new Set(extractSchemaBlocks(userSchema).map((b) => b.name))
-        const packages = discoverSchemas(dominios)
+        const packages = discoverSchemas(domains)
         if (packages.length === 0) return 0
 
         const nonInteractive = flags['yes'] === true || flags['all'] === true
         const additions: string[] = []
         let added = 0
-        const etiqueta = nome ? `[${nome}] ` : ''
+        const label = nome ? `[${nome}] ` : ''
 
         for (const { pkg, schema } of packages) {
           const missing = extractSchemaBlocks(schema).filter((b) => !present.has(b.name))
@@ -157,50 +157,50 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
           const names = missing.map((b) => b.name).join(', ')
           const approved =
             nonInteractive ||
-            (await io.confirm(`${etiqueta}Add ${missing.length} model(s) from ${pkg} — ${names}?`))
+            (await io.confirm(`${label}Add ${missing.length} model(s) from ${pkg} — ${names}?`))
           if (!approved) {
-            io.log(`  ${etiqueta}skipped ${pkg}`)
+            io.log(`  ${label}skipped ${pkg}`)
             continue
           }
           additions.push(`\n// --- ${pkg} ---\n${missing.map((b) => b.text).join('\n\n')}`)
           missing.forEach((b) => present.add(b.name))
           added += missing.length
-          io.log(`  ${etiqueta}+ ${pkg}: ${names}`)
+          io.log(`  ${label}+ ${pkg}: ${names}`)
         }
 
         if (added === 0) return 0
-        writeFileSync(caminho, `${userSchema.replace(/\s*$/, '')}\n${additions.join('\n')}\n`)
-        io.log(`${etiqueta}Added ${added} model(s) to ${caminho}.`)
+        writeFileSync(path, `${userSchema.replace(/\s*$/, '')}\n${additions.join('\n')}\n`)
+        io.log(`${label}Added ${added} model(s) to ${path}.`)
         return added
       }
 
       let total = 0
       const escritos: string[] = []
 
-      if (alvos) {
-        for (const [nome, alvo] of Object.entries(alvos)) {
+      if (targets) {
+        for (const [nome, target] of Object.entries(targets)) {
           // `--only` narrows inside each target; it never moves a domain across
           // one. Asking for `auth` must not drag in whatever shares its schema.
-          const dominios = pedidos
-            ? alvo.domains.filter((d) => pedidos.includes(d))
-            : alvo.domains
-          if (dominios.length === 0) continue
+          const domains = requested
+            ? target.domains.filter((d) => requested.includes(d))
+            : target.domains
+          if (domains.length === 0) continue
 
-          const n = await sincronizar(nome, alvo.schemaPath, dominios)
+          const n = await syncOne(nome, target.schemaPath, domains)
           if (n === null) return 1
           if (n > 0) {
             total += n
-            escritos.push(resolve(alvo.schemaPath))
+            escritos.push(resolve(target.schemaPath))
           }
         }
       } else {
         const schemaPath =
           typeof flags['schema'] === 'string' ? flags['schema'] : (options.schemaPath ?? 'prisma/schema.prisma')
-        const dominios = pedidos ?? options.domains ?? DOMAINS
+        const domains = requested ?? options.domains ?? DOMAINS
 
-        const n = await sincronizar(null, schemaPath, dominios)
+        const n = await syncOne(null, schemaPath, domains)
         if (n === null) return 1
-        if (n === 0 && discoverSchemas(dominios).length === 0) {
+        if (n === 0 && discoverSchemas(domains).length === 0) {
           io.log('No installed @basaltkit/*-prisma packages found. Add one (e.g. `@basaltkit/auth-prisma`) first.')
           return 0
         }
@@ -218,9 +218,9 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
         // Once per schema that actually changed. Running it against a schema
         // nothing was added to is a migration with no diff — noise in the
         // history at best, a surprise at worst.
-        for (const caminho of escritos) {
-          io.log(`Running: prisma ${args.join(' ')} --schema ${caminho}`)
-          const result = spawnSync('npx', ['prisma', ...args, '--schema', caminho], { stdio: 'inherit' })
+        for (const path of escritos) {
+          io.log(`Running: prisma ${args.join(' ')} --schema ${path}`)
+          const result = spawnSync('npx', ['prisma', ...args, '--schema', path], { stdio: 'inherit' })
           if (result.status !== 0) {
             io.error('prisma command failed.')
             return result.status ?? 1

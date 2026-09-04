@@ -28,11 +28,11 @@ const plans = definePlans({
   pro: { price: 29, features: { api: true } },
 })
 
-const comPlanos = (rotas: ReturnType<typeof route>[]) =>
+const withPlans = (routes: ReturnType<typeof route>[]) =>
   createApp({
     plugins: [
       subscriptionsPlugin({ plans, gateway: new FakeBillingGateway() }),
-      fastifyPlugin({ routes: rotas }),
+      fastifyPlugin({ routes: routes }),
     ],
   }).boot()
 
@@ -41,8 +41,8 @@ const comPlanos = (rotas: ReturnType<typeof route>[]) =>
  * this, a boot that quietly succeeds fails the next assertion with a message
  * about `undefined` instead of saying that nothing was rejected.
  */
-const falhaAoArrancar = (rotas: ReturnType<typeof route>[]): Promise<Error> =>
-  comPlanos(rotas).then(
+const bootFailure = (routes: ReturnType<typeof route>[]): Promise<Error> =>
+  withPlans(routes).then(
     () => {
       throw new Error('booted — expected the unknown plan to be refused')
     },
@@ -51,68 +51,68 @@ const falhaAoArrancar = (rotas: ReturnType<typeof route>[]): Promise<Error> =>
 
 describe('F-17 · meta.subscribed is checked against the catalogue', () => {
   it('refuses to boot on a plan that is not in the catalogue', async () => {
-    const rota = route({
+    const aRoute = route({
       method: 'GET',
       url: '/reports',
       meta: { subscribed: 'enterprise' },
       handler: () => ({ ok: true }),
     })
 
-    await expect(comPlanos([rota])).rejects.toThrow(UnknownPlanMetaError)
+    await expect(withPlans([aRoute])).rejects.toThrow(UnknownPlanMetaError)
   })
 
   it('names the route, the plan, and what the catalogue has', async () => {
     // The error has to be actionable without opening the catalogue: the fix is
     // either a typo in one place or a plan missing from the other, and the
     // message should say which is which.
-    const rota = route({
+    const aRoute = route({
       method: 'GET',
       url: '/reports',
       meta: { subscribed: 'pró' },
       handler: () => ({ ok: true }),
     })
 
-    const erro = await falhaAoArrancar([rota])
-    expect(erro.message).toContain('/reports')
-    expect(erro.message).toContain('pró')
-    expect(erro.message).toContain('free')
-    expect(erro.message).toContain('pro')
+    const error = await bootFailure([aRoute])
+    expect(error.message).toContain('/reports')
+    expect(error.message).toContain('pró')
+    expect(error.message).toContain('free')
+    expect(error.message).toContain('pro')
   })
 
   it('boots on a plan that exists', async () => {
-    const rota = route({
+    const aRoute = route({
       method: 'GET',
       url: '/reports',
       meta: { subscribed: 'pro' },
       handler: () => ({ ok: true }),
     })
 
-    const app = await comPlanos([rota])
+    const app = await withPlans([aRoute])
     expect(app).toBeDefined()
     await app.shutdown()
   })
 
   it('reports every offending route at once', async () => {
     // Booting, failing, fixing one, booting again is a slow way to find three.
-    const rotas = [
+    const routes = [
       route({ method: 'GET', url: '/a', meta: { subscribed: 'enterprise' }, handler: () => ({}) }),
       route({ method: 'GET', url: '/b', meta: { subscribed: 'pro' }, handler: () => ({}) }),
       route({ method: 'GET', url: '/c', meta: { subscribed: 'starter' }, handler: () => ({}) }),
     ]
 
-    const erro = await falhaAoArrancar(rotas)
-    expect(erro.message).toContain('/a')
-    expect(erro.message).toContain('/c')
-    expect(erro.message).not.toContain('/b')
+    const error = await bootFailure(routes)
+    expect(error.message).toContain('/a')
+    expect(error.message).toContain('/c')
+    expect(error.message).not.toContain('/b')
   })
 
   it('leaves routes without meta.subscribed alone', async () => {
-    const rotas = [
+    const routes = [
       route({ method: 'GET', url: '/livre', handler: () => ({}) }),
       route({ method: 'GET', url: '/feature', meta: { feature: 'api' }, handler: () => ({}) }),
     ]
 
-    const app = await comPlanos(rotas)
+    const app = await withPlans(routes)
     expect(app).toBeDefined()
     await app.shutdown()
   })

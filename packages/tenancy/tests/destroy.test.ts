@@ -22,18 +22,13 @@ import {
  * in the framework could remove.
  */
 
-const fonte = (): MemoryTenantSource => {
-  const s = new MemoryTenantSource()
-  return s
-}
-
 const tenancy = (opts: {
   source?: MemoryTenantSource
   hooks?: HookBus
   onProvision?: (t: Tenant) => Promise<void> | void
   onDeprovision?: (t: Tenant) => Promise<void> | void
 } = {}) => {
-  const source = opts.source ?? fonte()
+  const source = opts.source ?? new MemoryTenantSource()
   return {
     source,
     service: new Tenancy(
@@ -49,38 +44,38 @@ const tenancy = (opts: {
 
 describe('F-29 · Tenancy.destroy', () => {
   it('runs onDeprovision inside the tenant context, then removes the record', async () => {
-    const visto: Array<string | undefined> = []
+    const seen: Array<string | undefined> = []
     const { source, service } = tenancy({
       onDeprovision: async () => {
         // Inside the context, exactly like onProvision — so a tenant-scoped
         // client resolves to the schema that is about to be dropped, rather
         // than to whatever the caller happened to be in.
         const { ctx } = await import('@basaltkit/core')
-        visto.push((ctx()['tenant'] as Tenant | undefined)?.id)
+        seen.push((ctx()['tenant'] as Tenant | undefined)?.id)
       },
     })
 
     await service.create({ id: 'acme' } as Tenant)
     await service.destroy('acme')
 
-    expect(visto).toEqual(['acme'])
+    expect(seen).toEqual(['acme'])
     expect(await source.find('acme')).toBeNull()
   })
 
   it('stops serving the tenant before its storage is touched', async () => {
-    const estados: Array<string | undefined> = []
+    const statuses: Array<string | undefined> = []
     const { source, service } = tenancy({
       onDeprovision: async () => {
         // The status the resolver sees while the schema is being dropped. If it
         // still said `ready` here, a request arriving mid-teardown would be
         // routed to storage that is being deleted underneath it.
-        estados.push((await source.find('acme'))?.['status'] as string | undefined)
+        statuses.push((await source.find('acme'))?.['status'] as string | undefined)
       },
     })
 
     await service.create({ id: 'acme' } as Tenant)
     await service.destroy('acme')
-    expect(estados).toEqual(['deleting'])
+    expect(statuses).toEqual(['deleting'])
   })
 
   it('keeps the record when deprovisioning fails', async () => {
@@ -95,9 +90,9 @@ describe('F-29 · Tenancy.destroy', () => {
 
     // The record is the only thing naming the storage that is still out there.
     // Deleting it on a failed teardown would orphan a schema nobody can find.
-    const restante = await source.find('acme')
-    expect(restante).not.toBeNull()
-    expect(restante?.['status']).toBe('deleting')
+    const remaining = await source.find('acme')
+    expect(remaining).not.toBeNull()
+    expect(remaining?.['status']).toBe('deleting')
   })
 
   it('force removes the record even when deprovisioning fails', async () => {
@@ -116,29 +111,29 @@ describe('F-29 · Tenancy.destroy', () => {
   it('emits tenancy:destroyed only after the record is gone', async () => {
     const hooks = new HookBus()
     const { source, service } = tenancy({ hooks })
-    const quando: Array<boolean> = []
+    const recordGoneWhenEmitted: Array<boolean> = []
     hooks.on('tenancy:destroyed', async () => {
-      quando.push((await source.find('acme')) === null)
+      recordGoneWhenEmitted.push((await source.find('acme')) === null)
     })
 
     await service.create({ id: 'acme' } as Tenant)
     await service.destroy('acme')
     // A listener that reacts by cleaning up its own rows must not find the
     // tenant still listed.
-    expect(quando).toEqual([true])
+    expect(recordGoneWhenEmitted).toEqual([true])
   })
 
   it('refuses a tenant that is not there', async () => {
     const { service } = tenancy()
-    await expect(service.destroy('nunca-existiu')).rejects.toThrow(TenantNotFoundError)
+    await expect(service.destroy('never-existed')).rejects.toThrow(TenantNotFoundError)
   })
 
   it('refuses a source that cannot delete, instead of reporting success', async () => {
-    const semDelete = {
+    const sourceWithoutDelete = {
       find: async () => ({ id: 'acme' }) as Tenant,
       save: async (t: Tenant) => t,
     }
-    const service = new Tenancy(semDelete, [])
+    const service = new Tenancy(sourceWithoutDelete, [])
     await expect(service.destroy('acme')).rejects.toThrow(TenantDeleteUnsupportedError)
   })
 

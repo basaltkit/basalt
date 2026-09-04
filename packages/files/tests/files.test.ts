@@ -124,8 +124,8 @@ describe('beyond-SaaS: files does not require tenancy', () => {
     expect(await files.temporaryUrl(record.id, '5m')).toContain(record.path)
     // A timestamp, not a flag: 'scanned' with no idea when stops being an
     // answer the moment the scanner's rules change.
-    const marcado = await files.markScanned(record.id, { clean: true })
-    expect(marcado.scannedAt).toBeGreaterThan(0)
+    const marked = await files.markScanned(record.id, { clean: true })
+    expect(marked.scannedAt).toBeGreaterThan(0)
 
     // Storage paths stay unprefixed — identical to using @basaltkit/storage directly.
     expect(await driver.exists(record.path)).toBe(true)

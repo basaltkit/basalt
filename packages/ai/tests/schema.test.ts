@@ -12,32 +12,32 @@ import {
 
 describe('extractModelBlock', () => {
   it('pulls the model block out of a generated snippet', () => {
-    const snippet = `// Add this model…\nmodel Cliente {\n  id String @id\n  nome String\n\n  @@index([tenantId])\n}\n`
+    const snippet = `// Add this model…\nmodel Client {\n  id String @id\n  name String\n\n  @@index([tenantId])\n}\n`
     const block = extractModelBlock(snippet)
-    expect(block?.name).toBe('Cliente')
-    expect(block?.block).toMatch(/^model Cliente \{/)
+    expect(block?.name).toBe('Client')
+    expect(block?.block).toMatch(/^model Client \{/)
     expect(block?.block).toContain('@@index([tenantId])')
   })
 })
 
 describe('mergeModelsIntoSchema', () => {
   const schema = 'datasource db {\n  provider = "postgresql"\n}\n\nmodel Tenant {\n  id String @id\n}\n'
-  const cliente = { name: 'Cliente', block: 'model Cliente {\n  id String @id\n}' }
+  const client = { name: 'Client', block: 'model Client {\n  id String @id\n}' }
 
   it('appends a new model', () => {
-    const out = mergeModelsIntoSchema(schema, [cliente])
-    expect(out.merged).toEqual(['Cliente'])
+    const out = mergeModelsIntoSchema(schema, [client])
+    expect(out.merged).toEqual(['Client'])
     expect(out.skipped).toEqual([])
-    expect(out.content).toContain('model Cliente {')
+    expect(out.content).toContain('model Client {')
     expect(out.content).toContain('model Tenant {') // preserved
   })
 
   it('is idempotent — skips a model already present', () => {
-    const once = mergeModelsIntoSchema(schema, [cliente]).content
-    const twice = mergeModelsIntoSchema(once, [cliente])
+    const once = mergeModelsIntoSchema(schema, [client]).content
+    const twice = mergeModelsIntoSchema(once, [client])
     expect(twice.merged).toEqual([])
-    expect(twice.skipped).toEqual(['Cliente'])
-    expect(twice.content.match(/model Cliente \{/g)).toHaveLength(1)
+    expect(twice.skipped).toEqual(['Client'])
+    expect(twice.content.match(/model Client \{/g)).toHaveLength(1)
   })
 })
 
@@ -46,8 +46,8 @@ describe('runMake schema merge (real dir)', () => {
   const plan: ArchitecturePlan = {
     request: 'r',
     summary: 's',
-    entities: [{ name: 'Cliente', tenantScoped: true, fields: [{ name: 'nome', type: 'String' }] }],
-    steps: [{ order: 1, title: 'x', kind: 'generator', detail: '', command: 'basalt make:resource Cliente --prisma' }],
+    entities: [{ name: 'Client', tenantScoped: true, fields: [{ name: 'name', type: 'String' }] }],
+    steps: [{ order: 1, title: 'x', kind: 'generator', detail: '', command: 'basalt make:resource Client --prisma' }],
     permissions: [],
     auditEvents: [],
     tenantScoped: true,
@@ -73,12 +73,12 @@ describe('runMake schema merge (real dir)', () => {
     const ctx = detectProject(root)
     const result = await runMake(ctx, plan, { baseDir: root }) // real write, migrate off
     expect(result.schema?.found).toBe(true)
-    expect(result.schema?.merged).toEqual(['Cliente'])
+    expect(result.schema?.merged).toEqual(['Client'])
     expect(result.schema?.written).toBe(true)
     expect(result.migration).toBeUndefined()
 
     const schema = await readFile(join(root, 'prisma/schema.prisma'), 'utf8')
-    expect(schema).toContain('model Cliente {')
+    expect(schema).toContain('model Client {')
     expect(schema).toContain('model Tenant {') // preserved
 
     // review says the model is in the schema, follow-up says run db push
@@ -89,9 +89,9 @@ describe('runMake schema merge (real dir)', () => {
   it('dry-run reports the merge but writes nothing', async () => {
     const ctx = detectProject(root)
     const result = await runMake(ctx, plan, { baseDir: root, dryRun: true })
-    expect(result.schema?.merged).toEqual(['Cliente'])
+    expect(result.schema?.merged).toEqual(['Client'])
     expect(result.schema?.written).toBe(false)
     const schema = await readFile(join(root, 'prisma/schema.prisma'), 'utf8')
-    expect(schema).not.toContain('model Cliente {')
+    expect(schema).not.toContain('model Client {')
   })
 })
