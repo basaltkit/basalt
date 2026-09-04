@@ -56,6 +56,18 @@ overrides:
   # tree, so an app using @basaltkit/prisma against MySQL would really be
   # exposed. This repo runs Postgres/SQLite, which is why nothing here breaks.
   mysql2: ^3.24.2
+  # GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf (high):
+  # fast-uri can be made to disagree with the WHATWG parser about a URL's host —
+  # skipped IDN normalisation, and SSRF through hosts it parses differently from
+  # the fetcher that later resolves them. It arrives through fastify's validation
+  # stack (fastify > ajv / fast-json-stringify), which pins ranges below the
+  # patched versions, so an override is the only way to raise it.
+  #
+  # Overridden rather than ignored: this one sits on the request path of every
+  # application built on @basaltkit/fastify, not in build tooling. Two majors are
+  # installed, each patched on its own line.
+  'fast-uri@3': ^3.1.7
+  'fast-uri@4': ^4.1.4
   jsdom: ^30.0.1
   '@types/node': ^26.3.0
   tailwind-merge: ^3.6.0
