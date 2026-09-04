@@ -14,17 +14,20 @@ lock-in, TypeScript inference from the route to the client.
 Runs on **Fastify, Express or Hono** (swap adapters without touching your
 routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.9 — the release written by an application, not by the
-> framework. Requires Zod 4. 89 packages, each versioned independently. 🎉**
-> A real legal SaaS was built on Basalt and every place the framework made its
-> author write code the framework should have written was recorded. Fifteen of
-> those gaps are closed here: a search index that could not run through the
-> Prisma client at all, an audit plugin that aborted tenant provisioning, an
-> admin package that would not bundle for the browser it targets, a permission
-> gate whose roles no service could reach, a notifications package that stored
-> alerts and never served them. **Zod 3 is no longer supported** — twelve
-> packages narrow their peer to `^4.0.0`, which is the one thing an upgrade
-> requires you to change. Before that, 1.8 made multi-tenant persistence fail
+> **Status: Basalt 1.10 — the release of missing halves. 90 packages, each
+> versioned independently. 🎉**
+> The application that wrote 1.9 kept going, and what it found this time was
+> capabilities with no other side: a tenant that could be created and never
+> destroyed, an index that could be kept current and never rebuilt, the one
+> domain with a store contract and no durable implementation of it, a permission
+> that said what a caller may do and never who they are. A missing half does not
+> announce itself — every application invents its own answer, and the one that
+> is wrong looks exactly like the one that is right. Two contracts changed:
+> `@basaltkit/files` revises its store, and `app.server` in `@basaltkit/testing`
+> is now awaited. Before that, 1.9 was written by an application rather than by
+> the framework — fifteen places where it made its author write code it should
+> have written itself, and **Zod 3 was dropped**, twelve packages narrowing
+> their peer to `^4.0.0`. Before that, 1.8 made multi-tenant persistence fail
 > loudly: four ways a tenant could be served the wrong data — or none — while
 > every layer reported success are now refused where the mistake is made.
 > Before that, 1.7 ended backend lock-in: the queue, storage, cache and

@@ -239,6 +239,12 @@ it inside `<id>`'s context — e.g. `basalt tenant:run acme queue:retry`.
 | `source` | `TenantSource` | Yes | — | Where tenants are loaded from. |
 | `resolvers` | `TenantResolver[]` | Yes | — | Tried in order; the first one that loads a tenant wins. |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. `{ except: ['/health'] }` exempts those paths (matched without the query string) and guards everything else. |
+| `onMigrate` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant migration work for `basalt tenant:migrate`. The framework iterates tenants and enters each context; you do the DB-specific part. Without it the command errors. |
+| `onSeed` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant seeding for `basalt tenant:seed`, same contract. |
+| `onProvision` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Brings a NEW tenant's storage into existence, inside its context, from `tenancy.create()` and `basalt tenant:create`. Without it a tenant is routable before its schema exists. |
+| `onDeprovision` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Tears that storage down, inside the tenant's context, from `tenancy.destroy()`. Without it the record goes and the schema stays. |
+| `provision` | `'inline' \| 'deferred'` | No | `'inline'` | `'inline'` — `create()` waits, so the tenant is usable when it returns. `'deferred'` — `create()` returns immediately with status `provisioning` and the resolver answers 503 until `tenancy.provision(id)` runs. |
+| `canonicalDomain` | `(tenant: Tenant) => string \| undefined` | No | — | The address a new tenant is reachable at, **added** to `tenant.domains` by `tenancy.create()` before the record is persisted — so every creation path gets it instead of each one remembering. Return `undefined` to decline. |
 
 A route can override `required` for itself with `meta.tenant` — `false` marks it central, `true` requires a tenant even when the app-wide default is off:
 
@@ -246,8 +252,19 @@ A route can override `required` for itself with `meta.tenant` — `false` marks 
 route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
 ```
 
-| `onMigrate` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant migration work for `basalt tenant:migrate`. The framework iterates tenants and enters each context; you do the DB-specific part. Without it the command errors. |
-| `onSeed` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant seeding for `basalt tenant:seed`, same contract. |
+Without `canonicalDomain` a tenant is created with no `domains` entry, and
+nothing says so: `subdomainResolver` answers from the `Host` without consulting
+the table. The tenant works; what is missing is the record that the address is
+its own, so `domainResolver` cannot find it and nothing stops a second tenant
+claiming the same one.
+
+```ts
+tenancyPlugin({ source, resolvers, canonicalDomain: (tenant) => `${tenant.id}.${process.env.APP_DOMAIN}` })
+```
+
+It is added to whatever the tenant already declares, never substituted: sources
+replace the whole domain set on save, so substituting would erase a customer's
+own domain the next time anything called `create()`.
 
 The plugin also adds the `tenancy:active` marker to the container metadata.
 Other packages read it — string-keyed, so no package coupling — to adopt
@@ -264,6 +281,9 @@ Constructor: `new Tenancy(source, resolvers, hooks?)` (normally created by the p
 |---|---|---|
 | `current()` | `Tenant \| undefined` | The tenant of the active context. |
 | `find(id)` | `Promise<Tenant \| null>` | Looks it up in the source. |
+| `create(tenant)` | `Promise<Tenant>` | Persists a new tenant, applies `canonicalDomain`, runs `onProvision` and emits `tenancy:created`. The creation path — the source only writes the row. |
+| `provision(tenantOrId)` | `Promise<Tenant>` | Runs `onProvision` for a tenant left `provisioning` by `provision: 'deferred'`, then flips it to `ready`. |
+| `destroy(id, { force? })` | `Promise<void>` | Marks the tenant `deleting`, runs `onDeprovision` in its context and removes the record. `force` removes it even if the teardown threw. |
 | `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }`. |
 | `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched`. |
 | `forEach(fn, { concurrency? })` | `Promise<void>` | Runs `fn` for each tenant (requires `source.list`); default concurrency 5. |
