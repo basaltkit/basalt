@@ -2503,22 +2503,19 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/fastify':
-        specifier: workspace:^
-        version: link:../fastify
       '@basaltkit/mailer':
         specifier: workspace:^
         version: link:../mailer
       '@basaltkit/queue':
         specifier: workspace:^
         version: link:../queue
-      fastify:
-        specifier: ^5.12.1
-        version: 5.12.1
     devDependencies:
       '@basaltkit/express':
         specifier: workspace:^
         version: link:../express
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
       '@basaltkit/hono':
         specifier: workspace:^
         version: link:../hono
@@ -2534,6 +2531,9 @@ importers:
       express:
         specifier: ^5.0.0
         version: 5.2.1
+      fastify:
+        specifier: ^5.12.1
+        version: 5.12.1
       hono:
         specifier: ^4.13.5
         version: 4.13.5
