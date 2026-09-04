@@ -104,8 +104,9 @@ também como `structuredContent`. Handlers que devolvem um array ou primitivo no
 topo (ex. um endpoint de lista) põem os dados só no `content`, porque o MCP exige
 que o `structuredContent` seja um objeto.
 
-**Zod 3 e 4** são ambos suportados; no Zod 4 a conversão usa o `z.toJSONSchema`
-nativo do Zod.
+A conversão de schemas usa o `z.toJSONSchema` do próprio Zod, portanto o schema
+de entrada de uma tool é descrito ao cliente tal como o Zod o descreve. **É
+preciso Zod 4** — vê a nota sobre a peer dependency no README do pacote.
 
 ## stdio e Claude Desktop
 

@@ -23,7 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "zod": "^4.5.4"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",

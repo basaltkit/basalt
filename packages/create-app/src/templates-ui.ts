@@ -39,7 +39,9 @@ function webPackageJson(options: ProjectOptions): string {
         '@basaltkit/sdk': BASALT_VERSION,
         react: '^18.3.1',
         'react-dom': '^18.3.1',
-        zod: '^3.24.0',
+        // Matches the peer every @basaltkit package now declares. Scaffolding a
+        // zod 3 app would produce one that fails its own install.
+        zod: '^4.0.0',
       },
       devDependencies: {
         '@types/react': '^18.3.0',
