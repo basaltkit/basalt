@@ -1,0 +1,35 @@
+# CodeQL scope: the code we publish.
+#
+# Without this file CodeQL extracts everything, tests included, and that has a
+# specific consequence beyond noise. A test that writes into `mkdtemp()` is a
+# taint source, and when it calls a CLI command that writes to a path the caller
+# chose, the flow lands on the *production* line — `js/insecure-temporary-file`
+# reported against `prisma:sync`, which never touches the temp directory in any
+# real code path. The finding is about the harness, reported against the library.
+#
+# Excluding tests removes the source rather than dismissing the symptom, and the
+# next test that drives a CLI command with a temporary directory will not
+# reintroduce it.
+#
+# What is given up: test code is no longer scanned. That is the intended trade —
+# tests are never published and never run against untrusted input. Everything
+# under `packages/*/src` and `apps/*/src`, which is what ships, is analysed
+# exactly as before.
+name: 'Basalt CodeQL config'
+
+# A list of suites, not a bare string: the config file's schema differs from the
+# workflow input's, and a string here fails init with
+# "(config.originalUserInput.queries || []).map is not a function".
+queries:
+  - uses: security-and-quality
+
+paths-ignore:
+  - '**/tests/**'
+  - '**/*.test.ts'
+  - '**/*.test.tsx'
+  - '**/*.spec.ts'
+  - '**/*.spec.tsx'
+  # Emitted artefacts: scanning them re-reports every finding a second time,
+  # against a file nobody edits.
+  - '**/dist/**'
+  - '**/.vitepress/dist/**'
