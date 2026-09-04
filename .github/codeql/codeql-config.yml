@@ -17,7 +17,11 @@
 # exactly as before.
 name: 'Basalt CodeQL config'
 
-queries: security-and-quality
+# A list of suites, not a bare string: the config file's schema differs from the
+# workflow input's, and a string here fails init with
+# "(config.originalUserInput.queries || []).map is not a function".
+queries:
+  - uses: security-and-quality
 
 paths-ignore:
   - '**/tests/**'
