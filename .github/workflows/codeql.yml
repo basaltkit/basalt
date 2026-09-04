@@ -27,7 +27,9 @@ jobs:
         uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
+          # The query suite moves into the config file with the path rules, so
+          # both halves of "what is scanned" are stated in one place.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Analyze
         uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
