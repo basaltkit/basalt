@@ -134,7 +134,55 @@ const acmeFeed = await runWithContext({ tenant: { id: 'acme' } }, () =>
 await activity.for('project', 'p1') // → 2 records
 ```
 
+With `@basaltkit/tenancy` registered and no `tenantScoped` of your own,
+`activityPlugin` uses `'required'`: a query with no resolvable tenant throws
+rather than answering with every tenant's records. A feed line is not an
+aggregate — it reads *"Dr. Kiala opened matter 2026/014 for Kwanza Lda"*, which
+is another firm's client, by name. A single-tenant app has no tenant dimension
+and is untouched.
+
 To turn it off: `new Activity({ tenantScoped: false })` or `activityPlugin({ tenantScoped: false })`. Passing an explicit `tenantId` in the `query` also bypasses automatic scoping.
+
+### `activityRule` — record from domain events
+
+Wiring the feed by hand means a `hooks.on(...)` per event, and it pulls you
+towards calling `activity` from inside your services. A rule keeps them apart:
+**the domain emits, this package listens, and neither knows the other.** Same
+shape as `syncRule` in `@basaltkit/search` and `bridgeRule` in
+`@basaltkit/realtime`.
+
+```ts
+import { activityPlugin, activityRule } from '@basaltkit/activity'
+
+activityPlugin({
+  rules: [
+    activityRule({
+      hook: 'matter:opened',
+      log: 'matters',
+      subject: ({ matter }) => ({ type: 'matter', id: matter.id }),
+      description: ({ matter }) => `opened matter ${matter.number}`,
+      properties: ({ matter }) => ({ practiceArea: matter.area }),
+      causer: ({ by }) => by,
+    }),
+  ],
+})
+```
+
+`description` returning `null` records nothing — useful when only some events of
+a hook are worth a line. `causer` defaults to `ctx().user.id`, and the line is
+written inside the emitter's context, so it belongs to the tenant whose action
+produced it.
+
+**A rule never rethrows.** `HookBus` propagates to the emitter, which is right
+for an audit trail — a fact you failed to record must not be reported as
+recorded — and wrong here: a history line that cannot be written must not fail
+the case closure that produced it. Failures go to `onRuleError`, which warns on
+the console by default.
+
+| Option | Type | Default |
+| --- | --- | --- |
+| `rules` | `ActivityRule[]` | `[]` |
+| `onRuleError` | `(error, rule) => void` | Warn on the console |
 
 ### Usage without the plugin (scripts, tests)
 
