@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
+import type { BasaltHooks } from '@basaltkit/core'
 import { requireTenantId } from '@basaltkit/tenancy'
 
 export interface ActivityRecord {
@@ -108,6 +109,37 @@ export class ActivityBuilder {
   }
 }
 
+/**
+ * Records a feed line from a domain event.
+ *
+ * The same shape `@basaltkit/search` uses for `syncRule` and
+ * `@basaltkit/realtime` for `bridgeRule`, and for the same reason: **the domain
+ * emits, this package listens, and neither knows the other.** Without it the
+ * natural answer to "record this" is to call `activity` from inside the
+ * service, which couples the domain to the package the other two teach you to
+ * keep at arm's length.
+ */
+export interface ActivityRule<K extends keyof BasaltHooks & string = keyof BasaltHooks & string> {
+  hook: K
+  /** Which log the line belongs to. Default: `'default'`. */
+  log?: string
+  /** What the line is about. */
+  subject?: (payload: BasaltHooks[K]) => { type: string; id: string } | null
+  /** The line itself. Return null to record nothing for this event. */
+  description: (payload: BasaltHooks[K]) => string | null
+  /** Structured detail alongside the prose. */
+  properties?: (payload: BasaltHooks[K]) => Record<string, unknown> | undefined
+  /** Who did it. Defaults to `ctx().user.id`. */
+  causer?: (payload: BasaltHooks[K]) => string | undefined
+}
+
+/** Type-checks a rule against its hook, then erases the generic. */
+export function activityRule<K extends keyof BasaltHooks & string>(
+  rule: ActivityRule<K>,
+): ActivityRule {
+  return rule as unknown as ActivityRule
+}
+
 export interface ActivityOptions {
   store?: ActivityStore
   /**
@@ -124,6 +156,17 @@ export interface ActivityOptions {
    * - `false`: never auto-scope.
    */
   tenantScoped?: boolean | 'required'
+  /** Rules turning domain events into feed lines. */
+  rules?: ActivityRule[]
+  /**
+   * Called when a rule throws. Default: a warning on the console.
+   *
+   * A rule never rethrows. `HookBus` propagates to the emitter, which is right
+   * for an audit trail — a fact you failed to record must not be reported as
+   * recorded — and wrong for a readable feed: a history line that cannot be
+   * written must not fail the case closure that produced it.
+   */
+  onRuleError?: (error: unknown, rule: ActivityRule) => void
 }
 
 export class Activity {
@@ -201,6 +244,38 @@ export function activityPlugin(options: ActivityOptions = {}) {
             : options
         return new Activity(resolved)
       })
+    },
+    boot({ container, hooks }) {
+      const rules = options.rules ?? []
+      if (rules.length === 0) return
+      const activity = container.get(ACTIVITY)
+      const onError =
+        options.onRuleError ??
+        ((error: unknown, rule: ActivityRule) =>
+          console.warn(
+            `[basalt:activity] rule for "${rule.hook}" failed: ` +
+              `${String((error as { message?: string })?.message ?? error)} — the feed line was not written.`,
+          ))
+
+      for (const rule of rules) {
+        hooks.on(rule.hook, async (payload) => {
+          try {
+            const description = rule.description(payload)
+            if (description === null) return
+            let builder = activity.in(rule.log ?? 'default')
+            const subject = rule.subject?.(payload)
+            if (subject) builder = builder.performedOn(subject.type, subject.id)
+            const causer = rule.causer?.(payload)
+            if (causer !== undefined) builder = builder.causedBy(causer)
+            const properties = rule.properties?.(payload)
+            if (properties !== undefined) builder = builder.withProperties(properties)
+            await builder.log(description)
+          } catch (error) {
+            // Swallowed on purpose — see `onRuleError`.
+            onError(error, rule)
+          }
+        })
+      }
     },
   })
 }
