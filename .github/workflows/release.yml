@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     branches: [main]
+  # A release run that fails at startup — as one did when the repository's
+  # workflow permissions were changed — cannot be retried, and the push trigger
+  # offers no second chance without an empty commit on a protected branch.
+  workflow_dispatch:
 
 concurrency: release
 
