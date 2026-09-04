@@ -122,7 +122,10 @@ describe('beyond-SaaS: files does not require tenancy', () => {
     expect((await files.get(record.id))?.name).toBe('a.png')
     expect((await files.download(record.id)).content.equals(png)).toBe(true)
     expect(await files.temporaryUrl(record.id, '5m')).toContain(record.path)
-    expect((await files.markScanned(record.id, { clean: true })).scanned).toBe(true)
+    // A timestamp, not a flag: 'scanned' with no idea when stops being an
+    // answer the moment the scanner's rules change.
+    const marcado = await files.markScanned(record.id, { clean: true })
+    expect(marcado.scannedAt).toBeGreaterThan(0)
 
     // Storage paths stay unprefixed — identical to using @basaltkit/storage directly.
     expect(await driver.exists(record.path)).toBe(true)
@@ -155,7 +158,7 @@ describe('Files lifecycle', () => {
       scanned = (p as { file: FileRecord }).file
     })
     const marked = await files.markScanned(record.id, { clean: true }, 'acme')
-    expect(marked.scanned).toBe(true)
+    expect(marked.scannedAt).toBeGreaterThan(0)
     expect((marked.metadata as { scan?: { clean: boolean } }).scan?.clean).toBe(true)
     expect(scanned?.id).toBe(record.id)
 

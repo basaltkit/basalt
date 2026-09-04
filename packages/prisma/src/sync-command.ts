@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import type { CommandDefinition } from './command.js'
 
 /** The @basalt domains that ship a Prisma reference schema. */
-const DOMAINS = ['auth', 'teams', 'subscriptions', 'permissions', 'comments', 'audit', 'activity', 'notifications', 'tenancy', 'events', 'webhooks']
+const DOMAINS = ['auth', 'teams', 'subscriptions', 'permissions', 'comments', 'audit', 'activity', 'notifications', 'tenancy', 'events', 'webhooks', 'files']
 
 export interface PrismaSyncTarget {
   /** Where this target's models are written. */

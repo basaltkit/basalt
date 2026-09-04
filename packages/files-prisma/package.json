@@ -1,0 +1,56 @@
+{
+  "name": "@basaltkit/files-prisma",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "Prisma-backed implementation of the @basaltkit/files FileStore \u2014 the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema.prisma": "./prisma/schema.prisma"
+  },
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@basaltkit/files": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/files": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/files-prisma"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/files-prisma#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "files",
+    "uploads",
+    "prisma",
+    "store",
+    "postgresql"
+  ]
+}

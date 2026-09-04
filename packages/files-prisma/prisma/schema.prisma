@@ -1,0 +1,37 @@
+// Reference schema for @basaltkit/files-prisma.
+// Copy this model into your app's schema.prisma, migrate, and pass the client
+// to `prismaFileStore()`.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model File {
+  tenantId    String
+  id          String
+  name        String
+  contentType String
+  // Bytes. Int tops out at 2 GB, which a video upload passes without trying.
+  size        BigInt
+  // Key within the storage disk — the only link back to the bytes. Losing this
+  // row orphans them permanently, which is the reason this package exists.
+  path        String
+  checksum    String
+  uploadedBy  String?
+  metadata    Json?
+  // Null means never scanned. A date rather than a flag: it derives the
+  // boolean, and it answers "is this result still worth trusting?".
+  scannedAt   DateTime?
+  createdAt   DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId, createdAt])
+  // Quota checks sum size per tenant on every upload.
+  @@index([tenantId])
+  @@map("files")
+}
