@@ -1,5 +1,13 @@
 # @basaltkit/hono
 
+## 1.5.1
+
+### Patch Changes
+
+- Updated dependencies [36ab1a1]
+- Updated dependencies [d5ca076]
+  - @basaltkit/http@2.0.0
+
 ## 1.5.0
 
 ### Minor Changes

@@ -1,5 +1,73 @@
 # @basaltkit/http
 
+## 2.0.0
+
+### Major Changes
+
+- d5ca076: **Zod 3 is no longer supported.** These packages now require zod 4.
+  
+  The peer range was `^3.24.0 || ^4.0.0`. It is now `^4.0.0`, which is a breaking
+  change for any application still on zod 3: the install will refuse the peer
+  rather than fail somewhere subtle at runtime, which is the point of declaring it.
+  
+  The move itself was overdue — the repository has been testing against zod 4 only
+  for some time, through a workspace override, so the second half of that range was
+  a claim nobody was checking. Supporting a major version you never run is worse
+  than not supporting it: it holds back the API surface (a schema written against
+  zod 4's `z.iso.datetime()` cannot be expressed in 3) while promising a
+  compatibility that would break on first contact.
+  
+  **Upgrading.** Most applications need only `pnpm add zod@^4`. Zod's own 3-to-4
+  migration guide covers the API changes; the ones that touch Basalt users most are
+  `z.string().datetime()` becoming `z.iso.datetime()`, and error customisation
+  moving from `message`/`invalid_type_error` to a single `error` parameter.
+  
+  The peer asks for `^4.0.0` and not the version this repo happens to test —
+  requiring the newest 4.x would force every consumer to move in step with us for
+  no reason. `@basaltkit/ai` takes zod as a direct dependency rather than a peer,
+  so its range narrowing is not breaking for anyone.
+  
+  **The zod 3 code goes with it.** `@basaltkit/http` carried a hand-rolled
+  `switch` over `_def.typeName` — 75 lines reimplementing what zod 4's
+  `z.toJSONSchema` does natively — reachable only when the native converter was
+  absent, which now never happens. `@basaltkit/mcp` normalised two shapes of
+  `_def` for every introspection. Both are gone, along with the coverage test
+  that existed solely to drive the dead path by mocking zod's converter away.
+  
+  `create-app` also scaffolded UI applications pinned to `zod@^3.24.0`. A project
+  generated after this change would have failed its own install against the new
+  peer; it now scaffolds `^4.0.0`.
+
+### Patch Changes
+
+- 36ab1a1: Give route `meta` a shape, and refuse to boot on a plan that is not in the
+  catalogue.
+  
+  **`meta.subscribed` is now checked at boot.** The toolkit already refused to
+  boot a route declaring `meta.subscribed` without `subscriptionsPlugin` — it
+  checked the *plugin* existed, never that the *value* meant anything.
+  `Subscriptions.subscribed()` compares strings and returns false when they do not
+  match, and the guard turns that into a 402. So a route gated on a plan absent
+  from the catalogue was indistinguishable from one nobody subscribed to: it
+  answered 402 to every paying customer, forever, with nothing in the logs.
+  
+  `subscriptionsPlugin` now validates every `meta.subscribed` against the plans it
+  was given and throws `UnknownPlanMetaError`, naming all offending routes at once
+  and listing what the catalogue does have. The check runs on `app:booted`, not in
+  the plugin's own boot: adapters publish `http:routes` during *their* boot phase,
+  so reading the list earlier would depend on plugin order and silently pass.
+  
+  **`meta` is typed.** It was `Record<string, unknown>`, so `can: 123` compiled.
+  `RouteMeta` is exported from `@basaltkit/http` and augmented by each guard
+  plugin — `can` by permissions, `subscribed`/`feature` by subscriptions, `auth`
+  by auth — the same pattern `BasaltHooks` uses.
+  
+  It stays open. The index signature keeps every existing route compiling and lets
+  applications add their own keys, which means a **misspelt** key still compiles:
+  `subcribed: 'pro'` is not a type error. That gap is closed at boot instead, by
+  the two checks above. The typing catches wrong value types and lets an editor
+  complete the names.
+
 ## 1.16.0
 
 ### Minor Changes

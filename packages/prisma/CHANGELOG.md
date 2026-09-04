@@ -1,5 +1,73 @@
 # @basaltkit/prisma
 
+## 1.6.2
+
+### Patch Changes
+
+- 36ab1a1: `prisma:sync` can be told which schema each domain belongs to.
+  
+  The command had one schema path and one flat list of domains. That list mixes
+  domains living in every tenant's schema (`auth`, `permissions`, `audit`,
+  `activity`, `teams`, `notifications`) with domains living only in the central
+  one (`tenancy`, `subscriptions`), and nothing told them apart.
+  
+  So `prisma:sync --yes` — the obvious invocation — wrote `Tenant`,
+  `Subscription` and `Payment` into the schema of every tenant. Those tables must
+  never hold a row; having them there is a place for one tenant's data to land
+  unnoticed. It was caught by reading a diff, not by the tool.
+  
+  ```ts
+  prismaSyncCommand({
+    targets: {
+      central: { schemaPath: 'prisma/schema.prisma', domains: ['tenancy', 'subscriptions'] },
+      tenant: {
+        schemaPath: 'prisma/tenants/schema.prisma',
+        domains: ['auth', 'permissions', 'audit', 'activity', 'teams', 'notifications'],
+      },
+    },
+  })
+  ```
+  
+  `--only` narrows inside each target and never moves a domain across one.
+  `--push`/`--migrate` run once per schema that actually changed, rather than
+  producing an empty migration for one that did not. `--schema` is refused when
+  targets are declared: it names a single file, and guessing which would write
+  central models into it.
+  
+  Without `targets`, behaviour is unchanged.
+- 36ab1a1: Add `tenantClient()` — the per-request client stand-in every schema-per-tenant
+  app was writing by hand.
+  
+  The `-prisma` stores (`auth-prisma`, `permissions-prisma`, `audit-prisma`,
+  `activity-prisma`, `teams-prisma`, `notifications-prisma`) take a client when
+  they are constructed, at boot, and hold it for the life of the process. Under
+  schema-per-tenant the right client is only known per request: it comes from
+  `db()`, which reads the context and throws outside one.
+  
+  The framework already tolerated the workaround — `ensureModel` catches the "not
+  yet resolvable" case, commented *"lazy/proxy client (e.g. database-per-tenant) —
+  validated at first use"* — but never supplied it, so each application wrote the
+  same proxy:
+  
+  ```ts
+  // before
+  const tenantDb = new Proxy({} as PrismaClient, {
+    get: (_t, prop) => (db() as Record<string | symbol, unknown>)[prop],
+  })
+  
+  // after
+  const tenantDb = tenantClient<PrismaClient>()
+  ```
+  
+  Writing that proxy wrong does not raise an error. It points every tenant at
+  whatever client was passed instead — usually the central one — so tenant data
+  lands in the `public` schema, silently. The version here also forwards through
+  `Reflect`, keeping the receiver intact when a store calls a model method, and
+  answers `has`/`ownKeys`, which is what the stores' model probes rely on.
+  
+  Not a replacement for `db()`: inside a request, call `db()`. This is for the
+  places that must be constructed before a request exists.
+
 ## 1.6.1
 
 ### Patch Changes
