@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/teams",
-  "version": "1.4.2",
+  "version": "2.0.0",
   "engines": {
     "node": ">=22.5.0"
   },

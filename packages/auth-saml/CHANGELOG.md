@@ -1,5 +1,15 @@
 # @basaltkit/auth-saml
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [36ab1a1]
+- Updated dependencies [36ab1a1]
+- Updated dependencies [d5ca076]
+  - @basaltkit/auth@2.0.0
+  - @basaltkit/http@2.0.0
+
 ## 1.2.0
 
 ### Minor Changes
