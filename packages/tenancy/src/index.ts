@@ -86,6 +86,7 @@ export class Tenancy {
     /** 'deferred' → `create()` returns before provisioning; see `provision()`. */
     private readonly provisionMode: 'inline' | 'deferred' = 'inline',
     private readonly onDeprovision?: (tenant: Tenant) => void | Promise<void>,
+    private readonly canonicalDomain?: (tenant: Tenant) => string | undefined,
   ) {}
 
   /** The tenant of the active context, if any. */
@@ -125,6 +126,8 @@ export class Tenancy {
     // whole flow to MemoryTenantSource, i.e. to tests.
     const persist = this.source.create ?? this.source.save
     if (!persist) throw new TenantCreateUnsupportedError()
+
+    tenant = this.withCanonicalDomain(tenant)
 
     // Nothing to provision means nothing to wait for and nothing to gate on.
     // Stamping a status here would mark the record `provisioning` forever,
@@ -225,6 +228,32 @@ export class Tenancy {
     // Emitted after the record is gone, so a listener cleaning up its own rows
     // never finds the tenant still listed.
     await this.hooks?.emit('tenancy:destroyed', { tenant: marked })
+  }
+
+  /**
+   * Adds the canonical domain to a tenant on its way in.
+   *
+   * Every durable source reads domains from one key, `tenant.domains`, and an
+   * application that forgets it gets a tenant with none — silently, because
+   * `subdomainResolver` answers from the `Host` without consulting the table.
+   * The firm serves traffic; what is missing is the record that the address is
+   * theirs, so a custom domain cannot be attached and nothing stops a second
+   * firm claiming the same one.
+   *
+   * Added to what the tenant already declares, never substituted: the sources
+   * replace the whole domain set on save, so substituting would erase a firm's
+   * own address the next time anything called `create`.
+   */
+  private withCanonicalDomain(tenant: Tenant): Tenant {
+    if (!this.canonicalDomain) return tenant
+    const canonical = this.canonicalDomain(tenant)
+    if (!canonical) return tenant
+    const existing = (tenant as { domains?: unknown }).domains
+    const domains = Array.isArray(existing)
+      ? existing.filter((d): d is string => typeof d === 'string')
+      : []
+    if (domains.includes(canonical)) return tenant
+    return { ...tenant, domains: [...domains, canonical] } as Tenant
   }
 
   /** Persists a status transition, preferring the upsert when the source has one. */
@@ -409,6 +438,22 @@ export interface TenancyPluginOptions {
    */
   onDeprovision?: (tenant: Tenant) => void | Promise<void>
   /**
+   * The address a new tenant is reachable at, applied by `tenancy.create()`
+   * before the record is persisted.
+   *
+   * ```ts
+   * canonicalDomain: (tenant) => `${tenant.id}.${process.env.APP_DOMAIN}`
+   * ```
+   *
+   * Without it an application has to remember `domains` at every creation path
+   * — public signup, an admin route, a seed script — and forgetting is silent:
+   * `subdomainResolver` answers from the `Host`, so the firm works and the
+   * table stays empty until somebody asks for a custom domain.
+   *
+   * Return `undefined` for a tenant that should have none.
+   */
+  canonicalDomain?: (tenant: Tenant) => string | undefined
+  /**
    * When `onProvision` runs.
    *
    * `'inline'` (default) — `create()` waits for it, so the caller knows the
@@ -454,6 +499,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             options.onProvision,
             options.provision ?? 'inline',
             options.onDeprovision,
+            options.canonicalDomain,
           ),
       )
       registerTenantCommands(container, options)

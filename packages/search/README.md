@@ -74,7 +74,49 @@ searchPlugin({
 })
 ```
 
-`syncRule` type-checks against the hook's payload. Return `null` from `document`/`remove` to skip an event.
+`syncRule` type-checks against the hook's payload. Return `null` from `document`/`remove` to skip an event. Add `backfill` to the rule to make the index rebuildable — see below.
+
+## Who may see a hit (`authorize`)
+
+A driver filters by the fields you declared `filterable` and nothing else. Where visibility depends on a policy — a confidential record is visible only to the people assigned to it — pass `authorize` and the package applies it to every page:
+
+```ts
+const page = await search.search('matters', q, {
+  limit: 20,
+  authorize: async (hits) => hits.filter((h) => allowed.has(h.id)),
+})
+```
+
+The hook runs **after** the driver, which is what lets the package keep asking until your page is full — the thing a caller cannot do from outside without guessing an over-fetch factor. `offset` counts authorized hits, so page two continues where page one ended, and `maxScan` bounds the work (default: 20 pages, floor 200).
+
+Do **not** copy the ACL into the index instead. It is faster, and it makes the index a second copy of an access rule: remove someone from a confidential record and the database changes while the index does not, so search keeps showing it to them until somebody reindexes. A stale index gives an old result; a stale ACL gives an unauthorized one.
+
+The result's `total` is then the authorized count, and `totalExact` says whether it is the whole truth — `false` means "at least this many", because the scan stopped at its budget.
+
+Callers without the hook are untouched: one driver call, same behaviour, same cost.
+
+## Rebuilding an index (`backfill` + `reindex`)
+
+A rule fed by events knows only what was created after the rule existed, so adding search to data you already have gives a box that returns nothing for everything old. Give the rule a `backfill` and one declaration serves both directions:
+
+```ts
+syncRule({
+  hook: 'note:created',
+  index: 'notes',
+  document: (p) => ({ id: p.note.id, tenantId: p.tenantId, title: p.note.title }),
+  backfill: async function* () {
+    for (let page = 0; ; page++) {
+      const rows = await notes.page(page, 500)
+      if (rows.length === 0) return
+      yield rows.map((note) => ({ note, tenantId: note.tenantId }))   // the same payload the hook carries
+    }
+  },
+})
+
+await search.reindex('notes')   // → number of documents written
+```
+
+`backfill` yields **hook payloads**, not rows, so the same `document` function maps both. A second mapping written by hand is the drift this prevents: let it disagree and the same search returns different things depending on whether a record predates the last rebuild. The index is cleared first — a rebuild that appends leaves documents for records that no longer exist — and an index whose rules have no `backfill` raises, rather than reporting a rebuild that did nothing.
 
 ## How relevance works (in-memory driver)
 
@@ -112,7 +154,8 @@ Registers the `SEARCH` token (`Search`).
 | `index(indexName, document)` | Indexes/updates a document (carries `id` and `tenantId`). |
 | `bulk(indexName, documents)` | Indexes several. |
 | `remove(indexName, id, tenantId?)` | Removes a document (tenant from context if omitted). |
-| `search(indexName, q, options?)` | Searches. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`. |
+| `search(indexName, q, options?)` | Searches. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`, `authorize?`, `maxScan?`. |
+| `reindex(indexName)` | Rebuilds the index from its rules' `backfill`, through their own `document`. Clears first; returns how many documents were written. Throws if no rule declares the index, or none has a `backfill`. |
 
 Without an explicit `tenantId`, `search`/`remove` use `ctx().tenant.id`; if there's no tenant, they throw `TenantRequiredError`.
 

@@ -351,6 +351,44 @@ errado para qualquer coisa lenta — passa a parte lenta para um job em fila e
 deixa a rota responder.
 :::
 
+### O endereço com que um tenant é criado
+
+Todo `TenantSource` durável lê os endereços de um tenant a partir de uma única
+chave — `tenant.domains` — e uma aplicação que nunca a passa cria tenants sem
+nenhum. E em silêncio: o `subdomainResolver` corta o sufixo do `Host` e responde
+sem nunca consultar a tabela, por isso o tenant serve tráfego e o que falta é
+apenas o **registo** de que o endereço lhe pertence.
+
+Nada parte até algo precisar desse registo. O `domainResolver()` não encontra o
+tenant, não se consegue anexar-lhe um domínio custom, e nada impede um segundo
+tenant de reclamar o mesmo endereço — a unicidade vive na tabela que ficou
+vazia. É o pior tipo de falha: não rebenta, omite. Uma instalação pode correr um
+ano com o conjunto de domínios vazio e descobri-lo quando o primeiro cliente
+pede o domínio próprio, com todas as linhas históricas por preencher.
+
+Declara-o uma vez, no plugin:
+
+```ts
+tenancyPlugin({
+  source,
+  resolvers: [subdomainResolver({ base: 'example.com' })],
+  canonicalDomain: (tenant) => `${tenant.id}.${process.env.APP_DOMAIN}`,
+})
+```
+
+O `tenancy.create()` aplica-o antes de o registo ser persistido, por isso todos
+os caminhos de criação o recebem — sign-up público, uma rota de admin, o
+`basalt tenant:create`, um script de seed — em vez de cada um ter de se lembrar.
+Devolve `undefined` para recusar, no caso de um tenant que não deva ter endereço
+próprio.
+
+::: tip É acrescentado, nunca substituído
+O domínio canónico junta-se ao que o tenant já declara. As sources substituem o
+conjunto **inteiro** de domínios ao gravar, por isso substituir apagaria o
+`app.acme.com` do próprio cliente na próxima vez que alguma coisa chamasse
+`create()`.
+:::
+
 ### Quando o provisionamento é mais longo que o pedido
 
 O `onProvision` corre inline por omissão: o `create()` espera por ele, e quem
@@ -761,6 +799,10 @@ de cada tenant; passa `migrate` para o sobrepor.
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | `false` | Rejeita um pedido que não resolveu nenhum tenant com `404 TENANCY_NOT_RESOLVED`, em vez de o correr sem tenant. `{ except }` isenta caminhos (health checks, landing pages) e continua a proteger o resto |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:migrate`, corrido dentro do contexto de cada tenant |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:seed`, corrido dentro do contexto de cada tenant |
+| `onProvision` | `(tenant) => void \| Promise<void>` | — | Traz o storage de um tenant NOVO à existência, dentro do contexto dele, a partir do `tenancy.create()` e do `basalt tenant:create`. Sem isto um tenant é roteável antes de o schema existir |
+| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica |
+| `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — o `create()` espera, por isso o tenant está utilizável quando ele retorna. `'deferred'` — o `create()` retorna já com estado `provisioning` e o resolver responde 503 até correr `tenancy.provision(id)` |
+| `canonicalDomain` | `(tenant) => string \| undefined` | — | O endereço em que um tenant novo é alcançável, acrescentado a `tenant.domains` pelo `tenancy.create()` antes de o registo ser persistido. Sem isto a tabela de domínios fica vazia e ninguém é dono do endereço |
 
 As fábricas de resolvers incorporadas:
 

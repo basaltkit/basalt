@@ -1,25 +1,186 @@
-# Novidades no Basalt 1.9
+# Novidades no Basalt 1.10
 
-> *"Basalt 1.9" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.10" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são publicados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
 > pacote que o traz.*
 
-::: warning É preciso Zod 4
-Doze pacotes estreitam o peer do `zod` de `^3.24.0 || ^4.0.0` para `^4.0.0`. É a
-única coisa que uma atualização te obriga a mudar — ver [Atualização](#atualização).
+::: warning Dois contratos mudaram
+O `@basaltkit/files` revê o contrato do seu store, e o `app.server` do
+`@basaltkit/testing` passa a ser esperado com `await`. As duas edições são
+mecânicas — ver [Atualização](#atualizacao).
 :::
 
-O Basalt 1.9 é a versão **escrita por uma aplicação e não pelo framework**.
-Construiu-se um SaaS jurídico a sério sobre o Basalt e registou-se, à medida que
-acontecia, cada sítio onde o framework obrigou quem o usava a escrever código que
-o framework devia ter escrito. Quinze dessas lacunas fecham aqui.
+O Basalt 1.10 é a versão das **metades que faltavam**. A aplicação que escreveu o
+1.9 continuou, e o que encontrou desta vez não foram duas peças que não
+encaixavam uma na outra — foram capacidades sem o outro lado. Um tenant podia ser
+criado e nunca destruído. Um índice podia ser mantido atualizado e nunca
+reconstruído. Uma permissão dizia o que quem chama pode fazer e nunca quem essa
+pessoa é.
 
-Não são uma lista de desejos. Cada uma é um sítio onde duas peças oficiais não
-encaixavam, ou onde a forma documentada de fazer uma coisa não sobreviveu ao
-contacto com um segundo cliente Prisma, um utilizador de portal, ou um tenant.
+Uma metade que falta não se anuncia. Não há stack trace para uma pergunta a que o
+framework não tem resposta: cada aplicação inventa a sua, as invenções divergem,
+e a que está errada é exatamente igual à que está certa — até alguém ver um
+registo que não era seu.
 
 ## Destaques
+
+### Capacidades que só funcionavam num sentido
+- **Um tenant pode ser removido.** O `TenantSource` tinha `find`, `findByDomain`,
+  `list`, `create` e `save`; o `Tenancy` não tinha `destroy` — não havia saída,
+  nem sequer opcional. Nos testes isso significava `DROP SCHEMA` com um
+  identificador interpolado em string, e a razão de ser preciso é pior do que o
+  padrão: sem a limpeza, um schema que fica torna o provisionamento seguinte um
+  no-op e todas as asserções abaixo dele passam a verde contra os dados da
+  corrida anterior. A ordem das operações é o desenho — marcar `deleting`
+  primeiro, para o resolver deixar de encaminhar antes de se desmontar seja o que
+  for; correr o `onDeprovision` dentro do contexto do tenant; apagar o registo
+  por último, porque o registo é a única coisa que dá nome àquele storage.
+  *(`@basaltkit/tenancy`)*
+- **O `search.reindex()` reconstrói um índice a partir das regras que o
+  alimentam.** Uma regra alimentada por eventos só sabe do que foi criado depois
+  de a regra existir, por isso uma aplicação que acrescentava pesquisa a dados
+  que já tinha ficava com uma caixa que não devolvia nada para tudo o que era
+  antigo — e um resultado vazio é indistinguível de "não há". O `backfill` de uma
+  regra produz **payloads de hook**, não linhas, por isso uma só função
+  `document` serve os dois sentidos e um segundo mapeamento escrito à mão não
+  pode divergir dela. *(`@basaltkit/search`)*
+- **O domínio de ficheiros tem um store durável.** Onze domínios publicam um
+  backend `-prisma` e um `-sqlite` sem uma única exceção; o `files` não publicava
+  nenhum — o único domínio com contrato de store e sem implementação durável
+  dele. A chave no disco é `files/<uuid>` e o uuid vivia no processo, por isso um
+  restart deixava todos os uploads no bucket, sem referência e impossíveis de
+  ligar ao documento que eram, enquanto a aplicação comunicava uma lista vazia e
+  nada dava erro. *(`@basaltkit/files-prisma`)*
+- **Os documentos têm revisões.** O `Files.upload` cunha um id novo e um caminho
+  novo em cada chamada, por isso carregar o mesmo contrato duas vezes produzia
+  dois registos sem relação e sem nada a ligá-los, e todas as aplicações que
+  precisavam de "que rascunho estou a ler?" escreviam a mesma contabilidade à
+  mão. Não é um campo `version` no `FileRecord`: um registo de ficheiro descreve
+  bytes, uma revisão descreve um ato editorial, e cada revisão aponta para um
+  ficheiro inteiro cujos bytes nunca são sobrescritos. É o store que atribui o
+  número e chaveia em `[tenantId, groupId, version]`, por isso a base de dados
+  recusa o duplicado que uma corrida de ler-o-último-e-somar-um produziria.
+  *(`@basaltkit/files-versions`)*
+
+### Declarações em vez de contabilidade
+- **`activityRule`** — o `search` tem `syncRule`, o `realtime` tem `bridgeRule`,
+  e o `activity`, provavelmente o mais comum dos três, tinha apenas o builder
+  fluente, que serve para escrever uma linha à mão dentro de um serviço. O custo
+  da assimetria não são as treze chamadas a `hooks.on()` que uma aplicação
+  escreve em vez disso; é a resposta natural a "regista isto" passar a ser
+  "chama o activity a partir do `MatterService`", acoplando o domínio ao pacote
+  que os outros dois te ensinam a manter à distância. Uma regra nunca relança o
+  erro, e é aí que difere de propósito do `syncRule`: uma linha de histórico que
+  não consegue ser escrita não pode fazer falhar o encerramento do processo que a
+  produziu. *(`@basaltkit/activity`)*
+- **`canonicalDomain`** dá um endereço a um tenant novo. Toda a source durável lê
+  os domínios de uma única chave, e uma aplicação que nunca a passa cria tenants
+  sem nenhum — em silêncio, porque o `subdomainResolver` responde a partir do
+  `Host` sem consultar a tabela. O tenant serve tráfego; o que falta é o registo
+  de que o endereço lhe pertence, e por isso não se lhe consegue anexar um
+  domínio custom e nada impede um segundo tenant de reclamar o mesmo. Aplicado
+  pelo `tenancy.create()`, para todos os caminhos de criação o receberem em vez
+  de cada um ter de se lembrar. *(`@basaltkit/tenancy`)*
+- **O `authorize` decide quem pode ver um resultado.** Um driver filtra pelos
+  campos declarados `filterable` e por mais nada, o que deixava a pesquisa como a
+  única superfície sem resposta para visibilidade linha a linha. O hook corre
+  *depois* do driver, e é isso que permite ao pacote continuar a pedir até a
+  página estar cheia — o que quem chama não consegue fazer de fora sem adivinhar
+  um fator de over-fetch. Copiar a ACL para o índice é a alternativa rápida e a
+  errada: um índice desatualizado dá um resultado velho, uma ACL desatualizada dá
+  um resultado não autorizado. *(`@basaltkit/search`)*
+
+### Respostas que estavam erradas em silêncio
+- **Uma permissão é uma capacidade, não uma superfície.** O `matter:read` não
+  distingue "ler o meu próprio processo no portal do cliente" de "ler o processo
+  onde está a estratégia de litigância", por isso um papel a quem se concedeu o
+  primeiro passava também a guarda do segundo — e um cliente de portal
+  autenticado recebia `200` numa listagem interna com a estratégia do próprio
+  processo no corpo. O `meta.audience` descreve para quem é uma rota, e a
+  predefinição é o desenho todo: uma rota que não declara audiência é
+  inalcançável por um papel confinado. Marcar a pequena superfície a que um papel
+  restrito pode chegar é uma lista que alguém mantém; marcar todas as rotas a que
+  não pode é uma lista que alguém esquece. *(`@basaltkit/permissions`)*
+- **As versões de ficheiros leem o tenant ambiente, como o `Files` sempre fez.**
+  Resolviam a chave do store como `tenantId ?? SINGLE_TENANT_SCOPE`, saltando o
+  contexto do pedido, por isso uma app multi-tenant que não passasse um id
+  explícito — o caso normal — escrevia as versões sob `acme` e lia-as de volta
+  sob `default`: o `history()` devolvia `[]`, o `latest()` devolvia `null` e o
+  `download()` rebentava para um ficheiro que estava no disco. A regra passa a
+  viver num sítio só, exportada pelo `files` e usada pelos dois.
+  *(`@basaltkit/files-versions`)*
+- **O feed de atividade é escopado como `required` sob tenancy.** A predefinição
+  antiga queria dizer "escopa ao tenant do contexto, corre sem escopo quando não
+  há nenhum", por isso uma consulta ao feed fora de um tenant devolvia os
+  registos de todos — e uma linha de feed nomeia um cliente em prosa. A mesma
+  regra que a `cache` já aplicava. *(`@basaltkit/activity`)*
+- **Todos os adaptadores HTTP do `testing` são peers opcionais.** O `express` e o
+  `hono` já eram; o `fastify` era uma dependência normal por ser o adaptador
+  predefinido, e essa assimetria custou meia hora a alguém. Quando o pacote moveu
+  o seu intervalo de `fastify` para `^2` com uma app ainda em `1.x`, o pnpm
+  instalou os dois, e o `createTestApp` resolveu um token `FASTIFY` de uma cópia
+  diferente daquela que o `fastifyPlugin` da app registou: duas chamadas a
+  `createToken('fastify')`, duas identidades, um contentor que não as consegue
+  emparelhar. O erro dizia "No provider registered for token fastify" e não
+  nomeava nem o pacote nem a diferença de versões. Um peer não pode duplicar.
+  *(`@basaltkit/testing`)*
+
+## Atualização
+
+Os pacotes são independentes — sobe só o que usas. Dois contratos mudaram, e as
+duas edições são mecânicas.
+
+### O `app.server` passa a ser esperado
+
+```ts
+const server = await app.server()   // era: app.server
+```
+
+O `@basaltkit/testing` importa o adaptador a pedido, como já fazia para o
+`express` e o `hono`, por isso uma app arrancada sem nenhum plugin HTTP continua
+a funcionar e o pacote nunca vai buscar algo que a aplicação pode não ter
+instalado. Um token resolvido através de um import dinâmico não pode ser síncrono.
+
+Se o `pnpm install` começar a avisar de um peer `fastify` por satisfazer, o aviso
+é o objetivo: é a diferença de versões que antes aparecia em runtime como um
+token que não existe.
+
+### O contrato do store de ficheiros tem três revisões
+
+O `@basaltkit/files` publica um major. Um `FileStore` próprio precisa de três
+edições:
+
+| Era | É | Porquê |
+| --- | --- | --- |
+| `scanned?: boolean` | `scannedAt?: number` | A data deriva o booleano e o booleano não deriva a data. "Analisado", sem saber quando, deixa de ser resposta no momento em que as regras do scanner mudam — a única coisa que as regras de antivírus fazem de forma fiável. O hook `file:scanned` mantém o nome: o evento não é o campo |
+| `metadata?: Record<string, unknown>` | `metadata?: FileMetadata` | `Record<string, JsonValue>` — de outra forma cada store durável faz um cast para passar pelo tipo JSON do seu driver, um cast que cada implementação repete e tem de acertar |
+| `FilePatch = Partial<Pick<…>>` | escrito por extenso | Para poder dizer que uma chave presente com `undefined` **limpa** a coluna enquanto uma chave ausente a deixa em paz — o que o `Partial` de um campo opcional não consegue exprimir sob `exactOptionalPropertyTypes`, e que é como quem chama descarta um resultado de análise velho |
+
+O `prisma:sync` aprende o domínio dos ficheiros, por isso os seus modelos juntam-se
+como os de todos os outros.
+
+### Dois pacotes estreiam em 0.1.0
+
+O `files-prisma` e o `files-versions` publicam `0.1.0`, e não `1.0.0`. Nenhum foi
+ainda corrido contra uma base de dados a sério por ninguém, e juntá-los ao
+compromisso de semver do ecossistema logo no primeiro dia seria prometer uma
+coisa que ninguém verificou. O número de versão diz isso mais barato do que um
+changelog que ninguém lê, e deixa o `1.0.0` para quando for merecido.
+
+---
+
+## Anteriormente — Basalt 1.9
+
+> *A versão **escrita por uma aplicação e não pelo framework**: construiu-se um
+> SaaS jurídico a sério sobre o Basalt e fecharam-se quinze sítios onde o
+> framework obrigou quem o usava a escrever código que o framework devia ter
+> escrito.*
+
+::: warning A partir do 1.9 é preciso Zod 4
+Doze pacotes estreitam o peer do `zod` de `^3.24.0 || ^4.0.0` para `^4.0.0` —
+ver [Atualizar para 1.9](#atualizar-para-1-9).
+:::
 
 ### Duas peças oficiais que não encaixavam
 - **A pesquisa full-text não corria de todo através do cliente Prisma.** A língua
@@ -82,12 +243,12 @@ contacto com um segundo cliente Prisma, um utilizador de portal, ou um tenant.
   `ReadableStream` — e aceita `AbortSignal` e cabeçalhos por chamada.
   *(`@basaltkit/sdk`)*
 
-## Atualização
+### Atualizar para 1.9
 
 Os pacotes são independentes — sobe só o que usas. Uma mudança é exigida a toda a
 gente, e um comportamento apertou.
 
-### É preciso Zod 4
+#### É preciso Zod 4
 
 Doze pacotes — `admin`, `audit-viewer`, `auth`, `comments`, `env`, `fastify`,
 `files`, `http`, `mcp`, `sdk`, `subscriptions`, `teams` — estreitam o peer do
@@ -114,7 +275,7 @@ O peer pede `^4.0.0` e não a 4.x mais recente — exigir a versão que este
 repositório testa obrigaria todos os consumidores a mexer ao nosso ritmo sem
 motivo.
 
-### Um nome de plano desconhecido passa a falhar o arranque
+#### Um nome de plano desconhecido passa a falhar o arranque
 
 `meta.subscribed: 'pró'` contra um catálogo com `pro` arrancava bem e recusava
 toda a gente em runtime. Agora é erro no arranque, com todas as rotas ofensoras

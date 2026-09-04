@@ -52,6 +52,14 @@ export interface SearchResult {
   hits: SearchHit[]
   /** Total matches (before limit/offset). */
   total: number
+  /**
+   * Whether `total` is the whole truth.
+   *
+   * Only set by an authorized search (`options.authorize`), where the count is
+   * of hits the caller may see and the scan may have stopped at its budget.
+   * `false` means "at least this many" — render it as such, or not at all.
+   */
+  totalExact?: boolean
 }
 
 /**

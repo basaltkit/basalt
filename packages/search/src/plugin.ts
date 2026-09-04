@@ -21,6 +21,20 @@ export interface SyncRule<K extends keyof BasaltHooks & string = keyof BasaltHoo
   document?: (payload: BasaltHooks[K]) => SearchInput | null
   /** Or the identifiers to remove. Return null to skip. */
   remove?: (payload: BasaltHooks[K]) => { tenantId?: string; id: string } | null
+  /**
+   * Every record this rule would ever index, in pages, for `search.reindex()`.
+   *
+   * A rule fed by events keeps an index current from the moment it exists and
+   * does nothing for the rows already in the database — so an application that
+   * adds search to existing data gets a box that returns nothing for everything
+   * old, and an empty result is indistinguishable from "there is none".
+   *
+   * It yields **hook payloads**, not rows, so the same `document` function
+   * serves both directions. A second mapping written by hand is the drift this
+   * prevents: let it disagree with `document` and the same search returns
+   * different things depending on whether a record predates the last rebuild.
+   */
+  backfill?: () => AsyncIterable<BasaltHooks[K][]>
 }
 
 /** Type-checks a sync rule against its hook, then erases the generic. */
@@ -51,7 +65,16 @@ export function searchPlugin(options: SearchPluginOptions = {}) {
       // 'tenancy:active' is tenancyPlugin's marker: how a generic package
       // learns the app is multi-tenant without importing @basaltkit/tenancy.
       const metadata = ensureMetadata(container)
-      container.singleton(SEARCH, () => new Search({ driver }, () => metadata.get('tenancy:active').length > 0))
+      // The rules go to the service so `reindex()` can rebuild an index from
+      // the same declaration that keeps it current.
+      container.singleton(
+        SEARCH,
+        () =>
+          new Search(
+            { driver, rules: (options.sync ?? []) as never },
+            () => metadata.get('tenancy:active').length > 0,
+          ),
+      )
     },
     async boot({ container, hooks }) {
       const search = container.get(SEARCH)
