@@ -188,6 +188,9 @@ importers:
       '@basaltkit/files':
         specifier: workspace:*
         version: link:../../packages/files
+      '@basaltkit/files-versions':
+        specifier: workspace:^
+        version: link:../../packages/files-versions
       '@basaltkit/flags':
         specifier: workspace:*
         version: link:../../packages/flags

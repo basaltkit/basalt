@@ -1,4 +1,4 @@
-import { createToken, definePlugin } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import { FILES } from '@basaltkit/files'
 import { FileVersions } from './versions.js'
 import type { FileVersionStore } from './store.js'
@@ -28,12 +28,19 @@ export function fileVersionsPlugin(options: FileVersionsPluginOptions = {}) {
     name: 'basalt:files-versions',
     dependsOn: ['basalt:files'],
     register({ container, hooks }) {
+      // The same marker `filesPlugin` reads, so both services agree on what a
+      // scope is. Reading it here rather than importing @basaltkit/tenancy is
+      // what keeps this package usable without tenancy at all.
+      const metadata = ensureMetadata(container)
       container.singleton(FILE_VERSIONS, () => {
-        return new FileVersions({
-          files: container.get(FILES),
-          hooks,
-          ...(options.store ? { store: options.store } : {}),
-        })
+        return new FileVersions(
+          {
+            files: container.get(FILES),
+            hooks,
+            ...(options.store ? { store: options.store } : {}),
+          },
+          () => metadata.get('tenancy:active').length > 0,
+        )
       })
     },
   })

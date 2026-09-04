@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { HookBus } from '@basaltkit/core'
-import { SINGLE_TENANT_SCOPE, type FileRecord, type Files, type UploadInput } from '@basaltkit/files'
+import { fileScope, type FileRecord, type Files, type UploadInput } from '@basaltkit/files'
 import { MemoryFileVersionStore, type FileVersion, type FileVersionStore } from './store.js'
 
 export interface FileVersionsOptions {
@@ -48,7 +48,16 @@ export class FileVersions {
   private readonly hooks: HookBus | undefined
   private readonly newGroupId: () => string
 
-  constructor(options: FileVersionsOptions) {
+  constructor(
+    options: FileVersionsOptions,
+    /**
+     * Whether the host app registered `@basaltkit/tenancy`, exactly as `Files`
+     * takes it. `fileVersionsPlugin` wires it from the same `'tenancy:active'`
+     * marker, so the two services resolve a scope identically — they must, or
+     * one writes under the context tenant and the other reads under `'default'`.
+     */
+    private readonly tenancyActive: () => boolean = () => false,
+  ) {
     this.files = options.files
     this.store = options.store ?? new MemoryFileVersionStore()
     this.hooks = options.hooks
@@ -127,11 +136,19 @@ export class FileVersions {
   }
 
   /**
-   * The version store's key for a call: the tenant, or the same single-tenant
-   * scope `FileStore` uses, so both stores are keyed identically.
+   * The version store's key for a call, resolved by the same rule `Files` uses
+   * — the explicit argument, then the context tenant, then the single-tenant
+   * scope — because the rows are keyed by that value on the way in.
+   *
+   * An earlier version stopped at `tenantId ?? SINGLE_TENANT_SCOPE`, skipping
+   * the context. `Files.upload` does read the context, so a multi-tenant app
+   * that passed nothing wrote versions under `acme` and read them back under
+   * `'default'`: `history()` returned `[]` and `latest()` returned `null` for a
+   * document that existed. A silent wrong answer, which is worse than the error
+   * it replaced.
    */
   private scope(tenantId?: string): string {
-    return tenantId ?? SINGLE_TENANT_SCOPE
+    return fileScope(tenantId, this.tenancyActive())
   }
 
   /**

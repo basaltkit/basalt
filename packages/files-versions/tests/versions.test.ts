@@ -179,3 +179,43 @@ describe('F-28 · with tenancy active', () => {
     )
   })
 })
+
+describe('F-28 · the ambient tenant, with nothing passed explicitly', () => {
+  it('reads back what it wrote', async () => {
+    // `Files.upload` resolves the tenant from `ctx()`, so the version row is
+    // written under `acme`. If this service does not resolve it the same way,
+    // the read looks somewhere else and answers "no such document" about a
+    // document that exists — a silent wrong answer, which is the one failure
+    // mode this package set out to prevent.
+    const { runWithContext } = await import('@basaltkit/core')
+    const store = new MemoryFileVersionStore()
+    const files = new Files({ disk: disk() }, () => true)
+    const versions = new FileVersions({ files, store })
+
+    const { groupId } = await runWithContext({ tenant: { id: 'acme' } }, () =>
+      versions.create(buf('v1'), { name: 'c.pdf', contentType: 'application/pdf' }),
+    )
+
+    await runWithContext({ tenant: { id: 'acme' } }, async () => {
+      expect(await versions.history(groupId)).toHaveLength(1)
+      expect((await versions.latest(groupId))?.version.version).toBe(1)
+      expect((await versions.download(groupId)).content.toString()).toBe('v1')
+    })
+  })
+
+  it('does not let one tenant read another by omitting the argument', async () => {
+    const { runWithContext } = await import('@basaltkit/core')
+    const store = new MemoryFileVersionStore()
+    const files = new Files({ disk: disk() }, () => true)
+    const versions = new FileVersions({ files, store })
+
+    const { groupId } = await runWithContext({ tenant: { id: 'acme' } }, () =>
+      versions.create(buf('v1'), { name: 'c.pdf', contentType: 'application/pdf' }),
+    )
+
+    await runWithContext({ tenant: { id: 'globex' } }, async () => {
+      expect(await versions.history(groupId)).toEqual([])
+      expect(await versions.latest(groupId)).toBeNull()
+    })
+  })
+})
