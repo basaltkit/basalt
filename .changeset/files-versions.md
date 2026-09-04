@@ -1,9 +1,12 @@
 ---
-'@basaltkit/files-versions': major
+'@basaltkit/files-versions': minor
 '@basaltkit/files-prisma': minor
 ---
 
 `@basaltkit/files-versions`: documents have revisions.
+
+Debuts at **0.1.0**: new, and not yet under the 1.0 stability promise the rest
+of the ecosystem carries.
 
 `Files.upload` mints a new id and a new path on every call, so uploading the
 same contract twice produced two unrelated records with nothing linking them —
