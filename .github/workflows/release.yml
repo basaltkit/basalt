@@ -45,7 +45,6 @@ jobs:
           publish-script: pnpm release
           commit-message: "chore: version packages"
           pr-title: "chore: version packages"
-        env:
           # A pull request opened with GITHUB_TOKEN starts no workflow runs —
           # GitHub's own guard against a workflow triggering itself forever. The
           # consequence here is that the "Version Packages" PR arrives with no
@@ -58,7 +57,12 @@ jobs:
           # makes the checks run. Falls back to GITHUB_TOKEN so a fork, or this
           # repository before the secret exists, still releases — with the
           # manual step above.
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          #
+          # It is an input and not the GITHUB_TOKEN environment variable: this
+          # version of the action refuses to start when both are set and differ,
+          # rather than guessing which one was meant.
+          github-token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        env:
           # setup-node's generated .npmrc reads the token from NODE_AUTH_TOKEN;
           # passing it as NPM_TOKEN left ${NODE_AUTH_TOKEN} empty → anonymous
           # publish → E404. The secret name stays NPM_TOKEN.
