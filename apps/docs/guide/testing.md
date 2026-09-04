@@ -155,10 +155,14 @@ only the dispatch differs, a parameterized `describe.each(['fastify',
 against the neutral `@basaltkit/http` contract — see
 [HTTP Adapters](/guide/adapters).
 
-::: warning `app.server` is Fastify-only
-The `server` getter resolves the `FASTIFY` token. On `'express'` / `'hono'` it
+::: warning `app.server()` is Fastify-only, and asynchronous
+`await app.server()` resolves the `FASTIFY` token. On `'express'` / `'hono'` it
 throws `DI_UNKNOWN_TOKEN` — resolve `EXPRESS` / `HONO` from `app.container`
 instead.
+
+It became a method in 2.0: `@basaltkit/fastify` is now an optional peer, loaded
+on demand, so this package can never put a second copy of the adapter in your
+tree.
 :::
 
 ## The mail fake
@@ -337,7 +341,7 @@ in-file concurrency.
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
 | `Error: createTestApp({ adapter: 'express' }) requires @basaltkit/express …` | — | boot | `adapter: 'express'`/`'hono'` without the optional peer (and its framework) installed |
-| `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `app.server` on a non-Fastify adapter, or a request with no adapter plugin in `plugins` |
+| `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `await app.server()` on a non-Fastify adapter, or a request with no adapter plugin in `plugins` |
 | `PluginDependencyError` | `PLUGIN_DEPENDENCY` | boot | `Duplicate plugin` — `fakeMailer().plugin` next to `mailerPlugin`, or `fakeQueue().plugin` next to `queuePlugin` |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route under test declares `meta.auth` / `meta.can` / `meta.teamRole` but the test app didn't register the enforcing plugin |
 | `TenantRequiredError` | `TENANT_REQUIRED` | 400 | Tenant-scoped code ran with no tenant — call `.asTenant('acme')` |

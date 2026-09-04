@@ -7,7 +7,7 @@ import {
   type Container,
   type CreateAppOptions,
 } from '@basaltkit/core'
-import { FASTIFY, type RequestEnricher } from '@basaltkit/fastify'
+import type { RequestEnricher } from '@basaltkit/fastify'
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify'
 
 export interface TestActor {
@@ -94,7 +94,8 @@ interface ConnectedDriver {
 // ---- drivers -------------------------------------------------------------
 
 /** Fastify: light-my-request inject — in-process, no socket, sync-json reply. */
-function connectFastify(container: Container): ConnectedDriver {
+async function connectFastify(container: Container): Promise<ConnectedDriver> {
+  const { FASTIFY } = await loadAdapter('fastify')
   const server = container.get(FASTIFY)
   return {
     dispatch: ({ method, url, headers, payload }) =>
@@ -177,10 +178,12 @@ async function connectHono(container: Container): Promise<ConnectedDriver> {
  * missing install fails with an actionable message instead of a bare
  * ERR_MODULE_NOT_FOUND.
  */
+async function loadAdapter(name: 'fastify'): Promise<typeof import('@basaltkit/fastify')>
 async function loadAdapter(name: 'express'): Promise<typeof import('@basaltkit/express')>
 async function loadAdapter(name: 'hono'): Promise<typeof import('@basaltkit/hono')>
-async function loadAdapter(name: 'express' | 'hono'): Promise<unknown> {
+async function loadAdapter(name: TestAdapterName): Promise<unknown> {
   try {
+    if (name === 'fastify') return await import('@basaltkit/fastify')
     return name === 'express' ? await import('@basaltkit/express') : await import('@basaltkit/hono')
   } catch (error) {
     throw new Error(
@@ -226,8 +229,14 @@ export class TestApp<Res extends TestResponse = LightMyRequestResponse> {
   /**
    * The raw Fastify instance — only meaningful on the default adapter; on
    * Express/Hono resolve the `EXPRESS`/`HONO` token from `container` instead.
+   *
+   * Asynchronous because `@basaltkit/fastify` is an optional peer and is
+   * imported on demand. That is what stops a version skew from putting a
+   * second copy in the tree, with a second `FASTIFY` token that the
+   * application's `fastifyPlugin` never registered.
    */
-  get server(): FastifyInstance {
+  async server(): Promise<FastifyInstance> {
+    const { FASTIFY } = await loadAdapter('fastify')
     return this.container.get(FASTIFY)
   }
 
@@ -256,8 +265,10 @@ export class TestApp<Res extends TestResponse = LightMyRequestResponse> {
       headers['x-test-tenant'] = JSON.stringify(typeof tenant === 'string' ? { id: tenant } : tenant)
     }
     // Instantiating TestApp directly (without createTestApp) keeps the old
-    // fastify-inject behavior — connect lazily on first use.
-    this.driver ??= connectFastify(this.container)
+    // fastify-inject behavior — connect lazily on first use. Awaited now that
+    // the adapter is loaded dynamically: it is an optional peer, so this
+    // package must not reach for it until a test actually makes a request.
+    this.driver ??= await connectFastify(this.container)
     return this.driver.dispatch({
       method: String(method),
       url,
