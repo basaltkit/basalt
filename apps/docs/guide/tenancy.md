@@ -344,6 +344,42 @@ migration. That is fine for a schema and a handful of migrations, and wrong for
 anything slow — hand the slow part to a queued job and let the route return.
 :::
 
+### The address a tenant is created with
+
+Every durable `TenantSource` reads a tenant's addresses from one key —
+`tenant.domains` — and an application that never passes it creates tenants with
+none. Silently, too: `subdomainResolver` slices the suffix off the `Host` and
+answers without ever consulting the table, so the tenant serves traffic and what
+is missing is only the **record** that the address belongs to it.
+
+Nothing breaks until something needs that record. `domainResolver()` cannot find
+the tenant, a custom domain cannot be attached to it, and nothing stops a second
+tenant claiming the same address — the uniqueness lives in the table that stayed
+empty. It is the worst kind of gap: it does not fail, it omits. An installation
+can run for a year with an empty domain set and discover it when the first
+customer asks for their own domain, with every historical row to backfill.
+
+Declare it once, on the plugin:
+
+```ts
+tenancyPlugin({
+  source,
+  resolvers: [subdomainResolver({ base: 'example.com' })],
+  canonicalDomain: (tenant) => `${tenant.id}.${process.env.APP_DOMAIN}`,
+})
+```
+
+`tenancy.create()` applies it before the record is persisted, so every creation
+path gets it — public signup, an admin route, `basalt tenant:create`, a seed
+script — instead of each one remembering. Return `undefined` to decline, for a
+tenant that should have no address of its own.
+
+::: tip It is added, never substituted
+The canonical domain joins whatever the tenant already declares. Sources replace
+the **whole** domain set on save, so substituting would erase a customer's own
+`app.acme.com` the next time anything called `create()`.
+:::
+
 ### When provisioning outlives the request
 
 `onProvision` runs inline by default: `create()` waits for it, and the caller
@@ -748,6 +784,7 @@ scoped connection URL; pass `migrate` to override it.
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |
 | `onProvision` | `(tenant) => void \| Promise<void>` | — | Brings a NEW tenant's storage into existence, inside its context, from `tenancy.create()` and `basalt tenant:create`. Without it a tenant is routable before its schema exists |
 | `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Tears that storage down, inside the tenant's context, from `tenancy.destroy()`. Without it the record goes and the schema stays |
+| `canonicalDomain` | `(tenant) => string \| undefined` | — | The address a new tenant is reachable at, added to `tenant.domains` by `tenancy.create()` before the record is persisted. Without it the domain table stays empty and nothing owns the address |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — `create()` waits, so the tenant is usable when it returns. `'deferred'` — `create()` returns immediately with status `provisioning` and the resolver answers 503 until `tenancy.provision(id)` runs |
 
 The built-in resolver factories:

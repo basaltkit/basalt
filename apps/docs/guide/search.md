@@ -147,6 +147,83 @@ the `syncRule` mappers type-safe. Skip it and the payload is `unknown` (you'd
 cast, or annotate each mapper inline).
 :::
 
+## Who may see a hit
+
+A driver filters by the fields you declared `filterable`, and nothing else. In a
+product where visibility depends on a policy — a confidential matter is visible
+only to the people assigned to it — that leaves search as the one surface with
+no answer.
+
+```ts
+const page = await search.search('matters', q, {
+  limit: 20,
+  authorize: async (hits) => {
+    const rows = await matters.findMany({ id: { in: hits.map((h) => h.id) } })
+    const allowed = new Set(
+      (await Promise.all(rows.map(async (m) => ((await gate.can(user, 'matter:read', m)) ? m.id : null))))
+        .filter(Boolean),
+    )
+    return hits.filter((h) => allowed.has(h.id))
+  },
+})
+```
+
+::: danger Do not put the ACL in the index
+Copying `assigneeIds` and `confidential` into the document and filtering there
+is faster, and it makes the index a **second copy of an access rule**. Remove
+someone from a confidential matter: the database changes, the index does not,
+and search keeps showing it to them until somebody reindexes.
+
+A stale index gives an old result. A stale ACL gives an unauthorized one.
+:::
+
+The hook runs after the driver, which is what lets the package keep asking until
+your page is full — the thing you cannot do from outside without guessing an
+over-fetch factor. `offset` counts authorized hits, so page two continues where
+page one ended.
+
+| Option | What it does |
+| --- | --- |
+| `authorize` | Returns the hits the caller may see, in the order given. Must not reorder — relevance is the driver's to decide |
+| `maxScan` | How many driver rows a search may scan before giving up. Default: 20 pages, floor 200 |
+| `totalExact` *(on the result)* | Whether `total` is the whole truth. A driver's total counts rows the caller may not see, and rendering it would put "42 results" above three rows |
+
+Callers without the hook are untouched: one driver call, same behaviour.
+
+## Rebuilding an index
+
+A rule fed by events knows only what was created after the rule existed. Add
+search to data you already have and you get a box that returns nothing for
+everything old — and an empty result is indistinguishable from "there is none".
+
+Give the rule a `backfill` and the same declaration works in both directions:
+
+```ts
+syncRule({
+  hook: 'matter:opened',
+  index: 'matters',
+  document: ({ matter }) => ({ id: matter.id, tenantId: matter.tenantId, number: matter.number }),
+  backfill: async function* () {
+    for (let page = 0; ; page++) {
+      const rows = await matters.page(page, 500)
+      if (rows.length === 0) return
+      yield rows.map((matter) => ({ matter }))   // the same payload the hook carries
+    }
+  },
+})
+
+await search.reindex('matters')
+```
+
+`backfill` yields **hook payloads**, not rows, so one `document` function serves
+both paths. A second mapping written by hand is the drift this prevents: let it
+disagree and the same search returns different things depending on whether a
+record predates the last rebuild.
+
+The index is cleared first — a rebuild that appends leaves documents for records
+that no longer exist — and an index whose rules have no `backfill` raises,
+rather than reporting a rebuild that did nothing.
+
 ## Production with Meilisearch
 
 ```ts

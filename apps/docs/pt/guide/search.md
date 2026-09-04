@@ -149,6 +149,86 @@ os mappers do `syncRule` type-safe. Sem ela, o payload é `unknown` (terias de f
 cast, ou anotar cada mapper à mão).
 :::
 
+## Quem pode ver um resultado
+
+Um driver filtra pelos campos que declaraste `filterable`, e mais nada. Num
+produto onde a visibilidade depende de uma policy — um caso confidencial só é
+visível a quem está atribuído —, isso deixa a pesquisa como a única superfície
+sem resposta.
+
+```ts
+const pagina = await search.search('matters', q, {
+  limit: 20,
+  authorize: async (hits) => {
+    const linhas = await matters.findMany({ id: { in: hits.map((h) => h.id) } })
+    const permitidos = new Set(
+      (await Promise.all(linhas.map(async (m) => ((await gate.can(user, 'matter:read', m)) ? m.id : null))))
+        .filter(Boolean),
+    )
+    return hits.filter((h) => permitidos.has(h.id))
+  },
+})
+```
+
+::: danger Não ponhas a ACL no índice
+Copiar `assigneeIds` e `confidential` para dentro do documento e filtrar lá é
+mais rápido, e faz do índice uma **segunda cópia de uma regra de acesso**. Tira
+alguém de um caso confidencial: a base muda, o índice não, e a pesquisa continua
+a mostrar-lhe o caso até alguém reindexar.
+
+Um índice desatualizado dá um resultado velho. Uma ACL desatualizada dá um
+acesso indevido.
+:::
+
+O gancho corre depois do driver, e é isso que permite ao pacote continuar a
+pedir até a tua página estar cheia — o que não consegues fazer de fora sem
+adivinhar um fator de sobra. O `offset` conta resultados autorizados, portanto a
+página dois continua onde a um acabou.
+
+| Opção | O que faz |
+| --- | --- |
+| `authorize` | Devolve os resultados que quem chama pode ver, pela ordem dada. Não pode reordenar — a relevância é decisão do driver |
+| `maxScan` | Quantas linhas do driver uma pesquisa pode percorrer antes de desistir. Por omissão: 20 páginas, mínimo 200 |
+| `totalExact` *(no resultado)* | Se o `total` é toda a verdade. O total de um driver conta linhas que quem chama pode não ver, e mostrá-lo poria «42 resultados» por cima de três linhas |
+
+Quem não usa o gancho fica na mesma: uma chamada ao driver, o mesmo comportamento.
+
+## Reconstruir um índice
+
+Uma regra alimentada por eventos só conhece o que foi criado depois de a regra
+existir. Acrescenta pesquisa a dados que já tens e ficas com uma caixa que
+devolve vazio para tudo o que é antigo — e um resultado vazio é indistinguível
+de «não existe».
+
+Dá um `backfill` à regra e a mesma declaração serve nos dois sentidos:
+
+```ts
+syncRule({
+  hook: 'matter:opened',
+  index: 'matters',
+  document: ({ matter }) => ({ id: matter.id, tenantId: matter.tenantId, number: matter.number }),
+  backfill: async function* () {
+    for (let pagina = 0; ; pagina++) {
+      const linhas = await matters.page(pagina, 500)
+      if (linhas.length === 0) return
+      yield linhas.map((matter) => ({ matter }))   // o mesmo payload que o hook leva
+    }
+  },
+})
+
+await search.reindex('matters')
+```
+
+O `backfill` produz **payloads do hook**, não linhas, portanto uma só função
+`document` serve os dois caminhos. Um segundo mapeamento escrito à mão é a
+divergência que isto evita: deixa-o discordar e a mesma pesquisa passa a dar
+coisas diferentes consoante o registo seja anterior ou posterior à última
+reconstrução.
+
+O índice é limpo primeiro — uma reconstrução que acrescenta deixa documentos de
+registos que já não existem — e um índice cujas regras não tenham `backfill`
+lança, em vez de reportar uma reconstrução que não fez nada.
+
 ## Produção com Meilisearch
 
 ```ts

@@ -1,24 +1,175 @@
-# What's new in Basalt 1.9
+# What's new in Basalt 1.10
 
-> *"Basalt 1.9" is the umbrella label for this wave of work; the `@basaltkit/*`
+> *"Basalt 1.10" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
 
-::: warning Zod 4 is now required
-Twelve packages narrow their `zod` peer from `^3.24.0 || ^4.0.0` to `^4.0.0`.
-This is the one change an upgrade forces on you — see [Upgrading](#upgrading).
+::: warning Two contracts changed
+`@basaltkit/files` revises its store contract, and `app.server` in
+`@basaltkit/testing` is now awaited. Both edits are mechanical — see
+[Upgrading](#upgrading).
 :::
 
-Basalt 1.9 is the release **written by an application rather than by the
-framework**. A real legal SaaS was built on Basalt, and every place where the
-framework made its author write code the framework should have written was
-recorded as it happened. Fifteen of those gaps are closed here.
+Basalt 1.10 is the release of **missing halves**. The application that wrote 1.9
+kept going, and what it ran into this time was not two packages that failed to
+fit together — it was capabilities with no other side. A tenant could be created
+and never destroyed. An index could be kept current and never rebuilt. A
+permission said what a caller may do and never who they are.
 
-They are not a wish list. Each one is a place where two official packages did
-not fit together, or where the documented way of doing something did not
-survive contact with a second Prisma client, a portal user, or a tenant.
+A missing half does not announce itself. There is no stack trace for a question
+the framework has no answer to: every application invents its own, the inventions
+differ, and the one that is wrong looks exactly like the one that is right — until
+somebody sees a record that was not theirs.
 
 ## Highlights
+
+### Capabilities that only worked in one direction
+- **A tenant can be removed.** `TenantSource` had `find`, `findByDomain`, `list`,
+  `create` and `save`; `Tenancy` had no `destroy` — no path out, not even an
+  optional one. In tests that meant `DROP SCHEMA` with a string-interpolated
+  identifier, and the reason it was needed is worse than the pattern: without the
+  cleanup, a leftover schema makes the next provisioning a no-op and every
+  assertion below it passes green against the previous run's data. The order of
+  operations is the design — mark `deleting` first, so the resolver stops routing
+  before anything is torn down; run `onDeprovision` inside the tenant's context;
+  delete the record last, because the record is the only thing naming that
+  storage. *(`@basaltkit/tenancy`)*
+- **`search.reindex()` rebuilds an index from the rules that feed it.** A rule
+  fed by events knows only what was created after the rule existed, so an
+  application adding search to data it already had got a box that returned
+  nothing for everything old — and an empty result is indistinguishable from
+  "there is none". A rule's `backfill` yields **hook payloads**, not rows, so one
+  `document` function serves both directions and a second mapping written by hand
+  cannot drift from it. *(`@basaltkit/search`)*
+- **The file domain has a durable store.** Eleven domains ship both a `-prisma`
+  and a `-sqlite` backend without a single exception; `files` shipped neither —
+  the only domain with a store contract and no durable implementation of it. The
+  disk key is `files/<uuid>` and the uuid lived in the process, so a restart left
+  every upload in the bucket, unreferenced and unmatchable to the document it
+  was, while the application reported an empty list and nothing errored.
+  *(`@basaltkit/files-prisma`)*
+- **Documents have revisions.** `Files.upload` mints a new id and a new path on
+  every call, so uploading the same contract twice produced two unrelated records
+  with nothing linking them, and every application that needed "which draft am I
+  reading?" wrote the same bookkeeping by hand. Not a `version` field on
+  `FileRecord`: a file record describes bytes, a revision describes an editorial
+  act, and each revision points at a whole file whose bytes are never
+  overwritten. The store assigns the number and keys on
+  `[tenantId, groupId, version]`, so the database refuses the duplicate that a
+  read-the-latest-and-add-one race would produce.
+  *(`@basaltkit/files-versions`)*
+
+### Declarations instead of bookkeeping
+- **`activityRule`** — `search` has `syncRule`, `realtime` has `bridgeRule`, and
+  `activity`, probably the most common of the three, had only the fluent builder,
+  which is for writing a line by hand inside a service. The cost of the asymmetry
+  is not the thirteen `hooks.on()` calls an application writes instead; it is
+  that the natural answer to "record this" becomes "call activity from
+  `MatterService`", coupling the domain to the package the other two teach you to
+  keep at arm's length. A rule never rethrows, and that is where it deliberately
+  differs from `syncRule`: a history line that cannot be written must not fail
+  the case closure that produced it. *(`@basaltkit/activity`)*
+- **`canonicalDomain`** gives a new tenant an address. Every durable source reads
+  domains from one key, and an application that never passes it creates tenants
+  with none — silently, because `subdomainResolver` answers from the `Host`
+  without consulting the table. The tenant serves traffic; what is missing is the
+  record that the address belongs to it, so a custom domain cannot be attached
+  and nothing stops a second tenant claiming the same one. Applied by
+  `tenancy.create()`, so every creation path gets it instead of each one
+  remembering. *(`@basaltkit/tenancy`)*
+- **`authorize` decides who may see a hit.** A driver filters by the fields
+  declared `filterable` and nothing else, which left search as the one surface
+  with no answer for per-row visibility. The hook runs *after* the driver, which
+  is what lets the package keep asking until the page is full — the thing a
+  caller cannot do from outside without guessing an over-fetch factor. Copying
+  the ACL into the index is the fast alternative and the wrong one: a stale index
+  gives an old result, a stale ACL gives an unauthorized one.
+  *(`@basaltkit/search`)*
+
+### Answers that were quietly wrong
+- **A permission is a capability, not a surface.** `matter:read` cannot tell
+  "read my own case in the client portal" from "read the case with the litigation
+  strategy in it", so a role granted the first also passed the guard on the
+  second — and an authenticated portal client received `200` on an internal
+  listing with their own case's strategy in the body. `meta.audience` describes
+  who a route is for, and the default is the whole design: a route that declares
+  no audience is unreachable by a confined role. Marking the small surface a
+  restricted role may reach is a list somebody maintains; marking every route
+  they may not is a list somebody forgets. *(`@basaltkit/permissions`)*
+- **File versions read the ambient tenant, like `Files` always did.** They
+  resolved the store key as `tenantId ?? SINGLE_TENANT_SCOPE`, skipping the
+  request context, so a multi-tenant app that passed no explicit id — the normal
+  case — wrote versions under `acme` and read them back under `default`:
+  `history()` returned `[]`, `latest()` returned `null`, and `download()` raised
+  for a file sitting on the disk. The rule now lives in one place, exported by
+  `files` and used by both. *(`@basaltkit/files-versions`)*
+- **The activity feed is scoped `required` under tenancy.** The old default meant
+  "scope to the context tenant, run unscoped when there is none", so a feed query
+  outside a tenant returned every tenant's records — and a feed line names a
+  client in prose. The same rule `cache` already applied.
+  *(`@basaltkit/activity`)*
+- **Every HTTP adapter in `testing` is an optional peer.** `express` and `hono`
+  already were; `fastify` was a plain dependency because it is the default
+  adapter, and that asymmetry cost somebody half an hour. When the package moved
+  its `fastify` range to `^2` while an app was still on `1.x`, pnpm installed
+  both, and `createTestApp` resolved a `FASTIFY` token from a different copy than
+  the one the app's `fastifyPlugin` registered: two `createToken('fastify')`
+  calls, two identities, one container that cannot match them. The error said
+  "No provider registered for token fastify" and named neither the package nor
+  the version skew. A peer cannot duplicate. *(`@basaltkit/testing`)*
+
+## Upgrading
+
+Packages are independent — bump only what you use. Two contracts changed, and
+both edits are mechanical.
+
+### `app.server` is now awaited
+
+```ts
+const server = await app.server()   // was: app.server
+```
+
+`@basaltkit/testing` imports the adapter on demand, as it already did for
+`express` and `hono`, so an app booted without any HTTP plugin still works and
+the package never reaches for something the application may not have installed.
+A token resolved through a dynamic import cannot be synchronous.
+
+If `pnpm install` starts warning about an unmet `fastify` peer, that warning is
+the point: it is the version skew that used to surface at runtime as a token
+that does not exist.
+
+### The files store contract has three revisions
+
+`@basaltkit/files` publishes a major. A custom `FileStore` needs three edits:
+
+| Was | Is | Why |
+| --- | --- | --- |
+| `scanned?: boolean` | `scannedAt?: number` | The date derives the boolean and the boolean does not derive the date. "Scanned", with no idea when, stops being an answer the moment the scanner's rules change — the one thing antivirus rules reliably do. The `file:scanned` hook keeps its name: the event is not the field |
+| `metadata?: Record<string, unknown>` | `metadata?: FileMetadata` | `Record<string, JsonValue>` — otherwise every durable store casts its way past its driver's JSON type, a cast each implementation repeats and has to get right |
+| `FilePatch = Partial<Pick<…>>` | spelled out | So it can say that a key present with `undefined` **clears** the column while an absent key is left alone — which `Partial` of an optional field cannot express under `exactOptionalPropertyTypes`, and which is how a caller drops a stale scan result |
+
+`prisma:sync` learns the files domain, so its models merge like every other one.
+
+### Two packages debut at 0.1.0
+
+`files-prisma` and `files-versions` publish `0.1.0`, not `1.0.0`. Neither has
+been run against a real database by anyone yet, and joining the ecosystem's
+semver commitment on their first day would promise something nobody has checked.
+The version number says that more cheaply than a changelog nobody reads, and
+leaves `1.0.0` for when it is earned.
+
+---
+
+## Previously — Basalt 1.9
+
+> *The release **written by an application rather than by the framework**: a real
+> legal SaaS was built on Basalt, and fifteen places where the framework made its
+> author write code the framework should have written were closed.*
+
+::: warning Zod 4 is required from 1.9 on
+Twelve packages narrow their `zod` peer from `^3.24.0 || ^4.0.0` to `^4.0.0` —
+see [Upgrading to 1.9](#upgrading-to-1-9).
+:::
 
 ### Two official packages that did not fit together
 - **Full-text search could not run through the Prisma client at all.** The
@@ -80,12 +231,12 @@ survive contact with a second Prisma client, a portal user, or a tenant.
   `ReadableStream` — and accepts an `AbortSignal` and per-call headers.
   *(`@basaltkit/sdk`)*
 
-## Upgrading
+### Upgrading to 1.9
 
 Packages are independent — bump only what you use. One change is required of
 everyone, and one behaviour tightened.
 
-### Zod 4 is required
+#### Zod 4 is required
 
 Twelve packages — `admin`, `audit-viewer`, `auth`, `comments`, `env`, `fastify`,
 `files`, `http`, `mcp`, `sdk`, `subscriptions`, `teams` — narrow their `zod` peer
@@ -112,7 +263,7 @@ The peer asks for `^4.0.0`, not the newest 4.x — requiring the version this
 repository happens to test would force every consumer to move in step with us
 for no reason.
 
-### An unknown plan name now fails the boot
+#### An unknown plan name now fails the boot
 
 `meta.subscribed: 'pró'` against a catalogue containing `pro` used to boot fine
 and refuse every caller at runtime. It is now an error at startup, listing every
