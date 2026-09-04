@@ -33,6 +33,14 @@ export {
   type MfaStore,
   type MfaRecord,
 } from './stores.js'
+
+declare module '@basaltkit/http' {
+  interface RouteMeta {
+    /** `true` requires a session; `false` opts a route out. */
+    auth?: boolean
+  }
+}
+
 export {
   Auth,
   publicUser,

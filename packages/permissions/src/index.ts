@@ -12,6 +12,14 @@ import { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError } from 
 export { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError, PermissionDeniedError } from './errors.js'
 import { PermissionDeniedError } from './errors.js'
 
+declare module '@basaltkit/http' {
+  interface RouteMeta {
+    /** Permission the caller must hold. Enforced by `permissionsPlugin`. */
+    can?: string | string[]
+  }
+}
+
+
 /** Global scope key — role/permission grants outside any tenant. */
 export const GLOBAL_SCOPE = 'global'
 
