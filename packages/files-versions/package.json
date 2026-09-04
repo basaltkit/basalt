@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/files-versions",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "engines": {
     "node": ">=22.5.0"
   },
