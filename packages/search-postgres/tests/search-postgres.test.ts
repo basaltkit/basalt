@@ -39,7 +39,10 @@ describe('PostgresSearchDriver', () => {
 
     const insert = pg.find(/INSERT INTO/)
     expect(insert.text).toContain('ON CONFLICT (idx, tenant_id, id) DO UPDATE')
-    expect(insert.text).toContain('to_tsvector($5, $6)')
+    // `::regconfig` since F-12: `PgClientLike` accepts clients that type their
+    // parameters (Prisma) as well as clients that do not (`pg`), and only the
+    // cast works for both.
+    expect(insert.text).toContain('to_tsvector($5::regconfig, $6)')
     // only the configured field (title) feeds the tsvector
     expect(insert.params).toEqual(['notes', 'acme', '1', JSON.stringify({ id: '1', tenantId: 'acme', title: 'Hello world', body: 'ignored' }), 'english', 'Hello world'])
   })
@@ -51,7 +54,7 @@ describe('PostgresSearchDriver', () => {
     const res = await driverWith(pg).search('notes', { tenantId: 'acme', q: 'hello', filters: { folder: 'inbox', tag: ['a', 'b'] }, limit: 10, offset: 0 })
 
     const select = pg.find(/ts_rank/)
-    expect(select.text).toContain('ts_rank(tsv, plainto_tsquery($3, $4))')
+    expect(select.text).toContain('ts_rank(tsv, plainto_tsquery($3::regconfig, $4))')
     expect(select.text).toContain('idx = $1 AND tenant_id = $2')
     expect(select.text).toContain('document->>$5 = $6') // scalar filter
     expect(select.text).toContain('document->>$7 = ANY($8)') // array filter
