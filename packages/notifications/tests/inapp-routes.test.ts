@@ -18,11 +18,11 @@ import { MemoryInAppStore, inAppRoutes, notificationsPlugin } from '../src/index
 const montar = async () => {
   const store = new MemoryInAppStore()
   const app = await createApp({ plugins: [notificationsPlugin({ inApp: store })] }).boot()
-  const rotas = inAppRoutes()
+  const routes = inAppRoutes()
 
   const chamar = (url: string, user: { id: string } | undefined, extra: object = {}) => {
-    const r = rotas.find((x) => x.url === url)
-    if (!r) throw new Error(`sem rota ${url}`)
+    const r = routes.find((x) => x.url === url)
+    if (!r) throw new Error(`sem aRoute ${url}`)
     return runWithContext(
       { ...(user ? { user } : {}), container: app.container },
       () => (r.handler as (a: unknown) => Promise<unknown>)({ query: {}, params: {}, ...extra }),

@@ -35,7 +35,7 @@ describe('real Prisma relations', () => {
     request: 'consultas',
     summary: 's',
     entities: [
-      { name: 'Paciente', tenantScoped: true, fields: [{ name: 'nome', type: 'String' }] },
+      { name: 'Paciente', tenantScoped: true, fields: [{ name: 'name', type: 'String' }] },
       {
         name: 'Consulta',
         tenantScoped: true,

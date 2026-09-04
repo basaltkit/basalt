@@ -105,7 +105,7 @@ describe('tenancyPlugin + fastify (end to end)', () => {
         return { ok: true }
       },
     }),
-    // Declarada como central na própria rota.
+    // Declarada como central na própria aRoute.
     route({
       method: 'GET',
       url: '/central',
@@ -114,7 +114,7 @@ describe('tenancyPlugin + fastify (end to end)', () => {
         return { central: true }
       },
     }),
-    // Declarada como de tenant, mesmo quando o default da app é permissivo.
+    // Declarada como de tenant, mesmo when o default da app é permissivo.
     route({
       method: 'GET',
       url: '/tenant-only',

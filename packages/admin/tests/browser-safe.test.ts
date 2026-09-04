@@ -24,20 +24,20 @@ describe('F-14 · no Node builtins reach the bundle', () => {
       // Vite API that `tsc --noEmit` does not know about, and a test guarding
       // the build should not itself fail the typecheck.
       const src = new URL('../src/', import.meta.url).pathname
-      const culpados = readdirSync(src, { recursive: true })
+      const offenders = readdirSync(src, { recursive: true })
         .map(String)
-        .filter((caminho) => caminho.endsWith('.ts'))
-        .filter((caminho) => /from ['"]node:/.test(readFileSync(join(src, caminho), 'utf8')))
+        .filter((path) => path.endsWith('.ts'))
+        .filter((path) => /from ['"]node:/.test(readFileSync(join(src, path), 'utf8')))
 
-    expect(culpados).toEqual([])
+    expect(offenders).toEqual([])
   })
 })
 
 describe('F-14 · memoryDataSource still mints usable ids', () => {
   it('generates a distinct id per record', async () => {
-    const fonte = memoryDataSource<{ id: string; nome: string }>()
-    const a = await fonte.create({ nome: 'a' })
-    const b = await fonte.create({ nome: 'b' })
+    const source = memoryDataSource<{ id: string; nome: string }>()
+    const a = await source.create({ nome: 'a' })
+    const b = await source.create({ nome: 'b' })
 
     expect(a.id).toBeTruthy()
     expect(b.id).toBeTruthy()
@@ -45,8 +45,8 @@ describe('F-14 · memoryDataSource still mints usable ids', () => {
   })
 
   it('keeps an id the caller supplied', async () => {
-    const fonte = memoryDataSource<{ id: string; nome: string }>()
-    const r = await fonte.create({ id: 'escolhido', nome: 'a' })
+    const source = memoryDataSource<{ id: string; nome: string }>()
+    const r = await source.create({ id: 'escolhido', nome: 'a' })
     expect(r.id).toBe('escolhido')
   })
 
@@ -61,9 +61,9 @@ describe('F-14 · memoryDataSource still mints usable ids', () => {
     try {
       Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true })
 
-      const fonte = memoryDataSource<{ id: string; nome: string }>()
-      const a = await fonte.create({ nome: 'a' })
-      const b = await fonte.create({ nome: 'b' })
+      const source = memoryDataSource<{ id: string; nome: string }>()
+      const a = await source.create({ nome: 'a' })
+      const b = await source.create({ nome: 'b' })
 
       expect(a.id).toBeTruthy()
       expect(a.id).not.toBe(b.id)

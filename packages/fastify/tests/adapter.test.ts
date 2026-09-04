@@ -35,7 +35,7 @@ const routes = [
     method: 'GET',
     url: '/boom',
     async handler() {
-      throw new Error('segredo interno')
+      throw new Error('segredo internal')
     },
   }),
 ]
@@ -107,7 +107,7 @@ describe('@basaltkit/fastify', () => {
     const res = await server.inject({ method: 'GET', url: '/boom' })
     expect(res.statusCode).toBe(500)
     expect(res.json().error.code).toBe('INTERNAL_ERROR')
-    expect(res.body).not.toContain('segredo interno')
+    expect(res.body).not.toContain('segredo internal')
     await app.shutdown()
   })
 

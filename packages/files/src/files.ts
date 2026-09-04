@@ -1,7 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { BasaltError, runWithContext, tryCtx, type DurationInput, type HookBus } from '@basaltkit/core'
 import type { Disk } from '@basaltkit/storage'
-import { MemoryFileStore, type FilePatch, type FileRecord, type FileStore } from './store.js'
+import {
+  MemoryFileStore,
+  type FileMetadata,
+  type FilePatch,
+  type FileRecord,
+  type FileStore,
+} from './store.js'
 
 /** Default upload cap (25 MiB) applied when `validate.maxSize` is not set. */
 export const DEFAULT_MAX_FILE_SIZE = 25 * 1024 * 1024
@@ -66,7 +72,7 @@ export interface UploadInput {
   contentType: string
   tenantId?: string
   uploadedBy?: string
-  metadata?: Record<string, unknown>
+  metadata?: FileMetadata
 }
 
 const matchesType = (contentType: string, allowed: string[]): boolean =>
@@ -195,7 +201,10 @@ export class Files {
     const resolved = this.scope(tenantId)
     const record = await this.store.find(resolved, id)
     if (!record) throw new FileNotFoundError()
-    const patch: FilePatch = { scanned: true, metadata: { ...record.metadata, scan: result } }
+    const patch: FilePatch = {
+      scannedAt: Date.now(),
+      metadata: { ...record.metadata, scan: { ...result } },
+    }
     const updated = (await this.store.update(resolved, id, patch)) ?? record
     await this.hooks?.emit('file:scanned', { file: updated })
     return updated

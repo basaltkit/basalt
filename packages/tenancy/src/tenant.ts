@@ -14,9 +14,9 @@ export interface Tenant {
  * before provisioning was introduced has no status, and they must keep serving
  * traffic — a stricter default would 503 an entire production estate on upgrade.
  */
-export type TenantStatus = 'provisioning' | 'ready' | 'failed'
+export type TenantStatus = 'provisioning' | 'ready' | 'failed' | 'deleting'
 
-/** True unless the tenant is explicitly mid-provisioning or failed. */
+/** True unless the tenant is explicitly mid-provisioning, failed or being removed. */
 export function isTenantReady(tenant: Tenant): boolean {
   const status = tenant['status'] as TenantStatus | undefined
   return status === undefined || status === 'ready'
@@ -33,6 +33,15 @@ export interface TenantSource {
    * `MemoryTenantSource` implements this.
    */
   create?(tenant: Tenant): Promise<Tenant>
+  /**
+   * Removes the record. Optional, because not every source can: a read-only
+   * directory or a config file has nothing to delete from.
+   *
+   * `tenancy.destroy()` refuses rather than reporting a success it did not
+   * perform — a tenant that looks removed and still resolves is worse than one
+   * that never left.
+   */
+  delete?(id: string): Promise<void>
   /**
    * Upsert — what the durable sources (`@basaltkit/tenancy-prisma`,
    * `@basaltkit/tenancy-sqlite`) implement instead of `create`.
@@ -82,6 +91,10 @@ export class MemoryTenantSource implements TenantSource {
     this.tenants.set(tenant.id, tenant)
     return tenant
   }
+
+  async delete(id: string): Promise<void> {
+    this.tenants.delete(id)
+  }
 }
 
 /** Request could not be mapped to a tenant. Maps to HTTP 404 in the adapter. */
@@ -113,7 +126,21 @@ export class TenantNotReadyError extends BasaltError {
       'TENANT_NOT_READY',
       status === 'failed'
         ? `Tenant "${id}" failed to provision and is not serving requests. Re-run provisioning once the cause is fixed.`
-        : `Tenant "${id}" is still being provisioned. Retry shortly.`,
+        : status === 'deleting'
+          ? `Tenant "${id}" is being removed and is no longer serving requests.`
+          : `Tenant "${id}" is still being provisioned. Retry shortly.`,
+    )
+  }
+}
+
+/** `tenancy.destroy()` (or `basalt tenant:destroy`) on a source that cannot remove. */
+export class TenantDeleteUnsupportedError extends BasaltError {
+  constructor() {
+    super(
+      'TENANT_DELETE_UNSUPPORTED',
+      'The configured TenantSource does not implement delete(), so the tenant record cannot be ' +
+        'removed. Refused rather than reported as done: a tenant that looks deleted and still ' +
+        'resolves is worse than one that never left.',
     )
   }
 }

@@ -24,12 +24,12 @@ const ACCESS = createToken<{ roles(userId: string): string[] }>('test:access')
 /**
  * Uma conexão registada no hub.
  *
- * O `subscribe` recebe um **id**, não a conexão — procura-a no registo e
- * devolve `false` se não a encontrar. A primeira versão deste teste passava a
+ * O `subscribe` recebe um **id**, não a conexão — procura-a no calls e
+ * devolve `false` se não a encontrar. A first versão deste teste passava a
  * conexão e via `false` sempre, o que teria passado por «o gate recusou» se eu
  * não tivesse ido ler o método.
  */
-const registar = (hub: { register: (c: unknown) => void }, userId: string) => {
+const connect = (hub: { register: (c: unknown) => void }, userId: string) => {
   const id = `c-${userId}`
   hub.register({ id, tenantId: 'acme', userId, send: () => {}, close: () => {} })
   return id
@@ -37,7 +37,7 @@ const registar = (hub: { register: (c: unknown) => void }, userId: string) => {
 
 describe('F-23 · authorize receives the container', () => {
   it('can resolve a service from it', async () => {
-    let visto: string[] = []
+    let seen: string[] = []
 
     const app = await createApp({
       plugins: [
@@ -53,8 +53,8 @@ describe('F-23 · authorize receives the container', () => {
           authorize: (connection, channel, { container }) => {
             // The whole point: reaching a service without a module-level
             // variable filled from someone else's boot.
-            visto = container.get(ACCESS).roles(connection.userId!)
-            return channel === 'firm' ? visto.includes('partner') : true
+            seen = container.get(ACCESS).roles(connection.userId!)
+            return channel === 'firm' ? seen.includes('partner') : true
           },
         }),
       ],
@@ -62,9 +62,9 @@ describe('F-23 · authorize receives the container', () => {
 
     const hub = app.container.get(REALTIME_HUB)
 
-    const id = registar(hub as never, 'u1')
+    const id = connect(hub as never, 'u1')
     expect(await hub.subscribe(id, 'firm')).toBe(true)
-    expect(visto).toEqual(['partner'])
+    expect(seen).toEqual(['partner'])
 
     await app.shutdown()
   })
@@ -88,11 +88,11 @@ describe('F-23 · authorize receives the container', () => {
     }).boot()
 
     const hub = app.container.get(REALTIME_HUB)
-    const permitido = await hub.subscribe(registar(hub as never, 'u2'), 'firm')
+    const allowed = await hub.subscribe(connect(hub as never, 'u2'), 'firm')
 
     // A portal client listening on the firm channel would hear which cases open
     // and for whom, in real time. This is the check that stops it.
-    expect(permitido).toBe(false)
+    expect(allowed).toBe(false)
 
     await app.shutdown()
   })
@@ -105,7 +105,7 @@ describe('F-23 · authorize receives the container', () => {
     }).boot()
 
     const hub = app.container.get(REALTIME_HUB)
-    const id = registar(hub as never, 'u1')
+    const id = connect(hub as never, 'u1')
     expect(await hub.subscribe(id, 'user:u1')).toBe(true)
     expect(await hub.subscribe(id, 'firm')).toBe(false)
 

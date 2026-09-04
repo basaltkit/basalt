@@ -12,6 +12,7 @@ import {
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantCreateUnsupportedError,
+  TenantDeleteUnsupportedError,
   TenantNotReadyError,
   isTenantReady,
   type Tenant,
@@ -24,6 +25,7 @@ export {
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantCreateUnsupportedError,
+  TenantDeleteUnsupportedError,
   TenantNotReadyError,
   isTenantReady,
   type Tenant,
@@ -64,6 +66,14 @@ declare module '@basaltkit/core' {
      * that reacts to a half-built tenant is worse than one that never runs.
      */
     'tenancy:created': { tenant: Tenant }
+    /**
+     * A tenant was removed — record and storage both gone.
+     *
+     * Emitted after the record is deleted, so a listener that reacts by
+     * cleaning up rows of its own never finds the tenant still listed. It does
+     * NOT fire when deprovisioning threw and the record was kept.
+     */
+    'tenancy:destroyed': { tenant: Tenant }
   }
 }
 
@@ -75,6 +85,7 @@ export class Tenancy {
     private readonly onProvision?: (tenant: Tenant) => void | Promise<void>,
     /** 'deferred' → `create()` returns before provisioning; see `provision()`. */
     private readonly provisionMode: 'inline' | 'deferred' = 'inline',
+    private readonly onDeprovision?: (tenant: Tenant) => void | Promise<void>,
   ) {}
 
   /** The tenant of the active context, if any. */
@@ -168,6 +179,52 @@ export class Tenancy {
     const ready = await this.writeStatus(tenant, 'ready')
     await this.hooks?.emit('tenancy:created', { tenant: ready })
     return ready
+  }
+
+  /**
+   * Removes a tenant: its storage first, then its record.
+   *
+   * **The order is the whole design.** Three steps, and each one is where it is
+   * because the alternative loses something:
+   *
+   * 1. **Mark `deleting`.** The resolver stops serving the tenant before
+   *    anything is torn down. Dropping a schema out from under live requests
+   *    produces errors nobody can interpret, from a tenant that looked healthy
+   *    a second earlier.
+   * 2. **Run `onDeprovision` inside the tenant's context**, like `onProvision`,
+   *    so a tenant-scoped client resolves to the storage being removed rather
+   *    than to whatever the caller happened to be in.
+   * 3. **Delete the record last.** The record is the only thing naming that
+   *    storage. Delete it first and a failed teardown leaves a schema nobody
+   *    can find, which is exactly the state a half-finished signup used to
+   *    leave behind — the reason this method exists.
+   *
+   * If step 2 throws, the record survives, marked `deleting`, and the error
+   * propagates: the evidence is kept and a retry can finish the job. `force`
+   * removes the record anyway — for when the storage is already gone by other
+   * means. It is a deliberate way to orphan storage, so it is never the default.
+   */
+  async destroy(id: string, options: { force?: boolean } = {}): Promise<void> {
+    const remove = this.source.delete
+    if (!remove) throw new TenantDeleteUnsupportedError()
+
+    const tenant = await this.source.find(id)
+    if (!tenant) throw new TenantNotFoundError(id)
+
+    const marked = await this.writeStatus(tenant, 'deleting')
+
+    if (this.onDeprovision) {
+      try {
+        await this.run(marked, () => this.onDeprovision!(marked))
+      } catch (error) {
+        if (!options.force) throw error
+      }
+    }
+
+    await remove.call(this.source, id)
+    // Emitted after the record is gone, so a listener cleaning up its own rows
+    // never finds the tenant still listed.
+    await this.hooks?.emit('tenancy:destroyed', { tenant: marked })
   }
 
   /** Persists a status transition, preferring the upsert when the source has one. */
@@ -339,6 +396,19 @@ export interface TenancyPluginOptions {
    */
   onProvision?: (tenant: Tenant) => void | Promise<void>
   /**
+   * Tears a tenant's storage down — the counterpart to `onProvision`, and its
+   * mirror image: `DROP SCHEMA`, delete the bucket prefix, drop the database.
+   *
+   * Runs inside the tenant's context, so a tenant-scoped client points at the
+   * storage being removed. Make it idempotent (`DROP SCHEMA IF EXISTS`): if it
+   * throws, the record survives marked `deleting` and a retry has to be able to
+   * finish.
+   *
+   * Without it, `tenancy.destroy()` still removes the record — and says so, so
+   * nobody discovers by accident that the schema is still there.
+   */
+  onDeprovision?: (tenant: Tenant) => void | Promise<void>
+  /**
    * When `onProvision` runs.
    *
    * `'inline'` (default) — `create()` waits for it, so the caller knows the
@@ -383,6 +453,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             hooks,
             options.onProvision,
             options.provision ?? 'inline',
+            options.onDeprovision,
           ),
       )
       registerTenantCommands(container, options)
@@ -436,6 +507,8 @@ type Io = {
   log(m: string): void
   error(m: string): void
   table(rows: Record<string, unknown>[]): void
+  /** Optional: a non-interactive runner has no way to ask. */
+  confirm?(question: string): Promise<boolean>
 }
 type CmdCtx = { container: Container; io: Io; args: string[]; flags: Record<string, string | boolean> }
 
@@ -492,6 +565,46 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
           ? `Created and provisioned tenant "${tenant.id}".`
           : `Created tenant "${tenant.id}". No onProvision hook configured — its storage was NOT created.`,
       )
+    },
+  })
+
+  add({
+    name: 'tenant:destroy',
+    description: 'Remove a tenant and its storage: tenant:destroy <id> [--force] [--yes]',
+    async handle({ io, args, flags }) {
+      const id = args[0]
+      if (!id) {
+        io.error('Usage: basalt tenant:destroy <id> [--force] [--yes]')
+        return 1
+      }
+      if (!options.source.delete) {
+        io.error(new TenantDeleteUnsupportedError().message)
+        return 1
+      }
+      if (!options.onDeprovision) {
+        // Said before anything happens, not after. Removing the record while
+        // the schema stays behind is a defensible thing to want and a terrible
+        // thing to discover later.
+        io.log('No onDeprovision hook configured — the tenant record will go, its storage will NOT.')
+      }
+      // Destroying a tenant is not undoable and not partial: unlike a failed
+      // provision, there is no retry that brings the data back.
+      if (flags['yes'] !== true) {
+        if (!io.confirm) {
+          // Nothing to ask with, so the flag is the only consent there can be.
+          // Proceeding here would delete a tenant because a script ran.
+          io.error('Refusing to destroy without confirmation. Re-run with --yes.')
+          return 1
+        }
+        if (!(await io.confirm(`Destroy tenant "${id}" and its storage?`))) {
+          io.log('Cancelled.')
+          return
+        }
+      }
+      // Through the SERVICE: that is what marks the tenant `deleting` first,
+      // runs onDeprovision in its context, and emits `tenancy:destroyed`.
+      await tenancy().destroy(id, { force: flags['force'] === true })
+      io.log(`Destroyed tenant "${id}".`)
     },
   })
 

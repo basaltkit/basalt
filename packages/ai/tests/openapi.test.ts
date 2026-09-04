@@ -12,22 +12,22 @@ describe('injectOpenApiMeta (unit)', () => {
     const routes = `export const clienteRoutes = [
   route({
     method: 'GET',
-    url: '/clientes',
-    meta: { can: 'clientes.view' },
+    url: '/clients',
+    meta: { can: 'clients.view' },
     async handler() { return service().list() },
   }),
 
   route({
     method: 'POST',
-    url: '/clientes',
+    url: '/clients',
     async handler({ body }) { return service().create(body) },
   }),
 ]`
-    const { content } = injectOpenApiMeta(routes, 'Cliente')
+    const { content } = injectOpenApiMeta(routes, 'Client')
     // merged with the existing can guard
-    expect(content).toContain("meta: { can: 'clientes.view', summary: 'List clientes', tags: ['Cliente'] },")
+    expect(content).toContain("meta: { can: 'clients.view', summary: 'List clients', tags: ['Client'] },")
     // created where there was no meta
-    expect(content).toContain("meta: { summary: 'Create a cliente', tags: ['Cliente'] },")
+    expect(content).toContain("meta: { summary: 'Create a client', tags: ['Client'] },")
   })
 
   it('names each CRUD verb sensibly (multi-word kebab)', () => {
@@ -69,20 +69,20 @@ describe('runMake OpenAPI enrichment', () => {
     const plan: ArchitecturePlan = {
       request: 'r',
       summary: 's',
-      entities: [{ name: 'Cliente', tenantScoped: true, fields: [{ name: 'nome', type: 'String' }] }],
-      steps: [{ order: 1, title: 'x', kind: 'generator', detail: '', command: 'basalt make:resource Cliente --prisma' }],
-      permissions: ['clientes.view', 'clientes.create', 'clientes.update', 'clientes.delete'],
+      entities: [{ name: 'Client', tenantScoped: true, fields: [{ name: 'name', type: 'String' }] }],
+      steps: [{ order: 1, title: 'x', kind: 'generator', detail: '', command: 'basalt make:resource Client --prisma' }],
+      permissions: ['clients.view', 'clients.create', 'clients.update', 'clients.delete'],
       auditEvents: [],
       tenantScoped: true,
       warnings: [],
     }
     const r = await runMake(ctx, plan, { dryRun: true, baseDir: '/p' })
     const routes = r.resources[0]?.files.find((f) => f.path.endsWith('.routes.ts'))?.content ?? ''
-    expect(routes).toContain("summary: 'List clientes'")
-    expect(routes).toContain("summary: 'Create a cliente'")
-    expect(routes).toContain("tags: ['Cliente']")
+    expect(routes).toContain("summary: 'List clients'")
+    expect(routes).toContain("summary: 'Create a client'")
+    expect(routes).toContain("tags: ['Client']")
     // guard + openapi coexist in one meta object
-    expect(routes).toContain("can: 'clientes.create'")
-    expect(routes).toMatch(/can: 'clientes\.create', summary: 'Create a cliente', tags: \['Cliente'\]/)
+    expect(routes).toContain("can: 'clients.create'")
+    expect(routes).toMatch(/can: 'clients\.create', summary: 'Create a client', tags: \['Client'\]/)
   })
 })

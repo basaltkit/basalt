@@ -17,8 +17,8 @@ import { authRoutes } from '../src/routes.js'
  *
  * The default stays at 8 so nobody's existing routes start rejecting logins.
  */
-const corpoDe = (rotas: ReturnType<typeof authRoutes>, url: string) => {
-  const r = rotas.find((x) => x.url === url)
+const corpoDe = (routes: ReturnType<typeof authRoutes>, url: string) => {
+  const r = routes.find((x) => x.url === url)
   if (!r?.body) throw new Error(`sem corpo em ${url}`)
   return r.body as z.ZodType
 }
@@ -59,8 +59,8 @@ describe('F-22 · authRoutes({ password })', () => {
      * to eight characters through "forgot password" — the loophole is worse
      * than not having the option.
      */
-    const rotas = authRoutes({ password: { minLength: 12 } })
-    const body = corpoDe(rotas, '/auth/password/reset')
+    const routes = authRoutes({ password: { minLength: 12 } })
+    const body = corpoDe(routes, '/auth/password/reset')
 
     expect(body.safeParse({ token: 't', password: '12345678' }).success).toBe(false)
     expect(body.safeParse({ token: 't', password: '123456789012' }).success).toBe(true)

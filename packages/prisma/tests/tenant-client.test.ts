@@ -21,10 +21,10 @@ import { DbUnavailableError, db, tenantClient } from '../src/index.js'
  */
 describe('F-15 · tenantClient()', () => {
   it('resolves the context client on every property access', () => {
-    const cliente = tenantClient<{ marca: string }>()
+    const client = tenantClient<{ marca: string }>()
 
-    const a = runWithContext({ db: { marca: 'tenant-a' } }, () => cliente.marca)
-    const b = runWithContext({ db: { marca: 'tenant-b' } }, () => cliente.marca)
+    const a = runWithContext({ db: { marca: 'tenant-a' } }, () => client.marca)
+    const b = runWithContext({ db: { marca: 'tenant-b' } }, () => client.marca)
 
     // The same object, two contexts, two answers — which is the whole point:
     // the stores hold this once, at boot, and still reach the right database.
@@ -39,8 +39,8 @@ describe('F-15 · tenantClient()', () => {
   })
 
   it('throws the same error as db() when used outside a context', () => {
-    const cliente = tenantClient<{ user: unknown }>()
-    expect(() => cliente.user).toThrow(DbUnavailableError)
+    const client = tenantClient<{ user: unknown }>()
+    expect(() => client.user).toThrow(DbUnavailableError)
   })
 
   it('forwards method calls with the right receiver', async () => {
@@ -53,10 +53,10 @@ describe('F-15 · tenantClient()', () => {
         return [this.nome]
       },
     }
-    const cliente = tenantClient<{ user: typeof modelo }>()
+    const client = tenantClient<{ user: typeof modelo }>()
 
     await runWithContext({ db: { user: modelo } }, async () => {
-      await expect(cliente.user.findMany()).resolves.toEqual(['users'])
+      await expect(client.user.findMany()).resolves.toEqual(['users'])
     })
   })
 
@@ -64,19 +64,19 @@ describe('F-15 · tenantClient()', () => {
     // `in` and `Object.keys` are how the stores probe for a model before using
     // it — see `ensureModel`. A proxy that answers "no" to everything makes
     // those checks fail in a way that looks like a missing schema.
-    const cliente = tenantClient<Record<string, unknown>>()
+    const client = tenantClient<Record<string, unknown>>()
 
     runWithContext({ db: { user: {}, session: {} } }, () => {
-      expect('user' in cliente).toBe(true)
-      expect('inexistente' in cliente).toBe(false)
-      expect(Object.keys(cliente).sort()).toEqual(['session', 'user'])
+      expect('user' in client).toBe(true)
+      expect('missing' in client).toBe(false)
+      expect(Object.keys(client).sort()).toEqual(['session', 'user'])
     })
   })
 
   it('is the same client db() would return', () => {
-    const cliente = tenantClient<{ marca: string }>()
+    const client = tenantClient<{ marca: string }>()
     runWithContext({ db: { marca: 'x' } }, () => {
-      expect(cliente.marca).toBe(db<{ marca: string }>().marca)
+      expect(client.marca).toBe(db<{ marca: string }>().marca)
     })
   })
 })
@@ -95,11 +95,11 @@ describe('F-15 · a store built at boot reaches the right tenant', () => {
     const clienteB = { permUserRole: { async findMany() { return [{ role: 'trainee' }] } } }
 
     // Built once, at "boot", outside any context.
-    const cliente = tenantClient<typeof clienteA>()
-    const store = { papeis: () => cliente.permUserRole.findMany() }
+    const client = tenantClient<typeof clienteA>()
+    const store = { roles: () => client.permUserRole.findMany() }
 
-    const a = await runWithContext({ db: clienteA }, () => store.papeis())
-    const b = await runWithContext({ db: clienteB }, () => store.papeis())
+    const a = await runWithContext({ db: clienteA }, () => store.roles())
+    const b = await runWithContext({ db: clienteB }, () => store.roles())
 
     expect(a).toEqual([{ role: 'partner' }])
     expect(b).toEqual([{ role: 'trainee' }])
@@ -109,10 +109,10 @@ describe('F-15 · a store built at boot reaches the right tenant', () => {
     // `ensureModel` checks the model exists before touching it. Under a proxy
     // that answers nothing, that check reads as "schema missing" — which is a
     // confusing way to be told the proxy is wrong.
-    const cliente = tenantClient<Record<string, unknown>>()
+    const client = tenantClient<Record<string, unknown>>()
     runWithContext({ db: { permUserRole: {} } }, () => {
-      expect(cliente['permUserRole']).toBeDefined()
-      expect(cliente['permRolePermission']).toBeUndefined()
+      expect(client['permUserRole']).toBeDefined()
+      expect(client['permRolePermission']).toBeUndefined()
     })
   })
 })

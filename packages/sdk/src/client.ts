@@ -120,14 +120,14 @@ async function request(
    *
    * Com `exactOptionalPropertyTypes`, um spread condicional inline dá um tipo
    * com `body?: X | undefined`, que não encaixa em `RequestInit`. O objeto só
-   * ganha a chave quando há valor — o compilador é que não consegue segui-lo
+   * ganha a key when há valor — o compilador é que não consegue segui-lo
    * através do spread.
    */
   const init: RequestInit = { method: endpoint.method, headers }
   if (hasBody) {
     // Um corpo nativo segue tal como está; o resto vai em JSON.
     // `NonNullable` porque `RequestInit['body']` inclui `undefined`, e com
-    // `exactOptionalPropertyTypes` atribuir isso a uma chave opcional é erro —
+    // `exactOptionalPropertyTypes` atribuir isso a uma key opcional é error —
     // aqui já sabemos que há corpo.
     init.body = nativo
       ? (input.body as NonNullable<RequestInit['body']>)

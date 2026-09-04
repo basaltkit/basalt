@@ -1,0 +1,56 @@
+{
+  "name": "@basaltkit/files-versions",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "Document revisions on top of @basaltkit/files \u2014 each version points at its own file, so an earlier draft keeps its own bytes and nothing is ever overwritten.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@basaltkit/files": "workspace:^",
+    "@basaltkit/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/files": "workspace:^",
+    "@basaltkit/storage": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/files-versions"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/files-versions#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "files",
+    "versions",
+    "revisions",
+    "documents"
+  ]
+}

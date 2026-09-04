@@ -105,7 +105,7 @@ fastify.post('/files/upload', async (request, reply) => {
 ```
 
 O `FileRecord` devolvido é `{ id, tenantId, name, contentType, size, path,
-checksum, uploadedBy?, metadata?, scanned?, createdAt }`. O `path` é a chave
+checksum, uploadedBy?, metadata?, scannedAt?, createdAt }`. O `path` é a chave
 **dentro do disco** (`files/<uuid>`); o disco acrescenta o prefixo do tenant em
 todas as operações, por isso o objeto aterra realmente em
 `tenants/<tenantId>/files/<uuid>`.
@@ -205,7 +205,7 @@ idempotente: apagar um id desconhecido é um no-op silencioso, nunca um 404.
 
 `file:uploaded` dispara depois de o registo ser gravado, por isso a resposta do
 upload nunca espera pelo teu scanner. O padrão típico é despachar um job de fila
-e registar o resultado com `markScanned`, que passa `scanned: true`, junta o
+e registar o resultado com `markScanned`, que grava o instante em `scannedAt`, junta o
 resultado a `metadata.scan` e emite `file:scanned`:
 
 ```ts

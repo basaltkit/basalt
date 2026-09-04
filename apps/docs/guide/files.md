@@ -105,7 +105,7 @@ fastify.post('/files/upload', async (request, reply) => {
 ```
 
 The returned `FileRecord` is `{ id, tenantId, name, contentType, size, path,
-checksum, uploadedBy?, metadata?, scanned?, createdAt }`. `path` is the key
+checksum, uploadedBy?, metadata?, scannedAt?, createdAt }`. `path` is the key
 **inside the disk** (`files/<uuid>`); the disk adds the tenant prefix on every
 operation, so the object really lands at `tenants/<tenantId>/files/<uuid>`.
 
@@ -201,7 +201,7 @@ It is idempotent: deleting an unknown id is a silent no-op, never a 404.
 
 `file:uploaded` fires after the record is saved, so the upload response never
 waits on your scanner. The typical pattern is to dispatch a queue job and record
-the outcome with `markScanned`, which flips `scanned: true`, merges the result
+the outcome with `markScanned`, which stamps `scannedAt`, merges the result
 into `metadata.scan` and emits `file:scanned`:
 
 ```ts

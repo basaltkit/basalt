@@ -281,6 +281,33 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 | `TemporaryGrant`, `TemporaryGrantStore`, `MemoryTemporaryGrantStore` | Time-boxed grants: the record, the contract, the in-process implementation. |
 | `Delegation`, `DelegationStore`, `MemoryDelegationStore` | Delegation: the record, the contract, the in-process implementation. |
 
+### Route guard — `meta.audience`
+
+A permission is a capability, not a surface. `matter:read` cannot tell "read my
+own case in the client portal" from "read the case with the litigation strategy
+in it", so a role granted the first also passes the guard on the second — which
+is how a portal client once received `200 OK` on an internal listing.
+
+```ts
+permissionsPlugin({
+  store,
+  audiences: { portal: { roles: ['client'], allow: ['portal', 'public'] } },
+})
+
+route({ url: '/portal/matters', meta: { can: 'matter:read', audience: 'portal' } })
+```
+
+**A route that declares no audience is unreachable by a confined role**, and
+that direction is the point: marking the internal routes instead fails the first
+time somebody adds one without thinking about portals.
+
+A caller is confined only when **every** role they hold is named by some rule.
+One unnamed role — a lawyer who is also a client of the firm — and audiences say
+nothing about them. Two confined roles reach the union of their rules.
+
+Audiences narrow, never widen: the permission check runs regardless, so naming
+an audience is not a way in. Omit `audiences` and nothing changes.
+
 ### Route guard — `meta.can`
 
 `permissionsPlugin` registers a route guard. A route carrying `meta.can`
@@ -304,10 +331,10 @@ Anything else is **unenforceable and fails closed**: `can: true`, `can: 42`,
 replaced a historic fail-open where a non-string simply skipped the check —
 a route that declares authorization it cannot enforce must never serve.
 
-The plugin also claims `'can'` in the `http:guarded-meta` bucket, so a route
-declaring `meta.can` in an app that never registered `permissionsPlugin` fails
-loud **at boot** with `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`)
-rather than serving unchecked. See `@basaltkit/http` for the
+The plugin also claims `'can'` and `'audience'` in the `http:guarded-meta`
+bucket, so a route declaring either in an app that never registered
+`permissionsPlugin` fails loud **at boot** with `UnguardedRouteMetaError`
+(`HTTP_UNGUARDED_ROUTE_META`) rather than serving unchecked. See `@basaltkit/http` for the
 `allowUnguardedMeta` escape hatch.
 
 ### Failure modes & troubleshooting

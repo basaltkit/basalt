@@ -55,44 +55,44 @@ describe('generateOpenApi', () => {
       [
         {
           method: 'POST',
-          url: '/clientes',
-          meta: { summary: 'Create a cliente', tags: ['Cliente'], operationId: 'createCliente', description: 'Adds a client.' },
+          url: '/clients',
+          meta: { summary: 'Create a client', tags: ['Cliente'], operationId: 'createCliente', description: 'Adds a client.' },
           body: z.object({ nome: z.string() }),
           response: { 201: z.object({ id: z.string() }) },
         },
         {
           method: 'DELETE',
-          url: '/clientes/:id',
+          url: '/clients/:id',
           params: z.object({ id: z.string() }),
           response: { 204: z.object({}) },
         },
       ],
       { title: 'API', version: '1' },
     ) as any
-    const post = doc.paths['/clientes'].post
-    expect(post.summary).toBe('Create a cliente')
+    const post = doc.paths['/clients'].post
+    expect(post.summary).toBe('Create a client')
     expect(post.description).toBe('Adds a client.')
     expect(post.tags).toEqual(['Cliente'])
     expect(post.operationId).toBe('createCliente')
     expect(post.responses['201'].description).toBe('Created')
-    expect(doc.paths['/clientes/{id}'].delete.responses['204'].description).toBe('No Content')
+    expect(doc.paths['/clients/{id}'].delete.responses['204'].description).toBe('No Content')
   })
 
   it('emits a top-level tags[] — described groups first, then discovered ones', () => {
     const doc = generateOpenApi(
       [
-        { method: 'GET', url: '/clientes', meta: { tags: ['Clientes'] } },
+        { method: 'GET', url: '/clients', meta: { tags: ['Clientes'] } },
         { method: 'GET', url: '/faturas', meta: { tags: ['Faturas'] } }, // used but not described
       ],
       { title: 'API', version: '1' },
       [
-        { name: 'Clientes', description: 'Gestão de clientes' },
-        { name: 'Vazio', description: 'Descrito mas sem rotas' }, // provided even if unused
+        { name: 'Clientes', description: 'Gestão de clients' },
+        { name: 'Vazio', description: 'Descrito mas sem routes' }, // provided even if unused
       ],
     ) as any
     expect(doc.tags).toEqual([
-      { name: 'Clientes', description: 'Gestão de clientes' },
-      { name: 'Vazio', description: 'Descrito mas sem rotas' },
+      { name: 'Clientes', description: 'Gestão de clients' },
+      { name: 'Vazio', description: 'Descrito mas sem routes' },
       { name: 'Faturas' }, // discovered, name only
     ])
   })

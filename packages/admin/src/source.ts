@@ -14,9 +14,9 @@
  * an in-memory source for development and tests — ids have to be unique within
  * one process, and nothing more. Anything durable brings its own.
  */
-let contador = 0
-const novoId = (): string =>
-  globalThis.crypto?.randomUUID?.() ?? `mem-${Date.now().toString(36)}-${(contador += 1)}`
+let counter = 0
+const nextId = (): string =>
+  globalThis.crypto?.randomUUID?.() ?? `mem-${Date.now().toString(36)}-${(counter += 1)}`
 
 export interface ListParams {
   page?: number
@@ -60,7 +60,7 @@ export function memoryDataSource<T extends { id: string }>(seed: T[] = []): Admi
       return items.get(id) ?? null
     },
     async create(input) {
-      const id = typeof input['id'] === 'string' ? (input['id'] as string) : novoId()
+      const id = typeof input['id'] === 'string' ? (input['id'] as string) : nextId()
       const item = { ...input, id } as T
       items.set(id, item)
       return item

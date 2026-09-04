@@ -16,7 +16,31 @@ declare module '@basaltkit/http' {
   interface RouteMeta {
     /** Permission the caller must hold. Enforced by `permissionsPlugin`. */
     can?: string | string[]
+    /**
+     * Which surface this route belongs to — `'portal'`, `'public'`, whatever
+     * the application calls them. Enforced by `permissionsPlugin` when
+     * `audiences` is configured.
+     *
+     * A permission is a capability, not a surface: `matter:read` cannot tell
+     * "read my own case in the portal" from "read the case with the litigation
+     * strategy in it". This says which one a route is.
+     */
+    audience?: string
   }
+}
+
+/**
+ * A set of roles confined to a set of surfaces.
+ *
+ * ```ts
+ * audiences: { portal: { roles: ['client'], allow: ['portal', 'public'] } }
+ * ```
+ */
+export interface AudienceRule {
+  /** Roles this rule confines. */
+  roles: string[]
+  /** The `meta.audience` values those roles may reach. */
+  allow: string[]
 }
 
 
@@ -200,13 +224,13 @@ export class Gate {
     const scope = this.scope()
     // Keyed by user AND scope: caching by user alone would carry one tenant's
     // roles into a request for another.
-    const chave = `__basaltGateActor:${scope}:${user.id}`
-    const cached = context?.[chave] as PolicyUser | undefined
+    const key = `__basaltGateActor:${scope}:${user.id}`
+    const cached = context?.[key] as PolicyUser | undefined
     if (cached) return cached
 
     const roles = await this.options.store.getUserRoles(user.id, scope)
     const actor: PolicyUser = { ...user, roles }
-    if (context) (context as Record<string, unknown>)[chave] = actor
+    if (context) (context as Record<string, unknown>)[key] = actor
     return actor
   }
 
@@ -388,7 +412,25 @@ export function accessRoutes(
 
 export const GATE = createToken<Gate>('gate')
 
-export type PermissionsPluginOptions = GateOptions
+export type PermissionsPluginOptions = GateOptions & {
+  /**
+   * Surfaces, keyed by name. Omit it and nothing changes.
+   *
+   * A caller holding at least one role no rule names is **unconfined** and
+   * reaches everything their permissions allow. A caller whose every role is
+   * confined may reach only routes whose `meta.audience` one of their rules
+   * allows — and a route that declares no audience is reachable by none of
+   * them.
+   *
+   * That default is the point. The obvious design is to mark the internal
+   * routes, and it fails the first time somebody adds a route without thinking
+   * about portals: the leak this exists to prevent was exactly that, an
+   * authenticated client receiving 200 on an internal listing. Marking the
+   * small, deliberate surface a restricted role may reach is a list somebody
+   * maintains; marking every route they may not is a list somebody forgets.
+   */
+  audiences?: Record<string, AudienceRule>
+}
 
 export function permissionsPlugin(options: PermissionsPluginOptions) {
   return definePlugin({
@@ -420,11 +462,61 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
         const gate = c.get(GATE)
         for (const permission of permissions) await gate.authorize(user, permission)
       }
+      // Guard: a confined role reaches only the surfaces its rule allows.
+      //
+      // Separate from the `can` guard, and running whatever the route declares,
+      // because the two answer different questions. `can` asks whether the
+      // caller may perform the action at all; this asks whether this route is
+      // one they are allowed to see. A route with no `can` still has a surface.
+      const rules = Object.values(options.audiences ?? {})
+      const audienceGuard: RouteGuard = async ({ route, container: c }) => {
+        if (rules.length === 0) return
+        const gate = c.get(GATE)
+        const actor = await gate.actor()
+        // No user: `meta.auth`/`meta.can` decide that, not this. Confining an
+        // anonymous caller here would turn every public route into a 403.
+        if (!actor) return
+
+        // `PolicyUser` is open (`[key: string]: unknown`), so `roles` arrives
+        // untyped even though `gate.actor()` is what filled it. Narrowed here
+        // rather than cast: a store that returned something else should make
+        // this guard do nothing, not throw inside a security check.
+        const raw = actor['roles']
+        const roles: string[] = Array.isArray(raw) ? raw.filter((r): r is string => typeof r === 'string') : []
+        // No roles at all is not an audience. Such a caller holds no permission
+        // either, so `meta.can` already answers for every route that declares
+        // one; confining them here would 403 the public pages too.
+        if (roles.length === 0) return
+
+        // Confined only when EVERY role they hold is named by some rule. One
+        // unnamed role — a lawyer who is also a client of the firm — and the
+        // audiences say nothing about them. Refusing that person would lock a
+        // member of staff out of their own workplace the day they became a
+        // client.
+        const confining = rules.filter((rule) => rule.roles.some((role) => roles.includes(role)))
+        const named = (role: string): boolean => rules.some((rule) => rule.roles.includes(role))
+        if (!roles.every(named)) return
+
+        const audience = route.meta?.['audience']
+        // The default, and the whole reason this exists: a route that never
+        // mentions an audience is not reachable by a confined role. Reversing
+        // this — allow unless marked internal — is what let a portal client
+        // read an internal listing.
+        if (typeof audience !== 'string') throw new PermissionDeniedError('audience')
+        // The union of what their rules allow: two confined roles each grant
+        // reach to their own surface, and holding both grants reach to both.
+        if (!confining.some((rule) => rule.allow.includes(audience))) {
+          throw new PermissionDeniedError(`audience:${audience}`)
+        }
+      }
+
       const metadata = ensureMetadata(container)
       metadata.add('http:guards', guard)
+      metadata.add('http:guards', audienceGuard)
       // Claim `meta.can` for the adapters' boot check (routes declaring it
       // without this plugin fail loud at boot instead of serving unchecked).
       metadata.add('http:guarded-meta', 'can')
+      metadata.add('http:guarded-meta', 'audience')
     },
   })
 }

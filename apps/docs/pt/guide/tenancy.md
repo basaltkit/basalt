@@ -404,6 +404,7 @@ uma fila, um cron, um `basalt tenant:run` à mão.
 | `ready` | ✅ | O `onProvision` teve sucesso |
 | `provisioning` | ❌ 503 | O `create()` escreveu o registo; o trabalho ainda não acabou |
 | `failed` | ❌ 503 | O `onProvision` lançou. O registo é mantido, não apagado — é a evidência de que o tenant foi tentado |
+| `deleting` | ❌ 503 | O `destroy()` começou. Marcado **antes** de o storage ser tocado, para nenhum pedido chegar a um schema a ser apagado por baixo dele |
 
 **503, e não 404.** O tenant existe; apenas ainda não serve, e o 503 é o estado
 que um cliente pode voltar a tentar. Um 404 diria o contrário.
@@ -620,9 +621,11 @@ que o `@basaltkit/cli` está presente — sem ligação extra:
 | --- | --- | --- |
 | `basalt tenant:list` | `source.list()` | Tabula todos os tenants (apenas campos escalares) |
 | `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` | Persiste um novo tenant; cada flag torna-se um campo |
+| `basalt tenant:destroy <id> [--force] [--yes]` | `source.delete()` | Marca o tenant como `deleting`, corre o `onDeprovision` no contexto dele e remove o registo. Pergunta primeiro; `--yes` salta a pergunta, `--force` remove o registo mesmo que a limpeza falhe |
 | `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Corre o teu hook de migração por tenant dentro do contexto de cada um |
 | `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Corre o teu hook de seed por tenant dentro do contexto de cada um |
 | `onProvision` | `(tenant) => void \| Promise<void>` | — | Traz o storage de um tenant NOVO à existência, dentro do contexto dele, a partir do `tenancy.create()` e do `basalt tenant:create`. Sem isto o tenant é encaminhável antes de o schema existir |
+| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — o `create()` espera, portanto o tenant está utilizável quando retorna. `'deferred'` — o `create()` retorna já, com estado `provisioning`, e o resolver responde 503 até correr o `tenancy.provision(id)` |
 | `basalt tenant:run <id> <command> [args…]` | — | Corre qualquer outro comando registado dentro do contexto de um tenant |
 
