@@ -125,8 +125,10 @@ describe.each(['fastify', 'express', 'hono'] as const)('on %s', (adapter) => {
 
 Two details worth knowing. The Fastify driver connects **lazily**, on the first request, so
 an app booted with no HTTP plugin at all (a mailer- or queue-only test) still works. And
-`TestApp.server` returns the raw `FastifyInstance` — meaningful only on the default
-adapter; on Express/Hono resolve `EXPRESS` / `HONO` from `app.container` instead.
+`await TestApp.server()` returns the raw `FastifyInstance` — meaningful only on the
+default adapter; on Express/Hono resolve `EXPRESS` / `HONO` from `app.container`
+instead. It is a method, and asynchronous, because `@basaltkit/fastify` is an
+optional peer loaded on demand — see below.
 
 If you ask for an adapter whose package isn't installed, you get an actionable error
 naming the two packages to add, not a bare `ERR_MODULE_NOT_FOUND`.
@@ -368,7 +370,7 @@ Make sure you created the app with `createTestApp` (it's the one that installs i
 **`createTestApp({ adapter: 'hono' }) requires @basaltkit/hono …`**
 The optional peer isn't installed. Add `@basaltkit/hono` and `hono` (or `@basaltkit/express` and `express`) as devDependencies.
 
-**`app.server` throws `DI_UNKNOWN_TOKEN` on Express or Hono.**
+**`await app.server()` throws `DI_UNKNOWN_TOKEN` on Express or Hono.**
 `server` resolves the `FASTIFY` token. On another adapter, use `app.container.get(EXPRESS)` / `app.container.get(HONO)`.
 
 **The Express run leaves a port open after the suite.**

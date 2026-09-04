@@ -156,10 +156,14 @@ parametrizado é o teste de conformidade mais barato para tudo o que é escrito
 contra o contrato neutro do `@basaltkit/http` — vê
 [Adaptadores HTTP](/pt/guide/adapters).
 
-::: warning Aviso: `app.server` é só para Fastify
-O getter `server` resolve o token `FASTIFY`. Em `'express'` / `'hono'` lança
+::: warning Aviso: `app.server()` é só para Fastify, e é assíncrono
+O `await app.server()` resolve o token `FASTIFY`. Em `'express'` / `'hono'` lança
 `DI_UNKNOWN_TOKEN` — resolve antes `EXPRESS` / `HONO` a partir de
 `app.container`.
+
+Passou a método na 2.0: o `@basaltkit/fastify` é agora um peer opcional,
+carregado a pedido, para este pacote nunca conseguir pôr uma segunda cópia do
+adaptador na tua árvore.
 :::
 
 ## O fake de mail
@@ -338,7 +342,7 @@ tempo com concorrência dentro do ficheiro.
 | Erro | Código | HTTP | Quando |
 | --- | --- | --- | --- |
 | `Error: createTestApp({ adapter: 'express' }) requires @basaltkit/express …` | — | boot | `adapter: 'express'`/`'hono'` sem o peer opcional (e a respetiva framework) instalado |
-| `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `app.server` num adaptador que não é Fastify, ou um pedido sem plugin de adaptador em `plugins` |
+| `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `await app.server()` num adaptador que não é Fastify, ou um pedido sem plugin de adaptador em `plugins` |
 | `PluginDependencyError` | `PLUGIN_DEPENDENCY` | boot | `Duplicate plugin` — `fakeMailer().plugin` ao lado do `mailerPlugin`, ou `fakeQueue().plugin` ao lado do `queuePlugin` |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Uma rota em teste declara `meta.auth` / `meta.can` / `meta.teamRole` mas a app de teste não registou o plugin que a impõe |
 | `TenantRequiredError` | `TENANT_REQUIRED` | 400 | Código com scope de tenant correu sem tenant — chama `.asTenant('acme')` |

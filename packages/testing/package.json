@@ -24,18 +24,18 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/fastify": "workspace:^",
     "@basaltkit/mailer": "workspace:^",
-    "@basaltkit/queue": "workspace:^",
-    "fastify": "^5.12.1"
+    "@basaltkit/queue": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/express": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
     "@basaltkit/hono": "workspace:^",
     "@basaltkit/http": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.4.0",
     "express": "^5.0.0",
+    "fastify": "^5.12.1",
     "hono": "^4.13.5",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
@@ -58,10 +58,14 @@
   ],
   "peerDependencies": {
     "@basaltkit/express": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
     "@basaltkit/hono": "workspace:^"
   },
   "peerDependenciesMeta": {
     "@basaltkit/express": {
+      "optional": true
+    },
+    "@basaltkit/fastify": {
       "optional": true
     },
     "@basaltkit/hono": {
