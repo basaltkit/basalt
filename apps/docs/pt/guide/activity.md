@@ -42,10 +42,55 @@ quê, quando".
 
 ## Scoping por tenant
 
-Numa app multi-tenant, um feed nunca pode vazar atividade de outra organização. Por
-omissão as queries são **scoped ao tenant em contexto** (`tenantScoped: true`): dentro
-do tenant `acme` só vês registos `acme`; a partir de um contexto central/admin (sem
-tenant) vês tudo. As escritas preenchem `tenantId` a partir do contexto automaticamente.
+Numa app multi-tenant, um feed nunca pode vazar atividade de outra organização.
+As escritas preenchem o `tenantId` a partir do contexto automaticamente, e as
+queries são scoped ao tenant em contexto.
+
+**Com o `@basaltkit/tenancy` registado, uma query que não resolva tenant lança**
+em vez de responder com os registos de todos — o `activityPlugin` escolhe
+`tenantScoped: 'required'` por ti, a menos que digas outra coisa. Uma linha de
+feed não é um número agregado: lê-se *«a Dra. Kiala abriu o caso 2026/014 para a
+Kwanza Lda»*, que é o cliente de outro escritório, pelo nome, em texto.
+
+Uma app single-tenant não tem dimensão de tenant e fica como estava. Uma consola
+de operador que queira mesmo ler através de tenants diz `tenantScoped: false` e
+é obedecida; passar um `tenantId` explícito na query também salta o scoping
+automático.
+
+## Registar a partir de eventos de domínio
+
+Ligar um feed à mão é um `hooks.on(...)` por evento, e puxa-te para chamar o
+`activity` de dentro dos teus serviços. O `activityRule` mantém-nos separados —
+**o domínio emite, este pacote escuta, e nenhum conhece o outro** — com a mesma
+forma do `syncRule` do [search](/pt/guide/search) e do `bridgeRule` do
+[realtime](/pt/guide/realtime).
+
+```ts
+import { activityPlugin, activityRule } from '@basaltkit/activity'
+
+activityPlugin({
+  rules: [
+    activityRule({
+      hook: 'matter:opened',
+      log: 'matters',
+      subject: ({ matter }) => ({ type: 'matter', id: matter.id }),
+      description: ({ matter }) => `abriu o caso ${matter.number}`,
+      causer: ({ by }) => by,
+    }),
+  ],
+})
+```
+
+Um `description` que devolva `null` não regista nada, portanto um hook pode
+produzir linha só para os eventos que a merecem.
+
+::: tip Uma regra nunca derruba quem emitiu
+O `HookBus` propaga a falha de um handler a quem emitiu o evento. Isso está
+certo para uma trilha de auditoria — um facto que não se conseguiu registar não
+pode ser reportado como registado — e errado aqui: uma linha de histórico que
+não se consegue escrever não pode fazer falhar o encerramento do caso que a
+produziu. As falhas vão para o `onRuleError`, que por omissão avisa na consola.
+:::
 
 ## Persistir
 
