@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -130,13 +130,18 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
         dominios: string[],
       ): Promise<number | null> => {
         const caminho = resolve(schemaPath)
-        if (!existsSync(caminho)) {
+
+        // Read first and ask questions after, rather than `existsSync` then
+        // read: the two-step version has a window between the check and the
+        // read, and answers a question the read itself already answers.
+        let userSchema: string
+        try {
+          userSchema = readFileSync(caminho, 'utf8')
+        } catch {
           io.error(`No schema found at ${caminho}.`)
           io.error('Create one first with a `datasource` and `generator` block, then re-run.')
           return null
         }
-
-        const userSchema = readFileSync(caminho, 'utf8')
         const present = new Set(extractSchemaBlocks(userSchema).map((b) => b.name))
         const packages = discoverSchemas(dominios)
         if (packages.length === 0) return 0

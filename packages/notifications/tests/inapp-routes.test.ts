@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createApp, runWithContext } from '@basaltkit/core'
-import { IN_APP, MemoryInAppStore, inAppRoutes, notificationsPlugin } from '../src/index.js'
+import { MemoryInAppStore, inAppRoutes, notificationsPlugin } from '../src/index.js'
 
 /**
  * F-24 · Reading your own notifications.
