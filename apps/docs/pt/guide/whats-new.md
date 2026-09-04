@@ -1,17 +1,133 @@
-# Novidades no Basalt 1.8
+# Novidades no Basalt 1.9
 
-> *"Basalt 1.8" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.9" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são publicados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
 > pacote que o traz.*
 
-O Basalt 1.8 é a versão em que **a persistência multi-tenant deixa de falhar em
-silêncio**. Tudo o que está aqui saiu de usar o framework para construir uma app
-multi-tenant a sério, e não de o ler: quatro maneiras distintas de um tenant
-acabar com os dados errados — ou sem dados nenhuns — com todas as camadas a
-comunicar sucesso.
+::: warning É preciso Zod 4
+Doze pacotes estreitam o peer do `zod` de `^3.24.0 || ^4.0.0` para `^4.0.0`. É a
+única coisa que uma atualização te obriga a mudar — ver [Atualização](#atualização).
+:::
+
+O Basalt 1.9 é a versão **escrita por uma aplicação e não pelo framework**.
+Construiu-se um SaaS jurídico a sério sobre o Basalt e registou-se, à medida que
+acontecia, cada sítio onde o framework obrigou quem o usava a escrever código que
+o framework devia ter escrito. Quinze dessas lacunas fecham aqui.
+
+Não são uma lista de desejos. Cada uma é um sítio onde duas peças oficiais não
+encaixavam, ou onde a forma documentada de fazer uma coisa não sobreviveu ao
+contacto com um segundo cliente Prisma, um utilizador de portal, ou um tenant.
 
 ## Destaques
+
+### Duas peças oficiais que não encaixavam
+- **A pesquisa full-text não corria de todo através do cliente Prisma.** A língua
+  ia como parâmetro ligado, e o PostgreSQL não aceita isso onde quer um
+  `regconfig`. Todas as queries falhavam com erro de tipo — não um resultado
+  degradado, resultado nenhum. Agora com cast no sítio da chamada.
+  *(`@basaltkit/search-postgres`)*
+- **O plugin de auditoria abortava o provisionamento de tenants.** Os padrões por
+  omissão incluíam `tenancy:switched`, que dispara fora de qualquer contexto de
+  tenant; a captura lançava, e o erro propagava-se pelo `provision()`, marcando o
+  tenant como falhado. Uma aplicação a seguir os defaults dos dois pacotes não
+  conseguia criar um único tenant. O padrão saiu e as duas pontes passaram a
+  isolar as suas falhas. *(`@basaltkit/audit`)*
+- **O pacote de admin não fazia bundle para o browser a que se destina.**
+  Importava `node:crypto` para gerar um id, e o barrel reexportava-o, portanto
+  importar o `defineResource` arrastava um builtin do Node para o bundle. Todas as
+  aplicações tinham de o substituir por um shim. *(`@basaltkit/admin`)*
+
+### O framework passa a escrever o que todas as aplicações escreviam
+- **`gate.actor()`** hidrata os papéis de quem chama a partir do âmbito do
+  pedido, em vez de cada serviço o reimplementar — e levar com um 403 sem
+  explicação quando se esquecia. *(`@basaltkit/permissions`)*
+- **`accessRoutes()` e um subpath `permissions/match` sem dependências**, para o
+  browser avaliar wildcards da mesma maneira que o servidor. Divergir aí não dá
+  um erro que se veja; dá um ecrã com um botão que ninguém consegue carregar.
+  *(`@basaltkit/permissions`)*
+- **`inAppRoutes()`** serve os quatro endpoints que todas as aplicações
+  escreviam à mão. A forma das rotas era opinativa que chegasse para ficar de
+  fora; a regra de segurança não era, e é a mesma em todo o lado — **o
+  destinatário é a sessão, nunca um parâmetro**. *(`@basaltkit/notifications`)*
+- **`tenantClient()`** para stores construídos antes de existir um pedido, em vez
+  de cada aplicação escrever o mesmo proxy. *(`@basaltkit/prisma`)*
+- **`authRoutes({ password })`**, aplicado ao registo *e* ao reset — uma política
+  imposta só num dos dois não é uma política. *(`@basaltkit/auth`)*
+
+### Declarações que passam a ser verificadas
+- **O `meta.subscribed` é validado no arranque.** Um nome de plano com uma gralha
+  produzia uma rota que recusava toda a gente em silêncio. Todas as rotas
+  ofensoras são reportadas de uma vez, porque arrancar, corrigir uma e arrancar
+  outra vez é uma forma lenta de encontrar três. *(`@basaltkit/subscriptions`)*
+- **O `RouteMeta` aceita assinatura de índice**, para um pacote poder estender os
+  metadados de rota sem cada aplicação fazer cast. *(`@basaltkit/http`)*
+- **O `prisma:sync` distingue o schema central do de um tenant.** A flag mais
+  óbvia punha, em silêncio, tabelas centrais dentro do schema de cada tenant.
+  *(`@basaltkit/prisma`)*
+
+### Código gerado que combina com o projeto onde é gerado
+- **O `defineResource` aceita rótulos de campo e opções de enum traduzidas.** Os
+  rótulos vinham do nome do campo — `taxId` saía *Tax Id* — e as opções de enum
+  saíam como os valores guardados. Numa aplicação escrita noutra língua, o
+  formulário gerado ficava metade em inglês e metade em valores de base de dados,
+  o que chegava para escrevê-lo à mão ser mais fácil. *(`@basaltkit/admin`)*
+- **O gerador aceita um cliente Prisma configurável**, e opções do projeto. Uma
+  aplicação com um segundo cliente — schema-por-tenant, réplica de leitura —
+  tinha de editar à mão todos os repositórios gerados. *(`@basaltkit/generator`)*
+- **O `authorize` recebe o contentor**, para o gate de subscrições de realtime
+  alcançar um serviço sem uma variável de módulo preenchida pelo `boot` de outro
+  plugin. *(`@basaltkit/realtime`)*
+- **O SDK passa corpos nativos sem lhes tocar** — `FormData`, `Blob`,
+  `ReadableStream` — e aceita `AbortSignal` e cabeçalhos por chamada.
+  *(`@basaltkit/sdk`)*
+
+## Atualização
+
+Os pacotes são independentes — sobe só o que usas. Uma mudança é exigida a toda a
+gente, e um comportamento apertou.
+
+### É preciso Zod 4
+
+Doze pacotes — `admin`, `audit-viewer`, `auth`, `comments`, `env`, `fastify`,
+`files`, `http`, `mcp`, `sdk`, `subscriptions`, `teams` — estreitam o peer do
+`zod` de `^3.24.0 || ^4.0.0` para `^4.0.0`. Cada um publica um major por causa
+disso.
+
+```bash
+pnpm add zod@^4
+```
+
+A segunda metade daquele range já não era exercitada há muito: este repositório
+testa só contra o zod 4, portanto o zod 3 era uma promessa de compatibilidade que
+ninguém verificava. Suportar uma major que nunca se corre é pior do que não a
+suportar — trava a API e promete uma coisa que partia ao primeiro contacto.
+
+O [guia de migração 3→4](https://zod.dev/v4/changelog) do próprio Zod cobre as
+mudanças de API. As duas que mais tocam a quem usa Basalt:
+
+- `z.string().datetime()` passa a `z.iso.datetime()`
+- a personalização de erros passa de `message` / `invalid_type_error` para um só
+  parâmetro `error`
+
+O peer pede `^4.0.0` e não a 4.x mais recente — exigir a versão que este
+repositório testa obrigaria todos os consumidores a mexer ao nosso ritmo sem
+motivo.
+
+### Um nome de plano desconhecido passa a falhar o arranque
+
+`meta.subscribed: 'pró'` contra um catálogo com `pro` arrancava bem e recusava
+toda a gente em runtime. Agora é erro no arranque, com todas as rotas ofensoras
+listadas de uma vez. Se um arranque começar a falhar depois da atualização, a
+rota já estava morta — agora é que dá para ver.
+
+---
+
+## Anteriormente — Basalt 1.8
+
+> *A versão em que **a persistência multi-tenant deixou de falhar em silêncio**:
+> quatro maneiras distintas de um tenant acabar com os dados errados — ou sem
+> dados nenhuns — com todas as camadas a comunicar sucesso.*
 
 ### Nunca mais se servem dados errados a um tenant em silêncio
 - **Schema-por-tenant numa base que não o consegue fazer.** Assenta em um schema
@@ -89,10 +205,10 @@ incluindo o compromisso: com o `client` definido, uma rota de tenant mal marcada
 lê a base central em vez de falhar ruidosamente, e é o `required: true` que
 mantém isso seguro.
 
-## Atualização
+### Atualizar para 1.8
 
-Os pacotes são independentes — sobe só o que usas. Nada aqui é breaking, mas dois
-comportamentos apertaram:
+Os pacotes são independentes — sobe só o que usas. Nada no 1.8 é breaking, mas
+dois comportamentos apertaram:
 
 1. **O `migrateTenants` pode agora reprovar um tenant que antes passava.** Uma
    migração que não produziu tabelas comunica `ok: false` com

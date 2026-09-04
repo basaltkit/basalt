@@ -1,15 +1,131 @@
-# What's new in Basalt 1.8
+# What's new in Basalt 1.9
 
-> *"Basalt 1.8" is the umbrella label for this wave of work; the `@basaltkit/*`
+> *"Basalt 1.9" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
 
-Basalt 1.8 is the release where **multi-tenant persistence stops failing quietly**.
-Every item here came out of using the framework to build a real multi-tenant app,
-not out of reading it: four distinct ways a tenant could end up with the wrong
-data — or no data at all — while every layer reported success.
+::: warning Zod 4 is now required
+Twelve packages narrow their `zod` peer from `^3.24.0 || ^4.0.0` to `^4.0.0`.
+This is the one change an upgrade forces on you — see [Upgrading](#upgrading).
+:::
+
+Basalt 1.9 is the release **written by an application rather than by the
+framework**. A real legal SaaS was built on Basalt, and every place where the
+framework made its author write code the framework should have written was
+recorded as it happened. Fifteen of those gaps are closed here.
+
+They are not a wish list. Each one is a place where two official packages did
+not fit together, or where the documented way of doing something did not
+survive contact with a second Prisma client, a portal user, or a tenant.
 
 ## Highlights
+
+### Two official packages that did not fit together
+- **Full-text search could not run through the Prisma client at all.** The
+  language was passed as a bound parameter, which PostgreSQL will not accept
+  where a `regconfig` belongs. Every query failed with a type error — not a
+  degraded result, no result. Now cast at the call site. *(`@basaltkit/search-postgres`)*
+- **The audit plugin aborted tenant provisioning.** Its default hook patterns
+  included `tenancy:switched`, which fires outside any tenant context; the
+  capture threw, and the error propagated out through `provision()`, marking the
+  tenant failed. An application following both packages' defaults could not
+  create a single tenant. The pattern is gone and both bridges now isolate their
+  own failures. *(`@basaltkit/audit`)*
+- **The admin package would not bundle for the browser it targets.** It imported
+  `node:crypto` to mint one id, and the barrel re-exported it, so importing
+  `defineResource` dragged a Node builtin into the bundle. Every application had
+  to alias it away. *(`@basaltkit/admin`)*
+
+### The framework now writes what every application was writing
+- **`gate.actor()`** hydrates the caller's roles from the request scope, instead
+  of each service reimplementing it — and getting a silent 403 when it forgot.
+  *(`@basaltkit/permissions`)*
+- **`accessRoutes()` and a dependency-free `permissions/match` subpath**, so a
+  browser evaluates wildcards the same way the server does. Divergence there is
+  not a bug you notice; it is a screen that renders a button nobody can press.
+  *(`@basaltkit/permissions`)*
+- **`inAppRoutes()`** serves the four endpoints every application wrote by hand.
+  The routing shape was opinionated enough to leave out; the security rule was
+  not, and is the same everywhere — **the recipient is the session, never a
+  parameter**. *(`@basaltkit/notifications`)*
+- **`tenantClient()`** for stores constructed before any request exists, instead
+  of each application writing the same proxy. *(`@basaltkit/prisma`)*
+- **`authRoutes({ password })`**, applied to registration *and* reset — a policy
+  enforced on one of the two is not a policy. *(`@basaltkit/auth`)*
+
+### Declarations that are now checked
+- **`meta.subscribed` is validated at boot.** A plan name with a typo used to
+  produce a route that quietly refused everyone. Every offending route is
+  reported at once, because booting, fixing one, and booting again is a slow way
+  to find three. *(`@basaltkit/subscriptions`)*
+- **`RouteMeta` takes an index signature**, so a package can extend route
+  metadata without every application casting. *(`@basaltkit/http`)*
+- **`prisma:sync` distinguishes the central schema from a tenant's.** The most
+  obvious flag used to put central tables inside every tenant's schema, silently.
+  *(`@basaltkit/prisma`)*
+
+### Generated code that matches the project it is generated into
+- **`defineResource` accepts field labels and translated enum options.** Labels
+  came from the field name — `taxId` read *Tax Id* — and enum options came out as
+  the stored values. In an application written in another language the generated
+  form ended up half in English and half in database values, which was enough to
+  make hand-writing it the easier option. *(`@basaltkit/admin`)*
+- **The generator takes a configurable Prisma client**, and project-wide
+  defaults. An application with a second client — schema-per-tenant, a read
+  replica — had to hand-edit every generated repository. *(`@basaltkit/generator`)*
+- **`authorize` receives the container**, so a realtime subscription gate can
+  reach a service without a module-level variable filled from someone else's
+  boot. *(`@basaltkit/realtime`)*
+- **The SDK passes native bodies through untouched** — `FormData`, `Blob`,
+  `ReadableStream` — and accepts an `AbortSignal` and per-call headers.
+  *(`@basaltkit/sdk`)*
+
+## Upgrading
+
+Packages are independent — bump only what you use. One change is required of
+everyone, and one behaviour tightened.
+
+### Zod 4 is required
+
+Twelve packages — `admin`, `audit-viewer`, `auth`, `comments`, `env`, `fastify`,
+`files`, `http`, `mcp`, `sdk`, `subscriptions`, `teams` — narrow their `zod` peer
+from `^3.24.0 || ^4.0.0` to `^4.0.0`. Each publishes a new major for it.
+
+```bash
+pnpm add zod@^4
+```
+
+The second half of that old range had not been exercised in a long time: this
+repository tests against zod 4 only, so zod 3 was a compatibility promise nobody
+was checking. Supporting a major version you never run is worse than not
+supporting it — it holds the API surface back while promising something that
+would break on first contact.
+
+Zod's own [3-to-4 migration guide](https://zod.dev/v4/changelog) covers the API
+changes. The two that touch Basalt users most:
+
+- `z.string().datetime()` becomes `z.iso.datetime()`
+- error customisation moves from `message` / `invalid_type_error` to a single
+  `error` parameter
+
+The peer asks for `^4.0.0`, not the newest 4.x — requiring the version this
+repository happens to test would force every consumer to move in step with us
+for no reason.
+
+### An unknown plan name now fails the boot
+
+`meta.subscribed: 'pró'` against a catalogue containing `pro` used to boot fine
+and refuse every caller at runtime. It is now an error at startup, listing every
+offending route at once. If a boot starts failing after the upgrade, the route
+was already dead — you can now see it.
+
+---
+
+## Previously — Basalt 1.8
+
+> *The release where **multi-tenant persistence stopped failing quietly**: four
+> distinct ways a tenant could end up with the wrong data — or no data at all —
+> while every layer reported success.*
 
 ### A tenant is never served the wrong data quietly
 - **Schema-per-tenant on a database that cannot do it.** It relies on a schema
@@ -84,9 +200,9 @@ including the trade-off: with `client` set, a mis-scoped tenant route reads the
 central database instead of failing loudly, and `required: true` is what keeps
 that safe.
 
-## Upgrading
+### Upgrading to 1.8
 
-Packages are independent — bump only what you use. Nothing here is a breaking
+Packages are independent — bump only what you use. Nothing in 1.8 is a breaking
 change, but two behaviours tightened:
 
 1. **`migrateTenants` can now fail a tenant it previously passed.** A migration

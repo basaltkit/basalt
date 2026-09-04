@@ -14,13 +14,20 @@ lock-in, TypeScript inference from the route to the client.
 Runs on **Fastify, Express or Hono** (swap adapters without touching your
 routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.8 — the release where multi-tenant persistence fails loudly.
-> 89 packages, each versioned independently. 🎉** Four ways a tenant could be
-> served the wrong data — or none — while every layer reported success are now
-> refused where the mistake is made: schema-per-tenant on a database that cannot
-> do it, migrations read from the central history, a migration that "succeeded"
-> without creating a table, and central-vs-tenant routes that could not be told
-> apart. Before that, 1.7 ended backend lock-in: the queue, storage, cache and
+> **Status: Basalt 1.9 — the release written by an application, not by the
+> framework. Requires Zod 4. 89 packages, each versioned independently. 🎉**
+> A real legal SaaS was built on Basalt and every place the framework made its
+> author write code the framework should have written was recorded. Fifteen of
+> those gaps are closed here: a search index that could not run through the
+> Prisma client at all, an audit plugin that aborted tenant provisioning, an
+> admin package that would not bundle for the browser it targets, a permission
+> gate whose roles no service could reach, a notifications package that stored
+> alerts and never served them. **Zod 3 is no longer supported** — twelve
+> packages narrow their peer to `^4.0.0`, which is the one thing an upgrade
+> requires you to change. Before that, 1.8 made multi-tenant persistence fail
+> loudly: four ways a tenant could be served the wrong data — or none — while
+> every layer reported success are now refused where the mistake is made.
+> Before that, 1.7 ended backend lock-in: the queue, storage, cache and
 > mailer cores each shipped one backend's client to every consumer, and all four
 > are now separate packages with the tripwire's allowlist empty. Earlier still, three
 > architecture review cycles turned the project's promises into machine-enforced rules:
