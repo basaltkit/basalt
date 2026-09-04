@@ -21,6 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The same token the Changesets step uses, so the branch it pushes is
+          # pushed as a person and the pull request's checks run. See below.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
@@ -42,7 +46,19 @@ jobs:
           commit-message: "chore: version packages"
           pr-title: "chore: version packages"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A pull request opened with GITHUB_TOKEN starts no workflow runs —
+          # GitHub's own guard against a workflow triggering itself forever. The
+          # consequence here is that the "Version Packages" PR arrives with no
+          # checks at all, and `main`'s protection then blocks it for missing the
+          # very checks that could never run. Merging it took an empty commit
+          # pushed by hand.
+          #
+          # RELEASE_TOKEN is a fine-grained PAT with Contents and Pull requests
+          # set to read/write on this repository. Opening the PR as a person
+          # makes the checks run. Falls back to GITHUB_TOKEN so a fork, or this
+          # repository before the secret exists, still releases — with the
+          # manual step above.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           # setup-node's generated .npmrc reads the token from NODE_AUTH_TOKEN;
           # passing it as NPM_TOKEN left ${NODE_AUTH_TOKEN} empty → anonymous
           # publish → E404. The secret name stays NPM_TOKEN.
