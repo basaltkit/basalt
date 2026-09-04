@@ -68,6 +68,8 @@ export {
 } from './migrate-command.js'
 export {
   prismaSyncCommand,
+  type PrismaSyncTarget,
+  type PrismaSyncCommandOptions,
   extractSchemaBlocks,
   type PrismaSyncCommandOptions,
 } from './sync-command.js'
