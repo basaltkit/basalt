@@ -101,7 +101,9 @@ reference schema; `basalt prisma:sync` merges it like any other.
 | `download(groupId, n?, tenantId?)` | The bytes of one revision; defaults to the current |
 
 `input` is the `UploadInput` of `@basaltkit/files` plus an optional `note`.
-`tenantId` is optional and last, exactly as in `Files`.
+`tenantId` is optional and last, and resolves exactly as in `Files`: the
+explicit argument, then `ctx().tenant`, then the single-tenant scope. Passing
+nothing inside a tenant context is the normal case and works.
 
 Reading a revision whose file has been deleted throws
 `FileVersionNotFoundError` rather than handing back a row that cannot be

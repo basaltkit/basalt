@@ -75,6 +75,35 @@ export interface UploadInput {
   metadata?: FileMetadata
 }
 
+/**
+ * The tenant a file call is scoped to, or `undefined` when the app has no
+ * tenancy.
+ *
+ * With `@basaltkit/tenancy` registered an unresolvable tenant is an error: an
+ * unscoped read or write would cross tenants. Without it there is no tenant
+ * dimension and nothing to cross.
+ */
+export function resolveFileTenant(explicit: string | undefined, tenancyActive: boolean): string | undefined {
+  const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+  if (id) return id
+  if (tenancyActive) throw new FileTenantRequiredError()
+  return undefined
+}
+
+/**
+ * The store key for a file call: the resolved tenant, or
+ * {@link SINGLE_TENANT_SCOPE}.
+ *
+ * Exported so that anything storing rows alongside files — `FileVersions`, an
+ * application's own table — keys them identically. Two implementations of this
+ * rule is one implementation too many: the first divergence wrote versions
+ * under the context tenant and read them back under `'default'`, which answers
+ * "no such document" about a document that exists.
+ */
+export function fileScope(explicit: string | undefined, tenancyActive: boolean): string {
+  return resolveFileTenant(explicit, tenancyActive) ?? SINGLE_TENANT_SCOPE
+}
+
 const matchesType = (contentType: string, allowed: string[]): boolean =>
   allowed.some((a) => a === contentType || (a.endsWith('/*') && contentType.startsWith(a.slice(0, -1))))
 
@@ -227,23 +256,13 @@ export class Files {
     await this.checkQuota?.(tenantId, size)
   }
 
-  /**
-   * The tenant a call is scoped to, or `undefined` when the app has no tenancy.
-   *
-   * With `@basaltkit/tenancy` registered an unresolvable tenant is an error: an
-   * unscoped read or write would cross tenants. Without it there is no tenant
-   * dimension and nothing to cross.
-   */
   private tenant(explicit?: string): string | undefined {
-    const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (id) return id
-    if (this.tenancyActive()) throw new FileTenantRequiredError()
-    return undefined
+    return resolveFileTenant(explicit, this.tenancyActive())
   }
 
   /** The {@link FileStore} key: the tenant, or {@link SINGLE_TENANT_SCOPE}. */
   private scope(explicit?: string): string {
-    return this.tenant(explicit) ?? SINGLE_TENANT_SCOPE
+    return fileScope(explicit, this.tenancyActive())
   }
 
   /**
