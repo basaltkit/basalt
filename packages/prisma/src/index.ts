@@ -71,7 +71,6 @@ export {
   type PrismaSyncTarget,
   type PrismaSyncCommandOptions,
   extractSchemaBlocks,
-  type PrismaSyncCommandOptions,
 } from './sync-command.js'
 
 declare module '@basaltkit/core' {

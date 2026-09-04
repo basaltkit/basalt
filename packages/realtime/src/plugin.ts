@@ -1,5 +1,5 @@
 import { createToken, definePlugin } from '@basaltkit/core'
-import type { BasaltHooks } from '@basaltkit/core'
+import type { BasaltHooks, Container } from '@basaltkit/core'
 import { MemoryBackplane, RealtimeHub, type Connection, type RealtimeBackplane } from './hub.js'
 import { Realtime } from './realtime.js'
 

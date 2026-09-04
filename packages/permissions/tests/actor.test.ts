@@ -65,8 +65,8 @@ describe('F-20 · gate.actor()', () => {
     const a = await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, () => gate.actor())
     const b = await runWithContext({ user: { id: 'u2' }, tenant: { id: 'acme' } }, () => gate.actor())
 
-    expect(a.roles).toEqual(['partner'])
-    expect(b.roles).toEqual(['trainee'])
+    expect(a?.roles).toEqual(['partner'])
+    expect(b?.roles).toEqual(['trainee'])
   })
 
   it('reads roles from the scope of the request', async () => {
@@ -80,8 +80,8 @@ describe('F-20 · gate.actor()', () => {
     const acme = await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, () => gate.actor())
     const globex = await runWithContext({ user: { id: 'u1' }, tenant: { id: 'globex' } }, () => gate.actor())
 
-    expect(acme.roles).toEqual(['partner'])
-    expect(globex.roles).toEqual(['trainee'])
+    expect(acme?.roles).toEqual(['partner'])
+    expect(globex?.roles).toEqual(['trainee'])
   })
 
   it('returns null with no user in context', async () => {

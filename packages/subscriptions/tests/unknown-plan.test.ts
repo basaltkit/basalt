@@ -36,6 +36,19 @@ const comPlanos = (rotas: ReturnType<typeof route>[]) =>
     ],
   }).boot()
 
+/**
+ * Boots and returns the error, refusing to hand back an application: without
+ * this, a boot that quietly succeeds fails the next assertion with a message
+ * about `undefined` instead of saying that nothing was rejected.
+ */
+const falhaAoArrancar = (rotas: ReturnType<typeof route>[]): Promise<Error> =>
+  comPlanos(rotas).then(
+    () => {
+      throw new Error('booted — expected the unknown plan to be refused')
+    },
+    (e: unknown) => e as Error,
+  )
+
 describe('F-17 · meta.subscribed is checked against the catalogue', () => {
   it('refuses to boot on a plan that is not in the catalogue', async () => {
     const rota = route({
@@ -59,7 +72,7 @@ describe('F-17 · meta.subscribed is checked against the catalogue', () => {
       handler: () => ({ ok: true }),
     })
 
-    const erro = await comPlanos([rota]).catch((e: unknown) => e as Error)
+    const erro = await falhaAoArrancar([rota])
     expect(erro.message).toContain('/reports')
     expect(erro.message).toContain('pró')
     expect(erro.message).toContain('free')
@@ -87,7 +100,7 @@ describe('F-17 · meta.subscribed is checked against the catalogue', () => {
       route({ method: 'GET', url: '/c', meta: { subscribed: 'starter' }, handler: () => ({}) }),
     ]
 
-    const erro = await comPlanos(rotas).catch((e: unknown) => e as Error)
+    const erro = await falhaAoArrancar(rotas)
     expect(erro.message).toContain('/a')
     expect(erro.message).toContain('/c')
     expect(erro.message).not.toContain('/b')

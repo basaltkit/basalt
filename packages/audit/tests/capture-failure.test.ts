@@ -30,7 +30,7 @@ const brokenStore = (): AuditStore => ({
   async append() {
     throw new Error('relation "audit_entries" does not exist')
   },
-  async list() {
+  async query() {
     return []
   },
 })
@@ -145,6 +145,7 @@ describe('F-13 · the combination that broke: audit + tenancy + schema-per-tenan
       plugins: [
         auditPlugin({ store }),
         tenancyPlugin({
+          resolvers: [],
           source: new MemoryTenantSource(),
           onProvision: async (t) => {
             provisioned.add(t.id)

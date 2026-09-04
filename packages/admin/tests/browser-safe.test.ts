@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { memoryDataSource } from '../src/index.js'
 
@@ -19,10 +20,14 @@ describe('F-14 · no Node builtins reach the bundle', () => {
     // The regression guard the whole fix exists for. A single `node:` import
     // anywhere in `src` breaks every consumer's build, and the failure appears
     // in *their* bundler — far from the line that caused it.
-    const fontes = import.meta.glob('../src/**/*.ts', { eager: true, query: '?raw', import: 'default' })
-    const culpados = Object.entries(fontes)
-      .filter(([, conteudo]) => /from ['"]node:/.test(conteudo as string))
-      .map(([caminho]) => caminho)
+      // Walked with `node:fs` rather than `import.meta.glob`: the glob is a
+      // Vite API that `tsc --noEmit` does not know about, and a test guarding
+      // the build should not itself fail the typecheck.
+      const src = new URL('../src/', import.meta.url).pathname
+      const culpados = readdirSync(src, { recursive: true })
+        .map(String)
+        .filter((caminho) => caminho.endsWith('.ts'))
+        .filter((caminho) => /from ['"]node:/.test(readFileSync(join(src, caminho), 'utf8')))
 
     expect(culpados).toEqual([])
   })

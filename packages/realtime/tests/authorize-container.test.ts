@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, createToken } from '@basaltkit/core'
+import { createApp, createToken, definePlugin } from '@basaltkit/core'
 import { REALTIME_HUB, realtimePlugin } from '../src/index.js'
 
 /**
@@ -41,14 +41,14 @@ describe('F-23 · authorize receives the container', () => {
 
     const app = await createApp({
       plugins: [
-        {
+        definePlugin({
           name: 'test:access-plugin',
           register({ container }) {
             container.singleton(ACCESS, () => ({
               roles: (userId: string) => (userId === 'u1' ? ['partner'] : ['trainee']),
             }))
           },
-        },
+        }),
         realtimePlugin({
           authorize: (connection, channel, { container }) => {
             // The whole point: reaching a service without a module-level
@@ -72,14 +72,14 @@ describe('F-23 · authorize receives the container', () => {
   it('refuses the channel when the service says so', async () => {
     const app = await createApp({
       plugins: [
-        {
+        definePlugin({
           name: 'test:access-plugin',
           register({ container }) {
             container.singleton(ACCESS, () => ({
               roles: (userId: string) => (userId === 'u1' ? ['partner'] : ['client']),
             }))
           },
-        },
+        }),
         realtimePlugin({
           authorize: (connection, channel, { container }) =>
             channel !== 'firm' || container.get(ACCESS).roles(connection.userId!).includes('partner'),
