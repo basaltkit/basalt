@@ -100,7 +100,18 @@ export class PrismaTenantSource implements TenantSource {
     return rows.map((r) => r.data as Tenant)
   }
 
-  /** Delete a tenant; its domains cascade (schema `onDelete: Cascade`). */
+  /**
+   * Removes a tenant; its domains cascade (schema `onDelete: Cascade`).
+   *
+   * This is the `TenantSource.delete` the contract asks for, and what
+   * `tenancy.destroy()` calls. Without it, `destroy` refuses — which is the
+   * right answer, and not one you want to meet in production.
+   */
+  async delete(id: string): Promise<void> {
+    await this.client.tenant.deleteMany({ where: { id } })
+  }
+
+  /** The older name, kept so existing callers keep working. */
   async remove(id: string): Promise<boolean> {
     const { count } = await this.client.tenant.deleteMany({ where: { id } })
     return count > 0
