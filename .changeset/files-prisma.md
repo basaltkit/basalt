@@ -1,10 +1,15 @@
 ---
-'@basaltkit/files-prisma': major
+'@basaltkit/files-prisma': minor
 '@basaltkit/files': major
 '@basaltkit/prisma': minor
 ---
 
 `@basaltkit/files-prisma`: the file domain finally has a durable store.
+
+Debuts at **0.1.0**, not 1.0.0. The eleven sibling `-prisma` packages are at 1.x
+and covered by the ecosystem's semver commitment; this one has not been run
+against a real database by anyone yet, and saying so in the version number is
+cheaper than saying it in a changelog nobody reads.
 
 Of the framework's domains, eleven ship both `-prisma` and `-sqlite` backends
 without a single exception. `files` shipped neither. It was the only domain with
