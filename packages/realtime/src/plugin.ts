@@ -47,7 +47,27 @@ export interface RealtimePluginOptions {
    * of the tenant (private/admin channels); without it any authenticated
    * connection can subscribe to any channel name in its tenant.
    */
-  authorize?: (connection: Connection, channel: string) => boolean | Promise<boolean>
+  authorize?: (
+    connection: Connection,
+    channel: string,
+    /**
+     * The application's container.
+     *
+     * `authorize` runs outside any request — there is no `ctx()` when a client
+     * opens a stream — and `Connection` carries `id`, `tenantId` and `userId`.
+     * Not roles, not permissions, which is exactly what deciding "may this
+     * connection hear this channel" needs.
+     *
+     * Without this, gates stashed the container in a module-level variable and
+     * filled it from a companion plugin's `boot` — which is quietly wrong when
+     * plugin order changes.
+     *
+     * A container rather than resolved roles: the gate does not always want
+     * roles. It might want a subscription, a feature flag, a per-tenant
+     * setting. Deciding that here would be deciding it for everyone.
+     */
+    context: { container: Container },
+  ) => boolean | Promise<boolean>
   /** Max distinct channels per connection (DoS bound). Default 1000. */
   maxSubscriptionsPerConnection?: number
   /** Max channel-name length (DoS bound). Default 256. */
@@ -76,7 +96,14 @@ export function realtimePlugin(options: RealtimePluginOptions = {}) {
     register({ container }) {
       const hub = new RealtimeHub(options.backplane ?? new MemoryBackplane(), {
         ...(options.onDeliveryError ? { onDeliveryError: options.onDeliveryError } : {}),
-        ...(options.authorize ? { authorize: options.authorize } : {}),
+        // Bound here, where the container exists. Existing two-parameter gates
+        // are unaffected — they simply ignore the extra argument.
+        ...(options.authorize
+          ? {
+              authorize: (connection: Connection, channel: string) =>
+                options.authorize!(connection, channel, { container }),
+            }
+          : {}),
         ...(options.maxSubscriptionsPerConnection !== undefined
           ? { maxSubscriptionsPerConnection: options.maxSubscriptionsPerConnection }
           : {}),
