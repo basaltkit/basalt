@@ -8,6 +8,7 @@ import { COMMENTS, commentsPlugin } from '@basaltkit/comments'
 import { EVENTS, defineEvent, eventsPlugin } from '@basaltkit/events'
 import { EXPORTS, defineExport, exportsPlugin } from '@basaltkit/exports'
 import { FILES, filesPlugin } from '@basaltkit/files'
+import { FILE_VERSIONS, fileVersionsPlugin } from '@basaltkit/files-versions'
 import { FLAGS, defineFlags, flagsPlugin } from '@basaltkit/flags'
 import { I18N, i18nPlugin } from '@basaltkit/i18n'
 import { MAILER, defineMail, mailerPlugin } from '@basaltkit/mailer'
@@ -122,6 +123,7 @@ async function bootWithoutTenancy() {
       webhooksPlugin({ deliverer: collectingDeliverer(deliveries) }),
       storagePlugin({ disks: { main: { driver: storageDriver } }, default: 'main' }),
       filesPlugin({ disk: 'main' }),
+      fileVersionsPlugin(),
       commentsPlugin(),
       searchPlugin({ driver: new MemorySearchDriver() }),
       exportsPlugin(),
@@ -215,6 +217,19 @@ describe('beyond-SaaS: the generic packages work without tenancyPlugin', () => {
     await exercise('files.download', () => c.get(FILES).download(file.id))
     await exercise('files.temporaryUrl', () => c.get(FILES).temporaryUrl(file.id, '5m'))
     await exercise('files.delete', () => c.get(FILES).delete(file.id))
+
+    // --- files-versions: revisions, with no tenant anywhere
+    const doc = await exercise('versions.create', () =>
+      c.get(FILE_VERSIONS).create(png, { name: 'b.png', contentType: 'image/png' }),
+    )
+    await exercise('versions.addVersion', () =>
+      c.get(FILE_VERSIONS).addVersion(doc.groupId, png, { name: 'b.png', contentType: 'image/png' }),
+    )
+    expect(await exercise('versions.history', () => c.get(FILE_VERSIONS).history(doc.groupId))).toHaveLength(2)
+    expect(
+      (await exercise('versions.latest', () => c.get(FILE_VERSIONS).latest(doc.groupId)))?.version.version,
+    ).toBe(2)
+    await exercise('versions.download', () => c.get(FILE_VERSIONS).download(doc.groupId))
     // storage paths stay unprefixed — identical to using the disk directly
     expect(await storageDriver.exists('notes/a.txt')).toBe(true)
 

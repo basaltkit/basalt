@@ -7,6 +7,8 @@ export {
   FileNotFoundError,
   FileTenantRequiredError,
   SINGLE_TENANT_SCOPE,
+  fileScope,
+  resolveFileTenant,
   type FilesOptions,
   type FileValidation,
   type UploadInput,

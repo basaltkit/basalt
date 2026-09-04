@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { requireTenantId } from '@basaltkit/tenancy'
 
 export interface ActivityRecord {
@@ -180,7 +180,27 @@ export function activityPlugin(options: ActivityOptions = {}) {
   return definePlugin({
     name: 'basalt:activity',
     register({ container }) {
-      container.singleton(ACTIVITY, () => new Activity(options))
+      container.singleton(ACTIVITY, () => {
+        // Fail closed by default in multi-tenant apps, the same way
+        // `@basaltkit/cache` does and for the same reason. `tenantScoped: true`
+        // scopes to the context tenant and runs UNSCOPED when there is none —
+        // so a feed query made outside a tenant answered with every tenant's
+        // records. An activity line is not an aggregate: it reads "Dr. Kiala
+        // opened matter 2026/014 for Kwanza Lda", which is another firm's
+        // client, by name, in prose.
+        //
+        // Tightened only when `@basaltkit/tenancy` is registered (its
+        // 'tenancy:active' marker) and only when the app expressed no
+        // preference. A single-tenant app has no tenant dimension and nothing
+        // to cross, so it is untouched; an app that means to read across
+        // tenants says `tenantScoped: false` and is obeyed.
+        const tenancyActive = ensureMetadata(container).get('tenancy:active').length > 0
+        const resolved: ActivityOptions =
+          options.tenantScoped === undefined && tenancyActive
+            ? { ...options, tenantScoped: 'required' }
+            : options
+        return new Activity(resolved)
+      })
     },
   })
 }

@@ -117,7 +117,7 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 | `delete(id, tenantId?)` | Deletes bytes + metadata; emits `file:deleted`. |
 | `markScanned(id, result, tenantId?)` | Marks as scanned; emits `file:scanned`. |
 
-Without an explicit `tenantId`, it uses `ctx().tenant.id`; without a tenant, it throws `FileTenantRequiredError`. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
+Without an explicit `tenantId`, it uses `ctx().tenant.id`. With no tenant resolvable it throws `FileTenantRequiredError` **only when `@basaltkit/tenancy` is registered** — an app without tenancy has no tenant dimension to cross, and its records are keyed by `SINGLE_TENANT_SCOPE`. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
 
 ### Failure modes
 
