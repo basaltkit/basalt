@@ -121,6 +121,36 @@ export const projects = defineResource({
 
 From this, the engine derives the column labels, the form fields (with the right input per type — text, checkbox for booleans, `<select>` for enums, number for numbers), which fields are required, and the validation rules. Use `fieldsFromSchema` directly if you want the field models without a full resource.
 
+#### Labels the reader recognises
+
+Those derived labels come from the field name: `taxId` reads *Tax Id*, and an
+enum's options come out as the values you store — `person`, `company`. That is
+fine for an internal English admin and wrong everywhere else, including an
+English one where the field name is the developer's name for the thing.
+
+`fields` overrides both, keyed by field name, and covers the table and both form
+modes at once:
+
+```ts
+export const contacts = defineResource({
+  name: 'contacts',
+  schema: ContactSchema,
+  createSchema: CreateContactSchema,
+  fields: {
+    taxId: { label: 'NIF' },
+    kind: { label: 'Tipo', options: { person: 'Pessoa', company: 'Empresa' } },
+  },
+})
+```
+
+The stored values do not change — `options` only relabels what is shown, so the
+form still submits `person` and your schema still validates it. An option left
+out keeps its raw value, and a key naming no field is ignored rather than
+failing the resource.
+
+`ResourceForm` also takes `chooseLabel` for the placeholder of an empty select
+(default `Select…`), alongside the `submitLabel` it already took.
+
 ### 2. Wire a data source
 
 The engine reads and writes through an **`AdminDataSource`** — `{ list, get, create, update, remove }`. Use `memoryDataSource(seed)` for demos, or back it with your type-safe SDK client for a real API:

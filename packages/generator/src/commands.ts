@@ -40,8 +40,23 @@ function specs(): MakeSpec[] {
  * --prisma (Prisma-backed repository + schema.prisma model),
  * --soft-delete (deletedAt column + restore() + restore route),
  * --no-register (skip wiring the resource into src/app.ts).
+ *
+ * `defaults` holds what is true of the project rather than of one invocation —
+ * which Prisma client the repositories are typed against, and whether they are
+ * Prisma-backed at all:
+ *
+ * ```ts
+ * generatorCommands({
+ *   prisma: true,
+ *   prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' },
+ * })
+ * ```
+ *
+ * A flag still wins, in both directions: `--no-prisma` turns off a default of
+ * `prisma: true`. A default a flag cannot override is a trap, and the CLI's
+ * argv parser already gives the negation its own value.
  */
-export function generatorCommands(): CommandDefinition[] {
+export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefinition[] {
   return specs().map((spec) =>
     defineCommand({
       name: spec.command,
@@ -58,9 +73,14 @@ export function generatorCommands(): CommandDefinition[] {
           ...(typeof flags['dir'] === 'string' ? { baseDir: flags['dir'] } : {}),
           force: flags['force'] === true,
         }
+        // `flags[x] === true` alone would let a default of `true` survive
+        // `--no-prisma`: the flag is only consulted when it was actually given.
+        const flagOr = (flag: string, fallback: boolean | undefined): boolean =>
+          typeof flags[flag] === 'boolean' ? flags[flag] : (fallback ?? false)
         const genOptions: GeneratorOptions = {
-          prisma: flags['prisma'] === true,
-          softDelete: flags['soft-delete'] === true,
+          ...defaults,
+          prisma: flagOr('prisma', defaults.prisma),
+          softDelete: flagOr('soft-delete', defaults.softDelete),
         }
         try {
           const written = await writeGenerated(spec.build(name, genOptions), options)

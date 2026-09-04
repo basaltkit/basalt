@@ -74,7 +74,13 @@ export class PostgresSearchDriver implements SearchDriver {
       .join(' ')
     await this.client.query(
       `INSERT INTO ${this.table} (idx, tenant_id, id, document, tsv) ` +
-        `VALUES ($1, $2, $3, $4::jsonb, to_tsvector($5, $6)) ` +
+        // `$5::regconfig` — not decoration. `PgClientLike` accepts any client,
+        // and they do not agree on parameter typing: `pg` sends them untyped
+        // and lets Postgres infer `regconfig`, while Prisma sends them as
+        // `text`. `to_tsvector(text, text)` does not exist (error 42883), so
+        // without the cast this driver is unusable with the very client
+        // `@basaltkit/prisma` recommends. Redundant under `pg`, required here.
+        `VALUES ($1, $2, $3, $4::jsonb, to_tsvector($5::regconfig, $6)) ` +
         `ON CONFLICT (idx, tenant_id, id) DO UPDATE SET document = EXCLUDED.document, tsv = EXCLUDED.tsv`,
       [indexName, document.tenantId, document.id, JSON.stringify(document), this.language, text],
     )
@@ -101,7 +107,9 @@ export class PostgresSearchDriver implements SearchDriver {
     if (q) {
       const langIdx = params.push(this.language)
       const qIdx = params.push(q)
-      const tsquery = `plainto_tsquery($${langIdx}, $${qIdx})`
+      // Same reason as the INSERT above: the language has to arrive as a
+      // `regconfig`, not as text.
+      const tsquery = `plainto_tsquery($${langIdx}::regconfig, $${qIdx})`
       score = `ts_rank(tsv, ${tsquery})`
       where += ` AND tsv @@ ${tsquery}`
     }

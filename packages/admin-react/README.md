@@ -187,6 +187,11 @@ formatCell(false, 'boolean')                   // 'No'
 formatCell(new Date('2026-08-07'), 'date')     // '2026-08-07'
 formatCell(null, 'string')                     // ''
 formatCell(42, 'number')                       // '42'
+
+// Pass the whole field instead of its type and an enum shows its configured
+// label — see `fields` in @basaltkit/admin.
+formatCell('person', { name: 'kind', label: 'Tipo', type: 'enum', required: true,
+                       options: ['person'], optionLabels: { person: 'Pessoa' } }) // 'Pessoa'
 ```
 
 ## API reference
@@ -211,6 +216,7 @@ Each row's key is `row[resource.idField]` (or the index, if missing).
 | `mode` | `'create' \| 'update'` | No | `'create'` | Chooses the validation schema. |
 | `onSubmit` | `(data) => void \| Promise<void>` | Yes | — | Receives the data validated/converted by Zod. |
 | `submitLabel` | `string` | No | `'Save'` | Button text. |
+| `chooseLabel` | `string` | No | `'Select…'` | Placeholder shown in an empty `<select>`. |
 
 Accessibility: the `<form>` has `aria-label` `"<resource label> form"`; each error is a `<span role="alert" data-field="<name>">`.
 

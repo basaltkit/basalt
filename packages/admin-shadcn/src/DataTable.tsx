@@ -1,4 +1,4 @@
-import { tableView, type FieldType, type Resource } from '@basaltkit/admin'
+import { optionLabel, tableView, type Field, type Resource } from '@basaltkit/admin'
 import { Badge } from './ui/badge.js'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.js'
 
@@ -36,7 +36,7 @@ export function DataTable({ resource, rows, onRowClick, emptyLabel = 'No records
               {...(onRowClick ? { onClick: () => onRowClick(row), className: 'cursor-pointer' } : {})}
             >
               {view.columns.map((column) => (
-                <TableCell key={column.name}>{renderCell(row[column.name], column.type)}</TableCell>
+                <TableCell key={column.name}>{renderCell(row[column.name], column)}</TableCell>
               ))}
             </TableRow>
           ))
@@ -46,8 +46,13 @@ export function DataTable({ resource, rows, onRowClick, emptyLabel = 'No records
   )
 }
 
-function renderCell(value: unknown, type: FieldType) {
+// Takes the whole field, not just its type, so an enum cell shows the label the
+// form shows: a table reading 'person' beside a form reading 'Pessoa' is worse
+// than either alone.
+function renderCell(value: unknown, field: Field) {
   if (value === undefined || value === null) return ''
+  const type = field.type
+  if (type === 'enum') return optionLabel(field, String(value))
   if (type === 'boolean') {
     return <Badge variant={value ? 'default' : 'secondary'}>{value ? 'Yes' : 'No'}</Badge>
   }

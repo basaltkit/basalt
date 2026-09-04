@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx, type Container } from '@basaltkit/core'
 import {
   newDelegationId,
   type TemporaryGrant,
@@ -6,11 +6,19 @@ import {
   type Delegation,
   type DelegationStore,
 } from './delegation.js'
-import type { RouteGuard } from '@basaltkit/http'
+import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/http'
 import { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError } from './errors.js'
 
 export { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError, PermissionDeniedError } from './errors.js'
 import { PermissionDeniedError } from './errors.js'
+
+declare module '@basaltkit/http' {
+  interface RouteMeta {
+    /** Permission the caller must hold. Enforced by `permissionsPlugin`. */
+    can?: string | string[]
+  }
+}
+
 
 /** Global scope key — role/permission grants outside any tenant. */
 export const GLOBAL_SCOPE = 'global'
@@ -76,14 +84,14 @@ export class MemoryAccessStore implements AccessStore {
   }
 }
 
-/** 'projects:*' grants 'projects:delete'; '*' grants everything. */
-export function permissionMatches(granted: string, requested: string): boolean {
-  if (granted === requested || granted === '*') return true
-  const grantedParts = granted.split(':')
-  const requestedParts = requested.split(':')
-  if (grantedParts.length !== requestedParts.length) return false
-  return grantedParts.every((part, index) => part === '*' || part === requestedParts[index])
-}
+// The rule itself lives in `./match.js`, which imports nothing — so it can also
+// be reached from a browser through the `@basaltkit/permissions/match` subpath.
+// Imported (not just re-exported) because this module uses it too: a bare
+// `export … from` re-exports the name without binding it locally, and the two
+// call sites below would fail at runtime with "permissionMatches is not
+// defined" — which is exactly what happened.
+export { permissionMatches, permitted } from './match.js'
+import { permissionMatches } from './match.js'
 
 export interface PolicyUser {
   id: string
@@ -143,6 +151,11 @@ const defaultScope = (): string => {
 }
 
 export class Gate {
+  /** The grants this gate reads. Exposed for `accessRoutes()`; treat as read-only. */
+  get store(): AccessStore {
+    return this.options.store
+  }
+
   private readonly policies = new Map<string, Policy<never>>()
   private readonly scope: () => string
   private readonly now: () => number
@@ -156,6 +169,45 @@ export class Gate {
   register(policy: Policy<never>): this {
     this.policies.set(policy.resource, policy)
     return this
+  }
+
+  /**
+   * The user of the current request, with its roles attached.
+   *
+   * What `@basaltkit/auth` puts in the context is `PublicUser` —
+   * `{ id, email, emailVerified }`. No roles, and rightly so: `auth` does not
+   * know this package exists.
+   *
+   * But policies receive that object, and `PolicyUser` is open, so
+   * `user.roles?.includes('partner')` reads `undefined` and the policy denies.
+   * The right failure mode, and an invisible one — a partner treated as a
+   * stranger in their own firm, with no error anywhere to say why.
+   *
+   * Nothing filled the gap, so every service wrote this by hand and memoised it
+   * under a private context key it had to invent. Here it is once, memoised per
+   * request and per scope, because the same person can hold different roles in
+   * two tenants.
+   *
+   * `null` when there is no user — a background job, a public route. An object
+   * with an empty id would be an actor that fails every check for a reason
+   * nobody can read.
+   */
+  async actor(): Promise<PolicyUser | null> {
+    const context = tryCtx()
+    const user = context?.['user'] as { id: string } | undefined
+    if (!user?.id) return null
+
+    const scope = this.scope()
+    // Keyed by user AND scope: caching by user alone would carry one tenant's
+    // roles into a request for another.
+    const chave = `__basaltGateActor:${scope}:${user.id}`
+    const cached = context?.[chave] as PolicyUser | undefined
+    if (cached) return cached
+
+    const roles = await this.options.store.getUserRoles(user.id, scope)
+    const actor: PolicyUser = { ...user, roles }
+    if (context) (context as Record<string, unknown>)[chave] = actor
+    return actor
   }
 
   /**
@@ -277,6 +329,61 @@ export class Gate {
     }
     return false
   }
+}
+
+/**
+ * `GET /me/access` — the roles and permissions of whoever is asking.
+ *
+ * `/auth/me` answers who you are; nothing answered what you may do. So every
+ * frontend that hides a menu by permission wrote the same twenty lines: read
+ * the roles, read the direct grants, read each role's grants, merge, dedupe.
+ *
+ * Not a security surface — the server decides on every request regardless. This
+ * exists so the interface stops offering doors that return 403, and stops
+ * hiding doors that would have opened.
+ *
+ * Pair it with `@basaltkit/permissions/match`, which carries the same wildcard
+ * rule and imports nothing, so the browser applies the server's rule instead of
+ * a copy that drifts from it.
+ *
+ * ```ts
+ * fastifyPlugin({ routes: [...accessRoutes(), ...myRoutes] })
+ * ```
+ */
+export function accessRoutes(
+  options: { path?: string; store?: AccessStore } = {},
+): BasaltRoute[] {
+  return [
+    route({
+      method: 'GET',
+      url: options.path ?? '/me/access',
+      // No `meta.auth`: a public page asks this before anyone logs in. Empty is
+      // the honest answer there, and a 401 would make the frontend treat "not
+      // logged in" as an error to report.
+      async handler() {
+        const context = tryCtx()
+        const user = context?.['user'] as { id: string } | undefined
+        if (!user?.id) return { roles: [], permissions: [] }
+
+        // From the option, or from the Gate the plugin registered. There is no
+        // token for the store itself, and adding one here would be a second way
+        // to reach the same object.
+        const container = context?.['container'] as Container | undefined
+        const store = options.store ?? (container?.has(GATE) ? container.get(GATE).store : undefined)
+        if (!store) return { roles: [], permissions: [] }
+
+        const scope = (context?.['tenant'] as { id: string } | undefined)?.id ?? GLOBAL_SCOPE
+        const roles = await store.getUserRoles(user.id, scope)
+
+        // Direct grants plus everything each role carries. The union is what a
+        // frontend needs; assembling it there means reimplementing the model.
+        const diretas = await store.getUserPermissions(user.id, scope)
+        const dosPapeis = await Promise.all(roles.map((r) => store.getRolePermissions(r, scope)))
+
+        return { roles, permissions: [...new Set([...diretas, ...dosPapeis.flat()])].sort() }
+      },
+    }),
+  ]
 }
 
 export const GATE = createToken<Gate>('gate')

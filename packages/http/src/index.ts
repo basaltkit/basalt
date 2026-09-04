@@ -1,6 +1,7 @@
 export {
   route,
   type BasaltRoute,
+  type RouteMeta,
   type HandlerArgs,
   type HttpMethod,
   type HttpRequest,

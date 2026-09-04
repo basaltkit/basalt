@@ -194,6 +194,24 @@ soft-deleted), um método `restore()` e uma rota `POST /projects/:id/restore`.
 Os artefactos individuais estão disponíveis como `make:schema`,
 `make:repository`, `make:service`, `make:plugin`, `make:routes` e `make:test`.
 
+O que é verdade do projeto inteiro — e não de uma invocação — configura-se onde
+os comandos são registados, incluindo o cliente Prisma contra o qual os
+repositórios gerados são tipados:
+
+```ts
+commandsPlugin(
+  generatorCommands({
+    prisma: true,
+    prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' },
+  }),
+)
+```
+
+Uma aplicação com um segundo cliente (schema-por-tenant, uma réplica de leitura)
+precisa disso: contra o `PrismaClient` por omissão o repositório gerado ou não
+compila ou, pior, compila contra os modelos errados. As flags continuam a
+mandar, nos dois sentidos — o `--no-prisma` sobrepõe-se ao `prisma: true`.
+
 ### Comandos embutidos da CLI
 
 O `runCli` oferece sempre estes, além do que qualquer plugin registe:
