@@ -264,6 +264,7 @@ cn('text-sm', condition && 'font-bold')   // merges conditionally
 | `mode` | `'create' \| 'update'` | No | `'create'` | Selects the validation schema. |
 | `onSubmit` | `(data) => void \| Promise<void>` | Yes | — | Receives data validated by Zod. |
 | `submitLabel` | `string` | No | `'Save'` | Button text. |
+| `chooseLabel` | `string` | No | `'Select…'` | Placeholder shown in an empty `<select>`. |
 
 ### `Button` (component)
 

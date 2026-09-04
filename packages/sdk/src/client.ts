@@ -30,6 +30,31 @@ interface CallInput {
   body?: unknown
   query?: Record<string, unknown>
   params?: Record<string, unknown>
+  /**
+   * Cancels the request. Without this a search-as-you-type field fires one
+   * request per keystroke and can call none of them off — the last answer to
+   * arrive wins, which is not the same as the last one asked for.
+   */
+  signal?: AbortSignal
+  /** Headers for this call only. Merged over the client's, narrower wins. */
+  headers?: Record<string, string>
+}
+
+/**
+ * Bodies the platform already knows how to send.
+ *
+ * `JSON.stringify` on any of these produces `"{}"` or garbage, and for
+ * `FormData` the browser also has to write the multipart boundary itself —
+ * which it only does when we leave `content-type` alone.
+ */
+function isNativeBody(body: unknown): boolean {
+  return (
+    typeof FormData !== 'undefined' && body instanceof FormData ||
+    typeof Blob !== 'undefined' && body instanceof Blob ||
+    typeof ArrayBuffer !== 'undefined' && body instanceof ArrayBuffer ||
+    typeof ReadableStream !== 'undefined' && body instanceof ReadableStream ||
+    typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams
+  )
 }
 
 function isEndpoint(value: unknown): value is Endpoint {
@@ -79,17 +104,38 @@ async function request(
   // `content-type: application/json` makes a strict server try to parse an empty
   // body and fail.
   const hasBody = input.body !== undefined
+  // A native body carries its own encoding. Declaring `application/json` over
+  // a FormData strips the boundary the server needs to split the parts, and
+  // `URLSearchParams` already means `application/x-www-form-urlencoded`.
+  const nativo = hasBody && isNativeBody(input.body)
   const headers: Record<string, string> = {
-    ...(hasBody ? { 'content-type': 'application/json' } : {}),
+    ...(hasBody && !nativo ? { 'content-type': 'application/json' } : {}),
     ...options.headers,
+    ...input.headers,
     ...(token ? { authorization: `Bearer ${token}` } : {}),
   }
 
-  const response = await doFetch(url, {
-    method: endpoint.method,
-    headers,
-    ...(hasBody ? { body: JSON.stringify(input.body) } : {}),
-  })
+  /**
+   * Montado à parte e tipado uma vez.
+   *
+   * Com `exactOptionalPropertyTypes`, um spread condicional inline dá um tipo
+   * com `body?: X | undefined`, que não encaixa em `RequestInit`. O objeto só
+   * ganha a chave quando há valor — o compilador é que não consegue segui-lo
+   * através do spread.
+   */
+  const init: RequestInit = { method: endpoint.method, headers }
+  if (hasBody) {
+    // Um corpo nativo segue tal como está; o resto vai em JSON.
+    // `NonNullable` porque `RequestInit['body']` inclui `undefined`, e com
+    // `exactOptionalPropertyTypes` atribuir isso a uma chave opcional é erro —
+    // aqui já sabemos que há corpo.
+    init.body = nativo
+      ? (input.body as NonNullable<RequestInit['body']>)
+      : JSON.stringify(input.body)
+  }
+  if (input.signal) init.signal = input.signal
+
+  const response = await doFetch(url, init)
 
   // Transparent refresh: one retry with a fresh token on a first 401.
   if (response.status === 401 && options.refresh && overrideToken === undefined) {

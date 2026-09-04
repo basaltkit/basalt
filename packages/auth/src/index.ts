@@ -33,6 +33,14 @@ export {
   type MfaStore,
   type MfaRecord,
 } from './stores.js'
+
+declare module '@basaltkit/http' {
+  interface RouteMeta {
+    /** `true` requires a session; `false` opts a route out. */
+    auth?: boolean
+  }
+}
+
 export {
   Auth,
   publicUser,
@@ -72,7 +80,13 @@ export {
   type ApiKeyContext,
 } from './apikeys.js'
 export { apiKeysPlugin, API_KEYS, type ApiKeysPluginOptions } from './apikeys-plugin.js'
-export { authRoutes, apiKeyRoutes, mfaRoutes } from './routes.js'
+export {
+  authRoutes,
+  apiKeyRoutes,
+  mfaRoutes,
+  type AuthRoutesOptions,
+  type PasswordPolicy,
+} from './routes.js'
 export {
   OAuth,
   googleProvider,

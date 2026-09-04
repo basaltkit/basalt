@@ -102,6 +102,36 @@ pnpm basalt make:resource BlogPost --prisma
 
 Instead of the in-memory repository, generates `PrismaBlogPostRepository` (which uses `db()` from `@basaltkit/prisma`) and an extra file `src/modules/blog-post/blog-post.prisma` with the model block to copy into your `schema.prisma`. Then run `prisma migrate dev`.
 
+#### Project defaults, including which Prisma client
+
+The generated repository types itself against `PrismaClient` from
+`@prisma/client`. An application with a second client — schema-per-tenant,
+database-per-tenant, a read replica — needs the other one, and against that one
+the default either fails to compile or, worse, compiles and points at the wrong
+models.
+
+That is a fact about the project, not about one invocation, so it goes where the
+commands are registered rather than into a flag typed every time:
+
+```ts
+import { generatorCommands } from '@basaltkit/generator'
+
+commandsPlugin(
+  generatorCommands({
+    prisma: true, // every repository here is Prisma-backed
+    prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' },
+  }),
+)
+```
+
+The repository then opens with `import type { TenantDb } from '../../tenant-db.js'`
+and reads `db<TenantDb>().blogPost`. A relative `import` is resolved from the
+generated file, which lives at `src/modules/<name>/`.
+
+Flags still win, in both directions: `--no-prisma` generates the in-memory
+repository even with `prisma: true` configured. A default a flag cannot turn off
+is a trap.
+
 ### Automatic wiring into `src/app.ts`
 
 After writing the files, `make:resource` tries to:

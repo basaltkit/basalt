@@ -672,6 +672,9 @@ importers:
         specifier: workspace:^
         version: link:../events
     devDependencies:
+      '@basaltkit/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -1639,6 +1642,9 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
       '@basaltkit/mailer':
         specifier: workspace:^
         version: link:../mailer

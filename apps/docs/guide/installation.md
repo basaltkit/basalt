@@ -191,6 +191,24 @@ and a `POST /projects/:id/restore` route.
 Individual artifacts are available as `make:schema`, `make:repository`,
 `make:service`, `make:plugin`, `make:routes` and `make:test`.
 
+What is true of the whole project — rather than of one invocation — is
+configured where the commands are registered, including which Prisma client the
+generated repositories are typed against:
+
+```ts
+commandsPlugin(
+  generatorCommands({
+    prisma: true,
+    prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' },
+  }),
+)
+```
+
+An application with a second client (schema-per-tenant, a read replica) needs
+that: against the default `PrismaClient` the generated repository either fails to
+compile or, worse, compiles against the wrong models. Flags still win in both
+directions — `--no-prisma` overrides `prisma: true`.
+
 ### Built-in CLI commands
 
 `runCli` always offers these, alongside anything a plugin registers:

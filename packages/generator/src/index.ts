@@ -9,6 +9,7 @@ export {
   FileExistsError,
   type GeneratorKind,
   type GeneratorOptions,
+  type PrismaClientRef,
   type WriteOptions,
   type AppRegistration,
 } from './generate.js'

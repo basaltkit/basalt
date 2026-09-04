@@ -1,4 +1,11 @@
-import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import {
+  BasaltError,
+  createToken,
+  ctx,
+  definePlugin,
+  ensureMetadata,
+  type Container,
+} from '@basaltkit/core'
 import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/http'
 import { Invoices, renderInvoiceHtml, InvoiceNotFoundError, type InvoicesOptions } from './invoice.js'
 import { z } from 'zod'
@@ -12,6 +19,16 @@ import {
   type SubscriptionsOptions,
 } from './subscriptions.js'
 
+declare module '@basaltkit/http' {
+  interface RouteMeta {
+    /** Plan the billable must be on. Checked against the catalogue at boot. */
+    subscribed?: string
+    /** Feature the plan must include. */
+    feature?: string
+  }
+}
+
+
 declare module '@basaltkit/core' {
   interface BasaltHooks {
     'billing:subscribed': { subscription: SubscriptionRecord }
@@ -20,6 +37,32 @@ declare module '@basaltkit/core' {
     'billing:trial_expired': { subscription: SubscriptionRecord }
     'billing:webhook': { event: WebhookEvent }
     'billing:checkout_started': { billableId: string; plan: string; url: string }
+  }
+}
+
+/**
+ * A route is gated on a plan the catalogue does not contain.
+ *
+ * `Subscriptions.subscribed()` compares strings; a name that matches nothing
+ * simply returns false, and the guard turns that into a 402. So a typo — or a
+ * plan renamed in the catalogue and not in the route — produces a paid feature
+ * that answers 402 to every paying customer, forever, with nothing in the logs
+ * to say why.
+ *
+ * The toolkit already refuses to boot a route declaring `meta.subscribed`
+ * without this plugin. This is the same check one level down: the plugin is
+ * there, but the value means nothing.
+ */
+export class UnknownPlanMetaError extends BasaltError {
+  constructor(offenders: { url: string; plan: string }[], known: string[]) {
+    const lista = offenders.map((o) => `  ${o.url} → "${o.plan}"`).join('\n')
+    super(
+      'BILLING_UNKNOWN_PLAN_META',
+      `These routes are gated on plans that are not in the catalogue:\n${lista}\n\n` +
+        `The catalogue has: ${known.join(', ')}.\n` +
+        'Either the route names a plan that no longer exists, or the plan is missing ' +
+        'from definePlans(). Left as is, each of these answers 402 to everyone.',
+    )
   }
 }
 
@@ -68,6 +111,38 @@ export function subscriptionsPlugin(options: SubscriptionsPluginOptions) {
       // now fails loud at boot instead of serving the paid feature to everyone.
       ensureMetadata(container).add('http:guarded-meta', 'subscribed')
       ensureMetadata(container).add('http:guarded-meta', 'feature')
+    },
+
+    /**
+     * On `app:booted`, not in this plugin's own boot.
+     *
+     * The adapters publish `http:routes` during *their* boot phase, so reading
+     * the list here directly would depend on plugin order — with
+     * `subscriptionsPlugin` registered first, as it usually is, the list is
+     * empty and the check silently passes. Same ordering `openapiPlugin` works
+     * around, for the same reason.
+     *
+     * `app:booted` fires after every plugin has registered its routes and
+     * before the server listens, so throwing here still stops the process
+     * rather than serving one request first.
+     */
+    boot({ container, hooks }) {
+      hooks.on('app:booted', () => {
+        const rotas = ensureMetadata(container).get<{
+          url?: string
+          meta?: Record<string, unknown>
+        }>('http:routes')
+
+        const conhecidos = Object.keys(options.plans)
+        const culpados = rotas
+          .filter((r) => typeof r?.meta?.['subscribed'] === 'string')
+          .map((r) => ({ url: r.url ?? '(sem url)', plan: r.meta!['subscribed'] as string }))
+          .filter((r) => !conhecidos.includes(r.plan))
+
+        // All of them at once: booting, failing, fixing one and booting again
+        // is a slow way to find three.
+        if (culpados.length > 0) throw new UnknownPlanMetaError(culpados, conhecidos)
+      })
     },
   })
 }

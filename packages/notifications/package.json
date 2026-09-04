@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
+    "@basaltkit/http": "workspace:^",
     "@basaltkit/mailer": "workspace:^"
   },
   "devDependencies": {

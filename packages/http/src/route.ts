@@ -46,6 +46,35 @@ export interface HandlerArgs<B, Q, P> {
   reply: HttpReply
 }
 
+/**
+ * What a route declares about itself for other plugins to enforce.
+ *
+ * Open by design — the index signature keeps every existing `meta` compiling,
+ * and applications legitimately put their own keys here. What it adds is the
+ * shape of the keys the toolkit *does* know: `meta: { can: 123 }` is now an
+ * error, and an editor can complete the names.
+ *
+ * Plugins declare their own keys by augmentation, the same pattern
+ * `BasaltHooks` uses:
+ *
+ * ```ts
+ * declare module '@basaltkit/http' {
+ *   interface RouteMeta {
+ *     can?: string | string[]
+ *   }
+ * }
+ * ```
+ *
+ * What this does NOT catch is a misspelt key: `subcribed: 'pro'` still
+ * compiles, because the index signature has to accept unknown names. That gap
+ * is closed at boot instead — the adapters refuse to start on a guard key with
+ * no plugin behind it, and `subscriptionsPlugin` refuses on a plan that is not
+ * in the catalogue.
+ */
+export interface RouteMeta {
+  [key: string]: unknown
+}
+
 export interface BasaltRoute {
   method: HttpMethod
   url: string

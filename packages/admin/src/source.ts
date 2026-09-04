@@ -1,4 +1,22 @@
-import { randomUUID } from 'node:crypto'
+/**
+ * An id for a record the caller did not name.
+ *
+ * NOT `node:crypto`. This package is the engine two React bindings render, so
+ * its destination is the browser; a Node builtin here fails the bundler
+ * outright, and every consuming app had to alias it away.
+ *
+ * NOT `crypto.randomUUID()` on its own either. That needs a **secure context**
+ * and is undefined on plain http — which is exactly how a developer reaches a
+ * dev server from a phone on the local network. Swapping one unavailable API
+ * for another moves the failure instead of fixing it.
+ *
+ * So: the real thing where it exists, and a counter where it does not. This is
+ * an in-memory source for development and tests — ids have to be unique within
+ * one process, and nothing more. Anything durable brings its own.
+ */
+let contador = 0
+const novoId = (): string =>
+  globalThis.crypto?.randomUUID?.() ?? `mem-${Date.now().toString(36)}-${(contador += 1)}`
 
 export interface ListParams {
   page?: number
@@ -42,7 +60,7 @@ export function memoryDataSource<T extends { id: string }>(seed: T[] = []): Admi
       return items.get(id) ?? null
     },
     async create(input) {
-      const id = typeof input['id'] === 'string' ? (input['id'] as string) : randomUUID()
+      const id = typeof input['id'] === 'string' ? (input['id'] as string) : novoId()
       const item = { ...input, id } as T
       items.set(id, item)
       return item

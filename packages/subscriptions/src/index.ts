@@ -119,6 +119,7 @@ export {
   billingRoutes,
   invoiceRoutes,
   SUBSCRIPTIONS,
+  UnknownPlanMetaError,
   INVOICES,
   type SubscriptionsPluginOptions,
   type BillingRoutesOptions,

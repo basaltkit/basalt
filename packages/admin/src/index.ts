@@ -1,7 +1,9 @@
 export {
   fieldsFromSchema,
   humanize,
+  optionLabel,
   type Field,
+  type FieldConfig,
   type FieldType,
 } from './fields.js'
 export {

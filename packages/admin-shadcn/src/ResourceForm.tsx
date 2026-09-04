@@ -1,4 +1,4 @@
-import { formView, type Field, type FormMode, type Resource } from '@basaltkit/admin'
+import { formView, optionLabel, type Field, type FormMode, type Resource } from '@basaltkit/admin'
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { cn } from './lib/cn.js'
 import { Button } from './ui/button.js'
@@ -11,6 +11,8 @@ export interface ResourceFormProps {
   mode?: FormMode
   onSubmit: (data: Record<string, unknown>) => void | Promise<void>
   submitLabel?: string
+  /** Placeholder of an unfilled select. Overridable for the same reason `submitLabel` is. */
+  chooseLabel?: string
 }
 
 /** shadcn-styled form generated from a resource's fields, validated with its schema. */
@@ -20,6 +22,7 @@ export function ResourceForm({
   mode = 'create',
   onSubmit,
   submitLabel = 'Save',
+  chooseLabel = 'Select…',
 }: ResourceFormProps) {
   const view = formView(resource, initialValues, mode)
   const [values, setValues] = useState<Record<string, unknown>>(initialValues)
@@ -43,7 +46,12 @@ export function ResourceForm({
       {view.fields.map((field) => (
         <div key={field.name} className="space-y-2">
           <Label htmlFor={field.name}>{field.label}</Label>
-          <FieldControl field={field} value={values[field.name]} onChange={(value) => set(field.name, value)} />
+          <FieldControl
+            field={field}
+            value={values[field.name]}
+            chooseLabel={chooseLabel}
+            onChange={(value) => set(field.name, value)}
+          />
           {errors[field.name] ? (
             <p role="alert" data-field={field.name} className="text-sm font-medium text-destructive">
               {errors[field.name]}
@@ -59,13 +67,14 @@ export function ResourceForm({
 interface FieldControlProps {
   field: Field
   value: unknown
+  chooseLabel: string
   onChange: (value: unknown) => void
 }
 
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50'
 
-function FieldControl({ field, value, onChange }: FieldControlProps) {
+function FieldControl({ field, value, chooseLabel, onChange }: FieldControlProps) {
   const id = field.name
   const text = value === undefined || value === null ? '' : String(value)
 
@@ -92,11 +101,11 @@ function FieldControl({ field, value, onChange }: FieldControlProps) {
         className={cn(selectClass)}
       >
         <option value="" disabled>
-          Select…
+          {chooseLabel}
         </option>
         {field.options?.map((option) => (
           <option key={option} value={option}>
-            {option}
+            {optionLabel(field, option)}
           </option>
         ))}
       </select>

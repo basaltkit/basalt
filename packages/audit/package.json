@@ -27,6 +27,7 @@
     "@basaltkit/events": "workspace:^"
   },
   "devDependencies": {
+    "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.4.0",
     "typescript": "^7.0.2",

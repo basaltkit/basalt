@@ -288,13 +288,50 @@ export interface AuditPluginOptions {
    * function to change the policy, or `(p) => p` to store payloads verbatim.
    */
   redact?: AuditRedactor
+
+  /**
+   * Called when a *bridged* capture fails — a hook or event the plugin picked
+   * up automatically. Defaults to logging.
+   *
+   * The bridge is opportunistic: it must never fail (or slow down) the domain
+   * write that emitted the hook, the same rule `@basaltkit/realtime` applies to
+   * its own bridge. A deliberate `audit.record()` still throws, because there
+   * the audit *is* the operation.
+   *
+   * The default logs rather than staying quiet: a trail with a silent hole is
+   * worse than no trail, because it looks complete.
+   */
+  onCaptureError?: (error: unknown, info: { source: 'hook' | 'event'; event: string }) => void
 }
 
-const DEFAULT_HOOK_PATTERNS = ['auth:**', 'billing:**', 'tenancy:**', 'permission:**']
+/**
+ * `tenancy:created` and not `tenancy:**`.
+ *
+ * `tenancy:switched` fires on every HTTP request that resolves a tenant, so
+ * capturing it by default wrote one audit row per request, forever — a
+ * compliance trail drowned in routing noise.
+ *
+ * Worse, it also fires *inside* the new tenant's context during
+ * `provision()`, before the tenant's storage exists. With a store bound to the
+ * tenant's own database that write failed, the error propagated out through
+ * `provision()`, and the tenant was marked failed: an application on the
+ * default configuration could not create a single tenant.
+ *
+ * Tenant lifecycle is worth auditing; context switching is routing. The two
+ * were only ever together because one wildcard covered both.
+ */
+const DEFAULT_HOOK_PATTERNS = ['auth:**', 'billing:**', 'tenancy:created', 'permission:**']
 
 export function auditPlugin(options: AuditPluginOptions = {}) {
   const hookPatterns = options.hooks ?? DEFAULT_HOOK_PATTERNS
   const eventPatterns = options.events ?? ['**']
+  const onCaptureError =
+    options.onCaptureError ??
+    ((error: unknown, info: { source: 'hook' | 'event'; event: string }) =>
+      console.error(
+        `[basalt:audit] capture failed for ${info.source} "${info.event}" — the operation continued, this entry is missing from the trail:`,
+        error,
+      ))
 
   return definePlugin({
     name: 'basalt:audit',
@@ -313,7 +350,11 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
 
       hooks.onAny(async (hook, payload) => {
         if (!hookPatterns.some((pattern) => patternMatches(pattern, hook))) return
-        await container.get(AUDIT).capture('hook', hook, payload)
+        try {
+          await container.get(AUDIT).capture('hook', hook, payload)
+        } catch (error) {
+          onCaptureError(error, { source: 'hook', event: hook })
+        }
       })
     },
     boot({ container }) {
@@ -321,7 +362,11 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
       const bus = container.get(EVENTS)
       bus.on('**', async (payload, meta) => {
         if (!eventPatterns.some((pattern) => patternMatches(pattern, meta.name))) return
-        await container.get(AUDIT).capture('event', meta.name, payload)
+        try {
+          await container.get(AUDIT).capture('event', meta.name, payload)
+        } catch (error) {
+          onCaptureError(error, { source: 'event', event: meta.name })
+        }
       })
     },
   })

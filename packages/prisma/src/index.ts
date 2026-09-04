@@ -68,8 +68,9 @@ export {
 } from './migrate-command.js'
 export {
   prismaSyncCommand,
-  extractSchemaBlocks,
+  type PrismaSyncTarget,
   type PrismaSyncCommandOptions,
+  extractSchemaBlocks,
 } from './sync-command.js'
 
 declare module '@basaltkit/core' {
@@ -94,6 +95,45 @@ export function db<T = unknown>(): T {
   const client = tryCtx()?.db
   if (client === undefined) throw new DbUnavailableError()
   return client as T
+}
+
+/**
+ * A client that resolves from the context on every access.
+ *
+ * The `-prisma` stores take a client when they are built — at boot — and hold
+ * it for the life of the process. Under schema-per-tenant the right client is
+ * only known per request, so what they must hold is not a client but a way to
+ * reach one:
+ *
+ * ```ts
+ * const tenantDb = tenantClient<PrismaClient>()
+ * const auth = prismaAuthStores(tenantDb)
+ * const perms = prismaAccessStore(tenantDb)
+ * ```
+ *
+ * Every application doing this wrote the same proxy by hand, because the
+ * pattern was tolerated — `ensureModel` catches the "not yet resolvable" case
+ * explicitly — but never supplied. Writing it wrong does not raise an error: it
+ * points every tenant at whatever client was passed instead, which in the usual
+ * mistake is the central one. Tenant data, silently, in the wrong schema.
+ *
+ * Not a substitute for `db()`: inside a request, call `db()`. This is for the
+ * handful of places that must be **constructed** before a request exists.
+ */
+export function tenantClient<T extends object = Record<string, unknown>>(): T {
+  return new Proxy({} as T, {
+    // `Reflect` and not a bare read: it preserves the receiver, so a store
+    // calling `client.user.findMany()` reaches the model with `this` intact.
+    get: (_target, prop, receiver) => Reflect.get(db<object>(), prop, receiver),
+    has: (_target, prop) => Reflect.has(db<object>(), prop),
+    // `ownKeys` needs a matching descriptor or the proxy invariant throws —
+    // which is what `Object.keys()` on a store's client would hit.
+    ownKeys: () => Reflect.ownKeys(db<object>()),
+    getOwnPropertyDescriptor: (_target, prop) => ({
+      ...Reflect.getOwnPropertyDescriptor(db<object>(), prop),
+      configurable: true,
+    }),
+  })
 }
 
 export const DB = createToken<unknown>('db')

@@ -4,7 +4,36 @@ import { z } from 'zod'
 import { AUTH } from './plugin.js'
 import { API_KEYS } from './apikeys-plugin.js'
 
-const credentials = z.object({ email: z.string().email(), password: z.string().min(8) })
+/**
+ * How strong a password has to be.
+ *
+ * The rule was `min(8)`, fixed, with no way to change it — the 2012 minimum, in
+ * routes an application either uses as they are or replaces wholesale. One that
+ * needed more reached into the route's Zod object and swapped the field,
+ * depending on the internal shape of a body it does not own.
+ *
+ * A whole schema and not just a number, because the interesting rules are not
+ * lengths: "at least one symbol", "not the email address", "not in a breach
+ * list". An option taking only a number would send those applications straight
+ * back to patching.
+ */
+export interface PasswordPolicy {
+  minLength?: number
+}
+
+export interface AuthRoutesOptions {
+  /** A minimum length, or the schema itself. Default: `min(8)`. */
+  password?: PasswordPolicy | z.ZodType<string>
+}
+
+const DEFAULT_PASSWORD = z.string().min(8)
+
+const passwordSchema = (policy: AuthRoutesOptions['password']): z.ZodType<string> => {
+  if (!policy) return DEFAULT_PASSWORD
+  if (typeof (policy as z.ZodType).safeParse === 'function') return policy as z.ZodType<string>
+  const { minLength } = policy as PasswordPolicy
+  return minLength === undefined ? DEFAULT_PASSWORD : z.string().min(minLength)
+}
 
 const auth = () => (ctx().container as Container).get(AUTH)
 const apiKeys = () => (ctx().container as Container).get(API_KEYS)
@@ -16,7 +45,10 @@ const apiKeys = () => (ctx().container as Container).get(API_KEYS)
  * (`/auth/password/forgot`, `/auth/password/reset`).
  * Every one is a plain BasaltRoute: replace or omit any of them freely.
  */
-export function authRoutes(): BasaltRoute[] {
+export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
+  const password = passwordSchema(options.password)
+  const credentials = z.object({ email: z.string().email(), password })
+
   return [
     route({
       method: 'POST',
@@ -109,7 +141,10 @@ export function authRoutes(): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/password/reset',
-      body: z.object({ token: z.string(), password: z.string().min(8) }),
+      // The same policy as register. Covering register and leaving reset behind
+      // would let anyone walk a strong password back down to eight characters
+      // through "forgot password" — a loophole worse than having no option.
+      body: z.object({ token: z.string(), password }),
       async handler({ body }) {
         await auth().resetPassword(body.token, body.password)
         return { ok: true }

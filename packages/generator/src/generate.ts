@@ -13,7 +13,7 @@ import {
   type GeneratorOptions,
 } from './templates.js'
 
-export type { GeneratorOptions } from './templates.js'
+export type { GeneratorOptions, PrismaClientRef } from './templates.js'
 
 /** The kinds of artifact the generator can emit individually. */
 export const GENERATORS = {

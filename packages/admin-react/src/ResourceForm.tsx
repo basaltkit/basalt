@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { formView, type Field, type FormMode, type Resource } from '@basaltkit/admin'
+import { formView, optionLabel, type Field, type FormMode, type Resource } from '@basaltkit/admin'
 
 export interface ResourceFormProps {
   resource: Resource
@@ -7,6 +7,8 @@ export interface ResourceFormProps {
   mode?: FormMode
   onSubmit: (data: Record<string, unknown>) => void | Promise<void>
   submitLabel?: string
+  /** Placeholder of an unfilled select. Overridable for the same reason `submitLabel` is. */
+  chooseLabel?: string
 }
 
 /** A controlled form generated from a resource's fields, validated with its schema. */
@@ -16,6 +18,7 @@ export function ResourceForm({
   mode = 'create',
   onSubmit,
   submitLabel = 'Save',
+  chooseLabel = 'Select…',
 }: ResourceFormProps) {
   const view = formView(resource, initialValues, mode)
   const [values, setValues] = useState<Record<string, unknown>>(initialValues)
@@ -39,7 +42,12 @@ export function ResourceForm({
       {view.fields.map((field) => (
         <div key={field.name}>
           <label htmlFor={field.name}>{field.label}</label>
-          <FieldInput field={field} value={values[field.name]} onChange={(value) => set(field.name, value)} />
+          <FieldInput
+            field={field}
+            value={values[field.name]}
+            chooseLabel={chooseLabel}
+            onChange={(value) => set(field.name, value)}
+          />
           {errors[field.name] ? (
             <span role="alert" data-field={field.name}>
               {errors[field.name]}
@@ -55,10 +63,11 @@ export function ResourceForm({
 interface FieldInputProps {
   field: Field
   value: unknown
+  chooseLabel: string
   onChange: (value: unknown) => void
 }
 
-function FieldInput({ field, value, onChange }: FieldInputProps) {
+function FieldInput({ field, value, chooseLabel, onChange }: FieldInputProps) {
   const id = field.name
   const text = value === undefined || value === null ? '' : String(value)
 
@@ -83,11 +92,11 @@ function FieldInput({ field, value, onChange }: FieldInputProps) {
         onChange={(event: ChangeEvent<HTMLSelectElement>) => onChange(event.target.value)}
       >
         <option value="" disabled>
-          Select…
+          {chooseLabel}
         </option>
         {field.options?.map((option) => (
           <option key={option} value={option}>
-            {option}
+            {optionLabel(field, option)}
           </option>
         ))}
       </select>

@@ -33,7 +33,7 @@ export function DataTable({ resource, rows, onRowClick, emptyLabel = 'No records
               {...(onRowClick ? { onClick: () => onRowClick(row) } : {})}
             >
               {view.columns.map((column) => (
-                <td key={column.name}>{formatCell(row[column.name], column.type)}</td>
+                <td key={column.name}>{formatCell(row[column.name], column)}</td>
               ))}
             </tr>
           ))

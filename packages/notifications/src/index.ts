@@ -71,9 +71,14 @@ declare module '@basaltkit/core' {
   }
 }
 
-export const NOTIFIER = createToken<Notifier>('notifier')
-export const IN_APP = createToken<InAppStore>('notifications:inApp')
-export const PREFERENCES = createToken<NotificationPreferences>('notifications:preferences')
+// Defined in `./tokens.js` so `routes.ts` can import them without going through
+// this barrel — which re-exports the routes, closing a cycle that broke the
+// package's import entirely.
+//
+// Imported as well as re-exported: `export … from` does not bind the names
+// locally, and this module uses `IN_APP` and the others below.
+export { NOTIFIER, IN_APP, PREFERENCES } from './tokens.js'
+import { NOTIFIER, IN_APP, PREFERENCES } from './tokens.js'
 export const DIGEST = createToken<Digest>('notifications:digest')
 
 export interface NotificationsPluginOptions {
@@ -116,3 +121,9 @@ export function notificationsPlugin(options: NotificationsPluginOptions = {}) {
     },
   })
 }
+
+export {
+  inAppRoutes,
+  NotificationNotFoundError,
+  type InAppRoutesOptions,
+} from './routes.js'
