@@ -1,10 +1,10 @@
 {
-  "name": "@basaltkit/files-prisma",
+  "name": "@basaltkit/files-versions",
   "version": "0.0.0",
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Prisma-backed implementation of the @basaltkit/files FileStore \u2014 the production reference backend (PostgreSQL/MySQL). Bring your own PrismaClient; ships a reference schema.",
+  "description": "Document revisions on top of @basaltkit/files \u2014 each version points at its own file, so an earlier draft keeps its own bytes and nothing is ever overwritten.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -12,16 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./versions": {
-      "types": "./dist/versions.d.ts",
-      "import": "./dist/versions.js"
-    },
-    "./schema.prisma": "./prisma/schema.prisma"
+    }
   },
   "files": [
-    "dist",
-    "prisma"
+    "dist"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -30,13 +24,14 @@
   },
   "peerDependencies": {
     "@basaltkit/files": "workspace:^",
-    "@basaltkit/files-versions": "workspace:^"
+    "@basaltkit/core": "workspace:^"
   },
   "devDependencies": {
+    "@basaltkit/core": "workspace:^",
     "@basaltkit/files": "workspace:^",
-    "@basaltkit/files-versions": "workspace:^",
+    "@basaltkit/storage": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.4.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },
@@ -46,22 +41,16 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/basaltkit/basalt.git",
-    "directory": "packages/files-prisma"
+    "directory": "packages/files-versions"
   },
-  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/files-prisma#readme",
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/files-versions#readme",
   "bugs": "https://github.com/basaltkit/basalt/issues",
   "keywords": [
     "basalt",
     "typescript",
     "files",
-    "uploads",
-    "prisma",
-    "store",
-    "postgresql"
-  ],
-  "peerDependenciesMeta": {
-    "@basaltkit/files-versions": {
-      "optional": true
-    }
-  }
+    "versions",
+    "revisions",
+    "documents"
+  ]
 }
