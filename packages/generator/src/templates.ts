@@ -6,9 +6,31 @@ export interface GeneratedFile {
   content: string
 }
 
+/** Which Prisma client a generated repository types itself against. */
+export interface PrismaClientRef {
+  /** Module specifier, written into the generated file as-is. Relative paths are from `src/modules/<name>/`. */
+  import: string
+  /** Name of the exported client type. */
+  type: string
+}
+
 export interface GeneratorOptions {
   /** Generate a Prisma-backed repository (and a schema.prisma model) instead of in-memory. */
   prisma?: boolean
+  /**
+   * The Prisma client the repository is typed against. Defaults to
+   * `PrismaClient` from `@prisma/client`.
+   *
+   * An application with more than one client — schema-per-tenant,
+   * database-per-tenant, a read replica — needs the other one, and against it
+   * the default either fails to compile or, worse, compiles and points at the
+   * wrong models.
+   *
+   * ```ts
+   * prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' }
+   * ```
+   */
+  prismaClient?: PrismaClientRef
   /**
    * Add a soft-delete column (`deletedAt`): `delete` marks the row instead of
    * removing it, `list`/`find` skip soft-deleted rows, and a `restore()` method
@@ -52,7 +74,7 @@ const repositoryInterface = (n: Names, soft: boolean): string => `export interfa
   delete(id: string): Promise<boolean>${soft ? '\n  restore(id: string): Promise<boolean>' : ''}
 }`
 
-function prismaRepository(n: Names, soft: boolean): string {
+function prismaRepository(n: Names, soft: boolean, prismaClient?: PrismaClientRef): string {
   const rowType = soft
     ? '{ id: string; name: string; createdAt: Date; updatedAt: Date; deletedAt: Date | null }'
     : '{ id: string; name: string; createdAt: Date; updatedAt: Date }'
@@ -83,9 +105,10 @@ function prismaRepository(n: Names, soft: boolean): string {
     }
   }`
     : ''
+  const client = prismaClient ?? { import: '@prisma/client', type: 'PrismaClient' }
   return `import { createToken } from '@basaltkit/core'
 import { db } from '@basaltkit/prisma'
-import type { PrismaClient } from '@prisma/client'
+import type { ${client.type} } from '${client.import}'
 import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from './${n.kebab}.schema.js'
 
 // Map the Prisma row (Date columns) to the API type (ISO-string timestamps).
@@ -98,7 +121,7 @@ ${repositoryInterface(n, soft)}
 /** Prisma-backed. Requires prismaPlugin configured and a \`${n.pascal}\` model in schema.prisma. */
 export class Prisma${n.pascal}Repository implements ${n.pascal}Repository {
   private get records() {
-    return db<PrismaClient>().${n.camel}
+    return db<${client.type}>().${n.camel}
   }
 
   async list(): Promise<${n.pascal}[]> {
@@ -208,7 +231,9 @@ export function repositoryFile(n: Names, options: GeneratorOptions = {}): Genera
   const soft = options.softDelete === true
   return {
     path: `${dir(n)}/${n.kebab}.repository.ts`,
-    content: options.prisma ? prismaRepository(n, soft) : memoryRepository(n, soft),
+    content: options.prisma
+      ? prismaRepository(n, soft, options.prismaClient)
+      : memoryRepository(n, soft),
   }
 }
 
