@@ -151,6 +151,63 @@ unenforceable and **fails closed**: the guard throws `InvalidCanMetaError`
 skipping the check. And declaring `meta.can` without registering
 `permissionsPlugin` fails at **boot** — see the adapters guide.
 
+## Audiences — which surface a route belongs to
+
+A permission is a capability, not a surface. `matter:read` cannot tell "read my
+own case in the client portal" from "read the case with the litigation strategy
+in it", so a role granted the first also passes the guard on the second.
+
+That is not hypothetical: it is how an authenticated portal client received
+`200 OK` on an internal listing, with their own case's strategy in the body.
+
+`audiences` names the surfaces, and `meta.audience` says which one a route is:
+
+```ts
+app.use(permissionsPlugin({
+  store,
+  audiences: {
+    portal: { roles: ['client'], allow: ['portal', 'public'] },
+  },
+}))
+
+route({
+  method: 'GET', url: '/portal/matters',
+  meta: { can: 'matter:read', audience: 'portal' },
+  async handler() { /* … */ },
+})
+```
+
+### The default is the point
+
+**A route that declares no audience is unreachable by a confined role.** Not
+"reachable unless marked internal" — the other way round.
+
+The obvious design is to mark the internal routes, and it fails the first time
+somebody adds a route without thinking about portals. Marking the small,
+deliberate surface a restricted role may reach is a list somebody maintains;
+marking every route they may not is a list somebody forgets, once, silently.
+
+### Who is confined
+
+| The caller holds | Result |
+| --- | --- |
+| At least one role no rule names | **Unconfined.** Audiences say nothing about them |
+| Only roles that rules name | **Confined** to the union of those rules' `allow` lists |
+| No roles at all | Unconfined here — they hold no permission either, so `meta.can` already answers |
+
+The middle row is why a lawyer who is also a client of their own firm keeps
+working: refusing them would lock a member of staff out of their own workplace
+the day the firm made them a client. Confine only those who have nothing else.
+
+The union in the second row means two confined roles each grant reach to their
+own surface, and holding both grants both — what neither names stays closed.
+
+**Audiences narrow; they never widen.** The permission check runs regardless: a
+caller without `matter:read` is refused on `/portal/matters` whether or not the
+audience matches. Naming an audience is not a way in.
+
+Omit `audiences` entirely and none of this applies.
+
 ## Tenant scoping
 
 Grants are **per tenant** by default: `projects:*` granted in `acme` doesn't apply in

@@ -69,10 +69,10 @@ describe('reviewImplementation', () => {
     }),
   )
   const plan: ArchitecturePlan = {
-    request: 'add a clientes module',
-    summary: 'Cliente',
-    entities: [{ name: 'Cliente', tenantScoped: true, fields: [{ name: 'nome', type: 'String' }] }],
-    steps: [{ order: 1, title: 'x', kind: 'generator', detail: '', command: 'basalt make:resource Cliente --prisma' }],
+    request: 'add a clients module',
+    summary: 'Client',
+    entities: [{ name: 'Client', tenantScoped: true, fields: [{ name: 'name', type: 'String' }] }],
+    steps: [{ order: 1, title: 'x', kind: 'generator', detail: '', command: 'basalt make:resource Client --prisma' }],
     permissions: [],
     auditEvents: [],
     tenantScoped: true,
@@ -94,8 +94,8 @@ describe('reviewImplementation', () => {
   it('buildReviewContext includes the request and the model file', async () => {
     const result = await runMake(ctx, plan, { dryRun: true, baseDir: '/p' })
     const context = buildReviewContext(plan, result)
-    expect(context).toContain('REQUEST: add a clientes module')
-    expect(context).toMatch(/cliente\.prisma ---/)
-    expect(context).toMatch(/model Cliente \{/)
+    expect(context).toContain('REQUEST: add a clients module')
+    expect(context).toMatch(/client\.prisma ---/)
+    expect(context).toMatch(/model Client \{/)
   })
 })

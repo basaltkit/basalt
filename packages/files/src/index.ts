@@ -16,5 +16,7 @@ export {
   type FileRecord,
   type FileStore,
   type FilePatch,
+  type FileMetadata,
+  type JsonValue,
 } from './store.js'
 export { filesPlugin, fileRoutes, FILES, type FilesPluginOptions } from './plugin.js'

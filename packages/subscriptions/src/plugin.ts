@@ -128,20 +128,20 @@ export function subscriptionsPlugin(options: SubscriptionsPluginOptions) {
      */
     boot({ container, hooks }) {
       hooks.on('app:booted', () => {
-        const rotas = ensureMetadata(container).get<{
+        const routes = ensureMetadata(container).get<{
           url?: string
           meta?: Record<string, unknown>
         }>('http:routes')
 
         const conhecidos = Object.keys(options.plans)
-        const culpados = rotas
+        const offenders = routes
           .filter((r) => typeof r?.meta?.['subscribed'] === 'string')
           .map((r) => ({ url: r.url ?? '(sem url)', plan: r.meta!['subscribed'] as string }))
           .filter((r) => !conhecidos.includes(r.plan))
 
         // All of them at once: booting, failing, fixing one and booting again
         // is a slow way to find three.
-        if (culpados.length > 0) throw new UnknownPlanMetaError(culpados, conhecidos)
+        if (offenders.length > 0) throw new UnknownPlanMetaError(offenders, conhecidos)
       })
     },
   })

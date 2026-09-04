@@ -155,6 +155,66 @@ aplicável e **falha fechada**: o guard lança `InvalidCanMetaError`
 silenciosamente. E declarar `meta.can` sem registar o `permissionsPlugin` falha
 no **boot** — vê o guia de adapters.
 
+## Audiências — a que superfície uma rota pertence
+
+Uma permissão é uma capacidade, não uma superfície. O `matter:read` não distingue
+"ler o meu próprio processo no portal do cliente" de "ler o processo com a
+estratégia processual lá dentro", portanto um papel a quem se concedeu o primeiro
+passa também no guard do segundo.
+
+Não é hipotético: foi assim que um cliente autenticado recebeu `200 OK` numa
+listagem interna, com a estratégia do próprio caso no corpo.
+
+O `audiences` dá nome às superfícies, e o `meta.audience` diz qual é a de cada
+rota:
+
+```ts
+app.use(permissionsPlugin({
+  store,
+  audiences: {
+    portal: { roles: ['client'], allow: ['portal', 'public'] },
+  },
+}))
+
+route({
+  method: 'GET', url: '/portal/matters',
+  meta: { can: 'matter:read', audience: 'portal' },
+  async handler() { /* … */ },
+})
+```
+
+### O default é que é o ponto
+
+**Uma rota que não declara audiência é inalcançável por um papel confinado.** Não
+"alcançável a menos que marcada como interna" — ao contrário.
+
+O desenho óbvio é marcar as rotas internas, e falha na primeira vez que alguém
+acrescenta uma rota sem pensar em portais. Marcar a superfície pequena e
+deliberada que um papel restrito pode alcançar é uma lista que alguém mantém;
+marcar todas as que não pode é uma lista que alguém esquece, uma vez, em silêncio.
+
+### Quem fica confinado
+
+| O chamador tem | Resultado |
+| --- | --- |
+| Pelo menos um papel que nenhuma regra nomeia | **Não confinado.** As audiências não dizem nada sobre ele |
+| Só papéis que as regras nomeiam | **Confinado** à união dos `allow` dessas regras |
+| Nenhum papel | Não confinado aqui — também não tem permissão nenhuma, e o `meta.can` já responde |
+
+A linha do meio é a razão por que um advogado que também é cliente do próprio
+escritório continua a trabalhar: recusá-lo trancaria um membro do staff fora do
+seu próprio local de trabalho no dia em que o escritório o tornasse cliente.
+Confina-se só quem não tem mais nada.
+
+A união na segunda linha significa que dois papéis confinados dão alcance cada um
+à sua superfície, e ter os dois dá as duas — o que nenhum nomeia fica fechado.
+
+**As audiências estreitam; nunca alargam.** A verificação de permissão corre à
+mesma: um chamador sem `matter:read` é recusado em `/portal/matters`, coincida ou
+não a audiência. Nomear uma audiência não é uma porta de entrada.
+
+Omite o `audiences` por completo e nada disto se aplica.
+
 ## Scoping por tenant
 
 As concessões são **por tenant** por omissão: `projects:*` concedido em `acme` não se

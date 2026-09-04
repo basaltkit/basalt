@@ -97,6 +97,14 @@ export class SqliteTenantSource implements TenantSource {
     return rows.map((r) => JSON.parse(r.data) as Tenant)
   }
 
+  /**
+   * Removes a tenant and its domains — the `TenantSource.delete` the contract
+   * asks for, and what `tenancy.destroy()` calls. Without it, `destroy` refuses.
+   */
+  async delete(id: string): Promise<void> {
+    await this.remove(id)
+  }
+
   /** Delete a tenant and its domains. Returns whether a tenant was removed. */
   async remove(id: string): Promise<boolean> {
     this.db.exec('BEGIN IMMEDIATE')

@@ -40,7 +40,7 @@ describe('F-16 · FormData is sent as-is', () => {
   it('does not JSON-stringify a FormData body', async () => {
     const { chamadas, fetch } = espiao()
     const forma = new FormData()
-    forma.append('ficheiro', new Blob(['x']), 'a.txt')
+    forma.append('file', new Blob(['x']), 'a.txt')
 
     await api(fetch).upload({ body: forma })
 
@@ -51,7 +51,7 @@ describe('F-16 · FormData is sent as-is', () => {
   it('leaves content-type unset so the browser writes the boundary', async () => {
     const { chamadas, fetch } = espiao()
     const forma = new FormData()
-    forma.append('ficheiro', new Blob(['x']), 'a.txt')
+    forma.append('file', new Blob(['x']), 'a.txt')
 
     await api(fetch).upload({ body: forma })
 
@@ -72,7 +72,7 @@ describe('F-16 · FormData is sent as-is', () => {
 
   it('passes a Blob through too', async () => {
     const { chamadas, fetch } = espiao()
-    const blob = new Blob(['conteudo'], { type: 'application/pdf' })
+    const blob = new Blob(['content'], { type: 'application/pdf' })
     await api(fetch).upload({ body: blob })
 
     expect(chamadas[0]!.init.body).toBeInstanceOf(Blob)
@@ -91,8 +91,8 @@ describe('F-16 · AbortSignal reaches fetch', () => {
 
   it('rejects when the caller aborts', async () => {
     /**
-     * O `fetch` real rejeita quando o sinal dispara, e um sinal JÁ abortado
-     * rejeita de imediato. A primeira versão deste teste abortava depois de
+     * O `fetch` real rejeita when o sinal dispara, e um sinal JÁ abortado
+     * rejeita de imediato. A first versão deste teste abortava depois de
      * chamar e ficava pendurada trinta segundos: o `request` faz trabalho
      * assíncrono antes do `fetch`, e o `abort` chegou primeiro — ninguém
      * estava a ouvir. Abortar antes reproduz o mesmo sem a corrida.
@@ -118,12 +118,12 @@ describe('F-16 · AbortSignal reaches fetch', () => {
 describe('F-16 · per-call headers', () => {
   it('merges with the client headers, and the call wins', async () => {
     const { chamadas, fetch } = espiao()
-    const cliente = createClient(
+    const client = createClient(
       { list: endpoint({ method: 'GET', path: '/files', result: z.object({ ok: z.boolean() }) }) },
-      { baseUrl: '', fetch, headers: { 'x-app': 'demo', 'x-shared': 'do-cliente' } },
+      { baseUrl: '', fetch, headers: { 'x-app': 'demo', 'x-shared': 'do-client' } },
     )
 
-    await cliente.list({ headers: { 'x-shared': 'da-chamada', 'x-pedido': '1' } })
+    await client.list({ headers: { 'x-shared': 'da-chamada', 'x-pedido': '1' } })
 
     const headers = chamadas[0]!.init.headers as Record<string, string>
     expect(headers['x-app']).toBe('demo')

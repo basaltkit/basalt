@@ -32,8 +32,8 @@ describe('BasaltApp lifecycle', () => {
   })
 
   it('fails on missing dependency', () => {
-    const a = definePlugin({ name: 'a', dependsOn: ['inexistente'] })
-    expect(() => createApp({ plugins: [a] })).toThrowError(/depends on "inexistente"/)
+    const a = definePlugin({ name: 'a', dependsOn: ['missing'] })
+    expect(() => createApp({ plugins: [a] })).toThrowError(/depends on "missing"/)
   })
 
   it('fails on dependency cycle showing the path', () => {

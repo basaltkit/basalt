@@ -397,6 +397,7 @@ app owns the dispatch, so any scheduler works — a queue, a cron, a manual
 | `ready` | ✅ | `onProvision` succeeded |
 | `provisioning` | ❌ 503 | `create()` wrote the record; the work has not finished |
 | `failed` | ❌ 503 | `onProvision` threw. The record is kept, not deleted — it is the evidence the tenant was attempted |
+| `deleting` | ❌ 503 | `destroy()` has started. Marked **before** the storage is touched, so no request reaches a schema being dropped underneath it |
 
 **503, not 404.** The tenant exists; it is simply not serving yet, and 503 is the
 status a client may retry. A 404 would say the opposite.
@@ -608,6 +609,7 @@ soon as `@basaltkit/cli` is present — no extra wiring:
 | --- | --- | --- |
 | `basalt tenant:list` | `source.list()` | Tabulates every tenant (scalar fields only) |
 | `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` | Persists a new tenant; every flag becomes a field |
+| `basalt tenant:destroy <id> [--force] [--yes]` | `source.delete()` | Marks the tenant `deleting`, runs `onDeprovision` in its context, then removes the record. Asks first; `--yes` skips the question, `--force` removes the record even if teardown failed |
 | `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Runs your per-tenant migration hook inside each tenant's context |
 | `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Runs your per-tenant seed hook inside each tenant's context |
 | `basalt tenant:run <id> <command> [args…]` | — | Runs any other registered command inside one tenant's context |
@@ -745,6 +747,7 @@ scoped connection URL; pass `migrate` to override it.
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:migrate`, run inside each tenant's context |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |
 | `onProvision` | `(tenant) => void \| Promise<void>` | — | Brings a NEW tenant's storage into existence, inside its context, from `tenancy.create()` and `basalt tenant:create`. Without it a tenant is routable before its schema exists |
+| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Tears that storage down, inside the tenant's context, from `tenancy.destroy()`. Without it the record goes and the schema stays |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — `create()` waits, so the tenant is usable when it returns. `'deferred'` — `create()` returns immediately with status `provisioning` and the resolver answers 503 until `tenancy.provision(id)` runs |
 
 The built-in resolver factories:

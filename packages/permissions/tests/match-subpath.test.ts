@@ -20,9 +20,9 @@ describe('F-21 · @basaltkit/permissions/match imports nothing', () => {
     // The guard the subpath exists for. One `import` here and the file drags
     // `core` back in, and with it `node:async_hooks` — and the failure shows up
     // in someone else's bundler.
-    const fonte = readFileSync(new URL('../src/match.ts', import.meta.url), 'utf8')
-    const linhas = fonte.split('\n').filter((l) => /^\s*import\b/.test(l))
-    expect(linhas).toEqual([])
+    const source = readFileSync(new URL('../src/match.ts', import.meta.url), 'utf8')
+    const rows = source.split('\n').filter((l) => /^\s*import\b/.test(l))
+    expect(rows).toEqual([])
   })
 })
 
