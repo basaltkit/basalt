@@ -69,6 +69,25 @@ model File {
 
 Then `prisma migrate dev`.
 
+**`tenantId` is part of the primary key, and single-tenant apps still get it.**
+
+An application that never registers `@basaltkit/tenancy` never writes that
+column — `@basaltkit/files` fills it with `SINGLE_TENANT_SCOPE`, the literal
+string `'default'`, and every row reads the same. Nothing to configure, nothing
+that fails; the cost is one column that looks unused.
+
+It stays in the key on purpose. With `@@id([tenantId, id])` a lookup with the
+right id and the wrong tenant returns nothing **structurally** — it does not
+depend on every query remembering the filter. That is the same reasoning behind
+schema-per-tenant: isolation belongs in the shape of the data, not in a `where`
+clause somebody has to get right every time.
+
+The framework's other backends split on exactly this. `audit-prisma`,
+`activity-prisma` and `events-prisma` use a plain `id` with a nullable
+`tenantId`, because they record system-level facts that genuinely can have no
+tenant — an audit trail written outside any tenant, an outbox entry. A file is
+not one of those: it always belongs to somebody.
+
 **`size` is a `BigInt`** because `Int` stops at 2 GB, which a video upload passes
 without trying. It reaches your code as a `number` — `Number.MAX_SAFE_INTEGER` is
 about 8 petabytes, so nothing is lost on the way out.
