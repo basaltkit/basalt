@@ -22,7 +22,7 @@ It also includes the `secret()` helper, a special schema for secrets (API keys, 
 pnpm add @basaltkit/env zod
 ```
 
-`zod` is a *peer dependency* (you have to install it yourself; both `^3.24.0` and `^4.0.0` are supported). `@basaltkit/core` comes along automatically as a dependency.
+`zod` is a *peer dependency* (you have to install it yourself; Zod 4, `^4.0.0`, is required). `@basaltkit/core` comes along automatically as a dependency.
 
 ## Get started in 5 minutes
 

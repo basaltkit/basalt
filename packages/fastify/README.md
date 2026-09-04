@@ -24,7 +24,7 @@ One piece genuinely *is* specific to this adapter: `idempotencyPlugin`. It has t
 pnpm add @basaltkit/fastify @basaltkit/core zod
 ```
 
-Fastify already comes as a dependency of this package — you don't need to install it separately. `zod` (version 3 or 4) is a *peer dependency*.
+Fastify already comes as a dependency of this package — you don't need to install it separately. `zod` (`^4.0.0`) is a *peer dependency*.
 
 ## Getting started in 5 minutes
 

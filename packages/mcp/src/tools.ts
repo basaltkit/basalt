@@ -46,38 +46,31 @@ export function defaultToolName(route: BasaltRoute): string {
   return `${route.method.toLowerCase()}${path ? `_${path}` : ''}`.replace(/[^a-z0-9_]/gi, '_')
 }
 
-// --- Zod introspection that works on both Zod 3 and Zod 4 ---
-// v3 identifies types via `_def.typeName` ('ZodNumber') and exposes an object's
-// shape as `_def.shape()` (a function). v4 uses `_def.type` ('number') and
-// `_def.shape` (a plain object). These helpers normalise both.
+// --- Zod introspection ---
+// Reading `_def` is unlovely, but the alternative is parsing a sample value to
+// learn a schema's shape. Zod 4 names the type in `_def.type` ('number') and
+// exposes an object's fields as the plain record `_def.shape`.
 
 type ZodDefLike = {
-  typeName?: string
   type?: string
   innerType?: unknown
-  shape?: Record<string, unknown> | (() => Record<string, unknown>)
+  shape?: Record<string, unknown>
 }
 
 const zodDef = (schema: unknown): ZodDefLike | undefined =>
   (schema as { _def?: ZodDefLike } | undefined)?._def
 
-/** Normalised lowercase type name, e.g. 'number' | 'object' | 'optional'. */
+/** Lowercase type name, e.g. 'number' | 'object' | 'optional'. */
 function zodType(schema: unknown): string | undefined {
   const def = zodDef(schema)
-  if (!def) return undefined
-  if (typeof def.type === 'string') return def.type // v4
-  if (typeof def.typeName === 'string' && def.typeName.startsWith('Zod')) {
-    return def.typeName.slice(3).toLowerCase() // v3: 'ZodNumber' -> 'number'
-  }
-  return undefined
+  return typeof def?.type === 'string' ? def.type : undefined
 }
 
-/** The shape record of a Zod object (both versions), or null. */
+/** The shape record of a Zod object, or null. */
 function zodShape(schema: unknown): Record<string, unknown> | null {
   if (zodType(schema) !== 'object') return null
   const shape = zodDef(schema)?.shape
-  const resolved = typeof shape === 'function' ? shape() : shape
-  return resolved && typeof resolved === 'object' ? resolved : null
+  return shape && typeof shape === 'object' ? shape : null
 }
 
 /** Unwrap optional/default/nullable to the inner scalar type name. */

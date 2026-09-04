@@ -28,7 +28,7 @@
     "@basaltkit/storage": "workspace:^"
   },
   "peerDependencies": {
-    "zod": "^4.5.4"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@basaltkit/fastify": "workspace:^",

@@ -22,7 +22,7 @@ The client also handles **Bearer** token authentication (the token goes in the `
 pnpm add @basaltkit/sdk zod
 ```
 
-> Zod is a *peer dependency* (`^3.24.0` or `^4.0.0` are supported) — you have to install it yourself. The client uses the global `fetch` (browsers and Node 18+); on other runtimes, pass your own implementation via `options.fetch`.
+> Zod is a *peer dependency* (`^4.0.0`) — you have to install it yourself. The client uses the global `fetch` (browsers and Node 18+); on other runtimes, pass your own implementation via `options.fetch`.
 
 ## Get started in 5 minutes
 
