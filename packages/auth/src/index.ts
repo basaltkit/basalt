@@ -80,7 +80,13 @@ export {
   type ApiKeyContext,
 } from './apikeys.js'
 export { apiKeysPlugin, API_KEYS, type ApiKeysPluginOptions } from './apikeys-plugin.js'
-export { authRoutes, apiKeyRoutes, mfaRoutes } from './routes.js'
+export {
+  authRoutes,
+  apiKeyRoutes,
+  mfaRoutes,
+  type AuthRoutesOptions,
+  type PasswordPolicy,
+} from './routes.js'
 export {
   OAuth,
   googleProvider,
