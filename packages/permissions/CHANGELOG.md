@@ -1,5 +1,70 @@
 # @basaltkit/permissions
 
+## 1.3.1
+
+### Patch Changes
+
+- 36ab1a1: Add `gate.actor()`, a browser-safe `/match` subpath, and `accessRoutes()`.
+  
+  **`gate.actor()`** returns the current user with its roles attached. What
+  `@basaltkit/auth` puts in the context is `PublicUser` — `{ id, email,
+  emailVerified }` — with no roles, rightly, since `auth` does not know this
+  package exists. But policies receive that object, so `user.roles?.includes(…)`
+  read `undefined` and the policy denied: the right failure mode and an invisible
+  one, a partner treated as a stranger in their own firm with no error anywhere.
+  
+  Nothing filled the gap, so every service hydrated by hand and memoised under a
+  private context key it had to invent. This memoises per request *and per scope* —
+  the same person can hold different roles in two tenants — and returns `null`
+  when there is no user, rather than an actor that fails every check for a reason
+  nobody can read.
+  
+  **`@basaltkit/permissions/match`** exports `permissionMatches` and `permitted`
+  and imports nothing. The rule was already implemented and unreachable from a
+  browser: the package has a single entry point and depends on `@basaltkit/core`,
+  which imports `node:async_hooks`. So frontends rewrote it, and the rewrites
+  drifted — one handled `resource:*` and missed the global `'*'`, hiding controls
+  from the people allowed to use them.
+  
+  **`accessRoutes()`** serves `GET /me/access` with `{ roles, permissions }`,
+  merging direct grants with everything each role carries. `/auth/me` answers who
+  you are; nothing answered what you may do, so every frontend wrote the same
+  twenty lines. Not a security surface — the server still decides on every
+  request — but a UI that stops offering doors returning 403.
+  
+  It deliberately has no `meta.auth`: a public page asks before anyone logs in,
+  and empty is the honest answer there.
+- 36ab1a1: Give route `meta` a shape, and refuse to boot on a plan that is not in the
+  catalogue.
+  
+  **`meta.subscribed` is now checked at boot.** The toolkit already refused to
+  boot a route declaring `meta.subscribed` without `subscriptionsPlugin` — it
+  checked the *plugin* existed, never that the *value* meant anything.
+  `Subscriptions.subscribed()` compares strings and returns false when they do not
+  match, and the guard turns that into a 402. So a route gated on a plan absent
+  from the catalogue was indistinguishable from one nobody subscribed to: it
+  answered 402 to every paying customer, forever, with nothing in the logs.
+  
+  `subscriptionsPlugin` now validates every `meta.subscribed` against the plans it
+  was given and throws `UnknownPlanMetaError`, naming all offending routes at once
+  and listing what the catalogue does have. The check runs on `app:booted`, not in
+  the plugin's own boot: adapters publish `http:routes` during *their* boot phase,
+  so reading the list earlier would depend on plugin order and silently pass.
+  
+  **`meta` is typed.** It was `Record<string, unknown>`, so `can: 123` compiled.
+  `RouteMeta` is exported from `@basaltkit/http` and augmented by each guard
+  plugin — `can` by permissions, `subscribed`/`feature` by subscriptions, `auth`
+  by auth — the same pattern `BasaltHooks` uses.
+  
+  It stays open. The index signature keeps every existing route compiling and lets
+  applications add their own keys, which means a **misspelt** key still compiles:
+  `subcribed: 'pro'` is not a type error. That gap is closed at boot instead, by
+  the two checks above. The typing catches wrong value types and lets an editor
+  complete the names.
+- Updated dependencies [36ab1a1]
+- Updated dependencies [d5ca076]
+  - @basaltkit/http@2.0.0
+
 ## 1.3.0
 
 ### Minor Changes

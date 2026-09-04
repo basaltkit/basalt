@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/mcp",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "engines": {
     "node": ">=22.5.0"
   },

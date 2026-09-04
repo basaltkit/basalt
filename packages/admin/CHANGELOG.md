@@ -1,5 +1,113 @@
 # @basaltkit/admin
 
+## 2.0.0
+
+### Major Changes
+
+- d5ca076: **Zod 3 is no longer supported.** These packages now require zod 4.
+  
+  The peer range was `^3.24.0 || ^4.0.0`. It is now `^4.0.0`, which is a breaking
+  change for any application still on zod 3: the install will refuse the peer
+  rather than fail somewhere subtle at runtime, which is the point of declaring it.
+  
+  The move itself was overdue — the repository has been testing against zod 4 only
+  for some time, through a workspace override, so the second half of that range was
+  a claim nobody was checking. Supporting a major version you never run is worse
+  than not supporting it: it holds back the API surface (a schema written against
+  zod 4's `z.iso.datetime()` cannot be expressed in 3) while promising a
+  compatibility that would break on first contact.
+  
+  **Upgrading.** Most applications need only `pnpm add zod@^4`. Zod's own 3-to-4
+  migration guide covers the API changes; the ones that touch Basalt users most are
+  `z.string().datetime()` becoming `z.iso.datetime()`, and error customisation
+  moving from `message`/`invalid_type_error` to a single `error` parameter.
+  
+  The peer asks for `^4.0.0` and not the version this repo happens to test —
+  requiring the newest 4.x would force every consumer to move in step with us for
+  no reason. `@basaltkit/ai` takes zod as a direct dependency rather than a peer,
+  so its range narrowing is not breaking for anyone.
+  
+  **The zod 3 code goes with it.** `@basaltkit/http` carried a hand-rolled
+  `switch` over `_def.typeName` — 75 lines reimplementing what zod 4's
+  `z.toJSONSchema` does natively — reachable only when the native converter was
+  absent, which now never happens. `@basaltkit/mcp` normalised two shapes of
+  `_def` for every introspection. Both are gone, along with the coverage test
+  that existed solely to drive the dead path by mocking zod's converter away.
+  
+  `create-app` also scaffolded UI applications pinned to `zod@^3.24.0`. A project
+  generated after this change would have failed its own install against the new
+  peer; it now scaffolds `^4.0.0`.
+
+### Minor Changes
+
+- 36ab1a1: `defineResource` accepts field labels and enum option labels.
+  
+  Every label was derived from the field name through `humanize()`, which is an
+  English transformation of an identifier — `taxId` reads *Tax Id*, `idDocumentNumber`
+  reads *Id Document Number* — and an enum's options came out as the stored values:
+  `person`, `company`, `bi`. In an application written in another language the
+  generated form ends up half in English and half in database values, which is
+  enough to make hand-writing the form the easier option. It is not only a
+  translation problem: an English admin whose field name is the developer's name
+  for the thing has it too.
+  
+  ```ts
+  defineResource({
+    name: 'contacts',
+    schema: ContactSchema,
+    fields: {
+      taxId: { label: 'NIF' },
+      kind: { label: 'Tipo', options: { person: 'Pessoa', company: 'Empresa' } },
+    },
+  })
+  ```
+  
+  One map, keyed by field name, covering the table and both form modes — the same
+  translation should not need three copies.
+  
+  **Labelling never changes what is stored.** `field.options` still holds
+  `['person', 'company']`, which is what the form submits and the schema
+  validates; the display text lands in a separate `field.optionLabels`, read
+  through the new `optionLabel(field, value)`. Making `options` value/label pairs
+  would have read better and broken every renderer, including third-party ones;
+  this way a renderer that has never heard of the feature shows exactly what it
+  shows today. An option left unlabelled keeps its raw value, and a key naming no
+  field is ignored — a rename leaves stale entries behind, and refusing to
+  describe the resource over a leftover translation would be a poor trade.
+  
+  `DataTable` shows the label in enum cells too: a table reading `person` beside a
+  form reading *Pessoa* is worse than either alone. `formatCell` now takes a
+  `Field` as well as a bare `FieldType`, which behaves as before. `ResourceForm`
+  gains `chooseLabel` for an empty select's placeholder, mirroring `submitLabel` —
+  the last hardcoded English string inside a translated form.
+
+### Patch Changes
+
+- 36ab1a1: Drop the `node:crypto` import so the package bundles for the browser.
+  
+  `memoryDataSource` used `randomUUID` from `node:crypto` to mint an id, and the
+  barrel re-exports that module — so importing `defineResource` pulled a Node
+  builtin into the bundle. This package is the engine two React bindings render;
+  its destination is the browser, and bundlers failed outright:
+  
+  ```
+  "randomUUID" is not exported by "__vite-browser-external"
+  ```
+  
+  Every consuming application had to alias `node:crypto` to a shim of its own.
+  
+  The id now comes from `globalThis.crypto.randomUUID()` where it exists, with a
+  counter fallback. Not `crypto.randomUUID()` alone: that requires a secure
+  context and is undefined on plain http — how a developer reaches a dev server
+  from a phone on the local network — so it would have moved the failure rather
+  than removed it. Ids from an in-memory source need only be unique within one
+  process.
+  
+  `node:crypto` was the only Node builtin in the package, so the whole entry point
+  is now isomorphic. A test asserts that no file under `src` imports from `node:`,
+  because that failure surfaces in the consumer's bundler, far from the line that
+  caused it.
+
 ## 1.0.2
 
 ### Patch Changes

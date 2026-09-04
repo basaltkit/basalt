@@ -1,5 +1,14 @@
 # @basaltkit/billing-ui
 
+## 1.1.2
+
+### Patch Changes
+
+- Updated dependencies [36ab1a1]
+- Updated dependencies [d5ca076]
+  - @basaltkit/http@2.0.0
+  - @basaltkit/subscriptions@3.0.0
+
 ## 1.1.1
 
 ### Patch Changes

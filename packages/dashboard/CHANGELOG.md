@@ -1,5 +1,16 @@
 # @basaltkit/dashboard
 
+## 1.4.3
+
+### Patch Changes
+
+- Updated dependencies [36ab1a1]
+- Updated dependencies [36ab1a1]
+- Updated dependencies [36ab1a1]
+- Updated dependencies [d5ca076]
+  - @basaltkit/admin@2.0.0
+  - @basaltkit/subscriptions@3.0.0
+
 ## 1.4.2
 
 ### Patch Changes

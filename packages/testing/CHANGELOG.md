@@ -1,5 +1,12 @@
 # @basaltkit/testing
 
+## 1.1.4
+
+### Patch Changes
+
+- Updated dependencies [d5ca076]
+  - @basaltkit/fastify@2.0.0
+
 ## 1.1.3
 
 ### Patch Changes
