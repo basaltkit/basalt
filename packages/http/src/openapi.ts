@@ -5,120 +5,49 @@ import { HTTP_SERVER } from './server.js'
 type JsonSchema = Record<string, unknown>
 
 /**
- * Minimal Zod → JSON Schema (OpenAPI 3.0 dialect) covering the subset used in
- * route definitions. Unknown types degrade to `{}` rather than throwing.
+ * Zod → JSON Schema (OpenAPI 3.0 dialect), delegating to Zod's own converter.
+ *
+ * Until zod 4 became the requirement this function also carried a hand-rolled
+ * `switch` over `_def.typeName` for zod 3, which the native converter replaces
+ * outright. Unknown types still degrade to `{}` rather than throwing: an
+ * OpenAPI document missing a constraint is far better than a boot that fails.
  */
 export function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
-  // Dates aren't a JSON type, so v4's native converter drops them to {}; keep
-  // the useful OpenAPI shape (works on both Zod v3 and v4 via instanceof).
+  // A date is not a JSON type, so the native converter drops it to {}. The
+  // OpenAPI shape is more useful to a client than nothing.
   if (schema instanceof z.ZodDate) return { type: 'string', format: 'date-time' }
-  // Zod v4 ships a complete native converter and changed its internals (the
-  // hand-rolled path below only understands Zod v3). Delegate to it when present.
-  const native = (z as unknown as { toJSONSchema?: (s: unknown, o?: unknown) => JsonSchema }).toJSONSchema
-  if (typeof native === 'function') {
-    // Normalise Zod 4's native output to the shape Basalt has always emitted,
-    // recursively (nested objects/arrays too): drop the $schema banner, strip
-    // the JS safe-integer bounds it stamps on every number, and treat a property
-    // with a `default` as optional (a client may omit it) rather than required.
-    const clean = (node: unknown): unknown => {
-      if (!node || typeof node !== 'object') return node
-      if (Array.isArray(node)) return node.map(clean)
-      const o = node as Record<string, unknown>
-      delete o['$schema']
-      if (o['minimum'] === -9007199254740991 || o['minimum'] === Number.MIN_SAFE_INTEGER) delete o['minimum']
-      if (o['maximum'] === 9007199254740991 || o['maximum'] === Number.MAX_SAFE_INTEGER) delete o['maximum']
-      const props = o['properties'] as Record<string, JsonSchema> | undefined
-      if (props && Array.isArray(o['required'])) {
-        o['required'] = (o['required'] as string[]).filter((k) => props[k]?.['default'] === undefined)
-        if ((o['required'] as string[]).length === 0) delete o['required']
-      }
-      for (const v of Object.values(o)) clean(v)
-      return o
-    }
-    try {
-      return clean(native(schema, { target: 'openapi-3.0', unrepresentable: 'any' })) as JsonSchema
-    } catch {
-      try {
-        return clean(native(schema)) as JsonSchema
-      } catch {
-        return {}
-      }
-    }
-  }
-  const def = (schema as unknown as { _def?: Record<string, unknown> })?._def as Record<string, unknown> | undefined
-  if (!def) return {}
-  const anyDef = def as Record<string, unknown> & { typeName: string; checks?: { kind: string; value?: unknown; regex?: RegExp }[] }
-  switch (anyDef.typeName) {
-    case 'ZodString': {
-      const out: JsonSchema = { type: 'string' }
-      for (const check of anyDef.checks ?? []) {
-        if (check.kind === 'email') out.format = 'email'
-        else if (check.kind === 'url') out.format = 'uri'
-        else if (check.kind === 'uuid') out.format = 'uuid'
-        else if (check.kind === 'min') out.minLength = check.value
-        else if (check.kind === 'max') out.maxLength = check.value
-        else if (check.kind === 'regex') out.pattern = String(check.regex?.source)
-      }
-      return out
-    }
-    case 'ZodNumber': {
-      const out: JsonSchema = { type: 'number' }
-      for (const check of anyDef.checks ?? []) {
-        if (check.kind === 'int') out.type = 'integer'
-        else if (check.kind === 'min') out.minimum = check.value
-        else if (check.kind === 'max') out.maximum = check.value
-      }
-      return out
-    }
-    case 'ZodBoolean':
-      return { type: 'boolean' }
-    case 'ZodDate':
-      return { type: 'string', format: 'date-time' }
-    case 'ZodLiteral':
-      return { const: (def as { value: unknown }).value }
-    case 'ZodEnum':
-      return { type: 'string', enum: (def as { values: unknown[] }).values }
-    case 'ZodNativeEnum':
-      return { enum: Object.values((def as { values: object }).values) }
-    case 'ZodArray':
-      return { type: 'array', items: zodToJsonSchema((def as { type: ZodTypeAny }).type) }
-    case 'ZodObject': {
-      const shape = (def as { shape: () => Record<string, ZodTypeAny> }).shape()
-      const properties: JsonSchema = {}
-      const required: string[] = []
-      for (const [key, value] of Object.entries(shape)) {
-        properties[key] = zodToJsonSchema(value)
-        if (!isOptional(value)) required.push(key)
-      }
-      const out: JsonSchema = { type: 'object', properties }
-      if (required.length) out.required = required
-      return out
-    }
-    case 'ZodOptional':
-    case 'ZodNullable':
-      return {
-        ...zodToJsonSchema((def as { innerType: ZodTypeAny }).innerType),
-        ...(anyDef.typeName === 'ZodNullable' ? { nullable: true } : {}),
-      }
-    case 'ZodDefault':
-      return {
-        ...zodToJsonSchema((def as { innerType: ZodTypeAny }).innerType),
-        default: (def as { defaultValue: () => unknown }).defaultValue(),
-      }
-    case 'ZodEffects':
-      return zodToJsonSchema((def as { schema: ZodTypeAny }).schema)
-    case 'ZodUnion':
-      return { anyOf: (def as { options: ZodTypeAny[] }).options.map((option) => zodToJsonSchema(option)) }
-    case 'ZodRecord':
-      return { type: 'object', additionalProperties: zodToJsonSchema((def as { valueType: ZodTypeAny }).valueType) }
-    default:
-      return {}
-  }
-}
 
-function isOptional(schema: ZodTypeAny): boolean {
-  const name = (schema as { _def?: { typeName?: string } })?._def?.typeName
-  return name === 'ZodOptional' || name === 'ZodDefault'
+  // Normalise the native output to the shape Basalt has always emitted,
+  // recursively (nested objects and arrays too): drop the $schema banner, strip
+  // the JS safe-integer bounds it stamps on every number, and treat a property
+  // with a `default` as optional — a client may omit it.
+  const clean = (node: unknown): unknown => {
+    if (!node || typeof node !== 'object') return node
+    if (Array.isArray(node)) return node.map(clean)
+    const o = node as Record<string, unknown>
+    delete o['$schema']
+    if (o['minimum'] === -9007199254740991 || o['minimum'] === Number.MIN_SAFE_INTEGER) delete o['minimum']
+    if (o['maximum'] === 9007199254740991 || o['maximum'] === Number.MAX_SAFE_INTEGER) delete o['maximum']
+    const props = o['properties'] as Record<string, JsonSchema> | undefined
+    if (props && Array.isArray(o['required'])) {
+      o['required'] = (o['required'] as string[]).filter((k) => props[k]?.['default'] === undefined)
+      if ((o['required'] as string[]).length === 0) delete o['required']
+    }
+    for (const v of Object.values(o)) clean(v)
+    return o
+  }
+
+  try {
+    return clean(z.toJSONSchema(schema, { target: 'openapi-3.0', unrepresentable: 'any' })) as JsonSchema
+  } catch {
+    // A schema the OpenAPI 3.0 target refuses (a bigint, a custom type) may
+    // still convert against the default target.
+    try {
+      return clean(z.toJSONSchema(schema)) as JsonSchema
+    } catch {
+      return {}
+    }
+  }
 }
 
 export interface OpenApiInfo {

@@ -102,8 +102,9 @@ text (`content`), and — **only when that value is a JSON object** — also as
 list endpoint) put the data in `content` only, because MCP requires
 `structuredContent` to be an object.
 
-**Zod 3 and 4** are both supported; on Zod 4 the schema conversion uses Zod's
-native `z.toJSONSchema`.
+Schema conversion uses Zod's own `z.toJSONSchema`, so a tool's input schema is
+described to the client exactly as Zod describes it. **Zod 4 is required** —
+see the note on the peer dependency in the package's README.
 
 ## stdio & Claude Desktop
 

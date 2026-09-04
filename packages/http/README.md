@@ -24,7 +24,7 @@ Besides routes, this module brings ready-to-use **edge plugins** for any adapter
 pnpm add @basaltkit/http zod
 ```
 
-`zod` is a *peer dependency* (the module uses it but lets you choose the version). You'll also need an adapter to serve requests, e.g. `pnpm add @basaltkit/fastify`.
+`zod` is a *peer dependency* (`^4.0.0`) — the module uses it, but the copy is yours, so the project only ever has one. You'll also need an adapter to serve requests, e.g. `pnpm add @basaltkit/fastify`.
 
 ## Get started in 5 minutes
 

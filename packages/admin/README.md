@@ -22,7 +22,7 @@ The word **headless** means this package doesn't render anything on screen — i
 pnpm add @basaltkit/admin zod
 ```
 
-> `zod` is a *peer dependency* (a dependency you install yourself, to ensure only one version exists in the project). Versions 3.24+ and 4.x are supported.
+> `zod` is a *peer dependency* (a dependency you install yourself, to ensure only one version exists in the project). Zod 4 (`^4.0.0`) is required.
 
 ## Get started in 5 minutes
 

@@ -27,6 +27,29 @@ auditConfig:
     # without breaking @prisma/config, and never on a request path. Low real-world
     # exploitability; production runtime deps are unaffected.
     - GHSA-ggr8-5vv4-36mx
+    # The three below are the same vitepress corner as GHSA-fx2h-pf6j-xcff above,
+    # and they are here for the same reason: the fixes landed in vite 6.4.2 and
+    # 6.4.3, the 5.x line stops at 5.4.21 with no backport, and vitepress — 1.6.4,
+    # the newest there is — requires `vite ^5.4.14`. There is no version of this
+    # tree that satisfies both, short of dropping vitepress.
+    #
+    # All three are dev-server holes: they need someone to be running
+    # `pnpm docs:dev` and to visit a hostile page while it is up. They are not in
+    # any published package and not in the static site the docs build emits.
+    #
+    # esbuild dev-server reads any origin's requests and returns the response:
+    - GHSA-67mh-4wv8-2f99
+    # vite path traversal through an optimized dep's `.map` handling:
+    - GHSA-4w7w-66w2-5vf9
+    # vite/launch-editor NTLMv2 hash disclosure via UNC paths, Windows only:
+    - GHSA-v6wh-96g9-6wx3
+    # uuid <11.1.1 missing bounds check on a caller-supplied `buf`. Only v3, v5
+    # and v6 take a `buf`, and only gaxios and hyperid bring uuid here — gaxios
+    # calls `v4()` for a multipart boundary (gaxios.js:417) and hyperid is
+    # bench-only. The vulnerable functions are never called, and raising uuid two
+    # majors under someone else's peer SDK buys nothing for it. Revisit if a
+    # direct dependency ever starts using v3/v5/v6.
+    - GHSA-w5hq-g745-h8pq
 
 minimumReleaseAgeExclude:
   - '@typescript-eslint/eslint-plugin@8.68.0'
@@ -44,7 +67,8 @@ minimumReleaseAgeExclude:
   - '@types/node@26.3.0'
   - bullmq@6.2.1
 
-# Force zod 4 across the tree while ranges stay `^3 || ^4` (library compat).
+# The zod entry below no longer forces a major — every package now declares
+# zod 4 — but it keeps the whole tree on one copy and one tested version.
 overrides:
   # GHSA-3f6p-5ww8-9rcr (high): mysql2 < 3.22.0 can be downgraded to the
   # mysql_clear_password auth plugin by a hostile server, leaking the password
@@ -56,6 +80,16 @@ overrides:
   # tree, so an app using @basaltkit/prisma against MySQL would really be
   # exposed. This repo runs Postgres/SQLite, which is why nothing here breaks.
   mysql2: ^3.24.2
+  # GHSA-x5fp-wj9c-mxmx and GHSA-4mjr-xmp4-gh2g (moderate): qs below 6.16.0 can
+  # be made to blow past `arrayLimit` through comma-parsed bracket keys, and to
+  # spend unbounded time when an attacker controls what `isBuffer` sees.
+  #
+  # Overridden, not ignored, for the reason the two entries above are: this one
+  # parses query strings on the request path of every application built on
+  # @basaltkit/express. Express pins a range that stops short of the fix, so an
+  # override is the only way to raise it; 6.16 is the same major and the parser's
+  # behaviour for well-formed input is unchanged.
+  qs: ^6.16.0
   # GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf (high):
   # fast-uri can be made to disagree with the WHATWG parser about a URL's host —
   # skipped IDN normalisation, and SSRF through hosts it parses differently from
@@ -80,6 +114,9 @@ overrides:
   react-dom: ^19.2.8
   '@types/react': ^19.2.18
   '@types/react-dom': ^19.2.5
-  zod: ^4.4.3
+  # Peers declare `^4.0.0`, which is the honest claim to a consumer; this pins
+  # what the repo is actually tested against, so a stale transitive copy cannot
+  # make a suite pass here and fail for someone on a newer 4.x.
+  zod: ^4.5.4
   vitest: ^4.1.11
   '@vitest/coverage-v8': ^4.1.11
