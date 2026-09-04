@@ -121,6 +121,36 @@ export const projects = defineResource({
 
 A partir disto, o motor deriva os rótulos das colunas, os campos do formulário (com o input certo por tipo — texto, checkbox para booleanos, `<select>` para enums, número para números), quais os campos obrigatórios, e as regras de validação. Usa o `fieldsFromSchema` diretamente se quiseres os modelos de campo sem um recurso completo.
 
+#### Rótulos que quem lê reconhece
+
+Esses rótulos derivados vêm do nome do campo: `taxId` sai *Tax Id*, e as opções
+de um enum saem como os valores que guardas — `person`, `company`. Serve para um
+admin interno em inglês e está errado em todo o resto, incluindo um em inglês
+onde o nome do campo é o nome que o programador lhe deu.
+
+O `fields` substitui os dois, com a chave no nome do campo, e cobre a tabela e os
+dois modos do formulário de uma vez:
+
+```ts
+export const contactos = defineResource({
+  name: 'contacts',
+  schema: ContactSchema,
+  createSchema: CreateContactSchema,
+  fields: {
+    taxId: { label: 'NIF' },
+    kind: { label: 'Tipo', options: { person: 'Pessoa', company: 'Empresa' } },
+  },
+})
+```
+
+Os valores guardados não mudam — o `options` só troca o que se mostra, portanto o
+formulário continua a submeter `person` e o teu schema continua a validá-lo. Uma
+opção que fique de fora mantém o valor cru, e uma chave que não nomeia campo
+nenhum é ignorada em vez de estragar o recurso.
+
+O `ResourceForm` aceita também `chooseLabel` para o texto de um select por
+preencher (por omissão `Select…`), ao lado do `submitLabel` que já aceitava.
+
 ### 2. Liga uma fonte de dados
 
 O motor lê e escreve através de uma **`AdminDataSource`** — `{ list, get, create, update, remove }`. Usa `memoryDataSource(seed)` para demos, ou apoia-a no teu cliente SDK type-safe para uma API real:

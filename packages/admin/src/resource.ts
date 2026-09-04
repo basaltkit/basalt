@@ -1,5 +1,5 @@
 import type { z } from 'zod'
-import { fieldsFromSchema, humanize, type Field } from './fields.js'
+import { fieldsFromSchema, humanize, type Field, type FieldConfig } from './fields.js'
 
 export interface ResourceConfig {
   /** Plural machine name, e.g. 'projects'. */
@@ -15,6 +15,20 @@ export interface ResourceConfig {
   columns?: string[]
   /** Identifier field. Default: 'id'. */
   idField?: string
+  /**
+   * Display overrides keyed by field name, for every schema of the resource.
+   *
+   * Labels otherwise come from the field name through `humanize()`, which is an
+   * English transformation of an identifier — `taxId` reads 'Tax Id' — and enum
+   * options come out as the stored values. Neither is presentable in an
+   * application written in another language, or wherever the field name is a
+   * developer's name for the thing rather than the reader's.
+   *
+   * ```ts
+   * fields: { taxId: { label: 'NIF' }, kind: { options: { person: 'Pessoa' } } }
+   * ```
+   */
+  fields?: Record<string, FieldConfig>
 }
 
 export type FormMode = 'create' | 'update'
@@ -39,7 +53,7 @@ export class Resource {
 
   /** All entity fields. */
   fields(): Field[] {
-    return fieldsFromSchema(this.config.schema)
+    return fieldsFromSchema(this.config.schema, this.config.fields)
   }
 
   /** Table columns, honoring the configured order/subset. */
@@ -54,7 +68,9 @@ export class Resource {
   /** Form fields for the given mode (falls back to entity fields minus the id). */
   formFields(mode: FormMode = 'create'): Field[] {
     const schema = this.schemaFor(mode)
-    return schema ? fieldsFromSchema(schema) : this.fields().filter((f) => f.name !== this.idField)
+    return schema
+      ? fieldsFromSchema(schema, this.config.fields)
+      : this.fields().filter((f) => f.name !== this.idField)
   }
 
   /** Validates input against the mode's schema, mapping errors to field names. */

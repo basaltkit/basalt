@@ -161,6 +161,31 @@ tags.validate({ label: 'x' }) // { success: true, data: { label: 'x' } }
 
 Form modes: `'create'` uses `createSchema`; `'update'` uses `updateSchema` (or, if it doesn't exist, `createSchema`).
 
+**Labels and enum options.** Every label is derived from the field name through
+`humanize()` — `taxId` reads *Tax Id* — and an enum's options are the values you
+store. `fields` overrides both, keyed by field name, and applies to the table and
+to both form modes:
+
+```ts
+const contacts = defineResource({
+  name: 'contacts',
+  schema: ContactSchema,
+  fields: {
+    taxId: { label: 'NIF' },
+    kind: { label: 'Tipo', options: { person: 'Pessoa', company: 'Empresa' } },
+  },
+})
+
+contacts.columns().map((c) => c.label) // ['Id', 'NIF', 'Tipo']
+```
+
+Labelling never changes what is stored or submitted: `field.options` still holds
+`['person', 'company']`, and the display text lands in `field.optionLabels`. Read
+it through `optionLabel(field, value)`, which falls back to the raw value for an
+option left unlabelled. A key naming no field is ignored — a rename leaves stale
+entries behind, and failing the resource over a translation would be a poor
+trade.
+
 ### View models — `tableView` and `formView`
 
 These functions produce plain objects that a visual layer (React or otherwise) renders:
