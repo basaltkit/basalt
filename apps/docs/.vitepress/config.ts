@@ -148,6 +148,7 @@ export default defineConfig({
               items: [
                 { text: 'Filas & Jobs', link: '/pt/guide/queues' },
                 { text: 'Tarefas agendadas', link: '/pt/guide/scheduler' },
+                { text: 'Backups PostgreSQL', link: '/pt/guide/backup' },
                 { text: 'Storage', link: '/pt/guide/storage' },
                 { text: 'Caching', link: '/pt/guide/caching' },
                 { text: 'Base de dados por tenant', link: '/pt/guide/database-per-tenant' },
@@ -278,6 +279,7 @@ export default defineConfig({
           items: [
             { text: 'Queues & Jobs', link: '/guide/queues' },
             { text: 'Scheduled tasks', link: '/guide/scheduler' },
+            { text: 'PostgreSQL backups', link: '/guide/backup' },
             { text: 'Storage', link: '/guide/storage' },
             { text: 'Caching', link: '/guide/caching' },
             { text: 'Database-per-tenant', link: '/guide/database-per-tenant' },

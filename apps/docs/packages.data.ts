@@ -21,7 +21,7 @@ export interface EcosystemGroup {
 const CATEGORIES: { key: string; bases: string[] }[] = [
   { key: 'foundation', bases: ['core', 'config', 'env', 'events', 'logger'] },
   { key: 'http', bases: ['http', 'fastify', 'express', 'hono', 'sdk'] },
-  { key: 'data', bases: ['prisma', 'cache', 'storage', 'files'] },
+  { key: 'data', bases: ['prisma', 'cache', 'storage', 'files', 'backup'] },
   { key: 'queues', bases: ['queue', 'scheduler'] },
   { key: 'auth', bases: ['auth', 'permissions', 'api-keys-ui'] },
   { key: 'tenancy', bases: ['tenancy', 'teams'] },
