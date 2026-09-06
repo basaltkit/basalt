@@ -106,6 +106,24 @@ manifest:
 await backup.createAllTenants(app.container.get(TENANCY), { concurrency: 5 })
 ```
 
+`@basaltkit/backup` does not depend on `@basaltkit/tenancy`. The application
+passes the iterator as configuration when scheduling all tenants:
+
+```ts
+backupPlugin({
+  connectionUrl: process.env.DATABASE_URL!,
+  disk: 'backups',
+  tenancy: app.container.get(TENANCY),
+  schedule: {
+    target: 'all-tenants',
+    cron: '0 3 * * *',
+  },
+})
+```
+
+The iterator is a structural callback contract, so applications can provide
+their own tenant registry without installing the Basalt tenancy package.
+
 For database-per-tenant deployments, configure `tenantDatabaseUrl` or pass a
 `databaseUrl` for each target. A full database dump is not a safe substitute
 for a tenant-by-tenant export when isolation is required.

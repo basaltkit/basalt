@@ -115,6 +115,24 @@ a daily task, or provide `cron` and `timezone`; it uses
 `schedulerPlugin({ define })`, instantiate `PostgresBackup` in that callback
 and call `create()` or `createAllTenants()` from the existing schedule.
 
+The package does not import or resolve `@basaltkit/tenancy`. For an
+`'all-tenants'` schedule, pass the application's tenant iterator explicitly:
+
+```ts
+backupPlugin({
+  connectionUrl,
+  disk: 'backups',
+  tenancy: app.container.get(TENANCY),
+  schedule: {
+    target: 'all-tenants',
+    cron: '0 3 * * *',
+  },
+})
+```
+
+This keeps tenancy opt-in while retaining schema-per-tenant and
+database-per-tenant backups through the structural `TenantIterator` contract.
+
 Failures are represented in the manifest and logger output. `restore()` requires
 an explicit confirmation callback and refuses production unless
 `allowProduction: true` is provided.

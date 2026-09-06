@@ -94,6 +94,24 @@ Para `schema-per-tenant`, use:
 await backup.createAllTenants(app.container.get(TENANCY), { concurrency: 5 })
 ```
 
+O `@basaltkit/backup` não depende de `@basaltkit/tenancy`. Para agendar o
+backup de todos os tenants, a aplicação passa explicitamente o seu iterador:
+
+```ts
+backupPlugin({
+  connectionUrl: process.env.DATABASE_URL!,
+  disk: 'backups',
+  tenancy: app.container.get(TENANCY),
+  schedule: {
+    target: 'all-tenants',
+    cron: '0 3 * * *',
+  },
+})
+```
+
+O contrato é estrutural, portanto a aplicação pode fornecer o seu próprio
+registo de tenants sem instalar o pacote de tenancy do BasaltKit.
+
 Para `database-per-tenant`, configure `tenantDatabaseUrl` ou passe um
 `databaseUrl` por target.
 
