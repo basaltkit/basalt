@@ -1,0 +1,34 @@
+{
+  "name": "@basaltkit/backup",
+  "version": "0.1.0",
+  "engines": { "node": ">=22.5.0" },
+  "description": "PostgreSQL backups for Basalt applications, including multi-tenant deployments.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/logger": "workspace:^",
+    "@basaltkit/prisma": "workspace:^",
+    "@basaltkit/scheduler": "workspace:^",
+    "@basaltkit/storage": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "git+https://github.com/basaltkit/basalt.git", "directory": "packages/backup" },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/backup#readme",
+  "bugs": { "url": "https://github.com/basaltkit/basalt/issues" },
+  "keywords": ["basalt", "backup", "postgresql", "multi-tenant"]
+}
