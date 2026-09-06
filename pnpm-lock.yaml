@@ -884,9 +884,6 @@ importers:
       '@basaltkit/storage':
         specifier: workspace:^
         version: link:../storage
-      '@basaltkit/tenancy':
-        specifier: workspace:^
-        version: link:../tenancy
     devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^

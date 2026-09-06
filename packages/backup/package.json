@@ -18,8 +18,7 @@
     "@basaltkit/logger": "workspace:^",
     "@basaltkit/prisma": "workspace:^",
     "@basaltkit/scheduler": "workspace:^",
-    "@basaltkit/storage": "workspace:^",
-    "@basaltkit/tenancy": "workspace:^"
+    "@basaltkit/storage": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",

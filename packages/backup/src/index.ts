@@ -1,7 +1,6 @@
 import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { SCHEDULER, type Scheduler } from '@basaltkit/scheduler'
 import { STORAGE, type Disk } from '@basaltkit/storage'
-import { TENANCY, type Tenancy } from '@basaltkit/tenancy'
 import { PostgresBackup, type BackupTarget, type PostgresBackupOptions, type TenantIterator } from './postgres.js'
 
 export * from './errors.js'
@@ -20,7 +19,7 @@ export interface BackupScheduleOptions {
 export interface BackupPluginOptions extends Omit<PostgresBackupOptions, 'disk'> {
   disk: Disk | string
   schedule?: BackupScheduleOptions
-  /** Resolves the tenancy service for the all-tenants schedule. */
+  /** Iterator supplied by the application for the all-tenants schedule. */
   tenancy?: TenantIterator
 }
 
@@ -46,8 +45,12 @@ export function backupPlugin(options: BackupPluginOptions) {
           : [options.schedule!.target]
         for (const target of targets) {
           if (target === 'all-tenants') {
-            const tenancy = options.tenancy ?? container.get(TENANCY)
-            await backup.createAllTenants(tenancy, {
+            if (!options.tenancy) {
+              throw new Error(
+                'backupPlugin: `tenancy` must be provided for an all-tenants schedule.',
+              )
+            }
+            await backup.createAllTenants(options.tenancy, {
               ...(options.schedule!.concurrency !== undefined ? { concurrency: options.schedule!.concurrency } : {}),
             })
           } else {
