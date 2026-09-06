@@ -58,4 +58,24 @@ describe('PostgresBackup', () => {
 
     await expect(backup.list()).resolves.toEqual([])
   })
+
+  it('normalizes a prefix without regex backtracking', async () => {
+    const driver = new MemoryDriver()
+    let output = ''
+    const backup = new PostgresBackup({
+      connectionUrl: 'postgresql://localhost/app',
+      disk: new Disk('backups', driver, { scope: null }),
+      prefix: '////custom////',
+      runner: async (_command, args) => {
+        const file = args[args.indexOf('--file') + 1]!
+        const { writeFile } = await import('node:fs/promises')
+        await writeFile(file, 'dump')
+        output = args[args.indexOf('--dbname') + 1]!
+      },
+    })
+
+    await backup.create({ kind: 'full' })
+    expect(output).toContain('postgresql://localhost/app')
+    expect(await driver.list('custom/')).toHaveLength(2)
+  })
 })

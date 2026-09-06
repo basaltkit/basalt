@@ -70,7 +70,7 @@ export class PostgresBackup {
     if (!options.connectionUrl) throw new BackupConfigError('connectionUrl is required.')
     if (!options.disk) throw new BackupConfigError('disk is required.')
     this.options = options
-    this.prefix = (options.prefix ?? 'backups').replace(/^\/+|\/+$/g, '')
+    this.prefix = trimSlashes(options.prefix ?? 'backups')
     this.runner = options.runner ?? runCommand
     this.clock = options.clock ?? (() => new Date())
   }
@@ -206,6 +206,14 @@ export class PostgresBackup {
 }
 
 function sameTarget(a: BackupTarget, b: BackupTarget): boolean { return a.kind === b.kind && ('tenantId' in a ? a.tenantId === (b as typeof a).tenantId : true) }
+
+function trimSlashes(value: string): string {
+  let start = 0
+  let end = value.length
+  while (start < end && value[start] === '/') start++
+  while (end > start && value[end - 1] === '/') end--
+  return value.slice(start, end)
+}
 
 /** Prisma uses `schema` to select search_path; PostgreSQL client tools reject it. */
 function postgresToolUrl(connectionUrl: string): string {
