@@ -89,6 +89,31 @@ Each run writes a custom-format dump and a JSON manifest containing status,
 target, timestamps, size and SHA-256 checksum. Failed runs remain visible as
 `failed` manifests and are logged with the backup id.
 
+## List and inspect backups
+
+`list()` reads the JSON manifests from the configured disk, returns them newest
+first, and ignores incomplete manifests with a warning:
+
+```ts
+const backups = await backup.list()
+
+for (const item of backups) {
+  console.log(item.id, item.status, item.target, item.sizeBytes, item.artifact)
+}
+
+const latestFull = backups.find(
+  (item) => item.status === 'succeeded' && item.target.kind === 'full',
+)
+```
+
+Each `BackupManifest` includes `id`, `target`, `mode`, `artifact`,
+`createdAt`, `completedAt`, `status`, `sizeBytes`, `sha256` and, for failures,
+`error`. The CLI equivalent is:
+
+```bash
+pnpm basalt backup:list
+```
+
 ## Multi-tenant targets
 
 | Target | Behavior |
@@ -164,28 +189,135 @@ use the same scheduler instance.
 ## Docker and remote PostgreSQL
 
 The default runner invokes `pg_dump` from the application runtime. If the
-client binary is in a container, provide an application-specific runner that
-captures the binary stdout to the temporary output path. Keep container names,
-Kubernetes pod names and credentials outside the reusable package.
+client binary is in a container, provide an application-specific runner. The
+important detail is that custom-format dumps are binary: remove the host-only
+`--file` argument and stream `docker exec` stdout to `options.output`.
+
+```ts
+import { createWriteStream } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
+import { PostgresBackup } from '@basaltkit/backup'
+
+const execFileAsync = promisify(execFile)
+const container = process.env.POSTGRES_CONTAINER ?? 'postgres'
+
+const dockerRunner = async (command, args, options) => {
+  if (command === 'pg_dump' && options.output) {
+    const dumpArgs = args.filter((arg, index) =>
+      arg !== '--file' && args[index - 1] !== '--file',
+    )
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('docker', ['exec', container, command, ...dumpArgs], {
+        cwd: options.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      const output = createWriteStream(options.output)
+      let error = ''
+      child.stdout.pipe(output)
+      child.stderr.on('data', (chunk) => { error += chunk.toString() })
+      child.on('error', reject)
+      child.on('close', (code) => code === 0
+        ? resolve()
+        : reject(new Error(error.trim())))
+    })
+    return
+  }
+
+  // pg_restore receives a host temporary path; copy it into the container.
+  const input = args.at(-1)
+  if (command === 'pg_restore' && input) {
+    const remoteInput = `/tmp/basalt-${Date.now()}.dump`
+    await execFileAsync('docker', ['cp', input, `${container}:${remoteInput}`])
+    try {
+      await execFileAsync('docker', [
+        'exec', container, command, ...args.slice(0, -1), remoteInput,
+      ])
+    } finally {
+      await execFileAsync('docker', ['exec', container, 'rm', '-f', remoteInput])
+    }
+    return
+  }
+
+  await execFileAsync('docker', ['exec', container, command, ...args], {
+    cwd: options.cwd,
+  })
+}
+
+const backup = new PostgresBackup({
+  connectionUrl: process.env.DATABASE_URL!,
+  disk: app.container.get(STORAGE).disk('backups'),
+  runner: dockerRunner,
+})
+```
+
+The database URL must be reachable from inside the container. For example,
+`localhost:5433` on the host may be `localhost:5432` inside the PostgreSQL
+container. `PostgresBackup` removes Prisma's `schema` URL parameter before
+calling the PostgreSQL tools. Keep container names, Kubernetes pod names and
+credentials outside the reusable package.
+
+### Runner parameters
+
+| Parameter | Type | Meaning |
+| --- | --- | --- |
+| `command` | `string` | `pg_dump` or `pg_restore`. |
+| `args` | `string[]` | Argument list passed to the tool; do not build a shell string. |
+| `options.cwd` | `string` | Temporary working directory on the application host. |
+| `options.output` | `string \| undefined` | Host path where a Docker `pg_dump` runner must write binary stdout. |
+
+### Backup options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `connectionUrl` | required | PostgreSQL URL. |
+| `disk` | required | Local or S3-compatible destination disk. |
+| `prefix` | `backups` | Prefix for dump and manifest keys. |
+| `pgDumpPath` / `pgRestorePath` | `pg_dump` / `pg_restore` | Tool names or paths. |
+| `tenantSchemaPrefix` | `tenant_` | Schema-per-tenant name prefix. |
+| `tenantDatabaseUrl` | none | Callback resolving database-per-tenant URLs. |
+| `retention` | none | Newest successful backups kept per target. |
+| `runner` | local subprocess | Custom Docker, Kubernetes or sidecar execution. |
+| `logger` | none | Logger for lifecycle and failure messages. |
 
 ## Retention and restore
 
-Set `retention` to keep the newest successful backups for each target. Older
-artifacts and manifests are deleted from the configured disk after a successful
-run.
+There is no public `prune()` method. Set `retention` to keep the newest
+successful backups for each target. Cleanup runs automatically at the end of
+each successful `create()` and deletes the older artifact and manifest pair:
+
+```ts
+const backup = new PostgresBackup({
+  connectionUrl: process.env.DATABASE_URL!,
+  disk,
+  retention: 7,
+})
+```
+
+This keeps seven full backups, seven central backups and seven backups for each
+tenant target independently. Failed runs do not consume the retention count.
+Leave `retention` undefined to disable cleanup.
 
 Restoration is explicit and guarded:
 
 ```ts
-await backup.restore(id, process.env.RESTORE_DATABASE_URL!, {
-  confirm: async () => operatorConfirmedTheRestore,
+const backups = await backup.list()
+const candidate = backups.find(
+  (item) => item.status === 'succeeded' && item.target.kind === 'full',
+)
+if (!candidate) throw new Error('No successful full backup available')
+
+await backup.restore(candidate.id, process.env.RESTORE_DATABASE_URL!, {
+  confirm: async () => process.env.CONFIRM_RESTORE === 'yes',
   environment: process.env.NODE_ENV,
 })
 ```
 
-Production restoration requires `allowProduction: true`. Always restore into a
-disposable database first and verify the resulting application before replacing
-the live database.
+`restore()` downloads the artifact to a temporary file, invokes `pg_restore`
+with `--clean --if-exists --no-owner --exit-on-error`, and removes the file.
+Production restoration requires `allowProduction: true`; a false confirmation
+is rejected. Always restore into a disposable database first and verify the
+resulting application before replacing the live database.
 
 ## CLI
 
