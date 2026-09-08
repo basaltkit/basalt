@@ -51,6 +51,26 @@ const makeAuth = (extra: Partial<ConstructorParameters<typeof Auth>[0]> = {}) =>
   new Auth({ users: new MemoryUserSource(), secret: 'test-secret', accessTtl: '15m', ...extra })
 
 describe('Auth', () => {
+  it('supports configurable secure session cookie attributes', () => {
+    const auth = makeAuth({
+      sessionCookie: {
+        name: 'app_session',
+        path: '/app',
+        sameSite: 'Strict',
+        secure: true,
+      },
+    })
+
+    const header = auth.sessionCookieHeader('session id')
+    expect(header).toContain('app_session=session%20id')
+    expect(header).toContain('Path=/app')
+    expect(header).toContain('HttpOnly')
+    expect(header).toContain('SameSite=Strict')
+    expect(header).toContain('Secure')
+    expect(auth.sessionIdFromCookie('app_session=session%20id')).toBe('session id')
+    expect(auth.expiredSessionCookieHeader()).toContain('app_session=;')
+  })
+
   it('register + login issues verifiable tokens; duplicate email is 409', async () => {
     const auth = makeAuth()
     const user = await auth.register('ada@example.com', 'password123')

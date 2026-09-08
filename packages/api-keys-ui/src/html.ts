@@ -15,9 +15,21 @@ const pageScript = (apiBase: string): string => `
 const API = ${scriptJson(apiBase)};
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const opts = { credentials: 'same-origin', headers: { 'content-type': 'application/json' } };
+const showError = (message) => {
+  const error = document.getElementById('error');
+  error.textContent = message;
+  error.style.display = 'block';
+};
+const json = async (response) => {
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(value.message || value.error || ('Request failed (' + response.status + ')'));
+  return value;
+};
 
 async function list() {
-  const keys = await fetch(API + '/apikeys', opts).then((r) => r.json());
+  try {
+  const keys = await fetch(API + '/apikeys', opts).then(json);
+  document.getElementById('error').style.display = 'none';
   const rows = document.getElementById('rows');
   if (!Array.isArray(keys) || keys.length === 0) {
     rows.innerHTML = '<tr><td colspan="4" class="empty muted">No API keys yet.</td></tr>';
@@ -31,10 +43,13 @@ async function list() {
   for (const b of rows.querySelectorAll('button[data-id]')) {
     b.addEventListener('click', async () => {
       if (!confirm('Revoke this key? Any client using it will stop working.')) return;
-      await fetch(API + '/apikeys/' + b.dataset.id, { ...opts, method: 'DELETE' });
-      list();
+      try {
+        await fetch(API + '/apikeys/' + b.dataset.id, { ...opts, method: 'DELETE' }).then(json);
+        list();
+      } catch (error) { showError(error.message); }
     });
   }
+  } catch (error) { showError(error.message); }
 }
 
 document.getElementById('create').addEventListener('submit', async (e) => {
@@ -42,13 +57,16 @@ document.getElementById('create').addEventListener('submit', async (e) => {
   const f = new FormData(e.target);
   const scopes = String(f.get('scopes') || '').split(',').map((s) => s.trim()).filter(Boolean);
   const body = JSON.stringify({ name: f.get('name'), ...(scopes.length ? { scopes } : {}) });
-  const created = await fetch(API + '/apikeys', { ...opts, method: 'POST', body }).then((r) => r.json());
-  if (created && created.key) {
-    document.getElementById('newkey').textContent = created.key;
-    document.getElementById('reveal').style.display = 'block';
-  }
-  e.target.reset();
-  list();
+  try {
+    const created = await fetch(API + '/apikeys', { ...opts, method: 'POST', body }).then(json);
+    document.getElementById('error').style.display = 'none';
+    if (created && created.key) {
+      document.getElementById('newkey').textContent = created.key;
+      document.getElementById('reveal').style.display = 'block';
+    }
+    e.target.reset();
+    list();
+  } catch (error) { showError(error.message); }
 });
 
 document.getElementById('copy').addEventListener('click', () => {
@@ -106,6 +124,7 @@ export function apiKeysPageHtml(options: ApiKeysPageOptions = {}): string {
   .reveal { border: 1px solid var(--ok); background: #16a34a18; border-radius: 8px; padding: .75rem 1rem; margin-top: .75rem; display: none; }
   .reveal code { word-break: break-all; }
   .empty { padding: 1rem; text-align: center; }
+  .error { color: var(--danger); margin-top: .75rem; display: none; }
 </style>
 </head>
 <body>
@@ -123,6 +142,7 @@ export function apiKeysPageHtml(options: ApiKeysPageOptions = {}): string {
       <code id="newkey"></code><button id="copy" type="button">Copy</button>
     </div>
   </div>
+  <div class="error" id="error" role="alert"></div>
 </div>
 
 <table>

@@ -66,13 +66,16 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
       method: 'POST',
       url: '/auth/login',
       body: credentials.extend({ mfaCode: z.string().optional() }),
-      async handler({ body, request }) {
+      async handler({ body, request, reply }) {
         const { user, tokens } = await auth().login(
           body.email,
           body.password,
           body.mfaCode,
           request.ip ? { ip: request.ip } : {},
         )
+        const session = await auth().createSession(user.id)
+        const sessionCookie = auth().sessionCookieHeader(session.id)
+        if (sessionCookie) reply.header('set-cookie', sessionCookie)
         return { user, ...tokens }
       },
     }),
@@ -90,8 +93,12 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
       method: 'POST',
       url: '/auth/logout',
       body: z.object({ refreshToken: z.string() }),
-      async handler({ body, reply }) {
+      async handler({ body, request, reply }) {
         await auth().revoke(body.refreshToken)
+        const sessionId = auth().sessionIdFromCookie(request.headers.cookie as string | undefined)
+        if (sessionId) await auth().logout(sessionId)
+        const expiredCookie = auth().expiredSessionCookieHeader()
+        if (expiredCookie) reply.header('set-cookie', expiredCookie)
         return reply.code(204).send()
       },
     }),
