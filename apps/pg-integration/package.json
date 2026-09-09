@@ -18,10 +18,10 @@
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:*",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.4.1",
     "prisma": "^7.10.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.0",
     "@basaltkit/auth": "workspace:*",
     "@basaltkit/auth-prisma": "workspace:*",
     "@basaltkit/teams": "workspace:*",
