@@ -43,7 +43,7 @@ export function authPlugin(options: AuthPluginOptions) {
       container.singleton(AUTH, () => new Auth({ ...options, hooks }))
       const metadata = ensureMetadata(container)
 
-      // Enricher: authenticates via Bearer JWT or x-session-id header.
+      // Enricher: authenticates via Bearer JWT, session cookie, or x-session-id header.
       // An explicitly provided invalid token is rejected (401); absence of
       // credentials just leaves the request anonymous.
       const enricher: RequestEnricher = async ({ request, context, container: c }) => {
@@ -66,6 +66,16 @@ export function authPlugin(options: AuthPluginOptions) {
         if (typeof sessionId === 'string') {
           const user = await auth.sessionUser(sessionId)
           if (user) context.user = publicUser(user)
+          return
+        }
+
+        const cookie = request.headers.cookie
+        if (typeof cookie === 'string') {
+          const cookieSessionId = auth.sessionIdFromCookie(cookie)
+          if (cookieSessionId) {
+            const user = await auth.sessionUser(cookieSessionId)
+            if (user) context.user = publicUser(user)
+          }
         }
       }
       metadata.add('http:enrichers', enricher)

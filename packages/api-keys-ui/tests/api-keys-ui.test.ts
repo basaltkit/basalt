@@ -14,6 +14,13 @@ describe('apiKeysPageHtml', () => {
     expect(html).toContain("won't be shown again") // one-time reveal
     expect(html).toContain('Create key')
   })
+
+  it('uses same-origin credentials for API requests', () => {
+    const html = apiKeysPageHtml()
+    expect(html).toContain("credentials: 'same-origin'")
+    expect(html).not.toContain('localStorage')
+    expect(html).toContain('role="alert"')
+  })
 })
 
 const secret = 'test-secret-value-123456'
