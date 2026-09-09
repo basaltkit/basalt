@@ -1,5 +1,11 @@
 # @basaltkit/api-keys-ui
 
+## 1.3.0
+
+### Minor Changes
+
+- ad40683: Add optional API key expiration dates across the auth stores, routes, and management UI.
+
 ## 1.2.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @basaltkit/auth
 
+## 2.2.0
+
+### Minor Changes
+
+- ad40683: Add optional API key expiration dates across the auth stores, routes, and management UI.
+
 ## 2.1.0
 
 ### Minor Changes
