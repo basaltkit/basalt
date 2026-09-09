@@ -120,7 +120,7 @@ the `saas` keyword on npm.
 | Package | Purpose |
 |---|---|
 | `@basaltkit/tenancy` | Multi-tenancy — resolvers, per-request context, hooks |
-| `@basaltkit/auth` | Password hashing, JWT with refresh rotation, sessions, email verification, password reset, API keys, MFA (TOTP) |
+| `@basaltkit/auth` | Password hashing, JWT with refresh rotation, HttpOnly browser sessions, email verification, password reset, API keys, MFA (TOTP) |
 | `@basaltkit/permissions` | Roles, wildcard permissions, policies, tenant scoping |
 | `@basaltkit/teams` | Multi-user tenants — roles, email invitations, membership management, `teamRole` guard |
 | `@basaltkit/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks, hosted Checkout & Customer Portal, proration |

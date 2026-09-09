@@ -192,6 +192,7 @@ export function apiKeyRoutes(): BasaltRoute[] {
       body: z.object({
         name: z.string().min(1).max(100),
         scopes: z.array(z.string().min(1)).optional(),
+        expiresAt: z.number().int().positive().optional(),
       }),
       async handler({ body, reply }) {
         const { record, key } = await apiKeys().issue({ ...body, ...scope() })

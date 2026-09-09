@@ -13,6 +13,8 @@ describe('apiKeysPageHtml', () => {
     expect(html).toContain("method: 'DELETE'") // revoke
     expect(html).toContain("won't be shown again") // one-time reveal
     expect(html).toContain('Create key')
+    expect(html).toContain('name="expiresAt"')
+    expect(html).toContain('expiresAt')
   })
 
   it('uses same-origin credentials for API requests', () => {

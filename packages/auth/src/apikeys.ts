@@ -16,6 +16,13 @@ export class ScopeRequiredError extends BasaltError {
   }
 }
 
+export class ApiKeyExpirationError extends BasaltError {
+  readonly status = 400
+  constructor() {
+    super('AUTH_APIKEY_EXPIRATION_INVALID', 'API key expiration must be a future timestamp.')
+  }
+}
+
 /** The prefix on every key. `mk` = Basalt key, `live` = environment. */
 const KEY_PREFIX = 'mk_live_'
 
@@ -36,6 +43,7 @@ export interface IssueApiKeyInput {
   scopes?: string[] | undefined
   tenantId?: string
   userId?: string
+  expiresAt?: number | undefined
 }
 
 export interface ApiKeysOptions {
@@ -63,6 +71,9 @@ export class ApiKeys {
 
   /** Mints a key. Returns the record plus the plaintext `key` (shown once). */
   async issue(input: IssueApiKeyInput): Promise<{ record: ApiKeyInfo; key: string }> {
+    if (input.expiresAt !== undefined && (!Number.isInteger(input.expiresAt) || input.expiresAt <= this.now())) {
+      throw new ApiKeyExpirationError()
+    }
     const secret = randomBytes(24).toString('base64url')
     const key = `${KEY_PREFIX}${secret}`
     const record: ApiKeyRecord = {
@@ -72,6 +83,7 @@ export class ApiKeys {
       hash: hashKey(key),
       scopes: input.scopes ?? ['*'],
       createdAt: this.now(),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
       ...(input.userId !== undefined ? { userId: input.userId } : {}),
     }
@@ -91,13 +103,13 @@ export class ApiKeys {
   async verify(presented: string): Promise<ApiKeyRecord | null> {
     if (!presented.startsWith(KEY_PREFIX)) return null
     const record = await this.store.findByHash(hashKey(presented))
-    if (!record || record.revokedAt !== undefined) return null
+    if (!record || record.revokedAt !== undefined || (record.expiresAt !== undefined && record.expiresAt <= this.now())) return null
     await this.store.touch(record.id, this.now())
     return record
   }
 
   async list(filter: ApiKeyFilter): Promise<ApiKeyInfo[]> {
-    return (await this.store.list(filter)).map(strip)
+    return (await this.store.list(filter)).filter((record) => record.expiresAt === undefined || record.expiresAt > this.now()).map(strip)
   }
 
   /** Revokes a key by id. No-op if unknown or already revoked. */
