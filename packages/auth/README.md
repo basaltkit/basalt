@@ -447,7 +447,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 ### Ready-made routes
 
 - `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them.
-- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (all require login; scoped to the current tenant/user).
+- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (all require login; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
 - `oauthRoutes({ callbackBaseUrl, successRedirect? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider.
 

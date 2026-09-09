@@ -103,6 +103,7 @@ export function migrate(db: DatabaseSync): void {
       user_id      TEXT,
       scopes       TEXT NOT NULL,
       created_at   INTEGER NOT NULL,
+      expires_at   INTEGER,
       last_used_at INTEGER,
       revoked_at   INTEGER
     );
@@ -121,6 +122,12 @@ export function migrate(db: DatabaseSync): void {
       version INTEGER NOT NULL DEFAULT 0
     );
   `)
+
+  try {
+    db.exec('ALTER TABLE auth_api_keys ADD COLUMN expires_at INTEGER')
+  } catch {
+    // Existing databases already have the column.
+  }
 
   // Migrate existing databases: add the anti-replay column if it's absent.
   // (ADD COLUMN throws when it already exists — ignore that.)
@@ -352,6 +359,7 @@ interface ApiKeyRow {
   user_id: string | null
   scopes: string
   created_at: number
+  expires_at: number | null
   last_used_at: number | null
   revoked_at: number | null
 }
@@ -365,6 +373,7 @@ const toApiKey = (r: ApiKeyRow): ApiKeyRecord => {
     scopes: JSON.parse(r.scopes) as string[],
     createdAt: r.created_at,
   }
+  if (r.expires_at !== null) rec.expiresAt = r.expires_at
   if (r.tenant_id !== null) rec.tenantId = r.tenant_id
   if (r.user_id !== null) rec.userId = r.user_id
   if (r.last_used_at !== null) rec.lastUsedAt = r.last_used_at
@@ -379,8 +388,8 @@ export class SqliteApiKeyStore implements ApiKeyStore {
     this.db
       .prepare(
         `INSERT INTO auth_api_keys
-           (id, name, prefix, hash, tenant_id, user_id, scopes, created_at, last_used_at, revoked_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, prefix, hash, tenant_id, user_id, scopes, created_at, expires_at, last_used_at, revoked_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -391,6 +400,7 @@ export class SqliteApiKeyStore implements ApiKeyStore {
         orNull(record.userId),
         JSON.stringify(record.scopes),
         record.createdAt,
+        orNull(record.expiresAt),
         orNull(record.lastUsedAt),
         orNull(record.revokedAt),
       )

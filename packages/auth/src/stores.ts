@@ -129,6 +129,8 @@ export interface ApiKeyRecord {
   /** Granted scopes; `*` means all. */
   scopes: string[]
   createdAt: number
+  /** Unix timestamp in milliseconds; omitted means the key never expires. */
+  expiresAt?: number
   lastUsedAt?: number
   revokedAt?: number
 }

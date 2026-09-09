@@ -595,6 +595,8 @@ and `POST /auth/verify` (token valid 24h).
 `x-api-key`) and enforces `meta.scopes` on routes. Keys are tenant-scoped,
 created by a logged-in user through `apiKeyRoutes()`, and stored only as a
 SHA-256 hash plus a short display prefix — the plaintext is shown exactly once.
+Keys may optionally expire; expired keys are rejected by the server and omitted
+from listings.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
@@ -630,6 +632,12 @@ import { API_KEYS } from '@basaltkit/auth'
 const apiKeys = app.container.get(API_KEYS)
 const { record, key } = await apiKeys.issue({ name: 'CI pipeline', scopes: ['reports:read'] })
 // key = 'mk_live_…' → show once, never store; record has prefix/scopes but no hash
+
+await apiKeys.issue({
+  name: 'Temporary deploy',
+  scopes: ['deploy'],
+  expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+})
 ```
 
 ::: warning Register both plugins
