@@ -1,5 +1,11 @@
 # @basaltkit/auth-sqlite
 
+## 1.5.0
+
+### Minor Changes
+
+- ad40683: Add optional API key expiration dates across the auth stores, routes, and management UI.
+
 ## 1.4.1
 
 ### Patch Changes
