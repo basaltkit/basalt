@@ -27,6 +27,12 @@ enviado em cada pedido, e um **refresh token** longo (30d) trocado por um novo p
 O refresh é rotativo com deteção de reutilização — repetir um token já consumido
 revoga a família inteira.
 
+Para aplicações de browser, o `POST /auth/login` também cria uma sessão no
+servidor e devolve um cabeçalho `Set-Cookie`. O cookie `basalt_session` é
+`HttpOnly`, `SameSite=Lax`, limitado a `/` e marcado como `Secure` em produção.
+Pedidos same-origin do browser enviam-no automaticamente, sem expor o JWT ao
+JavaScript. Mantém os access e refresh tokens fora de `localStorage`.
+
 ::: tip O `meta.auth` é um pedido de proteção, e é verificado no arranque
 O `authPlugin` reivindica a chave de meta `auth`. Uma rota que declara `meta.auth`
 sem o `authPlugin` registado serviria desprotegida, por isso cada adaptador recusa
@@ -264,8 +270,8 @@ driver argon2id pode ser trocado através do contrato `PasswordHasher`
 
 ## Proteger rotas e ler o utilizador
 
-`authPlugin` regista um **enricher** (lê `Authorization: Bearer <jwt>` ou
-`x-session-id` e define `ctx().user`) e um **guard**. Declara `meta.auth` numa
+`authPlugin` regista um **enricher** (lê `Authorization: Bearer <jwt>`, o cookie
+de sessão ou `x-session-id` e define `ctx().user`) e um **guard**. Declara `meta.auth` numa
 rota; o guard devolve `401 AUTH_REQUIRED` para pedidos anónimos. `ctx().user`
 é um `PublicUser` — nunca inclui o hash da password:
 
@@ -280,6 +286,21 @@ route({
   async handler() {
     const user = ctx().user // { id, email, emailVerified, … }
     return { hello: user?.email }
+  },
+})
+```
+
+A sessão de browser pode ser configurada através de `sessionCookie`:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessionCookie: {
+    name: 'app_session',
+    path: '/app',
+    sameSite: 'Strict',
+    secure: true,
   },
 })
 ```
@@ -655,6 +676,7 @@ plugin fornece:
 | `accessTtl` | `DurationInput` | `'15m'` | Duração do access token. Curta por desenho — é o refresh token que sustenta a sessão |
 | `refreshTtl` | `DurationInput` | `'30d'` | Duração do refresh token — na prática, "quanto tempo até o utilizador ter de entrar outra vez" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor |
+| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` predefinido apenas em produção |
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |
