@@ -14,8 +14,8 @@
     "@basaltkit/http": "workspace:*",
     "@hono/node-server": "^2.1.1",
     "express": "^5.0.0",
-    "fastify": "^5.12.1",
-    "hono": "^4.13.5",
+    "fastify": "^5.12.3",
+    "hono": "^4.13.7",
     "zod": "^4.5.4"
   },
   "devDependencies": {
