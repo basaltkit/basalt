@@ -181,7 +181,7 @@ interface PRefreshRow { token: string; familyId: string; userId: string; expires
 interface PTokenRow { token: string; userId: string; purpose: string; expiresAt: Date; usedAt: Date | null }
 interface PApiKeyRow {
   id: string; name: string; prefix: string; hash: string; tenantId: string | null
-  userId: string | null; scopes: string[]; createdAt: Date; lastUsedAt: Date | null; revokedAt: Date | null
+  userId: string | null; scopes: string[]; createdAt: Date; expiresAt: Date | null; lastUsedAt: Date | null; revokedAt: Date | null
 }
 interface PMfaRow { userId: string; secret: string; enabled: boolean; recoveryCodes: string[]; lastUsedStep: number | null }
 

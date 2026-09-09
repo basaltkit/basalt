@@ -74,6 +74,7 @@ export {
 export { authPlugin, AUTH, type AuthPluginOptions } from './plugin.js'
 export {
   ApiKeys,
+  ApiKeyExpirationError,
   ScopeRequiredError,
   scopesSatisfy,
   type ApiKeysOptions,

@@ -45,6 +45,20 @@ const app = await createApp({
 
 Open **`/apikeys/ui`** (authenticated) and the user can create, view and revoke their keys.
 
+Log in through `/auth/login` before opening the page. The login route sets the
+HttpOnly browser session cookie; the page uses same-origin requests and sends
+that cookie automatically:
+
+```bash
+curl -c cookies.txt -X POST http://localhost:3000/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","password":"secretpassword1"}'
+curl -b cookies.txt http://localhost:3000/apikeys/ui
+```
+
+Do not modify the page to read a JWT from `localStorage`. The supported browser
+flow is the HttpOnly cookie.
+
 ## How it works
 
 The page is served by `GET /apikeys/ui` (requires login). In the browser, it calls the JSON routes with `credentials: 'same-origin'`, so it assumes the user's session is already authenticated against `${apiBase}/apikeys`. When creating a key, it reveals the secret **once** (with a warning and a copy button) — after that only the prefix is visible, as required by `@basaltkit/auth`'s security model.
@@ -54,7 +68,8 @@ The page is served by `GET /apikeys/ui` (requires login). In the browser, it cal
 ### `apiKeysUiRoutes({ path?, apiBase?, title? })`
 
 Returns the route that serves the page. `path` (default `/apikeys/ui`), `apiBase` (where the JSON routes are, default same-origin), `title`.
-The page relies on same-origin session credentials. `authRoutes()` issues a
+The page relies on same-origin session credentials. The create form accepts an
+optional expiration date, which the server validates again. `authRoutes()` issues a
 `HttpOnly` session cookie on login, and the browser sends it automatically to
 the JSON API routes. The access JWT remains in the login response for
 non-browser clients and is not copied to `localStorage` by this UI.

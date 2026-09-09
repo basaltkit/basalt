@@ -32,12 +32,13 @@ async function list() {
   document.getElementById('error').style.display = 'none';
   const rows = document.getElementById('rows');
   if (!Array.isArray(keys) || keys.length === 0) {
-    rows.innerHTML = '<tr><td colspan="4" class="empty muted">No API keys yet.</td></tr>';
+    rows.innerHTML = '<tr><td colspan="5" class="empty muted">No API keys yet.</td></tr>';
     return;
   }
   rows.innerHTML = keys.map((k) =>
     '<tr><td><code>' + esc(k.prefix) + '…</code></td>' +
     '<td>' + esc((k.scopes || []).join(', ')) + '</td>' +
+    '<td class="muted">' + (k.expiresAt ? new Date(k.expiresAt).toLocaleString() : 'never') + '</td>' +
     '<td class="muted">' + (k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : 'never') + '</td>' +
     '<td><button class="link" data-id="' + esc(k.id) + '">Revoke</button></td></tr>').join('');
   for (const b of rows.querySelectorAll('button[data-id]')) {
@@ -56,7 +57,10 @@ document.getElementById('create').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   const scopes = String(f.get('scopes') || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const body = JSON.stringify({ name: f.get('name'), ...(scopes.length ? { scopes } : {}) });
+  const expiration = String(f.get('expiresAt') || '');
+  const expiresAt = expiration ? new Date(expiration).getTime() : undefined;
+  if (expiration && !Number.isFinite(expiresAt)) { showError('Choose a valid expiration date.'); return; }
+  const body = JSON.stringify({ name: f.get('name'), ...(scopes.length ? { scopes } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) });
   try {
     const created = await fetch(API + '/apikeys', { ...opts, method: 'POST', body }).then(json);
     document.getElementById('error').style.display = 'none';
@@ -134,6 +138,7 @@ export function apiKeysPageHtml(options: ApiKeysPageOptions = {}): string {
   <form id="create">
     <label>Name<input name="name" placeholder="CI pipeline" required /></label>
     <label>Scopes (comma-separated)<input name="scopes" placeholder="read, write" /></label>
+    <label>Expires (optional)<input name="expiresAt" type="datetime-local" /></label>
     <button class="primary" type="submit">Create key</button>
   </form>
   <div class="reveal" id="reveal">
@@ -146,7 +151,7 @@ export function apiKeysPageHtml(options: ApiKeysPageOptions = {}): string {
 </div>
 
 <table>
-  <thead><tr><th>Prefix</th><th>Scopes</th><th>Last used</th><th></th></tr></thead>
+  <thead><tr><th>Prefix</th><th>Scopes</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
 

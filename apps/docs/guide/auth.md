@@ -27,6 +27,12 @@ on every request, and a long **refresh token** (30d) exchanged for a new pair.
 Refresh is rotating with reuse detection — replaying a consumed token revokes the
 whole family.
 
+For browser applications, `POST /auth/login` also creates a server-side session
+and returns a `Set-Cookie` header. The default `basalt_session` cookie is
+`HttpOnly`, `SameSite=Lax`, scoped to `/`, and marked `Secure` in production.
+Same-origin browser requests then authenticate without exposing the JWT to page
+JavaScript. Keep the access and refresh tokens out of `localStorage`.
+
 ::: tip `meta.auth` is a request for protection, and it is checked at boot
 `authPlugin` claims the `auth` meta key. A route that declares `meta.auth`
 while `authPlugin` is **not** registered would serve unprotected, so every
@@ -262,8 +268,8 @@ argon2id driver can be swapped in via the `PasswordHasher` contract
 
 ## Guarding routes and reading the user
 
-`authPlugin` registers an **enricher** (reads `Authorization: Bearer <jwt>` or
-`x-session-id` and sets `ctx().user`) and a **guard**. Declare `meta.auth` on a
+`authPlugin` registers an **enricher** (reads `Authorization: Bearer <jwt>`, the
+session cookie, or `x-session-id` and sets `ctx().user`) and a **guard**. Declare `meta.auth` on a
 route; the guard returns `401 AUTH_REQUIRED` for anonymous requests. `ctx().user`
 is a `PublicUser` — it never includes the password hash:
 
@@ -278,6 +284,21 @@ route({
   async handler() {
     const user = ctx().user // { id, email, emailVerified, … }
     return { hello: user?.email }
+  },
+})
+```
+
+The browser session can be configured through `sessionCookie`:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessionCookie: {
+    name: 'app_session',
+    path: '/app',
+    sameSite: 'Strict',
+    secure: true,
   },
 })
 ```
@@ -574,6 +595,8 @@ and `POST /auth/verify` (token valid 24h).
 `x-api-key`) and enforces `meta.scopes` on routes. Keys are tenant-scoped,
 created by a logged-in user through `apiKeyRoutes()`, and stored only as a
 SHA-256 hash plus a short display prefix — the plaintext is shown exactly once.
+Keys may optionally expire; expired keys are rejected by the server and omitted
+from listings.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
@@ -609,6 +632,12 @@ import { API_KEYS } from '@basaltkit/auth'
 const apiKeys = app.container.get(API_KEYS)
 const { record, key } = await apiKeys.issue({ name: 'CI pipeline', scopes: ['reports:read'] })
 // key = 'mk_live_…' → show once, never store; record has prefix/scopes but no hash
+
+await apiKeys.issue({
+  name: 'Temporary deploy',
+  scopes: ['deploy'],
+  expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+})
 ```
 
 ::: warning Register both plugins
@@ -649,6 +678,7 @@ the plugin supplies:
 | `accessTtl` | `DurationInput` | `'15m'` | Access-token lifetime. Short by design — the refresh token is what carries the session |
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults to production only |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |

@@ -13,10 +13,13 @@ You need this module only when you actually process images. The core `@basaltkit
 ## Installation
 
 ```bash
-pnpm add @basaltkit/image-sharp sharp
+pnpm add @basaltkit/image-sharp sharp@^0.35.4
 ```
 
-`sharp` is a **peer dependency** (it carries the native `libvips` binary). It's loaded lazily on first use, so a missing install fails fast with a clear message instead of at import time.
+`sharp` is a **peer dependency** (it carries the native `libvips` binary) and
+must be `>=0.35.4 <0.36.0`. Versions before `0.35.4` include known libheif
+vulnerabilities. It is loaded lazily on first use, so a missing install fails
+fast with a clear message instead of at import time.
 
 ## Usage
 
