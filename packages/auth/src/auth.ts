@@ -116,6 +116,19 @@ export interface TokenPair {
   refreshToken: string
 }
 
+export interface SessionCookieOptions {
+  /** Cookie name. Default: `basalt_session`. */
+  name?: string
+  /** Cookie path. Default: `/`. */
+  path?: string
+  /** Whether the browser may expose the cookie to JavaScript. Default: true. */
+  httpOnly?: boolean
+  /** SameSite policy. Default: `Lax`. */
+  sameSite?: 'Strict' | 'Lax' | 'None'
+  /** Whether to require HTTPS. Defaults to production-only. */
+  secure?: boolean
+}
+
 export interface AuthOptions {
   users: UserSource
   secret: string
@@ -125,6 +138,7 @@ export interface AuthOptions {
   accessTtl?: DurationInput
   refreshTtl?: DurationInput
   sessionTtl?: DurationInput
+  sessionCookie?: SessionCookieOptions
   hooks?: HookBus
   /** Brute-force lockout (per email). Enabled by default; pass `false` to disable. */
   loginThrottle?: LoginThrottle | false
@@ -184,6 +198,7 @@ export class Auth {
   private readonly accessTtl: DurationInput
   private readonly refreshTtl: DurationInput
   private readonly sessionTtl: DurationInput
+  private readonly sessionCookie: Required<SessionCookieOptions>
   private readonly hooks: HookBus | undefined
   private readonly throttle: LoginThrottle | undefined
   private readonly ipThrottle: LoginThrottle | undefined
@@ -211,6 +226,13 @@ export class Auth {
     this.accessTtl = options.accessTtl ?? '15m'
     this.refreshTtl = options.refreshTtl ?? '30d'
     this.sessionTtl = options.sessionTtl ?? '30d'
+    this.sessionCookie = {
+      name: options.sessionCookie?.name ?? 'basalt_session',
+      path: options.sessionCookie?.path ?? '/',
+      httpOnly: options.sessionCookie?.httpOnly ?? true,
+      sameSite: options.sessionCookie?.sameSite ?? 'Lax',
+      secure: options.sessionCookie?.secure ?? process.env['NODE_ENV'] === 'production',
+    }
     this.hooks = options.hooks
     this.throttle = options.loginThrottle === false ? undefined : options.loginThrottle ?? new LoginThrottle()
     this.ipThrottle =
@@ -420,6 +442,29 @@ export class Auth {
 
   async createSession(userId: string): Promise<SessionRecord> {
     return this.sessions.create(userId, parseDuration(this.sessionTtl))
+  }
+
+  sessionCookieHeader(sessionId: string): string {
+    const ttlMs = parseDuration(this.sessionTtl)
+    const cookie = this.sessionCookie
+    const expires = new Date(Date.now() + ttlMs).toUTCString()
+    return `${cookie.name}=${encodeURIComponent(sessionId)}; Path=${cookie.path};${cookie.httpOnly ? ' HttpOnly;' : ''} SameSite=${cookie.sameSite}; Max-Age=${Math.max(1, Math.floor(ttlMs / 1000))}; Expires=${expires}${cookie.secure ? '; Secure' : ''}`
+  }
+
+  sessionIdFromCookie(cookieHeader?: string): string | null {
+    if (!cookieHeader) return null
+    for (const part of cookieHeader.split(';')) {
+      const [name, ...rest] = part.trim().split('=')
+      if (name === this.sessionCookie.name && rest.length > 0) {
+        return decodeURIComponent(rest.join('='))
+      }
+    }
+    return null
+  }
+
+  expiredSessionCookieHeader(): string {
+    const cookie = this.sessionCookie
+    return `${cookie.name}=; Path=${cookie.path};${cookie.httpOnly ? ' HttpOnly;' : ''} SameSite=${cookie.sameSite}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${cookie.secure ? '; Secure' : ''}`
   }
 
   async sessionUser(sessionId: string): Promise<AuthUser | null> {

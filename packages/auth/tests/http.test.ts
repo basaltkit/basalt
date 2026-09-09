@@ -91,23 +91,21 @@ describe('auth over HTTP (end to end)', () => {
     await app.shutdown()
   })
 
-  it('session header authenticates and hooks fire', async () => {
+  it('browser cookie session authenticates and hooks fire', async () => {
     const { app, server } = await boot()
     const logins: string[] = []
     app.hooks.on('auth:login', ({ user }) => void logins.push(user.email))
 
     const credentials = { email: 'ada@example.com', password: 'password123' }
     await server.inject({ method: 'POST', url: '/auth/register', payload: credentials })
-    await server.inject({ method: 'POST', url: '/auth/login', payload: credentials })
+    const login = await server.inject({ method: 'POST', url: '/auth/login', payload: credentials })
+    expect(login.headers['set-cookie']).toContain('basalt_session=')
     expect(logins).toEqual(['ada@example.com'])
 
-    const auth = app.container.get((await import('../src/index.js')).AUTH)
-    const user = await auth.users.findByEmail('ada@example.com')
-    const session = await auth.createSession(user!.id)
     const me = await server.inject({
       method: 'GET',
       url: '/auth/me',
-      headers: { 'x-session-id': session.id },
+      headers: { cookie: String(login.headers['set-cookie']).split(';')[0] },
     })
     expect(me.json().email).toBe('ada@example.com')
     await app.shutdown()

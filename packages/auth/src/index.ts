@@ -56,6 +56,7 @@ export {
   MfaInvalidCodeError,
   MfaNotEnrolledError,
   type AuthOptions,
+  type SessionCookieOptions,
   type TokenPair,
 } from './auth.js'
 export {

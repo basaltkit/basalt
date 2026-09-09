@@ -1,5 +1,11 @@
 # @basaltkit/auth
 
+## 2.1.0
+
+### Minor Changes
+
+- Use HttpOnly session cookies for browser auth and keep the API-keys management page on same-origin session credentials instead of reading JWTs from localStorage. This keeps the browser flow aligned with the package security model and improves the UI error handling.
+
 ## 2.0.0
 
 ### Major Changes
