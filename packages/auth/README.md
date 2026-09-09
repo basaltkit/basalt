@@ -65,6 +65,35 @@ curl -X POST http://localhost:3000/auth/login \
 # → { "user": {...}, "accessToken": "...", "refreshToken": "..." }
 ```
 
+For browser clients, the same login response also sets an `HttpOnly` session
+cookie named `basalt_session`. Browsers send it automatically on same-origin
+requests, so browser code does not need to read or store the JWT in
+`localStorage`:
+
+```bash
+curl -c cookies.txt -X POST http://localhost:3000/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","password":"secretpassword1"}'
+
+curl -b cookies.txt http://localhost:3000/auth/me
+```
+
+The cookie defaults to `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` in
+production. Customize its public attributes when mounting the plugin:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessionCookie: {
+    name: 'app_session',
+    path: '/app',
+    sameSite: 'Strict',
+    secure: true,
+  },
+})
+```
+
 4. **Use the access token** to reach protected routes:
 
 ```bash
@@ -130,7 +159,7 @@ await auth.revoke(renewed.refreshToken) // logout: invalidates the token family
 
 `authPlugin` automatically registers:
 
-- An **enricher** that reads the `Authorization: Bearer <jwt>` or `x-session-id` header and places the user in `ctx().user` (of type `PublicUser` — never includes the password hash).
+- An **enricher** that reads the `Authorization: Bearer <jwt>`, the configured session cookie, or `x-session-id` and places the user in `ctx().user` (of type `PublicUser` — never includes the password hash).
 - A **guard** that rejects with 401 any route with `meta: { auth: true }` without an authenticated user.
 
 A request with no credentials stays anonymous (no error); an explicit invalid token returns 401.
@@ -389,6 +418,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `accessTtl` | `DurationInput` | No | `'15m'` | Access token validity. |
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
 | `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
+| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults to production only. |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
 | `tokens` | `AuthTokenStore` | No | `MemoryAuthTokenStore` | Verification/reset tokens. `markUsed` must be a **compare-and-swap** — see below. |
 | `verificationTtl` | `DurationInput` | No | `'24h'` | Email verification link validity. |
@@ -504,6 +534,7 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 
 - **The `secret` is the vault's key.** Use a long, random value (e.g. `openssl rand -base64 48`), store it in an environment variable, and never put it in code or in git. If it leaks, anyone can forge tokens.
 - **Always use HTTPS.** Plain-text tokens on an unencrypted connection can be intercepted.
+- **Use the browser session cookie for browser UIs.** It is `HttpOnly` by default; keep JWTs out of `localStorage` and use same-origin requests so the browser sends the cookie automatically.
 - **Don't increase `accessTtl`.** Short access tokens limit the damage from a stolen token; renewal via refresh token already provides convenience for the user.
 - **Show the API key and recovery codes only once** — that's how the module works; don't store them in plain text on your side.
 - **Don't disable `loginThrottle` in production**, and keep the "always 200" responses on the forgot/verify routes (already the default), so as not to reveal which emails have an account.
