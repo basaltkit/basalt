@@ -1,5 +1,11 @@
 # @basaltkit/image-sharp
 
+## 1.1.4
+
+### Patch Changes
+
+- 9799d08: Require a patched sharp release to avoid known libheif vulnerabilities.
+
 ## 1.1.3
 
 ### Patch Changes
