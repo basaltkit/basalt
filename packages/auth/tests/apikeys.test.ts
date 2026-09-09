@@ -14,6 +14,23 @@ import {
 const secret = 'test-secret-value-123456'
 
 describe('ApiKeys service', () => {
+  it('rejects expired keys and hides them from listings', async () => {
+    let now = 1_000
+    const api = new ApiKeys({ now: () => now })
+    const expired = await api.issue({ name: 'expired', expiresAt: 2_000, userId: 'u1' })
+    const permanent = await api.issue({ name: 'permanent', userId: 'u1' })
+
+    now = 2_000
+    expect(await api.verify(expired.key)).toBeNull()
+    expect((await api.list({ userId: 'u1' })).map((key) => key.id)).toEqual([permanent.record.id])
+  })
+
+  it('rejects expiration dates that are not in the future', async () => {
+    const api = new ApiKeys({ now: () => 1_000 })
+    await expect(api.issue({ name: 'invalid', expiresAt: 1_000 })).rejects.toThrow('expiration')
+    await expect(api.issue({ name: 'invalid', expiresAt: Number.NaN })).rejects.toThrow('expiration')
+  })
+
   it('issues a key shown once, then verifies and touches it', async () => {
     const api = new ApiKeys()
     const { record, key } = await api.issue({ name: 'CI', scopes: ['read'], userId: 'u1' })

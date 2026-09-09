@@ -68,7 +68,8 @@ The page is served by `GET /apikeys/ui` (requires login). In the browser, it cal
 ### `apiKeysUiRoutes({ path?, apiBase?, title? })`
 
 Returns the route that serves the page. `path` (default `/apikeys/ui`), `apiBase` (where the JSON routes are, default same-origin), `title`.
-The page relies on same-origin session credentials. `authRoutes()` issues a
+The page relies on same-origin session credentials. The create form accepts an
+optional expiration date, which the server validates again. `authRoutes()` issues a
 `HttpOnly` session cookie on login, and the browser sends it automatically to
 the JSON API routes. The access JWT remains in the login response for
 non-browser clients and is not copied to `localStorage` by this UI.

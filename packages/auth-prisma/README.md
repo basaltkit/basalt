@@ -37,7 +37,7 @@ model AuthUser {
 model AuthSession        { id String @id  userId String  expiresAt DateTime  @@index([userId]) @@map("auth_sessions") }
 model AuthRefreshToken   { token String @id  familyId String  userId String  expiresAt DateTime  usedAt DateTime?  @@index([familyId]) @@index([userId]) @@map("auth_refresh_tokens") }
 model AuthToken          { token String @id  userId String  purpose String  expiresAt DateTime  usedAt DateTime?  @@index([userId, purpose]) @@map("auth_tokens") }
-model AuthApiKey         { id String @id  name String  prefix String  hash String @unique  tenantId String?  userId String?  scopes String[]  createdAt DateTime  lastUsedAt DateTime?  revokedAt DateTime?  @@map("auth_api_keys") }
+model AuthApiKey         { id String @id  name String  prefix String  hash String @unique  tenantId String?  userId String?  scopes String[]  createdAt DateTime  expiresAt DateTime?  lastUsedAt DateTime?  revokedAt DateTime?  @@map("auth_api_keys") }
 model AuthMfa            { userId String @id  secret String  enabled Boolean @default(false)  recoveryCodes String[]  lastUsedStep Int?  @@map("auth_mfa") }
 ```
 

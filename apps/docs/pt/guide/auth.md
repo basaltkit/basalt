@@ -600,6 +600,8 @@ verificação de email funciona de forma idêntica: hook `auth:verify_requested`
 criadas por um utilizador autenticado através de `apiKeyRoutes()`, e guardadas apenas
 como um hash SHA-256 mais um prefixo curto de exibição — o texto simples é mostrado
 exatamente uma vez.
+Podem ter uma expiração opcional; chaves expiradas são rejeitadas pelo servidor
+e omitidas das listagens.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'

@@ -65,6 +65,7 @@ model AuthApiKey {
   userId     String?
   scopes     String[]
   createdAt  DateTime
+  expiresAt  DateTime?
   lastUsedAt DateTime?
   revokedAt  DateTime?
 

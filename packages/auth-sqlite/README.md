@@ -11,6 +11,9 @@ store — users, sessions, refresh tokens, one-time tokens, API keys and MFA
 state — built on Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html).
 **Zero external dependencies.**
 
+API keys may have an optional expiration date. Existing databases are migrated
+automatically when opened; expired keys are rejected and omitted from listings.
+
 `@basaltkit/auth` ships in-memory stores that are perfect for dev and tests but
 lose everything on restart. Swap in these and your users stay logged in, your
 API keys keep working, and password-reset tokens survive a redeploy — no ORM, no

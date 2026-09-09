@@ -66,6 +66,7 @@ interface PApiKey {
   userId: string | null
   scopes: string[]
   createdAt: Date
+  expiresAt: Date | null
   lastUsedAt: Date | null
   revokedAt: Date | null
 }
@@ -329,6 +330,7 @@ const toApiKey = (r: PApiKey): ApiKeyRecord => {
     scopes: r.scopes,
     createdAt: ms(r.createdAt),
   }
+  if (r.expiresAt !== null) rec.expiresAt = ms(r.expiresAt)
   if (r.tenantId !== null) rec.tenantId = r.tenantId
   if (r.userId !== null) rec.userId = r.userId
   if (r.lastUsedAt !== null) rec.lastUsedAt = ms(r.lastUsedAt)
@@ -350,6 +352,7 @@ export class PrismaApiKeyStore implements ApiKeyStore {
         userId: record.userId ?? null,
         scopes: record.scopes,
         createdAt: at(record.createdAt),
+        expiresAt: record.expiresAt !== undefined ? at(record.expiresAt) : null,
         lastUsedAt: record.lastUsedAt !== undefined ? at(record.lastUsedAt) : null,
         revokedAt: record.revokedAt !== undefined ? at(record.revokedAt) : null,
       },
