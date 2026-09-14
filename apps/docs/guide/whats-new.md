@@ -7,7 +7,7 @@
 ::: warning Two contracts changed
 `@basaltkit/files` revises its store contract, and `app.server` in
 `@basaltkit/testing` is now awaited. Both edits are mechanical — see
-[Upgrading](#upgrading).
+[Upgrading](#upgrading). Prisma apps that use API keys also need one new column.
 :::
 
 Basalt 1.10 is the release of **missing halves**. The application that wrote 1.9
@@ -149,6 +149,25 @@ that does not exist.
 | `FilePatch = Partial<Pick<…>>` | spelled out | So it can say that a key present with `undefined` **clears** the column while an absent key is left alone — which `Partial` of an optional field cannot express under `exactOptionalPropertyTypes`, and which is how a caller drops a stale scan result |
 
 `prisma:sync` learns the files domain, so its models merge like every other one.
+
+### Prisma apps add a column for API key expiration
+
+`@basaltkit/auth-prisma` 1.5.0 added a nullable `expiresAt` column to
+`AuthApiKey` (`auth_api_keys`) for the new optional key expiration. Regenerating
+the client is not enough — the database needs the column, or every API-key
+request fails. Add a migration (`prisma migrate dev --name add_api_key_expires_at`),
+which on PostgreSQL is:
+
+```sql
+ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3);
+```
+
+With schema-per-tenant the column must exist in **every** tenant schema: add the
+migration to your tenant migrations, then run `basalt tenant:migrate`. A test
+suite that never issues an API key will not notice. Since `auth-prisma` 1.5.1 a
+missing column raises `AUTH_API_KEY_SCHEMA_OUTDATED` with these instructions
+instead of a raw Prisma `P2022`. `@basaltkit/auth-sqlite` needs nothing: it adds
+the column itself when the database is opened.
 
 ### Two packages debut at 0.1.0
 
