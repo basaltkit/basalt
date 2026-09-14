@@ -54,6 +54,16 @@ describe('tenant CLI commands', () => {
     expect(await src.find('initech')).toMatchObject({ id: 'initech', name: 'Initech' })
   })
 
+  it('tenant:create refuses an existing id with a clean error, leaving it unchanged', async () => {
+    const src = source()
+    const { run } = await boot({ source: src, resolvers: [] })
+    const io = fakeIo()
+    const code = await run('tenant:create', { io, args: ['acme'], flags: { name: 'Overwritten' } })
+    expect(code).toBe(1)
+    expect(io.errors[0]).toMatch(/Tenant "acme" already exists/)
+    expect(await src.find('acme')).toMatchObject({ name: 'Acme' })
+  })
+
   it('tenant:migrate runs the hook for all tenants, or one with --tenant', async () => {
     const seen: string[] = []
     const { run } = await boot({ source: source(), resolvers: [], onMigrate: (t: Tenant) => void seen.push(t.id) })

@@ -3,6 +3,7 @@ import { createApp, tryCtx } from '@basaltkit/core'
 import {
   MemoryTenantSource,
   TENANCY,
+  TenantAlreadyExistsError,
   TenantCreateUnsupportedError,
   headerResolver,
   tenancyPlugin,
@@ -141,14 +142,15 @@ describe('provisioning a new tenant', () => {
 })
 
 /**
- * The durable sources — `@basaltkit/tenancy-prisma` and
- * `@basaltkit/tenancy-sqlite` — implement `save()` (an upsert), not `create()`.
- * Requiring `create()` limited this whole flow to `MemoryTenantSource`, which is
- * to say to tests: a real app on Prisma got TENANT_CREATE_UNSUPPORTED from a
- * source that persists tenants perfectly well.
+ * A source may implement only `save()` (an upsert) — the durable sources did,
+ * until they gained an insert-only `create()`. Requiring `create()` limited this
+ * whole flow to `MemoryTenantSource`, which is to say to tests: a real app on
+ * Prisma got TENANT_CREATE_UNSUPPORTED from a source that persists tenants
+ * perfectly well.
  *
  * Shipped that way in 1.5.0 and caught in a real app, because every test here
- * used the one source that happens to have `create()`.
+ * used the one source that happens to have `create()`. A third-party save-only
+ * source is still supported, and still refuses an existing id.
  */
 describe('sources that persist through save() instead of create()', () => {
   const saveOnly = () => {
@@ -208,9 +210,118 @@ describe('sources that persist through save() instead of create()', () => {
     await app.shutdown()
   })
 
+  it('refuses an existing id through the find() pre-check, writing nothing', async () => {
+    // A save-only source has no insert that could refuse the duplicate; without
+    // the pre-check its upsert would replace the record wholesale.
+    const { source, rows } = saveOnly()
+    const saves: Tenant[] = []
+    const counting: TenantSource = {
+      find: source.find,
+      save: async (tenant) => {
+        saves.push(tenant)
+        return source.save(tenant)
+      },
+    }
+    const provisioned: string[] = []
+    const { app, tenancy } = await boot({ source: counting, onProvision: (t) => void provisioned.push(t.id) })
+
+    await tenancy.create({ id: 'acme', name: 'Acme' })
+    const writes = saves.length
+    await expect(tenancy.create({ id: 'acme', name: 'Other' })).rejects.toBeInstanceOf(TenantAlreadyExistsError)
+
+    expect(saves).toHaveLength(writes)
+    expect(rows.get('acme')).toMatchObject({ name: 'Acme', status: 'ready' })
+    expect(provisioned).toEqual(['acme'])
+    await app.shutdown()
+  })
+
   it('names both ways out when a source can do neither', async () => {
     const { app, tenancy } = await boot({ source: { find: async () => null } })
     await expect(tenancy.create({ id: 'acme' })).rejects.toThrow(/neither create\(\) nor save\(\)/)
     await app.shutdown()
+  })
+})
+
+/**
+ * `create()` used to persist through the durable sources' `save`, an upsert. A
+ * second create for an existing id — a double-submitted signup, an operator
+ * re-running `tenant:create` — replaced the whole record: the owner was lost, a
+ * suspended firm came back to life and provisioning ran again over live data.
+ * Found in a real app review. An existing id is now refused, whatever its
+ * status, before anything is written.
+ */
+describe('creating a tenant that already exists', () => {
+  it('rejects with 409 and leaves the record, the hooks and provisioning alone', async () => {
+    const provisioned: string[] = []
+    const created: string[] = []
+    const { app, tenancy, source } = await boot({ onProvision: (t) => void provisioned.push(t.id) })
+    app.hooks.on('tenancy:created', ({ tenant }) => void created.push(tenant.id))
+
+    await tenancy.create({ id: 'acme', name: 'Acme', ownerUserId: 'u1' })
+
+    const error = await tenancy.create({ id: 'acme', name: 'Impostor' }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(TenantAlreadyExistsError)
+    expect(error).toMatchObject({ code: 'TENANT_ALREADY_EXISTS', status: 409 })
+    expect((error as Error).message).toMatch(/"acme" already exists/)
+
+    expect(await source.find('acme')).toMatchObject({ name: 'Acme', ownerUserId: 'u1', status: 'ready' })
+    expect(provisioned).toEqual(['acme'])
+    expect(created).toEqual(['acme'])
+    await app.shutdown()
+  })
+
+  it('points a failed tenant at provision() instead of creating it again', async () => {
+    let attempts = 0
+    const { app, tenancy, source } = await boot({
+      onProvision: () => {
+        attempts++
+        throw new Error('CREATE SCHEMA denied')
+      },
+    })
+    await expect(tenancy.create({ id: 'acme' })).rejects.toThrow('CREATE SCHEMA denied')
+
+    const error = await tenancy.create({ id: 'acme' }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(TenantAlreadyExistsError)
+    expect((error as Error).message).toMatch(/status "failed".*tenancy\.provision\("acme"\)/)
+    // Refused before provisioning — the retry path is provision(id), not create.
+    expect(attempts).toBe(1)
+    expect((await source.find('acme'))?.['status']).toBe('failed')
+    await app.shutdown()
+  })
+
+  it('gives exactly one winner to two concurrent creates of the same id', async () => {
+    // Both calls pass the find() pre-check before either writes; the source's
+    // own create() is what refuses the second.
+    const provisioned: string[] = []
+    const { app, tenancy, source } = await boot({ onProvision: (t) => void provisioned.push(String(t['name'])) })
+
+    const results = await Promise.allSettled([
+      tenancy.create({ id: 'acme', name: 'first' }),
+      tenancy.create({ id: 'acme', name: 'second' }),
+    ])
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]!.reason).toBeInstanceOf(TenantAlreadyExistsError)
+    expect(provisioned).toHaveLength(1)
+    expect((await source.find('acme'))?.['name']).toBe(provisioned[0])
+    await app.shutdown()
+  })
+})
+
+describe('MemoryTenantSource.create', () => {
+  it('refuses an existing id and keeps the first record', async () => {
+    const source = new MemoryTenantSource()
+    await source.create({ id: 'acme', name: 'Acme' })
+
+    await expect(source.create({ id: 'acme', name: 'Other' })).rejects.toBeInstanceOf(TenantAlreadyExistsError)
+    expect(await source.find('acme')).toEqual({ id: 'acme', name: 'Acme' })
+  })
+
+  it('leaves add() and save() as upserts', async () => {
+    const source = new MemoryTenantSource().add({ id: 'acme', name: 'Acme' }).add({ id: 'acme', name: 'Seeded' })
+    await source.save({ id: 'acme', name: 'Saved' })
+    expect(await source.find('acme')).toEqual({ id: 'acme', name: 'Saved' })
   })
 })

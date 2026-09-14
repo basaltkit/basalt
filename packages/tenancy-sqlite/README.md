@@ -47,7 +47,8 @@ A tenant is an **open record** — `{ id, ...anything }` — so it's stored as a
 
 | Method | Description |
 | --- | --- |
-| `save(tenant)` | Insert or update a tenant and replace its domain set, in one transaction. |
+| `create(tenant)` | Insert a **new** tenant and its domain set, in one transaction. An existing id throws `TenantAlreadyExistsError` (409) and leaves that tenant untouched — the primary key refuses it, so of two concurrent creates exactly one wins. What `tenancy.create()` calls. |
+| `save(tenant)` | Insert or update a tenant (upsert, replacing the whole record) and replace its domain set, in one transaction. For intentional updates and status transitions. |
 | `find(id)` | The tenant record, or `null`. |
 | `findByDomain(domain)` | The tenant owning that custom domain, or `null`. |
 | `list()` | Every tenant, ordered by `id`. |
@@ -69,14 +70,16 @@ Other exports:
 `journal_mode = WAL` and `busy_timeout = 5000`, so a competing writer waits up
 to 5 s for the lock instead of throwing "database is locked" immediately.
 
-**Domains are globally unique.** Claiming a domain already owned by a *different* tenant throws, and the whole `save` rolls back — routing must be unambiguous, and the tenant record and its domains never drift apart. Re-saving the *same* tenant with a new `domains` array adds the new ones and drops the missing ones.
+**Domains are globally unique.** Claiming a domain already owned by a *different* tenant throws, and the whole `save`/`create` rolls back — routing must be unambiguous, and the tenant record and its domains never drift apart. Re-saving the *same* tenant with a new `domains` array adds the new ones and drops the missing ones.
 
 ## Errors
 
-This package defines no `BasaltError` subclasses and no error codes.
-`node:sqlite` errors propagate unchanged — including the `UNIQUE` violation
-raised when `save()` claims a domain already owned by a different tenant, which
-rolls the whole transaction back. The tenancy errors a client sees —
+This package defines no `BasaltError` subclasses and no error codes. `create()`
+maps a duplicate tenant id to `@basaltkit/tenancy`'s `TenantAlreadyExistsError`
+(`TENANT_ALREADY_EXISTS`, 409). Every other `node:sqlite` error propagates
+unchanged — including the `UNIQUE` violation raised when `save()` or `create()`
+claims a domain already owned by a different tenant, which rolls the whole
+transaction back. The tenancy errors a client sees —
 `TENANT_REQUIRED`, `TENANCY_NOT_RESOLVED`, `TENANT_NOT_FOUND` — come from
 `@basaltkit/tenancy`.
 

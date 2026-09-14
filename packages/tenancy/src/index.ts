@@ -11,6 +11,7 @@ import type { ResolutionRequest, TenantRef, TenantResolver } from './resolvers.j
 import {
   TenancyNotResolvedError,
   TenantNotFoundError,
+  TenantAlreadyExistsError,
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
   TenantNotReadyError,
@@ -24,6 +25,7 @@ export {
   MemoryTenantSource,
   TenancyNotResolvedError,
   TenantNotFoundError,
+  TenantAlreadyExistsError,
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
   TenantNotReadyError,
@@ -117,15 +119,34 @@ export class Tenancy {
    * source persisted it first. That half-state is not rolled back: deleting is
    * not something every `TenantSource` can do, and a failed delete on top of a
    * failed provision loses the evidence. Provisioning is expected to be
-   * idempotent so that a retry finishes the job.
+   * idempotent so that a retry finishes the job — and that retry is
+   * `provision(id)`, not a second `create()`.
+   *
+   * **An existing id is refused** with `TenantAlreadyExistsError` (409), whatever
+   * its status: nothing is written, no hook fires, `onProvision` does not run.
+   * Overwriting was never what a caller meant. The durable sources' `save` is an
+   * upsert that replaces the whole record, so a double-submitted signup used to
+   * erase the tenant's owner, reactivate a suspended account and re-run
+   * provisioning over live data. Use the source's `save()` for an intentional
+   * update.
    */
   async create(tenant: Tenant): Promise<Tenant> {
-    // `create` when the source has it, `save` otherwise. The two durable
-    // sources (tenancy-prisma, tenancy-sqlite) expose only `save`, an upsert
-    // with the same signature — so requiring `create` would have limited this
-    // whole flow to MemoryTenantSource, i.e. to tests.
+    // `create` when the source has it, `save` otherwise. `create` is the one
+    // that refuses a duplicate atomically — MemoryTenantSource, tenancy-prisma
+    // and tenancy-sqlite all have it — while `save` keeps a third-party source
+    // that only upserts usable at all.
     const persist = this.source.create ?? this.source.save
     if (!persist) throw new TenantCreateUnsupportedError()
+
+    // Checked before anything else, including for a source with `create`: a
+    // save-only source has no other guard, and every source gets an error that
+    // knows the existing status (and so can point a `failed` tenant at
+    // `provision`). This alone is not race-free — two creates can both find
+    // nothing — which is what the source's own `create` is for.
+    const existing = await this.source.find(tenant.id)
+    if (existing) {
+      throw new TenantAlreadyExistsError(tenant.id, existing['status'] as TenantStatus | undefined)
+    }
 
     tenant = this.withCanonicalDomain(tenant)
 
@@ -241,8 +262,8 @@ export class Tenancy {
    * firm claiming the same one.
    *
    * Added to what the tenant already declares, never substituted: the sources
-   * replace the whole domain set on save, so substituting would erase a firm's
-   * own address the next time anything called `create`.
+   * replace the whole domain set on write, so substituting would erase the
+   * firm's own address from the record it is created with.
    */
   private withCanonicalDomain(tenant: Tenant): Tenant {
     if (!this.canonicalDomain) return tenant
@@ -605,7 +626,18 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
       // Through the SERVICE, not the source: that is what runs `onProvision`
       // and emits `tenancy:created`, so this command and an admin panel calling
       // `tenancy.create()` produce an identical tenant.
-      const tenant = await tenancy().create({ id, ...fields } as Tenant)
+      let tenant: Tenant
+      try {
+        tenant = await tenancy().create({ id, ...fields } as Tenant)
+      } catch (error) {
+        // An operator re-running the command is the common way to hit this; the
+        // message already says what to do instead (`provision` for a failed one).
+        if (error instanceof TenantAlreadyExistsError) {
+          io.error(error.message)
+          return 1
+        }
+        throw error
+      }
       io.log(
         options.onProvision
           ? `Created and provisioned tenant "${tenant.id}".`
