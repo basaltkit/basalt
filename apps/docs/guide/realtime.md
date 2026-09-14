@@ -239,6 +239,61 @@ realtimePlugin({
 the generic, so rules for different hooks live in the same array. Rules are
 attached during `boot`.
 
+### Tenant from context (schema- and database-per-tenant apps)
+
+When tenancy isolates by Postgres schema or by database, domain models have no
+`tenantId` column, so the payload has nothing to point `tenant` at. **Omit
+`tenant`** and the bridge takes the tenant from the active context when the hook
+fires: `ctx().tenant.id`, set by `@basaltkit/tenancy`. Hook handlers run inside
+the emitter's async context, so a hook emitted while handling a tenant-scoped
+request or job delivers to that tenant.
+
+```ts
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
+    'matter:opened': { matter: { id: string; title: string } } // no tenantId
+  }
+}
+
+realtimePlugin({
+  bridge: [
+    bridgeRule({
+      hook: 'matter:opened',
+      // no `tenant`: delivered to ctx().tenant.id at emit time
+      channel: 'matters',
+      event: 'opened',
+      data: (p) => p.matter,
+    }),
+  ],
+  onBridgeSkipped: ({ hook, channel, event, reason }) =>
+    logger.warn({ hook, channel, event, reason }, 'realtime bridge skipped'),
+})
+```
+
+The two ways an event can be skipped behave differently on purpose:
+
+| Rule | Tenant resolves to | What happens |
+| --- | --- | --- |
+| `tenant` set | a string | Delivered to that tenant; the context is ignored |
+| `tenant` set | `undefined` | Skipped **silently**: it's an explicit opt-out, so it's the way to filter events |
+| `tenant` omitted | tenant in context | Delivered to `ctx().tenant.id` |
+| `tenant` omitted | no tenant in context | Skipped and reported to **`onBridgeSkipped({ hook, channel, event, reason: 'no-tenant' })`** |
+
+With no tenant in context the hook was emitted outside a tenant-scoped scope:
+boot, a cron tick, or a worker that didn't restore the context. Leave
+`onBridgeSkipped` unset and the default logs
+`[basalt:realtime] bridge skipped (hook "…" -> channel "…", event "…")` via
+`console.warn`, **once per rule**, not once per event, so a misconfigured rule
+shows up without flooding the logs. For a function `channel`, the reported
+channel is evaluated against the payload; if that throws, you get the
+placeholder `'<dynamic>'`.
+
+::: warning Don't read a tenant id the payload doesn't carry
+`tenant: ({ matter }) => matter?.tenantId` on a model with no `tenantId` column
+always returns `undefined`, and that is the *silent* opt-out, so nothing is ever
+pushed and nothing is logged. Omit `tenant` instead.
+:::
+
 ::: tip The bridge can never fail your domain write
 The emit is deliberately **fire-and-forget**: the hook handler doesn't await it,
 so a dead backplane can't reject into — or slow down — the transaction that
@@ -371,6 +426,7 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | `maxSubscriptionsPerConnection` | `number` | `1000` | DoS bound: channels one connection may hold |
 | `maxChannelLength` | `number` | `256` | DoS bound: max channel-name length |
 | `onBridgeError` | `(error, { hook, channel, event }) => void` | `console.error` | Where a failed **bridged** broadcast is reported; the failure never reaches the emitting domain code |
+| `onBridgeSkipped` | `(info: { hook, channel, event, reason: 'no-tenant' }) => void` | `console.warn`, once per rule | Where a rule **without `tenant`** reports an event skipped because no tenant was in context. Not called when your own `tenant` returns `undefined` |
 | `onDeliveryError` | `(error, { connectionId, tenantId, channel, event }) => void` | `console.error` | Where a failed **local write** to one socket is reported; that connection is pruned, the rest still receive the message |
 
 `bridgeRule(rule)`:
@@ -378,7 +434,7 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `hook` | `keyof BasaltHooks & string` | — | The core hook to listen on |
-| `tenant` | `(payload) => string \| undefined` | — | Which tenant to deliver to; `undefined` skips the event entirely |
+| `tenant` | `(payload) => string \| undefined` | tenant in context | Which tenant to deliver to; `undefined` skips the event silently. Omit it to use `ctx().tenant.id` at emit time (schema-/database-per-tenant apps); with no tenant there, the event is skipped and reported to `onBridgeSkipped` |
 | `channel` | `string \| (payload) => string` | — | Fixed or payload-derived channel name |
 | `event` | `string` | — | Event name the client listens for |
 | `data` | `(payload) => unknown` | whole payload | Narrow what leaves the server — the payload is delivered to every subscriber |
@@ -417,6 +473,7 @@ rather than propagated. These are the signals to watch:
 | Failure | Surfaced as | Default behaviour | When |
 | --- | --- | --- | --- |
 | Bridged broadcast rejected | `onBridgeError(error, { hook, channel, event })` | `console.error`, event dropped | The backplane is down/unreachable while a bridge rule fires |
+| Bridged event had no tenant | `onBridgeSkipped({ hook, channel, event, reason: 'no-tenant' })` | `console.warn` once per rule, event dropped | A rule without `tenant` fired outside a tenant-scoped context (boot, cron, a worker without context) |
 | Local write to a socket threw | `onDeliveryError(error, { connectionId, tenantId, channel, event })` | `console.error`, connection **unregistered**, other recipients still served | A socket died between the last write and this one |
 | Subscription refused | `hub.subscribe()` resolves `false` | nothing — silent unless you check | Unknown connection id, empty/over-long channel, per-connection cap hit, or `authorize` returned `false` |
 | Malformed backplane payload | `console.error` from the Redis driver | message dropped | Something else `PUBLISH`ed to the same Redis channel, or a version mismatch |

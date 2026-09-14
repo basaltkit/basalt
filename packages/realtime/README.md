@@ -89,7 +89,7 @@ realtimePlugin({
   bridge: [
     bridgeRule({
       hook: 'note:created',            // a hook declared in your app
-      tenant: (p) => p.tenantId,        // which tenant to deliver to (undefined → skips)
+      tenant: (p) => p.tenantId,        // which tenant to deliver to (undefined → skips); omit → tenant in context
       channel: 'notes',                 // or a function (p) => `notes:${p.folderId}`
       event: 'created',
       data: (p) => p.note,              // optional; defaults to sending the whole payload
@@ -100,12 +100,20 @@ realtimePlugin({
 
 `bridgeRule` validates the types against the hook's payload, so `p` has the right type.
 
+**Schema- or database-per-tenant apps:** domain models have no `tenantId` column, so omit
+`tenant`. The bridge then delivers to the tenant in the active context at emit time
+(`ctx().tenant.id`, set by `@basaltkit/tenancy`); hook handlers run inside the emitter's async
+context. If there is no tenant in context (boot, cron, a worker without context), the event is
+skipped and reported to `onBridgeSkipped`. A `tenant` you set that returns `undefined` is
+different: that is an explicit opt-out and is skipped silently, so never point `tenant` at a field
+the payload doesn't carry.
+
 `BridgeRule` fields:
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `hook` | `keyof BasaltHooks & string` | — (required) | The core hook to listen to. |
-| `tenant` | `(payload) => string \| undefined` | — (required) | Which tenant receives the push. Return `undefined` to skip this event — that is the intended way to filter. |
+| `tenant` | `(payload) => string \| undefined` | the tenant in context (`ctx().tenant.id`) | Which tenant receives the push. Return `undefined` to skip this event silently; that is the intended way to filter. Omit it when the payload has no tenant id; with no tenant in context either, the event is skipped and reported to `onBridgeSkipped`. |
 | `channel` | `string \| ((payload) => string)` | — (required) | Target channel; a function lets you shard per record (`` (p) => `notes:${p.folderId}` ``). |
 | `event` | `string` | — (required) | Event name the client listens for. |
 | `data` | `(payload) => unknown` | the whole hook payload | What to send. **Set this** when the hook payload contains fields the client shouldn't see. |
@@ -170,6 +178,7 @@ realtimePlugin({
 | `maxSubscriptionsPerConnection` | `number` | `1000` | Cap on distinct channels one connection may hold. A DoS bound: without it a client can subscribe in a loop and grow the hub's maps unbounded. |
 | `maxChannelLength` | `number` | `256` | Cap on a channel name's length. Same reason; empty names are refused too. |
 | `onBridgeError` | `(error: unknown, info: { hook: string; channel: string; event: string }) => void` | `console.error` naming the hook, channel and event | A bridged broadcast failed — see [Failure hooks](#failure-hooks). |
+| `onBridgeSkipped` | `(info: { hook: string; channel: string; event: string; reason: 'no-tenant' }) => void` | `console.warn` naming the hook, channel and event, **once per rule** | A rule without `tenant` fired with no tenant in context — see [Failure hooks](#failure-hooks). |
 | `onDeliveryError` | `(error: unknown, info: { connectionId: string; tenantId: string; channel: string; event: string }) => void` | `console.error` naming the connection, tenant, channel and event | A single client's `send` threw — see [Failure hooks](#failure-hooks). |
 
 Registers the `REALTIME` (`Realtime`) and `REALTIME_HUB` (`RealtimeHub`) tokens, `start()`s the
@@ -182,16 +191,17 @@ takes exactly the same four.
 
 ### Failure hooks
 
-Realtime has no error classes. Both failure paths are **callbacks with a non-silent default**,
+Realtime has no error classes. Every failure path is a **callback with a non-silent default**,
 because a realtime push is cosmetic fan-out and must never fail the domain write that triggered
 it — but it must not vanish either.
 
 | Hook | Fires when | Default | What happens regardless |
 |---|---|---|---|
 | `onBridgeError` | A `bridge` rule's broadcast rejected — typically the backplane is down (Redis unreachable). | `console.error` with hook → channel, event | The hook handler is fire-and-forget: the failure is caught, so the domain write that emitted the hook still succeeds. Clients simply miss that push. |
+| `onBridgeSkipped` | A `bridge` rule **without `tenant`** fired but there is no tenant in context (the hook was emitted at boot, from cron, or from a worker without context). | `console.warn` with hook → channel, event — once per rule, not per event | The push is skipped. A function `channel` is evaluated for the report; if it throws, `channel` is `'<dynamic>'`. A rule whose own `tenant` returns `undefined` never lands here: that opt-out is silent. |
 | `onDeliveryError` | One connection's `send()` **threw** during local delivery — a dead or closing socket. | `console.error` with the connection, tenant, channel and event | That connection is **pruned** (`unregister`), and every remaining subscriber still receives the message. One dead socket never stops the fan-out, and never throws into the backplane's message emitter (fatal on a real ioredis subscriber). |
 
-Point both at your logger in production — a permanently failing bridge means clients are
+Point all three at your logger in production — a permanently failing bridge means clients are
 silently stale, and a spike in delivery errors means sockets are dying faster than they are
 being unregistered.
 
