@@ -239,6 +239,63 @@ O `bridgeRule()` verifica os tipos de uma regra contra o payload desse hook e
 depois apaga o genérico, para que regras de hooks diferentes vivam no mesmo array.
 As regras são ligadas durante o `boot`.
 
+### Tenant a partir do contexto (apps com schema ou base de dados por tenant)
+
+Quando a tenancy isola por schema Postgres ou por base de dados, os modelos de
+domínio não têm coluna `tenantId`, por isso o payload não tem nada para onde o
+`tenant` possa apontar. **Omite o `tenant`** e a ponte vai buscar o tenant ao
+contexto ativo quando o hook dispara: `ctx().tenant.id`, definido pelo
+`@basaltkit/tenancy`. Os handlers de hooks correm dentro do contexto assíncrono
+de quem emite, por isso um hook emitido durante um pedido ou job com tenant é
+entregue a esse tenant.
+
+```ts
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
+    'matter:opened': { matter: { id: string; title: string } } // sem tenantId
+  }
+}
+
+realtimePlugin({
+  bridge: [
+    bridgeRule({
+      hook: 'matter:opened',
+      // sem `tenant`: entregue a ctx().tenant.id no momento do emit
+      channel: 'matters',
+      event: 'opened',
+      data: (p) => p.matter,
+    }),
+  ],
+  onBridgeSkipped: ({ hook, channel, event, reason }) =>
+    logger.warn({ hook, channel, event, reason }, 'realtime bridge skipped'),
+})
+```
+
+As duas formas de um evento ser ignorado comportam-se de propósito de maneira
+diferente:
+
+| Regra | O tenant resolve para | O que acontece |
+| --- | --- | --- |
+| `tenant` definido | uma string | Entregue a esse tenant; o contexto é ignorado |
+| `tenant` definido | `undefined` | Ignorado **em silêncio**: é uma exclusão explícita, por isso é a forma de filtrar eventos |
+| `tenant` omitido | tenant no contexto | Entregue a `ctx().tenant.id` |
+| `tenant` omitido | sem tenant no contexto | Ignorado e reportado a **`onBridgeSkipped({ hook, channel, event, reason: 'no-tenant' })`** |
+
+Sem tenant no contexto, o hook foi emitido fora de um âmbito com tenant: o
+`boot`, um tick de cron, ou um worker que não restaurou o contexto. Deixa o
+`onBridgeSkipped` por definir e a predefinição regista
+`[basalt:realtime] bridge skipped (hook "…" -> channel "…", event "…")` via
+`console.warn`, **uma vez por regra** e não uma vez por evento, para uma regra mal
+configurada se notar sem inundar os logs. Com um `channel` função, o canal
+reportado é avaliado contra o payload; se isso lançar, recebes o marcador
+`'<dynamic>'`.
+
+::: warning Não leias um id de tenant que o payload não traz
+`tenant: ({ matter }) => matter?.tenantId` num modelo sem coluna `tenantId`
+devolve sempre `undefined`, e essa é a exclusão *silenciosa*: nada é enviado e
+nada é registado. Omite o `tenant`.
+:::
+
 ::: tip A ponte nunca pode falhar a tua escrita de domínio
 O emit é deliberadamente **fire-and-forget**: o handler do hook não o aguarda, por
 isso um backplane morto não consegue rejeitar para dentro da — nem atrasar a —
@@ -372,6 +429,7 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | `maxSubscriptionsPerConnection` | `number` | `1000` | Limite anti-DoS: canais que uma connection pode deter |
 | `maxChannelLength` | `number` | `256` | Limite anti-DoS: comprimento máximo do nome do canal |
 | `onBridgeError` | `(error, { hook, channel, event }) => void` | `console.error` | Onde é reportado um broadcast **da ponte** que falhou; a falha nunca chega ao código de domínio emissor |
+| `onBridgeSkipped` | `(info: { hook, channel, event, reason: 'no-tenant' }) => void` | `console.warn`, uma vez por regra | Onde uma regra **sem `tenant`** reporta um evento ignorado por não haver tenant no contexto. Não é chamado quando o teu `tenant` devolve `undefined` |
 | `onDeliveryError` | `(error, { connectionId, tenantId, channel, event }) => void` | `console.error` | Onde é reportada uma **escrita local** falhada num socket; essa connection é removida, as restantes continuam a receber a mensagem |
 
 `bridgeRule(rule)`:
@@ -379,7 +437,7 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | Campo | Tipo | Predefinição | Para que serve |
 | --- | --- | --- | --- |
 | `hook` | `keyof BasaltHooks & string` | — | O hook do core a escutar |
-| `tenant` | `(payload) => string \| undefined` | — | A que tenant entregar; `undefined` ignora o evento por completo |
+| `tenant` | `(payload) => string \| undefined` | tenant no contexto | A que tenant entregar; `undefined` ignora o evento em silêncio. Omite-o para usar `ctx().tenant.id` no momento do emit (apps com schema/base de dados por tenant); sem tenant aí, o evento é ignorado e reportado a `onBridgeSkipped` |
 | `channel` | `string \| (payload) => string` | — | Nome de canal fixo ou derivado do payload |
 | `event` | `string` | — | Nome do evento que o cliente escuta |
 | `data` | `(payload) => unknown` | payload inteiro | Restringe o que sai do servidor — o payload é entregue a cada subscritor |
@@ -418,6 +476,7 @@ vez de propagada. Estes são os sinais a vigiar:
 | Falha | Aparece como | Comportamento predefinido | Quando |
 | --- | --- | --- | --- |
 | Broadcast da ponte rejeitado | `onBridgeError(error, { hook, channel, event })` | `console.error`, evento descartado | O backplane está em baixo/inacessível quando uma regra de ponte dispara |
+| Evento da ponte sem tenant | `onBridgeSkipped({ hook, channel, event, reason: 'no-tenant' })` | `console.warn` uma vez por regra, evento descartado | Uma regra sem `tenant` disparou fora de um contexto com tenant (boot, cron, worker sem contexto) |
 | Escrita local num socket lançou | `onDeliveryError(error, { connectionId, tenantId, channel, event })` | `console.error`, connection **removida**, restantes destinatários servidos na mesma | Um socket morreu entre a última escrita e esta |
 | Subscrição recusada | `hub.subscribe()` resolve `false` | nada — silencioso se não verificares | Id de connection desconhecido, canal vazio/demasiado longo, teto por connection atingido, ou `authorize` devolveu `false` |
 | Payload malformado no backplane | `console.error` do driver Redis | mensagem descartada | Outra coisa fez `PUBLISH` no mesmo canal Redis, ou há incompatibilidade de versões |

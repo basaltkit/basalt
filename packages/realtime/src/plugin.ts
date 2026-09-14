@@ -1,4 +1,4 @@
-import { createToken, definePlugin } from '@basaltkit/core'
+import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
 import type { BasaltHooks, Container } from '@basaltkit/core'
 import { MemoryBackplane, RealtimeHub, type Connection, type RealtimeBackplane } from './hub.js'
 import { Realtime } from './realtime.js'
@@ -12,7 +12,7 @@ export const REALTIME_HUB = createToken<RealtimeHub>('realtime:hub')
  *
  *   bridge: [{
  *     hook: 'note:created',
- *     tenant: (p) => p.tenantId,
+ *     tenant: (p) => p.tenantId, // omit to use the tenant in context
  *     channel: 'notes',
  *     event: 'created',
  *     data: (p) => p.note,
@@ -20,8 +20,18 @@ export const REALTIME_HUB = createToken<RealtimeHub>('realtime:hub')
  */
 export interface BridgeRule<K extends keyof BasaltHooks & string = keyof BasaltHooks & string> {
   hook: K
-  /** Tenant to deliver to; return undefined to skip this event. */
-  tenant: (payload: BasaltHooks[K]) => string | undefined
+  /**
+   * Tenant to deliver to; return undefined to skip this event (silently — an
+   * explicit opt-out).
+   *
+   * Omit it when the payload carries no tenant id — e.g. schema- or
+   * database-per-tenant apps, whose domain models have no `tenantId` column.
+   * The tenant is then read from the active context at emit time
+   * (`ctx().tenant.id`, set by `@basaltkit/tenancy`); hook handlers run inside
+   * the emitter's async context. With no tenant in context the event is
+   * skipped and reported through `onBridgeSkipped`.
+   */
+  tenant?: (payload: BasaltHooks[K]) => string | undefined
   channel: string | ((payload: BasaltHooks[K]) => string)
   event: string
   /** What to send. Default: the whole hook payload. */
@@ -35,6 +45,17 @@ export interface BridgeRule<K extends keyof BasaltHooks & string = keyof BasaltH
 export function bridgeRule<K extends keyof BasaltHooks & string>(rule: BridgeRule<K>): BridgeRule {
   return rule as unknown as BridgeRule
 }
+
+/** What `onBridgeSkipped` receives. */
+export interface BridgeSkippedInfo {
+  hook: string
+  channel: string
+  event: string
+  reason: 'no-tenant'
+}
+
+/** Channel reported for a function channel that threw while describing a skip. */
+const DYNAMIC_CHANNEL = '<dynamic>'
 
 export interface RealtimePluginOptions {
   /** Fan-out backplane. Default in-memory (single instance). */
@@ -79,6 +100,19 @@ export interface RealtimePluginOptions {
    * instead of propagating. Default: logs to console with the rule's context.
    */
   onBridgeError?: (error: unknown, info: { hook: string; channel: string; event: string }) => void
+  /**
+   * Called when a rule WITHOUT `tenant` fires but there is no tenant in the
+   * active context (the hook was emitted outside a tenant-scoped request/job:
+   * boot, a cron tick, a worker without context). The push is skipped. A rule
+   * whose own `tenant` returns undefined is an explicit opt-out and is NOT
+   * reported here.
+   *
+   * `channel` is the rule's channel; for a function channel it is evaluated
+   * against the payload, falling back to `'<dynamic>'` if it throws.
+   * Default: `console.warn` once per rule (not per event), so a misconfigured
+   * rule is visible without flooding the logs.
+   */
+  onBridgeSkipped?: (info: BridgeSkippedInfo) => void
   /**
    * A local delivery failed (dead socket) — forwarded to the hub. The
    * connection is pruned and remaining recipients still receive the message.
@@ -125,9 +159,40 @@ export function realtimePlugin(options: RealtimePluginOptions = {}) {
             error,
           ))
       for (const rule of options.bridge ?? []) {
+        let warned = false
+        const onBridgeSkipped =
+          options.onBridgeSkipped ??
+          ((info: BridgeSkippedInfo) => {
+            if (warned) return
+            warned = true
+            console.warn(
+              `[basalt:realtime] bridge skipped (hook "${info.hook}" -> channel "${info.channel}", event "${info.event}"): ` +
+                'the rule has no `tenant` and there is no tenant in context. Emit the hook inside a ' +
+                'tenant-scoped request/job, or set `tenant` on the rule. (Warned once per rule.)',
+            )
+          })
         hooks.on(rule.hook, (payload) => {
-          const tenantId = rule.tenant(payload)
-          if (tenantId === undefined) return
+          let tenantId: string | undefined
+          if (rule.tenant) {
+            // Explicit resolver: undefined is a deliberate opt-out — skip silently.
+            tenantId = rule.tenant(payload)
+            if (tenantId === undefined) return
+          } else {
+            // No resolver: the tenant lives in the emitter's context (schema-/
+            // database-per-tenant apps). HookBus handlers run inside it.
+            tenantId = (tryCtx() as { tenant?: { id?: string } } | undefined)?.tenant?.id
+            if (!tenantId) {
+              let channel = DYNAMIC_CHANNEL
+              try {
+                channel = typeof rule.channel === 'function' ? rule.channel(payload) : rule.channel
+              } catch {
+                // A channel function may need data that is absent here; the
+                // placeholder keeps the report simple.
+              }
+              onBridgeSkipped({ hook: rule.hook, channel, event: rule.event, reason: 'no-tenant' })
+              return
+            }
+          }
           const channel = typeof rule.channel === 'function' ? rule.channel(payload) : rule.channel
           // Fire-and-forget: a realtime push is a cosmetic fan-out — it must
           // never fail (or slow down) the domain write that emitted the hook.
