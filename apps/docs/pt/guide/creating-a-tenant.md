@@ -130,6 +130,10 @@ passes é guardado e volta sem alterações:
 await tenants.save({ id: 'acme', name: 'Acme Inc', plan: 'pro', domains: ['app.acme.com'] })
 ```
 
+Quando queres *apenas* criar — sem nunca tocar num tenant que já existe — chama
+antes o `create()`. Ele insere, e um `id` existente lança
+`TenantAlreadyExistsError` (409), com o tenant guardado exatamente como estava.
+
 É tudo. O tenant está agora na tua base de dados, `acme.tuaapp.com` (ou o domínio
 próprio `app.acme.com`) resolve para ele, e continua lá depois de um reinício.
 
@@ -233,6 +237,13 @@ tenancyPlugin({ source, resolvers, onProvision })
 Se o provisionamento for mais longo que o pedido, acrescenta
 `provision: 'deferred'`: o `create()` passa a retornar já, e o tenant responde
 **503** até um job chamar o `tenancy.provision(id)`.
+
+O `create()` recusa um id que já existe — seja qual for o estado — com
+`TenantAlreadyExistsError` (**409**), antes de escrever o que quer que seja ou
+de correr o `onProvision`. Um utilizador que submete o formulário duas vezes, ou
+escolhe um id que outra pessoa já tem, recebe um conflito em vez de sobrescrever
+esse tenant. Um tenant cujo provisionamento falhou também não se volta a criar:
+termina-se com `tenancy.provision(id)`.
 
 E aqui está a rota que exige um utilizador com sessão e a chama. O `meta.auth`
 diz ao Basalt que esta rota precisa de autenticação; `ctx().user` é o utilizador

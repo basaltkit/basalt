@@ -29,8 +29,15 @@ export interface TenantSource {
   /** Required by tenancy.forEach() and `basalt tenant:list`. */
   list?(): Promise<Tenant[]>
   /**
-   * Persists and returns the new tenant, failing if it already exists.
-   * `MemoryTenantSource` implements this.
+   * Persists and returns the new tenant, failing with `TenantAlreadyExistsError`
+   * if the id is already taken — never overwriting it.
+   *
+   * Implement it as an insert the store itself refuses on a duplicate (a primary
+   * key violation), not as a read followed by a write: `tenancy.create()` checks
+   * with `find()` first, but two concurrent creates of the same id both pass that
+   * check, and only the store can pick exactly one winner.
+   * `MemoryTenantSource`, `@basaltkit/tenancy-prisma` and
+   * `@basaltkit/tenancy-sqlite` all implement it that way.
    */
   create?(tenant: Tenant): Promise<Tenant>
   /**
@@ -43,12 +50,14 @@ export interface TenantSource {
    */
   delete?(id: string): Promise<void>
   /**
-   * Upsert — what the durable sources (`@basaltkit/tenancy-prisma`,
-   * `@basaltkit/tenancy-sqlite`) implement instead of `create`.
+   * Upsert — inserts a new tenant or replaces an existing record wholesale.
    *
-   * `tenancy.create()` accepts either: it prefers `create` when a source has
-   * it, and falls back to `save`. Without that, the whole provisioning flow
-   * would work only with the in-memory source — which is to say, only in tests.
+   * This is the write for an INTENTIONAL update, and the one status transitions
+   * go through (`provisioning` → `ready`). `tenancy.create()` prefers `create`
+   * and falls back to `save` only for a source that has nothing else; it checks
+   * with `find()` before writing either way, so a save-only source still refuses
+   * an existing id — just without the store-level guarantee against a
+   * concurrent create of the same id.
    */
   save?(tenant: Tenant): Promise<Tenant>
 }
@@ -78,7 +87,15 @@ export class MemoryTenantSource implements TenantSource {
     return [...this.tenants.values()]
   }
 
+  /**
+   * Refuses an id that is already present. The check and the write happen in
+   * one synchronous step, so concurrent creates of the same id cannot both
+   * succeed — the same guarantee the durable sources get from a primary key.
+   */
   async create(tenant: Tenant): Promise<Tenant> {
+    if (this.tenants.has(tenant.id)) {
+      throw new TenantAlreadyExistsError(tenant.id, this.tenants.get(tenant.id)!['status'] as TenantStatus | undefined)
+    }
     this.tenants.set(tenant.id, tenant)
     return tenant
   }
@@ -151,9 +168,38 @@ export class TenantCreateUnsupportedError extends BasaltError {
     super(
       'TENANT_CREATE_UNSUPPORTED',
       'The configured TenantSource can persist neither way: it implements neither create() nor ' +
-        'save(). MemoryTenantSource has create(); @basaltkit/tenancy-prisma and ' +
-        '@basaltkit/tenancy-sqlite have save(). A read-only source (e.g. one backed by a static ' +
-        'config file) has neither and cannot create tenants.',
+        'save(). MemoryTenantSource, @basaltkit/tenancy-prisma and @basaltkit/tenancy-sqlite ' +
+        'have both. A read-only source (e.g. one backed by a static config file) has neither and ' +
+        'cannot create tenants.',
+    )
+  }
+}
+
+/**
+ * `tenancy.create()` (or `basalt tenant:create`, or a source's `create()`) for an
+ * id that already exists. 409: the request conflicts with a record that is
+ * there, and repeating it will not change that.
+ *
+ * Refused rather than overwritten. Creating over an existing tenant used to go
+ * through the durable sources' upsert, which replaced the whole record — the
+ * owner, the plan, a `suspended` status — and then ran `onProvision` again on
+ * storage that already held a customer's data. A signup form that submits twice
+ * must not be able to do that.
+ *
+ * `status` is the existing record's, when the caller knows it. A `failed` or
+ * `provisioning` tenant is the one case where "create it again" is a reasonable
+ * instinct, so the message names the method that actually finishes the job.
+ */
+export class TenantAlreadyExistsError extends BasaltError {
+  readonly status = 409
+  constructor(id: string, existingStatus?: TenantStatus) {
+    super(
+      'TENANT_ALREADY_EXISTS',
+      existingStatus === 'failed' || existingStatus === 'provisioning'
+        ? `Tenant "${id}" already exists with status "${existingStatus}". Call tenancy.provision("${id}") ` +
+            'to finish or retry its provisioning instead of creating it again.'
+        : `Tenant "${id}" already exists. create() never overwrites a tenant; use the source's save() ` +
+            'for an intentional update.',
     )
   }
 }

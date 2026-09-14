@@ -208,7 +208,7 @@ Registering `tenancyPlugin` wires five CLI commands (run via the `@basaltkit/cli
 
 ```bash
 basalt tenant:list                          # every tenant (needs source.list)
-basalt tenant:create acme --name=Acme       # needs source.create
+basalt tenant:create acme --name=Acme       # needs source.create or save; refuses an existing id
 basalt tenant:migrate                       # run onMigrate for every tenant…
 basalt tenant:migrate --tenant=acme         # …or just one
 basalt tenant:seed --tenant=acme            # run onSeed inside the tenant context
@@ -281,7 +281,7 @@ Constructor: `new Tenancy(source, resolvers, hooks?)` (normally created by the p
 |---|---|---|
 | `current()` | `Tenant \| undefined` | The tenant of the active context. |
 | `find(id)` | `Promise<Tenant \| null>` | Looks it up in the source. |
-| `create(tenant)` | `Promise<Tenant>` | Persists a new tenant, applies `canonicalDomain`, runs `onProvision` and emits `tenancy:created`. The creation path — the source only writes the row. |
+| `create(tenant)` | `Promise<Tenant>` | Persists a new tenant, applies `canonicalDomain`, runs `onProvision` and emits `tenancy:created`. The creation path — the source only writes the row. An id that already exists is refused with `TenantAlreadyExistsError` (409) before anything is written; retry a failed tenant with `provision(id)`, update one with `source.save()`. |
 | `provision(tenantOrId)` | `Promise<Tenant>` | Runs `onProvision` for a tenant left `provisioning` by `provision: 'deferred'`, then flips it to `ready`. |
 | `destroy(id, { force? })` | `Promise<void>` | Marks the tenant `deleting`, runs `onDeprovision` in its context and removes the record. `force` removes it even if the teardown threw. |
 | `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }`. |
@@ -304,7 +304,7 @@ A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promis
 | Export | Description |
 |---|---|
 | `Tenant` | `{ id: string; [key: string]: unknown }`. |
-| `TenantSource` | `find` (required), `findByDomain?`, `list?`. |
+| `TenantSource` | `find` (required), `findByDomain?`, `list?`, `create?` (insert-only — refuses an existing id), `save?` (upsert), `delete?`. |
 | `MemoryTenantSource` | In-memory source with a chainable `.add(tenant)` — dev/tests. |
 | `ResolutionRequest`, `TenantRef`, `TenantResolver` | Resolver types. Advanced. |
 | `TENANCY` | Injection token: `container.get(TENANCY)` → `Tenancy`. |
@@ -338,6 +338,7 @@ against dangling-domain takeover.
 | `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `requireTenant()` / `requireTenantId()` / `tenantScoped()` ran with no tenant in context and no fallback. Fails closed rather than querying unscoped. |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | No resolver produced a tenant and the plugin was configured `required: true`. |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `run()` was given an id absent from the source — also raised by `forEach()` when the source has no `list()`. |
+| `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (or a source's `create()`) for an id that already exists. Nothing is written and `onProvision` does not run. A `failed`/`provisioning` tenant is retried with `tenancy.provision(id)`; an intentional update is `source.save()`. |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | The domain is already registered (by any tenant). |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | Acting on a domain that isn't registered. |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | Acting on a domain that belongs to a different tenant. |

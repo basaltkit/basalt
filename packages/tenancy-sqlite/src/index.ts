@@ -4,7 +4,7 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import type { Tenant, TenantSource } from '@basaltkit/tenancy'
+import { TenantAlreadyExistsError, type Tenant, type TenantSource } from '@basaltkit/tenancy'
 
 /**
  * Durable, SQLite-backed implementation of the `@basaltkit/tenancy` `TenantSource`,
@@ -51,6 +51,17 @@ const domainsOf = (tenant: Tenant): string[] => {
   return Array.isArray(value) ? value.filter((d): d is string => typeof d === 'string') : []
 }
 
+/**
+ * Whether a `node:sqlite` error is a primary-key or unique violation.
+ * Matched on the extended result code, not on the message text, which is
+ * SQLite's to reword: 1555 is SQLITE_CONSTRAINT_PRIMARYKEY, 2067
+ * SQLITE_CONSTRAINT_UNIQUE (a database migrated with a unique index instead).
+ */
+const isUniqueViolation = (error: unknown): boolean => {
+  const errcode = (error as { errcode?: unknown } | null)?.errcode
+  return errcode === 1555 || errcode === 2067
+}
+
 export class SqliteTenantSource implements TenantSource {
   constructor(readonly db: DatabaseSync) {}
 
@@ -59,14 +70,49 @@ export class SqliteTenantSource implements TenantSource {
    * transaction. Claiming a domain already owned by a *different* tenant throws
    * (domains are globally unique — routing must be unambiguous); the whole save
    * rolls back so the tenant record and its domains never drift apart.
+   *
+   * An upsert replaces the whole record. That is right for an intentional
+   * update and for status transitions; it is wrong for creating a tenant, which
+   * is what `create` is for.
    */
   async save(tenant: Tenant): Promise<Tenant> {
+    this.write(
+      tenant,
+      'INSERT INTO tenants (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data',
+    )
+    return tenant
+  }
+
+  /**
+   * Insert a NEW tenant and its custom-domain set, in one transaction; an
+   * existing id throws `TenantAlreadyExistsError` and leaves that tenant
+   * untouched.
+   *
+   * A plain INSERT, not a lookup followed by a write: the primary key refuses
+   * the duplicate, and `BEGIN IMMEDIATE` serialises writers across processes
+   * sharing the file, so of two concurrent creates of the same id exactly one
+   * wins. This is what `tenancy.create()` calls.
+   */
+  async create(tenant: Tenant): Promise<Tenant> {
+    this.write(tenant, 'INSERT INTO tenants (id, data) VALUES (?, ?)', true)
+    return tenant
+  }
+
+  /**
+   * The tenant row plus its domain set, all or nothing. `refuseExisting` maps a
+   * key violation on the TENANT insert — and only there, since a domain claimed
+   * by another tenant violates a key too — to `TenantAlreadyExistsError`.
+   */
+  private write(tenant: Tenant, insertTenant: string, refuseExisting = false): void {
     const domains = domainsOf(tenant)
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.db
-        .prepare('INSERT INTO tenants (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data')
-        .run(tenant.id, JSON.stringify(tenant))
+      try {
+        this.db.prepare(insertTenant).run(tenant.id, JSON.stringify(tenant))
+      } catch (error) {
+        if (refuseExisting && isUniqueViolation(error)) throw new TenantAlreadyExistsError(tenant.id)
+        throw error
+      }
       // Replace this tenant's domain set: drop the old rows, then insert the new
       // ones. A plain INSERT fails if another tenant already owns the domain.
       this.db.prepare('DELETE FROM tenant_domains WHERE tenant_id = ?').run(tenant.id)
@@ -77,7 +123,6 @@ export class SqliteTenantSource implements TenantSource {
       this.db.exec('ROLLBACK')
       throw error
     }
-    return tenant
   }
 
   async find(id: string): Promise<Tenant | null> {
@@ -126,7 +171,7 @@ export class SqliteTenantSource implements TenantSource {
  *
  * ```ts
  * const tenants = sqliteTenantSource('./data/tenants.db')
- * await tenants.save({ id: 'acme', name: 'Acme', domains: ['app.acme.com'] })
+ * await tenants.create({ id: 'acme', name: 'Acme', domains: ['app.acme.com'] })
  * tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'localhost' })] })
  * ```
  *

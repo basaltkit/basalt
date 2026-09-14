@@ -228,7 +228,7 @@ tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'basalt.a
 ### Durably — `@basaltkit/tenancy-sqlite` / `-prisma`
 
 For production, don't hand-roll the contract — a durable `TenantSource` persists
-tenants across a restart. Both ship `save`/`find`/`findByDomain`/`list`/`remove`:
+tenants across a restart. Both ship `create`/`save`/`find`/`findByDomain`/`list`/`remove`:
 
 ```ts
 import { sqliteTenantSource } from '@basaltkit/tenancy-sqlite'   // single node, zero-dep
@@ -238,6 +238,8 @@ const tenants = sqliteTenantSource('./data/tenants.db')
 
 // save() is an upsert — create or update a tenant. Any extra field round-trips.
 await tenants.save({ id: 'acme', name: 'Acme Inc', plan: 'pro', domains: ['app.acme.com'] })
+// create() only inserts — an id that already exists throws TenantAlreadyExistsError.
+await tenants.create({ id: 'globex', name: 'Globex' })
 
 tenancyPlugin({
   source: tenants,
@@ -245,14 +247,14 @@ tenancyPlugin({
 })
 ```
 
-`save` replaces the tenant's custom-domain set; a domain already owned by another
-tenant is rejected (routing must be unambiguous). See [Persistence](/guide/persistence).
+`save` and `create` replace the tenant's custom-domain set; a domain already owned
+by another tenant is rejected (routing must be unambiguous). See [Persistence](/guide/persistence).
 
 ::: tip Prisma-backed registry
 `prismaTenantSource(prisma)` stores the registry in the Postgres/MySQL database
 you already run — ideal for multiple instances sharing one tenant list. Add its
 two models with `basalt prisma:sync --push`, then pass your generated
-`PrismaClient`. Same `save`/`find`/`findByDomain`/`list`/`remove` surface.
+`PrismaClient`. Same `create`/`save`/`find`/`findByDomain`/`list`/`remove` surface.
 :::
 
 ### At sign-up — provision a tenant on demand
@@ -310,6 +312,17 @@ the moment it is saved — and its first request dies on a raw database error.
 Going through `tenancy.create()` is what closes that window.
 :::
 
+::: tip `create()` never overwrites an existing tenant
+An id that already exists — whatever its status — is refused with
+`TenantAlreadyExistsError` (`409 TENANT_ALREADY_EXISTS`) before anything is
+written: no hook fires and `onProvision` does not run, so a double-submitted
+signup cannot replace a tenant's owner or re-provision live storage. A tenant
+left `failed` (or still `provisioning`) is finished with `tenancy.provision(id)`,
+not by creating it again; an intentional update of the record is `source.save()`.
+The durable sources refuse the duplicate in the insert itself, so of two
+concurrent creates of the same id exactly one wins.
+:::
+
 `onProvision` runs inside the new tenant's context, so `ctx().tenant` and any
 tenant-scoped client resolve correctly — the same contract as `onMigrate` and
 `onSeed`. Seeding starter data belongs here too:
@@ -336,8 +349,8 @@ If it throws, the error reaches your caller and `tenancy:created` does **not**
 fire — but the tenant record was already written, because the source persists
 first. That half-state is deliberately not rolled back: not every
 `TenantSource` can delete, and a failed delete on top of a failed provision
-destroys the evidence. Write it so a retry can finish the job —
-`CREATE SCHEMA IF NOT EXISTS`, `migrate deploy`.
+destroys the evidence. Write it so a retry — `tenancy.provision(id)` — can
+finish the job: `CREATE SCHEMA IF NOT EXISTS`, `migrate deploy`.
 
 It also runs **inline**: an HTTP handler calling `create()` waits for the whole
 migration. That is fine for a schema and a handful of migrations, and wrong for
@@ -644,7 +657,7 @@ soon as `@basaltkit/cli` is present — no extra wiring:
 | Command | Needs | What it does |
 | --- | --- | --- |
 | `basalt tenant:list` | `source.list()` | Tabulates every tenant (scalar fields only) |
-| `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` | Persists a new tenant; every flag becomes a field |
+| `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` or `save()` | Persists a new tenant; every flag becomes a field. An existing id is refused (exit code 1) |
 | `basalt tenant:destroy <id> [--force] [--yes]` | `source.delete()` | Marks the tenant `deleting`, runs `onDeprovision` in its context, then removes the record. Asks first; `--yes` skips the question, `--force` removes the record even if teardown failed |
 | `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Runs your per-tenant migration hook inside each tenant's context |
 | `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Runs your per-tenant seed hook inside each tenant's context |
@@ -825,6 +838,7 @@ takeover.
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, or `forEach()` on a `TenantSource` without `list()` |
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning` or `failed`. 503, not 404: the tenant exists and the client may retry |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` on a source implementing neither `create()` nor `save()` — e.g. one backed by a static config file |
+| `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (or a source's `create()`) for an id that already exists. Nothing is written. A `failed`/`provisioning` tenant is retried with `tenancy.provision(id)`; an intentional update is `source.save()` |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` for a domain another tenant already registered |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` for a domain that isn't registered |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | A tenant acted on a domain belonging to a **different** tenant |
