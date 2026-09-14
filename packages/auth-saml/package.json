@@ -33,9 +33,9 @@
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
     "@node-saml/node-saml": "^5.1.0",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.1",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.0",
     "zod": "^4.5.4"
   },
   "publishConfig": {
