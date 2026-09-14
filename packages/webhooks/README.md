@@ -82,6 +82,8 @@ if (!valid) {
 }
 ```
 
+The header may carry several `v1=` signatures (e.g. a sender rotating its secret signs with both the new and the old one); `verifySignature` returns `true` when **any** of them matches your secret.
+
 ## Usage guide
 
 ### Event patterns
@@ -208,7 +210,7 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 | Function | Signature | Description |
 |---|---|---|
 | `signPayload` | `(body: string, secret: string, timestampSeconds: number) => string` | Generates the `t=<unix>,v1=<hmac-sha256>` header |
-| `verifySignature` | `(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds?) => boolean` | Verifies in constant time; rejects timestamps outside the tolerance |
+| `verifySignature` | `(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds?) => boolean` | Verifies in constant time; `true` if any `v1` matches (secret rotation); rejects timestamps outside the tolerance |
 | `matchesEvent` | `(patterns: string[], event: string) => boolean` | Tests whether an event matches the patterns |
 
 ### Other exports
