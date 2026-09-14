@@ -23,9 +23,10 @@ aligns a timer to the next minute. Every 60 seconds it runs a **tick**:
    entry still runs, and the process never crashes because a task threw.
 
 The scheduler fails **loud and early** everywhere it can: an invalid cron
-expression throws `CronParseError` at definition time, `.onOneServer()` without
-a lock fails the boot, and a lock-store failure counts as a task failure — never
-a silent no-op.
+expression throws `CronParseError` at definition time, an entry with two
+frequencies (or a malformed `.at()`) throws `ScheduleDefinitionError` at boot,
+`.onOneServer()` without a lock fails the boot, and a lock-store failure counts
+as a task failure — never a silent no-op.
 
 ## Define schedules
 
@@ -65,9 +66,9 @@ Every entry builder, at a glance:
 | `.everyMinutes(n)` | Minutes divisible by `n` (`*/n`). |
 | `.hourly()` | Minute 0 of every hour. |
 | `.daily()` / `.weekly()` / `.monthly()` | 00:00 daily / Sundays / the 1st — combine with `.at()`. |
-| `.at('HH:mm')` | Sets the time for `daily`/`weekly`/`monthly`. |
-| `.sundays()` … `.saturdays()` | Pins the day of week. |
-| `.cron('*/5 * * * *')` | Raw 5-field cron — the escape hatch, validated at definition time. |
+| `.at('HH:mm')` | Sets the time. Only with `daily`/`weekly`/`monthly` (or no frequency, meaning daily), once per entry. |
+| `.sundays()` … `.saturdays()` | Pins the day of week. Not with `.cron()`. |
+| `.cron('*/5 * * * *')` | Raw 5-field cron — the escape hatch, validated at definition time. It is the entry's frequency. |
 | `.timezone('Europe/Lisbon')` | Evaluates the cron in that IANA zone. Default `UTC`. |
 | `.withoutOverlapping()` | Skips a run while the previous one is still going (this process). |
 | `.onOneServer()` | Runs on one replica per tick — requires a `lock` (below). |
@@ -75,6 +76,33 @@ Every entry builder, at a glance:
 
 `schedule.call(name, fn)` runs a function; `schedule.job(JobDef, payload?)`
 dispatches a [queue job](/guide/queues) instead (see below).
+
+### One frequency per entry
+
+`everyMinute`, `everyMinutes`, `hourly`, `daily`, `weekly`, `monthly` and `cron`
+are **frequencies**, and an entry has exactly one. A second one throws
+`ScheduleDefinitionError` (code `SCHEDULE_CONFLICT`) while `define` runs, so the
+app fails at boot instead of quietly running on whichever call came last:
+
+```ts
+schedule.call('backup', doBackup).daily().monthly()
+// ✗ Schedule "backup": .monthly() conflicts with .daily() — an entry has one
+//   frequency. Use .monthly().at('HH:mm') instead.
+
+schedule.call('backup', doBackup).monthly().at('03:00')  // ✓ one frequency + a time
+```
+
+`.at('HH:mm')` refines a frequency, so the valid combinations are:
+
+| Chain | Valid? |
+| --- | --- |
+| `.daily().at()` / `.weekly().at()` / `.monthly().at()` | ✓ |
+| `.at()` with no frequency, or before `daily`/`weekly`/`monthly` | ✓ (the order doesn't matter) |
+| `.weekly().mondays().at('07:30')` | ✓ |
+| `.everyMinute()` / `.everyMinutes(n)` / `.hourly()` / `.cron()` + `.at()` | ✗ `SCHEDULE_CONFLICT` |
+| `.at()` twice | ✗ `SCHEDULE_CONFLICT` |
+| `.cron()` + `.mondays()` (either order) | ✗ `SCHEDULE_CONFLICT`: put the day in the expression |
+| `.at('25:00')`, `.at('ab')` | ✗ `SCHEDULE_INVALID_TIME`: hour 0–23, minute 0–59 |
 
 ## Timezones, overlap & failures
 
@@ -186,6 +214,8 @@ guard and `onFailure` handler still apply.
 | --- | --- | --- |
 | Boot throws `schedulerPlugin: an entry uses .onOneServer() but no 'lock' was configured.` | Fail-closed guard: without a lock the entry would silently run on every replica | Pass `schedulerPlugin({ lock })` with an atomic set-if-absent lock |
 | `CronParseError` (code `CRON_INVALID`) at definition | The cron expression uses unsupported syntax (names like `MON`), an out-of-range value, or a reversed range — it would otherwise silently never fire | Fix the expression; supported: `*`, `*/n`, single values, `a-b`, comma lists |
+| `ScheduleDefinitionError` (code `SCHEDULE_CONFLICT`) at boot | An entry chains two frequencies (`.daily().monthly()`), uses `.at()` after `everyMinute`/`everyMinutes`/`hourly`/`cron` or twice, or combines `.cron()` with a day-of-week modifier. Previously the last call silently won | Keep the one frequency you mean, e.g. `.monthly().at('03:00')`; for anything else use `.cron()` alone |
+| `ScheduleDefinitionError` (code `SCHEDULE_INVALID_TIME`) at boot | `.at()` got something other than `HH:mm` (hour 0–23, minute 0–59) | Fix the time string, e.g. `.at('03:00')` |
 | `AggregateError: Failure in N scheduled task(s)` | Tasks without `onFailure` threw during a tick; every due entry still ran and the process survived | Add `.onFailure()` to route each task's errors to your reporting |
 | A task runs N times at once across pods | The entry lacks `.onOneServer()` (or replicas point at different lock stores) | Mark it `.onOneServer()`; share one lock store across replicas |
 | An `.onOneServer()` task failed the tick while Redis was down | Fail closed: a lock-store failure is a task failure, never permission to run everywhere | Restore the lock store; the next minute's tick recovers |

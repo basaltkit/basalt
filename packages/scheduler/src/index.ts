@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { BasaltError, createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import type { JobDefinition } from '@basaltkit/queue'
 import { cronMatches, cronToString, parseCron, type CronFields } from './cron.js'
 
@@ -6,6 +6,34 @@ export { CronParseError, cronMatches, parseCron, fieldMatches, zonedParts } from
 export type { CronFields, ZonedParts } from './cron.js'
 
 type Task = () => void | Promise<void>
+
+/**
+ * A schedule entry was defined inconsistently. Thrown while the `define`
+ * callback builds the entry, so the app fails at boot instead of running a
+ * task on the wrong cadence.
+ *
+ * - `SCHEDULE_CONFLICT`: two frequencies on one entry (`.daily().monthly()`),
+ *   `.at()` with a frequency it can't refine (or called twice), or a
+ *   day-of-week modifier combined with `.cron()`.
+ * - `SCHEDULE_INVALID_TIME`: `.at()` received something other than `HH:mm`.
+ */
+export class ScheduleDefinitionError extends BasaltError {
+  constructor(code: 'SCHEDULE_CONFLICT' | 'SCHEDULE_INVALID_TIME', message: string) {
+    super(code, message)
+  }
+}
+
+type FrequencyKind = 'everyMinute' | 'everyMinutes' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'cron'
+
+/** Frequencies whose hour/minute `.at()` may set. */
+const TIME_FREQUENCIES: ReadonlySet<FrequencyKind> = new Set<FrequencyKind>(['daily', 'weekly', 'monthly'])
+
+const EVERY_MINUTE: CronFields = { minute: '*', hour: '*', dayOfMonth: '*', month: '*', dayOfWeek: '*' }
+
+const DAY_MODIFIERS = ['sundays', 'mondays', 'tuesdays', 'wednesdays', 'thursdays', 'fridays', 'saturdays'] as const
+
+const formatTime = ({ hour, minute }: { hour: number; minute: number }): string =>
+  `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 
 /**
  * Cross-replica mutex for `.onOneServer()` entries. `acquire` must be ATOMIC
@@ -31,15 +59,20 @@ export interface ScheduleLock {
  *
  * schedule.job(ReconcileBilling).daily().at('03:00').timezone('UTC')
  * schedule.call('purge-cache', () => cache.flush()).everyMinute().withoutOverlapping()
+ *
+ * An entry has exactly ONE frequency (`everyMinute`, `everyMinutes`, `hourly`,
+ * `daily`, `weekly`, `monthly`, `cron`); a second one throws
+ * {@link ScheduleDefinitionError} instead of silently replacing the first.
  */
 export class ScheduleEntry {
-  private fields: CronFields = {
-    minute: '*',
-    hour: '*',
-    dayOfMonth: '*',
-    month: '*',
-    dayOfWeek: '*',
-  }
+  /** Effective cron fields, recomputed from frequency, time and day of week. */
+  private fields: CronFields = { ...EVERY_MINUTE }
+  /** The single frequency call (`.daily()`, `.cron('…')`, …). */
+  private frequency: { call: string; kind: FrequencyKind; fields: CronFields } | undefined
+  /** The `.at('HH:mm')` call, if any. */
+  private time: { call: string; hour: number; minute: number } | undefined
+  /** The last day-of-week modifier (`.mondays()`, …), if any. */
+  private day: { call: string; value: number } | undefined
   private tz = 'UTC'
   private noOverlap = false
   private oneServer = false
@@ -54,52 +87,62 @@ export class ScheduleEntry {
   ) {}
 
   everyMinute(): this {
-    this.fields = { minute: '*', hour: '*', dayOfMonth: '*', month: '*', dayOfWeek: '*' }
-    return this
+    return this.setFrequency('everyMinute', '.everyMinute()', {})
   }
 
   everyMinutes(n: number): this {
-    this.everyMinute()
-    this.fields.minute = `*/${n}`
-    return this
+    return this.setFrequency('everyMinutes', `.everyMinutes(${n})`, { minute: `*/${n}` })
   }
 
   hourly(): this {
-    this.everyMinute()
-    this.fields.minute = '0'
-    return this
+    return this.setFrequency('hourly', '.hourly()', { minute: '0' })
   }
 
   daily(): this {
-    this.hourly()
-    this.fields.hour = '0'
-    return this
+    return this.setFrequency('daily', '.daily()', { minute: '0', hour: '0' })
   }
 
   weekly(): this {
-    this.daily()
-    this.fields.dayOfWeek = '0'
-    return this
+    return this.setFrequency('weekly', '.weekly()', { minute: '0', hour: '0', dayOfWeek: '0' })
   }
 
   monthly(): this {
-    this.daily()
-    this.fields.dayOfMonth = '1'
-    return this
+    return this.setFrequency('monthly', '.monthly()', { minute: '0', hour: '0', dayOfMonth: '1' })
   }
 
-  /** 'HH:mm' time — combines with daily/weekly/monthly. */
+  /**
+   * 'HH:mm' (or 'H:mm') time. Combines with daily/weekly/monthly, or with no
+   * frequency; throws after everyMinute/everyMinutes/hourly/cron and when
+   * called twice.
+   */
   at(time: string): this {
-    const [hour, minute] = time.split(':')
-    this.fields.hour = String(Number(hour))
-    this.fields.minute = String(Number(minute ?? 0))
-    return this
+    const call = `.at('${time}')`
+    const match = /^(\d{1,2}):(\d{2})$/.exec(time)
+    const hour = Number(match?.[1])
+    const minute = Number(match?.[2])
+    if (!match || hour > 23 || minute > 59) {
+      throw new ScheduleDefinitionError(
+        'SCHEDULE_INVALID_TIME',
+        `Schedule "${this.name}": invalid time in ${call} — expected 'HH:mm' (hour 0-23, minute 0-59).`,
+      )
+    }
+    if (this.time) this.conflict(call, this.time.call, 'an entry has one time.')
+    if (this.frequency && !TIME_FREQUENCIES.has(this.frequency.kind)) {
+      this.conflict(
+        call,
+        this.frequency.call,
+        this.frequency.kind === 'cron'
+          ? '.cron() is the full expression; put the time in it.'
+          : `.at() only combines with .daily(), .weekly() or .monthly(). Use .daily()${call} instead.`,
+      )
+    }
+    this.time = { call, hour, minute }
+    return this.compose()
   }
 
-  /** Raw cron expression (5 fields) — escape hatch. */
+  /** Raw cron expression (5 fields) — escape hatch. It is the entry's frequency. */
   cron(expression: string): this {
-    this.fields = parseCron(expression)
-    return this
+    return this.setFrequency('cron', `.cron('${expression}')`, parseCron(expression))
   }
 
   sundays(): this { return this.onDayOfWeek(0) }
@@ -170,8 +213,56 @@ export class ScheduleEntry {
   }
 
   private onDayOfWeek(day: number): this {
-    this.fields.dayOfWeek = String(day)
+    const call = `.${DAY_MODIFIERS[day]}()`
+    if (this.frequency?.kind === 'cron') {
+      this.conflict(call, this.frequency.call, '.cron() is the full expression; put the day of week in it.')
+    }
+    this.day = { call, value: day }
+    return this.compose()
+  }
+
+  /**
+   * Records the entry's one frequency. A second frequency used to silently
+   * overwrite the first (`.daily().monthly()` ran monthly); now it fails at
+   * definition time, i.e. at boot.
+   */
+  private setFrequency(kind: FrequencyKind, call: string, fields: Partial<CronFields>): this {
+    if (this.frequency) {
+      this.conflict(
+        call,
+        this.frequency.call,
+        TIME_FREQUENCIES.has(kind)
+          ? `an entry has one frequency. Use ${call}.at('${this.time ? formatTime(this.time) : 'HH:mm'}') instead.`
+          : 'an entry has one frequency. Keep only the one you mean, or use .cron() for a custom expression.',
+      )
+    }
+    if (this.time && !TIME_FREQUENCIES.has(kind)) {
+      this.conflict(call, this.time.call, '.at() only combines with .daily(), .weekly() or .monthly().')
+    }
+    if (kind === 'cron' && this.day) {
+      this.conflict(call, this.day.call, '.cron() is the full expression; put the day of week in it.')
+    }
+    this.frequency = { call, kind, fields: { ...EVERY_MINUTE, ...fields } }
+    return this.compose()
+  }
+
+  /** Frequency fields, overlaid with the `.at()` time and the day-of-week modifier. */
+  private compose(): this {
+    const fields = { ...(this.frequency?.fields ?? EVERY_MINUTE) }
+    if (this.time) {
+      fields.hour = String(this.time.hour)
+      fields.minute = String(this.time.minute)
+    }
+    if (this.day) fields.dayOfWeek = String(this.day.value)
+    this.fields = fields
     return this
+  }
+
+  private conflict(call: string, previous: string, hint: string): never {
+    throw new ScheduleDefinitionError(
+      'SCHEDULE_CONFLICT',
+      `Schedule "${this.name}": ${call} conflicts with ${previous} — ${hint}`,
+    )
   }
 }
 

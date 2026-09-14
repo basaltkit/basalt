@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { createApp, METADATA } from '@basaltkit/core'
 import { defineJob, QueueManager, SyncQueueDriver } from '@basaltkit/queue'
-import { SCHEDULER, Scheduler, schedulerPlugin } from '../src/index.js'
+import { SCHEDULER, ScheduleDefinitionError, Scheduler, schedulerPlugin } from '../src/index.js'
 
 const utc = (iso: string) => new Date(iso)
 
@@ -229,5 +229,113 @@ describe('cron field validation (Q-8 pin)', () => {
     for (const good of ['* * * * *', '*/15 0 1,15 * 1-5', '0 3 * * 0', '59 23 31 12 6']) {
       expect(() => parseCron(good), good).not.toThrow()
     }
+  })
+})
+
+describe('one frequency per entry (definition-time guard)', () => {
+  const definitionError = (define: (scheduler: Scheduler) => unknown): ScheduleDefinitionError => {
+    try {
+      define(new Scheduler())
+    } catch (error) {
+      expect(error).toBeInstanceOf(ScheduleDefinitionError)
+      return error as ScheduleDefinitionError
+    }
+    throw new Error('expected a ScheduleDefinitionError')
+  }
+
+  it('.daily().monthly() throws SCHEDULE_CONFLICT naming the entry and both calls', () => {
+    const error = definitionError((s) => s.call('backup', () => {}).daily().monthly())
+    expect(error.code).toBe('SCHEDULE_CONFLICT')
+    expect(error.message).toContain('Schedule "backup"')
+    expect(error.message).toContain('.monthly() conflicts with .daily()')
+    expect(error.message).toContain(".monthly().at('HH:mm')")
+  })
+
+  it('.daily().everyMinute() throws SCHEDULE_CONFLICT', () => {
+    const error = definitionError((s) => s.call('dump', () => {}).daily().everyMinute())
+    expect(error.code).toBe('SCHEDULE_CONFLICT')
+    expect(error.message).toContain('Schedule "dump"')
+    expect(error.message).toContain('.everyMinute() conflicts with .daily()')
+  })
+
+  it('.cron(...).daily() throws SCHEDULE_CONFLICT', () => {
+    const error = definitionError((s) => s.call('sync', () => {}).cron('*/5 * * * *').daily())
+    expect(error.code).toBe('SCHEDULE_CONFLICT')
+    expect(error.message).toContain(".daily() conflicts with .cron('*/5 * * * *')")
+  })
+
+  it('.hourly().at() and .at() twice throw SCHEDULE_CONFLICT', () => {
+    const afterHourly = definitionError((s) => s.call('x', () => {}).hourly().at('03:00'))
+    expect(afterHourly.code).toBe('SCHEDULE_CONFLICT')
+    expect(afterHourly.message).toContain(".at('03:00') conflicts with .hourly()")
+
+    const twice = definitionError((s) => s.call('x', () => {}).daily().at('03:00').at('04:00'))
+    expect(twice.code).toBe('SCHEDULE_CONFLICT')
+    expect(twice.message).toContain(".at('04:00') conflicts with .at('03:00')")
+  })
+
+  it('.at() after everyMinute/everyMinutes/cron, and a non-time frequency after .at(), throw', () => {
+    for (const define of [
+      (s: Scheduler) => s.call('x', () => {}).everyMinute().at('03:00'),
+      (s: Scheduler) => s.call('x', () => {}).everyMinutes(5).at('03:00'),
+      (s: Scheduler) => s.call('x', () => {}).cron('0 3 * * *').at('03:00'),
+      (s: Scheduler) => s.call('x', () => {}).at('03:00').hourly(),
+    ]) {
+      expect(definitionError(define).code).toBe('SCHEDULE_CONFLICT')
+    }
+  })
+
+  it('day-of-week modifiers conflict with .cron() in either order', () => {
+    const after = definitionError((s) => s.call('x', () => {}).cron('0 3 * * *').mondays())
+    expect(after.code).toBe('SCHEDULE_CONFLICT')
+    expect(after.message).toContain(".mondays() conflicts with .cron('0 3 * * *')")
+    expect(definitionError((s) => s.call('x', () => {}).fridays().cron('0 3 * * *')).code).toBe(
+      'SCHEDULE_CONFLICT',
+    )
+  })
+
+  it('.at() rejects malformed times with SCHEDULE_INVALID_TIME', () => {
+    for (const bad of ['25:00', 'ab', '03:60', '3', '03:5', '']) {
+      const error = definitionError((s) => s.call('x', () => {}).at(bad))
+      expect(error.code, bad).toBe('SCHEDULE_INVALID_TIME')
+    }
+  })
+
+  it('valid combinations still build the right cron', () => {
+    const scheduler = new Scheduler()
+    expect(scheduler.call('a', () => {}).monthly().at('03:00').describe().cron).toBe('0 3 1 * *')
+    expect(scheduler.call('b', () => {}).weekly().mondays().at('07:30').describe().cron).toBe('30 7 * * 1')
+    const entry = scheduler
+      .call('c', () => {})
+      .daily()
+      .at('03:00')
+      .timezone('Africa/Luanda')
+      .withoutOverlapping()
+      .onOneServer()
+    expect(entry.describe()).toEqual({ name: 'c', cron: '0 3 * * *', timezone: 'Africa/Luanda' })
+    expect(scheduler.call('d', () => {}).at('9:05').describe().cron).toBe('5 9 * * *')
+    expect(scheduler.call('e', () => {}).at('03:00').daily().describe().cron).toBe('0 3 * * *')
+    expect(scheduler.call('f', () => {}).hourly().fridays().describe().cron).toBe('0 * * * 5')
+  })
+
+  it('frequencies do not chain internally (weekly() alone does not trip the guard)', () => {
+    const scheduler = new Scheduler()
+    expect(scheduler.call('w', () => {}).weekly().describe().cron).toBe('0 0 * * 0')
+    expect(scheduler.call('m', () => {}).monthly().describe().cron).toBe('0 0 1 * *')
+    expect(scheduler.call('h', () => {}).hourly().describe().cron).toBe('0 * * * *')
+    expect(scheduler.call('n', () => {}).everyMinutes(15).describe().cron).toBe('*/15 * * * *')
+  })
+
+  it('a conflicting entry fails the app at boot', async () => {
+    await expect(
+      createApp({
+        plugins: [
+          schedulerPlugin({
+            autostart: false,
+            define: (schedule) => void schedule.call('backup', () => {}).daily().monthly(),
+          }),
+        ],
+      }).boot(),
+    ).rejects.toThrow(ScheduleDefinitionError)
   })
 })
