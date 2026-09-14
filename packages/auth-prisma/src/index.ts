@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { BasaltError } from '@basaltkit/core'
 import type {
   ApiKeyFilter,
   ApiKeyRecord,
@@ -338,51 +339,137 @@ const toApiKey = (r: PApiKey): ApiKeyRecord => {
   return rec
 }
 
+/**
+ * The database's `auth_api_keys` table is older than the store: a column the
+ * store reads or writes does not exist. `@basaltkit/auth-prisma` 1.5.0 added
+ * `expiresAt`; an app that regenerated its client without migrating (or, with
+ * schema-per-tenant, without migrating every tenant schema) would otherwise fail
+ * every API-key request with a raw Prisma `P2022`. The original error is `cause`.
+ */
+export class ApiKeySchemaOutdatedError extends BasaltError {
+  constructor(cause: unknown) {
+    super(
+      'AUTH_API_KEY_SCHEMA_OUTDATED',
+      'The "auth_api_keys" table is missing a column the API key store needs. ' +
+        '@basaltkit/auth-prisma 1.5.0 added the nullable column "auth_api_keys.expiresAt"; ' +
+        'add a migration for it (e.g. `prisma migrate dev --name add_api_key_expires_at`), which on PostgreSQL is: ' +
+        'ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3); ' +
+        'With schema-per-tenant the column must exist in EVERY tenant schema: add the migration to your ' +
+        'tenant migrations, then run `basalt tenant:migrate`.',
+      { cause },
+    )
+  }
+}
+
+// "Undefined column" codes: Prisma P2022, PostgreSQL 42703, MySQL 1054.
+const UNDEFINED_COLUMN_CODES = new Set<unknown>(['P2022', '42703', 1054, '1054', 'ER_BAD_FIELD_ERROR'])
+const MISSING_COLUMN_TEXT = /does not exist|no such column|unknown column|ColumnNotFound/i
+
+/**
+ * Whether `err` reports a missing `auth_api_keys` column. Every query here goes
+ * through the `authApiKey` delegate, so an undefined-column code can only mean
+ * that table is outdated. A driver-adapter error without a recognised code must
+ * name `expiresAt` in its message or meta, so unrelated failures are never
+ * relabelled. Nested `cause`s are followed a few levels deep.
+ */
+function isApiKeySchemaOutdated(err: unknown, depth = 0): boolean {
+  if (typeof err !== 'object' || err === null || depth > 3) return false
+  const e = err as {
+    code?: unknown
+    originalCode?: unknown
+    kind?: unknown
+    message?: unknown
+    meta?: unknown
+    cause?: unknown
+  }
+  if (UNDEFINED_COLUMN_CODES.has(e.code) || UNDEFINED_COLUMN_CODES.has(e.originalCode)) return true
+  let meta = ''
+  try {
+    meta = e.meta === undefined ? '' : JSON.stringify(e.meta)
+  } catch {
+    // unserializable meta: judge by the message alone
+  }
+  const text = [e.message, e.kind].filter((v) => typeof v === 'string').join(' ') + ' ' + meta
+  if (text.includes('expiresAt') && MISSING_COLUMN_TEXT.test(text)) return true
+  return isApiKeySchemaOutdated(e.cause, depth + 1)
+}
+
+/** A missing-column failure becomes an actionable error; anything else is returned untouched. */
+const apiKeyError = (err: unknown): unknown =>
+  isApiKeySchemaOutdated(err) ? new ApiKeySchemaOutdatedError(err) : err
+
 export class PrismaApiKeyStore implements ApiKeyStore {
   constructor(private readonly client: PrismaAuthClient) {}
 
+  // Each query is wrapped so an un-migrated database surfaces as
+  // AUTH_API_KEY_SCHEMA_OUTDATED instead of a raw "column does not exist".
+
   async create(record: ApiKeyRecord): Promise<void> {
-    await this.client.authApiKey.create({
-      data: {
-        id: record.id,
-        name: record.name,
-        prefix: record.prefix,
-        hash: record.hash,
-        tenantId: record.tenantId ?? null,
-        userId: record.userId ?? null,
-        scopes: record.scopes,
-        createdAt: at(record.createdAt),
-        expiresAt: record.expiresAt !== undefined ? at(record.expiresAt) : null,
-        lastUsedAt: record.lastUsedAt !== undefined ? at(record.lastUsedAt) : null,
-        revokedAt: record.revokedAt !== undefined ? at(record.revokedAt) : null,
-      },
-    })
+    try {
+      await this.client.authApiKey.create({
+        data: {
+          id: record.id,
+          name: record.name,
+          prefix: record.prefix,
+          hash: record.hash,
+          tenantId: record.tenantId ?? null,
+          userId: record.userId ?? null,
+          scopes: record.scopes,
+          createdAt: at(record.createdAt),
+          expiresAt: record.expiresAt !== undefined ? at(record.expiresAt) : null,
+          lastUsedAt: record.lastUsedAt !== undefined ? at(record.lastUsedAt) : null,
+          revokedAt: record.revokedAt !== undefined ? at(record.revokedAt) : null,
+        },
+      })
+    } catch (err) {
+      throw apiKeyError(err)
+    }
   }
 
   async findByHash(hash: string): Promise<ApiKeyRecord | null> {
-    const r = await this.client.authApiKey.findUnique({ where: { hash } })
-    return r ? toApiKey(r) : null
+    try {
+      const r = await this.client.authApiKey.findUnique({ where: { hash } })
+      return r ? toApiKey(r) : null
+    } catch (err) {
+      throw apiKeyError(err)
+    }
   }
 
   async findById(id: string): Promise<ApiKeyRecord | null> {
-    const r = await this.client.authApiKey.findUnique({ where: { id } })
-    return r ? toApiKey(r) : null
+    try {
+      const r = await this.client.authApiKey.findUnique({ where: { id } })
+      return r ? toApiKey(r) : null
+    } catch (err) {
+      throw apiKeyError(err)
+    }
   }
 
   async list(filter: ApiKeyFilter): Promise<ApiKeyRecord[]> {
     const where: { revokedAt: null; tenantId?: string; userId?: string } = { revokedAt: null }
     if (filter.tenantId !== undefined) where.tenantId = filter.tenantId
     if (filter.userId !== undefined) where.userId = filter.userId
-    const rows = await this.client.authApiKey.findMany({ where, orderBy: { createdAt: 'asc' } })
-    return rows.map(toApiKey)
+    try {
+      const rows = await this.client.authApiKey.findMany({ where, orderBy: { createdAt: 'asc' } })
+      return rows.map(toApiKey)
+    } catch (err) {
+      throw apiKeyError(err)
+    }
   }
 
   async touch(id: string, at_: number): Promise<void> {
-    await this.client.authApiKey.update({ where: { id }, data: { lastUsedAt: at(at_) } })
+    try {
+      await this.client.authApiKey.update({ where: { id }, data: { lastUsedAt: at(at_) } })
+    } catch (err) {
+      throw apiKeyError(err)
+    }
   }
 
   async revoke(id: string, at_: number): Promise<void> {
-    await this.client.authApiKey.update({ where: { id }, data: { revokedAt: at(at_) } })
+    try {
+      await this.client.authApiKey.update({ where: { id }, data: { revokedAt: at(at_) } })
+    } catch (err) {
+      throw apiKeyError(err)
+    }
   }
 }
 

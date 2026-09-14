@@ -134,6 +134,16 @@ authPlugin({
 apiKeysPlugin({ store: s.apiKeys, users: s.users })
 ```
 
+::: warning Upgrading to auth-prisma 1.5
+1.5.0 added a nullable `expiresAt` column to `AuthApiKey` (`auth_api_keys`) for
+API key expiration. Regenerating the client is not enough: add a migration
+(`prisma migrate dev --name add_api_key_expires_at`), which on PostgreSQL is
+`ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3);`. With
+schema-per-tenant, apply it in **every** tenant schema — add it to your tenant
+migrations and run `basalt tenant:migrate`. Until then API-key requests fail
+with `AUTH_API_KEY_SCHEMA_OUTDATED`. `auth-sqlite` adds the column itself.
+:::
+
 ::: tip Bring your own UserSource
 No database? Implement the `UserSource` contract yourself — four methods over
 your tables. `update` is optional but **required** for email verification and
@@ -754,6 +764,7 @@ users in.
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars under `NODE_ENV=production` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`) |
 | `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` for a key outside the caller's tenant/user scope — a 404, never a 403, so key ids can't be probed |
+| `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: the database's `auth_api_keys` is missing a column (usually `expiresAt`, added in 1.5.0) — migrate it, in every tenant schema with schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | The passkey challenge expired or was already used (they are single-use) |
 | `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | The verifier rejected the browser's response |
 | `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for |

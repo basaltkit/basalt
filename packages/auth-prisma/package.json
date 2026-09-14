@@ -24,6 +24,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@basaltkit/core": "workspace:^"
+  },
   "peerDependencies": {
     "@basaltkit/auth": "workspace:^"
   },

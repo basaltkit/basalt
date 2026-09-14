@@ -135,6 +135,17 @@ authPlugin({
 apiKeysPlugin({ store: s.apiKeys, users: s.users })
 ```
 
+::: warning Atualizar para o auth-prisma 1.5
+O 1.5.0 acrescentou uma coluna `expiresAt` anulável ao `AuthApiKey`
+(`auth_api_keys`) para a expiração das API keys. Regenerar o client não chega:
+acrescenta uma migração (`prisma migrate dev --name add_api_key_expires_at`), que
+em PostgreSQL é `ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3);`.
+Com schema-per-tenant, aplica-a em **todos** os schemas de tenant — acrescenta-a
+às tuas migrações de tenant e corre `basalt tenant:migrate`. Até lá, os pedidos
+com API key falham com `AUTH_API_KEY_SCHEMA_OUTDATED`. O `auth-sqlite` acrescenta
+a coluna sozinho.
+:::
+
 ::: tip Dica
 Traz o teu próprio UserSource. Não tens base de dados? Implementa o contrato `UserSource`
 tu mesmo — quatro métodos sobre as tuas tabelas. `update` é opcional mas **obrigatório**
@@ -754,6 +765,7 @@ autenticar os utilizadores.
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres com `NODE_ENV=production` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`) |
 | `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` para uma chave fora do âmbito tenant/utilizador de quem chama — um 404, nunca um 403, para que os ids das chaves não possam ser sondados |
+| `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: a `auth_api_keys` da base de dados não tem uma coluna (normalmente `expiresAt`, acrescentada no 1.5.0) — migra-a, em todos os schemas de tenant com schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | O desafio da passkey expirou ou já foi usado (são de uso único) |
 | `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | O verifier rejeitou a resposta do browser |
 | `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | O `finishRegistration` recebeu um `userId` diferente daquele para quem o desafio foi emitido |
