@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { createApp } from '@basaltkit/core'
+import { describe, expect, it, vi } from 'vitest'
+import { createApp, runWithContext, type Container } from '@basaltkit/core'
 import {
   Realtime,
   RealtimeHub,
@@ -17,6 +17,7 @@ import {
 declare module '@basaltkit/core' {
   interface BasaltHooks {
     'test:note_created': { tenantId: string; note: { id: number } }
+    'test:matter_opened': { matter: { id: number; folder?: string } }
   }
 }
 
@@ -232,6 +233,183 @@ describe('Realtime service + events bridge', () => {
     await app.hooks.emit('test:note_created', { tenantId: 'acme', note: { id: 7 } })
     expect(conn.received).toEqual([{ channel: 'notes', event: 'created', data: { id: 7 } }])
     await app.shutdown()
+  })
+})
+
+describe('bridge tenant from context (schema-/database-per-tenant apps)', () => {
+  const subscriber = async (app: { container: Container }, tenantId: string, channel: string) => {
+    const hub = app.container.get(REALTIME_HUB)
+    const conn = new FakeConnection(`c-${tenantId}`, tenantId, 'u1')
+    hub.register(conn)
+    await hub.subscribe(conn.id, channel)
+    return conn
+  }
+
+  it('a rule without `tenant` delivers to the tenant in context', async () => {
+    const skipped: unknown[] = []
+    const app = await createApp({
+      plugins: [
+        realtimePlugin({
+          onBridgeSkipped: (info) => void skipped.push(info),
+          bridge: [
+            bridgeRule({
+              hook: 'test:matter_opened',
+              channel: (p) => `matters:${p.matter.folder ?? 'all'}`,
+              event: 'opened',
+              data: (p) => p.matter,
+            }),
+          ],
+        }),
+      ],
+    }).boot()
+    const acme = await subscriber(app, 'acme', 'matters:all')
+    const globex = await subscriber(app, 'globex', 'matters:all')
+
+    await runWithContext({ tenant: { id: 'acme' } }, () =>
+      app.hooks.emit('test:matter_opened', { matter: { id: 1 } }),
+    )
+    expect(acme.received).toEqual([{ channel: 'matters:all', event: 'opened', data: { id: 1 } }])
+    expect(globex.received).toHaveLength(0)
+    expect(skipped).toHaveLength(0)
+    await app.shutdown()
+  })
+
+  it('without a tenant in context: not delivered, reported as no-tenant', async () => {
+    const skipped: unknown[] = []
+    const app = await createApp({
+      plugins: [
+        realtimePlugin({
+          onBridgeSkipped: (info) => void skipped.push(info),
+          bridge: [
+            bridgeRule({ hook: 'test:matter_opened', channel: 'matters', event: 'opened' }),
+            bridgeRule({
+              hook: 'test:matter_opened',
+              channel: (p) => `matters:${p.matter.folder!.toUpperCase()}`,
+              event: 'opened:folder',
+            }),
+          ],
+        }),
+      ],
+    }).boot()
+    const acme = await subscriber(app, 'acme', 'matters')
+
+    await app.hooks.emit('test:matter_opened', { matter: { id: 1 } })
+    await runWithContext({ requestId: 'r1' }, () =>
+      app.hooks.emit('test:matter_opened', { matter: { id: 2 } }),
+    )
+    expect(acme.received).toHaveLength(0)
+    expect(skipped).toEqual([
+      { hook: 'test:matter_opened', channel: 'matters', event: 'opened', reason: 'no-tenant' },
+      // a function channel that throws falls back to the placeholder
+      { hook: 'test:matter_opened', channel: '<dynamic>', event: 'opened:folder', reason: 'no-tenant' },
+      { hook: 'test:matter_opened', channel: 'matters', event: 'opened', reason: 'no-tenant' },
+      { hook: 'test:matter_opened', channel: '<dynamic>', event: 'opened:folder', reason: 'no-tenant' },
+    ])
+    await app.shutdown()
+  })
+
+  it('the default onBridgeSkipped warns once per rule, not once per event', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const app = await createApp({
+        plugins: [
+          realtimePlugin({
+            bridge: [
+              bridgeRule({ hook: 'test:matter_opened', channel: 'matters', event: 'opened' }),
+              bridgeRule({ hook: 'test:matter_opened', channel: 'matters', event: 'reopened' }),
+            ],
+          }),
+        ],
+      }).boot()
+      for (let i = 0; i < 5; i++) await app.hooks.emit('test:matter_opened', { matter: { id: i } })
+      expect(warn).toHaveBeenCalledTimes(2) // one per rule
+      expect(String(warn.mock.calls[0]![0])).toContain(
+        '[basalt:realtime] bridge skipped (hook "test:matter_opened" -> channel "matters", event "opened")',
+      )
+      expect(String(warn.mock.calls[1]![0])).toContain('event "reopened"')
+      await app.shutdown()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a `tenant` returning undefined skips silently (explicit opt-out)', async () => {
+    const skipped: unknown[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const app = await createApp({
+        plugins: [
+          realtimePlugin({
+            onBridgeSkipped: (info) => void skipped.push(info),
+            bridge: [
+              bridgeRule({ hook: 'test:note_created', tenant: () => undefined, channel: 'notes', event: 'created' }),
+            ],
+          }),
+        ],
+      }).boot()
+      const acme = await subscriber(app, 'acme', 'notes')
+      // even with a tenant in context, the explicit resolver wins
+      await runWithContext({ tenant: { id: 'acme' } }, () =>
+        app.hooks.emit('test:note_created', { tenantId: 'acme', note: { id: 1 } }),
+      )
+      await app.hooks.emit('test:note_created', { tenantId: 'acme', note: { id: 2 } })
+      expect(acme.received).toHaveLength(0)
+      expect(skipped).toHaveLength(0)
+      expect(warn).not.toHaveBeenCalled()
+      await app.shutdown()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('an explicit `tenant` wins over the tenant in context', async () => {
+    const app = await createApp({
+      plugins: [
+        realtimePlugin({
+          bridge: [
+            bridgeRule({
+              hook: 'test:note_created',
+              tenant: (p) => p.tenantId,
+              channel: 'notes',
+              event: 'created',
+              data: (p) => p.note,
+            }),
+          ],
+        }),
+      ],
+    }).boot()
+    const acme = await subscriber(app, 'acme', 'notes')
+    const globex = await subscriber(app, 'globex', 'notes')
+
+    await runWithContext({ tenant: { id: 'globex' } }, () =>
+      app.hooks.emit('test:note_created', { tenantId: 'acme', note: { id: 9 } }),
+    )
+    expect(acme.received).toEqual([{ channel: 'notes', event: 'created', data: { id: 9 } }])
+    expect(globex.received).toHaveLength(0)
+    await app.shutdown()
+  })
+
+  it('type-checks tenant/channel/data against the hook payload', () => {
+    bridgeRule({
+      hook: 'test:matter_opened',
+      // @ts-expect-error — the payload has no tenantId
+      tenant: (p) => p.tenantId,
+      channel: 'matters',
+      event: 'opened',
+    })
+    bridgeRule({
+      hook: 'test:matter_opened',
+      // @ts-expect-error — matter.id is a number, channel must be a string
+      channel: (p) => p.matter.id,
+      event: 'opened',
+    })
+    bridgeRule({
+      hook: 'test:matter_opened',
+      channel: 'matters',
+      event: 'opened',
+      // @ts-expect-error — the payload has no note
+      data: (p) => p.note,
+    })
   })
 })
 

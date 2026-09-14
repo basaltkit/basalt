@@ -27,4 +27,5 @@ export {
   REALTIME_HUB,
   type RealtimePluginOptions,
   type BridgeRule,
+  type BridgeSkippedInfo,
 } from './plugin.js'
