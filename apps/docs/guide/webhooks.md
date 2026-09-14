@@ -284,6 +284,12 @@ need to sign manually. `verifySignature` returns `false` — never throws — fo
 malformed header, a missing `v1`, a timestamp outside the tolerance, or a
 mismatched digest, so a receiver can treat it as a single boolean.
 
+A header may carry **several** `v1=` entries — a sender rotating its secret
+signs with both the new and the old one (`t=…,v1=<new>,v1=<old>`), as Stripe
+does. `verifySignature` returns `true` when **any** of them matches your secret,
+so a receiver keeps working whether it has already switched secrets or not.
+Unknown schemes (e.g. `v0=`) are ignored; a duplicate `t` is rejected.
+
 ## Delivery semantics
 
 - Transient failures (`5xx`, network errors, timeouts) retry with exponential
@@ -516,7 +522,7 @@ and `basalt:events`, and drains the outbox once on shutdown (best-effort).
 | Export | Signature | Purpose |
 | --- | --- | --- |
 | `signPayload` | `(body, secret, timestampSeconds) => string` | Builds `t=…,v1=…` — sign a payload by hand |
-| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Constant-time verify in a receiver; never throws |
+| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Constant-time verify in a receiver; `true` if any `v1` matches; never throws |
 | `assertDeliverableUrl` | `(url, options?) => Promise<void>` | Reject an SSRF-unsafe URL at registration time; throws `WebhookUrlBlockedError` |
 | `resolveAndValidate` | `(url, options?) => Promise<ValidatedTarget>` | The same check, returning the resolved addresses and the one to pin |
 | `isPrivateIp` | `(ip) => boolean` | The range predicate itself; anything that isn't a public IP literal is `true` |

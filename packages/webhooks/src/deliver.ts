@@ -20,17 +20,39 @@ export function signPayload(body: string, secret: string, timestampSeconds: numb
   return `t=${timestampSeconds},v1=${signature}`
 }
 
-/** Verifies a signature header (for tests and receiver SDKs). */
+/**
+ * Verifies a signature header (for tests and receiver SDKs). The header may
+ * carry several `v1=` entries — a sender rotating its secret signs with both the
+ * new and the old one — and is valid when ANY of them matches, as Stripe
+ * receivers do. Unknown schemes are ignored; a malformed header (no/duplicate
+ * `t`, no `v1`) is `false`. Never throws.
+ */
 export function verifySignature(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds = Math.floor(Date.now() / 1000)): boolean {
-  const parts = Object.fromEntries(header.split(',').map((p) => p.split('=') as [string, string]))
-  const timestamp = Number(parts['t'])
-  const provided = parts['v1']
-  if (!Number.isFinite(timestamp) || !provided) return false
+  let rawTimestamp: string | undefined
+  const provided: string[] = []
+  for (const part of header.split(',')) {
+    const eq = part.indexOf('=')
+    if (eq <= 0) continue
+    const key = part.slice(0, eq).trim()
+    const value = part.slice(eq + 1).trim()
+    if (key === 't') {
+      if (rawTimestamp !== undefined) return false
+      rawTimestamp = value
+    } else if (key === 'v1' && value) {
+      provided.push(value)
+    }
+  }
+  const timestamp = Number(rawTimestamp)
+  if (!rawTimestamp || !Number.isFinite(timestamp) || provided.length === 0) return false
   if (Math.abs(nowSeconds - timestamp) > toleranceSeconds) return false
-  const expected = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')
-  const a = Buffer.from(provided)
-  const b = Buffer.from(expected)
-  return a.length === b.length && timingSafeEqual(a, b)
+  const expected = Buffer.from(createHmac('sha256', secret).update(`${rawTimestamp}.${body}`).digest('hex'))
+  // Check every candidate (no early exit) so timing doesn't reveal which one matched.
+  let valid = false
+  for (const candidate of provided) {
+    const a = Buffer.from(candidate)
+    if (a.length === expected.length && timingSafeEqual(a, expected)) valid = true
+  }
+  return valid
 }
 
 export interface DeliveryResult {
