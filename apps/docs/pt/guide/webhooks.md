@@ -287,6 +287,13 @@ de assinar manualmente. `verifySignature` devolve `false` — nunca lança — p
 header malformado, um `v1` em falta, um timestamp fora da tolerância ou um digest
 diferente, por isso um recetor pode tratá-lo como um único booleano.
 
+Um header pode trazer **vários** `v1=` — um emissor a rodar o segredo assina com
+o novo e com o antigo (`t=…,v1=<novo>,v1=<antigo>`), como faz a Stripe.
+`verifySignature` devolve `true` quando **qualquer** um bate com o teu segredo,
+por isso o recetor continua a funcionar quer já tenha trocado de segredo quer
+não. Esquemas desconhecidos (ex. `v0=`) são ignorados; um `t` duplicado é
+rejeitado.
+
 ## Semântica de entrega
 
 - Falhas transitórias (`5xx`, erros de rede, timeouts) fazem retry com backoff
@@ -523,7 +530,7 @@ shutdown (best-effort).
 | Export | Assinatura | Porquê |
 | --- | --- | --- |
 | `signPayload` | `(body, secret, timestampSeconds) => string` | Constrói `t=…,v1=…` — assina um payload à mão |
-| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; nunca lança |
+| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; `true` se qualquer `v1` bater; nunca lança |
 | `assertDeliverableUrl` | `(url, options?) => Promise<void>` | Rejeita um URL inseguro para SSRF no momento do registo; lança `WebhookUrlBlockedError` |
 | `resolveAndValidate` | `(url, options?) => Promise<ValidatedTarget>` | A mesma verificação, devolvendo os endereços resolvidos e o que fixar |
 | `isPrivateIp` | `(ip) => boolean` | O próprio predicado de gamas; tudo o que não seja um IP público literal é `true` |
