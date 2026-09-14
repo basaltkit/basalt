@@ -8,7 +8,8 @@
 ::: warning Dois contratos mudaram
 O `@basaltkit/files` revê o contrato do seu store, e o `app.server` do
 `@basaltkit/testing` passa a ser esperado com `await`. As duas edições são
-mecânicas — ver [Atualização](#atualizacao).
+mecânicas — ver [Atualização](#atualizacao). As apps Prisma que usam API keys
+precisam também de uma coluna nova.
 :::
 
 O Basalt 1.10 é a versão das **metades que faltavam**. A aplicação que escreveu o
@@ -159,6 +160,26 @@ edições:
 
 O `prisma:sync` aprende o domínio dos ficheiros, por isso os seus modelos juntam-se
 como os de todos os outros.
+
+### As apps Prisma acrescentam uma coluna para a expiração das API keys
+
+O `@basaltkit/auth-prisma` 1.5.0 acrescentou uma coluna `expiresAt` anulável ao
+`AuthApiKey` (`auth_api_keys`) para a nova expiração opcional das chaves.
+Regenerar o client não chega — a base de dados precisa da coluna, ou todos os
+pedidos com API key falham. Acrescenta uma migração
+(`prisma migrate dev --name add_api_key_expires_at`), que em PostgreSQL é:
+
+```sql
+ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3);
+```
+
+Com schema-per-tenant a coluna tem de existir em **todos** os schemas de tenant:
+acrescenta a migração às tuas migrações de tenant e depois corre
+`basalt tenant:migrate`. Uma suite de testes que nunca emite uma API key não dá
+por nada. Desde o `auth-prisma` 1.5.1 uma coluna em falta lança
+`AUTH_API_KEY_SCHEMA_OUTDATED` com estas instruções em vez de um `P2022` cru do
+Prisma. O `@basaltkit/auth-sqlite` não precisa de nada: acrescenta a coluna
+sozinho quando a base de dados é aberta.
 
 ### Dois pacotes estreiam em 0.1.0
 

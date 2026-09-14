@@ -1,6 +1,7 @@
 import { Auth } from '@basaltkit/auth'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  ApiKeySchemaOutdatedError,
   PrismaApiKeyStore,
   PrismaAuthTokenStore,
   type PrismaAuthClient,
@@ -419,5 +420,93 @@ describe('F-1 · Prisma refresh/auth token consumption is a compare-and-swap', (
 
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
     expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1)
+  })
+})
+
+describe('PrismaApiKeyStore · un-migrated auth_api_keys (auth-prisma 1.5.0 added expiresAt)', () => {
+  // A client whose every authApiKey call rejects with `error`.
+  const failingStore = (error: unknown): PrismaApiKeyStore => {
+    const reject = async (): Promise<never> => {
+      throw error
+    }
+    return new PrismaApiKeyStore({
+      authApiKey: { findUnique: reject, findMany: reject, create: reject, update: reject },
+    } as unknown as PrismaAuthClient)
+  }
+
+  const rejection = (p: Promise<unknown>): Promise<unknown> =>
+    p.then(
+      () => expect.unreachable('expected a rejection'),
+      (e: unknown) => e,
+    )
+
+  const record = { id: 'k1', name: 'k', prefix: 'mk_ab', hash: 'h1', scopes: ['*'], createdAt: Date.now() }
+  const methods: Array<[string, (s: PrismaApiKeyStore) => Promise<unknown>]> = [
+    ['create', (s) => s.create(record)],
+    ['findByHash', (s) => s.findByHash('h1')],
+    ['findById', (s) => s.findById('k1')],
+    ['list', (s) => s.list({ tenantId: 't1' })],
+    ['touch', (s) => s.touch('k1', 1)],
+    ['revoke', (s) => s.revoke('k1', 1)],
+  ]
+
+  // The shape of PrismaClientKnownRequestError for a missing column.
+  const p2022 = (): Error =>
+    Object.assign(new Error('The column `auth_api_keys.expiresAt` does not exist in the current database.'), {
+      code: 'P2022',
+      meta: { modelName: 'AuthApiKey', column: 'auth_api_keys.expiresAt' },
+      clientVersion: '6.0.0',
+    })
+
+  const expectOutdated = (err: unknown, cause: unknown): void => {
+    expect(err).toBeInstanceOf(ApiKeySchemaOutdatedError)
+    expect((err as ApiKeySchemaOutdatedError).code).toBe('AUTH_API_KEY_SCHEMA_OUTDATED')
+    expect((err as Error).cause).toBe(cause)
+  }
+
+  it.each(methods)('%s rethrows a P2022 as AUTH_API_KEY_SCHEMA_OUTDATED with the original as cause', async (_, call) => {
+    const original = p2022()
+    const err = await rejection(call(failingStore(original)))
+    expectOutdated(err, original)
+    const message = (err as Error).message
+    expect(message).toContain('1.5.0')
+    expect(message).toContain('auth_api_keys.expiresAt')
+    expect(message).toContain('ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3);')
+    expect(message).toContain('EVERY tenant schema')
+    expect(message).toContain('basalt tenant:migrate')
+  })
+
+  it('recognises driver-adapter errors that name expiresAt without a Prisma code', async () => {
+    const byMessage = new Error('column "expiresAt" does not exist')
+    expectOutdated(await rejection(failingStore(byMessage).findByHash('h1')), byMessage)
+
+    const byCause = Object.assign(new Error('driver adapter error'), {
+      cause: { kind: 'ColumnNotFound', column: 'expiresAt', originalCode: '42703' },
+    })
+    expectOutdated(await rejection(failingStore(byCause).list({})), byCause)
+
+    const byMeta = Object.assign(new Error('Invalid query'), {
+      meta: { driverAdapterError: { cause: { kind: 'ColumnNotFound', column: 'expiresAt' } } },
+    })
+    expectOutdated(await rejection(failingStore(byMeta).findById('k1')), byMeta)
+  })
+
+  it.each(methods)('%s passes unrelated errors through unchanged', async (_, call) => {
+    const unique = Object.assign(new Error('Unique constraint failed on the fields: (`hash`)'), {
+      code: 'P2002',
+      meta: { target: ['hash'] },
+    })
+    expect(await rejection(call(failingStore(unique)))).toBe(unique)
+
+    // "does not exist" without expiresAt (e.g. a missing table) is not relabelled
+    const missingTable = new Error('relation "auth_api_keys" does not exist')
+    expect(await rejection(call(failingStore(missingTable)))).toBe(missingTable)
+  })
+
+  it('leaves the success path unchanged', async () => {
+    const store = new PrismaApiKeyStore(makeFakeClient())
+    await store.create({ ...record, expiresAt: 5_000 })
+    expect(await store.findByHash('h1')).toMatchObject({ id: 'k1', expiresAt: 5_000 })
+    expect((await store.list({})).map((k) => k.id)).toEqual(['k1'])
   })
 })

@@ -47,6 +47,32 @@ Then `prisma migrate dev` (or `prisma db push`) and `prisma generate`.
 > database without scalar-list support (e.g. SQLite), model them as `Json` and
 > adapt — or just use `@basaltkit/auth-sqlite`.
 
+## Upgrading to 1.5
+
+1.5.0 added optional API key expiration, stored in a new nullable column:
+`AuthApiKey.expiresAt` (`auth_api_keys.expiresAt`). Copying the model and
+running `prisma generate` is **not enough** — the database needs the column too,
+or every API-key request fails. Create a migration:
+
+```bash
+prisma migrate dev --name add_api_key_expires_at
+```
+
+On PostgreSQL the generated migration is:
+
+```sql
+ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3);
+```
+
+**Schema-per-tenant:** `auth_api_keys` lives in each tenant schema, so the column
+must be added in **every** tenant schema. Add the migration to your tenant
+migrations, then run `basalt tenant:migrate`. A test suite that never issues an
+API key will stay green while production fails, so check this explicitly.
+
+Until the column exists, `PrismaApiKeyStore` throws `ApiKeySchemaOutdatedError`
+(code `AUTH_API_KEY_SCHEMA_OUTDATED`) with these instructions, keeping the
+original Prisma error (`P2022`) as `cause`.
+
 ## 2. Wire the stores
 
 `prismaAuthStores(prisma)` returns every store named to drop straight into the
