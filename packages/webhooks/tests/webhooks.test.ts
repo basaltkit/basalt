@@ -26,6 +26,29 @@ describe('signing', () => {
     expect(verifySignature(header, '{"a":1}', 'other', 300, 1000)).toBe(false) // wrong secret
     expect(verifySignature(header, '{"a":1}', 'whsec', 300, 5000)).toBe(false) // stale
   })
+
+  it('accepts a header with several v1 signatures when any matches (secret rotation)', () => {
+    const body = '{"a":1}'
+    const v1 = (secret: string) => signPayload(body, secret, 1000).split(',')[1]
+    const newThenOld = `t=1000,${v1('whsec_new')},${v1('whsec_old')}`
+    const oldThenNew = `t=1000,${v1('whsec_old')},${v1('whsec_new')}`
+    for (const header of [newThenOld, oldThenNew]) {
+      expect(verifySignature(header, body, 'whsec_new', 300, 1000)).toBe(true)
+      expect(verifySignature(header, body, 'whsec_old', 300, 1000)).toBe(true)
+      expect(verifySignature(header, body, 'whsec_other', 300, 1000)).toBe(false)
+      expect(verifySignature(header, '{"a":2}', 'whsec_new', 300, 1000)).toBe(false)
+    }
+  })
+
+  it('ignores unknown schemes and spaces, and rejects malformed headers without throwing', () => {
+    const body = '{"a":1}'
+    const valid = signPayload(body, 'whsec', 1000)
+    const [t, v1] = valid.split(',')
+    expect(verifySignature(`${t}, v0=deadbeef, ${v1}`, body, 'whsec', 300, 1000)).toBe(true)
+    for (const header of ['', 'garbage', ',,,', `${v1}`, `${t}`, `t=abc,${v1}`, `t=,${v1}`, `${t},v1=`, `${t},t=1001,${v1}`]) {
+      expect(verifySignature(header, body, 'whsec', 300, 1000)).toBe(false)
+    }
+  })
 })
 
 describe('matchesEvent + store', () => {
