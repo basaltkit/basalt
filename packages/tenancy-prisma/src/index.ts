@@ -1,4 +1,4 @@
-import type { Tenant, TenantSource } from '@basaltkit/tenancy'
+import { TenantAlreadyExistsError, type Tenant, type TenantSource } from '@basaltkit/tenancy'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/tenancy` `TenantSource` for
@@ -34,6 +34,7 @@ export interface PrismaTenancyClient {
   tenant: {
     findUnique(a: any): Promise<PTenant | null>
     findMany(a: any): Promise<PTenant[]>
+    create(a: any): Promise<PTenant>
     upsert(a: any): Promise<PTenant>
     deleteMany(a: any): Promise<{ count: number }>
   }
@@ -58,10 +59,53 @@ export class PrismaTenantSource implements TenantSource {
    * Insert or update a tenant and replace its custom-domain set. Domains are
    * globally unique — a domain already owned by a *different* tenant is rejected
    * up front (before any write), so routing stays unambiguous.
+   *
+   * An upsert replaces the whole record. That is right for an intentional
+   * update and for status transitions; it is wrong for creating a tenant, which
+   * is what `create` is for.
    */
   async save(tenant: Tenant): Promise<Tenant> {
+    const domains = await this.claimableDomains(tenant)
+    await this.client.tenant.upsert({
+      where: { id: tenant.id },
+      create: { id: tenant.id, data: tenant as object },
+      update: { data: tenant as object },
+    })
+    await this.replaceDomains(tenant.id, domains)
+    return tenant
+  }
+
+  /**
+   * Insert a NEW tenant and its custom-domain set; an existing id throws
+   * `TenantAlreadyExistsError` and leaves that tenant untouched.
+   *
+   * A plain `create`, not a find-then-upsert: the primary key is what refuses
+   * the duplicate, so of two concurrent creates of the same id exactly one
+   * wins — which no read in application code can guarantee. This is what
+   * `tenancy.create()` calls.
+   *
+   * Domains are pre-flighted exactly as in `save`, before the insert, so a
+   * domain conflict writes nothing either.
+   */
+  async create(tenant: Tenant): Promise<Tenant> {
+    const domains = await this.claimableDomains(tenant)
+    try {
+      await this.client.tenant.create({ data: { id: tenant.id, data: tenant as object } })
+    } catch (error) {
+      // P2002 is Prisma's unique-constraint violation. Only the tenant insert
+      // is inside this try, so the constraint can only be the tenant's id.
+      if ((error as { code?: unknown } | null)?.code === 'P2002') {
+        throw new TenantAlreadyExistsError(tenant.id)
+      }
+      throw error
+    }
+    await this.replaceDomains(tenant.id, domains)
+    return tenant
+  }
+
+  /** The tenant's domains, after refusing any owned by a different tenant — before any write. */
+  private async claimableDomains(tenant: Tenant): Promise<string[]> {
     const domains = domainsOf(tenant)
-    // Pre-flight the conflict so a rejected save writes nothing.
     for (const domain of domains) {
       const owner = await this.client.tenantDomain.findUnique({ where: { domain } })
       if (owner && owner.tenantId !== tenant.id) {
@@ -70,19 +114,17 @@ export class PrismaTenantSource implements TenantSource {
         )
       }
     }
-    await this.client.tenant.upsert({
-      where: { id: tenant.id },
-      create: { id: tenant.id, data: tenant as object },
-      update: { data: tenant as object },
-    })
-    // Replace this tenant's domain set.
-    await this.client.tenantDomain.deleteMany({ where: { tenantId: tenant.id } })
+    return domains
+  }
+
+  /** Replace this tenant's domain set. */
+  private async replaceDomains(tenantId: string, domains: string[]): Promise<void> {
+    await this.client.tenantDomain.deleteMany({ where: { tenantId } })
     if (domains.length > 0) {
       await this.client.tenantDomain.createMany({
-        data: domains.map((domain) => ({ domain, tenantId: tenant.id })),
+        data: domains.map((domain) => ({ domain, tenantId })),
       })
     }
-    return tenant
   }
 
   async find(id: string): Promise<Tenant | null> {
@@ -140,7 +182,7 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  *
  * ```ts
  * const tenants = prismaTenantSource(prisma)
- * await tenants.save({ id: 'acme', name: 'Acme', domains: ['app.acme.com'] })
+ * await tenants.create({ id: 'acme', name: 'Acme', domains: ['app.acme.com'] })
  * tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'localhost' })] })
  * ```
  */
