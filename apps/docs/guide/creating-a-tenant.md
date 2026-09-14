@@ -124,6 +124,10 @@ extra field you pass is stored and comes back unchanged:
 await tenants.save({ id: 'acme', name: 'Acme Inc', plan: 'pro', domains: ['app.acme.com'] })
 ```
 
+When you mean *only* create — never touch a tenant that already exists — call
+`create()` instead. It inserts, and an existing `id` throws
+`TenantAlreadyExistsError` (409) with the stored tenant left exactly as it was.
+
 That's it. The tenant is now in your database, `acme.yourapp.com` (or the custom
 domain `app.acme.com`) resolves to it, and it's still there after a restart.
 
@@ -225,6 +229,13 @@ tenancyPlugin({ source, resolvers, onProvision })
 If provisioning is slow enough to outlive the request, add
 `provision: 'deferred'`: `create()` then returns immediately and the tenant
 answers **503** until a job calls `tenancy.provision(id)`.
+
+`create()` refuses an id that already exists — whatever its status — with
+`TenantAlreadyExistsError` (**409**), before writing anything or running
+`onProvision`. A user who double-submits the form, or picks an id someone else
+already has, gets a conflict instead of overwriting that tenant. A tenant whose
+provisioning failed is not re-created either: finish it with
+`tenancy.provision(id)`.
 
 And here's the route that requires a signed-in user and calls it. `meta.auth`
 tells Basalt this route needs authentication; `ctx().user` is the logged-in user:
