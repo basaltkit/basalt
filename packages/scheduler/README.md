@@ -92,6 +92,20 @@ schedule.call('i', task).mondays().at('09:00')  // days of the week: sundays()�
 
 `at('HH:mm')` combines with `daily()`/`weekly()`/`monthly()` — it sets the hour and minute.
 
+**One frequency per entry.** `everyMinute`, `everyMinutes`, `hourly`, `daily`, `weekly`, `monthly` and `cron` are frequencies, and an entry has exactly one. Chaining a second one throws `ScheduleDefinitionError` (code `SCHEDULE_CONFLICT`) while the entry is defined, so the app fails at boot instead of silently running on whichever call came last:
+
+```ts
+schedule.call('backup', task).daily().monthly()
+// throws: Schedule "backup": .monthly() conflicts with .daily() — an entry has one
+//         frequency. Use .monthly().at('HH:mm') instead.
+```
+
+The same guard covers the other ambiguous chains:
+
+- `.at()` is valid with `daily()`/`weekly()`/`monthly()` or with no frequency (the order doesn't matter), once per entry. After `everyMinute()`, `everyMinutes(n)`, `hourly()` or `cron()`, or a second time, it throws `SCHEDULE_CONFLICT`.
+- `sundays()`…`saturdays()` combine with any fluent frequency, but not with `cron()` (in either order). The expression already has its day-of-week field.
+- A malformed time (`at('25:00')`, `at('ab')`, `at('3')`) throws `SCHEDULE_INVALID_TIME`. The accepted format is `H:mm`/`HH:mm`, hour 0–23, minute 0–59.
+
 ### Direct cron expression
 
 When the fluent API isn't enough, pass raw cron (5 fields; supports `*`, `*/n` steps, `a-b` ranges and `a,b,c` lists):
@@ -260,6 +274,7 @@ Exported for tooling and tests; you don't usually need them:
 | `fieldMatches` | `(field: string, value: number) => boolean` | Does a field (`*`, `*/n`, `a-b`, `a,b,c`, value) accept the number? |
 | `zonedParts` | `(date: Date, timeZone = 'UTC') => ZonedParts` | Breaks the instant down into minute/hour/day/month/day-of-week in the timezone. |
 | `CronParseError` | class (`BasaltError`, code `CRON_INVALID`) | Invalid cron expression. |
+| `ScheduleDefinitionError` | class (`BasaltError`, codes `SCHEDULE_CONFLICT` / `SCHEDULE_INVALID_TIME`) | Inconsistent entry definition (two frequencies, invalid `.at()`). |
 | `CronFields`, `ZonedParts` | types | Cron fields as strings; numeric parts of the instant. |
 
 ### Token
@@ -271,6 +286,8 @@ Exported for tooling and tests; you don't usually need them:
 | Error | Code | When |
 |---|---|---|
 | `CronParseError` | `CRON_INVALID` | An expression passed to `.cron()` (or built internally) isn't 5 fields, uses unsupported syntax (`MON`, `@daily`, `?`, `L`), has a reversed range (`5-1`), a step below 1, or a value outside its field's bounds. Extends `BasaltError`; raised at **definition** time, so a typo fails at boot rather than becoming a task that silently never fires. |
+| `ScheduleDefinitionError` | `SCHEDULE_CONFLICT` | An entry chains a second frequency (`.daily().monthly()`, `.cron(...).daily()`), calls `.at()` after `everyMinute()`/`everyMinutes()`/`hourly()`/`cron()` or twice, or combines `.cron()` with a day-of-week modifier. The message names the entry and both calls. Extends `BasaltError`; raised at **definition** time (boot). Before, the last call silently won. |
+| `ScheduleDefinitionError` | `SCHEDULE_INVALID_TIME` | `.at()` received something other than `H:mm`/`HH:mm` with hour 0–23 and minute 0–59. Before, it silently produced `NaN` fields. |
 | `Error` (plain) | — | At `boot`, when an entry uses `.onOneServer()` but no `lock` was configured. See [Boot-time enforcement](#boot-time-enforcement). |
 | `AggregateError` | — (built-in) | From `tick()`, when one or more due entries failed without an `onFailure` handler — or when a `.onOneServer()` entry's `lock.acquire` rejected. All due entries still ran; `error.errors` holds each failure. Swallowed by the automatic timer path so a failing task can't kill the process. |
 
