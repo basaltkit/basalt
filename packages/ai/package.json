@@ -37,7 +37,7 @@
   "dependencies": {
     "@basaltkit/cli": "workspace:^",
     "@basaltkit/generator": "workspace:^",
-    "zod": "^4.5.4"
+    "zod": "^4.6.4"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
