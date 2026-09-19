@@ -25,7 +25,7 @@
   "dependencies": {
     "@basaltkit/core": "workspace:^",
     "@basaltkit/http": "workspace:^",
-    "fastify": "^5.12.3"
+    "fastify": "^5.12.5"
   },
   "peerDependencies": {
     "zod": "^4.0.0"
@@ -35,7 +35,7 @@
     "@types/node": "^26.5.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "publishConfig": {
     "access": "public"
