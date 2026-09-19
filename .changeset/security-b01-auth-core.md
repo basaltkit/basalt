@@ -1,5 +1,5 @@
 ---
-'@basaltkit/auth': minor
+'@basaltkit/auth': major
 '@basaltkit/auth-prisma': minor
 '@basaltkit/auth-sqlite': minor
 ---

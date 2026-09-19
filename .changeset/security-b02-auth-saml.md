@@ -1,5 +1,5 @@
 ---
-'@basaltkit/auth-saml': minor
+'@basaltkit/auth-saml': major
 ---
 
 Security hardening (secure-by-default changes):

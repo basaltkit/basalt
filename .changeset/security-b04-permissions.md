@@ -1,5 +1,5 @@
 ---
-'@basaltkit/permissions': minor
+'@basaltkit/permissions': major
 ---
 
 Security hardening (B04):

@@ -2,7 +2,7 @@
 '@basaltkit/events': minor
 '@basaltkit/events-sqlite': minor
 '@basaltkit/events-prisma': minor
-'@basaltkit/webhooks': minor
+'@basaltkit/webhooks': major
 '@basaltkit/webhooks-sqlite': minor
 '@basaltkit/webhooks-prisma': minor
 '@basaltkit/sdk': patch
