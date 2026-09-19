@@ -129,6 +129,60 @@ tenant prefix or defeat prefix-based `list()` isolation. Keys that start with
 `StorageInvalidKeyError` (`STORAGE_INVALID_KEY`). Ordinary nested keys like
 `avatars/123/pic.png` are untouched.
 
+### Large files: streaming, server-side copy and stat
+
+`put`/`get` move whole buffers, which is the wrong shape for a 2 GB video or a
+database dump. Four **optional driver capabilities** cover that case — `local`,
+`s3`, `azure` and `gcs` implement all four; a driver that does not throws a
+clear `STORAGE_*_UNSUPPORTED` error, and `disk.supports(capability)` tells you
+in advance.
+
+```ts
+import { createWriteStream } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
+
+// Upload without ever holding the body: Node Readable, web ReadableStream or
+// any AsyncIterable<Uint8Array>. maxBytes is enforced WHILE it streams.
+await disk.putStream('imports/2026.csv', request.raw, {
+  contentType: 'text/csv',
+  contentLength: 48_213,        // when the client declared one
+  maxBytes: 200 * 1024 * 1024,
+})
+
+// Download as a stream — consume it or destroy() it, never abandon it.
+await pipeline(await disk.getStream('imports/2026.csv'), createWriteStream('/tmp/2026.csv'))
+
+// Server-side copy: the bytes never reach this process (S3 CopyObject, Azure
+// copy-from-URL, GCS file.copy, local fs.copyFile).
+await disk.copy('drafts/a.pdf', 'final/a.pdf')
+await disk.copy('drafts/a.pdf', 'archive/a.pdf', { disk: storage.disk('cold') })
+
+// Metadata without a download (HeadObject / getProperties / getMetadata).
+const { size, contentType, etag, lastModified } = await disk.stat('final/a.pdf')
+```
+
+Same safety rules as `put`: keys are validated and tenant-prefixed (fail-closed
+without a tenant), `allowedContentTypes` is checked before a single byte is
+read, and past `maxBytes` the upload is aborted with `STORAGE_TOO_LARGE` and the
+source is destroyed (Node) or cancelled (web stream).
+
+Notes worth knowing:
+
+- **S3 needs a length.** `PutObject` cannot send a body of unknown size, so
+  `putStream` wants a `contentLength` (streamed straight through) or a
+  `maxBytes` (buffered up to that cap, bounded memory). With neither it throws
+  `STORAGE_STREAM_LENGTH_REQUIRED`; for unbounded streams drive
+  `@aws-sdk/lib-storage`'s multipart `Upload` yourself. Azure and GCS chunk
+  streams of unknown length natively.
+- **`copy` falls back.** Across two different drivers (or one without a
+  server-side copy) it streams `getStream` → `putStream`, and finally
+  `get` → `put`. Pass `{ requireServerSide: true }` to make a fallback an error
+  instead of a quiet download-and-re-upload.
+- Azure's `syncCopyFromURL` is limited to **256 MiB** per copy.
+- A failed streaming upload may leave a partial object on backends that cannot
+  roll one back (`local` removes it). Delete the key when that matters —
+  `@basaltkit/files` already does.
+
 ### Listing, checking and deleting
 
 ```ts
@@ -296,6 +350,11 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | `exists` | `exists(path: string): Promise<boolean>` | Checks whether the file exists. |
 | `delete` | `delete(path: string): Promise<boolean>` | Deletes; `true` if it existed. |
 | `list` | `list(prefix?: string): Promise<string[]>` | Lists paths under the prefix (recursive, sorted). Prefix defaults to `''`. |
+| `putStream` | `putStream(path: string, source: StreamSource, options: PutStreamInput): Promise<void>` | Streams a body to the backend; `maxBytes` enforced mid-stream. Throws `PutStreamUnsupportedError` if the driver can't. |
+| `getStream` | `getStream(path: string): Promise<Readable>` | Reads the object as a stream — **consume or `destroy()` it**. Throws `GetStreamUnsupportedError` if the driver can't. |
+| `copy` | `copy(from: string, to: string, options?: CopyOptions): Promise<void>` | Server-side copy where possible, else `getStream`→`putStream`, else `get`→`put`. Both keys are validated and scoped. |
+| `stat` | `stat(path: string): Promise<StorageStat>` | `{ size, contentType?, etag?, lastModified? }` without downloading. Throws `StatUnsupportedError` if the driver can't. |
+| `supports` | `supports(capability): boolean` | Whether the driver implements `temporaryUrl` / `temporaryUploadUrl` / `putStream` / `getStream` / `copy` / `stat`. |
 | `temporaryUrl` | `temporaryUrl(path: string, expiresIn: DurationInput, options?: TemporaryUrlOptions): Promise<string>` | Pre-signed URL, served `attachment` unless `{ disposition: 'inline' }`; throws `TemporaryUrlUnsupportedError` if the driver doesn't support it. |
 | `temporaryUploadUrl` | `temporaryUploadUrl(path: string, options: TemporaryUploadUrlOptions): Promise<TemporaryUploadUrl>` | Pre-signed direct-upload URL: `{ url, method: 'PUT', headers, expiresAt, key }`. Throws `TemporaryUploadUrlUnsupportedError` if the driver doesn't support it. |
 | `image` | `image(path: string): ImagePipeline` | Opens the lazy image pipeline for `path`. |
@@ -317,11 +376,39 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | `maxBytes` | `number` | — (uncapped) | Facade-enforced upload cap. Over it → `STORAGE_TOO_LARGE`, before the driver runs. Opt-in — set it on user-supplied content. |
 | `allowedContentTypes` | `readonly string[]` | — (anything) | Facade-enforced allowlist. A missing or unlisted `contentType` → `STORAGE_CONTENT_TYPE`. Exact matches only, no wildcards (use `@basaltkit/files` for `image/*`). |
 
+#### `PutStreamInput`
+
+Extends `PutOptions` (`maxBytes`, `allowedContentTypes`) with:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `contentType` | `string` | — (required) | The type stored with the object, checked against `allowedContentTypes` before any byte is read. |
+| `contentLength` | `number` | — | Exact body size when known. **S3 needs this** (or `maxBytes`) — see [Large files](#large-files-streaming-server-side-copy-and-stat). |
+
+#### `CopyOptions`
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `disk` | `Disk` | the source disk | Destination disk. The key is scoped against *that* disk. |
+| `contentType` | `string` | the source's | Content type for the destination object. |
+| `maxBytes` | `number` | — | Cap for a fallback copy (the only one whose bytes pass through this process). |
+| `requireServerSide` | `boolean` | `false` | Throw `CopyUnsupportedError` instead of falling back to a download-and-re-upload. |
+
+#### `StorageStat`
+
+| Field | Type | Notes |
+|---|---|---|
+| `size` | `number` | Bytes. |
+| `contentType` | `string \| undefined` | Not reported by `local` (the filesystem stores none). |
+| `etag` | `string \| undefined` | As the backend returns it, quoting included. Not reported by `local`. |
+| `lastModified` | `Date \| undefined` | `mtime` on `local`. |
+
 #### `TemporaryUrlOptions`
 
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `disposition` | `'attachment' \| 'inline'` | `'attachment'` | How the signed URL serves the object. Leave it alone for user-uploaded content; `'inline'` only when top-level rendering is deliberate. |
+| `endpoint` | `string` | the driver's own | Sign for another host of the **same** bucket (see below). S3 only; Azure/GCS refuse it. |
 
 #### `TemporaryUploadUrlOptions`
 
@@ -333,6 +420,7 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | `checksumSha256` | `string` (base64) | — | SHA-256 of the body; signed and verified by S3, refused by GCS/Azure. |
 | `maxBytes` | `number` | — | Facade cap on the declared `contentLength` (which becomes mandatory) → `STORAGE_TOO_LARGE`. |
 | `allowedContentTypes` | `readonly string[]` | — | Facade allowlist for `contentType` → `STORAGE_CONTENT_TYPE`. |
+| `endpoint` | `string` | the driver's own | Sign for another host of the **same** bucket — an internal service name, a CDN alias — when the process that uploads reaches the bucket under a different name than this one does (`http://minio:9000` vs the public endpoint). Validated: absolute `http(s)`, no credentials, no query/fragment → `STORAGE_SIGNING_ENDPOINT_INVALID` (400). A **deployment** value, never client input: a signature minted for a host you do not control is a credential handed to that host. S3 signs for it; Azure and GCS refuse it (their SDKs derive the URL from the account/bucket host). A driver-level default is available as `s3Disk({ signingEndpoint })`. |
 
 Invalid options (missing/malformed type, non-integer length, malformed checksum, `maxBytes` without `contentLength`) → `StorageUploadUrlInvalidError` (`400 STORAGE_UPLOAD_URL_INVALID`).
 
@@ -381,6 +469,8 @@ Dependency injection token: `app.container.get(STORAGE)` returns the `Storage`.
 | `endpoint` | `string` | No | — | Custom endpoint — set this to use MinIO/R2. |
 | `credentials` | `{ accessKeyId: string; secretAccessKey: string }` | No | credentials from the AWS environment | Explicit credentials. |
 | `forcePathStyle` | `boolean` | No | `true` when there's an `endpoint`, otherwise `false` | URLs in the form `http://host/bucket/key` (required by MinIO). |
+| `serverSideEncryption` | `'AES256' \| { kms: string }` | No | — | SSE sent with every put and signed into every upload URL. |
+| `signingEndpoint` | `string` | No | — | Default host pre-signed URLs are signed for, when it differs from the one this process talks to. A per-call `endpoint` wins. |
 
 ### `class LocalStorageDriver` (Advanced)
 
@@ -388,7 +478,15 @@ Dependency injection token: `app.container.get(STORAGE)` returns the `Storage`.
 
 ### `interface StorageDriver` (Advanced)
 
-Contract for building your own driver: `name` (readable string, used in errors), `put`, `get`, `exists`, `delete`, `list`, `temporaryUrl?` (optional, receives the expiration in milliseconds) and `disconnect`.
+Contract for building your own driver. Required: `name` (readable string, used
+in errors), `put`, `get`, `exists`, `delete`, `list`, `disconnect`. Optional
+capabilities, each surfaced by `disk.supports(...)`: `temporaryUrl`,
+`temporaryUploadUrl`, `putStream` (receives **one normalized Node `Readable`**
+that already enforces `maxBytes`), `getStream`, `copy` and `stat`.
+
+A driver that cannot honour a `TemporaryUrlOptions.endpoint` override MUST
+throw the unsupported error rather than ignore it — a URL signed for the wrong
+host is a silently broken one.
 
 ### Errors
 
@@ -400,7 +498,14 @@ Contract for building your own driver: `name` (readable string, used in errors),
 | `StorageTooLargeError` | `STORAGE_TOO_LARGE` | 500 | `put()` content exceeds the `maxBytes` you passed. |
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | 500 | `put()` `contentType` is missing from, or absent in, `allowedContentTypes`. |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | 500 | `storage.disk('name')` for a disk that isn't declared. |
-| `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | 500 | `temporaryUrl()` on a driver without support (e.g. `local`). |
+| `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | 500 | `temporaryUrl()` on a driver without support (e.g. `local`), or with an `endpoint` override the driver cannot sign for. |
+| `TemporaryUploadUrlUnsupportedError` | `STORAGE_UPLOAD_URL_UNSUPPORTED` | 500 | `temporaryUploadUrl()` on a driver without support, or with an option it cannot bind. |
+| `StorageSigningEndpointInvalidError` | `STORAGE_SIGNING_ENDPOINT_INVALID` | **400** | The `endpoint` override is not an absolute `http(s)` URL, or carries credentials/query/fragment. |
+| `PutStreamUnsupportedError` | `STORAGE_PUT_STREAM_UNSUPPORTED` | 500 | `putStream()` on a driver without the capability. |
+| `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | 500 | `getStream()` on a driver without the capability. |
+| `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | 500 | `copy({ requireServerSide: true })` with no server-side copy available. |
+| `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | 500 | `stat()` on a driver without the capability. |
+| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` | **400** | `putStream()` on S3 with neither `contentLength` nor `maxBytes`. |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | 500 | An image-pipeline terminal ran with no `imageProcessor` configured. |
 
 All extend `BasaltError` from `@basaltkit/core` and carry the `code` above.

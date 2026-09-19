@@ -135,14 +135,14 @@ mudam o que está lá dentro:
 
 | Caminho | Conteúdo |
 | --- | --- |
-| `src/env.ts` | `defineEnv` sobre `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` com auth) |
+| `src/env.ts` | `defineEnv` sobre `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` com auth), com `{ prefix: 'MY_SAAS' }` — cada variável é lida primeiro como `MY_SAAS_<NOME>`, com recuo para o nome simples (vê [O `--env-file` nunca sobrepõe variáveis exportadas](#o-env-file-nunca-sobrepoe-variaveis-exportadas)) |
 | `src/app.ts` | `buildApp()` — config, logger, eventos, headers de segurança + um rate limit global, depois tenancy/auth/faturação/MCP/CLI conforme escolhido. Com tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (pedidos autenticados para um tenant de que o utilizador não é membro recebem `403`) e um seed só de dev que adiciona quem se regista ao tenant `demo` |
 | `src/routes.ts` | `GET /` (um índice amigável) e `GET /health` |
 | `src/server.ts` | Arranca, resolve o `FASTIFY`, escuta e encerra em `SIGINT`/`SIGTERM` |
 | `src/dev.ts` | A entrada do `pnpm dev`: define `NODE_ENV=development` se ainda não estiver definido e carrega o `server.ts` |
 | `tests/app.test.ts` | Um smoke test que arranca a app e chama `/` e `/health` |
 | `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — um `NODE_ENV` não definido conta como produção), `test`, `typecheck` — mais `basalt` com `--cli`. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
-| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` e o README avisam da [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
+| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` usa os nomes com prefixo da app e, com o README, explica a [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
 | `bin/basalt.ts` | Com `--cli`: o ponto de entrada da CLI que liga os geradores e o `prisma:sync` |
 | `.mcp.json` | Com `--mcp`: regista a ponte `basalt-ai-mcp`, **só de desenvolvimento**, para clientes MCP |
 | `web/…` | Com `--ui`: o frontend React + shadcn, membro do workspace pnpm |
@@ -168,8 +168,45 @@ isto morde em silêncio — num terminal onde outro projeto exportou `DATABASE_U
 ou `PORT`, a app arranca contra *essa* base de dados ou porta e só falha no
 primeiro pedido que lhe toca.
 
-- Dá aos nomes genéricos um **prefixo próprio da app** — `MY_SAAS_DATABASE_URL`,
-  não `DATABASE_URL` (o `.env.example` sugere um derivado do nome do projeto).
+**A correcção que o scaffold aplica: um prefixo próprio da app.** O `src/env.ts`
+passa `prefix` ao `defineEnv`, derivado do nome do projeto (`my-saas` →
+`MY_SAAS`), e o `.env.example` usa os nomes com prefixo:
+
+```ts
+// src/env.ts — gerado
+export const env = defineEnv(
+  {
+    PORT: z.coerce.number().default(3000),
+    HOST: z.string().default('0.0.0.0'),
+    LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
+    APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-please-change-me' }),
+  },
+  { prefix: 'MY_SAAS' },
+)
+```
+
+```bash
+# .env.example — gerado
+MY_SAAS_PORT=3000
+MY_SAAS_HOST=0.0.0.0
+MY_SAAS_LOG_LEVEL=info
+NODE_ENV=development            # nunca leva prefixo — convenção do Node
+# MY_SAAS_APP_SECRET=           # com auth
+```
+
+Cada variável é lida primeiro como `MY_SAAS_<NOME>` e **recua** para o nome
+simples `<NOME>`, por isso um deployment que já exporta os nomes genéricos
+continua a arrancar — enquanto um `PORT` perdido na tua shell deixa de ganhar.
+As chaves do shape não mudam — a app continua a ler `env.PORT`. Para eliminar o
+recuo e exigir apenas os nomes com prefixo, escreve
+`prefix: { value: 'MY_SAAS', fallback: false }`. Quando falta uma variável, o
+relatório nomeia o que foi procurado —
+`MY_SAAS_DATABASE_URL (or DATABASE_URL): Required`. Regras completas:
+[Configuração → Prefixos próprios da app](/pt/guide/config#prefixos-proprios-da-app).
+
+Dois hábitos que continuam a ajudar:
+
 - Na dúvida, `env | grep DATABASE_URL` antes do `pnpm dev`, ou arranca com o
   ambiente limpo: `env -u DATABASE_URL pnpm dev`.
 - Quando ligares uma base de dados, regista o seu alvo no arranque (host e nome
@@ -278,9 +315,60 @@ contigo.
 | `--no-register` | `make:resource` | Salta a ligação automática ao `src/app.ts` |
 | `--public` | `make:resource`, `make:routes`, `make:test` | Rotas sem `meta.auth`, abertas a pedidos anónimos (alias `--no-auth`). Usa apenas para um recurso deliberadamente público |
 | `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Força o âmbito por tenant ligado ou desligado (por predefinição: ligado quando o `package.json` depende de `@basaltkit/tenancy`) |
+| `--crud` / `--no-crud` | `make:service` | Força o serviço CRUD ou o mínimo (por predefinição: CRUD quando o repositório e o schema irmãos já estão na diretoria de destino) |
 
 Os artefactos individuais estão disponíveis como `make:schema`,
 `make:repository`, `make:service`, `make:plugin`, `make:routes` e `make:test`.
+
+### Serviços que não são CRUD
+
+Um serviço CRUD delega num repositório irmão e importa o schema irmão. Gerado
+sozinho, onde esses ficheiros não existem, não compilava (`TS2307: Cannot find
+module './invoice.repository.js'`) — por isso o `make:service` olha primeiro
+para a diretoria de destino:
+
+- `<name>.repository.ts` **e** `<name>.schema.ts` já lá estão (depois de
+  `make:resource`, ou escritos por ti) → o serviço CRUD, como antes;
+- falta um deles → um **serviço mínimo**: a classe, o seu token de injeção
+  `createToken` e um construtor sem dependências, sem importar nada além de
+  `@basaltkit/core`. Compila tal como é escrito e traz um TODO a apontar para o
+  `make:resource` para a vertical CRUD.
+
+É esta a forma para orquestração, regras de domínio, transações, agendadores —
+os serviços que nada têm a ver com um repositório.
+
+```bash
+pnpm basalt make:service Billing            # mínimo: não há repositório ao lado
+pnpm basalt make:service Invoice --crud     # força a forma CRUD
+pnpm basalt make:service Invoice --no-crud  # força a forma mínima
+```
+
+O `make:resource` não muda: a vertical recebe sempre o serviço CRUD, porque
+gera o repositório e o schema no mesmo lote.
+
+### Um artefacto de cada vez: o aviso dos ficheiros irmãos
+
+O serviço é o único artefacto com uma forma que se aguenta sozinha. Os outros
+são membros de uma vertical e importam-se uns aos outros — o plugin precisa do
+repositório e do serviço, as rotas precisam do serviço e do schema, o teste
+precisa do plugin e das rotas, o repositório precisa do schema. Gerar um deles
+sozinho continua a escrever o ficheiro (o irmão pode ser a próxima coisa que
+escreves à mão), mas o gerador passa a dizer o que ele referencia e não
+encontra:
+
+```
+Generated 1 file(s):
+  src/modules/invoice/invoice.plugin.ts
+Warning: src/modules/invoice/invoice.plugin.ts imports 2 file(s) that do not exist yet:
+  src/modules/invoice/invoice.repository.ts
+  src/modules/invoice/invoice.service.ts
+  Generate the whole vertical with `basalt make:resource Invoice`, or write them yourself — until then this file does not compile.
+```
+
+O `make:schema` nunca avisa (não importa nada do módulo) e o `make:resource`
+também não (escreve-os todos). Programaticamente, a mesma lista é
+`missingSiblings(kind, name, options, { baseDir })`, e
+`expectedSiblings(kind, names(name))` é a tabela estática por tipo.
 
 O que é verdade do projeto inteiro — e não de uma invocação — configura-se onde
 os comandos são registados, incluindo o cliente Prisma contra o qual os
@@ -343,7 +431,8 @@ vê [Filas e jobs](/pt/guide/queues).
   gerado a `plugins` e as rotas ao adaptador; de resto os ficheiros gerados
   estão completos.
 - **A app liga-se à base de dados / porta errada** — uma variável exportada na
-  tua shell ganha ao `--env-file`. Vê
+  tua shell ganha ao `--env-file`. Define os nomes com prefixo da app
+  (`MY_SAAS_PORT`) que o scaffold declara, não os genéricos. Vê
   [O `--env-file` nunca sobrepõe variáveis exportadas](#o-env-file-nunca-sobrepoe-variaveis-exportadas).
 - **O `pnpm basalt …` começa com um `pnpm install`** (ou falha offline) — é o
   `verifyDepsBeforeRun` do pnpm 11. Vê

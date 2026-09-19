@@ -135,12 +135,12 @@ Always:
 my-app/
 ├── package.json          # scripts: dev, start, test, typecheck (+ basalt with --cli)
 ├── tsconfig.json         # strict TypeScript, ESM
-├── .env.example          # PORT, HOST, LOG_LEVEL, NODE_ENV (+ APP_SECRET with auth) + the --env-file precedence warning
+├── .env.example          # MY_APP_PORT, MY_APP_HOST, MY_APP_LOG_LEVEL, NODE_ENV (+ MY_APP_APP_SECRET with auth) + the --env-file precedence warning
 ├── .gitignore
 ├── README.md             # instructions adapted to the chosen options
 ├── pnpm-workspace.yaml   # esbuild allowBuilds, @basaltkit/* release-age exclusion (+ "web" member with --ui) + pnpm 11 notes
 ├── src/
-│   ├── env.ts            # environment variables validated with Zod (@basaltkit/env)
+│   ├── env.ts            # environment variables validated with Zod (@basaltkit/env), app-prefixed
 │   ├── app.ts            # buildApp() with the chosen plugins
 │   ├── routes.ts         # GET / (friendly index) and GET /health
 │   └── server.ts         # startup + clean shutdown on SIGINT/SIGTERM
@@ -176,7 +176,28 @@ With pnpm 11, every `pnpm <script>` and `pnpm exec` first verifies dependencies 
 
 ### Environment variables and `--env-file`
 
-Nothing loads `.env` for you. `node --env-file=.env` / `tsx --env-file=.env` **never override a variable already exported in the shell** — in a terminal where another project exported `DATABASE_URL` or `PORT`, the app boots against that value and only fails on the first request that touches it. The generated `.env.example` and README say so and suggest an app-specific prefix derived from the project name (`my-saas` → `MY_SAAS_DATABASE_URL`).
+Nothing loads `.env` for you. `node --env-file=.env` / `tsx --env-file=.env` **never override a variable already exported in the shell** — in a terminal where another project exported `DATABASE_URL` or `PORT`, an app reading the generic name boots against that value and only fails on the first request that touches it.
+
+The scaffold closes that trap instead of only warning about it: `src/env.ts` passes an **app-specific prefix** derived from the project name (`my-saas` → `MY_SAAS`) to `defineEnv`, and `.env.example` uses the prefixed names.
+
+```ts
+// src/env.ts (generated)
+export const env = defineEnv(
+  { PORT: z.coerce.number().default(3000), /* … */ },
+  { prefix: 'MY_SAAS' },
+)
+```
+
+```bash
+# .env.example (generated)
+MY_SAAS_PORT=3000
+MY_SAAS_HOST=0.0.0.0
+MY_SAAS_LOG_LEVEL=info
+NODE_ENV=development          # never prefixed — a Node-wide convention
+# MY_SAAS_APP_SECRET=         # with auth
+```
+
+Each variable is read as `MY_SAAS_<NAME>` first and **falls back** to the bare `<NAME>`, so a deployment that already exports the generic names keeps booting — while a stray `PORT` in your shell no longer wins. The rest of the app is unchanged: the keys stay bare (`env.PORT`). To require the prefixed names only, edit the generated file to `prefix: { value: 'MY_SAAS', fallback: false }`. Full rules: [`@basaltkit/env`](https://github.com/basaltkit/basalt/tree/main/packages/env#app-specific-prefix-prefix).
 
 ### Programmatic usage (Advanced)
 
@@ -267,10 +288,10 @@ Outside an interactive terminal (no TTY) the questions are skipped. Always pass 
 Automatic installation failed (network, Node version, etc.). Go into the folder and run `pnpm install` (or the indicated manager) to see the real error.
 
 **I started the app and `GET /auth/login` gives a secret error.**
-With auth on, `src/env.ts` requires `APP_SECRET` with at least 16 characters (there's a development default `change-me-in-production--`). Copy `.env.example` to `.env` and set your own secret before going to production.
+With auth on, `src/env.ts` requires `APP_SECRET` — read as `MY_SAAS_APP_SECRET`, with at least 32 characters (`secret()` supplies a development default only when `NODE_ENV` is explicitly `development`/`test`). Copy `.env.example` to `.env` and set your own secret before going to production.
 
 **My app connects to the wrong database / port.**
-A variable exported in your shell beats `--env-file`. Check `env | grep DATABASE_URL`, start with `env -u DATABASE_URL pnpm dev`, and prefer app-prefixed names (see *Environment variables and `--env-file`*).
+A variable exported in your shell beats `--env-file`. The generated `src/env.ts` already reads app-prefixed names (`MY_SAAS_PORT`), so set those rather than the generic ones — the bare names are only a fallback. Check `env | grep DATABASE_URL`, and see *Environment variables and `--env-file`*.
 
 **`pnpm basalt …` starts by running `pnpm install` (or fails offline).**
 pnpm 11's `verifyDepsBeforeRun` (default `install`). Run `node_modules/.bin/tsx bin/basalt.ts …` instead, or set `verifyDepsBeforeRun: warn` in `pnpm-workspace.yaml`.

@@ -1,18 +1,59 @@
-import { Disk, type StorageDriver } from '@basaltkit/storage'
+import { Readable } from 'node:stream'
+import { Disk, StorageFileNotFoundError, type PutStreamOptions, type StorageDriver, type StorageStat } from '@basaltkit/storage'
 
-/** In-memory driver: enough of a disk to observe what was (not) written. */
+/**
+ * In-memory driver: enough of a disk to observe what was (not) written.
+ * Implements the optional streaming capabilities (BK-019), so `Files` takes
+ * its streaming path against it.
+ */
 export class FakeDriver implements StorageDriver {
   readonly name = 'fake'
   readonly files = new Map<string, Buffer>()
   readonly types = new Map<string, string | undefined>()
+  /** Chunk sizes handed to `putStream`, per key — proof the body arrived in pieces. */
+  readonly streamed = new Map<string, number[]>()
+  /** Options `putStream` was called with, per key. */
+  readonly streamOptions = new Map<string, PutStreamOptions>()
   async put(path: string, content: Buffer | string, options?: { contentType?: string }): Promise<void> {
     this.files.set(path, Buffer.isBuffer(content) ? content : Buffer.from(content))
     this.types.set(path, options?.contentType)
+  }
+  async putStream(path: string, source: Readable, options: PutStreamOptions): Promise<void> {
+    const chunks: Buffer[] = []
+    const sizes: number[] = []
+    this.streamed.set(path, sizes)
+    this.streamOptions.set(path, options)
+    for await (const chunk of source) {
+      const buffer = Buffer.from(chunk as Uint8Array)
+      sizes.push(buffer.length)
+      chunks.push(buffer)
+      // Written as it arrives, like a real backend: a failed upload can leave a
+      // partial object behind, which `Files` is then responsible for deleting.
+      this.files.set(path, Buffer.concat(chunks))
+    }
+    this.types.set(path, options.contentType)
   }
   async get(path: string): Promise<Buffer> {
     const buffer = this.files.get(path)
     if (!buffer) throw new Error('not found')
     return buffer
+  }
+  async getStream(path: string): Promise<Readable> {
+    const buffer = this.files.get(path)
+    if (!buffer) throw new StorageFileNotFoundError(path)
+    return Readable.from([buffer])
+  }
+  async copy(from: string, to: string): Promise<void> {
+    const buffer = this.files.get(from)
+    if (!buffer) throw new StorageFileNotFoundError(from)
+    this.files.set(to, buffer)
+    this.types.set(to, this.types.get(from))
+  }
+  async stat(path: string): Promise<StorageStat> {
+    const buffer = this.files.get(path)
+    if (!buffer) throw new StorageFileNotFoundError(path)
+    const contentType = this.types.get(path)
+    return { size: buffer.length, ...(contentType !== undefined ? { contentType } : {}) }
   }
   async exists(path: string): Promise<boolean> {
     return this.files.has(path)

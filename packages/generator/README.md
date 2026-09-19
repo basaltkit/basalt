@@ -113,6 +113,7 @@ Options (common to all `make:*` commands, unless noted):
 | `--no-register` | (only `make:resource`) Doesn't touch `src/app.ts` |
 | `--public` | Generates routes WITHOUT `meta.auth` (anonymous access). Default: every route requires an authenticated user. Alias: `--no-auth` |
 | `--tenant` / `--no-tenant` | Forces tenant scoping on/off. Default: on when `package.json` depends on `@basaltkit/tenancy` |
+| `--crud` / `--no-crud` | (only `make:service`) Forces the CRUD service or the minimal one. Default: CRUD when the sibling `<name>.repository.ts` and `<name>.schema.ts` are already in the target directory, minimal when they are not |
 
 ### `--prisma` — real persistence with a database
 
@@ -181,6 +182,58 @@ Without a name, any command prints usage and returns exit code 1:
 Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant|--no-tenant]
 ```
 
+### Services that are not CRUD
+
+`make:service` on its own does **not** assume a resource. A CRUD service
+delegates to a sibling repository and imports the sibling schema; generated
+where those files do not exist, it would not compile (`TS2307: Cannot find
+module './invoice.repository.js'`). So the command looks at the target
+directory first:
+
+- `<name>.repository.ts` **and** `<name>.schema.ts` already there (typically
+  after `make:resource`, or after writing them yourself) → the **CRUD service**,
+  exactly as before;
+- either one missing → a **minimal service**: the class, its `createToken`
+  injection token and a constructor with no dependencies, importing nothing but
+  `@basaltkit/core`. It compiles the moment it is written, and carries a TODO
+  pointing at `make:resource` for the CRUD vertical.
+
+That is the shape you want for orchestration, domain rules, transactions,
+schedulers — the services a repository has nothing to do with.
+
+```bash
+pnpm basalt make:service Billing            # minimal: no repository next to it
+pnpm basalt make:service Invoice --crud     # force the CRUD shape (you will add the siblings)
+pnpm basalt make:service Invoice --no-crud  # force the minimal shape, siblings or not
+```
+
+`make:resource` is unaffected — the vertical always gets the CRUD service,
+because it generates the repository and the schema in the same batch.
+
+### One artifact at a time: the sibling warning
+
+The service is the only artifact with a shape that stands on its own. The
+others are members of a vertical and import one another: the plugin needs the
+repository and the service, the routes need the service and the schema, the
+test needs the plugin and the routes, the repository needs the schema. Generate
+one of them alone and the file is written — the sibling may be the next thing
+you write by hand — but the generator now tells you what it refers to and
+cannot find:
+
+```
+Generated 1 file(s):
+  src/modules/invoice/invoice.plugin.ts
+Warning: src/modules/invoice/invoice.plugin.ts imports 2 file(s) that do not exist yet:
+  src/modules/invoice/invoice.repository.ts
+  src/modules/invoice/invoice.service.ts
+  Generate the whole vertical with `basalt make:resource Invoice`, or write them yourself — until then this file does not compile.
+```
+
+`make:schema` never warns (it imports nothing of the module) and
+`make:resource` never warns (it writes every one of them). The same list is
+available programmatically as
+[`missingSiblings`](#missingsiblingskind-name-options-write-promisestring).
+
 ### Using the generator as a library (Advanced)
 
 You can generate files programmatically, without going through the CLI:
@@ -219,6 +272,10 @@ Pluralization is English and simplified (`company` → `companies`, `box` → `b
 
 Generates **one** artifact. `kind` is a `GeneratorKind`: `'schema' | 'repository' | 'service' | 'plugin' | 'routes' | 'test'`.
 
+For `'service'` the default is the CRUD shape; pass `{ crud: false }` for the
+minimal one. A caller that scaffolds a lone service should decide the same way
+the CLI does — with `serviceSiblingsExist` (below).
+
 ### `generateResource(name, options?): GeneratedFile[]`
 
 Generates the complete vertical slice. With `options.prisma: true`, adds the `.prisma` file and swaps the repository for the Prisma version.
@@ -230,8 +287,60 @@ Generates the complete vertical slice. With `options.prisma: true`, adds the `.p
 | `prisma` | `boolean` | No | `false` | Prisma repository (+ `schema.prisma` model) instead of in-memory |
 | `auth` | `boolean` | No | `true` | Every generated route requires an authenticated user (`meta.auth`). `false` = deliberately public |
 | `tenant` | `boolean` | No | `false` (the CLI detects `@basaltkit/tenancy`) | Tenant-owned repository scoped with `requireTenantId()` + indexed `tenantId` model column |
+| `crud` | `boolean` | No | `true` (the CLI detects the sibling files) | Shape of the generated service: CRUD over the sibling repository, or minimal (class + token + empty constructor, no imports beyond `@basaltkit/core`). `generateResource` always generates CRUD |
 
 `GeneratedFile`: `{ path: string; content: string }` — the path is relative to the project root.
+
+### `expectedSiblings(kind, name, options?): string[]`
+
+The files `kind` imports but does **not** create, as project-relative paths.
+Pure — it says nothing about what is on disk.
+
+| `kind` | Imports but does not create |
+| --- | --- |
+| `schema` | — |
+| `repository` | `<name>.schema.ts` |
+| `service` | `<name>.repository.ts`, `<name>.schema.ts` (nothing with `{ crud: false }`) |
+| `plugin` | `<name>.repository.ts`, `<name>.service.ts` |
+| `routes` | `<name>.service.ts`, `<name>.schema.ts` |
+| `test` | `<name>.plugin.ts`, `<name>.routes.ts` |
+
+(All under `src/modules/<name>/`.) `moduleFile(names(name), 'repository')`
+builds one such path.
+
+### `missingSiblings(kind, name, options?, write?): Promise<string[]>`
+
+`expectedSiblings` minus what is already under `write.baseDir` (default
+`process.cwd()`) — the files the generated artifact will import and nobody has
+written. Empty for every kind once `make:resource` has run.
+
+`missingSiblingsWarning(name, generatedPath, missing): string[]` renders the
+exact lines the CLI prints, so tooling that calls the generator
+programmatically can surface the same message.
+
+```typescript
+import { generate, missingSiblings, missingSiblingsWarning, writeGenerated } from '@basaltkit/generator'
+
+const file = generate('plugin', 'Invoice')
+const missing = await missingSiblings('plugin', 'Invoice', {}, { baseDir: root })
+await writeGenerated([file], { baseDir: root })       // written either way
+for (const line of missingSiblingsWarning('Invoice', file.path, missing)) console.warn(line)
+```
+
+### `serviceSiblingsExist(name, options?): Promise<boolean>`
+
+`true` when both files a CRUD service imports — `src/modules/<name>/<name>.repository.ts`
+and `src/modules/<name>/<name>.schema.ts` — are already under `options.baseDir`
+(default `process.cwd()`); `missingSiblings('service', …)` with nothing missing.
+This is what `basalt make:service` consults when neither `--crud` nor
+`--no-crud` was given.
+
+```typescript
+import { generate, serviceSiblingsExist, writeGenerated } from '@basaltkit/generator'
+
+const crud = await serviceSiblingsExist('Invoice', { baseDir: root })
+await writeGenerated([generate('service', 'Invoice', { crud })], { baseDir: root })
+```
 
 ### `writeGenerated(files, options?): Promise<string[]>`
 
@@ -282,6 +391,20 @@ Automatic wiring only recognizes the `fastifyPlugin({ routes: [...] })` shape in
 
 **I generated with `--prisma` but get an error that `blogPost` doesn't exist on PrismaClient.**
 The Prisma repository assumes a model with the PascalCase name (`model BlogPost`) in your `schema.prisma`. Copy the generated `.prisma` file's contents into `schema.prisma`, run `prisma migrate dev`, and regenerate the Prisma client.
+
+**`Warning: … imports N file(s) that do not exist yet`.**
+You generated one artifact of a vertical whose siblings are not there. The file
+was written anyway (the warning lists exactly what is missing, in the order the
+file imports it): write those files, or run `basalt make:resource <Name>` to
+generate the whole vertical. Until then that file does not compile — `TS2307:
+Cannot find module`.
+
+**`make:service` gave me a service with no CRUD methods.**
+Expected: there was no `<name>.repository.ts` / `<name>.schema.ts` next to it, so
+you got the minimal shape instead of a file that could not compile (the note
+printed after generation says so). Run `make:resource <Name>` for the whole
+vertical, or `make:service <Name> --crud` if you are writing the siblings
+yourself.
 
 **Data disappears when I restart the server.**
 This is the expected behavior of the in-memory repository (the default). For real persistence, generate with `--prisma` or implement the `<Name>Repository` interface yourself and register it in the plugin.

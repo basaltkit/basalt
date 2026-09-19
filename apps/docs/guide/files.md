@@ -148,11 +148,26 @@ const record = await files.upload(request.body!, { name, contentType: request.he
 const record = await files.upload(file.stream, { name: file.filename, contentType: file.declaredType })
 ```
 
-::: info The storage contract takes whole buffers
-`Disk.put` accepts `Buffer | string` only, so after the stream passes
-validation its bytes are collected into one buffer before the write — memory
-per upload is bounded by `maxSize`, not by what the client sends. Keep
-`maxSize` realistic when uploads stream.
+::: info Straight to the backend when the driver can stream
+On a disk whose driver implements `putStream` — `local`, `s3`, `azure`, `gcs`
+(see [Large files](/guide/storage#large-files)) — the bytes go **straight to
+storage**: only the 64 KiB sniff window is ever held. Pass `contentLength` when
+the client declared one (`Content-Length`); S3 needs a known length to stream
+rather than buffer.
+
+```ts
+await files.upload(part.file, {
+  name: part.filename,
+  contentType: part.mimetype,
+  contentLength: Number(request.headers['content-length']), // optional hint
+})
+```
+
+The buffered path — at most `maxSize` in memory, then `disk.put` — remains the
+fallback for a driver without `putStream`, an unbounded `validate.maxSize` with
+no declared `contentLength`, or a custom `checkQuota` (which is asked to
+approve a size the stream does not have yet). The record is identical either
+way, and a failed upload leaves neither a record nor a partial object.
 :::
 
 ::: warning The `contentType` is the client's claim
@@ -269,6 +284,27 @@ either way. The full rationale is in [Storage](/guide/storage).
 ```ts
 await files.temporaryUrl(id, '15m', undefined, { disposition: 'inline' })
 ```
+
+### Streaming a download
+
+When you must proxy a large file, `downloadStream()` mirrors `download()` —
+same tenant scoping, same quarantine gate — without loading it into memory:
+
+```ts
+import { pipeline } from 'node:stream/promises'
+
+const { record, stream } = await files.downloadStream(id)
+reply.header('content-type', record.contentType)
+reply.header('content-disposition', `attachment; filename="${encodeURIComponent(record.name)}"`)
+await pipeline(stream, reply.raw)
+```
+
+**Consume the stream or `destroy()` it** — an abandoned one holds a connection
+(S3, Azure, GCS) or a file descriptor (local) open. With `requireScan` a
+quarantined file throws `423 FILE_NOT_SCANNED` / `403 FILE_INFECTED` before the
+stream is ever opened; `{ bypassQuarantine: true }` is for the scanner only. A
+driver without `getStream` throws `STORAGE_GET_STREAM_UNSUPPORTED` — use
+`download()` there.
 
 ### Quarantine until scanned (`requireScan`)
 
@@ -481,10 +517,11 @@ the `attachment` disposition.
 
 | Method | Purpose |
 | --- | --- |
-| `upload(content, input)` | The pipeline. `content` is a `Buffer`/`Uint8Array`, a Node `Readable`, an `AsyncIterable<Uint8Array>` or a web `ReadableStream`; `input` is `{ name, contentType, tenantId?, uploadedBy?, metadata? }` |
+| `upload(content, input)` | The pipeline. `content` is a `Buffer`/`Uint8Array`, a Node `Readable`, an `AsyncIterable<Uint8Array>` or a web `ReadableStream`; `input` is `{ name, contentType, tenantId?, uploadedBy?, metadata?, contentLength? }`. A stream goes straight to the backend when the driver supports `putStream`; `contentLength` is the client's declared size (a hint — the real one is always measured) |
 | `get(id, tenantId?)` | `FileRecord \| null` — no throw for a miss |
 | `list(tenantId?)` | Every record for the tenant |
 | `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`; throws `FileNotFoundError`, and with `requireScan` `FileNotScannedError` / `FileInfectedError` unless `bypassQuarantine` (for the scanner only) |
+| `downloadStream(id, tenantId?, { bypassQuarantine? })` | `{ record, stream }` — the same contract as `download`, quarantine included, without buffering. The caller must consume or `destroy()` the stream; needs a driver with `getStream` |
 | `temporaryUrl(id, expiresIn, tenantId?, { disposition? })` | Signed URL; `attachment` by default. Gated by `requireScan` like `download` |
 | `delete(id, tenantId?)` | Removes object + record, emits `file:deleted`; idempotent |
 | `markScanned(id, { clean, detail? }, tenantId?)` | Records an out-of-band scan result, emits `file:scanned` |

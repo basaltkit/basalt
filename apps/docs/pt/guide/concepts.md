@@ -223,6 +223,44 @@ códigos que encontras nestes docs são reais e estáveis — p.ex. `AUTH_REQUIR
 `TEAM_NOT_A_MEMBER`, `DI_CAPTIVE_DEPENDENCY`, `HTTP_VALIDATION`, `NOT_FOUND` —
 trata-os como API.
 
+#### Detalhes estruturados de erro
+
+Um código e uma frase chegam para um humano, mas não para uma UI que tem de
+*agir* sobre a falha. Dá ao erro um payload legível por máquina em vez de
+contrabandear dados dentro da mensagem:
+
+```ts
+throw new HttpError(422, 'CHECKS_FAILED', 'Some checks failed.', {
+  details: { failed: ['age', 'address'], remaining: 2 },
+})
+```
+
+```json
+{
+  "error": {
+    "code": "CHECKS_FAILED",
+    "message": "Some checks failed.",
+    "details": { "failed": ["age", "address"], "remaining": 2 }
+  }
+}
+```
+
+A forma de três argumentos mantém-se inalterada. `BasaltError` aceita a mesma
+opção `{ details }`, por isso um package de domínio que lance um com `status`
+numérico também transporta detalhes, e os três adapters servem exatamente o
+mesmo corpo. No cliente, o `@basaltkit/sdk` expõe-o como `error.errorDetails`.
+
+`details` chega ao cliente **tal e qual**, por isso é tratado como público e é
+limitado: sem segredos nem internals (essa parte é contigo), apenas dados JSON
+simples (uma `Date` vira string ISO; funções, `undefined`, ciclos, `Error`s,
+`Map`s e instâncias de classes são removidos), profundidade limitada a 8
+níveis, e o payload inteiro é descartado acima de 4 KiB de JSON — portanto
+mantém sempre `code` + `message` como fallback do cliente. Só erros
+*construídos* com detalhes os têm: uma exceção inesperada continua a ser o 500
+neutro sem nada anexado, e o corpo de validação mantém exatamente a forma
+`part` + `issues[]`. Regras completas no
+[README do `@basaltkit/http`](https://github.com/basaltkit/basalt/tree/main/packages/http#structured-error-details).
+
 ### Meta de segurança tem de ser aplicada — o check de boot
 
 `meta: { auth: true }`, `meta.can`, `meta.teamRole`, `meta.scopes`,

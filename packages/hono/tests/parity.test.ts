@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
+  errorDetailsParitySuite,
   rateLimitKeyParitySuite,
   uploadParitySuite,
   type ParityDriver,
@@ -59,6 +60,7 @@ const driver: ParityDriver = {
 
 uploadParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
+errorDetailsParitySuite('hono', driver)
 
 describe('hono: multipart on routes that are not upload() routes', () => {
   const echo = route({

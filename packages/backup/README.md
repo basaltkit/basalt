@@ -99,6 +99,15 @@ documents does not automatically make backups use S3. Backups use S3 only when
 the backup disk itself is configured with an S3 driver. Otherwise they remain
 local.
 
+Dumps are **streamed**, never buffered. `create()` measures and hashes the
+temporary `pg_dump` file by reading it in chunks, then streams it to the disk
+with `disk.putStream(...)` (a known `contentLength`, so S3 uploads it in one
+`PutObject` without holding it); `restore()` streams the artifact back to a
+temporary file with `disk.getStream(...)` and verifies its SHA-256 **before**
+`pg_restore` is allowed to run. A driver without those capabilities falls back
+to the previous whole-file `put`/`get`, so a multi-gigabyte dump wants a disk
+whose driver streams — `local`, `s3`, `azure` or `gcs` all do.
+
 The default artifact prefix is `backups/`. On a local disk this means paths
 such as `./backups/backups/<id>.dump` when the disk root is `./backups`. In an
 S3 bucket, it means keys such as `backups/<id>.dump` and

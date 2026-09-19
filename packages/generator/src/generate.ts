@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { names, type Names } from './names.js'
 import {
@@ -6,6 +6,7 @@ import {
   prismaModelFile,
   repositoryFile,
   routesFile,
+  moduleFile,
   schemaFile,
   serviceFile,
   testFile,
@@ -41,7 +42,10 @@ export function generateResource(name: string, options: GeneratorOptions = {}): 
     schemaFile(n, options),
     repositoryFile(n, options),
     ...(options.prisma ? [prismaModelFile(n, options)] : []),
-    serviceFile(n, options),
+    // The vertical always gets the CRUD service: the repository and schema it
+    // imports are generated right here, in the same batch. Stated explicitly so
+    // it does not ride on the default.
+    serviceFile(n, { ...options, crud: true }),
     pluginFile(n, options),
     routesFile(n, options),
     testFile(n, options),
@@ -64,6 +68,94 @@ export interface WriteOptions {
   baseDir?: string
   /** Overwrite existing files instead of refusing. Default: false. */
   force?: boolean
+}
+
+/**
+ * What each artifact imports from the resource module but does not generate
+ * itself. `make:resource` writes them all in one batch; a single `make:<kind>`
+ * writes one file, and the ones it refers to have to be there already or the
+ * file does not compile (TS2307).
+ */
+const SIBLINGS: Record<GeneratorKind, (n: Names) => string[]> = {
+  schema: () => [],
+  repository: (n) => [moduleFile(n, 'schema')],
+  service: (n) => [moduleFile(n, 'repository'), moduleFile(n, 'schema')],
+  plugin: (n) => [moduleFile(n, 'repository'), moduleFile(n, 'service')],
+  routes: (n) => [moduleFile(n, 'service'), moduleFile(n, 'schema')],
+  test: (n) => [moduleFile(n, 'plugin'), moduleFile(n, 'routes')],
+}
+
+/**
+ * The files `kind` will import but not create, as project-relative paths.
+ * Pure — it says nothing about what is on disk; see {@link missingSiblings}.
+ *
+ * A minimal service (`crud: false`) imports nothing, so it expects nothing.
+ */
+export function expectedSiblings(
+  kind: GeneratorKind,
+  name: string | Names,
+  options: GeneratorOptions = {},
+): string[] {
+  if (kind === 'service' && options.crud === false) return []
+  return SIBLINGS[kind](typeof name === 'string' ? names(name) : name)
+}
+
+/**
+ * The subset of {@link expectedSiblings} that is not under `write.baseDir`
+ * (default `process.cwd()`) — the files the generated artifact will import and
+ * nobody has written. Empty for every kind once `make:resource` has run.
+ *
+ * The CLI prints these as a warning and generates the file anyway; tooling that
+ * calls the generator programmatically (the dev-only `@basaltkit/ai` `make`
+ * path, an MCP client, an editor extension) should surface them the same way —
+ * {@link missingSiblingsWarning} renders the exact lines the CLI prints.
+ */
+export async function missingSiblings(
+  kind: GeneratorKind,
+  name: string,
+  options: GeneratorOptions = {},
+  write: WriteOptions = {},
+): Promise<string[]> {
+  const baseDir = resolve(write.baseDir ?? process.cwd())
+  const missing: string[] = []
+  for (const path of expectedSiblings(kind, name, options)) {
+    const exists = await access(join(baseDir, path)).then(
+      () => true,
+      () => false,
+    )
+    if (!exists) missing.push(path)
+  }
+  return missing
+}
+
+/**
+ * The warning the CLI prints when a generated artifact refers to files that do
+ * not exist yet: what is missing, and the command that creates them. Empty
+ * array when nothing is missing.
+ */
+export function missingSiblingsWarning(name: string, generatedPath: string, missing: string[]): string[] {
+  if (missing.length === 0) return []
+  const n = names(name)
+  return [
+    `Warning: ${generatedPath} imports ${missing.length} file(s) that do not exist yet:`,
+    ...missing.map((path) => `  ${path}`),
+    `  Generate the whole vertical with \`basalt make:resource ${n.pascal}\`, or write them yourself — until then this file does not compile.`,
+  ]
+}
+
+/**
+ * Whether the sibling files a CRUD service imports — `<name>.repository.ts`
+ * and `<name>.schema.ts` in the module directory — are already under
+ * `baseDir`. Both, or none: a service importing a file nobody generated does
+ * not compile.
+ *
+ * This is what `basalt make:service <Name>` consults when neither `--crud` nor
+ * `--no-crud` was given, and what a programmatic caller should consult before
+ * calling `generate('service', …)` on its own — `generateResource` does not
+ * need it (it writes the siblings itself).
+ */
+export async function serviceSiblingsExist(name: string, options: WriteOptions = {}): Promise<boolean> {
+  return (await missingSiblings('service', name, { crud: true }, options)).length === 0
 }
 
 /** Writes generated files to disk. Refuses to clobber unless `force`. */

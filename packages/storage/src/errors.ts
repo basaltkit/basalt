@@ -54,10 +54,10 @@ export class UnknownDiskError extends BasaltError {
 }
 
 export class TemporaryUrlUnsupportedError extends BasaltError {
-  constructor(driver: string) {
+  constructor(driver: string, detail?: string) {
     super(
       'STORAGE_TEMPORARY_URL_UNSUPPORTED',
-      `The "${driver}" driver does not support temporary URLs. Use an S3-compatible disk.`,
+      detail ?? `The "${driver}" driver does not support temporary URLs. Use an S3-compatible disk.`,
     )
   }
 }
@@ -69,6 +69,73 @@ export class TemporaryUploadUrlUnsupportedError extends BasaltError {
       detail ??
         `The "${driver}" driver does not support pre-signed upload URLs. Use an S3, Azure or GCS disk, or upload through the server with disk.put().`,
     )
+  }
+}
+
+/** The driver cannot stream an upload — buffer with `disk.put()` instead. */
+export class PutStreamUnsupportedError extends BasaltError {
+  constructor(driver: string, detail?: string) {
+    super(
+      'STORAGE_PUT_STREAM_UNSUPPORTED',
+      detail ??
+        `The "${driver}" driver does not support streaming uploads. Use disk.put() with a Buffer, or a driver that implements putStream (local, s3, azure, gcs).`,
+    )
+  }
+}
+
+/** The driver cannot stream a download — read it whole with `disk.get()` instead. */
+export class GetStreamUnsupportedError extends BasaltError {
+  constructor(driver: string, detail?: string) {
+    super(
+      'STORAGE_GET_STREAM_UNSUPPORTED',
+      detail ??
+        `The "${driver}" driver does not support streaming downloads. Use disk.get(), or a driver that implements getStream (local, s3, azure, gcs).`,
+    )
+  }
+}
+
+/** The driver cannot copy server-side and no streaming fallback was available. */
+export class CopyUnsupportedError extends BasaltError {
+  constructor(driver: string, detail?: string) {
+    super(
+      'STORAGE_COPY_UNSUPPORTED',
+      detail ??
+        `The "${driver}" driver does not support copying. Read the object with disk.get() and write it with disk.put().`,
+    )
+  }
+}
+
+/** The driver cannot report object metadata without downloading the object. */
+export class StatUnsupportedError extends BasaltError {
+  constructor(driver: string, detail?: string) {
+    super(
+      'STORAGE_STAT_UNSUPPORTED',
+      detail ??
+        `The "${driver}" driver does not support stat(). Use disk.exists(), or a driver that implements stat (local, s3, azure, gcs).`,
+    )
+  }
+}
+
+/**
+ * The per-call (or per-driver) signing endpoint is not a usable base URL.
+ * 400: the caller chose it. Only ever point it at another host of the SAME
+ * bucket — an internal service name, a CDN alias — never at a third party.
+ */
+export class StorageSigningEndpointInvalidError extends BasaltError {
+  readonly status = 400
+  constructor(reason: string) {
+    super('STORAGE_SIGNING_ENDPOINT_INVALID', `Invalid signing endpoint: ${reason}`)
+  }
+}
+
+/**
+ * A streaming upload needs an exact `contentLength` on this backend and none
+ * was given. 400: the caller chose the body.
+ */
+export class StorageStreamLengthRequiredError extends BasaltError {
+  readonly status = 400
+  constructor(driver: string, detail: string) {
+    super('STORAGE_STREAM_LENGTH_REQUIRED', `The "${driver}" driver needs a known body length: ${detail}`)
   }
 }
 

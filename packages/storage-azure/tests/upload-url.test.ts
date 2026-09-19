@@ -89,3 +89,15 @@ describe('Azure temporaryUploadUrl (BK-005)', () => {
     expect(upload.url).toContain('azure.test/tenants/acme/a.png')
   })
 })
+
+describe('Azure refuses a signing-endpoint override (BK-005 phase 2)', () => {
+  it('reports it as unsupported instead of signing for the wrong host', async () => {
+    const { driver } = make()
+    await expect(
+      driver.temporaryUploadUrl('a.png', 60_000, { contentType: 'image/png', endpoint: 'https://files.example.com' }),
+    ).rejects.toMatchObject({ code: 'STORAGE_UPLOAD_URL_UNSUPPORTED' })
+    await expect(driver.temporaryUrl('a.png', 60_000, { endpoint: 'https://files.example.com' })).rejects.toMatchObject({
+      code: 'STORAGE_TEMPORARY_URL_UNSUPPORTED',
+    })
+  })
+})

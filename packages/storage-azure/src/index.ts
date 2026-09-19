@@ -1,14 +1,31 @@
+import { Readable } from 'node:stream'
 import {
   DEFAULT_MAX_TEMPORARY_URL_TTL,
   type TemporaryUrlOptions,
+  CopyUnsupportedError,
+  GetStreamUnsupportedError,
+  PutStreamUnsupportedError,
+  StatUnsupportedError,
   StorageFileNotFoundError,
   TemporaryUploadUrlUnsupportedError,
   TemporaryUrlTtlTooLongError,
+  TemporaryUrlUnsupportedError,
+  type CopyDriverOptions,
   type PutOptions,
+  type PutStreamOptions,
   type StorageDriver,
+  type StorageStat,
   type TemporaryUploadUrl,
   type TemporaryUploadUrlDriverOptions,
 } from '@basaltkit/storage'
+
+/** What `getProperties()` returns, in the shape this driver reads. */
+export interface AzureBlobProperties {
+  contentLength?: number
+  contentType?: string
+  etag?: string
+  lastModified?: Date
+}
 
 /** The subset of an `@azure/storage-blob` BlockBlobClient this driver uses. */
 export interface AzureBlobLike {
@@ -17,6 +34,19 @@ export interface AzureBlobLike {
   exists(): Promise<boolean>
   deleteIfExists(): Promise<{ succeeded: boolean }>
   generateSasUrl(options: { permissions: string; expiresOn: Date; contentDisposition?: string }): Promise<string>
+  /** Block-blob streaming upload — the SDK chunks the readable for us. */
+  uploadStream?(
+    stream: Readable,
+    bufferSize?: number,
+    maxConcurrency?: number,
+    options?: { blobHTTPHeaders?: { blobContentType?: string } },
+  ): Promise<unknown>
+  /** Streaming download; `readableStreamBody` is undefined only in the browser bundle. */
+  download?(offset?: number): Promise<{ readableStreamBody?: NodeJS.ReadableStream }>
+  /** Server-side copy from a (SAS) URL, completed before it resolves. */
+  syncCopyFromURL?(source: string, options?: { blobHTTPHeaders?: { blobContentType?: string } }): Promise<unknown>
+  getProperties?(): Promise<AzureBlobProperties>
+  readonly url?: string
 }
 
 /** The subset of an `@azure/storage-blob` ContainerClient this driver uses. */
@@ -31,6 +61,17 @@ export interface AzureDriverOptions {
   /** Injectable container — defaults to `@azure/storage-blob`. Tests pass a fake. */
   client?: AzureContainerLike
 }
+
+/**
+ * Azure derives a SAS URL from the blob client's own account host, and the
+ * SDK exposes no way to sign for another one, so an endpoint override is
+ * refused instead of silently ignored (which would mint a URL for the wrong
+ * host). Reach the account under another name with a custom DNS alias on the
+ * storage account, or build the client with that endpoint.
+ */
+const ENDPOINT_UNSUPPORTED =
+  'The "azure" driver cannot sign a SAS URL for a different endpoint: the SDK derives it from the blob client\'s account host. ' +
+  'Configure the driver with a connection string for that endpoint instead.'
 
 const isNotFound = (error: unknown): boolean =>
   (error as { statusCode?: number; code?: string } | undefined)?.statusCode === 404 ||
@@ -54,9 +95,88 @@ export class AzureBlobStorageDriver implements StorageDriver {
       .uploadData(data, options?.contentType !== undefined ? { blobHTTPHeaders: { blobContentType: options.contentType } } : {})
   }
 
+  /**
+   * `uploadStream` — the SDK splits the readable into blocks, so a body of any
+   * size (and of unknown length) is uploaded without ever being held whole.
+   */
+  async putStream(path: string, source: Readable, options: PutStreamOptions): Promise<void> {
+    const blob = (await this.container()).getBlockBlobClient(path)
+    if (!blob.uploadStream) {
+      throw new PutStreamUnsupportedError(this.name, 'The injected Azure client does not implement uploadStream().')
+    }
+    await blob.uploadStream(
+      source,
+      undefined,
+      undefined,
+      options.contentType !== undefined ? { blobHTTPHeaders: { blobContentType: options.contentType } } : {},
+    )
+  }
+
   async get(path: string): Promise<Buffer> {
     try {
       return await (await this.container()).getBlockBlobClient(path).downloadToBuffer()
+    } catch (error) {
+      if (isNotFound(error)) throw new StorageFileNotFoundError(path)
+      throw error
+    }
+  }
+
+  /** `download()` — the blob's body as a Node readable. The caller must consume or destroy it. */
+  async getStream(path: string): Promise<Readable> {
+    const blob = (await this.container()).getBlockBlobClient(path)
+    if (!blob.download) {
+      throw new GetStreamUnsupportedError(this.name, 'The injected Azure client does not implement download().')
+    }
+    let body: NodeJS.ReadableStream | undefined
+    try {
+      body = (await blob.download()).readableStreamBody
+    } catch (error) {
+      if (isNotFound(error)) throw new StorageFileNotFoundError(path)
+      throw error
+    }
+    if (!body) throw new StorageFileNotFoundError(path)
+    return body instanceof Readable ? body : Readable.from(body as AsyncIterable<Uint8Array>)
+  }
+
+  /**
+   * Server-side copy: the destination blob pulls the source through a
+   * short-lived read SAS, so the bytes never reach this process.
+   *
+   * `syncCopyFromURL` (Copy Blob From URL) completes before it resolves and is
+   * limited to 256 MiB by Azure; copy larger blobs with `beginCopyFromURL` on
+   * the SDK client directly, or stream them with `getStream`/`putStream`.
+   */
+  async copy(from: string, to: string, options?: CopyDriverOptions): Promise<void> {
+    const container = await this.container()
+    const target = container.getBlockBlobClient(to)
+    if (!target.syncCopyFromURL) {
+      throw new CopyUnsupportedError(this.name, 'The injected Azure client does not implement syncCopyFromURL().')
+    }
+    const source = container.getBlockBlobClient(from)
+    if (!(await source.exists())) throw new StorageFileNotFoundError(from)
+    // Copy Blob From URL needs a readable URL for the source; a 5-minute read
+    // SAS is the narrowest credential that gives it one.
+    const url = await source.generateSasUrl({ permissions: 'r', expiresOn: new Date(Date.now() + 5 * 60 * 1000) })
+    await target.syncCopyFromURL(
+      url,
+      options?.contentType !== undefined ? { blobHTTPHeaders: { blobContentType: options.contentType } } : {},
+    )
+  }
+
+  /** `getProperties()` — size, content type, etag and last-modified without a download. */
+  async stat(path: string): Promise<StorageStat> {
+    const blob = (await this.container()).getBlockBlobClient(path)
+    if (!blob.getProperties) {
+      throw new StatUnsupportedError(this.name, 'The injected Azure client does not implement getProperties().')
+    }
+    try {
+      const properties = await blob.getProperties()
+      return {
+        size: properties.contentLength ?? 0,
+        ...(properties.contentType !== undefined ? { contentType: properties.contentType } : {}),
+        ...(properties.etag !== undefined ? { etag: properties.etag } : {}),
+        ...(properties.lastModified !== undefined ? { lastModified: properties.lastModified } : {}),
+      }
     } catch (error) {
       if (isNotFound(error)) throw new StorageFileNotFoundError(path)
       throw error
@@ -85,6 +205,7 @@ export class AzureBlobStorageDriver implements StorageDriver {
     if (!(expiresInMs > 0) || expiresInMs > DEFAULT_MAX_TEMPORARY_URL_TTL) {
       throw new TemporaryUrlTtlTooLongError(expiresInMs, DEFAULT_MAX_TEMPORARY_URL_TTL)
     }
+    if (options?.endpoint !== undefined) throw new TemporaryUrlUnsupportedError(this.name, ENDPOINT_UNSUPPORTED)
     return (await this.container()).getBlockBlobClient(path).generateSasUrl({
       permissions: 'r',
       expiresOn: new Date(Date.now() + expiresInMs),
@@ -114,6 +235,7 @@ export class AzureBlobStorageDriver implements StorageDriver {
     if (!(expiresInMs > 0) || expiresInMs > DEFAULT_MAX_TEMPORARY_URL_TTL) {
       throw new TemporaryUrlTtlTooLongError(expiresInMs, DEFAULT_MAX_TEMPORARY_URL_TTL)
     }
+    if (options.endpoint !== undefined) throw new TemporaryUploadUrlUnsupportedError(this.name, ENDPOINT_UNSUPPORTED)
     if (options.checksumSha256 !== undefined) {
       throw new TemporaryUploadUrlUnsupportedError(
         this.name,

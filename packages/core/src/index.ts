@@ -25,6 +25,7 @@ export { parseDuration, type DurationInput } from './duration.js'
 export { MetadataRegistry, METADATA, ensureMetadata } from './metadata.js'
 export {
   BasaltError,
+  type BasaltErrorOptions,
   ContextUnavailableError,
   UnknownTokenError,
   CircularDependencyError,
