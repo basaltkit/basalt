@@ -1,5 +1,12 @@
 # @basaltkit/subscriptions-sqlite
 
+## 2.2.3
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/subscriptions@4.0.0
+
 ## 2.2.2
 
 ### Patch Changes

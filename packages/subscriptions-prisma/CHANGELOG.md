@@ -1,5 +1,12 @@
 # @basaltkit/subscriptions-prisma
 
+## 2.2.4
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/subscriptions@4.0.0
+
 ## 2.2.3
 
 ### Patch Changes

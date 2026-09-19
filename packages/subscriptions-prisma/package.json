@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/subscriptions-prisma",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "engines": {
     "node": ">=22.5.0"
   },

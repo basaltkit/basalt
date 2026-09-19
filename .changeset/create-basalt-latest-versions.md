@@ -1,7 +1,0 @@
----
-'create-basalt': minor
----
-
-New projects now get the latest published version of every dependency. Before writing files, the CLI asks the npm registry (`npm_config_registry`, else `registry.npmjs.org`) for each package's `latest` and writes `^<latest>` into the root and `web/` package.json. `@basaltkit/*` packages always take the latest release; third-party packages take it only on the major the templates are written for (a newer major keeps the bundled range and prints a notice). If the registry is unreachable or slow, the ranges bundled at build time are used with a single warning, and the scaffold never fails because of the registry. `--offline` skips the lookup. Programmatically, `createProject({ resolveLatest: true, registry: { fetch, registry } })` opts in; the default still touches no network.
-
-The templates move to current majors: TypeScript 7, Vitest 5, `@types/node` 26, React 19, Vite 8 with `@vitejs/plugin-react` 6, and Tailwind CSS 4. The UI now loads Tailwind through `@tailwindcss/vite`, keeps its config in `web/src/index.css` (`@import 'tailwindcss'`, `@source` for `@basaltkit/admin-shadcn`, `@theme inline` for the shadcn tokens, a class-based `dark` variant), and no longer emits `tailwind.config.js`, `postcss.config.js`, `postcss` or `autoprefixer`. `web/tsconfig.json` adds `vite/client` types, so `import './index.css'` typechecks under TypeScript 6+, and `web/` gets a `typecheck` script.

@@ -1,5 +1,13 @@
 # @basaltkit/activity
 
+## 1.3.1
+
+### Patch Changes
+
+- fb85c40: security: with `tenantScoped: true` (the default), the context tenant now always wins over a caller-supplied `query.tenantId`, so a forwarded tenant id can no longer widen a feed query to another tenant; an explicit `tenantId` is still honoured when no tenant is in context, and `tenantScoped: false` remains the explicit opt-out.
+- Updated dependencies [fb85c40]
+  - @basaltkit/tenancy@2.0.0
+
 ## 1.3.0
 
 ### Minor Changes

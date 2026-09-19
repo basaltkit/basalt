@@ -1,5 +1,12 @@
 # @basaltkit/storage-s3
 
+## 1.0.1
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/storage@3.0.0
+
 ## 1.0.0
 
 ### Major Changes

@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/backup",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "engines": { "node": ">=22.5.0" },
   "description": "PostgreSQL backups for Basalt applications, including multi-tenant deployments.",
   "license": "MIT",
