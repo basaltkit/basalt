@@ -4,6 +4,7 @@ import type { ZodType } from 'zod'
 import { RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
+import { UploadSession, uploadOptionsOf } from './upload.js'
 
 declare module '@basaltkit/core' {
   interface RequestContext {
@@ -128,29 +129,42 @@ export async function runRoute(
   }
   reply.header('x-request-id', requestId)
 
+  // An `upload()` body is streamed, not parsed up front: nothing is read from
+  // the transport until enrichers and guards have all passed, and whatever the
+  // route leaves unread is released (drained, connection closed) at the end.
+  const uploadOptions = uploadOptionsOf(definition.body)
+  const session = uploadOptions ? new UploadSession(request, uploadOptions) : undefined
+
   return runWithContext(context, async () => {
-    const scoped = context.container
-    // Fail closed: guards that cannot run must never be silently skipped.
-    if (!scoped && (pipeline.guards?.length ?? 0) > 0) {
-      throw new GuardsWithoutContainerError(
-        `${definition.method} ${definition.url}`,
-        pipeline.guards?.length ?? 0,
-      )
+    try {
+      const scoped = context.container
+      // Fail closed: guards that cannot run must never be silently skipped.
+      if (!scoped && (pipeline.guards?.length ?? 0) > 0) {
+        throw new GuardsWithoutContainerError(
+          `${definition.method} ${definition.url}`,
+          pipeline.guards?.length ?? 0,
+        )
+      }
+      if (scoped) {
+        for (const enrich of pipeline.enrichers ?? [])
+          await enrich({ route: definition, request, context, container: scoped })
+        for (const guard of pipeline.guards ?? [])
+          await guard({ route: definition, request, context, container: scoped, reply })
+      }
+      const parsedBody = session ? undefined : parsePart('body', definition.body, request.body)
+      const query = parsePart('query', definition.query, request.query)
+      const params = parsePart('params', definition.params, request.params)
+      const result = await definition.handler({
+        body: session ? session.open() : parsedBody,
+        query,
+        params,
+        request,
+        reply,
+      } as Parameters<BasaltRoute['handler']>[0])
+      return applyEtag(definition, request, reply, result)
+    } finally {
+      session?.release(reply)
     }
-    if (scoped) {
-      for (const enrich of pipeline.enrichers ?? [])
-        await enrich({ route: definition, request, context, container: scoped })
-      for (const guard of pipeline.guards ?? [])
-        await guard({ route: definition, request, context, container: scoped, reply })
-    }
-    const result = await definition.handler({
-      body: parsePart('body', definition.body, request.body),
-      query: parsePart('query', definition.query, request.query),
-      params: parsePart('params', definition.params, request.params),
-      request,
-      reply,
-    } as Parameters<BasaltRoute['handler']>[0])
-    return applyEtag(definition, request, reply, result)
   })
 }
 

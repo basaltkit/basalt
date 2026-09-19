@@ -352,7 +352,7 @@ pertence aqui:
 async onProvision(tenant) {
   await provisionTenantSchema(admin, tenantSchema(tenant.id))
   await migrateTenants({ tenants: [tenant.id], target })
-  await ctx().db.setting.create({ data: { key: 'onboarded', value: 'true' } })
+  await db<PrismaClient>().setting.create({ data: { key: 'onboarded', value: 'true' } })
 }
 ```
 
@@ -659,14 +659,14 @@ e restaura o contexto circundante depois:
 
 ```ts
 import { TENANCY } from '@basaltkit/tenancy'
-import { ctx } from '@basaltkit/core'
+import { db } from '@basaltkit/prisma'
 
 const tenancy = app.container.get(TENANCY)
 
 // Passa um id (carregado da source; lança TenantNotFoundError se desconhecido)
 // ou um objeto Tenant que já tenhas.
 const total = await tenancy.run('acme', async () => {
-  return ctx().db.invoice.count() // com âmbito na Acme
+  return db<PrismaClient>().invoice.count() // com âmbito na Acme
 })
 
 // Manutenção em massa: visita cada tenant, cada um no seu próprio contexto, com
@@ -711,7 +711,7 @@ tenancyPlugin({
   source: tenants,
   resolvers: [subdomainResolver({ base: 'basalt.app' })],
   onMigrate: async (tenant) => { await migrateSchemaFor(tenant.id) },
-  onSeed: async (tenant) => { await ctx().db.plan.create({ data: { name: 'free' } }) },
+  onSeed: async (tenant) => { await db<PrismaClient>().plan.create({ data: { name: 'free' } }) },
 })
 ```
 
@@ -763,6 +763,8 @@ A extensão trabalha sobre os argumentos da query, por isso não sabe que
 colunas escalares são chaves estrangeiras (`data: { projectId }` não é
 verificado). Usa chaves estrangeiras compostas `(tenantId, id)` e RLS como
 garantia ao nível da base de dados.
+O `tenancyExtension({ rls: true })` define o tenant para o RLS do Postgres em
+cada operação — ver a parte de RLS do [guia de Segurança](/pt/guide/security).
 
 **Schema por tenant** — uma base de dados, um schema PostgreSQL por tenant. Cada
 tenant recebe um client cujo URL de ligação transporta `?schema=tenant_<id>`, para que

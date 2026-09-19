@@ -7,10 +7,18 @@ const canRoute = route({ method: 'DELETE', url: '/p/:id', meta: { can: 'p:delete
 const roleRoute = route({ method: 'POST', url: '/team', meta: { teamRole: 'admin' }, handler: async () => ({}) })
 const plain = route({ method: 'GET', url: '/health', handler: async () => ({}) })
 
+it('flags meta.mfa: true without authPlugin, never meta.mfa: false', () => {
+  const route = (mfa: boolean) => ({ method: 'GET', url: `/m-${mfa}`, meta: { mfa }, handler: () => null }) as never
+  expect(() => assertRoutesGuarded([route(true)], new Set())).toThrow(/meta\.mfa \(enforced by authPlugin\)/)
+  expect(() => assertRoutesGuarded([route(false)], new Set())).not.toThrow()
+  expect(() => assertRoutesGuarded([route(true)], new Set(['mfa']))).not.toThrow()
+})
+
 describe('assertRoutesGuarded — security meta declared with no enforcing guard fails at BOOT', () => {
   it('knows the framework security keys', () => {
     expect([...GUARDED_META_KEYS]).toEqual([
       'auth',
+      'mfa',
       'can',
       'teamRole',
       'scopes',

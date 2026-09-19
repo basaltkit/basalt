@@ -345,7 +345,7 @@ tenant-scoped client resolve correctly — the same contract as `onMigrate` and
 async onProvision(tenant) {
   await provisionTenantSchema(admin, tenantSchema(tenant.id))
   await migrateTenants({ tenants: [tenant.id], target })
-  await ctx().db.setting.create({ data: { key: 'onboarded', value: 'true' } })
+  await db<PrismaClient>().setting.create({ data: { key: 'onboarded', value: 'true' } })
 }
 ```
 
@@ -643,14 +643,14 @@ and restores the surrounding context afterwards:
 
 ```ts
 import { TENANCY } from '@basaltkit/tenancy'
-import { ctx } from '@basaltkit/core'
+import { db } from '@basaltkit/prisma'
 
 const tenancy = app.container.get(TENANCY)
 
 // Pass an id (loaded from the source; throws TenantNotFoundError if unknown)
 // or a Tenant object you already have.
 const total = await tenancy.run('acme', async () => {
-  return ctx().db.invoice.count() // scoped to Acme
+  return db<PrismaClient>().invoice.count() // scoped to Acme
 })
 
 // Bulk maintenance: visits every tenant, each in its own context, with bounded
@@ -692,7 +692,7 @@ tenancyPlugin({
   source: tenants,
   resolvers: [subdomainResolver({ base: 'basalt.app' })],
   onMigrate: async (tenant) => { await migrateSchemaFor(tenant.id) },
-  onSeed: async (tenant) => { await ctx().db.plan.create({ data: { name: 'free' } }) },
+  onSeed: async (tenant) => { await db<PrismaClient>().plan.create({ data: { name: 'free' } }) },
 })
 ```
 
@@ -743,6 +743,8 @@ export const adminDb = new PrismaClient().$extends(
 The extension works on query arguments, so it can't tell which scalar columns
 are foreign keys (`data: { projectId }` is not checked). Use composite foreign
 keys `(tenantId, id)` and RLS as the database-level guarantee.
+`tenancyExtension({ rls: true })` sets the tenant for Postgres RLS on every
+operation — see the RLS part of the [Security guide](/guide/security).
 
 **Schema per tenant** — one database, one PostgreSQL schema per tenant. Each
 tenant gets a client whose connection URL carries `?schema=tenant_<id>`, so

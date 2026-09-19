@@ -83,6 +83,36 @@ route({
 })
 ```
 
+**Per-user and per-tenant budgets.** By default the bucket is the client IP, so
+everyone behind one NAT or corporate proxy shares it. `meta.rateLimit.key` picks
+who the bucket belongs to:
+
+| `key` | Bucket | Use it for |
+|---|---|---|
+| `'ip'` (default) | client address (`request.ip`) | anonymous endpoints: login, sign-up, password reset |
+| `'user'` | `ctx().user.id` | expensive per-user actions: exports, AI calls, uploads |
+| `'tenant'` | `ctx().tenant.id` (shared by the tenant's users) | a per-organization quota |
+| `'user+tenant'` | one bucket per user per tenant | a user who belongs to several tenants |
+| `(ctx) => string` | whatever id you return (e.g. an API key id) | anything else |
+
+```ts
+route({
+  method: 'POST',
+  url: '/reports/export',
+  meta: { auth: true, rateLimit: { limit: 10, windowMs: 60_000, key: 'user' } },
+  // …
+})
+```
+
+The key is resolved in the route guard, after the enrichers ran, so auth and
+tenancy have already set `ctx().user` / `ctx().tenant`. When the id is missing
+(an anonymous caller, no tenant resolved, or the function returns nothing), the
+bucket **falls back to the client IP**. It never falls back to one shared bucket,
+and anonymous buckets never mix with signed-in ones. Keyed buckets use the same
+store (`MemoryRateLimitStore`, or Redis across instances). A keyed route still
+counts against the global per-IP limit on every adapter, because the pre-routing
+hook cannot know the user yet.
+
 ### CORS
 
 `origin` accepts `true` (reflect), a string, an allow-list array, or a
@@ -429,22 +459,51 @@ await db.$queryRaw`
 ```
 
 **Defense in depth — enable Postgres RLS.** Application-layer scoping is one
-layer; add a database-enforced one so even a forgotten predicate can't leak.
-`rlsPolicySql` generates the migration, and `set_config` names the active tenant
-per transaction — the database then filters every row itself:
+layer; add a database-enforced one so even a forgotten predicate can't leak —
+including the foreign-key `include` above, which the extension cannot see.
+`rlsPolicySql` generates the migration, and `tenancyExtension({ rls: true })`
+names the active tenant to Postgres on every tenant-scoped operation:
 
 ```ts
-import { rlsPolicySql, setTenantConfigSql, tenantConfigParams } from '@basaltkit/prisma'
+import { rlsPolicySql, tenancyExtension, tenantTransaction } from '@basaltkit/prisma'
 
-// migration (once): enable RLS + a tenant-isolation policy on each table
-await db.$executeRawUnsafe(rlsPolicySql({ tables: ['invoices', 'projects'] }))
+// migration (once): put the generated SQL in a Prisma migration — it enables
+// and FORCEs RLS and adds a tenant-isolation policy on each table
+console.log(rlsPolicySql({ tables: ['invoices', 'projects'], tenantColumn: 'tenantId' }))
 
-// per request: set the active tenant, transaction-local (never leaks on a pool)
-await db.$transaction(async (tx) => {
-  await tx.$executeRawUnsafe(setTenantConfigSql(), ...tenantConfigParams(ctx().tenant.id))
-  // every query in here is filtered to the tenant by the database
+// every model operation in tenant scope now runs as
+//   $transaction([ set_config('app.tenant_id', <tenant>, true), <operation> ])
+const db = new PrismaClient().$extends(tenancyExtension({ rls: true }))
+
+// interactive transactions: open them with tenantTransaction, which sets the
+// tenant on the transaction's own connection first — tx stays tenant-scoped
+await tenantTransaction(db, async (tx) => {
+  const invoice = await tx.invoice.create({ data })
+  await tx.invoiceLine.createMany({ data: lines(invoice.id) })
 })
 ```
+
+- **Connect as a role RLS applies to.** Superusers and `BYPASSRLS` roles skip
+  every policy; table owners skip them unless the table has `FORCE ROW LEVEL
+  SECURITY` (`rlsPolicySql` adds it by default). Run the app as a plain login
+  role and keep migrations/admin work on a separate one.
+- **Costs.** Each tenant-scoped operation becomes a short batch transaction
+  (`BEGIN`, `set_config`, the query, `COMMIT`) — a few extra statements on the
+  same connection (≈ +2 ms p50 in the app team's measurements). The setting is
+  transaction-local (`set_config(…, true)`), so it never leaks onto a pooled
+  connection.
+- **Transactions you open yourself are not wrapped** (they can't be nested):
+  a plain interactive `db.$transaction(async (tx) => …)` runs without the
+  tenant setting and fails closed (reads see no rows, writes fail with
+  `42501`) — use `tenantTransaction(db, fn)` instead. A batch
+  `db.$transaction([...])` must **lead** with the setting:
+  `db.$executeRawUnsafe(setTenantConfigSql(), ...tenantConfigParams(tenantId))`.
+  That exact statement, for the tenant already in scope, is the one raw query
+  the `PRISMA_RAW_IN_TENANT` guard lets through — every other raw query is
+  still refused.
+- A client with `onMissingTenant: 'bypass'` sends no setting, so under RLS it
+  sees nothing: give central/admin code its own database role (`BYPASSRLS`, or
+  one the policies don't cover).
 
 When in doubt, prefer model operations (which are scoped automatically) over raw
 SQL, and review every `connect` against the current tenant.

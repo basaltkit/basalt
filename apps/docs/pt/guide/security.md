@@ -84,6 +84,37 @@ route({
 })
 ```
 
+**Orçamentos por utilizador e por tenant.** Por omissão o balde é o IP do
+cliente, por isso toda a gente atrás de um mesmo NAT ou proxy empresarial o
+partilha. `meta.rateLimit.key` escolhe a quem pertence o balde:
+
+| `key` | Balde | Para quê |
+|---|---|---|
+| `'ip'` (predefinição) | endereço do cliente (`request.ip`) | endpoints anónimos: login, registo, reposição de palavra-passe |
+| `'user'` | `ctx().user.id` | ações caras por utilizador: exportações, chamadas de IA, uploads |
+| `'tenant'` | `ctx().tenant.id` (partilhado pelos utilizadores do tenant) | uma quota por organização |
+| `'user+tenant'` | um balde por utilizador por tenant | um utilizador que pertence a vários tenants |
+| `(ctx) => string` | o id que devolveres (ex.: o id de uma API key) | qualquer outro caso |
+
+```ts
+route({
+  method: 'POST',
+  url: '/reports/export',
+  meta: { auth: true, rateLimit: { limit: 10, windowMs: 60_000, key: 'user' } },
+  // …
+})
+```
+
+A chave é resolvida no guard de rota, depois de os enrichers correrem, por isso
+a autenticação e a tenancy já definiram `ctx().user` / `ctx().tenant`. Quando o
+id falta (um chamador anónimo, nenhum tenant resolvido, ou a função não devolve
+nada), o balde **recua para o IP do cliente**. Nunca recua para um balde único
+partilhado, e os baldes anónimos nunca se misturam com os de utilizadores
+autenticados. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
+Redis entre instâncias). Uma rota com chave continua a contar para o limite
+global por IP em todos os adaptadores, porque o hook anterior ao routing ainda
+não conhece o utilizador.
+
 ### CORS
 
 `origin` aceita `true` (refletir), uma string, um array de allow-list, ou um
@@ -441,21 +472,50 @@ await db.$queryRaw`
 
 **Defesa em profundidade — ativa RLS no Postgres.** O scoping aplicacional é uma
 camada; junta uma imposta pela base de dados, para que nem um predicado esquecido
-vaze. O `rlsPolicySql` gera a migração, e o `set_config` nomeia o tenant ativo
-por transação — a base de dados filtra cada linha por si:
+vaze — incluindo o `include` por chave estrangeira acima, que a extensão não vê.
+O `rlsPolicySql` gera a migração, e o `tenancyExtension({ rls: true })` indica o
+tenant ativo ao Postgres em cada operação limitada ao tenant:
 
 ```ts
-import { rlsPolicySql, setTenantConfigSql, tenantConfigParams } from '@basaltkit/prisma'
+import { rlsPolicySql, tenancyExtension, tenantTransaction } from '@basaltkit/prisma'
 
-// migração (uma vez): ativa RLS + política de isolamento por tenant em cada tabela
-await db.$executeRawUnsafe(rlsPolicySql({ tables: ['invoices', 'projects'] }))
+// migração (uma vez): põe o SQL gerado numa migração Prisma — ativa e força
+// (FORCE) o RLS e cria uma política de isolamento por tenant em cada tabela
+console.log(rlsPolicySql({ tables: ['invoices', 'projects'], tenantColumn: 'tenantId' }))
 
-// por pedido: define o tenant ativo, local à transação (nunca vaza num pool)
-await db.$transaction(async (tx) => {
-  await tx.$executeRawUnsafe(setTenantConfigSql(), ...tenantConfigParams(ctx().tenant.id))
-  // cada query aqui é filtrada ao tenant pela base de dados
+// cada operação de modelo com tenant em contexto corre agora como
+//   $transaction([ set_config('app.tenant_id', <tenant>, true), <operação> ])
+const db = new PrismaClient().$extends(tenancyExtension({ rls: true }))
+
+// transações interativas: abre-as com tenantTransaction, que define o tenant
+// primeiro na própria ligação da transação — o tx continua limitado ao tenant
+await tenantTransaction(db, async (tx) => {
+  const invoice = await tx.invoice.create({ data })
+  await tx.invoiceLine.createMany({ data: lines(invoice.id) })
 })
 ```
+
+- **Liga-te com um role a que o RLS se aplique.** Superusers e roles com
+  `BYPASSRLS` ignoram todas as políticas; os donos das tabelas também, a menos
+  que a tabela tenha `FORCE ROW LEVEL SECURITY` (o `rlsPolicySql` adiciona-o por
+  omissão). Corre a app com um role de login simples e deixa migrações/admin
+  noutro.
+- **Custos.** Cada operação limitada ao tenant passa a ser uma transação batch
+  curta (`BEGIN`, `set_config`, a query, `COMMIT`) — algumas instruções extra na
+  mesma ligação (≈ +2 ms p50 nas medições da equipa da app). A definição é local
+  à transação (`set_config(…, true)`), por isso nunca vaza para uma ligação do
+  pool.
+- **Transações abertas por ti não são envolvidas** (não podem ser aninhadas):
+  um `db.$transaction(async (tx) => …)` interativo simples corre sem a definição
+  do tenant e falha fechado (leituras não veem linhas, escritas falham com
+  `42501`) — usa antes `tenantTransaction(db, fn)`. Um `db.$transaction([...])`
+  em batch tem de **começar** pela definição:
+  `db.$executeRawUnsafe(setTenantConfigSql(), ...tenantConfigParams(tenantId))`.
+  Essa instrução exata, para o tenant já em contexto, é a única query bruta que
+  a guarda `PRISMA_RAW_IN_TENANT` deixa passar — qualquer outra continua recusada.
+- Um cliente com `onMissingTenant: 'bypass'` não envia a definição, por isso com
+  RLS não vê nada: dá ao código central/admin o seu próprio role de base de
+  dados (`BYPASSRLS`, ou um que as políticas não cubram).
 
 Na dúvida, prefere operações de modelo (limitadas automaticamente) a SQL bruto,
 e revê cada `connect` contra o tenant atual.

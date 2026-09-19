@@ -85,6 +85,18 @@ Beyond mounting routes, `fastifyPlugin` sets three defaults that plain Fastify d
   500. Genuinely malformed JSON still gets a `400`.
 - **An `application/x-www-form-urlencoded` parser.** Fastify ships none; HTML forms and the
   SAML ACS binding need it.
+- **A pass-through `multipart/form-data` parser, but only when a route uses `upload()`.**
+  It leaves the raw stream unread for `upload()` routes, and `@basaltkit/http` parses it
+  after enrichers and guards ran. Every other route still answers `415`. It is never
+  registered over a multipart parser you added yourself: `@fastify/multipart` also leaves
+  the stream unread, so the two can coexist.
+
+### Uploads — `upload()`
+
+`body: upload({ maxBytes, maxFiles, allowedTypes? })` from `@basaltkit/http` gives a
+route a streamed multipart body. It runs the same on Express and Hono, so you don't need
+`@fastify/multipart`, and a raw `fastify.post` would skip enrichers and guards. See the
+[`@basaltkit/http` README](../http/README.md#file-uploads--upload) for options and errors.
 
 ## Usage guide
 

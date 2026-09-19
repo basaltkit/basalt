@@ -161,9 +161,12 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 export {
   THIRD_PARTY_VERSIONS,
   DEFAULT_REGISTRY,
+  DEFAULT_MINIMUM_RELEASE_AGE_MINUTES,
   describeResolution,
+  minimumReleaseAgeMinutes,
   resolveLatestVersions,
   registryUrl,
+  type FreshVersion,
   type HeldBackVersion,
   type ResolveLatestOptions,
   type VersionResolution,

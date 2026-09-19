@@ -12,7 +12,15 @@ Prisma-backed implementation of the [`@basaltkit/events`](https://github.com/bas
 
 ## Why the same database matters
 
-The transactional outbox only holds its promise when the event is written **in the same transaction** as the state change it describes — commit both or neither. Putting the outbox in your primary Postgres/MySQL (this package) makes that possible; a separate store can't.
+The transactional outbox only holds its promise when the event is written **in the same transaction** as the state change it describes — commit both or neither. Putting the outbox in your primary Postgres/MySQL (this package) makes that possible; a separate store can't. Pass Prisma's transaction client as `tx` and the entry is written through it:
+
+```ts
+await prisma.$transaction(async (tx) => {
+  await tx.order.update({ where: { id }, data: { status: 'paid' } })
+  await outbox.enqueue('order.paid', { id }, { tenantId, tx }) // outbox = container.get(OUTBOX)
+})
+// throw inside the callback → Prisma rolls back the update AND the outbox row
+```
 
 ## Installation
 
@@ -40,6 +48,8 @@ model OutboxEntry {
   attempts    Int       @default(0)
   publishedAt DateTime?
   lastError   String?
+  lockedUntil DateTime? // relay claim lease ({ claim: true })
+  lockedBy    String?   // token of the relay holding the row
   @@index([publishedAt, createdAt])
   @@map("outbox")
 }
@@ -57,7 +67,7 @@ import { prismaOutboxStore } from '@basaltkit/events-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
-const outbox = prismaOutboxStore(prisma)
+const outbox = prismaOutboxStore(prisma, { claim: true }) // safe with several replicas
 
 outboxPlugin({
   store: outbox.store,
@@ -73,21 +83,43 @@ Wire the store before its model exists and it **fails fast** with a message nami
 
 | Export | Signature | Purpose |
 |---|---|---|
-| `prismaOutboxStore` | `(client: PrismaEventsClient) => { store: PrismaOutboxStore }` | The one you want. Validates the model exists, then returns the store — drop `store` into `outboxPlugin({ store })`. |
-| `PrismaOutboxStore` | `new PrismaOutboxStore(client)` | The store itself, without the model check. |
+| `prismaOutboxStore` | `(client: PrismaEventsClient, options?: PrismaOutboxStoreOptions) => { store: PrismaOutboxStore }` | The one you want. Validates the model exists, then returns the store — drop `store` into `outboxPlugin({ store })`. |
+| `PrismaOutboxStore` | `new PrismaOutboxStore(client, options?)` | The store itself, without the model check. `enqueue(entry, { tx })` writes through a Prisma transaction client. |
+| `PrismaOutboxStoreOptions` | type | `{ claim?: boolean }` — see below. |
+| `PrismaOutboxTx` | type | What `tx` must provide: `outboxEntry.upsert` — the `tx` of `prisma.$transaction(async (tx) => …)` is assignable. |
 | `PrismaEventsClient` | type | The minimal delegate surface used: `outboxEntry.upsert` / `findMany` / `updateMany`. A real `PrismaClient` with the `OutboxEntry` model is assignable, so pass it directly — no cast. |
 
 ### Options
 
-`prismaOutboxStore` takes no options object: everything tunable (`maxAttempts`, `backoff`,
-`onDead`, `batchSize`, `intervalMs`, `onFlushError`) lives on `outboxPlugin` /
-`OutboxOptions` in [`@basaltkit/events`](https://www.npmjs.com/package/@basaltkit/events). The
-only decision here is which `PrismaClient` you hand it — and the answer is the one that owns your
-business writes, so the enqueue can join their transaction.
+| Option (`PrismaOutboxStoreOptions`) | Type | Default | Purpose |
+|---|---|---|---|
+| `claim` | `boolean` | `false` | Claim rows before dispatching, so **several relays (one per replica) never deliver the same entry at once**, and a failed entry's retry backoff holds on every replica. Needs the `lockedUntil` / `lockedBy` columns (reference schema; `basalt prisma:sync` + migrate). Off by default only so an existing table without those columns keeps working — turn it on whenever more than one process runs the relay. |
+
+Everything else (`maxAttempts`, `backoff`, `onDead`, `batchSize`, `intervalMs`, `onFlushError`,
+`claimLeaseMs`) lives on `outboxPlugin` / `OutboxOptions` in
+[`@basaltkit/events`](https://www.npmjs.com/package/@basaltkit/events). Hand it the
+`PrismaClient` that owns your business writes, so `enqueue(…, { tx })` can join their transaction.
+
+### How the claim works (multi-replica relays)
+
+After selecting a batch, the relay calls `claim(ids, { token, until, now })`: **one conditional
+`updateMany`** — `WHERE id IN (…) AND publishedAt IS NULL AND (lockedUntil IS NULL OR lockedUntil <= now)`
+— stamps the relay's token and lease expiry, then a `findMany` by token reads back the rows it
+won; only those are dispatched. Postgres and MySQL re-check the `WHERE` of a concurrent `UPDATE`
+after the row lock is released, so each row is won by exactly one relay. `pending()` hides rows
+with an active claim, `markPublished` releases it, and `markFailed` releases it or holds it
+until the retry time. If a relay dies mid-dispatch its lease (`claimLeaseMs`, default 5 min)
+expires and another relay takes the row over — at-least-once, never lost.
+
+Why not `SELECT … FOR UPDATE SKIP LOCKED`? It needs a raw query (not portable across
+providers, and refused inside a tenant context by the `@basaltkit/prisma` tenancy extension's raw
+guard), and the lock only lives as long as a transaction — you'd have to hold a transaction open
+across the network dispatch. The lease is plain model queries, works on every Prisma provider,
+and survives the relay crashing.
 
 ### Contract details
 
-`PrismaOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt ceiling, oldest first, tie-broken by `id`; `filter` excludes tenants — NULL-safe, so tenant-less rows are only dropped by `excludeGlobal` — which lets the relay stay fair across tenants), `markPublished`, `markFailed` (increments `attempts`), `all`. Payloads are JSON-serialized into a text column; time is stored as `DateTime` and exposed as epoch-ms, matching the contract. Re-enqueuing the same `id` **replaces** the entry (`upsert` resets `attempts` to 0 and clears `publishedAt`/`lastError`), mirroring `MemoryOutboxStore`. `markPublished` and `markFailed` use `updateMany`, so a missing id is a no-op rather than a throw — again matching the memory store.
+`PrismaOutboxStore` implements the full `OutboxStore` contract — `enqueue` (optionally through `{ tx }`), `claim` (with `{ claim: true }`), `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt ceiling, oldest first, tie-broken by `id`; `filter` excludes tenants — NULL-safe, so tenant-less rows are only dropped by `excludeGlobal` — which lets the relay stay fair across tenants), `markPublished`, `markFailed` (increments `attempts`), `all`. Payloads are JSON-serialized into a text column; time is stored as `DateTime` and exposed as epoch-ms, matching the contract. Re-enqueuing the same `id` **replaces** the entry (`upsert` resets `attempts` to 0 and clears `publishedAt`/`lastError`), mirroring `MemoryOutboxStore`. `markPublished` and `markFailed` use `updateMany`, so a missing id is a no-op rather than a throw — again matching the memory store.
 
 ### Errors
 

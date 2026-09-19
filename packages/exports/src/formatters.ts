@@ -8,6 +8,14 @@ export interface ExportFormatter {
   readonly contentType: string
   readonly extension: string
   render(headers: string[], rows: unknown[][]): Buffer | Promise<Buffer>
+  /**
+   * Optional incremental rendering, used by `Exports.stream()`. Pulls rows one
+   * at a time and yields pieces of the file as it goes, so memory stays bounded
+   * by one chunk instead of the whole dataset. The concatenated output must be
+   * byte-identical to `render()`. Formats whose container needs the whole data
+   * up front (XLSX's ZIP, PDF) leave this out and are buffer-only.
+   */
+  renderStream?(headers: string[], rows: AsyncIterable<unknown[]>): AsyncIterable<string | Buffer>
 }
 
 // A spreadsheet evaluates a cell whose text starts with =, +, -, @ or a leading
@@ -41,18 +49,30 @@ export class DelimitedFormatter implements ExportFormatter {
     this.needsQuote = new RegExp(`["\\r\\n${delimiter === '\t' ? '\\t' : delimiter}]`)
   }
 
+  private line(row: unknown[]): string {
+    return row
+      .map((value) => {
+        const s = cell(value)
+        return this.needsQuote.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+      })
+      .join(this.delimiter)
+  }
+
   render(headers: string[], rows: unknown[][]): Buffer {
-    const escape = (value: unknown): string => {
-      const s = cell(value)
-      return this.needsQuote.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-    }
-    const lines = [headers, ...rows].map((row) => row.map(escape).join(this.delimiter))
-    return Buffer.from(lines.join('\r\n'))
+    return Buffer.from([headers, ...rows].map((row) => this.line(row)).join('\r\n'))
+  }
+
+  async *renderStream(headers: string[], rows: AsyncIterable<unknown[]>): AsyncIterable<string> {
+    yield this.line(headers)
+    for await (const row of rows) yield `\r\n${this.line(row)}`
   }
 }
 
+const toObject = (headers: string[], row: unknown[]): Record<string, unknown> =>
+  Object.fromEntries(headers.map((h, i) => [h, row[i]]))
+
 const toObjects = (headers: string[], rows: unknown[][]): Record<string, unknown>[] =>
-  rows.map((row) => Object.fromEntries(headers.map((h, i) => [h, row[i]])))
+  rows.map((row) => toObject(headers, row))
 
 /** JSON array of `{ header: value }` objects. */
 export class JsonFormatter implements ExportFormatter {
@@ -61,6 +81,18 @@ export class JsonFormatter implements ExportFormatter {
   readonly extension = 'json'
   render(headers: string[], rows: unknown[][]): Buffer {
     return Buffer.from(JSON.stringify(toObjects(headers, rows), null, 2))
+  }
+
+  /** Same bytes as `render()`: each element is indented one level inside `[ … ]`. */
+  async *renderStream(headers: string[], rows: AsyncIterable<unknown[]>): AsyncIterable<string> {
+    let first = true
+    for await (const row of rows) {
+      // JSON escapes newlines inside strings, so every '\n' here is structural.
+      const element = JSON.stringify(toObject(headers, row), null, 2).replace(/\n/g, '\n  ')
+      yield `${first ? '[\n' : ',\n'}  ${element}`
+      first = false
+    }
+    yield first ? '[]' : '\n]'
   }
 }
 
@@ -71,6 +103,14 @@ export class NdjsonFormatter implements ExportFormatter {
   readonly extension = 'ndjson'
   render(headers: string[], rows: unknown[][]): Buffer {
     return Buffer.from(toObjects(headers, rows).map((o) => JSON.stringify(o)).join('\n'))
+  }
+
+  async *renderStream(headers: string[], rows: AsyncIterable<unknown[]>): AsyncIterable<string> {
+    let first = true
+    for await (const row of rows) {
+      yield `${first ? '' : '\n'}${JSON.stringify(toObject(headers, row))}`
+      first = false
+    }
   }
 }
 

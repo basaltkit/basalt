@@ -125,6 +125,28 @@ const gate = new Gate({
 })
 ```
 
+### A role catalogue for per-tenant roles
+
+A role's permissions are normally looked up **in the scope where the role is held**. `@basaltkit/teams` assigns roles per tenant (`assignRole(user, 'owner', tenantId)`), so a catalogue granted once in `GLOBAL_SCOPE` never reaches a tenant owner. Two ways to define the catalogue once:
+
+```ts
+permissionsPlugin({
+  store,
+  // (a) Code-defined, valid in every scope: a role held in tenant A grants these
+  //     permissions in tenant A — never in tenant B, never globally.
+  roleCatalog: {
+    owner: ['*'],
+    admin: ['projects:*', 'members:invite'],
+    member: ['projects:read'],
+  },
+  // (b) Or keep the catalogue in the store under GLOBAL_SCOPE and let tenant-held
+  //     roles resolve their permissions from it (still granting only in the tenant).
+  inheritGlobalRolePermissions: ['admin', 'member'], // or `true` for every role name
+})
+```
+
+Both are unions with what the store grants the role in the tenant itself, use the same wildcard rule, and grant **permissions, not roles** — `hasRole()`, `effectiveRoles()` and audience confinement are unchanged. Prefer a list for `inheritGlobalRolePermissions` when tenant admins can assign role names themselves: with `true`, assigning a globally defined `platform-admin` inside a tenant grants its global permission set in that tenant.
+
 ### Policies (rules about a specific resource)
 
 A **policy** decides by looking at the object in question — for example, "only the owner can edit." When you call `can()` with a third argument (the resource) and a policy exists for `resource:action`, the policy decides (grants are not consulted):
@@ -224,6 +246,8 @@ Options (`GateOptions` = `PermissionsPluginOptions`):
 | `delegations` | `DelegationStore` | — | Enables `delegate()`. Without it that method throws a plain `Error`, and delegations are never consulted. |
 | `now` | `() => number` | `Date.now` | Injectable clock — expiry of temporary grants and delegations is evaluated against it. |
 | `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`. `'error'` throws `MissingPolicyError` (fail closed); `'rbac'` falls back to the granted permission strings. |
+| `roleCatalog` | `Record<string, string[]>` | — | Code-defined role → permissions, valid in every scope: a role held in a scope grants its catalogue permissions in that scope only. Union with the store's role grants. Snapshotted at construction; malformed entries throw `TypeError`. See [A role catalogue for per-tenant roles](#a-role-catalogue-for-per-tenant-roles). |
+| `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | A tenant-held role also resolves its permissions from its `GLOBAL_SCOPE` definition (and the legacy one with `readLegacyGlobalScope`), granting only in that tenant. A list limits it to those role names. |
 | `readLegacyGlobalScope` | `boolean` | `false` | Also treat rows stored under the pre-1.5 global scope `'global'` as global. Transition aid only — see [The global scope is `'@global'`](#the-global-scope-is-global). |
 | `hooks` | `HookBus` | the app's bus (plugin) | Where `permission:*` hooks are emitted. `permissionsPlugin` wires it for you. |
 
@@ -306,6 +330,7 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 | Export | Description |
 |---|---|
 | `permissionMatches(granted, requested)` | Wildcard matching. |
+| `gate.rolePermissions(role, scope)` | The permissions `role` carries when held in `scope`: store grants in that scope + `roleCatalog` + (opt-in) the global definition. Used by checks and `GET /me/access`. |
 | `definePolicy<T>(resource, checks)` | Creates a `Policy<T>` (checks: `(user, resource) => boolean \| Promise<boolean>`). |
 | `GLOBAL_SCOPE` | The string `'@global'` (was `'global'` before 1.5). |
 | `LEGACY_GLOBAL_SCOPE` | The string `'global'` — the old global scope, read only with `readLegacyGlobalScope`. |

@@ -204,6 +204,55 @@ console.log(runs) // 1
 
 In tests with the plugin, pass `autostart: false` so the timer doesn't start.
 
+### Recovering stuck work: `defineReconciler()`
+
+A dispatch can fail **after** the business commit (the queue was down), or a worker can die
+mid-job — and the entity stays `processing` forever. A reconciler is the safety net: on a cadence
+it finds items stuck in an intermediate state and re-dispatches them.
+
+```ts
+import { defineReconciler, schedulerPlugin } from '@basaltkit/scheduler'
+
+schedulerPlugin({
+  lock, // optional: with one, each run happens on ONE replica per tick
+  define: (schedule) => {
+    defineReconciler({
+      name: 'stuck-orders',
+      every: '5m',
+      find: () =>
+        prisma.order.findMany({
+          where: { status: 'processing', updatedAt: { lt: new Date(Date.now() - 15 * 60_000) } },
+          take: 500,
+        }),
+      redispatch: (order) => ProcessOrder.dispatch({ orderId: order.id }),
+      maxPerRun: 100,
+      onError: (error, order) => logger.error({ err: error, orderId: order?.id }, 'reconcile failed'),
+    }).schedule(schedule)
+  },
+})
+```
+
+What it guarantees:
+
+- **No overlap.** A run never starts while the previous one is still running in this process
+  (the tick is skipped and counted). When the scheduler has a `lock`, the entry is
+  `.onOneServer()` (one replica per tick); pass `lock: ReconcilerLock` (`acquire` + `release`,
+  e.g. Redis `SET NX PX` / `DEL`) to also hold a distributed mutex for the **whole** run, so a run
+  that outlasts the cadence can't overlap one on another replica.
+- **Per-item isolation.** A throwing `redispatch` is reported to `onError(error, item)` and the
+  next item still runs. A throwing `find` is reported as `onError(error, undefined)`. Both
+  default to `console.error` — a stuck item that can't be recovered is never silent. `run()`
+  never throws.
+- **Bounded work.** At most `maxPerRun` items (default 100) per run; the rest wait for the next.
+- **Observable.** Every run (also skipped ones) emits `reconciler:run` on the app's hook bus with
+  `{ name, found, redispatched, failed, skipped, reason?, error?, durationMs }`, calls `onRun`, and
+  updates `reconciler.stats` (`runs`, `skippedOverlaps`, `skippedLocked`, `found`, `redispatched`,
+  `failed`).
+
+`redispatch` must be **idempotent**: the "stuck" item may only be slow, and a job may run twice.
+The entry is named `reconciler:<name>`, so `basalt schedule:run reconciler:stuck-orders` triggers
+it on demand; `reconciler.run()` does the same in code (tests).
+
 ## CLI commands (`basalt schedule:*`)
 
 ```bash
@@ -228,8 +277,9 @@ Registers a `Scheduler` (singleton) under the `SCHEDULER` token; on `boot` it ca
 | `autostart` | `boolean` | `true` | Starts the timer at boot. Turn it off in tests so the process isn't holding a 60 s interval. |
 | `lock` | `ScheduleLock` | — | Cross-replica mutex, **required** as soon as any entry calls `.onOneServer()`. Boot throws without it. See [`ScheduleLock`](#the-schedulelock-contract). |
 | `lockTtlMs` | `number` | `60_000` | TTL of each per-entry, per-tick lock key. The key already embeds the minute, so this only has to outlive clock skew between replicas — one tick window is the right default. |
+| `hooks` | `HookBus` | the app's bus | Bus that scheduler-driven hooks (`reconciler:run`) are emitted on. The plugin passes the app's; set it only on a hand-built `Scheduler`. |
 
-`SchedulerOptions` (`lock`, `lockTtlMs`) are the same two the `Scheduler` constructor takes, so a
+`SchedulerOptions` (`lock`, `lockTtlMs`, `hooks`) are the same the `Scheduler` constructor takes, so a
 hand-built `new Scheduler({ lock })` behaves identically.
 
 ### `class Scheduler`
@@ -245,6 +295,27 @@ hand-built `new Scheduler({ lock })` behaves identically.
 | `start` | `() => void` | Aligns to the next minute and then `tick()`s every 60s. Idempotent; the timers are `unref`'d. |
 | `stop` | `() => void` | Stops the timers. |
 | `skippedByLock` | `number` | Ticks skipped because another replica held the lock — for observability and tests. |
+| `hooks` | `HookBus \| undefined` | The bus reconcilers emit `reconciler:run` on. |
+
+### `defineReconciler<T>(options: ReconcilerOptions<T>): Reconciler`
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `name` | `string` | — (**required**) | Identifies the reconciler: entry `reconciler:<name>`, lock key `basalt:reconciler:<name>`, hook payload, logs. |
+| `every` | `DurationInput` \| cron | — (**required**) | Cadence: whole minutes dividing 60 (`'1m'`, `'5m'`, `'15m'`), whole hours dividing 24 (`'2h'`), `'1d'`, or a 5-field cron expression. Anything else (`'30s'`, `'7m'`, `'90m'`) throws `ScheduleDefinitionError` (`SCHEDULE_INVALID_INTERVAL`) at definition. |
+| `find` | `() => T[] \| Promise<T[]>` | — (**required**) | Returns the stuck items. Bound the query yourself (`take`). |
+| `redispatch` | `(item: T) => void \| Promise<void>` | — (**required**) | Re-dispatches one item. Must be idempotent. |
+| `maxPerRun` | `number` | `100` | Most items re-dispatched per run. |
+| `onError` | `(error, item \| undefined) => void` | `console.error` | A `redispatch` (item set) or `find` / lock (item `undefined`) failed. Must not throw. |
+| `onRun` | `(result: ReconcilerRunResult) => void` | — | Called after every run — wire metrics here. |
+| `hooks` | `HookBus` | the scheduler's (`schedulerPlugin`: the app's) | Where `reconciler:run` is emitted. |
+| `lock` | `ReconcilerLock` | — | `{ acquire(key, ttlMs), release(key) }` — distributed mutex held for the whole run. |
+| `lockTtlMs` | `number` | `900_000` (15 min) | Lease of the run lock; must exceed the longest run. |
+| `timezone` | `string` | `'UTC'` | Timezone of a cron cadence. |
+| `onOneServer` | `boolean` | `true` | Mark the entry `.onOneServer()` when the scheduler has a `lock`. |
+
+`Reconciler`: `name`, `stats` (`ReconcilerStats`), `run(): Promise<ReconcilerRunResult>` (runs now; overlap guard and lock apply; never throws), `schedule(scheduler): ScheduleEntry`.
+`ReconcilerRunResult`: `{ name, found, redispatched, failed, skipped, reason?: 'overlap' | 'locked', error?, durationMs }`.
 
 ### `class ScheduleEntry` (returned by `call`/`job`)
 
@@ -274,7 +345,7 @@ Exported for tooling and tests; you don't usually need them:
 | `fieldMatches` | `(field: string, value: number) => boolean` | Does a field (`*`, `*/n`, `a-b`, `a,b,c`, value) accept the number? |
 | `zonedParts` | `(date: Date, timeZone = 'UTC') => ZonedParts` | Breaks the instant down into minute/hour/day/month/day-of-week in the timezone. |
 | `CronParseError` | class (`BasaltError`, code `CRON_INVALID`) | Invalid cron expression. |
-| `ScheduleDefinitionError` | class (`BasaltError`, codes `SCHEDULE_CONFLICT` / `SCHEDULE_INVALID_TIME`) | Inconsistent entry definition (two frequencies, invalid `.at()`). |
+| `ScheduleDefinitionError` | class (`BasaltError`, codes `SCHEDULE_CONFLICT` / `SCHEDULE_INVALID_TIME` / `SCHEDULE_INVALID_INTERVAL`) | Inconsistent entry definition (two frequencies, invalid `.at()`, a reconciler `every` the cron can't express). |
 | `CronFields`, `ZonedParts` | types | Cron fields as strings; numeric parts of the instant. |
 
 ### Token
@@ -288,17 +359,21 @@ Exported for tooling and tests; you don't usually need them:
 | `CronParseError` | `CRON_INVALID` | An expression passed to `.cron()` (or built internally) isn't 5 fields, uses unsupported syntax (`MON`, `@daily`, `?`, `L`), has a reversed range (`5-1`), a step below 1, or a value outside its field's bounds. Extends `BasaltError`; raised at **definition** time, so a typo fails at boot rather than becoming a task that silently never fires. |
 | `ScheduleDefinitionError` | `SCHEDULE_CONFLICT` | An entry chains a second frequency (`.daily().monthly()`, `.cron(...).daily()`), calls `.at()` after `everyMinute()`/`everyMinutes()`/`hourly()`/`cron()` or twice, or combines `.cron()` with a day-of-week modifier. The message names the entry and both calls. Extends `BasaltError`; raised at **definition** time (boot). Before, the last call silently won. |
 | `ScheduleDefinitionError` | `SCHEDULE_INVALID_TIME` | `.at()` received something other than `H:mm`/`HH:mm` with hour 0–23 and minute 0–59. Before, it silently produced `NaN` fields. |
+| `ScheduleDefinitionError` | `SCHEDULE_INVALID_INTERVAL` | `defineReconciler({ every })` got a duration the minute-based cron can't express (`'30s'`, `'7m'`, `'90m'`). Raised at definition (boot). |
 | `Error` (plain) | — | At `boot`, when an entry uses `.onOneServer()` but no `lock` was configured. See [Boot-time enforcement](#boot-time-enforcement). |
 | `AggregateError` | — (built-in) | From `tick()`, when one or more due entries failed without an `onFailure` handler — or when a `.onOneServer()` entry's `lock.acquire` rejected. All due entries still ran; `error.errors` holds each failure. Swallowed by the automatic timer path so a failing task can't kill the process. |
 
 ### Hooks & callbacks
 
-The scheduler has no hook bus. Two per-entry callbacks and one injected collaborator:
+The scheduler emits one hook, from reconcilers: **`reconciler:run`** (payload `ReconcilerRunResult`)
+on the app's bus after every reconciler run — a throwing hook handler is logged, never turns the
+run into a failure. Plus per-entry callbacks and injected collaborators:
 
 | Callback | Where | Receives | Default when unset |
 |---|---|---|---|
 | `onFailure(handler)` | `ScheduleEntry` | `(error: unknown)` | The error propagates — aggregated into the tick's `AggregateError`, then **swallowed** by the automatic timer. Set it, or a failure in production is invisible. |
 | `lock.acquire` | `SchedulerOptions` | `(key: string, ttlMs: number) => Promise<boolean>` | No lock. Boot throws if any entry needs one. |
+| `onError` / `onRun` | `ReconcilerOptions` | `(error, item \| undefined)` / `(result)` | `console.error` / none |
 
 ## Multiple replicas — `.onOneServer()`
 

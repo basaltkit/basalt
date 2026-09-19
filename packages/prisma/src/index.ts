@@ -8,6 +8,7 @@ import {
 import { TenantClientPool } from './pool.js'
 import type { ShardRouter } from './sharding.js'
 import { schemaUrl, tenantSchema, assertSchemaPerTenantSupported } from './schema.js'
+import { assertMigrated, type AssertMigratedOptions } from './assert-migrated.js'
 
 export {
   tenancyExtension,
@@ -16,9 +17,21 @@ export {
   RawQueryInTenantContextError,
   UnscopedOperationError,
   CrossTenantWriteError,
+  tenantTransaction,
   type TenancyExtensionOptions,
+  type RlsExtensionOptions,
+  type TenancyExtension,
+  type TenancyRlsExtension,
+  type TenantTransactionOptions,
+  type TenantTransactionClient,
 } from './extension.js'
 export { TenantClientPool, type TenantClientPoolOptions } from './pool.js'
+export {
+  assertMigrated,
+  redactCredentials,
+  DatabaseNotMigratedError,
+  type AssertMigratedOptions,
+} from './assert-migrated.js'
 export { readReplica, type ReadReplicaOptions } from './replicas.js'
 export {
   ShardRouter,
@@ -178,6 +191,15 @@ export interface PrismaPluginOptions<TClient = unknown> {
   destroy?: (client: TClient, tenantId: string) => void | Promise<void>
   /** Max simultaneously open per-tenant clients. Default: 10 */
   max?: number
+  /**
+   * Fail the boot unless the shared `client`'s database is migrated: checks
+   * that `_prisma_migrations` exists (and, with `{ tables }`, those tables
+   * too). Catches booting against the wrong database — e.g. a shell that
+   * exported another project's DATABASE_URL — at startup instead of as a
+   * P2021 on the first request. The error names the database and host, never
+   * the credentials. Needs `client`. Default: off.
+   */
+  assertMigrated?: boolean | AssertMigratedOptions
 }
 
 export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TClient>) {
@@ -246,6 +268,19 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         const client = await clientFor(tenant.id)
         if (client !== undefined) context.db = client
       })
+    },
+    async boot() {
+      if (!options.assertMigrated) return
+      if (options.client === undefined) {
+        throw new BasaltError(
+          'PRISMA_CONFIG',
+          'prismaPlugin: assertMigrated needs `client` (the shared/central database client) to check.',
+        )
+      }
+      await assertMigrated(
+        options.client as Parameters<typeof assertMigrated>[0],
+        options.assertMigrated === true ? {} : options.assertMigrated,
+      )
     },
     async shutdown({ container }) {
       if (container.has(DB_POOL)) await container.get(DB_POOL).destroyAll()

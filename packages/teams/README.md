@@ -310,8 +310,10 @@ the real error code in the body.
 - **A custom role keeps getting `TEAM_ROLE_REQUIRED`** — roles outside
   `roleRank` have rank 0. Add the role to the map, or (for the membership
   guard) rely on the default existence semantics instead of `role:`.
-- **403 on a central route (login, sign-up, tenant creation)** — mark it
-  `meta: { central: true }`, or exempt the calling identity with `exempt`.
+- **403 on a central route (tenant creation, platform admin)** — mark it
+  `meta: { central: true }`, or exempt the calling identity with `exempt`. Your
+  own profile/account routes take `meta: { account: true }` instead (the
+  `@basaltkit/auth` routes and the invite-accept route already declare it).
 - **`TEAM_INVITE_INVALID` on a link the user swears is fresh** — they may be
   signed in as a different account than the one invited, and `accept` binds to
   the invited address.
@@ -356,9 +358,14 @@ createApp({
 The guard runs only when **both** a tenant and a user are present, and is
 skipped for:
 
-- routes where no tenant resolved (central/platform routes), and
-- routes that opt out explicitly with `meta: { central: true }` — login, sign-up,
-  tenant creation, invite acceptance.
+- routes where no tenant resolved (central/platform routes),
+- **account routes**, `meta: { account: true }` — about the caller's own
+  identity, not the tenant's data. `authRoutes()`, `mfaRoutes()`,
+  `oauthRoutes()` (`@basaltkit/auth`) and `POST /team/invites/accept` declare
+  it, so a non-member can sign in and accept an invitation on the company's
+  subdomain. `apiKeyRoutes()` does not (keys are tenant-bound), and
+- routes that opt out explicitly with `meta: { central: true }` — tenant
+  creation, platform admin.
 
 Its options table, the existence-vs-rank semantics and the cache staleness
 rules are under **API reference → `tenantMembershipPlugin(options)`** above.

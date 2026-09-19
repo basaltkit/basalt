@@ -1,8 +1,9 @@
 # @basaltkit/backup
 
 PostgreSQL backups for Basalt applications. The package runs the PostgreSQL
-client tools, writes immutable dump artifacts and JSON manifests to a Basalt
-`Disk`, and keeps execution independent from Prisma's query API.
+client tools, writes dump artifacts and JSON manifests to a Basalt
+`Disk` (plain writes — see [Immutability](#immutability-object-lock) for
+making them tamper-proof), and keeps execution independent from Prisma's query API.
 
 ## Install
 
@@ -218,6 +219,31 @@ Failed backups are not counted as retained successful backups. Leave
 artifacts.
 
 `backup:list` is registered for `pnpm basalt backup:list`.
+
+## Immutability (Object Lock)
+
+The package does **not** make backups immutable by itself: artifacts and
+manifests are ordinary `disk.put()` writes, manifests are rewritten as a run
+progresses (`running` → `succeeded`/`failed`), and `retention` deletes old
+pairs with `disk.delete()`. Anyone holding the disk's write credentials can
+overwrite or delete a backup.
+
+Immutability is a property of the storage, so it is the application's (or the
+platform's) responsibility. On S3 or an S3-compatible service that supports it:
+
+- enable **bucket versioning** and **S3 Object Lock** on the backup bucket, with
+  a default retention (**compliance** mode for a hard guarantee, governance mode
+  if privileged users must be able to lift it) at least as long as your recovery
+  window;
+- use a **dedicated bucket or prefix** and credentials for backups, separate from
+  the application's upload disk, ideally with no `s3:DeleteObjectVersion` /
+  `s3:BypassGovernanceRetention` permission;
+- with versioning on, `retention` cleanup only adds delete markers — the locked
+  versions stay recoverable until their retention period expires, and manifest
+  rewrites become new versions rather than overwrites.
+
+Local disks give no immutability guarantee; copy dumps off-host (or to a
+locked bucket) if tamper resistance matters.
 
 ## Docker or remote PostgreSQL
 

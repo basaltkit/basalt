@@ -2,9 +2,12 @@ import {
   DEFAULT_MAX_TEMPORARY_URL_TTL,
   type TemporaryUrlOptions,
   StorageFileNotFoundError,
+  TemporaryUploadUrlUnsupportedError,
   TemporaryUrlTtlTooLongError,
   type PutOptions,
   type StorageDriver,
+  type TemporaryUploadUrl,
+  type TemporaryUploadUrlDriverOptions,
 } from '@basaltkit/storage'
 
 /** The subset of an `@azure/storage-blob` BlockBlobClient this driver uses. */
@@ -89,6 +92,47 @@ export class AzureBlobStorageDriver implements StorageDriver {
       // rendering on the storage origin ('attachment' is the Disk default).
       contentDisposition: options?.disposition ?? 'attachment',
     })
+  }
+
+  /**
+   * Pre-signed direct upload: a service SAS with create + write permission
+   * only (no read/list/delete), valid for `expiresInMs`.
+   *
+   * Caveat: an Azure SAS cannot bind request headers, so — unlike S3 and GCS —
+   * the declared Content-Type and Content-Length are NOT enforced by the
+   * signature. They are returned as the headers the client should send; treat
+   * the upload as untrusted and verify the blob's properties (type, size)
+   * before using it. `checksumSha256` is refused: Put Blob has no SHA-256
+   * header to carry it.
+   */
+  async temporaryUploadUrl(
+    path: string,
+    expiresInMs: number,
+    options: TemporaryUploadUrlDriverOptions,
+  ): Promise<TemporaryUploadUrl> {
+    // Same driver-level ceiling as temporaryUrl: Azure SAS has no native maximum.
+    if (!(expiresInMs > 0) || expiresInMs > DEFAULT_MAX_TEMPORARY_URL_TTL) {
+      throw new TemporaryUrlTtlTooLongError(expiresInMs, DEFAULT_MAX_TEMPORARY_URL_TTL)
+    }
+    if (options.checksumSha256 !== undefined) {
+      throw new TemporaryUploadUrlUnsupportedError(
+        this.name,
+        'The "azure" driver cannot bind checksumSha256 into a SAS upload URL (Put Blob verifies MD5/CRC64 only). ' +
+          'Omit it and verify the blob after upload.',
+      )
+    }
+    const expiresOn = new Date(Date.now() + expiresInMs)
+    const url = await (await this.container()).getBlockBlobClient(path).generateSasUrl({ permissions: 'cw', expiresOn })
+    return {
+      url,
+      method: 'PUT',
+      headers: {
+        'x-ms-blob-type': 'BlockBlob',
+        'Content-Type': options.contentType,
+        ...(options.contentLength !== undefined ? { 'Content-Length': String(options.contentLength) } : {}),
+      },
+      expiresAt: expiresOn,
+    }
   }
 
   async disconnect(): Promise<void> {}

@@ -144,8 +144,15 @@ export async function anyService() {
 }
 
 tryCtx()                                  // …or undefined outside a context, no throw
-await runWithContext({ tenant }, () => runJobForTenant()) // give background work a context
+await runWithContext({ tenant }, async () => await runJobForTenant()) // give background work a context
 ```
+
+::: warning Await inside the callback
+The context is only active while the callback runs. A lazy thenable — a Prisma
+query — returned un-awaited from a synchronous callback executes *after*
+`runWithContext` returns, outside the context (`PRISMA_TENANT_MISSING`). Use an
+`async` callback and `await` the work inside it. `tenancy.run()` does this for you.
+:::
 
 This is the backbone that lets cache, storage, queue, logger and the data
 drivers isolate per tenant automatically — they all read the tenant from the

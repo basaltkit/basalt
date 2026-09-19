@@ -90,10 +90,16 @@ export interface TenantMembershipPluginOptions {
  *
  * The guard runs only when BOTH a tenant and a user are present (i.e. an
  * authenticated request that resolved a tenant). It is skipped for:
- *  - routes with no resolved tenant (central/platform routes), and
+ *  - routes with no resolved tenant (central/platform routes),
+ *  - account routes, `meta: { account: true }` — routes about the caller's own
+ *    identity rather than the tenant's data. `authRoutes()`, `mfaRoutes()`,
+ *    `oauthRoutes()` (`@basaltkit/auth`) and the invite-accept route of
+ *    `teamRoutes()` declare it, so a non-member can sign in and accept an
+ *    invitation on the company's tenant. `account` is a neutral key: any
+ *    package can mark its own account-scoped routes with it, and
  *  - routes that explicitly opt out with `meta: { central: true }` — used by
  *    the routes that legitimately act across/outside a single tenant
- *    (login, tenant creation, platform admin, invite acceptance).
+ *    (tenant creation, platform admin).
  *
  * Register it alongside `authPlugin`, `tenancyPlugin` and `teamsPlugin`.
  * Treat tenant *resolution* as identification, never authorization.
@@ -139,6 +145,10 @@ export function tenantMembershipPlugin(options: TenantMembershipPluginOptions = 
 
       const guard: RouteGuard = async ({ route, context, container: c }) => {
         if (route.meta?.['central'] === true) return
+        // Account routes act on the caller's own identity (sign-in, profile,
+        // MFA, accepting an invitation), not on the tenant's data — the caller
+        // is by definition allowed to be a non-member there.
+        if (route.meta?.['account'] === true) return
 
         const ctxLike = context as { tenant?: { id: string }; user?: { id: string } }
         const tenantId = ctxLike.tenant?.id

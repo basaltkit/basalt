@@ -5,7 +5,13 @@ const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import { randomUUID } from 'node:crypto'
-import type { OutboxEntry, OutboxPendingFilter, OutboxStore } from '@basaltkit/events'
+import type {
+  OutboxClaimOptions,
+  OutboxEntry,
+  OutboxMarkFailedOptions,
+  OutboxPendingFilter,
+  OutboxStore,
+} from '@basaltkit/events'
 
 /**
  * Durable, SQLite-backed implementation of the `@basaltkit/events` `OutboxStore`,
@@ -41,11 +47,19 @@ export function migrate(db: DatabaseSync): void {
       created_at   INTEGER NOT NULL,
       attempts     INTEGER NOT NULL DEFAULT 0,
       published_at INTEGER,
-      last_error   TEXT
+      last_error   TEXT,
+      locked_until INTEGER,
+      locked_by    TEXT
     );
     -- Partial index: the relay only ever scans un-published rows, oldest first.
     CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox (created_at) WHERE published_at IS NULL;
   `)
+  // Tables created before the relay claim columns existed: add them in place.
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(outbox)').all() as unknown as { name: string }[]).map((c) => c.name),
+  )
+  if (!columns.has('locked_until')) db.exec('ALTER TABLE outbox ADD COLUMN locked_until INTEGER')
+  if (!columns.has('locked_by')) db.exec('ALTER TABLE outbox ADD COLUMN locked_by TEXT')
 }
 
 interface OutboxRow {
@@ -57,6 +71,8 @@ interface OutboxRow {
   attempts: number
   published_at: number | null
   last_error: string | null
+  locked_until: number | null
+  locked_by: string | null
 }
 
 const toEntry = (r: OutboxRow): OutboxEntry => ({
@@ -73,21 +89,31 @@ const toEntry = (r: OutboxRow): OutboxEntry => ({
 export class SqliteOutboxStore implements OutboxStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  async enqueue(input: {
-    id?: string
-    event: string
-    payload: unknown
-    tenantId?: string
-    createdAt: number
-  }): Promise<OutboxEntry> {
+  /**
+   * Writes the entry. Pass `{ tx }` — the `DatabaseSync` handle on which your
+   * `BEGIN … COMMIT` runs (the store's own handle, or another connection to the
+   * same file) — to write it in that transaction: a rollback removes it with the
+   * state change. Without `tx` it is written on the store's handle, which already
+   * joins any transaction open on that same handle.
+   */
+  async enqueue(
+    input: {
+      id?: string
+      event: string
+      payload: unknown
+      tenantId?: string
+      createdAt: number
+    },
+    options: { tx?: DatabaseSync } = {},
+  ): Promise<OutboxEntry> {
     const id = input.id ?? randomUUID()
     const payload = input.payload === undefined ? null : JSON.stringify(input.payload)
     // INSERT OR REPLACE mirrors MemoryOutboxStore: re-enqueuing the same id
     // replaces the entry (attempts reset to 0, publish/error cleared).
-    this.db
+    ;(options.tx ?? this.db)
       .prepare(
-        `INSERT OR REPLACE INTO outbox (id, event, payload, tenant_id, created_at, attempts, published_at, last_error)
-         VALUES (?, ?, ?, ?, ?, 0, NULL, NULL)`,
+        `INSERT OR REPLACE INTO outbox (id, event, payload, tenant_id, created_at, attempts, published_at, last_error, locked_until, locked_by)
+         VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, NULL)`,
       )
       .run(id, input.event, payload, input.tenantId ?? null, input.createdAt)
     return {
@@ -113,6 +139,11 @@ export class SqliteOutboxStore implements OutboxStore {
     } else if (filter.excludeGlobal) {
       tenantClause = ' AND tenant_id IS NOT NULL'
     }
+    if (filter.now !== undefined) {
+      // Hide rows another relay holds, or that sit in a stored retry backoff.
+      tenantClause += ' AND (locked_until IS NULL OR locked_until <= ?)'
+      args.push(filter.now)
+    }
     args.push(limit)
     const rows = this.db
       .prepare(
@@ -125,12 +156,40 @@ export class SqliteOutboxStore implements OutboxStore {
     return rows.map(toEntry)
   }
 
-  async markPublished(id: string, at: number): Promise<void> {
-    this.db.prepare('UPDATE outbox SET published_at = ? WHERE id = ?').run(at, id)
+  /**
+   * Claims rows for one relay: a single conditional UPDATE (atomic in SQLite,
+   * also across processes sharing the file) stamps the token on rows still
+   * unpublished and unclaimed (or expired); a SELECT reads back the winners.
+   */
+  async claim(ids: string[], options: OutboxClaimOptions): Promise<string[]> {
+    if (ids.length === 0) return []
+    const list = ids.map(() => '?').join(', ')
+    this.db
+      .prepare(
+        `UPDATE outbox SET locked_until = ?, locked_by = ?
+         WHERE id IN (${list}) AND published_at IS NULL AND (locked_until IS NULL OR locked_until <= ?)`,
+      )
+      .run(options.until, options.token, ...ids, options.now)
+    const rows = this.db
+      .prepare(`SELECT id FROM outbox WHERE locked_by = ? AND id IN (${list})`)
+      .all(options.token, ...ids) as unknown as { id: string }[]
+    const won = new Set(rows.map((row) => row.id))
+    return ids.filter((id) => won.has(id))
   }
 
-  async markFailed(id: string, error: string): Promise<void> {
-    this.db.prepare('UPDATE outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?').run(error, id)
+  async markPublished(id: string, at: number): Promise<void> {
+    this.db
+      .prepare('UPDATE outbox SET published_at = ?, locked_until = NULL, locked_by = NULL WHERE id = ?')
+      .run(at, id)
+  }
+
+  /** Records a failure and releases the claim — or holds it until `retryAt` (cross-relay backoff). */
+  async markFailed(id: string, error: string, options: OutboxMarkFailedOptions = {}): Promise<void> {
+    this.db
+      .prepare(
+        'UPDATE outbox SET attempts = attempts + 1, last_error = ?, locked_until = ?, locked_by = NULL WHERE id = ?',
+      )
+      .run(error, options.retryAt ?? null, id)
   }
 
   async all(): Promise<OutboxEntry[]> {

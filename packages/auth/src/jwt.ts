@@ -21,6 +21,11 @@ export interface JwtClaims {
   exp?: number
   /** Access-token version — checked against TokenVersionStore for revocation. */
   tv?: number
+  /**
+   * Authentication methods used at sign-in (RFC 8176 style): `pwd` (password),
+   * `fed` (social / SSO provider), `mfa` (a second factor was verified).
+   */
+  amr?: string[]
   [claim: string]: unknown
 }
 

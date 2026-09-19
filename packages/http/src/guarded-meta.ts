@@ -4,7 +4,7 @@ import type { BasaltRoute } from './route.js'
  * The security-relevant route-meta keys the framework knows about. Each is
  * enforced by a guard that a specific plugin registers:
  *
- * - `auth` — `@basaltkit/auth`'s `authPlugin`
+ * - `auth`, `mfa` — `@basaltkit/auth`'s `authPlugin`
  * - `can` — `@basaltkit/permissions`' `permissionsPlugin`
  * - `teamRole` — `@basaltkit/teams`' `teamsPlugin`
  * - `scopes` — `@basaltkit/auth`'s `apiKeysPlugin`
@@ -20,11 +20,12 @@ import type { BasaltRoute } from './route.js'
  * and `rateLimit` (abuse throttling, not an authorization boundary, and legal
  * to declare with `securityPlugin`'s optional rate limiter switched off).
  */
-export const GUARDED_META_KEYS = ['auth', 'can', 'teamRole', 'scopes', 'subscribed', 'feature'] as const
+export const GUARDED_META_KEYS = ['auth', 'mfa', 'can', 'teamRole', 'scopes', 'subscribed', 'feature'] as const
 
 /** Which plugin enforces each guarded key — used to make the boot error actionable. */
 const ENFORCED_BY: Record<string, string> = {
   auth: 'authPlugin',
+  mfa: 'authPlugin',
   can: 'permissionsPlugin',
   teamRole: 'teamsPlugin',
   scopes: 'apiKeysPlugin',

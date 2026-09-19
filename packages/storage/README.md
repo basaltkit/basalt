@@ -200,6 +200,24 @@ stored XSS on the storage domain. `attachment` neutralises it. Embedded uses
 (`<img>`, `<video>`) render regardless of disposition, so avatars and media are
 unaffected.
 
+### Direct browser uploads (pre-signed PUT)
+
+```ts
+const upload = await disk.temporaryUploadUrl(`uploads/${randomUUID()}.png`, {
+  expiresIn: '5m',              // capped by maxTemporaryUploadUrlTtl (default 1h)
+  contentType: 'image/png',     // required, signed
+  contentLength: file.size,     // signed: any other size is rejected (S3, GCS)
+})
+// browser: fetch(upload.url, { method: upload.method, headers: upload.headers, body: file })
+```
+
+Same safety rules as `temporaryUrl` — key validation, tenant prefix, fail-closed
+without a tenant, TTL cap. Generate the key server-side, keep the TTL short,
+always bind the content type and length, and verify the object before trusting
+it (Azure SAS cannot bind headers at all). Drivers without the capability throw
+`TemporaryUploadUrlUnsupportedError` (`STORAGE_UPLOAD_URL_UNSUPPORTED`). Full
+flow and per-driver matrix in the [Storage guide](https://basaltkit-docs.pages.dev/guide/storage#direct-browser-uploads).
+
 ### Automatic tenant isolation
 
 Just like the cache, every operation reads the tenant from the request context and prefixes paths with `tenants/<id>/`. Each tenant gets its own private area with no extra code:
@@ -279,6 +297,7 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | `delete` | `delete(path: string): Promise<boolean>` | Deletes; `true` if it existed. |
 | `list` | `list(prefix?: string): Promise<string[]>` | Lists paths under the prefix (recursive, sorted). Prefix defaults to `''`. |
 | `temporaryUrl` | `temporaryUrl(path: string, expiresIn: DurationInput, options?: TemporaryUrlOptions): Promise<string>` | Pre-signed URL, served `attachment` unless `{ disposition: 'inline' }`; throws `TemporaryUrlUnsupportedError` if the driver doesn't support it. |
+| `temporaryUploadUrl` | `temporaryUploadUrl(path: string, options: TemporaryUploadUrlOptions): Promise<TemporaryUploadUrl>` | Pre-signed direct-upload URL: `{ url, method: 'PUT', headers, expiresAt, key }`. Throws `TemporaryUploadUrlUnsupportedError` if the driver doesn't support it. |
 | `image` | `image(path: string): ImagePipeline` | Opens the lazy image pipeline for `path`. |
 
 #### `DiskOptions`
@@ -286,6 +305,9 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `scope` | `(() => string \| undefined) \| null` | No | reads `ctx().tenant.id` → `tenants/<id>` | Dynamic path prefix, resolved on each operation. `null` disables it. |
+| `onMissingScope` | `'root' \| 'error'` | No | `'error'` with tenancy + default scope, else `'root'` | What happens with no tenant in context. |
+| `maxTemporaryUrlTtl` | `DurationInput` | No | `'7d'` | Longest `temporaryUrl` lifetime. |
+| `maxTemporaryUploadUrlTtl` | `DurationInput` | No | `'1h'` (or `maxTemporaryUrlTtl` if lower) | Longest `temporaryUploadUrl` lifetime. |
 
 #### `PutOptions`
 
@@ -300,6 +322,19 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `disposition` | `'attachment' \| 'inline'` | `'attachment'` | How the signed URL serves the object. Leave it alone for user-uploaded content; `'inline'` only when top-level rendering is deliberate. |
+
+#### `TemporaryUploadUrlOptions`
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `expiresIn` | `DurationInput` | — (required) | URL lifetime, capped by `maxTemporaryUploadUrlTtl`. |
+| `contentType` | `string` | — (required) | The only content type the upload may declare; signed (S3, GCS). |
+| `contentLength` | `number` | — | Exact body size; signed (S3, GCS). Omit it and any size is accepted. |
+| `checksumSha256` | `string` (base64) | — | SHA-256 of the body; signed and verified by S3, refused by GCS/Azure. |
+| `maxBytes` | `number` | — | Facade cap on the declared `contentLength` (which becomes mandatory) → `STORAGE_TOO_LARGE`. |
+| `allowedContentTypes` | `readonly string[]` | — | Facade allowlist for `contentType` → `STORAGE_CONTENT_TYPE`. |
+
+Invalid options (missing/malformed type, non-integer length, malformed checksum, `maxBytes` without `contentLength`) → `StorageUploadUrlInvalidError` (`400 STORAGE_UPLOAD_URL_INVALID`).
 
 ### `class Storage`
 

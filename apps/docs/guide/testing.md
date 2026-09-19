@@ -274,6 +274,30 @@ worker — typically as a token that is mysteriously expired. Always
 in-file concurrency.
 :::
 
+## A real tenant per test
+
+`withTenant(tenancy, id, fn, { fields?, cleanup? })` provisions a real tenant,
+runs `fn` inside its context and destroys it afterwards — including when `fn`
+throws. A leftover tenant with the same id (a crashed earlier run) is
+force-destroyed first, so a suite can always recover on its own.
+
+```ts
+import { TENANCY } from '@basaltkit/tenancy'
+import { withTenant } from '@basaltkit/testing'
+
+await withTenant(app.container.get(TENANCY), 'acme', async () => {
+  // ctx().tenant is acme; your onProvision hook has run
+})
+```
+
+::: info Not provided yet
+`@basaltkit/testing` has no dedicated storage, notifications or billing fakes,
+no Prisma factories, no per-file rolled-back transaction and no Vitest preset.
+For billing, use `FakeBillingGateway` / `FakePaymentGateway` and the
+`Memory*Store`s from `@basaltkit/subscriptions`; for in-app notifications,
+`MemoryInAppStore` from `@basaltkit/notifications`.
+:::
+
 ## Options reference
 
 `createTestApp(options)` — everything from `CreateAppOptions`, plus `adapter`:

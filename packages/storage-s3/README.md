@@ -59,11 +59,26 @@ s3Disk({
 
 Omit `credentials` on AWS to use the standard credential chain (environment, profile, instance role).
 
+### Direct browser uploads
+
+`disk.temporaryUploadUrl(key, { expiresIn, contentType, contentLength?, checksumSha256? })` presigns a `PutObject`. Content-Type — and Content-Length, the SHA-256 checksum and the SSE headers when present — are signed as **headers** (not query parameters), so S3 rejects an upload that omits or changes any of them; with `checksumSha256` S3 also verifies the body. Send the returned `headers` verbatim. Uploads are presigned without the SDK's default CRC32 checksum (which would otherwise pin the checksum of an empty body and break every upload). See the [Storage guide](https://basaltkit-docs.pages.dev/guide/storage#direct-browser-uploads) for the browser flow and security checklist.
+
+### Server-side encryption
+
+The simplest option is the bucket's default encryption — nothing to set here. To pin it from the app:
+
+```ts
+s3Disk({ bucket: 'docs', serverSideEncryption: 'AES256' })                 // SSE-S3
+s3Disk({ bucket: 'docs', serverSideEncryption: { kms: 'alias/docs-key' } }) // SSE-KMS
+```
+
+It is sent with every `put` and signed into every pre-signed upload.
+
 ## API reference
 
 ### `s3Disk(options)`
 
-Returns a disk config for `storagePlugin({ disks })`. Takes every `S3DriverOptions` field plus the disk's own `scope`.
+Returns a disk config for `storagePlugin({ disks })`. Takes every `S3DriverOptions` field plus every `DiskOptions` field (`scope`, `onMissingScope`, `maxTemporaryUrlTtl`, `maxTemporaryUploadUrlTtl`, …) and forwards each to the driver or the disk.
 
 | Option | Type | Required? | Description |
 |---|---|---|---|
@@ -72,7 +87,11 @@ Returns a disk config for `storagePlugin({ disks })`. Takes every `S3DriverOptio
 | `endpoint` | `string` | No | Custom endpoint — set it for MinIO, R2 and friends |
 | `credentials` | `{ accessKeyId, secretAccessKey }` | No | Omit on AWS to use the standard chain |
 | `forcePathStyle` | `boolean` | No | Path-style URLs. Defaults to `true` when `endpoint` is set |
+| `serverSideEncryption` | `'AES256' \| { kms: string }` | No | SSE on every put and pre-signed upload. Default: none sent (bucket default applies) |
 | `scope` | `DiskOptions['scope']` | No | Per-disk tenant scoping, as on any other disk |
+| `onMissingScope` | `'root' \| 'error'` | No | Behaviour with no tenant in context |
+| `maxTemporaryUrlTtl` | `DurationInput` | No | Cap for `temporaryUrl` lifetimes (default `'7d'`) |
+| `maxTemporaryUploadUrlTtl` | `DurationInput` | No | Cap for `temporaryUploadUrl` lifetimes (default `'1h'`) |
 
 ### `new S3StorageDriver(options)`
 

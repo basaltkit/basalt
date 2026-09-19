@@ -93,7 +93,10 @@ export function teamRoutes(options: TeamRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/team/invites/accept',
-      meta: { auth: true },
+      // `account`: the accepter is by definition not a member yet, so the
+      // tenant-membership guard must not refuse them (the invitation token,
+      // bound to their verified email, is the authorization).
+      meta: { auth: true, account: true },
       body: z.object({ token: z.string() }),
       async handler({ body }) {
         const uid = actingUserId()

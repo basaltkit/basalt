@@ -104,6 +104,7 @@ Behavior notes (faithful to the code):
 - **`--ui` forces pnpm**: the `web/` frontend is a member of a pnpm *workspace* (declared in the generated `pnpm-workspace.yaml`). npm, yarn, and bun can't install or run that structure, so if you request `--ui` with another manager, you'll see `Note: --ui projects are pnpm workspaces — using pnpm instead of <manager>.` and pnpm is used.
 - **Interactive wizard**: when you don't pass a name, you're in a terminal (TTY), and you didn't use `--yes`, you get the guided wizard — an intro, a **starting-point preset** (SaaS starter / API only / Full stack / Minimal / Custom), an arrow-key **feature multiselect** on the custom path, package-manager select, and a **summary + confirm** step before anything is written. Ctrl+C (or declining the final confirm) ends cleanly with "Cancelled." (exit code 130).
 - **Latest dependency versions**: before writing files, the CLI asks the npm registry (`npm_config_registry` when set by your package manager, else `registry.npmjs.org`) for the `latest` version of every dependency the project will contain and writes `^<latest>`. `@basaltkit/*` packages always take the latest release. Third-party packages (TypeScript, Vitest, React, Vite, Tailwind, …) take the latest only on the major the templates are written for — a newer major keeps the bundled range and prints a `Note:`. If the registry can't be reached (offline, timeout), the bundled ranges are used with one `Warning:` line; the scaffold never fails because of the registry. `--offline` skips the lookup entirely.
+- **Release-age window (pnpm `minimumReleaseAge`)**: a third-party `latest` not provably older than the window (default 1440 min = pnpm 11's default; follows `pnpm_config_minimum_release_age` / `npm_config_minimum_release_age`) keeps the bundled range, so the first `pnpm install` is never blocked by a just-published version — pnpm then picks the newest *mature* version inside that range. The age comes from one `HEAD <registry>/<name>` per third-party package (the packument's `last-modified`, measured against the registry's `Date`); a missing header or failed probe counts as "not provably mature" and prints a `Note:`. `@basaltkit/*` is never probed (the generated `pnpm-workspace.yaml` excludes the scope).
 - **Occupied folder**: if the destination folder exists and isn't empty, the command refuses with `Target directory "<dir>" already exists and is not empty.` and exits with code 1.
 - At the end, it prints the created files and the "Next steps" appropriate to your choices.
 
@@ -134,10 +135,10 @@ Always:
 my-app/
 ├── package.json          # scripts: dev, start, test, typecheck (+ basalt with --cli)
 ├── tsconfig.json         # strict TypeScript, ESM
-├── .env.example          # PORT, HOST, LOG_LEVEL, NODE_ENV (+ APP_SECRET with auth)
+├── .env.example          # PORT, HOST, LOG_LEVEL, NODE_ENV (+ APP_SECRET with auth) + the --env-file precedence warning
 ├── .gitignore
 ├── README.md             # instructions adapted to the chosen options
-├── pnpm-workspace.yaml   # esbuild allowBuilds (+ "web" member with --ui)
+├── pnpm-workspace.yaml   # esbuild allowBuilds, @basaltkit/* release-age exclusion (+ "web" member with --ui) + pnpm 11 notes
 ├── src/
 │   ├── env.ts            # environment variables validated with Zod (@basaltkit/env)
 │   ├── app.ts            # buildApp() with the chosen plugins
@@ -165,6 +166,17 @@ pnpm basalt list                    # available commands
 pnpm basalt routes                  # registered HTTP routes
 pnpm basalt make:resource Project   # generates schema → repository → service → plugin → routes → test
 ```
+
+With pnpm 11, every `pnpm <script>` and `pnpm exec` first verifies dependencies (`verifyDepsBeforeRun`, default `install`) and runs `pnpm install` when any workspace project is out of sync — so `pnpm basalt …` can need the network. `node_modules/.bin/tsx bin/basalt.ts …` skips that check; `verifyDepsBeforeRun: warn` (commented out in the generated `pnpm-workspace.yaml`) turns it into a warning for the whole project.
+
+### `pnpm-workspace.yaml` and pnpm 11
+
+- `minimumReleaseAgeExclude` is evaluated **first-match-wins by package name**. To exclude several versions of one package, write ONE entry with a union — `'@types/node@22.20.4 || 26.6.2'` — never two `@types/node@…` entries (only the first would apply). The generated file carries this example as a comment.
+- `verifyDepsBeforeRun: warn` is offered commented out; the scaffold keeps pnpm's secure default (`install`).
+
+### Environment variables and `--env-file`
+
+Nothing loads `.env` for you. `node --env-file=.env` / `tsx --env-file=.env` **never override a variable already exported in the shell** — in a terminal where another project exported `DATABASE_URL` or `PORT`, the app boots against that value and only fails on the first request that touches it. The generated `.env.example` and README say so and suggest an app-specific prefix derived from the project name (`my-saas` → `MY_SAAS_DATABASE_URL`).
 
 ### Programmatic usage (Advanced)
 
@@ -208,7 +220,7 @@ Exported from `create-basalt` (in addition to the `create-basalt` executable):
 | `cli` | `boolean` | No | `false` | Generate the `basalt` CLI |
 | `mcp` | `boolean` | No | `false` | Expose read-only routes as MCP tools at `/mcp` |
 | `resolveLatest` | `boolean` | No | `false` | Resolve every dependency to `^<latest>` from the npm registry before writing (falls back to the bundled ranges on any registry failure) |
-| `registry` | `ResolveLatestOptions` | No | — | `{ fetch?, registry?, timeoutMs?, overallTimeoutMs?, concurrency? }` — injectable fetch (tests), registry URL (default `npm_config_registry` or `https://registry.npmjs.org`), timeouts (5 s per request, 15 s overall) |
+| `registry` | `ResolveLatestOptions` | No | — | `{ fetch?, registry?, timeoutMs?, overallTimeoutMs?, concurrency?, minimumReleaseAge?, now? }` — injectable fetch (tests), registry URL (default `npm_config_registry` or `https://registry.npmjs.org`), timeouts (5 s per request, 15 s overall), release-age window in minutes (default `pnpm_config_minimum_release_age` / `npm_config_minimum_release_age`, else 1440; `0` disables the probe), clock (tests) |
 
 `CreateProjectResult`:
 
@@ -217,7 +229,7 @@ Exported from `create-basalt` (in addition to the `create-basalt` executable):
 | `dir` | `string` | Absolute path of the created folder |
 | `files` | `string[]` | Files written (relative, sorted) |
 | `options` | `ProjectOptions` | The options actually applied (with defaults resolved) |
-| `versions` | `VersionResolution \| undefined` | With `resolveLatest`: `{ versions, resolved, failed, heldBack, registry }` — the final ranges, which packages got `^<latest>`, which kept the fallback after a registry failure, and third-party packages held back because their latest is a new major |
+| `versions` | `VersionResolution \| undefined` | With `resolveLatest`: `{ versions, resolved, failed, heldBack, tooFresh, registry }` — the final ranges, which packages got `^<latest>`, which kept the fallback after a registry failure, third-party packages held back because their latest is a new major, and third-party packages whose latest is not provably older than the release-age window (`{ name, latest, range, reason: 'recent' \| 'unknown' }`) |
 
 Throws `TargetNotEmptyError` if the destination folder exists and isn't empty.
 
@@ -256,6 +268,12 @@ Automatic installation failed (network, Node version, etc.). Go into the folder 
 
 **I started the app and `GET /auth/login` gives a secret error.**
 With auth on, `src/env.ts` requires `APP_SECRET` with at least 16 characters (there's a development default `change-me-in-production--`). Copy `.env.example` to `.env` and set your own secret before going to production.
+
+**My app connects to the wrong database / port.**
+A variable exported in your shell beats `--env-file`. Check `env | grep DATABASE_URL`, start with `env -u DATABASE_URL pnpm dev`, and prefer app-prefixed names (see *Environment variables and `--env-file`*).
+
+**`pnpm basalt …` starts by running `pnpm install` (or fails offline).**
+pnpm 11's `verifyDepsBeforeRun` (default `install`). Run `node_modules/.bin/tsx bin/basalt.ts …` instead, or set `verifyDepsBeforeRun: warn` in `pnpm-workspace.yaml`.
 
 **I want to change my mind after generating (e.g. add billing).**
 There's no "re-scaffold" command. Either generate a new project with the right flags and compare, or add it by hand: install `@basaltkit/subscriptions` and add the `subscriptionsPlugin` to `src/app.ts` (the generated README and the templates serve as reference).

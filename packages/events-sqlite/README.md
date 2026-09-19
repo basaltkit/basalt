@@ -36,13 +36,32 @@ outboxPlugin({
 })
 ```
 
+To commit an event **atomically with your data**, keep your tables in the same database and pass the handle running the transaction as `tx`:
+
+```ts
+const { db, store } = sqliteOutboxStore('./data/app.db')
+const outbox = new Outbox(store) // or container.get(OUTBOX)
+
+db.exec('BEGIN')
+try {
+  db.prepare(`UPDATE orders SET status = 'paid' WHERE id = ?`).run(id)
+  await outbox.enqueue('order.paid', { id }, { tx: db })
+  db.exec('COMMIT')
+} catch (error) {
+  db.exec('ROLLBACK') // the outbox row goes with it
+  throw error
+}
+```
+
+`tx` may be the store's own handle or another `DatabaseSync` connection to the same file (the app's).
+
 Domain events matching `captureEvents` are written to SQLite as they fire; the relay delivers each **at least once** and marks it published. A crash between capture and delivery loses nothing — pending entries are still there on restart.
 
 ## The model
 
-One `outbox` table holds each entry: `event`, JSON `payload`, optional `tenant_id`, `created_at`, `attempts`, `published_at` and `last_error`. A **partial index** on un-published rows keeps the relay's "what's pending?" scan cheap no matter how much published history accumulates.
+One `outbox` table holds each entry: `event`, JSON `payload`, optional `tenant_id`, `created_at`, `attempts`, `published_at`, `last_error`, and the relay claim — `locked_until` / `locked_by` (added in place by `migrate()` on older databases). A **partial index** on un-published rows keeps the relay's "what's pending?" scan cheap no matter how much published history accumulates.
 
-`SqliteOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt ceiling, oldest first; `filter` excludes tenants — NULL-safe, so tenant-less rows are only dropped by `excludeGlobal` — which lets the relay stay fair across tenants), `markPublished`, `markFailed` (increments `attempts`), `all`. Re-enqueuing the same `id` replaces the entry (`INSERT OR REPLACE`: `attempts` reset to 0, publish/error cleared), mirroring `MemoryOutboxStore`. `sqliteOutboxStore()` also exposes the raw `db` handle.
+`SqliteOutboxStore` implements the full `OutboxStore` contract — `enqueue` (optionally on `{ tx }`), `claim` (one conditional `UPDATE … WHERE locked_until IS NULL OR locked_until <= now`, atomic even across processes sharing the file — so several relays never dispatch the same entry), `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt ceiling, oldest first; `filter` excludes tenants — NULL-safe, so tenant-less rows are only dropped by `excludeGlobal` — which lets the relay stay fair across tenants), `markPublished`, `markFailed` (increments `attempts`), `all`. Re-enqueuing the same `id` replaces the entry (`INSERT OR REPLACE`: `attempts` reset to 0, publish/error cleared), mirroring `MemoryOutboxStore`. `sqliteOutboxStore()` also exposes the raw `db` handle.
 
 ## API reference
 
@@ -51,7 +70,7 @@ One `outbox` table holds each entry: `event`, JSON `payload`, optional `tenant_i
 | `sqliteOutboxStore` | `(dbOrLocation?: DatabaseSync \| string) => { db, store }` | The one you want. Opens (or reuses) the database, migrates it, returns `{ db, store }` — drop `store` into `outboxPlugin({ store })`. |
 | `openOutboxDatabase` | `(location?: string) => DatabaseSync` | Opens and migrates a database without building the store. |
 | `migrate` | `(db: DatabaseSync) => void` | Applies the idempotent schema to a `DatabaseSync` you already own. Safe to call repeatedly. |
-| `SqliteOutboxStore` | `new SqliteOutboxStore(db: DatabaseSync)` | The store itself, if you manage the handle. |
+| `SqliteOutboxStore` | `new SqliteOutboxStore(db: DatabaseSync)` | The store itself, if you manage the handle. `enqueue(entry, { tx })` writes on the given `DatabaseSync` (the one running your `BEGIN … COMMIT`). |
 
 ### Options
 

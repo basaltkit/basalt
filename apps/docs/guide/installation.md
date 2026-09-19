@@ -108,6 +108,16 @@ written for — a newer major keeps the bundled range and prints a `Note:`. When
 registry can't be reached, the bundled ranges are used with a single `Warning:`
 line; the scaffold never fails because of it. `--offline` skips the lookup.
 
+A third-party `latest` published **inside pnpm's release-age window**
+(`minimumReleaseAge` — pnpm 11 defaults it to one day) keeps the bundled range
+too: `^<latest>` of a version published an hour ago can't be installed under that
+policy, while the bundled range lets pnpm pick the newest *mature* version
+itself. The age comes from one cheap `HEAD <registry>/<name>` per third-party
+package (its `last-modified`); when it can't be proven, the bundled range is kept
+and a `Note:` says so. The window follows `pnpm_config_minimum_release_age` /
+`npm_config_minimum_release_age` when set. `@basaltkit/*` is never checked — the
+generated `pnpm-workspace.yaml` excludes the scope from the policy.
+
 ::: warning `--ui` requires pnpm
 The `web/` frontend is a member of a pnpm workspace (`pnpm-workspace.yaml`),
 which npm, yarn and bun can't install or run. Ask for `--ui` with another
@@ -128,7 +138,7 @@ inside it:
 | `src/dev.ts` | The `pnpm dev` entry: sets `NODE_ENV=development` unless already set, then loads `server.ts` |
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
 | `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck` — plus `basalt` with `--cli`. `@basaltkit/*` ranges track each package's current release line |
-| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers) |
+| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` and the README warn about the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
 | `bin/basalt.ts` | With `--cli`: the CLI entrypoint wiring the generators and `prisma:sync` |
 | `.mcp.json` | With `--mcp`: registers the **dev-only** `basalt-ai-mcp` bridge for MCP clients |
 | `web/…` | With `--ui`: the React + shadcn frontend, a pnpm workspace member |
@@ -143,6 +153,53 @@ pnpm test
 ```
 
 For a guided end-to-end run, see [Getting Started](/guide/getting-started).
+
+### `--env-file` never overrides exported variables
+
+`src/env.ts` validates `process.env` and nothing else — the scaffold does not load
+`.env` for you. When you launch with `node --env-file=.env` (or
+`tsx --env-file=.env`), Node **only fills variables that are not already set**:
+a value exported in your shell always wins. With generic names this bites
+quietly — in a terminal where another project exported `DATABASE_URL` or `PORT`,
+the app boots against *that* database or port and fails only on the first request
+that touches it.
+
+- Give generic names an **app-specific prefix** — `MY_SAAS_DATABASE_URL`, not
+  `DATABASE_URL` (`.env.example` suggests one derived from the project name).
+- When in doubt, `env | grep DATABASE_URL` before `pnpm dev`, or start with a
+  clean slate: `env -u DATABASE_URL pnpm dev`.
+- Once a database is wired, log its target at boot (host and database name,
+  never the password) so a wrong one is visible in the first line of output.
+
+### pnpm 11: release age and `verifyDepsBeforeRun`
+
+Two pnpm 11 behaviours shape the generated `pnpm-workspace.yaml`:
+
+- **`minimumReleaseAgeExclude` is first-match-wins by package name.** Two entries
+  for the same package (`'@types/node@22.20.4'` and `'@types/node@26.6.2'`) do not
+  add up — only the first applies. Exclude several versions of one package with a
+  single union entry, as the generated comment shows:
+
+  ```yaml
+  minimumReleaseAgeExclude:
+    - '@basaltkit/*'
+    - '@types/node@22.20.4 || 26.6.2'
+  ```
+
+- **`verifyDepsBeforeRun` defaults to `install`.** Before every `pnpm <script>`
+  *and* `pnpm exec`, pnpm checks that `node_modules` matches the manifests of
+  every workspace project (including `web/` with `--ui`); when it doesn't, it runs
+  `pnpm install` first — network and supply-chain checks included. So
+  `pnpm basalt make:resource …` is effectively `pnpm install && basalt …` right
+  after any dependency change. Two conscious ways out:
+
+  ```bash
+  node_modules/.bin/tsx bin/basalt.ts make:resource Project   # no pnpm, no pre-run check
+  ```
+
+  or uncomment `verifyDepsBeforeRun: warn` in `pnpm-workspace.yaml` — pnpm then
+  only warns, and running `pnpm install` after dependency changes is on you. The
+  scaffold keeps pnpm's default and the `basalt` script as `tsx bin/basalt.ts`.
 
 ## Choose an HTTP adapter
 
@@ -275,6 +332,12 @@ see [Queues & jobs](/guide/queues).
   `app.ts` that still uses `fastifyPlugin({ routes: [...] })`. Add the generated
   plugin to `plugins` and the routes to the adapter yourself; the generated
   files are otherwise complete.
+- **The app connects to the wrong database / port** — a variable exported in
+  your shell beats `--env-file`. See
+  [`--env-file` never overrides exported variables](#env-file-never-overrides-exported-variables).
+- **`pnpm basalt …` starts with a `pnpm install`** (or fails offline) — pnpm 11's
+  `verifyDepsBeforeRun`. See
+  [pnpm 11: release age and `verifyDepsBeforeRun`](#pnpm-11-release-age-and-verifydepsbeforerun).
 - **`ERR_UNKNOWN_BUILTIN_MODULE: node:sqlite`, or `--experimental-strip-types`
   is rejected** — you're on a Node older than 22.5 / 22.6. Upgrade Node, or
   install `tsx` (which the scaffold already does).

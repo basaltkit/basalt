@@ -295,6 +295,19 @@ Isto mantém sete backups completos, sete centrais e sete backups por tenant,
 independentemente. Falhas não consomem o limite. Sem `retention`, a limpeza
 automática fica desativada.
 
+::: warning Os backups não são imutáveis por omissão
+Artefactos e manifestos são escritas `disk.put()` normais, os manifestos são
+reescritos à medida que a execução avança, e o `retention` apaga pares antigos —
+quem tiver as credenciais de escrita do disco pode sobrescrever ou apagar um
+backup. A imutabilidade é trabalho do storage, por isso é responsabilidade da tua
+aplicação (ou plataforma): em S3 ou num serviço compatível, ativa **versionamento
+do bucket + S3 Object Lock** com uma retenção por omissão (modo compliance para uma
+garantia rígida) que cubra a tua janela de recuperação, e usa um bucket e
+credenciais dedicados sem `s3:DeleteObjectVersion`. Com versionamento ativo, a
+limpeza do `retention` só adiciona delete markers; as versões bloqueadas continuam
+recuperáveis até a retenção expirar. Discos locais não dão essa garantia.
+:::
+
 Para restaurar, primeiro consulte a lista e passe o id do manifesto:
 
 ```ts

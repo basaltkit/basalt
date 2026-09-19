@@ -226,6 +226,44 @@ the global scope. Use `GLOBAL_SCOPE` for grants that apply everywhere, and the
 `MemoryAccessStore` for a durable `AccessStore`
 (`@basaltkit/permissions-prisma` / `-sqlite` ship in the ecosystem).
 
+### One role catalogue for every tenant
+
+A role's permissions are looked up **in the scope where the role is held**.
+`@basaltkit/teams` mirrors memberships per tenant (`assignRole(user, 'owner',
+tenantId)`), so a catalogue like "owner = `*`" granted once in `GLOBAL_SCOPE`
+never reaches a tenant owner — and copying it into every tenant drifts. Define
+it once instead:
+
+```ts
+permissionsPlugin({
+  store,
+  // (a) Code-defined, valid in every scope.
+  roleCatalog: {
+    owner: ['*'],
+    admin: ['projects:*', 'members:invite'],
+    member: ['projects:read'],
+  },
+  // (b) Or keep the catalogue in the store, under GLOBAL_SCOPE.
+  inheritGlobalRolePermissions: ['admin', 'member'], // or `true` for every role
+})
+```
+
+- **`roleCatalog`** — a role held in a scope grants its catalogue permissions
+  **in that scope**: the owner of `acme` gets `*` in `acme`, nothing in
+  `globex`, nothing globally. A role held in `GLOBAL_SCOPE` applies everywhere,
+  as global roles always did.
+- **`inheritGlobalRolePermissions`** — a tenant-held role also resolves its
+  permissions from its `GLOBAL_SCOPE` definition, still granting only in that
+  tenant. Prefer a list of role names when tenant admins can assign roles
+  themselves: with `true`, assigning a globally defined `platform-admin` inside
+  a tenant grants its global permission set there.
+
+Both are unions with what the store grants the role in the tenant, use the same
+wildcard rule, and grant **permissions, never roles**: `hasRole()`,
+`effectiveRoles()` and audience confinement are unchanged. `GET /me/access`
+(`accessRoutes()`) reports the same resolution (`gate.rolePermissions(role,
+scope)`).
+
 ### The global scope can't be a tenant
 
 `GLOBAL_SCOPE` is `'@global'` — a value no slug, hostname label or uuid can
@@ -314,6 +352,8 @@ a delegation ignores the delegator's own incoming delegations).
 | `delegations` | `DelegationStore` | off | Enables `delegate()` |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 | `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`: `'error'` throws `MissingPolicyError` (fail closed), `'rbac'` falls back to the granted permission strings |
+| `roleCatalog` | `Record<string, string[]>` | — | Code-defined role → permissions valid in every scope; a role grants them only in the scope where it is held. See [One role catalogue for every tenant](#one-role-catalogue-for-every-tenant) |
+| `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | A tenant-held role also resolves its permissions from its `GLOBAL_SCOPE` definition (only in that tenant); a list limits it to those role names |
 | `readLegacyGlobalScope` | `boolean` | `false` | Also read rows under the pre-1.5 global scope `'global'` as global. Transition aid — see [The global scope can't be a tenant](#the-global-scope-can-t-be-a-tenant) |
 | `hooks` | `HookBus` | the app's bus (plugin) | Where `permission:*` hooks are emitted |
 
@@ -347,7 +387,10 @@ than the store: writes straight on the `AccessStore` leave no trail.
 
 - **`PERMISSION_DENIED` for a user who "has the role"** — check the *scope*:
   a role assigned in tenant `acme` doesn't apply in `globex` or globally.
-  Assign in `GLOBAL_SCOPE` for cross-tenant staff.
+  Assign in `GLOBAL_SCOPE` for cross-tenant staff. If the *role* is per tenant
+  (teams) but its permissions were granted only in `GLOBAL_SCOPE`, use
+  `roleCatalog` or `inheritGlobalRolePermissions` — see
+  [One role catalogue for every tenant](#one-role-catalogue-for-every-tenant).
 - **`PERMISSION_POLICY_MISSING` after an upgrade** — a `can(user, perm, resource)`
   call was already silently answering from RBAC. Check the spelling of both
   halves of `resource:action` against `definePolicy`, register the missing

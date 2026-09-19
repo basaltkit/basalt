@@ -6,7 +6,9 @@ resultados nunca vazam entre tenants. Numa app sem `tenancyPlugin` não há tena
 a que delimitar: o `tenantId` passa a opcional no `index()` e no `search()`, e
 ambos resolvem para um único âmbito interno `'default'`, por isso concordam
 sempre (vê [Para além do SaaS](/pt/guide/beyond-saas)). Traz um driver em memória para dev/testes e
-um driver Meilisearch para produção, atrás de uma única API.
+um driver Meilisearch para produção, atrás de uma única API; os pacotes de driver
+separados [Postgres](#ja-estas-em-postgres) e [Elasticsearch / OpenSearch](#elasticsearch-opensearch)
+encaixam no mesmo ponto.
 
 Dentro de um contexto de tenant, o tenant do contexto é o que vale: um `tenantId`
 passado a `search()`, `remove()`, ou num documento dado a `index()`/`bulk()`, tem
@@ -374,7 +376,9 @@ await search.search('notes', 'report', {
 | `searchPlugin({ driver?, indexes?, sync? })` | Registar o serviço, índices e regras de sync. |
 | `SEARCH` | Token de DI → o serviço `Search`. |
 | `search.index/bulk/remove/search` | Indexar, indexar em bloco, remover, consultar. |
-| `MemorySearchDriver` · `MeilisearchDriver` | Backends de dev/teste e de produção. |
+| `MemorySearchDriver` · `MeilisearchDriver` | Backends incluídos de dev/teste e de produção. |
+| `PostgresSearchDriver` (`@basaltkit/search-postgres`) | Backend full-text do Postgres — sem serviço de pesquisa separado. |
+| `ElasticsearchDriver` (`@basaltkit/search-elasticsearch`) | Backend Elasticsearch / OpenSearch para relevância em grande escala. |
 
 Vê o [cookbook de notes SaaS](/pt/cookbook/notes-saas) para pesquisa numa app
 completa.

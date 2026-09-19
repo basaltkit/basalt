@@ -213,6 +213,39 @@ também sobrevive a um restart. `@basaltkit/flags` não precisa de backend — a
 flags são declaradas em código e avaliadas deterministicamente, sem nada para
 persistir.
 
+### Trilho de auditoria verificável
+
+Ambos os stores de audit suportam um trilho **à prova de adulteração** (tamper-evident) e o contexto do pedido:
+
+```ts
+auditPlugin({
+  store: prismaAuditStore(prisma).store,
+  integrity: 'hash-chain',   // ou { mode: 'hash-chain', key: process.env.AUDIT_CHAIN_KEY! } (HMAC)
+  requestContext: true,      // regista ip + user-agent — dados pessoais, ver abaixo
+})
+```
+
+Cada entrada fica ligada à anterior da cadeia do seu tenant (`seq`, `prevHash`,
+`hash` = SHA-256 sobre uma serialização canónica), com uma cadeia por tenant mais
+uma cadeia de sistema. `audit.verify({ tenantId, from?, to? })` — ou `basalt
+audit:verify [--tenant=<id> | --all]` — deteta linhas editadas, apagadas,
+reordenadas e forjadas. Ambos os stores têm uma **restrição única em `(chain, seq)`**,
+pelo que réplicas a escrever ao mesmo tempo repetem a tentativa em vez de bifurcar
+a cadeia. Linhas escritas antes de ativar `integrity` são reportadas como
+*unchained* (fora da cadeia), não como corrompidas.
+
+`requestContext: true` adiciona um enricher HTTP (igual em fastify, express e hono)
+e guarda o `ip` e o `userAgent` do cliente. O IP é dado pessoal: com
+`createPiiMinimizingRedactor({ key })` é guardado como pseudónimo.
+
+O SQLite migra as novas colunas automaticamente; no Prisma, adiciona-as ao modelo
+e migra primeiro (o [README do `@basaltkit/audit-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/audit-prisma#upgrading-from-11)
+tem o SQL). Depois, faz a base de dados impor também o append-only:
+
+```sql
+REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
+```
+
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 
 O registo de tenants é a fundação de uma app multi-tenant, mas `@basaltkit/tenancy`
@@ -263,6 +296,49 @@ outboxPlugin({
 })
 ```
 
+### Escrever o evento na tua transação
+
+A garantia — o evento existe **se e só se** a alteração de estado fez commit —
+exige que a entrada seja escrita *dentro* da transação de negócio. Passa o handle
+da transação como `tx` ao `enqueue`; o store escreve através dele, por isso um
+rollback remove ambos:
+
+```ts
+const outbox = app.container.get(OUTBOX)
+
+// Prisma: o cliente da transação interativa
+await prisma.$transaction(async (tx) => {
+  await tx.order.update({ where: { id }, data: { status: 'paid' } })
+  await outbox.enqueue('order.paid', { id }, { tenantId, tx })
+})
+
+// SQLite: o DatabaseSync que corre o BEGIN … COMMIT (mesmo ficheiro do outbox)
+db.exec('BEGIN')
+db.prepare(`UPDATE orders SET status = 'paid' WHERE id = ?`).run(id)
+await outbox.enqueue('order.paid', { id }, { tx: db })
+db.exec('COMMIT')
+```
+
+O `captureEvents` é conveniente mas **não** é transacional: regista o evento
+quando o `emit()` corre, fora da tua transação. Usa um `enqueue(…, { tx })`
+explícito para eventos que nunca podem divergir dos dados.
+
+### Vários relays (réplicas)
+
+Com um relay por réplica, dois relays leriam as mesmas linhas pendentes. Um store
+que implementa `claim` impede o dispatch duplicado: depois de selecionar um lote,
+o relay **reclama-o** com um único update condicional (`lockedUntil`/`lockedBy`,
+um lease de `claimLeaseMs`, predefinição 5 min) e só despacha as linhas que
+ganhou; o `pending()` esconde as linhas que outro relay detém. O
+`@basaltkit/events-sqlite` reclama sempre (o seu `migrate()` acrescenta as
+colunas); o `@basaltkit/events-prisma` reclama com
+`prismaOutboxStore(prisma, { claim: true })` — acrescenta primeiro as colunas
+`lockedUntil` / `lockedBy` (`basalt prisma:sync`, depois migrate). Usa queries de
+modelo simples, não `FOR UPDATE SKIP LOCKED`: portável entre providers, permitido
+pelo guard de raw queries da extensão de tenancy, e um relay que morre a meio de
+um dispatch só retém as suas linhas até o lease expirar. A entrega continua
+at-least-once.
+
 ### Semântica do relay
 
 O relay é a parte que decide se o "pelo menos uma vez" é real. Quatro
@@ -281,8 +357,9 @@ comportamentos, todos verificáveis em `@basaltkit/events`:
 - **As falhas recuam.** Uma entrada falhada é ignorada por este processo até o seu
   atraso decorrer: `delayMs · 2^(tentativas-1)`, limitado a `maxDelayMs`
   (`type: 'fixed'` mantém-no constante, `backoff: false` faz retry em cada tick).
-  O calendário é **local ao processo** — sem alteração de schema, e um restart
-  esquece-o, pelo que o pior caso é um retry antecipado. Continua at-least-once.
+  O calendário é **local ao processo** — um restart esquece-o, pelo que o pior
+  caso é um retry antecipado — a menos que o store reclame: aí a hora do retry é
+  também escrita na linha, e todas as réplicas a respeitam. Continua at-least-once.
   As entradas em backoff nunca enchem o lote — o relay pede mais entradas para as
   saltar — por isso um destino em falha (ex. o endpoint de um tenant) não
   consegue deixar as entradas mais recentes à espera.
@@ -347,6 +424,7 @@ outboxPlugin({
 | `dispatchTimeoutMs` | `number \| false` | `10_000` | Espera máxima por entrada antes de o flush avançar; o dispatch continua destacado e o resultado é registado na mesma. `false` espera indefinidamente |
 | `onDead` | `(entry, error) => void` | `console.error` | Uma entrada esgotou `maxAttempts` — chama alguém, isto é uma entrega externa perdida |
 | `onFlushError` | `(error) => void` | `console.error` | O flush falhou ao nível do store (tick do temporizador ou drenagem no encerramento). Nunca pode lançar |
+| `claimLeaseMs` | `number` | `300_000` | Stores que reclamam (vários relays): quanto tempo dura o claim de um relay sobre uma entrada. Passado esse tempo, um relay que morreu a meio do dispatch perde a entrada para outro relay. Tem de exceder o teu dispatch mais lento |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
 `backoff` (`OutboxBackoff`):
@@ -401,7 +479,7 @@ partilhado entre instâncias:
 | Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@basaltkit/http`) — um contador atómico partilhado entre instâncias |
 | Idempotência de request | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/fastify`) — reproduz uma resposta em cache entre instâncias |
 | Queues | driver em memória | pacotes de driver RabbitMQ / Kafka / SQS |
-| Search | `MemorySearchDriver` | pacotes de driver Meilisearch / Postgres |
+| Search | `MemorySearchDriver` | `MeilisearchDriver` (incluído), `@basaltkit/search-postgres`, `@basaltkit/search-elasticsearch` |
 | Storage | disco local | pacotes de driver S3 / GCS / Azure |
 
 ## Escrever o teu próprio store
@@ -453,7 +531,7 @@ configuração continua segura em testes.
 | Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
 | Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store })` |
 | Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — devolve a própria source, não `{ store }` |
-| Outbox de eventos | `sqliteOutboxStore()` | `prismaOutboxStore(client)` | `outboxPlugin({ store })` |
+| Outbox de eventos | `sqliteOutboxStore()` | `prismaOutboxStore(client, { claim? })` | `outboxPlugin({ store })` |
 | Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |
 
 Cada pacote também exporta `openXDatabase(location)` e `migrate(db)` se quiseres
@@ -461,8 +539,9 @@ controlar tu a abertura e a migração, e cada classe de store individual
 (`SqliteUserSource`, `PrismaAuditStore`, …) recebe um `DatabaseSync` /
 `PrismaClient` no construtor — por isso podes misturar backends por store.
 
-O único backend com opções de comportamento próprias é o relay do outbox; as suas
-tabelas estão em **Semântica do relay**, acima. Todo o resto é configurado no
+Os únicos backends com opções de comportamento próprias são os do outbox: as
+tabelas do relay estão em **Semântica do relay**, acima, e o `prismaOutboxStore`
+aceita `{ claim: true }` (vê **Vários relays**). Todo o resto é configurado no
 plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
 [Billing](/pt/guide/billing), [Tenancy](/pt/guide/tenancy) e
 [Webhooks](/pt/guide/webhooks).
@@ -507,5 +586,8 @@ plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
 - Move **cache**, **usage metering** e **idempotência de webhook** para Redis se
   correres mais do que uma instância.
 - Aponta **queues**, **search** e **storage** para os seus drivers de produção.
+- Para um **trilho de auditoria** com valor de conformidade, ativa `integrity: 'hash-chain'`,
+  revoga `UPDATE`/`DELETE` em `audit_entries` e agenda `basalt audit:verify --all`
+  ([acima](#trilho-de-auditoria-verificavel)).
 
 Vê [Going to Production](/pt/guide/production) para a checklist completa.

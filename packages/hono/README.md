@@ -111,6 +111,8 @@ Unexpected errors respond with `500` and `{ error: { code: 'INTERNAL_ERROR', ...
 
 The adapter reads the body based on `Content-Type`: `application/json` → JSON object; forms (`form`) → Hono's `parseBody()`; other text → string; empty or invalid body → `undefined` (Zod validation handles the rest). `GET`/`HEAD` requests never have a body.
 
+A `multipart/form-data` body is only read inside the route handler: pre-hooks and after-hooks never see it. On an `upload()` route (`body: upload({ … })` from `@basaltkit/http`), the raw `ReadableStream` goes, unbuffered, to the neutral streaming parser after enrichers and guards ran. The route's own `maxBytes` applies there, not `bodyLimit`. On any other route, a multipart body is still bounded by `bodyLimit` and parsed with `parseBody()`. See the [`@basaltkit/http` README](../http/README.md#file-uploads--upload).
+
 ### Body-size limit — `bodyLimit`
 
 Hono and edge runtimes impose **no** default cap on a request body, so an upload is
@@ -292,7 +294,7 @@ In this mode errors are still standardized (each handler wraps `toErrorResponse`
 | `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
 | `app` | `Hono` | No | `new Hono()` | Bring your own Hono app; otherwise a new one is created. |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes. A later `hono.notFound(…)` of your own still wins; `false` opts out entirely. |
-| `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` = `1_048_576` (1 MiB) | Maximum request body in bytes, enforced on the bytes read. A request whose `Content-Length` exceeds it is rejected `413 PAYLOAD_TOO_LARGE` before the body is read; a chunked/streamed body is cut off at the limit — Hono/edge has no default cap of its own. |
+| `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` = `1_048_576` (1 MiB) | Maximum request body in bytes, enforced on the bytes read. A request whose `Content-Length` exceeds it is rejected `413 PAYLOAD_TOO_LARGE` before the body is read; a chunked/streamed body is cut off at the limit — Hono/edge has no default cap of its own. An `upload()` route is bounded by its own `maxBytes` instead (streamed, never buffered). |
 | `getClientIp` | `(c: Context) => string \| undefined` | No | `defaultClientIp` (socket address on `@hono/node-server` / Bun) | Resolves `request.ip` for rate limiting and the IP login throttle. |
 | `onError` | `HttpErrorReporter` | No | `console.error`/`console.warn` | Where failed requests are reported. |
 
