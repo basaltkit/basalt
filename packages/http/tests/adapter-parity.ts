@@ -1,12 +1,13 @@
 /**
- * Shared adapter parity matrix for `upload()` bodies (BK-006) and keyed
- * per-route rate limits (BK-008). Not a test file on its own: each adapter
- * package (fastify, express, hono) runs it against its own driver, so the three
- * are held to the exact same assertions.
+ * Shared adapter parity matrix for `upload()` bodies (BK-006), keyed per-route
+ * rate limits (BK-008) and structured error details (BK-021). Not a test file
+ * on its own: each adapter package (fastify, express, hono) runs it against its
+ * own driver, so the three are held to the exact same assertions.
  */
 import { ctx, definePlugin, ensureMetadata, type BasaltPlugin } from '@basaltkit/core'
 import {
   HttpError,
+  MAX_ERROR_DETAILS_BYTES,
   route,
   securityPlugin,
   upload,
@@ -15,6 +16,7 @@ import {
   type RouteGuard,
 } from '@basaltkit/http'
 import { afterEach, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { BOUNDARY, chunked, contentType, multipart } from './multipart-fixtures.js'
 
 export interface ParityRequest {
@@ -246,6 +248,84 @@ export function rateLimitKeyParitySuite(adapter: string, driver: ParityDriver): 
       expect(await get('/by-user')).toBe(200)
       expect(await get('/by-user')).toBe(429)
       expect(await get('/by-user', 'alice')).toBe(200)
+    })
+  })
+}
+
+export function errorDetailsParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: structured error details parity (BK-021)`, () => {
+    const details = { failed: ['age', 'address'], remaining: 2, conflict: { field: 'email', version: 7 } }
+    const routes = [
+      route({
+        method: 'GET',
+        url: '/checks',
+        handler: () => {
+          throw new HttpError(422, 'CHECKS_FAILED', 'Checks failed.', { details })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/legacy',
+        handler: () => {
+          throw new HttpError(409, 'CONFLICT', 'Already exists.')
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/unsafe',
+        handler: () => {
+          throw new HttpError(422, 'CHECKS_FAILED', 'Checks failed.', {
+            details: { blob: 'x'.repeat(MAX_ERROR_DETAILS_BYTES * 2) },
+          })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/boom',
+        handler: () => {
+          throw Object.assign(new Error('internals'), { details: { secret: 'shhh' } })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/validated',
+        query: z.object({ page: z.coerce.number() }),
+        handler: ({ query }) => query,
+      }),
+    ]
+
+    let send: Send
+    afterEach(() => driver.close())
+    const get = (url: string) => send({ method: 'GET', url })
+
+    it('serves the same 422-with-details body on every adapter', async () => {
+      send = await driver.boot(routes, [])
+      const res = await get('/checks')
+      expect(res.status).toBe(422)
+      expect(res.json).toEqual({ error: { code: 'CHECKS_FAILED', message: 'Checks failed.', details } })
+    })
+
+    it('adds no details key to a 3-argument HttpError, an oversized payload, or an unexpected 500', async () => {
+      send = await driver.boot(routes, [])
+      expect(await get('/legacy')).toMatchObject({
+        status: 409,
+        json: { error: { code: 'CONFLICT', message: 'Already exists.' } },
+      })
+      expect((await get('/legacy')).json).toEqual({ error: { code: 'CONFLICT', message: 'Already exists.' } })
+      expect((await get('/unsafe')).json).toEqual({ error: { code: 'CHECKS_FAILED', message: 'Checks failed.' } })
+      const boom = await get('/boom')
+      expect(boom.status).toBe(500)
+      expect(boom.json).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' } })
+    })
+
+    it('leaves the validation body untouched — part and issues, still no details', async () => {
+      send = await driver.boot(routes, [])
+      const res = await get('/validated?page=abc')
+      expect(res.status).toBe(400)
+      expect(res.json).toMatchObject({ error: { code: 'HTTP_VALIDATION', part: 'query' } })
+      const body = res.json as { error: Record<string, unknown> }
+      expect(Array.isArray(body.error['issues'])).toBe(true)
+      expect('details' in body.error).toBe(false)
     })
   })
 }

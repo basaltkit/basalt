@@ -89,6 +89,13 @@ Each run writes a custom-format dump and a JSON manifest containing status,
 target, timestamps, size and SHA-256 checksum. Failed runs remain visible as
 `failed` manifests and are logged with the backup id.
 
+Dumps are **streamed**, never buffered: the temporary `pg_dump` file is measured
+and hashed in chunks, then streamed to the disk with `disk.putStream(...)`, and
+`restore()` streams the artifact back to a temporary file before verifying its
+checksum. A driver without those capabilities falls back to whole-file
+`put`/`get` — so give a large database a disk whose driver streams (`local`,
+`s3`, `azure`, `gcs` all do). See [Large files](/guide/storage#large-files).
+
 ## List and inspect backups
 
 `list()` reads the JSON manifests from the configured disk, returns them newest

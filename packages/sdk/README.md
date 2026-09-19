@@ -151,6 +151,16 @@ try {
 }
 ```
 
+A server error built with a structured payload (`new HttpError(422, 'CHECKS_FAILED', '…', { details })` in `@basaltkit/http`) arrives as `error.errorDetails` — the payload itself, without digging through the body:
+
+```typescript
+if (error instanceof BasaltClientError && error.code === 'CHECKS_FAILED') {
+  const failed = error.errorDetails?.['failed'] // ['age', 'address']
+}
+```
+
+`errorDetails` is `undefined` whenever the response carried no `error.details` — the server drops the payload when it is oversized or not plain JSON data, so always keep `code` + `message` as the fallback. `BasaltErrorBody` types the whole body (`code`, `message`, the validation `part`/`issues`, `details`) if you prefer to read `error.details` directly.
+
 `code` comes from `body.error.code` (the Basalt APIs' error convention); without it, it's `'HTTP_ERROR'`. 204 (no content) responses resolve to `undefined`.
 
 ### Testing with a fake `fetch`
@@ -216,6 +226,7 @@ Error thrown for any non-2xx response or a response that fails the `result` sche
 | `code` | `string` | Stable server code (`body.error.code`), `'HTTP_ERROR'` if absent, or `'CLIENT_RESPONSE_MISMATCH'` when the response fails the `result` schema |
 | `message` | `string` | Server message (or `statusText`) |
 | `details` | `unknown` | The response body (or the `ZodError`, in case of a mismatch) |
+| `errorDetails` | `Record<string, unknown> \| undefined` | Getter — the server's structured `error.details`, or `undefined` when the response carried none |
 
 ### Utility types
 
@@ -229,6 +240,7 @@ Error thrown for any non-2xx response or a response that fails the `result` sche
 | `HttpMethod` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE'` |
 | `FetchLike` | `typeof fetch` |
 | `ClientOptions` | Described above |
+| `BasaltErrorBody` | The error body Basalt servers send — `{ error: { code, message, part?, issues?, details? } }` |
 
 ## Common errors and solutions (FAQ)
 

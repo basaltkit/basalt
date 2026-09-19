@@ -100,6 +100,50 @@ const env = defineEnv(
 )
 ```
 
+### App-specific prefix (`prefix`)
+
+Generic names like `DATABASE_URL` or `PORT` are exported by *every* project. A shell that still has another project's `DATABASE_URL` exported is a silent trap: `node --env-file=.env` **never overrides a variable that is already set**, so your app boots against the wrong database and only finds out on the first request.
+
+`prefix` makes the names app-specific without changing a single line of the rest of the code:
+
+```ts
+export const env = defineEnv(
+  {
+    DATABASE_URL: z.string().url(),
+    PORT: z.coerce.number().default(3000),
+  },
+  { prefix: 'MY_SAAS' },
+)
+
+env.DATABASE_URL // read from MY_SAAS_DATABASE_URL, falling back to DATABASE_URL
+env.PORT         // read from MY_SAAS_PORT, falling back to PORT
+```
+
+Rules, all of them deliberate:
+
+1. **Prefixed first, bare as a fallback.** `MY_SAAS_PORT` wins whenever it is *set* — an empty `MY_SAAS_PORT=` counts as set, exactly like `process.env` does. Only when it is absent does the bare `PORT` apply. The fallback exists so an already-running deployment that exports the generic names keeps booting after you add the prefix.
+2. **The keys never change.** The shape's keys are what you declared, so the object is still `env.PORT` — never `env.MY_SAAS_PORT`.
+3. **`NODE_ENV` is never prefixed.** It is a Node-wide convention read by the whole toolchain (and by `secret()` inside this package), so `MY_SAAS_NODE_ENV` is ignored.
+4. **The error report names what was actually looked for.** A missing variable names *both* keys, an invalid one names the key the value came from:
+
+```
+EnvValidationError: Invalid environment variables:
+  - MY_SAAS_DATABASE_URL (or DATABASE_URL): Required
+  - MY_SAAS_PORT: Invalid input: expected number, received NaN
+```
+
+To require the prefixed names and ignore the bare ones entirely — the strictest setting, and the one that makes a stray `DATABASE_URL` in your shell impossible to pick up — turn the fallback off:
+
+```ts
+defineEnv(shape, { prefix: { value: 'MY_SAAS', fallback: false } })
+```
+
+The report then names only `MY_SAAS_DATABASE_URL`, because that is the only key the app reads.
+
+The prefix must itself be a valid environment variable name: uppercase letters, digits and single inner underscores, starting with a letter and not ending in an underscore (`MY_SAAS`, `APP`, `A1_B2`). Anything else throws `EnvPrefixError` (`ENV_PREFIX_INVALID`) at boot, instead of quietly looking up a variable nobody can set.
+
+> `create-basalt` wires this for you: a new app gets `prefix: '<PROJECT_NAME>'` in `src/env.ts` and prefixed names in `.env.example`.
+
 ### Secrets with `secret()`
 
 `secret()` returns a Zod `string` schema with three protections (the dev/production decision is made by reading `process.env.NODE_ENV` at validation time):
@@ -157,6 +201,14 @@ Validates and types the environment variables. Returns `z.infer<z.ZodObject<TSha
 |---|---|---|---|---|
 | `shape` | `z.ZodRawShape` (an object `{ NAME: zodSchema }`) | yes | — | One Zod schema per variable. |
 | `options.source` | `Record<string, string \| undefined>` | no | `process.env` | Source of the values (useful in tests). |
+| `options.prefix` | `string \| { value: string; fallback?: boolean }` | no | — | Read each variable as `<PREFIX>_<NAME>` first. A bare string means `{ value, fallback: true }`. `NODE_ENV` is never prefixed; the returned keys stay bare. |
+
+#### `EnvPrefix`
+
+| Option | Type | Required? | Default | Description |
+|---|---|---|---|---|
+| `value` | `string` | yes | — | The prefix, e.g. `'MY_SAAS'`. Uppercase letters, digits and single inner underscores; must start with a letter and not end in `_`. |
+| `fallback` | `boolean` | no | `true` | Also accept the bare `<NAME>` when `<PREFIX>_<NAME>` is unset. `false` requires the prefixed names. |
 
 ### `secret(options?)`
 
@@ -176,12 +228,25 @@ Error thrown by `defineEnv`. Extends `BasaltError` from `@basaltkit/core`.
 | Property | Type | Description |
 |---|---|---|
 | `code` | `string` | Always `'ENV_INVALID'`. |
-| `report` | `string[]` | One line per problem, in the format `VARIABLE_NAME: message`. |
+| `report` | `string[]` | One line per problem, in the format `VARIABLE_NAME: message`. With a `prefix`, the name is the key actually read — `MY_SAAS_PORT`, or `MY_SAAS_PORT (or PORT)` when neither is set. |
 | `message` | `string` | The full formatted report, ready to print. |
+
+### `EnvPrefixError`
+
+Thrown by `defineEnv` when `options.prefix` is not a valid environment variable name (see the table above). Extends `BasaltError`.
+
+| Property | Type | Description |
+|---|---|---|
+| `code` | `string` | Always `'ENV_PREFIX_INVALID'`. |
+| `prefix` | `string` | The rejected prefix. |
 
 ## Common errors and solutions (FAQ)
 
 **"Invalid environment variables" on startup** — Read the report's lines: each one names the variable and the problem. Set the missing variables in your `.env` file (or in the server's environment) and start again. Note: `@basaltkit/env` doesn't read `.env` files on its own — use `node --env-file=.env` (Node 20+) or a tool like `dotenv` before the `env.ts` module is imported.
+
+**The app booted against another project's database / port, and `.env` was ignored** — `--env-file` (and `dotenv`) **never override a variable that is already exported** in the shell. Check with `env | grep DATABASE_URL`. The fix is `prefix`: give the variables app-specific names (`MY_SAAS_DATABASE_URL`) so nothing else in the shell can collide with them — see [App-specific prefix](#app-specific-prefix-prefix). `env -u DATABASE_URL pnpm dev` unsets one variable for a single run, but it is a workaround, not a fix.
+
+**"MY_SAAS_DATABASE_URL (or DATABASE_URL): Required"** — with a `prefix`, a missing variable names both keys the app looked for. Set either one (the prefixed name is the one to prefer). With `fallback: false` only the prefixed name is read, and only it is named.
 
 **"is required in production" for a variable with `devDefault`** — This is the intended behavior: with `NODE_ENV=production`, `devDefault` is ignored. Set the real value in the production environment.
 

@@ -64,6 +64,26 @@ the returned `headers` verbatim. `checksumSha256` is refused with
 `delete()` checks `exists()` first so it can return `false` for a missing object
 rather than throwing — that costs one extra round-trip per delete.
 
+## Streaming, copy and stat
+
+All four optional capabilities are implemented:
+
+| Capability | GCS call | Notes |
+|---|---|---|
+| `putStream` | `createWriteStream` | A resumable upload GCS chunks itself, so a body of **unknown length** streams fine — no `contentLength` needed. |
+| `getStream` | `createReadStream` | Returns a Node `Readable`; consume it or `destroy()` it. GCS only discovers a missing object once the download starts, so `STORAGE_FILE_NOT_FOUND` arrives as an `error` **on the stream**, not as a rejected promise. |
+| `copy` | `file.copy()` | GCS rewrites the object server-side; the bytes never reach the process. |
+| `stat` | `getMetadata()` | `{ size, contentType, etag, lastModified }` (GCS reports `size` as a string; it is coerced). |
+
+An injected fake `client` that omits one of these methods makes that capability
+report `STORAGE_*_UNSUPPORTED` instead of crashing.
+
+**Endpoint overrides are refused.** V4 signatures are bound to the bucket host
+and `file.getSignedUrl` takes no endpoint, so `{ endpoint }` on `temporaryUrl` /
+`temporaryUploadUrl` throws `STORAGE_TEMPORARY_URL_UNSUPPORTED` /
+`STORAGE_UPLOAD_URL_UNSUPPORTED` rather than minting a URL for the wrong host.
+Use a bucket-bound hostname (`cname`) on the `@google-cloud/storage` client.
+
 ## Errors
 
 | Error | Code | HTTP | When |

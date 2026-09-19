@@ -12,8 +12,15 @@ export {
   HttpError,
   RequestValidationError,
   NOT_FOUND_RESPONSE,
+  type HttpErrorOptions,
   type ValidationIssue,
 } from './errors.js'
+export {
+  sanitizeErrorDetails,
+  MAX_ERROR_DETAILS_BYTES,
+  MAX_ERROR_DETAILS_DEPTH,
+  type ErrorDetails,
+} from './error-details.js'
 export {
   runRoute,
   toErrorResponse,

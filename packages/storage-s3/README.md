@@ -63,6 +63,39 @@ Omit `credentials` on AWS to use the standard credential chain (environment, pro
 
 `disk.temporaryUploadUrl(key, { expiresIn, contentType, contentLength?, checksumSha256? })` presigns a `PutObject`. Content-Type — and Content-Length, the SHA-256 checksum and the SSE headers when present — are signed as **headers** (not query parameters), so S3 rejects an upload that omits or changes any of them; with `checksumSha256` S3 also verifies the body. Send the returned `headers` verbatim. Uploads are presigned without the SDK's default CRC32 checksum (which would otherwise pin the checksum of an empty body and break every upload). See the [Storage guide](https://basaltkit-docs.pages.dev/guide/storage#direct-browser-uploads) for the browser flow and security checklist.
 
+### Streaming, copy and stat
+
+This driver implements all four optional capabilities:
+
+| Capability | S3 call | Notes |
+|---|---|---|
+| `putStream` | `PutObject` | Needs a **known length**: pass `contentLength` (the stream goes straight to S3) or `maxBytes` (the body is buffered up to that cap). With neither → `STORAGE_STREAM_LENGTH_REQUIRED` (400). For unbounded streams, drive `@aws-sdk/lib-storage`'s multipart `Upload` yourself — it is deliberately **not** a dependency here. |
+| `getStream` | `GetObject` | Returns the response body as a Node `Readable`; consume it or `destroy()` it. |
+| `copy` | `CopyObject` | Server-side within the same bucket; the bytes never reach the process. A given `contentType` sets `MetadataDirective: 'REPLACE'`. SSE is re-applied. |
+| `stat` | `HeadObject` | `{ size, contentType, etag, lastModified }`. |
+
+### Pre-signing for another endpoint
+
+When the process that will use the URL reaches the bucket under a different
+host than this one does — an ingest worker on `http://minio:9000` inside the
+container network, a public CDN alias — sign for that host:
+
+```ts
+// per call
+await disk.temporaryUploadUrl(key, { expiresIn: '5m', contentType: 'image/png', endpoint: 'http://minio:9000' })
+await disk.temporaryUrl(key, '15m', { endpoint: 'https://files.example.com' })
+
+// or a default for the disk
+s3Disk({ bucket: 'my-app', endpoint: 'http://minio:9000', signingEndpoint: 'https://files.example.com' })
+```
+
+Only the signed host changes: region, path style, credentials and SSE stay as
+configured, and the signed `Content-Type`/`Content-Length`/checksum headers are
+unchanged. It is a **deployment** value — always the SAME bucket under another
+name, never client input, never a third party. Invalid values (relative, non
+`http(s)`, credentials in the URL, a query string) throw
+`STORAGE_SIGNING_ENDPOINT_INVALID` (400).
+
 ### Server-side encryption
 
 The simplest option is the bucket's default encryption — nothing to set here. To pin it from the app:
@@ -88,6 +121,7 @@ Returns a disk config for `storagePlugin({ disks })`. Takes every `S3DriverOptio
 | `credentials` | `{ accessKeyId, secretAccessKey }` | No | Omit on AWS to use the standard chain |
 | `forcePathStyle` | `boolean` | No | Path-style URLs. Defaults to `true` when `endpoint` is set |
 | `serverSideEncryption` | `'AES256' \| { kms: string }` | No | SSE on every put and pre-signed upload. Default: none sent (bucket default applies) |
+| `signingEndpoint` | `string` | No | Default host pre-signed URLs are signed for, when it differs from `endpoint`. A per-call `endpoint` wins |
 | `scope` | `DiskOptions['scope']` | No | Per-disk tenant scoping, as on any other disk |
 | `onMissingScope` | `'root' \| 'error'` | No | Behaviour with no tenant in context |
 | `maxTemporaryUrlTtl` | `DurationInput` | No | Cap for `temporaryUrl` lifetimes (default `'7d'`) |

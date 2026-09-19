@@ -129,27 +129,41 @@ export function tsconfigJson(): string {
 }
 
 export function envTs(options: ProjectOptions): string {
+  const prefix = envPrefix(options.name)
   return `import { defineEnv${options.auth ? ', secret' : ''} } from '@basaltkit/env'
 import { LOG_LEVELS } from '@basaltkit/logger'
 import { z } from 'zod'
 
-export const env = defineEnv({
-  PORT: z.coerce.number().default(3000),
-  HOST: z.string().default('0.0.0.0'),
-  // Typed against the logger's LogLevel union — a free-form string here fails
-  // \`pnpm typecheck\` where loggerPlugin({ level }) consumes it.
-  LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
-  // Unset counts as production (fail-closed); \`pnpm dev\` sets development.
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),${
-    options.auth
-      ? `
-  // Signs JWTs and sessions. secret() is fail-closed: required unless NODE_ENV
-  // is explicitly development/test (no fallback when NODE_ENV is unset),
-  // rejected if it looks like a placeholder. \`pnpm dev\` uses devDefault.
-  APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-please-change-me' }),`
-      : ''
-  }
-})
+export const env = defineEnv(
+  {
+    PORT: z.coerce.number().default(3000),
+    HOST: z.string().default('0.0.0.0'),
+    // Typed against the logger's LogLevel union — a free-form string here fails
+    // \`pnpm typecheck\` where loggerPlugin({ level }) consumes it.
+    LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+    // Unset counts as production (fail-closed); \`pnpm dev\` sets development.
+    // NODE_ENV is a Node-wide convention and is never prefixed.
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),${
+      options.auth
+        ? `
+    // Signs JWTs and sessions. secret() is fail-closed: required unless NODE_ENV
+    // is explicitly development/test (no fallback when NODE_ENV is unset),
+    // rejected if it looks like a placeholder. \`pnpm dev\` uses devDefault.
+    APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-please-change-me' }),`
+        : ''
+    }
+  },
+  {
+    // Every variable is read as ${prefix}_<NAME> first (${prefix}_PORT before PORT),
+    // falling back to the bare name. \`--env-file\` never overrides a variable
+    // already exported in your shell, so without the prefix another project's
+    // exported PORT / DATABASE_URL would silently win. The keys above stay bare:
+    // the rest of the app still reads env.PORT.
+    // To require the prefixed names (no bare fallback at all), write:
+    //   prefix: { value: '${prefix}', fallback: false }
+    prefix: '${prefix}',
+  },
+)
 `
 }
 
@@ -177,13 +191,26 @@ export function envExample(options: ProjectOptions): string {
   return `# Nothing loads this file for you: copy it to .env and start with
 # \`node --env-file=.env\` / \`tsx --env-file=.env\`, or export the variables.
 # --env-file NEVER overrides a variable already exported in your shell: if
-# another project exported DATABASE_URL, the app silently uses THAT one. Give
-# generic names an app-specific prefix, e.g. ${prefix}_DATABASE_URL.
-PORT=3000
-HOST=0.0.0.0
-LOG_LEVEL=info
+# another project exported PORT or DATABASE_URL, an app reading the generic
+# name would silently use THAT one. That is why src/env.ts reads app-prefixed
+# names — ${prefix}_PORT wins over a stray PORT. The bare names still work as a
+# fallback, so an existing deployment exporting them keeps booting.
+${prefix}_PORT=3000
+${prefix}_HOST=0.0.0.0
+${prefix}_LOG_LEVEL=info
+# NODE_ENV is a Node-wide convention and is never prefixed.
 NODE_ENV=development
-${options.auth ? '# Required unless NODE_ENV is development/test — `pnpm start` refuses to boot\n# without it. Generate a strong one:  openssl rand -base64 48\n# APP_SECRET=\n' : ''}`
+${
+    options.auth
+      ? `# Required unless NODE_ENV is development/test — \`pnpm start\` refuses to boot
+# without it. Generate a strong one:  openssl rand -base64 48
+# ${prefix}_APP_SECRET=
+`
+      : ''
+  }# When you add a database, declare DATABASE_URL in src/env.ts and set it here
+# under the prefixed name:
+# ${prefix}_DATABASE_URL=postgres://user:pass@localhost:5432/${options.name.replace(/^@[^/]+\//, '')}
+`
 }
 
 export function appTs(options: ProjectOptions): string {
@@ -505,11 +532,23 @@ pnpm test
 \`.env.example\` to \`.env\` and launch with \`--env-file=.env\` (Node/tsx), or
 export the variables.
 
-**\`--env-file\` never overrides a variable that is already exported.** In a shell
-where another project exported \`DATABASE_URL\` (or \`PORT\`), this app boots
-against THAT value and only fails on the first request that touches it. Give
-generic names an app-specific prefix — \`${envPrefix(options.name)}_DATABASE_URL\` rather than
-\`DATABASE_URL\` — and check \`env | grep DATABASE_URL\` when in doubt.
+The variables are **app-prefixed**: \`${envPrefix(options.name)}_PORT\`,
+\`${envPrefix(options.name)}_HOST\`, \`${envPrefix(options.name)}_LOG_LEVEL\`${
+    options.auth ? `, \`${envPrefix(options.name)}_APP_SECRET\`` : ''
+  }. \`NODE_ENV\` is never prefixed.
+
+Why: **\`--env-file\` never overrides a variable that is already exported.** In a
+shell where another project exported \`DATABASE_URL\` (or \`PORT\`), an app reading
+the generic name boots against THAT value and only fails on the first request
+that touches it. \`src/env.ts\` therefore passes \`prefix: '${envPrefix(options.name)}'\` to
+\`defineEnv\`: each variable is read as \`${envPrefix(options.name)}_<NAME>\` first and
+**falls back** to the bare \`<NAME>\`, so a deployment that already exports the
+generic names keeps booting while a stray one in your shell loses. Add a
+database and \`DATABASE_URL\` is read as \`${envPrefix(options.name)}_DATABASE_URL\`.
+
+To drop the fallback entirely (prefixed names only), write
+\`prefix: { value: '${envPrefix(options.name)}', fallback: false }\`. When in doubt about what
+your shell exports: \`env | grep DATABASE_URL\`.
 ${
   options.cli
     ? `

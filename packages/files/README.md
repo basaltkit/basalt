@@ -68,7 +68,33 @@ await files.upload(request.body!, { name, contentType })                        
 await files.upload(file.stream, { name: file.filename, contentType: file.contentType }) // @basaltkit/http upload() body
 ```
 
-`Disk.put` takes whole buffers, so the accepted bytes (at most `maxSize`) are buffered before the write.
+On a disk whose driver can stream (`local`, `s3`, `azure`, `gcs` — see
+`disk.supports('putStream')`), the bytes go **straight to the backend**: only
+the 64 KiB sniff window is ever held. Pass `contentLength` when the client
+declared one (`Content-Length`) — S3 needs a known length to stream rather than
+buffer. The buffered path (at most `maxSize` in memory, then `disk.put`) is the
+fallback, used for a driver with no `putStream`, an unbounded
+`validate.maxSize` with no declared `contentLength`, or a custom `checkQuota`
+(which is asked to approve a size the stream does not yet have). Either way the
+record is identical, and a failed upload leaves neither a record nor a partial
+object.
+
+### Streaming a download
+
+`files.downloadStream(id, tenantId?, { bypassQuarantine? })` mirrors
+`download()` — same tenant scoping, same quarantine gate — without loading the
+file into memory:
+
+```ts
+const { record, stream } = await files.downloadStream(id)
+reply.header('content-type', record.contentType)
+reply.header('content-disposition', `attachment; filename="${record.name}"`)
+await pipeline(stream, reply.raw)
+```
+
+**Consume the stream or `destroy()` it** — an abandoned one holds a connection
+(S3/Azure/GCS) or a file descriptor (local) open. A driver that cannot stream
+throws `STORAGE_GET_STREAM_UNSUPPORTED`; use `download()` there.
 
 ## Checking the real type (`validate.sniff`)
 
@@ -134,8 +160,9 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 
 | Method | Description |
 |---|---|
-| `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. `content`: `Buffer`/`Uint8Array`, Node `Readable`, `AsyncIterable<Uint8Array>` or web `ReadableStream`. |
+| `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. `content`: `Buffer`/`Uint8Array`, Node `Readable`, `AsyncIterable<Uint8Array>` or web `ReadableStream`. A stream goes straight to the backend when the driver supports `putStream`. `input.contentLength` (optional) is the client-declared size — a hint that lets S3 stream instead of buffer; the real size is always measured. |
 | `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`. Gated by `requireScan`; `bypassQuarantine` is for the scanner only. |
+| `downloadStream(id, tenantId?, { bypassQuarantine? })` | `{ record, stream }` — the same contract as `download`, quarantine included, without buffering. The caller must consume or `destroy()` the stream. Needs a driver with `getStream`. |
 | `temporaryUrl(id, expiresIn, tenantId?, options?)` | Signed URL. Served `Content-Disposition: attachment` by default; pass `{ disposition: 'inline' }` only when top-level rendering is deliberate — an uploaded HTML/SVG file served inline is stored XSS on the storage origin. Embedded `<img>`/`<video>` uses render regardless. |
 | `get(id, tenantId?)` · `list(tenantId?)` | Metadata. |
 | `delete(id, tenantId?)` | Deletes bytes + metadata; emits `file:deleted`. |

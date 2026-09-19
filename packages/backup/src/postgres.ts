@@ -1,8 +1,10 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { spawn } from 'node:child_process'
+import { pipeline } from 'node:stream/promises'
 import type { Logger } from '@basaltkit/logger'
 import { tenantSchema } from '@basaltkit/prisma'
 import type { Disk } from '@basaltkit/storage'
@@ -105,17 +107,28 @@ export class PostgresBackup {
       if (resolved.schema) args.push('--schema', resolved.schema)
       this.options.logger?.info({ backupId: id, target: running.target }, 'backup started')
       await this.runner(this.options.pgDumpPath ?? 'pg_dump', args, { cwd: folder, output, ...(tool.env ? { env: tool.env } : {}) })
-      const content = await readFile(output)
+      // A dump is as large as the database: it is measured and hashed by
+      // streaming the temp file, then streamed to the disk. Only a driver
+      // without `putStream` still reads it whole (BK-019).
+      const streaming = this.options.disk.supports('putStream')
+      const { size, sha256 } = streaming ? await digestFile(output) : await digestBuffer(output)
       const completed: BackupManifest = {
         ...running,
         status: 'succeeded',
         completedAt: this.clock().toISOString(),
-        sizeBytes: content.byteLength,
-        sha256: createHash('sha256').update(content).digest('hex'),
+        sizeBytes: size,
+        sha256,
       }
-      await this.options.disk.put(artifact, content, { contentType: 'application/octet-stream' })
+      if (streaming) {
+        await this.options.disk.putStream(artifact, createReadStream(output), {
+          contentType: 'application/octet-stream',
+          contentLength: size,
+        })
+      } else {
+        await this.options.disk.put(artifact, await readFile(output), { contentType: 'application/octet-stream' })
+      }
       await this.options.disk.put(manifestKey, JSON.stringify(completed), { contentType: 'application/json' })
-      this.options.logger?.info({ backupId: id, sizeBytes: content.byteLength }, 'backup completed')
+      this.options.logger?.info({ backupId: id, sizeBytes: size }, 'backup completed')
       await this.prune(target)
       return completed
     } catch (caught) {
@@ -169,15 +182,21 @@ export class PostgresBackup {
     // creation time; anything else is refused before pg_restore runs.
     if (manifest.artifact !== `${this.prefix}/${id}.dump`) throw new BackupIntegrityError(id, 'artifact path does not match the backup id.')
     if (typeof manifest.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(manifest.sha256)) throw new BackupIntegrityError(id, 'no checksum was recorded.')
-    const content = await this.options.disk.get(manifest.artifact)
-    const actual = createHash('sha256').update(content).digest()
-    const expected = Buffer.from(manifest.sha256, 'hex')
-    if (!timingSafeEqual(actual, expected)) throw new BackupIntegrityError(id, 'artifact checksum mismatch.')
     const tool = postgresToolConnection(connectionUrl)
     const folder = await mkdtemp(join(tmpdir(), 'basalt-restore-'))
     const input = join(folder, 'backup.dump')
     try {
-      await writeFile(input, content)
+      // The artifact goes to a temp file as it downloads (BK-019) — a restore
+      // is the one operation whose payload is guaranteed to be database-sized.
+      // Its checksum is still verified BEFORE pg_restore is allowed to run.
+      if (this.options.disk.supports('getStream')) {
+        await pipeline(await this.options.disk.getStream(manifest.artifact), createWriteStream(input))
+      } else {
+        await writeFile(input, await this.options.disk.get(manifest.artifact))
+      }
+      const actual = Buffer.from((await digestFile(input)).sha256, 'hex')
+      const expected = Buffer.from(manifest.sha256, 'hex')
+      if (!timingSafeEqual(actual, expected)) throw new BackupIntegrityError(id, 'artifact checksum mismatch.')
       await this.runner(
         options.pgRestorePath ?? this.options.pgRestorePath ?? 'pg_restore',
         [
@@ -226,6 +245,24 @@ export class PostgresBackup {
       schema: target.schema ?? tenantSchema(target.tenantId, this.options.tenantSchemaPrefix ? { prefix: this.options.tenantSchemaPrefix } : {}),
     }
   }
+}
+
+/** Size and SHA-256 of a file, read in chunks — never held in memory. */
+async function digestFile(path: string): Promise<{ size: number; sha256: string }> {
+  const hash = createHash('sha256')
+  let size = 0
+  for await (const chunk of createReadStream(path)) {
+    const buffer = chunk as Buffer
+    size += buffer.byteLength
+    hash.update(buffer)
+  }
+  return { size, sha256: hash.digest('hex') }
+}
+
+/** The pre-BK-019 path: only for a disk whose driver cannot stream anyway. */
+async function digestBuffer(path: string): Promise<{ size: number; sha256: string }> {
+  const content = await readFile(path)
+  return { size: content.byteLength, sha256: createHash('sha256').update(content).digest('hex') }
 }
 
 function sameTarget(a: BackupTarget, b: BackupTarget): boolean { return a.kind === b.kind && ('tenantId' in a ? a.tenantId === (b as typeof a).tenantId : true) }

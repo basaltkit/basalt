@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { createClient, endpoint, BasaltClientError, type EndpointOutput } from '../src/index.js'
+import {
+  createClient,
+  endpoint,
+  BasaltClientError,
+  type BasaltErrorBody,
+  type EndpointOutput,
+} from '../src/index.js'
 
 const Project = z.object({ id: z.string(), name: z.string() })
 const Tokens = z.object({ accessToken: z.string(), refreshToken: z.string() })
@@ -152,6 +158,34 @@ describe('createClient', () => {
       .catch((caught: unknown) => caught)
     expect(error).toBeInstanceOf(BasaltClientError)
     expect(error).toMatchObject({ status: 404, code: 'PROJECT_NOT_FOUND', message: 'Project not found' })
+  })
+
+  it("surfaces the server's structured error.details (BK-021)", async () => {
+    const details = { failed: ['age', 'address'], remaining: 2 }
+    const { fetchMock } = harness(() =>
+      jsonResponse({ error: { code: 'CHECKS_FAILED', message: 'Checks failed.', details } }, 422),
+    )
+    const client = createClient(api, { baseUrl: 'https://api.test', fetch: fetchMock })
+
+    const error = (await client.projects
+      .get({ params: { id: 'p1' } })
+      .catch((caught: unknown) => caught)) as BasaltClientError
+    expect(error.status).toBe(422)
+    expect(error.details).toEqual({ error: { code: 'CHECKS_FAILED', message: 'Checks failed.', details } })
+    // Typed, without digging through the body by hand.
+    const typed: Record<string, unknown> | undefined = error.errorDetails
+    expect(typed).toEqual(details)
+    const body = error.details as BasaltErrorBody
+    expect(body.error.details?.['remaining']).toBe(2)
+  })
+
+  it('has no errorDetails when the server sent a plain error body', async () => {
+    const { fetchMock } = harness(() => jsonResponse({ error: { code: 'NOPE', message: 'No.' } }, 400))
+    const client = createClient(api, { baseUrl: 'https://api.test', fetch: fetchMock })
+    const error = (await client.projects
+      .get({ params: { id: 'p1' } })
+      .catch((caught: unknown) => caught)) as BasaltClientError
+    expect(error.errorDetails).toBeUndefined()
   })
 
   it('returns undefined for 204 responses', async () => {

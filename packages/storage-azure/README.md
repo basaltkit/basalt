@@ -68,6 +68,27 @@ Keep the TTL short, generate the key server-side, and verify the blob (size,
 type) in a "complete" step before trusting it. `checksumSha256` is refused with
 `STORAGE_UPLOAD_URL_UNSUPPORTED` (Put Blob verifies MD5/CRC64 only).
 
+## Streaming, copy and stat
+
+All four optional capabilities are implemented:
+
+| Capability | Azure call | Notes |
+|---|---|---|
+| `putStream` | `uploadStream` | The SDK splits the readable into blocks, so a body of **unknown length** streams fine — no `contentLength` needed. |
+| `getStream` | `download()` | Returns `readableStreamBody` as a Node `Readable`; consume it or `destroy()` it. |
+| `copy` | `syncCopyFromURL` | The destination pulls the source through a **5-minute read-only SAS**, so the bytes never reach the process. Azure caps Copy Blob From URL at **256 MiB** — copy larger blobs with `beginCopyFromURL` on the SDK client, or stream them with `getStream`/`putStream`. |
+| `stat` | `getProperties()` | `{ size, contentType, etag, lastModified }`. |
+
+An injected fake `client` that omits one of these methods makes that capability
+report `STORAGE_*_UNSUPPORTED` instead of crashing.
+
+**Endpoint overrides are refused.** A SAS URL is derived from the blob client's
+own account host and the SDK offers no way to sign for another one, so
+`{ endpoint }` on `temporaryUrl` / `temporaryUploadUrl` throws
+`STORAGE_TEMPORARY_URL_UNSUPPORTED` / `STORAGE_UPLOAD_URL_UNSUPPORTED` rather
+than minting a URL for the wrong host. Configure the driver with a connection
+string for that endpoint instead.
+
 ## Errors
 
 | Error | Code | HTTP | When |

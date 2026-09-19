@@ -94,23 +94,31 @@ pnpm install
 cp .env.example .env
 ```
 
-O `.env.example` lista `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` e — com auth — um
-`APP_SECRET` comentado. Todos são declarados e validados em `src/env.ts` com o
-[`@basaltkit/env`](/pt/guide/config). O `pnpm dev` corre o `src/dev.ts`, que
-define `NODE_ENV=development` (se ainda não estiver definido), por isso a app
-arranca mesmo com um ambiente vazio. O `APP_SECRET` usa
-`secret({ minLength: 32 })`: recai num valor descartável **apenas** com
-`NODE_ENV=development`/`test`. O `pnpm start` corre o `src/server.ts`
-diretamente, onde um `NODE_ENV` não definido conta como produção, por isso
-**recusa arrancar** enquanto não definires um `APP_SECRET` a sério com pelo
-menos 32 caracteres (`openssl rand -base64 48`).
+O `.env.example` lista as variáveis sob um **prefixo próprio da app** derivado
+do nome do projeto — `MY_SAAS_PORT`, `MY_SAAS_HOST`, `MY_SAAS_LOG_LEVEL` e, com
+auth, um `MY_SAAS_APP_SECRET` comentado — mais o `NODE_ENV`, que nunca leva
+prefixo. Todas são declaradas e validadas em `src/env.ts` com o
+[`@basaltkit/env`](/pt/guide/config), que passa `{ prefix: 'MY_SAAS' }` ao
+`defineEnv`: cada variável é lida primeiro como `MY_SAAS_<NOME>` e recua para o
+nome simples `<NOME>`. O código continua a ler `env.PORT` — só mudam os *nomes
+no ambiente*.
+
+O `pnpm dev` corre o `src/dev.ts`, que define `NODE_ENV=development` (se ainda
+não estiver definido), por isso a app arranca mesmo com um ambiente vazio. O
+`APP_SECRET` usa `secret({ minLength: 32 })`: recai num valor descartável
+**apenas** com `NODE_ENV=development`/`test`. O `pnpm start` corre o
+`src/server.ts` diretamente, onde um `NODE_ENV` não definido conta como
+produção, por isso **recusa arrancar** enquanto não definires um
+`MY_SAAS_APP_SECRET` a sério com pelo menos 32 caracteres
+(`openssl rand -base64 48`).
 
 ::: tip Dica: o `.env` não é carregado por ti
 O `defineEnv` lê o `process.env` e mais nada — copiar o ficheiro não torna os
 seus valores visíveis. Exporta as variáveis, arranca com
 `node --env-file=.env` (Node 22+), ou deixa o teu gestor de processos
 injetá-las. Vê [Configuração](/pt/guide/config). O `--env-file` nunca sobrepõe
-uma variável já exportada na tua shell — prefere nomes com prefixo da app; vê
+uma variável já exportada na tua shell — e é exatamente por isso que o scaffold
+usa nomes com prefixo; vê
 [a armadilha de precedência](/pt/guide/installation#o-env-file-nunca-sobrepoe-variaveis-exportadas).
 :::
 
