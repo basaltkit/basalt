@@ -81,6 +81,14 @@ Cada execução cria um dump em formato custom e um manifesto JSON com estado,
 target, datas, tamanho e checksum SHA-256. Execuções falhadas permanecem
 visíveis como manifestos `failed` e são registadas com o id do backup.
 
+Os dumps são **transmitidos em stream**, nunca acumulados em memória: o ficheiro
+temporário do `pg_dump` é medido e hashed em blocos e depois enviado para o disk
+com `disk.putStream(...)`; o `restore()` traz o artefacto de volta em stream para
+um ficheiro temporário antes de verificar o checksum. Um driver sem essas
+capacidades recorre ao `put`/`get` do ficheiro inteiro — por isso dá a uma base
+de dados grande um disk cujo driver transmita (`local`, `s3`, `azure` e `gcs`
+transmitem todos). Vê [Ficheiros grandes](/pt/guide/storage#ficheiros-grandes).
+
 ## Listar e consultar backups
 
 `list()` lê os manifestos JSON do disk configurado, devolve-os do mais recente

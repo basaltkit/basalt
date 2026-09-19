@@ -221,6 +221,43 @@ message**. Codes you'll meet in these docs are real and stable — e.g.
 `TENANT_REQUIRED`, `TEAM_NOT_A_MEMBER`, `DI_CAPTIVE_DEPENDENCY`,
 `HTTP_VALIDATION`, `NOT_FOUND` — treat them as API.
 
+#### Structured error details
+
+A code and a sentence are enough for a human, but not for a UI that has to
+*act* on the failure. Give the error a machine-readable payload instead of
+smuggling data into the message:
+
+```ts
+throw new HttpError(422, 'CHECKS_FAILED', 'Some checks failed.', {
+  details: { failed: ['age', 'address'], remaining: 2 },
+})
+```
+
+```json
+{
+  "error": {
+    "code": "CHECKS_FAILED",
+    "message": "Some checks failed.",
+    "details": { "failed": ["age", "address"], "remaining": 2 }
+  }
+}
+```
+
+The three-argument form is unchanged. `BasaltError` takes the same
+`{ details }` option, so a domain package that throws one with a numeric
+`status` carries details too, and all three adapters serve the identical body.
+On the client, `@basaltkit/sdk` surfaces it as `error.errorDetails`.
+
+`details` reaches the client **verbatim**, so it is treated as public and is
+bounded: no secrets or internals (that part is on you), plain JSON data only
+(a `Date` becomes an ISO string; functions, `undefined`, cycles, `Error`s,
+`Map`s and class instances are stripped), nesting capped at 8 levels, and the
+whole payload dropped above 4 KiB of JSON — so always keep `code` + `message`
+as the client's fallback. Only errors *constructed* with details have any: an
+unexpected exception is still the neutral 500 with nothing attached, and the
+validation body keeps exactly its `part` + `issues[]` shape. Full rules in the
+[`@basaltkit/http` README](https://github.com/basaltkit/basalt/tree/main/packages/http#structured-error-details).
+
 ### Security meta must be enforced — the boot check
 
 `meta: { auth: true }`, `meta.can`, `meta.teamRole`, `meta.scopes`,

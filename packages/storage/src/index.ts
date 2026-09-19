@@ -6,7 +6,12 @@ import {
   tryCtx,
   type DurationInput,
 } from '@basaltkit/core'
+import type { Readable } from 'node:stream'
 import type {
+  CopyDriverOptions,
+  PutStreamOptions,
+  StorageStat,
+  StreamSource,
   TemporaryUploadUrl,
   TemporaryUploadUrlDriverOptions,
   TemporaryUrlOptions,
@@ -15,10 +20,16 @@ import type {
 } from './driver.js'
 import { ImagePipeline, type ImageProcessor } from './image.js'
 import { LocalStorageDriver } from './drivers/local.js'
+import { toLimitedReadable } from './streams.js'
 import {
+  CopyUnsupportedError,
+  GetStreamUnsupportedError,
+  PutStreamUnsupportedError,
+  StatUnsupportedError,
   StorageContentTypeError,
   StorageInvalidKeyError,
   StorageInvalidScopeError,
+  StorageSigningEndpointInvalidError,
   StorageTenantRequiredError,
   StorageTooLargeError,
   StorageUploadUrlInvalidError,
@@ -31,10 +42,15 @@ import {
 export type {
   StorageDriver,
   PutOptions,
+  PutStreamOptions,
+  StreamSource,
+  StorageStat,
+  CopyDriverOptions,
   TemporaryUrlOptions,
   TemporaryUploadUrl,
   TemporaryUploadUrlDriverOptions,
 } from './driver.js'
+export { collectStream, toLimitedReadable } from './streams.js'
 export {
   ImagePipeline,
   type ImageProcessor,
@@ -45,12 +61,18 @@ export {
 } from './image.js'
 export { LocalStorageDriver } from './drivers/local.js'
 export {
+  CopyUnsupportedError,
+  GetStreamUnsupportedError,
   ImageProcessingUnavailableError,
+  PutStreamUnsupportedError,
+  StatUnsupportedError,
+  StorageStreamLengthRequiredError,
   StorageContentTypeError,
   StorageFileNotFoundError,
   StorageInvalidKeyError,
   StorageInvalidPathError,
   StorageInvalidScopeError,
+  StorageSigningEndpointInvalidError,
   StorageTenantRequiredError,
   StorageTooLargeError,
   StorageUploadUrlInvalidError,
@@ -134,6 +156,52 @@ export interface TemporaryUploadUrlOptions {
   maxBytes?: number
   /** Facade-enforced allowlist for the declared `contentType` (like `PutOptions.allowedContentTypes`). */
   allowedContentTypes?: readonly string[]
+  /**
+   * Sign the URL for this base endpoint instead of the driver's own — the SAME
+   * bucket reached under another host.
+   *
+   * The case this exists for: an isolated worker (or a browser) that must
+   * upload to a bucket it reaches under a different name than the API does —
+   * `http://minio:9000` on a container network vs the app's public endpoint.
+   * Deployment concern, never client input: a signature minted for a host you
+   * do not control is a credential handed to that host.
+   *
+   * S3 signs for it (region, path style and SSE unchanged); Azure and GCS
+   * refuse it — their SDKs derive the signed URL from the account/bucket host.
+   */
+  endpoint?: string
+}
+
+/** Options for {@link Disk.putStream}. */
+export interface PutStreamInput extends PutStreamOptions {
+  /**
+   * Required: a streaming upload has no bytes to fall back on, so the type is
+   * declared up front. It is checked against `allowedContentTypes` before a
+   * single byte is read.
+   */
+  contentType: string
+}
+
+/** Options for {@link Disk.copy}. */
+export interface CopyOptions extends CopyDriverOptions {
+  /**
+   * Destination disk. Defaults to the source disk. A different disk on the
+   * SAME driver instance still copies server-side; anything else falls back to
+   * `getStream` → `putStream` (and finally `get` → `put`).
+   */
+  disk?: Disk
+  /**
+   * Cap applied to the fallback copy, which is the only one whose bytes travel
+   * through this process. A server-side copy never reads the body, so it
+   * cannot be capped here — use it deliberately.
+   */
+  maxBytes?: number
+  /**
+   * Refuse to fall back: throw {@link CopyUnsupportedError} instead of moving
+   * the bytes through this process. Use it when a copy that quietly downloads
+   * and re-uploads a multi-gigabyte object would be a bug, not a slow path.
+   */
+  requireServerSide?: boolean
 }
 
 // type/subtype with optional parameters; no whitespace runs, CR/LF or other control chars.
@@ -141,8 +209,32 @@ const CONTENT_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+(?:; ?[a-z0-9!#$&^_
 // 32 bytes, base64: 43 characters + one '=' pad.
 const SHA256_BASE64 = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/
 
+/**
+ * A signing endpoint must be an absolute `http(s)` base URL with nothing that
+ * belongs to a request in it. It is a deployment concern, not user input:
+ * whoever sets it is telling the signer which host serves the SAME bucket.
+ */
+function assertSigningEndpoint(endpoint: string): void {
+  let url: URL
+  try {
+    url = new URL(endpoint)
+  } catch {
+    throw new StorageSigningEndpointInvalidError(`"${endpoint}" is not an absolute URL (e.g. "https://files.example.com").`)
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new StorageSigningEndpointInvalidError(`"${url.protocol}" is not allowed; use http: or https:.`)
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new StorageSigningEndpointInvalidError('it must not carry credentials (user:password@).')
+  }
+  if (url.search !== '' || url.hash !== '') {
+    throw new StorageSigningEndpointInvalidError('it must not carry a query string or fragment.')
+  }
+}
+
 function validateUploadUrlOptions(options: TemporaryUploadUrlOptions): TemporaryUploadUrlDriverOptions {
-  const { contentType, contentLength, checksumSha256, maxBytes, allowedContentTypes } = options
+  const { contentType, contentLength, checksumSha256, maxBytes, allowedContentTypes, endpoint } = options
+  if (endpoint !== undefined) assertSigningEndpoint(endpoint)
   if (typeof contentType !== 'string' || !CONTENT_TYPE.test(contentType)) {
     throw new StorageUploadUrlInvalidError('contentType is required and must be a valid media type (e.g. "image/png").')
   }
@@ -165,6 +257,7 @@ function validateUploadUrlOptions(options: TemporaryUploadUrlOptions): Temporary
     contentType,
     ...(contentLength !== undefined ? { contentLength } : {}),
     ...(checksumSha256 !== undefined ? { checksumSha256 } : {}),
+    ...(endpoint !== undefined ? { endpoint } : {}),
   }
 }
 
@@ -256,6 +349,20 @@ export class Disk {
   }
 
   /**
+   * Whether this disk's driver implements an optional capability, so callers
+   * can take the streaming path where it exists and buffer where it does not
+   * instead of catching a `STORAGE_*_UNSUPPORTED` error.
+   *
+   * ```ts
+   * if (disk.supports('putStream')) await disk.putStream(key, body, { contentType })
+   * else await disk.put(key, await buffer(body), { contentType })
+   * ```
+   */
+  supports(capability: 'temporaryUrl' | 'temporaryUploadUrl' | 'putStream' | 'getStream' | 'copy' | 'stat'): boolean {
+    return typeof this.driver[capability] === 'function'
+  }
+
+  /**
    * Opens a fluent image pipeline reading `path` from this disk:
    * `disk.image('a.png').resize(256, 256).webp().save('a.webp')`. Requires an
    * `imageProcessor` (from `@basaltkit/image-sharp`); otherwise the terminal
@@ -277,8 +384,138 @@ export class Disk {
     return this.driver.put(key, content, options)
   }
 
+  /**
+   * Streams a body straight to the backend: the bytes never sit in this
+   * process as one buffer.
+   *
+   * ```ts
+   * await disk.putStream('imports/2026.csv', request.raw, {
+   *   contentType: 'text/csv',
+   *   maxBytes: 200 * 1024 * 1024,
+   * })
+   * ```
+   *
+   * Same safety rules as {@link put}: the key is validated and tenant-prefixed
+   * (fail-closed without a tenant), `allowedContentTypes` is checked before any
+   * byte is read, and `maxBytes` is enforced WHILE the body arrives — past the
+   * cap the upload is aborted with {@link StorageTooLargeError} and the source
+   * is destroyed (Node `Readable`) or cancelled (web `ReadableStream`). A
+   * partial object may remain on backends that cannot roll back a half-written
+   * upload; delete the key when that matters.
+   *
+   * Pass `contentLength` whenever it is known — S3 needs it (see the
+   * `@basaltkit/storage-s3` README).
+   *
+   * Drivers without the capability throw {@link PutStreamUnsupportedError}.
+   */
+  async putStream(path: string, source: StreamSource, options: PutStreamInput): Promise<void> {
+    if (!this.driver.putStream) throw new PutStreamUnsupportedError(this.driver.name)
+    const key = this.path(path)
+    // The declared type and length are judged before the body is touched: an
+    // upload that cannot be accepted should never be read.
+    if (options.allowedContentTypes && !options.allowedContentTypes.includes(options.contentType)) {
+      throw new StorageContentTypeError(options.contentType, options.allowedContentTypes)
+    }
+    if (options.maxBytes !== undefined && options.contentLength !== undefined && options.contentLength > options.maxBytes) {
+      throw new StorageTooLargeError(options.contentLength, options.maxBytes)
+    }
+    return this.driver.putStream(key, toLimitedReadable(source, options.maxBytes), options)
+  }
+
   async get(path: string): Promise<Buffer> {
     return this.driver.get(this.path(path))
+  }
+
+  /**
+   * Reads an object as a stream. The caller MUST consume the returned readable
+   * to completion or `destroy()` it — an abandoned stream holds a socket (S3,
+   * Azure, GCS) or a file descriptor (local) open.
+   *
+   * ```ts
+   * const body = await disk.getStream('reports/2026.csv')
+   * await pipeline(body, createWriteStream('/tmp/2026.csv'))
+   * ```
+   *
+   * Drivers without the capability throw {@link GetStreamUnsupportedError};
+   * a missing object throws {@link StorageFileNotFoundError}, as `get` does.
+   */
+  async getStream(path: string): Promise<Readable> {
+    if (!this.driver.getStream) throw new GetStreamUnsupportedError(this.driver.name)
+    return this.driver.getStream(this.path(path))
+  }
+
+  /**
+   * Copies an object without the bytes passing through this process, when the
+   * driver can (S3 `CopyObject`, Azure copy-from-URL, GCS `file.copy`, local
+   * `fs.copyFile`).
+   *
+   * ```ts
+   * await disk.copy('drafts/a.pdf', 'final/a.pdf')
+   * await disk.copy('drafts/a.pdf', 'archive/a.pdf', { disk: storage.disk('cold') })
+   * ```
+   *
+   * Both keys are validated and tenant-prefixed — the destination against the
+   * destination disk's own scope, so a copy can never write outside the tenant
+   * it runs in.
+   *
+   * Fallbacks, in order: a different driver (or one with no `copy`) is copied
+   * with `getStream` → `putStream`, and a driver without those streams with
+   * `get` → `put`, which does buffer the object. Both fallbacks move the bytes
+   * through this process — for cross-cloud copies of large objects, prefer the
+   * provider's own transfer service, or pass `{ requireServerSide: true }` to
+   * make a fallback an error ({@link CopyUnsupportedError}) instead.
+   */
+  async copy(from: string, to: string, options: CopyOptions = {}): Promise<void> {
+    const target = options.disk ?? this
+    const source = this.path(from)
+    const destination = target.path(to)
+    const contentTypeOption = options.contentType !== undefined ? { contentType: options.contentType } : {}
+    if (target.driver === this.driver && this.driver.copy) {
+      return this.driver.copy(source, destination, contentTypeOption)
+    }
+    if (options.requireServerSide) {
+      throw new CopyUnsupportedError(
+        this.driver.name,
+        target.driver === this.driver
+          ? `The "${this.driver.name}" driver cannot copy server-side. Drop requireServerSide to copy through this process, or use a driver that implements copy (local, s3, azure, gcs).`
+          : `A server-side copy needs one driver: "${this.driver.name}" (disk "${this.name}") and "${target.driver.name}" (disk "${target.name}") are different backends. Drop requireServerSide to copy through this process.`,
+      )
+    }
+    if (this.driver.getStream && target.driver.putStream) {
+      const stat = await this.driver.stat?.(source).catch(() => undefined)
+      const contentType = options.contentType ?? stat?.contentType ?? 'application/octet-stream'
+      const body = await this.driver.getStream(source)
+      try {
+        await target.driver.putStream(destination, toLimitedReadable(body, options.maxBytes), {
+          contentType,
+          ...(stat?.size !== undefined ? { contentLength: stat.size } : {}),
+          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
+        })
+      } catch (error) {
+        body.destroy()
+        throw error
+      }
+      return
+    }
+    // Last resort: the whole object through memory. Kept so `copy` works on
+    // any pair of drivers rather than failing where `get`/`put` would not.
+    const content = await this.driver.get(source)
+    if (options.maxBytes !== undefined && content.byteLength > options.maxBytes) {
+      throw new StorageTooLargeError(content.byteLength, options.maxBytes)
+    }
+    await target.driver.put(destination, content, contentTypeOption)
+  }
+
+  /**
+   * Object metadata — size, content type, etag, last-modified — without
+   * downloading it (S3 `HeadObject`, Azure `getProperties`, GCS `getMetadata`).
+   *
+   * Drivers without the capability throw {@link StatUnsupportedError}; a
+   * missing object throws {@link StorageFileNotFoundError}, as `get` does.
+   */
+  async stat(path: string): Promise<StorageStat> {
+    if (!this.driver.stat) throw new StatUnsupportedError(this.driver.name)
+    return this.driver.stat(this.path(path))
   }
 
   async exists(path: string): Promise<boolean> {
@@ -307,8 +544,10 @@ export class Disk {
     // Capped here, for every driver: a signed URL is a bearer credential that
     // outlives the holder's membership and role, so it must not be long-lived.
     if (!(ttl > 0) || ttl > this.maxTemporaryUrlTtl) throw new TemporaryUrlTtlTooLongError(ttl, this.maxTemporaryUrlTtl)
+    if (options.endpoint !== undefined) assertSigningEndpoint(options.endpoint)
     return this.driver.temporaryUrl(this.path(path), ttl, {
       disposition: options.disposition ?? 'attachment',
+      ...(options.endpoint !== undefined ? { endpoint: options.endpoint } : {}),
     })
   }
 

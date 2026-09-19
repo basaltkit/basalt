@@ -354,7 +354,10 @@ documented as `multipart/form-data`.
   404 with the same body on all three. Unmatched routes get the same treatment:
   every adapter serves the neutral `404 { "error": { "code": "NOT_FOUND", … } }`
   instead of its framework's default (opt out with `notFound: false` on the
-  adapter plugin).
+  adapter plugin). A structured payload
+  (`new HttpError(422, code, message, { details })`) is sanitised and serialised
+  as `error.details` by that same neutral serializer, so it is identical on the
+  three — see [Structured error details](/guide/concepts#structured-error-details).
 - The handler's `request` / `reply` are the neutral types; reach the underlying
   framework object via `request.raw` when you truly need it.
 

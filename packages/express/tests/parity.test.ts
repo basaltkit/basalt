@@ -3,6 +3,7 @@ import type { Server } from 'node:http'
 import { createApp, type BasaltApp } from '@basaltkit/core'
 import {
   fetchSend,
+  errorDetailsParitySuite,
   rateLimitKeyParitySuite,
   uploadParitySuite,
   type ParityDriver,
@@ -33,3 +34,4 @@ const driver: ParityDriver = {
 
 uploadParitySuite('express', driver)
 rateLimitKeyParitySuite('express', driver)
+errorDetailsParitySuite('express', driver)

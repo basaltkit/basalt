@@ -365,7 +365,11 @@ rota que não é de upload continua a analisar um body multipart dentro do
   um `HttpError(404)` é um 404 com o mesmo corpo nos três. Rotas não
   correspondidas recebem o mesmo tratamento: todos os adapters servem o neutro
   `404 { "error": { "code": "NOT_FOUND", … } }` em vez do default da sua
-  framework (desativa com `notFound: false` no plugin do adapter).
+  framework (desativa com `notFound: false` no plugin do adapter). Um payload
+  estruturado (`new HttpError(422, code, message, { details })`) é sanitizado e
+  serializado como `error.details` pelo mesmo serializador neutro, por isso é
+  idêntico nos três — vê
+  [Detalhes estruturados de erro](/pt/guide/concepts#detalhes-estruturados-de-erro).
 - O `request` / `reply` do handler são os tipos neutros; alcança o objeto
   subjacente da framework via `request.raw` quando realmente precisares.
 

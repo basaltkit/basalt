@@ -16,6 +16,36 @@ describe('defineEnv', () => {
     expect(Object.isFrozen(env)).toBe(true)
   })
 
+  it('reads process.env when no options are given', () => {
+    process.env['BASALT_ENV_SMOKE'] = '7'
+    try {
+      expect(defineEnv({ BASALT_ENV_SMOKE: z.coerce.number() }).BASALT_ENV_SMOKE).toBe(7)
+    } finally {
+      delete process.env['BASALT_ENV_SMOKE']
+    }
+  })
+
+  it('keeps the full path for a nested failure', () => {
+    try {
+      defineEnv(
+        { TAGS: z.preprocess((value) => String(value).split(','), z.array(z.string().min(2))) },
+        { source: { TAGS: 'ok,x' } },
+      )
+      expect.unreachable()
+    } catch (error) {
+      expect((error as EnvValidationError).report[0]).toMatch(/^TAGS\.1: /)
+    }
+  })
+
+  it('reports a non-object source as (root)', () => {
+    try {
+      defineEnv({}, { source: 'not-an-object' as unknown as Record<string, string | undefined> })
+      expect.unreachable()
+    } catch (error) {
+      expect((error as EnvValidationError).report[0]).toMatch(/^\(root\): /)
+    }
+  })
+
   it('aggregates ALL errors into a single report', () => {
     try {
       defineEnv(

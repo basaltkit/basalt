@@ -131,14 +131,14 @@ inside it:
 
 | Path | Contents |
 | --- | --- |
-| `src/env.ts` | `defineEnv` over `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` with auth) |
+| `src/env.ts` | `defineEnv` over `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` with auth), with `{ prefix: 'MY_SAAS' }` — every variable is read as `MY_SAAS_<NAME>` first, falling back to the bare name (see [`--env-file` never overrides exported variables](#env-file-never-overrides-exported-variables)) |
 | `src/app.ts` | `buildApp()` — config, logger, events, security headers + a global rate limit, then tenancy/auth/billing/MCP/CLI as selected. With tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (authenticated requests for a tenant the user is not a member of get `403`) and a dev-only seed adding registrants to the `demo` tenant |
 | `src/routes.ts` | `GET /` (a friendly index) and `GET /health` |
 | `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM` |
 | `src/dev.ts` | The `pnpm dev` entry: sets `NODE_ENV=development` unless already set, then loads `server.ts` |
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
 | `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck` — plus `basalt` with `--cli`. `@basaltkit/*` ranges track each package's current release line |
-| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` and the README warn about the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
+| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` uses the app-prefixed names and, with the README, explains the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
 | `bin/basalt.ts` | With `--cli`: the CLI entrypoint wiring the generators and `prisma:sync` |
 | `.mcp.json` | With `--mcp`: registers the **dev-only** `basalt-ai-mcp` bridge for MCP clients |
 | `web/…` | With `--ui`: the React + shadcn frontend, a pnpm workspace member |
@@ -164,8 +164,45 @@ quietly — in a terminal where another project exported `DATABASE_URL` or `PORT
 the app boots against *that* database or port and fails only on the first request
 that touches it.
 
-- Give generic names an **app-specific prefix** — `MY_SAAS_DATABASE_URL`, not
-  `DATABASE_URL` (`.env.example` suggests one derived from the project name).
+**The fix the scaffold applies: an app-specific prefix.** `src/env.ts` passes
+`prefix` to `defineEnv`, derived from the project name (`my-saas` → `MY_SAAS`),
+and `.env.example` uses the prefixed names:
+
+```ts
+// src/env.ts — generated
+export const env = defineEnv(
+  {
+    PORT: z.coerce.number().default(3000),
+    HOST: z.string().default('0.0.0.0'),
+    LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
+    APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-please-change-me' }),
+  },
+  { prefix: 'MY_SAAS' },
+)
+```
+
+```bash
+# .env.example — generated
+MY_SAAS_PORT=3000
+MY_SAAS_HOST=0.0.0.0
+MY_SAAS_LOG_LEVEL=info
+NODE_ENV=development            # never prefixed — a Node-wide convention
+# MY_SAAS_APP_SECRET=           # with auth
+```
+
+Each variable is read as `MY_SAAS_<NAME>` first and **falls back** to the bare
+`<NAME>`, so a deployment that already exports the generic names keeps booting
+while a stray `PORT` in your shell no longer wins. The shape's keys are
+untouched — the app still reads `env.PORT`. To drop the fallback and require
+the prefixed names only, write
+`prefix: { value: 'MY_SAAS', fallback: false }`. When a variable is missing the
+report names what was looked for —
+`MY_SAAS_DATABASE_URL (or DATABASE_URL): Required`. Full rules:
+[Configuration → App-specific prefixes](/guide/config#app-specific-prefixes).
+
+Two habits that still help:
+
 - When in doubt, `env | grep DATABASE_URL` before `pnpm dev`, or start with a
   clean slate: `env -u DATABASE_URL pnpm dev`.
 - Once a database is wired, log its target at boot (host and database name,
@@ -268,9 +305,60 @@ authorization (who may read or write which rows) is still up to you.
 | `--no-register` | `make:resource` | Skip the automatic wiring into `src/app.ts` |
 | `--public` | `make:resource`, `make:routes`, `make:test` | Routes without `meta.auth`, open to anonymous callers (alias `--no-auth`). Use only for a deliberately public resource |
 | `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Force tenant scoping on or off (default: on when `package.json` depends on `@basaltkit/tenancy`) |
+| `--crud` / `--no-crud` | `make:service` | Force the CRUD service or the minimal one (default: CRUD when the sibling repository and schema are already in the target directory) |
 
 Individual artifacts are available as `make:schema`, `make:repository`,
 `make:service`, `make:plugin`, `make:routes` and `make:test`.
+
+### Services that are not CRUD
+
+A CRUD service delegates to a sibling repository and imports the sibling
+schema. Generated on its own, where those files do not exist, it would not
+compile (`TS2307: Cannot find module './invoice.repository.js'`) — so
+`make:service` looks at the target directory first:
+
+- `<name>.repository.ts` **and** `<name>.schema.ts` already there (after
+  `make:resource`, or written by you) → the CRUD service, as before;
+- either one missing → a **minimal service**: the class, its `createToken`
+  injection token and a constructor with no dependencies, importing nothing but
+  `@basaltkit/core`. It compiles as written and carries a TODO pointing at
+  `make:resource` for the CRUD vertical.
+
+That is the shape for orchestration, domain rules, transactions, schedulers —
+the services a repository has nothing to do with.
+
+```bash
+pnpm basalt make:service Billing            # minimal: no repository next to it
+pnpm basalt make:service Invoice --crud     # force the CRUD shape
+pnpm basalt make:service Invoice --no-crud  # force the minimal shape
+```
+
+`make:resource` is unaffected: the vertical always gets the CRUD service,
+because it generates the repository and the schema in the same batch.
+
+### One artifact at a time: the sibling warning
+
+The service is the only artifact with a shape that stands on its own. The
+others are members of a vertical and import one another — the plugin needs the
+repository and the service, the routes need the service and the schema, the
+test needs the plugin and the routes, the repository needs the schema.
+Generating one of them alone still writes the file (the sibling may be the next
+thing you write by hand), but the generator now names what it refers to and
+cannot find:
+
+```
+Generated 1 file(s):
+  src/modules/invoice/invoice.plugin.ts
+Warning: src/modules/invoice/invoice.plugin.ts imports 2 file(s) that do not exist yet:
+  src/modules/invoice/invoice.repository.ts
+  src/modules/invoice/invoice.service.ts
+  Generate the whole vertical with `basalt make:resource Invoice`, or write them yourself — until then this file does not compile.
+```
+
+`make:schema` never warns (it imports nothing of the module) and
+`make:resource` never warns (it writes every one of them). Programmatically the
+same list is `missingSiblings(kind, name, options, { baseDir })`, and
+`expectedSiblings(kind, names(name))` is the static per-kind table.
 
 What is true of the whole project — rather than of one invocation — is
 configured where the commands are registered, including which Prisma client the
@@ -333,7 +421,8 @@ see [Queues & jobs](/guide/queues).
   plugin to `plugins` and the routes to the adapter yourself; the generated
   files are otherwise complete.
 - **The app connects to the wrong database / port** — a variable exported in
-  your shell beats `--env-file`. See
+  your shell beats `--env-file`. Set the app-prefixed names (`MY_SAAS_PORT`)
+  the scaffold declares, not the generic ones. See
   [`--env-file` never overrides exported variables](#env-file-never-overrides-exported-variables).
 - **`pnpm basalt …` starts with a `pnpm install`** (or fails offline) — pnpm 11's
   `verifyDepsBeforeRun`. See

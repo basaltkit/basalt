@@ -1,14 +1,37 @@
 /**
+ * Options for every `BasaltError` — the standard `cause`, plus an optional
+ * structured payload.
+ */
+export interface BasaltErrorOptions extends ErrorOptions {
+  /**
+   * Machine-readable data about this failure, for the caller to act on:
+   * which checks failed, how much quota is left, the current version behind a
+   * conflict. Without it the only place to put that data is the human-readable
+   * message, and the UI ends up parsing sentences.
+   *
+   * When the error carries a numeric `status`, `@basaltkit/http` serialises a
+   * sanitised copy of this as `error.details` in the HTTP body — so treat it as
+   * PUBLIC: no secrets, no internals, plain JSON data only, and small. See the
+   * rules in `@basaltkit/http`'s "Structured error details".
+   */
+  details?: Record<string, unknown>
+}
+
+/**
  * Base error for the whole ecosystem. The `code` is stable and part of the
  * semver contract — apps can safely branch on codes.
  */
 export class BasaltError extends Error {
   readonly code: string
 
-  constructor(code: string, message: string, options?: ErrorOptions) {
+  /** Structured payload passed to the constructor, exactly as given (never sanitised here). */
+  readonly details?: Record<string, unknown>
+
+  constructor(code: string, message: string, options?: BasaltErrorOptions) {
     super(message, options)
     this.name = new.target.name
     this.code = code
+    if (options?.details) this.details = options.details
   }
 }
 

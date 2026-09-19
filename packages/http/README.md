@@ -121,6 +121,53 @@ throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
 
 Unintentional errors (any `throw new Error(...)`) become a generic `500` with the `INTERNAL_ERROR` code — the internal message never reaches the client.
 
+### Structured error details
+
+A domain error the UI has to *act* on — which checks failed, how much quota is left, the current version behind a conflict — used to have nowhere to go but the message, so apps ended up parsing sentences like `Checks failed: A, B`. Pass a fourth options argument instead:
+
+```ts
+throw new HttpError(422, 'CHECKS_FAILED', 'Some checks failed.', {
+  details: { failed: ['age', 'address'], remaining: 2 },
+})
+```
+
+```json
+{
+  "error": {
+    "code": "CHECKS_FAILED",
+    "message": "Some checks failed.",
+    "details": { "failed": ["age", "address"], "remaining": 2 }
+  }
+}
+```
+
+The three-argument form is unchanged and adds no `details` key. The options object also takes the standard `cause`. The same field exists on `BasaltError` (`@basaltkit/core`), so a domain package that throws `BasaltError` with a numeric `status` gets it too:
+
+```ts
+class QuotaExceededError extends BasaltError {
+  readonly status = 402
+  constructor(limit: number, used: number) {
+    super('QUOTA_EXCEEDED', 'Plan quota exceeded.', { details: { limit, used } })
+  }
+}
+```
+
+On the client, `@basaltkit/sdk` exposes it as `error.errorDetails` (`BasaltClientError`).
+
+**`details` is public — the rules it is held to.** It reaches the client verbatim, so the neutral serializer sanitises a copy of it (`sanitizeErrorDetails`) before it leaves, and never mutates yours:
+
+| Rule | Behaviour |
+|---|---|
+| **Yours to keep clean** | No secrets, credentials, internal IDs, SQL or stack traces. The framework cannot tell those apart from data the UI needs — that part is on you. |
+| **Plain JSON data only** | Strings, finite numbers, booleans, `null`, arrays, plain objects. A `Date` becomes its ISO string. |
+| **Everything else is stripped** | Functions, symbols, `undefined`, BigInt, `NaN`/`Infinity`, and exotic objects — `Error` (its stack is an internal), `Map`/`Set`/`RegExp`, typed arrays and **class instances** (an ORM row would otherwise walk out through an error body). A dropped array element becomes `null` so later indexes do not shift; a `__proto__` key is never copied. |
+| **Acyclic and shallow** | A cycle is dropped where it closes; nesting deeper than `MAX_ERROR_DETAILS_DEPTH` (8) is dropped. |
+| **Bounded** | Over `MAX_ERROR_DETAILS_BYTES` (4 KiB) of serialised JSON the **whole payload is dropped** — the error still carries `code` and `message`. An error must never become an exfiltration or amplification channel. |
+| **Opt-in only** | Only an error explicitly constructed with `details` has any. An unexpected exception is still the neutral `500` with nothing attached, and a framework-raised 4xx (malformed JSON, body too large) never grows one. A deliberate 5xx (`new HttpError(503, …, { details })`) does keep its payload. |
+| **Validation is untouched** | A `RequestValidationError` body keeps exactly its `part` + `issues[]` shape and never gains a `details` key. |
+
+Because the whole payload is dropped when it is unsafe or oversized, treat `details` as best-effort enrichment: the client's fallback must always be `code` + `message`.
+
 ### The neutral 404 — `NOT_FOUND_RESPONSE`
 
 Every adapter serves the same JSON body for an unmatched route, instead of Fastify's,
@@ -514,7 +561,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | Error | Code | HTTP | When |
 |---|---|---|---|
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. The response carries `part` and `issues[]`. |
-| `HttpError(status, code, message)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. |
+| `HttpError(status, code, message, options?)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. `options` is `{ details?, cause? }` — `details` is serialized as `error.details` (see [Structured error details](#structured-error-details)). |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
 | — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
 | — (no class) | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. `Retry-After` is set. |
@@ -526,6 +573,15 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 
 `HttpError` and `RequestValidationError` extend `BasaltError`, so `error.code` is stable
 and safe to branch on. `ValidationIssue` is `{ path: string; message: string }`.
+
+| Export | Description |
+|---|---|
+| `HttpErrorOptions` | `{ details?: ErrorDetails; cause?: unknown }` — the fourth argument of `HttpError`. |
+| `ErrorDetails` | `Record<string, unknown>` — a structured error payload. |
+| `sanitizeErrorDetails(value)` → `ErrorDetails \| undefined` | The client-safety filter the serializer applies: returns a plain, acyclic, bounded copy, or `undefined` when there is nothing safe to send. Never throws. |
+| `MAX_ERROR_DETAILS_BYTES` | `4096` — serialised JSON bytes above which the payload is dropped. |
+| `MAX_ERROR_DETAILS_DEPTH` | `8` — nesting below which values are dropped. |
+
 `UnguardedRouteMetaError` extends `Error` (not `BasaltError`) and carries `code` as a
 readonly field — it is a boot failure, never an HTTP response.
 
@@ -641,6 +697,8 @@ and never reaches your route.
 **"Rate limiting doesn't work with multiple servers."** `MemoryRateLimitStore` lives in each process's memory. Implement `RateLimitStore` on top of Redis and pass it in `rateLimit.store`.
 
 **"My custom error comes out as a generic 500."** Only `HttpError` (or a `BasaltError` with a numeric `status` property) maps to the status you chose; any other error becomes `INTERNAL_ERROR` on purpose, to avoid exposing internal details.
+
+**"My `details` never reach the client."** The payload is dropped whole when it is not plain JSON data (a class instance, a `Map`, an `Error`), when it is deeper than 8 levels, or when its serialised JSON is over 4 KiB — and it is only ever read from an error that was *constructed* with it. Check it with `sanitizeErrorDetails(yourDetails)`: `undefined` means nothing would be sent. See [Structured error details](#structured-error-details).
 
 **"`/readyz` responds 503."** Some check returned `ok: false` or threw an error; the response body carries the detail per check in `checks`.
 
