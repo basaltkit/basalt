@@ -1,4 +1,6 @@
 import { definePlugin, ensureMetadata } from '@basaltkit/core'
+import { HttpError } from './errors.js'
+import type { RouteGuard } from './pipeline.js'
 import type { HttpReply, HttpRequest } from './route.js'
 import { HTTP_SERVER } from './server.js'
 
@@ -20,14 +22,56 @@ export interface RateLimitStore {
   reset(key: string): void | Promise<void>
 }
 
+export interface MemoryRateLimitStoreOptions {
+  clock?: () => number
+  /**
+   * Most buckets kept at once (default 100 000). Past it, expired buckets are
+   * swept and, if the store is still full, the oldest windows are evicted first
+   * — so a flood of distinct client addresses (IPv6 makes them cheap) costs
+   * bounded memory instead of growing the process until it dies. Evicting a
+   * live window resets that client's count, so size it well above your real
+   * distinct-client count per window; use `RedisRateLimitStore` across
+   * instances.
+   */
+  maxEntries?: number
+  /** How often, at most, a hit sweeps every expired bucket (default 60 000 ms). */
+  sweepIntervalMs?: number
+}
+
+/** Default cap on in-memory rate-limit buckets. */
+export const DEFAULT_RATE_LIMIT_MAX_ENTRIES = 100_000
+
 export class MemoryRateLimitStore implements RateLimitStore {
+  // Insertion order == window start order (a new window re-inserts its key),
+  // which makes the first entry the oldest window: FIFO eviction for free.
   private readonly windows = new Map<string, { count: number; resetAt: number }>()
-  constructor(private readonly clock: () => number = () => Date.now()) {}
+  private readonly clock: () => number
+  private readonly maxEntries: number
+  private readonly sweepIntervalMs: number
+  private nextSweepAt = 0
+
+  constructor(clockOrOptions: (() => number) | MemoryRateLimitStoreOptions = {}) {
+    const options = typeof clockOrOptions === 'function' ? { clock: clockOrOptions } : clockOrOptions
+    this.clock = options.clock ?? (() => Date.now())
+    this.maxEntries = Math.max(1, Math.floor(options.maxEntries ?? DEFAULT_RATE_LIMIT_MAX_ENTRIES))
+    this.sweepIntervalMs = Math.max(0, options.sweepIntervalMs ?? 60_000)
+  }
+
+  /** Buckets currently held (live or not yet swept). */
+  get size(): number {
+    return this.windows.size
+  }
 
   hit(key: string, limit: number, windowMs: number): RateLimitResult {
     const now = this.clock()
+    if (now >= this.nextSweepAt) {
+      this.sweep(now)
+      this.nextSweepAt = now + this.sweepIntervalMs
+    }
     let window = this.windows.get(key)
     if (!window || now >= window.resetAt) {
+      if (window) this.windows.delete(key)
+      else if (this.windows.size >= this.maxEntries) this.makeRoom(now)
       window = { count: 0, resetAt: now + windowMs }
       this.windows.set(key, window)
     }
@@ -42,6 +86,21 @@ export class MemoryRateLimitStore implements RateLimitStore {
   }
   reset(key: string): void {
     this.windows.delete(key)
+  }
+
+  private sweep(now: number): void {
+    for (const [key, window] of this.windows) if (now >= window.resetAt) this.windows.delete(key)
+  }
+
+  // Evicts from the FRONT only (oldest windows first), so admitting a new key
+  // into a full store is amortised O(1). A full sweep here would rescan every
+  // bucket for each new client once the store is full — a flood of distinct
+  // addresses would turn the memory bound into a CPU denial of service.
+  private makeRoom(now: number): void {
+    for (const [key, window] of this.windows) {
+      if (this.windows.size < this.maxEntries && now < window.resetAt) break
+      this.windows.delete(key)
+    }
   }
 }
 
@@ -74,7 +133,17 @@ export interface SecurityHeadersOptions {
    */
   contentSecurityPolicy?: string | false
   crossOriginOpenerPolicy?: string | false
+  /**
+   * Cache-Control value. Defaults to `no-store`: API responses carry session
+   * tokens, API keys and MFA secrets that no browser or intermediary cache may
+   * keep. A route that is safe to cache sets its own header (it replaces this
+   * one); pass a string to change the default, or `false` to omit it.
+   */
+  cacheControl?: string | false
 }
+
+/** Default Cache-Control for API responses. */
+export const DEFAULT_CACHE_CONTROL = 'no-store'
 
 /** Restrictive default CSP for a JSON API: it renders nothing and frames nothing. */
 export const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
@@ -114,6 +183,9 @@ const headerOf = (request: HttpRequest, name: string): string | undefined => {
 // trusted proxy, configure the adapter to populate `request.ip` from it.
 const clientIp = (request: HttpRequest): string => request.ip ?? 'unknown'
 
+const isObject = (value: unknown): value is object =>
+  (typeof value === 'object' && value !== null) || typeof value === 'function'
+
 function resolveOrigin(options: CorsOptions, requestOrigin: string | undefined): string | null {
   const option = options.origin
   if (option === undefined || option === true) {
@@ -148,7 +220,18 @@ function applyHeaders(reply: HttpReply, options: SecurityHeadersOptions): void {
   // Callers override with their own policy string, or pass `false` to omit it.
   const csp = options.contentSecurityPolicy ?? DEFAULT_CSP
   if (csp) reply.header('Content-Security-Policy', csp)
+  const cacheControl = options.cacheControl ?? DEFAULT_CACHE_CONTROL
+  if (cacheControl) reply.header('Cache-Control', cacheControl)
 }
+
+function applyRateLimitHeaders(reply: HttpReply, result: RateLimitResult): void {
+  reply.header('X-RateLimit-Limit', String(result.limit))
+  reply.header('X-RateLimit-Remaining', String(result.remaining))
+  reply.header('X-RateLimit-Reset', String(Math.ceil(result.resetAt / 1000)))
+  if (!result.allowed) reply.header('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
+}
+
+const RATE_LIMITED = { code: 'RATE_LIMITED', message: 'Too many requests — slow down.' } as const
 
 function applyCors(request: HttpRequest, reply: HttpReply, options: CorsOptions): void {
   const origin = resolveOrigin(options, headerOf(request, 'origin'))
@@ -171,19 +254,45 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
   const headers: SecurityHeadersOptions | null =
     headersOption === false ? null : headersOption === true ? {} : headersOption
 
-  // Per-route overrides, filled at app:booted from the `http:routes` metadata
-  // bucket (adapters publish it). Populated before any request is served.
+  // Per-route overrides by `METHOD url`, filled at app:booted from the
+  // `http:routes` metadata bucket (adapters publish it). Keyed by method too: a
+  // GET on a url whose POST is budgeted must still count against the global
+  // limit. When the pre-hook knows the route (Fastify), it charges the dedicated
+  // bucket itself — BEFORE enrichers run, so requests an enricher rejects are
+  // counted too — and marks the native request so the guard does not charge it
+  // a second time.
   const perRoute = new Map<string, RouteRateLimit>()
+  const charged = new WeakSet<object>()
+  const routeKey = (method: string, url: string): string => `${method.toUpperCase()} ${url}`
+  const clientKey = (request: HttpRequest): string => rateLimit ? (rateLimit.key?.(request) ?? clientIp(request)) : clientIp(request)
 
   return definePlugin({
     name: 'basalt:security',
+    register({ container }) {
+      if (!rateLimit || !store) return
+      // Per-route `meta.rateLimit` is enforced HERE, in a route guard, because a
+      // guard always sees the matched route definition. The pre-hook cannot: on
+      // Express and Hono it runs before routing, with no `routePattern`, and a
+      // stricter login/reset budget used to be silently ignored there. Guards
+      // also run when a route is invoked as an MCP tool, so the budget cannot be
+      // sidestepped through `/mcp` either.
+      const guard: RouteGuard = async ({ route, request, reply }) => {
+        const override = parseRouteRateLimit(route.meta?.['rateLimit'])
+        if (!override || rateLimit.skip?.(request)) return
+        if (isObject(request.raw) && charged.has(request.raw)) return
+        const result = await store.hit(`${clientKey(request)}::${route.url}`, override.limit, override.windowMs)
+        if (reply) applyRateLimitHeaders(reply, result)
+        if (!result.allowed) throw new HttpError(429, RATE_LIMITED.code, RATE_LIMITED.message)
+      }
+      ensureMetadata(container).add('http:guards', guard)
+    },
     boot({ container, hooks }) {
       if (rateLimit && store) {
         hooks.on('app:booted', () => {
           const metadata = ensureMetadata(container)
-          for (const route of metadata.get<{ url: string; meta?: Record<string, unknown> }>('http:routes')) {
+          for (const route of metadata.get<{ method?: string; url: string; meta?: Record<string, unknown> }>('http:routes')) {
             const override = parseRouteRateLimit(route.meta?.['rateLimit'])
-            if (override) perRoute.set(route.url, override)
+            if (override && typeof route.method === 'string') perRoute.set(routeKey(route.method, route.url), override)
           }
         })
       }
@@ -204,22 +313,22 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
         }
 
         if (rateLimit && store && !rateLimit.skip?.(request)) {
-          const baseKey = rateLimit.key?.(request) ?? clientIp(request)
-          // A route with its own `meta.rateLimit` gets a dedicated bucket (keyed
-          // by client + route) at its stricter threshold; everything else shares
-          // the global bucket, exactly as before.
-          const override = request.routePattern ? perRoute.get(request.routePattern) : undefined
-          const key = override ? `${baseKey}::${request.routePattern}` : baseKey
-          const limit = override?.limit ?? rateLimit.limit
-          const windowMs = override?.windowMs ?? rateLimit.windowMs
-          const result = await store.hit(key, limit, windowMs)
-          reply.header('X-RateLimit-Limit', String(result.limit))
-          reply.header('X-RateLimit-Remaining', String(result.remaining))
-          reply.header('X-RateLimit-Reset', String(Math.ceil(result.resetAt / 1000)))
-          if (!result.allowed) {
-            reply.header('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
-            reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Too many requests — slow down.' } })
+          // A route with its own `meta.rateLimit` gets a dedicated bucket. When
+          // the adapter already knows the route here (Fastify), charge it now
+          // (instead of the global bucket) and let the guard skip it; when it
+          // does not (Express, Hono), the request counts against the global
+          // bucket and the guard charges the dedicated, stricter one.
+          const override = request.routePattern ? perRoute.get(routeKey(request.method, request.routePattern)) : undefined
+          if (override && request.routePattern) {
+            const result = await store.hit(`${clientKey(request)}::${request.routePattern}`, override.limit, override.windowMs)
+            if (isObject(request.raw)) charged.add(request.raw)
+            applyRateLimitHeaders(reply, result)
+            if (!result.allowed) reply.code(429).send({ error: { ...RATE_LIMITED } })
+            return
           }
+          const result = await store.hit(clientKey(request), rateLimit.limit, rateLimit.windowMs)
+          applyRateLimitHeaders(reply, result)
+          if (!result.allowed) reply.code(429).send({ error: { ...RATE_LIMITED } })
         }
       })
     },

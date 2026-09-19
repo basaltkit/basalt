@@ -16,37 +16,38 @@ const okResponse = (status = 200) => ({ ok: status >= 200 && status < 300, statu
 const noSleep = async () => {}
 // Resolve any (fake) test hostname to a public IP so the SSRF guard passes for
 // delivery-mechanics tests without real DNS. SSRF blocking is covered separately.
+const SECRET = 'whsec_test_0123456789abcdef'
 const publicDns = { lookup: async () => [{ address: '93.184.216.34' }] }
 
 describe('signing', () => {
   it('signs and verifies, rejecting tampering and stale timestamps', () => {
-    const header = signPayload('{"a":1}', 'whsec', 1000)
-    expect(verifySignature(header, '{"a":1}', 'whsec', 300, 1000)).toBe(true)
-    expect(verifySignature(header, '{"a":2}', 'whsec', 300, 1000)).toBe(false) // tampered body
-    expect(verifySignature(header, '{"a":1}', 'other', 300, 1000)).toBe(false) // wrong secret
-    expect(verifySignature(header, '{"a":1}', 'whsec', 300, 5000)).toBe(false) // stale
+    const header = signPayload('{"a":1}', SECRET, 1000)
+    expect(verifySignature(header, '{"a":1}', SECRET, 300, 1000)).toBe(true)
+    expect(verifySignature(header, '{"a":2}', SECRET, 300, 1000)).toBe(false) // tampered body
+    expect(verifySignature(header, '{"a":1}', 'other_0123456789abcdef', 300, 1000)).toBe(false) // wrong secret
+    expect(verifySignature(header, '{"a":1}', SECRET, 300, 5000)).toBe(false) // stale
   })
 
   it('accepts a header with several v1 signatures when any matches (secret rotation)', () => {
     const body = '{"a":1}'
     const v1 = (secret: string) => signPayload(body, secret, 1000).split(',')[1]
-    const newThenOld = `t=1000,${v1('whsec_new')},${v1('whsec_old')}`
-    const oldThenNew = `t=1000,${v1('whsec_old')},${v1('whsec_new')}`
+    const newThenOld = `t=1000,${v1('whsec_new_0123456789')},${v1('whsec_old_0123456789')}`
+    const oldThenNew = `t=1000,${v1('whsec_old_0123456789')},${v1('whsec_new_0123456789')}`
     for (const header of [newThenOld, oldThenNew]) {
-      expect(verifySignature(header, body, 'whsec_new', 300, 1000)).toBe(true)
-      expect(verifySignature(header, body, 'whsec_old', 300, 1000)).toBe(true)
-      expect(verifySignature(header, body, 'whsec_other', 300, 1000)).toBe(false)
-      expect(verifySignature(header, '{"a":2}', 'whsec_new', 300, 1000)).toBe(false)
+      expect(verifySignature(header, body, 'whsec_new_0123456789', 300, 1000)).toBe(true)
+      expect(verifySignature(header, body, 'whsec_old_0123456789', 300, 1000)).toBe(true)
+      expect(verifySignature(header, body, 'whsec_other_0123456789', 300, 1000)).toBe(false)
+      expect(verifySignature(header, '{"a":2}', 'whsec_new_0123456789', 300, 1000)).toBe(false)
     }
   })
 
   it('ignores unknown schemes and spaces, and rejects malformed headers without throwing', () => {
     const body = '{"a":1}'
-    const valid = signPayload(body, 'whsec', 1000)
+    const valid = signPayload(body, SECRET, 1000)
     const [t, v1] = valid.split(',')
-    expect(verifySignature(`${t}, v0=deadbeef, ${v1}`, body, 'whsec', 300, 1000)).toBe(true)
+    expect(verifySignature(`${t}, v0=deadbeef, ${v1}`, body, SECRET, 300, 1000)).toBe(true)
     for (const header of ['', 'garbage', ',,,', `${v1}`, `${t}`, `t=abc,${v1}`, `t=,${v1}`, `${t},v1=`, `${t},t=1001,${v1}`]) {
-      expect(verifySignature(header, body, 'whsec', 300, 1000)).toBe(false)
+      expect(verifySignature(header, body, SECRET, 300, 1000)).toBe(false)
     }
   })
 })
@@ -90,7 +91,7 @@ describe('WebhookDeliverer', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       sleep: noSleep,
       now: () => 1000,
-      secret: 's',
+      secret: SECRET,
       ssrf: publicDns,
     })
     const result = await deliverer.deliver(endpoint, 'invoice.paid', { amount: 10 })
@@ -104,7 +105,7 @@ describe('WebhookDeliverer', () => {
   it('retries 5xx with backoff then succeeds', async () => {
     let n = 0
     const fetchImpl = vi.fn(async () => okResponse(n++ < 2 ? 503 : 200))
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3, ssrf: publicDns })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3, ssrf: publicDns, secret: SECRET })
     const result = await deliverer.deliver(endpoint, 'e', {})
     expect(result.ok).toBe(true)
     expect(result.attempts).toBe(3)
@@ -112,7 +113,7 @@ describe('WebhookDeliverer', () => {
 
   it('does not retry 4xx', async () => {
     const fetchImpl = vi.fn(async () => okResponse(400))
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3, ssrf: publicDns })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 3, ssrf: publicDns, secret: SECRET })
     const result = await deliverer.deliver(endpoint, 'e', {})
     expect(result.ok).toBe(false)
     expect(result.status).toBe(400)
@@ -121,7 +122,7 @@ describe('WebhookDeliverer', () => {
 
   it('gives up after maxRetries on persistent failure', async () => {
     const fetchImpl = vi.fn(async () => { throw new Error('ECONNREFUSED') })
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 2, ssrf: publicDns })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, maxRetries: 2, ssrf: publicDns, secret: SECRET })
     const result = await deliverer.deliver(endpoint, 'e', {})
     expect(result.ok).toBe(false)
     expect(result.attempts).toBe(3) // 1 + 2 retries
@@ -132,7 +133,7 @@ describe('WebhookDeliverer', () => {
 describe('WebhookDeliverer — SSRF guard', () => {
   it('refuses a URL whose host is a private/metadata IP, without calling fetch', async () => {
     const fetchImpl = vi.fn(async () => okResponse(200))
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, secret: SECRET })
     for (const url of ['http://169.254.169.254/latest/meta-data', 'http://127.0.0.1/', 'http://10.0.0.5/', 'http://[::1]/']) {
       const result = await deliverer.deliver({ id: 'x', url, events: ['*'] }, 'e', {})
       expect(result.ok).toBe(false)
@@ -147,6 +148,7 @@ describe('WebhookDeliverer — SSRF guard', () => {
     const deliverer = new WebhookDeliverer({
       fetchImpl,
       sleep: noSleep,
+      secret: SECRET,
       ssrf: { lookup: async () => [{ address: '10.1.2.3' }] }, // internal rebind
     })
     const result = await deliverer.deliver({ id: 'x', url: 'https://evil.example', events: ['*'] }, 'e', {})
@@ -157,7 +159,7 @@ describe('WebhookDeliverer — SSRF guard', () => {
 
   it('refuses a non-http(s) scheme', async () => {
     const fetchImpl = vi.fn(async () => okResponse(200))
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, secret: SECRET })
     const result = await deliverer.deliver({ id: 'x', url: 'file:///etc/passwd', events: ['*'] }, 'e', {})
     expect(result.ok).toBe(false)
     expect(result.error).toMatch(/scheme/)
@@ -166,7 +168,7 @@ describe('WebhookDeliverer — SSRF guard', () => {
 
   it('allowPrivateHosts opts out for trusted internal delivery', async () => {
     const fetchImpl = vi.fn(async () => okResponse(200))
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: { allowPrivateHosts: true } })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: { allowPrivateHosts: true }, secret: SECRET })
     const result = await deliverer.deliver({ id: 'x', url: 'http://10.0.0.5/hook', events: ['*'] }, 'e', {})
     expect(result.ok).toBe(true)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
@@ -176,7 +178,7 @@ describe('WebhookDeliverer — SSRF guard', () => {
     const fetchImpl = vi.fn((_url: string | URL, _init?: RequestInit) =>
       Promise.resolve({ ok: false, status: 0, type: 'opaqueredirect' } as unknown as Response),
     )
-    const deliverer = new WebhookDeliverer({ fetchImpl: fetchImpl as unknown as typeof fetch, sleep: noSleep, ssrf: publicDns })
+    const deliverer = new WebhookDeliverer({ fetchImpl: fetchImpl as unknown as typeof fetch, sleep: noSleep, ssrf: publicDns, secret: SECRET })
     const result = await deliverer.deliver({ id: 'x', url: 'https://hook', events: ['*'] }, 'e', {})
     expect(result.ok).toBe(false)
     expect(result.error).toBe('redirect refused')
@@ -190,7 +192,7 @@ describe('WebhookManager.dispatch', () => {
     await store.add({ id: 'a', url: 'https://a', events: ['invoice.*'] })
     await store.add({ id: 'b', url: 'https://b', events: ['user.*'] })
     const fetchImpl = vi.fn(async () => okResponse(200))
-    const manager = new WebhookManager(store, new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: publicDns }))
+    const manager = new WebhookManager(store, new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: publicDns, secret: SECRET }))
 
     const results = await manager.dispatch('invoice.paid', { amount: 1 })
     expect(results).toHaveLength(1)
@@ -231,10 +233,10 @@ describe('ambient-tenant fail-closed scoping (A-1)', () => {
   const managerWith = async () => {
     const store = new MemoryWebhookStore()
     const fetchImpl = vi.fn(async () => okResponse())
-    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: publicDns })
+    const deliverer = new WebhookDeliverer({ fetchImpl, sleep: noSleep, ssrf: publicDns, secret: SECRET })
     const manager = new WebhookManager(store, deliverer)
-    const acme = await store.add({ url: 'https://acme.example/hook', events: ['*'], tenantId: 'acme' })
-    const globex = await store.add({ url: 'https://globex.example/hook', events: ['*'], tenantId: 'globex' })
+    const acme = await store.add({ url: 'https://acme.example/hook', events: ['*'], tenantId: 'acme', secret: `${SECRET}_acme` })
+    const globex = await store.add({ url: 'https://globex.example/hook', events: ['*'], tenantId: 'globex', secret: `${SECRET}_globex` })
     return { store, manager, fetchImpl, acme, globex }
   }
   const asTenant = <T>(id: string, fn: () => T): T =>

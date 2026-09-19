@@ -25,7 +25,14 @@ export interface WebAuthnPluginOptions {
 export function webauthnPlugin(options: WebAuthnPluginOptions) {
   return definePlugin({
     name: 'basalt:auth-webauthn',
-    register({ container }) {
+    register({ container, hooks }) {
+      // Passkeys enrolled on a never-verified account by whoever registered it
+      // are login credentials too: a verified social login adopting the account
+      // removes them with the rest.
+      hooks.on('auth:social_account_adopted', async ({ user }) => {
+        const service = container.get(WEBAUTHN)
+        for (const credential of await service.list(user.id)) await service.remove(credential.id)
+      })
       container.singleton(
         WEBAUTHN,
         () =>

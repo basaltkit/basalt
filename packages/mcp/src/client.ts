@@ -37,8 +37,77 @@ export class HttpClientTransport implements McpClientTransport {
 export interface StdioTransportOptions {
   command: string
   args?: string[]
+  /** Variables passed to the child verbatim (on top of the inherited ones). */
   env?: Record<string, string>
   cwd?: string
+  /**
+   * Which host environment variables the child inherits. Default: only the
+   * non-secret basics in {@link DEFAULT_INHERITED_ENV} (PATH, HOME, locale…),
+   * so host secrets (APP_SECRET, DATABASE_URL, provider keys) never reach a
+   * third-party server. Pass a list to inherit extra named variables, or
+   * `true` to explicitly opt in to the full `process.env`.
+   */
+  inheritEnv?: boolean | string[]
+}
+
+/**
+ * Host environment variables a spawned stdio MCP server inherits by default:
+ * what a process needs to locate binaries, its home/temp dirs and locale — no
+ * application secrets.
+ */
+export const DEFAULT_INHERITED_ENV: readonly string[] = Object.freeze([
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TERM',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  // Windows
+  'SYSTEMROOT',
+  'SYSTEMDRIVE',
+  'WINDIR',
+  'COMSPEC',
+  'PATHEXT',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'USERNAME',
+  'PROGRAMFILES',
+  'PROGRAMDATA',
+])
+
+/**
+ * Build the environment for a spawned stdio MCP server: the allowlisted host
+ * variables (or all of them with `inheritEnv: true`) plus the explicit `env`.
+ */
+export function buildStdioEnv(
+  options: Pick<StdioTransportOptions, 'env' | 'inheritEnv'>,
+  hostEnv: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const inherited: Record<string, string> = {}
+  if (options.inheritEnv === true) {
+    for (const [key, value] of Object.entries(hostEnv)) if (value !== undefined) inherited[key] = value
+  } else {
+    // Env var names are case-insensitive on Windows (e.g. `Path`, `SystemRoot`).
+    const allowed = new Set(
+      [...DEFAULT_INHERITED_ENV, ...(Array.isArray(options.inheritEnv) ? options.inheritEnv : [])].map((k) =>
+        k.toUpperCase(),
+      ),
+    )
+    for (const [key, value] of Object.entries(hostEnv)) {
+      if (value !== undefined && allowed.has(key.toUpperCase())) inherited[key] = value
+    }
+  }
+  return { ...inherited, ...options.env }
 }
 
 /** Spawn a child MCP server and speak newline-delimited JSON-RPC over its stdio. */
@@ -55,7 +124,7 @@ export class StdioClientTransport implements McpClientTransport {
   private start(): ChildProcessByStdio<Writable, Readable, null> {
     if (this.child) return this.child
     const child = spawn(this.options.command, this.options.args ?? [], {
-      env: { ...process.env, ...this.options.env },
+      env: buildStdioEnv(this.options),
       ...(this.options.cwd ? { cwd: this.options.cwd } : {}),
       stdio: ['pipe', 'pipe', 'inherit'],
     })

@@ -1,6 +1,7 @@
 import {
   createToken,
   definePlugin,
+  ensureMetadata,
   parseDuration,
   tryCtx,
   type DurationInput,
@@ -11,7 +12,10 @@ import { LocalStorageDriver } from './drivers/local.js'
 import {
   StorageContentTypeError,
   StorageInvalidKeyError,
+  StorageInvalidScopeError,
+  StorageTenantRequiredError,
   StorageTooLargeError,
+  TemporaryUrlTtlTooLongError,
   TemporaryUrlUnsupportedError,
   UnknownDiskError,
 } from './errors.js'
@@ -32,7 +36,10 @@ export {
   StorageFileNotFoundError,
   StorageInvalidKeyError,
   StorageInvalidPathError,
+  StorageInvalidScopeError,
+  StorageTenantRequiredError,
   StorageTooLargeError,
+  TemporaryUrlTtlTooLongError,
   TemporaryUrlUnsupportedError,
   UnknownDiskError,
 } from './errors.js'
@@ -76,32 +83,86 @@ function enforceUploadLimits(content: Buffer | string, options: PutOptions | und
   }
 }
 
+/**
+ * Largest lifetime a temporary URL may be minted with unless a disk sets
+ * `maxTemporaryUrlTtl`: 7 days, the ceiling S3 and GCS V4 signatures enforce
+ * natively. A signed URL is a bearer credential that survives the holder's
+ * removal from the tenant, so it must not be near-permanent.
+ */
+export const DEFAULT_MAX_TEMPORARY_URL_TTL = 7 * 24 * 60 * 60 * 1000
+
 export interface DiskOptions {
   /**
    * Dynamic path prefix resolved on every operation. The default reads
-   * `ctx().tenant.id` — automatic tenant isolation. Pass `null` to disable.
+   * `ctx().tenant.id` — automatic tenant isolation (`tenants/<id>/`). Pass
+   * `null` to disable (a deliberately central disk: backups, branding).
    */
   scope?: (() => string | undefined) | null
+  /**
+   * What an operation does when the scope resolves nothing (no tenant in
+   * context): `'root'` uses the caller's key against the disk root — where
+   * every tenant's `tenants/<id>/` tree lives; `'error'` throws
+   * {@link StorageTenantRequiredError}. Default: `'error'` when
+   * `@basaltkit/tenancy` is registered (via `storagePlugin`) and the disk uses
+   * the default scope, `'root'` otherwise. An explicit value always wins.
+   */
+  onMissingScope?: 'root' | 'error'
+  /**
+   * Upper bound for `temporaryUrl` lifetimes. Default 7 days
+   * ({@link DEFAULT_MAX_TEMPORARY_URL_TTL}); a longer request throws
+   * {@link TemporaryUrlTtlTooLongError} (400).
+   */
+  maxTemporaryUrlTtl?: DurationInput
   /** Engine that backs `disk.image(...)`. Injected by `storagePlugin`. */
   imageProcessor?: ImageProcessor
 }
 
+const isUnsafeScopeSegment = (segment: string): boolean =>
+  segment === '' || segment === '.' || segment === '..' || CONTROL_CHARS.test(segment)
+
 const defaultScope = (): string | undefined => {
   const tenant = tryCtx()?.['tenant'] as { id?: string } | undefined
-  return tenant?.id ? `tenants/${tenant.id}` : undefined
+  if (!tenant?.id) return undefined
+  // The id must be exactly one path segment. 'globex/files' would scope into
+  // globex's tree and '..' would collapse onto the bucket root.
+  if (/[/\\]/.test(tenant.id) || isUnsafeScopeSegment(tenant.id)) throw new StorageInvalidScopeError()
+  return `tenants/${tenant.id}`
+}
+
+/** Any scope (default or custom) must be a relative, traversal-free prefix. */
+function assertValidScope(scope: string): void {
+  // Empty segments only come from a trailing separator here (a leading one is
+  // refused and runs collapse in the split), so they are harmless.
+  const segments = scope.split(/[/\\]+/).filter((segment) => segment !== '')
+  if (scope.startsWith('/') || scope.startsWith('\\') || segments.some(isUnsafeScopeSegment)) {
+    throw new StorageInvalidScopeError()
+  }
 }
 
 /** A named disk: driver + tenant scoping. All app code talks to this API. */
 export class Disk {
   private readonly scope: (() => string | undefined) | null
+  private readonly onMissingScope: 'root' | 'error' | undefined
+  private readonly maxTemporaryUrlTtl: number
   private readonly imageProcessor: ImageProcessor | undefined
 
   constructor(
     readonly name: string,
     private readonly driver: StorageDriver,
     options: DiskOptions = {},
+    /**
+     * Whether the host app registered `@basaltkit/tenancy`. `storagePlugin`
+     * wires this to the container's `'tenancy:active'` metadata marker. It is
+     * read on every operation, not once at construction, so the fail-closed
+     * default does not depend on plugin order (a disk resolved before
+     * tenancy registers). Defaults to `false` (single-tenant).
+     */
+    private readonly tenancyActive: () => boolean = () => false,
   ) {
     this.scope = options.scope === undefined ? defaultScope : options.scope
+    this.onMissingScope = options.onMissingScope
+    this.maxTemporaryUrlTtl =
+      options.maxTemporaryUrlTtl === undefined ? DEFAULT_MAX_TEMPORARY_URL_TTL : parseDuration(options.maxTemporaryUrlTtl)
     this.imageProcessor = options.imageProcessor
   }
 
@@ -151,9 +212,13 @@ export class Disk {
    * `{ disposition: 'inline' }` when top-level rendering is deliberate.
    * Embedded uses (<img> etc.) render regardless of disposition.
    */
-  temporaryUrl(path: string, expiresIn: DurationInput, options: TemporaryUrlOptions = {}): Promise<string> {
+  async temporaryUrl(path: string, expiresIn: DurationInput, options: TemporaryUrlOptions = {}): Promise<string> {
     if (!this.driver.temporaryUrl) throw new TemporaryUrlUnsupportedError(this.driver.name)
-    return this.driver.temporaryUrl(this.path(path), parseDuration(expiresIn), {
+    const ttl = parseDuration(expiresIn)
+    // Capped here, for every driver: a signed URL is a bearer credential that
+    // outlives the holder's membership and role, so it must not be long-lived.
+    if (!(ttl > 0) || ttl > this.maxTemporaryUrlTtl) throw new TemporaryUrlTtlTooLongError(ttl, this.maxTemporaryUrlTtl)
+    return this.driver.temporaryUrl(this.path(path), ttl, {
       disposition: options.disposition ?? 'attachment',
     })
   }
@@ -163,8 +228,27 @@ export class Disk {
     // of the tenant prefix and every driver — not just the local one, which
     // guards only the disk root — gets the same key guarantee (L-3).
     assertValidKey(path)
-    const scope = this.scope?.()
-    return scope ? `${scope}/${path}` : path
+    if (this.scope === null) return path // deliberately central disk
+    const scope = this.scope()
+    if (!scope) {
+      // Fail closed in a multi-tenant app: without a tenant the key would be
+      // resolved against the bucket root, where `tenants/<victim>/…` is
+      // reachable by name and `list('tenants')` enumerates every tenant.
+      if (this.missingScopeMode() === 'error') throw new StorageTenantRequiredError(this.name)
+      return path
+    }
+    assertValidScope(scope)
+    return `${scope}/${path}`
+  }
+
+  /**
+   * An explicit `onMissingScope` wins. Otherwise a disk on the default tenant
+   * scope fails closed whenever tenancy is registered, and uses the root when
+   * it is not (single-tenant apps, standalone disks).
+   */
+  private missingScopeMode(): 'root' | 'error' {
+    if (this.onMissingScope !== undefined) return this.onMissingScope
+    return this.scope === defaultScope && this.tenancyActive() ? 'error' : 'root'
   }
 }
 
@@ -219,6 +303,14 @@ export function storagePlugin(options: StoragePluginOptions) {
     register({ container }) {
       container.singleton(STORAGE, () => {
         const storage = new Storage(options.default)
+        // Fail closed by default in multi-tenant apps: when @basaltkit/tenancy
+        // is registered (its 'tenancy:active' metadata marker), a disk on the
+        // default tenant scope refuses to run without a tenant instead of
+        // falling back to the bucket root. Same rule as @basaltkit/cache. A
+        // custom `scope`, `scope: null` or an explicit `onMissingScope` wins.
+        // Read lazily (per operation), so the marker is seen even when this
+        // singleton is resolved before tenancyPlugin has registered.
+        const tenancyActive = () => ensureMetadata(container).get('tenancy:active').length > 0
         for (const [name, config] of Object.entries(options.disks)) {
           // `local` is the only string left: it needs no client library, just
           // `fs`. Everything else arrives as an instance from its own package.
@@ -230,8 +322,10 @@ export function storagePlugin(options: StoragePluginOptions) {
           storage.add(
             new Disk(name, driver, {
               ...(config.scope !== undefined ? { scope: config.scope } : {}),
+              ...(config.onMissingScope !== undefined ? { onMissingScope: config.onMissingScope } : {}),
+              ...(config.maxTemporaryUrlTtl !== undefined ? { maxTemporaryUrlTtl: config.maxTemporaryUrlTtl } : {}),
               ...(options.imageProcessor ? { imageProcessor: options.imageProcessor } : {}),
-            }),
+            }, tenancyActive),
           )
         }
         return storage

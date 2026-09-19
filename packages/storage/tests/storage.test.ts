@@ -91,7 +91,7 @@ describe('Disk (local driver)', () => {
   it('temporaryUrl on the local driver fails with a typed error', async () => {
     const disk = makeDisk({ scope: null })
     await disk.put('report.pdf', 'x')
-    expect(() => disk.temporaryUrl('report.pdf', '15m')).toThrowError(/does not support/)
+    await expect(disk.temporaryUrl('report.pdf', '15m')).rejects.toThrowError(/does not support/)
   })
 })
 

@@ -104,6 +104,12 @@ export function tenantMembershipPlugin(options: TenantMembershipPluginOptions = 
   const cache = options.cache ? new Map<string, { ok: boolean; until: number }>() : undefined
   const ttlMs = options.cache?.ttlMs ?? 0
   const maxEntries = options.cache?.maxEntries ?? 10_000
+  // Bumped on every invalidation. A lookup only caches its decision if no
+  // invalidation happened while it was in flight — otherwise a removal landing
+  // between the store read and cache.set would be overwritten by a stale "member".
+  // One global counter (not per key) keeps memory bounded; the cost is only a
+  // skipped cache write for lookups that overlap any membership change.
+  let generation = 0
 
   return definePlugin({
     name: 'basalt:teams:membership',
@@ -113,7 +119,10 @@ export function tenantMembershipPlugin(options: TenantMembershipPluginOptions = 
       if (cache) {
         // Precise same-process invalidation: any membership mutation drops the
         // cached decision, so only cross-replica changes wait out the TTL.
-        const drop = (tenantId: string, userId: string) => void cache.delete(cacheKey(tenantId, userId))
+        const drop = (tenantId: string, userId: string) => {
+          generation++
+          cache.delete(cacheKey(tenantId, userId))
+        }
         hooks.on('team:joined', ({ membership }) => drop(membership.tenantId, membership.userId))
         hooks.on('team:role_changed', ({ membership }) => drop(membership.tenantId, membership.userId))
         hooks.on('team:member_removed', ({ tenantId, userId }) => drop(tenantId, userId))
@@ -149,9 +158,10 @@ export function tenantMembershipPlugin(options: TenantMembershipPluginOptions = 
           }
         }
 
+        const startedAt = generation
         const ok = await isMember(c.get(TEAMS), tenantId, userId)
 
-        if (cache) {
+        if (cache && generation === startedAt) {
           // Bounded: evict oldest entries rather than growing without limit.
           while (cache.size >= maxEntries) {
             const oldest = cache.keys().next().value

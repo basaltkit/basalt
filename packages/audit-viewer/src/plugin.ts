@@ -1,4 +1,4 @@
-import { createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { BasaltError, createToken, ctx, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { AUDIT } from '@basaltkit/audit'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
@@ -52,20 +52,82 @@ export interface AuditViewerRoutesOptions extends AuditViewerHtmlOptions {
    * {@link auditViewerCsp}. Pass a string to override, or `false` to send none.
    */
   csp?: string | false
+  /**
+   * The authorization guard merged into every route's `meta` — e.g.
+   * `{ can: 'audit:read' }` (@basaltkit/permissions) or `{ teamRole: 'admin' }`
+   * (@basaltkit/teams). `auth: true` is always added on top.
+   *
+   * Required unless `allowAnyAuthenticated` is set: the trail holds every
+   * user's actions, emails and event payloads, so it is an admin surface.
+   */
+  meta?: Record<string, unknown>
+  /**
+   * Explicitly lets any logged-in user of the tenant read the whole trail.
+   * Only for apps where every user is an administrator.
+   */
+  allowAnyAuthenticated?: boolean
+}
+
+/** `auditViewerRoutes()` was called without an authorization guard. */
+export class AuditViewerUnguardedError extends BasaltError {
+  constructor() {
+    super(
+      'AUDIT_VIEWER_UNGUARDED',
+      'auditViewerRoutes() exposes every user\'s audit entries and needs an authorization guard: ' +
+        "pass `meta` (e.g. { can: 'audit:read' } or { teamRole: 'admin' }), " +
+        'or `allowAnyAuthenticated: true` if every logged-in user may read the whole trail.',
+    )
+  }
 }
 
 /**
- * Read-only audit routes for the current tenant, requiring a logged-in user
- * (add your own admin guard on top): `GET /audit`, `/audit/stats`,
+ * Route-meta keys the framework reads that authorize nobody: throttling,
+ * documentation, caching, exposure and tenant-routing switches. A `meta` made
+ * only of these is no guard at all.
+ */
+const NON_AUTHORIZING_META = new Set([
+  'auth',
+  'rateLimit',
+  'central',
+  'tenant',
+  'mcp',
+  'etag',
+  'summary',
+  'description',
+  'tags',
+  'operationId',
+  'deprecated',
+])
+
+/**
+ * Whether a guard value asks for something. Guards skip falsy values (the teams
+ * guard returns early on `!meta.teamRole`), so `''`, `null`, `false`, `0` or an
+ * empty array would mount the routes with no check behind them.
+ */
+const isPresent = (value: unknown): boolean =>
+  Array.isArray(value) ? value.length > 0 : value !== null && value !== false && value !== '' && value !== 0
+
+/**
+ * Read-only audit routes for the current tenant: `GET /audit`, `/audit/stats`,
  * `/audit/:id`, and a browsable HTML page at `/audit/view`.
+ *
+ * Every route requires a logged-in user **and** the guard given as `meta`;
+ * building the routes without one throws {@link AuditViewerUnguardedError}
+ * unless `allowAnyAuthenticated: true` opts out explicitly.
  */
 export function auditViewerRoutes(options: AuditViewerRoutesOptions = {}): BasaltRoute[] {
+  const guard = Object.fromEntries(
+    Object.entries(options.meta ?? {}).filter(([key, value]) => key !== 'auth' && value !== undefined),
+  )
+  const authorizes = Object.entries(guard).some(([key, value]) => !NON_AUTHORIZING_META.has(key) && isPresent(value))
+  if (!authorizes && options.allowAnyAuthenticated !== true) throw new AuditViewerUnguardedError()
+  const meta = { ...guard, auth: true }
   const csp = options.csp === false ? undefined : (options.csp ?? auditViewerCsp(options))
   return [
     route({
       method: 'GET',
       url: '/audit',
-      meta: { auth: true },
+      meta,
       query: querySchema,
       async handler({ query }) {
         return viewer().page(toQuery(query))
@@ -74,7 +136,7 @@ export function auditViewerRoutes(options: AuditViewerRoutesOptions = {}): Basal
     route({
       method: 'GET',
       url: '/audit/stats',
-      meta: { auth: true },
+      meta,
       query: querySchema,
       async handler({ query }) {
         return viewer().stats(toQuery(query))
@@ -83,7 +145,7 @@ export function auditViewerRoutes(options: AuditViewerRoutesOptions = {}): Basal
     route({
       method: 'GET',
       url: '/audit/view',
-      meta: { auth: true },
+      meta,
       async handler({ reply }) {
         if (csp !== undefined) reply.header('content-security-policy', csp)
         return reply.header('content-type', 'text/html; charset=utf-8').send(auditViewerHtml(options))
@@ -92,7 +154,7 @@ export function auditViewerRoutes(options: AuditViewerRoutesOptions = {}): Basal
     route({
       method: 'GET',
       url: '/audit/:id',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
         const entry = await viewer().get(params.id)

@@ -157,11 +157,11 @@ import { createApp, ctx } from '@basaltkit/core'
 import { fastifyPlugin, FASTIFY } from '@basaltkit/fastify'
 import { headerResolver, MemoryTenantSource, tenancyPlugin } from '@basaltkit/tenancy'
 import { authPlugin, authRoutes, MemoryUserSource } from '@basaltkit/auth'
-import { MemoryAccessStore, permissionsPlugin } from '@basaltkit/permissions'
+import { GLOBAL_SCOPE, MemoryAccessStore, permissionsPlugin } from '@basaltkit/permissions'
 import { routes } from './routes.js'
 
 const access = new MemoryAccessStore()
-await access.grantToUser('user-ada', ['projects:delete'], 'global')
+await access.grantToUser('user-ada', ['projects:delete'], GLOBAL_SCOPE)
 
 const app = await createApp({
   plugins: [
@@ -308,7 +308,9 @@ nativos da sua framework.
 | `notFound` | `boolean` | `true` (corpo 404 neutro) | todos | Passa `false` para sair do `404 { error: { code: 'NOT_FOUND' } }` partilhado e manter o default da framework. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passado ao construtor `Fastify()` (logger, trustProxy, …). |
 | `app` | instância nativa | criada por ti ou pelo plugin | express, hono | Traz o teu próprio `express()` / `new Hono()` e o Basalt monta-se nele. |
-| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejeita bodies grandes demais com 413 (`PAYLOAD_TOO_LARGE`) — o Hono/edge não tem limite por omissão. |
+| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejeita bodies grandes demais com 413 (`PAYLOAD_TOO_LARGE`) — o Hono/edge não tem limite por omissão. Aplicado aos bytes efectivamente lidos: um body chunked/em stream sem `Content-Length` é contado durante a leitura e cortado no limite. |
+| `getClientIp` | `(c: Context) => string \| undefined` | endereço do socket (`@hono/node-server`, Bun) | hono | Define `request.ip`, a chave do rate limiting por cliente e do throttle de login por IP. Num runtime edge ou atrás de um proxy de confiança, fornece-o (ex.: `(c) => c.req.header('cf-connecting-ip')` na Cloudflare). Quando nenhum IP é resolvido, é emitido um aviso único e os rate limits partilham um só bucket. Nunca leias `X-Forwarded-For` a não ser que um proxy teu o reescreva. |
+| `errorHandler` | `boolean` | `true` | express | Middleware final `(err, req, res, next)` que transforma erros do body-parser e dos pre-hooks no envelope JSON neutro (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, caso contrário `500 INTERNAL_ERROR`) em vez da página HTML do Express com stack trace. Passa `false` só se montares o teu próprio error handler depois do boot. |
 
 ## Modos de falha
 
@@ -318,7 +320,9 @@ nativos da sua framework.
 | `500 HTTP_GUARDS_UNRUNNABLE` | o pipeline da rota tem guards mas não tem container, por isso nenhum deles pôde correr | passa `container` ao pipeline — todos os adapters do kit passam; só pipelines feitos à mão chegam aqui |
 | `400 HTTP_VALIDATION` | o body/query/params falhou o schema Zod da rota | a resposta lista a parte e as issues por campo |
 | `404 { code: 'NOT_FOUND' }` numa rota que definiste | a rota não foi registada nesta instância do adapter | confirma que está em `routes: [...]` do plugin do adapter que arrancou |
-| `413 PAYLOAD_TOO_LARGE` (hono) | o body excedeu o `bodyLimit` | sobe o `bodyLimit` deliberadamente |
+| `413 PAYLOAD_TOO_LARGE` | o body excedeu o `bodyLimit` (hono) ou o limite do body-parser (express, 100 KB por omissão) | sobe o limite deliberadamente |
+| `400 BAD_REQUEST` (express) | o body não pôde ser interpretado (JSON malformado, codificação corrompida) | envia um body válido |
+| Aviso `[basalt:hono] Could not resolve the client IP` | este runtime não expõe o endereço do socket ao adaptador | passa `honoPlugin({ getClientIp })` |
 
 ## Os plugins de edge também são neutros
 

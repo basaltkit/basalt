@@ -36,8 +36,10 @@ export interface CommentStore {
 
 export class MemoryCommentStore implements CommentStore {
   private readonly records = new Map<string, Comment>()
+  // Tuple-encoded: a joined string lets a tenant id containing the separator
+  // address another tenant's comment.
   private key(tenantId: string, id: string): string {
-    return `${tenantId} ${id}`
+    return JSON.stringify([tenantId, id])
   }
 
   async create(comment: Comment): Promise<void> {

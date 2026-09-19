@@ -14,6 +14,8 @@ export {
   applyTenantScope,
   MissingTenantError,
   RawQueryInTenantContextError,
+  UnscopedOperationError,
+  CrossTenantWriteError,
   type TenancyExtensionOptions,
 } from './extension.js'
 export { TenantClientPool, type TenantClientPoolOptions } from './pool.js'

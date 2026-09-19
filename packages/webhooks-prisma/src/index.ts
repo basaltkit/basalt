@@ -51,8 +51,12 @@ export class PrismaWebhookStore implements WebhookStore {
   async forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]> {
     // Narrow in SQL to active endpoints for this tenant (or tenant-agnostic ones);
     // the event-pattern match (`*`, `prefix.*`, exact) is applied in JS.
+    // Fail-closed: without a (non-empty string) tenant only tenant-agnostic
+    // endpoints match — a missing/null tenant never widens to every tenant's.
     const and: unknown[] = [{ OR: [{ active: null }, { active: true }] }]
-    if (tenantId !== undefined) and.push({ OR: [{ tenantId: null }, { tenantId }] })
+    const scope = typeof tenantId === 'string' && tenantId !== '' ? tenantId : undefined
+    if (scope !== undefined) and.push({ OR: [{ tenantId: null }, { tenantId: scope }] })
+    else and.push({ tenantId: null })
     const rows = await this.client.webhookEndpoint.findMany({ where: { AND: and } })
     return rows.map(toEndpoint).filter((endpoint) => matchesEvent(endpoint.events, event))
   }

@@ -67,7 +67,14 @@ export interface InvitationStore {
   /** Pending (not accepted, not revoked, not expired-at read time is caller's job). */
   listPending(tenantId: string): Promise<Invitation[]>
   findPending(tenantId: string, email: string): Promise<Invitation | null>
-  markAccepted(id: string, at: number): Promise<void>
+  /**
+   * Atomically marks a PENDING invitation (not accepted, not revoked) accepted —
+   * a compare-and-set. Resolve `true` when this call flipped it and `false` when
+   * it was no longer pending (a concurrent accept/revoke won), so one token
+   * enrolls at most one account. Returning `void` is accepted for backwards
+   * compatibility but gives up that race guarantee.
+   */
+  markAccepted(id: string, at: number): Promise<boolean | void>
   revoke(id: string, at: number): Promise<void>
 }
 
@@ -99,9 +106,11 @@ export class MemoryInvitationStore implements InvitationStore {
     }
     return null
   }
-  async markAccepted(id: string, at: number): Promise<void> {
+  async markAccepted(id: string, at: number): Promise<boolean> {
     const i = this.records.get(id)
-    if (i) i.acceptedAt = at
+    if (!i || !this.pending(i)) return false
+    i.acceptedAt = at
+    return true
   }
   async revoke(id: string, at: number): Promise<void> {
     const i = this.records.get(id)

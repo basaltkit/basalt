@@ -62,10 +62,10 @@ await gate.authorize({ id: 'other-user' }, 'projects:delete') // throws Permissi
 ```ts
 import { createApp } from '@basaltkit/core'
 import { fastifyPlugin, route } from '@basaltkit/fastify'
-import { permissionsPlugin, MemoryAccessStore } from '@basaltkit/permissions'
+import { permissionsPlugin, MemoryAccessStore, GLOBAL_SCOPE } from '@basaltkit/permissions'
 
 const store = new MemoryAccessStore()
-await store.grantToUser('user-ada', ['projects:delete'], 'global')
+await store.grantToUser('user-ada', ['projects:delete'], GLOBAL_SCOPE)
 
 const app = await createApp({
   plugins: [
@@ -114,7 +114,7 @@ You can also grant permissions directly to a user with `grantToUser(userId, perm
 
 ### Per-tenant scope
 
-When the Gate checks, it looks for grants in **two** scopes: the current scope and `GLOBAL_SCOPE` (`'global'`). The current scope, by default, is `ctx().tenant.id` set by `@basaltkit/tenancy` — or `global` if there's no tenant. You can override it with the `scope` option:
+When the Gate checks, it looks for grants in **two** scopes: the current scope and `GLOBAL_SCOPE` (`'@global'`). The current scope, by default, is `ctx().tenant.id` set by `@basaltkit/tenancy` — or `GLOBAL_SCOPE` if there's no tenant. You can override it with the `scope` option:
 
 ```ts
 import { Gate, MemoryAccessStore } from '@basaltkit/permissions'
@@ -224,6 +224,35 @@ Options (`GateOptions` = `PermissionsPluginOptions`):
 | `delegations` | `DelegationStore` | — | Enables `delegate()`. Without it that method throws a plain `Error`, and delegations are never consulted. |
 | `now` | `() => number` | `Date.now` | Injectable clock — expiry of temporary grants and delegations is evaluated against it. |
 | `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`. `'error'` throws `MissingPolicyError` (fail closed); `'rbac'` falls back to the granted permission strings. |
+| `readLegacyGlobalScope` | `boolean` | `false` | Also treat rows stored under the pre-1.5 global scope `'global'` as global. Transition aid only — see [The global scope is `'@global'`](#the-global-scope-is-global). |
+| `hooks` | `HookBus` | the app's bus (plugin) | Where `permission:*` hooks are emitted. `permissionsPlugin` wires it for you. |
+
+#### The global scope is `'@global'`
+
+`GLOBAL_SCOPE` used to be the string `'global'`. Grants are keyed by tenant id,
+so a tenant *named* `global` — say, a workspace a user picked at sign-up — wrote
+its members' roles (teams mirrors memberships into the store) into the
+platform-wide bucket, and its owner held those grants in every tenant.
+`GLOBAL_SCOPE` is now `'@global'`, a value no slug, hostname label or uuid can
+take, and the Gate throws `ReservedScopeError` (`PERMISSION_SCOPE_RESERVED`,
+403) instead of evaluating a request whose tenant id is `'@global'` or
+`'global'`. Refuse both in your tenant registry too (`isReservedScope(id)`).
+A request carrying a tenant with no non-empty string id gets the same error
+rather than falling back to the global scope.
+
+**Upgrading:** grants you stored with the literal `'global'` are no longer read
+as global. Migrate them:
+
+```sql
+UPDATE perm_user_roles       SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_user_permissions SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_role_permissions SET scope = '@global' WHERE scope = 'global';
+```
+
+(Prisma: the `PermUserRole` / `PermUserPermission` / `PermRolePermission`
+models.) Until you can, `readLegacyGlobalScope: true` keeps reading them — but
+while it is on, a tenant with id `'global'` can write global grants again, so
+reserve that id first.
 
 #### Scope resolution and `TENANT_REQUIRED`
 
@@ -249,6 +278,10 @@ user may do, not *which* tenant they belong to.
 | `can(user, permission, resource?)` | `Promise<boolean>` | Checks; with a resource and an applicable policy, the policy decides. |
 | `authorize(user, permission, resource?)` | `Promise<void>` | Like `can`, but throws `PermissionDeniedError` (403). |
 | `hasRole(user, role)` | `Promise<boolean>` | Does the user have the role (in the current scope or global)? |
+| `effectiveRoles(userId)` | `Promise<string[]>` | Every role the user holds across the scopes a check consults (current + global). |
+| `audienceRoles(userId)` | `Promise<string[]>` | The roles the audience guard confines on: the current scope's, or the global ones when the current scope has none. |
+| `assignRole` / `removeRole(userId, role, scope?)` | `Promise<void>` | Store write + `permission:role_assigned` / `permission:role_removed` hook. `scope` defaults to the current scope. |
+| `grantToRole(role, permissions, scope?)` / `grantToUser(userId, permissions, scope?)` | `Promise<void>` | Store write + `permission:granted` hook. Prefer these over the store's methods so changes reach the audit trail. |
 | `register(policy)` | `this` | Registers a policy after construction. |
 | `grantTemporarily(userId, permissions, options?)` | `Promise<TemporaryGrant>` | Time-boxed extra permissions. `options`: `{ expiresAt?, ttlMs?, scope?, grantedBy?, reason? }` — `expiresAt` wins over `ttlMs`, and with neither the grant expires immediately. Requires a `temporaryGrants` store. |
 | `delegate({ from, to, permissions, scope?, expiresAt? })` | `Promise<Delegation>` | Lets `to` act with a subset of `from`'s authority. `permissions` accepts patterns; `'*'` means everything the delegator can do. Omit `expiresAt` for an open-ended delegation. Requires a `delegations` store. |
@@ -274,7 +307,11 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 |---|---|
 | `permissionMatches(granted, requested)` | Wildcard matching. |
 | `definePolicy<T>(resource, checks)` | Creates a `Policy<T>` (checks: `(user, resource) => boolean \| Promise<boolean>`). |
-| `GLOBAL_SCOPE` | The string `'global'`. |
+| `GLOBAL_SCOPE` | The string `'@global'` (was `'global'` before 1.5). |
+| `LEGACY_GLOBAL_SCOPE` | The string `'global'` — the old global scope, read only with `readLegacyGlobalScope`. |
+| `isReservedScope(id)` | `true` for ids a tenant must not use (`'@global'`, `'global'`). |
+| `currentScope()` | The scope of the current request (tenant id or `GLOBAL_SCOPE`); throws `ReservedScopeError` for a reserved tenant id. |
+| `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` (403). |
 | `GATE` | DI token for the Gate in the container. |
 | `PolicyUser` | Minimal user type: `{ id: string; [key: string]: unknown }`. |
 | `Policy`, `PolicyCheck` | Policy types. Advanced. |
@@ -303,7 +340,12 @@ time somebody adds one without thinking about portals.
 
 A caller is confined only when **every** role they hold is named by some rule.
 One unnamed role — a lawyer who is also a client of the firm — and audiences say
-nothing about them. Two confined roles reach the union of their rules.
+nothing about them. Two confined roles reach the union of their rules. "Every
+role they hold" means the roles held in the current tenant, or — when the tenant
+grants none — those held in `GLOBAL_SCOPE` (`gate.audienceRoles()`). So a
+confined role assigned globally confines inside every tenant where the user has
+no role of their own, and an unnamed global baseline role (a `user` every signup
+gets) does not un-confine a tenant's client.
 
 Audiences narrow, never widen: the permission check runs regardless, so naming
 an audience is not a way in. Omit `audiences` and nothing changes.
@@ -368,10 +410,20 @@ with the real error code in the body.
 
 ### Hooks & events
 
-`@basaltkit/permissions` emits **no hooks**. Membership-driven role changes are
-emitted by `@basaltkit/teams` (`team:joined`, `team:role_changed`,
-`team:member_removed`); wire the Gate's store to teams via the `access` option
-there to mirror them into role grants.
+With `permissionsPlugin` (or a `hooks` bus passed to `new Gate`), the Gate
+emits — and `auditPlugin` captures by default (`permission:**`):
+
+| Hook | Payload | When |
+|---|---|---|
+| `permission:denied` | `{ userId, permission, scope }` | `authorize()` refused, a `meta.can` route refused, or an audience refused (`permission` is `audience` / `audience:<name>`). |
+| `permission:role_assigned` / `permission:role_removed` | `{ userId, role, scope }` | `gate.assignRole()` / `gate.removeRole()`. |
+| `permission:granted` | `{ role? , userId?, permissions, scope, expiresAt? }` | `gate.grantToRole()`, `gate.grantToUser()`, `gate.grantTemporarily()`. |
+| `permission:delegated` | `{ fromUserId, toUserId, permissions, scope, expiresAt? }` | `gate.delegate()`. |
+
+Writes made straight on the `AccessStore` bypass these hooks. Membership-driven
+role changes are emitted by `@basaltkit/teams` (`team:joined`,
+`team:role_changed`, `team:member_removed`); wire the Gate's store to teams via
+the `access` option there to mirror them into role grants.
 
 ## Common errors and solutions (FAQ)
 

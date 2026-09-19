@@ -11,7 +11,15 @@ import type { McpToolResult } from './protocol.js'
 /** How to reach one external MCP server. */
 export type McpServerConnection =
   | { type: 'http'; url: string; headers?: Record<string, string> }
-  | { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
+  | {
+      type: 'stdio'
+      command: string
+      args?: string[]
+      env?: Record<string, string>
+      cwd?: string
+      /** Host env inheritance — see `StdioTransportOptions.inheritEnv`. Default: a non-secret allowlist. */
+      inheritEnv?: boolean | string[]
+    }
 
 function transportFor(connection: McpServerConnection): McpClientTransport {
   if (connection.type === 'stdio') {
@@ -20,6 +28,7 @@ function transportFor(connection: McpServerConnection): McpClientTransport {
       ...(connection.args ? { args: connection.args } : {}),
       ...(connection.env ? { env: connection.env } : {}),
       ...(connection.cwd ? { cwd: connection.cwd } : {}),
+      ...(connection.inheritEnv !== undefined ? { inheritEnv: connection.inheritEnv } : {}),
     })
   }
   return new HttpClientTransport(connection.url, connection.headers ? { headers: connection.headers } : {})

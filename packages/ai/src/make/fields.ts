@@ -64,10 +64,25 @@ function usable(field: PlanField): boolean {
   return field.name.trim() !== '' && !RESERVED.has(field.name.toLowerCase())
 }
 
+/**
+ * A single-quoted TS string literal for arbitrary text. Plan enum values are
+ * untrusted (LLM output / MCP client input): escaping via JSON.stringify means
+ * quotes, backslashes and line breaks can never end the literal early.
+ */
+export function tsStringLiteral(value: string): string {
+  const escaped = JSON.stringify(String(value))
+    .slice(1, -1)
+    .replace(/\\"/g, '"')
+    .replace(/'/g, "\\'")
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+  return `'${escaped}'`
+}
+
 /** Zod validator for a field, honoring an enum (`z.enum([...])`) over its base type. */
 export function zodForField(field: PlanField, create: boolean): string {
   if (field.enum && field.enum.length > 0) {
-    return `z.enum([${field.enum.map((v) => `'${v}'`).join(', ')}])`
+    return `z.enum([${field.enum.map(tsStringLiteral).join(', ')}])`
   }
   return zodValidator(canonicalType(field.type), create)
 }

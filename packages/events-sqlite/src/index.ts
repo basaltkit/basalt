@@ -5,7 +5,7 @@ const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import { randomUUID } from 'node:crypto'
-import type { OutboxEntry, OutboxStore } from '@basaltkit/events'
+import type { OutboxEntry, OutboxPendingFilter, OutboxStore } from '@basaltkit/events'
 
 /**
  * Durable, SQLite-backed implementation of the `@basaltkit/events` `OutboxStore`,
@@ -100,15 +100,28 @@ export class SqliteOutboxStore implements OutboxStore {
     }
   }
 
-  async pending(limit: number, maxAttempts: number): Promise<OutboxEntry[]> {
+  async pending(limit: number, maxAttempts: number, filter: OutboxPendingFilter = {}): Promise<OutboxEntry[]> {
+    // Tenant exclusion (relay fairness): a NULL tenant_id never matches NOT IN,
+    // so tenant-less rows are kept or dropped explicitly by `excludeGlobal`.
+    const excluded = filter.excludeTenantIds ?? []
+    const args: (string | number)[] = [maxAttempts]
+    let tenantClause = ''
+    if (excluded.length > 0) {
+      const notIn = `tenant_id NOT IN (${excluded.map(() => '?').join(', ')})`
+      tenantClause = filter.excludeGlobal ? ` AND ${notIn}` : ` AND (tenant_id IS NULL OR ${notIn})`
+      args.push(...excluded)
+    } else if (filter.excludeGlobal) {
+      tenantClause = ' AND tenant_id IS NOT NULL'
+    }
+    args.push(limit)
     const rows = this.db
       .prepare(
         `SELECT * FROM outbox
-         WHERE published_at IS NULL AND attempts < ?
+         WHERE published_at IS NULL AND attempts < ?${tenantClause}
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?`,
       )
-      .all(maxAttempts, limit) as unknown as OutboxRow[]
+      .all(...args) as unknown as OutboxRow[]
     return rows.map(toEntry)
   }
 

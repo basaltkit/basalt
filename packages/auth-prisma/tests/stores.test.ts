@@ -1,5 +1,6 @@
 import { Auth } from '@basaltkit/auth'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { makeFakeClient } from './fake-client.js'
 import {
   ApiKeySchemaOutdatedError,
   PrismaApiKeyStore,
@@ -12,179 +13,6 @@ import {
   prismaAuthStores,
   PrismaTokenVersionStore,
 } from '../src/index.js'
-
-// A faithful in-memory fake of the Prisma delegate surface the stores use —
-// the same "injectable client" pattern the cloud drivers test with. If a real
-// PrismaClient satisfies `PrismaAuthClient`, so must this.
-function makeFakeClient(): PrismaAuthClient {
-  const users = new Map<string, PUserRow>()
-  const sessions = new Map<string, PSessionRow>()
-  const refresh = new Map<string, PRefreshRow>()
-  const tokens = new Map<string, PTokenRow>()
-  const apiKeys = new Map<string, PApiKeyRow>()
-  const mfa = new Map<string, PMfaRow>()
-  const versions = new Map<string, number>()
-
-  return {
-    authUser: {
-      async findUnique({ where }) {
-        if (where.id !== undefined) return users.get(where.id) ?? null
-        if (where.email !== undefined) {
-          for (const u of users.values()) if (u.email === where.email) return u
-        }
-        return null
-      },
-      async create({ data }) {
-        if ([...users.values()].some((u) => u.email === data.email)) throw new Error('unique email')
-        const row = { ...data }
-        users.set(row.id, row)
-        return row
-      },
-      async update({ where, data }) {
-        const row = users.get(where.id)
-        if (!row) throw new Error('not found')
-        Object.assign(row, data)
-        return row
-      },
-    },
-    authSession: {
-      async findUnique({ where }) {
-        return sessions.get(where.id) ?? null
-      },
-      async create({ data }) {
-        const row = { ...data }
-        sessions.set(row.id, row)
-        return row
-      },
-      async deleteMany({ where }) {
-        return { count: sessions.delete(where.id) ? 1 : 0 }
-      },
-    },
-    authRefreshToken: {
-      async findUnique({ where }) {
-        return refresh.get(where.token) ?? null
-      },
-      async create({ data }) {
-        const row = { ...data }
-        refresh.set(row.token, row)
-        return row
-      },
-      async updateMany({ where, data }) {
-        const row = refresh.get(where.token)
-        if (!row) return { count: 0 }
-        // Honour the `usedAt: null` predicate — the store relies on it for CAS.
-        if (where.usedAt === null && row.usedAt != null) return { count: 0 }
-        row.usedAt = data.usedAt
-        return { count: 1 }
-      },
-      async deleteMany({ where }) {
-        let count = 0
-        for (const [k, r] of refresh) {
-          if (where.familyId !== undefined && r.familyId !== where.familyId) continue
-          if (where.userId !== undefined && r.userId !== where.userId) continue
-          refresh.delete(k)
-          count++
-        }
-        return { count }
-      },
-    },
-    authToken: {
-      async findUnique({ where }) {
-        return tokens.get(where.token) ?? null
-      },
-      async create({ data }) {
-        const row = { ...data }
-        tokens.set(row.token, row)
-        return row
-      },
-      async updateMany({ where, data }) {
-        const row = tokens.get(where.token)
-        if (!row) return { count: 0 }
-        // Honour the `usedAt: null` predicate — the store relies on it for CAS.
-        if (where.usedAt === null && row.usedAt != null) return { count: 0 }
-        row.usedAt = data.usedAt
-        return { count: 1 }
-      },
-      async deleteMany({ where }) {
-        let count = 0
-        for (const [k, r] of tokens) {
-          if (r.userId === where.userId && r.purpose === where.purpose) {
-            tokens.delete(k)
-            count++
-          }
-        }
-        return { count }
-      },
-    },
-    authApiKey: {
-      async findUnique({ where }) {
-        if (where.id !== undefined) return apiKeys.get(where.id) ?? null
-        if (where.hash !== undefined) {
-          for (const k of apiKeys.values()) if (k.hash === where.hash) return k
-        }
-        return null
-      },
-      async findMany({ where, orderBy }) {
-        let rows = [...apiKeys.values()].filter((k) => k.revokedAt === null)
-        if (where.tenantId !== undefined) rows = rows.filter((k) => k.tenantId === where.tenantId)
-        if (where.userId !== undefined) rows = rows.filter((k) => k.userId === where.userId)
-        if (orderBy?.createdAt === 'asc') rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-        return rows
-      },
-      async create({ data }) {
-        if ([...apiKeys.values()].some((k) => k.hash === data.hash)) throw new Error('unique hash')
-        const row = { ...data }
-        apiKeys.set(row.id, row)
-        return row
-      },
-      async update({ where, data }) {
-        const row = apiKeys.get(where.id)
-        if (!row) throw new Error('not found')
-        Object.assign(row, data)
-        return row
-      },
-    },
-    authMfa: {
-      async findUnique({ where }) {
-        return mfa.get(where.userId) ?? null
-      },
-      async upsert({ where, create, update }) {
-        const existing = mfa.get(where.userId)
-        if (existing) {
-          Object.assign(existing, update)
-          return existing
-        }
-        const row = { ...create }
-        mfa.set(row.userId, row)
-        return row
-      },
-      async deleteMany({ where }) {
-        return { count: mfa.delete(where.userId) ? 1 : 0 }
-      },
-    },
-    authTokenVersion: {
-      async findUnique({ where }: { where: { userId: string } }) {
-        return versions.has(where.userId) ? { userId: where.userId, version: versions.get(where.userId)! } : null
-      },
-      async upsert({ where, create }: { where: { userId: string }; create: { version: number } }) {
-        const v = versions.has(where.userId) ? versions.get(where.userId)! + 1 : create.version
-        versions.set(where.userId, v)
-        return { userId: where.userId, version: v }
-      },
-    },
-  }
-}
-
-// row shapes the fake stores (Prisma-return shape: Date / boolean / null)
-interface PUserRow { id: string; email: string; passwordHash: string; emailVerified: boolean }
-interface PSessionRow { id: string; userId: string; expiresAt: Date }
-interface PRefreshRow { token: string; familyId: string; userId: string; expiresAt: Date; usedAt: Date | null }
-interface PTokenRow { token: string; userId: string; purpose: string; expiresAt: Date; usedAt: Date | null }
-interface PApiKeyRow {
-  id: string; name: string; prefix: string; hash: string; tenantId: string | null
-  userId: string | null; scopes: string[]; createdAt: Date; expiresAt: Date | null; lastUsedAt: Date | null; revokedAt: Date | null
-}
-interface PMfaRow { userId: string; secret: string; enabled: boolean; recoveryCodes: string[]; lastUsedStep: number | null }
 
 let client: PrismaAuthClient
 beforeEach(() => {
@@ -402,7 +230,7 @@ describe('F-1 · Prisma refresh/auth token consumption is a compare-and-swap', (
     expect(await stores.tokens.markUsed('t1')).toBe(false)
   })
 
-  it('two concurrent refreshes of the same token: exactly one wins', async () => {
+  it('two concurrent refreshes of the same token: at most one is served, and reuse is detected', async () => {
     const stores = prismaAuthStores(makeFakeClient())
     const auth = new Auth({
       secret: 'test-secret-test-secret-test-secret',
@@ -418,8 +246,13 @@ describe('F-1 · Prisma refresh/auth token consumption is a compare-and-swap', (
       auth.refresh(tokens.refreshToken),
     ])
 
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1)
+    // The CAS lets at most one consume the token; the loser revokes the family,
+    // and a winner whose rotated token landed after that revocation is refused too.
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBeLessThanOrEqual(1)
+    expect(results.filter((r) => r.status === 'rejected').length).toBeGreaterThanOrEqual(1)
+    for (const r of results) {
+      if (r.status === 'fulfilled') await expect(auth.refresh(r.value.refreshToken)).rejects.toThrow()
+    }
   })
 })
 

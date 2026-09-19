@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   Auth,
@@ -15,6 +15,9 @@ import {
 } from '../src/index.js'
 
 const SECRET = 'x'.repeat(32)
+/** The browser binding (the oauth cookie's value) the tests start and finish flows with. */
+const BINDING = 'b'.repeat(43)
+const BINDING_HASH = createHash('sha256').update(BINDING).digest('base64url')
 const NOW = 1_700_000_000_000
 
 const makeAuth = () => new Auth({ users: new MemoryUserSource(), secret: SECRET })
@@ -53,13 +56,13 @@ function signRawBody(bodyPlain: string): string {
 }
 
 const stateOf = (oauth: OAuth, redirect = 'https://app/cb') =>
-  new URL(oauth.authorizeUrl('test', redirect)).searchParams.get('state')!
+  new URL(oauth.authorizeUrl('test', redirect, BINDING)).searchParams.get('state')!
 
 describe('OAuth constructor defaults', () => {
   it('falls back to globalThis.fetch, Date.now, and the default state TTL', () => {
     // No fetch / now / stateTtlMs supplied — exercises every `?? default` branch.
     const oauth = new OAuth(makeAuth(), [testProvider({ subject: 'p', email: 'e@x.com' })], { secret: SECRET })
-    const url = new URL(oauth.authorizeUrl('test', 'https://app/cb'))
+    const url = new URL(oauth.authorizeUrl('test', 'https://app/cb', BINDING))
     expect(url.searchParams.get('state')).toContain('.')
   })
 
@@ -72,7 +75,7 @@ describe('OAuth constructor defaults', () => {
 describe('OAuth provider lookup', () => {
   it('authorizeUrl throws for an unknown provider', () => {
     const oauth = new OAuth(makeAuth(), [testProvider({ subject: 'p', email: 'e@x.com' })], { secret: SECRET })
-    expect(() => oauth.authorizeUrl('nope', 'https://app/cb')).toThrow(OAuthProviderUnknownError)
+    expect(() => oauth.authorizeUrl('nope', 'https://app/cb', BINDING)).toThrow(OAuthProviderUnknownError)
   })
 
   it('callback throws for a provider that verifies but is not registered', async () => {
@@ -81,8 +84,8 @@ describe('OAuth provider lookup', () => {
       secret: SECRET,
       now: () => NOW,
     })
-    const state = signRaw({ n: 'abc', e: NOW + 60_000, p: 'ghost' })
-    await expect(oauth.callback('ghost', { code: 'c', state, redirectUri: 'x' })).rejects.toBeInstanceOf(
+    const state = signRaw({ n: 'abc', e: NOW + 60_000, p: 'ghost', b: BINDING_HASH })
+    await expect(oauth.callback('ghost', { code: 'c', state, redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthProviderUnknownError,
     )
   })
@@ -97,7 +100,7 @@ describe('OAuth.verifyState edge cases', () => {
     })
 
   it('rejects a state with no dot separator', async () => {
-    await expect(oauth().callback('test', { code: 'c', state: 'no-dot-here', redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(oauth().callback('test', { code: 'c', state: 'no-dot-here', redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
   })
@@ -110,28 +113,28 @@ describe('OAuth.verifyState edge cases', () => {
     // Flip one char so the length matches the expected HMAC but the bytes differ.
     const forgedChar = sig[0] === 'A' ? 'B' : 'A'
     const forged = `${body}.${forgedChar}${sig.slice(1)}`
-    await expect(oauth().callback('test', { code: 'c', state: forged, redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(oauth().callback('test', { code: 'c', state: forged, redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
   })
 
   it('rejects a correctly-signed body that is not valid JSON', async () => {
     const state = signRawBody('this-is-not-json{')
-    await expect(oauth().callback('test', { code: 'c', state, redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(oauth().callback('test', { code: 'c', state, redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
   })
 
   it('rejects a signed state whose expiry is not a number', async () => {
     const state = signRaw({ n: 'abc', e: 'soon', p: 'test' })
-    await expect(oauth().callback('test', { code: 'c', state, redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(oauth().callback('test', { code: 'c', state, redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
   })
 
   it('rejects a state signed for a different provider name', async () => {
     const state = signRaw({ n: 'abc', e: NOW + 60_000, p: 'other' })
-    await expect(oauth().callback('test', { code: 'c', state, redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(oauth().callback('test', { code: 'c', state, redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
   })
@@ -145,7 +148,7 @@ describe('OAuth.callback profile/exchange branches', () => {
       fetch: tokenFetch(JSON.stringify({ access_token: 'at' })),
     })
     await expect(
-      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'https://app/cb' }),
+      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'https://app/cb', binding: BINDING }),
     ).rejects.toBeInstanceOf(OAuthExchangeError)
   })
 
@@ -157,7 +160,7 @@ describe('OAuth.callback profile/exchange branches', () => {
       fetch: tokenFetch('', true, 200),
     })
     await expect(
-      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'x' }),
+      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'x', binding: BINDING }),
     ).rejects.toThrow(/HTTP 200/)
   })
 
@@ -168,7 +171,7 @@ describe('OAuth.callback profile/exchange branches', () => {
       fetch: tokenFetch(JSON.stringify({ error: 'invalid_grant', error_description: 'code expired' }), false),
     })
     await expect(
-      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'x' }),
+      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'x', binding: BINDING }),
     ).rejects.toThrow(/code expired/)
   })
 })

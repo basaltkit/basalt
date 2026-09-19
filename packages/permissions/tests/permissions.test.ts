@@ -5,6 +5,7 @@ import {
   definePolicy,
   Gate,
   GATE,
+  GLOBAL_SCOPE,
   MemoryAccessStore,
   PermissionDeniedError,
   permissionMatches,
@@ -23,8 +24,8 @@ describe('permissionMatches', () => {
 
 const setupGate = async () => {
   const store = new MemoryAccessStore()
-  await store.grantToRole('admin', ['projects:*', 'billing:read'], 'global')
-  await store.assignRole('u1', 'admin', 'global')
+  await store.grantToRole('admin', ['projects:*', 'billing:read'], GLOBAL_SCOPE)
+  await store.assignRole('u1', 'admin', GLOBAL_SCOPE)
   await store.grantToUser('u2', ['projects:read'], 'acme')
   const gate = new Gate({ store, superAdmin: (user) => user['owner'] === true })
   return { store, gate }
@@ -99,7 +100,7 @@ describe('permissionsPlugin + fastify guard (end to end)', () => {
 
   const boot = async () => {
     const store = new MemoryAccessStore()
-    await store.grantToUser('u-allowed', ['projects:delete'], 'global')
+    await store.grantToUser('u-allowed', ['projects:delete'], GLOBAL_SCOPE)
     const app = await createApp({
       plugins: [fakeAuthPlugin, permissionsPlugin({ store }), fastifyPlugin({ routes })],
     }).boot()
@@ -147,8 +148,8 @@ describe('meta.can shapes: string[] (all-of) and fail-closed invalid declaration
 
   const bootWith = async (canMeta: unknown) => {
     const store = new MemoryAccessStore()
-    await store.grantToUser('u-both', ['reports:read', 'reports:export'], 'global')
-    await store.grantToUser('u-one', ['reports:read'], 'global')
+    await store.grantToUser('u-both', ['reports:read', 'reports:export'], GLOBAL_SCOPE)
+    await store.grantToUser('u-one', ['reports:read'], GLOBAL_SCOPE)
     const app = await createApp({
       plugins: [
         fakeAuthPlugin,

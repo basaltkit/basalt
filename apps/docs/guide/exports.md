@@ -46,6 +46,15 @@ const result = await exports.run(usersExport, users, 'csv')
 CSV/TSV quote correctly (RFC 4180), dates render as ISO, and `run` accepts an
 array **or** an `AsyncIterable`, so rows can be streamed from the database.
 
+CSV/TSV cells are also protected against **formula injection**: any cell whose
+rendered text starts with `=`, `+`, `-`, `@` (or their full-width forms
+`＝ ＋ － ＠`, also after leading whitespace), a tab, a carriage return or a line
+feed is prefixed with `'`, so a spreadsheet shows it as text instead of
+evaluating it. The guard applies to the final text of every value (strings,
+arrays, objects, boxed strings, and dates after they are rendered); only
+primitive numbers, bigints and booleans are exempt, so a negative number stays
+numeric.
+
 ## Large reports: queue + storage
 
 `run` is pure and synchronous by design. For big exports, run it inside a

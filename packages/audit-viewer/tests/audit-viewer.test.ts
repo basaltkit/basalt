@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { createApp, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
+import { BasaltError, createApp, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
 import { Audit, MemoryAuditStore, auditPlugin, type AuditEntry } from '@basaltkit/audit'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
 import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
-import { AUDIT_VIEWER, AuditTenantRequiredError, AuditViewer, auditViewerCsp, auditViewerHtml, auditViewerPlugin, auditViewerRoutes } from '../src/index.js'
+import { AUDIT_VIEWER, AuditTenantMismatchError, AuditTenantRequiredError, AuditViewer, AuditViewerUnguardedError, auditViewerCsp, auditViewerHtml, auditViewerPlugin, auditViewerRoutes } from '../src/index.js'
 
 let counter = 0
 const entry = (over: Partial<AuditEntry> & { event: string }): AuditEntry => ({
@@ -124,7 +124,7 @@ describe('HTTP routes', () => {
         authPlugin({ users: new MemoryUserSource(), secret: 'test-secret-value-123456', loginThrottle: false }),
         auditPlugin({ store }),
         auditViewerPlugin(),
-        fastifyPlugin({ routes: [...authRoutes(), ...auditViewerRoutes()] }),
+        fastifyPlugin({ routes: [...authRoutes(), ...auditViewerRoutes({ allowAnyAuthenticated: true })] }),
       ],
     }).boot()
     const server = app.container.get(FASTIFY)
@@ -202,5 +202,101 @@ describe('F-5 · the viewer bounds how much of the trail it reads', () => {
 
     expect(stats.total).toBe(10)
     expect(stats.truncated).toBe(true)
+  })
+})
+
+describe('F38 · auditViewerRoutes() refuse to mount without an authorization guard', () => {
+  /** A stand-in for permissions/teams: claims `meta.auditAdmin` and admits only admin@acme.test. */
+  const adminGuard = definePlugin({
+    name: 'test-admin-guard',
+    register({ container }) {
+      const metadata = ensureMetadata(container)
+      metadata.add('http:guards', (({ route, context }: { route: { meta?: Record<string, unknown> }; context: { user?: { email?: string } } }) => {
+        if (route.meta?.['auditAdmin'] === true && context.user?.email !== 'admin@acme.test') {
+          throw new (class extends BasaltError {
+            readonly status = 403
+          })('FORBIDDEN', 'Forbidden')
+        }
+      }) as never)
+      metadata.add('http:guarded-meta', 'auditAdmin')
+    },
+  })
+
+  it('throws when no guard is given, or the guard is only `auth`', () => {
+    expect(() => auditViewerRoutes()).toThrow(AuditViewerUnguardedError)
+    expect(() => auditViewerRoutes({ meta: {} })).toThrow(AuditViewerUnguardedError)
+    expect(() => auditViewerRoutes({ meta: { auth: true } })).toThrow(AuditViewerUnguardedError)
+    expect(() => auditViewerRoutes({ meta: { can: undefined } })).toThrow(AuditViewerUnguardedError)
+  })
+
+  it('a guard that enforces nothing does not count: empty/null/false values and non-authorization keys', () => {
+    // teamsPlugin skips a falsy `teamRole` (`if (!required) return`), so
+    // `{ teamRole: '' }` (e.g. an unset env var) would mount the trail for
+    // every logged-in user; `rateLimit`, `central`, `tags`… authorize nobody.
+    for (const meta of [
+      { teamRole: '' },
+      { teamRole: null },
+      { teamRole: false },
+      { can: [] },
+      { scopes: [] },
+      { rateLimit: { max: 10, window: '1m' } },
+      { central: true },
+      { tags: ['audit'], summary: 'Audit' },
+      { mcp: true },
+      { etag: true },
+    ]) {
+      expect(() => auditViewerRoutes({ meta }), JSON.stringify(meta)).toThrow(AuditViewerUnguardedError)
+    }
+    // A real guard next to such keys still counts.
+    expect(() => auditViewerRoutes({ meta: { teamRole: 'admin', rateLimit: { max: 10 } } })).not.toThrow()
+  })
+
+  it('merges the guard into every route and keeps auth required', () => {
+    const routes = auditViewerRoutes({ meta: { can: 'audit:read', auth: false } })
+    expect(routes).toHaveLength(4)
+    for (const r of routes) expect(r.meta).toEqual({ can: 'audit:read', auth: true })
+  })
+
+  it('allowAnyAuthenticated is the explicit opt-out', () => {
+    for (const r of auditViewerRoutes({ allowAnyAuthenticated: true })) expect(r.meta).toEqual({ auth: true })
+  })
+
+  it('a self-registered user without the guard role cannot read other users’ audit entries', async () => {
+    const store = await seededStore()
+    const app = await createApp({
+      plugins: [
+        tenancyPlugin({ source: new MemoryTenantSource().add({ id: 'acme' }), resolvers: [headerResolver()] }),
+        authPlugin({ users: new MemoryUserSource(), secret: 'test-secret-value-123456', loginThrottle: false }),
+        adminGuard,
+        auditPlugin({ store }),
+        auditViewerPlugin(),
+        fastifyPlugin({ routes: [...authRoutes(), ...auditViewerRoutes({ meta: { auditAdmin: true } })] }),
+      ],
+    }).boot()
+    const server = app.container.get(FASTIFY)
+    const tokenFor = async (email: string) => {
+      await server.inject({ method: 'POST', url: '/auth/register', payload: { email, password: 'password123' } })
+      return (await server.inject({ method: 'POST', url: '/auth/login', payload: { email, password: 'password123' } })).json()
+        .accessToken as string
+    }
+    const mallory = { authorization: `Bearer ${await tokenFor('mallory@evil.test')}`, 'x-tenant-id': 'acme' }
+    const admin = { authorization: `Bearer ${await tokenFor('admin@acme.test')}`, 'x-tenant-id': 'acme' }
+
+    for (const url of ['/audit?limit=100', '/audit/stats', '/audit/e1', '/audit/view']) {
+      expect((await server.inject({ method: 'GET', url, headers: mallory })).statusCode).toBe(403)
+    }
+    expect((await server.inject({ method: 'GET', url: '/audit?event=auth:**', headers: admin })).statusCode).toBe(200)
+    await app.shutdown()
+  })
+})
+
+describe('F59 · an explicit tenantId never widens past the context tenant', () => {
+  it('refuses a tenantId that differs from the ambient tenant', async () => {
+    const viewer = new AuditViewer(new Audit(await seededStore()), {}, () => true)
+    const inAcme = <T>(fn: () => Promise<T>) => runWithContext({ tenant: { id: 'acme' } } as never, async () => fn())
+    await expect(inAcme(() => viewer.page({ tenantId: 'globex' }))).rejects.toBeInstanceOf(AuditTenantMismatchError)
+    await expect(inAcme(() => viewer.stats({ tenantId: 'globex' }))).rejects.toBeInstanceOf(AuditTenantMismatchError)
+    await expect(inAcme(() => viewer.get('e5', 'globex'))).rejects.toBeInstanceOf(AuditTenantMismatchError)
+    expect((await inAcme(() => viewer.page({ tenantId: 'acme' }))).total).toBe(4)
   })
 })

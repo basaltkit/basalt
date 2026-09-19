@@ -213,6 +213,20 @@ TLS certificate provisioning is infrastructure — issue the cert with your plat
 
 How you create a tenant depends on the backend.
 
+::: warning Tenant ids follow one grammar
+A tenant id is not an opaque label: it becomes a namespace segment in the cache
+(`tenant:<id>:`), in storage (`tenants/<id>/`), in realtime channels and in
+schema names. `tenancy.create()` and `MemoryTenantSource.create()/save()`
+therefore refuse, with `InvalidTenantIdError` (`400 TENANT_ID_INVALID`), any id
+outside `/^[a-z0-9][a-z0-9_-]{0,62}$/` or equal to the reserved `global` — so a
+self-serve signup cannot pick `globex:user`, `globex/files` or `..` to alias
+another tenant's keys or files. Slugs, UUIDs and cuids fit. `isValidTenantId(id)`
+is exported for your own signup form; pass `validateTenantId` to `tenancyPlugin`
+(and the same function to `new MemoryTenantSource({ validateTenantId })`) to
+narrow or widen it — keep `:`, `/`, `\`, `.`, whitespace and control characters
+out of any replacement.
+:::
+
 ### In dev — `MemoryTenantSource`
 
 Seed them inline; the `add()` calls chain. Lost on restart, so dev/tests only:
@@ -561,7 +575,7 @@ when there is nothing to scope to they **throw** rather than return `undefined`.
 | --- | --- | --- | --- |
 | `requireTenant()` | `() => Tenant` | The whole tenant record of the active context | No tenant in context |
 | `requireTenantId(fallback?)` | `(fallback?: string) => string` | The context tenant's id; else `fallback` | No context tenant **and** no `fallback` |
-| `tenantScoped(where?)` | `<W>(where?: W) => W & { tenantId: string }` | Your `where` clause with `tenantId` merged in **last** | No tenant to scope to |
+| `tenantScoped(where?)` | `<W>(where?: W) => W & { tenantId: string }` | Your `where` clause with the **context** tenant's `tenantId` merged in **last** | No tenant in context — a `tenantId` in `where` is never used as a fallback |
 
 All three throw `TenantRequiredError` (`400 TENANT_REQUIRED`).
 
@@ -586,9 +600,16 @@ family safe to use on input-derived data:
   **last**, so a `tenantId` smuggled into `where` by client input cannot widen
   or switch the scope: `tenantScoped({ tenantId: 'globex' })` inside Acme's
   context still yields `{ tenantId: 'acme' }`.
-- **An explicit id is honoured only when there is no context tenant.** That is
-  the system-code path — a queue worker or `basalt` command pinning one tenant.
-  Inside a request it can never override the resolved tenant.
+- **`tenantScoped()` takes the tenant from the context only.** A `tenantId`
+  inside `where` is never a fallback: `where` is routinely built from client
+  input, and with no tenant resolved (`required` defaults to `false`) that would
+  let a request pick any tenant by omitting its tenant header. So
+  `tenantScoped({ tenantId: 'globex' })` with no context tenant **throws**.
+- **An explicit id is honoured only by `requireTenantId(fallback)`, and only
+  when there is no context tenant.** That is the system-code path — a queue
+  worker or `basalt` command pinning one tenant (or wrap the work in
+  `tenancy.run(id, …)`). Inside a request it can never override the resolved
+  tenant.
 - **With neither, it throws.** The value is always a real tenant id, never a
   filter that silently disappears. That is the whole point: a `400` beats a
   cross-tenant read.
@@ -692,8 +713,11 @@ configuration, not a rewrite. Pick one:
 | Database per tenant | a separate database (+ client) per tenant | strongest | compliance, per-tenant backups |
 
 **Shared database** (default) — one client with a `tenantId` column on each
-model. The extension forces the current tenant's filter onto every read, and
-stamps it onto every create — code can't forget or override it:
+model. The extension forces the current tenant's filter onto every read and
+update, stamps it onto every create (nested creates included), narrows nested
+`connect`/`update`/`delete` to the tenant, refuses to move a row to another
+tenant, and **refuses** raw or unknown operations inside a tenant context —
+code can't forget or override it:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -702,13 +726,23 @@ import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 const db = new PrismaClient().$extends(
   tenancyExtension({
     tenantField: 'tenantId',   // column name (default 'tenantId')
-    onMissingTenant: 'bypass',  // no tenant in context → run unfiltered (central/admin).
-                                // 'error' throws instead — strict isolation.
+    // onMissingTenant defaults to 'error': no tenant in context → throws
+    // PRISMA_TENANT_MISSING instead of running across every tenant.
   }),
 )
 
 prismaPlugin({ client: db })
+
+// Deliberate cross-tenant reads (back-office, jobs) get their OWN client —
+// never put 'bypass' on the app's main client.
+export const adminDb = new PrismaClient().$extends(
+  tenancyExtension({ onMissingTenant: 'bypass' }),
+)
 ```
+
+The extension works on query arguments, so it can't tell which scalar columns
+are foreign keys (`data: { projectId }` is not checked). Use composite foreign
+keys `(tenantId, id)` and RLS as the database-level guarantee.
 
 **Schema per tenant** — one database, one PostgreSQL schema per tenant. Each
 tenant gets a client whose connection URL carries `?schema=tenant_<id>`, so
@@ -734,6 +768,12 @@ prismaPlugin({
 const admin = new PrismaClient()
 await provisionTenantSchema(admin, tenantSchema('acme')) // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
+
+`tenantSchema()` is injective: canonical ids (`acme`, `acme_co`) are used
+as-is, and any other id (`ACME`, `acme-co`, UUIDs) gets a `__<hash>` suffix
+(`tenant_acme_co__<16 hex>`), so a new tenant can never land in an existing
+tenant's schema. Evicted pool clients are closed with `$disconnect()` by
+default, and concurrent first requests for a tenant share one client.
 
 **Database per tenant** — a separate database (and client) per tenant, via the
 same LRU pool. Give it a factory keyed by tenant id:
@@ -799,6 +839,7 @@ scoped connection URL; pass `migrate` to override it.
 | `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Tears that storage down, inside the tenant's context, from `tenancy.destroy()`. Without it the record goes and the schema stays |
 | `canonicalDomain` | `(tenant) => string \| undefined` | — | The address a new tenant is reachable at, added to `tenant.domains` by `tenancy.create()` before the record is persisted. Without it the domain table stays empty and nothing owns the address |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — `create()` waits, so the tenant is usable when it returns. `'deferred'` — `create()` returns immediately with status `provisioning` and the resolver answers 503 until `tenancy.provision(id)` runs |
+| `validateTenantId` | `(id: string) => boolean` | `isValidTenantId` | The id grammar `tenancy.create()` enforces (`/^[a-z0-9][a-z0-9_-]{0,62}$/`, minus `global`); a rejected id throws `InvalidTenantIdError` before anything is written |
 
 The built-in resolver factories:
 
@@ -833,7 +874,8 @@ takeover.
 
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
-| `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` ran with no tenant in context and no explicit fallback |
+| `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` ran with no tenant in context (and, for `requireTenantId`, no explicit fallback) |
+| `InvalidTenantIdError` | `TENANT_ID_INVALID` | 400 | `tenancy.create()` (or `MemoryTenantSource.create()/save()`) with an id outside the tenant-id grammar or a reserved id. Nothing is written |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` and no resolver produced a ref that loaded a tenant |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, or `forEach()` on a `TenantSource` without `list()` |
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning` or `failed`. 503, not 404: the tenant exists and the client may retry |

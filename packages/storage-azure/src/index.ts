@@ -1,4 +1,11 @@
-import { type TemporaryUrlOptions, StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
+import {
+  DEFAULT_MAX_TEMPORARY_URL_TTL,
+  type TemporaryUrlOptions,
+  StorageFileNotFoundError,
+  TemporaryUrlTtlTooLongError,
+  type PutOptions,
+  type StorageDriver,
+} from '@basaltkit/storage'
 
 /** The subset of an `@azure/storage-blob` BlockBlobClient this driver uses. */
 export interface AzureBlobLike {
@@ -69,6 +76,12 @@ export class AzureBlobStorageDriver implements StorageDriver {
   }
 
   async temporaryUrl(path: string, expiresInMs: number, options?: TemporaryUrlOptions): Promise<string> {
+    // Azure service SAS has no native maximum lifetime (unlike S3/GCS V4
+    // signatures, capped at 7 days), so the driver enforces the same ceiling
+    // itself — also when called directly, not only through the Disk facade.
+    if (!(expiresInMs > 0) || expiresInMs > DEFAULT_MAX_TEMPORARY_URL_TTL) {
+      throw new TemporaryUrlTtlTooLongError(expiresInMs, DEFAULT_MAX_TEMPORARY_URL_TTL)
+    }
     return (await this.container()).getBlockBlobClient(path).generateSasUrl({
       permissions: 'r',
       expiresOn: new Date(Date.now() + expiresInMs),

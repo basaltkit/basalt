@@ -71,6 +71,8 @@ const all     = await client.projects.list()
 
 O cliente **espelha a forma** do teu objeto `api`, o TypeScript verifica os argumentos, e a resposta do servidor é **validada contra o esquema** em runtime — uma incompatibilidade lança `CLIENT_RESPONSE_MISMATCH` em vez de devolver dados errados em silêncio. Muda um campo no backend e o frontend deixa de compilar, em vez de falhar em produção.
 
+Os parâmetros de path preenchem exatamente um segmento: cada valor é codificado para URL (por isso `/` não acrescenta segmentos), e um valor em falta, vazio, `.` ou `..` lança `CLIENT_INVALID_PARAM` antes de qualquer pedido ser enviado — assim um id vindo do utilizador nunca consegue redirecionar uma chamada autenticada para outro endpoint. Um placeholder é um `:name` no **início** de um segmento; um `:` noutro sítio é literal, por isso métodos personalizados como `/v1/items:batch` ou `/items/:id:archive` funcionam tal como estão escritos.
+
 ::: tip Dica: auth & refresh de token
 Passa um callback `getToken` (devolve o access token atual, enviado como `Authorization: Bearer`) e um callback `refresh` ao `createClient`. Num `401` o cliente chama `refresh` uma vez e repete com o novo token — transparente para quem chama; o `refresh` devolve o novo token, ou `null` para desistir. O scaffold `--ui` liga isto às rotas de auth por ti.
 

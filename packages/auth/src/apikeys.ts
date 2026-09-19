@@ -121,6 +121,16 @@ export class ApiKeys {
     }
   }
 
+  /**
+   * Revokes every live key owned by the user — for when the account's previous
+   * holder is no longer trusted (e.g. a verified social login adopted it).
+   */
+  async revokeAllForUser(userId: string): Promise<void> {
+    for (const record of await this.store.list({ userId })) {
+      if (record.userId === userId) await this.revoke(record.id)
+    }
+  }
+
   /** Reads a single key's public info (used to authorize a revoke). */
   async get(id: string): Promise<ApiKeyInfo | null> {
     const record = await this.store.findById(id)

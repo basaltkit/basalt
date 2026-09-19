@@ -1,6 +1,6 @@
 import { names } from '@basaltkit/generator/resource'
 import type { PlanField } from '../plan/types.js'
-import { canonicalType, domainFields, type CanonicalType } from './fields.js'
+import { canonicalType, domainFields, tsStringLiteral, type CanonicalType } from './fields.js'
 
 export interface RepositoryOptions {
   softDelete: boolean
@@ -52,7 +52,7 @@ export function renderPrismaRepository(name: string, fields: PlanField[], option
   // Enum columns are stored as String; the mapper narrows them to the union.
   const colType = (f: { canon: CanonicalType; values?: string[] }): string => (f.values ? 'string' : rowType(f.canon))
   const colExpr = (f: { name: string; canon: CanonicalType; values?: string[] }): string =>
-    f.values ? `r.${f.name} as ${f.values.map((v) => `'${v}'`).join(' | ')}` : mapExpr(f.name, f.canon)
+    f.values ? `r.${f.name} as ${f.values.map(tsStringLiteral).join(' | ')}` : mapExpr(f.name, f.canon)
 
   const rowTypeEntries = [
     'id: string',

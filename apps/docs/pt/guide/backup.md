@@ -188,8 +188,11 @@ const dockerRunner = async (command, args, options) => {
       arg !== '--file' && args[index - 1] !== '--file',
     )
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('docker', ['exec', container, command, ...dumpArgs], {
+      // `-e PGPASSWORD` forwards the variable by name only, so the password
+      // never appears on the docker command line.
+      const child = spawn('docker', ['exec', '-e', 'PGPASSWORD', container, command, ...dumpArgs], {
         cwd: options.cwd,
+        env: { ...process.env, ...options.env },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       const output = createWriteStream(options.output)
@@ -211,16 +214,17 @@ const dockerRunner = async (command, args, options) => {
     await execFileAsync('docker', ['cp', input, `${container}:${remoteInput}`])
     try {
       await execFileAsync('docker', [
-        'exec', container, command, ...args.slice(0, -1), remoteInput,
-      ])
+        'exec', '-e', 'PGPASSWORD', container, command, ...args.slice(0, -1), remoteInput,
+      ], { env: { ...process.env, ...options.env } })
     } finally {
       await execFileAsync('docker', ['exec', container, 'rm', '-f', remoteInput])
     }
     return
   }
 
-  await execFileAsync('docker', ['exec', container, command, ...args], {
+  await execFileAsync('docker', ['exec', '-e', 'PGPASSWORD', container, command, ...args], {
     cwd: options.cwd,
+    env: { ...process.env, ...options.env },
   })
 }
 
@@ -244,6 +248,22 @@ credenciais ficam fora do pacote.
 | `args` | `string[]` | Argumentos da ferramenta; não construa uma string shell. |
 | `options.cwd` | `string` | Diretório temporário no host da aplicação. |
 | `options.output` | `string \| undefined` | Caminho no host onde o runner Docker escreve o stdout binário do `pg_dump`. |
+| `options.env` | `Record<string, string> \| undefined` | Ambiente extra para a ferramenta, por exemplo `PGPASSWORD`. Um runner personalizado tem de o passar ao processo filho. |
+
+### Credenciais
+
+A password da base de dados nunca é colocada na linha de comandos da
+ferramenta, onde a lista de processos e as mensagens de erro a exporiam. O
+`PostgresBackup` remove a password (userinfo ou `?password=`) da URL passada em
+`--dbname` e entrega-a em `options.env.PGPASSWORD`. O runner por omissão junta-a
+ao ambiente do processo filho; um runner personalizado tem de fazer o mesmo
+(com `docker exec`, passe `-e PGPASSWORD` para reencaminhar a variável pelo
+nome). A libpq não tem variável de ambiente para `sslpassword`, por isso esse
+parâmetro continua na URL.
+
+Uma execução falhada regista apenas o nome da ferramenta e o código de saída,
+com quaisquer credenciais removidas do texto do erro. Uma `databaseUrl` de
+tenant é guardada no manifesto e nos logs com a password substituída por `***`.
 
 ### Opções do backup
 
@@ -290,8 +310,14 @@ await backup.restore(candidato.id, process.env.RESTORE_DATABASE_URL!, {
 })
 ```
 
-`restore()` descarrega o artefacto para um ficheiro temporário, executa
-`pg_restore` com `--clean --if-exists --no-owner --exit-on-error` e remove o
-ficheiro depois. A produção exige `allowProduction: true`; uma confirmação
+`restore()` verifica primeiro o artefacto: o manifesto tem de apontar para a
+chave canónica `<prefix>/<id>.dump` e os bytes descarregados têm de coincidir
+com o checksum SHA-256 registado. Caso contrário lança `BackupIntegrityError`
+(`BACKUP_INTEGRITY_FAILED`) e o `pg_restore` nunca é executado. Depois escreve
+o artefacto num ficheiro temporário, executa `pg_restore` com
+`--clean --if-exists --no-owner --exit-on-error` e remove o ficheiro. O
+checksum deteta corrupção ou substituição apenas do dump; quem conseguir
+reescrever o dump e o manifesto pode ainda forjar um backup, por isso restrinja
+o acesso de escrita ao disco de backups. A produção exige `allowProduction: true`; uma confirmação
 falsa é recusada. Teste sempre numa base descartável antes de substituir a base
 live.

@@ -43,6 +43,15 @@ function makeFakeClient(): PrismaEventsClient {
         let list = [...rows.values()]
         if (where?.publishedAt === null) list = list.filter((r) => r.publishedAt === null)
         if (where?.attempts?.lt !== undefined) list = list.filter((r) => r.attempts < where.attempts.lt)
+        // tenantId filters with SQL semantics: `notIn` never matches NULL.
+        const tenantMatches = (r: Row, cond: any): boolean => {
+          if (cond === null) return r.tenantId === null
+          if (cond?.not === null) return r.tenantId !== null
+          if (cond?.notIn) return r.tenantId !== null && !cond.notIn.includes(r.tenantId)
+          return true
+        }
+        if (where?.tenantId !== undefined) list = list.filter((r) => tenantMatches(r, where.tenantId))
+        if (where?.OR) list = list.filter((r) => where.OR.some((c: any) => tenantMatches(r, c.tenantId)))
         // the store always asks for orderBy [{ createdAt: 'asc' }, { id: 'asc' }]
         list.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
         if (take !== undefined) list = list.slice(0, take)
@@ -94,6 +103,35 @@ describe('PrismaOutboxStore', () => {
     await store.markPublished('b', 99)
     expect((await store.pending(10, 5)).map((e) => e.id)).toEqual(['c', 'a'])
     expect((await store.all()).find((e) => e.id === 'b')?.publishedAt).toBe(99)
+  })
+
+  it('pending: excludes tenants from the relay filter, keeping tenant-less rows unless excluded', async () => {
+    const store = new PrismaOutboxStore(makeFakeClient())
+    await store.enqueue({ id: 'a', event: 'e', payload: 1, tenantId: 'acme', createdAt: 1 })
+    await store.enqueue({ id: 'g', event: 'e', payload: 1, createdAt: 2 })
+    await store.enqueue({ id: 'b', event: 'e', payload: 1, tenantId: 'globex', createdAt: 3 })
+
+    expect((await store.pending(10, 5, { excludeTenantIds: ['acme'] })).map((e) => e.id)).toEqual(['g', 'b'])
+    expect((await store.pending(10, 5, { excludeGlobal: true })).map((e) => e.id)).toEqual(['a', 'b'])
+    expect((await store.pending(10, 5, { excludeTenantIds: ['acme'], excludeGlobal: true })).map((e) => e.id)).toEqual(['b'])
+    expect((await store.pending(10, 5, {})).map((e) => e.id)).toEqual(['a', 'g', 'b'])
+  })
+
+  it('pending: builds a NULL-safe Prisma where for the tenant filter', async () => {
+    const calls: any[] = []
+    const client = makeFakeClient()
+    const findMany = client.outboxEntry.findMany.bind(client.outboxEntry)
+    client.outboxEntry.findMany = (a: any) => {
+      calls.push(a.where)
+      return findMany(a)
+    }
+    const store = new PrismaOutboxStore(client)
+    await store.pending(5, 3, { excludeTenantIds: ['acme'] })
+    await store.pending(5, 3, { excludeTenantIds: ['acme'], excludeGlobal: true })
+    await store.pending(5, 3, { excludeGlobal: true })
+    expect(calls[0].OR).toEqual([{ tenantId: null }, { tenantId: { notIn: ['acme'] } }])
+    expect(calls[1].tenantId).toEqual({ notIn: ['acme'] })
+    expect(calls[2].tenantId).toEqual({ not: null })
   })
 
   it('markFailed increments attempts and drops the entry past the ceiling', async () => {

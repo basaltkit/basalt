@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { OutboxEntry, OutboxStore } from '@basaltkit/events'
+import type { OutboxEntry, OutboxPendingFilter, OutboxStore } from '@basaltkit/events'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/events` `OutboxStore` (the
@@ -93,9 +93,19 @@ export class PrismaOutboxStore implements OutboxStore {
     }
   }
 
-  async pending(limit: number, maxAttempts: number): Promise<OutboxEntry[]> {
+  async pending(limit: number, maxAttempts: number, filter: OutboxPendingFilter = {}): Promise<OutboxEntry[]> {
+    // Tenant exclusion (relay fairness): SQL `NOT IN` never matches a NULL
+    // tenantId, so tenant-less rows are kept or dropped explicitly.
+    const excluded = filter.excludeTenantIds ?? []
+    const where: Record<string, unknown> = { publishedAt: null, attempts: { lt: maxAttempts } }
+    if (excluded.length > 0) {
+      if (filter.excludeGlobal) where.tenantId = { notIn: excluded }
+      else where.OR = [{ tenantId: null }, { tenantId: { notIn: excluded } }]
+    } else if (filter.excludeGlobal) {
+      where.tenantId = { not: null }
+    }
     const rows = await this.client.outboxEntry.findMany({
-      where: { publishedAt: null, attempts: { lt: maxAttempts } },
+      where,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       take: limit,
     })

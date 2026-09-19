@@ -13,6 +13,8 @@ import {
 } from '../src/index.js'
 
 const SECRET = 'x'.repeat(32)
+/** The browser binding (the oauth cookie's value) the tests start and finish flows with. */
+const BINDING = 'b'.repeat(43)
 const NOW = 1_700_000_000_000
 
 const makeAuth = () => new Auth({ users: new MemoryUserSource(), secret: SECRET })
@@ -41,7 +43,7 @@ function tokenFetch(payload: Record<string, unknown> = { access_token: 'at' }, o
 }
 
 const stateOf = (oauth: OAuth, redirect = 'https://app/cb') =>
-  new URL(oauth.authorizeUrl('test', redirect)).searchParams.get('state')!
+  new URL(oauth.authorizeUrl('test', redirect, BINDING)).searchParams.get('state')!
 
 describe('Auth.socialLogin', () => {
   it('creates a passwordless account for a new email and issues usable tokens', async () => {
@@ -53,10 +55,10 @@ describe('Auth.socialLogin', () => {
     await expect(auth.login('new@x.com', 'whatever-password')).rejects.toBeTruthy()
   })
 
-  it('logs into an existing account without creating a duplicate', async () => {
+  it('logs into an existing account (provider-verified email) without creating a duplicate', async () => {
     const auth = makeAuth()
     const u = await auth.register('a@x.com', 'password123')
-    const r = await auth.socialLogin('a@x.com')
+    const r = await auth.socialLogin('a@x.com', { emailVerified: true })
     expect(r.created).toBe(false)
     expect(r.user.id).toBe(u.id)
   })
@@ -68,7 +70,7 @@ describe('OAuth authorization-code flow', () => {
       secret: SECRET,
       now: () => NOW,
     })
-    const url = new URL(oauth.authorizeUrl('test', 'https://app/cb'))
+    const url = new URL(oauth.authorizeUrl('test', 'https://app/cb', BINDING))
     expect(url.origin + url.pathname).toBe('https://provider.test/authorize')
     expect(url.searchParams.get('client_id')).toBe('cid')
     expect(url.searchParams.get('redirect_uri')).toBe('https://app/cb')
@@ -83,7 +85,7 @@ describe('OAuth authorization-code flow', () => {
       now: () => NOW,
       fetch: tokenFetch(),
     })
-    const r = await oauth.callback('test', { code: 'code', state: stateOf(oauth), redirectUri: 'https://app/cb' })
+    const r = await oauth.callback('test', { code: 'code', state: stateOf(oauth), redirectUri: 'https://app/cb', binding: BINDING })
     expect(r.created).toBe(true)
     expect((await auth.verifyAccessToken(r.tokens.accessToken)).sub).toBeTruthy()
   })
@@ -94,10 +96,10 @@ describe('OAuth authorization-code flow', () => {
       now: () => NOW,
       fetch: tokenFetch(),
     })
-    await expect(oauth.callback('test', { code: 'c', state: undefined, redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(oauth.callback('test', { code: 'c', state: undefined, redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
-    await expect(oauth.callback('test', { code: 'c', state: 'abc.def', redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(oauth.callback('test', { code: 'c', state: 'abc.def', redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
   })
@@ -112,7 +114,7 @@ describe('OAuth authorization-code flow', () => {
       now: () => NOW + 20 * 60_000,
       fetch: tokenFetch(),
     })
-    await expect(later.callback('test', { code: 'c', state, redirectUri: 'x' })).rejects.toBeInstanceOf(
+    await expect(later.callback('test', { code: 'c', state, redirectUri: 'x', binding: BINDING })).rejects.toBeInstanceOf(
       OAuthStateInvalidError,
     )
   })
@@ -124,7 +126,7 @@ describe('OAuth authorization-code flow', () => {
       fetch: tokenFetch({ error: 'invalid_grant' }, false),
     })
     await expect(
-      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'x' }),
+      oauth.callback('test', { code: 'c', state: stateOf(oauth), redirectUri: 'x', binding: BINDING }),
     ).rejects.toBeInstanceOf(OAuthExchangeError)
   })
 })

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { BasaltError } from '@basaltkit/core'
 import type { Auth, TokenPair } from './auth.js'
 import type { PublicUser } from './stores.js'
@@ -197,19 +197,46 @@ export interface OAuthOptions {
   now?: () => number
   /** How long a signed `state` stays valid, in ms. Default: 10 minutes. */
   stateTtlMs?: number
+  /**
+   * MFA for an existing account that has it enabled. `'required'` (default)
+   * refuses the social login with `AUTH_MFA_REQUIRED` — the callback cannot
+   * collect a code. `'skip'` trusts the provider's own second factor; choose it
+   * only for an IdP that enforces MFA.
+   */
+  mfa?: 'required' | 'skip'
 }
 
 interface StatePayload {
+  /** Random nonce — single-use. */
   n: string
+  /** Expiry (ms). */
   e: number
+  /** Provider name. */
   p: string
+  /** SHA-256 of the browser binding (the value in the HttpOnly cookie). */
+  b: string
 }
+
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('base64url')
+const safeEqual = (a: string, b: string): boolean => {
+  const x = Buffer.from(a)
+  const y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+/** Cap on remembered (consumed) states; each lives only until its expiry. */
+const MAX_CONSUMED_STATES = 100_000
 
 /**
  * OAuth 2.0 authorization-code login. Server-side (confidential-client) flow:
  * build an authorize URL with a signed, expiring `state`, then exchange the code
  * for a token, fetch the profile, and log the user in via {@link Auth.socialLogin}.
- * The `state` is HMAC-signed and stateless — no server storage, works cookieless.
+ *
+ * The flow is bound to the browser that started it: {@link authorize} returns a
+ * random `binding` the caller stores in an HttpOnly cookie ({@link oauthRoutes}
+ * does). The signed `state` carries its hash, the PKCE verifier (S256) and the
+ * OIDC nonce are derived from it, and the callback requires it back — so an
+ * attacker's callback URL opened in a victim's browser (login CSRF) or an
+ * injected authorization code is refused. Each `state` is single-use.
  */
 export class OAuth {
   private readonly providers: Map<string, OAuthProvider>
@@ -238,35 +265,107 @@ export class OAuth {
     return p
   }
 
-  /** The provider's authorization URL to redirect the browser to. */
-  authorizeUrl(name: string, redirectUri: string): string {
+  /**
+   * Starts a login: returns the provider's authorization URL to redirect the
+   * browser to, and the `binding` to keep in an HttpOnly cookie until the
+   * callback (pass it back to {@link callback}).
+   */
+  authorize(name: string, redirectUri: string): { url: string; binding: string } {
+    const binding = randomBytes(32).toString('base64url')
+    return { url: this.authorizeUrl(name, redirectUri, binding), binding }
+  }
+
+  /**
+   * The provider's authorization URL for a caller-managed `binding` (at least
+   * 32 characters of randomness, stored where only the initiating browser can
+   * present it). Prefer {@link authorize}, which generates one.
+   */
+  authorizeUrl(name: string, redirectUri: string, binding: string): string {
+    if (typeof binding !== 'string' || binding.length < 32) throw new OAuthStateInvalidError()
     const p = this.provider(name)
-    const state = this.signState({ n: randomBytes(16).toString('hex'), e: this.now() + this.stateTtl, p: name })
+    const state = this.signState({
+      n: randomBytes(16).toString('hex'),
+      e: this.now() + this.stateTtl,
+      p: name,
+      b: sha256(binding),
+    })
     const params = new URLSearchParams({
       client_id: p.clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: p.scopes.join(' '),
       state,
+      code_challenge: sha256(this.derive('pkce', binding)),
+      code_challenge_method: 'S256',
     })
+    if (p.scopes.includes('openid')) params.set('nonce', this.derive('nonce', binding))
     return `${p.authorizeUrl}?${params.toString()}`
   }
 
-  /** Verifies `state`, exchanges the code, fetches the profile, and logs in. */
+  /**
+   * Verifies `state` against the browser `binding`, consumes it (single-use),
+   * exchanges the code with the PKCE verifier, fetches the profile, and logs in.
+   */
   async callback(
     name: string,
-    input: { code: string; state: string | undefined; redirectUri: string },
+    input: { code: string; state: string | undefined; redirectUri: string; binding: string | undefined },
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean }> {
     const payload = this.verifyState(input.state)
     if (payload.p !== name) throw new OAuthStateInvalidError()
+    if (!input.binding || typeof payload.b !== 'string' || !safeEqual(sha256(input.binding), payload.b)) {
+      throw new OAuthStateInvalidError()
+    }
+    this.consumeState(payload)
     const p = this.provider(name)
-    const accessToken = await this.exchangeCode(p, input.code, input.redirectUri)
+    const { accessToken, idToken } = await this.exchangeCode(p, input.code, input.redirectUri, this.derive('pkce', input.binding))
+    if (p.scopes.includes('openid') && idToken !== undefined) this.checkNonce(idToken, this.derive('nonce', input.binding))
     const profile = await p.fetchProfile(accessToken, this.doFetch)
     if (!profile.email) throw new OAuthExchangeError('provider returned no email')
-    return this.auth.socialLogin(profile.email, { emailVerified: profile.emailVerified === true })
+    return this.auth.socialLogin(profile.email, {
+      emailVerified: profile.emailVerified === true,
+      ...(this.options.mfa ? { mfa: this.options.mfa } : {}),
+    })
   }
 
-  private async exchangeCode(p: OAuthProvider, code: string, redirectUri: string): Promise<string> {
+  /** A per-flow secret derived from the binding (PKCE verifier, OIDC nonce): 43 url-safe chars. */
+  private derive(label: 'pkce' | 'nonce', binding: string): string {
+    return createHmac('sha256', this.options.secret).update(`oauth:${label}:${binding}`).digest('base64url')
+  }
+
+  /** Single-use: a state nonce is remembered until it expires. */
+  private readonly consumed = new Map<string, number>()
+  private consumeState(payload: StatePayload): void {
+    const now = this.now()
+    if (this.consumed.size >= MAX_CONSUMED_STATES) {
+      for (const [n, exp] of this.consumed) if (now > exp) this.consumed.delete(n)
+      for (const n of this.consumed.keys()) {
+        if (this.consumed.size < MAX_CONSUMED_STATES) break
+        this.consumed.delete(n)
+      }
+    }
+    if (this.consumed.has(payload.n)) throw new OAuthStateInvalidError()
+    this.consumed.set(payload.n, payload.e)
+  }
+
+  /** The id_token (received directly from the token endpoint over TLS) must echo our nonce. */
+  private checkNonce(idToken: string, expected: string): void {
+    let claims: { nonce?: unknown }
+    try {
+      claims = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as { nonce?: unknown }
+    } catch {
+      throw new OAuthExchangeError('malformed id_token')
+    }
+    if (typeof claims.nonce !== 'string' || !safeEqual(claims.nonce, expected)) {
+      throw new OAuthExchangeError('id_token nonce mismatch')
+    }
+  }
+
+  private async exchangeCode(
+    p: OAuthProvider,
+    code: string,
+    redirectUri: string,
+    codeVerifier: string,
+  ): Promise<{ accessToken: string; idToken?: string }> {
     const res = await this.doFetch(p.tokenUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
@@ -276,14 +375,17 @@ export class OAuth {
         redirect_uri: redirectUri,
         client_id: p.clientId,
         client_secret: p.clientSecret,
+        code_verifier: codeVerifier,
       }).toString(),
     })
     const text = await res.text()
-    const json = text ? (JSON.parse(text) as { access_token?: string; error_description?: string; error?: string }) : {}
+    const json = text
+      ? (JSON.parse(text) as { access_token?: string; id_token?: string; error_description?: string; error?: string })
+      : {}
     if (!res.ok || !json.access_token) {
       throw new OAuthExchangeError(json.error_description ?? json.error ?? `token endpoint HTTP ${res.status}`)
     }
-    return json.access_token
+    return { accessToken: json.access_token, ...(typeof json.id_token === 'string' ? { idToken: json.id_token } : {}) }
   }
 
   private signState(payload: StatePayload): string {

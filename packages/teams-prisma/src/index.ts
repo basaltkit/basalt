@@ -171,8 +171,13 @@ export class PrismaInvitationStore implements InvitationStore {
     return r ? toInvitation(r) : null
   }
 
-  async markAccepted(id: string, at_: number): Promise<void> {
-    await this.client.teamInvitation.updateMany({ where: { id }, data: { acceptedAt: at(at_) } })
+  /** Compare-and-set: only a still-pending invitation flips; `false` means a concurrent accept/revoke won. */
+  async markAccepted(id: string, at_: number): Promise<boolean> {
+    const { count } = await this.client.teamInvitation.updateMany({
+      where: { id, ...PENDING },
+      data: { acceptedAt: at(at_) },
+    })
+    return count > 0
   }
 
   async revoke(id: string, at_: number): Promise<void> {

@@ -27,7 +27,7 @@
     "@basaltkit/http": "workspace:^"
   },
   "peerDependencies": {
-    "express": "^4.19.0 || ^5.0.0"
+    "express": "^4.22.3 || ^5.2.1"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",

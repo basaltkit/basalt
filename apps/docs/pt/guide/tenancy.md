@@ -215,6 +215,21 @@ plataforma (Cloudflare, Caddy, ACME) assim que o `verify()` devolver `true`.
 
 A forma de criares um tenant depende do backend.
 
+::: warning Os ids de tenant seguem uma gramática
+Um id de tenant não é um rótulo opaco: torna-se um segmento de namespace na cache
+(`tenant:<id>:`), no storage (`tenants/<id>/`), nos canais de realtime e nos nomes
+de schema. Por isso o `tenancy.create()` e o `MemoryTenantSource.create()/save()`
+recusam, com `InvalidTenantIdError` (`400 TENANT_ID_INVALID`), qualquer id fora de
+`/^[a-z0-9][a-z0-9_-]{0,62}$/` ou igual ao reservado `global` — assim um registo
+self-service não consegue escolher `globex:user`, `globex/files` ou `..` para se
+fazer passar pelas chaves ou ficheiros de outro tenant. Slugs, UUIDs e cuids
+cabem. O `isValidTenantId(id)` é exportado para o teu próprio formulário de
+registo; passa `validateTenantId` ao `tenancyPlugin` (e a mesma função a
+`new MemoryTenantSource({ validateTenantId })`) para a apertar ou alargar —
+mantém `:`, `/`, `\`, `.`, espaços e caracteres de controlo fora de qualquer
+substituto.
+:::
+
 ### Em dev — `MemoryTenantSource`
 
 Semeia-os inline; as chamadas `add()` encadeiam. Perdidos ao reiniciar, portanto só
@@ -576,7 +591,7 @@ devolverem `undefined`.
 | --- | --- | --- | --- |
 | `requireTenant()` | `() => Tenant` | O registo completo do tenant do contexto ativo | Não há tenant no contexto |
 | `requireTenantId(fallback?)` | `(fallback?: string) => string` | O id do tenant do contexto; senão o `fallback` | Não há tenant no contexto **nem** `fallback` |
-| `tenantScoped(where?)` | `<W>(where?: W) => W & { tenantId: string }` | A tua cláusula `where` com o `tenantId` fundido em **último** | Não há tenant a que dar âmbito |
+| `tenantScoped(where?)` | `<W>(where?: W) => W & { tenantId: string }` | A tua cláusula `where` com o `tenantId` do tenant **do contexto** fundido em **último** | Não há tenant no contexto — um `tenantId` no `where` nunca é usado como fallback |
 
 Os três lançam `TenantRequiredError` (`400 TENANT_REQUIRED`).
 
@@ -601,9 +616,16 @@ segura de usar sobre dados derivados de input:
   em **último**, pelo que um `tenantId` infiltrado no `where` por input do cliente
   não consegue alargar nem trocar o âmbito: `tenantScoped({ tenantId: 'globex' })`
   dentro do contexto da Acme continua a dar `{ tenantId: 'acme' }`.
-- **Um id explícito só é honrado quando não há tenant no contexto.** Esse é o
-  caminho do código de sistema — um worker de fila ou um comando `basalt` a fixar
-  um tenant. Dentro de um pedido nunca consegue sobrepor-se ao tenant resolvido.
+- **O `tenantScoped()` tira o tenant apenas do contexto.** Um `tenantId` dentro
+  do `where` nunca é fallback: o `where` é muitas vezes construído a partir de
+  input do cliente e, sem tenant resolvido (`required` é `false` por omissão),
+  isso deixaria um pedido escolher qualquer tenant omitindo o header de tenant.
+  Por isso `tenantScoped({ tenantId: 'globex' })` sem tenant no contexto **lança**.
+- **Um id explícito só é honrado pelo `requireTenantId(fallback)`, e só quando
+  não há tenant no contexto.** Esse é o caminho do código de sistema — um worker
+  de fila ou um comando `basalt` a fixar um tenant (ou embrulha o trabalho em
+  `tenancy.run(id, …)`). Dentro de um pedido nunca consegue sobrepor-se ao tenant
+  resolvido.
 - **Sem nenhum dos dois, lança.** O valor é sempre um id de tenant real, nunca um
   filtro que desaparece em silêncio. É esse o objetivo: um `400` é melhor do que
   uma leitura entre tenants.
@@ -710,8 +732,11 @@ mantém-se `db<PrismaClient>().user.findMany()` nas três — o modo é configur
 | Base de dados por tenant | uma base de dados separada (+ client) por tenant | o mais forte | conformidade, backups por tenant |
 
 **Base de dados partilhada** (padrão) — um client com uma coluna `tenantId` em cada
-modelo. A extensão força o filtro do tenant atual em cada leitura, e
-carimba-o em cada create — o código não pode esquecer nem sobrepor:
+modelo. A extensão força o filtro do tenant atual em cada leitura e
+update, carimba-o em cada create (incluindo creates aninhados), restringe
+`connect`/`update`/`delete` aninhados ao tenant, recusa mover uma linha para
+outro tenant e **recusa** operações brutas ou desconhecidas dentro de um
+contexto de tenant — o código não pode esquecer nem sobrepor:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -720,13 +745,24 @@ import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 const db = new PrismaClient().$extends(
   tenancyExtension({
     tenantField: 'tenantId',   // nome da coluna (padrão 'tenantId')
-    onMissingTenant: 'bypass',  // sem tenant no contexto → corre sem filtro (central/admin).
-                                // 'error' lança em vez disso — isolamento estrito.
+    // onMissingTenant é 'error' por omissão: sem tenant no contexto → lança
+    // PRISMA_TENANT_MISSING em vez de correr sobre todos os tenants.
   }),
 )
 
 prismaPlugin({ client: db })
+
+// Leituras entre tenants deliberadas (back-office, jobs) têm o SEU PRÓPRIO
+// client — nunca ponhas 'bypass' no client principal da app.
+export const adminDb = new PrismaClient().$extends(
+  tenancyExtension({ onMissingTenant: 'bypass' }),
+)
 ```
+
+A extensão trabalha sobre os argumentos da query, por isso não sabe que
+colunas escalares são chaves estrangeiras (`data: { projectId }` não é
+verificado). Usa chaves estrangeiras compostas `(tenantId, id)` e RLS como
+garantia ao nível da base de dados.
 
 **Schema por tenant** — uma base de dados, um schema PostgreSQL por tenant. Cada
 tenant recebe um client cujo URL de ligação transporta `?schema=tenant_<id>`, para que
@@ -752,6 +788,13 @@ prismaPlugin({
 const admin = new PrismaClient()
 await provisionTenantSchema(admin, tenantSchema('acme')) // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
+
+`tenantSchema()` é injetiva: ids canónicos (`acme`, `acme_co`) são usados
+tal como estão, e qualquer outro id (`ACME`, `acme-co`, UUIDs) recebe um
+sufixo `__<hash>` (`tenant_acme_co__<16 hex>`), para um tenant novo nunca
+aterrar no schema de um tenant existente. Os clients despejados do pool são
+fechados com `$disconnect()` por omissão, e primeiros pedidos concorrentes para
+um tenant partilham um único client.
 
 **Base de dados por tenant** — uma base de dados (e client) separada por tenant, via o
 mesmo pool LRU. Dá-lhe uma factory chaveada por id de tenant:
@@ -817,6 +860,7 @@ de cada tenant; passa `migrate` para o sobrepor.
 | `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — o `create()` espera, por isso o tenant está utilizável quando ele retorna. `'deferred'` — o `create()` retorna já com estado `provisioning` e o resolver responde 503 até correr `tenancy.provision(id)` |
 | `canonicalDomain` | `(tenant) => string \| undefined` | — | O endereço em que um tenant novo é alcançável, acrescentado a `tenant.domains` pelo `tenancy.create()` antes de o registo ser persistido. Sem isto a tabela de domínios fica vazia e ninguém é dono do endereço |
+| `validateTenantId` | `(id: string) => boolean` | `isValidTenantId` | A gramática de ids que o `tenancy.create()` impõe (`/^[a-z0-9][a-z0-9_-]{0,62}$/`, menos `global`); um id rejeitado lança `InvalidTenantIdError` antes de algo ser escrito |
 
 As fábricas de resolvers incorporadas:
 
@@ -852,7 +896,8 @@ a tomada de domínios pendentes.
 
 | Erro | Código | HTTP | Quando |
 | --- | --- | --- | --- |
-| `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` correram sem tenant no contexto e sem fallback explícito |
+| `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` correram sem tenant no contexto (e, no `requireTenantId`, sem fallback explícito) |
+| `InvalidTenantIdError` | `TENANT_ID_INVALID` | 400 | `tenancy.create()` (ou `MemoryTenantSource.create()/save()`) com um id fora da gramática de ids de tenant ou um id reservado. Nada é escrito |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` e nenhum resolver produziu uma referência que carregasse um tenant |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, ou `forEach()` sobre um `TenantSource` sem `list()` |
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | Um pedido resolveu para um tenant com estado `provisioning` ou `failed`. 503, e não 404: o tenant existe e o cliente pode voltar a tentar |

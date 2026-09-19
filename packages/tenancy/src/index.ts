@@ -9,6 +9,9 @@ import {
 } from '@basaltkit/core'
 import type { ResolutionRequest, TenantRef, TenantResolver } from './resolvers.js'
 import {
+  InvalidTenantIdError,
+  assertValidTenantId,
+  isValidTenantId,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -23,6 +26,11 @@ import {
 
 export {
   MemoryTenantSource,
+  InvalidTenantIdError,
+  TENANT_ID_PATTERN,
+  RESERVED_TENANT_IDS,
+  assertValidTenantId,
+  isValidTenantId,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -89,6 +97,8 @@ export class Tenancy {
     private readonly provisionMode: 'inline' | 'deferred' = 'inline',
     private readonly onDeprovision?: (tenant: Tenant) => void | Promise<void>,
     private readonly canonicalDomain?: (tenant: Tenant) => string | undefined,
+    /** The tenant-id grammar `create()` enforces. Default {@link isValidTenantId}. */
+    private readonly validateTenantId: (id: string) => boolean = isValidTenantId,
   ) {}
 
   /** The tenant of the active context, if any. */
@@ -131,6 +141,11 @@ export class Tenancy {
    * update.
    */
   async create(tenant: Tenant): Promise<Tenant> {
+    // First, before any I/O: the id becomes a namespace segment in the cache,
+    // storage, realtime and the database drivers, so an id outside the grammar
+    // must never be persisted — an id like 'globex:user' or '..' would alias
+    // another tenant's keys or files.
+    assertValidTenantId(tenant.id, this.validateTenantId)
     // `create` when the source has it, `save` otherwise. `create` is the one
     // that refuses a duplicate atomically — MemoryTenantSource, tenancy-prisma
     // and tenancy-sqlite all have it — while `save` keeps a third-party source
@@ -504,6 +519,18 @@ export interface TenancyPluginOptions {
    * the dispatch, and any scheduler works.
    */
   provision?: 'inline' | 'deferred'
+  /**
+   * The tenant-id grammar `tenancy.create()` (and `basalt tenant:create`)
+   * enforces; an id it rejects throws `InvalidTenantIdError` (400) before
+   * anything is written. Default {@link isValidTenantId}:
+   * `/^[a-z0-9][a-z0-9_-]{0,62}$/`, minus the reserved id `global`.
+   *
+   * Tenant ids become namespace segments (`tenant:<id>:` cache keys,
+   * `tenants/<id>/` storage paths, schema names), so keep any replacement free
+   * of `:`, `/`, `\\`, `.`, whitespace and control characters. Pass the same
+   * function to `new MemoryTenantSource({ validateTenantId })` if you use it.
+   */
+  validateTenantId?: (id: string) => boolean
 }
 
 export function tenancyPlugin(options: TenancyPluginOptions) {
@@ -521,6 +548,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             options.provision ?? 'inline',
             options.onDeprovision,
             options.canonicalDomain,
+            options.validateTenantId,
           ),
       )
       registerTenantCommands(container, options)
@@ -632,7 +660,7 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
       } catch (error) {
         // An operator re-running the command is the common way to hit this; the
         // message already says what to do instead (`provision` for a failed one).
-        if (error instanceof TenantAlreadyExistsError) {
+        if (error instanceof TenantAlreadyExistsError || error instanceof InvalidTenantIdError) {
           io.error(error.message)
           return 1
         }

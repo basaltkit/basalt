@@ -71,6 +71,8 @@ const all     = await client.projects.list()
 
 The client **mirrors the shape** of your `api` object, TypeScript checks the arguments, and the server's response is **validated against the schema** at runtime — a mismatch throws `CLIENT_RESPONSE_MISMATCH` instead of silently returning wrong data. Change a field on the backend and the frontend fails to compile, not in production.
 
+Path params fill exactly one segment: each value is URL-encoded (so `/` cannot add segments), and a missing, empty, `.` or `..` value throws `CLIENT_INVALID_PARAM` before any request is sent — so a user-supplied id can never redirect an authenticated call to a different endpoint. A placeholder is a `:name` at the **start** of a segment; a colon elsewhere is literal, so custom methods like `/v1/items:batch` or `/items/:id:archive` work as written.
+
 ::: tip Auth & token refresh
 Pass a `getToken` callback (returns the current access token, sent as `Authorization: Bearer`) and a `refresh` callback to `createClient`. On a `401` the client calls `refresh` once and retries with the new token — transparent to the caller; `refresh` returns the new token, or `null` to give up. The `--ui` scaffold wires this to the auth routes for you.
 

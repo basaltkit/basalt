@@ -7,5 +7,7 @@ export default defineConfig({
   test: {
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // tests/security.test.ts scaffolds real apps here; never collect their tests.
+    exclude: ['**/node_modules/**', '**/dist/**', '.scaffold-security/**'],
   },
 })

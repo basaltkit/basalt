@@ -200,8 +200,12 @@ export class SqliteInvitationStore implements InvitationStore {
     return row ? toInvitation(row) : null
   }
 
-  async markAccepted(id: string, at: number): Promise<void> {
-    this.db.prepare('UPDATE team_invitations SET accepted_at = ? WHERE id = ?').run(at, id)
+  /** Compare-and-set: only a still-pending invitation flips; `false` means a concurrent accept/revoke won. */
+  async markAccepted(id: string, at: number): Promise<boolean> {
+    const result = this.db
+      .prepare('UPDATE team_invitations SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL')
+      .run(at, id)
+    return Number(result.changes) > 0
   }
 
   async revoke(id: string, at: number): Promise<void> {

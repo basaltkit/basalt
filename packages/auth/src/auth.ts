@@ -103,6 +103,36 @@ export class MfaInvalidCodeError extends BasaltError {
   }
 }
 
+/** MFA is already active: re-enrolling would silently switch it off. Disable it (with a code) first. */
+export class MfaAlreadyEnabledError extends BasaltError {
+  readonly status = 409
+  constructor() {
+    super('AUTH_MFA_ALREADY_ENABLED', 'MFA is already enabled. Disable it with a valid code before enrolling again.')
+  }
+}
+
+/**
+ * A social / SSO login matched an existing account by email, but the provider
+ * did not vouch for that email (unverified), so linking would let anyone who
+ * can create an IdP account with the address take the account over.
+ */
+export class SocialLinkRefusedError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super(
+      'AUTH_SOCIAL_LINK_REFUSED',
+      'An account with this email already exists and the identity provider did not verify the email. Sign in with your password instead.',
+    )
+  }
+}
+
+/**
+ * Canonical form of an email identity: trimmed and lowercased. Every lookup,
+ * create and throttle key goes through it, so `Bob@acme.test` and
+ * `bob@acme.test` are one account.
+ */
+export const canonicalEmail = (email: string): string => email.trim().toLowerCase()
+
 /** An MFA action needed an enrollment that doesn't exist. */
 export class MfaNotEnrolledError extends BasaltError {
   readonly status = 400
@@ -149,6 +179,14 @@ export interface AuthOptions {
    * Only applies when the caller passes the client ip to `login`.
    */
   ipLoginThrottle?: LoginThrottle | false
+  /**
+   * Per-account throttle on password-reset and email-verification requests.
+   * Over budget, a request is silently dropped (no new token, no hook, the live
+   * link keeps working) — so the endpoints cannot be used to mail-bomb a user or
+   * keep invalidating their reset link. Default: 3 per 15 minutes per account
+   * and purpose; pass `false` to disable.
+   */
+  emailRequestThrottle?: LoginThrottle | false
   /**
    * Make the public registration endpoint enumeration-safe: a request for an
    * email that already exists returns the same response (and does equivalent
@@ -202,6 +240,7 @@ export class Auth {
   private readonly hooks: HookBus | undefined
   private readonly throttle: LoginThrottle | undefined
   private readonly ipThrottle: LoginThrottle | undefined
+  private readonly requestThrottle: LoginThrottle | undefined
   private readonly tokens: AuthTokenStore
   private readonly verificationTtl: DurationInput
   private readonly resetTtl: DurationInput
@@ -239,6 +278,10 @@ export class Auth {
       options.ipLoginThrottle === false
         ? undefined
         : options.ipLoginThrottle ?? new LoginThrottle({ maxAttempts: 50, windowMs: 15 * 60_000 })
+    this.requestThrottle =
+      options.emailRequestThrottle === false
+        ? undefined
+        : options.emailRequestThrottle ?? new LoginThrottle({ maxAttempts: 3, windowMs: 15 * 60_000 })
     this.tokens = options.tokens ?? new MemoryAuthTokenStore()
     this.verificationTtl = options.verificationTtl ?? '24h'
     this.resetTtl = options.resetTtl ?? '1h'
@@ -249,7 +292,8 @@ export class Auth {
     this.enumerationSafeRegister = options.enumerationSafeRegister ?? true
   }
 
-  async register(email: string, password: string): Promise<PublicUser> {
+  async register(rawEmail: string, password: string): Promise<PublicUser> {
+    const email = canonicalEmail(rawEmail)
     if (await this.users.findByEmail(email)) throw new EmailTakenError()
     const user = await this.users.create({
       email,
@@ -265,11 +309,21 @@ export class Auth {
    * (a random, unusable password hash), so password login won't work for it
    * until a password is set. A provider-verified email flips `emailVerified`.
    * Returns the tokens and whether the account was just created.
+   *
+   * Linking to an EXISTING account is refused ({@link SocialLinkRefusedError})
+   * unless `emailVerified` is `true` — an unverified provider email proves
+   * nothing about who owns the address. When the existing account had never
+   * verified its email, whoever registered it first is not trusted either: its
+   * password, sessions, refresh tokens and MFA are revoked before it is adopted
+   * (`auth:social_account_adopted`). An account with MFA enabled requires
+   * `mfaCode` ({@link MfaRequiredError}) unless `mfa: 'skip'` is passed
+   * explicitly (only for an IdP that enforces its own second factor).
    */
   async socialLogin(
-    email: string,
-    options: { emailVerified?: boolean } = {},
+    rawEmail: string,
+    options: { emailVerified?: boolean; mfaCode?: string; mfa?: 'required' | 'skip' } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean }> {
+    const email = canonicalEmail(rawEmail)
     let user = await this.users.findByEmail(email)
     let created = false
     if (!user) {
@@ -279,13 +333,47 @@ export class Auth {
       })
       created = true
       await this.hooks?.emit('auth:registered', { user: publicUser(user) })
-    }
-    if (options.emailVerified && !user.emailVerified && this.users.update) {
-      user = (await this.users.update(user.id, { emailVerified: true })) ?? user
+      if (options.emailVerified === true && this.users.update) {
+        user = (await this.users.update(user.id, { emailVerified: true })) ?? user
+      }
+    } else {
+      if (options.emailVerified !== true) throw new SocialLinkRefusedError()
+      if (!user.emailVerified) {
+        user = await this.adoptUnverifiedAccount(user)
+      } else if (options.mfa !== 'skip' && (await this.isMfaEnabled(user.id))) {
+        if (!options.mfaCode) throw new MfaRequiredError()
+        const key = user.email
+        this.throttle?.reserve(key)
+        if (!(await this.verifyMfaCode(user.id, options.mfaCode))) {
+          await this.hooks?.emit('auth:mfa_failed', { userId: user.id })
+          throw new MfaInvalidCodeError()
+        }
+        this.throttle?.reset(key)
+      }
     }
     const tokens = await this.issueTokens(user.id)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
     return { user: publicUser(user), tokens, created }
+  }
+
+  /**
+   * A provider-verified login is taking over an account whose email was never
+   * verified: whoever registered it could be anyone (pre-account hijacking), so
+   * every credential they may hold is revoked before the verified owner gets in.
+   */
+  private async adoptUnverifiedAccount(user: AuthUser): Promise<AuthUser> {
+    if (!this.users.update) throw new SocialLinkRefusedError()
+    const adopted =
+      (await this.users.update(user.id, {
+        passwordHash: await this.hasher.hash(randomBytes(32).toString('hex')),
+        emailVerified: true,
+      })) ?? user
+    await this.refreshTokens.revokeAllForUser?.(user.id)
+    await this.sessions.deleteAllForUser?.(user.id)
+    await this.tokenVersions?.increment(user.id)
+    await this.mfa.delete(user.id)
+    await this.hooks?.emit('auth:social_account_adopted', { user: publicUser(adopted) })
+    return adopted
   }
 
   /**
@@ -298,7 +386,8 @@ export class Auth {
    * With `enumerationSafeRegister: false` it throws {@link EmailTakenError} on a
    * duplicate instead (the classic, enumerable behavior).
    */
-  async registerSafely(email: string, password: string): Promise<void> {
+  async registerSafely(rawEmail: string, password: string): Promise<void> {
+    const email = canonicalEmail(rawEmail)
     const existing = await this.users.findByEmail(email)
     if (existing) {
       if (!this.enumerationSafeRegister) throw new EmailTakenError()
@@ -317,7 +406,7 @@ export class Auth {
 
   /** Verifies credentials without side effects. Null on failure. */
   async attempt(email: string, password: string): Promise<AuthUser | null> {
-    const user = await this.users.findByEmail(email)
+    const user = await this.users.findByEmail(canonicalEmail(email))
     if (!user) {
       // Equalize timing: a missing account must cost the same as a wrong
       // password, or the response time reveals which emails are registered
@@ -350,32 +439,50 @@ export class Auth {
     mfaCode?: string,
     context: { ip?: string } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair }> {
-    const key = email.toLowerCase()
+    const key = canonicalEmail(email)
     const ipKey = context.ip ? `ip:${context.ip}` : undefined
-    this.throttle?.assertAllowed(key)
-    if (ipKey) this.ipThrottle?.assertAllowed(ipKey)
-
-    const recordFailure = () => {
-      this.throttle?.recordFailure(key)
-      if (ipKey) this.ipThrottle?.recordFailure(ipKey)
+    // Reserve the attempt BEFORE the (async) verification: the counter moves
+    // synchronously, so a parallel burst cannot run more password or MFA
+    // guesses than the budget allows. Success gives the reservation back.
+    try {
+      this.throttle?.reserve(key)
+    } catch (error) {
+      await this.hooks?.emit('auth:locked_out', { email: key })
+      throw error
+    }
+    if (ipKey && this.ipThrottle) {
+      try {
+        this.ipThrottle.reserve(ipKey)
+      } catch (error) {
+        this.throttle?.release(key)
+        await this.hooks?.emit('auth:locked_out', { email: key, ip: context.ip as string })
+        throw error
+      }
+    }
+    const release = () => {
+      this.throttle?.release(key)
+      if (ipKey) this.ipThrottle?.release(ipKey)
     }
 
-    const user = await this.attempt(email, password)
+    const user = await this.attempt(key, password)
     if (!user) {
-      recordFailure()
-      await this.hooks?.emit('auth:login_failed', { email })
+      await this.hooks?.emit('auth:login_failed', { email: key })
       throw new InvalidCredentialsError()
     }
 
     if (await this.isMfaEnabled(user.id)) {
-      if (!mfaCode) throw new MfaRequiredError() // password was correct — not a failure
+      if (!mfaCode) {
+        release() // password was correct — not a failure
+        throw new MfaRequiredError()
+      }
       if (!(await this.verifyMfaCode(user.id, mfaCode))) {
-        recordFailure()
+        await this.hooks?.emit('auth:mfa_failed', { userId: user.id })
         throw new MfaInvalidCodeError()
       }
     }
 
     this.throttle?.reset(key)
+    if (ipKey) this.ipThrottle?.release(ipKey)
     const tokens = await this.issueTokens(user.id)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
     return { user: publicUser(user), tokens }
@@ -390,19 +497,36 @@ export class Auth {
     const hashed = this.hashToken(refreshToken)
     const record = await this.refreshTokens.find(hashed)
     if (!record) throw new RefreshInvalidError()
-    if (record.usedAt !== undefined) {
-      await this.refreshTokens.revokeFamily(record.familyId)
-      throw new RefreshReusedError()
-    }
+    if (record.usedAt !== undefined) return this.reuseDetected(record.userId, record.familyId)
     if (Date.now() >= record.expiresAt) throw new RefreshInvalidError()
+    // A deleted account must not keep minting tokens from a leftover refresh token.
+    if (!(await this.users.findById(record.userId))) {
+      await this.refreshTokens.revokeFamily(record.familyId)
+      throw new RefreshInvalidError()
+    }
 
     // Compare-and-swap: `false` means another caller consumed this exact token
     // between our read and this write — the very race reuse detection exists for.
     if ((await this.refreshTokens.markUsed(hashed)) === false) {
+      return this.reuseDetected(record.userId, record.familyId)
+    }
+    const pair = await this.issueTokens(record.userId, record.familyId)
+    // The consumed token is the witness that the family is still alive:
+    // revokeFamily/revokeAllForUser delete every row of it. If a concurrent
+    // revocation (a reuse loser, a logout, a logout-everywhere) ran between our
+    // CAS and the insert above, the row is gone — revoke again so the token we
+    // just stored does not outlive its family, and refuse.
+    if (!(await this.refreshTokens.find(hashed))) {
       await this.refreshTokens.revokeFamily(record.familyId)
       throw new RefreshReusedError()
     }
-    return this.issueTokens(record.userId, record.familyId)
+    return pair
+  }
+
+  private async reuseDetected(userId: string, familyId: string): Promise<never> {
+    await this.refreshTokens.revokeFamily(familyId)
+    await this.hooks?.emit('auth:refresh_reused', { userId, familyId })
+    throw new RefreshReusedError()
   }
 
   /** Revokes a refresh family — logout for token-based clients. */
@@ -433,10 +557,14 @@ export class Auth {
 
   /**
    * Revokes every access token issued so far for the user (logout-everywhere),
-   * by bumping the token version. No-op unless a {@link TokenVersionStore} is
-   * configured. Pair with refresh/session revocation for a full logout.
+   * revoking every refresh token and server-side session (when the stores
+   * implement `revokeAllForUser` / `deleteAllForUser`, as the bundled ones do)
+   * and bumping the token version so outstanding access tokens die too (needs a
+   * {@link TokenVersionStore}; without one, access tokens live until their TTL).
    */
   async revokeAllTokens(userId: string): Promise<void> {
+    await this.refreshTokens.revokeAllForUser?.(userId)
+    await this.sessions.deleteAllForUser?.(userId)
     await this.tokenVersions?.increment(userId)
   }
 
@@ -490,8 +618,8 @@ export class Auth {
    * whether the email exists.
    */
   async requestEmailVerification(email: string): Promise<{ user: PublicUser; token: string } | null> {
-    const user = await this.users.findByEmail(email)
-    if (!user) return null
+    const user = await this.users.findByEmail(canonicalEmail(email))
+    if (!user || !this.allowEmailRequest('verify_email', user.id)) return null
     const token = await this.issueOneTimeToken(user.id, 'verify_email', this.verificationTtl)
     await this.hooks?.emit('auth:verify_requested', { user: publicUser(user), token })
     return { user: publicUser(user), token }
@@ -505,16 +633,28 @@ export class Auth {
     return publicUser(user)
   }
 
+  /** Per-account budget for reset/verification mails; false = drop silently. */
+  private allowEmailRequest(purpose: AuthTokenPurpose, userId: string): boolean {
+    if (!this.requestThrottle) return true
+    try {
+      this.requestThrottle.reserve(`${purpose}:${userId}`)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   // --- password reset ------------------------------------------------------
 
   /**
    * Starts a password reset: mints a single-use token and emits
-   * `auth:password_reset_requested`. Returns null when no account matches, so
-   * the caller always responds 200 (no account enumeration).
+   * `auth:password_reset_requested`. Returns null when no account matches (or
+   * the per-account request budget is spent — the live link then stays valid),
+   * so the caller always responds 200 (no account enumeration).
    */
   async requestPasswordReset(email: string): Promise<{ user: PublicUser; token: string } | null> {
-    const user = await this.users.findByEmail(email)
-    if (!user) return null
+    const user = await this.users.findByEmail(canonicalEmail(email))
+    if (!user || !this.allowEmailRequest('reset_password', user.id)) return null
     const token = await this.issueOneTimeToken(user.id, 'reset_password', this.resetTtl)
     await this.hooks?.emit('auth:password_reset_requested', { user: publicUser(user), token })
     return { user: publicUser(user), token }
@@ -569,6 +709,9 @@ export class Auth {
   async enrollMfa(userId: string): Promise<{ secret: string; otpauthUri: string }> {
     const user = await this.users.findById(userId)
     if (!user) throw new AuthRequiredError()
+    // Overwriting an active record would switch MFA off without a code —
+    // exactly what disableMfa() refuses to do.
+    if ((await this.mfa.get(userId))?.enabled) throw new MfaAlreadyEnabledError()
     const secret = generateTotpSecret()
     await this.mfa.set(userId, { secret: this.encryptMfaSecret(secret), enabled: false, recoveryCodes: [] })
     return {
@@ -619,6 +762,9 @@ export class Auth {
       // Anti-replay: a code from a step already used cannot be reused within
       // its ~90s window (an intercepted code is single-use).
       if (record.lastUsedStep !== undefined && step <= record.lastUsedStep) return false
+      // Atomic consume when the store supports it: two parallel requests with
+      // the same code must not both pass the read-then-write above.
+      if (this.mfa.consumeTotpStep) return this.mfa.consumeTotpStep(userId, step)
       record.lastUsedStep = step
       await this.mfa.set(userId, record)
       return true
@@ -627,6 +773,7 @@ export class Auth {
     const hash = this.hashRecoveryCode(code)
     const index = record.recoveryCodes.indexOf(hash)
     if (index === -1) return false
+    if (this.mfa.consumeRecoveryCode) return this.mfa.consumeRecoveryCode(userId, hash)
     record.recoveryCodes.splice(index, 1) // consume it
     await this.mfa.set(userId, record)
     return true

@@ -54,7 +54,7 @@ The upload itself is *multipart* (adapter-specific), so there's no ready-made ro
 app.post('/upload', async (req) => {
   const part = await req.file()
   const buffer = await part.toBuffer()
-  return files.upload(buffer, { name: part.filename, contentType: part.mimetype })
+  return files.upload(buffer, { name: part.filename, contentType: part.mimetype, uploadedBy: ctx().user?.id })
   // tenantId comes from the request context (tenancy)
 })
 ```
@@ -67,6 +67,8 @@ The other operations have ready-made routes via `fileRoutes()`:
 | `GET /files/:id` | A file's metadata. |
 | `POST /files/:id/url` `{ expiresIn? }` | Temporary signed URL. |
 | `DELETE /files/:id` | Deletes bytes + metadata. |
+
+**Owner-only by default:** a user reaches only files whose `uploadedBy` is their own id; anything else answers 404. Choose another policy explicitly with `fileRoutes({ shared: true })` (tenant-wide drive) or `fileRoutes({ authorize: (action, record, user) => boolean })` (`action` is `'read' | 'url' | 'delete'`). `expiresIn` must be positive and at most `maxUrlTtl` (default `'1h'`), otherwise 400; when omitted it defaults to 15 minutes, lowered to `maxUrlTtl` if that is shorter.
 
 ## Post-processing with hooks
 
@@ -117,7 +119,7 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 | `delete(id, tenantId?)` | Deletes bytes + metadata; emits `file:deleted`. |
 | `markScanned(id, result, tenantId?)` | Marks as scanned; emits `file:scanned`. |
 
-Without an explicit `tenantId`, it uses `ctx().tenant.id`. With no tenant resolvable it throws `FileTenantRequiredError` **only when `@basaltkit/tenancy` is registered** — an app without tenancy has no tenant dimension to cross, and its records are keyed by `SINGLE_TENANT_SCOPE`. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
+Without an explicit `tenantId`, it uses `ctx().tenant.id`. Inside a tenant context an explicit `tenantId` must equal it, otherwise `FileTenantMismatchError` (403) — the argument can never widen a call to another tenant. With no tenant resolvable it throws `FileTenantRequiredError` **only when `@basaltkit/tenancy` is registered** — an app without tenancy has no tenant dimension to cross, and its records are keyed by `SINGLE_TENANT_SCOPE`. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
 
 ### Failure modes
 

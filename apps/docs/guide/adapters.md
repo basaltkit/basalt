@@ -155,11 +155,11 @@ import { createApp, ctx } from '@basaltkit/core'
 import { fastifyPlugin, FASTIFY } from '@basaltkit/fastify'
 import { headerResolver, MemoryTenantSource, tenancyPlugin } from '@basaltkit/tenancy'
 import { authPlugin, authRoutes, MemoryUserSource } from '@basaltkit/auth'
-import { MemoryAccessStore, permissionsPlugin } from '@basaltkit/permissions'
+import { GLOBAL_SCOPE, MemoryAccessStore, permissionsPlugin } from '@basaltkit/permissions'
 import { routes } from './routes.js'
 
 const access = new MemoryAccessStore()
-await access.grantToUser('user-ada', ['projects:delete'], 'global')
+await access.grantToUser('user-ada', ['projects:delete'], GLOBAL_SCOPE)
 
 const app = await createApp({
   plugins: [
@@ -303,7 +303,9 @@ native extras.
 | `notFound` | `boolean` | `true` (neutral 404 body) | all | Pass `false` to opt out of the shared `404 { error: { code: 'NOT_FOUND' } }` and keep the framework default. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passed to the `Fastify()` constructor (logger, trustProxy, …). |
 | `app` | native instance | created for you | express, hono | Bring your own `express()` / `new Hono()` and Basalt mounts onto it. |
-| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejects oversized bodies with 413 (`PAYLOAD_TOO_LARGE`) — Hono/edge has no default cap. |
+| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejects oversized bodies with 413 (`PAYLOAD_TOO_LARGE`) — Hono/edge has no default cap. Enforced on the bytes actually read: a chunked/streamed body without `Content-Length` is counted while buffering and cut off at the limit. |
+| `getClientIp` | `(c: Context) => string \| undefined` | socket address (`@hono/node-server`, Bun) | hono | Sets `request.ip`, the key for per-client rate limiting and the IP login throttle. On an edge runtime or behind a trusted proxy, supply it (e.g. `(c) => c.req.header('cf-connecting-ip')` on Cloudflare). When no IP resolves, a one-time warning is printed and rate limits share one bucket. Never read `X-Forwarded-For` unless a proxy you control overwrites it. |
+| `errorHandler` | `boolean` | `true` | express | Final `(err, req, res, next)` middleware that turns body-parser and pre-hook errors into the neutral JSON envelope (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, otherwise `500 INTERNAL_ERROR`) instead of Express's HTML page with a stack trace. Pass `false` only if you mount your own error handler after boot. |
 
 ## Failure modes
 
@@ -313,7 +315,9 @@ native extras.
 | `500 HTTP_GUARDS_UNRUNNABLE` | the route pipeline carries guards but no container, so none of them could run | pass `container` to the pipeline — every shipped adapter does; only hand-built pipelines can hit this |
 | `400 HTTP_VALIDATION` | body/query/params failed the route's Zod schema | the response lists the part and per-field issues |
 | `404 { code: 'NOT_FOUND' }` on a route you defined | the route wasn't registered on this adapter instance | check it is in `routes: [...]` of the adapter plugin that booted |
-| `413 PAYLOAD_TOO_LARGE` (hono) | body exceeded `bodyLimit` | raise `bodyLimit` deliberately |
+| `413 PAYLOAD_TOO_LARGE` | body exceeded `bodyLimit` (hono) or the body-parser limit (express, 100 KB by default) | raise the limit deliberately |
+| `400 BAD_REQUEST` (express) | the body could not be parsed (malformed JSON, corrupt encoding) | send a valid body |
+| `[basalt:hono] Could not resolve the client IP` warning | this runtime exposes no socket address to the adapter | pass `honoPlugin({ getClientIp })` |
 
 ## Edge plugins are neutral too
 

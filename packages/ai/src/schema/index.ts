@@ -10,6 +10,7 @@
  * tolerant coercion — the model's raw text is never fed to `.parse()` directly).
  */
 import { z } from 'zod'
+import { PLAN_ENTITY_NAME, PLAN_EVENT_NAME, PLAN_IDENTIFIER } from '../plan/identifiers.js'
 
 /** Bump when the serialized shape of a plan changes incompatibly. */
 export const PLAN_SCHEMA_VERSION = 1
@@ -121,19 +122,22 @@ export const AnalysisReportSchema = z.object({
 
 // --- ArchitecturePlan (plan/types.ts) --------------------------------------
 
+// Names are interpolated into generated source: only plain identifiers are
+// accepted (see plan/identifiers.ts). Enum values are free text, always
+// emitted as escaped string literals.
 export const PlanFieldSchema = z.object({
-  name: z.string(),
+  name: z.string().regex(PLAN_IDENTIFIER),
   type: z.string(),
   enum: z.array(z.string()).optional(),
 })
 
 export const PlanRelationSchema = z.object({
-  name: z.string(),
-  model: z.string(),
+  name: z.string().regex(PLAN_IDENTIFIER),
+  model: z.string().regex(PLAN_ENTITY_NAME),
 })
 
 export const PlanEntitySchema = z.object({
-  name: z.string(),
+  name: z.string().regex(PLAN_ENTITY_NAME),
   fields: z.array(PlanFieldSchema),
   tenantScoped: z.boolean(),
   relations: z.array(PlanRelationSchema).optional(),
@@ -168,7 +172,7 @@ export const ArchitecturePlanSchema = z.object({
   entities: z.array(PlanEntitySchema),
   steps: z.array(PlanStepSchema),
   permissions: z.array(z.string()),
-  auditEvents: z.array(z.string()),
+  auditEvents: z.array(z.string().regex(PLAN_EVENT_NAME)),
   tenantScoped: z.boolean(),
   warnings: z.array(z.string()),
 })

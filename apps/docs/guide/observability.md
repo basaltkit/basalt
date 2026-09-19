@@ -193,7 +193,8 @@ tracingPlugin({
 
 Per request the plugin continues an inbound `traceparent` (or starts a new
 trace), records a **server span** named `${method} ${routeTemplate}` with
-`http.method` / `http.target` attributes, echoes `traceparent` on the response,
+`http.method` / `http.target` attributes (query values masked as `[REDACTED]`,
+so OAuth codes and tokens never reach your trace backend), echoes `traceparent` on the response,
 then on completion sets `http.status_code`, marks the span `error` for `5xx` and
 `ok` otherwise, and ends it. Finished spans are buffered and flushed every
 `flushIntervalMs` (the timer is `unref()`ed) plus once more on `app.shutdown()`.
@@ -248,15 +249,31 @@ Every line automatically carries whatever the active
 call. Outside a context (a boot-time log, a script) the mixin contributes
 nothing rather than throwing.
 
-::: tip Redaction is on by default, and it is not just `password`
-Values are replaced with `[REDACTED]` for `password`, `pass`, `secret`, `token`,
-`accessToken`, `refreshToken`, `idToken`, `jwt`, `apiKey`, `api_key`, `apikey`,
-`mfaCode`, `otp`, `resetToken`, `authorization`, `cookie`, `creditCard`,
-`cardNumber`, `cvv`, `cvc` and `ssn` — at the top level **and** one level of
-nesting (`*.token`), plus the usual request-shaped paths
-(`req.headers.authorization`, `headers["set-cookie"]`, …). `redact` **adds** to
-that list; it never replaces it. Anything deeper than one level needs an explicit
-path.
+::: tip Redaction is on by default, at any depth
+Every logged object and every child binding is walked recursively (inside
+arrays, on logged `Error`s, up to 10 levels; anything deeper becomes
+`[Truncated]`, cycles become `[Circular]`) and any secret-bearing key is
+replaced with `[REDACTED]`. Keys are matched case- and separator-insensitively,
+so `access_token`, `accessToken`, `Access-Token` and `ACCESS_TOKEN` are the same.
+Covered names include `password`, `passwordHash`, `secret`, `token`, `jwt`,
+`otp`, `mfaCode`, `apiKey`, `privateKey`, `authorization`, `cookie`,
+`set-cookie`, `credentials`, `connectionString`, `creditCard`, `cardNumber`,
+`cvv`, `cvc` and `ssn`, plus any key **ending** in `password`, `secret`,
+`token`, `apiKey`, `privateKey`, `authorization` or `cookie` (`x-api-key`,
+`client_secret`, `mfaSecret`, `webhookSecret`, `APP_SECRET`, `refresh_token`,
+`id_token`, `proxy-authorization`…). Your objects are never mutated. `redact`
+**adds** Pino paths for your own fields (`customer.iban`); it never replaces the
+defaults.
+
+The walk follows what JSON serialisation would emit: plain objects, arrays,
+errors (including nested `cause`/`AggregateError` members), values with a
+`toJSON()` (e.g. axios `AxiosHeaders`) and class instances (their own
+enumerable keys). The one exception is a class instance logged under the
+top-level `req`/`res` keys, which is left to the Fastify/pino-http serializers.
+Plural and key-shaped names are covered too (`tokens`, `apiKeys`, `passwords`,
+`signingKey`, `encryptionKey`, `recoveryCodes`, `sessionId`…). Secrets inside
+string *values* (a `DATABASE_URL`, a message string) are not detected — log the
+fields you need (`{ url: req.url }`), not whole request objects or raw strings.
 :::
 
 Mail bodies are a separate problem with a separate switch: the mailer's `log`
@@ -333,8 +350,19 @@ out why your own request came back 400 with nothing in the terminal. If that is
 noisy for you, filter in your own reporter — the decision belongs to the app,
 not to the framework's default.
 
+The reported `url` has every query value masked (`/cb?code=[REDACTED]`): OAuth
+codes, reset tokens and signed-URL signatures travel there, and a log is the
+wrong place to keep them. A valueless entry (`/magic?<token>`) is masked too.
+
 The response body never changes: `toErrorResponse` decides what the client sees,
-and a 500 still says only `Internal server error.`
+and a 500 still says only `Internal server error.` Client errors raised by the
+framework itself — malformed JSON, a body over the limit, an unsupported content
+type — keep their status (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`,
+`415 UNSUPPORTED_MEDIA_TYPE`) with a fixed message, and are reported at `warn`,
+not as server errors. A status carried by any other error (say, a failed
+upstream SDK call) is not trusted: that stays a `500`. Their logged `reason`
+is that same fixed message, because the parser's own message quotes the body
+(`JSON.parse` echoes a slice of it, passwords included).
 
 ## Request correlation
 
@@ -344,6 +372,11 @@ propagated across services. Forward the incoming `x-request-id` /
 `x-correlation-id` headers on outbound calls and one identifier follows a
 user action through every hop; pair it with the `traceparent` that
 `tracingPlugin` echoes and you can jump from a log line to the trace.
+
+An inbound id is adopted only when it matches `^[A-Za-z0-9._:-]{1,128}$`;
+anything longer, or carrying spaces, quotes or control characters, is replaced
+by a freshly generated UUID, so a client cannot forge or bloat the id that
+lands in your logs and audit trail.
 
 The same identifiers are what make the async surfaces legible: put your logger
 behind the realtime `onBridgeError` / `onDeliveryError` callbacks
@@ -443,8 +476,10 @@ adapter's own `onError` (above) is the same family.
 - **Log lines have no `tenantId`/`userId`** — the log was emitted outside a
   request context, or tenancy/auth hadn't populated it yet. The mixin contributes
   only what the context already holds.
-- **A secret appeared in the logs** — it was nested more than one level deep, or
-  the key isn't in the default list. Add the explicit path with `redact`; and if
+- **A secret appeared in the logs** — its key name isn't recognised as
+  secret-bearing, it was inside a string value, or it sat in a raw request
+  object logged under top-level `req` without a serializer.
+  Add the explicit path with `redact`, or log plain fields instead; and if
   it was an email body, that's the mailer's `logBody`, in
   [Notifications](/guide/notifications).
 - **`/readyz` hangs** — a check has no timeout of its own. Wrap slow

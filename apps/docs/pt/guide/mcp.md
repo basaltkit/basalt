@@ -172,6 +172,13 @@ const local = new McpClient(new StdioClientTransport({ command: 'some-mcp-server
 await local.connect()
 ```
 
+Um servidor stdio lançado **não** herda o ambiente da tua app: só uma allowlist
+sem segredos (`PATH`, `HOME`, locale, diretórios temporários —
+`DEFAULT_INHERITED_ENV`) mais o `env` explícito lhe chegam, por isso
+`APP_SECRET`, `DATABASE_URL` e chaves de fornecedores ficam no teu processo. Usa
+`inheritEnv: ['GITHUB_TOKEN']` para passar variáveis com nome, ou
+`inheritEnv: true` para passar tudo de propósito.
+
 ### Registar servidores com um plugin
 
 O `mcpClientPlugin` liga servidores externos nomeados ao container — conecta-os no
@@ -215,10 +222,12 @@ superfície de tools independentemente do servidor por baixo.
 Num deployment exposto, dá ao `/mcp` o seu próprio orçamento de rate limit:
 `mcpRoutes({ rateLimit: { limit: 30, windowMs: 60_000 } })` aplica
 `meta.rateLimit` à rota, e o `securityPlugin` impõe-no num bucket dedicado.
-Nota que o `meta.rateLimit` próprio de uma rota-ferramenta pertence ao seu
-registo HTTP direto — não é aplicado quando a rota é invocada como tool através
-do `/mcp`, portanto o orçamento do `/mcp` é o throttle do tráfego de tools.
-(Auth e guards correm de forma idêntica em ambos os caminhos.)
+O `meta.rateLimit` próprio de uma rota-ferramenta é imposto por um guard de
+rota, por isso aplica-se também às chamadas de tools através do `/mcp`. Uma
+chamada de tool não traz endereço de cliente, pelo que, a não ser que dês uma
+`key` ao `securityPlugin({ rateLimit: { key } })`, todos os chamadores partilham
+o balde dessa rota (falha fechada). (Auth e guards correm de forma idêntica em
+ambos os caminhos.)
 
 ## Referência de opções
 
@@ -237,7 +246,7 @@ As tabelas abaixo são as opções públicas completas dos quatro pontos de entr
 | Opção | Tipo | Predefinição | Porquê |
 | --- | --- | --- | --- |
 | `path` | `string` | `'/mcp'` | Onde o endpoint POST de JSON-RPC é montado |
-| `rateLimit` | `{ limit: number; windowMs: number }` | nenhum | Aplica `meta.rateLimit` ao `/mcp` (imposto pelo `securityPlugin` num bucket dedicado) — o **único** rate limit que se aplica a chamadas de tools |
+| `rateLimit` | `{ limit: number; windowMs: number }` | nenhum | Aplica `meta.rateLimit` ao `/mcp` (imposto pelo `securityPlugin` num bucket dedicado) — o orçamento de todo o tráfego de tools; o `meta.rateLimit` próprio de uma rota-ferramenta aplica-se por cima |
 
 ### `serveMcpStdio(app, options)`
 
@@ -253,7 +262,7 @@ Devolve um handle cujo `close()` desliga o listener do stdin.
 
 | Opção | Tipo | Predefinição | Porquê |
 | --- | --- | --- | --- |
-| `servers` | `Record<string, { type: 'http'; url; headers? } \| { type: 'stdio'; command; args?; env?; cwd? }>` | — (obrigatório) | Servidores externos nomeados registados sob `MCP_CLIENTS` |
+| `servers` | `Record<string, { type: 'http'; url; headers? } \| { type: 'stdio'; command; args?; env?; cwd?; inheritEnv? }>` | — (obrigatório) | Servidores externos nomeados registados sob `MCP_CLIENTS`. Um servidor stdio herda só `DEFAULT_INHERITED_ENV` mais `env`; `inheritEnv: string[] \| true` alarga isso |
 | `eager` | `boolean` | `true` | Ligar todos os servidores no arranque (falhar cedo) vs. lazily no primeiro `callTool`/`listTools` |
 
 ## Modos de falha e resolução de problemas
@@ -269,7 +278,7 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | `isError: true` com um corpo `UNAUTHORIZED`/`FORBIDDEN` | A rota da tool está guardada e a chamada não levou credenciais (ou levou más) | Envia headers `Authorization`/tenant com o `POST /mcp`, ou `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Nome de tool não registado — rota sem `meta.mcp`, excluída pelo `filter`, ou renomeada | Verifica o `tools/list`; lembra os overrides via `meta.mcp.name` |
 | JSON-RPC `-32601` `Method not found` | O cliente chamou um método MCP que o servidor não implementa | Só existem `initialize`, `ping`, `tools/list`, `tools/call` (mais resources/prompts quando registados) |
-| Uma tool ignora o `meta.rateLimit` da sua rota | Os rate limits por rota pertencem ao registo HTTP direto da rota — **não** se aplicam através do `/mcp` | Orçamenta o tráfego de tools com `mcpRoutes({ rateLimit })` |
+| Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se através do `/mcp`, e as chamadas de tools não trazem ip de cliente, por isso todos os chamadores partilham um balde | Passa uma `key` ao `securityPlugin({ rateLimit })`, ou aumenta o orçamento da rota |
 | O Claude Desktop mostra um servidor morto/quebrado | Algo imprimiu no stdout — ele é o canal JSON-RPC | `logLevel: 'silent'`, remove `console.log`; vê a checklist de stdio acima |
 | Resposta `202` do `POST /mcp` com corpo vazio | A mensagem era uma *notificação* JSON-RPC — por spec não recebe resposta | Comportamento esperado, não é um erro |
 

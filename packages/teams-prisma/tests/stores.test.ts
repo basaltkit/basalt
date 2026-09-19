@@ -79,6 +79,9 @@ function makeFakeClient(): PrismaTeamsClient {
       async updateMany({ where, data }) {
         const row = invites.get(where.id)
         if (!row) return { count: 0 }
+        // Honour null filters like the real client (used for compare-and-set).
+        if ('acceptedAt' in where && where.acceptedAt === null && row.acceptedAt !== null) return { count: 0 }
+        if ('revokedAt' in where && where.revokedAt === null && row.revokedAt !== null) return { count: 0 }
         Object.assign(row, data)
         return { count: 1 }
       },
@@ -149,6 +152,19 @@ describe('PrismaInvitationStore', () => {
     const inv = await store.findById('x')
     expect(inv?.acceptedAt).toBe(20)
     expect(inv?.revokedAt).toBe(30)
+  })
+
+  it('markAccepted is a compare-and-set: a used or revoked invitation cannot be accepted again', async () => {
+    const store = new PrismaInvitationStore(client)
+    await store.create({ id: 'i1', tenantId: 'acme', email: 'a@x.com', role: 'admin', token: 't1', expiresAt: 100 })
+    await store.create({ id: 'i2', tenantId: 'acme', email: 'b@x.com', role: 'admin', token: 't2', expiresAt: 100 })
+    expect(await store.markAccepted('i1', 500)).toBe(true)
+    expect(await store.markAccepted('i1', 700)).toBe(false) // a concurrent second redemption loses
+    expect((await store.findById('i1'))?.acceptedAt).toBe(500)
+    await store.revoke('i2', 600)
+    expect(await store.markAccepted('i2', 700)).toBe(false)
+    expect((await store.findById('i2'))?.acceptedAt).toBeUndefined()
+    expect(await store.markAccepted('ghost', 1)).toBe(false)
   })
 
   it('rejects duplicate tokens', async () => {

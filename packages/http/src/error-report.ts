@@ -1,3 +1,6 @@
+import { clientErrorOf } from './pipeline.js'
+import { redactUrl } from './redact-url.js'
+
 /**
  * Making HTTP failures observable, identically on every adapter.
  *
@@ -87,7 +90,9 @@ export function reportHttpError(report: HttpErrorReport, sink: HttpLogSink = con
   try {
     const fields = {
       method,
-      url: String(url).slice(0, MAX_URL),
+      // Query values are masked: OAuth codes, reset tokens and signed-URL
+      // signatures travel there, and a log is the wrong place to keep them.
+      url: redactUrl(String(url)).slice(0, MAX_URL),
       // Coerced rather than trusted: `HttpErrorReport` is a plain object an
       // adapter could fill in wrongly.
       status: Number(status),
@@ -97,7 +102,11 @@ export function reportHttpError(report: HttpErrorReport, sink: HttpLogSink = con
       // `err` is pino's conventional key for a serialisable error.
       sink.error({ ...fields, err: error }, FAILED)
     } else if (status >= 400) {
-      sink.warn({ ...fields, reason: messageOf(error) }, REJECTED)
+      // A framework body-parse error's message quotes the offending input (V8's
+      // JSON.parse echoes a slice of the body — passwords included), so those
+      // get the same fixed reason the client gets.
+      const reason = clientErrorOf(error)?.body.error.message ?? messageOf(error)
+      sink.warn({ ...fields, reason }, REJECTED)
     }
   } catch {
     // Deliberately swallowed — see above.
