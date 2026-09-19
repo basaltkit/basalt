@@ -10,6 +10,10 @@ export class BackupCommandError extends BasaltError {
   }
 }
 
+export class BackupIntegrityError extends BasaltError {
+  constructor(id: string, reason: string) { super('BACKUP_INTEGRITY_FAILED', `Backup "${id}" failed integrity verification: ${reason}`) }
+}
+
 export class BackupNotFoundError extends BasaltError {
   constructor(id: string) { super('BACKUP_NOT_FOUND', `Backup "${id}" was not found.`) }
 }

@@ -90,7 +90,8 @@ describe('HTTP error reporting policy', () => {
 
     it('keeps the message a constant even for a hostile URL', () => {
       const log = sink()
-      const hostile = '/x?q=%s%d%j%o\nWARN forged line'
+      // In the path: query values are masked (see below), paths are kept as-is.
+      const hostile = '/x/%s%d%j%o\nWARN forged line'
       reportHttpError({ ...report(500), url: hostile }, log)
       reportHttpError({ ...report(400), url: hostile }, log)
 
@@ -148,5 +149,66 @@ describe('HTTP error reporting policy', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('error reports never carry query-string secrets (OAuth codes, tokens)', () => {
+  it('masks every query value while keeping the path and the parameter names', () => {
+    const log = sink()
+    reportHttpError({ ...report(400), url: '/auth/callback?code=OAUTHCODE&state=S7&token=SECRET123' }, log)
+    const url = log.warn.mock.calls[0]![0]['url'] as string
+    expect(url).toBe('/auth/callback?code=[REDACTED]&state=[REDACTED]&token=[REDACTED]')
+  })
+
+  it('masks absolute URLs (Hono reports the full request URL) and 5xx reports too', () => {
+    const log = sink()
+    reportHttpError({ ...report(500), url: 'http://api.test/boom?token=SECRET123#frag' }, log)
+    const url = log.error.mock.calls[0]![0]['url'] as string
+    expect(url).not.toContain('SECRET123')
+    expect(url).toBe('http://api.test/boom?token=[REDACTED]')
+  })
+
+  it('masks percent-encoded and valueless variants', () => {
+    const log = sink()
+    reportHttpError({ ...report(404), url: '/x?a%3Db=SECRET&flag&=SECRET2;c=SECRET3' }, log)
+    const url = log.warn.mock.calls[0]![0]['url'] as string
+    expect(url).not.toMatch(/SECRET/)
+  })
+})
+
+describe('error reports never carry request-body or bare-token secrets', () => {
+  it('masks a bare query token (magic links such as /login?<token>)', () => {
+    const log = sink()
+    reportHttpError({ ...report(404), url: '/magic?3f9a0c1e7b2d4a6f8e0c1b3d5f7a9c2e&next=/home' }, log)
+    const url = log.warn.mock.calls[0]![0]['url'] as string
+    expect(url).not.toContain('3f9a0c1e')
+    expect(url).toBe('/magic?[REDACTED]&next=[REDACTED]')
+  })
+
+  it('logs a fixed reason for a malformed JSON body, never the parser message quoting the body', () => {
+    let parseError: unknown
+    try {
+      JSON.parse('{"email":"a@b.c","password": hunter2SECRET}')
+    } catch (error) {
+      parseError = error
+    }
+    // The Fastify adapter tags its JSON parser error with a 400.
+    ;(parseError as { statusCode?: number }).statusCode = 400
+    const log = sink()
+    reportHttpError({ ...report(400, parseError), code: 'BAD_REQUEST' }, log)
+    const fields = log.warn.mock.calls[0]![0]
+    expect(JSON.stringify(fields)).not.toMatch(/hunter2|SECRET/)
+    expect(fields['reason']).toBe('Malformed request.')
+  })
+
+  it('does the same for http-errors style body-parser errors (Express)', () => {
+    const error = Object.assign(new SyntaxError('Unexpected token \'h\', "hunter2SECRET" is not valid JSON'), {
+      status: 400,
+      statusCode: 400,
+      expose: true,
+    })
+    const log = sink()
+    reportHttpError({ ...report(400, error), code: 'BAD_REQUEST' }, log)
+    expect(JSON.stringify(log.warn.mock.calls[0]![0])).not.toMatch(/hunter2|SECRET/)
   })
 })

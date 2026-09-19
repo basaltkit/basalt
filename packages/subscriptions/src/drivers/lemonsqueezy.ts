@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { BasaltError } from '@basaltkit/core'
 import type { BillingPeriod } from '../plans.js'
 import {
+  attestedPlan,
+  requireWebhookSecret,
   WebhookInvalidError,
   type BillingGateway,
   type CheckoutInput,
@@ -94,7 +96,7 @@ export class LemonSqueezyBillingGateway implements BillingGateway {
       data: {
         type: 'checkouts',
         attributes: {
-          checkout_data: { custom: { billableId } },
+          checkout_data: { custom: { billableId, plan, period } },
           ...(redirectUrl ? { product_options: { redirect_url: redirectUrl } } : {}),
         },
         relationships: {
@@ -139,9 +141,12 @@ export class LemonSqueezyBillingGateway implements BillingGateway {
   }
 
   verifyWebhook(rawBody: string, signature: string | undefined): WebhookEvent | null {
+    // Fail closed before anything else: an empty/missing secret would make the
+    // HMAC forgeable by anyone.
+    const secret = requireWebhookSecret('LemonSqueezyBillingGateway', this.options.webhookSecret)
     if (!signature) throw new WebhookInvalidError()
 
-    const expected = createHmac('sha256', this.options.webhookSecret).update(rawBody).digest('hex')
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex')
     const a = Buffer.from(expected)
     const b = Buffer.from(signature)
     if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
@@ -165,7 +170,22 @@ export class LemonSqueezyBillingGateway implements BillingGateway {
     // Lemon Squeezy webhooks have no event id of their own — use the subscription
     // ref + event name as a stable idempotency key.
     const id = `${name}:${gatewayRef ?? billableId}`
-    return { id, type, billableId, ...(gatewayRef ? { gatewayRef } : {}) }
+    // The plan/period we stamped into the checkout's custom data (signed
+    // payload). Lemon custom data is immutable after checkout, so a later
+    // variant change (swap or the customer portal) leaves it stale: it is
+    // only bound to what was charged on the checkout's INITIAL invoice.
+    const { plan, period } =
+      event.data?.attributes?.['billing_reason'] === 'initial'
+        ? attestedPlan(event.meta?.custom_data)
+        : {}
+    return {
+      id,
+      type,
+      billableId,
+      ...(gatewayRef ? { gatewayRef } : {}),
+      ...(plan !== undefined ? { plan } : {}),
+      ...(period !== undefined ? { period } : {}),
+    }
   }
 
   private async request(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<unknown> {

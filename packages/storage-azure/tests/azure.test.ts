@@ -80,3 +80,21 @@ describe('AzureBlobStorageDriver', () => {
     expect((await disk.get('x.txt')).toString()).toBe('via disk')
   })
 })
+
+describe('security: Azure SAS lifetimes are capped', () => {
+  it('refuses a SAS lifetime above 7 days (no near-permanent links), even called directly', async () => {
+    const { driver } = make()
+    await driver.put('r.pdf', 'data')
+    const DAY = 24 * 60 * 60 * 1000
+    await expect(driver.temporaryUrl('r.pdf', 36_500 * DAY)).rejects.toMatchObject({ code: 'STORAGE_TEMPORARY_URL_TTL', status: 400 })
+    await expect(driver.temporaryUrl('r.pdf', 7 * DAY + 1)).rejects.toMatchObject({ code: 'STORAGE_TEMPORARY_URL_TTL' })
+    await expect(driver.temporaryUrl('r.pdf', 0)).rejects.toMatchObject({ code: 'STORAGE_TEMPORARY_URL_TTL' })
+    await expect(driver.temporaryUrl('r.pdf', 7 * DAY)).resolves.toContain('azure.test/r.pdf')
+  })
+
+  it('the Disk facade refuses it too', async () => {
+    const { driver } = make()
+    const disk = new Disk('azure', driver, { scope: null })
+    await expect(disk.temporaryUrl('r.pdf', '36500d')).rejects.toMatchObject({ code: 'STORAGE_TEMPORARY_URL_TTL' })
+  })
+})

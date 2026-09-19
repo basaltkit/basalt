@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { unifiedDiff } from './diff.js'
 import { domainFields, injectPrismaFields, injectZodFields } from './fields.js'
+import { assertSafePlan } from '../plan/identifiers.js'
 import {
   externalRelationTargets,
   injectPrismaRelations,
@@ -59,6 +60,9 @@ export async function runMake(
   plan: ArchitecturePlan,
   options: MakeOptions = {},
 ): Promise<MakeResult> {
+  // The plan is untrusted (LLM / MCP client): refuse any name that could
+  // inject code into the generated sources before generating anything.
+  assertSafePlan(plan)
   const entities = plan.entities.filter((e) => e.name.trim() !== '')
   if (entities.length === 0) {
     throw new Error('ai:make — the plan has no entity to generate.')
@@ -75,7 +79,13 @@ export async function runMake(
     const prisma = options.prisma ?? gen?.prisma ?? prismaDefault
     const softDelete = options.softDelete ?? gen?.softDelete ?? false
 
-    const generated = generateResource(entity.name, { prisma, softDelete })
+    // Routes are authenticated by the generator's secure default. A
+    // tenant-scoped entity gets the generator's tenant-owned in-memory
+    // repository (requireTenantId()); with Prisma, augmentFiles below replaces
+    // the repository and injects tenantId + @@index itself, so the generator's
+    // tenant output is not requested there (it would duplicate the index).
+    const tenant = ctx.stack.tenancy && entity.tenantScoped && !prisma
+    const generated = generateResource(entity.name, { prisma, softDelete, tenant })
     const { files, augmented, guarded, audited } = augmentFiles(generated, entity, plan, ctx, { prisma, softDelete })
 
     const build: ResourceBuild = {

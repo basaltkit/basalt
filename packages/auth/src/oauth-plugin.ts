@@ -38,6 +38,27 @@ export interface OAuthRoutesOptions {
    * When omitted, the callback responds with JSON `{ user, accessToken, refreshToken }`.
    */
   successRedirect?: string
+  /**
+   * The HttpOnly cookie that binds a login to the browser that started it.
+   * `secure` defaults to production-only; when secure, the cookie is named
+   * `__Host-basalt_oauth` (host-only, so a sibling subdomain cannot plant it).
+   */
+  bindingCookie?: { secure?: boolean; maxAgeSeconds?: number }
+}
+
+const readCookie = (header: unknown, name: string): string | undefined => {
+  if (typeof header !== 'string') return undefined
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=')
+    if (key === name && rest.length > 0) {
+      try {
+        return decodeURIComponent(rest.join('='))
+      } catch {
+        return undefined
+      }
+    }
+  }
+  return undefined
 }
 
 /**
@@ -49,6 +70,12 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
   const oauth = () => (ctx().container as Container).get(OAUTH)
   const base = stripTrailingSlashes(options.callbackBaseUrl)
   const redirectUri = (provider: string): string => `${base}/auth/oauth/${provider}/callback`
+  const secure = options.bindingCookie?.secure ?? process.env['NODE_ENV'] === 'production'
+  const cookieName = secure ? '__Host-basalt_oauth' : 'basalt_oauth'
+  const maxAge = options.bindingCookie?.maxAgeSeconds ?? 15 * 60
+  // SameSite=Lax: the provider redirects back with a top-level GET, which Lax allows.
+  const cookie = (value: string, age: number): string =>
+    `${cookieName}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${secure ? '; Secure' : ''}`
 
   return [
     route({
@@ -56,20 +83,23 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
       url: '/auth/oauth/:provider',
       params: z.object({ provider: z.string() }),
       async handler({ params, reply }) {
-        const url = oauth().authorizeUrl(params.provider, redirectUri(params.provider))
-        return reply.code(302).header('location', url).send()
+        const { url, binding } = oauth().authorize(params.provider, redirectUri(params.provider))
+        return reply.code(302).header('set-cookie', cookie(binding, maxAge)).header('location', url).send()
       },
     }),
     route({
       method: 'GET',
       url: '/auth/oauth/:provider/callback',
       params: z.object({ provider: z.string() }),
-      query: z.object({ code: z.string(), state: z.string() }),
-      async handler({ params, query, reply }) {
+      query: z.object({ code: z.string().max(4096), state: z.string().max(4096) }),
+      async handler({ params, query, request, reply }) {
+        // Single-use: the binding cookie is cleared whatever the outcome.
+        reply.header('set-cookie', cookie('', 0))
         const { user, tokens } = await oauth().callback(params.provider, {
           code: query.code,
           state: query.state,
           redirectUri: redirectUri(params.provider),
+          binding: readCookie(request.headers.cookie, cookieName),
         })
         if (options.successRedirect) {
           const url = new URL(options.successRedirect)

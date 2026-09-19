@@ -36,6 +36,19 @@ Each `Disk` prefixes paths with `tenants/<id>` from `ctx().tenant` — so the sa
 code keeps every tenant's files isolated. Pass `scope: null` on a disk to turn
 that off.
 
+**Fails closed without a tenant.** When `@basaltkit/tenancy` is registered, a
+disk on the default scope refuses to run with no tenant in context and throws
+`StorageTenantRequiredError` (`400 STORAGE_TENANT_REQUIRED`). Without that, a
+request that simply omitted its tenant would resolve the caller's key against
+the bucket root, where `tenants/<other-tenant>/…` is reachable by name. A
+deliberately central disk (backups, platform branding) says so explicitly:
+`scope: null`, or `onMissingScope: 'root'` for a disk that is tenant-scoped
+inside a tenant and central outside one. Apps without tenancy are unaffected.
+
+A tenant id that is not a single safe path segment (`..`, `a/b`, control
+characters) is refused with `StorageInvalidScopeError` rather than joined into
+the path.
+
 ## put / get / exists / delete / list
 
 `put` accepts a string or `Buffer` and creates intermediate folders; `get`
@@ -171,7 +184,12 @@ Embedded uses (`<img>`, `<video>`) render regardless of disposition, so
 avatars and previews inside pages keep working.
 
 The expiry accepts a duration string (`'500ms'`, `'30s'`, `'15m'`, `'2h'`,
-`'7d'`) or milliseconds. Supported by `s3`, GCS and Azure; the `local` driver
+`'7d'`) or milliseconds. It is **capped at 7 days** by default (the S3 and GCS
+signature limit, now enforced for every driver, Azure included): a signed URL is
+a bearer credential that outlives the holder's membership, so a longer (or
+non-positive) lifetime throws `TemporaryUrlTtlTooLongError`
+(`400 STORAGE_TEMPORARY_URL_TTL`). Lower the cap per disk with
+`maxTemporaryUrlTtl`. Supported by `s3`, GCS and Azure; the `local` driver
 throws `TemporaryUrlUnsupportedError` (serve local files through a route in dev,
 or run MinIO locally with an `s3` disk).
 
@@ -211,6 +229,8 @@ Without a processor, the pipeline's terminal throws
 | --- | --- | --- | --- |
 | `driver` | `'local' \| 's3' \| StorageDriver` | — (required) | `'local'` needs `root`; `'s3'` takes the S3 options; an instance plugs in GCS/Azure/custom |
 | `scope` | `(() => string \| undefined) \| null` | `tenants/<ctx().tenant.id>` | Dynamic path prefix resolved on **every** operation — automatic tenant isolation. `null` disables it |
+| `onMissingScope` | `'root' \| 'error'` | `'error'` with tenancy registered and the default `scope`; `'root'` otherwise | What an operation does when no tenant is in context: `'error'` throws `StorageTenantRequiredError`, `'root'` uses the key against the disk root. An explicit value always wins |
+| `maxTemporaryUrlTtl` | `DurationInput` | `'7d'` | Longest lifetime `temporaryUrl` accepts; above it throws `TemporaryUrlTtlTooLongError` |
 
 ### `PutOptions` (per `put`)
 
@@ -241,6 +261,9 @@ The disposition default is honoured by all three signing drivers — S3
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` with `allowedContentTypes` set and a missing/unlisted content type |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `disk('name')` for a disk that isn't declared |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` on a driver without support (e.g. `local`) |
+| `TemporaryUrlTtlTooLongError` | `STORAGE_TEMPORARY_URL_TTL` (400) | `temporaryUrl` with a lifetime ≤ 0 or above `maxTemporaryUrlTtl` (default 7 days) |
+| `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` (400) | A tenant-scoped disk ran with no tenant in context while tenancy is registered — resolve a tenant, or give a central disk `scope: null` / `onMissingScope: 'root'` |
+| `StorageInvalidScopeError` | `STORAGE_INVALID_SCOPE` | The tenant id (or a custom `scope`) is not a safe path prefix (`..`, a `/` inside the id, control characters) |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | `disk.image(…)` terminal with no `imageProcessor` configured |
 
 All extend `BasaltError` and carry the `code` above.

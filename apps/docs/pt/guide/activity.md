@@ -54,8 +54,10 @@ Kwanza Lda»*, que é o cliente de outro escritório, pelo nome, em texto.
 
 Uma app single-tenant não tem dimensão de tenant e fica como estava. Uma consola
 de operador que queira mesmo ler através de tenants diz `tenantScoped: false` e
-é obedecida; passar um `tenantId` explícito na query também salta o scoping
-automático.
+é obedecida. Um `tenantId` explícito na query só é respeitado quando não há
+tenant no contexto (código de sistema, jobs): **sempre que há um tenant no
+contexto, é ele que ganha**, pelo que um `tenantId` vindo do input do cliente
+não consegue mudar um pedido para o feed de outro tenant.
 
 ## Registar a partir de eventos de domínio
 

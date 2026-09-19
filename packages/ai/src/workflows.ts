@@ -52,6 +52,7 @@ export type { AgentReview, ReviewIssue } from './review/types.js'
 // dry-run detects clashes and attaches diffs; writes never touch the DB unless
 // `migrate` is set. Framework-free via `@basaltkit/generator/resource`.
 export { runMake } from './make/make.js'
+export { assertSafePlan, UnsafePlanError } from './plan/identifiers.js'
 export type {
   MakeOptions,
   MakeResult,

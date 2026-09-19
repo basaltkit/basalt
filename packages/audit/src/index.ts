@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
 
@@ -25,6 +25,21 @@ export interface AuditQuery {
   limit?: number
 }
 
+/**
+ * Throws unless `limit` is absent or a non-negative safe integer.
+ *
+ * `AuditQuery.limit` is typed `number`, but handlers routinely forward a raw
+ * query-string value; a driver that builds SQL from it must never receive a
+ * string. {@link Audit} validates every read, and the bundled drivers validate
+ * again so a store called directly is equally safe.
+ */
+export function assertAuditLimit(limit: unknown): asserts limit is number | undefined {
+  if (limit === undefined) return
+  if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 0) {
+    throw new TypeError('AuditQuery.limit must be a non-negative safe integer')
+  }
+}
+
 /** Append-only by contract: no update, no delete. */
 export interface AuditStore {
   append(entry: AuditEntry): Promise<void>
@@ -39,6 +54,7 @@ export class MemoryAuditStore implements AuditStore {
   }
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {
+    assertAuditLimit(query.limit)
     let results = this.entries.filter(
       (entry) =>
         (query.event === undefined || patternMatches(query.event, entry.event)) &&
@@ -119,12 +135,63 @@ const PII_KEY = /e[-_]?mail|phone|msisdn|ssn|nif|taxid|passport/i
 /** A value that looks like an email address. */
 const EMAIL_VALUE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+/** A pseudonymisation key: a secret of at least 128 bits (16 bytes). */
+export type PseudonymizationKey = string | Uint8Array
+
+/** Minimum key length in bytes (128 bits). */
+const MIN_PSEUDONYM_KEY_BYTES = 16
+/** Pseudonym length in hex chars: 128 bits of HMAC output. */
+const PSEUDONYM_HEX_CHARS = 32
+
+function assertPseudonymKey(key: PseudonymizationKey): void {
+  // Type-checked at runtime too: a number or a `{ byteLength }` look-alike must
+  // not pass configuration and then fail (or be coerced) on the first entry.
+  if (typeof key !== 'string' && !(key instanceof Uint8Array)) {
+    throw new TypeError('Audit pseudonymization key must be a string or a Uint8Array')
+  }
+  const bytes = typeof key === 'string' ? Buffer.byteLength(key) : key.byteLength
+  if (bytes < MIN_PSEUDONYM_KEY_BYTES) {
+    throw new TypeError(`Audit pseudonymization key must be at least ${MIN_PSEUDONYM_KEY_BYTES} bytes (128 bits)`)
+  }
+}
+
 /**
- * Deterministically pseudonymizes a value: the same input always maps to the
- * same opaque token, so records stay correlatable without persisting the raw PII.
+ * Used when no key is configured. It is random per process, so an unkeyed
+ * pseudonym is NOT reversible by brute force (an unkeyed hash of a phone number
+ * or email is), at the cost of not correlating across restarts. Configure a key
+ * for stable pseudonyms.
  */
-export function pseudonymize(value: string): string {
-  return `pii_${createHash('sha256').update(value).digest('hex').slice(0, 16)}`
+let ephemeralKey: Buffer | undefined
+let warnedUnkeyed = false
+function warnUnkeyed(): void {
+  warnedUnkeyed = true
+  console.warn(
+    '[basalt:audit] PII pseudonymization has no configured key: using a random per-process key, so pseudonyms ' +
+      'will not correlate across restarts. Pass `createPiiMinimizingRedactor({ key })` with a secret of at least 128 bits.',
+  )
+}
+function unkeyedFallback(): Buffer {
+  if (!warnedUnkeyed) warnUnkeyed()
+  return (ephemeralKey ??= randomBytes(32))
+}
+
+/**
+ * Deterministically pseudonymizes a value with HMAC-SHA256 under `key`: the
+ * same input and key always map to the same opaque 128-bit token, so records
+ * stay correlatable without persisting the raw PII — and without the key the
+ * token cannot be reversed by hashing candidate emails or phone numbers.
+ *
+ * Without a key a random per-process key is used (and a warning is logged once).
+ */
+export function pseudonymize(value: string, key?: PseudonymizationKey): string {
+  if (key !== undefined) assertPseudonymKey(key)
+  const digest = createHmac('sha256', key ?? unkeyedFallback()).update(value).digest('hex')
+  return `pii_${digest.slice(0, PSEUDONYM_HEX_CHARS)}`
+}
+
+export interface PiiRedactionOptions {
+  /** Secret used to key pseudonyms (>= 128 bits). Without it, see {@link pseudonymize}. */
+  key?: PseudonymizationKey
 }
 
 /**
@@ -133,33 +200,65 @@ export function pseudonymize(value: string): string {
  * stable pseudonym. Use it to minimize PII at rest in the trail while keeping
  * entries correlatable.
  */
-export function redactSensitiveAndPii(value: unknown, depth = 0): unknown {
+export function redactSensitiveAndPii(value: unknown, depth = 0, options: PiiRedactionOptions = {}): unknown {
   if (value === null) return value
   // Bound the length before the regex: a real email is <= 254 chars (RFC 5321),
   // so only test plausibly-email-length strings — arbitrary logged values never
   // reach the regex, avoiding ReDoS on attacker-influenceable input.
   if (typeof value === 'string')
-    return value.length <= 320 && EMAIL_VALUE.test(value) ? pseudonymize(value) : value
+    return value.length <= 320 && EMAIL_VALUE.test(value) ? pseudonymize(value, options.key) : value
   if (typeof value !== 'object') return value
   if (depth > MAX_REDACT_DEPTH) return TRUNCATED
-  if (Array.isArray(value)) return value.map((v) => redactSensitiveAndPii(v, depth + 1))
+  if (Array.isArray(value)) return value.map((v) => redactSensitiveAndPii(v, depth + 1, options))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
     if (SENSITIVE_KEY.test(k)) out[k] = '[redacted]'
-    else if (PII_KEY.test(k) && typeof v === 'string') out[k] = pseudonymize(v)
-    else out[k] = redactSensitiveAndPii(v, depth + 1)
+    else if (PII_KEY.test(k)) out[k] = pseudonymizeAll(v, depth + 1, options)
+    else out[k] = redactSensitiveAndPii(v, depth + 1, options)
   }
   return out
 }
 
 /**
- * Payload scrubber that also pseudonymizes obvious PII (PII F3). Opt-in — pass it
- * to `auditPlugin({ redact: piiMinimizingRedactor })` or `new Audit(store, piiMinimizingRedactor)`.
+ * Everything under a PII key is PII, whatever its shape: a numeric phone, a
+ * list of emails or a `{ number, country }` object must not reach the trail raw.
+ * Every scalar leaf is pseudonymized; secret-looking keys are still masked.
+ */
+function pseudonymizeAll(value: unknown, depth: number, options: PiiRedactionOptions): unknown {
+  if (value === null || value === undefined || typeof value === 'boolean') return value
+  if (typeof value === 'string') return pseudonymize(value, options.key)
+  if (typeof value === 'number' || typeof value === 'bigint') return pseudonymize(String(value), options.key)
+  if (typeof value !== 'object') return undefined
+  if (depth > MAX_REDACT_DEPTH) return TRUNCATED
+  if (Array.isArray(value)) return value.map((v) => pseudonymizeAll(v, depth + 1, options))
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = SENSITIVE_KEY.test(k) ? '[redacted]' : pseudonymizeAll(v, depth + 1, options)
+  }
+  return out
+}
+
+/**
+ * Payload scrubber that also pseudonymizes obvious PII (PII F3), keyed with
+ * HMAC-SHA256. Opt-in — pass it to `auditPlugin({ redact: createPiiMinimizingRedactor({ key }) })`.
+ * The key is validated up front (>= 128 bits); without one, pseudonyms use a
+ * random per-process key and a warning is logged.
  *
  * TODO(PII F3 follow-up): the default capture set still persists whatever the
  * emitting code puts in the payload. A fuller minimization pass would let callers
  * declare per-event field policies; kept out of the default here to avoid changing
  * existing capture/redaction behavior.
+ */
+export function createPiiMinimizingRedactor(options: PiiRedactionOptions = {}): AuditRedactor {
+  // Validate (or warn) at configuration time, not on the first captured entry.
+  if (options.key !== undefined) assertPseudonymKey(options.key)
+  else warnUnkeyed()
+  return (payload) => redactSensitiveAndPii(payload, 0, options)
+}
+
+/**
+ * Unkeyed PII redactor: pseudonyms use a random per-process key (not reversible,
+ * not stable across restarts). Prefer {@link createPiiMinimizingRedactor} with a key.
  */
 export const piiMinimizingRedactor: AuditRedactor = (payload) => redactSensitiveAndPii(payload)
 
@@ -214,6 +313,9 @@ export class Audit {
    *     without the opt-in SaaS layer.
    */
   async trail(query: AuditQuery = {}): Promise<AuditEntry[]> {
+    // Validate before any store sees it: a limit forwarded straight from a
+    // request (a string, a float, a SQL fragment) must never reach a driver.
+    assertAuditLimit(query.limit)
     const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
     if (ctxTenantId !== undefined) {
       // Force the scope: spread the context tenant LAST so a differing
@@ -248,6 +350,7 @@ export class Audit {
    * cross-tenant data-exposure that {@link trail} closes.
    */
   async systemTrail(query: AuditQuery = {}): Promise<AuditEntry[]> {
+    assertAuditLimit(query.limit)
     return this.store.query(query)
   }
 

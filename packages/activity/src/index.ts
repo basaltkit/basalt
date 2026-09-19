@@ -145,8 +145,11 @@ export interface ActivityOptions {
   /**
    * Scope queries to ctx().tenant automatically. Default: true.
    *
-   * - `true` (default): auto-scope when a tenant is in context; with NO tenant
-   *   in context the query runs unscoped (fail-open, historical behavior).
+   * - `true` (default): auto-scope when a tenant is in context — the context
+   *   tenant always wins over a caller-supplied `query.tenantId` (it cannot
+   *   widen the scope); with NO tenant in context an explicit
+   *   `query.tenantId` is honoured, otherwise the query runs unscoped
+   *   (fail-open, historical behavior).
    * - `'required'`: fail-closed via @basaltkit/tenancy's `requireTenantId` —
    *   the context tenant always wins (a caller-supplied `query.tenantId`
    *   cannot widen the scope), an explicit `query.tenantId` is honoured when
@@ -209,10 +212,12 @@ export class Activity {
       return this.store.query({ ...query, tenantId: requireTenantId(query.tenantId) })
     }
     const tenant = tryCtx()?.['tenant'] as { id?: string } | undefined
+    // Anti-widening: when a tenant is in context it ALWAYS wins — a
+    // (possibly client-supplied) query.tenantId cannot switch the read to
+    // another tenant's feed. An explicit tenantId is only honoured when no
+    // tenant is in context (system code). `tenantScoped: false` opts out.
     const scoped =
-      this.tenantScoped && query.tenantId === undefined && tenant?.id !== undefined
-        ? { ...query, tenantId: tenant.id }
-        : query
+      this.tenantScoped && tenant?.id !== undefined ? { ...query, tenantId: tenant.id } : query
     return this.store.query(scoped)
   }
 }

@@ -211,7 +211,7 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `tenantId` | `string` | No | all | Filters by tenant. |
 | `actorId` | `string` | No | all | Filters by actor. |
 | `since` | `number` | No | since forever | Only entries with `at >= since`. |
-| `limit` | `number` | No | no limit | Maximum number of results. The SQL-backed stores push it into the database, so a limited query never loads the whole trail. |
+| `limit` | `number` | No | no limit | Maximum number of results. Must be a non-negative safe integer — `trail()`, `systemTrail()` and the bundled stores throw a `TypeError` otherwise (`assertAuditLimit`), so coerce and validate a query-string value before forwarding it. The SQL-backed stores push it into the database as a bound parameter, so a limited query never loads the whole trail. |
 
 ### `interface AuditStore`
 
@@ -231,7 +231,13 @@ In-memory implementation of `AuditStore` (freezes each entry; filters and revers
 
 ### Redaction
 
-Payloads are scrubbed before they are persisted. `redactSensitive` masks values under secret-looking keys (`password`, `token`, `api_key`, `authorization`, …) as `'[redacted]'`; the opt-in `redactSensitiveAndPii` / `piiMinimizingRedactor` additionally replaces email/phone-shaped values with a stable `pii_<hash>` pseudonym.
+Payloads are scrubbed before they are persisted. `redactSensitive` masks values under secret-looking keys (`password`, `token`, `api_key`, `authorization`, …) as `'[redacted]'`; the opt-in `createPiiMinimizingRedactor({ key })` (or `redactSensitiveAndPii`) additionally replaces email/phone-shaped values, and values under common PII keys, with a `pii_<hmac>` pseudonym: HMAC-SHA256 under your key, truncated to 128 bits.
+
+```ts
+auditPlugin({ redact: createPiiMinimizingRedactor({ key: process.env.AUDIT_PII_KEY! }) })
+```
+
+Every value under a PII key is pseudonymized whatever its shape — a number, a list, or a nested object (each scalar leaf; secret-looking keys inside are still masked). The key must be a string or `Uint8Array` secret of at least 16 bytes (128 bits); keep it out of the audit database. With the key, the same value always maps to the same pseudonym, so entries stay correlatable; without it, a pseudonym cannot be reversed by hashing candidate emails or phone numbers. If no key is configured (`createPiiMinimizingRedactor()` or the `piiMinimizingRedactor` constant), a random per-process key is used and a warning is logged: pseudonyms are still irreversible but no longer correlate across restarts.
 
 Both walk **6 levels deep**. Anything deeper is replaced with `'[truncated]'` — not passed through. Payloads are arbitrary and the default subscription is `events: ['**']`, so returning the raw subtree meant a secret nested seven levels down reached the trail in cleartext. If your payloads are deeply nested, flatten them before recording rather than relying on depth.
 

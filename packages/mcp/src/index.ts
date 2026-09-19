@@ -38,6 +38,8 @@ export {
   McpClient,
   HttpClientTransport,
   StdioClientTransport,
+  DEFAULT_INHERITED_ENV,
+  buildStdioEnv,
   type McpClientTransport,
   type McpClientInfo,
   type StdioTransportOptions,

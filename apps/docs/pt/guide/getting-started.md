@@ -96,11 +96,14 @@ cp .env.example .env
 
 O `.env.example` lista `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` e — com auth — um
 `APP_SECRET` comentado. Todos são declarados e validados em `src/env.ts` com o
-[`@basaltkit/env`](/pt/guide/config), e todos têm predefinições de
-desenvolvimento, por isso a app arranca mesmo com um ambiente vazio. O
-`APP_SECRET` usa `secret({ minLength: 32 })`: recai num valor descartável em
-desenvolvimento e **recusa arrancar em produção** enquanto não definires um a
-sério com pelo menos 32 caracteres (`openssl rand -base64 48`).
+[`@basaltkit/env`](/pt/guide/config). O `pnpm dev` corre o `src/dev.ts`, que
+define `NODE_ENV=development` (se ainda não estiver definido), por isso a app
+arranca mesmo com um ambiente vazio. O `APP_SECRET` usa
+`secret({ minLength: 32 })`: recai num valor descartável **apenas** com
+`NODE_ENV=development`/`test`. O `pnpm start` corre o `src/server.ts`
+diretamente, onde um `NODE_ENV` não definido conta como produção, por isso
+**recusa arrancar** enquanto não definires um `APP_SECRET` a sério com pelo
+menos 32 caracteres (`openssl rand -base64 48`).
 
 ::: tip Dica: o `.env` não é carregado por ti
 O `defineEnv` lê o `process.env` e mais nada — copiar o ficheiro não torna os

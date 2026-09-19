@@ -60,7 +60,7 @@ Wire the store before its model exists and it **fails fast** with a message nami
 
 ## API
 
-`PrismaWebhookStore` implements the full `WebhookStore` contract — `add` (auto `id`; re-adding an id replaces it), `forEvent(event, tenantId?)` (active, tenant-scoped, event-pattern matched), `list(tenantId?)`, `remove`. Event patterns are stored as a JSON array; matching (`*`, `prefix.*`, exact) reuses `matchesEvent` from `@basaltkit/webhooks`, identical to the memory store.
+`PrismaWebhookStore` implements the full `WebhookStore` contract — `add` (auto `id`; re-adding an id replaces it), `forEvent(event, tenantId?)` (active, tenant-scoped, event-pattern matched; fail-closed — with no tenant only tenant-agnostic endpoints are returned), `list(tenantId?)`, `remove`. Event patterns are stored as a JSON array; matching (`*`, `prefix.*`, exact) reuses `matchesEvent` from `@basaltkit/webhooks`, identical to the memory store.
 
 ## Which backend?
 

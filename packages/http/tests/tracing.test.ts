@@ -45,3 +45,22 @@ describe('tracingPlugin (neutral, via collector)', () => {
     expect(exporter.spans[0]!.status).toBe('ok')
   })
 })
+
+describe('tracing spans never carry query-string secrets', () => {
+  it('masks query values in http.target and keeps them out of the span name', async () => {
+    const exporter = new InMemorySpanExporter()
+    const c = new HttpServerCollector()
+    const app = await bootWith(c, [tracingPlugin({ exporter })])
+    // No routePattern: Express/Hono pre-hooks run before routing.
+    const request = makeRequest({ url: '/auth/callback?code=OAUTHCODE&state=abc' })
+    const reply = new FakeReply()
+    await c.runPre(request, reply)
+    await c.runAfter(request, reply, 200, 1)
+    await app.shutdown()
+
+    const span = exporter.spans[0]!
+    expect(span.attributes['http.target']).toBe('/auth/callback?code=[REDACTED]&state=[REDACTED]')
+    expect(span.name).toBe('GET /auth/callback')
+    expect(JSON.stringify(span)).not.toContain('OAUTHCODE')
+  })
+})

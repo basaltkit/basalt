@@ -95,7 +95,7 @@ Without registering anything, `runCli` always provides:
 | `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
 | `basalt dev [--entry] [--worker] [--queue] [--no-routes]` | Runs the app with watch + restart, **prints the route table on boot**, and with `--worker` also starts a watched `queue:work` alongside it (server + worker in one command). Delegates watching to `tsx watch` / `node --watch`. |
 | `basalt upgrade [--dry] [--only=<id>]` | Applies framework upgrade codemods (ships the `@machize/*` → `@basaltkit/*` scope rename; `--dry` previews) |
-| `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile`, `ci`, `editorconfig` (run with no id to list) |
+| `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile` (plus a `.dockerignore` keeping `.env` and keys out of the image), `ci`, `editorconfig` (run with no id to list) |
 
 If you also install `@basaltkit/generator`, you gain the `make:*` commands. Feature
 plugins register their own: `queue:work|stats|retry|jobs` (`@basaltkit/queue`),

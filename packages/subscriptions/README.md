@@ -127,8 +127,16 @@ const { url } = await subscriptions.checkout('acme', 'pro', {
 **A checkout never overwrites a live subscription.** When one already exists, the intent is
 recorded as `pendingPlan` / `pendingPeriod` instead of mutating `plan`/`status`/`gatewayRef`.
 `handleWebhook` promotes it only when the gateway confirms payment with a **new** gateway
-ref — so an abandoned checkout can't escalate the plan on the next legitimately-signed
-renewal webhook. If you implement `SubscriptionStore` yourself, persist `pendingPlan` and
+ref **and** attests that the paid plan (`WebhookEvent.plan`, from signed metadata the
+built-in drivers stamp next to the charged price) is that intent — so neither an abandoned
+checkout nor paying an older, cheaper checkout session can escalate the plan. `canceled` is
+terminal for the canceled gateway subscription: late payment events for the same ref are
+ignored; only a new subscription reactivates. The attestation is also bound to the price the
+event actually charges (Stripe invoice lines / subscription items, Paddle `items`; for Lemon
+Squeezy, whose custom data is immutable, only the initial invoice attests), because metadata
+stamped at checkout goes stale when the price changes later (a swap or the gateway's portal).
+Custom drivers should set `plan`/`period` on the `WebhookEvent` (see `attestedPlanForPrice()`);
+without them a plan change is never applied. If you implement `SubscriptionStore` yourself, persist `pendingPlan` and
 `pendingPeriod`, and make sure clearing them (writing `null`) round-trips.
 
 ### Changing plans (swap)
@@ -585,7 +593,7 @@ are mapped straight to that HTTP status by the adapters.
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `secretKey` | `string` | Yes | — | Stripe API secret key |
-| `webhookSecret` | `string` | Yes | — | Endpoint secret (`whsec_...`) |
+| `webhookSecret` | `string` | Yes | — | Endpoint secret (`whsec_...`). Empty/missing → `verifyWebhook` throws `BILLING_WEBHOOK_SECRET_MISSING` (fail closed; same for Paddle and Lemon Squeezy) |
 | `priceId` | `(plan, period) => string` | Yes | — | Maps plan+period → Stripe Price ID |
 | `customerId` | `(billableId) => string \| Promise<string>` | Yes | — | Gets/ensures the Stripe Customer ID |
 | `resolveBillableId` | `(event) => string \| undefined` | No | reads `metadata.billableId` | (Advanced) extracts the billable from an event |
@@ -628,10 +636,12 @@ Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`
 
 | Option | Type | Default | Purpose |
 |---|---|---|---|
-| `successUrl` | `string` | — (required) | Where the gateway returns the customer after a successful Checkout. The request body may override it per call. |
+| `successUrl` | `string` | — (required) | Where the gateway returns the customer after a successful Checkout. The request body may override it per call, but only with a URL on an allowed origin (else `400 BILLING_REDIRECT_NOT_ALLOWED`). |
 | `cancelUrl` | `string` | — (required) | Where the gateway returns them on abandonment. |
 | `portalReturnUrl` | `string` | `successUrl` | Where the Customer Portal returns them. |
 | `auth` | `boolean` | `true` | Stamps `meta: { auth: true }` on both routes. Set `false` **only** when an outer edge authenticates — these routes mint live payment-management URLs for the current tenant. |
+| `meta` | `RouteMeta` | — | Extra meta merged into both routes to require a billing role, e.g. `{ teamRole: 'owner' }` or `{ can: 'billing:manage' }`. Without it any authenticated tenant member can manage billing. Cannot switch `auth` off. |
+| `allowedRedirectOrigins` | `string[]` | — | Extra origins (https; http only for localhost) that body `successUrl`/`cancelUrl`/`returnUrl` overrides may use, besides the configured URLs' origins. |
 
 `invoiceRoutes({ auth? })` takes the same `auth` option, with the same `true` default and the same warning: invoices are a tenant's payment history.
 

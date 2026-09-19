@@ -14,7 +14,7 @@ Basalt's integration with Prisma: connects your application to the database in a
 
 This module supports the three classic isolation strategies and handles the tedious work for each:
 
-1. **Shared database** — all tenants in the same database, each row with a `tenantId` column. The `tenancyExtension()` extension intercepts **every** query and injects the current tenant's filter: it's impossible for application code to forget the `where: { tenantId }` or try to bypass it.
+1. **Shared database** — all tenants in the same database, each row with a `tenantId` column. The `tenancyExtension()` extension intercepts **every** query and injects the current tenant's filter (or refuses the query when it cannot scope it): application code cannot forget the `where: { tenantId }` or override it. Pair it with composite foreign keys and RLS for database-level isolation (see *Limits* below).
 2. **Schema per tenant** (PostgreSQL) — one database, but each tenant has its own *schema* (a "compartment" with its own tables). The module derives safe schema names, builds connection URLs with the right schema, and creates schemas when needed.
 3. **Database per tenant** — maximum isolation: each tenant has its own database. The module manages an **LRU pool** of Prisma clients (keeps only the N most recent ones open, closes the rest) so connections don't explode.
 
@@ -84,11 +84,14 @@ That's it: reads are filtered by tenant, creates are stamped with the right `ten
 
 ### Mode 1 — Shared database (`tenancyExtension`)
 
-The extension covers every operation on every model:
+The extension scopes every model operation it knows, and **refuses** (fails closed) anything it cannot scope:
 
-- **Reads and writes with `where`** (`findMany`, `findFirst`, `findUnique`, `count`, `aggregate`, `groupBy`, `update`, `updateMany`, `delete`, `deleteMany`): the `tenantId` filter is **forced** — even if the code passes `where: { tenantId: 'other' }`, the current tenant's filter wins.
-- **Creates** (`create`, `createMany`, `createManyAndReturn`): `tenantId` is stamped onto the data.
-- **`upsert`**: the `where` is filtered and the `create` branch is stamped; the `update` branch is left untouched.
+- **Reads and writes with `where`** (`findMany`, `findFirst`, `findUnique`, `count`, `aggregate`, `groupBy`, `update`, `updateMany`, `updateManyAndReturn`, `delete`, `deleteMany`): the `tenantId` filter is **forced** — even if the code passes `where: { tenantId: 'other' }`, the current tenant's filter wins.
+- **Creates** (`create`, `createMany`, `createManyAndReturn`): `tenantId` is stamped onto the data (overriding any value the caller passed).
+- **`upsert`**: the `where` is filtered, the `create` branch is stamped, and the `update` branch may not change `tenantId`.
+- **Updates cannot move rows between tenants**: setting `tenantId` to another tenant in `update`/`updateMany`/`updateManyAndReturn`/`upsert` data throws `CrossTenantWriteError` (`PRISMA_CROSS_TENANT_WRITE`).
+- **Nested relation writes** inside `data` are scoped too: nested `create`/`createMany`/`connectOrCreate.create` are stamped with the tenant, and `connect`, `connectOrCreate.where`, `set`, `disconnect`, `update`, `updateMany`, `upsert`, `delete` and `deleteMany` get the tenant filter — a relation cannot be linked to, or modify, another tenant's row.
+- **Raw and unknown operations** inside a tenant context throw: `$queryRaw`, `$executeRaw`, `$queryRawUnsafe`, `$executeRawUnsafe`, `$queryRawTyped`, `$runCommandRaw` (any client-level operation) and MongoDB's `findRaw`/`aggregateRaw` throw `RawQueryInTenantContextError` (`PRISMA_RAW_IN_TENANT`); any other model operation the extension does not know (e.g. one added by a future Prisma release) throws `UnscopedOperationError` (`PRISMA_UNSCOPED_OPERATION`) instead of running unscoped.
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -97,14 +100,24 @@ import { tenancyExtension } from '@basaltkit/prisma'
 const prisma = new PrismaClient().$extends(
   tenancyExtension({
     tenantField: 'tenantId',      // column name (default: 'tenantId')
-    onMissingTenant: 'bypass',    // no tenant in context: 'bypass' (default) runs without a filter
-                                  // — useful for administrative/central context;
-                                  // 'error' throws MissingTenantError — strict isolation
+    // onMissingTenant defaults to 'error': a query with no tenant in context
+    // throws MissingTenantError instead of running across every tenant.
   }),
 )
 ```
 
+Central/admin code that must read across tenants should use a **separate, explicitly named** client — never put `'bypass'` on the app's main client:
+
+```ts
+// Only for trusted central code paths (back-office jobs, migrations, …).
+export const adminPrisma = new PrismaClient().$extends(
+  tenancyExtension({ onMissingTenant: 'bypass' }),
+)
+```
+
 Note on `findUnique`/`update`/`delete`: since Prisma 5, the unique `where` accepts extra fields as additional filters — the module injects `tenantId` there, so a row from another tenant simply "isn't found".
+
+**Limits — add database-level isolation.** The extension works on query arguments, so it cannot know which scalar columns are foreign keys: `data: { projectId: '<another tenant's id>' }` is not checked, and an `include`/`select` of a relation follows whatever foreign key is stored. Make foreign keys composite (`@relation(fields: [tenantId, projectId], references: [tenantId, id])` with `@@unique([tenantId, id])` on the target) so the database refuses cross-tenant links, and enable RLS (`rlsPolicySql`) as defense in depth. Relation-write detection is by shape (an object whose keys are all nested-write operations), so a `Json` column whose value looks exactly like `{ create: … }` would be treated as a relation write.
 
 ### Mode 2 — Schema per tenant (PostgreSQL)
 
@@ -123,14 +136,23 @@ const app = await createApp({
         createClient: (url) => new PrismaClient({ datasourceUrl: url }),
         prefix: 'tenant_',              // default: 'tenant_'
       },
-      destroy: (client) => client.$disconnect(), // closes clients when they leave the pool
+      destroy: (client) => client.$disconnect(), // default: $disconnect() when the client has one
       max: 10,                                    // max clients open at once
     }),
   ],
 }).boot()
 ```
 
-The schema name is derived with `tenantSchema(tenantId)`: lowercase, `[a-z0-9_]` only, max 63 characters — invalid ids throw `InvalidTenantSchemaError`. To create a new tenant's schema:
+The schema name is derived with `tenantSchema(tenantId)`, and two different tenant ids never map to the same schema:
+
+- a **canonical** id — lowercase `[a-z0-9]` words joined by single underscores (`acme`, `acme_co`) — is used as-is: `tenant_acme`;
+- **any other** id (uppercase, `-`, `.`, `__`, UUIDs, …) gets a readable part plus `__` and a SHA-256-based suffix of the raw id: `Acme-Co` → `tenant_acme_co__<16 hex>`. So `ACME` or `acme-co` can never land in the schema of `acme` or `acme_co`.
+
+Names are at most 63 characters; ids with no letters or digits, over-long canonical ids and ids containing a lone UTF-16 surrogate (which UTF-8 would turn into U+FFFD) throw `InvalidTenantSchemaError`.
+
+> **Upgrading from `@basaltkit/prisma` < 1.8:** earlier versions lowercased and replaced characters (`Acme-Co` → `tenant_acme_co`), which let different ids share a schema. Canonical ids keep their schema name; for any tenant whose id is not canonical, rename its schema once (`ALTER SCHEMA "<old>" RENAME TO "<tenantSchema(id)>"`) after checking that no two tenants shared it.
+
+To create a new tenant's schema:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -162,7 +184,7 @@ const app = await createApp({
 }).boot()
 ```
 
-The pool is **LRU** (*least recently used*): when the limit is exceeded, the tenant client that's gone longest without use is closed (via `destroy`). Active tenants always reuse the same client.
+The pool is **LRU** (*least recently used*): when the limit is exceeded, the tenant client that's gone longest without use is closed (via `destroy`, which defaults to `client.$disconnect()`). Active tenants always reuse the same client, and concurrent first requests for a cold tenant share a single client creation — a burst of requests cannot open duplicate clients.
 
 You can combine `client` (for the central, tenant-less context) with `forTenant`/`schemaPerTenant` (for requests with a tenant) in the same plugin. That is what lets one app serve both worlds:
 
@@ -252,7 +274,7 @@ Registers the client(s) in the container (`DB`, `DB_POOL`), attaches the client 
 | `client` | `TClient` | No* | — | Shared mode: one client for everyone (typically with `$extends(tenancyExtension())`). Also used as the client for the tenant-less context in the other modes. |
 | `forTenant` | `(tenantId: string) => TClient \| Promise<TClient>` | No* | — | Database-per-tenant mode: client factory. |
 | `schemaPerTenant` | `{ url: string; createClient: (url: string) => TClient \| Promise<TClient>; prefix?: string }` | No* | `prefix: 'tenant_'` | Schema-per-tenant mode: base URL + factory from the URL with `?schema=`. |
-| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | — | Called when a client leaves the pool (e.g. `client.$disconnect()`). |
+| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | `client.$disconnect()` when present | Called when a client leaves the pool. |
 | `max` | `number` | No | `10` | Max per-tenant clients open at once. |
 
 \* Use at least one of the three: `client`, `forTenant`, or `schemaPerTenant` (`forTenant` takes priority over `schemaPerTenant`).
@@ -269,11 +291,12 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 |---|---|---|---|---|
 | `tenantField` | `string` | No | `'tenantId'` | Name of the column holding the tenant id. |
 | `getTenantId` | `() => string \| undefined` | No | reads `ctx().tenant.id` | How to get the current tenant. |
-| `onMissingTenant` | `'bypass' \| 'error'` | No | `'bypass'` | No tenant in context: `'bypass'` runs without a filter (central/admin context); `'error'` throws `MissingTenantError`. |
+| `onMissingTenant` | `'bypass' \| 'error'` | No | `'error'` | No tenant in context: `'error'` throws `MissingTenantError` (fail closed); `'bypass'` runs without a filter — only on a separate central/admin client, never on the app's main client. |
+| `onRawInTenant` | `'allow' \| 'error'` | No | `'error'` | Raw/client-level operations (`$queryRaw`, `$executeRaw`, `$queryRawTyped`, `$runCommandRaw`, `findRaw`, `aggregateRaw`, …) inside a tenant context: `'error'` throws `RawQueryInTenantContextError`; `'allow'` runs them as-is (only for queries you scoped by hand). |
 
 ### `applyTenantScope(operation, args, tenantId, field)` (Advanced)
 
-`applyTenantScope(operation: string, args: Record<string, unknown> | undefined, tenantId: string, field: string): Record<string, unknown>` — the pure transformation used by the extension; useful for tests or your own integrations.
+`applyTenantScope(operation: string, args: Record<string, unknown> | undefined, tenantId: string, field: string): Record<string, unknown>` — the pure transformation used by the extension; useful for tests or your own integrations. Throws `UnscopedOperationError` for an operation it cannot scope and `CrossTenantWriteError` when update data changes the tenant field.
 
 ### `class TenantClientPool<TClient>` (Advanced)
 
@@ -282,7 +305,7 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `create` | `(tenantId: string) => TClient \| Promise<TClient>` | Yes | — | Creates a tenant's client. |
-| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | — | Called on eviction. |
+| `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | `client.$disconnect()` when present | Called on eviction. |
 | `max` | `number` | No | `10` | Max clients open (minimum 1). |
 
 | Member | Signature | Description |
@@ -296,7 +319,7 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 
 | Export | Signature | Description |
 |---|---|---|
-| `tenantSchema` | `tenantSchema(tenantId: string, options?: { prefix?: string }): string` | Derives a safe PostgreSQL schema identifier (`prefix` default `'tenant_'`; lowercase, `[a-z0-9_]`, max 63 characters). Throws `InvalidTenantSchemaError`. |
+| `tenantSchema` | `tenantSchema(tenantId: string, options?: { prefix?: string }): string` | Derives a safe, injective PostgreSQL schema identifier (`prefix` default `'tenant_'`; canonical ids verbatim, other ids with a `__<hash>` suffix; max 63 characters). Throws `InvalidTenantSchemaError`. |
 | `schemaUrl` | `schemaUrl(baseUrl: string, schema: string): string` | Returns the connection URL with the `?schema=` parameter set. |
 | `provisionTenantSchema` | `provisionTenantSchema(client: SchemaProvisioner, schema: string): Promise<void>` | Runs `CREATE SCHEMA IF NOT EXISTS` (name validated before interpolating). |
 | `SchemaProvisioner` | `{ $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number> }` | Interface satisfied by a `PrismaClient`. |
@@ -351,7 +374,10 @@ Returns a `CommandDefinition` (`@basaltkit/cli`) named `tenant:migrate`.
 | `DB` | Token for the shared client in the container. (Advanced) |
 | `DB_POOL` | Token for the `TenantClientPool` in the container. (Advanced) |
 | `DbUnavailableError` | Code `DB_UNAVAILABLE` — `db()` outside context. |
-| `MissingTenantError` | Code `PRISMA_TENANT_MISSING` — query without a tenant with `onMissingTenant: 'error'`. |
+| `MissingTenantError` | Code `PRISMA_TENANT_MISSING` — query without a tenant with `onMissingTenant: 'error'` (the default). |
+| `RawQueryInTenantContextError` | Code `PRISMA_RAW_IN_TENANT` — raw/client-level operation inside a tenant context. |
+| `UnscopedOperationError` | Code `PRISMA_UNSCOPED_OPERATION` — an operation the extension cannot scope, inside a tenant context. |
+| `CrossTenantWriteError` | Code `PRISMA_CROSS_TENANT_WRITE` — update data tried to set the tenant field to another tenant. |
 | `InvalidTenantSchemaError` | Code `PRISMA_INVALID_SCHEMA` — tenant id without a valid schema identifier. |
 | `EmptyTenantSchemaError` | Code `PRISMA_TENANT_SCHEMA_EMPTY` — the migration exited cleanly but produced no tables. |
 
@@ -361,7 +387,7 @@ Returns a `CommandDefinition` (`@basaltkit/cli`) named `tenant:migrate`.
 You called `db()` outside an HTTP request or `tenancy.run()`, or `prismaPlugin` isn't registered. In scripts/jobs, run the code inside `tenancy.run()` (or use your `PrismaClient` directly).
 
 **`PRISMA_TENANT_MISSING` on a query.**
-You configured `onMissingTenant: 'error'` and the query ran without a tenant in context. Either identify the tenant beforehand (tenancy plugin / `tenancy.run()`), or use `'bypass'` to allow central queries without a filter.
+The query ran without a tenant in context (`onMissingTenant` defaults to `'error'`). Identify the tenant beforehand (tenancy plugin / `tenancy.run()`). For deliberate central queries use a separate admin client built with `onMissingTenant: 'bypass'` — do not set it on the main client.
 
 **I passed `where: { tenantId: 'other' }` and "it didn't work".**
 That's expected: the extension forces the current tenant's filter over whatever the code passes — that's the isolation guarantee. For cross-tenant operations use a client without the extension (administrative context).
@@ -376,7 +402,7 @@ Correct — switching `search_path` per request on a shared pool isn't reliable 
 The id doesn't produce a valid PostgreSQL identifier (e.g. only symbols, or name over 63 characters with the prefix). Use simple ids (lowercase letters, numbers, `_`) or a shorter `prefix`.
 
 **Too many database connections in per-tenant mode.**
-Adjust `max` on `prismaPlugin` (default 10) and make sure you pass `destroy: (client) => client.$disconnect()` — without it, clients evicted from the pool keep their connection open.
+Adjust `max` on `prismaPlugin` (default 10). Evicted clients are closed with `client.$disconnect()` by default; pass `destroy` only if your client needs a different teardown.
 
 **`prismaMigrator` fails with "command not found" or can't find the schema.**
 It needs the Prisma CLI available (`pnpm add -D prisma`), and if `schema.prisma` isn't in the usual place, pass `schemaPath`.
@@ -408,7 +434,7 @@ A loaded config also makes Prisma skip its usual `.env` loading, so the config m
 ## How it connects to other modules
 
 - **`@basaltkit/core`** — provides `createApp`, the container, the hooks, and the request context; this module adds `ctx().db` to `RequestContext`.
-- **`@basaltkit/tenancy`** — identifies each request's tenant and emits `tenancy:switched`; without a tenant in context, the extension bypasses (or throws, depending on configuration) and the plugin uses the central client.
+- **`@basaltkit/tenancy`** — identifies each request's tenant and emits `tenancy:switched`; without a tenant in context, the extension throws `MissingTenantError` (unless that client was built with `'bypass'`) and the plugin uses the central client.
 - **`@basaltkit/cli`** — `tenantMigrateCommand` is a `defineCommand` command registered via `commandsPlugin` and run with the `basalt` binary.
 - **`@basaltkit/http` / `@basaltkit/express` / `@basaltkit/fastify` / `@basaltkit/hono`** — the plugin registers an HTTP *enricher* that attaches the client to each request's context, so `db()` works in handlers.
 - **`@basaltkit/cache`** — combines `db()` with `cache.remember(...)` to speed up expensive queries, with consistent per-tenant isolation across both modules.

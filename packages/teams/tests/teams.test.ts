@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
-import { MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
+import { AUTH, MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
 import { createHash } from 'node:crypto'
 import {
@@ -155,8 +155,13 @@ async function makeApp() {
 
 const tenant = { 'x-tenant-id': 'acme' }
 
-async function registerAndLogin(server: Awaited<ReturnType<typeof makeApp>>['server'], email: string) {
+async function registerAndLogin(app: Awaited<ReturnType<typeof makeApp>>['app'], email: string) {
+  const server = app.container.get(FASTIFY)
   await server.inject({ method: 'POST', url: '/auth/register', payload: { email, password: 'password123' } })
+  // Invite acceptance requires a verified address; stand in for the verify-email flow.
+  const auth = app.container.get(AUTH)
+  const user = await auth.users.findByEmail(email)
+  if (user && auth.users.update) await auth.users.update(user.id, { emailVerified: true })
   const login = await server.inject({ method: 'POST', url: '/auth/login', payload: { email, password: 'password123' } })
   return { access: login.json().accessToken as string, id: login.json().user.id as string }
 }
@@ -165,7 +170,7 @@ describe('Team HTTP flow', () => {
   it('owner invites, member accepts, and role guards are enforced', async () => {
     const { app, server, teams } = await makeApp()
 
-    const owner = await registerAndLogin(server, 'owner@acme.test')
+    const owner = await registerAndLogin(app, 'owner@acme.test')
     await teams.addMember('acme', owner.id, 'owner')
     const ownerAuth = { authorization: `Bearer ${owner.access}`, ...tenant }
 
@@ -186,7 +191,7 @@ describe('Team HTTP flow', () => {
     expect(inviteToken).toBeTruthy()
 
     // bob accepts
-    const bob = await registerAndLogin(server, 'bob@acme.test')
+    const bob = await registerAndLogin(app, 'bob@acme.test')
     const accept = await server.inject({
       method: 'POST',
       url: '/team/invites/accept',

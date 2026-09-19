@@ -227,10 +227,15 @@ export class Subscriptions {
       })
     }
 
-    record.plan = planName
-    await this.store.save(record)
-    await this.hooks?.emit('billing:swapped', { subscription: record, from })
-    return record
+    // Re-read after the gateway round-trip and apply the change to the CURRENT
+    // state: a cancel (or webhook) that landed meanwhile must not be
+    // overwritten by the stale copy read above.
+    const current = (await this.store.get(billableId)) ?? record
+    if (!this.isActive(current)) throw new NotSubscribedError()
+    current.plan = planName
+    await this.store.save(current)
+    await this.hooks?.emit('billing:swapped', { subscription: current, from })
+    return current
   }
 
   async cancel(
@@ -244,15 +249,18 @@ export class Subscriptions {
     if (record.gatewayRef) {
       await this.gateway?.cancelSubscription(record.gatewayRef, { atPeriodEnd })
     }
+    // Apply to the state as it is NOW (re-read after the gateway round-trip),
+    // so a concurrent swap/webhook is neither lost nor able to undo the cancel.
+    const current = (await this.store.get(billableId)) ?? record
     if (atPeriodEnd) {
-      record.cancelAtPeriodEnd = true
+      current.cancelAtPeriodEnd = true
     } else {
-      record.status = 'canceled'
-      record.canceledAt = Date.now()
+      current.status = 'canceled'
+      current.canceledAt = Date.now()
     }
-    await this.store.save(record)
-    await this.hooks?.emit('billing:canceled', { subscription: record })
-    return record
+    await this.store.save(current)
+    await this.hooks?.emit('billing:canceled', { subscription: current })
+    return current
   }
 
   async resume(billableId: string): Promise<SubscriptionRecord> {
@@ -343,21 +351,17 @@ export class Subscriptions {
         if (event.type === 'subscription.canceled') {
           record.status = 'canceled'
           record.canceledAt = Date.now()
+          // Remember WHICH subscription ended: later events for it (a final
+          // invoice delivered after the deletion) are then recognised as stale.
+          if (event.gatewayRef) record.gatewayRef = event.gatewayRef
+        } else if (record.status === 'canceled' && !refIsNew) {
+          // `canceled` is terminal for the subscription that was canceled. A
+          // late or re-delivered payment event for it (same ref, or no ref)
+          // must not revive access — only a NEW gateway subscription can.
         } else if (event.type === 'payment.failed') {
           record.status = 'past_due'
         } else if (event.type === 'payment.succeeded') {
-          if (record.pendingPlan !== undefined && refIsNew && event.gatewayRef !== undefined) {
-            // The gateway confirmed the NEW checkout: promote the intent and
-            // adopt the new subscription ref (it supersedes the old one).
-            record.plan = record.pendingPlan
-            record.period = record.pendingPeriod ?? record.period
-            record.gatewayRef = event.gatewayRef
-            delete record.pendingPlan
-            delete record.pendingPeriod
-            delete record.trialEndsAt
-          }
-          record.status = 'active'
-          record.cancelAtPeriodEnd = false
+          this.applyPaymentSucceeded(record, event, refIsNew)
         }
         await this.store.save(record)
       }
@@ -370,6 +374,71 @@ export class Subscriptions {
 
     await this.hooks?.emit('billing:webhook', { event })
     return true
+  }
+
+  /**
+   * `payment.succeeded` transition. A plan change is only ever taken from what
+   * the gateway attests was PAID (`event.plan`, signed metadata the driver set
+   * next to the charged price) — never from the latest checkout intent alone,
+   * which any member can overwrite by starting another checkout (paying the
+   * cheap session must not grant the expensive intent).
+   */
+  private applyPaymentSucceeded(record: SubscriptionRecord, event: WebhookEvent, refIsNew: boolean): void {
+    const paidPlan =
+      event.plan !== undefined && Object.hasOwn(this.plans, event.plan) ? event.plan : undefined
+    const activate = (): void => {
+      record.status = 'active'
+      record.cancelAtPeriodEnd = false
+      delete record.canceledAt
+    }
+    const adoptPaid = (plan: string): void => {
+      const period =
+        event.period ?? (record.pendingPlan === plan ? record.pendingPeriod : undefined) ?? record.period
+      if (plan !== record.plan) delete record.trialEndsAt
+      record.plan = plan
+      record.period = period
+      if (event.gatewayRef !== undefined) record.gatewayRef = event.gatewayRef
+      if (record.pendingPlan === plan) {
+        delete record.pendingPlan
+        delete record.pendingPeriod
+      }
+    }
+
+    // No live subscription yet (first checkout) or any more (canceled — only a
+    // NEW ref reaches here): the confirmed payment defines the subscription.
+    if (record.status === 'incomplete' || record.status === 'canceled') {
+      if (paidPlan !== undefined) {
+        adoptPaid(paidPlan)
+        activate()
+        return
+      }
+      // No attestation (custom driver): activate only when it is unambiguous
+      // which plan was bought — a single intent. Otherwise fail closed and
+      // leave the state for the app to reconcile from the `billing:webhook` hook.
+      const ambiguous =
+        record.pendingPlan !== undefined &&
+        (record.pendingPlan !== record.plan ||
+          (record.pendingPeriod !== undefined && record.pendingPeriod !== record.period))
+      if (ambiguous) return
+      if (refIsNew && event.gatewayRef !== undefined) record.gatewayRef = event.gatewayRef
+      delete record.pendingPlan
+      delete record.pendingPeriod
+      activate()
+      return
+    }
+
+    // Live subscription: only a NEW gateway subscription whose attested plan is
+    // the recorded intent may change the plan. A renewal (same ref / no ref),
+    // an unattested payment, or a payment for a different plan never promotes.
+    if (
+      refIsNew &&
+      event.gatewayRef !== undefined &&
+      record.pendingPlan !== undefined &&
+      paidPlan === record.pendingPlan
+    ) {
+      adoptPaid(paidPlan)
+    }
+    activate()
   }
 
   /**

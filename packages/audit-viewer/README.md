@@ -32,7 +32,8 @@ const app = await createApp({
   plugins: [
     auditPlugin(),
     auditViewerPlugin(),
-    fastifyPlugin({ routes: [...auditViewerRoutes()] }),
+    // plus authPlugin + the plugin behind your guard (permissions, teams, ...)
+    fastifyPlugin({ routes: [...auditViewerRoutes({ meta: { can: 'audit:read' } })] }),
   ],
 }).boot()
 
@@ -44,7 +45,7 @@ const stats = await viewer.stats({ tenantId: 'acme' })
 
 ## Routes
 
-`auditViewerRoutes()` (all require login — add your own admin *guard* on top):
+`auditViewerRoutes({ meta })` — every route requires login **and** the guard you pass as `meta` (e.g. `{ can: 'audit:read' }` or `{ teamRole: 'admin' }`). Without a guard it throws `AuditViewerUnguardedError`, unless you opt out explicitly with `allowAnyAuthenticated: true`. A `meta` whose only keys authorize nobody (`rateLimit`, `tags`, `central`, …) or whose guard value is empty (`''`, `null`, `false`, `[]`) counts as no guard:
 
 | Route | Description |
 |---|---|
@@ -53,14 +54,14 @@ const stats = await viewer.stats({ tenantId: 'acme' })
 | `GET /audit/:id` | A single entry. |
 | `GET /audit/view` | HTML page for browsing (filters + table + pagination). |
 
-All are **tenant-isolated** (the tenant comes from the request context).
+All are **tenant-isolated** (the tenant comes from the request context; inside a tenant context an explicit `tenantId` must match it).
 
 ## The HTML page
 
 `GET /audit/view` serves a vanilla page (no build step, no dependencies) that calls the JSON routes and shows a filterable table with pagination. Customize the title/base path:
 
 ```ts
-auditViewerRoutes({ title: 'Audit — Acme', apiBase: '/admin' })
+auditViewerRoutes({ meta: { can: 'audit:read' }, title: 'Audit — Acme', apiBase: '/admin' })
 ```
 
 ## API reference
@@ -85,7 +86,7 @@ Registers the `AUDIT_VIEWER` token.
 | `stats(query)` | `{ total, truncated, byEvent, byActor, bySource, timeline }`. |
 | `get(id, tenantId?)` | A single entry, or `null`. |
 
-`ViewerQuery`: `event` (wildcard), `actorId`, `tenantId`, `source` (`hook`/`event`/`manual`), `since`, `until`, `limit`, `offset`. Without `tenantId`, it uses `ctx().tenant.id` (otherwise `AuditTenantRequiredError`).
+`ViewerQuery`: `event` (wildcard), `actorId`, `tenantId`, `source` (`hook`/`event`/`manual`), `since`, `until`, `limit`, `offset`. Without `tenantId`, it uses `ctx().tenant.id` (otherwise `AuditTenantRequiredError`). Inside a tenant context an explicit `tenantId` must equal it, otherwise `AuditTenantMismatchError` (403).
 
 > Note: the extra filtering (source/until) and the aggregation happen in memory over the result of `Audit.trail`, bounded by `maxScan`. `truncated: true` means the trail had more matches than the window — raise `maxScan`, narrow the query (`since`/`until`/`event`), or use an `AuditStore` with richer database querying.
 

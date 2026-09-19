@@ -1,7 +1,4 @@
-import type { ProjectOptions } from './templates.js'
-
-/** Kept in sync with the monorepo release line (mirror of templates.ts). */
-const BASALT_VERSION = '^1.0.0'
+import { thirdPartyVersionOf, versionOf, type ProjectOptions } from './templates.js'
 
 /**
  * The `web/` frontend emitted when `--ui` is passed: a Vite + React app on
@@ -16,8 +13,6 @@ export function uiFiles(options: ProjectOptions): Record<string, string> {
     'web/vite.config.ts': webViteConfig(),
     'web/tsconfig.json': webTsconfig(),
     'web/index.html': webIndexHtml(options),
-    'web/postcss.config.js': webPostcss(),
-    'web/tailwind.config.js': webTailwind(),
     'web/src/main.tsx': webMain(),
     'web/src/crypto-shim.ts': webCryptoShim(),
     'web/src/index.css': webCss(),
@@ -32,27 +27,30 @@ function webPackageJson(options: ProjectOptions): string {
       name: `${options.name}-web`,
       private: true,
       type: 'module',
-      scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' },
+      scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview', typecheck: 'tsc --noEmit' },
       dependencies: {
-        '@basaltkit/admin': BASALT_VERSION,
-        '@basaltkit/admin-shadcn': BASALT_VERSION,
-        '@basaltkit/sdk': BASALT_VERSION,
-        react: '^18.3.1',
-        'react-dom': '^18.3.1',
-        // Matches the peer every @basaltkit package now declares. Scaffolding a
-        // zod 3 app would produce one that fails its own install.
-        zod: '^4.0.0',
+        '@basaltkit/admin': versionOf('@basaltkit/admin'),
+        '@basaltkit/admin-shadcn': versionOf('@basaltkit/admin-shadcn'),
+        '@basaltkit/sdk': versionOf('@basaltkit/sdk'),
+        react: thirdPartyVersionOf('react'),
+        'react-dom': thirdPartyVersionOf('react-dom'),
+        // Matches the peer every @basaltkit package declares (zod 4).
+        zod: thirdPartyVersionOf('zod'),
       },
-      devDependencies: {
-        '@types/react': '^18.3.0',
-        '@types/react-dom': '^18.3.0',
-        '@vitejs/plugin-react': '^4.3.0',
-        autoprefixer: '^10.4.0',
-        postcss: '^8.4.0',
-        tailwindcss: '^3.4.0',
-        typescript: '^5.8.0',
-        vite: '^6.0.0',
-      },
+      // Tailwind 4 runs as a Vite plugin (@tailwindcss/vite) — no PostCSS or
+      // autoprefixer config; the theme lives in src/index.css.
+      devDependencies: Object.fromEntries(
+        [
+          '@tailwindcss/vite',
+          '@types/node',
+          '@types/react',
+          '@types/react-dom',
+          '@vitejs/plugin-react',
+          'tailwindcss',
+          'typescript',
+          'vite',
+        ].map((pkg) => [pkg, thirdPartyVersionOf(pkg)]),
+      ),
     },
     null,
     2,
@@ -61,11 +59,12 @@ function webPackageJson(options: ProjectOptions): string {
 
 function webViteConfig(): string {
   return `import { fileURLToPath } from 'node:url'
+import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       // @basaltkit/admin uses randomUUID from crypto; map it to Web Crypto in the browser.
@@ -102,7 +101,9 @@ function webTsconfig(): string {
         noEmit: true,
         allowImportingTsExtensions: true,
         verbatimModuleSyntax: true,
-        types: ['node'],
+        // vite/client types the CSS/asset imports (TS 6+ checks side-effect
+        // imports such as `import './index.css'`) and import.meta.env.
+        types: ['node', 'vite/client'],
       },
       include: ['src'],
     },
@@ -127,43 +128,6 @@ function webIndexHtml(options: ProjectOptions): string {
 `
 }
 
-function webPostcss(): string {
-  return `export default {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
-  },
-}
-`
-}
-
-function webTailwind(): string {
-  return `export default {
-  darkMode: ['class'],
-  content: ['./index.html', './src/**/*.{ts,tsx}', './node_modules/@basaltkit/admin-shadcn/dist/**/*.js'],
-  theme: {
-    extend: {
-      colors: {
-        border: 'hsl(var(--border))',
-        input: 'hsl(var(--input))',
-        ring: 'hsl(var(--ring))',
-        background: 'hsl(var(--background))',
-        foreground: 'hsl(var(--foreground))',
-        primary: { DEFAULT: 'hsl(var(--primary))', foreground: 'hsl(var(--primary-foreground))' },
-        secondary: { DEFAULT: 'hsl(var(--secondary))', foreground: 'hsl(var(--secondary-foreground))' },
-        destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--destructive-foreground))' },
-        muted: { DEFAULT: 'hsl(var(--muted))', foreground: 'hsl(var(--muted-foreground))' },
-        accent: { DEFAULT: 'hsl(var(--accent))', foreground: 'hsl(var(--accent-foreground))' },
-        card: { DEFAULT: 'hsl(var(--card))', foreground: 'hsl(var(--card-foreground))' },
-      },
-      borderRadius: { lg: 'var(--radius)', md: 'calc(var(--radius) - 2px)', sm: 'calc(var(--radius) - 4px)' },
-    },
-  },
-  plugins: [],
-}
-`
-}
-
 function webMain(): string {
   return `import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -184,9 +148,39 @@ function webCryptoShim(): string {
 }
 
 function webCss(): string {
-  return `@tailwind base;
-@tailwind components;
-@tailwind utilities;
+  return `@import 'tailwindcss';
+
+/* @basaltkit/admin-shadcn ships precompiled components: let Tailwind scan them
+   (paths are relative to this file, so ../node_modules is web/node_modules). */
+@source '../node_modules/@basaltkit/admin-shadcn/dist';
+
+/* Class-based dark mode: <html class="dark"> (the theme toggle sets it). */
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn/ui tokens → Tailwind utilities (bg-primary, text-muted-foreground,
+   border-input, rounded-lg, …). The values are the CSS variables below. */
+@theme inline {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
 
 @layer base {
   :root {
@@ -228,8 +222,18 @@ function webCss(): string {
     --input: 240 3.7% 18%;
     --ring: 243 75% 68%;
   }
-  * {
+  /* Tailwind 4 defaults borders to currentColor; keep the themed border. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
     border-color: hsl(var(--border));
+  }
+  /* Tailwind 4 dropped the pointer cursor on buttons; keep it. */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
   }
   body {
     margin: 0;

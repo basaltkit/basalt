@@ -87,7 +87,7 @@ business writes, so the enqueue can join their transaction.
 
 ### Contract details
 
-`PrismaOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts)` (unpublished, below the attempt ceiling, oldest first, tie-broken by `id`), `markPublished`, `markFailed` (increments `attempts`), `all`. Payloads are JSON-serialized into a text column; time is stored as `DateTime` and exposed as epoch-ms, matching the contract. Re-enqueuing the same `id` **replaces** the entry (`upsert` resets `attempts` to 0 and clears `publishedAt`/`lastError`), mirroring `MemoryOutboxStore`. `markPublished` and `markFailed` use `updateMany`, so a missing id is a no-op rather than a throw — again matching the memory store.
+`PrismaOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt ceiling, oldest first, tie-broken by `id`; `filter` excludes tenants — NULL-safe, so tenant-less rows are only dropped by `excludeGlobal` — which lets the relay stay fair across tenants), `markPublished`, `markFailed` (increments `attempts`), `all`. Payloads are JSON-serialized into a text column; time is stored as `DateTime` and exposed as epoch-ms, matching the contract. Re-enqueuing the same `id` **replaces** the entry (`upsert` resets `attempts` to 0 and clears `publishedAt`/`lastError`), mirroring `MemoryOutboxStore`. `markPublished` and `markFailed` use `updateMany`, so a missing id is a no-op rather than a throw — again matching the memory store.
 
 ### Errors
 

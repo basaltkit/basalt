@@ -188,7 +188,24 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 
 `password` is validated at `min(8)` and `email` as an email address on every
 route that takes them — a shorter password is a `400` validation error, not a
-weak account.
+weak account. Inputs are also size-capped before any work is done: emails at 254
+characters, passwords at 1024 (whatever `password` policy you pass), tokens at
+512 — an oversized body is a `400`, never a hash.
+
+Emails are **case-insensitive identities**: `Auth` trims and lowercases every
+email before looking it up or creating an account, so `Bob@acme.test` and
+`bob@acme.test` are one account. The bundled stores also match rows written
+before that case-insensitively.
+
+The unauthenticated routes that hash, mail or guess — `register`, `login`,
+`verify/request`, `password/forgot` and `password/reset` — declare
+`meta.rateLimit: { limit: 10, windowMs: 60_000 }` (per client ip and route),
+enforced when `securityPlugin`'s rate limiter is on. Override or drop it with
+`authRoutes({ rateLimit: { limit, windowMs } })` / `authRoutes({ rateLimit: false })`.
+Independently of that, `Auth` sends at most 3 reset and 3 verification emails per
+account every 15 minutes (`emailRequestThrottle`): extra requests still answer
+`200` but mint no token, so the endpoints can't mail-bomb a user or keep
+invalidating the link they just received.
 
 ::: tip Nothing here reveals whether an account exists
 `POST /auth/register` answers the same `202 { ok: true }` for a fresh signup and
@@ -260,9 +277,16 @@ await auth.refresh(tokens.refreshToken)
 Consumption is a **compare-and-swap**, not a read-then-write: `markUsed` marks
 the token used only if it is still unused and reports whether *this* call did
 it. Two concurrent refreshes of the same token — the legitimate client and a
-thief racing it — resolve to exactly one winner and one `RefreshReusedError`;
+thief racing it — resolve to at most one winner and a `RefreshReusedError`;
 without the CAS both would succeed and reuse detection would never fire. The
-same applies to the single-use verification and reset tokens.
+loser revokes the family; if that lands before the winner has stored its rotated
+token, the winner is refused as well, so no token outlives its revoked family.
+The same CAS applies to the single-use verification and reset tokens. A refresh
+token whose user no longer exists is refused.
+
+`auth.revokeAllTokens(userId)` is a full "log out everywhere": it revokes every
+refresh token and server-side session of the user and, with a `tokenVersions`
+store, every outstanding access token.
 
 ::: tip Writing your own store
 `AuthTokenStore.markUsed` and `RefreshTokenStore.markUsed` return
@@ -315,6 +339,23 @@ authPlugin({
 
 A request with no credentials stays anonymous (no error); an explicit invalid or
 expired token returns `401 AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED`.
+
+### Cookie sessions and CSRF
+
+The session cookie is *ambient* — the browser attaches it to requests other
+sites trigger. So a request whose only credential is that cookie, with a method
+other than `GET`/`HEAD`/`OPTIONS`, is **not authenticated** when the browser marks
+it `Sec-Fetch-Site: cross-site` or `same-site` (a sibling subdomain, which
+`SameSite=Lax` does not stop), or when its `Origin` is neither the request's own
+host nor a trusted origin. A `meta.auth` route then answers
+`403 AUTH_CSRF_REJECTED`. Bearer tokens, `x-session-id` and API keys are not
+ambient and are unaffected; requests without browser metadata (curl, servers)
+pass. Allow a front-end served from another origin, or opt out:
+
+```ts
+authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] } })
+authPlugin({ users, secret, csrf: false }) // not recommended
+```
 
 ### `meta.auth` is verified at boot
 
@@ -386,6 +427,19 @@ A correct password with a missing code is **not** a failed attempt; a wrong code
 throws `MfaInvalidCodeError` and counts toward the throttle. Both a TOTP code and
 a recovery code are accepted (recovery codes are consumed on use). The TOTP
 implementation is dependency-free and verified against the RFC 6238 test vectors.
+
+`enrollMfa` on an account whose MFA is already on throws `MfaAlreadyEnabledError`
+(`409 AUTH_MFA_ALREADY_ENABLED`) — re-enrolling would switch the second factor off
+without a code; disable it with a code first. The MFA routes are session-only
+(`meta.apiKey: false`): an API key can never enroll or disable MFA.
+
+::: tip Writing your own `MfaStore`
+Implement the optional `consumeTotpStep(userId, step)` and
+`consumeRecoveryCode(userId, hash)` as conditional updates that return whether
+*this* call consumed the code (the memory, SQLite and Prisma stores do). Without
+them `Auth` falls back to read-then-write, and two parallel requests carrying the
+same captured code can both pass.
+:::
 
 ## Passkeys (WebAuthn)
 
@@ -474,8 +528,14 @@ default in-memory `PasskeyStore` / `WebAuthnChallengeStore` for durable ones.
 
 ## Social login (OAuth)
 
-Sign in with Google or GitHub via the OAuth 2.0 authorization-code flow — no SDK,
-and cookieless: the CSRF `state` is HMAC-signed and stateless.
+Sign in with Google or GitHub via the OAuth 2.0 authorization-code flow — no SDK.
+The flow is bound to the browser that started it: `GET /auth/oauth/:provider`
+sets a short-lived `HttpOnly`, `SameSite=Lax` cookie (`__Host-basalt_oauth` in
+production) holding a random binding; the HMAC-signed `state` carries its hash,
+the **PKCE** verifier (S256) and the OIDC `nonce` are derived from it, and the
+callback refuses a `state` that arrives without the matching cookie. Each `state`
+is single-use. An attacker's callback URL opened in a victim's browser (login
+CSRF) or an injected authorization code is therefore rejected.
 
 ```ts
 import {
@@ -503,18 +563,32 @@ Two routes per provider are added:
 
 - `GET /auth/oauth/:provider` → redirects to the provider. Register
   `${callbackBaseUrl}/auth/oauth/:provider/callback` as the provider's redirect URI.
-- `GET /auth/oauth/:provider/callback` → verifies the state, exchanges the code,
-  and logs the user in. The response is JSON `{ user, accessToken, refreshToken }`;
+- `GET /auth/oauth/:provider/callback` → verifies the state against the binding
+  cookie (then clears it), exchanges the code with the PKCE verifier, and logs the
+  user in. The response is JSON `{ user, accessToken, refreshToken }`;
   pass `successRedirect` to bounce the browser back to your SPA with the tokens in
   the URL fragment instead.
 
 New accounts are created **passwordless** (they authenticate via the provider
 until a password is set); a provider-verified email flips `emailVerified`.
-`Auth.socialLogin(email)` is the underlying primitive if you wire a custom provider.
+`Auth.socialLogin(email, { emailVerified })` is the underlying primitive if you
+wire a custom provider (or call `oauth.authorize()` / `oauth.callback({ …, binding })`
+yourself).
 
-::: warning Accounts are matched by email
-Only trust providers that return a **verified** email. Google and the built-in
-GitHub provider both do — GitHub's driver reads the primary *verified* address.
+::: warning Accounts are matched by email — only when the provider verified it
+Logging into an **existing** account requires the provider to vouch for the
+email (`emailVerified: true`); otherwise `socialLogin` throws
+`SocialLinkRefusedError` (`403 AUTH_SOCIAL_LINK_REFUSED`) and the user must sign
+in with their password. GitHub's driver treats the fallback `/user` email as
+unverified. When the existing account had never verified its own email (someone
+may have registered the address first), its password, sessions, refresh tokens
+and MFA are revoked before the verified owner is let in
+(`auth:social_account_adopted`).
+
+An existing account with **MFA enabled** is not logged in by the provider alone:
+`socialLogin` throws `MfaRequiredError` unless you pass `mfaCode`. If your IdP
+enforces its own second factor, opt out explicitly with
+`oauthPlugin({ …, mfa: 'skip' })` (or `socialLogin(email, { …, mfa: 'skip' })`).
 :::
 
 ### Enterprise SSO (OIDC)
@@ -547,16 +621,35 @@ samlPlugin({ providers: [{ name: 'okta', entryPoint, idpCert, issuer, callbackUr
 ```
 
 Assertions must be signed (`wantAssertionsSigned`) **and** bound to a login this
-app started: `validateInResponseTo` defaults to `'ifPresent'`, so a response
-carrying an `InResponseTo` must match an outstanding, not-yet-consumed
-AuthnRequest. That closes the window in which a captured `SAMLResponse` can be
-replayed until its `NotOnOrAfter`.
+app started: `validateInResponseTo` defaults to `'always'`, so every response must
+carry an `InResponseTo` matching an outstanding, not-yet-consumed AuthnRequest.
+Unsolicited (IdP-initiated) responses are refused unless you opt in with
+`validateInResponseTo: 'ifPresent'`; each consumed assertion id is then also kept
+in a single-use `assertionReplayCache`, so a captured `SAMLResponse` cannot be
+re-posted before its `NotOnOrAfter`.
+
+**Each IdP may only assert its own email domains.** In B2B SaaS every customer's
+IdP admin controls what their IdP signs, so give each provider an
+`allowedEmailDomains` list — an assertion for any other domain is rejected. With
+more than one provider this is **required** at boot (`AUTH_SAML_PROVIDER_CONFIG`);
+set `allowAnyEmailDomain: true` only on an IdP you fully control. The package also
+refuses to boot on `@node-saml/node-saml` < 5.1.0 (signature-bypass CVEs).
+
+```ts
+samlPlugin({
+  providers: [
+    { name: 'acme', /* … */ allowedEmailDomains: ['acme.com'] },
+    { name: 'globex', /* … */ allowedEmailDomains: ['globex.com', 'globex.co.uk'] },
+  ],
+})
+```
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute` |
-| `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'ifPresent'` | Replay protection — bind the response to an AuthnRequest this SP issued |
+| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute`, `allowedEmailDomains` (required with several IdPs), `allowAnyEmailDomain` |
+| `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'always'` | Replay protection — bind the response to an AuthnRequest this SP issued; `'ifPresent'` opts in to IdP-initiated SSO |
 | `cacheProvider` | `SamlCacheProvider` | node-saml's in-process cache | Where outstanding AuthnRequest ids live — **required on multi-replica deployments** |
+| `assertionReplayCache` | `SamlAssertionReplayCache` | in-process | Single-use store for consumed assertion ids (`consume(key, ttlMs) → boolean`) — share it across replicas if you opt in to IdP-initiated SSO |
 | `createClient` | `(provider) => SamlClient` | node-saml | Factory for the underlying client (tests) |
 | `host` | `string` | — | Host used when building the AuthnRequest |
 
@@ -564,8 +657,8 @@ replayed until its `NotOnOrAfter`.
 The request ids default to an **in-process** cache. Across several replicas
 without sticky sessions, a login started on one replica and returning to another
 fails with `AUTH_SAML_RESPONSE_INVALID`. Pass a shared `cacheProvider` (Redis,
-your database), or opt out with `validateInResponseTo: 'never'` and accept the
-replay window.
+your database). Opting out with `validateInResponseTo: 'never'` leaves only the
+per-replica `assertionReplayCache` as replay protection — pass a shared one.
 :::
 
 ## Password reset (end-to-end)
@@ -602,11 +695,28 @@ and `POST /auth/verify` (token valid 24h).
 ## API keys
 
 `apiKeysPlugin()` authenticates `mk_live_…` keys (via `Authorization: Bearer` or
-`x-api-key`) and enforces `meta.scopes` on routes. Keys are tenant-scoped,
-created by a logged-in user through `apiKeyRoutes()`, and stored only as a
-SHA-256 hash plus a short display prefix — the plaintext is shown exactly once.
-Keys may optionally expire; expired keys are rejected by the server and omitted
-from listings.
+`x-api-key`) and enforces `meta.scopes` on routes. Keys are created by a
+logged-in user through `apiKeyRoutes()` and stored only as a SHA-256 hash plus a
+short display prefix — the plaintext is shown exactly once. Keys may optionally
+expire; expired keys are rejected by the server and omitted from listings.
+
+The plugin's guard enforces three boundaries on every key-authenticated request
+(`403` in each case, with an `auth:apikey_rejected` event):
+
+- **Tenant binding.** A key created inside a tenant works only when the request
+  resolves that same tenant — never in another one chosen through `x-tenant-id`,
+  a subdomain or the Host, and never on a request without a tenant
+  (`AUTH_APIKEY_TENANT_MISMATCH`). A key issued without a tenant (a machine key)
+  is refused on tenant-scoped requests unless you pass `allowTenantlessKeys: true`.
+- **Scopes are an upper bound.** A key without `*` only reaches routes that
+  declare `meta.scopes` it holds; on a route gated by `meta.auth`, `can`,
+  `teamRole` or `audience` without `meta.scopes` it is refused
+  (`AUTH_SCOPE_REQUIRED`), even though `users` lets it set `ctx().user`. A `*` key
+  acts as its owner. `allowNarrowKeysOnUnscopedRoutes: true` restores the old,
+  looser behaviour.
+- **Session-only routes.** A route with `meta.apiKey: false` refuses every key
+  (`AUTH_APIKEY_NOT_ALLOWED`). `apiKeyRoutes()` and `mfaRoutes()` declare it, so
+  a key can never mint, list or revoke keys, or change MFA.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
@@ -619,7 +729,7 @@ const app = await createApp({
     fastifyPlugin({
       routes: [
         ...authRoutes(),
-        ...apiKeyRoutes(), // POST /apikeys, GET /apikeys, DELETE /apikeys/:id (all require login)
+        ...apiKeyRoutes(), // POST /apikeys, GET /apikeys, DELETE /apikeys/:id (login session only)
         route({
           method: 'GET',
           url: '/reports',
@@ -658,7 +768,11 @@ A bearer prefixed with `mk_` is ignored by `authPlugin` and handled by
 ## Brute-force lockout
 
 Active by default: 5 failed attempts per email within 15 minutes → `AccountLockedError`
-(429 `AUTH_LOCKED`); a successful login clears the counter. Tune or disable it:
+(429 `AUTH_LOCKED`); a successful login clears the counter. Each attempt is
+*reserved* before the password (or MFA code) is verified, so a burst of parallel
+requests cannot run more guesses than the budget. The throttle keeps SHA-256
+digests of the identifiers, never the raw email, and at most `maxEntries`
+(100 000) of them. Tune or disable it:
 
 ```ts
 import { authPlugin, LoginThrottle } from '@basaltkit/auth'
@@ -692,6 +806,8 @@ the plugin supplies:
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
+| `emailRequestThrottle` | `LoginThrottle \| false` | 3 per 15m, per account and purpose | Caps reset/verification emails; over budget a request is silently dropped and the live link stays valid |
+| `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | on | Cookie-session CSRF check on unsafe methods — see [Cookie sessions and CSRF](#cookie-sessions-and-csrf) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
 | `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
 | `tokenVersions` | `TokenVersionStore` | — (off) | Opt-in access-token **revocation**: tokens carry a `tv` claim that `resetPassword`/`revokeAllTokens` bump, killing outstanding tokens before their TTL. Costs one store read per authenticated request |
@@ -704,6 +820,7 @@ the plugin supplies:
 | --- | --- | --- | --- |
 | `maxAttempts` | `number` | `5` | Failed attempts allowed inside the window |
 | `windowMs` | `number` | `900_000` (15m) | Rolling window; a successful login clears the counter |
+| `maxEntries` | `number` | `100_000` | Cap on tracked identifiers; expired entries are swept, then the oldest evicted |
 | `clock` | `() => number` | `Date.now` | Injectable clock (tests) |
 
 `apiKeysPlugin(options)`:
@@ -713,6 +830,8 @@ the plugin supplies:
 | `store` | `ApiKeyStore` | in-memory | Where key hashes live — durable in production, or keys die on redeploy |
 | `header` | `string` | `'x-api-key'` | Alternative header to `Authorization: Bearer mk_…` |
 | `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
+| `allowTenantlessKeys` | `boolean` | `false` | Let keys issued without a tenant act on tenant-scoped requests (trusted platform keys only) |
+| `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Let a key without `*` reach `meta.auth`/`can`/`teamRole`/`audience` routes that declare no `meta.scopes` |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 
 `webauthnPlugin(options)` and its `config`:
@@ -739,8 +858,10 @@ the plugin supplies:
 | `stateTtlMs` | `number` | `600_000` (10m) | How long a signed `state` stays valid — the window for completing the redirect |
 | `fetch` | `typeof fetch` | global `fetch` | Injected HTTP client (tests) |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
+| `mfa` | `'required' \| 'skip'` | `'required'` | An existing account with MFA enabled is refused (`AUTH_MFA_REQUIRED`); `'skip'` only for an IdP that enforces its own MFA |
 | `callbackBaseUrl` (routes) | `string` | — (required) | Public base URL of your app; the redirect URI is `${callbackBaseUrl}/auth/oauth/:provider/callback` and must be registered with each provider |
 | `successRedirect` (routes) | `string` | — (JSON response) | Bounce the browser here with `#access_token=…&refresh_token=…` instead of returning JSON — the SPA flow |
+| `bindingCookie` (routes) | `{ secure?, maxAgeSeconds? }` | secure in production, 15 min | The HttpOnly cookie binding the flow to the browser (`__Host-basalt_oauth` when secure) |
 
 Register `oauthPlugin` **after** `authPlugin`: the service resolves `AUTH` to log
 users in.
@@ -759,10 +880,14 @@ users in.
 | `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correct, MFA enabled, no `mfaCode` supplied. Not counted as a failed attempt |
 | `MfaInvalidCodeError` | `AUTH_MFA_INVALID` | 401 | Wrong TOTP or recovery code — this **does** count toward the throttle |
 | `MfaNotEnrolledError` | `AUTH_MFA_NOT_ENROLLED` | 400 | Activating/disabling MFA with no enrollment in progress |
+| `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |
+| `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars under `NODE_ENV=production` |
-| `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`) |
+| `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
+| `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | A key used outside the tenant it was issued in (or a tenantless key on a tenant-scoped request) |
+| `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | A key used on a session-only route (`meta.apiKey: false`: key management, MFA) |
 | `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` for a key outside the caller's tenant/user scope — a 404, never a 403, so key ids can't be probed |
 | `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: the database's `auth_api_keys` is missing a column (usually `expiresAt`, added in 1.5.0) — migrate it, in every tenant schema with schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | The passkey challenge expired or was already used (they are single-use) |
@@ -772,9 +897,11 @@ users in.
 | `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | The signature counter did not increase — the authenticator may be cloned |
 | `PasskeyExistsError` | `PASSKEY_EXISTS` | 409 | That credential is already registered |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | `:provider` isn't in the `providers` array |
-| `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, or older than `stateTtlMs` |
+| `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, older than `stateTtlMs`, already used, or arrived without the browser's binding cookie |
+| `SocialLinkRefusedError` | `AUTH_SOCIAL_LINK_REFUSED` | 403 | A social login matched an existing account by an email the provider did not verify |
 | `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange or the profile fetch failed |
-| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The assertion failed validation — bad signature, expired, or (with `validateInResponseTo`) an `InResponseTo` this replica never issued |
+| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The assertion failed validation — bad signature, expired, missing/unknown `InResponseTo`, already used, or an email outside the provider's `allowedEmailDomains` |
+| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, or `@node-saml/node-saml` < 5.1.0 |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.auth` and `authPlugin` isn't registered |
 
 - **Every request is anonymous even with a valid `Authorization` header** — check
@@ -810,6 +937,10 @@ users in.
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Email the token**; the second confirms the change |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Security notification |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Audit trail |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; never the key |
+| `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
+| `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
+| `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials were revoked |
 
 They are consumed for free by audit and notifications (see
 [Packages](/reference/packages)). For the full end-to-end wiring — email

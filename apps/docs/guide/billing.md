@@ -211,10 +211,27 @@ payment ever happens, that webhook never arrives on its own — see
 
 That `incomplete` record is deliberate, and so is the fact that a second
 checkout does not overwrite a live subscription. An abandoned checkout parks its
-intent in `pendingPlan` / `pendingPeriod`; only a webhook carrying a **new**
-`gatewayRef` promotes it. Without that rule, starting a checkout for a cheap
-plan and abandoning it could downgrade — or, worse, escalate — an existing
-subscription on the next legitimately-signed renewal.
+intent in `pendingPlan` / `pendingPeriod`; it is promoted only by a webhook for a
+**new** `gatewayRef` whose **paid plan** (`WebhookEvent.plan`) is that intent.
+The built-in drivers stamp `plan`/`period` into the gateway's signed metadata
+next to the price they charge, so the webhook says what was actually paid.
+Without these rules, starting a checkout for an expensive plan and then paying
+an older, cheaper checkout session — or abandoning a checkout and waiting for
+the next renewal — would escalate the subscription.
+
+`canceled` is terminal for the gateway subscription that was canceled: a late
+`payment.succeeded`/`payment.failed` for the same `gatewayRef` (or with no ref)
+is ignored, so a final invoice delivered after the deletion never revives
+access. Only a **new** gateway subscription (a fresh checkout) reactivates the
+billable.
+
+::: warning Custom gateway drivers
+If you write your own `BillingGateway`, set `plan` (and `period`) on the
+`WebhookEvent` from metadata you attached when creating the checkout — the
+exported `attestedPlan(metadata)` helper reads them. Without it, a checkout-driven
+plan **change** is never applied (fail closed); only an unambiguous first checkout
+activates.
+:::
 
 ### Which status counts as subscribed
 
@@ -274,7 +291,7 @@ curl -X POST localhost:3000/billing/checkout \
 curl -X POST localhost:3000/billing/webhook \
   -H 'content-type: application/json' \
   -H 'x-billing-signature: valid' \
-  -d '{"id":"evt_1","type":"payment.succeeded","billableId":"demo","gatewayRef":"fake_sub_1"}'
+  -d '{"id":"evt_1","type":"payment.succeeded","billableId":"demo","gatewayRef":"fake_sub_1","plan":"pro"}'
 # → { "received": true, "duplicate": false }            ... status is now 'active'
 ```
 
@@ -417,6 +434,12 @@ export const gateway = new StripeBillingGateway({
 })
 ```
 
+The Stripe, Paddle and Lemon Squeezy drivers **fail closed** on a missing
+signing secret: with `webhookSecret` empty, whitespace or undefined (the classic
+`process.env.X ?? ''`), `verifyWebhook` throws `500
+BILLING_WEBHOOK_SECRET_MISSING` instead of "verifying" with an empty HMAC key
+anyone can compute.
+
 Wire the gateway into the plugin and register the ready-made billing routes.
 `billingRoutes` gives you hosted **Checkout** and the self-service **Portal**;
 `billingWebhookRoute` gives you the endpoint Stripe calls back.
@@ -428,6 +451,22 @@ must never be anonymous. If (and only if) authentication happens at an outer
 edge, opt out deliberately with `billingRoutes({ ..., auth: false })` /
 `invoiceRoutes({ auth: false })`. The webhook route is the exception: it is
 authenticated by the gateway **signature**, never by a session.
+
+Authentication is not authorization: by default **any** member of the tenant can
+start a checkout or open the Portal (change the card, the plan, or cancel).
+Restrict billing to a role with the `meta` option — it is merged into both
+routes (and can't switch `auth` off):
+
+```ts
+billingRoutes({ successUrl, cancelUrl, meta: { teamRole: 'owner' } })   // @basaltkit/teams
+billingRoutes({ successUrl, cancelUrl, meta: { can: 'billing:manage' } }) // @basaltkit/permissions
+```
+
+The body may override `successUrl` / `cancelUrl` / `returnUrl` per call, but
+**only** with URLs on the origins of the configured URLs (or the extra
+`allowedRedirectOrigins: ['https://www.example.com']`, https only). Anything else
+is `400 BILLING_REDIRECT_NOT_ALLOWED` — a legitimate checkout or portal link can
+never be turned into an open redirect to another site.
 
 ::: danger `meta.auth` alone does not isolate tenants
 `billingRoutes()` and `invoiceRoutes()` authenticate the **user** but resolve
@@ -456,8 +495,9 @@ right.
 
 An abandoned Checkout can never change the live subscription: `checkout()`
 records the intent as `pendingPlan`, and the plan only switches when the
-gateway confirms payment for a **new** gateway subscription — a renewal of the
-current subscription (same `gatewayRef`) can't activate an escalated plan.
+gateway confirms payment for a **new** gateway subscription **of that plan** — a
+renewal of the current subscription (same `gatewayRef`) can't activate an
+escalated plan, and paying an older, cheaper checkout session can't either.
 
 ```ts
 import { createApp } from '@basaltkit/core'
@@ -492,8 +532,8 @@ Routes registered:
 
 | Route | Body | Returns |
 | --- | --- | --- |
-| `POST /billing/checkout` | `{ plan, period?, successUrl?, cancelUrl? }` | `{ url }` — redirect the customer here |
-| `POST /billing/portal` | `{ returnUrl? }` (optional) | `{ url }` |
+| `POST /billing/checkout` | `{ plan, period?, successUrl?, cancelUrl? }` (URL overrides: allowed origins only) | `{ url }` — redirect the customer here |
+| `POST /billing/portal` | `{ returnUrl? }` (optional; allowed origins only) | `{ url }` |
 | `POST /billing/webhook` | raw gateway payload | `{ received, duplicate }` |
 
 The lifecycle: Checkout creates an `incomplete` subscription and returns a URL;

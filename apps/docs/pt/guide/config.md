@@ -186,7 +186,7 @@ de API, com uma política de produção já embutida:
 
 ```ts
 export const env = defineEnv({
-  // Arranca logo em dev; recusa arrancar em produção sem um valor real.
+  // Arranca logo com NODE_ENV=development; recusa arrancar noutro lado sem um valor real.
   APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-value' }),
   // Sem devDefault: obrigatório em qualquer ambiente.
   STRIPE_SECRET_KEY: secret(),
@@ -195,13 +195,17 @@ export const env = defineEnv({
 
 Três regras, decididas lendo `process.env.NODE_ENV` no momento da validação:
 
-- **Obrigatório em produção** — o `devDefault` nunca é aplicado quando
-  `NODE_ENV=production`. Um clone acabado de fazer corre localmente; o mesmo
-  código recusa arrancar em produção enquanto não existir um segredo a sério.
-- **Placeholders recusados em produção** — um valor que corresponda a
-  `change-me`, `changeme`, `placeholder`, `example`, `secret`, `password`,
-  `default`, `test`, `xxxx…` ou `0000…` falha. Em desenvolvimento passam, por
-  conveniência.
+- **Obrigatório a menos que `NODE_ENV` seja explicitamente `development` ou
+  `test`** — o `devDefault` só se aplica aí. Um `NODE_ENV` **não definido** (ou
+  `staging`, um erro de escrita, …) conta como produção, por isso um deploy que
+  esqueça o `NODE_ENV` nunca arranca com o valor de dev público. Um clone acabado
+  de fazer corre localmente com `NODE_ENV=development` (o `pnpm dev` do scaffold
+  define-o); o mesmo código recusa arrancar noutro lado enquanto não existir um
+  segredo a sério.
+- **Placeholders recusados fora de development/test** — um valor que
+  corresponda a `change-me`, `changeme`, `placeholder`, `example`, `secret`,
+  `password`, `default`, `test`, `xxxx…` ou `0000…` falha. Com
+  `NODE_ENV=development` ou `test` passam, por conveniência.
 - **Comprimento mínimo em todo o lado** — 16 caracteres por predefinição,
   incluindo para o próprio `devDefault`, que é validado como qualquer outro
   valor.
@@ -276,7 +280,7 @@ onde as puseres.
 | Opção | Tipo | Predefinição | Objetivo |
 | --- | --- | --- | --- |
 | `minLength` | `number` | `16` | Comprimento mínimo em **todos** os ambientes, `devDefault` incluído. Sobe-o para chaves de assinatura JWT (32+) |
-| `devDefault` | `string` | — | Valor usado fora de produção quando a variável não está definida, para um clone novo correr. Nunca aplicado com `NODE_ENV=production` |
+| `devDefault` | `string` | — | Valor usado quando a variável não está definida **e** `NODE_ENV` é explicitamente `development` ou `test`, para um clone novo correr. Nunca aplicado noutro caso — incluindo com `NODE_ENV` não definido |
 
 ## Modos de falha e resolução de problemas
 
@@ -296,9 +300,11 @@ onde as puseres.
   segundo argumento explícito; o fallback é detetado pela aridade. Tira o
   argumento.
 - **`ENV_INVALID` em produção com o mesmo `.env` que funciona localmente** — o
-  `secret()` muda de regras com `NODE_ENV=production`: o `devDefault` deixa de
-  se aplicar e valores com ar de placeholder são recusados. Confirma o que é
-  realmente o `NODE_ENV` nesse ambiente.
+  `secret()` só relaxa as regras com um `NODE_ENV=development` ou `test`
+  explícito: em qualquer outro caso (incluindo `NODE_ENV` não definido) o
+  `devDefault` deixa de se aplicar e valores com ar de placeholder são
+  recusados. Confirma o que é realmente o `NODE_ENV` nesse ambiente e define um
+  segredo a sério.
 - **O `merge` apagou o meu array** — só objetos simples se fundem em
   profundidade; arrays e primitivos são substituídos por inteiro.
 - **`DI_UNKNOWN_TOKEN` num plugin que lê o `CONFIG`** — acrescenta

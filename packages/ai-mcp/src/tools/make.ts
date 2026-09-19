@@ -61,8 +61,19 @@ export function makeTool(session: Session): McpToolDef {
 
       // 2) Obtain the plan: client-carried (stateless correlation) or planned from a request.
       let plan: ArchitecturePlan
-      if (args['plan'] && typeof args['plan'] === 'object') {
-        plan = args['plan'] as ArchitecturePlan
+      if (args['plan'] !== undefined) {
+        // The plan comes from the MCP client — untrusted. Validate it against the
+        // schema (which also restricts names to identifiers) instead of casting,
+        // so nothing in it can inject code into the generated sources.
+        const parsed = ArchitecturePlanSchema.safeParse(args['plan'])
+        if (!parsed.success) {
+          const issues = parsed.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+            .join('; ')
+          return toolError(`Invalid plan — ${issues}. Re-run basalt_plan or fix the plan.`)
+        }
+        plan = parsed.data as ArchitecturePlan
       } else if (typeof args['request'] === 'string' && args['request'].trim()) {
         let provider
         try {

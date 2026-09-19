@@ -154,3 +154,37 @@ describe('basalt_make — safety (temp-dir sandbox)', () => {
     expect(sc.preview.perFile.some((f: any) => f.action === 'overwrite')).toBe(true)
   })
 })
+
+describe('basalt_make — the client-supplied plan is validated before any code is generated (security)', () => {
+  let root: string
+  beforeEach(() => {
+    root = makeProject()
+  })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  const PAYLOAD = "x'); require('child_process').execSync('touch /tmp/pwned'); ('"
+
+  it('rejects a plan whose field name is not an identifier (nothing written)', async () => {
+    const server = buildAiMcpServer({ cwd: root })
+    const plan = { ...PLAN, entities: [{ name: 'Widget', fields: [{ name: 'title: z.any() }); evil(); ({ x', type: 'String' }], tenantScoped: false }] }
+    const res = await call(server, { plan, mode: 'apply', force: true })
+    expect(isError(res)).toBe(true)
+    expect(text(res)).toMatch(/invalid plan/i)
+    expect(existsSync(join(root, 'src', 'modules', 'widget'))).toBe(false)
+  })
+
+  it('rejects a structurally malformed plan instead of casting it', async () => {
+    const server = buildAiMcpServer({ cwd: root })
+    const res = await call(server, { plan: { entities: 'not-an-array' } })
+    expect(isError(res)).toBe(true)
+    expect(text(res)).toMatch(/invalid plan/i)
+  })
+
+  it('a malicious enum value is emitted only as an escaped string literal', async () => {
+    const server = buildAiMcpServer({ cwd: root })
+    const plan = { ...PLAN, entities: [{ name: 'Widget', fields: [{ name: 'status', type: 'String', enum: [PAYLOAD] }], tenantScoped: false }] }
+    const res = await call(server, { plan })
+    expect(isError(res)).toBe(false)
+    expect(text(res)).not.toContain("require('child_process')")
+  })
+})

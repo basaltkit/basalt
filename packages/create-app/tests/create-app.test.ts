@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createProject, detectPackageManager, TargetNotEmptyError, resolveRunDefaults } from '../src/index.js'
+import { thirdPartyVersionOf, versionOf } from '../src/templates.js'
 
 let root: string
 
@@ -21,12 +22,14 @@ describe('createProject', () => {
     const result = await createProject({ name: 'my-saas', dir: join(root, 'my-saas') })
 
     expect(result.files).toEqual([
+      '.dockerignore',
       '.env.example',
       '.gitignore',
       'README.md',
       'package.json',
       'pnpm-workspace.yaml',
       'src/app.ts',
+      'src/dev.ts',
       'src/env.ts',
       'src/routes.ts',
       'src/server.ts',
@@ -39,7 +42,7 @@ describe('createProject', () => {
     // npm shows "name@undefined" in errors when version is missing.
     expect(pkg.version).toBe('0.1.0')
     // Basalt deps must point at a real published range, never a placeholder.
-    expect(pkg.dependencies['@basaltkit/core']).toMatch(/^\^1\.\d+\.\d+$/)
+    expect(pkg.dependencies['@basaltkit/core']).toMatch(/^\^\d+\.\d+\.\d+$/)
     expect(pkg.dependencies['@basaltkit/core']).not.toBe('^0.0.0')
     expect(pkg.dependencies).toHaveProperty('@basaltkit/tenancy')
     expect(pkg.dependencies).toHaveProperty('@basaltkit/auth')
@@ -47,7 +50,8 @@ describe('createProject', () => {
     expect(pkg.devDependencies).toHaveProperty('@basaltkit/testing')
     // Regression: the @basalt range override loop once clobbered third-party
     // ranges (zod ended up as "^0.1.0", which no @basalt peer accepts).
-    expect(pkg.dependencies.zod).toBe('^4.0.0')
+    expect(pkg.dependencies.zod).toBe(thirdPartyVersionOf('zod'))
+    expect(pkg.dependencies.zod).toMatch(/^\^4\./)
 
     const app = await read(result.dir, 'src/app.ts')
     expect(app).toContain('tenancyPlugin')
@@ -133,11 +137,11 @@ describe('createProject', () => {
 
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
     expect(pkg.dependencies).toHaveProperty('@basaltkit/cli')
-    expect(pkg.dependencies['@basaltkit/cli']).toBe('^1.0.0')
+    expect(pkg.dependencies['@basaltkit/cli']).toBe(versionOf('@basaltkit/cli'))
     // The generator is a DEV tool — devDependency, not a runtime dependency.
     expect(pkg.dependencies).not.toHaveProperty('@basaltkit/generator')
     expect(pkg.devDependencies).toHaveProperty('@basaltkit/generator')
-    expect(pkg.devDependencies['@basaltkit/generator']).toBe('^1.0.0')
+    expect(pkg.devDependencies['@basaltkit/generator']).toBe(versionOf('@basaltkit/generator'))
     expect(pkg.scripts.basalt).toBe('tsx bin/basalt.ts')
 
     // The CLI entry (dev-only) imports the generator and passes it via `commands`.

@@ -204,8 +204,11 @@ authPlugin({ users, secret, mfaIssuer: 'Acme' })
 ## 6. Chaves de API
 
 `apiKeysPlugin()` autentica chaves `mk_live_…` (via `Authorization: Bearer` ou
-`x-api-key`) e impõe **scopes** declarados nas rotas. As chaves têm âmbito de
-tenant e são criadas por um utilizador autenticado.
+`x-api-key`) e impõe **scopes** declarados nas rotas. As chaves são criadas por
+um utilizador autenticado (nunca por outra chave) e ficam ligadas ao tenant em que
+foram criadas: uma chave é recusada (`403 AUTH_APIKEY_TENANT_MISMATCH`) num pedido
+que resolva qualquer outro tenant. Uma chave sem `*` só alcança rotas que declaram
+scopes que ela tem.
 
 ```ts
 apiKeysPlugin({ users })                 // `users` lets a key also populate ctx().user
@@ -249,13 +252,15 @@ import { TEAMS } from '@basaltkit/teams'
 await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 ```
 
-O guard `teamRole` protege as ações de administração; aceitar um convite só precisa
-de um utilizador autenticado.
+O guard `teamRole` protege as ações de administração. Aceitar um convite exige
+um utilizador autenticado cujo email está verificado e coincide com o endereço
+convidado (a secção 3 cobre a verificação). Caso contrário, a rota responde
+`403 TEAM_EMAIL_NOT_VERIFIED`.
 
 | Endpoint | Requer | |
 | --- | --- | --- |
 | `POST /team/invites` `{ email, role? }` | `admin` | envia por email um token via `team:invited` |
-| `POST /team/invites/accept` `{ token }` | login | inscreve o utilizador no papel convidado |
+| `POST /team/invites/accept` `{ token }` | login, email verificado | inscreve o utilizador no papel convidado |
 | `GET /team/invites` · `DELETE /team/invites/:id` | `admin` | listar / revogar pendentes |
 | `GET /team/members` | `member` | |
 | `PATCH /team/members/:userId` `{ role }` · `DELETE …` | `admin` | mudar papel / remover |

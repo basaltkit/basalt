@@ -19,17 +19,16 @@ Além da API, isto gera um frontend **`web/`** ligado de ponta a ponta:
 
 ```
 web/
-├── vite.config.ts     # o dev server faz proxy de /api → o teu backend (sem CORS)
-├── tailwind.config.js # tema Tailwind + shadcn, incl. @basaltkit/admin-shadcn em `content`
+├── vite.config.ts     # React + Tailwind 4 (@tailwindcss/vite); proxy de /api → o teu backend (sem CORS)
 ├── index.html
 └── src/
     ├── api.ts         # os teus endpoints descritos uma vez com @basaltkit/sdk
     ├── App.tsx        # a app — com --auth: login, registo, esqueci/repor, um dashboard + MFA
     ├── main.tsx
-    └── index.css      # variáveis do tema shadcn (claro/escuro)
+    └── index.css      # Tailwind 4: @import, @source do admin-shadcn, tema shadcn (claro/escuro)
 ```
 
-- **React + Vite** para o dev server e o build.
+- **React 19 + Vite 8 + Tailwind CSS 4** para o dev server e o build (o Tailwind é configurado no CSS — sem `tailwind.config.js` nem configuração PostCSS).
 - **[`@basaltkit/admin-shadcn`](#paineis-de-administracao-a-partir-dos-teus-esquemas-zod)** — componentes shadcn/ui autênticos, já com tema.
 - **[`@basaltkit/sdk`](#o-sdk-type-safe)** — o cliente type-safe para a tua API.
 - O dev server do Vite **faz proxy de `/api`** para o backend, portanto o browser fala same-origin — sem CORS para configurar.
@@ -70,6 +69,8 @@ const all     = await client.projects.list()
 ```
 
 O cliente **espelha a forma** do teu objeto `api`, o TypeScript verifica os argumentos, e a resposta do servidor é **validada contra o esquema** em runtime — uma incompatibilidade lança `CLIENT_RESPONSE_MISMATCH` em vez de devolver dados errados em silêncio. Muda um campo no backend e o frontend deixa de compilar, em vez de falhar em produção.
+
+Os parâmetros de path preenchem exatamente um segmento: cada valor é codificado para URL (por isso `/` não acrescenta segmentos), e um valor em falta, vazio, `.` ou `..` lança `CLIENT_INVALID_PARAM` antes de qualquer pedido ser enviado — assim um id vindo do utilizador nunca consegue redirecionar uma chamada autenticada para outro endpoint. Um placeholder é um `:name` no **início** de um segmento; um `:` noutro sítio é literal, por isso métodos personalizados como `/v1/items:batch` ou `/items/:id:archive` funcionam tal como estão escritos.
 
 ::: tip Dica: auth & refresh de token
 Passa um callback `getToken` (devolve o access token atual, enviado como `Authorization: Bearer`) e um callback `refresh` ao `createClient`. Num `401` o cliente chama `refresh` uma vez e repete com o novo token — transparente para quem chama; o `refresh` devolve o novo token, ou `null` para desistir. O scaffold `--ui` liga isto às rotas de auth por ti.
@@ -208,14 +209,26 @@ O `useList(source)` carrega a lista no mount e devolve `{ data, loading, error, 
 O `@basaltkit/admin-shadcn` também exporta as próprias primitivas shadcn — `Button`, `Input`, `Label`, `Card`, `CardHeader`, `CardContent`, `CardTitle`, `Badge`, `Table` — para que construas o resto do teu painel (cabeçalhos, cartões de métricas, ações) com o mesmo aspeto, sem copiar os ficheiros do shadcn para o teu projeto.
 
 ::: warning Aviso: o Tailwind é obrigatório para o estilo
-As classes do `@basaltkit/admin-shadcn` só produzem cores/espaçamento se a tua app tiver o **Tailwind CSS** configurado com as variáveis de tema do shadcn (`--primary`, `--border`, …) e incluir o pacote no `content` do Tailwind:
+As classes do `@basaltkit/admin-shadcn` só produzem cores/espaçamento se a tua app tiver o **Tailwind CSS** configurado com as variáveis de tema do shadcn (`--primary`, `--border`, …) e analisar os ficheiros do pacote. No **Tailwind 4** (o que o scaffold gera), regista-o com `@source` na tua folha de estilos — o caminho é relativo ao ficheiro CSS — e mapeia as variáveis em `@theme inline`:
+
+```css
+/* src/index.css */
+@import 'tailwindcss';
+@source '../node_modules/@basaltkit/admin-shadcn/dist';
+@theme inline {
+  --color-primary: hsl(var(--primary));
+  /* … as restantes cores shadcn e --radius-* */
+}
+```
+
+No **Tailwind 3**, adiciona antes o pacote ao `content`:
 
 ```js
 // tailwind.config.js
 content: ['./index.html', './src/**/*.{ts,tsx}', './node_modules/@basaltkit/admin-shadcn/dist/**/*.js']
 ```
 
-O scaffold `--ui` faz tudo isto por ti. A integrar à mão? Segue [ui.shadcn.com/docs/installation](https://ui.shadcn.com/docs/installation) mais a linha `content` acima.
+O scaffold `--ui` faz tudo isto por ti. A integrar à mão? Segue [ui.shadcn.com/docs/installation](https://ui.shadcn.com/docs/installation) mais a linha `@source` (ou `content`) acima.
 :::
 
 ## Dashboards

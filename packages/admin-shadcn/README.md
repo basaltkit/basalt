@@ -26,7 +26,27 @@ Requirements:
 
 1. **`react` >= 18** (peer dependency — you install it).
 2. **Tailwind CSS** configured in your project, with the shadcn theme (the CSS variables `--background`, `--primary`, `--destructive`, etc. — see [ui.shadcn.com/docs/installation](https://ui.shadcn.com/docs/installation)).
-3. In `tailwind.config`, include this package's files in `content`, so Tailwind generates the classes used here:
+3. Tell Tailwind to scan this package's files, so it generates the classes used here.
+
+**Tailwind CSS 4** (CSS-first config — what `create-basalt --ui` generates): register the package with `@source` in your main stylesheet, and map the shadcn variables to Tailwind colors with `@theme inline`. The path is relative to the CSS file:
+
+```css
+/* src/index.css */
+@import 'tailwindcss';
+@source '../node_modules/@basaltkit/admin-shadcn/dist'; /* ← important */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  /* … border, input, ring, background, foreground, secondary, destructive,
+     muted, accent, card (+ -foreground), and --radius-lg/md/sm */
+}
+```
+
+With Vite, load Tailwind through `@tailwindcss/vite` (`plugins: [react(), tailwindcss()]`) — no `postcss.config.js` or `tailwind.config.js` needed.
+
+**Tailwind CSS 3** (JavaScript config): include the package in `content`:
 
 ```js
 // tailwind.config.js
@@ -312,9 +332,9 @@ Merges conditional classes (`clsx`) and resolves Tailwind conflicts (`tailwind-m
 
 ## Common errors and solutions (FAQ)
 
-**"The components appear without colors/styling."** Two common causes: (1) Tailwind isn't scanning this package's files — add `'./node_modules/@basaltkit/admin-shadcn/dist/**/*.js'` to `content` in `tailwind.config`; (2) the shadcn theme variables (`--primary`, `--border`, …) are missing from your global CSS — follow the shadcn/ui installation guide or use the `create-basalt --ui` scaffold.
+**"The components appear without colors/styling."** Two common causes: (1) Tailwind isn't scanning this package's files — on Tailwind 4 add `@source '../node_modules/@basaltkit/admin-shadcn/dist';` to your CSS (path relative to the CSS file); on Tailwind 3 add `'./node_modules/@basaltkit/admin-shadcn/dist/**/*.js'` to `content` in `tailwind.config`; (2) the shadcn theme variables (`--primary`, `--border`, …) are missing from your global CSS — follow the shadcn/ui installation guide or use the `create-basalt --ui` scaffold.
 
-**"The button has a transparent/odd background."** Colors come from the shadcn theme's CSS variables. Without `--primary` and friends defined on `:root`, classes like `bg-primary` have no value.
+**"The button has a transparent/odd background."** Colors come from the shadcn theme's CSS variables. Without `--primary` and friends defined on `:root` (and, on Tailwind 4, mapped to `--color-primary` & co. in an `@theme inline` block), classes like `bg-primary` have no value.
 
 **"`asChild` throws a `React.Children.only` error."** With `asChild`, `Button` requires exactly **one** child element (e.g., a single `<a>`). This comes from Radix Slot.
 

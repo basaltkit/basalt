@@ -27,6 +27,37 @@ export class RawQueryInTenantContextError extends BasaltError {
   }
 }
 
+/**
+ * Thrown when a tenant is in scope and the extension is asked to run an
+ * operation it does not know how to scope (a Prisma operation added after this
+ * code was written, for example). Fails closed: an operation that cannot be
+ * scoped is refused rather than run across every tenant.
+ */
+export class UnscopedOperationError extends BasaltError {
+  constructor(operation: string) {
+    super(
+      'PRISMA_UNSCOPED_OPERATION',
+      `${operation} cannot be tenant-scoped by basalt-tenancy and was refused inside a tenant ` +
+        'context. Run it outside the tenant context (central/admin code) with the tenant ' +
+        'predicate added by hand.',
+    )
+  }
+}
+
+/**
+ * Thrown when a write inside a tenant context tries to set the tenant field of
+ * an existing row to another tenant (moving the row out of the tenant).
+ */
+export class CrossTenantWriteError extends BasaltError {
+  constructor(field: string) {
+    super(
+      'PRISMA_CROSS_TENANT_WRITE',
+      `An update inside a tenant context tried to change "${field}" to another tenant. ` +
+        'Rows cannot be moved between tenants through the tenant-scoped client.',
+    )
+  }
+}
+
 type QueryArgs = Record<string, unknown>
 
 /**
@@ -45,16 +76,202 @@ const WHERE_OPERATIONS = new Set([
   'count',
   'aggregate',
   'groupBy',
-  'update',
-  'updateMany',
   'delete',
   'deleteMany',
 ])
 
+/** Filtered like WHERE_OPERATIONS, and their `data` is checked for nested writes. */
+const UPDATE_OPERATIONS = new Set(['update', 'updateMany', 'updateManyAndReturn'])
+
+/**
+ * Model-level raw operations (MongoDB). They take a raw filter/pipeline the
+ * extension cannot rewrite reliably, so they are treated like `$queryRaw`.
+ */
+const RAW_MODEL_OPERATIONS = new Set(['findRaw', 'aggregateRaw'])
+
+/** Keys of a Prisma nested (relation) write, e.g. `{ project: { connect: { id } } }`. */
+const NESTED_WRITE_KEYS = new Set([
+  'create',
+  'createMany',
+  'connect',
+  'connectOrCreate',
+  'upsert',
+  'update',
+  'updateMany',
+  'delete',
+  'deleteMany',
+  'set',
+  'disconnect',
+])
+
+function isPlainObject(value: unknown): value is QueryArgs {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * `Prisma.skip`: Prisma drops a key holding it, exactly like `undefined`.
+ * Detected by shape so this package does not import `@prisma/client`.
+ */
+function isPrismaSkip(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !isPlainObject(value) &&
+    typeof (value as { ifUndefined?: unknown }).ifUndefined === 'function'
+  )
+}
+
+/**
+ * Keys Prisma actually reads: a key whose value is `undefined` or
+ * `Prisma.skip` is dropped by Prisma, so it must not change how the input is
+ * classified (otherwise `{ connect, extra: undefined }` would hide a relation
+ * write from the scoper and run unscoped).
+ */
+function presentKeys(value: QueryArgs): string[] {
+  return Object.keys(value).filter((key) => value[key] !== undefined && !isPrismaSkip(value[key]))
+}
+
+/** A value shaped like a relation write: every key is a nested-write operation. */
+function isRelationWrite(value: unknown): value is QueryArgs {
+  if (!isPlainObject(value)) return false
+  const keys = presentKeys(value)
+  return keys.length > 0 && keys.every((key) => NESTED_WRITE_KEYS.has(key))
+}
+
+/** Applies `fn` to one value or to each element of an array. */
+function each(value: unknown, fn: (item: unknown) => unknown): unknown {
+  return Array.isArray(value) ? value.map(fn) : fn(value)
+}
+
+/**
+ * Tenant-scoping of args, including relation writes nested inside `data`:
+ * nested creates are stamped with the tenant, and every nested where
+ * (connect, set, update, delete, …) is narrowed to the tenant so a relation
+ * cannot be linked to, or modify, another tenant's row.
+ */
+class Scoper {
+  constructor(
+    private readonly tenantId: string,
+    private readonly field: string,
+  ) {}
+
+  /** Adds the tenant filter to a where object (non-objects are left as-is). */
+  where = (where: unknown): unknown =>
+    isPlainObject(where) ? { ...where, [this.field]: this.tenantId } : where
+
+  /** Create data: nested writes scoped, tenant field forced (spread order). */
+  createData = (data: unknown): unknown => {
+    const input = isPlainObject(data) ? data : {}
+    return { ...this.relations(input), [this.field]: this.tenantId }
+  }
+
+  /** Update data: the tenant field may not change, nested writes are scoped. */
+  updateData = (data: unknown): unknown => {
+    if (!isPlainObject(data)) return data
+    this.assertTenantField(data)
+    return this.relations(data)
+  }
+
+  private assertTenantField(data: QueryArgs): void {
+    if (!(this.field in data)) return
+    const value = data[this.field]
+    if (value === undefined || isPrismaSkip(value) || value === this.tenantId) return
+    if (isPlainObject(value) && Object.keys(value).length === 1 && value['set'] === this.tenantId) return
+    throw new CrossTenantWriteError(this.field)
+  }
+
+  private relations(data: QueryArgs): QueryArgs {
+    const out: QueryArgs = {}
+    for (const [key, value] of Object.entries(data)) {
+      out[key] = key !== this.field && isRelationWrite(value) ? this.relationWrite(value) : value
+    }
+    return out
+  }
+
+  private relationWrite(ops: QueryArgs): QueryArgs {
+    const out: QueryArgs = {}
+    for (const [op, value] of Object.entries(ops)) {
+      switch (op) {
+        case 'create':
+          out[op] = each(value, this.createData)
+          break
+        case 'createMany':
+          out[op] = isPlainObject(value)
+            ? { ...value, data: each(value['data'], this.createData) }
+            : value
+          break
+        case 'connectOrCreate':
+          out[op] = each(value, (item) =>
+            isPlainObject(item)
+              ? { ...item, where: this.where(item['where']), create: this.createData(item['create']) }
+              : item,
+          )
+          break
+        case 'upsert':
+          // to-many upserts carry a where-unique; to-one upserts accept an
+          // optional where filter, which is added so a foreign related row
+          // (reached through a foreign-key scalar) is not updated
+          out[op] = each(value, (item) =>
+            isPlainObject(item)
+              ? {
+                  ...item,
+                  where: this.where(item['where'] ?? {}),
+                  create: this.createData(item['create']),
+                  update: this.updateData(item['update']),
+                }
+              : item,
+          )
+          break
+        case 'update':
+          out[op] = each(value, (item) => {
+            if (!isPlainObject(item)) return item
+            // `{ where, data }` (to-many, or to-one with a filter) or, for a
+            // to-one relation, the update data itself — rewritten to the
+            // `{ where, data }` form so the related row must be this tenant's.
+            const wrapped =
+              isPlainObject(item['data']) &&
+              presentKeys(item).every((key) => key === 'where' || key === 'data')
+            const data = wrapped ? item['data'] : item
+            const where = wrapped ? (item['where'] ?? {}) : {}
+            return { where: this.where(where), data: this.updateData(data) }
+          })
+          break
+        case 'updateMany':
+          out[op] = each(value, (item) =>
+            isPlainObject(item)
+              ? { ...item, where: this.where(item['where'] ?? {}), data: this.updateData(item['data']) }
+              : item,
+          )
+          break
+        case 'delete':
+          // to-one `delete: true` becomes a tenant filter (a foreign related
+          // row is then "not found" instead of deleted)
+          out[op] = value === true ? { [this.field]: this.tenantId } : each(value, this.where)
+          break
+        case 'connect':
+        case 'set':
+        case 'deleteMany':
+        case 'disconnect':
+          // where-unique / filter inputs; booleans (to-one disconnect) pass through
+          out[op] = each(value, this.where)
+          break
+        default:
+          out[op] = value
+      }
+    }
+    return out
+  }
+}
+
 /**
  * Pure transformation: returns the args scoped to the tenant. Reads and
- * writes are both covered — a caller cannot escape the current tenant, and
- * new rows always carry the tenant field.
+ * writes are both covered — a caller cannot escape the current tenant, new
+ * rows (including nested creates) always carry the tenant field, relation
+ * writes are narrowed to the tenant, and an update cannot change the tenant
+ * field. An operation it does not know throws `UnscopedOperationError`
+ * (fail closed) instead of running unscoped.
  */
 export function applyTenantScope(
   operation: string,
@@ -63,15 +280,19 @@ export function applyTenantScope(
   field: string,
 ): QueryArgs {
   const input = args ?? {}
+  const scoper = new Scoper(tenantId, field)
 
   if (WHERE_OPERATIONS.has(operation)) {
     // spread order forces the tenant filter — callers cannot override it
     return scopeWhere(input, tenantId, field)
   }
 
+  if (UPDATE_OPERATIONS.has(operation)) {
+    return { ...scopeWhere(input, tenantId, field), data: scoper.updateData(input['data'] ?? {}) }
+  }
+
   if (operation === 'create') {
-    const data = (input['data'] as QueryArgs | undefined) ?? {}
-    return { ...input, data: { ...data, [field]: tenantId } }
+    return { ...input, data: scoper.createData(input['data']) }
   }
 
   if (operation === 'createMany' || operation === 'createManyAndReturn') {
@@ -85,15 +306,15 @@ export function applyTenantScope(
 
   if (operation === 'upsert') {
     // filter the match to this tenant AND stamp the created row; the update
-    // branch is left as-is (updating the tenant field would be wrong)
-    const create = (input['create'] as QueryArgs | undefined) ?? {}
+    // branch may not change the tenant field
     return {
       ...scopeWhere(input, tenantId, field),
-      create: { ...create, [field]: tenantId },
+      create: scoper.createData(input['create']),
+      update: scoper.updateData(input['update'] ?? {}),
     }
   }
 
-  return input
+  throw new UnscopedOperationError(operation)
 }
 
 function scopeWhere(input: QueryArgs, tenantId: string, field: string): QueryArgs {
@@ -120,8 +341,10 @@ export interface TenancyExtensionOptions {
   onMissingTenant?: 'bypass' | 'error'
   /**
    * Behavior for raw methods ($queryRaw/$queryRawUnsafe/$executeRaw/
-   * $executeRawUnsafe) invoked WHILE a tenant is in scope — these bypass the
-   * model-level scoping and would touch every tenant's rows:
+   * $executeRawUnsafe/$queryRawTyped/$runCommandRaw, every other client-level
+   * operation, and the MongoDB model-level findRaw/aggregateRaw) invoked WHILE
+   * a tenant is in scope — these bypass the model-level scoping and would
+   * touch every tenant's rows:
    * - 'error' (default): throw PRISMA_RAW_IN_TENANT — fail closed.
    * - 'allow': run the raw query as-is (only for queries you have already
    *   scoped by tenant by hand).
@@ -144,7 +367,12 @@ const defaultTenantId = (): string | undefined => {
  * const db = new PrismaClient().$extends(tenancyExtension())
  *
  * Every query on every model is scoped to ctx().tenant at call time —
- * app code just writes `db.project.findMany()`.
+ * app code just writes `db.project.findMany()`. Operations it cannot scope
+ * (raw queries, unknown operations) are refused inside a tenant context.
+ *
+ * Limits: a foreign-key SCALAR (`data: { projectId }`) is not checked against
+ * the tenant — use composite foreign keys `(tenantId, id)` and/or RLS
+ * (`rlsPolicySql`) as the database-level guarantee.
  */
 export function tenancyExtension(options: TenancyExtensionOptions = {}) {
   const field = options.tenantField ?? 'tenantId'
@@ -152,23 +380,23 @@ export function tenancyExtension(options: TenancyExtensionOptions = {}) {
 
   // Raw methods bypass model-level scoping. Refuse them when a tenant is in
   // scope (they would ignore isolation); allow them otherwise (central code).
-  const rawGuard = (method: string) =>
-    async ({ args, query }: { args: unknown; query: (args: unknown) => Promise<unknown> }) => {
-      if (options.onRawInTenant !== 'allow' && getTenantId() !== undefined) {
-        throw new RawQueryInTenantContextError(method)
-      }
-      return query(args)
+  const guardRaw = (method: string) => {
+    if (options.onRawInTenant !== 'allow' && getTenantId() !== undefined) {
+      throw new RawQueryInTenantContextError(method)
     }
+  }
 
   return {
     name: 'basalt-tenancy',
     query: {
       $allModels: {
         async $allOperations({
+          model,
           operation,
           args,
           query,
         }: {
+          model?: string
           operation: string
           args: QueryArgs
           query: (args: QueryArgs) => Promise<unknown>
@@ -179,15 +407,32 @@ export function tenancyExtension(options: TenancyExtensionOptions = {}) {
             if (options.onMissingTenant !== 'bypass') throw new MissingTenantError()
             return query(args)
           }
+          if (RAW_MODEL_OPERATIONS.has(operation)) {
+            guardRaw(model ? `${model}.${operation}` : operation)
+            return query(args)
+          }
+          // throws UnscopedOperationError for an operation it cannot scope
           return query(applyTenantScope(operation, args, tenantId, field))
         },
       },
-      // Client-level raw operations (Prisma extends these top-level, not under
-      // $allModels) — guarded so raw SQL can't silently escape tenant scoping.
-      $queryRaw: rawGuard('$queryRaw'),
-      $queryRawUnsafe: rawGuard('$queryRawUnsafe'),
-      $executeRaw: rawGuard('$executeRaw'),
-      $executeRawUnsafe: rawGuard('$executeRawUnsafe'),
+      // Every client-level operation ($queryRaw, $executeRaw, $queryRawTyped,
+      // $runCommandRaw and any future one) bypasses model scoping, so ALL of
+      // them are guarded here rather than an allow-list of known raw methods.
+      // Model operations also reach this callback; they are scoped above.
+      async $allOperations({
+        model,
+        operation,
+        args,
+        query,
+      }: {
+        model?: string
+        operation: string
+        args: unknown
+        query: (args: unknown) => Promise<unknown>
+      }) {
+        if (model === undefined) guardRaw(operation)
+        return query(args)
+      },
     },
   }
 }

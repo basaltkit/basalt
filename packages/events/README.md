@@ -231,6 +231,9 @@ store-level (`onFlushError`).
 | `maxAttempts` | `number` | `10` | Attempts before an entry is left as **dead** — `pending()` stops selecting it, so it is never flushed again. It stays in the store with its `lastError` for inspection. |
 | `backoff` | `OutboxBackoff \| false` | `{ delayMs: 1000, type: 'exponential', maxDelayMs: 60_000 }` | Retry spacing for failed entries. `false` retries on every flush — only sensible when the dispatch target is cheap and local. |
 | `onDead` | `(entry: OutboxEntry, error: unknown) => void` | `console.error` naming the event, id and attempt count | Called **once**, at the moment an entry exhausts `maxAttempts`. Dead events should never be silent — this is where you page someone. The `entry` passed carries the post-increment `attempts`. |
+| `concurrency` | `number` | `8` | Entries of one flush dispatched in parallel. `1` gives strictly sequential delivery. |
+| `tenantConcurrency` | `number` | `ceil(concurrency / 2)` | Most dispatches **one tenant** may have in flight at once, across flushes and including detached ones. Tenant-less entries share one budget. A tenant whose downstream hangs can never hold every worker. |
+| `dispatchTimeoutMs` | `number \| false` | `10_000` | How long a flush waits on one dispatch before moving on. The dispatch is **not** cancelled or failed: it keeps running *detached*, its outcome is recorded when it settles, and the entry is not re-dispatched meanwhile (no duplicate, no lost result). `false` waits indefinitely. |
 | `now` | `() => number` | `Date.now` | Injectable clock; tests drive the backoff windows with it. |
 
 `OutboxBackoff`:
@@ -241,6 +244,13 @@ store-level (`onFlushError`).
 | `type` | `'fixed' \| 'exponential'` | `'exponential'` | `'exponential'` doubles per attempt; `'fixed'` keeps `delayMs` constant. |
 | `maxDelayMs` | `number` | `60_000` | Ceiling for the exponential delay (the exponent is also clamped at 16, so the delay can never overflow to `Infinity`). |
 
+**Tenant fairness.** One tenant's failing or hanging downstream cannot starve the others. A
+flush selects entries oldest-first, but when a page is full of one tenant's backlog it queries
+again excluding the tenants already seen (via `pending()`'s filter), then interleaves the batch
+round-robin by tenant — each tenant keeps its own FIFO order. Dispatch respects
+`tenantConcurrency`, and a flush waits at most `dispatchTimeoutMs` per dispatch, so the relay
+keeps ticking for everyone while a hung dispatch finishes on its own.
+
 **Backoff is process-local.** It is tracked in the relay process's memory — no store or schema
 change. After a failure, *this* process skips the entry until its delay elapses; another replica,
 or this one after a restart, may retry it sooner. Worst case is one extra immediate retry.
@@ -249,7 +259,7 @@ Delivery stays at-least-once either way.
 | Method | Parameters | Returns | Description |
 |---|---|---|---|
 | `enqueue(event, payload, tenantId?)` | `string`, `unknown`, `string?` | `Promise<OutboxEntry>` | Writes an entry with `createdAt = now()`. |
-| `flush(dispatch, batchSize?)` | `OutboxDispatch`, `number` (default `50`) | `Promise<FlushResult>` | Delivers up to `batchSize` pending entries (FIFO); marks success/failure per entry. **Overlap-safe** — see below. |
+| `flush(dispatch, batchSize?)` | `OutboxDispatch`, `number` (default `50`) | `Promise<FlushResult>` | Delivers up to `batchSize` pending entries (FIFO per tenant, tenants interleaved); marks success/failure per entry. **Overlap-safe** — see below. |
 
 **Overlapping-tick coalescing.** `flush()` keeps the in-flight promise: while one flush is
 running, every further call returns *that* promise instead of selecting a batch of its own. This
@@ -259,7 +269,7 @@ entry eight times. With coalescing, the extra ticks simply await the running flu
 `FlushResult`. It does **not** coordinate across processes — two replays on two replicas can
 still both deliver, which is why delivery is at-least-once and receivers must be idempotent.
 
-`OutboxDispatch` = `(entry: OutboxEntry) => void | Promise<void>`; `FlushResult` = `{ published: number; failed: number }`.
+`OutboxDispatch` = `(entry: OutboxEntry) => void | Promise<void>`; `FlushResult` = `{ published: number; failed: number; detached?: number }` — `detached` counts dispatches still running when `dispatchTimeoutMs` elapsed (present only when non-zero); their outcome is recorded later and is not counted in this result.
 
 `OutboxEntry`: `id`, `event`, `payload`, `tenantId?`, `createdAt`, `attempts`, `publishedAt?`, `lastError?`.
 
@@ -275,7 +285,7 @@ fault instead of losing it.
 
 ### `OutboxStore` / `MemoryOutboxStore`
 
-Persistence interface: `enqueue`, `pending(limit, maxAttempts)` (unpublished, below the attempt limit, oldest first), `markPublished(id, at)`, `markFailed(id, error)`, `all()`. `MemoryOutboxStore` implements it in memory (fine for dev/tests; **does not survive restarts** — in production implement `OutboxStore` over your database).
+Persistence interface: `enqueue`, `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt limit, oldest first; `filter` is an `OutboxPendingFilter` — `{ excludeTenantIds?: string[]; excludeGlobal?: boolean }` — that lets the relay look past tenants it won't dispatch now. A store may ignore it: the outbox re-filters every row, but fairness is then limited to what one page holds), `markPublished(id, at)`, `markFailed(id, error)`, `all()`. `MemoryOutboxStore` implements it in memory (fine for dev/tests; **does not survive restarts** — in production implement `OutboxStore` over your database).
 
 ### `outboxPlugin(options)` / `OUTBOX`
 
@@ -289,7 +299,7 @@ Returns the `basalt:outbox` plugin; registers `Outbox` under the token `OUTBOX` 
 | `intervalMs` | `number` | no | — | Automatic flush interval, in ms. Omit for manual flush via `OUTBOX`. |
 | `batchSize` | `number` | no | `50` | Maximum entries per flush. |
 | `onFlushError` | `(error: unknown) => void` | no | `console.error` prefixed `[basalt:outbox] flush failed:` | A **timer or shutdown flush failed at the store level** — e.g. `pending()` threw because the database is unreachable. Per-entry dispatch failures are *not* this: those are caught inside the flush and recorded on the entry. Must never throw. |
-| `maxAttempts`, `backoff`, `onDead`, `now` | — | no | see `OutboxOptions` | Inherited from `OutboxOptions`. |
+| `maxAttempts`, `backoff`, `onDead`, `concurrency`, `tenantConcurrency`, `dispatchTimeoutMs`, `now` | — | no | see `OutboxOptions` | Inherited from `OutboxOptions`. |
 
 On `shutdown`, the plugin stops the timer and performs one last best-effort `flush`; if that one
 throws, it goes to `onFlushError` too.

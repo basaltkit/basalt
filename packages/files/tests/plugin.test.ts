@@ -114,11 +114,11 @@ function fakeFilesService(overrides: Partial<Record<string, (...a: never[]) => u
   const svc = {
     async list() {
       record('list')
-      return [{ id: 'f1' }] as FileRecord[]
+      return [{ id: 'f1', uploadedBy: 'u1' }] as FileRecord[]
     },
     async get(id: string) {
       record('get', id)
-      return null as FileRecord | null
+      return { id, uploadedBy: 'u1' } as FileRecord | null
     },
     async temporaryUrl(id: string, expiresIn: string) {
       record('temporaryUrl', id, expiresIn)
@@ -135,7 +135,8 @@ function fakeFilesService(overrides: Partial<Record<string, (...a: never[]) => u
 function withFiles<T>(svc: Files, fn: () => Promise<T>): Promise<T> {
   const container = new Container()
   container.singleton(FILES, () => svc)
-  return runWithContext({ container } as never, fn)
+  // Runs as u1, the uploader of every record the fake service returns.
+  return runWithContext({ container, user: { id: 'u1' } } as never, fn)
 }
 
 const routeFor = (method: string, url: string) => {
@@ -148,12 +149,12 @@ describe('fileRoutes — handler branches', () => {
   it('GET /files lists the tenant files', async () => {
     const { svc, calls } = fakeFilesService()
     const out = await withFiles(svc, () => Promise.resolve(routeFor('GET', '/files').handler({} as never)))
-    expect(await out).toEqual([{ id: 'f1' }])
+    expect(await out).toEqual([{ id: 'f1', uploadedBy: 'u1' }])
     expect(calls.list).toHaveLength(1)
   })
 
   it('GET /files/:id returns the record when found', async () => {
-    const found: FileRecord = { id: 'f9' } as FileRecord
+    const found: FileRecord = { id: 'f9', uploadedBy: 'u1' } as FileRecord
     const { svc } = fakeFilesService({ get: async () => found })
     const { reply } = fakeReply()
     const out = await withFiles(svc, () => routeFor('GET', '/files/:id').handler({ params: { id: 'f9' }, reply } as never) as Promise<unknown>)
@@ -182,8 +183,8 @@ describe('fileRoutes — handler branches', () => {
     await withFiles(svc, () => routeFor('POST', '/files/:id/url').handler({ params: { id: 'f1' } } as never) as Promise<unknown>)
     await withFiles(svc, () => routeFor('POST', '/files/:id/url').handler({ params: { id: 'f1' }, body: {} } as never) as Promise<unknown>)
     expect(calls.temporaryUrl).toEqual([
-      ['f1', '15m'],
-      ['f1', '15m'],
+      ['f1', 15 * 60_000],
+      ['f1', 15 * 60_000],
     ])
   })
 

@@ -202,6 +202,14 @@ the day the firm made them a client. Confine only those who have nothing else.
 The union in the second row means two confined roles each grant reach to their
 own surface, and holding both grants both — what neither names stays closed.
 
+"The roles they hold" means the roles held in the current tenant, or — when
+the tenant grants none — those held in `GLOBAL_SCOPE`
+(`gate.audienceRoles(userId)`). A `client` role assigned globally confines its
+holder inside every tenant where they hold no role of their own, not only
+outside one. And an unnamed global baseline role (a `user` every signup gets)
+does not un-confine a client inside their tenant: there the tenant's own roles
+decide.
+
 **Audiences narrow; they never widen.** The permission check runs regardless: a
 caller without `matter:read` is refused on `/portal/matters` whether or not the
 audience matches. Naming an audience is not a way in.
@@ -217,6 +225,32 @@ the global scope. Use `GLOBAL_SCOPE` for grants that apply everywhere, and the
 `scope` option to derive the current scope differently. In production, swap
 `MemoryAccessStore` for a durable `AccessStore`
 (`@basaltkit/permissions-prisma` / `-sqlite` ship in the ecosystem).
+
+### The global scope can't be a tenant
+
+`GLOBAL_SCOPE` is `'@global'` — a value no slug, hostname label or uuid can
+take. (Before `@basaltkit/permissions` 1.5 it was `'global'`: grants are keyed
+by tenant id, so the owner of a tenant *named* `global` held their roles in
+every tenant.) The Gate refuses to evaluate a request whose tenant id is
+`'@global'` or `'global'` — `ReservedScopeError`, `PERMISSION_SCOPE_RESERVED`,
+403 — and `isReservedScope(id)` lets your tenant registry refuse those ids at
+sign-up. The same error answers a request that carries a tenant with no
+non-empty string id: that is a broken context, and falling back to the global
+scope would evaluate (and let default-scoped `gate.assignRole()` write) the
+platform-wide bucket.
+
+**Upgrading from ≤ 1.4:** rows stored under the literal `'global'` are no
+longer read as global. Migrate them:
+
+```sql
+UPDATE perm_user_roles       SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_user_permissions SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_role_permissions SET scope = '@global' WHERE scope = 'global';
+```
+
+`readLegacyGlobalScope: true` keeps reading them meanwhile — a transition aid:
+while it is on, a tenant with id `'global'` writes global grants again, so
+reserve that id before enabling it.
 
 ## Temporary grants and delegation
 
@@ -280,9 +314,25 @@ a delegation ignores the delegator's own incoming delegations).
 | `delegations` | `DelegationStore` | off | Enables `delegate()` |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 | `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`: `'error'` throws `MissingPolicyError` (fail closed), `'rbac'` falls back to the granted permission strings |
+| `readLegacyGlobalScope` | `boolean` | `false` | Also read rows under the pre-1.5 global scope `'global'` as global. Transition aid — see [The global scope can't be a tenant](#the-global-scope-can-t-be-a-tenant) |
+| `hooks` | `HookBus` | the app's bus (plugin) | Where `permission:*` hooks are emitted |
 
 The plugin registers the Gate under the `GATE` token, adds the `meta.can` guard,
 and claims the `can` key in the adapters' boot-time guarded-meta check.
+
+## Hooks — the audit trail
+
+The Gate emits `permission:*` hooks, which `auditPlugin` captures by default:
+
+| Hook | Payload | When |
+| --- | --- | --- |
+| `permission:denied` | `{ userId, permission, scope }` | `authorize()`, a `meta.can` route or an audience refused the caller |
+| `permission:role_assigned` / `permission:role_removed` | `{ userId, role, scope }` | `gate.assignRole()` / `gate.removeRole()` |
+| `permission:granted` | `{ role?, userId?, permissions, scope, expiresAt? }` | `gate.grantToRole()`, `gate.grantToUser()`, `gate.grantTemporarily()` |
+| `permission:delegated` | `{ fromUserId, toUserId, permissions, scope, expiresAt? }` | `gate.delegate()` |
+
+Change grants through the Gate (`gate.assignRole(userId, role, scope?)`, …) rather
+than the store: writes straight on the `AccessStore` leave no trail.
 
 ## Failure modes & troubleshooting
 
@@ -291,6 +341,7 @@ and claims the `can` key in the adapters' boot-time guarded-meta check.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | The check failed — nothing grants the permission in the current or global scope |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route was hit with no authenticated user in context |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` has an unenforceable shape (`true`, a number, an empty/mixed array) — fails closed on every request |
+| `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` | 403 | The request's tenant id is a reserved scope (`'@global'` or `'global'`), or the tenant has no usable id |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | `can`/`authorize` got a resource but no policy check matches `resource:action` — the ABAC rule you intended would be skipped |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` (or `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claims that key |
 

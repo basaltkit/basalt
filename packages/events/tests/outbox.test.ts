@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createApp } from '@basaltkit/core'
+import { createApp, runWithContext, tryCtx } from '@basaltkit/core'
 import { defineEvent, eventsPlugin, EVENTS } from '../src/index.js'
 import { MemoryOutboxStore, Outbox, OUTBOX, outboxPlugin } from '../src/index.js'
 
@@ -171,5 +171,87 @@ describe('at-least-once hardening (Q-5)', () => {
     const bus = app.container.get(EVENTS)
     await expect(bus.emit(Paid, { id: 'in_1' })).rejects.toThrow(/listener|outbox/i)
     await app.shutdown()
+  })
+})
+
+/**
+ * SECURITY INVARIANT (availability): one tenant's failing or hanging downstream
+ * cannot stall every other tenant's outbox entries — entries in backoff never
+ * occupy the batch, a slow dispatch does not serialize the rest of the batch,
+ * and the in-memory store does not grow without bound.
+ */
+describe('outbox head-of-line isolation', () => {
+  it('entries in backoff do not occupy the batch — newer entries still get delivered', async () => {
+    let clock = 0
+    const outbox = new Outbox(new MemoryOutboxStore(), { now: () => clock })
+    for (let i = 0; i < 3; i++) await outbox.enqueue('bad.event', { i }, 'evil')
+    const delivered: string[] = []
+    const dispatch = async (entry: { event: string; payload: unknown }) => {
+      if (entry.event === 'bad.event') throw new Error('endpoint down')
+      delivered.push((entry.payload as { id: string }).id)
+    }
+    // First flush of the 3 oldest (all bad) puts them into backoff.
+    expect(await outbox.flush(dispatch, 3)).toEqual({ published: 0, failed: 3 })
+    clock = 1
+    await outbox.enqueue('good.event', { id: 'g1' }, 'acme')
+    await outbox.enqueue('good.event', { id: 'g2' }, 'globex')
+    clock = 10 // still inside the backoff window
+    expect(await outbox.flush(dispatch, 3)).toEqual({ published: 2, failed: 0 })
+    expect(delivered.sort()).toEqual(['g1', 'g2'])
+  })
+
+  it('a hanging dispatch does not block the other entries of the same batch', async () => {
+    const outbox = new Outbox(new MemoryOutboxStore())
+    await outbox.enqueue('slow', {})
+    await outbox.enqueue('fast', { id: 'f1' })
+    await outbox.enqueue('fast', { id: 'f2' })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const delivered: string[] = []
+    const flushed = outbox.flush(async (entry) => {
+      if (entry.event === 'slow') await gate
+      else delivered.push((entry.payload as { id: string }).id)
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(delivered).toEqual(['f1', 'f2']) // not stuck behind the slow entry
+    release()
+    expect(await flushed).toEqual({ published: 3, failed: 0 })
+  })
+
+  it('concurrency: 1 restores strictly sequential dispatch', async () => {
+    const outbox = new Outbox(new MemoryOutboxStore(), { concurrency: 1 })
+    await outbox.enqueue('a', {})
+    await outbox.enqueue('b', {})
+    let active = 0
+    let peak = 0
+    await outbox.flush(async () => {
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise((r) => setTimeout(r, 5))
+      active -= 1
+    })
+    expect(peak).toBe(1)
+  })
+
+  it('MemoryOutboxStore prunes published entries beyond its retention cap', async () => {
+    const store = new MemoryOutboxStore({ retainPublished: 2 })
+    const outbox = new Outbox(store)
+    for (let i = 0; i < 5; i++) await outbox.enqueue('e', { i })
+    await outbox.flush(async () => {})
+    const all = await store.all()
+    expect(all.filter((e) => e.publishedAt !== undefined).length).toBeLessThanOrEqual(2)
+  })
+
+  it('a flush started inside a tenant request does not expose that tenant to other entries\' dispatch', async () => {
+    const outbox = new Outbox(new MemoryOutboxStore())
+    await outbox.enqueue('invoice.paid', {}, 'globex')
+    await outbox.enqueue('system.tick', {})
+    const seen: (string | undefined)[] = []
+    await runWithContext({ tenant: { id: 'acme' } } as never, () =>
+      outbox.flush(async () => {
+        seen.push((tryCtx() as { tenant?: { id?: string } } | undefined)?.tenant?.id)
+      }),
+    )
+    expect(seen).toEqual([undefined, undefined])
   })
 })

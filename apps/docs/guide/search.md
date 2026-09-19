@@ -8,6 +8,14 @@ resolve to one internal `'default'` scope, so they always agree
 (see [Beyond SaaS](/guide/beyond-saas)). It ships an in-memory driver for dev/test and a
 Meilisearch driver for production, behind one API.
 
+Inside a tenant context the context tenant is authoritative: a `tenantId` passed
+to `search()`, `remove()`, or on a document given to `index()`/`bulk()` must
+name that tenant, and any other value throws `SearchTenantMismatchError`
+(`403 SEARCH_TENANT_MISMATCH`) — so forwarding a client's `?tenantId=` can never
+widen a query or plant a document in another tenant. Outside a tenant context
+(jobs, CLI) the explicit value selects the tenant. `reindex()` is a system
+operation over every tenant and keeps the tenant each sync rule maps.
+
 [[toc]]
 
 ## Setup

@@ -40,6 +40,21 @@ describe('SqliteOutboxStore', () => {
     expect((await store.all()).find((e) => e.id === 'b')?.publishedAt).toBe(99)
   })
 
+  it('pending: excludes tenants from the relay filter, keeping tenant-less rows unless excluded', async () => {
+    const store = new SqliteOutboxStore(openOutboxDatabase())
+    await store.enqueue({ id: 'a', event: 'e', payload: 1, tenantId: 'acme', createdAt: 1 })
+    await store.enqueue({ id: 'g', event: 'e', payload: 1, createdAt: 2 })
+    await store.enqueue({ id: 'b', event: 'e', payload: 1, tenantId: 'globex', createdAt: 3 })
+    await store.enqueue({ id: 'c', event: 'e', payload: 1, tenantId: 'initech', createdAt: 4 })
+
+    expect((await store.pending(10, 5, { excludeTenantIds: ['acme'] })).map((e) => e.id)).toEqual(['g', 'b', 'c'])
+    expect((await store.pending(10, 5, { excludeTenantIds: ['acme', 'globex'] })).map((e) => e.id)).toEqual(['g', 'c'])
+    expect((await store.pending(10, 5, { excludeGlobal: true })).map((e) => e.id)).toEqual(['a', 'b', 'c'])
+    expect((await store.pending(10, 5, { excludeTenantIds: ['acme'], excludeGlobal: true })).map((e) => e.id)).toEqual(['b', 'c'])
+    expect((await store.pending(2, 5, { excludeTenantIds: ['acme'] })).map((e) => e.id)).toEqual(['g', 'b']) // still limited
+    expect((await store.pending(10, 5, {})).map((e) => e.id)).toEqual(['a', 'g', 'b', 'c'])
+  })
+
   it('markFailed increments attempts and drops the entry past the ceiling', async () => {
     const store = new SqliteOutboxStore(openOutboxDatabase())
     await store.enqueue({ id: 'x', event: 'e', payload: 1, createdAt: 1 })

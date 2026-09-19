@@ -55,6 +55,9 @@ export {
   MfaRequiredError,
   MfaInvalidCodeError,
   MfaNotEnrolledError,
+  MfaAlreadyEnabledError,
+  SocialLinkRefusedError,
+  canonicalEmail,
   type AuthOptions,
   type SessionCookieOptions,
   type TokenPair,
@@ -71,7 +74,7 @@ export {
   type VerifyTotpOptions,
   type OtpauthUriInput,
 } from './totp.js'
-export { authPlugin, AUTH, type AuthPluginOptions } from './plugin.js'
+export { authPlugin, AUTH, CsrfRejectedError, type AuthPluginOptions, type CsrfOptions } from './plugin.js'
 export {
   ApiKeys,
   ApiKeyExpirationError,
@@ -81,11 +84,20 @@ export {
   type IssueApiKeyInput,
   type ApiKeyContext,
 } from './apikeys.js'
-export { apiKeysPlugin, API_KEYS, type ApiKeysPluginOptions } from './apikeys-plugin.js'
+export {
+  apiKeysPlugin,
+  API_KEYS,
+  ApiKeyTenantMismatchError,
+  ApiKeyNotAllowedError,
+  type ApiKeysPluginOptions,
+} from './apikeys-plugin.js'
 export {
   authRoutes,
   apiKeyRoutes,
   mfaRoutes,
+  DEFAULT_AUTH_RATE_LIMIT,
+  MAX_EMAIL_LENGTH,
+  MAX_PASSWORD_LENGTH,
   type AuthRoutesOptions,
   type PasswordPolicy,
 } from './routes.js'

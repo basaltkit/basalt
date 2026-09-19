@@ -66,16 +66,18 @@ hooks.on('comment:mentioned', ({ comment, userId }) =>
 | Route | Description |
 |---|---|
 | `GET /comments?resourceType=&resourceId=` | Comment tree for the resource. |
-| `POST /comments` `{ resourceType, resourceId, body, parentId? }` | Create (or reply). |
+| `POST /comments` `{ resourceType, resourceId, body, parentId? }` | Create (or reply). `parentId` must be a comment of the same resource, otherwise 400 `COMMENT_PARENT_NOT_FOUND`. |
 | `PATCH /comments/:id` `{ body }` | Edit — **author only**. |
 | `DELETE /comments/:id` | Delete — **author only**. |
-| `POST /comments/:id/resolve` · `/reopen` | Resolve / reopen the discussion. |
+| `POST /comments/:id/resolve` · `/reopen` | Resolve / reopen the discussion — **author only**. |
+
+Pass `commentRoutes({ authorize: (action, { resourceType, resourceId, comment? }, user) => boolean })` to apply your own per-resource policy (it replaces the default; compose with `defaultCommentPolicy`).
 
 ## API reference
 
-### `commentsPlugin({ store?, mentionPattern? })`
+### `commentsPlugin({ store?, mentionPattern?, maxBodyLength?, maxMentions?, resolveMentions? })`
 
-Registers the `COMMENTS` token. `mentionPattern` is a regex whose first group is the mentioned id (default `@([\w-]+)`).
+Registers the `COMMENTS` token. `mentionPattern` is a regex whose first group is the mentioned id (default `@([\w-]+)`). Bodies are capped at `maxBodyLength` characters (default 10 000) and `maxMentions` distinct mentions (default 50); `resolveMentions(ids, tenantId)` keeps only the ids that may be mentioned (e.g. tenant members).
 
 ### `class Comments`
 

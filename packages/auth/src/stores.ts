@@ -34,8 +34,11 @@ export class MemoryUserSource implements UserSource {
   private readonly users = new Map<string, AuthUser>()
 
   async findByEmail(email: string): Promise<AuthUser | null> {
+    // Emails are case-insensitive identities (Auth canonicalises them; this also
+    // matches rows written before that, in whatever case they were stored).
+    const wanted = email.trim().toLowerCase()
     for (const user of this.users.values()) {
-      if (user.email === email) return user
+      if (user.email.toLowerCase() === wanted) return user
     }
     return null
   }
@@ -215,6 +218,18 @@ export interface MfaStore {
   get(userId: string): Promise<MfaRecord | null>
   set(userId: string, record: MfaRecord): Promise<void>
   delete(userId: string): Promise<void>
+  /**
+   * Atomically records `step` as the last accepted TOTP step, only if MFA is
+   * enabled and no step ≥ `step` was accepted before (a conditional UPDATE).
+   * Returns whether THIS call consumed it. Optional: without it, Auth falls back
+   * to get → set, which lets two parallel requests replay the same code.
+   */
+  consumeTotpStep?(userId: string, step: number): Promise<boolean>
+  /**
+   * Atomically removes the recovery-code hash, returning whether THIS call
+   * removed it (a compare-and-swap). Optional, with the same fallback caveat.
+   */
+  consumeRecoveryCode?(userId: string, hash: string): Promise<boolean>
 }
 
 export class MemoryMfaStore implements MfaStore {
@@ -228,6 +243,22 @@ export class MemoryMfaStore implements MfaStore {
   }
   async delete(userId: string): Promise<void> {
     this.records.delete(userId)
+  }
+  // Synchronous check-and-set: no await between the read and the write.
+  async consumeTotpStep(userId: string, step: number): Promise<boolean> {
+    const record = this.records.get(userId)
+    if (!record || !record.enabled) return false
+    if (record.lastUsedStep !== undefined && step <= record.lastUsedStep) return false
+    record.lastUsedStep = step
+    return true
+  }
+  async consumeRecoveryCode(userId: string, hash: string): Promise<boolean> {
+    const record = this.records.get(userId)
+    if (!record || !record.enabled) return false
+    const index = record.recoveryCodes.indexOf(hash)
+    if (index === -1) return false
+    record.recoveryCodes.splice(index, 1)
+    return true
   }
 }
 

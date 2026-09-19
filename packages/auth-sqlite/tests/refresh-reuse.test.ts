@@ -1,4 +1,4 @@
-import { Auth, MemoryUserSource, RefreshReusedError } from '@basaltkit/auth'
+import { Auth, MemoryUserSource, RefreshReusedError, type TokenPair } from '@basaltkit/auth'
 import { describe, expect, it } from 'vitest'
 import { sqliteAuthStores } from '../src/index.js'
 
@@ -15,7 +15,7 @@ const newAuth = () => {
 }
 
 describe('F-1 · refresh reuse detection is atomic', () => {
-  it('two concurrent refreshes of the same token: exactly one wins', async () => {
+  it('two concurrent refreshes of the same token: at most one is served, and reuse is detected', async () => {
     const { auth } = newAuth()
     await auth.register('a@b.com', 'correct-horse-battery')
     const { tokens } = await auth.login('a@b.com', 'correct-horse-battery')
@@ -27,12 +27,15 @@ describe('F-1 · refresh reuse detection is atomic', () => {
 
     const ok = results.filter((r) => r.status === 'fulfilled')
     const failed = results.filter((r) => r.status === 'rejected')
-    expect(ok).toHaveLength(1)
-    expect(failed).toHaveLength(1)
-    expect((failed[0] as PromiseRejectedResult).reason).toBeInstanceOf(RefreshReusedError)
+    // The CAS lets at most one consume the token. The loser revokes the family;
+    // if that lands before the winner stored its rotated token, the winner is
+    // refused as well rather than handed a token of a revoked family.
+    expect(ok.length).toBeLessThanOrEqual(1)
+    expect(failed.length).toBeGreaterThanOrEqual(1)
+    for (const f of failed) expect((f as PromiseRejectedResult).reason).toBeInstanceOf(RefreshReusedError)
   })
 
-  it('the losing refresh revokes the family, so the winner is dead too', async () => {
+  it('the losing refresh revokes the family, so no rotated token survives', async () => {
     const { auth } = newAuth()
     await auth.register('a@b.com', 'correct-horse-battery')
     const { tokens } = await auth.login('a@b.com', 'correct-horse-battery')
@@ -41,11 +44,12 @@ describe('F-1 · refresh reuse detection is atomic', () => {
       auth.refresh(tokens.refreshToken),
       auth.refresh(tokens.refreshToken),
     ])
-    const winner = results.find((r) => r.status === 'fulfilled') as PromiseFulfilledResult<{
-      refreshToken: string
-    }>
-
-    await expect(auth.refresh(winner.value.refreshToken)).rejects.toThrow()
+    const winners = results.filter(
+      (r): r is PromiseFulfilledResult<TokenPair> => r.status === 'fulfilled',
+    )
+    for (const winner of winners) await expect(auth.refresh(winner.value.refreshToken)).rejects.toThrow()
+    // Nothing of the family is left in the table.
+    expect(await auth.refresh(tokens.refreshToken).catch((e: unknown) => e)).toBeInstanceOf(Error)
   })
 
   it('markUsed reports whether THIS call consumed the token', async () => {

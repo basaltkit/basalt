@@ -54,3 +54,22 @@ export class MissingPolicyError extends BasaltError {
     )
   }
 }
+
+/**
+ * The request's tenant id equals a scope the Gate reserves for platform-wide
+ * grants (`GLOBAL_SCOPE`, or the historic `'global'`). Evaluating grants there
+ * would let the members of that tenant read and write the global bucket, so the
+ * check fails closed. Reserve these ids in your tenant registry. Also thrown
+ * when a tenant is present in the context without a non-empty string id.
+ */
+export class ReservedScopeError extends BasaltError {
+  readonly status = 403
+  constructor(tenantId: string) {
+    super(
+      'PERMISSION_SCOPE_RESERVED',
+      tenantId === ''
+        ? 'The request has a tenant but no usable tenant id, so no permission scope can be derived from it.'
+        : `Tenant id ${JSON.stringify(tenantId)} is reserved for global grants and cannot be used as a permission scope.`,
+    )
+  }
+}

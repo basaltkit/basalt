@@ -24,6 +24,63 @@ export class WebhookSecretMissingError extends BasaltError {
 }
 
 /**
+ * Returns the configured webhook signing secret, or throws
+ * WebhookSecretMissingError when it is absent, empty or whitespace — an empty
+ * HMAC key is public knowledge, so "verifying" with it would accept forgeries.
+ * Built-in drivers call this before every verification (fail closed).
+ */
+export function requireWebhookSecret(gateway: string, secret: string | undefined | null): string {
+  if (typeof secret !== 'string' || secret.trim() === '') throw new WebhookSecretMissingError(gateway)
+  return secret
+}
+
+/**
+ * Reads the plan/period a driver stamped into the gateway's signed metadata when
+ * it created the checkout/subscription — for `WebhookEvent.plan`/`period`.
+ */
+export function attestedPlan(
+  metadata: Record<string, unknown> | null | undefined,
+): { plan?: string; period?: BillingPeriod } {
+  const plan = metadata?.['plan']
+  const period = metadata?.['period']
+  return {
+    ...(typeof plan === 'string' && plan !== '' ? { plan } : {}),
+    ...(period === 'monthly' || period === 'yearly' ? { period } : {}),
+  }
+}
+
+/**
+ * Like {@link attestedPlan}, but only attests a plan whose gateway price (or
+ * variant) is among the prices the event actually CHARGED. Signed metadata is
+ * stamped once, at checkout; the price of a gateway subscription can change
+ * afterwards (a swap, or a plan change in the gateway's own portal) while the
+ * metadata keeps naming the old plan. Binding the attestation to the charged
+ * price stops a renewal of a cheap subscription from "attesting" an expensive
+ * plan. No charged price, an unknown plan or a mismatch → nothing (fail closed).
+ */
+export function attestedPlanForPrice(
+  metadata: Record<string, unknown> | null | undefined,
+  charged: readonly string[],
+  priceFor: (plan: string, period: BillingPeriod) => string,
+): { plan?: string; period?: BillingPeriod } {
+  const { plan, period } = attestedPlan(metadata)
+  if (plan === undefined || charged.length === 0) return {}
+  const periods: BillingPeriod[] = period !== undefined ? [period] : ['monthly', 'yearly']
+  for (const candidate of periods) {
+    let price: string
+    try {
+      price = priceFor(plan, candidate)
+    } catch {
+      continue
+    }
+    if (typeof price === 'string' && price !== '' && charged.includes(price)) {
+      return { plan, period: candidate }
+    }
+  }
+  return {}
+}
+
+/**
  * Thrown when a confirmed payment's amount does not match the amount that was
  * originally requested for that payment id — an underpayment, or a forged /
  * mis-routed callback trying to settle an invoice for less.
@@ -46,6 +103,17 @@ export interface WebhookEvent {
   billableId: string
   /** Gateway subscription id, when the event carries one (e.g. after Checkout). */
   gatewayRef?: string
+  /**
+   * Plan that was actually PAID for, as attested by the gateway — read from the
+   * signed metadata the driver attached when it created the checkout /
+   * subscription (next to the price it charged). `handleWebhook` only changes
+   * the local plan on a checkout confirmation when this is present and matches
+   * the recorded intent, so interleaved checkouts cannot swap a cheap payment
+   * for an expensive plan. Custom drivers should set it.
+   */
+  plan?: string
+  /** Billing period that was paid for — same provenance as `plan`. */
+  period?: BillingPeriod
 }
 
 export interface CreateSubscriptionInput {
