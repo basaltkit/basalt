@@ -91,22 +91,30 @@ pnpm install
 cp .env.example .env
 ```
 
-`.env.example` lists `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` and — with auth — a
-commented-out `APP_SECRET`. All of them are declared and validated in
-`src/env.ts` with [`@basaltkit/env`](/guide/config). `pnpm dev` runs
-`src/dev.ts`, which sets `NODE_ENV=development` (unless it is already set), so
-the app boots even with an empty environment. `APP_SECRET` uses
+`.env.example` lists the variables under an **app-specific prefix** derived from
+the project name — `MY_SAAS_PORT`, `MY_SAAS_HOST`, `MY_SAAS_LOG_LEVEL` and, with
+auth, a commented-out `MY_SAAS_APP_SECRET` — plus `NODE_ENV`, which is never
+prefixed. All of them are declared and validated in `src/env.ts` with
+[`@basaltkit/env`](/guide/config), which passes `{ prefix: 'MY_SAAS' }` to
+`defineEnv`: each variable is read as `MY_SAAS_<NAME>` first and falls back to
+the bare `<NAME>`. The code still reads `env.PORT` — only the *names in the
+environment* change.
+
+`pnpm dev` runs `src/dev.ts`, which sets `NODE_ENV=development` (unless it is
+already set), so the app boots even with an empty environment. `APP_SECRET` uses
 `secret({ minLength: 32 })`: it falls back to a throwaway value **only** with
 `NODE_ENV=development`/`test`. `pnpm start` runs `src/server.ts` directly, where
 an unset `NODE_ENV` counts as production, so it **refuses to boot** until you set
-a real `APP_SECRET` of at least 32 characters (`openssl rand -base64 48`).
+a real `MY_SAAS_APP_SECRET` of at least 32 characters
+(`openssl rand -base64 48`).
 
 ::: tip `.env` is not loaded for you
 `defineEnv` reads `process.env` and nothing else — copying the file does not
 make its values visible. Export the variables, launch with
 `node --env-file=.env` (Node 22+), or let your process manager inject them.
 See [Configuration](/guide/config). `--env-file` never overrides a variable
-already exported in your shell — prefer app-prefixed names; see
+already exported in your shell — which is exactly why the scaffold prefixes the
+names; see
 [the precedence pitfall](/guide/installation#env-file-never-overrides-exported-variables).
 :::
 

@@ -331,23 +331,58 @@ describe('pnpm 11 robustness (BK-002)', () => {
 })
 
 describe('environment precedence (BK-018)', () => {
-  it('.env.example warns that --env-file never overrides exported variables and suggests an app prefix', async () => {
+  it('.env.example warns that --env-file never overrides exported variables and uses the app prefix', async () => {
     const result = await createProject({ name: 'my-saas', dir: join(root, 'envprec') })
     const example = await read(result.dir, '.env.example')
     expect(example).toMatch(/--env-file/)
     expect(example).toMatch(/never override/i)
     expect(example).toContain('MY_SAAS_DATABASE_URL')
+    // The live variables carry the prefix — a stray PORT in the shell loses.
+    expect(example).toMatch(/^MY_SAAS_PORT=3000$/m)
+    expect(example).toMatch(/^MY_SAAS_HOST=/m)
+    expect(example).toMatch(/^MY_SAAS_LOG_LEVEL=/m)
+    // …except NODE_ENV, which is a Node-wide convention and never prefixed.
+    expect(example).toMatch(/^NODE_ENV=development$/m)
+    expect(example).not.toMatch(/^MY_SAAS_NODE_ENV=/m)
     // Every live line is still KEY=value (the file stays loadable).
     for (const line of example.split('\n').filter((l) => l && !l.startsWith('#'))) {
-      expect(line).toMatch(/^[A-Z_]+=/)
+      expect(line).toMatch(/^[A-Z][A-Z0-9_]*=/)
     }
   })
 
-  it('the README has an Environment section covering the pitfall', async () => {
+  it('src/env.ts reads the app-prefixed names with the documented bare fallback', async () => {
+    const result = await createProject({ name: 'my-saas', dir: join(root, 'envprefix') })
+    const env = await read(result.dir, 'src/env.ts')
+    expect(env).toContain("prefix: 'MY_SAAS'")
+    // Keys stay bare, so the rest of the app still reads env.PORT / env.HOST.
+    expect(env).toContain('PORT: z.coerce.number().default(3000)')
+    expect(env).toMatch(/fallback/)
+
+    // The prefix is derived from the project name, whatever its shape.
+    const scoped = await createProject({ name: '@acme/kepya-api', dir: join(root, 'scoped') })
+    expect(await read(scoped.dir, 'src/env.ts')).toContain("prefix: 'KEPYA_API'")
+    expect(await read(scoped.dir, '.env.example')).toMatch(/^KEPYA_API_PORT=/m)
+  })
+
+  it('the README has an Environment section covering the pitfall and the prefix', async () => {
     const result = await createProject({ name: 'my-saas', dir: join(root, 'envreadme') })
     const readme = await read(result.dir, 'README.md')
     expect(readme).toContain('## Environment')
     expect(readme).toContain('--env-file')
     expect(readme).toContain('MY_SAAS_DATABASE_URL')
+    expect(readme).toContain('MY_SAAS_PORT')
+    expect(readme).toContain("prefix: 'MY_SAAS'")
+    // The fallback is documented, so an existing deployment exporting the bare
+    // names knows it still boots.
+    expect(readme).toMatch(/falls back|fallback/)
+  })
+
+  it('names the prefixed secret with auth, and omits it without', async () => {
+    const withAuth = await createProject({ name: 'my-saas', dir: join(root, 'envsecret') })
+    expect(await read(withAuth.dir, '.env.example')).toContain('MY_SAAS_APP_SECRET')
+    expect(await read(withAuth.dir, 'README.md')).toContain('MY_SAAS_APP_SECRET')
+
+    const lean = await createProject({ name: 'my-saas', dir: join(root, 'envnosecret'), auth: false })
+    expect(await read(lean.dir, '.env.example')).not.toContain('APP_SECRET')
   })
 })

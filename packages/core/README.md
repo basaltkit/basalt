@@ -453,6 +453,24 @@ All extend `BasaltError`, which has a stable `code` (you can safely do `if (erro
 
 `shutdown()` does not use a `BasaltError`: if several plugins fail to shut down it throws a native `AggregateError` — every other plugin still shuts down first.
 
+`new BasaltError(code, message, options?)` takes `BasaltErrorOptions` — the standard `cause`, plus an optional structured payload:
+
+| Option | Type | Description |
+|---|---|---|
+| `cause` | `unknown` | Standard `ErrorOptions.cause`. |
+| `details` | `Record<string, unknown>` | Machine-readable data about the failure — which checks failed, how much quota is left, the current version behind a conflict. Kept exactly as given; **core never sanitises it**. |
+
+`details` matters for an error that also carries a numeric `status`: `@basaltkit/http` serialises a sanitised copy of it as `error.details` in the HTTP body, which makes it **public**. No secrets, no internals, plain JSON data only, and small — the rules (and the 4 KiB cap) live in `@basaltkit/http`'s "Structured error details".
+
+```ts
+class QuotaExceededError extends BasaltError {
+  readonly status = 402
+  constructor(limit: number, used: number) {
+    super('QUOTA_EXCEEDED', 'Plan quota exceeded.', { details: { limit, used } })
+  }
+}
+```
+
 ### Metrics
 
 - `MetricsRegistry`: `counter(name, options?)`, `gauge(name, options?)`, `histogram(name, options? & { buckets? })`, `render()`.

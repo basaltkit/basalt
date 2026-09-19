@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Container, BasaltError, runWithContext, type RequestContext } from '@basaltkit/core'
 import type { ZodType } from 'zod'
+import { sanitizeErrorDetails, type ErrorDetails } from './error-details.js'
 import { RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
@@ -170,7 +171,21 @@ export async function runRoute(
 
 export interface ErrorResponse {
   status: number
-  body: { error: { code: string; message: string; part?: string; issues?: ValidationIssue[] } }
+  body: {
+    error: {
+      code: string
+      message: string
+      part?: string
+      issues?: ValidationIssue[]
+      /**
+       * Structured payload from an error deliberately constructed with one
+       * (`new HttpError(status, code, message, { details })`, or any
+       * `BasaltError` with a numeric `status`). Absent otherwise — an
+       * unexpected exception never grows one.
+       */
+      details?: ErrorDetails
+    }
+  }
 }
 
 /**
@@ -179,6 +194,8 @@ export interface ErrorResponse {
  */
 export function toErrorResponse(error: unknown): ErrorResponse {
   if (error instanceof RequestValidationError) {
+    // Unchanged on purpose: `part` and `issues` are the documented validation
+    // contract and predate `details`; folding them in would break every client.
     return {
       status: 400,
       body: { error: { code: error.code, message: error.message, part: error.part, issues: error.issues } },
@@ -187,7 +204,13 @@ export function toErrorResponse(error: unknown): ErrorResponse {
   if (error instanceof BasaltError) {
     const status = (error as { status?: unknown }).status
     if (typeof status === 'number') {
-      return { status, body: { error: { code: error.code, message: error.message } } }
+      // Sanitised, not passed through: `details` reaches the client verbatim,
+      // so it must be plain, acyclic, bounded JSON data or nothing at all.
+      const details = sanitizeErrorDetails(error.details)
+      return {
+        status,
+        body: { error: { code: error.code, message: error.message, ...(details ? { details } : {}) } },
+      }
     }
   }
   const client = clientErrorOf(error)

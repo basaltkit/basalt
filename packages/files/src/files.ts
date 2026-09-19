@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { Readable } from 'node:stream'
 import { BasaltError, runWithContext, tryCtx, type DurationInput, type HookBus } from '@basaltkit/core'
 import type { Disk } from '@basaltkit/storage'
 import {
@@ -160,6 +161,14 @@ export interface UploadInput {
   tenantId?: string
   uploadedBy?: string
   metadata?: FileMetadata
+  /**
+   * Exact body size in bytes when the client declared one (an HTTP
+   * `Content-Length`). Only a hint: the real size is always measured while the
+   * bytes arrive, and it is what the record and the quota use. Passing it lets
+   * the upload stream straight into backends that cannot take a body of
+   * unknown length (S3) instead of buffering it.
+   */
+  contentLength?: number
 }
 
 /**
@@ -231,6 +240,9 @@ async function* readWebStream(stream: ReadableStream<Uint8Array>): AsyncGenerato
 const toAsyncIterable = (source: Exclude<UploadContent, Uint8Array>): AsyncIterable<Uint8Array | string> =>
   isWebStream(source) ? readWebStream(source) : source
 
+const asBuffer = (piece: Uint8Array | string): Buffer =>
+  typeof piece === 'string' ? Buffer.from(piece) : Buffer.from(piece.buffer, piece.byteOffset, piece.byteLength)
+
 const matchesType = (contentType: string, allowed: string[]): boolean =>
   allowed.some((a) => a === contentType || (a.endsWith('/*') && contentType.startsWith(a.slice(0, -1))))
 
@@ -289,13 +301,21 @@ export class Files {
    * `content` is a buffer or a stream ({@link UploadContent}). A stream is read
    * once: its size is enforced while it arrives (the source is cancelled past
    * `validate.maxSize`), its SHA-256 computed on the fly and — with
-   * `validate.sniff` — its type checked on the first 64 KiB. The storage
-   * driver contract takes whole buffers, so the accepted bytes are buffered
-   * (at most `maxSize` of them) before `disk.put`.
+   * `validate.sniff` — its type checked on the first 64 KiB.
+   *
+   * On a disk whose driver implements `putStream` (BK-019) the bytes go
+   * straight to the backend: only the sniff window (64 KiB) is ever held.
+   * Otherwise — a driver with no streaming capability, an unbounded
+   * `validate.maxSize` with no declared `contentLength`, or a custom
+   * `checkQuota`, which needs the size before the write — the accepted bytes
+   * are buffered (at most `maxSize` of them) and written with `disk.put`.
    */
   async upload(content: UploadContent, input: UploadInput): Promise<FileRecord> {
     const tenantId = this.tenant(input.tenantId)
     const scope = tenantId ?? SINGLE_TENANT_SCOPE
+    if (!(content instanceof Uint8Array) && this.canStream(input)) {
+      return this.uploadStreaming(content, input, tenantId, scope)
+    }
     const accepted = content instanceof Uint8Array ? this.acceptBuffer(content, input) : await this.acceptStream(content, input)
     const size = accepted.content.length
 
@@ -317,6 +337,166 @@ export class Files {
     const record = quotaEnforced ? await this.serialized(scope, store) : await store()
     await this.hooks?.emit('file:uploaded', { file: record })
     return record
+  }
+
+  /**
+   * Whether this upload can go straight to the backend.
+   *
+   * A custom `checkQuota` cannot: it is asked to approve a size, and a stream
+   * has none until it has been read. The built-in `maxTotalBytes` quota can —
+   * the remaining allowance becomes one more mid-stream limit. An unbounded
+   * `maxSize` with no declared `contentLength` also cannot, because a backend
+   * that needs a length (S3) would have nothing to bound the upload with.
+   */
+  private canStream(input: UploadInput): boolean {
+    if (this.checkQuota !== undefined || !this.disk.supports('putStream')) return false
+    const max = this.validation.maxSize
+    return input.contentLength !== undefined || (max !== undefined && Number.isFinite(max))
+  }
+
+  /**
+   * Streams an upload to the disk: the bytes are size-checked, hashed and
+   * sniffed as they pass through, and never collected into one buffer.
+   *
+   * A failure mid-stream (over the size limit, over the quota, a type the
+   * bytes contradict, a backend error) deletes whatever reached the disk, so a
+   * rejected upload leaves neither a record nor a half-written object.
+   */
+  private async uploadStreaming(
+    content: Exclude<UploadContent, Uint8Array>,
+    input: UploadInput,
+    tenantId: string | undefined,
+    scope: string,
+  ): Promise<FileRecord> {
+    const store = async (): Promise<FileRecord> => {
+      // The built-in quota becomes a second mid-stream limit: what is left of
+      // the tenant's allowance right now.
+      const remaining =
+        this.maxTotalBytes === undefined ? undefined : this.maxTotalBytes - (await this.store.totalSize(scope))
+      if (remaining !== undefined && remaining <= 0) throw new StorageQuotaExceededError()
+      const record = await this.writeStreamed(content, input, tenantId, scope, remaining)
+      // Re-checked after the insert, exactly as the buffered path does: the
+      // in-process queue cannot see uploads handled by another instance.
+      if (this.maxTotalBytes !== undefined && (await this.store.totalSize(scope)) > this.maxTotalBytes) {
+        await this.store.delete(scope, record.id)
+        await this.inTenant(tenantId, () => this.disk.delete(record.path))
+        throw new StorageQuotaExceededError()
+      }
+      return record
+    }
+
+    const record = this.maxTotalBytes !== undefined ? await this.serialized(scope, store) : await store()
+    await this.hooks?.emit('file:uploaded', { file: record })
+    return record
+  }
+
+  private async writeStreamed(
+    content: Exclude<UploadContent, Uint8Array>,
+    input: UploadInput,
+    tenantId: string | undefined,
+    scope: string,
+    quotaRemaining: number | undefined,
+  ): Promise<FileRecord> {
+    const iterator = toAsyncIterable(content)[Symbol.asyncIterator]()
+    const { contentType, head } = await this.sniffHead(iterator, input)
+    const hash = createHash('sha256')
+    const measured = { size: 0 }
+    const maxSize = this.validation.maxSize
+    const admit = (chunk: Buffer): void => {
+      measured.size += chunk.length
+      if (maxSize !== undefined && measured.size > maxSize) throw new FileTooLargeError(measured.size, maxSize)
+      if (quotaRemaining !== undefined && measured.size > quotaRemaining) throw new StorageQuotaExceededError()
+      hash.update(chunk)
+    }
+    async function* body(): AsyncGenerator<Uint8Array> {
+      let drained = false
+      try {
+        for (const chunk of head) {
+          admit(chunk)
+          yield chunk
+        }
+        for (;;) {
+          const next = await iterator.next()
+          if (next.done) break
+          const chunk = asBuffer(next.value)
+          admit(chunk)
+          yield chunk
+        }
+        drained = true
+      } finally {
+        // Anything but a clean end — the limits above, a backend error, the
+        // consumer giving up — returns the source so it is destroyed/cancelled.
+        if (!drained) await iterator.return?.().catch(() => undefined)
+      }
+    }
+
+    const id = randomUUID()
+    const path = storagePath(id)
+    try {
+      await this.inTenant(tenantId, () =>
+        this.disk.putStream(path, body(), {
+          contentType,
+          ...(input.contentLength !== undefined ? { contentLength: input.contentLength } : {}),
+          // Lets a backend that needs a bound (S3 without a contentLength)
+          // know how far it may go; the generator above still fails first.
+          ...(maxSize !== undefined && Number.isFinite(maxSize) ? { maxBytes: maxSize } : {}),
+        }),
+      )
+    } catch (error) {
+      await this.inTenant(tenantId, () => this.disk.delete(path)).catch(() => undefined)
+      throw error
+    }
+
+    const metadata: FileMetadata | undefined = this.validation.sniff
+      ? { ...input.metadata, declaredType: input.contentType }
+      : input.metadata
+    const record: FileRecord = {
+      id,
+      tenantId: scope,
+      name: input.name,
+      contentType,
+      size: measured.size,
+      path,
+      checksum: hash.digest('hex'),
+      createdAt: this.now(),
+      ...(input.uploadedBy !== undefined ? { uploadedBy: input.uploadedBy } : {}),
+      ...(metadata !== undefined ? { metadata } : {}),
+    }
+    await this.store.create(record)
+    return record
+  }
+
+  /**
+   * Pulls only the sniff window (64 KiB) off the stream, decides the content
+   * type from it, and hands the pulled chunks back so the body can be replayed
+   * from its first byte. Refusing here closes the source without reading the
+   * rest — nothing has been written yet.
+   */
+  private async sniffHead(
+    iterator: AsyncIterator<Uint8Array | string>,
+    input: UploadInput,
+  ): Promise<{ contentType: string; head: Buffer[] }> {
+    // Without sniffing the declared type is all there is: refuse it before
+    // reading a single byte.
+    if (!this.validation.sniff) return { contentType: this.resolveType(input.contentType, new Uint8Array()), head: [] }
+    const head: Buffer[] = []
+    let size = 0
+    try {
+      while (size < SNIFF_WINDOW) {
+        const next = await iterator.next()
+        if (next.done) break
+        const chunk = asBuffer(next.value)
+        head.push(chunk)
+        size += chunk.length
+        // The window is small, but an upload already past the cap is refused
+        // here rather than after it has been handed to the backend.
+        this.checkSize(size)
+      }
+      return { contentType: this.resolveType(input.contentType, Buffer.concat(head, size).subarray(0, SNIFF_WINDOW)), head }
+    } catch (error) {
+      await iterator.return?.().catch(() => undefined)
+      throw error
+    }
   }
 
   private async write(
@@ -394,6 +574,34 @@ export class Files {
     if (options.bypassQuarantine !== true) this.assertServable(record)
     const content = await this.inTenant(resolved, () => this.disk.get(record.path))
     return { record, content }
+  }
+
+  /**
+   * The file's record and a stream of its bytes — the same contract as
+   * {@link download} (quarantine included), without holding the file in
+   * memory. Requires a disk whose driver implements `getStream`; otherwise the
+   * disk throws `STORAGE_GET_STREAM_UNSUPPORTED`.
+   *
+   * ```ts
+   * const { record, stream } = await files.downloadStream(id)
+   * reply.header('content-type', record.contentType)
+   * await pipeline(stream, reply.raw)
+   * ```
+   *
+   * The caller MUST consume the stream or `destroy()` it — an abandoned stream
+   * holds a connection (S3, Azure, GCS) or a file descriptor (local) open.
+   */
+  async downloadStream(
+    id: string,
+    tenantId?: string,
+    options: { bypassQuarantine?: boolean } = {},
+  ): Promise<{ record: FileRecord; stream: Readable }> {
+    const resolved = this.tenant(tenantId)
+    const record = await this.store.find(resolved ?? SINGLE_TENANT_SCOPE, id)
+    if (!record) throw new FileNotFoundError()
+    if (options.bypassQuarantine !== true) this.assertServable(record)
+    const stream = await this.inTenant(resolved, () => this.disk.getStream(record.path))
+    return { record, stream }
   }
 
   /**

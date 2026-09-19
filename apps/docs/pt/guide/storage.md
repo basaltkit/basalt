@@ -93,6 +93,70 @@ await disk.put(key, buffer, {
 })
 ```
 
+## Ficheiros grandes
+
+`put`/`get` movem o objeto inteiro pela memória, o que é a forma errada para um
+vídeo de 2 GB, uma importação CSV ou um dump de base de dados. Quatro
+**capacidades opcionais do driver** cobrem esse caso. `local`, `s3`, `azure` e
+`gcs` implementam as quatro; um driver que não as tenha lança um erro claro
+`STORAGE_*_UNSUPPORTED`, e `disk.supports(capacidade)` responde antes de
+chamares.
+
+```ts
+import { createWriteStream } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
+
+// Upload sem nunca segurar o corpo. Fonte: Readable do Node, ReadableStream
+// web, ou qualquer AsyncIterable<Uint8Array>.
+await disk.putStream('imports/2026.csv', request.raw, {
+  contentType: 'text/csv',
+  contentLength: declaredSize,        // quando o cliente enviou um Content-Length
+  maxBytes: 200 * 1024 * 1024,        // aplicado ENQUANTO transmite
+})
+
+// Download como stream — consome-a ou faz destroy(), nunca a abandones.
+await pipeline(await disk.getStream('imports/2026.csv'), createWriteStream('/tmp/2026.csv'))
+
+// Cópia sem os bytes saírem do backend.
+await disk.copy('drafts/a.pdf', 'final/a.pdf')
+await disk.copy('drafts/a.pdf', 'a.pdf', { disk: storage.disk('cold') })
+
+// Metadados sem download.
+const { size, contentType, etag, lastModified } = await disk.stat('final/a.pdf')
+```
+
+As mesmas regras de segurança do `put`: a key é validada e prefixada com o
+tenant (falhando fechado sem tenant), `allowedContentTypes` é verificado antes
+de um único byte ser lido, e passado o `maxBytes` o upload é abortado com
+`StorageTooLargeError` enquanto a fonte é destruída (`Readable` do Node) ou
+cancelada (`ReadableStream` web) — nada para além do limite chega a ser lido.
+
+| Capacidade | S3 | Azure | GCS | Local |
+| --- | --- | --- | --- | --- |
+| `putStream` | `PutObject` — precisa de `contentLength` **ou** `maxBytes` | `uploadStream` (qualquer tamanho) | `createWriteStream` (qualquer tamanho) | stream de escrita `fs` |
+| `getStream` | corpo do `GetObject` | `download()` | `createReadStream` | stream de leitura `fs` |
+| `copy` | `CopyObject` | `syncCopyFromURL` (≤ 256 MiB) | `file.copy()` | `fs.copyFile` |
+| `stat` | `HeadObject` | `getProperties()` | `getMetadata()` | `fs.stat` (só tamanho + mtime) |
+
+::: warning O S3 precisa de um tamanho conhecido
+O `PutObject` não consegue enviar um corpo de tamanho desconhecido. O
+`putStream` transmite diretamente quando passas `contentLength`; só com
+`maxBytes` acumula até esse limite (memória limitada, escolha deliberada); sem
+nenhum dos dois lança `StorageStreamLengthRequiredError`
+(`400 STORAGE_STREAM_LENGTH_REQUIRED`). Para streams verdadeiramente ilimitadas,
+usa tu o `Upload` multipart do `@aws-sdk/lib-storage` — não é dependência do
+`@basaltkit/storage-s3` de propósito. Azure e GCS fragmentam streams de tamanho
+desconhecido nativamente.
+:::
+
+O `copy` recorre a alternativas quando uma cópia server-side é impossível — um
+driver diferente, ou um sem `copy`: primeiro `getStream` → `putStream`, depois
+`get` → `put`. Ambas movem os bytes por este processo, por isso passa
+`{ requireServerSide: true }` onde um download-e-reupload silencioso de um
+objeto enorme seria um bug (`CopyUnsupportedError`). Um upload em stream que
+falhe pode deixar um objeto parcial em backends que não conseguem reverter;
+apaga a key quando isso importar (o `@basaltkit/files` já o faz).
+
 ## Múltiplos discos nomeados
 
 Declara tantos discos quantos quiseres — ex.: uploads públicos num backend, faturas
@@ -275,6 +339,36 @@ que não consegue ligar headers do pedido.
   app com os headers devolvidos, e nada mais largo.
 :::
 
+### Assinar para outro endpoint
+
+Às vezes o processo que vai *usar* o URL chega ao bucket por um host diferente
+do da API: um worker de ingestão isolado em `http://minio:9000` dentro da rede
+de contentores, um alias público de CDN à frente do S3. Assina para esse host
+com um `endpoint` por chamada, ou um valor por omissão no disco:
+
+```ts
+await disk.temporaryUploadUrl(key, { expiresIn: '5m', contentType, endpoint: 'http://minio:9000' })
+await disk.temporaryUrl(key, '15m', { endpoint: 'https://files.example.com' })
+
+// por omissão para todos os URLs que este disco assina (um endpoint por chamada ganha)
+s3Disk({ bucket: 'uploads', endpoint: 'http://minio:9000', signingEndpoint: 'https://files.example.com' })
+```
+
+Só o host assinado muda — região, path style, credenciais e SSE ficam como
+configurados, e os headers ligados `Content-Type` / `Content-Length` / checksum
+não mudam. **Só S3:** o Azure deriva o SAS do host da conta do blob client e o
+GCS liga as assinaturas V4 ao host do bucket, por isso ambos recusam a
+substituição com `STORAGE_TEMPORARY_URL_UNSUPPORTED` /
+`STORAGE_UPLOAD_URL_UNSUPPORTED` em vez de emitir um URL para o host errado.
+
+::: warning Um valor de deployment, nunca input do cliente
+O endpoint tem de ser outro nome para o **mesmo** bucket. Uma assinatura emitida
+para um host que não controlas é uma credencial entregue a esse host, por isso
+nunca o construas a partir de um pedido. É validado (`http(s)` absoluto, sem
+credenciais, sem query nem fragmento) — qualquer outra coisa lança
+`StorageSigningEndpointInvalidError` (`400 STORAGE_SIGNING_ENDPOINT_INVALID`).
+:::
+
 `@basaltkit/files` constrói um pipeline de upload por cima disto (validação, quota,
 metadados) — vê o [guia de File uploads](/pt/guide/files).
 
@@ -323,11 +417,39 @@ Sem processador, o terminal do pipeline lança
 | `maxBytes` | `number` | sem limite | Limite de tamanho imposto na fachada — rejeita com `STORAGE_TOO_LARGE` antes de qualquer driver correr |
 | `allowedContentTypes` | `readonly string[]` | qualquer | Allowlist imposta na fachada — um `contentType` em falta ou fora da lista rejeita com `STORAGE_CONTENT_TYPE` |
 
+### `PutStreamInput` (por `putStream`)
+
+Tudo o que vem de `PutOptions` (`maxBytes`, `allowedContentTypes`) mais:
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `contentType` | `string` | — (obrigatório) | Uma stream não tem bytes a que recorrer, por isso o tipo é declarado à partida e verificado contra `allowedContentTypes` antes de qualquer byte ser lido |
+| `contentLength` | `number` | nenhum | Tamanho exato do corpo quando conhecido. **Obrigatório no S3** salvo se `maxBytes` estiver definido |
+
+### `CopyOptions` (por `copy`)
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `disk` | `Disk` | o disco de origem | Disco de destino; a key é prefixada pelo scope **desse** disco |
+| `contentType` | `string` | o da origem | Content type do objeto de destino |
+| `maxBytes` | `number` | sem limite | Limite para uma cópia por fallback — a única cujos bytes passam por este processo |
+| `requireServerSide` | `boolean` | `false` | Lança `CopyUnsupportedError` em vez de recorrer a um download-e-reupload |
+
+### `StorageStat` (devolvido por `stat`)
+
+| Campo | Tipo | Notas |
+| --- | --- | --- |
+| `size` | `number` | Bytes |
+| `contentType` | `string \| undefined` | Não reportado pelo `local` |
+| `etag` | `string \| undefined` | Tal como o backend o devolve; não reportado pelo `local` |
+| `lastModified` | `Date \| undefined` | `mtime` no `local` |
+
 ### `TemporaryUrlOptions` (por `temporaryUrl`)
 
 | Opção | Tipo | Predefinição | Porquê |
 | --- | --- | --- | --- |
 | `disposition` | `'attachment' \| 'inline'` | `'attachment'` | Fecha por omissão o vetor de um HTML/SVG carregado renderizar top-level na origem storage/CDN (stored XSS). Opta por `'inline'` só quando a renderização top-level é deliberada |
+| `endpoint` | `string` | o do próprio driver | Assina para outro host do **mesmo** bucket (só S3; Azure/GCS recusam). Vê [Assinar para outro endpoint](#assinar-para-outro-endpoint) |
 
 ### `TemporaryUploadUrlOptions` (por `temporaryUploadUrl`)
 
@@ -339,6 +461,7 @@ Sem processador, o terminal do pipeline lança
 | `checksumSha256` | `string` (base64) | nenhum | SHA-256 do corpo — assinado e verificado pelo S3; recusado por GCS e Azure |
 | `maxBytes` | `number` | sem limite | Limite imposto na fachada sobre o `contentLength` declarado (que passa a obrigatório) |
 | `allowedContentTypes` | `readonly string[]` | qualquer | Allowlist imposta na fachada para `contentType` |
+| `endpoint` | `string` | o do próprio driver | Assina para outro host do **mesmo** bucket — um valor de deployment, nunca input do cliente (só S3) |
 
 ### Opções de `s3Disk` / `S3StorageDriver`
 
@@ -350,6 +473,7 @@ Sem processador, o terminal do pipeline lança
 | `credentials` | `{ accessKeyId, secretAccessKey }` | cadeia de credenciais AWS | Credenciais estáticas |
 | `forcePathStyle` | `boolean` | `true` quando `endpoint` está definido | URLs path-style (MinIO) |
 | `serverSideEncryption` | `'AES256' \| { kms: string }` | nenhuma (aplica-se a do bucket) | SSE enviada em cada `put` e assinada em cada upload pré-assinado |
+| `signingEndpoint` | `string` | `endpoint` | Host por omissão para o qual os URLs pré-assinados são assinados, quando difere daquele com que este processo fala. Um `endpoint` por chamada ganha |
 
 A predefinição de disposition é honrada pelos três drivers de assinatura — S3
 (`ResponseContentDisposition`), GCS (`responseDisposition`) e Azure (SAS
@@ -372,12 +496,19 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` (400) | Um disco com scope de tenant correu sem tenant no contexto com tenancy registado — resolve um tenant, ou dá a um disco central `scope: null` / `onMissingScope: 'root'` |
 | `StorageInvalidScopeError` | `STORAGE_INVALID_SCOPE` | O id do tenant (ou um `scope` próprio) não é um prefixo de path seguro (`..`, uma `/` dentro do id, caracteres de controlo) |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | Terminal de `disk.image(…)` sem `imageProcessor` configurado |
+| `PutStreamUnsupportedError` | `STORAGE_PUT_STREAM_UNSUPPORTED` | `putStream` num driver sem a capacidade — verifica `disk.supports('putStream')` primeiro |
+| `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | `getStream` num driver sem a capacidade |
+| `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | `copy({ requireServerSide: true })` sem cópia server-side disponível (um driver diferente, ou um sem `copy`) |
+| `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | `stat` num driver sem a capacidade |
+| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` (400) | `putStream` no S3 sem `contentLength` nem `maxBytes` |
+| `StorageSigningEndpointInvalidError` | `STORAGE_SIGNING_ENDPOINT_INVALID` (400) | Um `endpoint` que não é um URL `http(s)` absoluto, ou que traz credenciais, query string ou fragmento |
 
 Todos estendem `BasaltError` e transportam o `code` acima.
 
 ## Escrever um driver
 
-Um driver implementa o contrato `StorageDriver` — seis métodos:
+Um driver implementa o contrato `StorageDriver` — seis métodos obrigatórios,
+mais as capacidades opcionais que conseguir honrar:
 
 ```ts
 import {
@@ -398,9 +529,21 @@ export class MyStorageDriver implements StorageDriver {
   async temporaryUrl(path: string, expiresInMs: number): Promise<string> { /* opcional */ throw 0 }
   // opcional: PUT pré-assinado — liga options.contentType (+ tamanho/checksum) e devolve os headers a enviar
   async temporaryUploadUrl(path: string, expiresInMs: number, options: TemporaryUploadUrlDriverOptions): Promise<TemporaryUploadUrl> { throw 0 }
+  // opcional: capacidades para objetos grandes. `source` é UMA Readable do Node
+  // que a camada Disk já normalizou e limitou a options.maxBytes.
+  async putStream(path: string, source: Readable, options: PutStreamOptions): Promise<void> { /* … */ }
+  async getStream(path: string): Promise<Readable> { /* lança StorageFileNotFoundError em miss */ throw 0 }
+  async copy(from: string, to: string, options?: CopyDriverOptions): Promise<void> { /* … */ }
+  async stat(path: string): Promise<StorageStat> { /* … */ throw 0 }
   async disconnect(): Promise<void> {}
 }
 ```
+
+Deixa de fora o que o teu backend não consegue fazer: o `Disk` reporta a lacuna
+com o erro `STORAGE_*_UNSUPPORTED` correspondente e `disk.supports(...)` devolve
+`false`. Uma regra não é opcional: um driver que não consiga honrar um
+`TemporaryUrlOptions.endpoint` **tem de lançar** em vez de o ignorar — um URL
+assinado para o host errado é um URL silenciosamente partido.
 
 Depois liga-o como instância: `disks: { d: { driver: new MyStorageDriver() } }`.
 Os drivers de cloud incluídos ([`@basaltkit/storage-gcs`][gcs], [`-azure`][az])

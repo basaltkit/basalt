@@ -10,13 +10,17 @@
  * here is also exported from the main barrel; this is a boundary-preserving subset.
  */
 export { names, type Names } from './names.js'
-export type { GeneratedFile } from './templates.js'
+export { moduleFile, type ModuleArtifact, type GeneratedFile } from './templates.js'
 export {
   GENERATORS,
   generate,
   generateResource,
   writeGenerated,
   registerResourceInApp,
+  serviceSiblingsExist,
+  expectedSiblings,
+  missingSiblings,
+  missingSiblingsWarning,
   FileExistsError,
   type GeneratorKind,
   type GeneratorOptions,

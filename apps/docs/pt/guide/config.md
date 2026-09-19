@@ -179,6 +179,52 @@ const env = defineEnv(
 )
 ```
 
+### Prefixos próprios da app
+
+`DATABASE_URL` e `PORT` são nomes que *todos* os projetos usam, e o
+`node --env-file=.env` **nunca sobrepõe uma variável já exportada** na shell.
+Num terminal que ainda carrega o `DATABASE_URL` de outro projeto, uma app que
+leia o nome genérico arranca contra a base de dados errada e só dá por isso no
+primeiro pedido.
+
+O `prefix` dá às variáveis nomes próprios da app sem mexer no resto do código:
+
+```ts
+export const env = defineEnv(
+  {
+    DATABASE_URL: z.string().url(),
+    PORT: z.coerce.number().default(3000),
+  },
+  { prefix: 'MY_SAAS' },
+)
+
+env.DATABASE_URL // de MY_SAAS_DATABASE_URL, com recuo para DATABASE_URL
+```
+
+- **Primeiro o prefixado, o simples como recuo.** O `MY_SAAS_PORT` ganha sempre
+  que esteja *definido* (um valor vazio conta como definido, como no
+  `process.env`); só quando falta é que o `PORT` se aplica. O recuo mantém a
+  arrancar uma app já em produção que exporte os nomes genéricos.
+- **As chaves nunca mudam** — o objeto continua a ser `env.PORT`.
+- **O `NODE_ENV` nunca leva prefixo.** É uma convenção de todo o Node, lida por
+  toda a toolchain e pelo `secret()`.
+- **O relatório nomeia o que foi procurado** —
+  `MY_SAAS_DATABASE_URL (or DATABASE_URL): Required` quando nenhum está
+  definido, e a chave de onde o valor veio quando é inválido.
+
+Para exigir os nomes com prefixo e ignorar de todo os simples — a definição
+mais estrita — usa `fallback: false`:
+
+```ts
+defineEnv(shape, { prefix: { value: 'MY_SAAS', fallback: false } })
+```
+
+O prefixo tem de ser ele próprio um nome válido de variável (letras
+maiúsculas, dígitos e underscores simples interiores, começando por letra):
+qualquer outra coisa lança `EnvPrefixError` (`ENV_PREFIX_INVALID`) no arranque.
+Uma app criada pelo scaffold já vem com `prefix: '<NOME_DO_PROJETO>'` — vê
+[O `--env-file` nunca sobrepõe variáveis exportadas](/pt/guide/installation#o-env-file-nunca-sobrepoe-variaveis-exportadas).
+
 ## Segredos que falham fechados
 
 O `secret()` é um schema Zod de string para chaves de assinatura e credenciais
@@ -274,6 +320,7 @@ onde as puseres.
 | --- | --- | --- | --- |
 | `shape` | `z.ZodRawShape` | — | Um schema Zod por variável. Usa `z.coerce.*` — todos os valores chegam como string |
 | `options.source` | `Record<string, string \| undefined>` | `process.env` | Ler de outro sítio — testes, ou um gestor de segredos que carregaste tu |
+| `options.prefix` | `string \| { value: string; fallback?: boolean }` | — | Ler cada variável primeiro como `<PREFIXO>_<NOME>` (`MY_SAAS_PORT` antes de `PORT`). Uma string simples significa `{ value, fallback: true }`; `fallback: false` exige os nomes com prefixo. O `NODE_ENV` nunca leva prefixo e as chaves devolvidas mantêm-se simples |
 
 `secret(options?)` — devolve `z.ZodType<string>`:
 
@@ -288,7 +335,8 @@ onde as puseres.
 | --- | --- | --- | --- |
 | `ConfigKeyError` | `CONFIG_KEY_MISSING` | — | `get(path)` com um argumento e o caminho ausente |
 | `ConfigUnsafeKeyError` | `CONFIG_UNSAFE_KEY` | — | `set()` num caminho que contém `__proto__`, `constructor` ou `prototype` |
-| `EnvValidationError` | `ENV_INVALID` | boot | Uma ou mais variáveis falharam o `defineEnv`; o `error.report` lista todas |
+| `EnvValidationError` | `ENV_INVALID` | boot | Uma ou mais variáveis falharam o `defineEnv`; o `error.report` lista todas (com `prefix`, sob a chave realmente lida) |
+| `EnvPrefixError` | `ENV_PREFIX_INVALID` | boot | O `defineEnv({ prefix })` recebeu algo que não é um nome válido de variável (`my-saas`, `MY-SAAS`, `1APP`, …) |
 | `ConfigValidationError` | `CONFIG_INVALID` | boot | Uma fatia de `createApp({ config })` falhou o `configSchema` desse plugin |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `container.get(CONFIG)` sem o `configPlugin` em `plugins`, ou um consumidor que se registou primeiro |
 | `DataCloneError` | — | boot | `configPlugin(values)` em que `values` contém uma função, instância de classe ou símbolo — o `structuredClone` recusa |
@@ -305,6 +353,10 @@ onde as puseres.
   `devDefault` deixa de se aplicar e valores com ar de placeholder são
   recusados. Confirma o que é realmente o `NODE_ENV` nesse ambiente e define um
   segredo a sério.
+- **A app arrancou contra a base de dados / porta de outro projeto** — uma
+  variável exportada na tua shell ganha ao `--env-file`. Dá às variáveis nomes
+  próprios da app com o [`prefix`](#prefixos-proprios-da-app); o
+  `env | grep DATABASE_URL` mostra o que a tua shell traz mesmo.
 - **O `merge` apagou o meu array** — só objetos simples se fundem em
   profundidade; arrays e primitivos são substituídos por inteiro.
 - **`DI_UNKNOWN_TOKEN` num plugin que lê o `CONFIG`** — acrescenta

@@ -151,11 +151,28 @@ const record = await files.upload(request.body!, { name, contentType: request.he
 const record = await files.upload(file.stream, { name: file.filename, contentType: file.declaredType })
 ```
 
-::: info O contrato do armazenamento recebe buffers inteiros
-`Disk.put` só aceita `Buffer | string`, por isso depois de o stream passar a
-validação os seus bytes são juntos num buffer antes da escrita — a memória por
-upload fica limitada pelo `maxSize`, não pelo que o cliente envia. Mantém o
-`maxSize` realista quando os uploads chegam em stream.
+::: info Diretamente para o backend quando o driver consegue transmitir
+Num disco cujo driver implementa `putStream` — `local`, `s3`, `azure`, `gcs`
+(vê [Ficheiros grandes](/pt/guide/storage#ficheiros-grandes)) — os bytes vão
+**diretamente para o armazenamento**: só a janela de sniffing de 64 KiB é
+segurada. Passa `contentLength` quando o cliente declarou um
+(`Content-Length`); o S3 precisa de um tamanho conhecido para transmitir em vez
+de acumular.
+
+```ts
+await files.upload(part.file, {
+  name: part.filename,
+  contentType: part.mimetype,
+  contentLength: Number(request.headers['content-length']), // pista opcional
+})
+```
+
+O caminho com buffer — no máximo `maxSize` em memória e depois `disk.put` —
+mantém-se como alternativa para um driver sem `putStream`, um
+`validate.maxSize` sem limite e sem `contentLength` declarado, ou um
+`checkQuota` próprio (a quem é pedido que aprove um tamanho que o stream ainda
+não tem). O registo é idêntico nos dois casos, e um upload falhado não deixa
+nem registo nem objeto parcial.
 :::
 
 ::: warning O `contentType` é a alegação do cliente
@@ -276,6 +293,28 @@ quando a renderização no browser for deliberada — usos embebidos em
 ```ts
 await files.temporaryUrl(id, '15m', undefined, { disposition: 'inline' })
 ```
+
+### Download em stream
+
+Quando tens mesmo de servir um ficheiro grande pela app, o `downloadStream()`
+espelha o `download()` — mesmo scope de tenant, mesma quarentena — sem o
+carregar para memória:
+
+```ts
+import { pipeline } from 'node:stream/promises'
+
+const { record, stream } = await files.downloadStream(id)
+reply.header('content-type', record.contentType)
+reply.header('content-disposition', `attachment; filename="${encodeURIComponent(record.name)}"`)
+await pipeline(stream, reply.raw)
+```
+
+**Consome a stream ou faz `destroy()`** — uma stream abandonada mantém uma
+ligação (S3, Azure, GCS) ou um descritor de ficheiro (local) aberto. Com
+`requireScan`, um ficheiro em quarentena lança `423 FILE_NOT_SCANNED` /
+`403 FILE_INFECTED` antes de a stream sequer ser aberta; o
+`{ bypassQuarantine: true }` é só para o scanner. Um driver sem `getStream`
+lança `STORAGE_GET_STREAM_UNSUPPORTED` — nesse caso usa o `download()`.
 
 ### Quarentena até à análise (`requireScan`)
 
@@ -492,10 +531,11 @@ a disposição `attachment`.
 
 | Método | Porquê |
 | --- | --- |
-| `upload(content, input)` | O pipeline. `content` é um `Buffer`/`Uint8Array`, um `Readable` do Node, um `AsyncIterable<Uint8Array>` ou um `ReadableStream` web; `input` é `{ name, contentType, tenantId?, uploadedBy?, metadata? }` |
+| `upload(content, input)` | O pipeline. `content` é um `Buffer`/`Uint8Array`, um `Readable` do Node, um `AsyncIterable<Uint8Array>` ou um `ReadableStream` web; `input` é `{ name, contentType, tenantId?, uploadedBy?, metadata?, contentLength? }`. Um stream vai diretamente para o backend quando o driver suporta `putStream`; `contentLength` é o tamanho declarado pelo cliente (uma pista — o real é sempre medido) |
 | `get(id, tenantId?)` | `FileRecord \| null` — não lança se não encontrar |
 | `list(tenantId?)` | Todos os registos do tenant |
 | `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`; lança `FileNotFoundError`, e com `requireScan` `FileNotScannedError` / `FileInfectedError` salvo `bypassQuarantine` (só para o scanner) |
+| `downloadStream(id, tenantId?, { bypassQuarantine? })` | `{ record, stream }` — o mesmo contrato do `download`, quarentena incluída, sem buffer. Quem chama tem de consumir ou fazer `destroy()` da stream; precisa de um driver com `getStream` |
 | `temporaryUrl(id, expiresIn, tenantId?, { disposition? })` | URL assinado; `attachment` por predefinição. Sujeito a `requireScan` como o `download` |
 | `delete(id, tenantId?)` | Remove objeto + registo, emite `file:deleted`; idempotente |
 | `markScanned(id, { clean, detail? }, tenantId?)` | Regista o resultado de uma análise fora de banda, emite `file:scanned` |

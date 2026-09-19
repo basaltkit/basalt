@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   fetchSend,
+  errorDetailsParitySuite,
   rateLimitKeyParitySuite,
   uploadParitySuite,
   type ParityDriver,
@@ -30,6 +31,7 @@ const driver: ParityDriver = {
 
 uploadParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
+errorDetailsParitySuite('fastify', driver)
 
 describe('fastify: multipart on routes that are not upload() routes', () => {
   it('still answers 415 (the pass-through parser only serves upload() routes)', async () => {

@@ -53,9 +53,37 @@ export interface GeneratorOptions {
    * `@basaltkit/tenancy` (opt out with `--no-tenant`).
    */
   tenant?: boolean
+  /**
+   * Shape of the generated service.
+   *
+   * `true` — the CRUD service delegating to the sibling repository (what
+   * `make:resource` emits, and the default of the programmatic API).
+   * `false` — a minimal domain service: the class, its injection token and a
+   * constructor with no dependencies, importing nothing but `@basaltkit/core`,
+   * so the file compiles on its own.
+   *
+   * Left undefined, `basalt make:service <Name>` decides per invocation: CRUD
+   * when the sibling `<name>.repository.ts` and `<name>.schema.ts` are already
+   * in the target directory (see {@link expectedSiblings}), minimal when
+   * they are not — a service importing files nobody generated does not
+   * compile (TS2307). Force either shape with `--crud` / `--no-crud`.
+   */
+  crud?: boolean
 }
 
 const dir = (n: Names) => `src/modules/${n.kebab}`
+
+/** The artifacts that live inside a resource module (the test lives in `tests/`). */
+export type ModuleArtifact = 'schema' | 'repository' | 'service' | 'plugin' | 'routes'
+
+/**
+ * Path of one artifact of a resource module — the single place the layout
+ * `src/modules/<name>/<name>.<artifact>.ts` is spelled out, so the generators
+ * and the sibling check (`expectedSiblings`) cannot drift apart.
+ */
+export function moduleFile(n: Names, artifact: ModuleArtifact): string {
+  return `${dir(n)}/${n.kebab}.${artifact}.ts`
+}
 
 export function schemaFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
   const soft = options.softDelete ? '\n  deletedAt: z.string().nullable(),' : ''
@@ -354,7 +382,38 @@ export function repositoryFile(n: Names, options: GeneratorOptions = {}): Genera
   }
 }
 
+/**
+ * A service with no repository behind it: orchestration, rules, transactions —
+ * whatever the domain needs. It imports nothing it does not have, so it
+ * compiles the moment it is written.
+ */
+function minimalService(n: Names): string {
+  return `import { createToken } from '@basaltkit/core'
+
+/**
+ * ${n.pascal} domain service.
+ *
+ * Generated in its minimal shape: no \`${n.kebab}.repository.ts\` / \`${n.kebab}.schema.ts\`
+ * was found next to it, so this service owns its own logic and imports nothing
+ * it does not have.
+ *
+ * TODO: add the methods this service owns, and take what they need through the
+ * constructor. For a CRUD service over a generated repository + schema, run
+ * \`basalt make:resource ${n.pascal}\` (the whole vertical) or, next to existing
+ * sibling files, \`basalt make:service ${n.pascal} --crud\`.
+ */
+export class ${n.pascal}Service {
+  // Inject dependencies here, e.g. \`constructor(private readonly clock: Clock) {}\`,
+  // and resolve them where the plugin registers the service.
+  constructor() {}
+}
+
+export const ${n.constant}_SERVICE = createToken<${n.pascal}Service>('${n.kebab}.service')
+`
+}
+
 export function serviceFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
+  if (options.crud === false) return { path: `${dir(n)}/${n.kebab}.service.ts`, content: minimalService(n) }
   const restore = options.softDelete
     ? `
 
