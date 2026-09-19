@@ -52,6 +52,15 @@ rendering top-level on the storage origin. Pass `{ disposition: 'inline' }`
 through `disk.temporaryUrl(path, expiresIn, options)` when in-browser rendering
 is deliberate.
 
+## Direct browser uploads
+
+`temporaryUploadUrl` (via `disk.temporaryUploadUrl(...)`) signs a **V4 `write`**
+URL. The `Content-Type` is signed, and a declared `contentLength` is signed as
+`x-goog-content-length-range: n,n`, so GCS rejects any other type or size. Send
+the returned `headers` verbatim. `checksumSha256` is refused with
+`STORAGE_UPLOAD_URL_UNSUPPORTED` (GCS verifies MD5/CRC32C only). A custom
+`client` fake receives the config typed as `GcsSignedUrlConfig`.
+
 `delete()` checks `exists()` first so it can return `false` for a missing object
 rather than throwing — that costs one extra round-trip per delete.
 

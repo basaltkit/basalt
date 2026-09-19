@@ -1,6 +1,27 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto'
-import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx, type RequestContext } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
+import {
+  AUDIT_CHAIN_GENESIS,
+  AuditChainConflictError,
+  assertIntegrityKey,
+  auditChainKey,
+  type AuditIntegrityKey,
+  computeAuditHash,
+  parseAuditChainKey,
+} from './chain.js'
+
+export * from './chain.js'
+
+declare module '@basaltkit/core' {
+  interface RequestContext {
+    /**
+     * Client information of the current HTTP request, set by `auditPlugin({ requestContext: true })`
+     * through an `http:enrichers` entry (so every adapter — fastify, express, hono — provides it).
+     */
+    client?: { ip?: string | undefined; userAgent?: string | undefined }
+  }
+}
 
 /** One immutable line of the trail. */
 export interface AuditEntry {
@@ -13,7 +34,17 @@ export interface AuditEntry {
   readonly actorId?: string | undefined
   readonly tenantId?: string | undefined
   readonly requestId?: string | undefined
+  /** Client IP of the originating HTTP request (opt-in, PII — see `requestContext`). */
+  readonly ip?: string | undefined
+  /** User-agent of the originating HTTP request (opt-in, truncated to 512 chars). */
+  readonly userAgent?: string | undefined
   readonly at: number
+  /** Position in the tenant's hash chain (from 1). Absent on unchained entries. */
+  readonly seq?: number | undefined
+  /** `hash` of the previous entry in the chain ({@link AUDIT_CHAIN_GENESIS} for the first). */
+  readonly prevHash?: string | undefined
+  /** SHA-256 (or HMAC-SHA256) over `prevHash` + the canonical entry — see `computeAuditHash`. */
+  readonly hash?: string | undefined
 }
 
 export interface AuditQuery {
@@ -40,17 +71,78 @@ export function assertAuditLimit(limit: unknown): asserts limit is number | unde
   }
 }
 
-/** Append-only by contract: no update, no delete. */
+/** The latest entry of a hash chain. */
+export interface AuditChainHead {
+  seq: number
+  hash: string
+}
+
+/** A window of a hash chain, inclusive on both ends, read in ascending `seq` order. */
+export interface AuditChainRange {
+  fromSeq: number
+  toSeq?: number | undefined
+  limit: number
+}
+
+/**
+ * Append-only by contract: no update, no delete.
+ *
+ * The chain methods are optional — a store without them works exactly as before,
+ * but cannot back `integrity: 'hash-chain'`. A store that implements them MUST
+ * also reject an `append` whose `(auditChainKey(tenantId), seq)` already exists
+ * with {@link AuditChainConflictError} (a unique constraint in SQL): that is what
+ * keeps concurrent writers on several replicas from forking a chain.
+ */
 export interface AuditStore {
   append(entry: AuditEntry): Promise<void>
   query(query: AuditQuery): Promise<AuditEntry[]>
+  /** Latest chained entry of the tenant's chain (`undefined` tenant = system chain). */
+  chainHead?(tenantId: string | undefined): Promise<AuditChainHead | undefined>
+  /** Chained entries of one chain with `fromSeq <= seq <= toSeq`, ascending, at most `limit`. */
+  readChain?(tenantId: string | undefined, range: AuditChainRange): Promise<AuditEntry[]>
+  /** Rows of the tenant (`undefined` = no tenant) written without a chain (before integrity was on). */
+  countUnchained?(tenantId: string | undefined): Promise<number>
+  /** Tenants that have a chain (`undefined` = the system chain). */
+  chainTenants?(): Promise<Array<string | undefined>>
 }
 
 export class MemoryAuditStore implements AuditStore {
   private readonly entries: AuditEntry[] = []
+  /** `(chain, seq)` pairs taken — the in-memory equivalent of the SQL unique index. */
+  private readonly chainSlots = new Set<string>()
 
   async append(entry: AuditEntry): Promise<void> {
+    if (entry.seq !== undefined) {
+      const slot = `${auditChainKey(entry.tenantId)}#${entry.seq}`
+      if (this.chainSlots.has(slot)) throw new AuditChainConflictError(entry.tenantId, entry.seq)
+      this.chainSlots.add(slot)
+    }
     this.entries.push(Object.freeze({ ...entry }))
+  }
+
+  async chainHead(tenantId: string | undefined): Promise<AuditChainHead | undefined> {
+    let head: AuditChainHead | undefined
+    for (const e of this.entries) {
+      if (e.seq === undefined || e.hash === undefined || e.tenantId !== tenantId) continue
+      if (head === undefined || e.seq > head.seq) head = { seq: e.seq, hash: e.hash }
+    }
+    return head
+  }
+
+  async readChain(tenantId: string | undefined, range: AuditChainRange): Promise<AuditEntry[]> {
+    return this.entries
+      .filter((e) => e.seq !== undefined && e.tenantId === tenantId && e.seq >= range.fromSeq && (range.toSeq === undefined || e.seq <= range.toSeq))
+      .sort((a, b) => a.seq! - b.seq!) // stable: ties keep insertion order
+      .slice(0, range.limit)
+  }
+
+  async countUnchained(tenantId: string | undefined): Promise<number> {
+    return this.entries.filter((e) => e.seq === undefined && e.tenantId === tenantId).length
+  }
+
+  async chainTenants(): Promise<Array<string | undefined>> {
+    const keys = new Set(this.entries.filter((e) => e.seq !== undefined).map((e) => auditChainKey(e.tenantId)))
+    return [...keys].map(parseAuditChainKey)
   }
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {
@@ -132,6 +224,11 @@ export const defaultAuditRedactor: AuditRedactor = (payload) => redactSensitive(
 
 /** Object keys that commonly carry direct PII and can be pseudonymized on request. */
 const PII_KEY = /e[-_]?mail|phone|msisdn|ssn|nif|taxid|passport/i
+/**
+ * Keys carrying an IP address (PII under GDPR). Anchored — a bare `/ip/` would
+ * also match `zip`, `recipient` or `shipping`.
+ */
+const IP_KEY = /^(ip|ip[-_]?addr(ess)?|client[-_]?ip|remote[-_]?addr(ess)?|x[-_]?forwarded[-_]?for)$/i
 /** A value that looks like an email address. */
 const EMAIL_VALUE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -213,7 +310,7 @@ export function redactSensitiveAndPii(value: unknown, depth = 0, options: PiiRed
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
     if (SENSITIVE_KEY.test(k)) out[k] = '[redacted]'
-    else if (PII_KEY.test(k)) out[k] = pseudonymizeAll(v, depth + 1, options)
+    else if (PII_KEY.test(k) || IP_KEY.test(k)) out[k] = pseudonymizeAll(v, depth + 1, options)
     else out[k] = redactSensitiveAndPii(v, depth + 1, options)
   }
   return out
@@ -262,7 +359,97 @@ export function createPiiMinimizingRedactor(options: PiiRedactionOptions = {}): 
  */
 export const piiMinimizingRedactor: AuditRedactor = (payload) => redactSensitiveAndPii(payload)
 
+/** Client information of the originating request. */
+export interface AuditRequestInfo {
+  ip?: string | undefined
+  userAgent?: string | undefined
+}
+
+/** Resolves the request fields to record, from the active context (if any). */
+export type AuditRequestContextResolver = (context: RequestContext | undefined) => AuditRequestInfo | undefined
+
+/** `'hash-chain'` (SHA-256) or `{ mode: 'hash-chain', key }` (HMAC-SHA256 under a >=128-bit secret). */
+export type AuditIntegrity = 'none' | 'hash-chain' | { mode: 'hash-chain'; key?: AuditIntegrityKey }
+
+export interface AuditOptions {
+  /**
+   * `'hash-chain'` links every entry to the previous one of its tenant's chain
+   * (`seq`, `prevHash`, `hash`) so {@link Audit.verify} can detect edited,
+   * deleted, reordered or forged rows. Needs a store with the chain methods
+   * (memory, `@basaltkit/audit-sqlite`, `@basaltkit/audit-prisma`). Default `'none'`.
+   */
+  integrity?: AuditIntegrity
+  /**
+   * Record the client `ip` / `userAgent` of the originating request. `true`
+   * reads `ctx().client` (set by the plugin's HTTP enricher); a function resolves
+   * them itself. Default off — an IP address is personal data: pair it with
+   * `createPiiMinimizingRedactor` to store a pseudonym instead.
+   */
+  requestContext?: boolean | AuditRequestContextResolver
+}
+
+export interface AuditVerifyOptions {
+  /**
+   * The chain to verify. Inside a tenant context the context tenant is FORCED
+   * (like {@link Audit.trail}); otherwise omitted = the system chain.
+   */
+  tenantId?: string
+  /** First `seq` to check (inclusive, default 1). Anchored on the entry at `from - 1`. */
+  from?: number
+  /** Last `seq` to check (inclusive, default: the head). */
+  to?: number
+}
+
+export type AuditVerifyFailure =
+  | 'hash-mismatch'
+  | 'prev-hash-mismatch'
+  | 'sequence-gap'
+  | 'sequence-duplicate'
+  | 'missing-predecessor'
+
+export interface AuditVerifyResult {
+  ok: boolean
+  /** The chain verified (`undefined` = system chain). */
+  tenantId: string | undefined
+  /** Chained entries that verified before the first failure (all of them when `ok`). */
+  checked: number
+  /** Rows of this tenant written without a chain (before integrity was enabled): not verifiable, not broken. */
+  unchained: number
+  /** `seq` of the first entry that failed. */
+  firstBrokenAt?: number
+  /** Id of the offending row, when there is one. */
+  entryId?: string
+  reason?: AuditVerifyFailure
+  /** Last verified entry — record it outside the database to detect later truncation of the tail. */
+  head?: AuditChainHead
+}
+
+export interface AuditVerifyAllResult {
+  ok: boolean
+  chains: AuditVerifyResult[]
+}
+
+/** Longest user-agent kept: the header is client-controlled and unbounded. */
+const MAX_USER_AGENT = 512
+/** Longest IP kept (an IPv6 literal with zone id fits comfortably). */
+const MAX_IP = 64
+/** Attempts to append after a `(chain, seq)` conflict before giving up. */
+const MAX_CHAIN_ATTEMPTS = 10
+
+const defaultRequestContext: AuditRequestContextResolver = (context) => context?.client
+
+const clip = (value: unknown, max: number): string | undefined =>
+  typeof value === 'string' && value.length > 0 ? value.slice(0, max) : undefined
+
+type ChainStore = Required<Pick<AuditStore, 'chainHead' | 'readChain' | 'countUnchained' | 'chainTenants'>> & AuditStore
+
 export class Audit {
+  private readonly chainEnabled: boolean
+  private readonly chainKey: AuditIntegrityKey | undefined
+  private readonly requestContext: AuditRequestContextResolver | undefined
+  /** Per-chain in-process mutex: appends to one chain run one at a time. */
+  private readonly chainLocks = new Map<string, Promise<void>>()
+
   constructor(
     private readonly store: AuditStore,
     /** Scrubs each payload before it is stored. Default masks common secret keys. */
@@ -277,18 +464,33 @@ export class Audit {
      * single-tenant app, which is the only thing it can safely assume.
      */
     private readonly tenancyActive: () => boolean = () => false,
-  ) {}
+    options: AuditOptions = {},
+  ) {
+    const integrity = options.integrity ?? 'none'
+    this.chainEnabled = integrity !== 'none'
+    this.chainKey = typeof integrity === 'object' ? integrity.key : undefined
+    if (typeof integrity === 'object' && integrity.mode !== 'hash-chain') {
+      throw new TypeError(`Unknown audit integrity mode: ${String(integrity.mode)}`)
+    }
+    if (this.chainKey !== undefined) assertIntegrityKey(this.chainKey)
+    if (this.chainEnabled && !isChainStore(store)) {
+      throw new TypeError(
+        "Audit integrity 'hash-chain' needs a store implementing chainHead/readChain/countUnchained/chainTenants " +
+          '(MemoryAuditStore, @basaltkit/audit-sqlite or @basaltkit/audit-prisma).',
+      )
+    }
+    this.requestContext =
+      options.requestContext === true ? defaultRequestContext : options.requestContext || undefined
+  }
 
   /** Manual entry — for actions no hook covers. */
   async record(event: string, payload?: unknown): Promise<AuditEntry> {
-    const entry = this.build('manual', event, payload)
-    await this.store.append(entry)
-    return entry
+    return this.append(this.build('manual', event, payload))
   }
 
   /** @internal used by the plugin's hook/event taps. */
   async capture(source: 'hook' | 'event', event: string, payload: unknown): Promise<void> {
-    await this.store.append(this.build(source, event, payload))
+    await this.append(this.build(source, event, payload))
   }
 
   /**
@@ -354,6 +556,123 @@ export class Audit {
     return this.store.query(query)
   }
 
+  /**
+   * Verifies one hash chain: recomputes every entry's hash and checks `seq`
+   * continuity and the `prevHash` links. Tenant scoping mirrors {@link trail}:
+   * inside a tenant context the context tenant is forced; otherwise `tenantId`
+   * picks the chain, and omitting it verifies the system chain.
+   *
+   * Rows written before integrity was enabled carry no hash: they are counted as
+   * `unchained`, never reported as broken. Truncating the tail of a chain leaves
+   * no gap — compare `head` against a value recorded elsewhere to catch that.
+   */
+  async verify(options: AuditVerifyOptions = {}): Promise<AuditVerifyResult> {
+    const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    return this.verifyChain(ctxTenantId ?? options.tenantId, options.from, options.to)
+  }
+
+  /**
+   * SYSTEM-ONLY: verifies every chain in the store (each tenant plus the system
+   * chain). Like {@link systemTrail}, for trusted tooling (`basalt audit:verify --all`).
+   */
+  async verifyAll(): Promise<AuditVerifyAllResult> {
+    const store = this.chainStore()
+    // The system chain first, then tenants in a stable order.
+    const named = new Set((await store.chainTenants()).filter((t): t is string => t !== undefined))
+    const tenants = [undefined, ...[...named].sort()]
+    const chains: AuditVerifyResult[] = []
+    for (const tenantId of tenants) chains.push(await this.verifyChain(tenantId))
+    return { ok: chains.every((c) => c.ok), chains }
+  }
+
+  private async verifyChain(tenantId: string | undefined, from?: number, to?: number): Promise<AuditVerifyResult> {
+    const store = this.chainStore()
+    const fromSeq = from ?? 1
+    if (!Number.isSafeInteger(fromSeq) || fromSeq < 1) throw new TypeError('verify: `from` must be a positive integer')
+    if (to !== undefined && (!Number.isSafeInteger(to) || to < fromSeq)) {
+      throw new TypeError('verify: `to` must be an integer >= `from`')
+    }
+    const unchained = await store.countUnchained(tenantId)
+    const result = (fields: Partial<AuditVerifyResult> & Pick<AuditVerifyResult, 'ok' | 'checked'>): AuditVerifyResult => ({
+      tenantId,
+      unchained,
+      ...fields,
+    })
+
+    let prevHash = AUDIT_CHAIN_GENESIS
+    if (fromSeq > 1) {
+      const [anchor] = await store.readChain(tenantId, { fromSeq: fromSeq - 1, toSeq: fromSeq - 1, limit: 1 })
+      if (anchor?.hash === undefined) return result({ ok: false, checked: 0, firstBrokenAt: fromSeq, reason: 'missing-predecessor' })
+      prevHash = anchor.hash
+    }
+
+    let expected = fromSeq
+    let checked = 0
+    let head: AuditChainHead | undefined
+    for (;;) {
+      const page = await store.readChain(tenantId, { fromSeq: expected, toSeq: to, limit: AUDIT_SCAN_PAGE })
+      for (const entry of page) {
+        const broken = (reason: AuditVerifyFailure) =>
+          result({ ok: false, checked, firstBrokenAt: expected, entryId: entry.id, reason, ...(head ? { head } : {}) })
+        if (entry.seq !== expected) return broken(entry.seq! < expected ? 'sequence-duplicate' : 'sequence-gap')
+        if (entry.prevHash !== prevHash) return broken('prev-hash-mismatch')
+        if (entry.tenantId !== tenantId || entry.hash !== computeAuditHash(entry, this.chainKey)) return broken('hash-mismatch')
+        prevHash = entry.hash
+        head = { seq: entry.seq, hash: entry.hash }
+        checked++
+        expected++
+      }
+      if (page.length < AUDIT_SCAN_PAGE) break
+    }
+    return result({ ok: true, checked, ...(head ? { head } : {}) })
+  }
+
+  private chainStore(): ChainStore {
+    if (!isChainStore(this.store)) {
+      throw new TypeError('Audit.verify() needs a store implementing the hash-chain methods.')
+    }
+    return this.store
+  }
+
+  private async append(draft: AuditEntry): Promise<AuditEntry> {
+    if (!this.chainEnabled) {
+      await this.store.append(draft)
+      return draft
+    }
+    const store = this.store as ChainStore
+    return this.withChainLock(auditChainKey(draft.tenantId), async () => {
+      for (let attempt = 1; ; attempt++) {
+        const head = await store.chainHead(draft.tenantId)
+        const linked = { ...draft, seq: (head?.seq ?? 0) + 1, prevHash: head?.hash ?? AUDIT_CHAIN_GENESIS }
+        const entry = Object.freeze({ ...linked, hash: computeAuditHash(linked, this.chainKey) })
+        try {
+          await store.append(entry)
+          return entry
+        } catch (error) {
+          // Another writer (a second replica) took this seq first: re-read the
+          // head and link after its entry. Jittered backoff avoids lock-step.
+          if (!(error instanceof AuditChainConflictError) || attempt >= MAX_CHAIN_ATTEMPTS) throw error
+          await new Promise((resolve) => setTimeout(resolve, Math.random() * 4 * attempt))
+        }
+      }
+    })
+  }
+
+  private async withChainLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.chainLocks.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const current = new Promise<void>((resolve) => (release = resolve))
+    const tail = previous.then(() => current)
+    this.chainLocks.set(key, tail)
+    await previous
+    try {
+      return await fn()
+    } finally {
+      release()
+      if (this.chainLocks.get(key) === tail) this.chainLocks.delete(key)
+    }
+  }
+
   private build(source: AuditEntry['source'], event: string, payload: unknown): AuditEntry {
     const context = tryCtx()
     const user = context?.['user'] as { id?: string } | undefined
@@ -366,9 +685,39 @@ export class Audit {
       actorId: user?.id,
       tenantId: tenant?.id,
       requestId: context?.requestId,
+      ...this.requestFields(context, event),
       at: Date.now(),
     })
   }
+
+  /**
+   * `ip` / `userAgent` of the originating request, bounded, then passed through
+   * the configured redactor as `{ ip, userAgent }` — so the PII-minimizing
+   * redactor stores a pseudonym for the IP. A redactor that drops them wins.
+   */
+  private requestFields(context: RequestContext | undefined, event: string): AuditRequestInfo {
+    if (this.requestContext === undefined) return {}
+    const info = this.requestContext(context)
+    const ip = clip(info?.ip, MAX_IP)
+    const userAgent = clip(info?.userAgent, MAX_USER_AGENT)
+    if (ip === undefined && userAgent === undefined) return {}
+    const scrubbed = this.redact({ ...(ip ? { ip } : {}), ...(userAgent ? { userAgent } : {}) }, event)
+    if (scrubbed === null || typeof scrubbed !== 'object') return {}
+    const out = scrubbed as Record<string, unknown>
+    const fields: AuditRequestInfo = {}
+    if (typeof out['ip'] === 'string') fields.ip = out['ip']
+    if (typeof out['userAgent'] === 'string') fields.userAgent = out['userAgent']
+    return fields
+  }
+}
+
+function isChainStore(store: AuditStore): store is ChainStore {
+  return (
+    typeof store.chainHead === 'function' &&
+    typeof store.readChain === 'function' &&
+    typeof store.countUnchained === 'function' &&
+    typeof store.chainTenants === 'function'
+  )
 }
 
 export const AUDIT = createToken<Audit>('audit')
@@ -405,6 +754,20 @@ export interface AuditPluginOptions {
    * worse than no trail, because it looks complete.
    */
   onCaptureError?: (error: unknown, info: { source: 'hook' | 'event'; event: string }) => void
+
+  /**
+   * `'hash-chain'` makes the trail verifiable: every entry is linked to the
+   * previous one of its tenant's chain, `audit.verify()` detects tampering, and
+   * the `audit:verify` CLI command is registered. See {@link AuditOptions.integrity}.
+   */
+  integrity?: AuditIntegrity
+
+  /**
+   * Record the client `ip` and `userAgent`. `true` registers an HTTP enricher
+   * (works on every adapter) that puts them in `ctx().client`; a function
+   * resolves them from the context itself. Off by default — IP is PII.
+   */
+  requestContext?: boolean | AuditRequestContextResolver
 }
 
 /**
@@ -446,10 +809,28 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
       // resolved per call, so plugin registration order does not matter.
       const metadata = ensureMetadata(container)
       const tenancyActive = () => metadata.get('tenancy:active').length > 0
+      const auditOptions: AuditOptions = {
+        ...(options.integrity !== undefined ? { integrity: options.integrity } : {}),
+        ...(options.requestContext !== undefined ? { requestContext: options.requestContext } : {}),
+      }
       container.singleton(
         AUDIT,
-        () => new Audit(options.store ?? new MemoryAuditStore(), options.redact ?? defaultAuditRedactor, tenancyActive),
+        () =>
+          new Audit(options.store ?? new MemoryAuditStore(), options.redact ?? defaultAuditRedactor, tenancyActive, auditOptions),
       )
+
+      if (options.requestContext === true) {
+        // A string-keyed metadata bucket, not an import of @basaltkit/http: the
+        // neutral pipeline runs these enrichers for fastify, express and hono alike.
+        metadata.add('http:enrichers', ({ request, context }: AuditHttpEnricherInfo) => {
+          const header = request.headers['user-agent']
+          context.client = { ip: request.ip, userAgent: Array.isArray(header) ? header[0] : header }
+        })
+      }
+
+      if (options.integrity !== undefined && options.integrity !== 'none') {
+        metadata.add('commands', createAuditVerifyCommand(() => container.get(AUDIT)))
+      }
 
       hooks.onAny(async (hook, payload) => {
         if (!hookPatterns.some((pattern) => patternMatches(pattern, hook))) return
@@ -473,4 +854,60 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
       })
     },
   })
+}
+
+/** The slice of `@basaltkit/http`'s enricher info the audit enricher reads (no import). */
+interface AuditHttpEnricherInfo {
+  request: { headers: Record<string, string | string[] | undefined>; ip?: string | undefined }
+  context: RequestContext
+}
+
+/** Minimal structural `@basaltkit/cli` command context (no dependency on the CLI). */
+export interface AuditVerifyCommandContext {
+  flags: Record<string, string | boolean>
+  io: { log(message: string): void; error(message: string): void }
+}
+
+const describeResult = (r: AuditVerifyResult): string => {
+  const chain = r.tenantId === undefined ? '(system)' : r.tenantId
+  const unchained = r.unchained > 0 ? `, ${r.unchained} unchained legacy row(s)` : ''
+  return r.ok
+    ? `${chain}: ok — ${r.checked} entr${r.checked === 1 ? 'y' : 'ies'} verified${r.head ? `, head #${r.head.seq} ${r.head.hash}` : ''}${unchained}`
+    : `${chain}: BROKEN at seq ${String(r.firstBrokenAt)} (${String(r.reason)})${r.entryId ? ` entry ${r.entryId}` : ''} — ${r.checked} verified before it${unchained}`
+}
+
+/**
+ * The `audit:verify` command, as a plain `@basaltkit/cli` command definition.
+ * `auditPlugin({ integrity: 'hash-chain' })` registers it automatically; call
+ * this yourself to register it elsewhere (e.g. `cliPlugin([createAuditVerifyCommand(...)])`).
+ *
+ * `basalt audit:verify [--tenant=<id>] [--from=<seq>] [--to=<seq>]` verifies one
+ * chain (the system chain without `--tenant`); `--all` verifies every chain.
+ * Exits 1 when any chain is broken.
+ */
+export function createAuditVerifyCommand(getAudit: () => Audit) {
+  const int = (value: string | boolean, name: string): number => {
+    const n = Number(value)
+    if (!Number.isSafeInteger(n) || n < 1) throw new TypeError(`--${name} must be a positive integer`)
+    return n
+  }
+  return {
+    name: 'audit:verify',
+    description: 'Verify the audit trail hash chain (--tenant=<id> | --all, --from/--to=<seq>)',
+    async handle({ flags, io }: AuditVerifyCommandContext): Promise<number> {
+      const audit = getAudit()
+      const results =
+        flags['all'] === true
+          ? (await audit.verifyAll()).chains
+          : [
+              await audit.verify({
+                ...(typeof flags['tenant'] === 'string' ? { tenantId: flags['tenant'] } : {}),
+                ...(flags['from'] !== undefined ? { from: int(flags['from'], 'from') } : {}),
+                ...(flags['to'] !== undefined ? { to: int(flags['to'], 'to') } : {}),
+              }),
+            ]
+      for (const r of results) (r.ok ? io.log : io.error)(describeResult(r))
+      return results.every((r) => r.ok) ? 0 : 1
+    },
+  }
 }

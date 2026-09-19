@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream'
 import type { output as ZodOutput, ZodType } from 'zod'
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS'
@@ -19,6 +20,13 @@ export interface HttpRequest {
   ip?: string
   /** Matched route template (e.g. `/users/:id`), when the adapter knows it. */
   routePattern?: string
+  /**
+   * The unread request body as a stream — a Node `Readable` or a web
+   * `ReadableStream`. Adapters set it only for `upload()` routes, whose
+   * body they deliberately leave unparsed; the pipeline streams it through
+   * the multipart parser. Absent everywhere else.
+   */
+  bodyStream?: Readable | ReadableStream<Uint8Array>
   raw: unknown
 }
 

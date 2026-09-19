@@ -38,6 +38,17 @@ declare module '@basaltkit/http' {
   interface RouteMeta {
     /** `true` requires a session; `false` opts a route out. */
     auth?: boolean
+    /**
+     * `true`: the route requires a credential obtained with a second factor
+     * (step-up). `false`: exempt from `authPlugin({ requireMfa })`.
+     */
+    mfa?: boolean
+    /**
+     * The route is about the caller's own account (sign-in, profile, MFA,
+     * accepting an invitation), not a tenant's data: tenant-membership guards
+     * (`@basaltkit/teams`' `tenantMembershipPlugin`) let non-members through.
+     */
+    account?: boolean
   }
 }
 
@@ -53,6 +64,8 @@ export {
   AuthTokenInvalidError,
   UserUpdateUnsupportedError,
   MfaRequiredError,
+  MfaStepUpRequiredError,
+  MfaEnrollmentRequiredError,
   MfaInvalidCodeError,
   MfaNotEnrolledError,
   MfaAlreadyEnabledError,
@@ -96,6 +109,7 @@ export {
   apiKeyRoutes,
   mfaRoutes,
   DEFAULT_AUTH_RATE_LIMIT,
+  ACCOUNT_META,
   MAX_EMAIL_LENGTH,
   MAX_PASSWORD_LENGTH,
   type AuthRoutesOptions,
@@ -122,7 +136,16 @@ export {
   type OAuthPluginOptions,
   type OAuthRoutesOptions,
 } from './oauth-plugin.js'
-export { LoginThrottle, AccountLockedError, type LoginThrottleOptions } from './throttle.js'
+export {
+  LoginThrottle,
+  MemoryThrottleStore,
+  AccountLockedError,
+  type LoginThrottleOptions,
+  type MemoryThrottleStoreOptions,
+  type ThrottleStore,
+  type ThrottleWindow,
+} from './throttle.js'
+export { RedisThrottleStore, type RedisThrottleClient, type RedisThrottleStoreOptions } from './redis-throttle.js'
 
 export {
   WebAuthnService,

@@ -86,8 +86,20 @@ com `runWithContext`.
 Código tenant-scoped (a extensão de tenancy do Prisma, o `db()`, a maioria dos
 stores) lê o tenant atual de `ctx().tenant`. Durante um pedido isso está definido
 automaticamente. Num script ou worker não está — por isso envolve o trabalho em
-`runWithContext({ tenant: { id }, db, container }, () => …)`, ou, para código
+`runWithContext({ tenant: { id }, db, container }, async () => …)`, ou, para código
 verdadeiramente central, usa um cliente/serviço que não seja tenant-scoped.
+
+Se *já* o envolveste e mesmo assim recebes `PRISMA_TENANT_MISSING`, confirma que o
+callback **faz await** da query. Uma query Prisma é uma `PrismaPromise` preguiçosa:
+devolvida por um callback síncrono (`() => prisma.invoice.findMany()`), só executa
+quando quem chama faz o await — depois de o `runWithContext` ter retornado, fora do
+contexto. Usa um callback async que faz o await lá dentro:
+
+```ts
+await runWithContext({ tenant }, async () => await prisma.invoice.findMany())
+```
+
+O `tenancy.run(tenant, fn)` já envolve o `fn` num âmbito async, por isso não é afetado.
 
 ## Onde registo o meu próprio serviço ou token?
 

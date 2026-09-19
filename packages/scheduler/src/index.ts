@@ -1,9 +1,17 @@
-import { BasaltError, createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { BasaltError, createToken, definePlugin, ensureMetadata, type Container, type HookBus } from '@basaltkit/core'
 import type { JobDefinition } from '@basaltkit/queue'
 import { cronMatches, cronToString, parseCron, type CronFields } from './cron.js'
 
 export { CronParseError, cronMatches, parseCron, fieldMatches, zonedParts } from './cron.js'
 export type { CronFields, ZonedParts } from './cron.js'
+export { defineReconciler } from './reconciler.js'
+export type {
+  Reconciler,
+  ReconcilerLock,
+  ReconcilerOptions,
+  ReconcilerRunResult,
+  ReconcilerStats,
+} from './reconciler.js'
 
 type Task = () => void | Promise<void>
 
@@ -16,9 +24,11 @@ type Task = () => void | Promise<void>
  *   `.at()` with a frequency it can't refine (or called twice), or a
  *   day-of-week modifier combined with `.cron()`.
  * - `SCHEDULE_INVALID_TIME`: `.at()` received something other than `HH:mm`.
+ * - `SCHEDULE_INVALID_INTERVAL`: a reconciler's `every` can't be expressed on
+ *   the minute-based cron (e.g. `'30s'`, `'7m'`, `'90m'`).
  */
 export class ScheduleDefinitionError extends BasaltError {
-  constructor(code: 'SCHEDULE_CONFLICT' | 'SCHEDULE_INVALID_TIME', message: string) {
+  constructor(code: 'SCHEDULE_CONFLICT' | 'SCHEDULE_INVALID_TIME' | 'SCHEDULE_INVALID_INTERVAL', message: string) {
     super(code, message)
   }
 }
@@ -274,6 +284,11 @@ export interface SchedulerOptions {
    * — the key embeds the minute, so it only needs to outlive clock skew).
    */
   lockTtlMs?: number
+  /**
+   * Hook bus for scheduler-driven hooks (`reconciler:run`). `schedulerPlugin`
+   * passes the app's bus.
+   */
+  hooks?: HookBus
 }
 
 export class Scheduler {
@@ -282,12 +297,15 @@ export class Scheduler {
   private interval: NodeJS.Timeout | undefined
   private readonly lock: ScheduleLock | undefined
   private readonly lockTtlMs: number
+  /** The hook bus reconcilers emit on (the app's, under `schedulerPlugin`). */
+  readonly hooks: HookBus | undefined
   /** ticks skipped because another replica held the lock — for observability/tests */
   skippedByLock = 0
 
   constructor(options: SchedulerOptions = {}) {
     this.lock = options.lock
     this.lockTtlMs = options.lockTtlMs ?? 60_000
+    this.hooks = options.hooks
   }
 
   /** @internal true when any entry requested `.onOneServer()`. */
@@ -412,11 +430,12 @@ export interface SchedulerPluginOptions extends SchedulerOptions {
 export function schedulerPlugin(options: SchedulerPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:scheduler',
-    register({ container }) {
+    register({ container, hooks }) {
       container.singleton(
         SCHEDULER,
         () =>
           new Scheduler({
+            hooks: options.hooks ?? hooks,
             ...(options.lock ? { lock: options.lock } : {}),
             ...(options.lockTtlMs !== undefined ? { lockTtlMs: options.lockTtlMs } : {}),
           }),

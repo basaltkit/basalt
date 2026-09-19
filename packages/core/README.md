@@ -260,6 +260,22 @@ console.log(tryCtx()) // undefined
 
 Concurrent contexts don't mix: each `runWithContext` has its own.
 
+#### Await lazy queries *inside* the callback
+
+`runWithContext` returns whatever `fn` returns, and the context is only active while `fn` runs. A **lazy thenable** — a Prisma `PrismaPromise`, a query builder — does no work until something calls `.then()` on it. Returned from a synchronous callback, it is executed by the caller's `await`, **outside** the context, so the tenant is missing (the Prisma extension then fails closed with `PRISMA_TENANT_MISSING`):
+
+```ts
+// `prisma` is a client extended with @basaltkit/prisma's tenant scoping.
+
+// Wrong: the query runs after runWithContext has returned
+await runWithContext({ tenant }, () => prisma.invoice.findMany())
+
+// Right: an async callback awaits the query while the context is active
+await runWithContext({ tenant }, async () => await prisma.invoice.findMany())
+```
+
+`tenancy.run(tenant, fn)` from `@basaltkit/tenancy` already wraps `fn` in an async scope, so it is not affected.
+
 ### Human-readable durations
 
 ```ts
@@ -412,7 +428,7 @@ become an `AggregateError`. Nothing is ever swallowed silently.
 |---|---|
 | `ctx()` | The active context (`RequestContext`); throws `ContextUnavailableError` outside a scope. |
 | `tryCtx()` | The active context, or `undefined`. |
-| `runWithContext(context, fn)` | Runs `fn` with the active context (propagates across `await`s and callbacks). |
+| `runWithContext(context, fn)` | Runs `fn` with the active context (propagates across `await`s and callbacks) and returns its result unchanged. Use an **async** callback that awaits lazy thenables (e.g. Prisma queries) inside it — see *Await lazy queries inside the callback* above. |
 
 `RequestContext` has `requestId?`, `correlationId?`, and accepts extra keys (extensible via *module augmentation*).
 
@@ -468,6 +484,8 @@ All extend `BasaltError`, which has a stable `code` (you can safely do `if (erro
 **"No provider registered for token …" (`DI_UNKNOWN_TOKEN`)** — You called `container.get(TOKEN)` but no plugin registered that token. Check that the plugin providing it is in the `plugins` list and that the consumer has `dependsOn` pointing to it.
 
 **"ctx() was called outside of an active context" (`CONTEXT_UNAVAILABLE`)** — You called `ctx()` outside `runWithContext`. Wrap the entry point (HTTP handler, worker) with `runWithContext({...}, fn)`, or use `tryCtx()` when a context is optional.
+
+**`PRISMA_TENANT_MISSING` from a query wrapped in `runWithContext`** — The callback returned a lazy `PrismaPromise` without awaiting it, so the query ran after the context ended. Make the callback `async` and `await` the query inside it.
 
 **"boot() called in phase …" (`LIFECYCLE`)** — `boot()` can only be called once per application. Create a new app with `createApp()` if you need to boot again (useful in tests).
 

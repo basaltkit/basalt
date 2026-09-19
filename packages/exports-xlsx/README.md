@@ -53,6 +53,7 @@ const buffer = xlsxFormatter.render(['Name', 'Price'], [['Ada', 29], ['Bob', 0]]
 
 - **Numbers** become numeric cells; **dates** become ISO text; everything else becomes an *inline string* (with XML escaping). `null`/`undefined` produce empty cells.
 - One sheet (`Sheet1`). The ZIP uses the **STORE** method (no compression) — valid and opens fine in Excel/LibreOffice.
+- **Buffer-only:** the whole workbook is built in memory (the ZIP needs each entry's size and CRC), so use `exports.run()`; `exports.stream()` rejects `xlsx` with `ExportNotStreamableError`.
 - The produced `Buffer` passes `unzip -t` (correct CRCs) and opens in Excel/LibreOffice/Google Sheets.
 
 ## How it connects to other modules

@@ -1,4 +1,26 @@
-import { type TemporaryUrlOptions, StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
+import {
+  type TemporaryUploadUrl,
+  type TemporaryUploadUrlDriverOptions,
+  type TemporaryUrlOptions,
+  StorageFileNotFoundError,
+  TemporaryUploadUrlUnsupportedError,
+  type PutOptions,
+  type StorageDriver,
+} from '@basaltkit/storage'
+
+/**
+ * The `getSignedUrl` config this driver sends: `action: 'read'` (download, with
+ * `responseDisposition`) or a V4 `action: 'write'` (upload, with `contentType`
+ * and optional signed `extensionHeaders`).
+ */
+export interface GcsSignedUrlConfig {
+  action: 'read' | 'write'
+  expires: number
+  version?: 'v4'
+  responseDisposition?: string
+  contentType?: string
+  extensionHeaders?: Record<string, string>
+}
 
 /** The subset of a `@google-cloud/storage` File this driver uses. */
 export interface GcsFileLike {
@@ -6,7 +28,7 @@ export interface GcsFileLike {
   download(): Promise<[Buffer]>
   exists(): Promise<[boolean]>
   delete(): Promise<unknown>
-  getSignedUrl(config: { action: 'read'; expires: number; responseDisposition?: string }): Promise<[string]>
+  getSignedUrl(config: GcsSignedUrlConfig): Promise<[string]>
 }
 
 /** The subset of a `@google-cloud/storage` Bucket this driver uses. */
@@ -78,6 +100,44 @@ export class GcsStorageDriver implements StorageDriver {
       responseDisposition: options?.disposition ?? 'attachment',
     })
     return url
+  }
+
+  /**
+   * Pre-signed direct upload: a V4 signed URL with action 'write'. The
+   * Content-Type is signed, and a declared `contentLength` is signed as
+   * `x-goog-content-length-range: n,n`, so GCS rejects any other type or size.
+   * `checksumSha256` is refused: GCS verifies MD5/CRC32C, not SHA-256.
+   */
+  async temporaryUploadUrl(
+    path: string,
+    expiresInMs: number,
+    options: TemporaryUploadUrlDriverOptions,
+  ): Promise<TemporaryUploadUrl> {
+    if (options.checksumSha256 !== undefined) {
+      throw new TemporaryUploadUrlUnsupportedError(
+        this.name,
+        'The "gcs" driver cannot bind checksumSha256 into a signed upload URL (GCS verifies MD5/CRC32C only). ' +
+          'Omit it and verify the object after upload.',
+      )
+    }
+    const expires = Date.now() + expiresInMs
+    const lengthHeaders: Record<string, string> =
+      options.contentLength !== undefined
+        ? { 'x-goog-content-length-range': `${options.contentLength},${options.contentLength}` }
+        : {}
+    const [url] = await (await this.bucket()).file(path).getSignedUrl({
+      version: 'v4',
+      action: 'write',
+      expires,
+      contentType: options.contentType,
+      ...(options.contentLength !== undefined ? { extensionHeaders: lengthHeaders } : {}),
+    })
+    return {
+      url,
+      method: 'PUT',
+      headers: { 'Content-Type': options.contentType, ...lengthHeaders },
+      expiresAt: new Date(expires),
+    }
   }
 
   async disconnect(): Promise<void> {}

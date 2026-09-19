@@ -18,6 +18,7 @@ import {
   SSE_HEADERS,
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
+  isUploadBody,
   type SseProducer,
 } from '@basaltkit/http'
 import { Hono, type Context, type Next } from 'hono'
@@ -27,9 +28,21 @@ export const HONO = createToken<Hono<any>>('hono')
 /** Default maximum request body size (1 MiB) — override via honoPlugin({ bodyLimit }). */
 export const DEFAULT_BODY_LIMIT = 1_048_576
 
-async function parseBody(context: Context): Promise<unknown> {
+/** True for a `multipart/form-data` request — its body is never read outside the route handler. */
+const isMultipart = (context: Context): boolean =>
+  (context.req.header('content-type') ?? '').trimStart().toLowerCase().startsWith('multipart/form-data')
+
+/**
+ * Parses the request body for the neutral request. A multipart body is parsed
+ * only when `multipart` is true — i.e. in the handler of a route that is not an
+ * `upload()` route (bounded by `bodyLimit` first). Pre-hooks and after-hooks
+ * never see it, so an `upload()` route's stream is never consumed (or
+ * buffered) before the pipeline — enrichers, guards — has run.
+ */
+async function parseBody(context: Context, multipart = false): Promise<unknown> {
   const method = context.req.method
   if (method === 'GET' || method === 'HEAD') return undefined
+  if (!multipart && isMultipart(context)) return undefined
   const contentType = context.req.header('content-type') ?? ''
   try {
     if (contentType.includes('application/json')) return await context.req.json()
@@ -73,7 +86,7 @@ export const defaultClientIp: ClientIpResolver = (context) => {
 async function toNeutralRequest(
   context: Context,
   getClientIp: ClientIpResolver = defaultClientIp,
-  withBody = true,
+  withBody: boolean | 'route' = true,
 ): Promise<HttpRequest> {
   const ip = getClientIp(context)
   return {
@@ -82,7 +95,7 @@ async function toNeutralRequest(
     headers: Object.fromEntries(context.req.raw.headers.entries()),
     params: context.req.param() as Record<string, string>,
     query: context.req.query(),
-    body: withBody ? await parseBody(context) : undefined,
+    body: withBody ? await parseBody(context, withBody === 'route') : undefined,
     ...(ip ? { ip } : {}),
     ...(context.req.routePath ? { routePattern: context.req.routePath } : {}),
     raw: context,
@@ -235,11 +248,18 @@ function handlerFor(
 ) {
   return async (context: Context): Promise<Response> => {
     const reply = new HonoReply(context)
+    // An upload() route streams the raw body through the neutral multipart
+    // parser, which enforces its own limits — it is never buffered here.
+    const uploads = isUploadBody(definition.body)
     // Bounded here too, so routes mounted with `registerRoutes()` alone (no
     // plugin middleware in front) never parse an unbounded body.
-    if (!(await enforceBodyLimit(context, bodyLimit))) return toResponse(reply.code(413), payloadTooLarge(bodyLimit))
+    if (!uploads && !(await enforceBodyLimit(context, bodyLimit))) {
+      return toResponse(reply.code(413), payloadTooLarge(bodyLimit))
+    }
     try {
-      const result = await runRoute(definition, await toNeutralRequest(context, getClientIp), reply, {
+      const request = await toNeutralRequest(context, getClientIp, uploads ? false : 'route')
+      if (uploads && context.req.raw.body) request.bodyStream = context.req.raw.body
+      const result = await runRoute(definition, request, reply, {
         ...(container ? { container } : {}),
         enrichers,
         guards,
@@ -380,6 +400,9 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
         // Bound the body on the bytes read, not only the declared length
         // (Hono/edge has no default cap). Runs before anything parses it.
         app.use(async (context: Context, next: Next) => {
+          // A multipart body is bounded where it is read: by the route handler
+          // (bodyLimit) or, for an upload() route, by its own streaming limits.
+          if (isMultipart(context)) return next()
           const tooLarge = !(await enforceBodyLimit(context, bodyLimit))
           if (tooLarge) {
             // Run the pre-hooks (without a body) so the 413 carries the same

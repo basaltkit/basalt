@@ -45,6 +45,7 @@ export {
   type RateLimitResult,
   type RateLimitStore,
   type RouteRateLimit,
+  type RateLimitKey,
   type CorsOptions,
   type SecurityHeadersOptions,
 } from './security.js'
@@ -66,6 +67,17 @@ export {
 } from './openapi.js'
 
 export { computeEtag, ifNoneMatchSatisfied } from './etag.js'
+
+export {
+  upload,
+  isUploadBody,
+  uploadOptionsOf,
+  type UploadOptions,
+  type UploadBody,
+  type UploadedFile,
+  type ResolvedUploadOptions,
+} from './upload.js'
+export { sanitizeFilename } from './multipart.js'
 
 export {
   sse,

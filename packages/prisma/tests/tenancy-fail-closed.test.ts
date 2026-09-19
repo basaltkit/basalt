@@ -25,7 +25,7 @@ const dispatch = async (
     tenant?: string | null
     /** `null` = a client-level operation (Prisma passes no model). */
     model?: string | null
-    options?: Parameters<typeof tenancyExtension>[0]
+    options?: Omit<NonNullable<Parameters<typeof tenancyExtension>[0]>, 'rls'>
   } = {},
 ) => {
   const extension = tenancyExtension(options)

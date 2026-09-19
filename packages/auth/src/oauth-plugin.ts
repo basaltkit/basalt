@@ -2,6 +2,7 @@ import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { AUTH } from './plugin.js'
+import { ACCOUNT_META } from './routes.js'
 import { OAuth, type OAuthOptions, type OAuthProvider, stripTrailingSlashes } from './oauth.js'
 
 export const OAUTH = createToken<OAuth>('auth.oauth')
@@ -81,6 +82,7 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/auth/oauth/:provider',
+      meta: { ...ACCOUNT_META },
       params: z.object({ provider: z.string() }),
       async handler({ params, reply }) {
         const { url, binding } = oauth().authorize(params.provider, redirectUri(params.provider))
@@ -90,6 +92,7 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/auth/oauth/:provider/callback',
+      meta: { ...ACCOUNT_META },
       params: z.object({ provider: z.string() }),
       query: z.object({ code: z.string().max(4096), state: z.string().max(4096) }),
       async handler({ params, query, request, reply }) {

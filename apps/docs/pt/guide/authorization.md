@@ -232,6 +232,45 @@ todo o lado, e a opção `scope` para derivar o scope atual de outra forma. Em
 produção, troca o `MemoryAccessStore` por um `AccessStore` durável
 (`@basaltkit/permissions-prisma` / `-sqlite` no ecossistema).
 
+### Um catálogo de roles para todos os tenants
+
+As permissões de um role são procuradas **no scope onde o role é detido**. O
+`@basaltkit/teams` espelha as memberships por tenant (`assignRole(user,
+'owner', tenantId)`), por isso um catálogo como "owner = `*`" concedido uma vez
+em `GLOBAL_SCOPE` nunca chega ao owner de um tenant — e copiá-lo para cada
+tenant diverge. Define-o uma vez:
+
+```ts
+permissionsPlugin({
+  store,
+  // (a) Definido em código, válido em todos os scopes.
+  roleCatalog: {
+    owner: ['*'],
+    admin: ['projects:*', 'members:invite'],
+    member: ['projects:read'],
+  },
+  // (b) Ou mantém o catálogo no store, sob GLOBAL_SCOPE.
+  inheritGlobalRolePermissions: ['admin', 'member'], // ou `true` para todos os roles
+})
+```
+
+- **`roleCatalog`** — um role detido num scope concede as permissões do
+  catálogo **nesse scope**: o owner de `acme` recebe `*` em `acme`, nada em
+  `globex`, nada globalmente. Um role detido em `GLOBAL_SCOPE` aplica-se em todo
+  o lado, como os roles globais sempre fizeram.
+- **`inheritGlobalRolePermissions`** — um role detido num tenant resolve também
+  as suas permissões a partir da definição em `GLOBAL_SCOPE`, concedendo apenas
+  nesse tenant. Prefere uma lista de nomes de roles quando os admins dos tenants
+  podem atribuir roles: com `true`, atribuir dentro de um tenant um
+  `platform-admin` definido globalmente concede lá o seu conjunto global de
+  permissões.
+
+Ambos são uniões com o que o store concede ao role no tenant, usam a mesma regra
+de wildcards e concedem **permissões, nunca roles**: `hasRole()`,
+`effectiveRoles()` e o confinamento por audiências não mudam. O `GET /me/access`
+(`accessRoutes()`) reporta a mesma resolução (`gate.rolePermissions(role,
+scope)`).
+
 ### O scope global não pode ser um tenant
 
 O `GLOBAL_SCOPE` é `'@global'` — um valor que nenhum slug, label de hostname ou
@@ -323,6 +362,8 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | `delegations` | `DelegationStore` | desligado | Ativa `delegate()` |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 | `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | O que `can(user, perm, resource)` faz quando nenhum check de política corresponde a `resource:action`: `'error'` lança `MissingPolicyError` (falha fechada), `'rbac'` volta às strings de permissão concedidas |
+| `roleCatalog` | `Record<string, string[]>` | — | Role → permissões definido em código, válido em todos os scopes; um role só as concede no scope onde é detido. Vê [Um catálogo de roles para todos os tenants](#um-catalogo-de-roles-para-todos-os-tenants) |
+| `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | Um role detido num tenant resolve também as permissões da sua definição em `GLOBAL_SCOPE` (só nesse tenant); uma lista limita-o a esses roles |
 | `readLegacyGlobalScope` | `boolean` | `false` | Ler também as linhas do scope global anterior à 1.5 (`'global'`) como globais. Ajuda de transição — vê [O scope global não pode ser um tenant](#o-scope-global-nao-pode-ser-um-tenant) |
 | `hooks` | `HookBus` | o bus da app (plugin) | Onde os hooks `permission:*` são emitidos |
 
@@ -356,7 +397,10 @@ e não do store: escritas feitas diretamente no `AccessStore` não deixam rasto.
 
 - **`PERMISSION_DENIED` para um utilizador que "tem o role"** — verifica o
   *scope*: um role atribuído no tenant `acme` não se aplica em `globex` nem
-  globalmente. Atribui em `GLOBAL_SCOPE` para staff cross-tenant.
+  globalmente. Atribui em `GLOBAL_SCOPE` para staff cross-tenant. Se o *role* é
+  por tenant (teams) mas as permissões só foram concedidas em `GLOBAL_SCOPE`,
+  usa `roleCatalog` ou `inheritGlobalRolePermissions` — vê
+  [Um catálogo de roles para todos os tenants](#um-catalogo-de-roles-para-todos-os-tenants).
 - **`PERMISSION_POLICY_MISSING` depois de um upgrade** — essa chamada
   `can(user, perm, resource)` já estava a responder silenciosamente a partir do
   RBAC. Confere a escrita das duas metades de `resource:action` contra o

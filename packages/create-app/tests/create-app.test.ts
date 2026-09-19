@@ -299,3 +299,55 @@ describe('resolveRunDefaults (D1 — TTY installs by default, CI never surprises
     })
   })
 })
+
+describe('pnpm 11 robustness (BK-002)', () => {
+  it('pnpm-workspace.yaml documents the union syntax for per-version release-age exclusions', async () => {
+    const result = await createProject({ name: 'pnpm11', dir: join(root, 'pnpm11') })
+    const yaml = await read(result.dir, 'pnpm-workspace.yaml')
+    // Exactly one live entry — the @basaltkit scope.
+    expect(yaml.match(/^ {2}- /gm)).toHaveLength(1)
+    expect(yaml).toContain("minimumReleaseAgeExclude:\n  - '@basaltkit/*'")
+    // pnpm matches exclusions first-match-wins BY NAME: two versions of one
+    // package must be ONE entry with a `||` union, never two entries.
+    expect(yaml).toContain("#   - '@types/node@22.20.4 || 26.6.2'")
+    expect(yaml).toMatch(/first match/i)
+  })
+
+  it('pnpm-workspace.yaml offers verifyDepsBeforeRun: warn as a commented, conscious opt-in', async () => {
+    const result = await createProject({ name: 'verify', dir: join(root, 'verify'), cli: true })
+    const yaml = await read(result.dir, 'pnpm-workspace.yaml')
+    expect(yaml).toContain('# verifyDepsBeforeRun: warn')
+    expect(yaml).not.toMatch(/^verifyDepsBeforeRun:/m)
+  })
+
+  it('the README explains that `pnpm basalt` may run `pnpm install` first, and how to skip it', async () => {
+    const result = await createProject({ name: 'clidoc', dir: join(root, 'clidoc'), cli: true })
+    const readme = await read(result.dir, 'README.md')
+    expect(readme).toContain('verifyDepsBeforeRun')
+    expect(readme).toContain('node_modules/.bin/tsx bin/basalt.ts')
+    const pkg = JSON.parse(await read(result.dir, 'package.json'))
+    expect(pkg.scripts.basalt).toBe('tsx bin/basalt.ts')
+  })
+})
+
+describe('environment precedence (BK-018)', () => {
+  it('.env.example warns that --env-file never overrides exported variables and suggests an app prefix', async () => {
+    const result = await createProject({ name: 'my-saas', dir: join(root, 'envprec') })
+    const example = await read(result.dir, '.env.example')
+    expect(example).toMatch(/--env-file/)
+    expect(example).toMatch(/never override/i)
+    expect(example).toContain('MY_SAAS_DATABASE_URL')
+    // Every live line is still KEY=value (the file stays loadable).
+    for (const line of example.split('\n').filter((l) => l && !l.startsWith('#'))) {
+      expect(line).toMatch(/^[A-Z_]+=/)
+    }
+  })
+
+  it('the README has an Environment section covering the pitfall', async () => {
+    const result = await createProject({ name: 'my-saas', dir: join(root, 'envreadme') })
+    const readme = await read(result.dir, 'README.md')
+    expect(readme).toContain('## Environment')
+    expect(readme).toContain('--env-file')
+    expect(readme).toContain('MY_SAAS_DATABASE_URL')
+  })
+})

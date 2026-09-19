@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseArgs, resolvesLatest } from '../src/args.js'
 import { createProject } from '../src/index.js'
 import {
+  DEFAULT_MINIMUM_RELEASE_AGE_MINUTES,
   DEFAULT_REGISTRY,
   describeResolution,
   latestUrl,
+  minimumReleaseAgeMinutes,
   registryUrl,
   resolveLatestVersions,
   THIRD_PARTY_VERSIONS,
@@ -22,11 +24,28 @@ import { SCAFFOLD_VERSIONS } from '../src/versions.js'
 type Handler = (url: string, init?: RequestInit) => Response | Promise<Response>
 type FakeRegistry = Record<string, unknown | Handler>
 
-/** A fetch answering `<registry>/<name>/latest` from a name → body/handler map. */
-function fakeFetch(entries: FakeRegistry, calls: string[] = []): typeof globalThis.fetch {
+/** A `last-modified` far outside any release-age window. */
+const LONG_AGO = 'Mon, 01 Jan 2024 00:00:00 GMT'
+
+/**
+ * A fetch answering `<registry>/<name>/latest` from a name → body/handler map,
+ * and the release-age probe (`HEAD <registry>/<name>`) with a `last-modified`
+ * from `modified` (default: long ago; `null` omits the header).
+ */
+function fakeFetch(
+  entries: FakeRegistry,
+  calls: string[] = [],
+  modified: Record<string, string | null> = {},
+): typeof globalThis.fetch {
   return (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
-    calls.push(url)
+    calls.push(init?.method === 'HEAD' ? `HEAD ${url}` : url)
+    if (init?.method === 'HEAD') {
+      const probe = /\/((?:@[^/]+%2f)?[^/]+)$/.exec(url)
+      const name = probe ? decodeURIComponent(probe[1]!) : ''
+      const lastModified = name in modified ? modified[name] : LONG_AGO
+      return new Response(null, { status: 200, headers: lastModified ? { 'last-modified': lastModified } : {} })
+    }
     const match = /\/((?:@[^/]+%2f)?[^/]+)\/latest$/.exec(url)
     const name = match ? decodeURIComponent(match[1]!) : ''
     const entry = entries[name]
@@ -35,6 +54,9 @@ function fakeFetch(entries: FakeRegistry, calls: string[] = []): typeof globalTh
     return new Response(JSON.stringify(entry), { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof globalThis.fetch
 }
+
+/** Only the `/latest` lookups (drops the release-age probes). */
+const latestCalls = (calls: string[]): string[] => calls.filter((url) => url.endsWith('/latest'))
 
 describe('resolveLatestVersions', () => {
   it('takes the latest @basaltkit/* version, even across majors', async () => {
@@ -164,7 +186,7 @@ describe('resolveLatestVersions', () => {
       return new Response(JSON.stringify({ version: '4.9.0' }), { status: 200 })
     }) as typeof globalThis.fetch
     const fallbacks = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`pkg-${i}`, '^4.0.0']))
-    const result = await resolveLatestVersions(fallbacks, { fetch: slow, concurrency: 3 })
+    const result = await resolveLatestVersions(fallbacks, { fetch: slow, concurrency: 3, minimumReleaseAge: 0 })
     expect(peak).toBe(3)
     expect(result.resolved).toHaveLength(20)
   })
@@ -175,11 +197,110 @@ describe('resolveLatestVersions', () => {
       { '@types/node': '^26.6.2', zod: '^4.6.5' },
       { fetch: fakeFetch({}, calls), registry: 'https://mirror.example.com/npm/' },
     )
-    expect(calls.sort()).toEqual([
+    expect(latestCalls(calls).sort()).toEqual([
       'https://mirror.example.com/npm/@types%2fnode/latest',
       'https://mirror.example.com/npm/zod/latest',
     ])
     expect(latestUrl(DEFAULT_REGISTRY, '@basaltkit/core')).toBe('https://registry.npmjs.org/@basaltkit%2fcore/latest')
+  })
+})
+
+describe('release-age window (pnpm minimumReleaseAge)', () => {
+  const NOW = Date.parse('2026-09-19T12:00:00Z')
+  const hoursAgo = (hours: number): string => new Date(NOW - hours * 3_600_000).toUTCString()
+
+  it('keeps the fallback range for a third-party latest published inside the window', async () => {
+    const calls: string[] = []
+    const result = await resolveLatestVersions(
+      { '@types/node': '^26.6.2', zod: '^4.6.5' },
+      {
+        now: () => NOW,
+        fetch: fakeFetch(
+          { '@types/node': { version: '26.9.0' }, zod: { version: '4.9.1' } },
+          calls,
+          { '@types/node': hoursAgo(3), zod: hoursAgo(72) },
+        ),
+      },
+    )
+    // ^26.9.0 would be unsatisfiable under pnpm 11's default 1-day
+    // minimumReleaseAge; the bundled range lets pnpm pick the newest mature 26.x.
+    expect(result.versions).toEqual({ '@types/node': '^26.6.2', zod: '^4.9.1' })
+    expect(result.resolved).toEqual(['zod'])
+    expect(result.tooFresh).toEqual([{ name: '@types/node', latest: '26.9.0', range: '^26.6.2', reason: 'recent' }])
+    expect(calls).toContain(`HEAD ${DEFAULT_REGISTRY}/@types%2fnode`)
+    expect(describeResolution(result).join('\n')).toMatch(/@types\/node 26\.9\.0 .*minimumReleaseAge.*kept \^26\.6\.2/)
+  })
+
+  it('treats an unprovable age (no last-modified, failed probe) as fresh', async () => {
+    const result = await resolveLatestVersions(
+      { tsx: '^4.23.13', vitest: '^5.0.1' },
+      {
+        now: () => NOW,
+        fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input)
+          if (init?.method === 'HEAD') {
+            return url.endsWith('/tsx') ? new Response(null, { status: 200 }) : new Response(null, { status: 405 })
+          }
+          return new Response(JSON.stringify({ version: url.includes('/tsx/') ? '4.30.0' : '5.2.0' }), { status: 200 })
+        }) as typeof globalThis.fetch,
+      },
+    )
+    expect(result.versions).toEqual({ tsx: '^4.23.13', vitest: '^5.0.1' })
+    expect(result.tooFresh.map((entry) => [entry.name, entry.reason])).toEqual([
+      ['tsx', 'unknown'],
+      ['vitest', 'unknown'],
+    ])
+  })
+
+  it('measures the age against the registry clock (Date header) when present', async () => {
+    const result = await resolveLatestVersions(
+      { zod: '^4.6.5' },
+      {
+        // The local clock is a week fast; the registry says it is 2h after publish.
+        now: () => NOW + 7 * 86_400_000,
+        fetch: (async (_input: string | URL | Request, init?: RequestInit) =>
+          init?.method === 'HEAD'
+            ? new Response(null, { status: 200, headers: { 'last-modified': hoursAgo(2), date: new Date(NOW).toUTCString() } })
+            : new Response(JSON.stringify({ version: '4.9.1' }), { status: 200 })) as typeof globalThis.fetch,
+      },
+    )
+    expect(result.versions.zod).toBe('^4.6.5')
+    expect(result.tooFresh[0]?.reason).toBe('recent')
+  })
+
+  it('never probes @basaltkit/* (excluded by the scaffolded pnpm-workspace.yaml)', async () => {
+    const calls: string[] = []
+    const result = await resolveLatestVersions(
+      { '@basaltkit/core': '^1.3.0' },
+      { now: () => NOW, fetch: fakeFetch({ '@basaltkit/core': { version: '1.9.0' } }, calls, { '@basaltkit/core': hoursAgo(1) }) },
+    )
+    expect(result.versions['@basaltkit/core']).toBe('^1.9.0')
+    expect(calls.some((call) => call.startsWith('HEAD '))).toBe(false)
+  })
+
+  it('honors minimumReleaseAge (option, then pnpm_config_minimum_release_age) and 0 disables the probe', async () => {
+    const registry = { zod: { version: '4.9.1' } }
+    const modified = { zod: hoursAgo(3) }
+    const twoHours = await resolveLatestVersions({ zod: '^4.6.5' }, { now: () => NOW, minimumReleaseAge: 120, fetch: fakeFetch(registry, [], modified) })
+    expect(twoHours.versions.zod).toBe('^4.9.1')
+
+    const calls: string[] = []
+    const off = await resolveLatestVersions({ zod: '^4.6.5' }, { now: () => NOW, minimumReleaseAge: 0, fetch: fakeFetch(registry, calls, modified) })
+    expect(off.versions.zod).toBe('^4.9.1')
+    expect(calls.some((call) => call.startsWith('HEAD '))).toBe(false)
+
+    const previous = process.env['pnpm_config_minimum_release_age']
+    process.env['pnpm_config_minimum_release_age'] = '60'
+    try {
+      const fromEnv = await resolveLatestVersions({ zod: '^4.6.5' }, { now: () => NOW, fetch: fakeFetch(registry, [], modified) })
+      expect(fromEnv.versions.zod).toBe('^4.9.1')
+    } finally {
+      if (previous === undefined) delete process.env['pnpm_config_minimum_release_age']
+      else process.env['pnpm_config_minimum_release_age'] = previous
+    }
+    expect(minimumReleaseAgeMinutes(undefined, {})).toBe(DEFAULT_MINIMUM_RELEASE_AGE_MINUTES)
+    expect(minimumReleaseAgeMinutes(undefined, { npm_config_minimum_release_age: '30' })).toBe(30)
+    expect(minimumReleaseAgeMinutes(undefined, { npm_config_minimum_release_age: 'soon' })).toBe(DEFAULT_MINIMUM_RELEASE_AGE_MINUTES)
   })
 })
 
@@ -201,7 +322,7 @@ describe('registryUrl', () => {
     try {
       const result = await resolveLatestVersions({ zod: '^4.6.5' }, { fetch: fakeFetch({}, calls) })
       expect(result.registry).toBe('https://env-registry.example')
-      expect(calls).toEqual(['https://env-registry.example/zod/latest'])
+      expect(latestCalls(calls)).toEqual(['https://env-registry.example/zod/latest'])
     } finally {
       if (previous === undefined) delete process.env['npm_config_registry']
       else process.env['npm_config_registry'] = previous
@@ -258,10 +379,14 @@ describe('createProject with resolveLatest', () => {
       expect(range, name).toBe(`^${bumpMinor(fallback!)}`)
     }
     expect(web.devDependencies.typescript).toBe(`^${bumpMinor(THIRD_PARTY_VERSIONS['typescript']!)}`)
-    // One request per distinct package, all against the chosen registry.
+    // One lookup per distinct package, all against the chosen registry, plus
+    // one release-age probe per third-party package (never for @basaltkit/*).
     expect(new Set(calls).size).toBe(calls.length)
-    expect(calls.length).toBe(Object.keys(all).length)
-    expect(calls.every((url) => url.startsWith('https://registry.test/'))).toBe(true)
+    expect(latestCalls(calls).length).toBe(Object.keys(all).length)
+    const probes = calls.filter((call) => call.startsWith('HEAD '))
+    expect(probes.length).toBe(Object.keys(all).filter((name) => !name.startsWith('@basaltkit/')).length)
+    expect(probes.some((call) => call.includes('@basaltkit'))).toBe(false)
+    expect(calls.every((url) => url.replace(/^HEAD /, '').startsWith('https://registry.test/'))).toBe(true)
     expect(result.versions?.failed).toEqual([])
   })
 

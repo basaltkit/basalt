@@ -257,6 +257,54 @@ export interface GateOptions {
    * captures by default.
    */
   hooks?: HookBus
+  /**
+   * Code-defined role → permissions catalogue, valid in **every** scope:
+   * a role held in a scope grants its catalogue permissions in that scope
+   * (never elsewhere), in addition to whatever the store grants the role there.
+   *
+   * ```ts
+   * roleCatalog: { owner: ['*'], admin: ['projects:*', 'members:invite'], member: ['projects:read'] }
+   * ```
+   *
+   * Pairs with `@basaltkit/teams`, which assigns roles per tenant
+   * (`assignRole(user, role, tenantId)`): the tenant owner gets `'*'` in their
+   * tenant without copying the catalogue into every tenant. Snapshotted at
+   * construction; malformed entries throw a `TypeError`.
+   */
+  roleCatalog?: Readonly<Record<string, readonly string[]>>
+  /**
+   * Resolve a tenant-held role's permissions from its **global** definition
+   * (`grantToRole(role, perms, GLOBAL_SCOPE)`) too — still granting only in
+   * the tenant where the role is held. Default `false` (the historic
+   * same-scope lookup).
+   *
+   * `true` applies to every role name; a list restricts it to those names.
+   * Prefer the list whenever tenants can assign roles themselves: with `true`,
+   * a tenant admin who can assign an arbitrary role name (say, a global
+   * `platform-admin`) gets that role's global permission set inside their
+   * tenant.
+   */
+  inheritGlobalRolePermissions?: boolean | readonly string[]
+}
+
+/** Validates and deep-copies a role catalogue into a prototype-free lookup. */
+function snapshotRoleCatalog(
+  catalog: Readonly<Record<string, readonly string[]>> | undefined,
+): ReadonlyMap<string, readonly string[]> {
+  const snapshot = new Map<string, readonly string[]>()
+  if (catalog === undefined) return snapshot
+  if (catalog === null || typeof catalog !== 'object') throw new TypeError('roleCatalog must be an object of role → permission[]')
+  for (const [role, permissions] of Object.entries(catalog)) {
+    if (role.length === 0) throw new TypeError('roleCatalog: role names must be non-empty strings')
+    if (!Array.isArray(permissions)) throw new TypeError(`roleCatalog.${role} must be an array of permissions`)
+    for (const permission of permissions as unknown[]) {
+      if (typeof permission !== 'string' || permission.length === 0) {
+        throw new TypeError(`roleCatalog.${role} must contain only non-empty permission strings`)
+      }
+    }
+    snapshot.set(role, Object.freeze([...permissions]))
+  }
+  return snapshot
 }
 
 const defaultScope = currentScope
@@ -277,10 +325,21 @@ export class Gate {
   private readonly policies = new Map<string, Policy<never>>()
   private readonly scope: () => string
   private readonly now: () => number
+  private readonly roleCatalog: ReadonlyMap<string, readonly string[]>
+  private readonly inheritGlobal: (role: string) => boolean
 
   constructor(private readonly options: GateOptions) {
     this.scope = options.scope ?? defaultScope
     this.now = options.now ?? (() => Date.now())
+    this.roleCatalog = snapshotRoleCatalog(options.roleCatalog)
+    const inherit = options.inheritGlobalRolePermissions
+    if (Array.isArray(inherit)) {
+      const names = new Set<string>(inherit)
+      this.inheritGlobal = (role) => names.has(role)
+    } else {
+      const all = inherit === true
+      this.inheritGlobal = () => all
+    }
     for (const policy of options.policies ?? []) this.register(policy)
   }
 
@@ -425,12 +484,31 @@ export class Gate {
     await this.emit('permission:granted', { userId, permissions, scope })
   }
 
+  /**
+   * The permissions `role` carries when held in `scope`: the store's definition
+   * in that scope, the `roleCatalog` entry, and — with
+   * `inheritGlobalRolePermissions` — the store's global definition. Always
+   * evaluated FOR `scope`: the caller only uses the result for a role held
+   * there, so nothing here widens a grant to another tenant.
+   */
+  async rolePermissions(role: string, scope: string): Promise<string[]> {
+    const permissions = new Set(await this.options.store.getRolePermissions(role, scope))
+    for (const permission of this.roleCatalog.get(role) ?? []) permissions.add(permission)
+    if (!isReservedScope(scope) && this.inheritGlobal(role)) {
+      const globals = [GLOBAL_SCOPE, ...(this.options.readLegacyGlobalScope ? [LEGACY_GLOBAL_SCOPE] : [])]
+      for (const global of globals) {
+        for (const permission of await this.options.store.getRolePermissions(role, global)) permissions.add(permission)
+      }
+    }
+    return [...permissions]
+  }
+
   /** Standing grants (user + roles) plus active temporary grants — no delegation. */
   private async canDirect(userId: string, permission: string): Promise<boolean> {
     for (const scope of this.scopes()) {
       const granted = new Set(await this.options.store.getUserPermissions(userId, scope))
       for (const role of await this.options.store.getUserRoles(userId, scope)) {
-        for (const perm of await this.options.store.getRolePermissions(role, scope)) granted.add(perm)
+        for (const perm of await this.rolePermissions(role, scope)) granted.add(perm)
       }
       if (this.options.temporaryGrants) {
         for (const grant of await this.options.temporaryGrants.activeFor(userId, scope, this.now())) {
@@ -567,8 +645,16 @@ export function accessRoutes(
         // token for the store itself, and adding one here would be a second way
         // to reach the same object.
         const container = context?.['container'] as Container | undefined
-        const store = options.store ?? (container?.has(GATE) ? container.get(GATE).store : undefined)
+        const gate = container?.has(GATE) ? container.get(GATE) : undefined
+        const store = options.store ?? gate?.store
         if (!store) return { roles: [], permissions: [] }
+        // The Gate's resolution (roleCatalog, inherited global definitions) when
+        // the answer comes from the Gate's own store — otherwise the menu hides
+        // what the server would allow.
+        const rolePermissions =
+          gate && store === gate.store
+            ? (role: string, scope: string) => gate.rolePermissions(role, scope)
+            : (role: string, scope: string) => store.getRolePermissions(role, scope)
 
         const scope = currentScope()
         const roles = await store.getUserRoles(user.id, scope)
@@ -576,7 +662,7 @@ export function accessRoutes(
         // Direct grants plus everything each role carries. The union is what a
         // frontend needs; assembling it there means reimplementing the model.
         const diretas = await store.getUserPermissions(user.id, scope)
-        const dosPapeis = await Promise.all(roles.map((r) => store.getRolePermissions(r, scope)))
+        const dosPapeis = await Promise.all(roles.map((r) => rolePermissions(r, scope)))
 
         return { roles, permissions: [...new Set([...diretas, ...dosPapeis.flat()])].sort() }
       },

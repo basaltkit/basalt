@@ -1,6 +1,7 @@
 import { definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { z, type ZodTypeAny } from 'zod'
 import { HTTP_SERVER } from './server.js'
+import { isUploadBody } from './upload.js'
 
 type JsonSchema = Record<string, unknown>
 
@@ -133,7 +134,17 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo, tags: Op
     }
     if (parameters.length) operation.parameters = parameters
 
-    if (route.body) {
+    if (route.body && isUploadBody(route.body)) {
+      // A streamed `upload()` body: files and text fields, names chosen by the client.
+      operation.requestBody = {
+        required: true,
+        content: {
+          'multipart/form-data': {
+            schema: { type: 'object', additionalProperties: { type: 'string', format: 'binary' } },
+          },
+        },
+      }
+    } else if (route.body) {
       operation.requestBody = {
         required: true,
         content: { 'application/json': { schema: zodToJsonSchema(route.body) } },

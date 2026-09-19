@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import type { OutboxEntry, OutboxPendingFilter, OutboxStore } from '@basaltkit/events'
+import type {
+  OutboxClaimOptions,
+  OutboxEntry,
+  OutboxMarkFailedOptions,
+  OutboxPendingFilter,
+  OutboxStore,
+} from '@basaltkit/events'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/events` `OutboxStore` (the
@@ -10,7 +16,9 @@ import type { OutboxEntry, OutboxPendingFilter, OutboxStore } from '@basaltkit/e
  *
  * Keeping the outbox in the SAME database as your business writes is what makes
  * the pattern work — enqueue the event in the same transaction as the state
- * change, and delivery becomes at-least-once and crash-safe. The production
+ * change (`outbox.enqueue(event, payload, { tx })` inside `$transaction`), and
+ * delivery becomes at-least-once and crash-safe. With `{ claim: true }` several
+ * relays (replicas) can share the table without double-dispatching. The production
  * counterpart to `@basaltkit/events-sqlite`.
  */
 
@@ -24,6 +32,9 @@ interface POutbox {
   attempts: number
   publishedAt: Date | null
   lastError: string | null
+  // Present when the schema has the claim columns (`{ claim: true }`).
+  lockedUntil?: Date | null
+  lockedBy?: string | null
 }
 
 /**
@@ -58,30 +69,73 @@ const toEntry = (r: POutbox): OutboxEntry => ({
   ...(r.lastError !== null ? { lastError: r.lastError } : {}),
 })
 
-export class PrismaOutboxStore implements OutboxStore {
-  constructor(private readonly client: PrismaEventsClient) {}
+export interface PrismaOutboxStoreOptions {
+  /**
+   * Claim pending rows before dispatching (`lockedUntil` / `lockedBy` columns),
+   * so several relays — one per replica — never deliver the same entry at once,
+   * and a failed entry's retry backoff holds across replicas. Requires the two
+   * columns from the reference schema (`basalt prisma:sync`, then migrate).
+   * Default false, so an existing schema without them keeps working; turn it on
+   * whenever more than one process runs the relay.
+   */
+  claim?: boolean
+}
 
-  async enqueue(input: {
-    id?: string
-    event: string
-    payload: unknown
-    tenantId?: string
-    createdAt: number
-  }): Promise<OutboxEntry> {
+/** The transaction client the store writes through — Prisma's interactive-transaction `tx`. */
+export interface PrismaOutboxTx {
+  outboxEntry: Pick<PrismaEventsClient['outboxEntry'], 'upsert'>
+}
+
+// A row is claimable when never claimed or when its lease expired.
+const claimable = (now: number) => ({ OR: [{ lockedUntil: null }, { lockedUntil: { lte: at(now) } }] })
+
+export class PrismaOutboxStore implements OutboxStore {
+  /**
+   * Present only with `{ claim: true }` — the relay checks for it, so a store
+   * whose schema lacks the lock columns is never asked to write them.
+   */
+  readonly claim?: (ids: string[], options: OutboxClaimOptions) => Promise<string[]>
+  private readonly claiming: boolean
+
+  constructor(
+    private readonly client: PrismaEventsClient,
+    options: PrismaOutboxStoreOptions = {},
+  ) {
+    this.claiming = options.claim === true
+    if (this.claiming) this.claim = (ids, claimOptions) => this.claimRows(ids, claimOptions)
+  }
+
+  /**
+   * Writes the entry. Pass `{ tx }` — the client Prisma hands to
+   * `$transaction(async (tx) => …)` — to write it in the same transaction as
+   * your state change: a rollback removes both.
+   */
+  async enqueue(
+    input: {
+      id?: string
+      event: string
+      payload: unknown
+      tenantId?: string
+      createdAt: number
+    },
+    options: { tx?: PrismaOutboxTx } = {},
+  ): Promise<OutboxEntry> {
     const id = input.id ?? randomUUID()
     const payload = input.payload === undefined ? null : JSON.stringify(input.payload)
     // upsert mirrors MemoryOutboxStore: re-enqueuing the same id replaces the
-    // entry (attempts reset to 0, publish/error cleared).
+    // entry (attempts reset to 0, publish/error/claim cleared).
     const base = {
       event: input.event,
       payload,
       tenantId: input.tenantId ?? null,
       createdAt: at(input.createdAt),
     }
-    await this.client.outboxEntry.upsert({
+    const release = this.claiming ? { lockedUntil: null, lockedBy: null } : {}
+    const delegate = options.tx ? options.tx.outboxEntry : this.client.outboxEntry
+    await delegate.upsert({
       where: { id },
       create: { id, ...base, attempts: 0 },
-      update: { ...base, attempts: 0, publishedAt: null, lastError: null },
+      update: { ...base, attempts: 0, publishedAt: null, lastError: null, ...release },
     })
     return {
       id,
@@ -104,6 +158,9 @@ export class PrismaOutboxStore implements OutboxStore {
     } else if (filter.excludeGlobal) {
       where.tenantId = { not: null }
     }
+    // Claiming relays: hide rows another relay holds (or that sit in a stored
+    // retry backoff). ANDed so it composes with the tenant `OR` above.
+    if (this.claiming && filter.now !== undefined) where.AND = [claimable(filter.now)]
     const rows = await this.client.outboxEntry.findMany({
       where,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -112,15 +169,43 @@ export class PrismaOutboxStore implements OutboxStore {
     return rows.map(toEntry)
   }
 
-  async markPublished(id: string, at_: number): Promise<void> {
-    // updateMany (not update) so a missing id is a no-op, matching MemoryOutboxStore.
-    await this.client.outboxEntry.updateMany({ where: { id }, data: { publishedAt: at(at_) } })
+  /**
+   * Atomic claim without raw SQL: ONE conditional `updateMany` stamps this
+   * relay's token on the rows that are still unpublished and unclaimed (or whose
+   * lease expired); a concurrent relay's identical UPDATE re-checks the
+   * condition once the row lock is released (Postgres/MySQL), so each row is
+   * won by exactly one token. A second query reads back which rows were won.
+   * Portable across Prisma providers and — being model queries, not
+   * `$queryRaw` — compatible with the tenancy extension's raw-query guard.
+   */
+  private async claimRows(ids: string[], options: OutboxClaimOptions): Promise<string[]> {
+    if (ids.length === 0) return []
+    await this.client.outboxEntry.updateMany({
+      where: { id: { in: ids }, publishedAt: null, ...claimable(options.now) },
+      data: { lockedUntil: at(options.until), lockedBy: options.token },
+    })
+    const won = await this.client.outboxEntry.findMany({
+      where: { id: { in: ids }, lockedBy: options.token },
+      select: { id: true },
+    })
+    return won.map((row) => row.id)
   }
 
-  async markFailed(id: string, error: string): Promise<void> {
+  async markPublished(id: string, at_: number): Promise<void> {
+    // updateMany (not update) so a missing id is a no-op, matching MemoryOutboxStore.
+    const release = this.claiming ? { lockedUntil: null, lockedBy: null } : {}
+    await this.client.outboxEntry.updateMany({ where: { id }, data: { publishedAt: at(at_), ...release } })
+  }
+
+  async markFailed(id: string, error: string, options: OutboxMarkFailedOptions = {}): Promise<void> {
+    // Claiming: release the row, or hold it until the retry time so no replica
+    // retries it before the backoff elapses.
+    const release = this.claiming
+      ? { lockedUntil: options.retryAt !== undefined ? at(options.retryAt) : null, lockedBy: null }
+      : {}
     await this.client.outboxEntry.updateMany({
       where: { id },
-      data: { attempts: { increment: 1 }, lastError: error },
+      data: { attempts: { increment: 1 }, lastError: error, ...release },
     })
   }
 
@@ -156,11 +241,14 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  * `outboxPlugin`:
  *
  * ```ts
- * const outbox = prismaOutboxStore(prisma)
+ * const outbox = prismaOutboxStore(prisma, { claim: true }) // claim: safe with N replicas
  * outboxPlugin({ store: outbox.store, dispatch, captureEvents: ['order.*'], intervalMs: 1000 })
  * ```
  */
-export function prismaOutboxStore(client: PrismaEventsClient): PrismaEventsStores {
+export function prismaOutboxStore(
+  client: PrismaEventsClient,
+  options: PrismaOutboxStoreOptions = {},
+): PrismaEventsStores {
   ensureModel(client, 'outboxEntry', '@basaltkit/events-prisma')
-  return { store: new PrismaOutboxStore(client) }
+  return { store: new PrismaOutboxStore(client, options) }
 }

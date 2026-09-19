@@ -204,10 +204,18 @@ createApp({
 ```
 
 A non-member gets `403 TEAM_NOT_A_MEMBER`. The guard is skipped when the
-request has no resolved tenant or no user (central/anonymous traffic), and for
-routes that opt out explicitly with `meta: { central: true }` — login, tenant
-creation, platform admin, invite acceptance: routes that legitimately act
-across or outside a single tenant.
+request has no resolved tenant or no user (central/anonymous traffic), for
+**account routes** (`meta: { account: true }`) and for routes that opt out
+explicitly with `meta: { central: true }` — tenant creation, platform admin:
+routes that legitimately act across or outside a single tenant.
+
+Account routes are about the caller's own identity, not the tenant's data:
+`authRoutes()`, `mfaRoutes()` and `oauthRoutes()` (`@basaltkit/auth`) and
+`POST /team/invites/accept` declare `account: true`, so a signed-in user who is
+not (yet) a member can still log in, read `/auth/me` and accept an invitation
+on the company's subdomain, while every other tenant route stays
+members-only. `apiKeyRoutes()` is **not** an account route — keys are bound to
+a tenant. Mark your own profile routes with `account: true` the same way.
 
 Three behaviours to know:
 
@@ -346,6 +354,12 @@ const access = new MemoryAccessStore()
 teamsPlugin({ access })
 // teams.addMember('acme', 'u1', 'admin') → access.assignRole('u1', 'admin', 'acme')
 ```
+
+The role is held **in the tenant**, so its permissions must resolve there too.
+Define what `owner`/`admin`/`member` may do once with `permissionsPlugin({
+roleCatalog })` (or `inheritGlobalRolePermissions`) instead of granting the
+catalogue into every tenant — see
+[One role catalogue for every tenant](/guide/authorization#one-role-catalogue-for-every-tenant).
 
 ## Options reference
 

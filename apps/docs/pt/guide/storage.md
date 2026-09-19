@@ -169,6 +169,22 @@ storagePlugin({
 })
 ```
 
+Todas as opções de disco (`scope`, `onMissingScope`, `maxTemporaryUrlTtl`,
+`maxTemporaryUploadUrlTtl`) podem ser passadas a `s3Disk()` junto das opções do
+driver — ele separa-as e encaminha cada uma para o sítio certo.
+
+**Encriptação em repouso.** A configuração mais simples é a encriptação por
+omissão do próprio bucket (a AWS já encripta novos objetos com SSE-S3 por
+omissão; define uma chave KMS por omissão no bucket se precisares de uma) —
+nada a configurar aqui. Quando a app tem de a fixar, define
+`serverSideEncryption` e o driver envia-a em cada `put` e assina-a em cada
+[upload pré-assinado](#uploads-diretos-do-browser):
+
+```ts
+s3Disk({ bucket: 'docs', serverSideEncryption: 'AES256' })                        // SSE-S3
+s3Disk({ bucket: 'docs', serverSideEncryption: { kms: 'alias/docs-key' } })        // SSE-KMS
+```
+
 ## URLs assinados
 
 Entrega a um cliente um URL de tempo limitado diretamente para o objeto, sem proxy:
@@ -195,6 +211,69 @@ por isso uma duração maior (ou não positiva) lança `TemporaryUrlTtlTooLongEr
 `maxTemporaryUrlTtl`. Suportado por `s3`, GCS e Azure; o driver `local` lança
 `TemporaryUrlUnsupportedError` (serve ficheiros locais através de uma rota em dev, ou
 corre MinIO localmente com um disco `s3`).
+
+## Uploads diretos do browser
+
+Para ficheiros grandes, deixa o browser fazer `PUT` diretamente para o bucket em
+vez de passar pelo teu servidor. O servidor emite um **URL de upload
+pré-assinado** de curta duração, ligado ao content type exato (e ao tamanho /
+checksum quando indicados):
+
+```ts
+import { randomUUID } from 'node:crypto'
+
+const ALLOWED = { 'image/png': 'png', 'image/jpeg': 'jpg', 'application/pdf': 'pdf' } as const
+
+// POST /uploads — o cliente diz o que quer carregar; o servidor decide onde.
+const { contentType, size } = req.body            // valida primeiro com o teu schema
+const upload = await disk.temporaryUploadUrl(`uploads/${randomUUID()}.${ALLOWED[contentType]}`, {
+  expiresIn: '5m',
+  contentType,                                    // obrigatório, sempre assinado
+  contentLength: size,                            // assinado: qualquer outro tamanho é rejeitado
+  maxBytes: 20 * 1024 * 1024,                     // → StorageTooLargeError acima de 20 MiB
+  allowedContentTypes: Object.keys(ALLOWED),      // → StorageContentTypeError caso contrário
+})
+return { url: upload.url, method: upload.method, headers: upload.headers, key: upload.key }
+```
+
+```ts
+// Browser
+const res = await fetch(url, { method, headers, body: file })   // envia `headers` tal como vêm
+if (!res.ok) throw new Error('upload failed')
+await fetch('/uploads/complete', { method: 'POST', body: JSON.stringify({ key }) })
+```
+
+`temporaryUploadUrl` segue as mesmas regras de segurança que `temporaryUrl`: a
+key é validada, prefixada com o tenant (e falha fechado sem tenant), e a duração
+é limitada — por `maxTemporaryUploadUrlTtl`, que por omissão é **1 hora** (ou
+`maxTemporaryUrlTtl` quando for menor). Devolve
+`{ url, method: 'PUT', headers, expiresAt, key }`; `key` é a key completa do
+objeto, prefixo do tenant incluído.
+
+| Driver | Liga `contentType` | Liga `contentLength` | `checksumSha256` |
+| --- | --- | --- | --- |
+| S3 | header assinado | header assinado | assinado; o S3 verifica o corpo |
+| GCS | assinado (V4) | `x-goog-content-length-range` assinado | recusado (`STORAGE_UPLOAD_URL_UNSUPPORTED`) |
+| Azure | **não aplicável** (enviado como header) | **não aplicável** | recusado (`STORAGE_UPLOAD_URL_UNSUPPORTED`) |
+| Local | não suportado — `TemporaryUploadUrlUnsupportedError` (`STORAGE_UPLOAD_URL_UNSUPPORTED`) | — | — |
+
+No S3 os headers SSE de `serverSideEncryption` também são assinados, por isso o
+cliente não pode saltar a encriptação. O Azure usa um SAS só de create/write,
+que não consegue ligar headers do pedido.
+
+::: warning Checklist de segurança
+- **Gera a key no servidor** (p.ex. um UUID) — nunca aceites um caminho vindo do cliente.
+- **Liga sempre `contentType`** (obrigatório) e **`contentLength`** — sem tamanho
+  o cliente pode carregar qualquer tamanho. Mantém uma allowlist de tipos.
+- **Mantém o TTL curto** — minutos. O URL é uma credencial de escrita para essa
+  key até expirar; quem o tiver pode carregar.
+- **Prefixa a key com o tenant** — o scope por omissão do disco faz isto; não o desligues para uploads de utilizadores.
+- **Trata o objeto carregado como não confiável** até um passo de "complete" o
+  verificar (existe, tem o tamanho/tipo esperado — obrigatório no Azure, onde
+  nada fica ligado). Serve-o com `temporaryUrl` (attachment por omissão), nunca inline.
+- **Configura o CORS do bucket** para permitir `PUT` a partir da origem da tua
+  app com os headers devolvidos, e nada mais largo.
+:::
 
 `@basaltkit/files` constrói um pipeline de upload por cima disto (validação, quota,
 metadados) — vê o [guia de File uploads](/pt/guide/files).
@@ -234,6 +313,7 @@ Sem processador, o terminal do pipeline lança
 | `scope` | `(() => string \| undefined) \| null` | `tenants/<ctx().tenant.id>` | Prefixo de path dinâmico resolvido em **todas** as operações — isolamento automático por tenant. `null` desativa-o |
 | `onMissingScope` | `'root' \| 'error'` | `'error'` com tenancy registado e o `scope` predefinido; `'root'` caso contrário | O que uma operação faz sem tenant no contexto: `'error'` lança `StorageTenantRequiredError`, `'root'` usa a chave contra a raiz do disco. Um valor explícito ganha sempre |
 | `maxTemporaryUrlTtl` | `DurationInput` | `'7d'` | Duração máxima que `temporaryUrl` aceita; acima disso lança `TemporaryUrlTtlTooLongError` |
+| `maxTemporaryUploadUrlTtl` | `DurationInput` | `'1h'` (ou `maxTemporaryUrlTtl` se for menor) | Duração máxima que `temporaryUploadUrl` aceita; acima disso lança `TemporaryUrlTtlTooLongError` |
 
 ### `PutOptions` (por `put`)
 
@@ -249,6 +329,28 @@ Sem processador, o terminal do pipeline lança
 | --- | --- | --- | --- |
 | `disposition` | `'attachment' \| 'inline'` | `'attachment'` | Fecha por omissão o vetor de um HTML/SVG carregado renderizar top-level na origem storage/CDN (stored XSS). Opta por `'inline'` só quando a renderização top-level é deliberada |
 
+### `TemporaryUploadUrlOptions` (por `temporaryUploadUrl`)
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `expiresIn` | `DurationInput` | — (obrigatório) | Duração do URL, limitada por `maxTemporaryUploadUrlTtl` |
+| `contentType` | `string` | — (obrigatório) | O único content type que o upload pode declarar — assinado no URL (S3, GCS) |
+| `contentLength` | `number` | nenhum | Tamanho exato do corpo em bytes — assinado (S3, GCS). Sem ele qualquer tamanho é aceite |
+| `checksumSha256` | `string` (base64) | nenhum | SHA-256 do corpo — assinado e verificado pelo S3; recusado por GCS e Azure |
+| `maxBytes` | `number` | sem limite | Limite imposto na fachada sobre o `contentLength` declarado (que passa a obrigatório) |
+| `allowedContentTypes` | `readonly string[]` | qualquer | Allowlist imposta na fachada para `contentType` |
+
+### Opções de `s3Disk` / `S3StorageDriver`
+
+| Opção | Tipo | Predefinição | Porquê |
+| --- | --- | --- | --- |
+| `bucket` | `string` | — (obrigatório) | Bucket de destino |
+| `region` | `string` | `'us-east-1'` | Região AWS |
+| `endpoint` | `string` | AWS | MinIO / R2 / qualquer endpoint compatível com S3 |
+| `credentials` | `{ accessKeyId, secretAccessKey }` | cadeia de credenciais AWS | Credenciais estáticas |
+| `forcePathStyle` | `boolean` | `true` quando `endpoint` está definido | URLs path-style (MinIO) |
+| `serverSideEncryption` | `'AES256' \| { kms: string }` | nenhuma (aplica-se a do bucket) | SSE enviada em cada `put` e assinada em cada upload pré-assinado |
+
 A predefinição de disposition é honrada pelos três drivers de assinatura — S3
 (`ResponseContentDisposition`), GCS (`responseDisposition`) e Azure (SAS
 `contentDisposition`).
@@ -260,11 +362,13 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` num ficheiro que não existe |
 | `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | A key começa por `/`/`\\`, contém um segmento `..` ou caracteres de controlo — o ponto único da fachada rejeita-a em **todas** as operações, para todos os drivers, antes de o prefixo de tenant ser aplicado |
 | `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | Um path escapa à root do disco — a segunda linha de defesa própria do driver local |
-| `StorageTooLargeError` | `STORAGE_TOO_LARGE` | `put` com `maxBytes` definido e um payload maior |
-| `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` com `allowedContentTypes` definido e um content type em falta/fora da lista |
+| `StorageTooLargeError` | `STORAGE_TOO_LARGE` | `put` (ou `temporaryUploadUrl`) com `maxBytes` definido e um payload / tamanho declarado maior |
+| `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` (ou `temporaryUploadUrl`) com `allowedContentTypes` definido e um content type em falta/fora da lista |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `disk('name')` para um disco que não foi declarado |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` num driver sem suporte (ex.: `local`) |
-| `TemporaryUrlTtlTooLongError` | `STORAGE_TEMPORARY_URL_TTL` (400) | `temporaryUrl` com duração ≤ 0 ou acima de `maxTemporaryUrlTtl` (7 dias por omissão) |
+| `TemporaryUrlTtlTooLongError` | `STORAGE_TEMPORARY_URL_TTL` (400) | `temporaryUrl` com duração ≤ 0 ou acima de `maxTemporaryUrlTtl` (7 dias por omissão); `temporaryUploadUrl` acima de `maxTemporaryUploadUrlTtl` (1 hora por omissão) |
+| `TemporaryUploadUrlUnsupportedError` | `STORAGE_UPLOAD_URL_UNSUPPORTED` | `temporaryUploadUrl` num driver sem suporte (p.ex. `local`), ou uma opção que o backend não consegue ligar (`checksumSha256` em GCS/Azure) |
+| `StorageUploadUrlInvalidError` | `STORAGE_UPLOAD_URL_INVALID` (400) | `temporaryUploadUrl` com `contentType` em falta/malformado, `contentLength` não inteiro, `checksumSha256` malformado, ou `maxBytes` sem `contentLength` |
 | `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` (400) | Um disco com scope de tenant correu sem tenant no contexto com tenancy registado — resolve um tenant, ou dá a um disco central `scope: null` / `onMissingScope: 'root'` |
 | `StorageInvalidScopeError` | `STORAGE_INVALID_SCOPE` | O id do tenant (ou um `scope` próprio) não é um prefixo de path seguro (`..`, uma `/` dentro do id, caracteres de controlo) |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | Terminal de `disk.image(…)` sem `imageProcessor` configurado |
@@ -276,7 +380,13 @@ Todos estendem `BasaltError` e transportam o `code` acima.
 Um driver implementa o contrato `StorageDriver` — seis métodos:
 
 ```ts
-import { StorageFileNotFoundError, type PutOptions, type StorageDriver } from '@basaltkit/storage'
+import {
+  StorageFileNotFoundError,
+  type PutOptions,
+  type StorageDriver,
+  type TemporaryUploadUrl,
+  type TemporaryUploadUrlDriverOptions,
+} from '@basaltkit/storage'
 
 export class MyStorageDriver implements StorageDriver {
   readonly name = 'my-backend'
@@ -286,6 +396,8 @@ export class MyStorageDriver implements StorageDriver {
   async delete(path: string): Promise<boolean> { /* retorna se existia */ return false }
   async list(prefix: string): Promise<string[]> { /* chaves sob o prefixo */ return [] }
   async temporaryUrl(path: string, expiresInMs: number): Promise<string> { /* opcional */ throw 0 }
+  // opcional: PUT pré-assinado — liga options.contentType (+ tamanho/checksum) e devolve os headers a enviar
+  async temporaryUploadUrl(path: string, expiresInMs: number, options: TemporaryUploadUrlDriverOptions): Promise<TemporaryUploadUrl> { throw 0 }
   async disconnect(): Promise<void> {}
 }
 ```

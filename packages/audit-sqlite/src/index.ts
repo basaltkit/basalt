@@ -7,10 +7,15 @@ type DatabaseSync = InstanceType<typeof DatabaseSync>
 import {
   AUDIT_SCAN_PAGE,
   assertAuditLimit,
+  AuditChainConflictError,
+  auditChainKey,
+  type AuditChainHead,
+  type AuditChainRange,
   type AuditEntry,
   type AuditQuery,
   type AuditStore,
   exactEventMatch,
+  parseAuditChainKey,
   patternMatches,
 } from '@basaltkit/audit'
 
@@ -48,6 +53,21 @@ export function migrate(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_entries (tenant_id, at);
   `)
+  // Hash-chain and request columns, added to databases created before them.
+  // (ADD COLUMN throws when the column already exists — ignore that.) Old rows
+  // keep NULLs: `verify()` reports them as unchained, never as broken.
+  for (const column of ['chain TEXT', 'seq INTEGER', 'prev_hash TEXT', 'hash TEXT', 'ip TEXT', 'user_agent TEXT']) {
+    try {
+      db.exec(`ALTER TABLE audit_entries ADD COLUMN ${column}`)
+    } catch {
+      /* column already present */
+    }
+  }
+  // One writer per (chain, seq): a second replica racing for the same seq gets a
+  // constraint error (→ AuditChainConflictError → retry) instead of forking the
+  // chain. `chain` is never NULL on chained rows — NULLs are distinct in a
+  // unique index, which would leave the system chain unprotected.
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_chain_seq ON audit_entries (chain, seq)')
 }
 
 interface AuditRow {
@@ -59,6 +79,11 @@ interface AuditRow {
   tenant_id: string | null
   request_id: string | null
   at: number
+  seq: number | null
+  prev_hash: string | null
+  hash: string | null
+  ip: string | null
+  user_agent: string | null
 }
 
 const toEntry = (r: AuditRow): AuditEntry => ({
@@ -70,7 +95,16 @@ const toEntry = (r: AuditRow): AuditEntry => ({
   tenantId: r.tenant_id ?? undefined,
   requestId: r.request_id ?? undefined,
   at: r.at,
+  ...(r.ip !== null ? { ip: r.ip } : {}),
+  ...(r.user_agent !== null ? { userAgent: r.user_agent } : {}),
+  ...(r.seq !== null ? { seq: r.seq } : {}),
+  ...(r.prev_hash !== null ? { prevHash: r.prev_hash } : {}),
+  ...(r.hash !== null ? { hash: r.hash } : {}),
 })
+
+/** The `(chain, seq)` unique index fired — as opposed to any other constraint. */
+const isChainConflict = (error: unknown): boolean =>
+  error instanceof Error && /UNIQUE constraint failed: audit_entries\.chain, audit_entries\.seq/.test(error.message)
 
 type Bindable = null | number | string
 
@@ -78,21 +112,66 @@ export class SqliteAuditStore implements AuditStore {
   constructor(private readonly db: DatabaseSync) {}
 
   async append(entry: AuditEntry): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT INTO audit_entries (id, source, event, payload, actor_id, tenant_id, request_id, at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        entry.id,
-        entry.source,
-        entry.event,
-        entry.payload === undefined ? null : JSON.stringify(entry.payload),
-        entry.actorId ?? null,
-        entry.tenantId ?? null,
-        entry.requestId ?? null,
-        entry.at,
-      )
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO audit_entries
+             (id, source, event, payload, actor_id, tenant_id, request_id, at, chain, seq, prev_hash, hash, ip, user_agent)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          entry.id,
+          entry.source,
+          entry.event,
+          entry.payload === undefined ? null : JSON.stringify(entry.payload),
+          entry.actorId ?? null,
+          entry.tenantId ?? null,
+          entry.requestId ?? null,
+          entry.at,
+          entry.seq === undefined ? null : auditChainKey(entry.tenantId),
+          entry.seq ?? null,
+          entry.prevHash ?? null,
+          entry.hash ?? null,
+          entry.ip ?? null,
+          entry.userAgent ?? null,
+        )
+    } catch (error) {
+      if (isChainConflict(error)) throw new AuditChainConflictError(entry.tenantId, entry.seq, { cause: error })
+      throw error
+    }
+  }
+
+  async chainHead(tenantId: string | undefined): Promise<AuditChainHead | undefined> {
+    const row = this.db
+      .prepare('SELECT seq, hash FROM audit_entries WHERE chain = ? AND seq IS NOT NULL ORDER BY seq DESC LIMIT 1')
+      .get(auditChainKey(tenantId)) as { seq: number; hash: string } | undefined
+    return row ? { seq: row.seq, hash: row.hash } : undefined
+  }
+
+  async readChain(tenantId: string | undefined, range: AuditChainRange): Promise<AuditEntry[]> {
+    assertAuditLimit(range.limit)
+    const args: Bindable[] = [auditChainKey(tenantId), range.fromSeq]
+    let sql = 'SELECT * FROM audit_entries WHERE chain = ? AND seq >= ?'
+    if (range.toSeq !== undefined) {
+      sql += ' AND seq <= ?'
+      args.push(range.toSeq)
+    }
+    sql += ' ORDER BY seq ASC, rowid ASC LIMIT ?'
+    return (this.db.prepare(sql).all(...args, range.limit) as unknown as AuditRow[]).map(toEntry)
+  }
+
+  async countUnchained(tenantId: string | undefined): Promise<number> {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM audit_entries WHERE seq IS NULL AND tenant_id IS ?')
+      .get(tenantId ?? null) as { n: number }
+    return Number(row.n)
+  }
+
+  async chainTenants(): Promise<Array<string | undefined>> {
+    const rows = this.db.prepare('SELECT DISTINCT chain FROM audit_entries WHERE chain IS NOT NULL').all() as unknown as Array<{
+      chain: string
+    }>
+    return rows.map((r) => parseAuditChainKey(r.chain))
   }
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {

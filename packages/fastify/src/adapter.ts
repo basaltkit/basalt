@@ -20,6 +20,7 @@ import {
   SSE_HEADERS,
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
+  isUploadBody,
 } from '@basaltkit/http'
 import Fastify, {
   type FastifyError,
@@ -206,13 +207,43 @@ export function registerRoutes(
   guards: RouteGuard[] = [],
   onError?: HttpErrorReporter,
 ): void {
+  if (routes.some((definition) => isUploadBody(definition.body))) allowMultipartPassthrough(instance)
   for (const definition of routes) {
+    const uploads = isUploadBody(definition.body)
     instance.route({
       method: definition.method,
       url: definition.url,
+      ...(uploads ? { config: { [UPLOAD_ROUTE]: true } } : {}),
       handler: wrapHandler(definition, container, enrichers, guards, onError),
     })
   }
+}
+
+/** Route-config flag marking an `upload()` route, read by the multipart pass-through parser. */
+const UPLOAD_ROUTE = 'basaltUpload'
+
+/**
+ * `upload()` routes stream `multipart/form-data` through @basaltkit/http's own
+ * parser, so Fastify must NOT consume the body: this content-type parser hands
+ * the raw request stream on untouched (the neutral pipeline reads it only
+ * after enrichers and guards passed). Any other route still answers 415 to a
+ * multipart body, as before. Registered only when an upload route exists, and
+ * never over a parser the app registered itself (e.g. `@fastify/multipart`,
+ * which also leaves the stream unread).
+ */
+function allowMultipartPassthrough(instance: FastifyInstance): void {
+  if (instance.hasContentTypeParser('multipart/form-data')) return
+  instance.addContentTypeParser(
+    'multipart/form-data',
+    (request: FastifyRequest, _payload: unknown, done: (err: Error | null, value?: unknown) => void) => {
+      const config = request.routeOptions?.config as unknown as Record<string, unknown> | undefined
+      if (config?.[UPLOAD_ROUTE] === true) return done(null, undefined)
+      const error = new Error('Unsupported Media Type') as FastifyError
+      ;(error as { code: string }).code = 'FST_ERR_CTP_INVALID_MEDIA_TYPE'
+      ;(error as { statusCode: number }).statusCode = 415
+      done(error)
+    },
+  )
 }
 
 function toNeutralRequest(request: FastifyRequest): HttpRequest {
@@ -240,9 +271,12 @@ function wrapHandler(
     const neutralReply = new FastifyReplyAdapter(reply)
 
     try {
+      const neutral = toNeutralRequest(request)
+      // An upload() route streams the raw body (the pass-through parser left it unread).
+      if (isUploadBody(definition.body)) neutral.bodyStream = request.raw
       const result = await runRoute(
         definition,
-        toNeutralRequest(request),
+        neutral,
         neutralReply,
         {
           ...(container ? { container } : {}),
