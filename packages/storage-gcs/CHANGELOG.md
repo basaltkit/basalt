@@ -1,5 +1,12 @@
 # @basaltkit/storage-gcs
 
+## 1.1.3
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/storage@3.0.0
+
 ## 1.1.2
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @basaltkit/files-versions
 
+## 0.1.2
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/files@4.0.0
+
 ## 0.1.1
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @basaltkit/subscriptions-pdf
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/subscriptions@4.0.0
+
 ## 0.1.3
 
 ### Patch Changes

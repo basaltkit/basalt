@@ -1,5 +1,12 @@
 # @basaltkit/subscriptions-proxypay
 
+## 2.1.4
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/subscriptions@4.0.0
+
 ## 2.1.3
 
 ### Patch Changes
