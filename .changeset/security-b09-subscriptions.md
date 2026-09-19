@@ -1,5 +1,5 @@
 ---
-'@basaltkit/subscriptions': minor
+'@basaltkit/subscriptions': major
 ---
 
 Security hardening (B09):

@@ -1,5 +1,5 @@
 ---
-'@basaltkit/teams': minor
+'@basaltkit/teams': major
 '@basaltkit/teams-prisma': patch
 '@basaltkit/teams-sqlite': patch
 ---

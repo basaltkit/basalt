@@ -1,7 +1,7 @@
 ---
-'@basaltkit/files': minor
-'@basaltkit/comments': minor
-'@basaltkit/audit-viewer': minor
+'@basaltkit/files': major
+'@basaltkit/comments': major
+'@basaltkit/audit-viewer': major
 '@basaltkit/search': minor
 ---
 

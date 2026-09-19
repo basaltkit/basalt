@@ -1,5 +1,5 @@
 ---
-"@basaltkit/prisma": minor
+"@basaltkit/prisma": major
 ---
 
 Security hardening of the Prisma tenancy integration (fail closed by default):

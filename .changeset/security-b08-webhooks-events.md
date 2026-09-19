@@ -1,5 +1,5 @@
 ---
-'@basaltkit/webhooks': minor
+'@basaltkit/webhooks': major
 '@basaltkit/events': minor
 ---
 

@@ -1,6 +1,6 @@
 ---
 'create-basalt': minor
-'@basaltkit/env': minor
+'@basaltkit/env': major
 '@basaltkit/ai': minor
 '@basaltkit/ai-mcp': patch
 '@basaltkit/cli': patch

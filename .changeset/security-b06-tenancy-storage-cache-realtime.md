@@ -1,6 +1,6 @@
 ---
-'@basaltkit/tenancy': minor
-'@basaltkit/storage': minor
+'@basaltkit/tenancy': major
+'@basaltkit/storage': major
 '@basaltkit/storage-azure': minor
 '@basaltkit/cache': patch
 '@basaltkit/realtime': patch
