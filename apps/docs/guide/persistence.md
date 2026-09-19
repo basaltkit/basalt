@@ -208,6 +208,38 @@ takes the durable `AccessStore` (role assignments and grants, scoped), so RBAC
 state survives a restart too. `@basaltkit/flags` needs no backend — feature flags
 are declared in code and evaluated deterministically, with nothing to persist.
 
+### Verifiable audit trail
+
+Both audit stores support a **tamper-evident** trail and the request context:
+
+```ts
+auditPlugin({
+  store: prismaAuditStore(prisma).store,
+  integrity: 'hash-chain',   // or { mode: 'hash-chain', key: process.env.AUDIT_CHAIN_KEY! } (HMAC)
+  requestContext: true,      // record ip + user-agent — personal data, see below
+})
+```
+
+Each entry is linked to the previous one of its tenant's chain (`seq`, `prevHash`,
+`hash` = SHA-256 over a canonical serialization), with one chain per tenant plus a
+system chain. `audit.verify({ tenantId, from?, to? })` — or `basalt audit:verify
+[--tenant=<id> | --all]` — detects edited, deleted, reordered and forged rows. Both
+stores put a **unique constraint on `(chain, seq)`**, so replicas appending at the
+same time retry instead of forking a chain. Rows written before `integrity` was
+enabled are reported as *unchained*, not broken.
+
+`requestContext: true` adds an HTTP enricher (fastify, express and hono alike) and
+stores the client `ip` and `userAgent`. The IP is PII: with
+`createPiiMinimizingRedactor({ key })` it is stored as a pseudonym.
+
+SQLite migrates the new columns automatically; for Prisma, add them to the model
+and migrate first (the [`@basaltkit/audit-prisma` README](https://github.com/basaltkit/basalt/tree/main/packages/audit-prisma#upgrading-from-11)
+has the SQL). Then make the database enforce append-only too:
+
+```sql
+REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
+```
+
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 
 The tenant registry is the foundation of a multi-tenant app, yet `@basaltkit/tenancy`
@@ -257,6 +289,47 @@ outboxPlugin({
 })
 ```
 
+### Write the event in your transaction
+
+The guarantee — the event exists **if and only if** the state change committed —
+needs the entry written *inside* the business transaction. Pass the transaction
+handle as `tx` to `enqueue`; the store writes through it, so a rollback removes
+both:
+
+```ts
+const outbox = app.container.get(OUTBOX)
+
+// Prisma: the interactive-transaction client
+await prisma.$transaction(async (tx) => {
+  await tx.order.update({ where: { id }, data: { status: 'paid' } })
+  await outbox.enqueue('order.paid', { id }, { tenantId, tx })
+})
+
+// SQLite: the DatabaseSync running BEGIN … COMMIT (same file as the outbox)
+db.exec('BEGIN')
+db.prepare(`UPDATE orders SET status = 'paid' WHERE id = ?`).run(id)
+await outbox.enqueue('order.paid', { id }, { tx: db })
+db.exec('COMMIT')
+```
+
+`captureEvents` is convenient but **not** transactional: it records the event
+when `emit()` runs, outside your transaction. Use an explicit
+`enqueue(…, { tx })` for events that must never diverge from the data.
+
+### Several relays (replicas)
+
+With one relay per replica, two relays would read the same pending rows. A store
+that implements `claim` prevents the double dispatch: after selecting a batch the
+relay **claims** it with one conditional update (`lockedUntil`/`lockedBy`, a
+lease of `claimLeaseMs`, default 5 min) and dispatches only the rows it won;
+`pending()` hides rows another relay holds. `@basaltkit/events-sqlite` always
+claims (its `migrate()` adds the columns); `@basaltkit/events-prisma` claims with
+`prismaOutboxStore(prisma, { claim: true })` — add the `lockedUntil` / `lockedBy`
+columns first (`basalt prisma:sync`, then migrate). It uses plain model queries,
+not `FOR UPDATE SKIP LOCKED`: portable across providers, allowed by the tenancy
+extension's raw-query guard, and a relay that crashes mid-dispatch only holds its
+rows until the lease expires. Delivery stays at-least-once.
+
 ### Relay semantics
 
 The relay is the part that decides whether "at-least-once" is real. Four
@@ -275,8 +348,9 @@ behaviours, all verifiable in `@basaltkit/events`:
 - **Failures back off.** A failed entry is skipped by this process until its
   delay elapses: `delayMs · 2^(attempts-1)`, capped at `maxDelayMs`
   (`type: 'fixed'` keeps it constant, `backoff: false` retries every tick). The
-  schedule is **process-local** — no schema change, and a restart forgets it, so
-  the worst case is one early retry. Still at-least-once. Entries in backoff
+  schedule is **process-local** — a restart forgets it, so the worst case is one
+  early retry — unless the store claims: then the retry time is also written to
+  the row, so every replica honours it. Still at-least-once. Entries in backoff
   never fill the batch — the relay over-fetches past them — so one failing
   downstream (e.g. one tenant's endpoint) can't starve newer entries.
 - **A slow dispatch doesn't serialize the batch.** Up to `concurrency` entries
@@ -337,6 +411,7 @@ outboxPlugin({
 | `dispatchTimeoutMs` | `number \| false` | `10_000` | Max wait per entry before the flush moves on; the dispatch continues detached and its outcome is still recorded. `false` waits indefinitely |
 | `onDead` | `(entry, error) => void` | `console.error` | One entry exhausted `maxAttempts` — page someone, this is a lost external delivery |
 | `onFlushError` | `(error) => void` | `console.error` | The flush failed at the store level (timer tick or shutdown drain). Must never throw |
+| `claimLeaseMs` | `number` | `300_000` | Claiming stores (several relays): how long a relay's claim on an entry lasts. Past it, a relay that died mid-dispatch loses the entry to another relay. Must exceed your slowest dispatch |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 
 `backoff` (`OutboxBackoff`):
@@ -391,7 +466,7 @@ most from being shared across instances:
 | Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@basaltkit/http`) — one atomic counter shared across instances |
 | Request idempotency | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/fastify`) — replays a cached response across instances |
 | Queues | in-memory driver | RabbitMQ / Kafka / SQS driver packages |
-| Search | `MemorySearchDriver` | Meilisearch / Postgres driver packages |
+| Search | `MemorySearchDriver` | `MeilisearchDriver` (built in), `@basaltkit/search-postgres`, `@basaltkit/search-elasticsearch` |
 | Storage | local disk | S3 / GCS / Azure driver packages |
 
 ## Writing your own store
@@ -443,7 +518,7 @@ un-configured factory is still safe in tests.
 | Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
 | Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store })` |
 | Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — returns the source itself, not `{ store }` |
-| Events outbox | `sqliteOutboxStore()` | `prismaOutboxStore(client)` | `outboxPlugin({ store })` |
+| Events outbox | `sqliteOutboxStore()` | `prismaOutboxStore(client, { claim? })` | `outboxPlugin({ store })` |
 | Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |
 
 Each package also exports `openXDatabase(location)` and `migrate(db)` if you
@@ -451,8 +526,9 @@ want to control opening and migration yourself, and every individual store class
 (`SqliteUserSource`, `PrismaAuditStore`, …) takes a `DatabaseSync` /
 `PrismaClient` in its constructor — so you can mix backends per store.
 
-The only backend with behavioural options of its own is the outbox relay; its
-tables are in **Relay semantics** above. Everything else is
+The only backends with behavioural options of their own are the outbox's: the
+relay's tables are in **Relay semantics** above, and `prismaOutboxStore` takes
+`{ claim: true }` (see **Several relays**). Everything else is
 configured on the plugin that consumes it — see [Auth](/guide/auth),
 [Teams](/guide/teams), [Billing](/guide/billing), [Tenancy](/guide/tenancy) and
 [Webhooks](/guide/webhooks).
@@ -493,5 +569,8 @@ configured on the plugin that consumes it — see [Auth](/guide/auth),
 - Move **cache**, **usage metering** and **webhook idempotency** to Redis if you
   run more than one instance.
 - Point **queues**, **search** and **storage** at their production drivers.
+- For a compliance-grade **audit trail**, enable `integrity: 'hash-chain'`, revoke
+  `UPDATE`/`DELETE` on `audit_entries`, and schedule `basalt audit:verify --all`
+  ([above](#verifiable-audit-trail)).
 
 See [Going to Production](/guide/production) for the full checklist.

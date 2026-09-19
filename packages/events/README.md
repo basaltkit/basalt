@@ -135,7 +135,7 @@ import { MemoryOutboxStore, Outbox } from '@basaltkit/events'
 
 const outbox = new Outbox(new MemoryOutboxStore(), { maxAttempts: 3 })
 
-// 1. Write (ideally in the same transaction as the state change):
+// 1. Write (with a database store: in the same transaction as the state change — see below):
 await outbox.enqueue('invoice.paid', { id: 'in_1' }, 'tenant-acme')
 
 // 2. Deliver pending entries (the "mail carrier"):
@@ -145,6 +145,29 @@ const result = await outbox.flush(async (entry) => {
 })
 console.log(result) // { published: 1, failed: 0 }
 ```
+
+#### Writing the entry in your transaction
+
+The pattern's guarantee — the event exists **if and only if** the state change committed — needs
+the entry written *inside* the business transaction. Pass the transaction handle as `tx`; the
+store writes through it, so a rollback removes both:
+
+```ts
+import { prismaOutboxStore } from '@basaltkit/events-prisma'
+
+const outbox = new Outbox(prismaOutboxStore(prisma, { claim: true }).store)
+
+await prisma.$transaction(async (tx) => {
+  await tx.order.update({ where: { id }, data: { status: 'paid' } })
+  await outbox.enqueue('order.paid', { id }, { tenantId, tx }) // rolled back with the update
+})
+```
+
+`tx` is store-specific: the Prisma interactive-transaction client for `@basaltkit/events-prisma`,
+the `DatabaseSync` handle running `BEGIN … COMMIT` for `@basaltkit/events-sqlite`.
+`MemoryOutboxStore` has no transactions and ignores it. Events recorded by `captureEvents`
+(below) are **not** transactional — they are written when `emit()` runs, after (or outside) your
+transaction; use an explicit `enqueue(…, { tx })` for events that must never diverge from the data.
 
 If `dispatch` throws, the entry is marked as failed (`attempts + 1`, `lastError`) and is retried on the next `flush` — up to `maxAttempts` (default 10); after that it becomes "dead" and is no longer picked up. Deliveries follow creation order (FIFO).
 
@@ -234,6 +257,7 @@ store-level (`onFlushError`).
 | `concurrency` | `number` | `8` | Entries of one flush dispatched in parallel. `1` gives strictly sequential delivery. |
 | `tenantConcurrency` | `number` | `ceil(concurrency / 2)` | Most dispatches **one tenant** may have in flight at once, across flushes and including detached ones. Tenant-less entries share one budget. A tenant whose downstream hangs can never hold every worker. |
 | `dispatchTimeoutMs` | `number \| false` | `10_000` | How long a flush waits on one dispatch before moving on. The dispatch is **not** cancelled or failed: it keeps running *detached*, its outcome is recorded when it settles, and the entry is not re-dispatched meanwhile (no duplicate, no lost result). `false` waits indefinitely. |
+| `claimLeaseMs` | `number` | `300_000` (5 min) | Stores implementing `claim` (multi-replica relays): how long a relay's claim on an entry lasts. While claimed, no other relay dispatches it; if the relay dies mid-dispatch the claim expires and another relay takes over (at-least-once). Must exceed your slowest dispatch. |
 | `now` | `() => number` | `Date.now` | Injectable clock; tests drive the backoff windows with it. |
 
 `OutboxBackoff`:
@@ -251,14 +275,16 @@ round-robin by tenant — each tenant keeps its own FIFO order. Dispatch respect
 `tenantConcurrency`, and a flush waits at most `dispatchTimeoutMs` per dispatch, so the relay
 keeps ticking for everyone while a hung dispatch finishes on its own.
 
-**Backoff is process-local.** It is tracked in the relay process's memory — no store or schema
-change. After a failure, *this* process skips the entry until its delay elapses; another replica,
-or this one after a restart, may retry it sooner. Worst case is one extra immediate retry.
+**Backoff is process-local — unless the store claims.** It is tracked in the relay process's
+memory. After a failure, *this* process skips the entry until its delay elapses; with a store
+that doesn't implement `claim`, another replica, or this one after a restart, may retry it
+sooner (worst case one extra immediate retry). With a claiming store the retry time is also
+written to the row (`markFailed(id, error, { retryAt })`), so the backoff holds on every replica.
 Delivery stays at-least-once either way.
 
 | Method | Parameters | Returns | Description |
 |---|---|---|---|
-| `enqueue(event, payload, tenantId?)` | `string`, `unknown`, `string?` | `Promise<OutboxEntry>` | Writes an entry with `createdAt = now()`. |
+| `enqueue(event, payload, tenantId?, options?)` / `enqueue(event, payload, { tenantId?, tx? })` | `string`, `unknown`, `string \| OutboxEnqueueOptions`, `OutboxStoreEnqueueOptions?` | `Promise<OutboxEntry>` | Writes an entry with `createdAt = now()`. `tx` makes the write join your transaction (store-specific handle — see *Writing the entry in your transaction*). |
 | `flush(dispatch, batchSize?)` | `OutboxDispatch`, `number` (default `50`) | `Promise<FlushResult>` | Delivers up to `batchSize` pending entries (FIFO per tenant, tenants interleaved); marks success/failure per entry. **Overlap-safe** — see below. |
 
 **Overlapping-tick coalescing.** `flush()` keeps the in-flight promise: while one flush is
@@ -266,8 +292,13 @@ running, every further call returns *that* promise instead of selecting a batch 
 matters because a slow dispatch (a webhook endpoint that takes 8 s) under a 1 s `intervalMs`
 would otherwise have eight timers all reading the same un-published rows and delivering each
 entry eight times. With coalescing, the extra ticks simply await the running flush and get its
-`FlushResult`. It does **not** coordinate across processes — two replays on two replicas can
-still both deliver, which is why delivery is at-least-once and receivers must be idempotent.
+`FlushResult`. Across processes, coalescing is not enough — two relays on two replicas would
+read the same rows. A store that implements **`claim`** fixes that: after selecting a batch the
+relay atomically claims it (a conditional update stamping a lease), dispatches only the entries
+it won, and `pending()` hides rows another relay holds. `@basaltkit/events-prisma`
+(`{ claim: true }`), `@basaltkit/events-sqlite` and `MemoryOutboxStore` implement it. Delivery
+is still at-least-once (a relay that dies mid-dispatch loses its claim after `claimLeaseMs`, and
+another relay re-sends), so receivers must be idempotent.
 
 `OutboxDispatch` = `(entry: OutboxEntry) => void | Promise<void>`; `FlushResult` = `{ published: number; failed: number; detached?: number }` — `detached` counts dispatches still running when `dispatchTimeoutMs` elapsed (present only when non-zero); their outcome is recorded later and is not counted in this result.
 
@@ -285,7 +316,18 @@ fault instead of losing it.
 
 ### `OutboxStore` / `MemoryOutboxStore`
 
-Persistence interface: `enqueue`, `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt limit, oldest first; `filter` is an `OutboxPendingFilter` — `{ excludeTenantIds?: string[]; excludeGlobal?: boolean }` — that lets the relay look past tenants it won't dispatch now. A store may ignore it: the outbox re-filters every row, but fairness is then limited to what one page holds), `markPublished(id, at)`, `markFailed(id, error)`, `all()`. `MemoryOutboxStore` implements it in memory (fine for dev/tests; **does not survive restarts** — in production implement `OutboxStore` over your database).
+Persistence interface:
+
+| Method | Description |
+|---|---|
+| `enqueue(entry, options?)` | Writes an entry. `options.tx` (`OutboxStoreEnqueueOptions`) is the transaction to write it in — its type is store-specific; stores without transactions ignore it. |
+| `pending(limit, maxAttempts, filter?)` | Unpublished, below the attempt limit, oldest first. `filter` is an `OutboxPendingFilter` — `{ excludeTenantIds?: string[]; excludeGlobal?: boolean; now?: number }` — that lets the relay look past tenants it won't dispatch now (a store may ignore the tenant part: the outbox re-filters every row, but fairness is then limited to what one page holds). `now` is only passed to claiming stores: hide rows whose claim is still active at that instant. |
+| `claim?(ids, { token, until, now })` | **Optional.** Atomically claims the given entries for one relay and returns the ids it won: only rows still unpublished whose previous claim expired (`lockedUntil <= now`, or none) — a conditional `UPDATE`, atomic across processes. Implement it and several relays can share the store without double-dispatching. |
+| `markPublished(id, at)` | Marks delivered (and releases the claim). |
+| `markFailed(id, error, options?)` | `attempts + 1`, `lastError`; releases the claim, or — with `options.retryAt` — keeps the row unclaimable until then (cross-replica backoff). |
+| `all()` | Every entry, for inspection. |
+
+`MemoryOutboxStore` implements all of it in memory (fine for dev/tests; **does not survive restarts** and has no transactions — in production use `@basaltkit/events-prisma` / `@basaltkit/events-sqlite` or implement `OutboxStore` over your database).
 
 ### `outboxPlugin(options)` / `OUTBOX`
 
@@ -299,7 +341,7 @@ Returns the `basalt:outbox` plugin; registers `Outbox` under the token `OUTBOX` 
 | `intervalMs` | `number` | no | — | Automatic flush interval, in ms. Omit for manual flush via `OUTBOX`. |
 | `batchSize` | `number` | no | `50` | Maximum entries per flush. |
 | `onFlushError` | `(error: unknown) => void` | no | `console.error` prefixed `[basalt:outbox] flush failed:` | A **timer or shutdown flush failed at the store level** — e.g. `pending()` threw because the database is unreachable. Per-entry dispatch failures are *not* this: those are caught inside the flush and recorded on the entry. Must never throw. |
-| `maxAttempts`, `backoff`, `onDead`, `concurrency`, `tenantConcurrency`, `dispatchTimeoutMs`, `now` | — | no | see `OutboxOptions` | Inherited from `OutboxOptions`. |
+| `maxAttempts`, `backoff`, `onDead`, `concurrency`, `tenantConcurrency`, `dispatchTimeoutMs`, `claimLeaseMs`, `now` | — | no | see `OutboxOptions` | Inherited from `OutboxOptions`. |
 
 On `shutdown`, the plugin stops the timer and performs one last best-effort `flush`; if that one
 throws, it goes to `onFlushError` too.
@@ -322,7 +364,8 @@ believed it was recorded would break the one guarantee the pattern exists to pro
 
 The practical consequence: `emit()` is now as slow and as failure-prone as your outbox store. Put
 the store in the same database as your business writes (`@basaltkit/events-prisma`) so the write
-is local and can join the same transaction.
+is local. Capture itself runs at `emit()` time and does **not** join your transaction; for events
+that must commit atomically with the data, call `outbox.enqueue(event, payload, { tx })` inside it.
 
 ## Common errors and solutions (FAQ)
 
@@ -336,7 +379,7 @@ is local and can join the same transaction.
 
 **`emit()` threw an `AggregateError` mentioning the outbox** — Capture listeners are *awaited*, so a failing outbox write fails the emit. That is intentional (nothing may be silently dropped after commit). Fix the store; don't swallow the error.
 
-**I lost outbox entries after restarting** — You're using `MemoryOutboxStore`, which only lives in memory. In production implement `OutboxStore` over a database and write the `enqueue` in the same transaction as the state change.
+**I lost outbox entries after restarting** — You're using `MemoryOutboxStore`, which only lives in memory. In production use a durable store (`@basaltkit/events-prisma`, `@basaltkit/events-sqlite`) and write the entry in the same transaction as the state change: `outbox.enqueue(event, payload, { tx })`.
 
 **An entry stopped being delivered** — It reached `maxAttempts` and became "dead". `onDead` fired once at that moment (default `console.error`). Query `store.all()` and look at `attempts` and `lastError` to diagnose; fix the cause and re-enqueue it if needed.
 
@@ -344,7 +387,7 @@ is local and can join the same transaction.
 
 **A retry didn't happen as soon as I expected** — `backoff` (default exponential from 1 s, capped at 60 s) holds the entry back in *this* process. Pass `backoff: false` to retry on every flush.
 
-**The same event was delivered twice** — Delivery is *at-least-once* by definition (e.g. a crash between `dispatch` and `markPublished`). The receiver should be idempotent — use `entry.id` to deduplicate.
+**The same event was delivered twice** — Delivery is *at-least-once* by definition (e.g. a crash between `dispatch` and `markPublished`). The receiver should be idempotent — use `entry.id` to deduplicate. If it happens routinely with several replicas, your store doesn't claim: enable `prismaOutboxStore(prisma, { claim: true })` (or implement `OutboxStore.claim`).
 
 ## Outbox reliability semantics, in one place
 
@@ -352,8 +395,13 @@ is local and can join the same transaction.
   silently dropped between "the caller thinks it's recorded" and "it's recorded".
 - **Flushes coalesce.** Overlapping timer ticks share one in-flight flush, so a slow dispatch
   can't cause the same batch to be delivered N times. Per process only.
+- **Writes can join your transaction.** `enqueue(event, payload, { tx })` writes through the
+  store's transaction handle, so the entry commits or rolls back with the state change.
+- **Relays claim across replicas.** With a store implementing `claim`, a batch is claimed with a
+  leased conditional update before dispatch; other relays skip it until it is published, failed,
+  or the lease (`claimLeaseMs`) expires.
 - **Failed entries back off.** Exponential from 1 s, capped at 60 s, tracked in the relay
-  process's memory; a restart forgets it (worst case: one immediate retry).
+  process's memory — and, with a claiming store, on the row too (so every replica honours it).
 - **Dead entries are reported once.** `onDead` fires at the `maxAttempts` transition; the entry
   stays in the store with its `lastError`.
 - **Store faults are reported per tick.** `onFlushError` catches them so the relay keeps running

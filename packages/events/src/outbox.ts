@@ -4,10 +4,11 @@ import { EVENTS } from './index.js'
 
 /**
  * The transactional outbox pattern: domain events are first written to a
- * durable store (ideally in the same transaction as the state change), then a
- * relay delivers them to external systems and marks them published. Delivery is
- * **at-least-once** and survives crashes — nothing is lost between "committed"
- * and "delivered".
+ * durable store — in the SAME transaction as the state change, by passing the
+ * transaction handle (`outbox.enqueue(event, payload, { tx })`) to a store that
+ * supports it — then a relay delivers them to external systems and marks them
+ * published. Delivery is **at-least-once** and survives crashes — nothing is
+ * lost between "committed" and "delivered".
  */
 export interface OutboxEntry {
   id: string
@@ -31,14 +32,77 @@ export interface OutboxPendingFilter {
   excludeTenantIds?: string[]
   /** Skip entries recorded without a tenant. */
   excludeGlobal?: boolean
+  /**
+   * Set only for stores that implement {@link OutboxStore.claim}: skip entries
+   * whose claim (`lockedUntil`) is still active at this instant (epoch ms) —
+   * claimed by another relay, or held back by a cross-replica retry backoff.
+   */
+  now?: number
+}
+
+/**
+ * Options for {@link OutboxStore.enqueue}.
+ */
+export interface OutboxStoreEnqueueOptions {
+  /**
+   * The transaction the entry must be written in (e.g. the Prisma interactive
+   * transaction client, or the `DatabaseSync` running `BEGIN … COMMIT`). When
+   * the transaction rolls back the entry disappears with the state change — the
+   * whole point of the transactional outbox. Its type is store-specific; a store
+   * without transactions (the in-memory one) ignores it.
+   */
+  tx?: unknown
+}
+
+/** Options for {@link Outbox.enqueue}. */
+export interface OutboxEnqueueOptions extends OutboxStoreEnqueueOptions {
+  tenantId?: string
+}
+
+/** Arguments of {@link OutboxStore.claim}. */
+export interface OutboxClaimOptions {
+  /** Unique token for this claim; the store stamps it on the rows it wins. */
+  token: string
+  /** Claim expiry (epoch ms): past it, a crashed relay's entries become claimable again. */
+  until: number
+  /** Current time (epoch ms): entries whose claim expired at or before it are claimable. */
+  now: number
+}
+
+/** Options for {@link OutboxStore.markFailed}. */
+export interface OutboxMarkFailedOptions {
+  /**
+   * Stores that implement `claim`: keep the entry unclaimable until this instant
+   * (epoch ms), so the retry backoff holds across every relay, not just this one.
+   */
+  retryAt?: number
 }
 
 export interface OutboxStore {
-  enqueue(entry: { id?: string; event: string; payload: unknown; tenantId?: string; createdAt: number }): Promise<OutboxEntry>
+  /**
+   * Writes an entry. With `options.tx` the write joins that transaction (stores
+   * that support it) — commit both the state change and the event, or neither.
+   */
+  enqueue(
+    entry: { id?: string; event: string; payload: unknown; tenantId?: string; createdAt: number },
+    options?: OutboxStoreEnqueueOptions,
+  ): Promise<OutboxEntry>
   /** Unpublished entries below the attempt ceiling (minus `filter`'s tenants), oldest first. */
   pending(limit: number, maxAttempts: number, filter?: OutboxPendingFilter): Promise<OutboxEntry[]>
+  /**
+   * OPTIONAL — atomically claims the given entries for one relay, so several
+   * relays (replicas) sharing the store never dispatch the same entry at once.
+   * Claims only entries still unpublished whose previous claim expired
+   * (`lockedUntil <= now`, or none), stamps `token` and `until` on them, and
+   * returns the ids it won. Must be atomic across processes (a conditional
+   * `UPDATE … WHERE lockedUntil IS NULL OR lockedUntil <= now`). Stores
+   * without it are single-relay only.
+   */
+  claim?(ids: string[], options: OutboxClaimOptions): Promise<string[]>
+  /** Marks an entry delivered (and releases its claim). */
   markPublished(id: string, at: number): Promise<void>
-  markFailed(id: string, error: string): Promise<void>
+  /** Records a failed attempt (and releases its claim, or holds it until `options.retryAt`). */
+  markFailed(id: string, error: string, options?: OutboxMarkFailedOptions): Promise<void>
   all(): Promise<OutboxEntry[]>
 }
 
@@ -53,6 +117,8 @@ export interface MemoryOutboxStoreOptions {
 
 export class MemoryOutboxStore implements OutboxStore {
   private readonly entries = new Map<string, OutboxEntry>()
+  /** Claims (id → lease) — kept off the entries so `all()` stays the plain contract. */
+  private readonly claims = new Map<string, { until: number; token?: string }>()
   private readonly retainPublished: number
   /** Ids of published entries, oldest publication first (for pruning). */
   private readonly published: string[] = []
@@ -61,8 +127,13 @@ export class MemoryOutboxStore implements OutboxStore {
     this.retainPublished = Math.max(0, options.retainPublished ?? 1000)
   }
 
-  async enqueue(input: { id?: string; event: string; payload: unknown; tenantId?: string; createdAt: number }): Promise<OutboxEntry> {
+  /** `options.tx` is accepted and ignored: memory has no transactions (use a database store in production). */
+  async enqueue(
+    input: { id?: string; event: string; payload: unknown; tenantId?: string; createdAt: number },
+    _options?: OutboxStoreEnqueueOptions,
+  ): Promise<OutboxEntry> {
     const id = input.id ?? randomUUID()
+    this.claims.delete(id)
     const entry: OutboxEntry = {
       id,
       event: input.event,
@@ -82,11 +153,30 @@ export class MemoryOutboxStore implements OutboxStore {
       .filter((entry) =>
         entry.tenantId === undefined ? !filter.excludeGlobal : !excluded.has(entry.tenantId),
       )
+      .filter((entry) => filter.now === undefined || this.claimable(entry.id, filter.now))
       .sort((a, b) => a.createdAt - b.createdAt)
       .slice(0, limit)
   }
 
+  async claim(ids: string[], options: OutboxClaimOptions): Promise<string[]> {
+    // Synchronous check-and-set: atomic within the process that owns the memory.
+    const won: string[] = []
+    for (const id of ids) {
+      const entry = this.entries.get(id)
+      if (!entry || entry.publishedAt !== undefined || !this.claimable(id, options.now)) continue
+      this.claims.set(id, { until: options.until, token: options.token })
+      won.push(id)
+    }
+    return won
+  }
+
+  private claimable(id: string, now: number): boolean {
+    const claim = this.claims.get(id)
+    return claim === undefined || claim.until <= now
+  }
+
   async markPublished(id: string, at: number): Promise<void> {
+    this.claims.delete(id)
     const entry = this.entries.get(id)
     if (!entry || entry.publishedAt !== undefined) return
     entry.publishedAt = at
@@ -94,7 +184,9 @@ export class MemoryOutboxStore implements OutboxStore {
     while (this.published.length > this.retainPublished) this.entries.delete(this.published.shift()!)
   }
 
-  async markFailed(id: string, error: string): Promise<void> {
+  async markFailed(id: string, error: string, options: OutboxMarkFailedOptions = {}): Promise<void> {
+    if (options.retryAt !== undefined) this.claims.set(id, { until: options.retryAt })
+    else this.claims.delete(id)
     const entry = this.entries.get(id)
     if (entry) {
       entry.attempts += 1
@@ -168,6 +260,13 @@ export interface OutboxOptions {
    * can hold a flush (and with it every other tenant's next tick).
    */
   dispatchTimeoutMs?: number | false
+  /**
+   * How long a relay's claim on an entry lasts (stores implementing `claim`).
+   * While claimed no other relay dispatches it; if the relay dies mid-dispatch
+   * the claim expires and another relay takes the entry over (at-least-once).
+   * Must exceed your slowest dispatch. Default 300_000 (5 minutes).
+   */
+  claimLeaseMs?: number
   now?: () => number
 }
 
@@ -206,6 +305,7 @@ export class Outbox {
   private readonly concurrency: number
   private readonly tenantConcurrency: number
   private readonly dispatchTimeoutMs: number | false
+  private readonly claimLeaseMs: number
   /** entryId → epoch-ms before which this process won't retry it (process-local). */
   private readonly retryAt = new Map<string, number>()
   /** Entries whose dispatch is running (including detached ones), by id. */
@@ -225,6 +325,7 @@ export class Outbox {
     this.tenantConcurrency = Math.max(1, Math.floor(options.tenantConcurrency ?? Math.ceil(this.concurrency / 2)))
     this.dispatchTimeoutMs =
       options.dispatchTimeoutMs === false ? false : Math.max(1, options.dispatchTimeoutMs ?? 10_000)
+    this.claimLeaseMs = Math.max(1, options.claimLeaseMs ?? 300_000)
     this.backoff =
       options.backoff === false
         ? false
@@ -242,13 +343,35 @@ export class Outbox {
         ))
   }
 
-  enqueue(event: string, payload: unknown, tenantId?: string): Promise<OutboxEntry> {
-    return this.store.enqueue({
+  /**
+   * Records an event. Pass `{ tx }` to write it inside your transaction, next to
+   * the state change it describes:
+   *
+   *     await prisma.$transaction(async (tx) => {
+   *       await tx.order.update({ where: { id }, data: { status: 'paid' } })
+   *       await outbox.enqueue('order.paid', { id }, { tenantId, tx })
+   *     })
+   *
+   * Accepts `enqueue(event, payload, tenantId?, options?)` or
+   * `enqueue(event, payload, { tenantId?, tx? })`.
+   */
+  enqueue(
+    event: string,
+    payload: unknown,
+    tenantIdOrOptions?: string | OutboxEnqueueOptions,
+    options?: OutboxStoreEnqueueOptions,
+  ): Promise<OutboxEntry> {
+    const merged: OutboxEnqueueOptions =
+      typeof tenantIdOrOptions === 'object' && tenantIdOrOptions !== null
+        ? tenantIdOrOptions
+        : { ...options, ...(tenantIdOrOptions !== undefined ? { tenantId: tenantIdOrOptions } : {}) }
+    const entry = {
       event,
       payload,
       createdAt: this.now(),
-      ...(tenantId !== undefined ? { tenantId } : {}),
-    })
+      ...(merged.tenantId !== undefined ? { tenantId: merged.tenantId } : {}),
+    }
+    return merged.tx !== undefined ? this.store.enqueue(entry, { tx: merged.tx }) : this.store.enqueue(entry)
   }
 
   /**
@@ -265,7 +388,7 @@ export class Outbox {
   }
 
   private async doFlush(dispatch: OutboxDispatch, batchSize: number): Promise<FlushResult> {
-    const batch = await this.select(batchSize)
+    const batch = await this.claimBatch(await this.select(batchSize))
     let published = 0
     let failed = 0
     let detached = 0
@@ -285,12 +408,18 @@ export class Outbox {
       } catch (error) {
         // Read BEFORE markFailed: the memory store mutates the same object.
         const attempts = entry.attempts + 1
-        await this.store.markFailed(entry.id, error instanceof Error ? error.message : String(error))
+        const message = error instanceof Error ? error.message : String(error)
+        const retryAt =
+          attempts < this.maxAttempts && this.backoff ? this.now() + this.retryDelay(attempts) : undefined
+        // With a claiming store the backoff is stored too (the entry stays
+        // claimed until `retryAt`), so no other relay retries it early.
+        if (this.store.claim && retryAt !== undefined) await this.store.markFailed(entry.id, message, { retryAt })
+        else await this.store.markFailed(entry.id, message)
         if (attempts >= this.maxAttempts) {
           this.retryAt.delete(entry.id)
           this.onDead({ ...entry, attempts }, error)
-        } else if (this.backoff) {
-          this.retryAt.set(entry.id, this.now() + this.retryDelay(attempts))
+        } else if (retryAt !== undefined) {
+          this.retryAt.set(entry.id, retryAt)
         }
         return 'failed'
       } finally {
@@ -342,6 +471,23 @@ export class Outbox {
     return { published, failed, ...(detached > 0 ? { detached } : {}) }
   }
 
+  /**
+   * With a claiming store, keeps only the entries this relay won — another
+   * replica may have selected the same rows. Without one, the batch is used as
+   * is (single relay).
+   */
+  private async claimBatch(batch: OutboxEntry[]): Promise<OutboxEntry[]> {
+    if (!this.store.claim || batch.length === 0) return batch
+    const now = this.now()
+    const won = new Set(
+      await this.store.claim(
+        batch.map((entry) => entry.id),
+        { token: randomUUID(), until: now + this.claimLeaseMs, now },
+      ),
+    )
+    return batch.filter((entry) => won.has(entry.id))
+  }
+
   private tenantHasCapacity(key: TenantKey): boolean {
     return (this.tenantInFlight.get(key) ?? 0) < this.tenantConcurrency
   }
@@ -372,7 +518,7 @@ export class Outbox {
     const candidates: OutboxEntry[] = []
     for (let round = 0; round < MAX_SELECTION_ROUNDS; round++) {
       const limit = batchSize + overFetch
-      const filter: OutboxPendingFilter = {}
+      const filter: OutboxPendingFilter = this.store.claim ? { now } : {}
       const ids = [...excluded].filter((key): key is string => key !== null)
       if (ids.length) filter.excludeTenantIds = ids
       if (excluded.has(null)) filter.excludeGlobal = true

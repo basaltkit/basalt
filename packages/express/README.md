@@ -134,6 +134,16 @@ A handler returning `sse(producer)` from `@basaltkit/http` is streamed straight 
 Express response (`res.writeHead(200, SSE_HEADERS)`), with client disconnects relayed to
 `stream.onClose()`. Same handler code as on Fastify and Hono.
 
+### Uploads — `upload()`
+
+`body: upload({ maxBytes, maxFiles, allowedTypes? })` from `@basaltkit/http` gives a
+route a streamed `multipart/form-data` body, with no `multer`. `express.json()` and
+`express.urlencoded()` never read multipart, so the adapter hands the untouched `req`
+stream to the neutral parser after enrichers and guards ran. If you bring your own app,
+don't mount a global multipart middleware in front of upload routes: it would consume the
+stream first, and those requests would fail with `400 MALFORMED_MULTIPART`. See the
+[`@basaltkit/http` README](../http/README.md#file-uploads--upload).
+
 ### Enrichers and guards (authentication, tenancy, …)
 
 Plugins register these functions in the container's metadata "buckets"; the adapter applies them to every route. Real example (from the package's tests) — a tenancy-style enricher and an auth-style guard:

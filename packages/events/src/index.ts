@@ -163,6 +163,10 @@ export {
   type OutboxOptions,
   type MemoryOutboxStoreOptions,
   type OutboxPendingFilter,
+  type OutboxStoreEnqueueOptions,
+  type OutboxEnqueueOptions,
+  type OutboxClaimOptions,
+  type OutboxMarkFailedOptions,
   type OutboxPluginOptions,
   type FlushResult,
 } from './outbox.js'

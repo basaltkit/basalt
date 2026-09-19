@@ -20,7 +20,18 @@ model AuditEntry {
   tenantId  String?
   requestId String?
   at        DateTime
+  // Request context (opt-in: auditPlugin({ requestContext: true })). `ip` is PII.
+  ip        String?
+  userAgent String?
+  // Hash chain (opt-in: auditPlugin({ integrity: 'hash-chain' })). One chain per
+  // tenant plus '@system'; NULL on rows written before integrity was enabled.
+  chain     String?
+  seq       Int?
+  prevHash  String?
+  hash      String?
 
   @@index([tenantId, at])
+  // One writer per (chain, seq): concurrent replicas cannot fork a chain.
+  @@unique([chain, seq])
   @@map("audit_entries")
 }

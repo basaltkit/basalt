@@ -6,7 +6,7 @@
 
 # @basaltkit/search
 
-Full-text search for Basalt: indexes and searches documents **per tenant**, with a typed API and an interchangeable driver — **in-memory** for development/testing and **Meilisearch** for production. You need this module when you want to give users a fast, relevant search box over their data (notes, projects, customers…).
+Full-text search for Basalt: indexes and searches documents **per tenant**, with a typed API and an interchangeable driver — **in-memory** for development/testing and, for production, **Meilisearch** (built in), **Postgres full-text** (`@basaltkit/search-postgres`) or **Elasticsearch / OpenSearch** (`@basaltkit/search-elasticsearch`). You need this module when you want to give users a fast, relevant search box over their data (notes, projects, customers…).
 
 ## What this module solves
 
@@ -14,7 +14,7 @@ Searching well is more than a `WHERE ... LIKE '%text%'`: you need **relevance** 
 
 - **Typed indexes** — declare once which fields are searchable and filterable.
 - **Guaranteed tenant isolation** — every search is scoped to `tenantId`; a result never "leaks" between tenants. Inside a tenant context an explicit `tenantId` must match it (otherwise `SearchTenantMismatchError`, 403), so client input can never widen a query or plant a document elsewhere.
-- **Interchangeable driver** — `MemorySearchDriver` (no services, for dev/test) and `MeilisearchDriver` (production). Your code doesn't change when you switch.
+- **Interchangeable driver** — `MemorySearchDriver` (no services, for dev/test), `MeilisearchDriver` (production, built in), and the separate driver packages `PostgresSearchDriver` and `ElasticsearchDriver`. Your code doesn't change when you switch.
 - **Automatic indexing** — hooks into domain events (created/updated/deleted) and the index keeps itself up to date.
 
 ## Installation
@@ -23,7 +23,7 @@ Searching well is more than a `WHERE ... LIKE '%text%'`: you need **relevance** 
 pnpm add @basaltkit/search
 ```
 
-Depends only on `@basaltkit/core`. `MemorySearchDriver` works with nothing installed; for production, point `MeilisearchDriver` at a Meilisearch server.
+Depends only on `@basaltkit/core`. `MemorySearchDriver` works with nothing installed; for production, point `MeilisearchDriver` at a Meilisearch server, or install one of the driver packages (see [Drivers](#drivers)).
 
 ## Get started in 5 minutes
 
@@ -135,6 +135,29 @@ searchPlugin({
 
 The driver talks directly to Meilisearch's REST API (no SDK). Each document gets a composite primary key (`_pk`), so ids never collide across tenants; and **every search is filtered by `tenantId`**, guaranteeing isolation. `defineIndex(...).filterable` is automatically declared as a filterable attribute in Meilisearch.
 
+## Production with Postgres or Elasticsearch
+
+No separate search service? `@basaltkit/search-postgres` uses Postgres' native full-text search (`tsvector` / `ts_rank`) on the `pg` client you already have:
+
+```ts
+import { PostgresSearchDriver } from '@basaltkit/search-postgres'
+
+searchPlugin({ driver: new PostgresSearchDriver({ client: pgPool }), indexes: [/* … */] })
+```
+
+For large-scale relevance, `@basaltkit/search-elasticsearch` targets the Elasticsearch 8.x / OpenSearch 2.x REST API directly (no SDK):
+
+```ts
+import { ElasticsearchDriver } from '@basaltkit/search-elasticsearch'
+
+searchPlugin({
+  driver: new ElasticsearchDriver({ node: process.env.ES_NODE!, apiKey: process.env.ES_API_KEY }),
+  indexes: [/* … */],
+})
+```
+
+Both keep the same guarantee as the built-in drivers: **every query is constrained to the tenant**.
+
 ## API reference
 
 ### `searchPlugin(options?)`
@@ -165,8 +188,14 @@ Declares an index: `fields` are searchable (full-text), `filterable` are usable 
 
 ### Drivers
 
-- `MemorySearchDriver` — in-process, dev/test.
-- `MeilisearchDriver({ host, apiKey?, fetch? })` — production; `fetch` is injectable for tests.
+| Driver | Package | Use |
+|---|---|---|
+| `MemorySearchDriver` | `@basaltkit/search` | In-process, dev/test. |
+| `MeilisearchDriver({ host, apiKey?, fetch? })` | `@basaltkit/search` | Production; `fetch` is injectable for tests. |
+| `PostgresSearchDriver({ client, table?, language? })` | `@basaltkit/search-postgres` | Production on Postgres full-text (`tsvector`/`ts_rank`, GIN index) — no extra infrastructure. |
+| `ElasticsearchDriver({ node, apiKey? \| username?+password?, indexPrefix?, fetch? })` | `@basaltkit/search-elasticsearch` | Production on Elasticsearch 8.x / OpenSearch 2.x (`multi_match` relevance). |
+
+Any object implementing the `SearchDriver` interface plugs in the same way.
 
 ## How it connects to other modules
 

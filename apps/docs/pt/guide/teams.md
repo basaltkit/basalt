@@ -208,10 +208,20 @@ createApp({
 ```
 
 Um não-membro recebe `403 TEAM_NOT_A_MEMBER`. O guard é saltado quando o pedido
-não tem tenant resolvido nem utilizador (tráfego central/anónimo), e para rotas
-que optam explicitamente por sair com `meta: { central: true }` — login, criação
-de tenant, administração da plataforma, aceitação de convite: rotas que
-legitimamente atuam através de vários tenants ou fora de um único tenant.
+não tem tenant resolvido nem utilizador (tráfego central/anónimo), para
+**rotas de conta** (`meta: { account: true }`) e para rotas que optam
+explicitamente por sair com `meta: { central: true }` — criação de tenant,
+administração da plataforma: rotas que legitimamente atuam através de vários
+tenants ou fora de um único tenant.
+
+As rotas de conta dizem respeito à identidade de quem chama, não aos dados do
+tenant: `authRoutes()`, `mfaRoutes()` e `oauthRoutes()` (`@basaltkit/auth`) e
+`POST /team/invites/accept` declaram `account: true`, por isso um utilizador
+autenticado que (ainda) não é membro consegue entrar, ler `/auth/me` e aceitar
+um convite no subdomínio da empresa, enquanto todas as outras rotas do tenant
+continuam só para membros. `apiKeyRoutes()` **não** é rota de conta — as
+chaves estão ligadas a um tenant. Marca as tuas rotas de perfil com
+`account: true` da mesma forma.
 
 Três comportamentos a conhecer:
 
@@ -354,6 +364,12 @@ const access = new MemoryAccessStore()
 teamsPlugin({ access })
 // teams.addMember('acme', 'u1', 'admin') → access.assignRole('u1', 'admin', 'acme')
 ```
+
+O role é detido **no tenant**, por isso as suas permissões têm de se resolver
+lá também. Define uma vez o que `owner`/`admin`/`member` podem fazer com
+`permissionsPlugin({ roleCatalog })` (ou `inheritGlobalRolePermissions`) em vez
+de conceder o catálogo em cada tenant — vê
+[Um catálogo de roles para todos os tenants](/pt/guide/authorization#um-catalogo-de-roles-para-todos-os-tenants).
 
 ## Referência de opções
 

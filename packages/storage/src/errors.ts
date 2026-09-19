@@ -62,6 +62,28 @@ export class TemporaryUrlUnsupportedError extends BasaltError {
   }
 }
 
+export class TemporaryUploadUrlUnsupportedError extends BasaltError {
+  constructor(driver: string, detail?: string) {
+    super(
+      'STORAGE_UPLOAD_URL_UNSUPPORTED',
+      detail ??
+        `The "${driver}" driver does not support pre-signed upload URLs. Use an S3, Azure or GCS disk, or upload through the server with disk.put().`,
+    )
+  }
+}
+
+/**
+ * The options passed to `temporaryUploadUrl` cannot be signed safely: missing
+ * or malformed content type, a non-integer length, a malformed checksum, or a
+ * `maxBytes` cap without a declared `contentLength`. 400: the caller chose them.
+ */
+export class StorageUploadUrlInvalidError extends BasaltError {
+  readonly status = 400
+  constructor(reason: string) {
+    super('STORAGE_UPLOAD_URL_INVALID', `Invalid pre-signed upload request: ${reason}`)
+  }
+}
+
 export class ImageProcessingUnavailableError extends BasaltError {
   constructor(
     detail = 'No image processor configured. Install @basaltkit/image-sharp and pass it to storagePlugin({ imageProcessor }).',

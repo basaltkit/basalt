@@ -1,6 +1,13 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
 import type { HttpRequest, RequestEnricher, RouteGuard } from '@basaltkit/http'
-import { Auth, AuthRequiredError, type AuthOptions } from './auth.js'
+import {
+  Auth,
+  AuthRequiredError,
+  isAmr,
+  MfaEnrollmentRequiredError,
+  MfaStepUpRequiredError,
+  type AuthOptions,
+} from './auth.js'
 import { publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'
 
@@ -8,6 +15,12 @@ declare module '@basaltkit/core' {
   interface RequestContext {
     /** The authenticated user of the current request, set by auth. */
     user?: PublicUser
+    /**
+     * Authentication methods of the current credential (`pwd`, `fed`, `mfa`),
+     * from the access token's `amr` claim or the session. Absent for API keys
+     * and for tokens / sessions issued without it.
+     */
+    amr?: string[]
   }
   interface BasaltHooks {
     'auth:registered': { user: PublicUser }
@@ -74,6 +87,22 @@ export interface AuthPluginOptions extends Omit<AuthOptions, 'hooks'> {
    * are not ambient and are not affected. `false` disables the check.
    */
   csrf?: CsrfOptions | false
+  /**
+   * Require multi-factor authentication. `true` for every user, or a policy
+   * `(user, context) => boolean | Promise<boolean>` (e.g. only admins, only
+   * some tenants). An authenticated request whose credential was not obtained
+   * with a second factor (`ctx().amr` lacks `mfa`) is refused with 403
+   * `AUTH_MFA_ENROLLMENT_REQUIRED` (the account has no MFA yet — enrol, then
+   * sign in again) or `AUTH_MFA_REQUIRED` (sign in again with a code).
+   *
+   * Routes declaring `meta.mfa: false` are exempt — every `authRoutes()` route
+   * and the enrol / activate / status routes of `mfaRoutes()`, so a user can
+   * still sign in, read `/auth/me`, enrol and log out. API-key requests are not
+   * subject to the policy (a key is a machine credential; minting one needs an
+   * MFA session under the policy). Independently of the policy, `meta.mfa: true`
+   * requires MFA on a single route (step-up). Default: off.
+   */
+  requireMfa?: boolean | ((user: PublicUser, context: RequestContext) => boolean | Promise<boolean>)
 }
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -113,8 +142,14 @@ function sameOriginRequest(request: HttpRequest, trusted: ReadonlySet<string>): 
 /** Requests whose session cookie was ignored by the CSRF check. */
 const csrfRejected = new WeakSet<RequestContext>()
 
+/**
+ * Whether the request's session cookie failed the CSRF check (so it must not
+ * be acted upon — e.g. by `POST /auth/logout`). Internal to the package.
+ */
+export const isCsrfRejected = (context: RequestContext): boolean => csrfRejected.has(context)
+
 export function authPlugin(pluginOptions: AuthPluginOptions) {
-  const { csrf, ...options } = pluginOptions
+  const { csrf, requireMfa, ...options } = pluginOptions
   const trustedOrigins = new Set(
     (csrf ? (csrf.trustedOrigins ?? []) : []).map((o) => originOf(o)).filter((o): o is string => o !== null),
   )
@@ -130,6 +165,15 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
       const enricher: RequestEnricher = async ({ request, context, container: c }) => {
         const auth = c.get(AUTH)
 
+        // Evaluate the ambient cookie's CSRF standing up front, whatever other
+        // credential the request carries, so routes that act on the cookie
+        // itself (logout) can refuse a cross-site one.
+        const cookie = request.headers.cookie
+        const cookieSessionId = typeof cookie === 'string' ? auth.sessionIdFromCookie(cookie) : null
+        if (cookieSessionId && csrf !== false && !sameOriginRequest(request, trustedOrigins)) {
+          csrfRejected.add(context)
+        }
+
         const header = request.headers.authorization
         const bearer =
           typeof header === 'string' && header.startsWith('Bearer ')
@@ -139,28 +183,29 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
         if (bearer && !bearer.startsWith('mk_')) {
           const claims = await auth.verifyAccessToken(bearer)
           const user = await auth.users.findById(claims.sub)
-          if (user) context.user = publicUser(user)
+          if (user) {
+            context.user = publicUser(user)
+            if (isAmr(claims.amr)) context.amr = claims.amr
+          }
           return
         }
 
         const sessionId = request.headers['x-session-id']
         if (typeof sessionId === 'string') {
-          const user = await auth.sessionUser(sessionId)
-          if (user) context.user = publicUser(user)
+          const session = await auth.sessionAuth(sessionId)
+          if (session) {
+            context.user = publicUser(session.user)
+            if (session.amr) context.amr = session.amr
+          }
           return
         }
 
-        const cookie = request.headers.cookie
-        if (typeof cookie === 'string') {
-          const cookieSessionId = auth.sessionIdFromCookie(cookie)
-          if (cookieSessionId && csrf !== false && !sameOriginRequest(request, trustedOrigins)) {
-            // Ambient credential on a cross-origin state change: do not use it.
-            csrfRejected.add(context)
-            return
-          }
-          if (cookieSessionId) {
-            const user = await auth.sessionUser(cookieSessionId)
-            if (user) context.user = publicUser(user)
+        // Ambient credential on a cross-origin state change: do not use it.
+        if (cookieSessionId && !csrfRejected.has(context)) {
+          const session = await auth.sessionAuth(cookieSessionId)
+          if (session) {
+            context.user = publicUser(session.user)
+            if (session.amr) context.amr = session.amr
           }
         }
       }
@@ -176,6 +221,24 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
       // Claim `meta.auth` so the adapters' boot check knows this key is
       // enforced (routes declaring it without this plugin fail loud at boot).
       metadata.add('http:guarded-meta', 'auth')
+      metadata.add('http:guarded-meta', 'mfa')
+
+      // Guard: MFA by policy (`requireMfa`) or per route (`meta.mfa: true`).
+      const mfaGuard: RouteGuard = async ({ route, context, container: c }) => {
+        const declared = route.meta?.['mfa']
+        if (declared === false) return
+        const user = context.user
+        if (!user) return
+        let required = declared === true
+        if (!required && requireMfa !== undefined && requireMfa !== false) {
+          // A machine credential: the policy is about interactive sign-ins.
+          if ((context as { apiKey?: unknown }).apiKey !== undefined) return
+          required = requireMfa === true ? true : (await requireMfa(user, context)) === true
+        }
+        if (!required || context.amr?.includes('mfa')) return
+        throw (await c.get(AUTH).isMfaEnabled(user.id)) ? new MfaStepUpRequiredError() : new MfaEnrollmentRequiredError()
+      }
+      metadata.add('http:guards', mfaGuard)
     },
   })
 }

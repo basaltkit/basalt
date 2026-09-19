@@ -111,6 +111,17 @@ intervalo incluído e imprime uma `Note:`. Se o registry não estiver acessível
 usados os intervalos incluídos com uma única linha `Warning:`; o scaffold nunca
 falha por causa disso. `--offline` salta a consulta.
 
+Um `latest` de terceiros publicado **dentro da janela de idade mínima do pnpm**
+(`minimumReleaseAge` — o pnpm 11 define-a por omissão como um dia) também mantém o
+intervalo incluído: `^<latest>` de uma versão publicada há uma hora não pode ser
+instalado sob essa política, ao passo que o intervalo incluído deixa o pnpm
+escolher ele próprio a versão *madura* mais recente. A idade vem de um
+`HEAD <registry>/<name>` barato por pacote de terceiros (o seu `last-modified`);
+quando não é possível prová-la, o intervalo incluído é mantido e uma `Note:`
+indica-o. A janela segue `pnpm_config_minimum_release_age` /
+`npm_config_minimum_release_age` quando definidas. Os `@basaltkit/*` nunca são
+verificados — o `pnpm-workspace.yaml` gerado exclui o scope da política.
+
 ::: warning Aviso: `--ui` requer pnpm
 O frontend `web/` é membro de um workspace pnpm (`pnpm-workspace.yaml`), que o
 npm, yarn e bun não conseguem instalar nem correr. Pede `--ui` com outro gestor
@@ -131,7 +142,7 @@ mudam o que está lá dentro:
 | `src/dev.ts` | A entrada do `pnpm dev`: define `NODE_ENV=development` se ainda não estiver definido e carrega o `server.ts` |
 | `tests/app.test.ts` | Um smoke test que arranca a app e chama `/` e `/health` |
 | `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — um `NODE_ENV` não definido conta como produção), `test`, `typecheck` — mais `basalt` com `--cli`. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
-| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem) |
+| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` e o README avisam da [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
 | `bin/basalt.ts` | Com `--cli`: o ponto de entrada da CLI que liga os geradores e o `prisma:sync` |
 | `.mcp.json` | Com `--mcp`: regista a ponte `basalt-ai-mcp`, **só de desenvolvimento**, para clientes MCP |
 | `web/…` | Com `--ui`: o frontend React + shadcn, membro do workspace pnpm |
@@ -146,6 +157,57 @@ pnpm test
 ```
 
 Para uma execução guiada ponta-a-ponta, vê [Começar](/pt/guide/getting-started).
+
+### O `--env-file` nunca sobrepõe variáveis exportadas
+
+O `src/env.ts` valida o `process.env` e mais nada — o scaffold não carrega o
+`.env` por ti. Quando arrancas com `node --env-file=.env` (ou
+`tsx --env-file=.env`), o Node **só preenche as variáveis que ainda não estão
+definidas**: um valor exportado na tua shell ganha sempre. Com nomes genéricos
+isto morde em silêncio — num terminal onde outro projeto exportou `DATABASE_URL`
+ou `PORT`, a app arranca contra *essa* base de dados ou porta e só falha no
+primeiro pedido que lhe toca.
+
+- Dá aos nomes genéricos um **prefixo próprio da app** — `MY_SAAS_DATABASE_URL`,
+  não `DATABASE_URL` (o `.env.example` sugere um derivado do nome do projeto).
+- Na dúvida, `env | grep DATABASE_URL` antes do `pnpm dev`, ou arranca com o
+  ambiente limpo: `env -u DATABASE_URL pnpm dev`.
+- Quando ligares uma base de dados, regista o seu alvo no arranque (host e nome
+  da base de dados, nunca a password), para que um alvo errado apareça logo na
+  primeira linha do output.
+
+### pnpm 11: idade mínima e `verifyDepsBeforeRun`
+
+Dois comportamentos do pnpm 11 moldam o `pnpm-workspace.yaml` gerado:
+
+- **O `minimumReleaseAgeExclude` é avaliado pelo primeiro que corresponde ao nome
+  do pacote.** Duas entradas para o mesmo pacote (`'@types/node@22.20.4'` e
+  `'@types/node@26.6.2'`) não se somam — só a primeira se aplica. Exclui várias
+  versões de um pacote com uma única entrada em união, como mostra o comentário
+  gerado:
+
+  ```yaml
+  minimumReleaseAgeExclude:
+    - '@basaltkit/*'
+    - '@types/node@22.20.4 || 26.6.2'
+  ```
+
+- **O `verifyDepsBeforeRun` é `install` por omissão.** Antes de cada
+  `pnpm <script>` *e* `pnpm exec`, o pnpm verifica se o `node_modules` corresponde
+  aos manifestos de todos os projetos do workspace (incluindo o `web/` com
+  `--ui`); se não corresponder, corre primeiro `pnpm install` — rede e
+  verificações de supply chain incluídas. Por isso `pnpm basalt make:resource …`
+  é na prática `pnpm install && basalt …` logo a seguir a qualquer alteração de
+  dependências. Duas saídas conscientes:
+
+  ```bash
+  node_modules/.bin/tsx bin/basalt.ts make:resource Project   # sem pnpm, sem verificação prévia
+  ```
+
+  ou descomenta `verifyDepsBeforeRun: warn` no `pnpm-workspace.yaml` — o pnpm
+  passa a só avisar, e correr `pnpm install` depois de alterar dependências fica
+  a teu cargo. O scaffold mantém a predefinição do pnpm e o script `basalt` como
+  `tsx bin/basalt.ts`.
 
 ## Escolher um adaptador HTTP
 
@@ -280,6 +342,12 @@ vê [Filas e jobs](/pt/guide/queues).
   que ainda use `fastifyPlugin({ routes: [...] })`. Acrescenta tu o plugin
   gerado a `plugins` e as rotas ao adaptador; de resto os ficheiros gerados
   estão completos.
+- **A app liga-se à base de dados / porta errada** — uma variável exportada na
+  tua shell ganha ao `--env-file`. Vê
+  [O `--env-file` nunca sobrepõe variáveis exportadas](#o-env-file-nunca-sobrepoe-variaveis-exportadas).
+- **O `pnpm basalt …` começa com um `pnpm install`** (ou falha offline) — é o
+  `verifyDepsBeforeRun` do pnpm 11. Vê
+  [pnpm 11: idade mínima e `verifyDepsBeforeRun`](#pnpm-11-idade-minima-e-verifydepsbeforerun).
 - **`ERR_UNKNOWN_BUILTIN_MODULE: node:sqlite`, ou o `--experimental-strip-types`
   é recusado** — estás num Node anterior ao 22.5 / 22.6. Atualiza o Node, ou
   instala o `tsx` (que o scaffold já instala).

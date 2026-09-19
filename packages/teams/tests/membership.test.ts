@@ -52,6 +52,17 @@ describe('tenantMembershipPlugin (F1 — user↔tenant binding)', () => {
     await app.shutdown()
   })
 
+  it('lets a non-member through account routes (meta.account = true) only', async () => {
+    const { app, run } = await harness()
+    await expect(
+      run({ tenant: { id: 'acme' }, user: { id: 'outsider' } }, { account: true }),
+    ).resolves.toBeDefined()
+    await expect(
+      run({ tenant: { id: 'acme' }, user: { id: 'outsider' } }, { account: 'yes' }),
+    ).rejects.toBeInstanceOf(NotATeamMemberError)
+    await app.shutdown()
+  })
+
   it('skips when no tenant is resolved (central/platform route)', async () => {
     const { app, run } = await harness()
     await expect(run({ user: { id: 'outsider' } })).resolves.toBeDefined()

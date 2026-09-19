@@ -88,7 +88,7 @@ describe('scaffold: tenant membership is enforced by default (tenancy + auth)', 
 
       const victim = await server.inject({
         method: 'GET',
-        url: '/auth/me',
+        url: '/',
         headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'victim' },
       })
       expect(victim.statusCode).toBe(403)
@@ -96,7 +96,7 @@ describe('scaffold: tenant membership is enforced by default (tenancy + auth)', 
       // Variant: the subdomain resolver must be bound by the same guard.
       const viaHost = await server.inject({
         method: 'GET',
-        url: '/auth/me',
+        url: '/',
         headers: { authorization: `Bearer ${token}`, host: 'victim.localhost' },
       })
       expect(viaHost.statusCode).toBe(403)
@@ -104,10 +104,19 @@ describe('scaffold: tenant membership is enforced by default (tenancy + auth)', 
       // The dev-only demo seed lets a fresh registrant use the demo tenant.
       const demo = await server.inject({
         method: 'GET',
-        url: '/auth/me',
+        url: '/',
         headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'demo' },
       })
       expect(demo.statusCode).toBe(200)
+
+      // Account routes are about the caller, not tenant data: a non-member can
+      // still read their own profile (BK-014), while tenant routes stay 403.
+      const ownProfile = await server.inject({
+        method: 'GET',
+        url: '/auth/me',
+        headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'victim' },
+      })
+      expect(ownProfile.statusCode).toBe(200)
     } finally {
       await app.shutdown()
     }

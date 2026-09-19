@@ -105,7 +105,9 @@ a real `APP_SECRET` of at least 32 characters (`openssl rand -base64 48`).
 `defineEnv` reads `process.env` and nothing else — copying the file does not
 make its values visible. Export the variables, launch with
 `node --env-file=.env` (Node 22+), or let your process manager inject them.
-See [Configuration](/guide/config).
+See [Configuration](/guide/config). `--env-file` never overrides a variable
+already exported in your shell — prefer app-prefixed names; see
+[the precedence pitfall](/guide/installation#env-file-never-overrides-exported-variables).
 :::
 
 ### 3. Run

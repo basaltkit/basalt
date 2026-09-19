@@ -9,6 +9,17 @@
  *   templates are written for (the major of the fallback range in
  *   {@link THIRD_PARTY_VERSIONS}). A new breaking major keeps the fallback range
  *   and is reported as a notice, so it can never silently produce a broken app.
+ * - Third-party packages also respect pnpm's `minimumReleaseAge` (pnpm 11
+ *   defaults it to one day): `^<latest>` for a version published minutes ago is
+ *   UNSATISFIABLE under that policy, so the first `pnpm install` would fail. A
+ *   cheap `HEAD <registry>/<name>` reads the packument's `last-modified` (which
+ *   is never older than the latest publish): older than the window proves the
+ *   latest mature and `^<latest>` is written; newer — or no header / a failed
+ *   probe — keeps the fallback range, from which pnpm picks the newest MATURE
+ *   version itself. The full packument (the only per-version `time` source) is
+ *   megabytes for packages like `@types/node`, so it is never fetched; a
+ *   false "fresh" only costs a lower range floor. `@basaltkit/*` is never
+ *   probed: the scaffolded pnpm-workspace.yaml excludes that scope.
  * - Any registry failure (offline, timeout, non-2xx, malformed JSON, a bogus
  *   version string) keeps the embedded fallback range. The registry never fails
  *   a scaffold.
@@ -38,6 +49,9 @@ export const THIRD_PARTY_VERSIONS: Readonly<Record<string, string>> = {
 }
 
 export const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
+/** pnpm 11's default `minimumReleaseAge`, in minutes (one day). */
+export const DEFAULT_MINIMUM_RELEASE_AGE_MINUTES = 1440
+const ABBREVIATED_METADATA = 'application/vnd.npm.install-v1+json'
 const PER_REQUEST_TIMEOUT_MS = 5_000
 const OVERALL_TIMEOUT_MS = 15_000
 /**
@@ -69,6 +83,16 @@ export interface HeldBackVersion {
   range: string
 }
 
+export interface FreshVersion {
+  name: string
+  /** The registry's latest version (same major, but possibly inside the release-age window). */
+  latest: string
+  /** The range kept instead. */
+  range: string
+  /** `recent`: published inside the window; `unknown`: its age could not be proven. */
+  reason: 'recent' | 'unknown'
+}
+
 export interface VersionResolution {
   /** Final range per package name (resolved or fallback). */
   versions: Record<string, string>
@@ -78,6 +102,11 @@ export interface VersionResolution {
   failed: string[]
   /** Third-party packages whose latest is a new major — fallback kept. */
   heldBack: HeldBackVersion[]
+  /**
+   * Third-party packages whose latest may be younger than the release-age
+   * window (pnpm `minimumReleaseAge`) — fallback kept so installs stay possible.
+   */
+  tooFresh: FreshVersion[]
   /** Registry actually queried. */
   registry: string
 }
@@ -93,6 +122,28 @@ export interface ResolveLatestOptions {
   overallTimeoutMs?: number
   /** Requests in flight at once. Default 8. */
   concurrency?: number
+  /**
+   * Release-age window in minutes (pnpm `minimumReleaseAge`): a third-party
+   * latest not provably older than this keeps its fallback range. Default:
+   * `pnpm_config_minimum_release_age` / `npm_config_minimum_release_age`, else
+   * 1440 (pnpm 11's default). `0` disables the check (no probe requests).
+   */
+  minimumReleaseAge?: number
+  /** Clock used when the registry sends no `Date` header (tests). Default: Date.now. */
+  now?: () => number
+}
+
+/**
+ * The release-age window in minutes: an explicit option, else the pnpm/npm
+ * config env var (a `pnpm create` exports its config), else pnpm 11's default.
+ */
+export function minimumReleaseAgeMinutes(explicit?: number, env: NodeJS.ProcessEnv = process.env): number {
+  if (explicit !== undefined && Number.isFinite(explicit) && explicit >= 0) return explicit
+  for (const key of ['pnpm_config_minimum_release_age', 'npm_config_minimum_release_age']) {
+    const raw = env[key]
+    if (raw !== undefined && /^\d+$/.test(raw.trim())) return Number(raw.trim())
+  }
+  return DEFAULT_MINIMUM_RELEASE_AGE_MINUTES
 }
 
 /**
@@ -118,6 +169,41 @@ export function registryUrl(explicit?: string, env: NodeJS.ProcessEnv = process.
 /** `<registry>/<name>/latest`, with a scoped name's `/` encoded as `%2f`. */
 export const latestUrl = (registry: string, name: string): string =>
   `${registry}/${name.replaceAll('/', '%2f')}/latest`
+
+/** `<registry>/<name>` — the packument (probed with HEAD for its `last-modified`). */
+export const packumentUrl = (registry: string, name: string): string =>
+  `${registry}/${name.replaceAll('/', '%2f')}`
+
+/**
+ * Whether `name`'s latest is provably older than `windowMs`. A packument's
+ * `last-modified` is never older than its latest publish, so an old header
+ * proves maturity. Age is measured against the registry's own `Date` header
+ * when present (immune to local clock skew). Never throws.
+ */
+async function probeAge(
+  fetchImpl: typeof globalThis.fetch,
+  registry: string,
+  name: string,
+  windowMs: number,
+  now: () => number,
+  signal: AbortSignal,
+): Promise<'mature' | 'recent' | 'unknown'> {
+  try {
+    const response = await fetchImpl(packumentUrl(registry, name), {
+      method: 'HEAD',
+      headers: { accept: ABBREVIATED_METADATA },
+      signal,
+    })
+    if (!response.ok) return 'unknown'
+    const modified = Date.parse(response.headers.get('last-modified') ?? '')
+    if (Number.isNaN(modified)) return 'unknown'
+    const serverNow = Date.parse(response.headers.get('date') ?? '')
+    const reference = Number.isNaN(serverNow) ? now() : serverNow
+    return reference - modified >= windowMs ? 'mature' : 'recent'
+  } catch {
+    return 'unknown'
+  }
+}
 
 /** Outcome of one registry lookup: a version, a definitive miss, or a transient failure. */
 type Lookup = { version: string } | 'miss' | 'transient'
@@ -185,27 +271,46 @@ export async function resolveLatestVersions(
   const resolved: string[] = []
   const failed: string[] = []
   const heldBack: HeldBackVersion[] = []
+  const tooFresh: FreshVersion[] = []
   const names = Object.keys(fallbacks).sort()
+  const windowMs = minimumReleaseAgeMinutes(options.minimumReleaseAge) * 60_000
+  const now = options.now ?? Date.now
+  const timeoutMs = options.timeoutMs ?? PER_REQUEST_TIMEOUT_MS
 
   if (typeof fetchImpl !== 'function') {
-    return { versions, resolved, failed: names, heldBack, registry }
+    return { versions, resolved, failed: names, heldBack, tooFresh, registry }
+  }
+
+  /** A third-party latest on the template-compatible major (else undefined). */
+  const compatible = (name: string, version: string): boolean => {
+    if (alwaysLatest(name)) return true
+    const major = compatibleMajor(fallbacks[name] as string)
+    return major !== undefined && Number(version.split('.')[0]) === major
   }
 
   const overall = new AbortController()
   const cap = setTimeout(() => overall.abort(), options.overallTimeoutMs ?? OVERALL_TIMEOUT_MS)
   try {
     const latest: (string | undefined)[] = []
+    const age: ('mature' | 'recent' | 'unknown')[] = []
     let next = 0
     const worker = async (): Promise<void> => {
       while (next < names.length) {
         const i = next++
-        latest[i] = await fetchLatest(
-          fetchImpl,
-          registry,
-          names[i] as string,
-          options.timeoutMs ?? PER_REQUEST_TIMEOUT_MS,
-          overall.signal,
-        )
+        const name = names[i] as string
+        const version = await fetchLatest(fetchImpl, registry, name, timeoutMs, overall.signal)
+        latest[i] = version
+        age[i] =
+          version === undefined || alwaysLatest(name) || windowMs === 0 || !compatible(name, version)
+            ? 'mature'
+            : await probeAge(
+                fetchImpl,
+                registry,
+                name,
+                windowMs,
+                now,
+                AbortSignal.any([AbortSignal.timeout(timeoutMs), overall.signal]),
+              )
       }
     }
     const pool = Math.max(1, Math.min(options.concurrency ?? CONCURRENCY, names.length))
@@ -217,12 +322,14 @@ export async function resolveLatestVersions(
         failed.push(name)
         return
       }
-      if (!alwaysLatest(name)) {
-        const major = compatibleMajor(fallback)
-        if (major === undefined || Number(version.split('.')[0]) !== major) {
-          heldBack.push({ name, latest: version, range: fallback })
-          return
-        }
+      if (!compatible(name, version)) {
+        heldBack.push({ name, latest: version, range: fallback })
+        return
+      }
+      const verdict = age[i]
+      if (verdict === 'recent' || verdict === 'unknown') {
+        tooFresh.push({ name, latest: version, range: fallback, reason: verdict })
+        return
       }
       versions[name] = `^${version}`
       resolved.push(name)
@@ -230,7 +337,7 @@ export async function resolveLatestVersions(
   } finally {
     clearTimeout(cap)
   }
-  return { versions, resolved, failed, heldBack, registry }
+  return { versions, resolved, failed, heldBack, tooFresh, registry }
 }
 
 /**
@@ -272,6 +379,18 @@ export function describeResolution(resolution: VersionResolution): string[] {
   for (const held of resolution.heldBack) {
     lines.push(
       `Note: ${held.name} ${held.latest} is a new major this template does not target yet — kept ${held.range}.`,
+    )
+  }
+  const recent = resolution.tooFresh.filter((entry) => entry.reason === 'recent')
+  const unknown = resolution.tooFresh.filter((entry) => entry.reason === 'unknown')
+  for (const fresh of recent) {
+    lines.push(
+      `Note: ${fresh.name} ${fresh.latest} was published inside pnpm's minimumReleaseAge window — kept ${fresh.range} (pnpm installs the newest mature version).`,
+    )
+  }
+  if (unknown.length > 0) {
+    lines.push(
+      `Note: could not prove the release age of ${unknown.map((entry) => `${entry.name}@${entry.latest}`).join(', ')} — kept the bundled range(s) so minimumReleaseAge cannot block the install.`,
     )
   }
   if (resolution.failed.length > 0) {

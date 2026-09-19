@@ -317,6 +317,19 @@ This keeps seven full backups, seven central backups and seven backups for each
 tenant target independently. Failed runs do not consume the retention count.
 Leave `retention` undefined to disable cleanup.
 
+::: warning Backups are not immutable by default
+Artifacts and manifests are plain `disk.put()` writes, manifests are rewritten
+as a run progresses, and `retention` deletes old pairs — anyone with the disk's
+write credentials can overwrite or delete a backup. Immutability is the
+storage's job, so it is your application's (or platform's) responsibility: on
+S3 or a compatible service, enable **bucket versioning + S3 Object Lock** with a
+default retention (compliance mode for a hard guarantee) covering your recovery
+window, and use a dedicated bucket and credentials without
+`s3:DeleteObjectVersion`. With versioning on, `retention` cleanup only adds
+delete markers; locked versions stay recoverable until their retention expires.
+Local disks give no such guarantee.
+:::
+
 Restoration is explicit and guarded:
 
 ```ts

@@ -41,6 +41,19 @@ const app = await createApp({
 handle with the other `*-sqlite` stores. `openAuditDatabase()` and `migrate()`
 are exported too.
 
+## Verifiable trail and request context
+
+The store supports everything `@basaltkit/audit` can record:
+
+```ts
+auditPlugin({ store: a.store, integrity: 'hash-chain', requestContext: true })
+```
+
+- **Hash chain** — `seq`, `prev_hash`, `hash` and a `chain` key (`'t:<tenantId>'` or `'@system'`) are stored per row, with a **unique index on `(chain, seq)`**: two processes appending to the same file cannot fork a chain — the loser gets `AuditChainConflictError` and `Audit` retries on the new head. `audit.verify()` / `basalt audit:verify` read the chain back in `seq` order.
+- **Request context** — `ip` and `user_agent` columns.
+- **Automatic migration** — `migrate()` (run by `openAuditDatabase()` / `sqliteAuditStore()`) adds the new columns and the index to an existing database with `ALTER TABLE`. Rows written before keep NULLs and are reported by `verify()` as *unchained*, never as broken.
+- SQLite has no roles to `REVOKE UPDATE, DELETE` from: protect the database file with filesystem permissions (only the app user can write it) and back it up; for a keyed chain see `integrity: { mode: 'hash-chain', key }` in the [`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#verifiable-trail-hash-chain).
+
 ## Notes
 
 - **Append-only by contract** — one `audit_entries` table, no update or delete.

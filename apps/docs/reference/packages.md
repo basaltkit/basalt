@@ -26,13 +26,13 @@ works on its own; together they form the framework. Each package is versioned in
 
 | Package | Purpose |
 |---|---|
-| `@basaltkit/prisma` | Tenant-scoping client extension, per-tenant LRU client pool, `ctx().db` |
+| `@basaltkit/prisma` | Tenant-scoping client extension, per-tenant LRU client pool, `db<T>()` context accessor |
 | `@basaltkit/cache` | Redis/Memory drivers, tags, TTL, stampede protection, per-tenant keys |
 | `@basaltkit/cache-tiered` | Multi-level cache driver — in-process near cache in front of Redis |
 | `@basaltkit/storage` | Local/S3/MinIO under one contract, tenant isolation, signed URLs |
 | `@basaltkit/storage-gcs` · `@basaltkit/storage-azure` | Google Cloud Storage & Azure Blob drivers |
 | `@basaltkit/mailer` | Typed declarative mails, SMTP/log/memory drivers, tenant sender |
-| `@basaltkit/scheduler` | Fluent cron: `schedule.job(X).daily().at('03:00')` |
+| `@basaltkit/scheduler` | Fluent cron: `schedule.job(X).daily().at('03:00')`; `defineReconciler` re-dispatches stuck work |
 
 ## Queues
 
@@ -61,7 +61,7 @@ works on its own; together they form the framework. Each package is versioned in
 | `@basaltkit/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@basaltkit/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
 | `@basaltkit/webhooks-sqlite` · `@basaltkit/webhooks-prisma` | Durable backends for the `@basaltkit/webhooks` WebhookStore — persist endpoint subscriptions across restarts; SQLite (zero-dep) and Prisma (Postgres/MySQL) |
-| `@basaltkit/audit` · `@basaltkit/activity` · `@basaltkit/notifications` | Audit trail, activity feed, multi-channel notifications |
+| `@basaltkit/audit` · `@basaltkit/activity` · `@basaltkit/notifications` | Audit trail (optional hash chain + `audit:verify`), activity feed, multi-channel notifications |
 | `@basaltkit/comments-sqlite` · `@basaltkit/comments-prisma` | Durable backends for the `@basaltkit/comments` CommentStore |
 | `@basaltkit/audit-sqlite` · `@basaltkit/audit-prisma` · `@basaltkit/activity-sqlite` · `@basaltkit/activity-prisma` · `@basaltkit/notifications-sqlite` · `@basaltkit/notifications-prisma` | Durable SQLite/Prisma backends for the audit, activity and in-app notification stores |
 
@@ -71,8 +71,9 @@ works on its own; together they form the framework. Each package is versioned in
 |---|---|
 | `@basaltkit/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
 | `@basaltkit/realtime-client` | Zero-dep browser client for `@basaltkit/realtime` — subscribe channels, auto-reconnect |
-| `@basaltkit/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch drivers, auto-sync from events |
+| `@basaltkit/search` | Tenant-scoped full-text search — in-memory (dev) & Meilisearch drivers built in, Postgres/Elasticsearch driver packages, auto-sync from events |
 | `@basaltkit/search-postgres` | PostgreSQL full-text driver (`tsvector`/`ts_rank`) for `@basaltkit/search` |
+| `@basaltkit/search-elasticsearch` | Elasticsearch / OpenSearch driver (`multi_match` relevance) for `@basaltkit/search` |
 | `@basaltkit/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, scan hooks |
 | `@basaltkit/comments` | Per-resource comment threads — @mentions, resolve/reopen, events for realtime & notifications |
 | `@basaltkit/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting |

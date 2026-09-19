@@ -1,4 +1,5 @@
 import { BasaltError, tryCtx } from '@basaltkit/core'
+import { DEFAULT_TENANT_SETTING, setTenantConfigSql, tenantConfigParams } from './rls.js'
 
 export class MissingTenantError extends BasaltError {
   constructor() {
@@ -354,6 +355,35 @@ export interface TenancyExtensionOptions {
    * @security Defaults to 'error'. Do not set 'allow' globally.
    */
   onRawInTenant?: 'allow' | 'error'
+  /**
+   * Postgres Row-Level Security, applied automatically. With `rls` on, every
+   * model operation in tenant scope runs as a batch transaction whose first
+   * statement is `set_config('<setting>', <tenantId>, true)` — so the policies
+   * installed by `rlsPolicySql` filter the rows in the database too, even for
+   * a query the application layer cannot scope (an `include` that follows a
+   * cross-tenant foreign key, for example).
+   *
+   * Costs: one extra statement per operation (same round-trip batch), and
+   * every tenant-scoped operation becomes a (short) transaction. Operations
+   * already inside a transaction are NOT wrapped again — open interactive
+   * transactions with {@link tenantTransaction}, and lead a batch
+   * `$transaction([...])` with the `set_config` statement yourself.
+   *
+   * `true` uses the default setting `app.tenant_id`.
+   */
+  rls?: boolean | RlsExtensionOptions
+}
+
+export interface RlsExtensionOptions {
+  /** Postgres setting (GUC) the RLS policies read. Default: 'app.tenant_id'. */
+  setting?: string
+}
+
+/** Minimal shape of the Prisma client this module drives (no @prisma/client import). */
+interface RawCapableClient {
+  $executeRawUnsafe(query: string, ...values: unknown[]): PromiseLike<unknown>
+  $transaction(arg: unknown, options?: unknown): Promise<unknown>
+  $extends(extension: unknown): unknown
 }
 
 const defaultTenantId = (): string | undefined => {
@@ -374,33 +404,143 @@ const defaultTenantId = (): string | undefined => {
  * the tenant — use composite foreign keys `(tenantId, id)` and/or RLS
  * (`rlsPolicySql`) as the database-level guarantee.
  */
-export function tenancyExtension(options: TenancyExtensionOptions = {}) {
+/**
+ * `true` when a raw call is exactly the statement that sets the RLS tenant
+ * setting to the tenant ALREADY in scope (`setTenantConfigSql()` with
+ * `tenantConfigParams(tenantId, setting)`). It reads no rows and grants
+ * nothing the scoping does not already enforce, so the raw guard lets it
+ * through — it is how a transaction you open yourself tells Postgres which
+ * tenant is active.
+ */
+function isOwnTenantConfig(operation: string, args: unknown, tenantId: string, setting: string): boolean {
+  if (operation !== '$executeRawUnsafe' && operation !== '$queryRawUnsafe') return false
+  if (!Array.isArray(args) || args.length !== 3) return false
+  const [sql, name, value] = args as unknown[]
+  return (
+    typeof sql === 'string' &&
+    sql.trim().toLowerCase() === setTenantConfigSql() &&
+    name === setting &&
+    value === tenantId
+  )
+}
+
+/** The transaction a Prisma query callback runs in, if any (`__internalParams.transaction`). */
+function transactionOf(params: { __internalParams?: unknown }): unknown {
+  const internal = params.__internalParams as { transaction?: unknown } | undefined
+  return internal?.transaction
+}
+
+function rlsSetting(rls: TenancyExtensionOptions['rls']): string | undefined {
+  if (!rls) return undefined
+  const setting = (rls === true ? undefined : rls.setting) ?? DEFAULT_TENANT_SETTING
+  // validates the name eagerly: a bad setting fails at boot, not per query
+  tenantConfigParams('validate', setting)
+  return setting
+}
+
+type TenancyQueryHooks = ReturnType<typeof buildQueryHooks>
+
+/** The extension object form (no RLS). */
+export interface TenancyExtension {
+  name: 'basalt-tenancy'
+  query: TenancyQueryHooks
+}
+
+/**
+ * The function form Prisma's `$extends` also accepts (`rls` on): it receives
+ * the client being extended, which it needs to open the `set_config` batch.
+ * Typed as identity so `$extends` keeps the client's own type.
+ */
+export type TenancyRlsExtension = <C>(client: C) => C
+
+/**
+ * Prisma client extension for the shared-database tenancy mode:
+ *
+ * const db = new PrismaClient().$extends(tenancyExtension())
+ *
+ * Every query on every model is scoped to ctx().tenant at call time —
+ * app code just writes `db.project.findMany()`. Operations it cannot scope
+ * (raw queries, unknown operations) are refused inside a tenant context.
+ *
+ * Limits: a foreign-key SCALAR (`data: { projectId }`) is not checked against
+ * the tenant — use composite foreign keys `(tenantId, id)` and/or RLS
+ * (`rlsPolicySql` + `rls: true`) as the database-level guarantee.
+ */
+export function tenancyExtension(
+  options?: TenancyExtensionOptions & { rls?: false | undefined },
+): TenancyExtension
+export function tenancyExtension(
+  options: TenancyExtensionOptions & { rls: true | RlsExtensionOptions },
+): TenancyRlsExtension
+export function tenancyExtension(options?: TenancyExtensionOptions): TenancyExtension | TenancyRlsExtension
+export function tenancyExtension(
+  options: TenancyExtensionOptions = {},
+): TenancyExtension | TenancyRlsExtension {
+  const setting = rlsSetting(options.rls)
+  if (setting === undefined) {
+    return { name: 'basalt-tenancy', query: buildQueryHooks(options, undefined, undefined) }
+  }
+  return (<C>(client: C): C =>
+    (client as unknown as RawCapableClient).$extends({
+      name: 'basalt-tenancy',
+      query: buildQueryHooks(options, client as unknown as RawCapableClient, setting),
+    }) as C) as TenancyRlsExtension
+}
+
+function buildQueryHooks(
+  options: TenancyExtensionOptions,
+  /** The client being extended — present only with `rls` on. */
+  base: RawCapableClient | undefined,
+  /** The RLS setting — present only with `rls` on. */
+  rlsSettingName: string | undefined,
+) {
   const field = options.tenantField ?? 'tenantId'
   const getTenantId = options.getTenantId ?? defaultTenantId
+  // The own-tenant set_config statement is allowed through the raw guard
+  // with or without `rls`: it is the documented way to open a transaction
+  // for hand-written RLS wiring (and what tenantTransaction() sends).
+  const configSetting = rlsSettingName ?? DEFAULT_TENANT_SETTING
 
   // Raw methods bypass model-level scoping. Refuse them when a tenant is in
   // scope (they would ignore isolation); allow them otherwise (central code).
-  const guardRaw = (method: string) => {
-    if (options.onRawInTenant !== 'allow' && getTenantId() !== undefined) {
-      throw new RawQueryInTenantContextError(method)
-    }
+  const guardRaw = (method: string, args?: unknown) => {
+    if (options.onRawInTenant === 'allow') return
+    const tenantId = getTenantId()
+    if (tenantId === undefined) return
+    if (isOwnTenantConfig(method, args, tenantId, configSetting)) return
+    throw new RawQueryInTenantContextError(method)
+  }
+
+  // With rls: run the operation after set_config, in one batch transaction,
+  // so the setting is on the same connection and transaction-local. An
+  // operation already inside a transaction (interactive or batch) is left
+  // alone — it cannot be nested, and its transaction must set the tenant
+  // first (tenantTransaction() does; a batch leads with set_config).
+  const run = (
+    tenantId: string,
+    params: { __internalParams?: unknown },
+    pending: unknown,
+  ): Promise<unknown> | unknown => {
+    if (!base || !rlsSettingName || transactionOf(params) !== undefined) return pending
+    return base
+      .$transaction([
+        base.$executeRawUnsafe(setTenantConfigSql(), ...tenantConfigParams(tenantId, rlsSettingName)),
+        pending,
+      ])
+      .then((results) => (results as unknown[])[1])
   }
 
   return {
-    name: 'basalt-tenancy',
-    query: {
-      $allModels: {
-        async $allOperations({
-          model,
-          operation,
-          args,
-          query,
-        }: {
-          model?: string
-          operation: string
-          args: QueryArgs
-          query: (args: QueryArgs) => Promise<unknown>
-        }) {
+    $allModels: {
+      $allOperations(params: {
+        model?: string
+        operation: string
+        args: QueryArgs
+        query: (args: QueryArgs) => Promise<unknown>
+        __internalParams?: unknown
+      }): Promise<unknown> {
+        const { model, operation, args, query } = params
+        try {
           const tenantId = getTenantId()
           if (!tenantId) {
             // Fail closed by default: only an explicit 'bypass' runs unscoped.
@@ -412,27 +552,83 @@ export function tenancyExtension(options: TenancyExtensionOptions = {}) {
             return query(args)
           }
           // throws UnscopedOperationError for an operation it cannot scope
-          return query(applyTenantScope(operation, args, tenantId, field))
-        },
-      },
-      // Every client-level operation ($queryRaw, $executeRaw, $queryRawTyped,
-      // $runCommandRaw and any future one) bypasses model scoping, so ALL of
-      // them are guarded here rather than an allow-list of known raw methods.
-      // Model operations also reach this callback; they are scoped above.
-      async $allOperations({
-        model,
-        operation,
-        args,
-        query,
-      }: {
-        model?: string
-        operation: string
-        args: unknown
-        query: (args: unknown) => Promise<unknown>
-      }) {
-        if (model === undefined) guardRaw(operation)
-        return query(args)
+          return run(tenantId, params, query(applyTenantScope(operation, args, tenantId, field))) as Promise<unknown>
+        } catch (error) {
+          return Promise.reject(error)
+        }
       },
     },
+    // Every client-level operation ($queryRaw, $executeRaw, $queryRawTyped,
+    // $runCommandRaw and any future one) bypasses model scoping, so ALL of
+    // them are guarded here rather than an allow-list of known raw methods.
+    // Model operations also reach this callback; they are scoped above.
+    // Not `async`: the query's own (Prisma) promise is returned untouched so
+    // it can still take part in a batch $transaction.
+    $allOperations({
+      model,
+      operation,
+      args,
+      query,
+    }: {
+      model?: string
+      operation: string
+      args: unknown
+      query: (args: unknown) => Promise<unknown>
+    }): Promise<unknown> {
+      try {
+        if (model === undefined) guardRaw(operation, args)
+        return query(args)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    },
   }
+}
+
+export interface TenantTransactionOptions {
+  /** Tenant to activate. Default: the extension's default source, ctx().tenant.id. */
+  tenantId?: string
+  /** Postgres setting the RLS policies read. Default: 'app.tenant_id'. */
+  setting?: string
+  /** Passed through to Prisma's interactive `$transaction` (isolationLevel, maxWait, timeout). */
+  transaction?: Record<string, unknown>
+}
+
+/**
+ * The Prisma interactive-transaction client: the client minus the methods
+ * Prisma denies inside a transaction.
+ */
+export type TenantTransactionClient<C> = Omit<
+  C,
+  '$transaction' | '$connect' | '$disconnect' | '$on' | '$use' | '$extends'
+>
+
+/**
+ * Opens an interactive transaction with the RLS tenant already set on ITS
+ * connection: `set_config('app.tenant_id', <tenant>, true)` runs first, then
+ * `fn(tx)`. Pass the tenant-scoped client (`$extends(tenancyExtension(...))`)
+ * — `tx` stays tenant-scoped, and every statement in `fn` is filtered by the
+ * RLS policies too.
+ *
+ *   await tenantTransaction(db, async (tx) => {
+ *     const invoice = await tx.invoice.create({ data })
+ *     await tx.invoiceLine.createMany({ data: lines(invoice.id) })
+ *   })
+ *
+ * Use `tx` inside `fn`: the outer client is not part of the transaction.
+ * Throws `MissingTenantError` with no tenant in scope.
+ */
+export async function tenantTransaction<C, R>(
+  client: C,
+  fn: (tx: TenantTransactionClient<C>) => Promise<R>,
+  options: TenantTransactionOptions = {},
+): Promise<R> {
+  const tenantId = options.tenantId ?? defaultTenantId()
+  if (!tenantId) throw new MissingTenantError()
+  const params = tenantConfigParams(tenantId, options.setting ?? DEFAULT_TENANT_SETTING)
+  const db = client as unknown as RawCapableClient
+  return (await db.$transaction(async (tx: RawCapableClient) => {
+    await tx.$executeRawUnsafe(setTenantConfigSql(), ...params)
+    return fn(tx as unknown as TenantTransactionClient<C>)
+  }, options.transaction)) as R
 }

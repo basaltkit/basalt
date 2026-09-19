@@ -77,43 +77,89 @@ See the [adapters guide](/guide/adapters).
 
 ## Uploading
 
-Multipart parsing is adapter-specific, so read the bytes in your own handler and
-hand the `Buffer` to `FILES.upload`. Validation, quota, tenant-scoped storage,
-the checksum and the `file:uploaded` hook are all done for you. With Fastify +
-`@fastify/multipart`:
+Declare the route body with `upload()` from `@basaltkit/http`: a streaming
+`multipart/form-data` body that works the same on Fastify, Express and Hono. It is
+a normal `route()`, so the whole pipeline (rate limit, tenant and user enrichers,
+`auth`/`can` guards) runs **before a single body byte is read**, and an
+unauthenticated upload is refused without being received. Each file reaches the
+handler as a stream; hand it to `FILES.upload`, which does validation, quota,
+tenant-scoped storage, the checksum and the `file:uploaded` hook:
 
 ```ts
+import { route, upload, HttpError } from '@basaltkit/http'
 import { FILES } from '@basaltkit/files'
-import { FASTIFY } from '@basaltkit/fastify'
 import { ctx } from '@basaltkit/core'
 import { app } from './app.js'
 
 const files = app.container.get(FILES)
-const fastify = app.container.get(FASTIFY)
 
-fastify.post('/files/upload', async (request, reply) => {
-  const part = await request.file()                       // @fastify/multipart
-  const buffer = await part.toBuffer()
-  const record = await files.upload(buffer, {
-    name: part.filename,
-    contentType: part.mimetype,
-    uploadedBy: ctx().user?.id,                           // tenantId comes from ctx().tenant
-    metadata: { source: 'web' },                          // anything you want on the record
-  })
-  return reply.code(201).send(record)                     // FileRecord
+export const uploadFile = route({
+  method: 'POST',
+  url: '/files/upload',
+  body: upload({
+    maxBytes: 25 * 1024 * 1024,                           // whole request; 413 past it
+    maxFiles: 1,                                          // 400 TOO_MANY_FILES past it
+    allowedTypes: ['application/pdf', 'image/*'],         // declared type; 415 otherwise
+  }),
+  meta: { auth: true },
+  async handler({ body, reply }) {
+    for await (const file of body.files) {
+      const record = await files.upload(file.stream, {
+        name: file.filename,                              // sanitised basename, never a path
+        contentType: file.declaredType,                   // the client's claim, so turn on validate.sniff
+        uploadedBy: ctx().user?.id,                       // tenantId comes from ctx().tenant
+        metadata: { source: 'web', title: body.fields['title'] }, // text fields sent before the file
+      })
+      return reply.code(201).send(record)                 // FileRecord
+    }
+    throw new HttpError(400, 'FILE_REQUIRED', 'Attach a file.')
+  },
 })
 ```
+
+The body is parsed while the handler reads it (it is never buffered), with every
+limit enforced on the bytes actually received. The [adapters guide](/guide/adapters#uploads)
+lists every option and error. You can still pass a `Buffer` to `FILES.upload`.
 
 The returned `FileRecord` is `{ id, tenantId, name, contentType, size, path,
 checksum, uploadedBy?, metadata?, scannedAt?, createdAt }`. `path` is the key
 **inside the disk** (`files/<uuid>`); the disk adds the tenant prefix on every
 operation, so the object really lands at `tenants/<tenantId>/files/<uuid>`.
 
+### Streaming uploads
+
+`upload()` also takes the file as a stream: a Node `Readable`, any
+`AsyncIterable<Uint8Array>`, or a web `ReadableStream`. The stream is read once,
+and `validate.maxSize` is enforced **while it arrives** — the moment it passes
+the cap the source is destroyed/cancelled and `413 FILE_TOO_LARGE` is thrown,
+with nothing written. The size and the SHA-256 checksum are computed on the fly,
+and `validate.sniff` (below) inspects the first 64 KiB, so a disguised file is
+refused before the rest is read.
+
+```ts
+// Fastify + @fastify/multipart: part.file is a Readable — no toBuffer()
+const part = await request.file()
+const record = await files.upload(part.file, { name: part.filename, contentType: part.mimetype, uploadedBy: ctx().user?.id })
+
+// Any web-standard runtime (Hono, a raw PUT body): the body is a ReadableStream
+const record = await files.upload(request.body!, { name, contentType: request.headers.get('content-type') ?? 'application/octet-stream' })
+
+// @basaltkit/http's neutral upload() route body yields { stream } per file — on every adapter
+const record = await files.upload(file.stream, { name: file.filename, contentType: file.declaredType })
+```
+
+::: info The storage contract takes whole buffers
+`Disk.put` accepts `Buffer | string` only, so after the stream passes
+validation its bytes are collected into one buffer before the write — memory
+per upload is bounded by `maxSize`, not by what the client sends. Keep
+`maxSize` realistic when uploads stream.
+:::
+
 ::: warning The `contentType` is the client's claim
-`allowedTypes` matches the content type you pass in, which for a browser upload
-is whatever the browser said. It stops honest mistakes, not attackers. Treat
-sniffing the magic bytes, and the antivirus/moderation pass below, as the real
-control — and keep the signed-URL `attachment` default (see
+Without sniffing, `allowedTypes` matches the content type you pass in, which for
+a browser upload is whatever the browser said: an HTML page sent as
+`application/pdf` passes. Turn on `validate.sniff` (below) — and keep the
+antivirus/moderation pass and the signed-URL `attachment` default (see
 [Storage](/guide/storage)) so a mislabelled HTML or SVG upload can't render on
 the storage origin.
 :::
@@ -135,6 +181,41 @@ filesPlugin({ disk: 'uploads', validate: { maxSize: Number.POSITIVE_INFINITY } }
 'application/pdf']` accepts `image/png` and `application/pdf` and rejects
 everything else with `FileTypeNotAllowedError` (`415 FILE_TYPE_NOT_ALLOWED`).
 With no `allowedTypes`, every content type is accepted.
+
+#### Content sniffing (`validate.sniff`)
+
+`validate: { sniff: true }` checks what the bytes **are** instead of trusting
+what the client declared. The built-in sniffer reads the file's signature (magic
+bytes, no dependency) and recognises PDF, PNG, JPEG, GIF, WebP, TIFF (both byte
+orders), ZIP and the Office formats (docx/xlsx/pptx, from the ZIP entry names),
+plus the formats that are dangerous when disguised: HTML, SVG and XML text, and
+executables (PE/`MZ`, ELF, Mach-O, `#!` scripts). With it on:
+
+- content that contradicts the declared type is refused with
+  `FileTypeMismatchError` (`415 FILE_TYPE_MISMATCH`) — an HTML page sent as
+  `application/pdf`, an `.exe` sent as `image/jpeg`, an SVG sent as `image/png`,
+  a Word file sent as a PDF;
+- a declared PDF/PNG/JPEG/GIF/WebP/TIFF/ZIP/Office type whose bytes don't carry
+  that signature (a renamed or truncated file) is refused the same way;
+- `allowedTypes` judges the **detected** type, the record's `contentType` is the
+  detected type, and the client's claim is kept in `metadata.declaredType`;
+- content the sniffer has no signature for (plain text, CSV, …) keeps its
+  declared type. `application/octet-stream` is accepted as "unknown" and stored
+  as whatever the bytes are.
+
+```ts
+filesPlugin({
+  disk: 'uploads',
+  validate: { allowedTypes: ['image/*', 'application/pdf'], sniff: true },
+})
+
+// or your own detector (receives the first 64 KiB; return a MIME type or null)
+filesPlugin({ disk: 'uploads', validate: { sniff: (head) => myDetector(head) } })
+```
+
+Sniffing is **off by default** (it changes what gets stored), but consider
+enabling it for any app whose users upload files other users open.
+`sniffContentType(bytes)` is exported if you want the same detector elsewhere.
 
 The pipeline's cap is separate from the storage facade's own per-`put`
 `maxBytes` / `allowedContentTypes` — see the
@@ -189,6 +270,30 @@ either way. The full rationale is in [Storage](/guide/storage).
 await files.temporaryUrl(id, '15m', undefined, { disposition: 'inline' })
 ```
 
+### Quarantine until scanned (`requireScan`)
+
+`markScanned(id, { clean: false })` records a failed scan, but on its own does
+not stop the file being served. `filesPlugin({ requireScan: true })` makes the
+scan a gate: `download()` and `temporaryUrl()` (and so `POST /files/:id/url`)
+throw `FileNotScannedError` (`423 FILE_NOT_SCANNED`) until a scan reports the
+file clean, and `FileInfectedError` (`403 FILE_INFECTED`) once one reports it
+not clean — forever, until a new clean scan. A scan timestamp without a clean
+verdict counts as not scanned (fail closed). `GET /files` and `GET /files/:id`
+still list the record, with `scannedAt` and `metadata.scan`, so a UI can show
+"scanning…" or "blocked". The errors carry their status, so Fastify, Express
+and Hono answer identically.
+
+The scanner itself has to read the quarantined bytes: pass
+`{ bypassQuarantine: true }` to `download` there — and nowhere that serves users.
+
+```ts
+filesPlugin({ disk: 'uploads', requireScan: true })
+
+// in the scan job
+const { content } = await files.download(id, tenantId, { bypassQuarantine: true })
+await files.markScanned(id, { clean: await antivirus.check(content) }, tenantId)
+```
+
 Signed URLs need a driver that supports them: `s3`, GCS and Azure do, the
 `local` driver throws `TemporaryUrlUnsupportedError`
 (`STORAGE_TEMPORARY_URL_UNSUPPORTED`). In local development, proxy through
@@ -215,7 +320,8 @@ const ScanFile = defineJob<{ tenantId: string; id: string }>({
   name: 'files.scan',
   queue: 'files',
   async handle({ tenantId, id }) {
-    const { content } = await files.download(id, tenantId)  // explicit tenant: jobs have no ctx
+    // explicit tenant: jobs have no ctx; bypassQuarantine because with requireScan the file is not served yet
+    const { content } = await files.download(id, tenantId, { bypassQuarantine: true })
     const clean = await antivirus.check(content)            // your scanner
     await files.markScanned(id, { clean }, tenantId)        // emits file:scanned
   },
@@ -245,8 +351,9 @@ import { STORAGE } from '@basaltkit/storage'
 app.hooks.on('file:uploaded', async ({ file }) => {
   if (!file.contentType.startsWith('image/')) return
   const disk = app.container.get(STORAGE).disk('uploads')
-  await runWithContext({ tenant: { id: file.tenantId } } as never, () =>
-    disk.image(file.path).resize(256, 256).webp().save(`${file.path}-thumb.webp`))
+  await runWithContext({ tenant: { id: file.tenantId } } as never, async () => {
+    await disk.image(file.path).resize(256, 256).webp().save(`${file.path}-thumb.webp`)
+  })
 })
 ```
 
@@ -258,8 +365,9 @@ Without a processor configured the pipeline's terminal throws
 
 `fileRoutes()` mounts read/manage endpoints for the **current tenant's** files.
 They are built on the neutral `route()` from `@basaltkit/http`, so they serve
-identically on Fastify, Express and Hono. Uploading is not among them —
-multipart is transport-specific, so you write that handler (above).
+identically on Fastify, Express and Hono. Uploading is not among them — you
+write that route yourself with the neutral `upload()` body kind shown in
+[Uploading](#uploading), so you choose its limits, authorization and naming.
 
 | Route | Body | Returns |
 | --- | --- | --- |
@@ -336,6 +444,7 @@ them. `totalSize` is the quota's hot path, so index `(tenantId)`. See
 | `validate` | `FileValidation` | `{ maxSize: 25 MiB }` | Upload policy (below). Passing `validate` **merges** with the default cap; it does not remove it |
 | `maxTotalBytes` | `number` | unlimited | Built-in per-tenant quota, checked against `store.totalSize()` before each upload. Quota-checked uploads of one tenant run one at a time in the process, and the total is re-checked after the insert (an overrun made by another instance is rolled back) |
 | `checkQuota` | `(tenantId, size) => void \| Promise<void>` | — | Custom quota — throw to reject. Wire it to a plan feature in `@basaltkit/subscriptions`. Runs *after* `maxTotalBytes` |
+| `requireScan` | `boolean` | `false` | Quarantine: `download`/`temporaryUrl` throw `423 FILE_NOT_SCANNED` until `markScanned` reports the file clean, `403 FILE_INFECTED` after a failed scan. See [Quarantine until scanned](#quarantine-until-scanned-requirescan) |
 
 The `Files` service takes the same options plus `hooks` (the `HookBus`, injected
 by the plugin) and `now` (an injectable clock for tests); construct it directly
@@ -347,7 +456,8 @@ container.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `maxSize` | `number` (bytes) | `DEFAULT_MAX_FILE_SIZE` = `25 * 1024 * 1024` | Reject bigger payloads with `413`. Set `Number.POSITIVE_INFINITY` to opt out of the cap deliberately |
-| `allowedTypes` | `string[]` | any type | Allowlist with `type/*` wildcards (`'image/*'`). Matched against the `contentType` **you pass to `upload`** |
+| `allowedTypes` | `string[]` | any type | Allowlist with `type/*` wildcards (`'image/*'`). Matched against the `contentType` **you pass to `upload`** — or, with `sniff`, against the detected type |
+| `sniff` | `boolean \| (bytes: Uint8Array) => string \| null` | `false` | Detect the real type from the magic bytes; refuse mismatches with `415 FILE_TYPE_MISMATCH`, store the detected type, keep the claim in `metadata.declaredType`. See [Content sniffing](#content-sniffing-validate-sniff) |
 
 ### `fileRoutes(options?)`
 
@@ -371,11 +481,11 @@ the `attachment` disposition.
 
 | Method | Purpose |
 | --- | --- |
-| `upload(content, input)` | The pipeline. `input` is `{ name, contentType, tenantId?, uploadedBy?, metadata? }` |
+| `upload(content, input)` | The pipeline. `content` is a `Buffer`/`Uint8Array`, a Node `Readable`, an `AsyncIterable<Uint8Array>` or a web `ReadableStream`; `input` is `{ name, contentType, tenantId?, uploadedBy?, metadata? }` |
 | `get(id, tenantId?)` | `FileRecord \| null` — no throw for a miss |
 | `list(tenantId?)` | Every record for the tenant |
-| `download(id, tenantId?)` | `{ record, content }`; throws `FileNotFoundError` |
-| `temporaryUrl(id, expiresIn, tenantId?, { disposition? })` | Signed URL; `attachment` by default |
+| `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`; throws `FileNotFoundError`, and with `requireScan` `FileNotScannedError` / `FileInfectedError` unless `bypassQuarantine` (for the scanner only) |
+| `temporaryUrl(id, expiresIn, tenantId?, { disposition? })` | Signed URL; `attachment` by default. Gated by `requireScan` like `download` |
 | `delete(id, tenantId?)` | Removes object + record, emits `file:deleted`; idempotent |
 | `markScanned(id, { clean, detail? }, tenantId?)` | Records an out-of-band scan result, emits `file:scanned` |
 
@@ -384,7 +494,10 @@ the `attachment` disposition.
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
 | `FileTooLargeError` | `FILE_TOO_LARGE` | 413 | Payload above `validate.maxSize` — 25 MiB by default, even with no `validate` |
-| `FileTypeNotAllowedError` | `FILE_TYPE_NOT_ALLOWED` | 415 | `contentType` not matched by `validate.allowedTypes` |
+| `FileTypeNotAllowedError` | `FILE_TYPE_NOT_ALLOWED` | 415 | `contentType` (with `sniff`, the detected type) not matched by `validate.allowedTypes` |
+| `FileTypeMismatchError` | `FILE_TYPE_MISMATCH` | 415 | `validate.sniff` is on and the bytes contradict the declared type (`error.declared`, `error.detected`) |
+| `FileNotScannedError` | `FILE_NOT_SCANNED` | 423 | `requireScan` is on and no scan has reported the file clean yet |
+| `FileInfectedError` | `FILE_INFECTED` | 403 | `requireScan` is on and the last scan reported the file not clean |
 | `StorageQuotaExceededError` | `FILE_QUOTA_EXCEEDED` | 402 | `maxTotalBytes` would be exceeded by this upload |
 | `FileNotFoundError` | `FILE_NOT_FOUND` | 404 | `download` / `markScanned` / `GET /files/:id` for an id that isn't this tenant's |
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | No `tenantId` argument **and** no `ctx().tenant` — typically a queue worker or CLI |

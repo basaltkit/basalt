@@ -109,7 +109,9 @@ menos 32 caracteres (`openssl rand -base64 48`).
 O `defineEnv` lê o `process.env` e mais nada — copiar o ficheiro não torna os
 seus valores visíveis. Exporta as variáveis, arranca com
 `node --env-file=.env` (Node 22+), ou deixa o teu gestor de processos
-injetá-las. Vê [Configuração](/pt/guide/config).
+injetá-las. Vê [Configuração](/pt/guide/config). O `--env-file` nunca sobrepõe
+uma variável já exportada na tua shell — prefere nomes com prefixo da app; vê
+[a armadilha de precedência](/pt/guide/installation#o-env-file-nunca-sobrepoe-variaveis-exportadas).
 :::
 
 ### 3. Correr

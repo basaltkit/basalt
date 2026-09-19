@@ -50,13 +50,26 @@ const tree = await comments.on('note', 'note-1', 'acme').tree()
 The power is in the events. Push comments live and notify mentioned users without coupling anything:
 
 ```ts
+import { defineNotification, NOTIFIER } from '@basaltkit/notifications'
+import { z } from 'zod'
+
 // live discussion (realtime)
 hooks.on('comment:created', ({ comment }) =>
   realtime.to(comment.tenantId).channel(`${comment.resourceType}:${comment.resourceId}`).emit('comment', comment))
 
 // notify whoever was mentioned
-hooks.on('comment:mentioned', ({ comment, userId }) =>
-  notifications.to(userId).send('comment.mention', { by: comment.authorId, resource: comment.resourceId }))
+const CommentMention = defineNotification({
+  name: 'comment.mention',
+  schema: z.object({ by: z.string(), resource: z.string() }),
+  channels: ['inApp'],
+  via: { inApp: ({ by, resource }) => ({ title: 'You were mentioned', body: `${by} mentioned you`, data: { resource } }) },
+})
+const notifier = app.container.get(NOTIFIER)
+
+hooks.on('comment:mentioned', async ({ comment, userId }) => {
+  // the recipient is any `Notifiable` ({ id, email? }) — load the user if a channel needs more than the id
+  await notifier.notify({ id: userId }, CommentMention, { by: comment.authorId, resource: comment.resourceId })
+})
 ```
 
 ## Routes
