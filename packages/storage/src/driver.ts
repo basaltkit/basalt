@@ -28,6 +28,18 @@ export interface StorageDriver {
   list(prefix: string): Promise<string[]>
   /** Optional: pre-signed URL valid for `expiresInMs`. */
   temporaryUrl?(path: string, expiresInMs: number, options?: TemporaryUrlOptions): Promise<string>
+  /**
+   * Optional: pre-signed direct-upload (PUT) URL valid for `expiresInMs`. The
+   * driver must bind `contentType` (and `contentLength` / `checksumSha256` when
+   * given) into the signature where its backend supports it, and return every
+   * header the client has to send. The Disk layer validates the key, applies
+   * the tenant scope and caps the lifetime before calling this.
+   */
+  temporaryUploadUrl?(
+    path: string,
+    expiresInMs: number,
+    options: TemporaryUploadUrlDriverOptions,
+  ): Promise<TemporaryUploadUrl>
   disconnect(): Promise<void>
 }
 
@@ -40,4 +52,30 @@ export interface StorageDriver {
  */
 export interface TemporaryUrlOptions {
   disposition?: 'attachment' | 'inline'
+}
+
+/** What a driver binds into a pre-signed upload URL. Validated by the Disk layer. */
+export interface TemporaryUploadUrlDriverOptions {
+  /** Always present: the only Content-Type the upload may declare. */
+  contentType: string
+  /** Exact body size in bytes, signed where the backend supports it. */
+  contentLength?: number
+  /** Base64 SHA-256 of the body, signed where the backend supports it. */
+  checksumSha256?: string
+}
+
+/** A pre-signed direct upload: the client sends `method url` with exactly `headers`. */
+export interface TemporaryUploadUrl {
+  url: string
+  method: 'PUT'
+  /**
+   * Headers the client MUST send verbatim (they are part of the signature, or
+   * required by the backend). Adding, dropping or changing one fails the upload.
+   * `Content-Length` is included when bound; browsers set it themselves from the body.
+   */
+  headers: Record<string, string>
+  /** When the URL stops working. */
+  expiresAt: Date
+  /** Full object key the upload lands on, tenant prefix included. Set by the Disk layer. */
+  key?: string
 }

@@ -183,6 +183,48 @@ fixed date and assert which entries ran — no waiting on real clocks.
 scheduler.tick(new Date('2026-01-01T03:00:00Z')) // runs everything due that minute
 ```
 
+## Recover stuck work: `defineReconciler()`
+
+If a dispatch fails **after** the business commit, or a worker dies mid-job, the entity stays in
+an intermediate state (`processing`) forever. `defineReconciler` builds the safety net on the
+scheduler: on a cadence it finds the stuck items and re-dispatches them.
+
+```ts
+import { defineReconciler } from '@basaltkit/scheduler'
+
+schedulerPlugin({
+  define: (schedule) => {
+    defineReconciler({
+      name: 'stuck-orders',
+      every: '5m',                   // or a cron expression
+      find: () => prisma.order.findMany({
+        where: { status: 'processing', updatedAt: { lt: new Date(Date.now() - 15 * 60_000) } },
+        take: 500,
+      }),
+      redispatch: (order) => ProcessOrder.dispatch({ orderId: order.id }), // must be idempotent
+      maxPerRun: 100,
+      onError: (error, order) => logger.error({ err: error, orderId: order?.id }, 'reconcile failed'),
+    }).schedule(schedule)
+  },
+})
+```
+
+- **No overlap** — a run never starts while the previous one is still running (the tick is
+  skipped and counted in `reconciler.stats.skippedOverlaps`). With a scheduler `lock` the entry
+  runs on one replica per tick; `lock: ReconcilerLock` (`acquire` + `release`) additionally holds a
+  distributed mutex for the whole run.
+- **Per-item isolation** — a throwing `redispatch` goes to `onError(error, item)` and the next
+  item still runs; a throwing `find` goes to `onError(error, undefined)`. Default: `console.error`.
+- **Observable** — every run emits the `reconciler:run` hook on the app's bus with
+  `{ name, found, redispatched, failed, skipped, reason?, error?, durationMs }`; `onRun(result)`
+  is the same data as a callback.
+- `every` accepts whole minutes dividing 60, whole hours dividing 24, `'1d'` or a cron
+  expression; anything else throws `ScheduleDefinitionError` (`SCHEDULE_INVALID_INTERVAL`) at boot.
+
+The entry is named `reconciler:<name>`, so `basalt schedule:run reconciler:stuck-orders` runs it
+on demand. The full option table is in the
+[package README](https://github.com/basaltkit/basalt/tree/main/packages/scheduler#definereconcilert-options-reconcileroptionst-reconciler).
+
 ## Run on demand
 
 `schedule:run` triggers an entry from the CLI, ignoring its cron — for testing a
@@ -216,6 +258,7 @@ guard and `onFailure` handler still apply.
 | `CronParseError` (code `CRON_INVALID`) at definition | The cron expression uses unsupported syntax (names like `MON`), an out-of-range value, or a reversed range — it would otherwise silently never fire | Fix the expression; supported: `*`, `*/n`, single values, `a-b`, comma lists |
 | `ScheduleDefinitionError` (code `SCHEDULE_CONFLICT`) at boot | An entry chains two frequencies (`.daily().monthly()`), uses `.at()` after `everyMinute`/`everyMinutes`/`hourly`/`cron` or twice, or combines `.cron()` with a day-of-week modifier. Previously the last call silently won | Keep the one frequency you mean, e.g. `.monthly().at('03:00')`; for anything else use `.cron()` alone |
 | `ScheduleDefinitionError` (code `SCHEDULE_INVALID_TIME`) at boot | `.at()` got something other than `HH:mm` (hour 0–23, minute 0–59) | Fix the time string, e.g. `.at('03:00')` |
+| `ScheduleDefinitionError` (code `SCHEDULE_INVALID_INTERVAL`) at boot | A reconciler's `every` can't be expressed on the minute-based cron (`'30s'`, `'7m'`, `'90m'`) | Use `'1m'`, `'5m'`, `'15m'`, `'2h'`, `'1d'` or a cron expression |
 | `AggregateError: Failure in N scheduled task(s)` | Tasks without `onFailure` threw during a tick; every due entry still ran and the process survived | Add `.onFailure()` to route each task's errors to your reporting |
 | A task runs N times at once across pods | The entry lacks `.onOneServer()` (or replicas point at different lock stores) | Mark it `.onOneServer()`; share one lock store across replicas |
 | An `.onOneServer()` task failed the tick while Redis was down | Fail closed: a lock-store failure is a task failure, never permission to run everywhere | Restore the lock store; the next minute's tick recovers |

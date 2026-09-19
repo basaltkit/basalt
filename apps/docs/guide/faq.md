@@ -86,8 +86,20 @@ script you create it with `runWithContext`.
 Tenant-scoped code (the Prisma tenancy extension, `db()`, most stores) reads the
 current tenant from `ctx().tenant`. During a request that's set automatically.
 In a script or worker it isn't — so wrap the work in
-`runWithContext({ tenant: { id }, db, container }, () => …)`, or, for genuinely
+`runWithContext({ tenant: { id }, db, container }, async () => …)`, or, for genuinely
 central code, use a client/service that isn't tenant-scoped.
+
+If you *did* wrap it and still get `PRISMA_TENANT_MISSING`, check that the
+callback **awaits** the query. A Prisma query is a lazy `PrismaPromise`: returned
+from a synchronous callback (`() => prisma.invoice.findMany()`), it only executes
+when the caller awaits it — after `runWithContext` has returned, outside the
+context. Use an async callback that awaits inside:
+
+```ts
+await runWithContext({ tenant }, async () => await prisma.invoice.findMany())
+```
+
+`tenancy.run(tenant, fn)` already wraps `fn` in an async scope, so it is not affected.
 
 ## Where do I register my own service or token?
 

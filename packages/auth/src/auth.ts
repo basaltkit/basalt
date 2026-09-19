@@ -1,7 +1,7 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
-import { LoginThrottle } from './throttle.js'
+import { LoginThrottle, type ThrottleStore } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
 import { generateTotpSecret, matchTotpStep, otpauthUri } from './totp.js'
 import { decryptSecret, deriveKey, encryptSecret } from './secret-box.js'
@@ -95,6 +95,30 @@ export class MfaRequiredError extends BasaltError {
   }
 }
 
+/**
+ * The route needs a credential obtained with a second factor (MFA policy or
+ * `meta.mfa: true`), and the account has MFA enabled: sign in again with a
+ * code. Distinct from the 401 {@link MfaRequiredError} of the login itself.
+ */
+export class MfaStepUpRequiredError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('AUTH_MFA_REQUIRED', 'This action requires a sign-in with multi-factor authentication. Sign in again with your code.')
+  }
+}
+
+/**
+ * The route needs a credential obtained with a second factor, and the account
+ * has not enabled MFA yet: enrol (`/auth/mfa/enroll` + `/activate`), then sign
+ * in again with a code.
+ */
+export class MfaEnrollmentRequiredError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('AUTH_MFA_ENROLLMENT_REQUIRED', 'Multi-factor authentication is required for this account. Enable it, then sign in again.')
+  }
+}
+
 /** The supplied MFA (or recovery) code was wrong. */
 export class MfaInvalidCodeError extends BasaltError {
   readonly status = 401
@@ -146,6 +170,15 @@ export interface TokenPair {
   refreshToken: string
 }
 
+/** Authentication methods (`amr`) values Basalt issues. */
+const AMR_VALUE = /^[a-z]{1,16}$/
+/** Whether a value is a well-formed `amr` list (non-empty, short lowercase words). */
+export const isAmr = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.length <= 8 &&
+  value.every((v) => typeof v === 'string' && AMR_VALUE.test(v))
+
 export interface SessionCookieOptions {
   /** Cookie name. Default: `basalt_session`. */
   name?: string
@@ -187,6 +220,15 @@ export interface AuthOptions {
    * and purpose; pass `false` to disable.
    */
   emailRequestThrottle?: LoginThrottle | false
+  /**
+   * Where the DEFAULT throttles above (login, per-ip login, email requests)
+   * keep their counters. Default: in memory, per process — each replica then
+   * grants its own budget. Pass a shared store (e.g. `RedisThrottleStore`) so a
+   * cluster enforces one budget; each throttle uses its own namespace
+   * (`login`, `login-ip`, `email-request`). Ignored for a throttle passed
+   * explicitly (give that one its own `store`).
+   */
+  throttleStore?: ThrottleStore
   /**
    * Make the public registration endpoint enumeration-safe: a request for an
    * email that already exists returns the same response (and does equivalent
@@ -273,15 +315,21 @@ export class Auth {
       secure: options.sessionCookie?.secure ?? process.env['NODE_ENV'] === 'production',
     }
     this.hooks = options.hooks
-    this.throttle = options.loginThrottle === false ? undefined : options.loginThrottle ?? new LoginThrottle()
+    const shared = options.throttleStore ? { store: options.throttleStore } : {}
+    this.throttle =
+      options.loginThrottle === false
+        ? undefined
+        : options.loginThrottle ?? new LoginThrottle({ ...shared, namespace: 'login' })
     this.ipThrottle =
       options.ipLoginThrottle === false
         ? undefined
-        : options.ipLoginThrottle ?? new LoginThrottle({ maxAttempts: 50, windowMs: 15 * 60_000 })
+        : options.ipLoginThrottle ??
+          new LoginThrottle({ ...shared, namespace: 'login-ip', maxAttempts: 50, windowMs: 15 * 60_000 })
     this.requestThrottle =
       options.emailRequestThrottle === false
         ? undefined
-        : options.emailRequestThrottle ?? new LoginThrottle({ maxAttempts: 3, windowMs: 15 * 60_000 })
+        : options.emailRequestThrottle ??
+          new LoginThrottle({ ...shared, namespace: 'email-request', maxAttempts: 3, windowMs: 15 * 60_000 })
     this.tokens = options.tokens ?? new MemoryAuthTokenStore()
     this.verificationTtl = options.verificationTtl ?? '24h'
     this.resetTtl = options.resetTtl ?? '1h'
@@ -322,10 +370,11 @@ export class Auth {
   async socialLogin(
     rawEmail: string,
     options: { emailVerified?: boolean; mfaCode?: string; mfa?: 'required' | 'skip' } = {},
-  ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean }> {
+  ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean; amr: string[] }> {
     const email = canonicalEmail(rawEmail)
     let user = await this.users.findByEmail(email)
     let created = false
+    const amr = ['fed']
     if (!user) {
       user = await this.users.create({
         email,
@@ -343,17 +392,18 @@ export class Auth {
       } else if (options.mfa !== 'skip' && (await this.isMfaEnabled(user.id))) {
         if (!options.mfaCode) throw new MfaRequiredError()
         const key = user.email
-        this.throttle?.reserve(key)
+        await this.throttle?.reserve(key)
         if (!(await this.verifyMfaCode(user.id, options.mfaCode))) {
           await this.hooks?.emit('auth:mfa_failed', { userId: user.id })
           throw new MfaInvalidCodeError()
         }
-        this.throttle?.reset(key)
+        await this.throttle?.reset(key)
+        amr.push('mfa')
       }
     }
-    const tokens = await this.issueTokens(user.id)
+    const tokens = await this.issueTokens(user.id, undefined, amr)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
-    return { user: publicUser(user), tokens, created }
+    return { user: publicUser(user), tokens, created, amr }
   }
 
   /**
@@ -432,36 +482,41 @@ export class Auth {
    * required: a correct password with a missing code throws
    * {@link MfaRequiredError} (without counting as a failed attempt), and a
    * wrong code throws {@link MfaInvalidCodeError}.
+   *
+   * `amr` lists the authentication methods used — `['pwd']`, or
+   * `['pwd', 'mfa']` when a second factor was verified. It is also embedded in
+   * the access token (`amr` claim) and carried by every refresh of this login;
+   * pass it to {@link createSession} so a cookie session carries it too.
    */
   async login(
     email: string,
     password: string,
     mfaCode?: string,
     context: { ip?: string } = {},
-  ): Promise<{ user: PublicUser; tokens: TokenPair }> {
+  ): Promise<{ user: PublicUser; tokens: TokenPair; amr: string[] }> {
     const key = canonicalEmail(email)
     const ipKey = context.ip ? `ip:${context.ip}` : undefined
     // Reserve the attempt BEFORE the (async) verification: the counter moves
     // synchronously, so a parallel burst cannot run more password or MFA
     // guesses than the budget allows. Success gives the reservation back.
     try {
-      this.throttle?.reserve(key)
+      await this.throttle?.reserve(key)
     } catch (error) {
       await this.hooks?.emit('auth:locked_out', { email: key })
       throw error
     }
     if (ipKey && this.ipThrottle) {
       try {
-        this.ipThrottle.reserve(ipKey)
+        await this.ipThrottle.reserve(ipKey)
       } catch (error) {
-        this.throttle?.release(key)
+        await this.throttle?.release(key)
         await this.hooks?.emit('auth:locked_out', { email: key, ip: context.ip as string })
         throw error
       }
     }
-    const release = () => {
-      this.throttle?.release(key)
-      if (ipKey) this.ipThrottle?.release(ipKey)
+    const release = async () => {
+      await this.throttle?.release(key)
+      if (ipKey) await this.ipThrottle?.release(ipKey)
     }
 
     const user = await this.attempt(key, password)
@@ -470,22 +525,24 @@ export class Auth {
       throw new InvalidCredentialsError()
     }
 
+    const amr = ['pwd']
     if (await this.isMfaEnabled(user.id)) {
       if (!mfaCode) {
-        release() // password was correct — not a failure
+        await release() // password was correct — not a failure
         throw new MfaRequiredError()
       }
       if (!(await this.verifyMfaCode(user.id, mfaCode))) {
         await this.hooks?.emit('auth:mfa_failed', { userId: user.id })
         throw new MfaInvalidCodeError()
       }
+      amr.push('mfa')
     }
 
-    this.throttle?.reset(key)
-    if (ipKey) this.ipThrottle?.release(ipKey)
-    const tokens = await this.issueTokens(user.id)
+    await this.throttle?.reset(key)
+    if (ipKey) await this.ipThrottle?.release(ipKey)
+    const tokens = await this.issueTokens(user.id, undefined, amr)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
-    return { user: publicUser(user), tokens }
+    return { user: publicUser(user), tokens, amr }
   }
 
   /**
@@ -510,7 +567,7 @@ export class Auth {
     if ((await this.refreshTokens.markUsed(hashed)) === false) {
       return this.reuseDetected(record.userId, record.familyId)
     }
-    const pair = await this.issueTokens(record.userId, record.familyId)
+    const pair = await this.issueTokens(record.userId, record.familyId, amrOfFamily(record.familyId))
     // The consumed token is the witness that the family is still alive:
     // revokeFamily/revokeAllForUser delete every row of it. If a concurrent
     // revocation (a reuse loser, a logout, a logout-everywhere) ran between our
@@ -568,8 +625,39 @@ export class Auth {
     await this.tokenVersions?.increment(userId)
   }
 
-  async createSession(userId: string): Promise<SessionRecord> {
-    return this.sessions.create(userId, parseDuration(this.sessionTtl))
+  /**
+   * Creates a server-side session. With `amr` (from {@link login}), the
+   * returned id — the value to put in the cookie — also carries those
+   * authentication methods, HMAC-signed with the auth secret so a client cannot
+   * add `mfa` to a password-only session. Stores are unaffected: they only
+   * ever see the random part.
+   */
+  async createSession(userId: string, options: { amr?: readonly string[] } = {}): Promise<SessionRecord> {
+    const record = await this.sessions.create(userId, parseDuration(this.sessionTtl))
+    const amr = options.amr ? [...options.amr] : undefined
+    if (!amr || !isAmr(amr)) return record
+    const tag = amr.join('+')
+    return { ...record, id: `${record.id}.${tag}.${this.sessionTagSignature(record.id, tag)}` }
+  }
+
+  private sessionTagSignature(rawId: string, tag: string): string {
+    return createHmac('sha256', this.secret).update(`basalt-session-amr\u0000${rawId}.${tag}`).digest('base64url')
+  }
+
+  /** Splits a session id minted by {@link createSession} into the store id and its signed `amr`. */
+  private parseSessionId(sessionId: string): { rawId: string; amr?: string[] } {
+    const parts = sessionId.split('.')
+    if (parts.length !== 3) return { rawId: sessionId }
+    const [rawId, tag, signature] = parts as [string, string, string]
+    const expected = Buffer.from(this.sessionTagSignature(rawId, tag))
+    const received = Buffer.from(signature)
+    const amr = tag.split('+')
+    if (expected.length !== received.length || !timingSafeEqual(expected, received) || !isAmr(amr)) {
+      // Not a signed composite: treat the whole value as an opaque store id
+      // (a tampered composite then simply matches no session).
+      return { rawId: sessionId }
+    }
+    return { rawId, amr }
   }
 
   sessionCookieHeader(sessionId: string): string {
@@ -596,13 +684,25 @@ export class Auth {
   }
 
   async sessionUser(sessionId: string): Promise<AuthUser | null> {
-    const session = await this.sessions.find(sessionId)
-    return session ? this.users.findById(session.userId) : null
+    return (await this.sessionAuth(sessionId))?.user ?? null
+  }
+
+  /**
+   * The user of a session plus the authentication methods it was created with
+   * (`amr` is absent for sessions created without them, e.g. before this option).
+   */
+  async sessionAuth(sessionId: string): Promise<{ user: AuthUser; amr?: string[] } | null> {
+    const { rawId, amr } = this.parseSessionId(sessionId)
+    const session = await this.sessions.find(rawId)
+    const user = session ? await this.users.findById(session.userId) : null
+    if (!user) return null
+    return amr ? { user, amr } : { user }
   }
 
   async logout(sessionId: string): Promise<void> {
-    const session = await this.sessions.find(sessionId)
-    await this.sessions.delete(sessionId)
+    const { rawId } = this.parseSessionId(sessionId)
+    const session = await this.sessions.find(rawId)
+    await this.sessions.delete(rawId)
     if (session) {
       const user = await this.users.findById(session.userId)
       if (user) await this.hooks?.emit('auth:logout', { user: publicUser(user) })
@@ -619,7 +719,7 @@ export class Auth {
    */
   async requestEmailVerification(email: string): Promise<{ user: PublicUser; token: string } | null> {
     const user = await this.users.findByEmail(canonicalEmail(email))
-    if (!user || !this.allowEmailRequest('verify_email', user.id)) return null
+    if (!user || !(await this.allowEmailRequest('verify_email', user.id))) return null
     const token = await this.issueOneTimeToken(user.id, 'verify_email', this.verificationTtl)
     await this.hooks?.emit('auth:verify_requested', { user: publicUser(user), token })
     return { user: publicUser(user), token }
@@ -634,10 +734,10 @@ export class Auth {
   }
 
   /** Per-account budget for reset/verification mails; false = drop silently. */
-  private allowEmailRequest(purpose: AuthTokenPurpose, userId: string): boolean {
+  private async allowEmailRequest(purpose: AuthTokenPurpose, userId: string): Promise<boolean> {
     if (!this.requestThrottle) return true
     try {
-      this.requestThrottle.reserve(`${purpose}:${userId}`)
+      await this.requestThrottle.reserve(`${purpose}:${userId}`)
       return true
     } catch {
       return false
@@ -654,7 +754,7 @@ export class Auth {
    */
   async requestPasswordReset(email: string): Promise<{ user: PublicUser; token: string } | null> {
     const user = await this.users.findByEmail(canonicalEmail(email))
-    if (!user || !this.allowEmailRequest('reset_password', user.id)) return null
+    if (!user || !(await this.allowEmailRequest('reset_password', user.id))) return null
     const token = await this.issueOneTimeToken(user.id, 'reset_password', this.resetTtl)
     await this.hooks?.emit('auth:password_reset_requested', { user: publicUser(user), token })
     return { user: publicUser(user), token }
@@ -831,7 +931,10 @@ export class Auth {
     return user
   }
 
-  private async issueTokens(userId: string, familyId: string = randomUUID()): Promise<TokenPair> {
+  private async issueTokens(userId: string, family?: string, amr?: string[]): Promise<TokenPair> {
+    // A new family records the login's authentication methods in its id, so
+    // every rotation carries them forward without a store schema change.
+    const familyId = family ?? (amr && isAmr(amr) ? `${randomUUID()}.${amr.join('+')}` : randomUUID())
     const refreshToken = randomBytes(32).toString('base64url')
     await this.refreshTokens.create({
       // Persist only the hash; the raw token is returned to the client below.
@@ -843,10 +946,18 @@ export class Auth {
     const tv = this.tokenVersions ? await this.tokenVersions.get(userId) : undefined
     return {
       accessToken: signJwt(
-        { sub: userId, ...(tv !== undefined ? { tv } : {}) },
+        { sub: userId, ...(tv !== undefined ? { tv } : {}), ...(amr && isAmr(amr) ? { amr } : {}) },
         { secret: this.secret, expiresIn: this.accessTtl },
       ),
       refreshToken,
     }
   }
+}
+
+/** The `amr` recorded in a refresh family id by {@link Auth} (undefined for older families). */
+function amrOfFamily(familyId: string): string[] | undefined {
+  const dot = familyId.lastIndexOf('.')
+  if (dot === -1) return undefined
+  const amr = familyId.slice(dot + 1).split('+')
+  return isAmr(amr) ? amr : undefined
 }

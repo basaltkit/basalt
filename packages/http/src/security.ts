@@ -1,4 +1,4 @@
-import { definePlugin, ensureMetadata } from '@basaltkit/core'
+import { definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
 import { HttpError } from './errors.js'
 import type { RouteGuard } from './pipeline.js'
 import type { HttpReply, HttpRequest } from './route.js'
@@ -149,22 +149,79 @@ export const DEFAULT_CACHE_CONTROL = 'no-store'
 export const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
 
 /**
+ * Who a per-route bucket belongs to (`meta.rateLimit.key`):
+ *
+ * - `'ip'` (default) — the client address (`request.ip`), as before.
+ * - `'user'` — `ctx().user.id`: users behind one NAT/proxy no longer share a budget.
+ * - `'tenant'` — `ctx().tenant.id`: every user of a tenant shares one budget.
+ * - `'user+tenant'` — one budget per user per tenant.
+ * - a function of `ctx()` returning the bucket id.
+ *
+ * Resolved after enrichers ran, so auth/tenancy have set `ctx()`. When the id
+ * is missing (anonymous caller, no tenant resolved, the function returns
+ * nothing) the bucket falls back to the client IP — never to one shared
+ * bucket, and never mixed with identified callers' buckets.
+ */
+export type RateLimitKey =
+  | 'ip'
+  | 'user'
+  | 'tenant'
+  | 'user+tenant'
+  | ((context: RequestContext) => string | undefined | null)
+
+/**
  * Per-route rate-limit override, read from a route's `meta.rateLimit`. When set,
- * that route gets its own bucket (keyed by client + route) at these thresholds
+ * that route gets its own bucket (keyed by `key` + route) at these thresholds
  * instead of the global default — so login/reset can be stricter than the rest.
  */
 export interface RouteRateLimit {
   limit: number
   windowMs: number
+  /** Who the bucket belongs to. Default `'ip'`. See {@link RateLimitKey}. */
+  key?: RateLimitKey
 }
+
+const RATE_LIMIT_KEYS = new Set(['ip', 'user', 'tenant', 'user+tenant'])
 
 /** Coerces a route's `meta.rateLimit` into a {@link RouteRateLimit}, or `null` if absent/malformed. */
 function parseRouteRateLimit(value: unknown): RouteRateLimit | null {
   if (!value || typeof value !== 'object') return null
-  const { limit, windowMs } = value as Record<string, unknown>
+  const { limit, windowMs, key } = value as Record<string, unknown>
   if (typeof limit !== 'number' || typeof windowMs !== 'number') return null
   if (!(limit > 0) || !(windowMs > 0)) return null
+  // An unrecognised key keeps the per-IP bucket: still limited, never unlimited.
+  if (typeof key === 'function') return { limit, windowMs, key: key as RateLimitKey }
+  if (typeof key === 'string' && RATE_LIMIT_KEYS.has(key)) return { limit, windowMs, key: key as RateLimitKey }
   return { limit, windowMs }
+}
+
+/** True when the bucket id can only be known after enrichers ran (not the IP). */
+const needsContext = (override: RouteRateLimit): boolean => override.key !== undefined && override.key !== 'ip'
+
+const idOf = (value: unknown): string | undefined => {
+  if (!value || typeof value !== 'object') return undefined
+  const id = (value as { id?: unknown }).id
+  return typeof id === 'string' || typeof id === 'number' ? String(id) : undefined
+}
+
+/**
+ * The identity part of a per-route bucket, namespaced (`user:`, `tenant:`,
+ * `key:`) so an id can never collide with an IP bucket; `undefined` when the
+ * key cannot be resolved and the caller falls back to the IP.
+ */
+function identityKey(key: RateLimitKey | undefined, context: RequestContext): string | undefined {
+  if (key === undefined || key === 'ip') return undefined
+  if (typeof key === 'function') {
+    const id = key(context)
+    return typeof id === 'string' && id !== '' ? `key:${id}` : undefined
+  }
+  const user = idOf(context['user'])
+  const tenant = idOf(context['tenant'])
+  if (key === 'user') return user !== undefined ? `user:${user}` : undefined
+  if (key === 'tenant') return tenant !== undefined ? `tenant:${tenant}` : undefined
+  // 'user+tenant'
+  if (user === undefined) return undefined
+  return tenant !== undefined ? `user:${user}|tenant:${tenant}` : `user:${user}`
 }
 
 export interface SecurityPluginOptions {
@@ -276,11 +333,14 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
       // stricter login/reset budget used to be silently ignored there. Guards
       // also run when a route is invoked as an MCP tool, so the budget cannot be
       // sidestepped through `/mcp` either.
-      const guard: RouteGuard = async ({ route, request, reply }) => {
+      // A `key` other than the IP (user/tenant) is resolved here, from ctx(),
+      // because only after the enrichers ran are the user and tenant known.
+      const guard: RouteGuard = async ({ route, request, reply, context }) => {
         const override = parseRouteRateLimit(route.meta?.['rateLimit'])
         if (!override || rateLimit.skip?.(request)) return
         if (isObject(request.raw) && charged.has(request.raw)) return
-        const result = await store.hit(`${clientKey(request)}::${route.url}`, override.limit, override.windowMs)
+        const bucket = identityKey(override.key, context) ?? clientKey(request)
+        const result = await store.hit(`${bucket}::${route.url}`, override.limit, override.windowMs)
         if (reply) applyRateLimitHeaders(reply, result)
         if (!result.allowed) throw new HttpError(429, RATE_LIMITED.code, RATE_LIMITED.message)
       }
@@ -318,8 +378,10 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
           // (instead of the global bucket) and let the guard skip it; when it
           // does not (Express, Hono), the request counts against the global
           // bucket and the guard charges the dedicated, stricter one.
+          // A user/tenant-keyed route cannot be charged here (no ctx() yet):
+          // it counts against the global bucket and the guard charges its own.
           const override = request.routePattern ? perRoute.get(routeKey(request.method, request.routePattern)) : undefined
-          if (override && request.routePattern) {
+          if (override && request.routePattern && !needsContext(override)) {
             const result = await store.hit(`${clientKey(request)}::${request.routePattern}`, override.limit, override.windowMs)
             if (isObject(request.raw)) charged.add(request.raw)
             applyRateLimitHeaders(reply, result)

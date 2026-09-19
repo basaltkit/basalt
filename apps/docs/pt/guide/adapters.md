@@ -280,6 +280,79 @@ security/metrics/tracing correm no edge. Infraestrutura só-de-Node —
 baseados em HTTP.
 :::
 
+## Uploads
+
+Os uploads de ficheiros também são neutros em relação ao adaptador. Dá a uma
+rota `body: upload({ … })` do `@basaltkit/http` e ela aceita
+`multipart/form-data` nos três frameworks, sem `@fastify/multipart`, `multer` nem
+o `parseBody` do Hono. O Basalt tem o seu próprio parser em stream, sem
+dependências e segundo o RFC 7578.
+
+```ts
+import { route, upload } from '@basaltkit/http'
+
+route({
+  method: 'POST',
+  url: '/documents',
+  body: upload({ maxBytes: 20 * 1024 * 1024, maxFiles: 3, allowedTypes: ['application/pdf', 'image/*'] }),
+  meta: { auth: true, rateLimit: { limit: 10, windowMs: 60_000, key: 'user' } },
+  async handler({ body }) {
+    for await (const file of body.files) {
+      // file: { field, filename, declaredType, stream: Readable }
+      await files.upload(file.stream, { name: file.filename, contentType: file.declaredType })
+    }
+    return { fields: body.fields }                // Record<string, string>
+  },
+})
+```
+
+- **O pipeline corre primeiro.** Pre-hooks (rate limit, CORS), enrichers
+  (tenant, utilizador) e guards (`auth`, `can`, …) correm todos antes de ser
+  lido um único byte do body. Um upload rejeitado recebe resposta sem ter sido
+  recebido.
+- **Em stream, nunca em buffer.** `body.files` é um iterável assíncrono. O
+  `stream` de cada ficheiro só é lido da rede à medida que o consomes (com
+  backpressure). Um ficheiro que saltes é descartado quando pedes o seguinte.
+  `body.fields` vai sendo preenchido à medida que as partes chegam: um campo
+  enviado antes de um ficheiro já está disponível quando esse ficheiro é
+  entregue, e todos estão disponíveis quando `files` se esgota.
+- **Os limites valem sobre os bytes recebidos**, não sobre o que o cliente
+  declara. Um `Content-Length` acima de `maxBytes` é recusado antes de ler
+  seja o que for.
+- **Os nomes de ficheiro são sanitizados**: diretórios (`../../x`, `C:\x`),
+  caracteres de controlo e overrides bidi são removidos, por isso `filename` é
+  uma etiqueta segura. Mesmo assim, nunca é uma chave de armazenamento.
+  `declaredType` é o que o cliente afirma, por isso faz sniffing dos bytes
+  (`validate.sniff` do `@basaltkit/files`) antes de confiar nele.
+- **Nada fica pendurado.** Quando o handler retorna (ou lança) sem ler tudo, o
+  resto é drenado em segundo plano até `maxBytes` e a resposta leva
+  `Connection: close`.
+
+| Opção de `upload()` | Predefinição | Acima do limite |
+|---|---|---|
+| `maxBytes` (obrigatória) | nenhuma | `413 PAYLOAD_TOO_LARGE`, para o pedido inteiro incluindo o enquadramento multipart |
+| `maxFiles` (obrigatória) | nenhuma | `400 TOO_MANY_FILES` |
+| `maxFileBytes` | `maxBytes` | `413 PAYLOAD_TOO_LARGE` |
+| `maxFields` | `50` | `400 TOO_MANY_FIELDS` |
+| `maxFieldBytes` | 64 KiB | `413 PAYLOAD_TOO_LARGE` |
+| `maxHeaderBytes` | 8 KiB (por parte) | `400 MALFORMED_MULTIPART` |
+| `allowedTypes` | qualquer | `415 UNSUPPORTED_MEDIA_TYPE` para uma parte de ficheiro cujo tipo declarado não está na lista (`image/png`, ou `image/*`) |
+
+Outros erros: `415 UNSUPPORTED_MEDIA_TYPE` se o pedido não for
+`multipart/form-data`. `400 MALFORMED_MULTIPART` para uma boundary em falta,
+repetida ou inválida, um body que acaba antes da boundary de fecho (upload
+truncado ou abortado), cabeçalhos de parte mal formados ou dobrados, uma parte
+`multipart/*` aninhada, ou um `Content-Transfer-Encoding` diferente de binary.
+
+Cada adaptador limita-se a entregar o stream cru do pedido. O Fastify recebe um
+parser `multipart/form-data` de passagem, registado apenas quando existe uma
+rota de upload e nunca por cima de um que tenhas registado tu. As outras rotas
+Fastify continuam a responder 415. Os parsers `json()`/`urlencoded()` do Express
+nunca leem multipart. O Hono salta o buffer do `bodyLimit` para multipart; uma
+rota que não é de upload continua a analisar um body multipart dentro do
+`bodyLimit`. No OpenAPI, o body do pedido da rota fica documentado como
+`multipart/form-data`.
+
 ## Como funciona
 
 - **`@basaltkit/http`** define os neutros `HttpRequest` / `HttpReply` e o pipeline
@@ -308,7 +381,7 @@ nativos da sua framework.
 | `notFound` | `boolean` | `true` (corpo 404 neutro) | todos | Passa `false` para sair do `404 { error: { code: 'NOT_FOUND' } }` partilhado e manter o default da framework. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passado ao construtor `Fastify()` (logger, trustProxy, …). |
 | `app` | instância nativa | criada por ti ou pelo plugin | express, hono | Traz o teu próprio `express()` / `new Hono()` e o Basalt monta-se nele. |
-| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejeita bodies grandes demais com 413 (`PAYLOAD_TOO_LARGE`) — o Hono/edge não tem limite por omissão. Aplicado aos bytes efectivamente lidos: um body chunked/em stream sem `Content-Length` é contado durante a leitura e cortado no limite. |
+| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejeita bodies grandes demais com 413 (`PAYLOAD_TOO_LARGE`) — o Hono/edge não tem limite por omissão. Aplicado aos bytes efectivamente lidos: um body chunked/em stream sem `Content-Length` é contado durante a leitura e cortado no limite. Uma rota `upload()` é limitada pelo seu próprio `maxBytes` (em stream, nunca em buffer). |
 | `getClientIp` | `(c: Context) => string \| undefined` | endereço do socket (`@hono/node-server`, Bun) | hono | Define `request.ip`, a chave do rate limiting por cliente e do throttle de login por IP. Num runtime edge ou atrás de um proxy de confiança, fornece-o (ex.: `(c) => c.req.header('cf-connecting-ip')` na Cloudflare). Quando nenhum IP é resolvido, é emitido um aviso único e os rate limits partilham um só bucket. Nunca leias `X-Forwarded-For` a não ser que um proxy teu o reescreva. |
 | `errorHandler` | `boolean` | `true` | express | Middleware final `(err, req, res, next)` que transforma erros do body-parser e dos pre-hooks no envelope JSON neutro (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, caso contrário `500 INTERNAL_ERROR`) em vez da página HTML do Express com stack trace. Passa `false` só se montares o teu próprio error handler depois do boot. |
 
@@ -322,6 +395,7 @@ nativos da sua framework.
 | `404 { code: 'NOT_FOUND' }` numa rota que definiste | a rota não foi registada nesta instância do adapter | confirma que está em `routes: [...]` do plugin do adapter que arrancou |
 | `413 PAYLOAD_TOO_LARGE` | o body excedeu o `bodyLimit` (hono) ou o limite do body-parser (express, 100 KB por omissão) | sobe o limite deliberadamente |
 | `400 BAD_REQUEST` (express) | o body não pôde ser interpretado (JSON malformado, codificação corrompida) | envia um body válido |
+| `400 MALFORMED_MULTIPART` / `TOO_MANY_FILES`, `413`, `415` numa rota `upload()` | o upload excedeu um limite ou violou o enquadramento multipart | vê [Uploads](#uploads) |
 | Aviso `[basalt:hono] Could not resolve the client IP` | este runtime não expõe o endereço do socket ao adaptador | passa `honoPlugin({ getClientIp })` |
 
 ## Os plugins de edge também são neutros

@@ -275,6 +275,30 @@ sempre `afterEach(() => time.restore())`, e nunca corras ficheiros que viajam no
 tempo com concorrência dentro do ficheiro.
 :::
 
+## Um tenant real por teste
+
+`withTenant(tenancy, id, fn, { fields?, cleanup? })` provisiona um tenant real,
+corre o `fn` dentro do seu contexto e destrói-o no fim — também quando o `fn`
+lança. Um tenant com o mesmo id que tenha ficado para trás (uma execução anterior
+que caiu) é destruído à força primeiro, para que a suite recupere sozinha.
+
+```ts
+import { TENANCY } from '@basaltkit/tenancy'
+import { withTenant } from '@basaltkit/testing'
+
+await withTenant(app.container.get(TENANCY), 'acme', async () => {
+  // ctx().tenant é a acme; o teu hook onProvision já correu
+})
+```
+
+::: info Ainda não disponível
+O `@basaltkit/testing` não tem fakes dedicados de storage, notificações ou
+billing, nem factories de Prisma, nem uma transação com rollback por ficheiro,
+nem um preset de Vitest. Para billing, usa `FakeBillingGateway` /
+`FakePaymentGateway` e os `Memory*Store` de `@basaltkit/subscriptions`; para
+notificações in-app, o `MemoryInAppStore` de `@basaltkit/notifications`.
+:::
+
 ## Referência de opções
 
 `createTestApp(options)` — tudo o que vem de `CreateAppOptions`, mais `adapter`:

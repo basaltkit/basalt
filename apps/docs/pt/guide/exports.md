@@ -43,8 +43,9 @@ const result = await exports.run(usersExport, users, 'csv')
 ```
 
 CSV/TSV fazem quoting corretamente (RFC 4180), as datas renderizam como ISO, e
-`run` aceita um array **ou** um `AsyncIterable`, para que as linhas possam vir em
-stream da base de dados.
+`run` aceita um array **ou** um `AsyncIterable`. O `run` faz sempre **buffer** —
+recolhe todas as linhas e devolve o ficheiro inteiro num único `Buffer`; para
+grandes volumes de dados usa o [`stream()`](#exportacoes-grandes-em-stream).
 
 As células CSV/TSV estão também protegidas contra **injeção de fórmulas**:
 qualquer célula cujo texto final comece por `=`, `+`, `-`, `@` (ou as suas
@@ -57,10 +58,9 @@ isentos, pelo que um número negativo continua numérico.
 
 ## Relatórios grandes: queue + storage
 
-`run` é puro e síncrono por design. Para exportações grandes, corre-o dentro de um
+`run` é puro e devolve um único `Buffer`. Para exportações grandes, corre-o dentro de um
 job de [queue](/pt/guide/queues) e armazena o ficheiro com [`@basaltkit/files`](/pt/guide/files)
-para download. `run` também aceita um `AsyncIterable`, para que as linhas venham em
-stream diretamente da base de dados em vez de acumularem em memória:
+para download (para volumes muito grandes, troca o `run` pelo [`stream()`](#exportacoes-grandes-em-stream)):
 
 ```ts
 // src/jobs/generate-report.ts
@@ -98,6 +98,44 @@ export const GenerateReport = defineJob<{ tenantId: string; requestedBy: string 
 await GenerateReport.dispatch({ tenantId: 'acme', requestedBy: 'u1' })
 ```
 
+## Exportações grandes em stream
+
+O `exports.stream(definition, data, format)` renderiza **incrementalmente**: as
+linhas são lidas de `data` (um array ou um `AsyncIterable`, p.ex. um cursor da
+base de dados) uma a uma e o ficheiro sai como um `AsyncIterable<Buffer>` em
+blocos de ~64 KiB (`{ chunkSize }` para ajustar), por isso a memória fica limitada
+a um bloco e não ao volume de dados. Os bytes são idênticos ao `content` do `run()`.
+
+```ts
+import { createWriteStream } from 'node:fs'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+
+const out = exports.stream(usersExport, queryUsers(tenantId), 'csv')
+out.contentType // 'text/csv' — conhecido à partida, para os headers da resposta
+out.filename    // 'users.csv'
+
+await pipeline(Readable.from(out), createWriteStream(`/tmp/${out.filename}`))
+out.rowCount    // final depois de o stream ser consumido
+```
+
+O stream só pode ser consumido uma vez; também serve como body de uma `Response`
+web (`new Response(ReadableStream.from(out))`) ou de um upload multipart para S3.
+
+| Formato | `run()` | `stream()` |
+| --- | --- | --- |
+| `csv`, `tsv`, `json`, `ndjson` | em buffer | incremental |
+| `xlsx`, PDF, qualquer formatador sem `renderStream` | em buffer | `ExportNotStreamableError` (`EXPORT_NOT_STREAMABLE`, 400) |
+
+O `exports.streamableFormats()` lista o que o `stream()` aceita.
+
+::: warning Mantém o destino também em stream
+O `files.upload()` aceita o stream, mas faz buffer do upload (até ao seu limite
+de tamanho) antes de escrever no disco. Para manter a memória estável de ponta a
+ponta, encaminha para um destino que faça stream — um ficheiro, uma resposta
+HTTP, um upload multipart.
+:::
+
 ## XLSX
 
 Adiciona `@basaltkit/exports-xlsx` — um `.xlsx` válido com um **escritor ZIP
@@ -116,6 +154,12 @@ vez de passarem tal e qual, o que tornaria a folha impossível de ler e faria o
 Excel recusar-se a abrir o ficheiro. Tab, newline e carriage return são XML
 legal e ficam intactos.
 
+O formatador XLSX funciona **só em buffer**: um `.xlsx` é um ZIP cujas entradas
+precisam dos tamanhos e CRCs, por isso a folha inteira é construída em memória —
+usa o `run()`, não o `stream()`.
+
 Para adicionar outro formato (PDF, ODS…), implementa `ExportFormatter.render(headers,
 rows) → Buffer` e regista-o da mesma forma — sem alterações à definição de
-exportação.
+exportação. Implementa também o `renderStream(headers, rows: AsyncIterable<unknown[]>)
+→ AsyncIterable<string | Buffer>` opcional (com bytes idênticos ao `render`) para
+tornar o formato streamable.

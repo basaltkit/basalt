@@ -59,6 +59,25 @@ app.post('/upload', async (req) => {
 })
 ```
 
+`upload()` also takes a **stream** — a Node `Readable`, an `AsyncIterable<Uint8Array>` or a web `ReadableStream` — enforcing `maxSize` while it arrives (the source is cancelled past the cap, nothing is written), and computing the size, the SHA-256 and the sniffed type on the fly:
+
+```ts
+const part = await req.file()
+await files.upload(part.file, { name: part.filename, contentType: part.mimetype }) // part.file is a Readable
+await files.upload(request.body!, { name, contentType })                            // web ReadableStream (Hono, raw PUT)
+await files.upload(file.stream, { name: file.filename, contentType: file.contentType }) // @basaltkit/http upload() body
+```
+
+`Disk.put` takes whole buffers, so the accepted bytes (at most `maxSize`) are buffered before the write.
+
+## Checking the real type (`validate.sniff`)
+
+By default `allowedTypes` trusts the client-declared `contentType` — an HTML page sent as `application/pdf` passes. `validate: { sniff: true }` reads the magic bytes instead (built-in table, no dependency: PDF, PNG, JPEG, GIF, WebP, TIFF, ZIP, docx/xlsx/pptx, and HTML/SVG/XML text and PE/ELF/Mach-O executables to catch disguises). A mismatch is `415 FILE_TYPE_MISMATCH`; the allowlist judges the detected type; the record stores the detected type and keeps the claim in `metadata.declaredType`. Pass a function `(bytes) => string | null` for your own detector. Off by default — **consider enabling it** whenever users upload files other users open.
+
+## Quarantine until scanned (`requireScan`)
+
+With `filesPlugin({ requireScan: true })`, `download()` / `temporaryUrl()` (and `POST /files/:id/url`) throw `423 FILE_NOT_SCANNED` until `markScanned` reports the file clean, and `403 FILE_INFECTED` after a failed scan. Listing still shows every record with its scan state. The scanner reads the quarantined bytes with `files.download(id, tenantId, { bypassQuarantine: true })`.
+
 The other operations have ready-made routes via `fileRoutes()`:
 
 | Route | Description |
@@ -79,6 +98,7 @@ hooks.on('file:uploaded', ({ file }) => ScanFile.dispatch({ tenantId: file.tenan
 
 // in the job, after scanning:
 await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
+// with requireScan, the scanner reads the bytes via download(id, tenantId, { bypassQuarantine: true })
 ```
 
 ## API reference
@@ -93,6 +113,7 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 | `validate` | `FileValidation` | `{ maxSize: DEFAULT_MAX_FILE_SIZE }` | Size limit and content-type allowlist. See below — the size cap applies **even if you pass nothing**. |
 | `maxTotalBytes` | `number` | — (no quota) | Built-in per-tenant quota: rejects an upload when the tenant's stored bytes plus this file would exceed it. Costs one `store.totalSize()` read per upload. |
 | `checkQuota` | `(tenantId, size) => Promise<void> \| void` | — | Custom quota check, run after the built-in one. Throw to reject — this is where you wire `@basaltkit/subscriptions` plan limits. |
+| `requireScan` | `boolean` | `false` | Quarantine: `download`/`temporaryUrl` throw `423 FILE_NOT_SCANNED` until a scan reports the file clean, `403 FILE_INFECTED` after a failed scan. |
 | `store` | `FileStore` | `MemoryFileStore` | Where file metadata lives. In-memory means records vanish on restart while the bytes stay in storage — implement `FileStore` over your database in production. |
 
 `FileValidation`:
@@ -100,11 +121,12 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `maxSize` | `number` | `DEFAULT_MAX_FILE_SIZE` = **25 MiB** (`26214400`) | Per-file byte cap. Secure by default: uploads are capped even when you configure nothing. Raise it, or pass `Infinity` to disable. |
-| `allowedTypes` | `string[]` | — (anything) | Content-type allowlist. Supports trailing wildcards: `'image/*'` matches `image/png`. |
+| `allowedTypes` | `string[]` | — (anything) | Content-type allowlist. Supports trailing wildcards: `'image/*'` matches `image/png`. With `sniff`, matched against the detected type. |
+| `sniff` | `boolean \| (bytes: Uint8Array) => string \| null` | `false` | Detect the real type from the first 64 KiB; refuse mismatches (`415 FILE_TYPE_MISMATCH`); store the detected type, keep the declared one in `metadata.declaredType`. |
 
 `DEFAULT_MAX_FILE_SIZE` is exported, so you can express a limit relative to it.
 
-> The cap applies to the buffer you hand to `upload()`. Your HTTP adapter's own
+> The cap applies to the buffer or stream you hand to `upload()` (a stream is cut off as soon as it passes it). Your HTTP adapter's own
 > body limit still applies first, and `@basaltkit/storage` itself caps nothing
 > unless you pass `maxBytes` per `put()`.
 
@@ -112,12 +134,13 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 
 | Method | Description |
 |---|---|
-| `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. |
-| `download(id, tenantId?)` | `{ record, content }`. |
+| `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. `content`: `Buffer`/`Uint8Array`, Node `Readable`, `AsyncIterable<Uint8Array>` or web `ReadableStream`. |
+| `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`. Gated by `requireScan`; `bypassQuarantine` is for the scanner only. |
 | `temporaryUrl(id, expiresIn, tenantId?, options?)` | Signed URL. Served `Content-Disposition: attachment` by default; pass `{ disposition: 'inline' }` only when top-level rendering is deliberate — an uploaded HTML/SVG file served inline is stored XSS on the storage origin. Embedded `<img>`/`<video>` uses render regardless. |
 | `get(id, tenantId?)` · `list(tenantId?)` | Metadata. |
 | `delete(id, tenantId?)` | Deletes bytes + metadata; emits `file:deleted`. |
 | `markScanned(id, result, tenantId?)` | Marks as scanned; emits `file:scanned`. |
+| `sniffContentType(bytes)` (export) | The built-in signature sniffer: MIME type or `null`. |
 
 Without an explicit `tenantId`, it uses `ctx().tenant.id`. Inside a tenant context an explicit `tenantId` must equal it, otherwise `FileTenantMismatchError` (403) — the argument can never widen a call to another tenant. With no tenant resolvable it throws `FileTenantRequiredError` **only when `@basaltkit/tenancy` is registered** — an app without tenancy has no tenant dimension to cross, and its records are keyed by `SINGLE_TENANT_SCOPE`. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
 
@@ -126,7 +149,10 @@ Without an explicit `tenantId`, it uses `ctx().tenant.id`. Inside a tenant conte
 | Error | Code | HTTP | When |
 |---|---|---|---|
 | `FileTooLargeError` | `FILE_TOO_LARGE` | 413 | The buffer exceeds `validate.maxSize` — 25 MiB when you configured nothing. |
-| `FileTypeNotAllowedError` | `FILE_TYPE_NOT_ALLOWED` | 415 | `contentType` doesn't match `validate.allowedTypes`. |
+| `FileTypeNotAllowedError` | `FILE_TYPE_NOT_ALLOWED` | 415 | `contentType` (with `sniff`, the detected type) doesn't match `validate.allowedTypes`. |
+| `FileTypeMismatchError` | `FILE_TYPE_MISMATCH` | 415 | `validate.sniff` is on and the bytes contradict the declared type. |
+| `FileNotScannedError` | `FILE_NOT_SCANNED` | 423 | `requireScan` is on and no scan has reported the file clean yet. |
+| `FileInfectedError` | `FILE_INFECTED` | 403 | `requireScan` is on and the last scan reported the file not clean. |
 | `StorageQuotaExceededError` | `FILE_QUOTA_EXCEEDED` | 402 | The tenant's total stored bytes plus this upload would pass `maxTotalBytes`. |
 | `FileNotFoundError` | `FILE_NOT_FOUND` | 404 | `download` / `temporaryUrl` / `markScanned` for an id absent from this tenant's metadata store. |
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | No `tenantId` argument and no `ctx().tenant` — every operation is tenant-scoped and fails closed rather than querying unscoped. |

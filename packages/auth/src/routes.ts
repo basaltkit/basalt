@@ -1,7 +1,7 @@
 import { ctx, BasaltError, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
-import { AUTH } from './plugin.js'
+import { AUTH, CsrfRejectedError, isCsrfRejected } from './plugin.js'
 import { API_KEYS } from './apikeys-plugin.js'
 
 /**
@@ -38,6 +38,14 @@ export interface AuthRoutesOptions {
   rateLimit?: { limit: number; windowMs: number } | false
 }
 
+/**
+ * Route meta shared by the account routes (sign-in, profile, MFA self-service):
+ * `account: true` exempts them from tenant-membership guards (they are about
+ * the caller, not a tenant's data — `@basaltkit/teams` honours it) and
+ * `mfa: false` keeps them reachable before MFA under `requireMfa`.
+ */
+export const ACCOUNT_META = { account: true, mfa: false } as const
+
 /** RFC 5321 caps a forward path at 254 characters. */
 export const MAX_EMAIL_LENGTH = 254
 /** Far above any passphrase; bounds the work an unauthenticated body can cause. */
@@ -72,12 +80,15 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
   const password = passwordSchema(options.password)
   const credentials = z.object({ email: email(), password })
   const limit = options.rateLimit === false ? {} : { rateLimit: options.rateLimit ?? { ...DEFAULT_AUTH_RATE_LIMIT } }
+  // Every route here is about the caller's own account: exempt from the
+  // tenant-membership guard (`account`) and reachable before MFA (`mfa: false`).
+  const account = ACCOUNT_META
 
   return [
     route({
       method: 'POST',
       url: '/auth/register',
-      meta: { ...limit },
+      meta: { ...account, ...limit },
       body: credentials,
       // Enumeration-safe: the same 202 whether the email is new or already taken
       // (a collision is signalled out-of-band via auth:register_existing_email).
@@ -90,16 +101,16 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/login',
-      meta: { ...limit },
+      meta: { ...account, ...limit },
       body: credentials.extend({ mfaCode: z.string().max(64).optional() }),
       async handler({ body, request, reply }) {
-        const { user, tokens } = await auth().login(
+        const { user, tokens, amr } = await auth().login(
           body.email,
           body.password,
           body.mfaCode,
           request.ip ? { ip: request.ip } : {},
         )
-        const session = await auth().createSession(user.id)
+        const session = await auth().createSession(user.id, { amr })
         const sessionCookie = auth().sessionCookieHeader(session.id)
         if (sessionCookie) reply.header('set-cookie', sessionCookie)
         return { user, ...tokens }
@@ -109,6 +120,7 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/refresh',
+      meta: { ...account },
       body: z.object({ refreshToken: token() }),
       async handler({ body }) {
         return auth().refresh(body.refreshToken)
@@ -118,11 +130,23 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/logout',
-      body: z.object({ refreshToken: token() }),
+      meta: { ...account },
+      // The refresh token is optional: a SPA on the HttpOnly session cookie
+      // alone never sees one, and ends its session with an empty body.
+      body: z.object({ refreshToken: token().optional() }).optional(),
       async handler({ body, request, reply }) {
-        await auth().revoke(body.refreshToken)
-        const sessionId = auth().sessionIdFromCookie(request.headers.cookie as string | undefined)
-        if (sessionId) await auth().logout(sessionId)
+        const refreshToken = body?.refreshToken
+        if (refreshToken) await auth().revoke(refreshToken)
+        const headerSession = request.headers['x-session-id']
+        if (typeof headerSession === 'string') await auth().logout(headerSession)
+        const cookieSession = auth().sessionIdFromCookie(request.headers.cookie as string | undefined)
+        if (cookieSession && isCsrfRejected(ctx())) {
+          // A cross-site request must not end the cookie session (logout CSRF).
+          // With nothing else to act on, say so instead of a silent 204.
+          if (!refreshToken && typeof headerSession !== 'string') throw new CsrfRejectedError()
+          return reply.code(204).send()
+        }
+        if (cookieSession) await auth().logout(cookieSession)
         const expiredCookie = auth().expiredSessionCookieHeader()
         if (expiredCookie) reply.header('set-cookie', expiredCookie)
         return reply.code(204).send()
@@ -132,7 +156,7 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/auth/me',
-      meta: { auth: true },
+      meta: { auth: true, ...account },
       async handler() {
         return ctx().user
       },
@@ -142,7 +166,7 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/verify/request',
-      meta: { ...limit },
+      meta: { ...account, ...limit },
       body: z.object({ email: email() }),
       async handler({ body }) {
         // The app emails the token (via the auth:verify_requested hook). Always
@@ -155,6 +179,7 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/verify',
+      meta: { ...account },
       body: z.object({ token: token() }),
       async handler({ body }) {
         return { user: await auth().verifyEmail(body.token) }
@@ -165,7 +190,7 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/password/forgot',
-      meta: { ...limit },
+      meta: { ...account, ...limit },
       body: z.object({ email: email() }),
       async handler({ body }) {
         await auth().requestPasswordReset(body.email)
@@ -179,7 +204,7 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
       // The same policy as register. Covering register and leaving reset behind
       // would let anyone walk a strong password back down to eight characters
       // through "forgot password" — a loophole worse than having no option.
-      meta: { ...limit },
+      meta: { ...account, ...limit },
       body: z.object({ token: token(), password }),
       async handler({ body }) {
         await auth().resetPassword(body.token, body.password)
@@ -285,7 +310,7 @@ export function mfaRoutes(): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/mfa/enroll',
-      meta: { auth: true, apiKey: false },
+      meta: { auth: true, apiKey: false, ...ACCOUNT_META },
       async handler() {
         return auth().enrollMfa(currentUserId())
       },
@@ -294,7 +319,7 @@ export function mfaRoutes(): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/mfa/activate',
-      meta: { auth: true, apiKey: false },
+      meta: { auth: true, apiKey: false, ...ACCOUNT_META },
       body: z.object({ code: z.string().min(6).max(64) }),
       async handler({ body }) {
         return auth().activateMfa(currentUserId(), body.code)
@@ -304,7 +329,7 @@ export function mfaRoutes(): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/auth/mfa/status',
-      meta: { auth: true, apiKey: false },
+      meta: { auth: true, apiKey: false, ...ACCOUNT_META },
       async handler() {
         return auth().mfaStatus(currentUserId())
       },
@@ -313,7 +338,9 @@ export function mfaRoutes(): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/auth/mfa/disable',
-      meta: { auth: true, apiKey: false },
+      // Account route, but NOT exempt from `requireMfa`: switching MFA off
+      // under the policy needs an MFA sign-in.
+      meta: { auth: true, apiKey: false, account: true },
       body: z.object({ code: z.string().min(6).max(64) }),
       async handler({ body, reply }) {
         await auth().disableMfa(currentUserId(), body.code)

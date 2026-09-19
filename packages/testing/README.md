@@ -348,6 +348,30 @@ The return type follows the adapter: `Promise<TestApp>` (Fastify responses) for 
 | `time.travelTo(date)` | `(date: Date) => void` | Pins "now" to an exact date |
 | `time.restore()` | `() => void` | Undoes the patch and resets the offset to zero — always call in `afterEach` |
 
+### `withTenant(tenancy, id, fn, options?)`
+
+Provisions a **real** tenant for one test, runs `fn` inside its context (`tenancy.run`), and destroys it afterwards — also when `fn` throws. A leftover tenant with the same id (from a crashed run) is force-destroyed first.
+
+```ts
+import { TENANCY } from '@basaltkit/tenancy'
+import { withTenant } from '@basaltkit/testing'
+
+await withTenant(app.container.get(TENANCY), 'acme', async () => {
+  // ctx().tenant is acme; provisioning hooks have run
+})
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `fields` | `Record<string, unknown>` | — | Extra fields for the tenant record (name, plan, domain…) |
+| `cleanup` | `boolean` | `true` | `false` leaves the tenant standing for inspection — don't commit it |
+
+`tenancy` is structural (`find`/`create`/`destroy`/`run`), so the package takes no dependency on `@basaltkit/tenancy`.
+
+### Not provided (yet)
+
+There are no dedicated storage, notifications or billing fakes in this package, no Prisma factories, no per-file rolled-back test transaction and no Vitest preset. For billing use `FakeBillingGateway` / `FakePaymentGateway` and the `Memory*Store`s from `@basaltkit/subscriptions`; for in-app notifications, `MemoryInAppStore` from `@basaltkit/notifications`.
+
 ### Errors
 
 | Error | Code | HTTP | When |

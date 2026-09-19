@@ -197,6 +197,18 @@ Flow (all routes require login):
 3. From then on, `POST /auth/login` requires the extra `mfaCode` field (TOTP code or a recovery code). Correct password without a code → `AUTH_MFA_REQUIRED` error.
 4. `GET /auth/mfa/status` and `POST /auth/mfa/disable` (with `{ code }`) complete the cycle.
 
+**Requiring MFA.** `authPlugin({ requireMfa: true })` — or a policy
+`requireMfa: (user, context) => boolean | Promise<boolean>` — refuses every
+authenticated request whose credential was not obtained with a second factor:
+`403 AUTH_MFA_ENROLLMENT_REQUIRED` (no MFA yet: enrol, then sign in again) or
+`403 AUTH_MFA_REQUIRED` (sign in again with a code). Routes with
+`meta.mfa: false` are exempt — all of `authRoutes()` and MFA
+enroll/activate/status. `meta: { mfa: true }` requires MFA on one route
+(step-up) even without the policy. Tokens carry an `amr` claim (`['pwd']`,
+`['pwd', 'mfa']`, `['fed', …]` for social login), refreshes keep it, the
+session cookie carries it HMAC-signed, and the request exposes it as
+`ctx().amr`. API-key requests are not subject to the policy. Off by default.
+
 ### Passkeys — WebAuthn (`webauthnPlugin`)
 
 Passkeys let users sign in with Face ID / Touch ID / a security key — no password.
@@ -412,6 +424,12 @@ authPlugin({
 })
 ```
 
+Counters live in memory per process by default. For several replicas, share
+them: `authPlugin({ throttleStore: new RedisThrottleStore(redis) })` backs the
+login/MFA, per-IP and email-request throttles with one atomic Redis script per
+attempt. `redis` is any ioredis-compatible client — only `eval` and `del` are
+used, no Redis dependency. Implement `ThrottleStore` for another backend.
+
 ### Hooks (events)
 
 The application can react to authentication events: `auth:registered`, `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
@@ -434,6 +452,8 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
 | `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults to production only. |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
+| `throttleStore` | `ThrottleStore` | No | in-memory, per process | Counters of the default login / per-IP / email-request throttles — `RedisThrottleStore` for one budget across replicas. |
+| `requireMfa` | `boolean \| (user, context) => boolean \| Promise<boolean>` | No | off | Plugin only. Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones. |
 | `tokens` | `AuthTokenStore` | No | `MemoryAuthTokenStore` | Verification/reset tokens. `markUsed` must be a **compare-and-swap** — see below. |
 | `verificationTtl` | `DurationInput` | No | `'24h'` | Email verification link validity. |
 | `resetTtl` | `DurationInput` | No | `'1h'` | Password reset link validity. |
@@ -446,12 +466,12 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | Method | Description |
 |---|---|
 | `register(email, password)` | Creates the account; throws `EmailTakenError` if the email already exists. |
-| `login(email, password, mfaCode?)` | Returns `{ user, tokens }`; applies throttle and MFA. |
+| `login(email, password, mfaCode?)` | Returns `{ user, tokens, amr }`; applies throttle and MFA. |
 | `attempt(email, password)` | Checks credentials without side effects; `null` on failure. |
 | `refresh(refreshToken)` | New token pair; detects reuse and revokes the family. |
 | `revoke(refreshToken)` | Logout for token-based clients. |
 | `verifyAccess(accessToken)` | Validates the JWT and returns the claims. |
-| `createSession(userId)` / `sessionUser(sessionId)` / `logout(sessionId)` | Cookie/header-based sessions. |
+| `createSession(userId, { amr? })` / `sessionUser(sessionId)` / `sessionAuth(sessionId)` / `logout(sessionId)` | Cookie/header-based sessions; `amr` is carried HMAC-signed in the session id, `sessionAuth` returns `{ user, amr? }`. |
 | `requestEmailVerification(email)` / `verifyEmail(token)` | Email verification. |
 | `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
 | `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
@@ -460,7 +480,8 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 
 ### Ready-made routes
 
-- `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them.
+- `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them. `POST /auth/logout` takes an optional `{ refreshToken }`: with none (or no body) it ends the cookie / `x-session-id` session and expires the cookie — a cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`).
+- Every `authRoutes()`, `mfaRoutes()` and `oauthRoutes()` route declares `meta.account: true` (about the caller, not a tenant's data — `@basaltkit/teams`' membership guard lets non-members through) and, except MFA disable, `meta.mfa: false` (reachable under `requireMfa`). `ACCOUNT_META` exports the pair for your own profile routes.
 - `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
 - `oauthRoutes({ callbackBaseUrl, successRedirect? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider.
@@ -484,7 +505,8 @@ Options (`ApiKeysPluginOptions`):
 |---|---|
 | `signJwt(claims, { secret, expiresIn? })` / `verifyJwt(token, secret)` | Dependency-free HS256 JWT. Advanced. |
 | `ScryptPasswordHasher` / `PasswordHasher` | Password hashing (scrypt, memory-hard). Advanced. |
-| `LoginThrottle` (`maxAttempts` def. 5, `windowMs` def. 15 min, `clock`) | Anti brute-force. |
+| `LoginThrottle` (`maxAttempts` def. 5, `windowMs` def. 15 min, `store`, `namespace`, `clock`) | Anti brute-force. |
+| `ThrottleStore` / `MemoryThrottleStore` / `RedisThrottleStore` (`RedisThrottleClient`: `eval` + `del`) | Where throttle counters live; Redis shares them across replicas. |
 | `generateTotpSecret`, `totp`, `verifyTotp`, `otpauthUri`, `base32Encode`, `base32Decode` | TOTP primitives (RFC 6238). Advanced. |
 | `publicUser(user)` | Converts `AuthUser` → `PublicUser` (removes the hash). |
 | `AUTH`, `API_KEYS`, `OAUTH` | Injection tokens: `container.get(AUTH)` returns the `Auth` instance; `OAUTH` returns the `OAuth` instance. |
@@ -512,6 +534,7 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 | `AuthTokenInvalidError` (verification/reset links) | `AUTH_TOKEN_INVALID` | 400 |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 |
 | `MfaRequiredError` / `MfaInvalidCodeError` / `MfaNotEnrolledError` | `AUTH_MFA_*` | 401/401/400 |
+| `MfaStepUpRequiredError` / `MfaEnrollmentRequiredError` | `AUTH_MFA_REQUIRED` / `AUTH_MFA_ENROLLMENT_REQUIRED` | 403/403 |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 |

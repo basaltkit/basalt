@@ -69,7 +69,7 @@ await audit.record('data.export', { format: 'csv' })
 
 ### Automatic hook capture
 
-By default, hooks matching `auth:**`, `billing:**`, `tenancy:**`, or `permission:**` are recorded. You can replace the list:
+By default, hooks matching `auth:**`, `billing:**`, `tenancy:created`, or `permission:**` are recorded (not `tenancy:switched`, which fires on every request). You can replace the list:
 
 ```ts
 import { auditPlugin } from '@basaltkit/audit'
@@ -148,6 +148,71 @@ await audit.systemTrail({ event: 'billing:**' })
 
 Event patterns support segments separated by `:` (hooks) or `.` (events): `*` matches one segment, `**` matches one or more. E.g.: `auth:*` matches `auth:login`; `order.**` matches `order.created` and `order.item.added`; `**` matches everything.
 
+### Verifiable trail (hash chain)
+
+"Append-only" in the store interface is a promise the code keeps; it does not stop someone with database access from editing a row. Turn on `integrity: 'hash-chain'` to make the trail **tamper-evident**:
+
+```ts
+auditPlugin({ store: sqliteAuditStore('./data/audit.db').store, integrity: 'hash-chain' })
+```
+
+Every entry then carries `seq` (its position in the chain, from 1), `prevHash` (the previous entry's hash) and `hash` = SHA-256 over `prevHash` + a canonical serialization of the entry (stable key order, explicit fields: `id`, `seq`, `tenantId`, `at`, `source`, `event`, `actorId`, `requestId`, `ip`, `userAgent` and the payload as persisted). There is **one chain per tenant**, plus one for entries recorded without a tenant (the system chain), so tenants never contend with each other and each can be verified alone.
+
+```ts
+const result = await audit.verify({ tenantId: 'acme' })        // or { from: 100, to: 200 }
+// { ok: true, tenantId: 'acme', checked: 1284, unchained: 0, head: { seq: 1284, hash: '…' } }
+// { ok: false, …, firstBrokenAt: 17, entryId: '…', reason: 'hash-mismatch' }
+
+const all = await audit.verifyAll()   // system-only: every chain → { ok, chains: [...] }
+```
+
+`verify` recomputes each hash and checks the `seq` continuity and the `prevHash` links, so it detects an **edited** row (`hash-mismatch`), a **deleted** row (`sequence-gap`), **reordered** rows and a **forged** row that does not link (`prev-hash-mismatch`, `sequence-duplicate`). `from`/`to` are sequence numbers (inclusive); a window is anchored on the entry at `from - 1` (`missing-predecessor` if it is gone). Tenant scoping works like `trail()`: inside a tenant context the context tenant is forced; outside one, `tenantId` picks the chain and omitting it verifies the system chain.
+
+Rows written **before** integrity was enabled have no hash: `verify` counts them as `unchained` — they are never reported as broken.
+
+**Concurrency.** Appends to one chain are serialized in-process (a per-chain mutex). Across replicas, the store is the guarantee: the SQLite and Prisma stores have a unique `(chain, seq)` constraint, so two replicas racing for the same `seq` cannot fork the chain — the loser gets `AuditChainConflictError`, re-reads the head and retries (with jittered backoff, up to 10 attempts). A custom store that implements the chain methods must do the same.
+
+**What a hash chain does and does not prove.** A plain SHA-256 chain can be recomputed by anyone who can write to the database — it catches accidental and naive tampering, not a determined DBA who rewrites every hash after the edit. Two mitigations, both cheap:
+
+- **Key the chain**: `integrity: { mode: 'hash-chain', key: process.env.AUDIT_CHAIN_KEY! }` makes every hash an HMAC-SHA256 (key of at least 128 bits, stored outside the database). Without the key a writer cannot produce a chain that verifies.
+- **Anchor the head**: `verify()` returns `head: { seq, hash }`. Record it periodically somewhere the database role cannot reach (a log sink, object storage with retention lock). Truncating the tail of a chain leaves no gap, so it is only detectable by comparing against an anchor.
+
+**Harden the table.** Make the database enforce append-only too — the application role should only be able to insert and read. On PostgreSQL:
+
+```sql
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_entries FROM app_role;
+GRANT SELECT, INSERT ON audit_entries TO app_role;
+```
+
+(Run migrations with a separate owner role.) SQLite has no roles: protect the file with filesystem permissions and back it up.
+
+#### `basalt audit:verify`
+
+With `integrity` on, the plugin registers an `audit:verify` command in the CLI's `commands` bucket — no extra wiring:
+
+```bash
+basalt audit:verify                  # the system chain
+basalt audit:verify --tenant=acme    # one tenant
+basalt audit:verify --tenant=acme --from=100 --to=200
+basalt audit:verify --all            # every chain; exits 1 if any is broken
+```
+
+Outside the plugin, `createAuditVerifyCommand(() => audit)` returns the same command definition — register it with `cliPlugin([...])` or call its `handle` from a scheduled job.
+
+### Request context (IP / user-agent)
+
+Opt in to recording the client IP and user-agent of the originating request:
+
+```ts
+auditPlugin({ requestContext: true })
+```
+
+The plugin registers an HTTP enricher (in the neutral `http:enrichers` bucket, so it works on **fastify, express and hono**) that puts `{ ip, userAgent }` in `ctx().client`; every entry recorded inside that request — manual, hook or event — gets `ip` and `userAgent` (the user-agent is truncated to 512 characters). Outside a request (jobs, CLI) the fields are absent. The IP is whatever the adapter reports as `request.ip`: configure your adapter's trusted-proxy setting so it is the client's address, not the load balancer's.
+
+To take them from elsewhere, pass a resolver instead: `requestContext: (context) => ({ ip: context?.forwardedIp, userAgent: … })`.
+
+**An IP address is personal data.** It is off by default. The request fields go through the configured redactor as `{ ip, userAgent }` before they are stored, so with `createPiiMinimizingRedactor({ key })` the IP is stored as a `pii_<hmac>` pseudonym (still correlatable, not reversible without the key); a redactor that drops them wins. Include `ip`/`userAgent` in your retention and data-subject-request policies.
+
 ### Custom store (production)
 
 `MemoryAuditStore` loses everything when the process ends. In production, implement `AuditStore` over your database — the contract is append-only (no update or delete):
@@ -156,6 +221,9 @@ Event patterns support segments separated by `:` (hooks) or `.` (events): `*` ma
 import type { AuditEntry, AuditQuery, AuditStore } from '@basaltkit/audit'
 import { auditPlugin } from '@basaltkit/audit'
 
+// Hash-chain support (optional): also implement chainHead, readChain,
+// countUnchained and chainTenants, and reject a duplicate (chain, seq) with
+// AuditChainConflictError — see "interface AuditStore" below.
 class SqlAuditStore implements AuditStore {
   async append(entry: AuditEntry): Promise<void> {
     // INSERT into the audit_entries table…
@@ -178,16 +246,23 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `store` | `AuditStore` | No | `new MemoryAuditStore()` | Where entries are stored. |
-| `hooks` | `string[]` | No | `['auth:**', 'billing:**', 'tenancy:**', 'permission:**']` | Hook patterns recorded automatically (replaces the defaults). |
+| `hooks` | `string[]` | No | `['auth:**', 'billing:**', 'tenancy:created', 'permission:**']` | Hook patterns recorded automatically (replaces the defaults). |
 | `events` | `string[]` | No | `['**']` (everything) | EventBus event patterns recorded. `[]` disables it. |
+| `redact` | `AuditRedactor` | No | `defaultAuditRedactor` | Scrubs each payload (and the request fields) before it is stored. See "Redaction". |
+| `onCaptureError` | `(error, { source, event }) => void` | No | logs | Called when a bridged hook/event capture fails; the emitting operation continues. |
+| `integrity` | `'none' \| 'hash-chain' \| { mode: 'hash-chain', key? }` | No | `'none'` | Hash-chains every entry per tenant so `verify()` detects tampering, and registers `audit:verify`. With `key` (>= 128 bits) the hash is HMAC-SHA256. Needs a store with the chain methods. See "Verifiable trail". |
+| `requestContext` | `boolean \| (ctx) => { ip?, userAgent? }` | No | off | Records the client `ip` / `userAgent`. `true` registers an HTTP enricher (all adapters) filling `ctx().client`. IP is PII — see "Request context". |
 
 ### `class Audit`
 
 | Method | Signature | Description |
 |---|---|---|
-| `constructor` | `new Audit(store: AuditStore)` | Creates the facade over a store. |
-| `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. Returns the entry. |
-| `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Query, most recent first. |
+| `constructor` | `new Audit(store, redact?, tenancyActive?, options?: AuditOptions)` | Creates the facade over a store. `options` takes `integrity` and `requestContext` (as in the plugin). |
+| `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. Returns the entry (with `seq`/`hash` when chained). |
+| `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Query, most recent first, tenant-scoped (see above). |
+| `systemTrail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | System-only cross-tenant read. |
+| `verify` | `(options?: { tenantId?, from?, to? }) => Promise<AuditVerifyResult>` | Verifies one hash chain: `{ ok, tenantId, checked, unchained, firstBrokenAt?, entryId?, reason?, head? }`. Tenant-scoped like `trail()`. |
+| `verifyAll` | `() => Promise<{ ok, chains: AuditVerifyResult[] }>` | System-only: verifies every chain (system chain first). |
 | `capture` | `(source: 'hook' \| 'event', event, payload) => Promise<void>` | **Advanced/internal**: used by the plugin's listeners. |
 
 ### `interface AuditEntry` (all fields `readonly`)
@@ -201,7 +276,12 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `actorId` | `string \| undefined` | `ctx().user.id` at record time. |
 | `tenantId` | `string \| undefined` | `ctx().tenant.id` at record time. |
 | `requestId` | `string \| undefined` | `ctx().requestId`. |
+| `ip` | `string \| undefined` | Client IP (or its pseudonym) — only with `requestContext`. |
+| `userAgent` | `string \| undefined` | Client user-agent (max 512 chars) — only with `requestContext`. |
 | `at` | `number` | Timestamp (`Date.now()`, milliseconds). |
+| `seq` | `number \| undefined` | Position in the tenant's chain (from 1) — only with `integrity`. |
+| `prevHash` | `string \| undefined` | Previous entry's `hash` (`AUDIT_CHAIN_GENESIS` for the first). |
+| `hash` | `string \| undefined` | SHA-256 / HMAC-SHA256 hex over `prevHash` + `canonicalAuditEntry(entry)`. |
 
 ### `interface AuditQuery`
 
@@ -220,6 +300,16 @@ Storage contract, **append-only by contract** (no update/delete):
 - `append(entry: AuditEntry): Promise<void>`
 - `query(query: AuditQuery): Promise<AuditEntry[]>` — must return most recent first and apply filters/limit.
 
+Optional, required for `integrity: 'hash-chain'` (implemented by `MemoryAuditStore`, `@basaltkit/audit-sqlite` and `@basaltkit/audit-prisma`):
+
+- `chainHead(tenantId): Promise<{ seq, hash } | undefined>` — latest entry of the chain (`undefined` tenant = system chain).
+- `readChain(tenantId, { fromSeq, toSeq?, limit }): Promise<AuditEntry[]>` — chained entries in ascending `seq`.
+- `countUnchained(tenantId): Promise<number>` — rows of that tenant without a chain (written before integrity).
+- `chainTenants(): Promise<Array<string | undefined>>` — tenants that have a chain.
+- `append` must reject an entry whose `(auditChainKey(tenantId), seq)` already exists with `AuditChainConflictError` — a unique constraint in SQL. `auditChainKey` maps a tenant to a never-NULL key (`'t:<id>'`, or `'@system'`), because SQL unique indexes treat NULLs as distinct.
+
+Hash-chain helpers are exported for stores and tooling: `computeAuditHash(entry, key?)`, `canonicalAuditEntry(entry)`, `AUDIT_CHAIN_GENESIS`, `auditChainKey` / `parseAuditChainKey`, `AuditChainConflictError` (code `AUDIT_CHAIN_CONFLICT`) and `createAuditVerifyCommand`.
+
 Two helpers exist so a driver can push the limit down safely:
 
 - `exactEventMatch(pattern?: string): string | undefined` — the event filter that may be pushed into SQL as an equality. Returns `undefined` for a pattern containing `*` (a wildcard) **or** `.` (because `patternMatches` treats `.` and `:` as interchangeable, so an equality would miss `a:b` for the pattern `a.b`); those must still be matched in code.
@@ -236,6 +326,8 @@ Payloads are scrubbed before they are persisted. `redactSensitive` masks values 
 ```ts
 auditPlugin({ redact: createPiiMinimizingRedactor({ key: process.env.AUDIT_PII_KEY! }) })
 ```
+
+IP-address keys (`ip`, `ipAddress`, `clientIp`, `remoteAddr`, `x-forwarded-for`, matched exactly — not `zip` or `recipient`) count as PII too, and so does the entry's own `ip` field when `requestContext` is on.
 
 Every value under a PII key is pseudonymized whatever its shape — a number, a list, or a nested object (each scalar leaf; secret-looking keys inside are still masked). The key must be a string or `Uint8Array` secret of at least 16 bytes (128 bits); keep it out of the audit database. With the key, the same value always maps to the same pseudonym, so entries stay correlatable; without it, a pseudonym cannot be reversed by hashing candidate emails or phone numbers. If no key is configured (`createPiiMinimizingRedactor()` or the `piiMinimizingRedactor` constant), a random per-process key is used and a warning is logged: pseudonyms are still irreversible but no longer correlate across restarts.
 
@@ -275,7 +367,13 @@ The defaults only cover `auth/billing/tenancy/permission`. Pass `hooks: [...]` w
 The redactors stop at 6 levels and drop everything below, so a secret can never slip past the depth bound. Flatten the payload (or record the interesting fields explicitly) if you need that data in the trail.
 
 **Can I edit or delete an entry?**
-No — the contract is append-only and entries are frozen. This is a feature, not a limitation: it's what gives the trail evidentiary value.
+No — the contract is append-only and entries are frozen. This is a feature, not a limitation: it's what gives the trail evidentiary value. To make that hold against someone with database access too, enable `integrity: 'hash-chain'`, revoke `UPDATE`/`DELETE` on the table, and run `basalt audit:verify` (see "Verifiable trail").
+
+**`verify()` reports `unchained` rows.**
+They were written before `integrity` was enabled and carry no hash. They are not broken — just not verifiable. New entries are chained from `seq` 1.
+
+**`AuditChainConflictError` reached my code.**
+Ten attempts in a row lost the race for the next `seq` — very heavy contention on one tenant's chain across replicas. The entry was not written; retry the operation.
 
 **What's the difference between `:` and `.` in names?**
 Convention: lifecycle hooks use `:` (`auth:login`); domain events use `.` (`order.created`). `patternMatches` treats both as segment separators.

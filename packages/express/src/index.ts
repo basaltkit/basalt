@@ -18,6 +18,7 @@ import {
   SSE_HEADERS,
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
+  isUploadBody,
 } from '@basaltkit/http'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
@@ -145,7 +146,11 @@ function basaltHandler(
   return async (req: Request, res: Response): Promise<void> => {
     const reply = new ExpressReply(res)
     try {
-      const result = await runRoute(definition, toNeutralRequest(req), reply, {
+      const request = toNeutralRequest(req)
+      // An upload() route streams the raw body. `express.json()` and
+      // `express.urlencoded()` skip multipart/form-data, so `req` is unread.
+      if (isUploadBody(definition.body)) request.bodyStream = req
+      const result = await runRoute(definition, request, reply, {
         ...(container ? { container } : {}),
         enrichers,
         guards,

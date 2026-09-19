@@ -108,6 +108,13 @@ A built-in LRU `TenantClientPool` keeps connection counts bounded, and
 `migrateTenants()` runs migrations across every tenant. Generate a
 Prisma-backed resource with `basalt make:resource Invoice --prisma`.
 
+**Fail fast on the wrong database.** `prismaPlugin({ client, assertMigrated: true })`
+checks at boot that `_prisma_migrations` exists (`{ tables: [...] }` checks those
+tables too) and refuses to start otherwise, naming the database and host it
+reached — never the credentials (`PRISMA_NOT_MIGRATED`). It catches a shell that
+exported another project's `DATABASE_URL` at startup instead of as a P2021 on
+the first request. Off by default.
+
 `@basaltkit/prisma` is for **your** domain data. The framework's own stateful
 domains — auth, teams, subscriptions, permissions, comments, audit, activity and
 notifications — also default to in-memory and each has a durable backend to swap
@@ -222,8 +229,10 @@ The repo ships GitHub Actions that gate every PR:
 
 - **Outbox** (`@basaltkit/events`) — write events to a durable store, relay them to
   external systems with retries, exponential backoff and a dead-letter ceiling.
-  At-least-once delivery that survives crashes — provided the store is durable
-  and `onDead` / `onFlushError` reach a human. Options in
+  At-least-once delivery that survives crashes — provided the store is durable,
+  the entry is written in the business transaction (`enqueue(…, { tx })`), and
+  `onDead` / `onFlushError` reach a human. With several replicas, use a claiming
+  store (`prismaOutboxStore(prisma, { claim: true })`) so relays don't double-dispatch. Options in
   [Persistence](/guide/persistence); the delivery side in
   [Webhooks](/guide/webhooks).
 - **Webhooks** (`@basaltkit/webhooks`) — signed outbound delivery with backoff,

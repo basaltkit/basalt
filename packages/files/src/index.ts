@@ -3,6 +3,9 @@ export {
   DEFAULT_MAX_FILE_SIZE,
   FileTooLargeError,
   FileTypeNotAllowedError,
+  FileTypeMismatchError,
+  FileNotScannedError,
+  FileInfectedError,
   StorageQuotaExceededError,
   FileNotFoundError,
   FileTenantRequiredError,
@@ -13,7 +16,14 @@ export {
   type FilesOptions,
   type FileValidation,
   type UploadInput,
+  type UploadContent,
 } from './files.js'
+export {
+  sniffContentType,
+  normalizeContentType,
+  SNIFF_WINDOW,
+  type ContentSniffer,
+} from './sniff.js'
 export {
   MemoryFileStore,
   type FileRecord,

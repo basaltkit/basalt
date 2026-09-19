@@ -59,7 +59,8 @@ export function packageJson(options: ProjectOptions): string {
   if (options.mcp) basalt.push('@basaltkit/mcp')
   if (options.cli) {
     // Runtime deps: app.ts uses commandsPlugin (@basaltkit/cli); prisma powers
-    // prismaPlugin + `basalt prisma:sync`. @basaltkit/generator is dev-only (below).
+    // `basalt prisma:sync` (and prismaPlugin once the app adds a PrismaClient —
+    // the scaffold wires no database itself). @basaltkit/generator is dev-only (below).
     basalt.push('@basaltkit/cli', '@basaltkit/prisma')
   }
   const dependencies: Record<string, string> = { zod: thirdPartyVersionOf('zod') }
@@ -152,8 +153,33 @@ export const env = defineEnv({
 `
 }
 
+/**
+ * An app-specific env-var prefix derived from the project name
+ * (`my-saas` → `MY_SAAS`), suggested for variables whose generic names
+ * (`DATABASE_URL`, …) other projects export too.
+ */
+export function envPrefix(name: string): string {
+  let base = name
+    .replace(/^@[^/]+\//, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+  // Trim underscores in linear time (an anchored `_+$` regex backtracks).
+  let start = 0
+  let end = base.length
+  while (start < end && base[start] === '_') start++
+  while (end > start && base[end - 1] === '_') end--
+  base = base.slice(start, end)
+  return base === '' || /^\d/.test(base) ? `APP_${base}` : base
+}
+
 export function envExample(options: ProjectOptions): string {
-  return `PORT=3000
+  const prefix = envPrefix(options.name)
+  return `# Nothing loads this file for you: copy it to .env and start with
+# \`node --env-file=.env\` / \`tsx --env-file=.env\`, or export the variables.
+# --env-file NEVER overrides a variable already exported in your shell: if
+# another project exported DATABASE_URL, the app silently uses THAT one. Give
+# generic names an app-specific prefix, e.g. ${prefix}_DATABASE_URL.
+PORT=3000
 HOST=0.0.0.0
 LOG_LEVEL=info
 NODE_ENV=development
@@ -472,6 +498,18 @@ pnpm install
 pnpm dev        # API on http://localhost:3000
 pnpm test
 \`\`\`
+
+## Environment
+
+\`src/env.ts\` validates \`process.env\` — nothing loads \`.env\` for you. Copy
+\`.env.example\` to \`.env\` and launch with \`--env-file=.env\` (Node/tsx), or
+export the variables.
+
+**\`--env-file\` never overrides a variable that is already exported.** In a shell
+where another project exported \`DATABASE_URL\` (or \`PORT\`), this app boots
+against THAT value and only fails on the first request that touches it. Give
+generic names an app-specific prefix — \`${envPrefix(options.name)}_DATABASE_URL\` rather than
+\`DATABASE_URL\` — and check \`env | grep DATABASE_URL\` when in doubt.
 ${
   options.cli
     ? `
@@ -486,6 +524,18 @@ pnpm basalt make:service Project    # a single artifact (--force to overwrite)
 
 Generated resources land in \`src/modules/<name>/\`. Register the generated
 plugin in \`src/app.ts\` to wire it up.
+
+With pnpm 11, \`pnpm basalt …\` first verifies dependencies
+(\`verifyDepsBeforeRun\`, default \`install\`): when any workspace project is out
+of sync it runs \`pnpm install\` — network included — before the command. To
+run the CLI without that check, call it directly:
+
+\`\`\`bash
+node_modules/.bin/tsx bin/basalt.ts make:resource Project
+\`\`\`
+
+or set \`verifyDepsBeforeRun: warn\` in \`pnpm-workspace.yaml\` (a conscious
+choice: you then run \`pnpm install\` yourself after dependency changes).
 `
     : ''
 }${
@@ -594,6 +644,12 @@ dist/
  * msgpackr-extract (optional native accelerator via BullMQ) is declined —
  * msgpackr falls back to pure JS. With --ui, `web` is a workspace member so
  * its own dependencies resolve.
+ *
+ * pnpm 11 notes (BK-002), spelled out in the file because both bite silently:
+ * `minimumReleaseAgeExclude` is evaluated first-match-wins BY PACKAGE NAME, so
+ * per-version exclusions of one package must be a single `||` union entry; and
+ * `verifyDepsBeforeRun` defaults to `install`, so any `pnpm <script>` may run
+ * `pnpm install` first — `warn` is offered commented out, never set for you.
  */
 export function pnpmWorkspaceYaml(options: ProjectOptions): string {
   return `${
@@ -609,5 +665,16 @@ export function pnpmWorkspaceYaml(options: ProjectOptions): string {
 # pnpm's minimumReleaseAge policy so \`pnpm up\` is never blocked on a fresh release.
 minimumReleaseAgeExclude:
   - '@basaltkit/*'
+# To let specific versions of ONE package bypass the policy, write ONE entry
+# with a \`||\` union. pnpm evaluates this list first match wins by package
+# name, so a second '<name>@<version>' entry for the same package is ignored:
+#   - '@types/node@22.20.4 || 26.6.2'
+
+# pnpm 11 checks dependencies before every \`pnpm <script>\` / \`pnpm exec\`
+# (verifyDepsBeforeRun defaults to \`install\`): when node_modules is out of sync
+# with ANY workspace project's manifest, it runs \`pnpm install\` first — network
+# and supply-chain checks included. To opt out consciously (you then run
+# \`pnpm install\` yourself after dependency changes), uncomment:
+# verifyDepsBeforeRun: warn
 `
 }

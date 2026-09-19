@@ -181,7 +181,7 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 | `POST /auth/register` | `{ email, password }` | Always `202 { ok: true }` — enumeration-safe (see below) |
 | `POST /auth/login` | `{ email, password, mfaCode? }` | → `{ user, accessToken, refreshToken }` |
 | `POST /auth/refresh` | `{ refreshToken }` | new token pair; kills the family on reuse |
-| `POST /auth/logout` | `{ refreshToken }` | `204`; revokes the refresh family |
+| `POST /auth/logout` | `{ refreshToken? }` (body optional) | `204`; revokes the refresh family when given, and ends the cookie / `x-session-id` session and expires the cookie. A cookie-only SPA sends no body. A cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`) |
 | `GET /auth/me` | — | `meta.auth` — requires `Authorization: Bearer <jwt>` |
 | `POST /auth/verify/request` · `POST /auth/verify` | `{ email }` · `{ token }` | email verification |
 | `POST /auth/password/forgot` · `POST /auth/password/reset` | `{ email }` · `{ token, password }` | password reset |
@@ -357,6 +357,17 @@ authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] 
 authPlugin({ users, secret, csrf: false }) // not recommended
 ```
 
+### Account routes: `meta.account` and `meta.mfa` {#account-routes}
+
+Every `authRoutes()` route, every `mfaRoutes()` route and both `oauthRoutes()`
+routes declare `meta.account: true` — they are about the caller's own identity,
+not a tenant's data, so `@basaltkit/teams`' `tenantMembershipPlugin` lets a
+non-member through (signing in on a company's subdomain before accepting its
+invitation). `account` is a neutral key: mark your own profile/settings routes
+with it too. They also declare `meta.mfa: false` (except
+`POST /auth/mfa/disable`), which keeps them reachable under
+[`requireMfa`](#requiring-mfa-by-policy). `ACCOUNT_META` exports the pair.
+
 ### `meta.auth` is verified at boot
 
 Declaring `meta.auth` is a *request* for protection; the guard `authPlugin`
@@ -432,6 +443,34 @@ implementation is dependency-free and verified against the RFC 6238 test vectors
 (`409 AUTH_MFA_ALREADY_ENABLED`) — re-enrolling would switch the second factor off
 without a code; disable it with a code first. The MFA routes are session-only
 (`meta.apiKey: false`): an API key can never enroll or disable MFA.
+
+### Requiring MFA by policy {#requiring-mfa-by-policy}
+
+`requireMfa` makes a second factor mandatory — for everyone, or per user /
+request with a policy function:
+
+```ts
+authPlugin({ users, secret, requireMfa: true })
+authPlugin({ users, secret, requireMfa: (user, context) => user.email.endsWith('@acme.test') })
+```
+
+Tokens and sessions record how the user signed in (`amr`): `['pwd']`, or
+`['pwd', 'mfa']` when a code was verified at login (`['fed', …]` for social
+login). The access token carries it as the `amr` claim, every refresh of that
+login keeps it, and the session cookie carries it HMAC-signed with `secret` (no
+store schema change); the enricher exposes it as `ctx().amr`. An authenticated
+request without `mfa` in `amr` is refused:
+
+- `403 AUTH_MFA_ENROLLMENT_REQUIRED` — the account has no MFA yet: enrol
+  (`/auth/mfa/enroll` + `/activate`), then sign in again with a code;
+- `403 AUTH_MFA_REQUIRED` — MFA is on but this credential was obtained without
+  it (e.g. issued before enrolment): sign in again with a code.
+
+Routes declaring `meta.mfa: false` are exempt (all of `authRoutes()` — login,
+`/auth/me`, logout… — and MFA enrol / activate / status). API-key requests are
+not subject to the policy; minting a key needs an MFA session under it.
+Independently of the policy, `meta: { auth: true, mfa: true }` requires MFA on
+one route (step-up for a sensitive action). Off by default.
 
 ::: tip Writing your own `MfaStore`
 Implement the optional `consumeTotpStep(userId, step)` and
@@ -785,6 +824,28 @@ authPlugin({
 })
 ```
 
+### Across replicas: a shared `ThrottleStore` {#across-replicas-a-shared-throttlestore}
+
+The counters live in memory per process by default, so N replicas grant N
+budgets and a lockout on one is invisible to the others. Pass a shared
+`throttleStore` — `RedisThrottleStore` takes any ioredis-compatible client
+(only `eval` and `del`; no Redis dependency) and counts each attempt in one
+atomic script, so a burst spread over every replica still runs at most
+`maxAttempts` checks:
+
+```ts
+import Redis from 'ioredis'
+import { authPlugin, RedisThrottleStore } from '@basaltkit/auth'
+
+authPlugin({ users, secret, throttleStore: new RedisThrottleStore(new Redis(process.env.REDIS_URL!)) })
+```
+
+It backs the login (and MFA-code), per-IP and email-request throttles, each in
+its own namespace (`basalt:throttle:login:…`, `login-ip`, `email-request`); keys
+are SHA-256 digests. A throttle you pass explicitly takes its own
+`new LoginThrottle({ store })`. Implement `ThrottleStore` (`hit` / `peek` /
+`release` / `reset`, `hit` atomic) for another backend.
+
 ## Options reference
 
 `authPlugin(options)` — every option of the `Auth` service except `hooks`, which
@@ -807,6 +868,8 @@ the plugin supplies:
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
 | `emailRequestThrottle` | `LoginThrottle \| false` | 3 per 15m, per account and purpose | Caps reset/verification emails; over budget a request is silently dropped and the live link stays valid |
+| `throttleStore` | `ThrottleStore` | in-memory, per process | Where the **default** throttles keep their counters — `RedisThrottleStore` for one budget across replicas. See [Across replicas](#across-replicas-a-shared-throttlestore) |
+| `requireMfa` (plugin) | `boolean \| (user, context) => boolean \| Promise<boolean>` | — (off) | Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones — see [Requiring MFA by policy](#requiring-mfa-by-policy) |
 | `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | on | Cookie-session CSRF check on unsafe methods — see [Cookie sessions and CSRF](#cookie-sessions-and-csrf) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
 | `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
@@ -819,9 +882,14 @@ the plugin supplies:
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `maxAttempts` | `number` | `5` | Failed attempts allowed inside the window |
-| `windowMs` | `number` | `900_000` (15m) | Rolling window; a successful login clears the counter |
-| `maxEntries` | `number` | `100_000` | Cap on tracked identifiers; expired entries are swept, then the oldest evicted |
-| `clock` | `() => number` | `Date.now` | Injectable clock (tests) |
+| `windowMs` | `number` | `900_000` (15m) | Fixed window opened by the first attempt; a successful login clears the counter |
+| `store` | `ThrottleStore` | a private `MemoryThrottleStore` | Where counters live — `RedisThrottleStore` to share them across replicas |
+| `namespace` | `string` | — | Key prefix separating throttles that share one store |
+| `maxEntries` | `number` | `100_000` | Cap on tracked identifiers (in-memory store); expired entries are swept, then the oldest evicted |
+| `clock` | `() => number` | `Date.now` | Injectable clock for the in-memory store (tests) |
+
+With a synchronous store (the default) every `LoginThrottle` method stays
+synchronous; with an async one they return promises — `Auth` awaits both.
 
 `apiKeysPlugin(options)`:
 
@@ -878,6 +946,8 @@ users in.
 | `RefreshInvalidError` | `AUTH_REFRESH_INVALID` | 401 | Refresh token unknown, revoked or expired |
 | `RefreshReusedError` | `AUTH_REFRESH_REUSED` | 401 | A **consumed** refresh token came back — theft indicator; the whole family is revoked |
 | `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correct, MFA enabled, no `mfaCode` supplied. Not counted as a failed attempt |
+| `MfaStepUpRequiredError` | `AUTH_MFA_REQUIRED` | 403 | `requireMfa` / `meta.mfa: true`: MFA is on, but this token or session was obtained without a code — sign in again with one |
+| `MfaEnrollmentRequiredError` | `AUTH_MFA_ENROLLMENT_REQUIRED` | 403 | `requireMfa` / `meta.mfa: true`: the account has no MFA — enrol, then sign in again with a code |
 | `MfaInvalidCodeError` | `AUTH_MFA_INVALID` | 401 | Wrong TOTP or recovery code — this **does** count toward the throttle |
 | `MfaNotEnrolledError` | `AUTH_MFA_NOT_ENROLLED` | 400 | Activating/disabling MFA with no enrollment in progress |
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |

@@ -55,6 +55,19 @@ rendering top-level on the storage origin. Pass `{ disposition: 'inline' }`
 through `disk.temporaryUrl(path, expiresIn, options)` when in-browser rendering
 is deliberate.
 
+## Direct browser uploads
+
+`temporaryUploadUrl` (via `disk.temporaryUploadUrl(...)`) mints a **create/write-only**
+SAS (no read, list or delete) and returns the headers Put Blob needs
+(`x-ms-blob-type: BlockBlob`, `Content-Type`, `Content-Length`). The lifetime is
+capped by the Disk (default 1 hour) and, when called directly, at 7 days.
+
+**Caveat:** an Azure SAS cannot bind request headers, so — unlike S3 and GCS —
+the declared content type and length are **not enforced** by the signature.
+Keep the TTL short, generate the key server-side, and verify the blob (size,
+type) in a "complete" step before trusting it. `checksumSha256` is refused with
+`STORAGE_UPLOAD_URL_UNSUPPORTED` (Put Blob verifies MD5/CRC64 only).
+
 ## Errors
 
 | Error | Code | HTTP | When |

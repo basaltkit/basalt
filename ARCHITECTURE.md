@@ -36,7 +36,7 @@
 3. **TypeScript as the design language** — end-to-end type inference (routes → Zod validation → handler → SDK client). No experimental decorators and no `reflect-metadata` as a mandatory dependency.
 4. **Progressive disclosure** — a simple API for the common case, escape hatches for the advanced case. `auth.login(email, password)` works; underneath, every step is a replaceable hook.
 5. **Tenancy as a first-class citizen** — unlike ecosystems where tenancy is a bolt-on third-party package, in Basalt the tenant context permeates cache, storage, queue, logger and Prisma natively via `AsyncLocalStorage`.
-6. **Everything testable** — every package ships in-memory fakes/drivers (`@basaltkit/testing`), in the spirit of built-in test fakes.
+6. **Everything testable** — every package ships in-memory drivers or fakes, with the cross-cutting fakes in `@basaltkit/testing` (§13.4 lists what exists today), in the spirit of built-in test fakes.
 7. **Documentation is product** — no feature ships without docs, a runnable example, and a cookbook recipe.
 
 ### 1.2 Anti-goals
@@ -385,13 +385,13 @@ export const createProject = route({
   body: z.object({ name: z.string().min(3) }),
   response: { 201: ProjectSchema },
   async handler({ body, reply }) {
-    const project = await ctx().db.project.create({ data: body })
+    const project = await db<PrismaClient>().project.create({ data: body })
     return reply.code(201).send(project)
   },
 })
 ```
 
-- The `body`/`query`/`params`/`response` types are **inferred from Zod** — the handler is 100% typed and the same schema feeds OpenAPI (generated automatically) and the `@basaltkit/sdk`.
+- The `body`/`query`/`params`/`response` types are **inferred from Zod** — the handler is 100% typed and the same schema feeds OpenAPI (generated automatically). The `@basaltkit/sdk` client reuses the same Zod schemas through its own `endpoint()` descriptors (see §13.5) — it is not generated from the route yet.
 - `auth`, `can`, `tenant` are **declarative shorthands** that domain plugins register on the adapter via hooks — the adapter does not know about auth; it just runs the registered chain of guards.
 - Discovery: files under `src/routes/**/*.ts` that export `route()` are registered automatically (convention; can be disabled).
 
@@ -402,13 +402,15 @@ export const createProject = route({
 **Goal:** make Prisma "speak Basalt": tenancy, auditing and conventions without changing the standard Prisma workflow.
 
 - **Client extensions** (not a fork): `withTenancy()`, `withAudit()`, `withSoftDelete()` are official Prisma Client Extensions.
-- The correct tenant client is accessed via `ctx().db` — resolved by the active tenancy mode (§6).
+- The correct tenant client is accessed via the typed accessor `db<T>()` exported by `@basaltkit/prisma` (it reads the client that `prismaPlugin` places on the request context as `ctx().db`, typed `unknown`) — resolved by the active tenancy mode (§6). Code built at boot, before a request exists, holds `tenantClient<T>()`, a proxy that resolves `db()` on every access.
 - **Connection pool management** for database-per-tenant: an LRU of clients with a configurable limit and idle disconnection (a real problem that is well solved elsewhere but rarely solved well in Node).
 - Per-tenant migrations orchestrated by the CLI (`basalt tenant migrate`), with parallelism and per-tenant failure reporting.
 
 ```ts
-// ctx().db is a PrismaClient already scoped to the current tenant
-const users = await ctx().db.user.findMany() // WHERE tenant_id = ... automatic (shared mode)
+import { db } from '@basaltkit/prisma'
+
+// db() returns the PrismaClient already scoped to the current tenant
+const users = await db<PrismaClient>().user.findMany() // WHERE tenant_id = ... automatic (shared mode)
 ```
 
 **Dependencies:** `@prisma/client`, `@basaltkit/core`. **Roadmap:** _Shipped_ — tenancy extension, raw-query guard, RLS helpers, pool. _Next_ — read replicas; sharding helpers.
@@ -425,7 +427,7 @@ const users = await ctx().db.user.findMany() // WHERE tenant_id = ... automatic 
 | **Schema per Tenant** | `SET search_path` per request (PostgreSQL schemas) | medium isolation, a single database |
 | **Database per Tenant** | A Prisma client per tenant with an LRU pool | maximum isolation, compliance |
 
-The mode is config, not code: the app writes `ctx().db.user.findMany()` the same way in all three modes. Migrating from shared → database-per-tenant is a data migration, not a rewrite.
+The mode is config, not code: the app writes `db<PrismaClient>().user.findMany()` the same way in all three modes. Migrating from shared → database-per-tenant is a data migration, not a rewrite.
 
 ### 6.2 Resolvers
 
@@ -756,25 +758,29 @@ Run with no name in a terminal for the **interactive wizard**: an intro banner, 
 
 The scaffolding engine used by `basalt make *`. A `basalt make resource Project` generates the complete vertical: controller (typed routes), service, repository, use cases, Zod DTOs, policy, tests (unit + http) and OpenAPI schema — all following the app's templates (publishable via `basalt publish generator` for customization, like publishable stubs).
 
-### 13.4 `@basaltkit/testing`  `[✅ shipped]`
+### 13.4 `@basaltkit/testing`  `[✅ shipped — storage/notification fakes, Prisma factories and Vitest preset planned]`
 
 ```ts
-import { createTestApp, mailFake, queueFake, time } from '@basaltkit/testing'
+import { createTestApp, fakeMailer, fakeQueue, time, withTenant } from '@basaltkit/testing'
 
-const app = await createTestApp({ plugins: [...], tenant: 'acme' })
+const mail = fakeMailer()
+const queue = fakeQueue({ jobs: [SendWelcomeEmail] })
+const app = await createTestApp({ plugins: [mail.plugin, queue.plugin, /* … */] }) // adapter: 'fastify' | 'express' | 'hono'
 
-await app.actingAs(user).post('/projects', { name: 'X' }).expectStatus(201)
-mailFake.assertSent(WelcomeEmail, (m) => m.to === user.email)
-queueFake.assertDispatched(SendWelcomeEmail)
-await time.travel('15d')                      // tests trial expiration
-expect(await tenant.subscription.onTrial()).toBe(false)
+const res = await app.actingAs(user).asTenant('acme').post('/projects', { name: 'X' })
+expect(res.statusCode).toBe(201)
+mail.assertSent(WelcomeEmail, (m) => m.to.includes(user.email))
+queue.assertDispatched(SendWelcomeEmail)
+time.travel('15d')                            // tests trial expiration
 ```
 
-Fakes for all drivers (mail, queue, storage, notifications, billing gateway), factories integrated with Prisma, an isolated test tenant per file (transaction with rollback), time travel. A ready Vitest preset (`@basaltkit/testing/vitest`).
+**Available today:** `createTestApp` (in-process requests on every adapter, `actingAs`/`asTenant` impersonation), `fakeMailer`, `fakeQueue` (capture + `drain()`), `time` (travel/travelTo/restore), and `withTenant(tenancy, id, fn)` — a real tenant provisioned for one test and destroyed afterwards, even when the test throws. Some packages also ship their own in-memory doubles usable in tests (e.g. `FakeBillingGateway` / `FakePaymentGateway` and the `Memory*Store`s in `@basaltkit/subscriptions`, `MemoryInAppStore` in `@basaltkit/notifications`).
 
-### 13.5 `@basaltkit/sdk`  `[✅ shipped]`
+**Planned — not yet available:** dedicated storage and notifications fakes in `@basaltkit/testing`, factories integrated with Prisma, an isolated test tenant per file via a rolled-back transaction, and a ready Vitest preset (`@basaltkit/testing/vitest`).
 
-A TypeScript client **generated from the route Metadata** (not from an intermediate OpenAPI): `sdk.projects.create({ name })` with exact types from the server, errors typed by code, automatic auth (transparent refresh). This is what makes Basalt attractive for full-stack Next.js/React Native teams: a Basalt backend + any frontend.
+### 13.5 `@basaltkit/sdk`  `[✅ shipped — generation from route metadata planned]`
+
+A type-safe TypeScript client (not generated from an intermediate OpenAPI): the API is described once with `endpoint({ method, path, params?, query?, body?, result })` using the **same Zod schemas** the server routes use (a shared module), and `createClient(api, options)` returns `api.projects.create({ body: { name } })` with inferred input/output types, runtime response validation (`CLIENT_RESPONSE_MISMATCH`), errors typed by code (`BasaltClientError`), and Bearer auth with a single transparent refresh on 401. It is browser-friendly (only Zod as a peer). **Planned — not yet available:** generating the endpoint descriptors automatically from route metadata, so the shared module no longer has to be written by hand. This is what makes Basalt attractive for full-stack Next.js/React Native teams: a Basalt backend + any frontend.
 
 ### 13.6 `@basaltkit/dashboard` + `@basaltkit/admin`  `[✅ shipped — headless model + ready-made app]`
 

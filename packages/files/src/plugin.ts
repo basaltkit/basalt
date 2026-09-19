@@ -22,6 +22,8 @@ export interface FilesPluginOptions {
   validate?: FileValidation
   maxTotalBytes?: number
   checkQuota?: FilesOptions['checkQuota']
+  /** Quarantine until scanned — see {@link FilesOptions.requireScan}. Default `false`. */
+  requireScan?: boolean
 }
 
 export function filesPlugin(options: FilesPluginOptions) {
@@ -40,6 +42,7 @@ export function filesPlugin(options: FilesPluginOptions) {
           ...(options.validate ? { validate: options.validate } : {}),
           ...(options.maxTotalBytes !== undefined ? { maxTotalBytes: options.maxTotalBytes } : {}),
           ...(options.checkQuota ? { checkQuota: options.checkQuota } : {}),
+          ...(options.requireScan !== undefined ? { requireScan: options.requireScan } : {}),
         }, () => metadata.get('tenancy:active').length > 0)
       })
     },
@@ -99,8 +102,13 @@ const notFound = { error: { code: 'FILE_NOT_FOUND', message: 'File not found.' }
 /**
  * Read/manage routes for the current tenant's files: list, metadata, a signed
  * URL, and delete. Uploading is transport-specific (multipart) — call
- * `FILES.upload(buffer, input)` from your own upload handler, passing
+ * `FILES.upload(bufferOrStream, input)` from your own upload handler, passing
  * `uploadedBy: ctx().user.id`.
+ *
+ * With `requireScan`, `POST /files/:id/url` answers 423 `FILE_NOT_SCANNED`
+ * until the file is scanned clean and 403 `FILE_INFECTED` after a failed scan
+ * (the errors carry their status, so every adapter maps them the same way);
+ * `GET /files` and `GET /files/:id` still list the record with its scan state.
  *
  * Secure by default: a user reaches only the files they uploaded. Pass
  * `authorize` for your own policy, or `shared: true` for a tenant-wide drive.

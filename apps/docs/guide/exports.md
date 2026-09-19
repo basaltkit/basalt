@@ -44,7 +44,9 @@ const result = await exports.run(usersExport, users, 'csv')
 ```
 
 CSV/TSV quote correctly (RFC 4180), dates render as ISO, and `run` accepts an
-array **or** an `AsyncIterable`, so rows can be streamed from the database.
+array **or** an `AsyncIterable`. `run` always **buffers** — it collects every row
+and returns the whole file as one `Buffer`; for large datasets use
+[`stream()`](#streaming-large-exports).
 
 CSV/TSV cells are also protected against **formula injection**: any cell whose
 rendered text starts with `=`, `+`, `-`, `@` (or their full-width forms
@@ -57,10 +59,9 @@ numeric.
 
 ## Large reports: queue + storage
 
-`run` is pure and synchronous by design. For big exports, run it inside a
+`run` is pure and returns one `Buffer`. For big exports, run it inside a
 [queue](/guide/queues) job and store the file with [`@basaltkit/files`](/guide/files)
-for download. `run` also accepts an `AsyncIterable`, so rows stream straight from
-the database instead of buffering in memory:
+for download (for very large datasets, swap `run` for [`stream()`](#streaming-large-exports)):
 
 ```ts
 // src/jobs/generate-report.ts
@@ -98,6 +99,43 @@ export const GenerateReport = defineJob<{ tenantId: string; requestedBy: string 
 await GenerateReport.dispatch({ tenantId: 'acme', requestedBy: 'u1' })
 ```
 
+## Streaming large exports
+
+`exports.stream(definition, data, format)` renders **incrementally**: rows are
+pulled from `data` (an array or an `AsyncIterable`, e.g. a database cursor) one
+at a time and the file comes out as an `AsyncIterable<Buffer>` in ~64 KiB chunks
+(`{ chunkSize }` to tune), so memory is bounded by one chunk rather than by the
+dataset. The bytes are identical to `run()`'s `content`.
+
+```ts
+import { createWriteStream } from 'node:fs'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+
+const out = exports.stream(usersExport, queryUsers(tenantId), 'csv')
+out.contentType // 'text/csv' — known up front, for response headers
+out.filename    // 'users.csv'
+
+await pipeline(Readable.from(out), createWriteStream(`/tmp/${out.filename}`))
+out.rowCount    // final once the stream is consumed
+```
+
+The stream is single-use; it also works as a web `Response` body
+(`new Response(ReadableStream.from(out))`) or an S3 multipart upload body.
+
+| Format | `run()` | `stream()` |
+| --- | --- | --- |
+| `csv`, `tsv`, `json`, `ndjson` | buffered | incremental |
+| `xlsx`, PDF, any formatter without `renderStream` | buffered | `ExportNotStreamableError` (`EXPORT_NOT_STREAMABLE`, 400) |
+
+`exports.streamableFormats()` lists what `stream()` accepts.
+
+::: warning Keep the sink streaming too
+`files.upload()` accepts the stream, but it buffers the upload (up to its size
+limit) before writing to the disk. To keep memory flat end to end, pipe into a
+sink that streams — a file, an HTTP response, a multipart upload.
+:::
+
 ## XLSX
 
 Add `@basaltkit/exports-xlsx` — a valid `.xlsx` with a **built-in ZIP writer**,
@@ -115,5 +153,12 @@ with OOXML's `_xHHHH_` escape rather than passed through, which would make the
 sheet unparseable and Excel refuse to open it. Tab, newline and carriage return
 are legal XML and stay verbatim.
 
+The XLSX formatter is **buffer-only**: a `.xlsx` is a ZIP whose entries need
+their sizes and CRCs, so the whole sheet is built in memory — use `run()`, not
+`stream()`.
+
 To add another format (PDF, ODS…), implement `ExportFormatter.render(headers,
 rows) → Buffer` and register it the same way — no export definition changes.
+Implement the optional `renderStream(headers, rows: AsyncIterable<unknown[]>)
+→ AsyncIterable<string | Buffer>` as well (byte-identical to `render`) to make
+the format streamable.

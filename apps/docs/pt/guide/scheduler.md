@@ -184,6 +184,50 @@ uma data fixa e verifica que entradas correram — sem esperar por relógios rea
 scheduler.tick(new Date('2026-01-01T03:00:00Z')) // corre tudo o que está due nesse minuto
 ```
 
+## Recuperar trabalho encalhado: `defineReconciler()`
+
+Se um dispatch falha **depois** do commit de negócio, ou um worker morre a meio de um job, a
+entidade fica num estado intermédio (`processing`) para sempre. `defineReconciler` monta a rede
+de segurança sobre o scheduler: numa cadência, encontra os itens encalhados e volta a despachá-los.
+
+```ts
+import { defineReconciler } from '@basaltkit/scheduler'
+
+schedulerPlugin({
+  define: (schedule) => {
+    defineReconciler({
+      name: 'stuck-orders',
+      every: '5m',                   // ou uma expressão cron
+      find: () => prisma.order.findMany({
+        where: { status: 'processing', updatedAt: { lt: new Date(Date.now() - 15 * 60_000) } },
+        take: 500,
+      }),
+      redispatch: (order) => ProcessOrder.dispatch({ orderId: order.id }), // tem de ser idempotente
+      maxPerRun: 100,
+      onError: (error, order) => logger.error({ err: error, orderId: order?.id }, 'reconcile failed'),
+    }).schedule(schedule)
+  },
+})
+```
+
+- **Sem sobreposição** — uma execução nunca começa enquanto a anterior ainda corre (o tick é
+  saltado e contado em `reconciler.stats.skippedOverlaps`). Com um `lock` no scheduler a entrada
+  corre numa só réplica por tick; `lock: ReconcilerLock` (`acquire` + `release`) segura ainda um
+  mutex distribuído durante toda a execução.
+- **Isolamento por item** — um `redispatch` que lança vai para `onError(error, item)` e o item
+  seguinte corre na mesma; um `find` que lança vai para `onError(error, undefined)`.
+  Predefinição: `console.error`.
+- **Observável** — cada execução emite o hook `reconciler:run` no bus da app com
+  `{ name, found, redispatched, failed, skipped, reason?, error?, durationMs }`; `onRun(result)`
+  dá os mesmos dados como callback.
+- `every` aceita minutos inteiros que dividem 60, horas inteiras que dividem 24, `'1d'` ou uma
+  expressão cron; qualquer outra coisa lança `ScheduleDefinitionError`
+  (`SCHEDULE_INVALID_INTERVAL`) no boot.
+
+A entrada chama-se `reconciler:<name>`, por isso `basalt schedule:run reconciler:stuck-orders`
+corre-a a pedido. A tabela completa de opções está no
+[README do pacote](https://github.com/basaltkit/basalt/tree/main/packages/scheduler#definereconcilert-options-reconcileroptionst-reconciler).
+
 ## Correr a pedido
 
 `schedule:run` dispara uma entrada a partir da CLI, ignorando o seu cron — para
@@ -217,6 +261,7 @@ sobreposição e o handler `onFailure` da entrada continuam a aplicar-se.
 | `CronParseError` (código `CRON_INVALID`) na definição | A expressão cron usa sintaxe não suportada (nomes como `MON`), um valor fora do intervalo, ou um intervalo invertido — de outro modo nunca dispararia, silenciosamente | Corrige a expressão; suportado: `*`, `*/n`, valores únicos, `a-b`, listas com vírgulas |
 | `ScheduleDefinitionError` (código `SCHEDULE_CONFLICT`) no boot | Uma entrada encadeia duas frequências (`.daily().monthly()`), usa `.at()` depois de `everyMinute`/`everyMinutes`/`hourly`/`cron` ou duas vezes, ou combina `.cron()` com um modificador de dia da semana. Antes, a última chamada ganhava silenciosamente | Mantém a frequência que queres, p. ex. `.monthly().at('03:00')`; para o resto usa só `.cron()` |
 | `ScheduleDefinitionError` (código `SCHEDULE_INVALID_TIME`) no boot | O `.at()` recebeu algo que não é `HH:mm` (hora 0–23, minuto 0–59) | Corrige a hora, p. ex. `.at('03:00')` |
+| `ScheduleDefinitionError` (código `SCHEDULE_INVALID_INTERVAL`) no boot | O `every` de um reconciler não cabe no cron baseado em minutos (`'30s'`, `'7m'`, `'90m'`) | Usa `'1m'`, `'5m'`, `'15m'`, `'2h'`, `'1d'` ou uma expressão cron |
 | `AggregateError: Failure in N scheduled task(s)` | Tarefas sem `onFailure` lançaram durante um tick; todas as entradas due correram na mesma e o processo sobreviveu | Adiciona `.onFailure()` para encaminhar os erros de cada tarefa para o teu reporting |
 | Uma tarefa corre N vezes ao mesmo tempo entre pods | Falta `.onOneServer()` na entrada (ou as réplicas apontam para lock stores diferentes) | Marca-a `.onOneServer()`; partilha um lock store entre réplicas |
 | Uma tarefa `.onOneServer()` falhou o tick enquanto o Redis esteve em baixo | Fail closed: uma falha do lock store é uma falha da tarefa, nunca permissão para correr em todo o lado | Restaura o lock store; o tick do minuto seguinte recupera |

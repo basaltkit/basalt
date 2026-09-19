@@ -145,8 +145,15 @@ export async function anyService() {
 }
 
 tryCtx()                                  // …ou undefined fora de um contexto, sem lançar
-await runWithContext({ tenant }, () => runJobForTenant()) // dá contexto a trabalho em background
+await runWithContext({ tenant }, async () => await runJobForTenant()) // dá contexto a trabalho em background
 ```
+
+::: warning Faz await dentro do callback
+O contexto só está ativo enquanto o callback corre. Um thenable preguiçoso — uma
+query Prisma — devolvido sem await por um callback síncrono executa *depois* de o
+`runWithContext` retornar, fora do contexto (`PRISMA_TENANT_MISSING`). Usa um
+callback `async` e faz `await` do trabalho lá dentro. O `tenancy.run()` já faz isto por ti.
+:::
 
 Esta é a espinha dorsal que permite a cache, storage, queue, logger e drivers
 de dados isolarem por tenant automaticamente — todos leem o tenant do contexto,

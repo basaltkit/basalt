@@ -16,6 +16,29 @@ model Project {
   @@index([tenantId])
 }
 
+// --- row-level security: tenancyExtension({ rls: true }) ---
+// The FK below is a plain (non-composite) one on purpose: it reproduces the
+// residual path where a foreign-key scalar points at another tenant's row.
+
+model RlsProject {
+  id       String    @id
+  tenantId String
+  name     String
+  tasks    RlsTask[]
+
+  @@map("rls_projects")
+}
+
+model RlsTask {
+  id        String      @id
+  tenantId  String
+  title     String
+  projectId String?
+  project   RlsProject? @relation(fields: [projectId], references: [id])
+
+  @@map("rls_tasks")
+}
+
 // --- store models (for @basaltkit/*-prisma integration tests) ---
 
 

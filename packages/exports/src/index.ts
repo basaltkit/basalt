@@ -2,9 +2,12 @@ export {
   Exports,
   defineExport,
   UnknownExportFormatError,
+  ExportNotStreamableError,
   type ExportColumn,
   type ExportDefinition,
   type ExportResult,
+  type ExportStream,
+  type ExportStreamOptions,
 } from './exports.js'
 export {
   DelimitedFormatter,

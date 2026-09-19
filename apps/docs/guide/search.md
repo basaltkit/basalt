@@ -6,7 +6,9 @@ leak between tenants. In an app with no `tenancyPlugin` there is no tenant to
 scope to: `tenantId` becomes optional on both `index()` and `search()`, and both
 resolve to one internal `'default'` scope, so they always agree
 (see [Beyond SaaS](/guide/beyond-saas)). It ships an in-memory driver for dev/test and a
-Meilisearch driver for production, behind one API.
+Meilisearch driver for production, behind one API; the separate
+[Postgres](#already-on-postgres) and [Elasticsearch / OpenSearch](#elasticsearch-opensearch)
+driver packages plug into the same seam.
 
 Inside a tenant context the context tenant is authoritative: a `tenantId` passed
 to `search()`, `remove()`, or on a document given to `index()`/`bulk()` must
@@ -366,6 +368,8 @@ await search.search('notes', 'report', {
 | `searchPlugin({ driver?, indexes?, sync? })` | Register the service, indexes and sync rules. |
 | `SEARCH` | DI token → the `Search` service. |
 | `search.index/bulk/remove/search` | Index, bulk-index, remove, query. |
-| `MemorySearchDriver` · `MeilisearchDriver` | Dev/test and production backends. |
+| `MemorySearchDriver` · `MeilisearchDriver` | Built-in dev/test and production backends. |
+| `PostgresSearchDriver` (`@basaltkit/search-postgres`) | Postgres full-text backend — no separate search service. |
+| `ElasticsearchDriver` (`@basaltkit/search-elasticsearch`) | Elasticsearch / OpenSearch backend for large-scale relevance. |
 
 See the [notes SaaS cookbook](/cookbook/notes-saas) for search in a full app.

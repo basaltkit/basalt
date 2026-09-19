@@ -191,7 +191,7 @@ Type: `boolean | string[]`. Default: unset — fail loud.
 | `auth` | `boolean` (or plugin-specific) | `@basaltkit/auth` guard | Requires an authenticated user. Boot-checked. |
 | `can` | `string \| string[]` | `@basaltkit/permissions` guard | Requires the permission — an array means **all** are required. Boot-checked. |
 | `teamRole` | plugin-specific | `@basaltkit/teams` guard | Requires a team-membership rank. Boot-checked. |
-| `rateLimit` | `{ limit: number; windowMs: number }` | `securityPlugin` | Per-route bucket at a stricter threshold. |
+| `rateLimit` | `{ limit: number; windowMs: number; key?: RateLimitKey }` | `securityPlugin` | Per-route bucket at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'` or `(ctx) => id`. |
 | `etag` | `true` | the shared pipeline | Strong `ETag` + `304` on `If-None-Match`, for `GET`/`HEAD`. |
 | `summary` · `description` · `tags` · `operationId` | `string` · `string` · `string[]` · `string` | `openapiPlugin` | Operation metadata in the generated document. |
 
@@ -220,6 +220,58 @@ route({
 `computeEtag(body)` and `ifNoneMatchSatisfied(header, etag)` are exported if you want to
 do it by hand. Only `GET`/`HEAD` are considered, and only when the handler returned a
 value without replying itself.
+
+### File uploads — `upload()`
+
+`body: upload({ … })` declares a streamed `multipart/form-data` body that works on
+Fastify, Express and Hono alike. It uses the package's own dependency-free RFC 7578
+parser, so there is no `@fastify/multipart`/`multer`. The whole pipeline (pre-hooks,
+enrichers, guards: rate limit, tenant, auth) runs **before** any body byte is read. The
+body is parsed while the handler consumes it, never buffered:
+
+```ts
+import { route, upload } from '@basaltkit/http'
+
+route({
+  method: 'POST',
+  url: '/documents',
+  body: upload({ maxBytes: 20 * 1024 * 1024, maxFiles: 3, allowedTypes: ['application/pdf', 'image/*'] }),
+  meta: { auth: true },
+  async handler({ body }) {
+    for await (const file of body.files) {
+      // { field, filename (sanitised), declaredType, stream: Readable }
+      await files.upload(file.stream, { name: file.filename, contentType: file.declaredType })
+    }
+    return { title: body.fields['title'] }
+  },
+})
+```
+
+| `UploadOptions` | Type | Default | Past the limit |
+|---|---|---|---|
+| `maxBytes` | `number` | **required** | `413 PAYLOAD_TOO_LARGE`. Covers the whole request; a larger `Content-Length` is refused before reading. |
+| `maxFiles` | `number` | **required** | `400 TOO_MANY_FILES` |
+| `maxFileBytes` | `number` | `maxBytes` | `413 PAYLOAD_TOO_LARGE` |
+| `maxFields` | `number` | `50` | `400 TOO_MANY_FIELDS` |
+| `maxFieldBytes` | `number` | 64 KiB | `413 PAYLOAD_TOO_LARGE` |
+| `maxHeaderBytes` | `number` | 8 KiB per part | `400 MALFORMED_MULTIPART` |
+| `allowedTypes` | `string[]` | any | `415 UNSUPPORTED_MEDIA_TYPE` (exact `image/png` or wildcard `image/*`, matched against the **declared** type) |
+
+The handler's `body` is an `UploadBody`: `files`, an async iterable of `UploadedFile`,
+and `fields`, a null-prototype `Record<string, string>` that fills as parts arrive. A
+file you do not read is skipped when you ask for the next one. When the handler
+returns or throws before the end, the rest is drained up to `maxBytes` and the reply
+gets `Connection: close`, so nothing hangs.
+
+The request is also rejected with `415` when it is not `multipart/form-data`, and with
+`400 MALFORMED_MULTIPART` for a missing, repeated or invalid boundary, a body that ends
+before the closing boundary, folded, duplicated or oversized part headers, a nested
+`multipart/*` part, or a non-binary `Content-Transfer-Encoding`. Filenames go through
+`sanitizeFilename()`, which strips directories (`../../x`, `C:\x`), control/NUL and
+bidi characters and caps the name at 255 bytes. Treat the result as a label, never as a
+storage key. Adapters set `request.bodyStream` (the unread request stream) for upload
+routes only; `isUploadBody(schema)` tells them which routes those are. OpenAPI documents
+the body as `multipart/form-data`.
 
 ### Server-Sent Events — `sse()`
 
@@ -314,6 +366,34 @@ route({
 
 Anything malformed in `meta.rateLimit` (missing/non-positive `limit` or `windowMs`) is
 ignored and the route falls back to the global bucket.
+
+**Who the bucket belongs to — `meta.rateLimit.key`.** Per IP by default, which lumps
+everyone behind one NAT or corporate proxy together. Key it by identity instead:
+
+| `key` (`RateLimitKey`) | Bucket |
+|---|---|
+| `'ip'` (default) | `request.ip` — as before. |
+| `'user'` | `ctx().user.id` — two users behind one IP get separate budgets. |
+| `'tenant'` | `ctx().tenant.id` — every user of a tenant shares one budget. |
+| `'user+tenant'` | One budget per user per tenant. |
+| `(ctx) => string \| undefined` | Whatever id you return (e.g. an API-key id). |
+
+```ts
+route({
+  method: 'POST',
+  url: '/reports/export',
+  meta: { auth: true, rateLimit: { limit: 10, windowMs: 60_000, key: 'user' } },
+  async handler() { /* … */ },
+})
+```
+
+The id is resolved in the guard, after enrichers (auth, tenancy) set `ctx()`. When it is
+missing — anonymous caller, no tenant, the function returns nothing — the bucket **falls
+back to the client IP** (never to one shared bucket; identity buckets are namespaced so
+they never collide with IP ones). The same `store` (memory/Redis) is used. A keyed route
+is always charged by the guard, so on every adapter it also counts against the global
+per-IP bucket (the pre-routing hook cannot know the user). An unknown `key` string keeps
+the per-IP bucket.
 
 By default the plugin also sets a **restrictive CSP** — `DEFAULT_CSP`, i.e.
 `default-src 'none'; frame-ancestors 'none'` — which is right for a JSON API but blocks
@@ -422,7 +502,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 |---|---|---|---|---|
 | `method` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE' \| 'HEAD' \| 'OPTIONS'` | Yes | — | HTTP method. |
 | `url` | `string` | Yes | — | Path, with `:name` parameters. |
-| `body` | `ZodType` | No | `undefined` | Request body schema; validated at runtime. |
+| `body` | `ZodType` \| `upload(…)` | No | `undefined` | Request body schema; validated at runtime. Or `upload({ … })` for a streamed `multipart/form-data` body (see [Uploads](#file-uploads--upload)). |
 | `query` | `ZodType` | No | `undefined` | Query string schema; validated at runtime. |
 | `params` | `ZodType` | No | `undefined` | URL parameters schema; validated at runtime. |
 | `response` | `Record<number, ZodType>` | No | `undefined` | Response schemas per status — only for OpenAPI/SDK, not validated at runtime. |
@@ -438,6 +518,10 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
 | — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
 | — (no class) | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. `Retry-After` is set. |
+| `HttpError` | `PAYLOAD_TOO_LARGE` | 413 | An `upload()` body passed `maxBytes`, `maxFileBytes` or `maxFieldBytes`. |
+| `HttpError` | `TOO_MANY_FILES` / `TOO_MANY_FIELDS` | 400 | An `upload()` body passed `maxFiles` / `maxFields`. |
+| `HttpError` | `UNSUPPORTED_MEDIA_TYPE` | 415 | An `upload()` route got a non-multipart body, or a file outside `allowedTypes`. |
+| `HttpError` | `MALFORMED_MULTIPART` | 400 | Bad boundary, truncated body, malformed/oversized part headers, or a nested multipart part. |
 | — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. |
 
 `HttpError` and `RequestValidationError` extend `BasaltError`, so `error.code` is stable

@@ -6,7 +6,13 @@ import {
   tryCtx,
   type DurationInput,
 } from '@basaltkit/core'
-import type { TemporaryUrlOptions, PutOptions, StorageDriver } from './driver.js'
+import type {
+  TemporaryUploadUrl,
+  TemporaryUploadUrlDriverOptions,
+  TemporaryUrlOptions,
+  PutOptions,
+  StorageDriver,
+} from './driver.js'
 import { ImagePipeline, type ImageProcessor } from './image.js'
 import { LocalStorageDriver } from './drivers/local.js'
 import {
@@ -15,12 +21,20 @@ import {
   StorageInvalidScopeError,
   StorageTenantRequiredError,
   StorageTooLargeError,
+  StorageUploadUrlInvalidError,
+  TemporaryUploadUrlUnsupportedError,
   TemporaryUrlTtlTooLongError,
   TemporaryUrlUnsupportedError,
   UnknownDiskError,
 } from './errors.js'
 
-export type { StorageDriver, PutOptions, TemporaryUrlOptions } from './driver.js'
+export type {
+  StorageDriver,
+  PutOptions,
+  TemporaryUrlOptions,
+  TemporaryUploadUrl,
+  TemporaryUploadUrlDriverOptions,
+} from './driver.js'
 export {
   ImagePipeline,
   type ImageProcessor,
@@ -39,6 +53,8 @@ export {
   StorageInvalidScopeError,
   StorageTenantRequiredError,
   StorageTooLargeError,
+  StorageUploadUrlInvalidError,
+  TemporaryUploadUrlUnsupportedError,
   TemporaryUrlTtlTooLongError,
   TemporaryUrlUnsupportedError,
   UnknownDiskError,
@@ -91,6 +107,67 @@ function enforceUploadLimits(content: Buffer | string, options: PutOptions | und
  */
 export const DEFAULT_MAX_TEMPORARY_URL_TTL = 7 * 24 * 60 * 60 * 1000
 
+/**
+ * Largest lifetime a pre-signed upload URL may be minted with unless a disk
+ * sets `maxTemporaryUploadUrlTtl`: 1 hour. An upload URL is a write credential
+ * — the browser should use it right away, so it has no reason to live long.
+ */
+export const DEFAULT_MAX_TEMPORARY_UPLOAD_URL_TTL = 60 * 60 * 1000
+
+/** Options for {@link Disk.temporaryUploadUrl}. */
+export interface TemporaryUploadUrlOptions {
+  /** URL lifetime. Capped by `maxTemporaryUploadUrlTtl` (default 1 hour). */
+  expiresIn: DurationInput
+  /**
+   * Required. The only Content-Type the upload may declare — signed into the
+   * URL, so the client cannot upload `text/html` to a URL minted for `image/png`.
+   */
+  contentType: string
+  /** Exact body size in bytes. Signed on S3; a size range on GCS; not bindable on Azure. */
+  contentLength?: number
+  /** Base64-encoded SHA-256 of the body. Signed on S3 (S3 verifies it); unsupported on GCS. */
+  checksumSha256?: string
+  /**
+   * Facade-enforced cap on the declared `contentLength` (like `PutOptions.maxBytes`).
+   * When set, `contentLength` becomes mandatory — the signature is what enforces it.
+   */
+  maxBytes?: number
+  /** Facade-enforced allowlist for the declared `contentType` (like `PutOptions.allowedContentTypes`). */
+  allowedContentTypes?: readonly string[]
+}
+
+// type/subtype with optional parameters; no whitespace runs, CR/LF or other control chars.
+const CONTENT_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+(?:; ?[a-z0-9!#$&^_.+-]+=(?:[a-z0-9!#$&^_.+-]+|"[^"\u0000-\u001f\u007f]*"))*$/i
+// 32 bytes, base64: 43 characters + one '=' pad.
+const SHA256_BASE64 = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/
+
+function validateUploadUrlOptions(options: TemporaryUploadUrlOptions): TemporaryUploadUrlDriverOptions {
+  const { contentType, contentLength, checksumSha256, maxBytes, allowedContentTypes } = options
+  if (typeof contentType !== 'string' || !CONTENT_TYPE.test(contentType)) {
+    throw new StorageUploadUrlInvalidError('contentType is required and must be a valid media type (e.g. "image/png").')
+  }
+  if (contentLength !== undefined && !(Number.isSafeInteger(contentLength) && contentLength >= 0)) {
+    throw new StorageUploadUrlInvalidError('contentLength must be a non-negative integer.')
+  }
+  if (checksumSha256 !== undefined && !SHA256_BASE64.test(checksumSha256)) {
+    throw new StorageUploadUrlInvalidError('checksumSha256 must be the base64-encoded 32-byte SHA-256 digest.')
+  }
+  if (allowedContentTypes && !allowedContentTypes.includes(contentType)) {
+    throw new StorageContentTypeError(contentType, allowedContentTypes)
+  }
+  if (maxBytes !== undefined) {
+    if (contentLength === undefined) {
+      throw new StorageUploadUrlInvalidError('maxBytes requires a declared contentLength, so the signature can enforce it.')
+    }
+    if (contentLength > maxBytes) throw new StorageTooLargeError(contentLength, maxBytes)
+  }
+  return {
+    contentType,
+    ...(contentLength !== undefined ? { contentLength } : {}),
+    ...(checksumSha256 !== undefined ? { checksumSha256 } : {}),
+  }
+}
+
 export interface DiskOptions {
   /**
    * Dynamic path prefix resolved on every operation. The default reads
@@ -113,6 +190,13 @@ export interface DiskOptions {
    * {@link TemporaryUrlTtlTooLongError} (400).
    */
   maxTemporaryUrlTtl?: DurationInput
+  /**
+   * Upper bound for `temporaryUploadUrl` lifetimes. Default: the smaller of
+   * 1 hour ({@link DEFAULT_MAX_TEMPORARY_UPLOAD_URL_TTL}) and
+   * `maxTemporaryUrlTtl`; an explicit value wins. A longer request throws
+   * {@link TemporaryUrlTtlTooLongError} (400).
+   */
+  maxTemporaryUploadUrlTtl?: DurationInput
   /** Engine that backs `disk.image(...)`. Injected by `storagePlugin`. */
   imageProcessor?: ImageProcessor
 }
@@ -144,6 +228,7 @@ export class Disk {
   private readonly scope: (() => string | undefined) | null
   private readonly onMissingScope: 'root' | 'error' | undefined
   private readonly maxTemporaryUrlTtl: number
+  private readonly maxTemporaryUploadUrlTtl: number
   private readonly imageProcessor: ImageProcessor | undefined
 
   constructor(
@@ -163,6 +248,10 @@ export class Disk {
     this.onMissingScope = options.onMissingScope
     this.maxTemporaryUrlTtl =
       options.maxTemporaryUrlTtl === undefined ? DEFAULT_MAX_TEMPORARY_URL_TTL : parseDuration(options.maxTemporaryUrlTtl)
+    this.maxTemporaryUploadUrlTtl =
+      options.maxTemporaryUploadUrlTtl === undefined
+        ? Math.min(DEFAULT_MAX_TEMPORARY_UPLOAD_URL_TTL, this.maxTemporaryUrlTtl)
+        : parseDuration(options.maxTemporaryUploadUrlTtl)
     this.imageProcessor = options.imageProcessor
   }
 
@@ -221,6 +310,35 @@ export class Disk {
     return this.driver.temporaryUrl(this.path(path), ttl, {
       disposition: options.disposition ?? 'attachment',
     })
+  }
+
+  /**
+   * Pre-signed direct upload: the browser PUTs the file straight to the
+   * bucket, never through the app server.
+   *
+   * ```ts
+   * const upload = await disk.temporaryUploadUrl(`avatars/${randomUUID()}.png`, {
+   *   expiresIn: '5m', contentType: 'image/png', contentLength: 48_213,
+   * })
+   * // client: fetch(upload.url, { method: upload.method, headers: upload.headers, body: file })
+   * ```
+   *
+   * Same safety rules as {@link temporaryUrl}: the key is validated and
+   * tenant-prefixed (fail-closed without a tenant), and the lifetime is capped
+   * by `maxTemporaryUploadUrlTtl` (default 1 hour). `contentType` is required
+   * and signed; `contentLength`/`checksumSha256` are signed where the backend
+   * can. Generate the key server-side — never accept it from the client.
+   */
+  async temporaryUploadUrl(path: string, options: TemporaryUploadUrlOptions): Promise<TemporaryUploadUrl> {
+    if (!this.driver.temporaryUploadUrl) throw new TemporaryUploadUrlUnsupportedError(this.driver.name)
+    const ttl = parseDuration(options.expiresIn)
+    if (!(ttl > 0) || ttl > this.maxTemporaryUploadUrlTtl) {
+      throw new TemporaryUrlTtlTooLongError(ttl, this.maxTemporaryUploadUrlTtl)
+    }
+    const driverOptions = validateUploadUrlOptions(options)
+    const key = this.path(path)
+    const upload = await this.driver.temporaryUploadUrl(key, ttl, driverOptions)
+    return { ...upload, key }
   }
 
   private path(path: string): string {
@@ -324,6 +442,9 @@ export function storagePlugin(options: StoragePluginOptions) {
               ...(config.scope !== undefined ? { scope: config.scope } : {}),
               ...(config.onMissingScope !== undefined ? { onMissingScope: config.onMissingScope } : {}),
               ...(config.maxTemporaryUrlTtl !== undefined ? { maxTemporaryUrlTtl: config.maxTemporaryUrlTtl } : {}),
+              ...(config.maxTemporaryUploadUrlTtl !== undefined
+                ? { maxTemporaryUploadUrlTtl: config.maxTemporaryUploadUrlTtl }
+                : {}),
               ...(options.imageProcessor ? { imageProcessor: options.imageProcessor } : {}),
             }, tenancyActive),
           )
