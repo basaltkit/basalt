@@ -291,8 +291,9 @@ for a "manage devices" screen.
 ### Social login (OAuth)
 
 Sign in with Google, GitHub, or any OpenID Connect provider via the OAuth 2.0
-authorization-code flow — no SDK, and cookieless (the CSRF `state` is HMAC-signed
-and stateless). Register `oauthPlugin` with your providers and `oauthRoutes` with
+authorization-code flow — no SDK. The flow is bound to the browser that started
+it (an HttpOnly binding cookie whose hash is in the HMAC-signed, single-use
+`state`), and the code exchange uses PKCE (S256) plus an OIDC `nonce`. Register `oauthPlugin` with your providers and `oauthRoutes` with
 your app's **base URL**:
 
 ```ts
@@ -305,7 +306,7 @@ createApp({
   plugins: [
     authPlugin({ users, secret: process.env.AUTH_SECRET! }),
     oauthPlugin({
-      secret: process.env.AUTH_SECRET!, // signs the stateless `state`
+      secret: process.env.AUTH_SECRET!, // signs the `state`, derives PKCE verifier + nonce
       providers: [
         googleProvider({ clientId: env.GOOGLE_ID, clientSecret: env.GOOGLE_SECRET }),
         githubProvider({ clientId: env.GITHUB_ID, clientSecret: env.GITHUB_SECRET }),
@@ -325,8 +326,8 @@ createApp({
 
 Two routes are added per provider:
 
-- `GET /auth/oauth/:provider` → 302 to the provider's consent screen.
-- `GET /auth/oauth/:provider/callback` → verifies the `state`, exchanges the code,
+- `GET /auth/oauth/:provider` → sets the binding cookie, 302 to the provider's consent screen.
+- `GET /auth/oauth/:provider/callback` → verifies the `state` against the cookie, exchanges the code,
   and logs the user in. Returns JSON `{ user, accessToken, refreshToken }`; pass
   `successRedirect` to `oauthRoutes` to bounce the browser back to your SPA with
   the tokens in the URL fragment instead.
@@ -338,9 +339,13 @@ character-for-character, or the provider rejects it with *"redirect_uri is not
 associated with this application"*.
 
 New accounts are created **passwordless** and a provider-verified email flips
-`emailVerified`. Accounts are matched by email, so only trust providers that
-return a **verified** address (Google and the built-in GitHub driver both do).
-`Auth.socialLogin(email)` is the underlying primitive for custom providers.
+`emailVerified`. An **existing** account is only logged into when the provider
+verified the email (`SocialLinkRefusedError` otherwise); an existing account that
+had never verified its own email has its password, sessions, refresh tokens and
+MFA revoked before it is adopted; an account with MFA enabled requires the code
+(`MfaRequiredError`) unless `oauthPlugin({ mfa: 'skip' })` is set for an IdP that
+enforces its own MFA. `Auth.socialLogin(email, { emailVerified })` is the
+underlying primitive for custom providers.
 
 **Enterprise SSO (OIDC):** any OpenID Connect IdP (Okta, Entra ID, Auth0,
 Keycloak…) plugs in via `oidcProvider({ clientId, clientSecret, authorizationUrl,
@@ -382,6 +387,15 @@ const app = await createApp({
 `apiKeysPlugin` claims the `scopes` key in the adapters' boot-time guarded-meta check, so a route declaring `meta.scopes` **without** the plugin registered fails loud at boot (`UnguardedRouteMetaError`) instead of serving unchecked.
 
 The key is presented in the `Authorization: Bearer mk_live_...` or `x-api-key` header. A **scope** is a granular permission on the key (e.g. `reports:read`); `*` means all. After authenticating, `ctx().apiKey` contains `{ id, scopes, tenantId?, userId? }`.
+
+The guard enforces, on every key-authenticated request: **tenant binding** (a key
+issued in a tenant is refused with `403 AUTH_APIKEY_TENANT_MISMATCH` on any request
+resolving another tenant or none; tenantless keys are refused on tenant-scoped
+requests unless `allowTenantlessKeys: true`), **scopes as an upper bound** (a key
+without `*` is refused on `meta.auth`/`can`/`teamRole`/`audience` routes that do not
+declare `meta.scopes`; opt out with `allowNarrowKeysOnUnscopedRoutes: true`) and
+**session-only routes** (`meta.apiKey: false` refuses every key with
+`403 AUTH_APIKEY_NOT_ALLOWED` — `apiKeyRoutes()` and `mfaRoutes()` declare it).
 
 ### Brute-force lockout (LoginThrottle)
 
@@ -442,12 +456,12 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
 | `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
 | `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | MFA state and verification. |
-| `socialLogin(email, { emailVerified? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; returns `{ user, tokens }`. |
+| `socialLogin(email, { emailVerified?, mfaCode?, mfa? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; links to an existing account only with a provider-verified email and honours its MFA; returns `{ user, tokens }`. |
 
 ### Ready-made routes
 
 - `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them.
-- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (all require login; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
+- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
 - `oauthRoutes({ callbackBaseUrl, successRedirect? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider.
 
@@ -527,7 +541,7 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 - **@basaltkit/core** — provides the app, the container, the request context (`ctx()`), and hooks; auth sets `ctx().user` and `ctx().apiKey`.
 - **@basaltkit/fastify** — the HTTP adapter that runs the enrichers/guards and serves the ready-made routes.
 - **@basaltkit/permissions** — answers "what can you do?"; its `meta.can` guard uses the `ctx().user` that auth sets.
-- **@basaltkit/tenancy** — defines `ctx().tenant`; API keys created within a tenant are scoped to that tenant.
+- **@basaltkit/tenancy** — defines `ctx().tenant`; API keys created within a tenant only work inside that tenant.
 - **@basaltkit/teams** — the `meta.teamRole` guard combines `ctx().user` (auth) with `ctx().tenant` (tenancy).
 
 ## Security best practices

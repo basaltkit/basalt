@@ -42,7 +42,7 @@ Domain events matching `captureEvents` are written to SQLite as they fire; the r
 
 One `outbox` table holds each entry: `event`, JSON `payload`, optional `tenant_id`, `created_at`, `attempts`, `published_at` and `last_error`. A **partial index** on un-published rows keeps the relay's "what's pending?" scan cheap no matter how much published history accumulates.
 
-`SqliteOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts)` (unpublished, below the attempt ceiling, oldest first), `markPublished`, `markFailed` (increments `attempts`), `all`. Re-enqueuing the same `id` replaces the entry (`INSERT OR REPLACE`: `attempts` reset to 0, publish/error cleared), mirroring `MemoryOutboxStore`. `sqliteOutboxStore()` also exposes the raw `db` handle.
+`SqliteOutboxStore` implements the full `OutboxStore` contract — `enqueue`, `pending(limit, maxAttempts, filter?)` (unpublished, below the attempt ceiling, oldest first; `filter` excludes tenants — NULL-safe, so tenant-less rows are only dropped by `excludeGlobal` — which lets the relay stay fair across tenants), `markPublished`, `markFailed` (increments `attempts`), `all`. Re-enqueuing the same `id` replaces the entry (`INSERT OR REPLACE`: `attempts` reset to 0, publish/error cleared), mirroring `MemoryOutboxStore`. `sqliteOutboxStore()` also exposes the raw `db` handle.
 
 ## API reference
 

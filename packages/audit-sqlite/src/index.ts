@@ -6,6 +6,7 @@ const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import {
   AUDIT_SCAN_PAGE,
+  assertAuditLimit,
   type AuditEntry,
   type AuditQuery,
   type AuditStore,
@@ -95,6 +96,8 @@ export class SqliteAuditStore implements AuditStore {
   }
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {
+    // Validated here too, not only in Audit.trail(): the store is public API.
+    assertAuditLimit(query.limit)
     // Exact filters — including an event name with no wildcard — push down to SQL,
     // and so does the limit. Only a wildcard pattern still needs matching in code,
     // and then rows are read in bounded LIMIT/OFFSET pages: a `limit: 50` query must
@@ -124,8 +127,9 @@ export class SqliteAuditStore implements AuditStore {
       ' ORDER BY at DESC, rowid DESC' // newest first, ties by insertion order
 
     const read = (limit: number | undefined, offset: number): AuditEntry[] => {
-      const sql = limit === undefined ? base : `${base} LIMIT ${limit} OFFSET ${offset}`
-      return (this.db.prepare(sql).all(...args) as unknown as AuditRow[]).map(toEntry)
+      // LIMIT/OFFSET are bound parameters, never interpolated into the SQL text.
+      if (limit === undefined) return (this.db.prepare(base).all(...args) as unknown as AuditRow[]).map(toEntry)
+      return (this.db.prepare(`${base} LIMIT ? OFFSET ?`).all(...args, limit, offset) as unknown as AuditRow[]).map(toEntry)
     }
 
     if (query.event === undefined || exact !== undefined) return read(query.limit, 0)

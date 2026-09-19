@@ -9,7 +9,13 @@ export {
   type SearchDriver,
 } from './types.js'
 export { MemorySearchDriver } from './memory.js'
-export { Search, SINGLE_TENANT_SCOPE, TenantRequiredError, type SearchOptions } from './search.js'
+export {
+  Search,
+  SINGLE_TENANT_SCOPE,
+  TenantRequiredError,
+  SearchTenantMismatchError,
+  type SearchOptions,
+} from './search.js'
 export {
   MeilisearchDriver,
   MeilisearchError,

@@ -263,10 +263,26 @@ multipart is transport-specific, so you write that handler (above).
 
 | Route | Body | Returns |
 | --- | --- | --- |
-| `GET /files` | — | `FileRecord[]` for the tenant |
+| `GET /files` | — | `FileRecord[]` the caller may read |
 | `GET /files/:id` | — | one `FileRecord`, or `404 FILE_NOT_FOUND` |
-| `POST /files/:id/url` | `{ expiresIn? }` (default `'15m'`) | `{ url }` — signed, `attachment` |
-| `DELETE /files/:id` | — | `204`, idempotent |
+| `POST /files/:id/url` | `{ expiresIn? }` (default `'15m'`, at most `maxUrlTtl`) | `{ url }` — signed, `attachment` |
+| `DELETE /files/:id` | — | `204`, or `404 FILE_NOT_FOUND` |
+
+**Owner-only by default.** A user reaches only the files whose `uploadedBy` is
+their own `ctx().user.id` — so pass `uploadedBy` in your upload handler (above).
+A file the caller may not reach answers `404`, exactly like a missing one, and a
+file uploaded without `uploadedBy` is reachable by nobody through these routes.
+Choose a different policy explicitly:
+
+```ts
+fileRoutes({ shared: true })   // a tenant-wide drive: every member reaches every file
+
+fileRoutes({
+  // action: 'read' | 'url' | 'delete'; GET /files keeps the records allowed for 'read'
+  authorize: (action, record, user) =>
+    record.uploadedBy === user.id || (action !== 'delete' && record.metadata?.['public'] === true),
+})
+```
 
 ::: danger Authentication is not tenant authorization
 Every route declares `meta: { auth: true }`, which proves *who* is calling. It
@@ -318,7 +334,7 @@ them. `totalSize` is the quota's hot path, so index `(tenantId)`. See
 | `disk` | `Disk \| string` | — (required) | The storage disk, by instance or by the name declared in `storagePlugin({ disks })`. An unknown name throws `UnknownDiskError` when `FILES` is first resolved |
 | `store` | `FileStore` | `MemoryFileStore` | Where metadata lives — implement it over your database in production, or the records vanish on restart |
 | `validate` | `FileValidation` | `{ maxSize: 25 MiB }` | Upload policy (below). Passing `validate` **merges** with the default cap; it does not remove it |
-| `maxTotalBytes` | `number` | unlimited | Built-in per-tenant quota, checked against `store.totalSize()` before each upload |
+| `maxTotalBytes` | `number` | unlimited | Built-in per-tenant quota, checked against `store.totalSize()` before each upload. Quota-checked uploads of one tenant run one at a time in the process, and the total is re-checked after the insert (an overrun made by another instance is rolled back) |
 | `checkQuota` | `(tenantId, size) => void \| Promise<void>` | — | Custom quota — throw to reject. Wire it to a plan feature in `@basaltkit/subscriptions`. Runs *after* `maxTotalBytes` |
 
 The `Files` service takes the same options plus `hooks` (the `HookBus`, injected
@@ -333,16 +349,23 @@ container.
 | `maxSize` | `number` (bytes) | `DEFAULT_MAX_FILE_SIZE` = `25 * 1024 * 1024` | Reject bigger payloads with `413`. Set `Number.POSITIVE_INFINITY` to opt out of the cap deliberately |
 | `allowedTypes` | `string[]` | any type | Allowlist with `type/*` wildcards (`'image/*'`). Matched against the `contentType` **you pass to `upload`** |
 
-### `fileRoutes()`
+### `fileRoutes(options?)`
 
-Takes no options. Every route declares `meta: { auth: true }` — there is no
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `authorize` | `(action, record, user) => boolean \| Promise<boolean>` | owner-only | Your per-record policy. `action` is `'read'`, `'url'` or `'delete'`; `user` is `ctx().user`. Replaces the default |
+| `shared` | `boolean` | `false` | Every authenticated user of the tenant reaches every file (ignored when `authorize` is set) |
+| `maxUrlTtl` | `DurationInput` | `'1h'` | Longest `expiresIn` a client may request from `POST /files/:id/url` |
+
+Every route declares `meta: { auth: true }` — there is no
 `auth: false` escape hatch, unlike `billingRoutes`. If authentication genuinely
 happens at an outer edge, waive the boot check with the adapter's
 `allowUnguardedMeta` instead of removing the meta.
 
 `POST /files/:id/url` accepts `{ expiresIn }` as a duration string (`'30s'`,
-`'15m'`, `'2h'`, `'7d'`) or milliseconds; it defaults to `'15m'` and always
-signs with the `attachment` disposition.
+`'15m'`, `'1h'`); it defaults to `'15m'`, must be positive and at most
+`maxUrlTtl` (a longer or malformed value answers `400`), and always signs with
+the `attachment` disposition.
 
 ### `Files` service methods
 
@@ -365,6 +388,7 @@ signs with the `attachment` disposition.
 | `StorageQuotaExceededError` | `FILE_QUOTA_EXCEEDED` | 402 | `maxTotalBytes` would be exceeded by this upload |
 | `FileNotFoundError` | `FILE_NOT_FOUND` | 404 | `download` / `markScanned` / `GET /files/:id` for an id that isn't this tenant's |
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | No `tenantId` argument **and** no `ctx().tenant` — typically a queue worker or CLI |
+| `FileTenantMismatchError` | `FILE_TENANT_MISMATCH` | 403 | A `tenantId` argument that differs from `ctx().tenant` — inside a tenant context the argument can only name that tenant, never widen to another |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | — | `disk: 'name'` doesn't match any disk in `storagePlugin({ disks })` |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | — | `temporaryUrl` on the `local` driver |
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | — | The record exists but the object doesn't — bytes deleted out of band, or the disk/`scope` changed under the records |
@@ -377,6 +401,10 @@ signs with the `attachment` disposition.
 - **`GET /files` returns another tenant's files** — the tenant identifier is
   client-supplied and `meta.auth` doesn't check membership. Register
   [`tenantMembershipPlugin()`](/guide/teams).
+- **`GET /files` returns `[]` for files that exist** — the default policy is
+  owner-only: the files were uploaded without `uploadedBy`, or by someone else.
+  Pass `uploadedBy: ctx().user.id` on upload, or choose `shared: true` /
+  `authorize` on `fileRoutes()`.
 - **Files vanish after a redeploy, but the bytes are still in the bucket** —
   you are still on `MemoryFileStore`. Implement `FileStore` over your database.
 - **`STORAGE_TEMPORARY_URL_UNSUPPORTED` only in development** — the `local`

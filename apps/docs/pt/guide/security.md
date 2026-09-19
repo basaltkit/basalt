@@ -26,8 +26,11 @@ entrar. Esta tabela é o mapa; o guia de cada linha tem os detalhes e o opt-out.
 Um só plugin cobre rate limiting, CORS e cabeçalhos de resposta seguros. **Os
 cabeçalhos seguros estão ligados por omissão**; o rate limiting e o CORS são
 opt-in — ativa-os explicitamente para produção. As apps novas já trazem
-`securityPlugin()` no scaffold, por isso os cabeçalhos ficam protegidos desde o
-primeiro deploy.
+`securityPlugin()` no scaffold com um rate limit global por IP ligado
+(`rateLimit: { limit: 120, windowMs: 60_000 }`), por isso os cabeçalhos e os
+limites de pedidos ficam protegidos desde o primeiro deploy. Com tenancy e auth,
+o scaffold regista também `teamsPlugin()` + `tenantMembershipPlugin()` (vê
+*Nunca confies num tenant vindo do cliente* abaixo).
 
 ```ts
 import { securityPlugin } from '@basaltkit/fastify'
@@ -56,13 +59,21 @@ securityPlugin({
 })
 ```
 
-O store por omissão é em memória (`MemoryRateLimitStore`). Para múltiplas
+O store por omissão é em memória (`MemoryRateLimitStore`). A sua memória é
+limitada: os baldes expirados são varridos à medida que chega tráfego, e são
+mantidos no máximo `maxEntries` (por omissão 100 000) baldes — acima disso as
+janelas mais antigas são despejadas primeiro, para que uma avalanche de endereços
+de cliente distintos não faça crescer o processo sem limite
+(`new MemoryRateLimitStore({ maxEntries })` para o dimensionar). Para múltiplas
 instâncias, implementa a interface `RateLimitStore` sobre Redis — o mesmo padrão
 de driver usado por `@basaltkit/cache`.
 
 **Limites por rota.** Uma rota pode apertar o orçamento de um endpoint sensível
-via `meta.rateLimit` — recebe o seu próprio balde (por IP + rota) nesse limite,
-enquanto as restantes usam o global:
+via `meta.rateLimit` — recebe o seu próprio balde (por IP + padrão de rota) nesse
+limite. É imposto como guard de rota, por isso vale de forma idêntica em Fastify,
+Express e Hono, e também quando a rota é invocada como tool MCP. Em Express e Hono
+(onde o hook de borda corre antes do routing) o pedido conta também para o balde
+global; em Fastify é contado uma só vez, no seu próprio balde:
 
 ```ts
 route({
@@ -91,9 +102,15 @@ predicado). Um wildcard `*` só é emitido para pedidos sem credenciais.
 `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
 `Cross-Origin-Opener-Policy: same-origin` e uma `Content-Security-Policy`
 restritiva por omissão — `default-src 'none'; frame-ancestors 'none'` (adequada
-a uma API JSON). Passa um objeto para personalizar (p. ex. a tua própria
-`contentSecurityPolicy` para uma superfície HTML/docs), `contentSecurityPolicy:
-false` para omitir só a CSP, ou `headers: false` para desativar tudo.
+a uma API JSON), mais `Cache-Control: no-store`, para que nenhuma cache do
+browser ou intermediária guarde uma resposta com um token de sessão, API key ou
+segredo MFA. Passa um objeto para personalizar (p. ex. a tua própria
+`contentSecurityPolicy` para uma superfície HTML/docs, ou
+`cacheControl: 'private, no-cache'`), `contentSecurityPolicy: false` /
+`cacheControl: false` para omitir só esse cabeçalho, ou `headers: false` para
+desativar tudo. Uma rota que pode ser guardada em cache define o seu próprio
+`Cache-Control`, que substitui o valor por omissão — fá-lo nas rotas `meta.etag`
+(p. ex. `private, no-cache`), já que `no-store` impede o browser de revalidar.
 
 ## Limites de recursos & resistência a DoS
 
@@ -167,10 +184,13 @@ export const env = defineEnv({
 })
 ```
 
-- **Desenvolvimento**: usa `devDefault` quando não definido — a app simplesmente corre.
-- **Produção** (`NODE_ENV=production`): a variável é **obrigatória**, tem de
-  cumprir um comprimento mínimo, e é **rejeitada se parecer um placeholder**
-  (`change-me`, `secret`, `password`, …). Caso contrário a app recusa arrancar.
+- **Desenvolvimento** (`NODE_ENV=development` ou `test`, definido
+  explicitamente): usa `devDefault` quando não definido — a app simplesmente corre.
+- **Em qualquer outro caso** — `NODE_ENV=production`, `staging` **ou não
+  definido**: a variável é **obrigatória**, tem de cumprir um comprimento mínimo,
+  e é **rejeitada se parecer um placeholder** (`change-me`, `secret`,
+  `password`, …). Caso contrário a app recusa arrancar, por isso esquecer o
+  `NODE_ENV` num deploy nunca recai no valor de dev público.
 
 ## Bloqueio por força bruta
 
@@ -230,10 +250,21 @@ idempotencyPlugin() // protege POST por omissão
 - Uma repetição enquanto a primeira ainda está em curso → `409 IDEMPOTENCY_CONFLICT`.
 - Respostas `5xx` **não** são colocadas em cache, por isso falhas genuínas
   continuam repetíveis.
-- As chaves têm escopo por **caller + método + rota**: uma impressão digital do
-  caller é misturada na chave armazenada, por isso a resposta em cache de um
-  utilizador nunca pode ser replicada a outro (sem fuga entre utilizadores/
-  tenants), e a mesma chave em dois endpoints não pode colidir.
+- As chaves têm escopo por **credenciais do caller + tenant + método + rota**,
+  com hash SHA-256 antes de chegarem ao store. As credenciais são todos os
+  headers em `credentialHeaders` (por omissão `authorization`, `x-session-id`,
+  `cookie`, `x-api-key`) e o tenant é `x-tenant-id` + `host`, por isso a resposta
+  em cache de um utilizador nunca pode ser replicada a outro (sem fuga entre
+  utilizadores/tenants), e a mesma chave em dois endpoints não pode colidir. O
+  replay corre antes dos guards da rota: se autenticas com outro header,
+  adiciona-o a `credentialHeaders`.
+- Pedidos **sem** nenhum header de credencial não são colocados em cache nem
+  replicados por omissão (senão um estranho que adivinhasse a chave receberia a
+  resposta). Ativa com `allowAnonymous: true` apenas em endpoints públicos sem
+  nada privado.
+- Chaves com mais de 255 caracteres → `400 IDEMPOTENCY_KEY_INVALID`; o
+  `MemoryIdempotencyStore` remove entradas expiradas e tem um limite
+  `maxEntries` (por omissão 10 000).
 
 ## Revogar access tokens
 
@@ -375,19 +406,27 @@ tenantMembershipPlugin({
 })
 ```
 
-### 3. O scoping automático de tenant cobre o ORM — não SQL bruto nem writes aninhados
+### 3. O scoping automático de tenant cobre o ORM — não SQL bruto nem escalares de chave estrangeira
 
-A extensão de tenancy do Prisma limita as operações de modelo padrão e **falha
-fechado** sem contexto de tenant. Dois caminhos ficam *fora* dessa rede:
+A extensão de tenancy do Prisma limita as operações de modelo (incluindo
+writes de relação aninhados) e **falha fechado**: sem contexto de tenant, e
+para qualquer operação que não consegue limitar (`PRISMA_UNSCOPED_OPERATION`).
+Os dados de um update não podem mover uma linha para outro tenant
+(`PRISMA_CROSS_TENANT_WRITE`). Dois caminhos ficam *fora* dessa rede:
 
-- **Queries brutas** — `$queryRaw` / `$executeRaw` contornam o scoping de modelo.
-  O Basalt agora **recusa-as por omissão quando há um tenant em contexto**
-  (`PRISMA_RAW_IN_TENANT`), para uma query bruta não poder ler entre tenants em
-  silêncio. Corre-as em código central (sem tenant em contexto), ou adiciona tu o
-  predicado `tenant_id = $1` e define `onRawInTenant: 'allow'`.
-- **Writes aninhados** — um `connect` / `create` aninhado que alcança outro
-  modelo não é re-limitado. Verifica primeiro que o registo relacionado pertence
-  ao tenant atual.
+- **Queries brutas** — `$queryRaw`, `$executeRaw`, `$queryRawTyped`,
+  `$runCommandRaw` (todas as operações ao nível do client) e `findRaw` /
+  `aggregateRaw` do MongoDB contornam o scoping de modelo. O Basalt **recusa-as
+  por omissão quando há um tenant em contexto** (`PRISMA_RAW_IN_TENANT`), para
+  uma query bruta não poder ler entre tenants em silêncio. Corre-as em código
+  central (sem tenant em contexto), ou adiciona tu o predicado `tenant_id = $1`
+  e define `onRawInTenant: 'allow'`.
+- **Escalares de chave estrangeira** — `connect` / `create` aninhados são
+  limitados, mas um valor de FK bruto (`data: { projectId: body.projectId }`)
+  não é verificado, e um `include` segue a FK que estiver guardada. Usa chaves
+  estrangeiras compostas `(tenantId, id)` (a base de dados recusa então uma
+  ligação entre tenants) e RLS, ou verifica primeiro que o registo relacionado
+  pertence ao tenant atual.
 
 ```ts
 // ❌ query bruta dentro de um contexto de tenant agora lança PRISMA_RAW_IN_TENANT
@@ -429,8 +468,15 @@ anexa *automaticamente* (cookies, HTTP Basic). Um header custom nunca é enviado
 cross-origin num pedido forjado, por isso a página do atacante não pode aproveitar
 a sessão da vítima. **Mantém a auth num header e não há nada a fazer.**
 
-Assumes o risco de CSRF no momento em que moves essa credencial para um **cookie**
-— p. ex. guardar o session id ou o JWT num cookie para o browser o enviar
+O cookie de sessão que o `authRoutes()` define no login (`basalt_session`) está
+coberto pela verificação incorporada do `authPlugin`: um pedido só com cookie, com
+um método não seguro, que o browser marca `cross-site`/`same-site`, ou cujo `Origin`
+não é o teu próprio host nem uma entrada de `csrf.trustedOrigins`, não é autenticado
+(`403 AUTH_CSRF_REJECTED` em rotas `meta.auth`) — ver
+[Sessões por cookie e CSRF](/pt/guide/auth#cookie-sessions-and-csrf).
+
+Assumes tu o risco de CSRF no momento em que moves uma credencial para um cookie
+**teu** — p. ex. guardar o JWT num cookie para o browser o enviar
 automaticamente. Se o fizeres, protege-o tu:
 
 - Define o cookie `SameSite=Lax` (ou `Strict`), `HttpOnly` e `Secure`.
@@ -455,9 +501,10 @@ O `basalt ai:doctor` verifica estaticamente o teu projeto contra os invariantes
 de segurança do framework — offline, sem chave de API. Duas verificações
 codificam as garantias mais importantes deste guia:
 
-- **`missing-tenant-membership`** (erro) — tens tenancy + auth + teams mas nenhum
-  `tenantMembershipPlugin`, por isso um tenant resolvido nunca é ligado a um
-  membro verificado. É a classe de acesso cross-tenant da secção 2.
+- **`missing-tenant-membership`** (erro) — tens tenancy + auth mas nenhum
+  `tenantMembershipPlugin` (com ou sem o `@basaltkit/teams` instalado — se não
+  estiver, a correção é instalá-lo), por isso um tenant resolvido nunca é ligado
+  a um membro verificado. É a classe de acesso cross-tenant da secção 2.
 - **`missing-security-plugin`** (aviso) — sem `securityPlugin()`, as respostas
   saem sem cabeçalhos seguros.
 

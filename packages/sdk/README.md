@@ -77,7 +77,7 @@ const all = await client.projects.list()
 Each call accepts an object with up to three parts, depending on what the endpoint declares:
 
 - `body` — the request's JSON body (`body` schema);
-- `params` — values for the `:name` placeholders in the path (`params` schema); encoded with `encodeURIComponent`;
+- `params` — values for the `:name` placeholders in the path (`params` schema); encoded with `encodeURIComponent`. A placeholder must start a path segment (`/projects/:id`); a colon elsewhere in a segment is literal, so custom methods like `/v1/items:batch` or `/items/:id:archive` work. Missing, empty, `.` and `..` values are rejected with `CLIENT_INVALID_PARAM` before any request is sent;
 - `query` — pairs for the `?a=1&b=2` query string (`query` schema); `undefined`/`null` are omitted and arrays repeat the key.
 
 ```typescript
@@ -186,7 +186,7 @@ Describes an endpoint. Returns the object as-is, with generic types captured for
 | Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
 | `method` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE'` | Yes | — | HTTP verb |
-| `path` | `string` | Yes | — | Path with `:param` placeholders, e.g. `/projects/:id` |
+| `path` | `string` | Yes | — | Path with `:param` placeholders at the start of a segment, e.g. `/projects/:id` (colons inside a segment, e.g. `/items:batch`, are literal) |
 | `body` | `ZodType` | No | — | Request body schema |
 | `query` | `ZodType` | No | — | Query string schema |
 | `params` | `ZodType` | No | — | Path parameters schema |

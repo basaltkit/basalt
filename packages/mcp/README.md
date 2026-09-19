@@ -86,6 +86,11 @@ const local = new McpClient(new StdioClientTransport({ command: 'some-mcp-server
 await local.connect()
 ```
 
+A spawned stdio server inherits only a non-secret allowlist of host variables
+(`DEFAULT_INHERITED_ENV`: `PATH`, `HOME`, locale, temp dirs) plus `env` — never
+`APP_SECRET`, `DATABASE_URL` or provider keys. Use `inheritEnv: ['NAME']` to
+forward named variables, or `inheritEnv: true` to opt in to the full environment.
+
 Or register named servers with a plugin — `mcpClientPlugin` connects them at boot
 and exposes them via the `MCP_CLIENTS` registry:
 

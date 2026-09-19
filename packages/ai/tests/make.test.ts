@@ -129,6 +129,16 @@ describe('runMake (dry-run)', () => {
     expect(result.followUps.join('\n')).toMatch(/patients\.create/)
   })
 
+  it('generates authenticated routes and a tenant-owned in-memory repository (security)', async () => {
+    const result = await runMake(tenantCtx, plan, { dryRun: true, baseDir: '/proj', prisma: false })
+    const files = result.resources[0]?.files ?? []
+    const routes = files.find((f) => f.path.endsWith('.routes.ts'))?.content ?? ''
+    const repo = files.find((f) => f.path.endsWith('.repository.ts'))?.content ?? ''
+    expect(routes).toMatch(/\]\.map\(requireAuth\)/)
+    expect(repo).toContain("import { requireTenantId } from '@basaltkit/tenancy'")
+    expect(repo).not.toMatch(/private readonly items = new Map/)
+  })
+
   it('throws when the plan has no entity', async () => {
     const empty = { ...plan, entities: [] }
     await expect(runMake(tenantCtx, empty, { dryRun: true })).rejects.toThrow(/no entity/)

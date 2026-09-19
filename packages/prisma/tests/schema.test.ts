@@ -10,10 +10,43 @@ import {
 } from '../src/index.js'
 
 describe('tenantSchema', () => {
-  it('derives a safe, prefixed, lowercased identifier', () => {
+  it('derives a safe, prefixed identifier (non-canonical ids get a hash suffix)', () => {
     expect(tenantSchema('acme')).toBe('tenant_acme')
-    expect(tenantSchema('Acme-Corp')).toBe('tenant_acme_corp')
+    expect(tenantSchema('Acme-Corp')).toMatch(/^tenant_acme_corp__[0-9a-f]{16}$/)
     expect(tenantSchema('acme', { prefix: 'org_' })).toBe('org_acme')
+  })
+
+  it('is injective: distinct tenant ids never share a schema (F05)', () => {
+    const ids = ['acme', 'ACME', 'Acme', 'acme-co', 'acme_co', 'acme.co', 'acme co', 'acme__co', 'acme_', '_acme']
+    const schemas = ids.map((id) => tenantSchema(id))
+    expect(new Set(schemas).size).toBe(ids.length)
+    // canonical ids keep their readable, backward-compatible name
+    expect(tenantSchema('acme')).toBe('tenant_acme')
+    expect(tenantSchema('acme_co')).toBe('tenant_acme_co')
+    // a canonical id can never be crafted to equal the encoding of another id
+    const encoded = tenantSchema('acme-co')
+    expect(encoded).toMatch(/^tenant_acme_co__[0-9a-f]{16}$/)
+    expect(() => tenantSchema(encoded.slice('tenant_'.length))).not.toThrow()
+    expect(tenantSchema(encoded.slice('tenant_'.length))).not.toBe(encoded)
+    for (const schema of schemas) expect(schema.length).toBeLessThanOrEqual(63)
+  })
+
+  it('refuses ids with lone UTF-16 surrogates (they hash like U+FFFD and would share a schema)', () => {
+    // UTF-8 encodes every lone surrogate as U+FFFD, so without this check
+    // 'acme\uD800', 'acme\uDC00' and 'acme\uFFFD' all mapped to one schema.
+    expect(() => tenantSchema('acme\uD800')).toThrowError(InvalidTenantSchemaError)
+    expect(() => tenantSchema('acme\uDC00')).toThrowError(InvalidTenantSchemaError)
+    expect(() => tenantSchema('\uDFFFacme')).toThrowError(InvalidTenantSchemaError)
+    // well-formed ids, including astral characters and U+FFFD itself, still work
+    expect(tenantSchema('acme\uFFFD')).toMatch(/^tenant_acme__[0-9a-f]{16}$/)
+    expect(tenantSchema('acme\u{1F600}')).not.toBe(tenantSchema('acme\uFFFD'))
+  })
+
+  it('encodes long non-canonical ids (e.g. UUIDs) within the 63-char limit', () => {
+    const uuid = '550E8400-E29B-41D4-A716-446655440000'
+    const schema = tenantSchema(uuid)
+    expect(schema.length).toBeLessThanOrEqual(63)
+    expect(schema).not.toBe(tenantSchema(uuid.toLowerCase()))
   })
 
   it('rejects unusable or over-long ids', () => {

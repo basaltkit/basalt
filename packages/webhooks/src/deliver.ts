@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { resolveAndValidate, WebhookUrlBlockedError, type SsrfGuardOptions, type ValidatedAddress } from './ssrf.js'
 import { pinnedRequest } from './pinned-fetch.js'
 import type { WebhookEndpoint } from './store.js'
@@ -9,6 +9,19 @@ import type { WebhookEndpoint } from './store.js'
  * `fetchImpl` (which can't take extra positional args) can read it from init.
  */
 export const PINNED_ADDRESS: unique symbol = Symbol('basalt.webhooks.pinnedAddress')
+
+/**
+ * Minimum length of a webhook signing secret. Shorter (or empty/unset) secrets
+ * are refused on both ends: the deliverer won't sign with one and
+ * {@link verifySignature} won't accept one, so a receiver whose secret env var
+ * is unset can never be satisfied by an HMAC computed with an empty key.
+ */
+export const MIN_WEBHOOK_SECRET_LENGTH = 16
+
+/** Generates a fresh per-endpoint signing secret (`whsec_` + 32 random bytes). */
+export function generateWebhookSecret(): string {
+  return `whsec_${randomBytes(32).toString('base64url')}`
+}
 
 /**
  * Signs a payload the Stripe way: `t=<unix>,v1=<hmac-sha256(t.body)>`. The
@@ -25,9 +38,12 @@ export function signPayload(body: string, secret: string, timestampSeconds: numb
  * carry several `v1=` entries — a sender rotating its secret signs with both the
  * new and the old one — and is valid when ANY of them matches, as Stripe
  * receivers do. Unknown schemes are ignored; a malformed header (no/duplicate
- * `t`, no `v1`) is `false`. Never throws.
+ * `t`, no `v1`) is `false`, and so is an empty, unset or shorter-than-
+ * {@link MIN_WEBHOOK_SECRET_LENGTH} secret. Never throws.
  */
 export function verifySignature(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds = Math.floor(Date.now() / 1000)): boolean {
+  if (typeof secret !== 'string' || secret.length < MIN_WEBHOOK_SECRET_LENGTH) return false
+  if (typeof header !== 'string') return false
   let rawTimestamp: string | undefined
   const provided: string[] = []
   for (const part of header.split(',')) {
@@ -64,8 +80,25 @@ export interface DeliveryResult {
 }
 
 export interface WebhookDelivererOptions {
-  /** Default signing secret (an endpoint's own `secret` overrides it). */
+  /**
+   * Default signing secret (an endpoint's own `secret` overrides it). At least
+   * {@link MIN_WEBHOOK_SECRET_LENGTH} characters. It is only used for
+   * tenant-agnostic endpoints: a tenant-bound endpoint must carry its own secret
+   * (see `allowSharedSecret`), since a secret shared by every tenant would let
+   * one tenant forge webhooks another tenant's receiver accepts.
+   */
   secret?: string
+  /**
+   * Opt-out: sign tenant-bound endpoints that have no own secret with the shared
+   * default `secret`. Off by default — such deliveries are refused.
+   */
+  allowSharedSecret?: boolean
+  /**
+   * Opt-out: send deliveries unsigned when neither the endpoint nor the
+   * deliverer has a secret. Off by default — unsigned deliveries are refused,
+   * since receivers could not tell them from forgeries.
+   */
+  allowUnsigned?: boolean
   /** Retries after the first attempt. Default 3. */
   maxRetries?: number
   /** Base backoff in ms, doubled per attempt. Default 500. */
@@ -98,12 +131,40 @@ export class WebhookDeliverer {
   private readonly now: () => number
 
   constructor(private readonly options: WebhookDelivererOptions = {}) {
+    if (options.secret !== undefined && (typeof options.secret !== 'string' || options.secret.length < MIN_WEBHOOK_SECRET_LENGTH)) {
+      throw new Error(
+        `Webhook signing secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters (generate one with generateWebhookSecret()).`,
+      )
+    }
     this.maxRetries = options.maxRetries ?? 3
     this.backoffMs = options.backoffMs ?? 500
     this.timeoutMs = options.timeoutMs ?? 10_000
     this.fetchImpl = options.fetchImpl
     this.sleep = options.sleep ?? defaultSleep
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000))
+  }
+
+  /** True when a default (plugin-wide) signing secret is configured. */
+  get hasDefaultSecret(): boolean {
+    return this.options.secret !== undefined
+  }
+
+  /** Resolves the signing secret for `endpoint`, or the reason delivery is refused. */
+  private signingSecret(endpoint: WebhookEndpoint): { secret?: string; refused?: string } {
+    if (endpoint.secret !== undefined) {
+      if (endpoint.secret.length < MIN_WEBHOOK_SECRET_LENGTH) {
+        return { refused: `endpoint signing secret is too short (min ${MIN_WEBHOOK_SECRET_LENGTH} characters)` }
+      }
+      return { secret: endpoint.secret }
+    }
+    if (this.options.secret !== undefined) {
+      if (endpoint.tenantId !== undefined && !this.options.allowSharedSecret) {
+        return { refused: 'tenant endpoint has no own secret; refusing to sign with the shared secret' }
+      }
+      return { secret: this.options.secret }
+    }
+    if (this.options.allowUnsigned) return {}
+    return { refused: 'no signing secret; refusing unsigned delivery' }
   }
 
   /**
@@ -125,9 +186,20 @@ export class WebhookDeliverer {
   }
 
   async deliver(endpoint: WebhookEndpoint, event: string, data: unknown): Promise<DeliveryResult> {
+    const { secret, refused } = this.signingSecret(endpoint)
+    if (refused) return { endpointId: endpoint.id, ok: false, attempts: 0, error: refused }
     const timestamp = this.now()
-    const body = JSON.stringify({ event, data, sentAt: new Date(timestamp * 1000).toISOString() })
-    const secret = endpoint.secret ?? this.options.secret
+    // A unique delivery id (stable across this delivery's retries) and the
+    // endpoint id are part of the signed body, so a receiver can dedupe replays
+    // and reject a payload signed for a different endpoint.
+    const deliveryId = randomUUID()
+    const body = JSON.stringify({
+      id: deliveryId,
+      event,
+      endpointId: endpoint.id,
+      data,
+      sentAt: new Date(timestamp * 1000).toISOString(),
+    })
 
     // SSRF guard (unless explicitly disabled): resolve+validate the URL ONCE up
     // front and remember the validated address. The connection is later pinned to
@@ -155,6 +227,7 @@ export class WebhookDeliverer {
         const headers: Record<string, string> = {
           'content-type': 'application/json',
           'x-basalt-event': event,
+          'x-basalt-delivery': deliveryId,
         }
         if (secret) headers['x-basalt-signature'] = signPayload(body, secret, timestamp)
 
@@ -166,6 +239,13 @@ export class WebhookDeliverer {
           // is pinned to the validated `pinned` address (rebind-proof).
           const response = await this.send(endpoint.url, { method: 'POST', headers, body, redirect: 'manual', signal: controller.signal }, pinned)
           lastStatus = response.status
+          // Only the status matters: release an injected fetch's body instead of
+          // leaving it (and its socket) open until garbage collection.
+          try {
+            void (response as { body?: { cancel?: () => Promise<void> } | null }).body?.cancel?.()?.catch(() => {})
+          } catch {
+            // a locked/consumed body is already being handled by its owner
+          }
           if (response.ok) return { endpointId: endpoint.id, ok: true, status: response.status, attempts }
           // A redirect is refused, not followed (opaqueredirect ⇒ status 0).
           if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {

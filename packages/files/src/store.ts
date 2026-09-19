@@ -68,8 +68,10 @@ export interface FileStore {
 
 export class MemoryFileStore implements FileStore {
   private readonly records = new Map<string, FileRecord>()
+  // Tuple-encoded: a joined string lets a tenant id containing the separator
+  // address another tenant's record.
   private key(tenantId: string, id: string): string {
-    return `${tenantId} ${id}`
+    return JSON.stringify([tenantId, id])
   }
 
   async create(record: FileRecord): Promise<void> {

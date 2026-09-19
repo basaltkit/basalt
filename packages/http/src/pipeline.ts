@@ -39,6 +39,11 @@ export type RouteGuard = (info: {
   request: HttpRequest
   context: RequestContext
   container: Container
+  /**
+   * The reply, so a guard can set response headers (e.g. `Retry-After`) before
+   * rejecting. Optional: a pipeline may run guards without one.
+   */
+  reply?: HttpReply
 }) => void | Promise<void>
 
 export interface RoutePipeline {
@@ -50,6 +55,20 @@ export interface RoutePipeline {
 const headerValue = (request: HttpRequest, name: string): string | undefined => {
   const value = request.headers[name]
   return Array.isArray(value) ? value[0] : value
+}
+
+/**
+ * Shape an inbound `x-request-id` / `x-correlation-id` must have to be adopted.
+ * The id lands in every log line, audit entry and response of the request, so
+ * a client-chosen value is accepted only when it is short and cannot carry
+ * separators, quotes, whitespace or control characters; otherwise a fresh id is
+ * generated.
+ */
+const TRACE_ID = /^[A-Za-z0-9._:-]{1,128}$/
+
+const inboundId = (request: HttpRequest, name: string): string | undefined => {
+  const value = headerValue(request, name)
+  return value !== undefined && TRACE_ID.test(value) ? value : undefined
 }
 
 function parsePart(part: 'body' | 'query' | 'params', schema: ZodType | undefined, input: unknown): unknown {
@@ -101,10 +120,10 @@ export async function runRoute(
   reply: HttpReply,
   pipeline: RoutePipeline = {},
 ): Promise<unknown> {
-  const requestId = headerValue(request, 'x-request-id') ?? randomUUID()
+  const requestId = inboundId(request, 'x-request-id') ?? randomUUID()
   const context: RequestContext = {
     requestId,
-    correlationId: headerValue(request, 'x-correlation-id') ?? requestId,
+    correlationId: inboundId(request, 'x-correlation-id') ?? requestId,
     ...(pipeline.container ? { container: pipeline.container.createScope() } : {}),
   }
   reply.header('x-request-id', requestId)
@@ -121,7 +140,8 @@ export async function runRoute(
     if (scoped) {
       for (const enrich of pipeline.enrichers ?? [])
         await enrich({ route: definition, request, context, container: scoped })
-      for (const guard of pipeline.guards ?? []) await guard({ route: definition, request, context, container: scoped })
+      for (const guard of pipeline.guards ?? [])
+        await guard({ route: definition, request, context, container: scoped, reply })
     }
     const result = await definition.handler({
       body: parsePart('body', definition.body, request.body),
@@ -156,5 +176,49 @@ export function toErrorResponse(error: unknown): ErrorResponse {
       return { status, body: { error: { code: error.code, message: error.message } } }
     }
   }
+  const client = clientErrorOf(error)
+  if (client) return client
   return { status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' } } }
+}
+
+/** Neutral code and fixed message for the 4xx statuses frameworks raise themselves. */
+const CLIENT_ERRORS: Record<number, { code: string; message: string }> = {
+  400: { code: 'BAD_REQUEST', message: 'Malformed request.' },
+  404: { code: 'NOT_FOUND', message: 'Route not found.' },
+  405: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' },
+  406: { code: 'NOT_ACCEPTABLE', message: 'Not acceptable.' },
+  408: { code: 'REQUEST_TIMEOUT', message: 'Request timeout.' },
+  411: { code: 'LENGTH_REQUIRED', message: 'Length required.' },
+  413: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large.' },
+  414: { code: 'URI_TOO_LONG', message: 'Request URI is too long.' },
+  415: { code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Unsupported media type.' },
+  429: { code: 'RATE_LIMITED', message: 'Too many requests — slow down.' },
+  431: { code: 'HEADERS_TOO_LARGE', message: 'Request headers are too large.' },
+}
+
+/**
+ * A client error raised by the HTTP framework itself — Fastify's body parser
+ * (`FST_*` codes: malformed JSON, body too large, unsupported content type), a
+ * body parser's `SyntaxError` explicitly tagged with a 4xx `statusCode` (the
+ * Fastify adapter's JSON parser), or an http-errors style error that marks
+ * itself `expose: true` (body-parser).
+ * Those used to become a 500 INTERNAL_ERROR: the client got the wrong status
+ * and every malformed request was logged and alerted on as a server bug.
+ *
+ * Deliberately NOT honoured: any other error that merely carries a `status` or
+ * `statusCode` — a failed upstream SDK call (`401 Invalid API key`) is a bug in
+ * this server, not the caller's fault, and must stay a 500. The framework's own
+ * message is never echoed (it can quote the offending input).
+ */
+export function clientErrorOf(error: unknown): ErrorResponse | null {
+  if (!error || typeof error !== 'object') return null
+  const e = error as { code?: unknown; statusCode?: unknown; status?: unknown; expose?: unknown }
+  const fromFramework =
+    (typeof e.code === 'string' && e.code.startsWith('FST_')) ||
+    (error instanceof SyntaxError && typeof e.statusCode === 'number')
+  if (!fromFramework && e.expose !== true) return null
+  const status = typeof e.statusCode === 'number' ? e.statusCode : e.status
+  if (typeof status !== 'number' || !Number.isInteger(status) || status < 400 || status > 499) return null
+  const known = CLIENT_ERRORS[status] ?? { code: 'BAD_REQUEST', message: 'Bad request.' }
+  return { status, body: { error: { ...known } } }
 }

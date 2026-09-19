@@ -1,6 +1,7 @@
 export {
   AuditViewer,
   AuditTenantRequiredError,
+  AuditTenantMismatchError,
   type ViewerQuery,
   type AuditPage,
   type AuditStats,
@@ -10,6 +11,7 @@ export { auditViewerCsp, auditViewerHtml, type AuditViewerHtmlOptions } from './
 export {
   auditViewerPlugin,
   auditViewerRoutes,
+  AuditViewerUnguardedError,
   AUDIT_VIEWER,
   type AuditViewerPluginOptions,
   type AuditViewerRoutesOptions,

@@ -190,7 +190,25 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 
 A `password` é validada com `min(8)` e o `email` como endereço de email em todas as
 rotas que os recebem — uma password mais curta é um erro de validação `400`, não uma
-conta fraca.
+conta fraca. Os inputs também têm limite de tamanho antes de qualquer trabalho: emails
+até 254 caracteres, passwords até 1024 (seja qual for a política de `password` que
+passes), tokens até 512 — um corpo sobredimensionado é um `400`, nunca um hash.
+
+Os emails são **identidades insensíveis a maiúsculas**: o `Auth` apara e converte
+para minúsculas cada email antes de o procurar ou de criar uma conta, por isso
+`Bob@acme.test` e `bob@acme.test` são a mesma conta. Os stores incluídos também
+encontram, sem distinguir maiúsculas, as linhas escritas antes disso.
+
+As rotas não autenticadas que fazem hash, enviam email ou aceitam tentativas —
+`register`, `login`, `verify/request`, `password/forgot` e `password/reset` —
+declaram `meta.rateLimit: { limit: 10, windowMs: 60_000 }` (por ip de cliente e
+rota), imposto quando o rate limiter do `securityPlugin` está ligado. Altera-o ou
+remove-o com `authRoutes({ rateLimit: { limit, windowMs } })` /
+`authRoutes({ rateLimit: false })`. Independentemente disso, o `Auth` envia no
+máximo 3 emails de reposição e 3 de verificação por conta a cada 15 minutos
+(`emailRequestThrottle`): pedidos a mais continuam a responder `200` mas não criam
+token, por isso os endpoints não servem para inundar um utilizador de emails nem
+para ir invalidando o link que acabou de receber.
 
 ::: tip Nada aqui revela se uma conta existe
 O `POST /auth/register` responde o mesmo `202 { ok: true }` para um registo novo e
@@ -262,10 +280,16 @@ await auth.refresh(tokens.refreshToken)
 O consumo é um **compare-and-swap**, não um ler-depois-escrever: o `markUsed`
 marca o token como usado só se ele ainda estiver por usar e reporta se foi
 *esta* chamada a fazê-lo. Dois refreshes concorrentes do mesmo token — o cliente
-legítimo e um ladrão a correr com ele — resolvem-se em exatamente um vencedor e
-um `RefreshReusedError`; sem o CAS ambos teriam sucesso e a deteção de reutilização
-nunca dispararia. O mesmo se aplica aos tokens de uso único de verificação e
-reposição.
+legítimo e um ladrão a correr com ele — resolvem-se em no máximo um vencedor e um
+`RefreshReusedError`; sem o CAS ambos teriam sucesso e a deteção de reutilização
+nunca dispararia. O perdedor revoga a família; se isso acontecer antes de o vencedor
+guardar o token rodado, o vencedor também é recusado, pelo que nenhum token
+sobrevive à sua família revogada. O mesmo CAS aplica-se aos tokens de uso único de
+verificação e reposição. Um refresh token cujo utilizador já não existe é recusado.
+
+O `auth.revokeAllTokens(userId)` é um "terminar sessão em todo o lado" completo:
+revoga todos os refresh tokens e sessões de servidor do utilizador e, com um store
+`tokenVersions`, todos os access tokens em circulação.
 
 ::: tip Escrever o teu próprio store
 `AuthTokenStore.markUsed` e `RefreshTokenStore.markUsed` devolvem
@@ -318,6 +342,23 @@ authPlugin({
 
 Um pedido sem credenciais permanece anónimo (sem erro); um token explicitamente
 inválido ou expirado devolve `401 AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED`.
+
+### Sessões por cookie e CSRF {#cookie-sessions-and-csrf}
+
+O cookie de sessão é *ambiente* — o browser anexa-o a pedidos que outros sites
+desencadeiam. Por isso, um pedido cuja única credencial é esse cookie, com um
+método que não seja `GET`/`HEAD`/`OPTIONS`, **não é autenticado** quando o browser o
+marca com `Sec-Fetch-Site: cross-site` ou `same-site` (um subdomínio irmão, que o
+`SameSite=Lax` não trava), ou quando o seu `Origin` não é nem o host do próprio
+pedido nem uma origem de confiança. Uma rota com `meta.auth` responde então
+`403 AUTH_CSRF_REJECTED`. Bearer tokens, `x-session-id` e API keys não são
+credenciais ambiente e não são afetados; pedidos sem metadados de browser (curl,
+servidores) passam. Permite um front-end servido de outra origem, ou desativa:
+
+```ts
+authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] } })
+authPlugin({ users, secret, csrf: false }) // não recomendado
+```
 
 ### O `meta.auth` é verificado no arranque
 
@@ -390,6 +431,19 @@ errado lança `MfaInvalidCodeError` e conta para o throttle. Tanto um código TO
 um código de recovery são aceites (os códigos de recovery são consumidos ao usar). A
 implementação de TOTP não tem dependências e é verificada contra os vetores de teste
 da RFC 6238.
+
+O `enrollMfa` numa conta com MFA já ativo lança `MfaAlreadyEnabledError`
+(`409 AUTH_MFA_ALREADY_ENABLED`) — uma nova inscrição desligaria o segundo fator sem
+código; desativa-o primeiro com um código. As rotas de MFA só aceitam sessão
+(`meta.apiKey: false`): uma API key nunca pode inscrever nem desativar MFA.
+
+::: tip Escrever o teu próprio `MfaStore`
+Implementa os opcionais `consumeTotpStep(userId, step)` e
+`consumeRecoveryCode(userId, hash)` como atualizações condicionais que devolvem se
+foi *esta* chamada a consumir o código (os stores de memória, SQLite e Prisma
+fazem-no). Sem eles, o `Auth` recorre a ler-depois-escrever, e dois pedidos em
+paralelo com o mesmo código capturado podem passar ambos.
+:::
 
 ## Passkeys (WebAuthn)
 
@@ -479,7 +533,13 @@ por isso uma passkey nunca pode ser vinculada à conta de outra pessoa — tira 
 ## Login social (OAuth)
 
 Entra com Google ou GitHub via o fluxo *authorization-code* do OAuth 2.0 — sem
-SDK e sem cookies: o `state` (CSRF) é assinado com HMAC e é stateless.
+SDK. O fluxo fica ligado ao browser que o iniciou: `GET /auth/oauth/:provider`
+define um cookie de curta duração `HttpOnly`, `SameSite=Lax` (`__Host-basalt_oauth`
+em produção) com um valor aleatório de ligação; o `state` assinado com HMAC leva o
+seu hash, o verificador **PKCE** (S256) e o `nonce` OIDC derivam dele, e o callback
+recusa um `state` que chegue sem o cookie correspondente. Cada `state` é de uso
+único. Assim, o URL de callback de um atacante aberto no browser de uma vítima
+(login CSRF) ou um authorization code injetado são rejeitados.
 
 ```ts
 import {
@@ -507,19 +567,32 @@ São adicionadas duas rotas por provider:
 
 - `GET /auth/oauth/:provider` → redireciona para o provider. Regista
   `${callbackBaseUrl}/auth/oauth/:provider/callback` como o redirect URI do provider.
-- `GET /auth/oauth/:provider/callback` → verifica o state, troca o code e faz o
-  login do utilizador. A resposta é JSON `{ user, accessToken, refreshToken }`;
+- `GET /auth/oauth/:provider/callback` → verifica o state contra o cookie de
+  ligação (e limpa-o), troca o code com o verificador PKCE e faz o login do
+  utilizador. A resposta é JSON `{ user, accessToken, refreshToken }`;
   passa `successRedirect` para devolver o browser à tua SPA com os tokens no
   fragmento do URL.
 
 As contas novas são criadas **sem password** (autenticam via provider até definires
 uma password); um email verificado pelo provider ativa o `emailVerified`. O
-`Auth.socialLogin(email)` é a primitiva subjacente se ligares um provider próprio.
+`Auth.socialLogin(email, { emailVerified })` é a primitiva subjacente se ligares um
+provider próprio (ou chamares tu mesmo `oauth.authorize()` /
+`oauth.callback({ …, binding })`).
 
-::: warning As contas são associadas por email
-Confia apenas em providers que devolvem um email **verificado**. O Google e o
-provider GitHub incorporado fazem-no — o driver do GitHub lê o endereço primário
-*verificado*.
+::: warning As contas são associadas por email — só quando o provider o verificou
+Entrar numa conta **existente** exige que o provider garanta o email
+(`emailVerified: true`); caso contrário o `socialLogin` lança
+`SocialLinkRefusedError` (`403 AUTH_SOCIAL_LINK_REFUSED`) e o utilizador tem de
+entrar com a password. O driver do GitHub trata o email de recurso de `/user` como
+não verificado. Quando a conta existente nunca verificou o próprio email (alguém pode
+ter registado o endereço primeiro), a password, as sessões, os refresh tokens e o MFA
+dessa conta são revogados antes de o dono verificado entrar
+(`auth:social_account_adopted`).
+
+Uma conta existente com **MFA ativo** não entra só pelo provider: o `socialLogin`
+lança `MfaRequiredError` a menos que passes `mfaCode`. Se o teu IdP impõe o seu
+próprio segundo fator, desativa explicitamente com `oauthPlugin({ …, mfa: 'skip' })`
+(ou `socialLogin(email, { …, mfa: 'skip' })`).
 :::
 
 ### SSO empresarial (OIDC)
@@ -552,16 +625,37 @@ samlPlugin({ providers: [{ name: 'okta', entryPoint, idpCert, issuer, callbackUr
 ```
 
 As assertions têm de ser assinadas (`wantAssertionsSigned`) **e** ligadas a um
-login que esta app iniciou: o `validateInResponseTo` tem omissão `'ifPresent'`,
-por isso uma resposta que traga um `InResponseTo` tem de corresponder a um
-AuthnRequest pendente e ainda não consumido. Isso fecha a janela em que um
-`SAMLResponse` capturado pode ser reproduzido até ao seu `NotOnOrAfter`.
+login que esta app iniciou: o `validateInResponseTo` tem omissão `'always'`, por
+isso todas as respostas têm de trazer um `InResponseTo` que corresponda a um
+AuthnRequest pendente e ainda não consumido. Respostas não solicitadas (iniciadas
+pelo IdP) são recusadas, a menos que optes por `validateInResponseTo: 'ifPresent'`;
+nesse caso cada id de assertion consumido fica também numa `assertionReplayCache`
+de uso único, para que um `SAMLResponse` capturado não possa ser reenviado antes
+do seu `NotOnOrAfter`.
+
+**Cada IdP só pode afirmar os seus próprios domínios de email.** Em SaaS B2B o
+administrador do IdP de cada cliente controla o que esse IdP assina, por isso dá a
+cada provider uma lista `allowedEmailDomains` — uma assertion para qualquer outro
+domínio é rejeitada. Com mais de um provider isto é **obrigatório** no arranque
+(`AUTH_SAML_PROVIDER_CONFIG`); usa `allowAnyEmailDomain: true` apenas num IdP que
+controlas totalmente. O pacote recusa também arrancar com `@node-saml/node-saml`
+< 5.1.0 (CVEs de bypass de assinatura).
+
+```ts
+samlPlugin({
+  providers: [
+    { name: 'acme', /* … */ allowedEmailDomains: ['acme.com'] },
+    { name: 'globex', /* … */ allowedEmailDomains: ['globex.com', 'globex.co.uk'] },
+  ],
+})
+```
 
 | Opção | Tipo | Omissão | Propósito |
 | --- | --- | --- | --- |
-| `providers` | `SamlProvider[]` | — (obrigatória) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, `emailAttribute` opcional |
-| `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'ifPresent'` | Proteção contra replay — liga a resposta a um AuthnRequest emitido por este SP |
+| `providers` | `SamlProvider[]` | — (obrigatória) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, `emailAttribute` opcional, `allowedEmailDomains` (obrigatório com vários IdPs), `allowAnyEmailDomain` |
+| `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'always'` | Proteção contra replay — liga a resposta a um AuthnRequest emitido por este SP; `'ifPresent'` ativa o SSO iniciado pelo IdP |
 | `cacheProvider` | `SamlCacheProvider` | cache em processo do node-saml | Onde vivem os ids de AuthnRequest pendentes — **obrigatório em deployments com várias réplicas** |
+| `assertionReplayCache` | `SamlAssertionReplayCache` | em processo | Armazenamento de uso único dos ids de assertion consumidos (`consume(key, ttlMs) → boolean`) — partilha-o entre réplicas se ativares o SSO iniciado pelo IdP |
 | `createClient` | `(provider) => SamlClient` | node-saml | Fábrica do cliente subjacente (testes) |
 | `host` | `string` | — | Host usado ao construir o AuthnRequest |
 
@@ -569,8 +663,8 @@ AuthnRequest pendente e ainda não consumido. Isso fecha a janela em que um
 Os ids de pedido usam por omissão uma cache **em processo**. Com várias réplicas
 sem sessões pegajosas, um login iniciado numa réplica e a regressar noutra falha
 com `AUTH_SAML_RESPONSE_INVALID`. Passa um `cacheProvider` partilhado (Redis, a
-tua base de dados), ou opta por sair com `validateInResponseTo: 'never'` e
-aceita a janela de replay.
+tua base de dados). Optar por sair com `validateInResponseTo: 'never'` deixa só a
+`assertionReplayCache` por réplica como proteção contra replay — passa uma partilhada.
 :::
 
 ## Reposição de password (ponta a ponta)
@@ -607,12 +701,29 @@ verificação de email funciona de forma idêntica: hook `auth:verify_requested`
 ## API keys
 
 `apiKeysPlugin()` autentica chaves `mk_live_…` (via `Authorization: Bearer` ou
-`x-api-key`) e impõe `meta.scopes` nas rotas. As chaves têm âmbito de tenant, são
-criadas por um utilizador autenticado através de `apiKeyRoutes()`, e guardadas apenas
-como um hash SHA-256 mais um prefixo curto de exibição — o texto simples é mostrado
-exatamente uma vez.
-Podem ter uma expiração opcional; chaves expiradas são rejeitadas pelo servidor
-e omitidas das listagens.
+`x-api-key`) e impõe `meta.scopes` nas rotas. As chaves são criadas por um
+utilizador autenticado através de `apiKeyRoutes()`, e guardadas apenas como um hash
+SHA-256 mais um prefixo curto de exibição — o texto simples é mostrado exatamente
+uma vez. Podem ter uma expiração opcional; chaves expiradas são rejeitadas pelo
+servidor e omitidas das listagens.
+
+O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
+(`403` em cada caso, com um evento `auth:apikey_rejected`):
+
+- **Ligação ao tenant.** Uma chave criada dentro de um tenant só funciona quando o
+  pedido resolve esse mesmo tenant — nunca noutro escolhido via `x-tenant-id`, um
+  subdomínio ou o Host, e nunca num pedido sem tenant
+  (`AUTH_APIKEY_TENANT_MISMATCH`). Uma chave emitida sem tenant (chave de máquina)
+  é recusada em pedidos com tenant, a menos que passes `allowTenantlessKeys: true`.
+- **Os scopes são um limite máximo.** Uma chave sem `*` só alcança rotas que
+  declaram `meta.scopes` que ela tem; numa rota protegida por `meta.auth`, `can`,
+  `teamRole` ou `audience` sem `meta.scopes` é recusada (`AUTH_SCOPE_REQUIRED`),
+  mesmo que `users` a deixe definir `ctx().user`. Uma chave `*` age como o seu dono.
+  `allowNarrowKeysOnUnscopedRoutes: true` repõe o comportamento antigo, mais
+  permissivo.
+- **Rotas só de sessão.** Uma rota com `meta.apiKey: false` recusa qualquer chave
+  (`AUTH_APIKEY_NOT_ALLOWED`). `apiKeyRoutes()` e `mfaRoutes()` declaram-no, por isso
+  uma chave nunca pode criar, listar ou revogar chaves, nem alterar o MFA.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
@@ -625,7 +736,7 @@ const app = await createApp({
     fastifyPlugin({
       routes: [
         ...authRoutes(),
-        ...apiKeyRoutes(), // POST /apikeys, GET /apikeys, DELETE /apikeys/:id (todas requerem login)
+        ...apiKeyRoutes(), // POST /apikeys, GET /apikeys, DELETE /apikeys/:id (só sessão de login)
         route({
           method: 'GET',
           url: '/reports',
@@ -659,7 +770,11 @@ tratado pelo `apiKeysPlugin`. Se as chaves "não funcionam", provavelmente falta
 ## Bloqueio por força bruta
 
 Ativo por padrão: 5 tentativas falhadas por email em 15 minutos → `AccountLockedError`
-(429 `AUTH_LOCKED`); um login bem-sucedido limpa o contador. Ajusta-o ou desativa-o:
+(429 `AUTH_LOCKED`); um login bem-sucedido limpa o contador. Cada tentativa é
+*reservada* antes de a password (ou o código MFA) ser verificada, por isso uma rajada
+de pedidos em paralelo não consegue fazer mais tentativas do que o orçamento. O
+throttle guarda digests SHA-256 dos identificadores, nunca o email em bruto, e no
+máximo `maxEntries` (100 000) deles. Ajusta-o ou desativa-o:
 
 ```ts
 import { authPlugin, LoginThrottle } from '@basaltkit/auth'
@@ -693,6 +808,8 @@ plugin fornece:
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |
+| `emailRequestThrottle` | `LoginThrottle \| false` | 3 por 15m, por conta e finalidade | Limita emails de reposição/verificação; acima do orçamento o pedido é ignorado em silêncio e o link em vigor continua válido |
+| `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | ligado | Verificação CSRF da sessão por cookie em métodos não seguros — ver [Sessões por cookie e CSRF](#cookie-sessions-and-csrf) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Orçamento por IP que apanha *password spraying* (uma tentativa em muitas contas), que um contador por email não vê. Só se aplica quando quem chama passa o ip do cliente — o `authRoutes()` passa |
 | `enumerationSafeRegister` | `boolean` | `true` | Impede que o `POST /auth/register` revele que um email já tem conta. `false` repõe o `409 AUTH_EMAIL_TAKEN` |
 | `tokenVersions` | `TokenVersionStore` | — (desligado) | **Revogação** opcional de access tokens: os tokens levam uma claim `tv` que o `resetPassword`/`revokeAllTokens` incrementa, matando os tokens em circulação antes do TTL. Custa uma leitura ao store por pedido autenticado |
@@ -705,6 +822,7 @@ plugin fornece:
 | --- | --- | --- | --- |
 | `maxAttempts` | `number` | `5` | Tentativas falhadas permitidas dentro da janela |
 | `windowMs` | `number` | `900_000` (15m) | Janela deslizante; um login bem-sucedido limpa o contador |
+| `maxEntries` | `number` | `100_000` | Limite de identificadores seguidos; as entradas expiradas são limpas e depois as mais antigas despejadas |
 | `clock` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
 `apiKeysPlugin(options)`:
@@ -714,6 +832,8 @@ plugin fornece:
 | `store` | `ApiKeyStore` | em memória | Onde vivem os hashes das chaves — durável em produção, ou as chaves morrem no redeploy |
 | `header` | `string` | `'x-api-key'` | Header alternativo ao `Authorization: Bearer mk_…` |
 | `users` | `UserSource` | — | Quando definido, uma chave com `userId` também preenche `ctx().user`, para que as rotas protegidas por scopes leiam o utilizador que age |
+| `allowTenantlessKeys` | `boolean` | `false` | Deixa chaves emitidas sem tenant agir em pedidos com tenant (só chaves de plataforma de confiança) |
+| `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Deixa uma chave sem `*` alcançar rotas `meta.auth`/`can`/`teamRole`/`audience` que não declaram `meta.scopes` |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
 `webauthnPlugin(options)` e a sua `config`:
@@ -740,8 +860,10 @@ plugin fornece:
 | `stateTtlMs` | `number` | `600_000` (10m) | Quanto tempo um `state` assinado se mantém válido — a janela para concluir o redirecionamento |
 | `fetch` | `typeof fetch` | `fetch` global | Cliente HTTP injetado (testes) |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
+| `mfa` | `'required' \| 'skip'` | `'required'` | Uma conta existente com MFA ativo é recusada (`AUTH_MFA_REQUIRED`); `'skip'` só para um IdP que impõe o seu próprio MFA |
 | `callbackBaseUrl` (rotas) | `string` | — (obrigatório) | URL base pública da tua app; o redirect URI é `${callbackBaseUrl}/auth/oauth/:provider/callback` e tem de ser registado em cada fornecedor |
 | `successRedirect` (rotas) | `string` | — (resposta JSON) | Devolve o browser para aqui com `#access_token=…&refresh_token=…` em vez de responder JSON — o fluxo para SPA |
+| `bindingCookie` (rotas) | `{ secure?, maxAgeSeconds? }` | secure em produção, 15 min | O cookie HttpOnly que liga o fluxo ao browser (`__Host-basalt_oauth` quando secure) |
 
 Regista o `oauthPlugin` **depois** do `authPlugin`: o serviço resolve o `AUTH` para
 autenticar os utilizadores.
@@ -760,10 +882,14 @@ autenticar os utilizadores.
 | `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correta, MFA ativo, sem `mfaCode`. Não conta como tentativa falhada |
 | `MfaInvalidCodeError` | `AUTH_MFA_INVALID` | 401 | Código TOTP ou de recuperação errado — este **conta** para o throttle |
 | `MfaNotEnrolledError` | `AUTH_MFA_NOT_ENROLLED` | 400 | Ativar/desativar MFA sem nenhuma inscrição em curso |
+| `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` numa conta com MFA ativo — desativa-o primeiro com um código |
+| `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | Uma rota `meta.auth` recebeu um pedido cross-site, só com cookie, que altera estado |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | O orçamento de logins falhados por email ou por IP esgotou-se; traz `retryAfterMs` |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres com `NODE_ENV=production` |
-| `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`) |
+| `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`), ou uma chave sem `*` chamou uma rota protegida por identidade que não declara `meta.scopes` |
+| `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | Uma chave usada fora do tenant em que foi emitida (ou uma chave sem tenant num pedido com tenant) |
+| `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | Uma chave usada numa rota só de sessão (`meta.apiKey: false`: gestão de chaves, MFA) |
 | `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` para uma chave fora do âmbito tenant/utilizador de quem chama — um 404, nunca um 403, para que os ids das chaves não possam ser sondados |
 | `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: a `auth_api_keys` da base de dados não tem uma coluna (normalmente `expiresAt`, acrescentada no 1.5.0) — migra-a, em todos os schemas de tenant com schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | O desafio da passkey expirou ou já foi usado (são de uso único) |
@@ -773,9 +899,11 @@ autenticar os utilizadores.
 | `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | O contador de assinaturas não aumentou — o autenticador pode estar clonado |
 | `PasskeyExistsError` | `PASSKEY_EXISTS` | 409 | Essa credencial já está registada |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | O `:provider` não está no array `providers` |
-| `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | O `state` de CSRF está em falta, foi adulterado, ou é mais velho que `stateTtlMs` |
+| `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | O `state` de CSRF está em falta, foi adulterado, é mais velho que `stateTtlMs`, já foi usado, ou chegou sem o cookie de ligação do browser |
+| `SocialLinkRefusedError` | `AUTH_SOCIAL_LINK_REFUSED` | 403 | Um login social encontrou uma conta existente por um email que o provider não verificou |
 | `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | O fornecedor rejeitou a troca do código ou a obtenção do perfil falhou |
-| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | A assertion falhou a validação — assinatura errada, expirada, ou (com `validateInResponseTo`) um `InResponseTo` que esta réplica nunca emitiu |
+| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | A assertion falhou a validação — assinatura errada, expirada, `InResponseTo` ausente/desconhecido, já usada, ou um email fora dos `allowedEmailDomains` do provider |
+| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | arranque | Vários providers SAML sem `allowedEmailDomains`, uma entrada de domínio inválida, ou `@node-saml/node-saml` < 5.1.0 |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | arranque | Uma rota declara `meta.auth` e o `authPlugin` não está registado |
 
 - **Todos os pedidos ficam anónimos mesmo com um `Authorization` válido** —
@@ -812,6 +940,10 @@ autenticar os utilizadores.
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Envia o token por email**; o segundo confirma a alteração |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Notificação de segurança |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Trilho de auditoria |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; nunca a chave |
+| `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | Alertas de força bruta de MFA e de bloqueio |
+| `auth:refresh_reused` | `{ userId, familyId }` | Alertas de roubo de token — um refresh token consumido voltou |
+| `auth:social_account_adopted` | `{ user }` | Um login social verificado assumiu uma conta não verificada; as credenciais antigas foram revogadas |
 
 São consumidos gratuitamente pelo audit e pelas notificações (vê
 [Pacotes](/pt/reference/packages)). Para a ligação completa ponta a ponta —

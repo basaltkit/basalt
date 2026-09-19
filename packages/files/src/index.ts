@@ -6,6 +6,7 @@ export {
   StorageQuotaExceededError,
   FileNotFoundError,
   FileTenantRequiredError,
+  FileTenantMismatchError,
   SINGLE_TENANT_SCOPE,
   fileScope,
   resolveFileTenant,
@@ -21,4 +22,12 @@ export {
   type FileMetadata,
   type JsonValue,
 } from './store.js'
-export { filesPlugin, fileRoutes, FILES, type FilesPluginOptions } from './plugin.js'
+export {
+  filesPlugin,
+  fileRoutes,
+  FILES,
+  type FilesPluginOptions,
+  type FileRoutesOptions,
+  type FileAction,
+  type FileRouteUser,
+} from './plugin.js'

@@ -109,24 +109,29 @@ export const DEFAULT_RULES: DoctorRule[] = [
     category: 'tenancy',
     check(ctx) {
       if (!ctx.app || !ctx.stack.tenancy || !ctx.stack.auth) return null
-      const teamsAvailable =
-        ctx.app.pluginCalls.includes('teamsPlugin') || ctx.installed.includes('@basaltkit/teams')
-      if (!teamsAvailable) return null
       if (ctx.app.pluginCalls.includes('tenantMembershipPlugin')) return null
+      // Fire whether or not @basaltkit/teams is installed: tenancy + auth with no
+      // membership guard is the vulnerable shape regardless — staying silent
+      // because the package providing the fix is absent hid it in fresh apps.
+      const teamsInstalled =
+        ctx.app.pluginCalls.includes('teamsPlugin') || ctx.installed.includes('@basaltkit/teams')
       return {
         id: 'missing-tenant-membership',
         title: 'Tenant is resolved from the request but membership is never enforced',
         severity: 'error',
         category: 'tenancy',
-        detected: `${ctx.app.path} wires tenancy + auth (+ teams) but no tenantMembershipPlugin`,
-        recommended:
-          'register tenantMembershipPlugin() so every authenticated, tenant-scoped request verifies the user belongs to the resolved tenant',
+        detected: `${ctx.app.path} wires tenancy + auth${teamsInstalled ? ' (+ teams)' : ''} but no tenantMembershipPlugin`,
+        recommended: teamsInstalled
+          ? 'register tenantMembershipPlugin() so every authenticated, tenant-scoped request verifies the user belongs to the resolved tenant'
+          : 'install @basaltkit/teams and register teamsPlugin() + tenantMembershipPlugin() so every authenticated, tenant-scoped request verifies the user belongs to the resolved tenant',
         reason:
           'Resolvers take the tenant from client input (x-tenant-id / Host). Without a ' +
           'membership check, any authenticated user can act on another tenant just by ' +
           'changing that header — a cross-tenant data breach. Tenant resolution is ' +
           'identification, never authorization.',
-        fix: "tenantMembershipPlugin()  // central routes opt out with meta: { central: true }",
+        fix: teamsInstalled
+          ? 'tenantMembershipPlugin()  // central routes opt out with meta: { central: true }'
+          : 'pnpm add @basaltkit/teams\n// then: teamsPlugin(), tenantMembershipPlugin()  // central routes opt out with meta: { central: true }',
         docs: '/guide/security',
       }
     },

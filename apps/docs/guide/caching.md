@@ -234,7 +234,7 @@ over other drivers.
 | --- | --- | --- | --- |
 | `driver` | `'memory' \| 'redis' \| CacheDriver` | `'memory'` | Storage backend; pass an instance for tiered/custom drivers |
 | `prefix` | `string` | `'basalt'` | Root prefix for every key |
-| `scope` | `(() => string \| undefined) \| null` | reads `ctx().tenant.id` → `tenant:<id>` | Dynamic prefix segment resolved on every operation — the per-tenant isolation. `null` = a deliberate **global** cache (no scoping, no fail-closed) |
+| `scope` | `(() => string \| undefined) \| null` | reads `ctx().tenant.id` → `tenant:<id>` (the id URL-encoded, so a `:` in it can never reach another tenant's keys) | Dynamic prefix segment resolved on every operation — the per-tenant isolation. `null` = a deliberate **global** cache (no scoping, no fail-closed) |
 | `onMissingScope` | `'global' \| 'error'` | see below | What a read/write does when the scope fn resolves nothing: `'global'` shares one namespace, `'error'` throws `MissingCacheScopeError`. `flush()` **always** fails closed, regardless |
 | `now` | `() => number` | `Date.now` | Injectable clock for the SWR freshness windows (tests) |
 

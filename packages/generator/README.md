@@ -73,6 +73,24 @@ pnpm test          # the generated test covers create/list/get/update/delete
 pnpm dev           # GET/POST /projects, GET/PATCH/DELETE /projects/:id
 ```
 
+## Secure by default
+
+Generated code is safe to ship as a starting point:
+
+- **Authenticated routes.** Every generated route carries `meta: { auth: true }`
+  (applied to the whole exported array), so the app refuses to boot without an
+  auth plugin and anonymous callers get 401. Pass `--public` (alias `--no-auth`) only for a
+  deliberately public resource.
+- **Tenant-owned data.** When the project depends on `@basaltkit/tenancy` (or
+  with `--tenant`), the repository scopes every read and write with
+  `requireTenantId()` — no tenant resolved means `TENANT_REQUIRED` (400), never
+  a shared view — by-id writes use `updateMany`/`deleteMany` so another
+  tenant's row is simply "not found", and the Prisma model gets an indexed
+  `tenantId` column. `--no-tenant` turns it off.
+- After generating, a short **security note** says which of the two applies.
+  Row-level authorization (who may read or write which rows) is still yours to
+  add.
+
 ## Usage guide
 
 ### `basalt make:resource <Name>` — the complete resource
@@ -93,6 +111,8 @@ Options (common to all `make:*` commands, unless noted):
 | `--force` | Overwrites existing files instead of refusing |
 | `--prisma` | Generates a repository connected to Prisma + a model for `schema.prisma` |
 | `--no-register` | (only `make:resource`) Doesn't touch `src/app.ts` |
+| `--public` | Generates routes WITHOUT `meta.auth` (anonymous access). Default: every route requires an authenticated user. Alias: `--no-auth` |
+| `--tenant` / `--no-tenant` | Forces tenant scoping on/off. Default: on when `package.json` depends on `@basaltkit/tenancy` |
 
 ### `--prisma` — real persistence with a database
 
@@ -158,7 +178,7 @@ pnpm basalt make:test Invoice          # tests/invoice.test.ts
 Without a name, any command prints usage and returns exit code 1:
 
 ```
-Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma]
+Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant|--no-tenant]
 ```
 
 ### Using the generator as a library (Advanced)
@@ -208,6 +228,8 @@ Generates the complete vertical slice. With `options.prisma: true`, adds the `.p
 | Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
 | `prisma` | `boolean` | No | `false` | Prisma repository (+ `schema.prisma` model) instead of in-memory |
+| `auth` | `boolean` | No | `true` | Every generated route requires an authenticated user (`meta.auth`). `false` = deliberately public |
+| `tenant` | `boolean` | No | `false` (the CLI detects `@basaltkit/tenancy`) | Tenant-owned repository scoped with `requireTenantId()` + indexed `tenantId` model column |
 
 `GeneratedFile`: `{ path: string; content: string }` — the path is relative to the project root.
 

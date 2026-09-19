@@ -62,9 +62,74 @@ export interface TenantSource {
   save?(tenant: Tenant): Promise<Tenant>
 }
 
+/**
+ * The canonical tenant-id grammar: 1–63 characters of lower-case ASCII
+ * letters, digits, `-` and `_`, starting with a letter or digit. Slugs, UUIDs
+ * and cuids all fit.
+ *
+ * The id is not an opaque label: every tenant-scoped package builds a
+ * namespace out of it — `tenant:<id>:<key>` in the cache, `tenants/<id>/<path>`
+ * in storage, a channel map key in realtime, a schema or database name in the
+ * tenancy drivers. An id carrying one of those delimiters (`:`, `/`, `..`,
+ * whitespace, control characters) could alias another tenant's namespace, and
+ * mixed case collides on case-insensitive filesystems and DNS. So ids are held
+ * to one grammar at the point they are created.
+ */
+export const TENANT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
+
+/**
+ * Ids the default grammar refuses although they match the pattern: `global`
+ * is the sentinel scope other packages use for platform-wide data (e.g. the
+ * legacy permissions global scope), so a tenant must not be able to take it.
+ */
+export const RESERVED_TENANT_IDS: readonly string[] = Object.freeze(['global'])
+
+/**
+ * Whether `id` matches {@link TENANT_ID_PATTERN} and is not one of
+ * {@link RESERVED_TENANT_IDS}. The default `validateTenantId`.
+ */
+export function isValidTenantId(id: unknown): id is string {
+  return typeof id === 'string' && TENANT_ID_PATTERN.test(id) && !RESERVED_TENANT_IDS.includes(id)
+}
+
+/**
+ * A tenant id that does not match the configured grammar (by default
+ * {@link TENANT_ID_PATTERN}). 400: the id came from the caller, and a
+ * different id is the fix.
+ */
+export class InvalidTenantIdError extends BasaltError {
+  readonly status = 400
+  constructor(id: unknown) {
+    const shown = typeof id === 'string' ? JSON.stringify(id.slice(0, 80)) : typeof id
+    super(
+      'TENANT_ID_INVALID',
+      `Invalid tenant id ${shown}. Tenant ids must be 1-63 characters of a-z, 0-9, "-" or "_", ` +
+        'starting with a letter or digit, and not a reserved id such as "global".',
+    )
+  }
+}
+
+/** Throws {@link InvalidTenantIdError} unless `validate(id)` accepts it. */
+export function assertValidTenantId(
+  id: unknown,
+  validate: (id: string) => boolean = isValidTenantId,
+): asserts id is string {
+  if (typeof id !== 'string' || !validate(id)) throw new InvalidTenantIdError(id)
+}
+
 /** In-memory source — tests, dev and small single-node setups. */
 export class MemoryTenantSource implements TenantSource {
   private readonly tenants = new Map<string, Tenant>()
+  private readonly validateTenantId: (id: string) => boolean
+
+  /**
+   * `validateTenantId` — the id grammar `create()`/`save()` enforce. Default
+   * {@link isValidTenantId}; pass the same function you give `tenancyPlugin`
+   * if you widen or narrow it there.
+   */
+  constructor(options: { validateTenantId?: (id: string) => boolean } = {}) {
+    this.validateTenantId = options.validateTenantId ?? isValidTenantId
+  }
 
   add(tenant: Tenant): this {
     this.tenants.set(tenant.id, tenant)
@@ -93,6 +158,7 @@ export class MemoryTenantSource implements TenantSource {
    * succeed — the same guarantee the durable sources get from a primary key.
    */
   async create(tenant: Tenant): Promise<Tenant> {
+    assertValidTenantId(tenant.id, this.validateTenantId)
     if (this.tenants.has(tenant.id)) {
       throw new TenantAlreadyExistsError(tenant.id, this.tenants.get(tenant.id)!['status'] as TenantStatus | undefined)
     }
@@ -105,6 +171,7 @@ export class MemoryTenantSource implements TenantSource {
    * writes `provisioning`, then `ready`, and needs a second write for that.
    */
   async save(tenant: Tenant): Promise<Tenant> {
+    assertValidTenantId(tenant.id, this.validateTenantId)
     this.tenants.set(tenant.id, tenant)
     return tenant
   }

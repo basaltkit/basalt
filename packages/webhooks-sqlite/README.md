@@ -40,7 +40,7 @@ One `webhook_endpoints` table holds each subscription: `url`, its `events` patte
 | Method | Description |
 | --- | --- |
 | `add(endpoint)` | Register an endpoint (auto `id` if omitted); re-adding an id replaces it. |
-| `forEvent(event, tenantId?)` | Active endpoints whose patterns match, scoped to the tenant (tenant-agnostic endpoints always match). |
+| `forEvent(event, tenantId?)` | Active endpoints whose patterns match, scoped to the tenant (tenant-agnostic endpoints always match). Fail-closed: with no tenant (`undefined`/`null`/`''`) only tenant-agnostic endpoints are returned. |
 | `list(tenantId?)` | Every endpoint, optionally filtered by exact tenant. |
 | `remove(id)` | Delete an endpoint. |
 

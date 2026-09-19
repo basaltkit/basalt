@@ -179,6 +179,19 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     expect(a?.lastError).toBe('boom')
   })
 
+  it('events outbox: tenant filter is NULL-safe in real SQL (relay fairness)', async () => {
+    const outbox = prismaOutboxStore(prisma).store
+    await outbox.enqueue({ id: 'fa', event: 'e', payload: 1, tenantId: 'acme', createdAt: 1 })
+    await outbox.enqueue({ id: 'fg', event: 'e', payload: 1, createdAt: 2 })
+    await outbox.enqueue({ id: 'fb', event: 'e', payload: 1, tenantId: 'globex', createdAt: 3 })
+    const ids = async (filter: Parameters<typeof outbox.pending>[2]) =>
+      (await outbox.pending(10, 5, filter)).map((e) => e.id).filter((id) => id.startsWith('f'))
+    // `NOT IN` alone would silently drop the tenant-less row.
+    expect(await ids({ excludeTenantIds: ['acme'] })).toEqual(['fg', 'fb'])
+    expect(await ids({ excludeGlobal: true })).toEqual(['fa', 'fb'])
+    expect(await ids({ excludeTenantIds: ['acme'], excludeGlobal: true })).toEqual(['fb'])
+  })
+
   it('webhooks: endpoint subscriptions, pattern + tenant matching', async () => {
     const webhooks = prismaWebhookStore(prisma).store
     await webhooks.add({ id: 'global', url: 'https://g.test', events: ['invoice.*'], secret: 's' })
@@ -193,5 +206,8 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     expect((await webhooks.forEvent('invoice.paid', 'acme')).map((e) => e.id).sort()).toEqual(['acme', 'global'])
     await webhooks.remove('acme')
     expect((await webhooks.forEvent('invoice.paid', 'acme')).map((e) => e.id)).toEqual(['global'])
+    // fail-closed: no tenant → tenant-agnostic endpoints only
+    await webhooks.add({ id: 'globex', url: 'https://x.test', events: ['*'], tenantId: 'globex' })
+    expect((await webhooks.forEvent('invoice.paid')).map((e) => e.id)).toEqual(['global'])
   })
 })

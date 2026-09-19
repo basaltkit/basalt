@@ -35,6 +35,17 @@ describe('SqliteWebhookStore', () => {
     expect((await store.forEvent('any', 'acme')).map((e) => e.id).sort()).toEqual(['acme', 'global'])
   })
 
+  // SECURITY INVARIANT: a direct read without a tenant is fail-closed — only
+  // tenant-agnostic endpoints, never every tenant's, however "no tenant" is spelled.
+  it.each([undefined, null, ''])('forEvent(event, %j) returns only tenant-agnostic endpoints', async (tenant) => {
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'global', url: 'u', events: ['*'] })
+    await store.add({ id: 'acme', url: 'u', events: ['*'], tenantId: 'acme' })
+    await store.add({ id: 'globex', url: 'u', events: ['*'], tenantId: 'globex' })
+
+    expect((await store.forEvent('any', tenant as unknown as string)).map((e) => e.id)).toEqual(['global'])
+  })
+
   it('list filters by exact tenant; remove deletes', async () => {
     const store = new SqliteWebhookStore(openWebhooksDatabase())
     await store.add({ id: 'a', url: 'u', events: ['*'], tenantId: 'acme' })

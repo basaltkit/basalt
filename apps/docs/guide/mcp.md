@@ -169,6 +169,12 @@ const local = new McpClient(new StdioClientTransport({ command: 'some-mcp-server
 await local.connect()
 ```
 
+A spawned stdio server does **not** inherit your app's environment: only a
+non-secret allowlist (`PATH`, `HOME`, locale, temp dirs — `DEFAULT_INHERITED_ENV`)
+plus the explicit `env` reaches it, so `APP_SECRET`, `DATABASE_URL` and provider
+keys stay in your process. Pass `inheritEnv: ['GITHUB_TOKEN']` to forward named
+variables, or `inheritEnv: true` to deliberately forward everything.
+
 ### Register servers with a plugin
 
 `mcpClientPlugin` wires named external servers into the container — it connects
@@ -211,10 +217,11 @@ same tool surface regardless of the server underneath.
 On an exposed deployment, give `/mcp` its own rate-limit budget:
 `mcpRoutes({ rateLimit: { limit: 30, windowMs: 60_000 } })` stamps
 `meta.rateLimit` on the route, and `securityPlugin` enforces it in a dedicated
-bucket. Note that a tool route's own `meta.rateLimit` belongs to its direct HTTP
-registration — it is not applied when the route is invoked as a tool through
-`/mcp`, so the `/mcp` budget is the throttle for tool traffic. (Auth and guards
-DO run identically on both paths.)
+bucket. A tool route's own `meta.rateLimit` is enforced by a route guard, so it
+applies to tool calls through `/mcp` too. A tool call carries no client address,
+so unless you give `securityPlugin({ rateLimit: { key } })` one, every tool
+caller shares that route's bucket (fail closed). (Auth and guards run
+identically on both paths.)
 
 
 ## Options reference
@@ -234,7 +241,7 @@ The tables below are the complete public options of the four entry points.
 | Option | Type | Default | Why |
 | --- | --- | --- | --- |
 | `path` | `string` | `'/mcp'` | Where the JSON-RPC POST endpoint mounts |
-| `rateLimit` | `{ limit: number; windowMs: number }` | none | Stamps `meta.rateLimit` on `/mcp` (enforced by `securityPlugin` in a dedicated bucket) — the **only** rate limit that applies to tool calls |
+| `rateLimit` | `{ limit: number; windowMs: number }` | none | Stamps `meta.rateLimit` on `/mcp` (enforced by `securityPlugin` in a dedicated bucket) — the budget for all tool traffic; a tool route's own `meta.rateLimit` applies on top |
 
 ### `serveMcpStdio(app, options)`
 
@@ -250,7 +257,7 @@ Returns a handle whose `close()` detaches the stdin listener.
 
 | Option | Type | Default | Why |
 | --- | --- | --- | --- |
-| `servers` | `Record<string, { type: 'http'; url; headers? } \| { type: 'stdio'; command; args?; env?; cwd? }>` | — (required) | Named external servers registered under `MCP_CLIENTS` |
+| `servers` | `Record<string, { type: 'http'; url; headers? } \| { type: 'stdio'; command; args?; env?; cwd?; inheritEnv? }>` | — (required) | Named external servers registered under `MCP_CLIENTS`. A stdio server inherits only `DEFAULT_INHERITED_ENV` plus `env`; `inheritEnv: string[] \| true` widens that |
 | `eager` | `boolean` | `true` | Connect all servers at boot (fail fast) vs. lazily on first `callTool`/`listTools` |
 
 ## Failure modes & troubleshooting
@@ -266,7 +273,7 @@ Protocol errors use JSON-RPC codes:
 | `isError: true` with an `UNAUTHORIZED`/`FORBIDDEN` body | The tool's route is guarded and the call carried no (or bad) credentials | Send `Authorization`/tenant headers with `POST /mcp`, or `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Tool name not registered — route missing `meta.mcp`, excluded by `filter`, or renamed | Check `tools/list`; remember overrides via `meta.mcp.name` |
 | JSON-RPC `-32601` `Method not found` | The client called an MCP method the server doesn't implement | Only `initialize`, `ping`, `tools/list`, `tools/call` (plus resources/prompts when registered) exist |
-| A tool ignores its route's `meta.rateLimit` | Per-route rate limits belong to the route's own HTTP registration — they do **not** apply through `/mcp` | Budget tool traffic with `mcpRoutes({ rateLimit })` |
+| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp`, and tool calls carry no client ip, so all callers share one bucket | Pass a `key` to `securityPlugin({ rateLimit })`, or raise the route's budget |
 | Claude Desktop shows a broken/dead server | Something printed to stdout — it is the JSON-RPC channel | `logLevel: 'silent'`, remove `console.log`; see the stdio checklist above |
 | `202` response from `POST /mcp` with empty body | The message was a JSON-RPC *notification* — by spec it gets no reply | Expected behaviour, not an error |
 

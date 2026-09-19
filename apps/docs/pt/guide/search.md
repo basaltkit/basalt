@@ -8,6 +8,15 @@ ambos resolvem para um único âmbito interno `'default'`, por isso concordam
 sempre (vê [Para além do SaaS](/pt/guide/beyond-saas)). Traz um driver em memória para dev/testes e
 um driver Meilisearch para produção, atrás de uma única API.
 
+Dentro de um contexto de tenant, o tenant do contexto é o que vale: um `tenantId`
+passado a `search()`, `remove()`, ou num documento dado a `index()`/`bulk()`, tem
+de nomear esse tenant, e qualquer outro valor lança `SearchTenantMismatchError`
+(`403 SEARCH_TENANT_MISMATCH`) — por isso reencaminhar o `?tenantId=` de um
+cliente nunca alarga uma query nem planta um documento noutro tenant. Fora de um
+contexto de tenant (jobs, CLI) o valor explícito escolhe o tenant. O `reindex()`
+é uma operação de sistema sobre todos os tenants e mantém o tenant que cada
+regra de sincronização mapeia.
+
 [[toc]]
 
 ## Configuração

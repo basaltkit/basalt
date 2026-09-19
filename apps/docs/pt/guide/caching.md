@@ -241,7 +241,7 @@ sobre outros drivers.
 | --- | --- | --- | --- |
 | `driver` | `'memory' \| 'redis' \| CacheDriver` | `'memory'` | Backend de armazenamento; passa uma instância para drivers tiered/personalizados |
 | `prefix` | `string` | `'basalt'` | Prefixo raiz de todas as chaves |
-| `scope` | `(() => string \| undefined) \| null` | lê `ctx().tenant.id` → `tenant:<id>` | Segmento dinâmico do prefixo, resolvido em cada operação — o isolamento por tenant. `null` = cache **global** deliberado (sem scoping, sem fail-closed) |
+| `scope` | `(() => string \| undefined) \| null` | lê `ctx().tenant.id` → `tenant:<id>` (o id codificado como URL, para que um `:` nele nunca alcance as chaves de outro tenant) | Segmento dinâmico do prefixo, resolvido em cada operação — o isolamento por tenant. `null` = cache **global** deliberado (sem scoping, sem fail-closed) |
 | `onMissingScope` | `'global' \| 'error'` | vê abaixo | O que uma leitura/escrita faz quando a função de scope não resolve nada: `'global'` partilha um namespace, `'error'` lança `MissingCacheScopeError`. O `flush()` falha **sempre** fechado, independentemente |
 | `now` | `() => number` | `Date.now` | Relógio injetável para as janelas de frescura SWR (testes) |
 

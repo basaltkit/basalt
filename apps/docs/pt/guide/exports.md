@@ -46,6 +46,15 @@ CSV/TSV fazem quoting corretamente (RFC 4180), as datas renderizam como ISO, e
 `run` aceita um array **ou** um `AsyncIterable`, para que as linhas possam vir em
 stream da base de dados.
 
+As células CSV/TSV estão também protegidas contra **injeção de fórmulas**:
+qualquer célula cujo texto final comece por `=`, `+`, `-`, `@` (ou as suas
+formas de largura total `＝ ＋ － ＠`, também depois de espaços iniciais), um tab,
+um carriage return ou um line feed recebe o prefixo `'`, para que a folha de
+cálculo a mostre como texto em vez de a avaliar. A proteção aplica-se ao texto
+final de todos os valores (strings, arrays, objetos, strings encapsuladas e
+datas depois de renderizadas); só números, bigints e booleanos primitivos ficam
+isentos, pelo que um número negativo continua numérico.
+
 ## Relatórios grandes: queue + storage
 
 `run` é puro e síncrono por design. Para exportações grandes, corre-o dentro de um

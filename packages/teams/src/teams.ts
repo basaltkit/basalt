@@ -38,6 +38,17 @@ export class InsufficientTeamRoleError extends BasaltError {
   }
 }
 
+/**
+ * The role is not part of the ranked hierarchy (`roleRank`) and was not listed
+ * in `grantableRoles`, so an acting user may not grant it.
+ */
+export class TeamRoleNotGrantableError extends BasaltError {
+  readonly status = 403
+  constructor(role: TeamRole) {
+    super('TEAM_ROLE_NOT_GRANTABLE', `The role "${role}" cannot be granted by a team member.`)
+  }
+}
+
 /** Refused because it would leave the team with no owner. */
 export class LastOwnerError extends BasaltError {
   readonly status = 400
@@ -66,6 +77,14 @@ export interface TeamsOptions {
   inviteTtl?: DurationInput
   /** Override the role hierarchy (name → rank). */
   roleRank?: Record<string, number>
+  /**
+   * Extra, unranked role names an acting user may grant (e.g. `['viewer']`).
+   * By default an acting user can only grant roles present in `roleRank`, so
+   * a free-form role string can't smuggle in a custom permission role. Roles
+   * listed here have rank 0 unless also ranked. Trusted server-side calls
+   * (no `actingUserId`) are never restricted.
+   */
+  grantableRoles?: readonly TeamRole[]
   /** Injectable clock for tests. */
   now?: () => number
 }
@@ -87,6 +106,7 @@ export class Teams {
   private readonly hooks: HookBus | undefined
   private readonly inviteTtl: DurationInput
   private readonly roleRank: Record<string, number>
+  private readonly grantableRoles: ReadonlySet<TeamRole>
   private readonly now: () => number
 
   constructor(options: TeamsOptions = {}) {
@@ -96,11 +116,18 @@ export class Teams {
     this.hooks = options.hooks
     this.inviteTtl = options.inviteTtl ?? '7d'
     this.roleRank = options.roleRank ?? { ...DEFAULT_ROLE_RANK }
+    this.grantableRoles = new Set(options.grantableRoles ?? [])
     this.now = options.now ?? Date.now
   }
 
   rankOf(role: TeamRole): number {
-    return this.roleRank[role] ?? 0
+    // Own keys only: 'constructor' / '__proto__' must not resolve to a prototype member.
+    const rank = Object.hasOwn(this.roleRank, role) ? this.roleRank[role] : undefined
+    return typeof rank === 'number' ? rank : 0
+  }
+
+  private isRanked(role: TeamRole): boolean {
+    return Object.hasOwn(this.roleRank, role) && typeof this.roleRank[role] === 'number'
   }
 
   /**
@@ -108,7 +135,9 @@ export class Teams {
    * given, the actor must be a member who ranks at least as high as the role
    * being granted (so an admin can never mint or self-promote to owner) and at
    * least as high as the target's current role (so they can't demote someone
-   * who outranks them). Omit the actor for trusted server-side seeding.
+   * who outranks them). The granted role must be ranked (or explicitly listed
+   * in `grantableRoles`) — an unknown role would otherwise rank 0 and pass.
+   * Omit the actor for trusted server-side seeding.
    */
   private async assertCanGrant(
     tenantId: string,
@@ -118,6 +147,9 @@ export class Teams {
   ): Promise<void> {
     const actorRole = await this.roleOf(tenantId, actingUserId)
     if (actorRole === null) throw new NotATeamMemberError()
+    if (!this.isRanked(grantedRole) && !this.grantableRoles.has(grantedRole)) {
+      throw new TeamRoleNotGrantableError(grantedRole)
+    }
     const actorRank = this.rankOf(actorRole)
     if (this.rankOf(grantedRole) > actorRank) throw new InsufficientTeamRoleError(grantedRole)
     if (currentTargetRole !== undefined && this.rankOf(currentTargetRole) > actorRank) {
@@ -132,10 +164,26 @@ export class Teams {
     role: TeamRole,
     opts: { actingUserId?: string } = {},
   ): Promise<Membership> {
-    if (opts.actingUserId !== undefined) await this.assertCanGrant(tenantId, opts.actingUserId, role)
     const existing = await this.memberships.find(tenantId, userId)
-    const membership: Membership = { tenantId, userId, role, createdAt: existing?.createdAt ?? this.now() }
+    // Snapshot before the write — the store may hand out a live record.
+    const previous: Membership | null = existing ? { ...existing } : null
+    // An upsert over an existing membership is a role change: the actor must
+    // also outrank the target's CURRENT role (an admin can't overwrite an owner).
+    if (opts.actingUserId !== undefined) await this.assertCanGrant(tenantId, opts.actingUserId, role, previous?.role)
+    const demotesOwner = previous !== null && previous.role === OWNER && role !== OWNER
+    if (demotesOwner) await this.assertNotLastOwner(tenantId, userId)
+
+    const membership: Membership = { tenantId, userId, role, createdAt: previous?.createdAt ?? this.now() }
     await this.memberships.add(membership)
+    if (demotesOwner && !(await this.hasOwner(tenantId))) {
+      // Lost a race with a concurrent demotion/removal: restore and refuse.
+      await this.memberships.add(previous)
+      throw new LastOwnerError()
+    }
+    if (previous !== null && previous.role !== role) {
+      await this.access?.removeRole(userId, previous.role, tenantId)
+      await this.revokeInvitesBeyond(tenantId, userId, role)
+    }
     await this.access?.assignRole(userId, role, tenantId)
     await this.hooks?.emit('team:joined', { membership })
     return membership
@@ -198,7 +246,17 @@ export class Teams {
     if (acceptingEmail !== undefined && acceptingEmail.toLowerCase() !== invitation.email.toLowerCase()) {
       throw new TeamInviteInvalidError()
     }
-    await this.invitations.markAccepted(invitation.id, this.now())
+    // Compare-and-set: only the caller that flips the invitation from pending to
+    // accepted may enroll. A store returning `false` lost a concurrent race.
+    // (Legacy stores returning void are treated as success.)
+    if ((await this.invitations.markAccepted(invitation.id, this.now())) === false) {
+      throw new TeamInviteInvalidError()
+    }
+    // An invitation only ever ADDS access: it must never overwrite an existing
+    // membership of equal or higher rank (e.g. an owner clicking a "member"
+    // invite would otherwise be demoted — past the last-owner rule).
+    const existing = await this.memberships.find(invitation.tenantId, userId)
+    if (existing && this.rankOf(existing.role) >= this.rankOf(invitation.role)) return { ...existing }
     return this.addMember(invitation.tenantId, userId, invitation.role)
   }
 
@@ -250,22 +308,64 @@ export class Teams {
     if (previousRole !== role && previousRole === OWNER) await this.assertNotLastOwner(tenantId, userId)
 
     await this.memberships.setRole(tenantId, userId, role)
+    if (previousRole !== role && previousRole === OWNER && !(await this.hasOwner(tenantId))) {
+      // Lost a race with a concurrent demotion/removal: restore and refuse.
+      await this.memberships.setRole(tenantId, userId, previousRole)
+      throw new LastOwnerError()
+    }
     if (this.access && previousRole !== role) {
       await this.access.removeRole(userId, previousRole, tenantId)
       await this.access.assignRole(userId, role, tenantId)
     }
+    if (previousRole !== role) await this.revokeInvitesBeyond(tenantId, userId, role)
     await this.hooks?.emit('team:role_changed', { membership })
     return membership
   }
 
-  async removeMember(tenantId: string, userId: string): Promise<void> {
+  /**
+   * Removes a membership. When `actingUserId` is given (HTTP routes), the actor
+   * must be a member and may only remove themselves or someone who does not
+   * outrank them — an admin can't remove an owner. Omit the actor for trusted
+   * server-side flows.
+   */
+  async removeMember(tenantId: string, userId: string, opts: { actingUserId?: string } = {}): Promise<void> {
     const current = await this.memberships.find(tenantId, userId)
+    if (opts.actingUserId !== undefined) {
+      const actorRole = await this.roleOf(tenantId, opts.actingUserId)
+      if (actorRole === null) throw new NotATeamMemberError()
+      if (current && opts.actingUserId !== userId && this.rankOf(current.role) > this.rankOf(actorRole)) {
+        throw new InsufficientTeamRoleError(current.role)
+      }
+    }
     if (!current) return
-    if (current.role === OWNER) await this.assertNotLastOwner(tenantId, userId)
+    // Snapshot before remove — the store may hand out a live record.
+    const snapshot: Membership = { ...current }
+    if (snapshot.role === OWNER) await this.assertNotLastOwner(tenantId, userId)
 
     await this.memberships.remove(tenantId, userId)
-    await this.access?.removeRole(userId, current.role, tenantId)
+    if (snapshot.role === OWNER && !(await this.hasOwner(tenantId))) {
+      // Lost a race with a concurrent demotion/removal: restore and refuse.
+      await this.memberships.add(snapshot)
+      throw new LastOwnerError()
+    }
+    await this.access?.removeRole(userId, snapshot.role, tenantId)
+    await this.revokeInvitesBeyond(tenantId, userId, null)
     await this.hooks?.emit('team:member_removed', { tenantId, userId })
+  }
+
+  /**
+   * An invitation carries its inviter's authority. When the inviter is removed
+   * (`role === null`) or re-roled, revoke their pending invitations for roles
+   * they could no longer grant — otherwise a removed admin could pre-invite an
+   * alternate address as admin and walk straight back in.
+   */
+  private async revokeInvitesBeyond(tenantId: string, inviterId: string, role: TeamRole | null): Promise<void> {
+    const pending = await this.invitations.listPending(tenantId)
+    for (const inv of pending) {
+      if (inv.invitedBy !== inviterId) continue
+      if (role !== null && this.rankOf(inv.role) <= this.rankOf(role)) continue
+      await this.invitations.revoke(inv.id, this.now())
+    }
   }
 
   private async assertNotLastOwner(tenantId: string, exceptUserId: string): Promise<void> {
@@ -273,5 +373,14 @@ export class Teams {
       (m) => m.role === OWNER && m.userId !== exceptUserId,
     )
     if (owners.length === 0) throw new LastOwnerError()
+  }
+
+  /**
+   * Post-write re-check for the owner invariant. The pre-check above is a
+   * list-then-act and can race; re-reading after the write means the later of
+   * two conflicting writers always observes both and rolls itself back.
+   */
+  private async hasOwner(tenantId: string): Promise<boolean> {
+    return (await this.memberships.list(tenantId)).some((m) => m.role === OWNER)
   }
 }

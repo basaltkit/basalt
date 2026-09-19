@@ -1,5 +1,5 @@
-import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
-import type { RequestEnricher, RouteGuard } from '@basaltkit/http'
+import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
+import type { HttpRequest, RequestEnricher, RouteGuard } from '@basaltkit/http'
 import { Auth, AuthRequiredError, type AuthOptions } from './auth.js'
 import { publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'
@@ -29,14 +29,95 @@ declare module '@basaltkit/core' {
     'auth:password_reset': { user: PublicUser }
     'auth:mfa_enabled': { user: PublicUser }
     'auth:mfa_disabled': { user: PublicUser }
+    /** A wrong MFA code was presented for this user (login or social login). */
+    'auth:mfa_failed': { userId: string }
+    /** A login was refused because the account (or the client ip) is locked. */
+    'auth:locked_out': { email: string; ip?: string }
+    /** A consumed refresh token came back; its whole family was revoked (theft indicator). */
+    'auth:refresh_reused': { userId: string; familyId: string }
+    /**
+     * A provider-verified social login took over an account whose email had
+     * never been verified; its previous password, sessions, refresh tokens and
+     * MFA were revoked.
+     */
+    'auth:social_account_adopted': { user: PublicUser }
   }
 }
 
 export const AUTH = createToken<Auth>('auth')
 
-export type AuthPluginOptions = Omit<AuthOptions, 'hooks'>
+/** A cookie-authenticated, state-changing request came from another origin. */
+export class CsrfRejectedError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('AUTH_CSRF_REJECTED', 'Cross-site request refused: the session cookie cannot authorize it.')
+  }
+}
 
-export function authPlugin(options: AuthPluginOptions) {
+export interface CsrfOptions {
+  /**
+   * Extra origins (scheme://host[:port]) allowed to send cookie-authenticated
+   * unsafe requests — e.g. a front-end on a sibling subdomain. The request's
+   * own origin (its Host / X-Forwarded-Host) is always allowed.
+   */
+  trustedOrigins?: string[]
+}
+
+export interface AuthPluginOptions extends Omit<AuthOptions, 'hooks'> {
+  /**
+   * CSRF defence for the session cookie (on by default). A request whose ONLY
+   * credential is the ambient session cookie and whose method is not
+   * GET/HEAD/OPTIONS is not authenticated when the browser says it is
+   * cross-site or same-site (`Sec-Fetch-Site`), or when its `Origin` is neither
+   * the request's own host nor a trusted origin; a route requiring auth then
+   * answers 403 `AUTH_CSRF_REJECTED`. Bearer tokens, `x-session-id` and API keys
+   * are not ambient and are not affected. `false` disables the check.
+   */
+  csrf?: CsrfOptions | false
+}
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+const headerOf = (request: HttpRequest, name: string): string | undefined => {
+  const value = request.headers[name]
+  return Array.isArray(value) ? value[0] : value
+}
+const originOf = (value: string): string | null => {
+  try {
+    const url = new URL(value)
+    return `${url.protocol}//${url.host}`.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+/** Whether a cookie-authenticated request may change state (CSRF check). */
+function sameOriginRequest(request: HttpRequest, trusted: ReadonlySet<string>): boolean {
+  if (SAFE_METHODS.has(request.method.toUpperCase())) return true
+  const origin = headerOf(request, 'origin')
+  const normalized = origin && origin !== 'null' ? originOf(origin) : null
+  if (normalized && trusted.has(normalized)) return true
+  // Sec-Fetch-Site is set by the browser alone (a page cannot forge it), so it
+  // settles the question when present — including behind a proxy that rewrites Host.
+  const site = headerOf(request, 'sec-fetch-site')?.toLowerCase()
+  if (site === 'same-origin' || site === 'none') return true
+  if (site === 'cross-site' || site === 'same-site') return false
+  if (origin === undefined) return true // no browser metadata: not a browser-forged request
+  if (!normalized) return false // `Origin: null` (sandboxed/opaque) or garbage
+  const host = normalized.slice(normalized.indexOf('//') + 2)
+  const own = [headerOf(request, 'host'), headerOf(request, 'x-forwarded-host')]
+    .filter((h): h is string => typeof h === 'string')
+    .map((h) => h.split(',')[0]!.trim().toLowerCase())
+  return own.includes(host)
+}
+
+/** Requests whose session cookie was ignored by the CSRF check. */
+const csrfRejected = new WeakSet<RequestContext>()
+
+export function authPlugin(pluginOptions: AuthPluginOptions) {
+  const { csrf, ...options } = pluginOptions
+  const trustedOrigins = new Set(
+    (csrf ? (csrf.trustedOrigins ?? []) : []).map((o) => originOf(o)).filter((o): o is string => o !== null),
+  )
   return definePlugin({
     name: 'basalt:auth',
     register({ container, hooks }) {
@@ -72,6 +153,11 @@ export function authPlugin(options: AuthPluginOptions) {
         const cookie = request.headers.cookie
         if (typeof cookie === 'string') {
           const cookieSessionId = auth.sessionIdFromCookie(cookie)
+          if (cookieSessionId && csrf !== false && !sameOriginRequest(request, trustedOrigins)) {
+            // Ambient credential on a cross-origin state change: do not use it.
+            csrfRejected.add(context)
+            return
+          }
           if (cookieSessionId) {
             const user = await auth.sessionUser(cookieSessionId)
             if (user) context.user = publicUser(user)
@@ -82,7 +168,9 @@ export function authPlugin(options: AuthPluginOptions) {
 
       // Guard: routes declaring meta.auth require an authenticated user.
       const guard: RouteGuard = ({ route, context }) => {
-        if (route.meta?.['auth'] === true && !context.user) throw new AuthRequiredError()
+        if (route.meta?.['auth'] === true && !context.user) {
+          throw csrfRejected.has(context) ? new CsrfRejectedError() : new AuthRequiredError()
+        }
       }
       metadata.add('http:guards', guard)
       // Claim `meta.auth` so the adapters' boot check knows this key is

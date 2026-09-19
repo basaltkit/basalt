@@ -209,6 +209,13 @@ Confina-se só quem não tem mais nada.
 A união na segunda linha significa que dois papéis confinados dão alcance cada um
 à sua superfície, e ter os dois dá as duas — o que nenhum nomeia fica fechado.
 
+"Os papéis que tem" são os papéis no tenant atual ou — quando o tenant não dá
+nenhum — os do `GLOBAL_SCOPE` (`gate.audienceRoles(userId)`). Um papel `client`
+atribuído globalmente confina quem o tem dentro de qualquer tenant onde não tenha
+papel próprio, não só fora de um. E um papel global de base sem regra (um `user`
+que cada registo recebe) não desconfina um cliente dentro do seu tenant: aí
+decidem os papéis do próprio tenant.
+
 **As audiências estreitam; nunca alargam.** A verificação de permissão corre à
 mesma: um chamador sem `matter:read` é recusado em `/portal/matters`, coincida ou
 não a audiência. Nomear uma audiência não é uma porta de entrada.
@@ -224,6 +231,33 @@ tenant) e o scope global. Usa `GLOBAL_SCOPE` para concessões que se aplicam em
 todo o lado, e a opção `scope` para derivar o scope atual de outra forma. Em
 produção, troca o `MemoryAccessStore` por um `AccessStore` durável
 (`@basaltkit/permissions-prisma` / `-sqlite` no ecossistema).
+
+### O scope global não pode ser um tenant
+
+O `GLOBAL_SCOPE` é `'@global'` — um valor que nenhum slug, label de hostname ou
+uuid pode tomar. (Antes do `@basaltkit/permissions` 1.5 era `'global'`: as
+concessões são indexadas pelo id do tenant, por isso o dono de um tenant
+*chamado* `global` tinha os seus papéis em todos os tenants.) O Gate recusa
+avaliar um pedido cujo id de tenant seja `'@global'` ou `'global'` —
+`ReservedScopeError`, `PERMISSION_SCOPE_RESERVED`, 403 — e o
+`isReservedScope(id)` deixa o teu registo de tenants recusar esses ids no
+registo. O mesmo erro responde a um pedido que traz um tenant sem id de texto
+não vazio: é um contexto partido, e cair no scope global avaliaria (e deixaria o
+`gate.assignRole()` com o scope por omissão escrever) o balde de toda a
+plataforma.
+
+**Upgrade a partir de ≤ 1.4:** as linhas guardadas com o literal `'global'` já
+não são lidas como globais. Migra-as:
+
+```sql
+UPDATE perm_user_roles       SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_user_permissions SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_role_permissions SET scope = '@global' WHERE scope = 'global';
+```
+
+Entretanto, `readLegacyGlobalScope: true` continua a lê-las — uma ajuda de
+transição: enquanto estiver ligada, um tenant com id `'global'` volta a escrever
+concessões globais, por isso reserva esse id antes de a ligar.
 
 ## Concessões temporárias e delegação
 
@@ -289,9 +323,25 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | `delegations` | `DelegationStore` | desligado | Ativa `delegate()` |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 | `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | O que `can(user, perm, resource)` faz quando nenhum check de política corresponde a `resource:action`: `'error'` lança `MissingPolicyError` (falha fechada), `'rbac'` volta às strings de permissão concedidas |
+| `readLegacyGlobalScope` | `boolean` | `false` | Ler também as linhas do scope global anterior à 1.5 (`'global'`) como globais. Ajuda de transição — vê [O scope global não pode ser um tenant](#o-scope-global-nao-pode-ser-um-tenant) |
+| `hooks` | `HookBus` | o bus da app (plugin) | Onde os hooks `permission:*` são emitidos |
 
 O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e
 reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
+
+## Hooks — o rasto de auditoria
+
+O Gate emite hooks `permission:*`, que o `auditPlugin` captura por omissão:
+
+| Hook | Payload | Quando |
+| --- | --- | --- |
+| `permission:denied` | `{ userId, permission, scope }` | O `authorize()`, uma rota com `meta.can` ou uma audiência recusou o chamador |
+| `permission:role_assigned` / `permission:role_removed` | `{ userId, role, scope }` | `gate.assignRole()` / `gate.removeRole()` |
+| `permission:granted` | `{ role?, userId?, permissions, scope, expiresAt? }` | `gate.grantToRole()`, `gate.grantToUser()`, `gate.grantTemporarily()` |
+| `permission:delegated` | `{ fromUserId, toUserId, permissions, scope, expiresAt? }` | `gate.delegate()` |
+
+Altera as concessões através do Gate (`gate.assignRole(userId, role, scope?)`, …)
+e não do store: escritas feitas diretamente no `AccessStore` não deixam rasto.
 
 ## Modos de falha e troubleshooting
 
@@ -300,6 +350,7 @@ reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | O check falhou — nada concede a permissão no scope atual nem no global |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | Uma rota com `meta.can` foi chamada sem utilizador autenticado no contexto |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | O `meta.can` tem uma forma não aplicável (`true`, um número, um array vazio/misto) — falha fechada em cada pedido |
+| `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` | 403 | O id de tenant do pedido é um scope reservado (`'@global'` ou `'global'`), ou o tenant não tem id utilizável |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | O `can`/`authorize` recebeu um recurso mas nenhum check de política corresponde a `resource:action` — a regra ABAC que pretendias seria saltada |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Uma rota declara `meta.can` (ou `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) e nenhum guard registado reclama essa chave |
 

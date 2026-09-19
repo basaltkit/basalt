@@ -17,10 +17,11 @@ describe('PostgresBackup', () => {
   it('creates a custom-format dump and records its checksum', async () => {
     const driver = new MemoryDriver()
     const calls: string[][] = []
+    const envs: Array<Record<string, string> | undefined> = []
     const backup = new PostgresBackup({
       connectionUrl: 'postgresql://user:pass@localhost/app',
       disk: new Disk('backups', driver, { scope: null }),
-      runner: async (_command, args) => { calls.push(args); const file = args[args.indexOf('--file') + 1]!; const { writeFile } = await import('node:fs/promises'); await writeFile(file, 'dump') },
+      runner: async (_command, args, options) => { calls.push(args); envs.push(options.env); const file = args[args.indexOf('--file') + 1]!; const { writeFile } = await import('node:fs/promises'); await writeFile(file, 'dump') },
       clock: () => new Date('2026-09-06T12:00:00Z'),
     })
     const result = await backup.create({ kind: 'full' })
@@ -28,7 +29,8 @@ describe('PostgresBackup', () => {
     expect(result.sizeBytes).toBe(4)
     expect(result.sha256).toBe('b6ca0868bca6a2926b70aa1a71592038d9030fe26d4214edcfbd6cf41f2f4654')
     expect(calls[0]).toContain('--format=custom')
-    expect(calls[0]).toContain('postgresql://user:pass@localhost/app')
+    expect(calls[0]).toContain('postgresql://user@localhost/app')
+    expect(envs[0]).toEqual({ PGPASSWORD: 'pass' })
     expect(calls[0]).not.toContain('schema=public')
     expect(await backup.list()).toHaveLength(1)
   })

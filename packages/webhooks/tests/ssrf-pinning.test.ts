@@ -120,6 +120,7 @@ describe('WebhookDeliverer — rebind is defeated by pinning', () => {
     const deliverer = new WebhookDeliverer({
       fetchImpl: fetchImpl as unknown as typeof fetch,
       sleep: noSleep,
+      secret: 'whsec_test_0123456789abcdef',
       // Validation-time DNS returns a public IP...
       ssrf: { lookup: async () => [{ address: '93.184.216.34' }] },
     })
@@ -135,6 +136,7 @@ describe('WebhookDeliverer — rebind is defeated by pinning', () => {
       const deliverer = new WebhookDeliverer({
         fetchImpl: fetchImpl as unknown as typeof fetch,
         sleep: noSleep,
+        secret: 'whsec_test_0123456789abcdef',
         ssrf: { lookup: async () => [{ address }] },
       })
       const result = await deliverer.deliver({ id: 'x', url: 'https://rebind.example/hook', events: ['*'] }, 'e', {})

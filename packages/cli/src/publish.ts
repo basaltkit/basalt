@@ -41,6 +41,27 @@ EXPOSE 3000
 CMD ["node", "dist/main.js"]
 `
 
+/**
+ * Published with the Dockerfile: its \`COPY . .\` would otherwise bake \`.env\`,
+ * private keys and VCS metadata into an image layer. Every rule is \`**\/\`-prefixed:
+ * .dockerignore patterns are anchored at the context root, so a bare \`.env\`
+ * or \`*.pem\` would still let \`prisma/.env\` or \`certs/server.key\` through.
+ */
+const DOCKERIGNORE = `**/.env
+**/.env.*
+!**/.env.example
+**/.npmrc
+**/.git
+**/node_modules
+**/coverage
+**/*.log
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/.DS_Store
+`
+
 const CI_WORKFLOW = `name: ci
 on:
   push: { branches: [main] }
@@ -71,7 +92,14 @@ trim_trailing_whitespace = true
 
 /** Stubs bundled with the CLI. Apps can register more via the metadata bucket. */
 export const PUBLISHABLES: Publishable[] = [
-  { id: 'dockerfile', description: 'Production multi-stage Dockerfile', files: () => [{ path: 'Dockerfile', content: DOCKERFILE }] },
+  {
+    id: 'dockerfile',
+    description: 'Production multi-stage Dockerfile (+ .dockerignore keeping secrets out of the image)',
+    files: () => [
+      { path: 'Dockerfile', content: DOCKERFILE },
+      { path: '.dockerignore', content: DOCKERIGNORE },
+    ],
+  },
   { id: 'ci', description: 'GitHub Actions CI workflow', files: () => [{ path: '.github/workflows/ci.yml', content: CI_WORKFLOW }] },
   { id: 'editorconfig', description: 'Shared .editorconfig', files: () => [{ path: '.editorconfig', content: EDITORCONFIG }] },
 ]

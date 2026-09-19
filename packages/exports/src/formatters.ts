@@ -11,16 +11,21 @@ export interface ExportFormatter {
 }
 
 // A spreadsheet evaluates a cell whose text starts with =, +, -, @ or a leading
-// tab/CR as a formula, so an exported value like `=WEBSERVICE(...)` runs on open
-// (CSV/formula injection). Only strings are risky — numbers and dates render
-// themselves and can never be a formula — so guard on the original type.
-const FORMULA_TRIGGER = /^[=+\-@\t\r]/
+// tab/CR/LF as a formula, so an exported value like `=WEBSERVICE(...)` runs on open
+// (CSV/formula injection). Some spreadsheets also accept the full-width forms
+// (＝ ＋ － ＠) or trim leading whitespace before evaluating, so those count too.
+// Primitive numbers, bigints and booleans render themselves and can never be a
+// formula (a negative number must stay numeric), so they are exempt. Everything
+// else — strings, dates, arrays, objects with a custom `toString`, boxed strings —
+// is guarded on its FINAL rendered text (a Date-branded object can override
+// `toISOString`, so even dates are checked after rendering).
+const FORMULA_TRIGGER = /^(?:[\t\r\n]|\s*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20])/
 
 const cell = (value: unknown): string => {
   if (value === null || value === undefined) return ''
-  if (value instanceof Date) return value.toISOString()
-  const text = String(value)
-  return typeof value === 'string' && FORMULA_TRIGGER.test(text) ? `'${text}` : text
+  if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') return String(value)
+  const text = value instanceof Date ? value.toISOString() : String(value)
+  return FORMULA_TRIGGER.test(text) ? `'${text}` : text
 }
 
 /** CSV/TSV via a configurable delimiter, with RFC-4180 quoting. */

@@ -181,7 +181,7 @@ production policy baked in:
 
 ```ts
 export const env = defineEnv({
-  // Boots out of the box in dev; refuses to boot in production without a real value.
+  // Boots out of the box with NODE_ENV=development; refuses to boot anywhere else without a real value.
   APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-value' }),
   // No devDefault: required in every environment.
   STRIPE_SECRET_KEY: secret(),
@@ -190,12 +190,16 @@ export const env = defineEnv({
 
 Three rules, decided by reading `process.env.NODE_ENV` at validation time:
 
-- **Required in production** — `devDefault` is never applied when
-  `NODE_ENV=production`. A fresh clone runs locally; the same code refuses to
-  start in production until a real secret exists.
-- **Placeholders rejected in production** — a value matching `change-me`,
-  `changeme`, `placeholder`, `example`, `secret`, `password`, `default`, `test`,
-  `xxxx…` or `0000…` fails. In development they pass, for convenience.
+- **Required unless `NODE_ENV` is explicitly `development` or `test`** —
+  `devDefault` only applies there. An **unset** `NODE_ENV` (or `staging`, a
+  typo, …) counts as production, so a deploy that forgets `NODE_ENV` can never
+  boot on the public dev default. A fresh clone runs locally with
+  `NODE_ENV=development` (the scaffold's `pnpm dev` sets it); the same code
+  refuses to start anywhere else until a real secret exists.
+- **Placeholders rejected outside development/test** — a value matching
+  `change-me`, `changeme`, `placeholder`, `example`, `secret`, `password`,
+  `default`, `test`, `xxxx…` or `0000…` fails. With `NODE_ENV=development` or
+  `test` they pass, for convenience.
 - **Minimum length everywhere** — 16 characters by default, including for the
   `devDefault` itself, which is validated like any other value.
 
@@ -268,7 +272,7 @@ where you put them.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `minLength` | `number` | `16` | Minimum length in **every** environment, `devDefault` included. Raise it for JWT signing keys (32+) |
-| `devDefault` | `string` | — | Value used outside production when the variable is unset, so a fresh clone runs. Never applied when `NODE_ENV=production` |
+| `devDefault` | `string` | — | Value used when the variable is unset **and** `NODE_ENV` is explicitly `development` or `test`, so a fresh clone runs. Never applied anywhere else — including when `NODE_ENV` is unset |
 
 ## Failure modes & troubleshooting
 
@@ -288,9 +292,10 @@ where you put them.
   an explicit second argument; the fallback is detected by arity. Drop the
   argument.
 - **`ENV_INVALID` in production with the same `.env` that works locally** —
-  `secret()` switches rules on `NODE_ENV=production`: `devDefault` stops
+  `secret()` only relaxes its rules for an explicit `NODE_ENV=development` or
+  `test`: everywhere else (including an unset `NODE_ENV`) `devDefault` stops
   applying and placeholder-looking values are rejected. Check what `NODE_ENV`
-  actually is in that environment.
+  actually is in that environment, and set a real secret.
 - **`merge` wiped my array** — only plain objects deep-merge; arrays and
   primitives are replaced wholesale.
 - **`DI_UNKNOWN_TOKEN` from a plugin that reads `CONFIG`** — add

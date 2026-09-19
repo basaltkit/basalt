@@ -49,9 +49,19 @@ await hooks.register({ url: 'https://customer.example.com/hooks', events: ['invo
 await hooks.dispatch('invoice.paid', { id: 'in_1', amount: 42 })
 ```
 
-Sem um `secret` (e sem um por endpoint) as entregas saem **sem assinatura** —
-nenhum header `x-basalt-signature`, por isso os recetores não têm forma de
-distinguir a tua chamada da de qualquer outro. Define-o.
+O `secret` por predefinição tem de ter pelo menos 16 caracteres
+(`MIN_WEBHOOK_SECRET_LENGTH`; o `generateWebhookSecret()` gera um forte) — um mais
+curto recusa arrancar. As entregas **nunca saem sem assinatura por
+predefinição**: sem secret por endpoint e sem `secret` por predefinição, a
+entrega é recusada (`error: 'no signing secret; refusing unsigned delivery'`). O
+`allowUnsigned: true` é o opt-out explícito.
+
+O `secret` por predefinição só assina endpoints **sem tenant**. Cada endpoint
+ligado a um tenant é assinado com o **seu próprio** secret — o `register()` gera
+um quando não o passas — porque um secret partilhado por todos os tenants
+permitiria a um tenant forjar webhooks que o recetor de outro tenant aceita. Um
+endpoint de tenant guardado sem secret próprio é recusado (`allowSharedSecret:
+true` é o opt-out para dados legados).
 
 ## Gerir subscrições
 
@@ -62,15 +72,23 @@ quer. Regista, lista e remove-os através do manager:
 const endpoint = await hooks.register({
   url: 'https://customer.example.com/hooks',
   events: ['invoice.*', 'user.created'], // padrões: exato, prefixo `x.*`, ou `*`
-  tenantId: 'acme',        // omite para receber eventos de todos os tenants (global)
-  secret: 'whsec_acme_...',// secret opcional por endpoint (sobrepõe-se ao default)
+  tenantId: 'acme',        // ligado a partir de ctx() quando há tenant no contexto
+  secret: 'whsec_acme_...',// opcional; gerado para endpoints de tenant quando omitido
   active: true,            // define false para desativar sem apagar
 })
+endpoint.secret             // devolvido UMA vez — entrega-o ao cliente agora
 
-await hooks.list()          // todos os endpoints (sem tenant no contexto)
+await hooks.list()          // todos os endpoints (sem tenant no contexto) — secrets ocultados
 await hooks.list('acme')    // só os endpoints do tenant "acme"
 await hooks.unregister(endpoint.id)
 ```
+
+O `register()` devolve o endpoint guardado **incluindo o seu secret de
+assinatura** — gerado como `whsec_…` (32 bytes aleatórios) para um endpoint de
+tenant, ou para qualquer endpoint quando não há `secret` por predefinição. O
+`list()` nunca devolve secrets: cada item é um `WebhookEndpointView` com
+`hasSecret: boolean`, por isso uma rota de gestão não os consegue divulgar. Para
+rodar, regista um novo endpoint (ou passa um novo `secret`) e remove o antigo.
 
 O scoping é **anti-alargamento**: dentro de um pedido com tenant no contexto,
 `register`, `list`, `unregister` e `dispatch` ficam forçados a esse tenant — um
@@ -79,6 +97,21 @@ consegue alargar ou trocar o âmbito. O argumento explícito e o comportamento
 system-wide acima aplicam-se apenas onde não há tenant ambiente (jobs, CLI, apps
 single-tenant). `unregister` é um no-op — não um erro — para um endpoint que
 pertence a outro tenant.
+
+**Fail-closed quando a tenancy está ativa.** Quando o `tenancyPlugin` está
+registado (o seu marcador `'tenancy:active'`), uma chamada de gestão sem tenant
+nenhum — sem tenant no contexto e sem `tenantId` explícito — lança
+`WebhookTenantRequiredError` (`WEBHOOKS_TENANT_REQUIRED`) em vez de correr sem
+âmbito. Isso impede uma rota central de criar um endpoint global que receberia
+os eventos de todos os tenants, ou de listar/apagar os endpoints de todos os
+tenants. Operações de sistema deliberadas dizem-no explicitamente:
+
+```ts
+await hooks.register({ url, events }, { system: true })       // endpoint global, de propósito
+await hooks.list(undefined, { system: true })                 // endpoints de todos os tenants
+await hooks.unregister(id, { tenantId: 'acme' })              // remoção com âmbito fora do pedido
+await hooks.unregister(id, { system: true })                  // remoção sem âmbito, de propósito
+```
 
 Os padrões de evento correspondem assim:
 
@@ -105,6 +138,21 @@ const results = await hooks.dispatch('invoice.paid', { id: 'in_1', amount: 42 },
 // [{ endpointId: '...', ok: true, status: 200, attempts: 1 }]
 ```
 
+O scoping é **fail-closed**. Um dispatch sem tenant — sem tenant em `ctx()` e sem
+`tenantId` explícito, como a partir de um job agendado, de um webhook de billing
+ou de uma rota central — chega **só a endpoints sem tenant**, nunca a um ligado a
+um tenant, por isso os dados de evento de um tenant não se espalham pelos
+endpoints de outro. Um broadcast de sistema deliberado faz opt-in explícito (é
+ignorado dentro de um contexto de tenant):
+
+```ts
+await hooks.dispatch('maintenance.scheduled', { at }, { allTenants: true })
+```
+
+O manager volta a aplicar o filtro de tenant ao que o store devolve, por isso um
+store personalizado que ignore o argumento `tenantId` não consegue alargar a
+entrega.
+
 Cada resultado é `{ endpointId, ok, status?, attempts, error? }` — persiste-o
 para um registo de auditoria. As entregas correm em paralelo e o `dispatch` só
 resolve quando todas terminam, por isso um endpoint que gasta todo o orçamento de
@@ -116,10 +164,17 @@ não inline num handler de pedido.
 ```
 content-type: application/json
 x-basalt-event: invoice.paid
+x-basalt-delivery: 5f0c…-uuid
 x-basalt-signature: t=1712345678,v1=<hmac-sha256(t.body)>
 
-{"event":"invoice.paid","data":{"id":"in_1","amount":42},"sentAt":"2026-08-07T10:00:00.000Z"}
+{"id":"5f0c…-uuid","event":"invoice.paid","endpointId":"ep_…","data":{"id":"in_1","amount":42},"sentAt":"2026-08-07T10:00:00.000Z"}
 ```
+
+O `id` (também em `x-basalt-delivery`) é único por entrega e estável entre os
+retries dessa entrega — faz dedup por ele para tornar inofensivo um replay dentro
+da janela de tolerância. O `endpointId` identifica a subscrição para a qual foi
+assinado. Ambos estão dentro do corpo assinado, por isso nenhum pode ser alterado
+sem partir a assinatura.
 
 ## Dispatch automático a partir de eventos de domínio
 
@@ -184,6 +239,9 @@ createApp({
       intervalMs: 5000,                      // poll do relay; 0 = flush manual via OUTBOX
       batchSize: 50,                         // entradas por flush
       maxAttempts: 10,                       // depois a entrada fica morta
+      concurrency: 8,                        // entradas entregues em paralelo por flush
+      tenantConcurrency: 4,                  // máx. de entregas em curso por tenant
+      dispatchTimeoutMs: 10_000,             // espera máx. por entrada antes de avançar
     }),
   ],
 })
@@ -192,7 +250,27 @@ createApp({
 O `webhookOutboxDispatch` só trata uma entrada como entregue quando **todos** os
 endpoints subscritos a aceitaram; uma falha lança, por isso a entrada inteira é
 repetida contra todos eles. Os subscritores têm portanto de ser **idempotentes** —
-o payload leva o nome do evento e os dados para dedup. Resolve o token `OUTBOX`
+o payload leva o nome do evento e os dados para dedup. Uma entrada gravada sem
+tenant no contexto chega só a endpoints sem tenant, tal como o `dispatch`.
+
+O endpoint em falha ou pendurado de um tenant não consegue parar todos os
+outros, por muitos eventos que emita:
+
+- **Seleção justa.** As entradas em backoff não ocupam o lote (o relay pede mais
+  entradas para as saltar), e quando o backlog de um tenant enche uma página
+  inteira o relay volta a consultar *excluindo* os tenants já vistos, e depois
+  intercala o lote em round-robin por tenant. Cada tenant mantém a sua própria
+  ordem de `createdAt`.
+- **Limite por tenant.** Um flush entrega até `concurrency` entradas em paralelo
+  (default 8), mas um tenant nunca tem mais de `tenantConcurrency` entregas em
+  curso (default `ceil(concurrency / 2)`), entre flushes.
+- **Flush limitado.** Um flush espera no máximo `dispatchTimeoutMs` (default
+  10 s) por uma entrada. Uma entrega mais lenta continua *destacada* — não é
+  cancelada, nem falhada, nem reenviada entretanto — e o seu resultado é
+  registado quando termina, por isso o relay continua a avançar para todos os
+  outros tenants.
+
+Define `concurrency: 1` para entrega estritamente sequencial. Resolve o token `OUTBOX`
 para fazer o relay tu mesmo, ex. a partir de um worker de fila em vez do timer:
 
 ```ts
@@ -216,13 +294,13 @@ Duas falhas diferentes, tratadas em dois sítios diferentes:
 - Uma **falha ao nível do flush** (o próprio `pending()` do store lança) não é um
   problema da entrada. O `onFlushError` do `outboxPlugin` existe para isso.
 
-::: warning O `webhookOutboxPlugin` não expõe `onDead` / `onFlushError`
-As suas opções são exatamente `store`, `events`, `intervalMs`, `batchSize` e
-`maxAttempts` — só reencaminha `maxAttempts` para o `Outbox` que constrói, por
-isso as entradas mortas vão para `console.error` e uma falha de flush ao nível do
-store surge como uma rejeição não tratada em vez de um callback. Quando
-precisares de ser alertado por um evento morto, liga o outbox tu mesmo com o
-`outboxPlugin` de `@basaltkit/events` e o `webhookOutboxDispatch` como `dispatch`:
+::: warning O `webhookOutboxPlugin` não expõe `onDead`
+Só reencaminha `maxAttempts`, `concurrency`, `tenantConcurrency` e
+`dispatchTimeoutMs` para o `Outbox` que constrói, por isso as entradas mortas vão
+para `console.error`. Uma falha de flush ao nível do store vai para o seu
+`onFlushError` (default `console.error`). Quando precisares de ser alertado por
+um evento morto, liga o outbox tu mesmo com o `outboxPlugin` de
+`@basaltkit/events` e o `webhookOutboxDispatch` como `dispatch`:
 :::
 
 ```ts
@@ -284,8 +362,15 @@ falha. Captura o corpo raw (ex. `express.raw()` no Express) antes do parse.
 
 `signPayload(body, secret, timestampSeconds)` produz o mesmo header se precisares
 de assinar manualmente. `verifySignature` devolve `false` — nunca lança — para um
-header malformado, um `v1` em falta, um timestamp fora da tolerância ou um digest
-diferente, por isso um recetor pode tratá-lo como um único booleano.
+header malformado, um `v1` em falta, um timestamp fora da tolerância, um digest
+diferente, ou um secret vazio/não definido ou com menos de 16 caracteres (assim um
+recetor cuja env var `WEBHOOK_SECRET` falte falha fechado em vez de aceitar um
+HMAC calculado com uma chave vazia). Um recetor pode tratá-lo como um único
+booleano.
+
+Cada endpoint de tenant tem o seu próprio secret: um recetor verifica com **o
+secret que o `register()` devolveu para o seu endpoint**, não com o default da
+app.
 
 Um header pode trazer **vários** `v1=` — um emissor a rodar o segredo assina com
 o novo e com o antigo (`t=…,v1=<novo>,v1=<antigo>`), como faz a Stripe.
@@ -304,6 +389,9 @@ rejeitado.
 - Os redirecionamentos são **recusados, não seguidos**: um `3xx` termina a
   entrega com `error: 'redirect refused'`. Segui-lo permitiria que um URL público
   e conforme desviasse o pedido para um endereço interno.
+- Só a linha de status é lida. O corpo da resposta é descartado e a ligação
+  fechada assim que o status é conhecido, por isso um recetor que envie um corpo
+  interminável aos poucos não consegue manter sockets abertos.
 - Afina o deliverer através das opções do plugin (passam diretamente para o
   `WebhookDeliverer`):
 
@@ -327,7 +415,12 @@ tratado como input hostil. Antes da primeira tentativa o deliverer resolve o
 hostname **uma vez** e recusa a entrega se o esquema não for `http:`/`https:`, ou
 se *algum* endereço resolvido for loopback, privado (`10/8`, `172.16/12`,
 `192.168/16`), link-local (incluindo o endereço de metadados de cloud
-`169.254.169.254`), CGNAT, ULA IPv6, ou de outra forma reservado.
+`169.254.169.254`), CGNAT, ULA IPv6, ou de outra forma reservado. O IPv6 é
+avaliado sobre o endereço já interpretado, por isso todas as grafias contam: um
+literal IPv6 que embute um endereço IPv4 — IPv4-mapped (`[::ffff:127.0.0.1]`,
+que o parsing de URL reescreve para `[::ffff:7f00:1]`), IPv4-compatible, NAT64
+(`64:ff9b::/96`) ou 6to4 (`2002::/16`) — é avaliado por esse endereço IPv4, e as
+gamas Teredo, NAT64 de uso local, discard e de documentação são recusadas.
 
 O socket é depois **fixado** ao endereço que foi validado, para que um DNS
 autoritativo hostil não possa devolver um IP público à verificação e um IP
@@ -375,6 +468,7 @@ export const webhookRoutes = () => [
     method: 'GET',
     url: '/webhooks/endpoints',
     meta: { auth: true, teamRole: 'admin' },
+    // list() nunca inclui secrets de assinatura (`hasSecret` em vez disso)
     async handler() { return { data: await hooks().list() } },
   }),
   route({
@@ -383,7 +477,8 @@ export const webhookRoutes = () => [
     meta: { auth: true, teamRole: 'admin' },
     body: z.object({ url: z.string().url(), events: z.array(z.string()).min(1) }),
     async handler({ body, reply }) {
-      // o tenantId é forçado a partir de ctx() — nunca o leias do corpo
+      // o tenantId é forçado a partir de ctx() — nunca o leias do corpo. A resposta
+      // leva o secret de assinatura gerado — a única vez em que é mostrado.
       return reply.code(201).send(await hooks().register(body))
     },
   }),
@@ -478,7 +573,12 @@ Duas regras que o store embutido segue e o teu também tem de seguir: `forEvent`
 devolve endpoints cujo `tenantId` corresponde **ou é undefined** (os endpoints
 globais recebem tudo), e ignora os que têm `active: false`. `remove(id, tenantId)`
 tem de ser um no-op silencioso quando o endpoint pertence a outra pessoa — é isso
-que torna o âmbito anti-alargamento seguro.
+que torna o âmbito anti-alargamento seguro. Chamado **sem** `tenantId` (ou com
+`null` / `''`), o `forEvent` tem de falhar fechado e devolver só endpoints sem
+tenant — nunca os de todos os tenants. Um dispatch deliberado com `allTenants` lê
+os endpoints através de `list()`, e o manager volta a filtrar todos os
+resultados, por isso um store que erre nisto continua sem conseguir alargar a
+entrega.
 
 ## Referência de opções
 
@@ -493,7 +593,9 @@ Tudo exceto `store`, `deliverer` e `events` é reencaminhado para o
 | `store` | `WebhookStore` | `MemoryWebhookStore` | Onde vivem as subscrições — troca por `webhooks-sqlite`/`webhooks-prisma`, ou os endpoints desaparecem no restart |
 | `deliverer` | `WebhookDeliverer` | construído a partir destas opções | Traz o teu (partilhado com um relay de outbox, ou um duplo de teste) |
 | `events` | `string[]` | `[]` (desligado) | Padrões de eventos de domínio a auto-despachar. Não vazio faz o plugin depender de `basalt:events` |
-| `secret` | `string` | — | Secret HMAC de assinatura por predefinição. Sem ele (e sem um `secret` por endpoint) as entregas vão **sem assinatura** |
+| `secret` | `string` | — | Secret HMAC de assinatura por predefinição (mín. 16 caracteres) para endpoints sem tenant. Os endpoints de tenant usam sempre o seu |
+| `allowSharedSecret` | `boolean` | `false` | Opt-out: assinar um endpoint de tenant sem secret próprio com o `secret` por predefinição (senão é recusado) |
+| `allowUnsigned` | `boolean` | `false` | Opt-out: enviar sem assinatura quando não há secret nenhum (senão é recusado) |
 | `maxRetries` | `number` | `3` | Retries **depois** da primeira tentativa; só `5xx`/rede/timeout são repetidos |
 | `backoffMs` | `number` | `500` | Espera base, duplicada por tentativa (500 ms, 1 s, 2 s, …) |
 | `timeoutMs` | `number` | `10_000` | Timeout por tentativa; um abort conta como falha transitória |
@@ -519,9 +621,13 @@ Tudo exceto `store`, `deliverer` e `events` é reencaminhado para o
 | `intervalMs` | `number` | `5000` | Intervalo de poll do relay. `0` desliga o timer — faz relay manual através de `OUTBOX` |
 | `batchSize` | `number` | `50` | Entradas entregues por flush |
 | `maxAttempts` | `number` | `10` | Tentativas antes de a entrada ficar morta (nunca mais enviada) |
+| `concurrency` | `number` | `8` | Entradas entregues em paralelo por flush, para que um endpoint lento não bloqueie o lote |
+| `tenantConcurrency` | `number` | `ceil(concurrency / 2)` | Máximo de entregas em curso de um tenant ao mesmo tempo, entre flushes |
+| `dispatchTimeoutMs` | `number \| false` | `10_000` | Espera máxima por entrada antes de o flush avançar; a entrega continua destacada e o resultado é registado na mesma |
+| `onFlushError` | `(error) => void` | `console.error` | Um flush do timer/shutdown falhou ao nível do store. Nunca pode lançar |
 
-Não há `onDead` / `onFlushError` aqui — usa o `outboxPlugin` de
-`@basaltkit/events` quando precisares deles, como mostrado acima. O plugin
+Não há `onDead` aqui — usa o `outboxPlugin` de `@basaltkit/events` quando
+precisares dele, como mostrado acima. O plugin
 depende de `basalt:webhooks` e de `basalt:events`, e drena o outbox uma vez no
 shutdown (best-effort).
 
@@ -530,7 +636,9 @@ shutdown (best-effort).
 | Export | Assinatura | Porquê |
 | --- | --- | --- |
 | `signPayload` | `(body, secret, timestampSeconds) => string` | Constrói `t=…,v1=…` — assina um payload à mão |
-| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; `true` se qualquer `v1` bater; nunca lança |
+| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; `true` se qualquer `v1` bater; `false` para um secret com menos de 16 caracteres; nunca lança |
+| `generateWebhookSecret` | `() => string` | Um secret `whsec_…` novo (32 bytes aleatórios) |
+| `MIN_WEBHOOK_SECRET_LENGTH` | `16` | Comprimento mínimo do secret, aplicado nos dois lados |
 | `assertDeliverableUrl` | `(url, options?) => Promise<void>` | Rejeita um URL inseguro para SSRF no momento do registo; lança `WebhookUrlBlockedError` |
 | `resolveAndValidate` | `(url, options?) => Promise<ValidatedTarget>` | A mesma verificação, devolvendo os endereços resolvidos e o que fixar |
 | `isPrivateIp` | `(ip) => boolean` | O próprio predicado de gamas; tudo o que não seja um IP público literal é `true` |
@@ -545,6 +653,7 @@ A maioria dos problemas de entrega **não são exceções** — voltam no
 | Resultado | `error` | `attempts` | Quando |
 | --- | --- | --- | --- |
 | Recusa SSRF | `Refusing to deliver webhook to <url>: <reason>` | `0` | Esquema inválido, ou o host é/resolve para um endereço privado, loopback, link-local, CGNAT, ULA ou reservado |
+| Sem secret utilizável | `no signing secret; refusing unsigned delivery` / `tenant endpoint has no own secret; …` / `endpoint signing secret is too short …` | `0` | Nada com que assinar, um endpoint de tenant só com o secret partilhado, ou um secret com menos de 16 caracteres |
 | Erro de cliente | `HTTP 4xx` | `1` | O recetor rejeitou — nunca repetido |
 | Redirecionamento | `redirect refused` | `1` | O endpoint respondeu `3xx`; segui-lo derrotaria a verificação SSRF |
 | Transitório | última mensagem de rede/timeout | `maxRetries + 1` | `5xx`, erro de ligação ou timeout por tentativa, repetido com backoff, e ainda a falhar |
@@ -552,6 +661,7 @@ A maioria dos problemas de entrega **não são exceções** — voltam no
 | Erro | Código | HTTP | Quando |
 | --- | --- | --- | --- |
 | `WebhookUrlBlockedError` | — (só `name`) | — | Lançado por `assertDeliverableUrl` / `resolveAndValidate`; dentro de `deliver()` é apanhado e transformado no resultado falhado acima |
+| `WebhookTenantRequiredError` | `WEBHOOKS_TENANT_REQUIRED` | — | `register` / `list` / `unregister` com tenancy ativa e sem tenant (contexto ou explícito) e sem `{ system: true }` |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `container.get(WEBHOOKS)` sem o `webhooksPlugin` registado |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | arranque | As tuas rotas de gestão de endpoints declaram `meta.auth` / `meta.teamRole` sem o plugin que as impõe |
 
@@ -566,7 +676,8 @@ A maioria dos problemas de entrega **não são exceções** — voltam no
   `MemoryWebhookStore`. Passa para `webhooks-sqlite` ou `webhooks-prisma`.
 - **Eventos emitidos de um job só chegam a alguns endpoints** — não há tenant em
   `ctx()` fora de um pedido, por isso só os endpoints globais (sem tenant)
-  correspondem. Chama `dispatch(event, data, tenantId)` explicitamente.
+  correspondem. Chama `dispatch(event, data, tenantId)` explicitamente (ou corre
+  o job dentro do contexto do tenant).
 - **Um handler de pedido ficou lento depois de adicionar webhooks** — o
   `dispatch` espera por todas as entregas, retries incluídos (até
   `(maxRetries + 1) × timeoutMs` por endpoint). Move-o para o outbox ou para um

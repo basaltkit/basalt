@@ -37,6 +37,9 @@ export {
   securityPlugin,
   MemoryRateLimitStore,
   DEFAULT_CSP,
+  DEFAULT_CACHE_CONTROL,
+  DEFAULT_RATE_LIMIT_MAX_ENTRIES,
+  type MemoryRateLimitStoreOptions,
   type SecurityPluginOptions,
   type RateLimitOptions,
   type RateLimitResult,
@@ -86,6 +89,7 @@ export {
   UnguardedRouteMetaError,
   assertRoutesGuarded,
 } from './guarded-meta.js'
+export { redactUrl, REDACTED } from './redact-url.js'
 export {
   reportHttpError,
   httpErrorReporter,

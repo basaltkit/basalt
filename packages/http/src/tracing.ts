@@ -1,5 +1,6 @@
 import { createToken, definePlugin, formatTraceparent, parseTraceparent, Tracer, type Span, type SpanExporter } from '@basaltkit/core'
 import type { HttpRequest } from './route.js'
+import { redactUrl, urlPath } from './redact-url.js'
 import { HTTP_SERVER } from './server.js'
 
 export const TRACER = createToken<Tracer>('tracer')
@@ -42,10 +43,12 @@ export function tracingPlugin(options: TracingPluginOptions = {}) {
 
       server.use(({ request, reply }) => {
         const parent = parseTraceparent(headerOf(request, 'traceparent'))
-        const span = tracer.startSpan(`${request.method} ${request.routePattern ?? request.url}`, {
+        // Spans are exported and retained: query values (OAuth codes, tokens)
+        // are masked in the target and kept out of the span name entirely.
+        const span = tracer.startSpan(`${request.method} ${request.routePattern ?? urlPath(request.url)}`, {
           kind: 'server',
           ...(parent ? { parent } : {}),
-          attributes: { 'http.method': request.method, 'http.target': request.url },
+          attributes: { 'http.method': request.method, 'http.target': redactUrl(request.url) },
         })
         // Stash on the native request (`raw`), stable across the pre/after hooks.
         ;(request.raw as Record<symbol, Span>)[SPAN] = span

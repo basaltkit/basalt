@@ -11,6 +11,18 @@ export class TenantRequiredError extends BasaltError {
 }
 
 /**
+ * An explicit `tenantId` named a different tenant than the one the call runs
+ * in. The context tenant is authoritative; an argument may narrow to it, never
+ * widen past it.
+ */
+export class SearchTenantMismatchError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('SEARCH_TENANT_MISMATCH', 'The tenantId does not match the current tenant.')
+  }
+}
+
+/**
  * The scope every document lands in when the app has no tenancy at all. The
  * driver contract is tenant-keyed, so a single-tenant app still needs one
  * stable key — it just shouldn't have to invent (and remember) it.
@@ -21,7 +33,11 @@ export const SINGLE_TENANT_SCOPE = 'default'
 const DEFAULT_LIMIT = 10
 
 export interface SearchOptions {
-  /** Defaults to the current tenant (`ctx().tenant.id`). */
+  /**
+   * Defaults to the current tenant (`ctx().tenant.id`). Inside a tenant
+   * context it must name that tenant — any other value throws
+   * {@link SearchTenantMismatchError}; it only selects a tenant outside one.
+   */
   tenantId?: string
   filters?: Record<string, unknown>
   limit?: number
@@ -202,7 +218,10 @@ export class Search {
         const documents = page
           .map((payload) => rule.document!(payload))
           .filter((document): document is SearchInput => document !== null)
-          .map((document) => this.resolveDocument(document))
+          // A rebuild is a system operation over every tenant: the rule's own
+          // mapping says which tenant each record belongs to, even when the
+          // rebuild is started from inside a tenant's request.
+          .map((document) => this.resolveDocument(document, true))
         if (documents.length === 0) continue
         await this.driver.bulk(indexName, documents)
         written += documents.length
@@ -219,15 +238,25 @@ export class Search {
    * tenant dimension, so every document shares {@link SINGLE_TENANT_SCOPE} and
    * index/query always agree.
    */
-  private tenant(explicit?: string): string {
-    const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (id) return id
+  private tenant(explicit?: string, trustExplicit = false): string {
+    // The context tenant wins: an explicit value is only honoured when it
+    // agrees with it, or when there is no context tenant (jobs, CLI, scripts).
+    // Letting the argument override the context let a caller that forwards
+    // client input (`?tenantId=`) search, plant or remove another tenant's
+    // documents.
+    const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    if (explicit && trustExplicit) return explicit
+    if (ambient) {
+      if (explicit !== undefined && explicit !== ambient) throw new SearchTenantMismatchError()
+      return ambient
+    }
+    if (explicit) return explicit
     if (this.tenancyActive()) throw new TenantRequiredError()
     return SINGLE_TENANT_SCOPE
   }
 
   /** Fills in the document's tenant with the same rule the read path uses. */
-  private resolveDocument(document: SearchInput): SearchDocument {
-    return { ...document, tenantId: this.tenant(document.tenantId) }
+  private resolveDocument(document: SearchInput, trustExplicit = false): SearchDocument {
+    return { ...document, tenantId: this.tenant(document.tenantId, trustExplicit) }
   }
 }

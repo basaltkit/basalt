@@ -268,10 +268,27 @@ elas — multipart é específico do transporte, por isso escreves tu esse handl
 
 | Rota | Corpo | Devolve |
 | --- | --- | --- |
-| `GET /files` | — | `FileRecord[]` do tenant |
+| `GET /files` | — | `FileRecord[]` que o utilizador pode ler |
 | `GET /files/:id` | — | um `FileRecord`, ou `404 FILE_NOT_FOUND` |
-| `POST /files/:id/url` | `{ expiresIn? }` (predefinição `'15m'`) | `{ url }` — assinado, `attachment` |
-| `DELETE /files/:id` | — | `204`, idempotente |
+| `POST /files/:id/url` | `{ expiresIn? }` (predefinição `'15m'`, no máximo `maxUrlTtl`) | `{ url }` — assinado, `attachment` |
+| `DELETE /files/:id` | — | `204`, ou `404 FILE_NOT_FOUND` |
+
+**Só o dono, por predefinição.** Um utilizador só alcança os ficheiros cujo
+`uploadedBy` é o seu próprio `ctx().user.id` — por isso passa `uploadedBy` no
+teu handler de upload (acima). Um ficheiro que o utilizador não pode alcançar
+responde `404`, tal como um inexistente, e um ficheiro enviado sem `uploadedBy`
+não é alcançável por ninguém através destas rotas. Escolhe outra política
+explicitamente:
+
+```ts
+fileRoutes({ shared: true })   // um drive do tenant: todos os membros alcançam todos os ficheiros
+
+fileRoutes({
+  // action: 'read' | 'url' | 'delete'; GET /files mantém os registos permitidos para 'read'
+  authorize: (action, record, user) =>
+    record.uploadedBy === user.id || (action !== 'delete' && record.metadata?.['public'] === true),
+})
+```
 
 ::: danger Autenticação não é autorização de tenant
 Todas as rotas declaram `meta: { auth: true }`, o que prova *quem* está a chamar.
@@ -325,7 +342,7 @@ eles. `totalSize` é o caminho quente da quota, por isso indexa `(tenantId)`. V�
 | `disk` | `Disk \| string` | — (obrigatório) | O disco de armazenamento, por instância ou pelo nome declarado em `storagePlugin({ disks })`. Um nome desconhecido lança `UnknownDiskError` quando `FILES` é resolvido pela primeira vez |
 | `store` | `FileStore` | `MemoryFileStore` | Onde vive a metadata — implementa-o sobre a tua base de dados em produção, ou os registos desaparecem no restart |
 | `validate` | `FileValidation` | `{ maxSize: 25 MiB }` | Política de upload (abaixo). Passar `validate` **funde** com o limite predefinido; não o remove |
-| `maxTotalBytes` | `number` | ilimitado | Quota embutida por tenant, verificada contra `store.totalSize()` antes de cada upload |
+| `maxTotalBytes` | `number` | ilimitado | Quota embutida por tenant, verificada contra `store.totalSize()` antes de cada upload. Os uploads com quota de um tenant correm um de cada vez no processo, e o total é reverificado depois da inserção (um excesso causado por outra instância é revertido) |
 | `checkQuota` | `(tenantId, size) => void \| Promise<void>` | — | Quota personalizada — lança para rejeitar. Liga-a a uma feature de plano em `@basaltkit/subscriptions`. Corre *depois* de `maxTotalBytes` |
 
 O serviço `Files` aceita as mesmas opções mais `hooks` (o `HookBus`, injetado
@@ -339,16 +356,23 @@ com `new Files({ disk, ... })` quando quiseres o pipeline sem o contentor de DI.
 | `maxSize` | `number` (bytes) | `DEFAULT_MAX_FILE_SIZE` = `25 * 1024 * 1024` | Rejeita payloads maiores com `413`. Define `Number.POSITIVE_INFINITY` para abdicares do limite deliberadamente |
 | `allowedTypes` | `string[]` | qualquer tipo | Allowlist com wildcards `type/*` (`'image/*'`). Comparada com o `contentType` **que passas ao `upload`** |
 
-### `fileRoutes()`
+### `fileRoutes(options?)`
 
-Não aceita opções. Todas as rotas declaram `meta: { auth: true }` — não há
+| Opção | Tipo | Predefinição | Função |
+| --- | --- | --- | --- |
+| `authorize` | `(action, record, user) => boolean \| Promise<boolean>` | só o dono | A tua política por registo. `action` é `'read'`, `'url'` ou `'delete'`; `user` é `ctx().user`. Substitui a predefinição |
+| `shared` | `boolean` | `false` | Todos os utilizadores autenticados do tenant alcançam todos os ficheiros (ignorado quando `authorize` está definido) |
+| `maxUrlTtl` | `DurationInput` | `'1h'` | O `expiresIn` mais longo que um cliente pode pedir a `POST /files/:id/url` |
+
+Todas as rotas declaram `meta: { auth: true }` — não há
 escape `auth: false`, ao contrário de `billingRoutes`. Se a autenticação
 acontecer mesmo numa borda exterior, dispensa a verificação de arranque com o
 `allowUnguardedMeta` do adaptador em vez de remover o meta.
 
 `POST /files/:id/url` aceita `{ expiresIn }` como string de duração (`'30s'`,
-`'15m'`, `'2h'`, `'7d'`) ou em milissegundos; a predefinição é `'15m'` e assina
-sempre com a disposição `attachment`.
+`'15m'`, `'1h'`); a predefinição é `'15m'`, tem de ser positivo e no máximo
+`maxUrlTtl` (um valor maior ou mal formado responde `400`), e assina sempre com
+a disposição `attachment`.
 
 ### Métodos do serviço `Files`
 
@@ -371,6 +395,7 @@ sempre com a disposição `attachment`.
 | `StorageQuotaExceededError` | `FILE_QUOTA_EXCEEDED` | 402 | `maxTotalBytes` seria excedido por este upload |
 | `FileNotFoundError` | `FILE_NOT_FOUND` | 404 | `download` / `markScanned` / `GET /files/:id` para um id que não é deste tenant |
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | Sem argumento `tenantId` **e** sem `ctx().tenant` — tipicamente um worker de fila ou a CLI |
+| `FileTenantMismatchError` | `FILE_TENANT_MISMATCH` | 403 | Um argumento `tenantId` diferente de `ctx().tenant` — dentro de um contexto de tenant o argumento só pode nomear esse tenant, nunca alargar a outro |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | — | `disk: 'name'` não corresponde a nenhum disco em `storagePlugin({ disks })` |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | — | `temporaryUrl` no driver `local` |
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | — | O registo existe mas o objeto não — bytes apagados fora de banda, ou o disco/`scope` mudou por baixo dos registos |
@@ -383,6 +408,10 @@ sempre com a disposição `attachment`.
 - **`GET /files` devolve os ficheiros de outro tenant** — o identificador do
   tenant é fornecido pelo cliente e `meta.auth` não verifica pertença. Regista o
   [`tenantMembershipPlugin()`](/pt/guide/teams).
+- **`GET /files` devolve `[]` para ficheiros que existem** — a política
+  predefinida é só o dono: os ficheiros foram enviados sem `uploadedBy`, ou por
+  outra pessoa. Passa `uploadedBy: ctx().user.id` no upload, ou escolhe
+  `shared: true` / `authorize` em `fileRoutes()`.
 - **Os ficheiros desaparecem depois de um redeploy, mas os bytes continuam no
   bucket** — continuas no `MemoryFileStore`. Implementa `FileStore` sobre a tua
   base de dados.

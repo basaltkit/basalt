@@ -248,6 +248,7 @@ In this mode each handler already handles its own errors (the wrapper responds w
 | `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
 | `app` | `Express` | No | new `express()` | Bring your own Express app; either way, `express.json()` and `express.urlencoded({ extended: false })` are added. |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes, mounted last. Set `false` to keep Express's HTML default or your own catch-all. |
+| `errorHandler` | `boolean` | No | `true` | Mount a final `(err, req, res, next)` middleware that answers body-parser and pre-hook errors with the neutral JSON envelope instead of Express's HTML page (which includes the stack trace unless `NODE_ENV=production`). Set `false` only if you mount your own error handler after boot. |
 
 Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, via `res.on('finish')`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Basalt routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
@@ -261,6 +262,9 @@ Behavior: registers the Express app under the `EXPRESS` token and an `HttpServer
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
+| — | `BAD_REQUEST` | 400 | The body could not be parsed (malformed JSON, corrupt encoding). |
+| — | `PAYLOAD_TOO_LARGE` | 413 | The body exceeded the body-parser limit (100 KB by default). |
+| — | `UNSUPPORTED_MEDIA_TYPE` | 415 | Unsupported body charset or content encoding. |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
 | — | `INTERNAL_ERROR` | 500 | Any other thrown error. The real message never reaches the client. |
 

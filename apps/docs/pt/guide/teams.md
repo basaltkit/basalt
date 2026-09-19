@@ -103,6 +103,17 @@ fora do mapa têm rank 0):
 teamsPlugin({ roleRank: { owner: 4, admin: 3, editor: 2, viewer: 1 } })
 ```
 
+Um membro que atua através das rotas só pode conceder roles que **estão no
+mapa**. Um role sem rank (por exemplo um role de permissão `billing-admin`
+espelhado via `access`) é recusado com `TeamRoleNotGrantableError`
+(`403 TEAM_ROLE_NOT_GRANTABLE`), para que uma string `role` livre não sirva para
+o conceder. Para permitir que os membros concedam um role extra sem rank,
+lista-o explicitamente:
+
+```ts
+teamsPlugin({ grantableRoles: ['viewer'] })
+```
+
 Uma equipa mantém sempre pelo menos um owner — o serviço recusa-se a despromover ou
 remover o último (`LastOwnerError`, `TEAM_LAST_OWNER`). Promove outra pessoa primeiro.
 
@@ -112,8 +123,12 @@ impõe duas regras: o ator nunca pode conceder um role **acima do seu próprio
 rank** (um `admin` não pode convidar nem promover ninguém — incluindo a si
 próprio — a `owner`), e nunca pode alterar o role nem despromover um membro que
 atualmente o **supere em rank**. As violações lançam
-`InsufficientTeamRoleError` (`403 TEAM_ROLE_REQUIRED`). Chamadas ao serviço sem
-`actingUserId` (seeding server-side de confiança) saltam a verificação.
+`InsufficientTeamRoleError` (`403 TEAM_ROLE_REQUIRED`). O mesmo se aplica à
+remoção: `DELETE /team/members/:userId` só pode remover o próprio ator ou um
+membro que não o supere em rank, por isso um `admin` não pode remover um
+`owner`. Roles ausentes de `roleRank` não podem ser concedidos (ver acima).
+Chamadas ao serviço sem `actingUserId` (seeding server-side de confiança)
+saltam a verificação.
 :::
 
 ## Seeding do primeiro owner
@@ -134,11 +149,14 @@ await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 | Endpoint | Requer |
 | --- | --- |
 | `POST /team/invites` `{ email, role? }` | `admin` |
-| `POST /team/invites/accept` `{ token }` | login |
+| `POST /team/invites/accept` `{ token }` | login com email **verificado** |
 | `GET /team/invites` · `DELETE /team/invites/:id` | `admin` |
 | `GET /team/members` | `member` |
 | `PATCH /team/members/:userId` `{ role }` | `admin` |
 | `DELETE /team/members/:userId` | `admin` |
+
+`teamRoutes(options)` aceita `requireVerifiedEmail` (predefinição `true`),
+descrito na secção de convites abaixo.
 
 ## Role guard
 
@@ -269,7 +287,7 @@ const membership = await teams.accept(token, 'bob-id')
 // → { tenantId: 'acme', userId: 'bob-id', role: 'member', createdAt }
 ```
 
-Duas propriedades de segurança estão incorporadas:
+Estas propriedades de segurança estão incorporadas:
 
 - **Os tokens são guardados em hash.** Só o SHA-256 do token é persistido — uma
   fuga da tabela de convites não pode ser reproduzida para aderir a uma equipa;
@@ -280,7 +298,20 @@ Duas propriedades de segurança estão incorporadas:
   mesmo `TEAM_INVITE_INVALID` que um token forjado — um destinatário errado não
   consegue distinguir um token real de um falso. Em código, passa o email
   **verificado** de quem chama; omite-o apenas em fluxos server-side de
-  confiança.
+  confiança. Quem chama sem email em `ctx().user` é recusado
+  (`TEAM_INVITE_INVALID`) e nunca é inscrito sem vínculo.
+- **O endereço tem de estar verificado.** Por predefinição, a rota de aceitação
+  também exige `ctx().user.emailVerified === true` e, caso contrário, responde
+  `403 TEAM_EMAIL_NOT_VERIFIED`. Sem isso, qualquer pessoa que registe o
+  endereço do convidado poderia resgatar um link fugido. Só apps que provam a
+  posse do endereço de outra forma devem desativar com
+  `teamRoutes({ requireVerifiedEmail: false })`. O vínculo ao endereço
+  continua a aplicar-se.
+- **Uso único, mesmo com concorrência.** Os stores aceitam um convite com um
+  compare-and-set (`markAccepted` resolve `false` se o convite já não estiver
+  pendente), por isso um token inscreve no máximo uma conta. Um
+  `InvitationStore` personalizado deve fazer o mesmo. Devolver `void` continua
+  a ser aceite, mas perdes essa garantia.
 
 Um token desconhecido, usado, revogado ou expirado lança `TeamInviteInvalidError`
 (`400 TEAM_INVITE_INVALID`). Liga o hook de email uma vez no arranque:
@@ -305,7 +336,11 @@ await teams.revokeInvite(invitationId)            // DELETE /team/invites/:id
 ```
 
 `changeRole` e `removeMember` lançam `LastOwnerError` (`400 TEAM_LAST_OWNER`) se
-deixassem a equipa sem um owner.
+deixassem a equipa sem um owner. A regra é verificada de novo depois da escrita,
+e a escrita é revertida se perdeu uma corrida. Isto impede que duas
+despromoções/remoções concorrentes deixem a equipa com zero owners. Passa
+`{ actingUserId }` a `changeRole`/`removeMember`/`addMember` para aplicar as
+regras de rank a uma chamada iniciada por um utilizador, como fazem as rotas.
 
 ## Espelhar roles para permissions
 
@@ -331,6 +366,7 @@ teamsPlugin({ access })
 | `access` | `RoleAssigner` | — | Espelha cada mudança de membership numa concessão de role de `@basaltkit/permissions` no âmbito do tenant |
 | `inviteTtl` | `DurationInput` | `'7d'` | Tempo de vida do link de convite |
 | `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Hierarquia de roles; roles fora do mapa têm rank 0 |
+| `grantableRoles` | `TeamRole[]` | `[]` | Roles sem rank que um utilizador ativo pode ainda conceder; qualquer outro role fora de `roleRank` é recusado (`TEAM_ROLE_NOT_GRANTABLE`) |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
 `tenantMembershipPlugin(options)`:
@@ -339,7 +375,13 @@ teamsPlugin({ access })
 | --- | --- | --- | --- |
 | `role` | `TeamRole` | — (verificação de existência) | Exigir um role mínimo com *rank* em vez de qualquer registo de membership |
 | `exempt` | `(context) => boolean` | — | Escape baseado em QUEM para identidades entre tenants (admin de plataforma, suporte); nunca cacheado |
-| `cache` | `{ ttlMs: number; maxEntries?: number }` | desligado | Cache de decisões em processo, opt-in; invalidada por hooks no mesmo processo, `ttlMs` limita a desatualização entre réplicas, `maxEntries` predefinição 10 000 |
+| `cache` | `{ ttlMs: number; maxEntries?: number }` | desligado | Cache de decisões em processo, opt-in; invalidada por hooks no mesmo processo (uma consulta que coincide com uma invalidação não é cacheada), `ttlMs` limita a desatualização entre réplicas, `maxEntries` predefinição 10 000 |
+
+`teamRoutes(options)`:
+
+| Opção | Tipo | Predefinição | Propósito |
+| --- | --- | --- | --- |
+| `requireVerifiedEmail` | `boolean` | `true` | Exigir `ctx().user.emailVerified === true` para aceitar um convite |
 
 ## Modos de falha e troubleshooting
 
@@ -347,7 +389,9 @@ teamsPlugin({ access })
 | --- | --- | --- | --- |
 | `TeamInviteInvalidError` | `TEAM_INVITE_INVALID` | 400 | Token desconhecido, usado, revogado, expirado — ou resgatado por uma conta cujo email não é o convidado |
 | `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 | `tenantMembershipPlugin` não encontrou membership; ou uma rota com `meta.teamRole` correu sem utilizador **ou** sem tenant no contexto |
-| `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | Rank do role abaixo do exigido — incluindo um ator a tentar conceder/despromover acima do seu próprio rank |
+| `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | Rank do role abaixo do exigido, incluindo um ator a tentar conceder, despromover ou remover acima do seu próprio rank |
+| `TeamRoleNotGrantableError` | `TEAM_ROLE_NOT_GRANTABLE` | 403 | Um utilizador ativo tentou conceder um role que não está em `roleRank` nem em `grantableRoles` |
+| `TeamEmailNotVerifiedError` | `TEAM_EMAIL_NOT_VERIFIED` | 403 | `POST /team/invites/accept` por um utilizador cujo email não está verificado (ver `requireVerifiedEmail`) |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | A mudança deixaria a equipa sem owner |
 | `TEAM_NO_TENANT` | `TEAM_NO_TENANT` | 400 | Um endpoint de `teamRoutes()` foi chamado sem tenant no contexto — regista a tenancy e envia o identificador do tenant |
 | `TEAM_INVITE_NOT_FOUND` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` para um id que não existe ou pertence a outro tenant |

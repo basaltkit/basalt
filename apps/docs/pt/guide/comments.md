@@ -51,6 +51,27 @@ const tree = await comments.on('note', 'note-1').tree() // nested replies
 comentário, e emite `comment:created` mais um `comment:mentioned` por cada
 utilizador mencionado. Também: `edit`, `remove`, `resolve(id, by)`, `reopen(id)`.
 
+::: warning Corpos e mentions limitados
+Um corpo maior que `maxBodyLength` (predefinição **10 000** caracteres) lança
+`CommentTooLongError` (`400 COMMENT_TOO_LONG`), e um com mais de `maxMentions`
+mentions distintas (predefinição **50**) lança `CommentMentionLimitError`
+(`400 COMMENT_TOO_MANY_MENTIONS`) — em `add` e em `edit`, antes de guardar ou
+emitir o que quer que seja. De resto cada `@id` é aceite tal como vem, por isso
+quando `comment:mentioned` chega a um canal de notificação real, passa
+`resolveMentions(ids, tenantId)` para manter só os utilizadores que podem ser
+mencionados — tipicamente os membros do tenant:
+
+```ts
+commentsPlugin({
+  resolveMentions: async (ids, tenantId) => (await members.of(tenantId, ids)).map((m) => m.userId),
+})
+```
+:::
+
+Dentro de um contexto de tenant, um argumento `tenantId` explícito tem de nomear
+esse tenant; qualquer outro valor lança `CommentTenantMismatchError` (`403
+COMMENT_TENANT_MISMATCH`). Só escolhe um tenant fora de um (jobs, CLI).
+
 ## Discussão ao vivo + notificações de mention
 
 Cada mutação emite um hook (`comment:created`, `comment:mentioned`,
@@ -91,8 +112,26 @@ app.hooks.on('comment:mentioned', ({ comment, userId }) =>
 `commentRoutes()` (exigem um utilizador autenticado; o autor é tirado de
 `ctx().user`): `GET /comments?resourceType=&resourceId=`, `POST /comments`,
 `PATCH /comments/:id`, `DELETE /comments/:id`,
-`POST /comments/:id/resolve` e `/reopen`. Editar e apagar estão restritos ao
-autor do comentário. Tudo é delimitado por tenant.
+`POST /comments/:id/resolve` e `/reopen`. Por predefinição qualquer utilizador
+do tenant pode ler uma thread e publicar nela, e editar, apagar, resolver e
+reabrir estão restritos ao autor do comentário (`403 COMMENT_FORBIDDEN`). Tudo é
+delimitado por tenant.
+
+Passa `authorize` para ligar uma thread às regras de acesso do recurso que
+discute. Substitui a política predefinida; compõe com `defaultCommentPolicy`
+para a manter:
+
+```ts
+import { commentRoutes, defaultCommentPolicy } from '@basaltkit/comments'
+
+commentRoutes({
+  // action: 'list' | 'create' | 'edit' | 'delete' | 'resolve' | 'reopen'
+  // target: { resourceType, resourceId, comment? }
+  authorize: async (action, target, user) =>
+    (await canSeeMatter(user.id, target.resourceId)) &&
+    (defaultCommentPolicy(action, target, user) || (action === 'resolve' && user.role === 'admin')),
+})
+```
 
 Aqui não é preciso UI já pronta — os comentários renderizam inline na tua app —
 mas o mesmo padrão autocontido alimenta o [visualizador de auditoria](/pt/reference/packages).

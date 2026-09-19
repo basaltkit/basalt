@@ -51,6 +51,27 @@ const tree = await comments.on('note', 'note-1').tree() // nested replies
 the comment, and emits `comment:created` plus one `comment:mentioned` per
 mentioned user. Also: `edit`, `remove`, `resolve(id, by)`, `reopen(id)`.
 
+::: warning Bounded bodies and mentions
+A body longer than `maxBodyLength` (default **10 000** characters) throws
+`CommentTooLongError` (`400 COMMENT_TOO_LONG`), and one carrying more than
+`maxMentions` distinct mentions (default **50**) throws
+`CommentMentionLimitError` (`400 COMMENT_TOO_MANY_MENTIONS`) — on `add` and on
+`edit`, before anything is stored or emitted. Every `@id` is otherwise taken at
+face value, so when `comment:mentioned` reaches a real notification channel,
+pass `resolveMentions(ids, tenantId)` to keep only users who may be mentioned —
+typically the tenant's members:
+
+```ts
+commentsPlugin({
+  resolveMentions: async (ids, tenantId) => (await members.of(tenantId, ids)).map((m) => m.userId),
+})
+```
+:::
+
+Inside a tenant context an explicit `tenantId` argument must name that tenant;
+any other value throws `CommentTenantMismatchError` (`403
+COMMENT_TENANT_MISMATCH`). It selects a tenant only outside one (jobs, CLI).
+
 ## Live discussion + mention notifications
 
 Every mutation emits a hook (`comment:created`, `comment:mentioned`,
@@ -91,8 +112,26 @@ app.hooks.on('comment:mentioned', ({ comment, userId }) =>
 `commentRoutes()` (require a logged-in user; author taken from `ctx().user`):
 `GET /comments?resourceType=&resourceId=`, `POST /comments`,
 `PATCH /comments/:id`, `DELETE /comments/:id`,
-`POST /comments/:id/resolve` and `/reopen`. Editing and deleting are restricted
-to the comment's author. Everything is tenant-scoped.
+`POST /comments/:id/resolve` and `/reopen`. By default any user of the tenant
+may read a thread and post to it, and editing, deleting, resolving and reopening
+are restricted to the comment's author (`403 COMMENT_FORBIDDEN`). Everything is
+tenant-scoped.
+
+Pass `authorize` to tie a thread to the access rules of the resource it
+discusses. It replaces the default policy; compose with `defaultCommentPolicy`
+to keep it:
+
+```ts
+import { commentRoutes, defaultCommentPolicy } from '@basaltkit/comments'
+
+commentRoutes({
+  // action: 'list' | 'create' | 'edit' | 'delete' | 'resolve' | 'reopen'
+  // target: { resourceType, resourceId, comment? }
+  authorize: async (action, target, user) =>
+    (await canSeeMatter(user.id, target.resourceId)) &&
+    (defaultCommentPolicy(action, target, user) || (action === 'resolve' && user.role === 'admin')),
+})
+```
 
 Ready-made UI is not needed here — comments render inline in your app — but the
 same self-contained pattern powers the [audit viewer](/reference/packages).

@@ -54,7 +54,7 @@ describe('F-5 · audit-sqlite pushes the limit down', () => {
     const page = await store.query({ tenantId: 't1', event: 'auth:**', limit: 5 })
 
     expect(page.map((e) => e.event)).toEqual(Array(5).fill('auth:login'))
-    expect(sql.every((s) => /LIMIT \d+ OFFSET \d+/.test(s))).toBe(true)
+    expect(sql.every((s) => s.includes('LIMIT ? OFFSET ?'))).toBe(true)
   })
 
   it('a `.`-separated pattern is NOT pushed down (`.` and `:` are interchangeable)', async () => {

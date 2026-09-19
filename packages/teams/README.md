@@ -94,13 +94,19 @@ await teams.addMember('acme', 'ada-id', 'owner')
 - Only the **SHA-256 hash** of the token is persisted; the raw value exists solely in the emailed link. A leak of the invitations table can't be replayed to accept an invite.
 - `accept(token, userId, acceptingEmail?)` consumes the token (single use) and enrolls the user with the invitation's role. Unknown, used, revoked, or expired token → `TeamInviteInvalidError` (400).
 - Pass the caller's **verified** email as `acceptingEmail` and acceptance is bound to the invited address, so a forwarded or leaked link can't enroll a different account. A mismatch throws the *same* `TEAM_INVITE_INVALID` as a bad token, so a wrong recipient can't distinguish a real token from a fake one. `teamRoutes()` passes `ctx().user.email` for you; omit it only in trusted server-side flows.
+- `POST /team/invites/accept` also requires `ctx().user.emailVerified === true` (`403 TEAM_EMAIL_NOT_VERIFIED`) and refuses callers with no email. Opt out only with `teamRoutes({ requireVerifiedEmail: false })`. Acceptance is a compare-and-set in every bundled store, so a token enrolls at most one account even under concurrency.
+- An invitation only ever adds access: accepting it never lowers an existing membership of equal or higher rank (an owner clicking a `member` invite stays owner).
+- An invitation carries its inviter's authority: when the inviter (`invitedBy`) is removed, or re-roled below the invited role, their pending invitations for roles they can no longer grant are revoked.
 - `pendingInvites(tenantId)` lists non-expired pending invites; `revokeInvite(id)` cancels one; `invitation(id)` looks one up.
 
 ### Privilege-escalation guard (`actingUserId`)
 
-`addMember`, `invite` and `changeRole` accept the acting user. When you pass it,
-the actor must be a member who ranks **at least as high as** the role being
-granted, and at least as high as the target's current role:
+`addMember`, `invite`, `changeRole` and `removeMember` accept the acting user.
+When you pass it, the actor must be a member who ranks **at least as high as**
+the role being granted, and at least as high as the target's current role (for
+`removeMember`: self-removal, or a target who doesn't outrank the actor). The
+granted role must be in `roleRank` or listed in `grantableRoles`, otherwise
+`TeamRoleNotGrantableError` (403). The HTTP routes always pass it:
 
 ```ts
 // admin (rank 2) invites a member — fine

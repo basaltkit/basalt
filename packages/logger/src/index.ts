@@ -1,5 +1,5 @@
 import { createToken, definePlugin, tryCtx } from '@basaltkit/core'
-import { pino, type Bindings, type DestinationStream, type Logger as PinoLogger } from 'pino'
+import { pino, stdSerializers, type Bindings, type DestinationStream, type Logger as PinoLogger } from 'pino'
 
 export type Logger = PinoLogger<string, boolean>
 
@@ -15,11 +15,10 @@ export type LogLevel = (typeof LOG_LEVELS)[number]
 /** ALS context fields automatically promoted onto every log line. */
 const CONTEXT_FIELDS = ['requestId', 'correlationId', 'traceId', 'userId', 'tenantId'] as const
 
-// Keys whose values are redacted wherever they appear (top level and one level
-// of nesting, e.g. req.body.password). The previous list matched only the exact
-// key `token`, so `accessToken`/`refreshToken`/`cookie` logged in clear — this
-// covers the secret-bearing names this framework actually mints, plus the usual
-// credential/header carriers. Mirrors the audit module's stronger coverage.
+// Pino path-based redaction for the well-known top-level and one-level-deep
+// carriers. It is kept as defense in depth (and to host user-supplied
+// `redact` paths); the recursive key redactor below is what guarantees
+// coverage at any depth, inside arrays, on errors and on child bindings.
 const REDACT_KEYS = [
   'password',
   'pass',
@@ -56,6 +55,201 @@ const DEFAULT_REDACT = [
   'request.headers.authorization',
   'request.headers.cookie',
 ]
+
+const CENSOR = '[REDACTED]'
+
+/**
+ * Secret-bearing key names, compared after normalization (lower-cased, with
+ * every non-alphanumeric character removed), so `access_token`, `accessToken`,
+ * `Access-Token` and `ACCESS_TOKEN` all match the same entry.
+ */
+const SENSITIVE_KEYS = new Set([
+  'password',
+  'passwords',
+  'passwd',
+  'pwd',
+  'pass',
+  'passphrase',
+  'passwordhash',
+  'secret',
+  'secrets',
+  'token',
+  'tokens',
+  'jwt',
+  'otp',
+  'mfacode',
+  'totpcode',
+  'apikey',
+  'apikeys',
+  'privatekey',
+  'secretaccesskey',
+  'authorization',
+  'proxyauthorization',
+  'cookie',
+  'cookies',
+  'setcookie',
+  'credential',
+  'credentials',
+  'recoverycode',
+  'backupcode',
+  'creditcard',
+  'cardnumber',
+  'cvv',
+  'cvc',
+  'ssn',
+  'connectionstring',
+])
+
+/**
+ * Normalized suffixes that mark a key as secret-bearing wherever it appears:
+ * `refreshToken`/`id_token`/`csrfToken`, `clientSecret`/`mfaSecret`/
+ * `webhookSecret`/`APP_SECRET`, `x-api-key`, `private_key`, `userPassword`,
+ * `stripe_secret_key`/`signingKey`/`mfaEncryptionKey`, `recoveryCodes` and
+ * the session cookie's bearer value (`sessionId`). A plural `tokens` suffix is
+ * deliberately absent: `inputTokens`/`maxTokens` are counts, not credentials.
+ */
+const SENSITIVE_SUFFIXES = [
+  'password',
+  'passwords',
+  'passwordhash',
+  'secret',
+  'secrets',
+  'token',
+  'apikey',
+  'apikeys',
+  'privatekey',
+  'privatekeys',
+  'secretkey',
+  'secretaccesskey',
+  'signingkey',
+  'encryptionkey',
+  'masterkey',
+  'authorization',
+  'cookie',
+  'cookies',
+  'recoverycodes',
+  'backupcodes',
+  'sessionid',
+]
+
+/** Beyond this nesting depth values are censored instead of inspected. */
+const MAX_REDACT_DEPTH = 10
+
+/**
+ * Upper bound on objects inspected per log line. Walking a large object graph
+ * (e.g. a socket reachable through several paths) would otherwise cost time
+ * exponential in its depth; past the budget values are censored.
+ */
+const MAX_REDACT_NODES = 5000
+
+/**
+ * Top-level keys whose class-instance values are left untouched for the
+ * logger's per-key serializers (Fastify/pino-http `req`/`res`), which run
+ * after this formatter and read prototype getters a plain copy would lose.
+ */
+const SERIALIZER_KEYS = new Set(['req', 'res'])
+
+function isSensitiveKey(key: string): boolean {
+  const k = key.toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (k.length === 0) return false
+  if (SENSITIVE_KEYS.has(k)) return true
+  for (const suffix of SENSITIVE_SUFFIXES) {
+    if (k.endsWith(suffix)) return true
+  }
+  return false
+}
+
+function isPlainObject(value: object): boolean {
+  const proto = Object.getPrototypeOf(value) as unknown
+  return proto === Object.prototype || proto === null
+}
+
+interface RedactState {
+  ancestors: WeakSet<object>
+  remaining: number
+}
+
+/**
+ * Serializes an Error (pino's standard error serializer) and redacts the
+ * result. Nested errors (custom Error-valued properties, `AggregateError`
+ * members) are redacted from the ORIGINAL errors, because the serializer turns
+ * them into non-plain objects. The error's constructor is kept (non-enumerable)
+ * so pino's `err` serializer, which runs again after this formatter, still
+ * reports the real `type` instead of `Object`.
+ */
+function redactError(err: Error, depth: number, state: RedactState): unknown {
+  const serialized = stdSerializers.err(err) as unknown as Record<string, unknown>
+  const original = err as unknown as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(serialized)) {
+    let v = serialized[key]
+    if (key === 'aggregateErrors' && Array.isArray(original['errors'])) v = original['errors']
+    else if (original[key] instanceof Error) v = original[key]
+    out[key] = isSensitiveKey(key) && v !== undefined ? CENSOR : redactDeep(v, depth + 1, state)
+  }
+  Object.defineProperty(out, 'constructor', { value: err.constructor, enumerable: false })
+  return out
+}
+
+/**
+ * Returns a copy of `value` with every secret-bearing key censored, at any
+ * depth and inside arrays. The caller's objects are never mutated. It mirrors
+ * what JSON serialization will emit: `toJSON()` results are redacted (axios'
+ * `AxiosHeaders`, Dates), class instances are walked by their own enumerable
+ * keys, and Errors go through pino's error serializer, since their custom
+ * properties (e.g. an HTTP client's `config.headers`) often carry credentials.
+ */
+function redactDeep(value: unknown, depth: number, state: RedactState, key?: string): unknown {
+  if (value === null || typeof value !== 'object') return value
+  if (state.ancestors.has(value)) return '[Circular]'
+  if (
+    depth === 1 &&
+    key !== undefined &&
+    SERIALIZER_KEYS.has(key) &&
+    !Array.isArray(value) &&
+    !isPlainObject(value) &&
+    !(value instanceof Error)
+  ) {
+    return value
+  }
+  if (depth > MAX_REDACT_DEPTH || state.remaining <= 0) return '[Truncated]'
+  state.remaining--
+
+  state.ancestors.add(value)
+  try {
+    if (value instanceof Error) return redactError(value, depth, state)
+
+    const toJSON = (value as { toJSON?: unknown }).toJSON
+    if (typeof toJSON === 'function') {
+      let json: unknown
+      try {
+        json = (toJSON as (k: string) => unknown).call(value, key ?? '')
+      } catch {
+        return '[Unserializable]'
+      }
+      if (json !== value) return redactDeep(json, depth, state, key)
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => redactDeep(item, depth + 1, state))
+    }
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(value)) {
+      const v = (value as Record<string, unknown>)[k]
+      out[k] = isSensitiveKey(k) && v !== undefined ? CENSOR : redactDeep(v, depth + 1, state, k)
+    }
+    return out
+  } finally {
+    state.ancestors.delete(value)
+  }
+}
+
+function redactRecord(obj: Record<string, unknown>): Record<string, unknown> {
+  return redactDeep(obj, 0, { ancestors: new WeakSet(), remaining: MAX_REDACT_NODES }) as Record<
+    string,
+    unknown
+  >
+}
 
 export interface LoggerOptions {
   /**
@@ -103,8 +297,11 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     base: options.base ?? {},
     redact: {
       paths: [...DEFAULT_REDACT, ...(options.redact ?? [])],
-      censor: '[REDACTED]',
+      censor: CENSOR,
     },
+    // Secure by default: every log object and every child binding is walked
+    // for secret-bearing key names at any depth (see `redactDeep`).
+    formatters: { log: redactRecord, bindings: redactRecord },
     mixin: contextFields,
     ...(options.pretty
       ? { transport: { target: 'pino-pretty', options: { colorize: true } } }

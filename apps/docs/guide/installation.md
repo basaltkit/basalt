@@ -82,6 +82,7 @@ order:
 | `--mcp` | off | Expose opted-in read-only routes as MCP tools at `POST /mcp`, plus a `.mcp.json` for AI dev tools — see [MCP](/guide/mcp) |
 | `--install` / `--no-install` | on in a TTY, off in CI | Install dependencies at the end |
 | `--git` / `--no-git` | on in a TTY, off in CI | `git init` plus an initial commit |
+| `--offline` | off | Skip the npm registry lookup and use the dependency ranges bundled with this create-basalt release |
 | `--pm=<manager>` | auto-detected | Force `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `-y`, `--yes` | — | Accept all defaults, no prompts (also disables the wizard) |
 | `-h`, `--help` | — | Print usage and exit |
@@ -98,6 +99,15 @@ tri-state: an explicit flag always wins, and only when you pass neither does the
 environment decide — a TTY that isn't CI gets both, everything else gets
 neither, so automation never gets a surprise install.
 
+New projects get the **latest published version** of every dependency: before
+writing files the scaffolder asks the registry (`npm_config_registry`, else
+`registry.npmjs.org`) for each package's `latest` and writes `^<latest>`.
+`@basaltkit/*` always takes the latest release; third-party packages (TypeScript,
+Vitest, React, Vite, Tailwind, …) take it only on the major the templates are
+written for — a newer major keeps the bundled range and prints a `Note:`. When the
+registry can't be reached, the bundled ranges are used with a single `Warning:`
+line; the scaffold never fails because of it. `--offline` skips the lookup.
+
 ::: warning `--ui` requires pnpm
 The `web/` frontend is a member of a pnpm workspace (`pnpm-workspace.yaml`),
 which npm, yarn and bun can't install or run. Ask for `--ui` with another
@@ -112,12 +122,13 @@ inside it:
 | Path | Contents |
 | --- | --- |
 | `src/env.ts` | `defineEnv` over `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` with auth) |
-| `src/app.ts` | `buildApp()` — config, logger, events, security headers, then tenancy/auth/billing/MCP/CLI as selected |
+| `src/app.ts` | `buildApp()` — config, logger, events, security headers + a global rate limit, then tenancy/auth/billing/MCP/CLI as selected. With tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (authenticated requests for a tenant the user is not a member of get `403`) and a dev-only seed adding registrants to the `demo` tenant |
 | `src/routes.ts` | `GET /` (a friendly index) and `GET /health` |
 | `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM` |
+| `src/dev.ts` | The `pnpm dev` entry: sets `NODE_ENV=development` unless already set, then loads `server.ts` |
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/server.ts`), `start`, `test`, `typecheck` — plus `basalt` with `--cli` |
-| `.env.example`, `.gitignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck` — plus `basalt` with `--cli`. `@basaltkit/*` ranges track each package's current release line |
+| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers) |
 | `bin/basalt.ts` | With `--cli`: the CLI entrypoint wiring the generators and `prisma:sync` |
 | `.mcp.json` | With `--mcp`: registers the **dev-only** `basalt-ai-mcp` bridge for MCP clients |
 | `web/…` | With `--ui`: the React + shadcn frontend, a pnpm workspace member |
@@ -180,6 +191,17 @@ into `src/app.ts` for you**. Models get `createdAt` + `updatedAt` automatically.
 removing it, and `list`/`find` skip soft-deleted rows), a `restore()` method,
 and a `POST /projects/:id/restore` route.
 
+The generated code is **secure by default**. Every route requires an
+authenticated user (`meta: { auth: true }`), so the app refuses to boot until
+an auth plugin enforces it and anonymous callers get 401. When the project
+depends on `@basaltkit/tenancy`, the resource is **tenant-owned**: the
+repository scopes every read and write with `requireTenantId()` (no tenant →
+`TENANT_REQUIRED`, 400), and the Prisma model gets an indexed `tenantId`
+column. The generated test signs in, checks that anonymous calls get 401 and,
+for tenant-owned data, that one tenant cannot see another's rows. A short
+security note after generation says which of these applies. Row-level
+authorization (who may read or write which rows) is still up to you.
+
 | Generator flag | Applies to | What it does |
 | --- | --- | --- |
 | `--prisma` | `make:resource`, `make:repository` | Prisma-backed repository plus a model appended to `schema.prisma` |
@@ -187,6 +209,8 @@ and a `POST /projects/:id/restore` route.
 | `--dir=<path>` | all `make:*` | Target root (default: the current directory) |
 | `--force` | all `make:*` | Overwrite existing files instead of refusing |
 | `--no-register` | `make:resource` | Skip the automatic wiring into `src/app.ts` |
+| `--public` | `make:resource`, `make:routes`, `make:test` | Routes without `meta.auth`, open to anonymous callers (alias `--no-auth`). Use only for a deliberately public resource |
+| `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Force tenant scoping on or off (default: on when `package.json` depends on `@basaltkit/tenancy`) |
 
 Individual artifacts are available as `make:schema`, `make:repository`,
 `make:service`, `make:plugin`, `make:routes` and `make:test`.
@@ -220,7 +244,7 @@ directions — `--no-prisma` overrides `prisma: true`.
 | `schedule:list` | Scheduled tasks with their cron expressions and timezones |
 | `dev` | Print the route table, then run the app with watch/restart. `--entry=<file>`, `--worker` (`-w`) to start a queue worker alongside, `--queue=<name>` |
 | `upgrade` | Apply framework upgrade codemods. `--dry` to preview, `--only=<id>`, `--dir=<path>` |
-| `publish` | Copy a stub group into the app (`dockerfile`, `ci`, `editorconfig`). Run with no id to list; `--force` to overwrite |
+| `publish` | Copy a stub group into the app (`dockerfile` — with a `.dockerignore` that keeps `.env` and keys out of the image —, `ci`, `editorconfig`). Run with no id to list; `--force` to overwrite |
 
 Registering `queuePlugin` adds `queue:work`, `queue:stats`, `queue:retry` and
 `queue:jobs` —

@@ -276,7 +276,20 @@ behaviours, all verifiable in `@basaltkit/events`:
   delay elapses: `delayMs · 2^(attempts-1)`, capped at `maxDelayMs`
   (`type: 'fixed'` keeps it constant, `backoff: false` retries every tick). The
   schedule is **process-local** — no schema change, and a restart forgets it, so
-  the worst case is one early retry. Still at-least-once.
+  the worst case is one early retry. Still at-least-once. Entries in backoff
+  never fill the batch — the relay over-fetches past them — so one failing
+  downstream (e.g. one tenant's endpoint) can't starve newer entries.
+- **A slow dispatch doesn't serialize the batch.** Up to `concurrency` entries
+  (default 8) are dispatched in parallel; set `concurrency: 1` for strictly
+  sequential delivery.
+- **Tenants are served fairly.** When one tenant's backlog fills a whole page,
+  the relay queries again excluding the tenants already seen (the store's
+  `pending(limit, maxAttempts, filter)`), then interleaves the batch round-robin
+  by tenant — each tenant stays FIFO. One tenant never has more than
+  `tenantConcurrency` dispatches in flight, and a flush waits at most
+  `dispatchTimeoutMs` per entry: a slower dispatch continues *detached* (not
+  cancelled, not re-sent) and its outcome is recorded when it settles. A tenant
+  with a hanging downstream can't starve the others, however much it emits.
 - **Dead entries are loud.** An entry that reaches `maxAttempts` is excluded
   from future `pending()` scans and reported once through `onDead(entry, error)`;
   it stays in the store with its `lastError` for inspection. Nothing deletes it
@@ -313,12 +326,15 @@ outboxPlugin({
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `dispatch` | `(entry: OutboxEntry) => void \| Promise<void>` | — (**required**) | Delivers a committed entry to the outside world; throwing marks the entry failed and schedules a retry |
-| `store` | `OutboxStore` | `new MemoryOutboxStore()` | Where entries live — the whole guarantee depends on this being durable |
+| `store` | `OutboxStore` | `new MemoryOutboxStore()` | Where entries live — the whole guarantee depends on this being durable. The in-memory store keeps the last 1000 published entries (`new MemoryOutboxStore({ retainPublished })`) |
 | `captureEvents` | `string[]` | `[]` | Event patterns recorded automatically (`'order.*'`); a non-empty list makes the plugin depend on `basalt:events` |
 | `intervalMs` | `number` | — (manual) | Relay poll interval. Omit to flush yourself via the `OUTBOX` token; the timer is `unref()`ed so it never keeps the process alive |
 | `batchSize` | `number` | `50` | Entries selected per flush — raise for throughput, lower to bound one tick's work |
 | `maxAttempts` | `number` | `10` | Attempts before an entry is left dead and reported to `onDead` |
 | `backoff` | `OutboxBackoff \| false` | `{ type: 'exponential', delayMs: 1000, maxDelayMs: 60_000 }` | Retry pacing for failed entries; `false` retries on every tick |
+| `concurrency` | `number` | `8` | Entries of one flush dispatched in parallel, so one hanging downstream holds a slot, not the batch. `1` = sequential |
+| `tenantConcurrency` | `number` | `ceil(concurrency / 2)` | Most dispatches one tenant (or all tenant-less entries together) may have in flight, across flushes |
+| `dispatchTimeoutMs` | `number \| false` | `10_000` | Max wait per entry before the flush moves on; the dispatch continues detached and its outcome is still recorded. `false` waits indefinitely |
 | `onDead` | `(entry, error) => void` | `console.error` | One entry exhausted `maxAttempts` — page someone, this is a lost external delivery |
 | `onFlushError` | `(error) => void` | `console.error` | The flush failed at the store level (timer tick or shutdown drain). Must never throw |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |

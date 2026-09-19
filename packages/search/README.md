@@ -13,7 +13,7 @@ Full-text search for Basalt: indexes and searches documents **per tenant**, with
 Searching well is more than a `WHERE ... LIKE '%text%'`: you need **relevance** (the best results first), **prefix** matching, and **tenant isolation** (customer A never sees customer B's data). This module gives you that with:
 
 - **Typed indexes** — declare once which fields are searchable and filterable.
-- **Guaranteed tenant isolation** — every search is scoped to `tenantId`; a result never "leaks" between tenants.
+- **Guaranteed tenant isolation** — every search is scoped to `tenantId`; a result never "leaks" between tenants. Inside a tenant context an explicit `tenantId` must match it (otherwise `SearchTenantMismatchError`, 403), so client input can never widen a query or plant a document elsewhere.
 - **Interchangeable driver** — `MemorySearchDriver` (no services, for dev/test) and `MeilisearchDriver` (production). Your code doesn't change when you switch.
 - **Automatic indexing** — hooks into domain events (created/updated/deleted) and the index keeps itself up to date.
 

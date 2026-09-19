@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createApp, definePlugin, ensureMetadata } from '@basaltkit/core'
 import { route, type RequestEnricher } from '@basaltkit/http'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
-import { MemoryAccessStore, permissionsPlugin } from '../src/index.js'
+import { GLOBAL_SCOPE, MemoryAccessStore, permissionsPlugin } from '../src/index.js'
 
 /**
  * A9 · a permission that serves the portal opened the internal route too.
@@ -51,13 +51,13 @@ const PORTAL = { portal: { roles: ['client'], allow: ['portal', 'public'] } }
 
 async function boot(audiences: Record<string, { roles: string[]; allow: string[] }>) {
   const store = new MemoryAccessStore()
-  await store.grantToRole('client', ['matter:read'], 'global')
-  await store.grantToRole('lawyer', ['matter:read'], 'global')
-  await store.assignRole('a-client', 'client', 'global')
-  await store.assignRole('a-lawyer', 'lawyer', 'global')
+  await store.grantToRole('client', ['matter:read'], GLOBAL_SCOPE)
+  await store.grantToRole('lawyer', ['matter:read'], GLOBAL_SCOPE)
+  await store.assignRole('a-client', 'client', GLOBAL_SCOPE)
+  await store.assignRole('a-lawyer', 'lawyer', GLOBAL_SCOPE)
   // A lawyer who is also a client of their own firm.
-  await store.assignRole('both', 'client', 'global')
-  await store.assignRole('both', 'lawyer', 'global')
+  await store.assignRole('both', 'client', GLOBAL_SCOPE)
+  await store.assignRole('both', 'lawyer', GLOBAL_SCOPE)
 
   const app = await createApp({
     plugins: [fakeAuth, permissionsPlugin({ store, audiences }), fastifyPlugin({ routes })],
@@ -134,10 +134,10 @@ describe('F-30 · two confined roles', () => {
 
   async function bootTwo() {
     const store = new MemoryAccessStore()
-    await store.grantToRole('client', ['matter:read'], 'global')
-    await store.grantToRole('supplier', ['matter:read'], 'global')
-    await store.assignRole('u', 'client', 'global')
-    await store.assignRole('u', 'supplier', 'global')
+    await store.grantToRole('client', ['matter:read'], GLOBAL_SCOPE)
+    await store.grantToRole('supplier', ['matter:read'], GLOBAL_SCOPE)
+    await store.assignRole('u', 'client', GLOBAL_SCOPE)
+    await store.assignRole('u', 'supplier', GLOBAL_SCOPE)
 
     const app = await createApp({
       plugins: [

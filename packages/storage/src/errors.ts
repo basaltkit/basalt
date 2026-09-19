@@ -69,3 +69,47 @@ export class ImageProcessingUnavailableError extends BasaltError {
     super('STORAGE_IMAGE_UNAVAILABLE', detail)
   }
 }
+
+/**
+ * A tenant-scoped disk ran without a tenant in context while tenancy is
+ * active. Fails closed: the alternative is resolving the caller's key against
+ * the bucket root, where every tenant's `tenants/<id>/` tree lives. 400, the
+ * same contract as `TenantRequiredError`.
+ */
+export class StorageTenantRequiredError extends BasaltError {
+  readonly status = 400
+  constructor(disk: string) {
+    super(
+      'STORAGE_TENANT_REQUIRED',
+      `Refusing storage operation on disk "${disk}": it is tenant-scoped and no tenant is in context. ` +
+        "Establish a tenant, or give a deliberately central disk scope: null or onMissingScope: 'root'.",
+    )
+  }
+}
+
+/**
+ * The resolved scope prefix is not a safe path prefix — for the default scope,
+ * a tenant id that is not a single path segment (`..`, `a/b`, control
+ * characters). Refused so a tenant id can never address another tenant's tree
+ * or the bucket root.
+ */
+export class StorageInvalidScopeError extends BasaltError {
+  constructor() {
+    super(
+      'STORAGE_INVALID_SCOPE',
+      'Invalid storage scope: the tenant id (or custom scope) is not a safe path prefix. ' +
+        'Scope segments may not be empty, ".", "..", contain "/" or "\\", or include control characters.',
+    )
+  }
+}
+
+/** A temporary URL lifetime outside (0, maxTemporaryUrlTtl]. 400: the caller chose it. */
+export class TemporaryUrlTtlTooLongError extends BasaltError {
+  readonly status = 400
+  constructor(requestedMs: number, maxMs: number) {
+    super(
+      'STORAGE_TEMPORARY_URL_TTL',
+      `Temporary URL lifetime ${requestedMs}ms is not allowed: it must be greater than 0 and at most ${maxMs}ms.`,
+    )
+  }
+}

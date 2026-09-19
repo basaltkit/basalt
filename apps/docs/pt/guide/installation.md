@@ -83,6 +83,7 @@ Pergunta, por esta ordem:
 | `--mcp` | desativado | Expõe rotas só-de-leitura marcadas como ferramentas MCP em `POST /mcp`, mais um `.mcp.json` para ferramentas de IA — vê [MCP](/pt/guide/mcp) |
 | `--install` / `--no-install` | ativo em TTY, desativado em CI | Instala dependências no fim |
 | `--git` / `--no-git` | ativo em TTY, desativado em CI | `git init` mais um commit inicial |
+| `--offline` | desativado | Não consulta o registry npm e usa os intervalos de dependências incluídos nesta versão do create-basalt |
 | `--pm=<manager>` | autodeteção | Força `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `-y`, `--yes` | — | Aceita todas as predefinições, sem perguntas (também desliga o assistente) |
 | `-h`, `--help` | — | Imprime a ajuda e sai |
@@ -100,6 +101,16 @@ passas nenhuma é que o ambiente decide — um TTY que não seja CI recebe ambos
 tudo o resto não recebe nenhum, para que a automação nunca leve com uma
 instalação inesperada.
 
+Os projetos novos recebem a **versão publicada mais recente** de cada dependência:
+antes de escrever os ficheiros, o scaffolder pergunta ao registry
+(`npm_config_registry`, senão `registry.npmjs.org`) a versão `latest` de cada
+pacote e escreve `^<latest>`. Os `@basaltkit/*` recebem sempre a última versão;
+os pacotes de terceiros (TypeScript, Vitest, React, Vite, Tailwind, …) só a recebem
+na major para a qual os templates foram escritos — uma major mais recente mantém o
+intervalo incluído e imprime uma `Note:`. Se o registry não estiver acessível, são
+usados os intervalos incluídos com uma única linha `Warning:`; o scaffold nunca
+falha por causa disso. `--offline` salta a consulta.
+
 ::: warning Aviso: `--ui` requer pnpm
 O frontend `web/` é membro de um workspace pnpm (`pnpm-workspace.yaml`), que o
 npm, yarn e bun não conseguem instalar nem correr. Pede `--ui` com outro gestor
@@ -114,12 +125,13 @@ mudam o que está lá dentro:
 | Caminho | Conteúdo |
 | --- | --- |
 | `src/env.ts` | `defineEnv` sobre `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` com auth) |
-| `src/app.ts` | `buildApp()` — config, logger, eventos, headers de segurança, depois tenancy/auth/faturação/MCP/CLI conforme escolhido |
+| `src/app.ts` | `buildApp()` — config, logger, eventos, headers de segurança + um rate limit global, depois tenancy/auth/faturação/MCP/CLI conforme escolhido. Com tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (pedidos autenticados para um tenant de que o utilizador não é membro recebem `403`) e um seed só de dev que adiciona quem se regista ao tenant `demo` |
 | `src/routes.ts` | `GET /` (um índice amigável) e `GET /health` |
 | `src/server.ts` | Arranca, resolve o `FASTIFY`, escuta e encerra em `SIGINT`/`SIGTERM` |
+| `src/dev.ts` | A entrada do `pnpm dev`: define `NODE_ENV=development` se ainda não estiver definido e carrega o `server.ts` |
 | `tests/app.test.ts` | Um smoke test que arranca a app e chama `/` e `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/server.ts`), `start`, `test`, `typecheck` — mais `basalt` com `--cli` |
-| `.env.example`, `.gitignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — um `NODE_ENV` não definido conta como produção), `test`, `typecheck` — mais `basalt` com `--cli`. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
+| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem) |
 | `bin/basalt.ts` | Com `--cli`: o ponto de entrada da CLI que liga os geradores e o `prisma:sync` |
 | `.mcp.json` | Com `--mcp`: regista a ponte `basalt-ai-mcp`, **só de desenvolvimento**, para clientes MCP |
 | `web/…` | Com `--ui`: o frontend React + shadcn, membro do workspace pnpm |
@@ -183,6 +195,18 @@ automaticamente. O `--soft-delete` acrescenta uma coluna `deletedAt` (o `delete`
 marca a linha em vez de a remover, e o `list`/`find` ignoram as linhas
 soft-deleted), um método `restore()` e uma rota `POST /projects/:id/restore`.
 
+O código gerado é **seguro por predefinição**. Todas as rotas exigem um
+utilizador autenticado (`meta: { auth: true }`), por isso a app recusa arrancar
+enquanto nenhum plugin de autenticação o aplicar, e os pedidos anónimos recebem
+401. Quando o projeto depende de `@basaltkit/tenancy`, o recurso **pertence ao
+tenant**: o repositório restringe cada leitura e escrita com `requireTenantId()`
+(sem tenant → `TENANT_REQUIRED`, 400), e o modelo Prisma ganha uma coluna
+`tenantId` indexada. O teste gerado autentica-se, verifica que os pedidos
+anónimos recebem 401 e, para dados de tenant, que um tenant não vê as linhas de
+outro. Uma breve nota de segurança após a geração diz o que se aplica. A
+autorização por linha (quem pode ler ou escrever que linhas) continua a ser
+contigo.
+
 | Flag do gerador | Aplica-se a | O que faz |
 | --- | --- | --- |
 | `--prisma` | `make:resource`, `make:repository` | Repositório com Prisma mais um modelo acrescentado ao `schema.prisma` |
@@ -190,6 +214,8 @@ soft-deleted), um método `restore()` e uma rota `POST /projects/:id/restore`.
 | `--dir=<path>` | todos os `make:*` | Raiz de destino (por predefinição, a diretoria atual) |
 | `--force` | todos os `make:*` | Sobrescreve ficheiros existentes em vez de recusar |
 | `--no-register` | `make:resource` | Salta a ligação automática ao `src/app.ts` |
+| `--public` | `make:resource`, `make:routes`, `make:test` | Rotas sem `meta.auth`, abertas a pedidos anónimos (alias `--no-auth`). Usa apenas para um recurso deliberadamente público |
+| `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Força o âmbito por tenant ligado ou desligado (por predefinição: ligado quando o `package.json` depende de `@basaltkit/tenancy`) |
 
 Os artefactos individuais estão disponíveis como `make:schema`,
 `make:repository`, `make:service`, `make:plugin`, `make:routes` e `make:test`.
@@ -223,7 +249,7 @@ O `runCli` oferece sempre estes, além do que qualquer plugin registe:
 | `schedule:list` | Tarefas agendadas com as suas expressões cron e fusos horários |
 | `dev` | Imprime a tabela de rotas e corre a app com watch/restart. `--entry=<file>`, `--worker` (`-w`) para arrancar um worker de fila ao lado, `--queue=<name>` |
 | `upgrade` | Aplica os codemods de atualização da framework. `--dry` para pré-visualizar, `--only=<id>`, `--dir=<path>` |
-| `publish` | Copia um grupo de stubs para a app (`dockerfile`, `ci`, `editorconfig`). Corre sem id para listar; `--force` para sobrescrever |
+| `publish` | Copia um grupo de stubs para a app (`dockerfile` — com um `.dockerignore` que mantém o `.env` e as chaves fora da imagem —, `ci`, `editorconfig`). Corre sem id para listar; `--force` para sobrescrever |
 
 Registar o `queuePlugin` acrescenta `queue:work`, `queue:stats`, `queue:retry` e
 `queue:jobs` —

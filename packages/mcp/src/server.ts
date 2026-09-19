@@ -118,9 +118,10 @@ export interface McpRoutesOptions {
    * Rate-limit budget for the `/mcp` endpoint, applied as the route's
    * `meta.rateLimit` (enforced by `securityPlugin` in a dedicated bucket).
    * Recommended for exposed deployments: tool calls are often heavier than
-   * plain endpoints, and note that a tool route's OWN `meta.rateLimit` is a
-   * property of its HTTP registration — it does NOT apply when the route is
-   * invoked as a tool through `/mcp`.
+   * plain endpoints. A tool route's OWN `meta.rateLimit` also applies when it
+   * is invoked as a tool through `/mcp` (securityPlugin enforces it as a route
+   * guard); MCP tool calls carry no client ip, so all callers share that
+   * route's bucket unless `securityPlugin({ rateLimit: { key } })` is set.
    */
   rateLimit?: { limit: number; windowMs: number }
 }

@@ -201,7 +201,9 @@ tracingPlugin({
 
 Por pedido, o plugin continua um `traceparent` de entrada (ou inicia um novo
 trace), regista um **span de servidor** chamado `${method} ${templateDeRota}` com
-os atributos `http.method` / `http.target`, ecoa `traceparent` na resposta, e no
+os atributos `http.method` / `http.target` (valores da query mascarados como
+`[REDACTED]`, para que códigos OAuth e tokens nunca cheguem ao teu backend de
+traces), ecoa `traceparent` na resposta, e no
 fim define `http.status_code`, marca o span como `error` para `5xx` e `ok` caso
 contrário, e termina-o. Os spans concluídos são acumulados e enviados a cada
 `flushIntervalMs` (o temporizador tem `unref()`) mais uma vez no `app.shutdown()`.
@@ -258,15 +260,33 @@ tiver: `requestId`, `correlationId`, `traceId`, `userId` e `tenantId` — mais
 estão definidos. Nunca os passas numa chamada de log. Fora de um contexto (um log
 de boot, um script) o mixin não contribui com nada em vez de lançar.
 
-::: tip A redação está ligada por predefinição, e não é só `password`
-Os valores são substituídos por `[REDACTED]` para `password`, `pass`, `secret`,
-`token`, `accessToken`, `refreshToken`, `idToken`, `jwt`, `apiKey`, `api_key`,
-`apikey`, `mfaCode`, `otp`, `resetToken`, `authorization`, `cookie`,
-`creditCard`, `cardNumber`, `cvv`, `cvc` e `ssn` — no nível de topo **e** num
-nível de aninhamento (`*.token`), mais os caminhos habituais em forma de pedido
-(`req.headers.authorization`, `headers["set-cookie"]`, …). O `redact`
-**acrescenta** a essa lista; nunca a substitui. Qualquer coisa mais funda do que
-um nível precisa de um caminho explícito.
+::: tip A redação está ligada por predefinição, a qualquer profundidade
+Cada objeto registado e cada binding de um child logger é percorrido
+recursivamente (dentro de arrays, em `Error`s registados, até 10 níveis; o que
+for mais fundo passa a `[Truncated]`, os ciclos passam a `[Circular]`) e qualquer
+chave que transporte um segredo é substituída por `[REDACTED]`. As chaves são
+comparadas sem distinguir maiúsculas nem separadores, por isso `access_token`,
+`accessToken`, `Access-Token` e `ACCESS_TOKEN` são a mesma. Os nomes cobertos
+incluem `password`, `passwordHash`, `secret`, `token`, `jwt`, `otp`, `mfaCode`,
+`apiKey`, `privateKey`, `authorization`, `cookie`, `set-cookie`, `credentials`,
+`connectionString`, `creditCard`, `cardNumber`, `cvv`, `cvc` e `ssn`, mais
+qualquer chave que **termine** em `password`, `secret`, `token`, `apiKey`,
+`privateKey`, `authorization` ou `cookie` (`x-api-key`, `client_secret`,
+`mfaSecret`, `webhookSecret`, `APP_SECRET`, `refresh_token`, `id_token`,
+`proxy-authorization`…). Os teus objetos nunca são alterados. O `redact`
+**acrescenta** caminhos Pino para os teus próprios campos (`customer.iban`);
+nunca substitui as predefinições.
+
+O percurso segue o que a serialização JSON emitiria: objetos simples, arrays,
+erros (incluindo `cause` aninhados e membros de `AggregateError`), valores com
+`toJSON()` (p. ex. `AxiosHeaders` do axios) e instâncias de classe (as suas
+próprias chaves enumeráveis). A única exceção é uma instância de classe registada
+nas chaves de topo `req`/`res`, que fica para os serializers do Fastify/pino-http.
+Nomes no plural e em forma de chave também são cobertos (`tokens`, `apiKeys`,
+`passwords`, `signingKey`, `encryptionKey`, `recoveryCodes`, `sessionId`…).
+Segredos dentro de *valores* string (um `DATABASE_URL`, uma mensagem) não são
+detetados — regista os campos de que precisas (`{ url: req.url }`), não objetos
+de pedido inteiros nem strings em bruto.
 :::
 
 Os corpos de email são um problema à parte com um interruptor à parte: o driver
@@ -346,8 +366,21 @@ quando estás a tentar perceber porque é que o teu pedido voltou 400 sem nada n
 terminal. Se for ruidoso para ti, filtra no teu próprio reporter — a decisão é da
 app, não do default do framework.
 
+O `url` reportado tem todos os valores da query mascarados
+(`/cb?code=[REDACTED]`): códigos OAuth, tokens de reset e assinaturas de URLs
+assinados viajam aí, e um log é o sítio errado para os guardar. Uma entrada sem
+valor (`/magic?<token>`) também é mascarada.
+
 O corpo da resposta nunca muda: é o `toErrorResponse` que decide o que o cliente
-vê, e um 500 continua a dizer apenas `Internal server error.`
+vê, e um 500 continua a dizer apenas `Internal server error.` Os erros de cliente
+levantados pela própria framework — JSON malformado, um corpo acima do limite, um
+content type não suportado — mantêm o seu status (`400 BAD_REQUEST`,
+`413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`) com uma mensagem fixa, e
+são reportados em `warn`, não como erros do servidor. Um status trazido por
+qualquer outro erro (p. ex. uma chamada falhada a um SDK externo) não é
+confiado: esse continua a ser um `500`. O `reason` registado é essa mesma
+mensagem fixa, porque a mensagem do próprio parser cita o corpo (o `JSON.parse`
+ecoa um pedaço dele, palavras-passe incluídas).
 
 ## Correlação de pedidos
 
@@ -357,6 +390,11 @@ e podem ser propagados entre serviços. Reencaminha os cabeçalhos `x-request-id
 `x-correlation-id` de entrada nas chamadas de saída e um identificador acompanha
 uma ação do utilizador em cada salto; junta-lhe o `traceparent` que o
 `tracingPlugin` ecoa e consegues saltar de uma linha de log para o trace.
+
+Um id de entrada só é adotado quando corresponde a `^[A-Za-z0-9._:-]{1,128}$`;
+qualquer coisa mais longa, ou com espaços, aspas ou caracteres de controlo, é
+substituída por um UUID gerado de novo, para que um cliente não consiga forjar
+nem inchar o id que chega aos teus logs e à trilha de auditoria.
 
 Os mesmos identificadores são o que torna legíveis as superfícies assíncronas:
 põe o teu logger por trás dos callbacks `onBridgeError` / `onDeliveryError` do
@@ -457,9 +495,10 @@ Instrumentos do `MetricsRegistry` — `counter(name, opts)`, `gauge(name, opts)`
 - **As linhas de log não têm `tenantId`/`userId`** — o log foi emitido fora de um
   contexto de pedido, ou a tenancy/auth ainda não o tinham preenchido. O mixin só
   contribui com o que o contexto já tem.
-- **Apareceu um segredo nos logs** — estava aninhado a mais de um nível, ou a
-  chave não está na lista predefinida. Acrescenta o caminho explícito com
-  `redact`; e se era um corpo de email, isso é o `logBody` do mailer, em
+- **Apareceu um segredo nos logs** — o nome da chave não é reconhecido como
+  segredo, estava dentro de um valor string, ou estava num objeto de pedido em
+  bruto registado na chave de topo `req` sem serializer. Acrescenta o caminho explícito com `redact`, ou regista
+  campos simples; e se era um corpo de email, isso é o `logBody` do mailer, em
   [Notificações](/pt/guide/notifications).
 - **O `/readyz` fica pendurado** — um check não tem timeout próprio. Envolve as
   dependências lentas com um; o `healthPlugin` aguarda o que lhe deres.

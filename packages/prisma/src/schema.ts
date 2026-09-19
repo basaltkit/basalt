@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { BasaltError } from '@basaltkit/core'
 
 export class InvalidTenantSchemaError extends BasaltError {
@@ -13,18 +14,60 @@ export interface TenantSchemaOptions {
 
 const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/
 const PG_MAX_IDENTIFIER = 63
+/**
+ * Ids used verbatim: lowercase alphanumerics separated by SINGLE underscores.
+ * They can never contain `__`, which every encoded name does — so the two
+ * forms cannot collide.
+ */
+const CANONICAL_ID = /^[a-z0-9]+(?:_[a-z0-9]+)*$/
+const HASH_HEX_LENGTH = 16
+/** Matches an unpaired surrogate (paired ones form an astral code point). */
+const LONE_SURROGATE = /\p{Cs}/u
+
+/** Strips leading/trailing underscores in linear time (an anchored `_+$` regex backtracks). */
+function trimUnderscores(value: string): string {
+  let start = 0
+  let end = value.length
+  while (start < end && value[start] === '_') start++
+  while (end > start && value[end - 1] === '_') end--
+  return value.slice(start, end)
+}
 
 /**
- * Derives a safe PostgreSQL schema identifier for a tenant. Lowercased and
- * sanitized to `[a-z0-9_]`, so it is safe to quote and interpolate.
+ * Derives a safe PostgreSQL schema identifier for a tenant, and the mapping is
+ * injective: two different tenant ids never get the same schema.
+ *
+ * - A canonical id (`[a-z0-9]` words joined by single `_`, e.g. `acme`,
+ *   `acme_co`) is used verbatim: `tenant_acme`.
+ * - Any other id (uppercase, `-`, `.`, `__`, UUIDs, …) is encoded as a readable
+ *   sanitized part plus `__` and a SHA-256-based suffix of the raw id:
+ *   `Acme-Co` → `tenant_acme_co__<16 hex>`. Case or punctuation variants of an
+ *   existing id therefore get their own schema instead of sharing it.
+ *
+ * The result matches `[a-z_][a-z0-9_]*` and is at most 63 chars, so it is safe
+ * to quote and interpolate.
  */
 export function tenantSchema(tenantId: string, options: TenantSchemaOptions = {}): string {
   const prefix = options.prefix ?? 'tenant_'
-  const sanitized = tenantId.toLowerCase().replace(/[^a-z0-9_]/g, '_')
-  if (sanitized.length === 0 || /^_+$/.test(sanitized)) {
+  if (!/[a-z0-9]/i.test(tenantId)) {
     throw new InvalidTenantSchemaError(tenantId, 'no usable characters')
   }
-  const name = `${prefix}${sanitized}`
+  // A lone UTF-16 surrogate is encoded as U+FFFD by UTF-8, so such ids would
+  // hash like each other (and like an id containing U+FFFD) and share a schema.
+  if (LONE_SURROGATE.test(tenantId)) {
+    throw new InvalidTenantSchemaError(tenantId, 'contains a lone UTF-16 surrogate')
+  }
+  let name: string
+  if (CANONICAL_ID.test(tenantId)) {
+    name = `${prefix}${tenantId}`
+  } else {
+    const hash = createHash('sha256').update(tenantId, 'utf8').digest('hex').slice(0, HASH_HEX_LENGTH)
+    const room = PG_MAX_IDENTIFIER - prefix.length - 2 - HASH_HEX_LENGTH
+    const readable = trimUnderscores(
+      trimUnderscores(tenantId.toLowerCase().replace(/[^a-z0-9]+/g, '_')).slice(0, Math.max(0, room)),
+    )
+    name = `${prefix}${readable}__${hash}`
+  }
   if (!SAFE_IDENTIFIER.test(name)) {
     throw new InvalidTenantSchemaError(tenantId, `"${name}" is not a valid identifier`)
   }

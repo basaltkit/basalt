@@ -61,7 +61,7 @@ describe('PaddleBillingGateway — API calls', () => {
     const body = JSON.parse(calls[0]!.body!)
     expect(body.items).toEqual([{ price_id: 'pri_pro_monthly', quantity: 1 }])
     expect(body.customer_id).toBe('ctm_acme')
-    expect(body.custom_data).toEqual({ billableId: 'acme' })
+    expect(body.custom_data).toEqual({ billableId: 'acme', plan: 'pro', period: 'monthly' })
   })
 
   it('cancelSubscription maps atPeriodEnd → effective_from', async () => {

@@ -14,7 +14,7 @@ An **environment variable** is a value defined outside the code — in the termi
 
 `@basaltkit/env` solves this with the `defineEnv` function: you declare the expected shape of each variable using a **schema** (a validatable description of the data's shape, written with the Zod library), and it validates everything the moment the module is loaded. If something is wrong, it throws an error with the full report — all missing or invalid variables at once, not one at a time. The returned object is typed (TypeScript knows `env.PORT` is a number) and frozen (nobody can change it by mistake).
 
-It also includes the `secret()` helper, a special schema for secrets (API keys, JWT signing keys, …) with a *fail-closed* policy in production: in development it accepts a default value so you can get up and running right away, but in production it requires a real secret — rejecting values that are missing, too short, or that look like a "placeholder" (`change-me`, `secret`, `password`, …).
+It also includes the `secret()` helper, a special schema for secrets (API keys, JWT signing keys, …) with a *fail-closed* policy: with `NODE_ENV=development` (or `test`) it accepts a default value so you can get up and running right away, but everywhere else — including when `NODE_ENV` is unset — it requires a real secret — rejecting values that are missing, too short, or that look like a "placeholder" (`change-me`, `secret`, `password`, …).
 
 ## Installation
 
@@ -104,8 +104,8 @@ const env = defineEnv(
 
 `secret()` returns a Zod `string` schema with three protections (the dev/production decision is made by reading `process.env.NODE_ENV` at validation time):
 
-1. **Required in production** — `devDefault` never applies when `NODE_ENV=production`.
-2. **Rejects placeholders in production** — values like `change-me`, `changeme`, `placeholder`, `example`, `secret`, `password`, `default`, `test`, `xxxx…`, `0000…` are rejected (in development they're accepted, for convenience).
+1. **Required unless `NODE_ENV` is explicitly `development` or `test`** — `devDefault` only applies there. An **unset** `NODE_ENV` (or `staging`, a typo, …) counts as production, so a deploy that forgets `NODE_ENV` can never boot on the public dev default.
+2. **Rejects placeholders outside development/test** — values like `change-me`, `changeme`, `placeholder`, `example`, `secret`, `password`, `default`, `test`, `xxxx…`, `0000…` are rejected (with `NODE_ENV=development`/`test` they're accepted, for convenience).
 3. **Minimum length in any environment** — 16 characters by default.
 
 ```ts
@@ -119,7 +119,7 @@ export const env = defineEnv({
 })
 ```
 
-The practical result: a fresh project runs "out of the box" in development and **refuses to boot** in production until you set real secrets.
+The practical result: a fresh project runs "out of the box" with `NODE_ENV=development` and **refuses to boot** anywhere else (including when `NODE_ENV` is unset) until you set real secrets.
 
 ### Connecting to the rest of a Basalt application
 

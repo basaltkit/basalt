@@ -53,8 +53,10 @@ Lda"*, which is another firm's client, by name, in prose.
 
 A single-tenant app has no tenant dimension and is untouched. An operator
 console that genuinely means to read across tenants says `tenantScoped: false`
-and is obeyed; passing an explicit `tenantId` in the query also bypasses the
-automatic scoping.
+and is obeyed. An explicit `tenantId` in the query is honoured only when no
+tenant is in context (system code, jobs): **whenever a tenant is in context it
+always wins**, so a `tenantId` forwarded from client input cannot switch a
+request to another tenant's feed.
 
 ## Recording from domain events
 

@@ -106,8 +106,10 @@ describe('tenancyExtension — raw query guard (F2)', () => {
   const runRaw = async (method: string, contextTenant: string | undefined, options = {}) => {
     const captured: unknown[] = []
     const extension = tenancyExtension(options)
-    const handler = (extension.query as unknown as Record<string, (a: unknown) => Promise<unknown>>)[method]
-    const invoke = () => handler!({ args: 'SELECT 1', query: async (args: unknown) => void captured.push(args) })
+    // client-level operations reach the top-level $allOperations with no model
+    const handler = extension.query.$allOperations
+    const invoke = () =>
+      handler({ operation: method, args: 'SELECT 1', query: async (args: unknown) => void captured.push(args) })
     if (contextTenant) await runWithContext({ tenant: { id: contextTenant } }, invoke)
     else await invoke()
     return captured

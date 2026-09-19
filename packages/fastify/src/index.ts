@@ -52,6 +52,9 @@ export {
 export {
   idempotencyPlugin,
   MemoryIdempotencyStore,
+  DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS,
+  MAX_IDEMPOTENCY_KEY_LENGTH,
+  type MemoryIdempotencyStoreOptions,
   type IdempotencyPluginOptions,
   type IdempotencyStore,
   type IdempotencyRecord,
