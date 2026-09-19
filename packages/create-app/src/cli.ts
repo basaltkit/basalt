@@ -3,85 +3,15 @@ import { spawn } from 'node:child_process'
 import { stdin, stdout } from 'node:process'
 import {
   createProject,
+  describeResolution,
   detectPackageManager,
   resolveRunDefaults,
   runWizard,
   ttyPrompter,
   TargetNotEmptyError,
   WizardCancelledError,
-  type PackageManager,
 } from './index.js'
-
-const USAGE = `Usage: npm create basalt <name> [options]
-
-Options:
-  --dir=<path>    Target directory (default: ./<name>)
-  --no-tenancy    Skip multi-tenancy
-  --no-auth       Skip authentication
-  --billing       Include subscriptions/billing
-  --ui            Scaffold a web/ frontend (React + shadcn + SDK)
-  --cli           Scaffold the 'basalt' CLI (code generators + commands)
-  --mcp           Expose read-only routes as MCP tools at /mcp
-  --install       Install dependencies (default: yes in an interactive
-                  terminal, skipped in CI/non-TTY; --no-install to opt out)
-  --no-install    Never install dependencies
-  --git           Initialize a git repository with a first commit
-                  (same default rule as --install; --no-git to opt out)
-  --no-git        Never initialize a git repository
-  --pm=<manager>  Package manager: pnpm | npm | yarn | bun (default: auto-detect)
-  -y, --yes       Skip prompts and accept defaults
-  -h, --help      Show this help
-
-Run with no name in a terminal to be prompted interactively.
-`
-
-interface Flags {
-  name?: string
-  dir?: string
-  tenancy: boolean
-  auth: boolean
-  billing: boolean
-  ui: boolean
-  cli: boolean
-  mcp: boolean
-  /** Tri-state: undefined = decide from the environment (TTY yes, CI no). */
-  install?: boolean
-  git?: boolean
-  yes: boolean
-  pm?: PackageManager
-}
-
-function parseArgs(argv: string[]): Flags {
-  const flags: Flags = {
-    tenancy: true,
-    auth: true,
-    billing: false,
-    ui: false,
-    cli: false,
-    mcp: false,
-    yes: false,
-  }
-  for (const token of argv) {
-    if (token === '--no-tenancy') flags.tenancy = false
-    else if (token === '--no-auth') flags.auth = false
-    else if (token === '--billing') flags.billing = true
-    else if (token === '--ui') flags.ui = true
-    else if (token === '--cli') flags.cli = true
-    else if (token === '--mcp') flags.mcp = true
-    else if (token === '--install') flags.install = true
-    else if (token === '--no-install') flags.install = false
-    else if (token === '--git') flags.git = true
-    else if (token === '--no-git') flags.git = false
-    else if (token === '-y' || token === '--yes') flags.yes = true
-    else if (token.startsWith('--dir=')) flags.dir = token.slice('--dir='.length)
-    else if (token.startsWith('--pm=')) flags.pm = token.slice('--pm='.length) as PackageManager
-    else if (token === '--help' || token === '-h') {
-      stdout.write(USAGE)
-      process.exit(0)
-    } else if (!token.startsWith('--') && flags.name === undefined) flags.name = token
-  }
-  return flags
-}
+import { parseArgs, resolvesLatest, USAGE } from './args.js'
 
 /** Runs a command inheriting stdio; resolves false on non-zero exit (never throws). */
 function run(command: string, args: string[], cwd: string): Promise<boolean> {
@@ -141,6 +71,7 @@ if (flags.ui && pm !== 'pnpm') {
 }
 
 try {
+  if (resolvesLatest(flags)) console.log('Resolving the latest published dependency versions…')
   const result = await createProject({
     name: flags.name,
     ...(flags.dir ? { dir: flags.dir } : {}),
@@ -150,9 +81,18 @@ try {
     ui: flags.ui,
     cli: flags.cli,
     mcp: flags.mcp,
+    // New apps get the latest published version of every dependency (with the
+    // bundled ranges as an offline fallback); --offline skips the registry.
+    resolveLatest: resolvesLatest(flags),
   })
   console.log(`\nCreated ${result.options.name} in ${result.dir}\n`)
   for (const file of result.files) console.log(`  ${file}`)
+  if (result.versions) {
+    const lines = describeResolution(result.versions)
+    if (lines.length > 0) console.log(`\n${lines.join('\n')}`)
+  } else {
+    console.log('\n--offline: used the dependency ranges bundled with this create-basalt release.')
+  }
 
   const run_ = resolveRunDefaults({
     install: flags.install,

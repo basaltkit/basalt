@@ -11,9 +11,11 @@ export interface ProjectOptions {
   mcp: boolean
 }
 
+import { THIRD_PARTY_VERSIONS } from './latest-versions.js'
 import { SCAFFOLD_VERSIONS } from './versions.js'
 
 export { SCAFFOLD_VERSIONS } from './versions.js'
+export { THIRD_PARTY_VERSIONS } from './latest-versions.js'
 
 /**
  * The dependency range for a @basaltkit/* package: the current release line
@@ -25,6 +27,20 @@ export const versionOf = (pkg: string): string => {
   const range = SCAFFOLD_VERSIONS[pkg]
   if (range === undefined) {
     throw new Error(`create-basalt: no release line for ${pkg} — add it to scripts/sync-versions.mjs.`)
+  }
+  return range
+}
+
+/**
+ * The fallback range for a third-party package the templates emit, from
+ * {@link THIRD_PARTY_VERSIONS}. At scaffold time the CLI replaces it with
+ * `^<latest>` when the registry's latest is on the same major. Throws for an
+ * unknown package so every emitted range lives in that single table.
+ */
+export const thirdPartyVersionOf = (pkg: string): string => {
+  const range = THIRD_PARTY_VERSIONS[pkg]
+  if (range === undefined) {
+    throw new Error(`create-basalt: no fallback range for ${pkg} — add it to THIRD_PARTY_VERSIONS.`)
   }
   return range
 }
@@ -46,16 +62,14 @@ export function packageJson(options: ProjectOptions): string {
     // prismaPlugin + `basalt prisma:sync`. @basaltkit/generator is dev-only (below).
     basalt.push('@basaltkit/cli', '@basaltkit/prisma')
   }
-  const dependencies: Record<string, string> = { zod: '^4.0.0' }
+  const dependencies: Record<string, string> = { zod: thirdPartyVersionOf('zod') }
   for (const pkg of basalt) dependencies[pkg] = versionOf(pkg)
 
   const devDependencies: Record<string, string> = {
     '@basaltkit/testing': versionOf('@basaltkit/testing'),
-    '@types/node': '^22.15.0',
-    'pino-pretty': '^13.0.0',
-    tsx: '^4.19.0',
-    typescript: '^5.8.0',
-    vitest: '^3.1.0',
+  }
+  for (const pkg of ['@types/node', 'pino-pretty', 'tsx', 'typescript', 'vitest']) {
+    devDependencies[pkg] = thirdPartyVersionOf(pkg)
   }
   if (options.cli) {
     // Dev-only: only bin/basalt.ts imports the code generator — the runtime server

@@ -19,17 +19,16 @@ Alongside the API, this generates a **`web/`** frontend wired end to end:
 
 ```
 web/
-├── vite.config.ts     # dev server proxies /api → your backend (no CORS)
-├── tailwind.config.js # Tailwind + shadcn theme, incl. @basaltkit/admin-shadcn in `content`
+├── vite.config.ts     # React + Tailwind 4 (@tailwindcss/vite); proxies /api → your backend (no CORS)
 ├── index.html
 └── src/
     ├── api.ts         # your endpoints described once with @basaltkit/sdk
     ├── App.tsx        # the app — with --auth: login, register, forgot/reset, a dashboard + MFA
     ├── main.tsx
-    └── index.css      # shadcn theme variables (light/dark)
+    └── index.css      # Tailwind 4: @import, @source for admin-shadcn, shadcn theme (light/dark)
 ```
 
-- **React + Vite** for the dev server and build.
+- **React 19 + Vite 8 + Tailwind CSS 4** for the dev server and build (Tailwind is configured in CSS — no `tailwind.config.js` or PostCSS config).
 - **[`@basaltkit/admin-shadcn`](#admin-panels-from-your-zod-schemas)** — authentic shadcn/ui components, already themed.
 - **[`@basaltkit/sdk`](#the-type-safe-sdk)** — the type-safe client to your API.
 - The Vite dev server **proxies `/api`** to the backend, so the browser talks same-origin — no CORS to configure.
@@ -210,14 +209,26 @@ export function ProjectsPage() {
 `@basaltkit/admin-shadcn` also exports the shadcn primitives themselves — `Button`, `Input`, `Label`, `Card`, `CardHeader`, `CardContent`, `CardTitle`, `Badge`, `Table` — so you build the rest of your panel (headers, metric cards, actions) with the same look, without copying shadcn's files into your project.
 
 ::: warning Tailwind is required for styling
-`@basaltkit/admin-shadcn`'s classes only produce colors/spacing if your app has **Tailwind CSS** configured with shadcn's theme variables (`--primary`, `--border`, …) and includes the package in Tailwind's `content`:
+`@basaltkit/admin-shadcn`'s classes only produce colors/spacing if your app has **Tailwind CSS** configured with shadcn's theme variables (`--primary`, `--border`, …) and scans the package's files. On **Tailwind 4** (what the scaffold generates), register it with `@source` in your stylesheet — the path is relative to the CSS file — and map the variables in `@theme inline`:
+
+```css
+/* src/index.css */
+@import 'tailwindcss';
+@source '../node_modules/@basaltkit/admin-shadcn/dist';
+@theme inline {
+  --color-primary: hsl(var(--primary));
+  /* … the other shadcn colors and --radius-* */
+}
+```
+
+On **Tailwind 3**, add the package to `content` instead:
 
 ```js
 // tailwind.config.js
 content: ['./index.html', './src/**/*.{ts,tsx}', './node_modules/@basaltkit/admin-shadcn/dist/**/*.js']
 ```
 
-The `--ui` scaffold does all of this for you. Integrating by hand? Follow [ui.shadcn.com/docs/installation](https://ui.shadcn.com/docs/installation) plus the `content` line above.
+The `--ui` scaffold does all of this for you. Integrating by hand? Follow [ui.shadcn.com/docs/installation](https://ui.shadcn.com/docs/installation) plus the `@source` (or `content`) line above.
 :::
 
 ## Dashboards

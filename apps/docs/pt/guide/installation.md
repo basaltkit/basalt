@@ -83,6 +83,7 @@ Pergunta, por esta ordem:
 | `--mcp` | desativado | Expõe rotas só-de-leitura marcadas como ferramentas MCP em `POST /mcp`, mais um `.mcp.json` para ferramentas de IA — vê [MCP](/pt/guide/mcp) |
 | `--install` / `--no-install` | ativo em TTY, desativado em CI | Instala dependências no fim |
 | `--git` / `--no-git` | ativo em TTY, desativado em CI | `git init` mais um commit inicial |
+| `--offline` | desativado | Não consulta o registry npm e usa os intervalos de dependências incluídos nesta versão do create-basalt |
 | `--pm=<manager>` | autodeteção | Força `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `-y`, `--yes` | — | Aceita todas as predefinições, sem perguntas (também desliga o assistente) |
 | `-h`, `--help` | — | Imprime a ajuda e sai |
@@ -99,6 +100,16 @@ que npm, pnpm, yarn e bun definem todos), recaindo em npm. O `--install` e o
 passas nenhuma é que o ambiente decide — um TTY que não seja CI recebe ambos,
 tudo o resto não recebe nenhum, para que a automação nunca leve com uma
 instalação inesperada.
+
+Os projetos novos recebem a **versão publicada mais recente** de cada dependência:
+antes de escrever os ficheiros, o scaffolder pergunta ao registry
+(`npm_config_registry`, senão `registry.npmjs.org`) a versão `latest` de cada
+pacote e escreve `^<latest>`. Os `@basaltkit/*` recebem sempre a última versão;
+os pacotes de terceiros (TypeScript, Vitest, React, Vite, Tailwind, …) só a recebem
+na major para a qual os templates foram escritos — uma major mais recente mantém o
+intervalo incluído e imprime uma `Note:`. Se o registry não estiver acessível, são
+usados os intervalos incluídos com uma única linha `Warning:`; o scaffold nunca
+falha por causa disso. `--offline` salta a consulta.
 
 ::: warning Aviso: `--ui` requer pnpm
 O frontend `web/` é membro de um workspace pnpm (`pnpm-workspace.yaml`), que o
