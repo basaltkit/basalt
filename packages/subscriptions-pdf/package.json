@@ -31,10 +31,10 @@
   "devDependencies": {
     "@basaltkit/subscriptions": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.1",
     "@types/pdfkit": "^0.17.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   },
   "publishConfig": {
     "access": "public"

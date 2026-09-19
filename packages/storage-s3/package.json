@@ -15,16 +15,16 @@
   },
   "dependencies": { "@basaltkit/storage": "workspace:^" },
   "peerDependencies": {
-    "@aws-sdk/client-s3": "^3.1130.0",
-    "@aws-sdk/s3-request-presigner": "^3.1130.0"
+    "@aws-sdk/client-s3": "^3.1133.0",
+    "@aws-sdk/s3-request-presigner": "^3.1133.0"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.1130.0",
-    "@aws-sdk/s3-request-presigner": "^3.1130.0",
+    "@aws-sdk/client-s3": "^3.1133.0",
+    "@aws-sdk/s3-request-presigner": "^3.1133.0",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   },
   "publishConfig": { "access": "public" },
   "repository": {

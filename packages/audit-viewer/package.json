@@ -35,9 +35,9 @@
     "@basaltkit/fastify": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0",
+    "vitest": "^5.0.1",
     "zod": "^4.5.4"
   },
   "publishConfig": {
