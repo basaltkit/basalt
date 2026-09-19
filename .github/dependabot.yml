@@ -10,6 +10,12 @@ updates:
         dependency-type: development
       production-dependencies:
         dependency-type: production
+    ignore:
+      # TypeScript majors are deliberate migrations, and apps/docs pins
+      # typescript 6 because TypeDoc 0.28 does not support TypeScript 7 yet
+      # (a grouped bump to 7 breaks `pnpm docs:api`).
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
     labels:
       - dependencies
 
