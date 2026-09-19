@@ -34,14 +34,74 @@ function isPrivateIpv4(ip: string): boolean {
   return false
 }
 
+/** Parses an IPv6 literal (zone id stripped, dotted IPv4 tail allowed) into 16 bytes, or null. */
+function ipv6Bytes(ip: string): number[] | null {
+  let addr = (ip.split('%')[0] ?? '').toLowerCase()
+  const tail: number[] = []
+  const lastColon = addr.lastIndexOf(':')
+  if (addr.includes('.', lastColon)) {
+    const v4 = ipv4Parts(addr.slice(lastColon + 1))
+    if (!v4) return null
+    tail.push(...v4)
+    addr = `${addr.slice(0, lastColon + 1)}0:0` // placeholder groups, replaced below
+  }
+  const halves = addr.split('::')
+  if (halves.length > 2) return null
+  const parse = (part: string): number[] | null => {
+    if (part === '') return []
+    const groups = part.split(':')
+    const out: number[] = []
+    for (const g of groups) {
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null
+      out.push(parseInt(g, 16))
+    }
+    return out
+  }
+  const head = parse(halves[0] ?? '')
+  const rest = halves.length === 2 ? parse(halves[1] ?? '') : []
+  if (!head || !rest) return null
+  const fill = 8 - head.length - rest.length
+  if (halves.length === 2 ? fill < 0 : fill !== 0) return null
+  const groups = [...head, ...new Array<number>(halves.length === 2 ? fill : 0).fill(0), ...rest]
+  const bytes = groups.flatMap((g) => [g >> 8, g & 0xff])
+  if (tail.length === 4) bytes.splice(12, 4, ...tail)
+  return bytes
+}
+
+const zeros = (bytes: number[], from: number, to: number): boolean => bytes.slice(from, to).every((b) => b === 0)
+const v4At = (bytes: number[], at: number): string => bytes.slice(at, at + 4).join('.')
+
+/**
+ * Classifies an IPv6 address over its 16 bytes, so every spelling (compressed,
+ * expanded, upper-case, hex or dotted IPv4 tail — WHATWG URL canonicalises
+ * `[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`) is judged the same. Forms that
+ * embed an IPv4 address (mapped, translated, NAT64, 6to4) are judged by that
+ * IPv4 address; transition/special-purpose ranges that can't be judged are
+ * refused.
+ */
 function isPrivateIpv6(ip: string): boolean {
-  const addr = (ip.split('%')[0] ?? '').toLowerCase() // strip zone id
-  if (addr === '::1' || addr === '::') return true // loopback / unspecified
-  const mapped = addr.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/) // IPv4-mapped ::ffff:a.b.c.d
-  if (mapped?.[1]) return isPrivateIpv4(mapped[1])
-  if (addr.startsWith('fc') || addr.startsWith('fd')) return true // unique local fc00::/7
-  if (/^fe[89ab]/.test(addr)) return true // link-local fe80::/10
-  if (addr.startsWith('ff')) return true // multicast ff00::/8
+  const b = ipv6Bytes(ip)
+  if (!b) return true // unparseable → treat as unsafe
+  // ::/96 — unspecified (::), loopback (::1) and deprecated IPv4-compatible (::a.b.c.d).
+  if (zeros(b, 0, 12)) return true
+  // ::ffff:0:0/96 IPv4-mapped.
+  if (zeros(b, 0, 10) && b[10] === 0xff && b[11] === 0xff) return isPrivateIpv4(v4At(b, 12))
+  // ::ffff:0:0:0/96 IPv4-translated (SIIT).
+  if (zeros(b, 0, 8) && b[8] === 0xff && b[9] === 0xff && b[10] === 0 && b[11] === 0) return isPrivateIpv4(v4At(b, 12))
+  // 64:ff9b::/96 well-known NAT64 prefix → the embedded IPv4 is what is reached.
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zeros(b, 4, 12)) return isPrivateIpv4(v4At(b, 12))
+  // 64:ff9b:1::/48 local-use NAT64 (RFC 8215) — translator-defined, refuse.
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 1) return true
+  // 2002::/16 6to4 → the embedded IPv4 is the relay target.
+  if (b[0] === 0x20 && b[1] === 0x02) return isPrivateIpv4(v4At(b, 2))
+  // 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32, ORCHID) and 2001:db8::/32 documentation.
+  if (b[0] === 0x20 && b[1] === 0x01 && (b[2]! < 0x02 || (b[2] === 0x0d && b[3] === 0xb8))) return true
+  // 100::/64 discard-only.
+  if (b[0] === 0x01 && b[1] === 0x00 && zeros(b, 2, 8)) return true
+  if ((b[0]! & 0xfe) === 0xfc) return true // unique local fc00::/7
+  if (b[0] === 0xfe && (b[1]! & 0xc0) === 0x80) return true // link-local fe80::/10
+  if (b[0] === 0xfe && (b[1]! & 0xc0) === 0xc0) return true // deprecated site-local fec0::/10
+  if (b[0] === 0xff) return true // multicast ff00::/8
   return false
 }
 

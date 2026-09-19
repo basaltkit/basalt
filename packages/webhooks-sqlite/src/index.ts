@@ -68,11 +68,16 @@ export class SqliteWebhookStore implements WebhookStore {
   async forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]> {
     // Narrow in SQL to active endpoints for this tenant (or tenant-agnostic ones);
     // the event-pattern match (`*`, `prefix.*`, exact) is applied in JS.
+    // Fail-closed: without a (non-empty string) tenant only tenant-agnostic
+    // endpoints match — a missing/null tenant never widens to every tenant's.
     let sql = 'SELECT * FROM webhook_endpoints WHERE (active IS NULL OR active = 1)'
     const args: string[] = []
-    if (tenantId !== undefined) {
+    const scope = typeof tenantId === 'string' && tenantId !== '' ? tenantId : undefined
+    if (scope !== undefined) {
       sql += ' AND (tenant_id IS NULL OR tenant_id = ?)'
-      args.push(tenantId)
+      args.push(scope)
+    } else {
+      sql += ' AND tenant_id IS NULL'
     }
     const rows = this.db.prepare(sql).all(...args) as unknown as EndpointRow[]
     return rows.map(toEndpoint).filter((endpoint) => matchesEvent(endpoint.events, event))

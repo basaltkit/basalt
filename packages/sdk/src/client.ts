@@ -179,15 +179,48 @@ function buildUrl(
   params: Record<string, unknown> | undefined,
   query: Record<string, unknown> | undefined,
 ): string {
-  let resolved = path
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
-      resolved = resolved.replace(`:${key}`, encodeURIComponent(String(value)))
-    }
-  }
+  // One pass over whole placeholder names: `:org` never matches the prefix of
+  // `:orgId`, and a substituted value is never re-scanned for placeholders.
+  const resolved = path.replace(
+    PATH_PARAM,
+    (_match, lead: string, name: string) =>
+      lead +
+      encodePathParam(name, params && Object.prototype.hasOwnProperty.call(params, name) ? params[name] : undefined),
+  )
   const base = stripTrailingSlashes(baseUrl)
   const search = query ? queryString(query) : ''
   return `${base}${resolved}${search ? `?${search}` : ''}`
+}
+
+/**
+ * A placeholder is `:name` at the START of a path segment (`/projects/:id`).
+ * A colon anywhere else in a segment is literal, so Google-style custom
+ * methods (`/v1/items:batch`, `/items/:id:archive`) pass through untouched.
+ */
+const PATH_PARAM = /(^|\/):([A-Za-z_][A-Za-z0-9_]*)/g
+
+/**
+ * Encodes one path parameter so it stays inside its own segment.
+ *
+ * `encodeURIComponent` escapes `/` but leaves `.` alone, so a value of `..` or
+ * `.` would become a dot-segment that URL normalisation (fetch, proxies, the
+ * server router) collapses — sending the caller's credentials to a different
+ * endpoint than the one invoked. An empty or missing value would likewise
+ * change which route matches. All of these are refused before any request.
+ */
+function encodePathParam(name: string, value: unknown): string {
+  if (value === undefined || value === null) {
+    throw new BasaltClientError(0, 'CLIENT_INVALID_PARAM', `Missing path parameter "${name}".`)
+  }
+  const text = String(value)
+  if (text === '' || text === '.' || text === '..') {
+    throw new BasaltClientError(
+      0,
+      'CLIENT_INVALID_PARAM',
+      `Path parameter "${name}" must not be empty, "." or "..".`,
+    )
+  }
+  return encodeURIComponent(text)
 }
 
 function queryString(query: Record<string, unknown>): string {

@@ -2,6 +2,7 @@ import { ctx, BasaltError, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { TEAMS } from './plugin.js'
+import { NotATeamMemberError, TeamInviteInvalidError } from './teams.js'
 
 const teams = () => (ctx().container as Container).get(TEAMS)
 
@@ -14,8 +15,37 @@ function tenantId(): string {
 function userId(): string | undefined {
   return (ctx() as { user?: { id: string } }).user?.id
 }
-function userEmail(): string | undefined {
-  return (ctx() as { user?: { email?: string } }).user?.email
+/**
+ * The acting user for privileged team routes. Fails closed: without an
+ * identity the service would fall back to its trusted (unchecked) mode.
+ */
+function actingUserId(): string {
+  const id = userId()
+  if (!id) throw new NotATeamMemberError()
+  return id
+}
+function currentUser(): { email?: unknown; emailVerified?: unknown } | undefined {
+  return (ctx() as { user?: { email?: unknown; emailVerified?: unknown } }).user
+}
+
+/** Accepting an invite requires the caller's email address to be verified. */
+export class TeamEmailNotVerifiedError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('TEAM_EMAIL_NOT_VERIFIED', 'Verify your email address before accepting this invitation.')
+  }
+}
+
+export interface TeamRoutesOptions {
+  /**
+   * Require `ctx().user.emailVerified === true` to accept an invitation.
+   * Default true: acceptance is bound to the invited address, and that binding
+   * is only meaningful if the caller proved they own it — otherwise anyone who
+   * registers the invitee's address could redeem a leaked link. Set `false`
+   * only for apps that verify ownership of the address some other way (the
+   * invited-address binding itself still applies).
+   */
+  requireVerifiedEmail?: boolean
 }
 
 class NoTenantError extends BasaltError {
@@ -39,7 +69,8 @@ const roleBody = z.object({ role: z.string().min(1) })
  * invite only requires a logged-in user. Invitation tokens are emailed via the
  * `team:invited` hook and never returned over HTTP.
  */
-export function teamRoutes(): BasaltRoute[] {
+export function teamRoutes(options: TeamRoutesOptions = {}): BasaltRoute[] {
+  const requireVerifiedEmail = options.requireVerifiedEmail !== false
   return [
     route({
       method: 'POST',
@@ -47,12 +78,13 @@ export function teamRoutes(): BasaltRoute[] {
       meta: { auth: true, teamRole: 'admin' },
       body: z.object({ email: z.string().email(), role: z.string().min(1).optional() }),
       async handler({ body, reply }) {
-        const uid = userId()
+        const uid = actingUserId()
         const { invitation } = await teams().invite({
           tenantId: tenantId(),
           email: body.email,
           ...(body.role !== undefined ? { role: body.role } : {}),
-          ...(uid !== undefined ? { invitedBy: uid, actingUserId: uid } : {}),
+          invitedBy: uid,
+          actingUserId: uid,
         })
         return reply.code(201).send(invitation)
       },
@@ -64,11 +96,17 @@ export function teamRoutes(): BasaltRoute[] {
       meta: { auth: true },
       body: z.object({ token: z.string() }),
       async handler({ body }) {
-        const uid = userId()
-        if (!uid) throw new NoTenantError()
-        // Bind to the caller's verified email so a forwarded link can't be
-        // redeemed by a different account.
-        return teams().accept(body.token, uid, userEmail())
+        const uid = actingUserId()
+        const user = currentUser()
+        // Bind to the caller's email so a forwarded link can't be redeemed by a
+        // different account. No email → nothing to bind to → refuse (never fall
+        // back to the service's unbound, trusted mode).
+        const email = typeof user?.email === 'string' && user.email !== '' ? user.email : undefined
+        if (email === undefined) throw new TeamInviteInvalidError()
+        // The binding only holds if the caller proved ownership of the address.
+        // Checked before the token lookup, so it reveals nothing about the token.
+        if (requireVerifiedEmail && user?.emailVerified !== true) throw new TeamEmailNotVerifiedError()
+        return teams().accept(body.token, uid, email)
       },
     }),
 
@@ -110,8 +148,7 @@ export function teamRoutes(): BasaltRoute[] {
       params: z.object({ userId: z.string() }),
       body: roleBody,
       async handler({ params, body }) {
-        const uid = userId()
-        return teams().changeRole(tenantId(), params.userId, body.role, uid !== undefined ? { actingUserId: uid } : {})
+        return teams().changeRole(tenantId(), params.userId, body.role, { actingUserId: actingUserId() })
       },
     }),
 
@@ -121,7 +158,7 @@ export function teamRoutes(): BasaltRoute[] {
       meta: { auth: true, teamRole: 'admin' },
       params: z.object({ userId: z.string() }),
       async handler({ params, reply }) {
-        await teams().removeMember(tenantId(), params.userId)
+        await teams().removeMember(tenantId(), params.userId, { actingUserId: actingUserId() })
         return reply.code(204).send()
       },
     }),

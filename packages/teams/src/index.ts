@@ -6,6 +6,7 @@ export {
   NotATeamMemberError,
   InsufficientTeamRoleError,
   LastOwnerError,
+  TeamRoleNotGrantableError,
   type TeamsOptions,
   type RoleAssigner,
 } from './teams.js'
@@ -26,4 +27,4 @@ export {
   type TeamsPluginOptions,
   type TenantMembershipPluginOptions,
 } from './plugin.js'
-export { teamRoutes } from './routes.js'
+export { teamRoutes, TeamEmailNotVerifiedError, type TeamRoutesOptions } from './routes.js'

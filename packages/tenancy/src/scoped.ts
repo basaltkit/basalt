@@ -48,13 +48,18 @@ export function requireTenantId(fallback?: string): string {
  *
  *     const rows = await db.project.findMany({ where: tenantScoped({ archived: false }) })
  *
- * Spreads `tenantId` LAST, so even a `tenantId` smuggled into `where` by
- * client input cannot override the context tenant. Throws
- * {@link TenantRequiredError} when there is no tenant to scope to.
+ * The tenant comes from the context and ONLY from the context. A `tenantId`
+ * in `where` is never used as a fallback: `where` is routinely built from
+ * client input (`{ ...req.query }`), and with no tenant resolved (tenancy's
+ * `required` defaults to false) that would let the client pick any tenant.
+ * `tenantId` is spread LAST, so a smuggled value cannot override the context
+ * tenant either. Throws {@link TenantRequiredError} when there is no context
+ * tenant — system code that must pin a tenant calls `requireTenantId(id)`
+ * explicitly, or runs inside `tenancy.run(id, …)`.
  */
 export function tenantScoped<W extends Record<string, unknown> = Record<string, never>>(
   where?: W,
 ): W & { tenantId: string } {
-  const tenantId = requireTenantId(typeof where?.['tenantId'] === 'string' ? (where['tenantId'] as string) : undefined)
+  const tenantId = requireTenantId()
   return { ...(where as W), tenantId }
 }

@@ -36,6 +36,20 @@ Cada `Disk` prefixa paths com `tenants/<id>` de `ctx().tenant` — por isso o me
 código mantém os ficheiros de cada tenant isolados. Passa `scope: null` num disco
 para desligar isso.
 
+**Falha fechado sem tenant.** Com `@basaltkit/tenancy` registado, um disco com o
+scope predefinido recusa correr sem tenant no contexto e lança
+`StorageTenantRequiredError` (`400 STORAGE_TENANT_REQUIRED`). Sem isso, um pedido
+que simplesmente omitisse o tenant resolveria a chave do chamador contra a raiz do
+bucket, onde `tenants/<outro-tenant>/…` está acessível pelo nome. Um disco
+deliberadamente central (backups, branding da plataforma) declara-o
+explicitamente: `scope: null`, ou `onMissingScope: 'root'` para um disco que tem
+scope de tenant dentro de um tenant e é central fora dele. Apps sem tenancy não
+são afetadas.
+
+Um id de tenant que não seja um único segmento de path seguro (`..`, `a/b`,
+caracteres de controlo) é recusado com `StorageInvalidScopeError` em vez de ser
+juntado ao path.
+
 ## put / get / exists / delete / list
 
 `put` aceita uma string ou `Buffer` e cria pastas intermédias; `get` retorna sempre
@@ -173,7 +187,12 @@ da disposition, por isso avatares e previews dentro de páginas continuam a
 funcionar.
 
 A expiração aceita uma string de duração (`'500ms'`, `'30s'`, `'15m'`, `'2h'`,
-`'7d'`) ou milissegundos. Suportado por `s3`, GCS e Azure; o driver `local` lança
+`'7d'`) ou milissegundos. Está **limitada a 7 dias** por omissão (o limite das
+assinaturas S3 e GCS, agora aplicado a todos os drivers, Azure incluído): um URL
+assinado é uma credencial ao portador que sobrevive à saída do titular do tenant,
+por isso uma duração maior (ou não positiva) lança `TemporaryUrlTtlTooLongError`
+(`400 STORAGE_TEMPORARY_URL_TTL`). Baixa o limite por disco com
+`maxTemporaryUrlTtl`. Suportado por `s3`, GCS e Azure; o driver `local` lança
 `TemporaryUrlUnsupportedError` (serve ficheiros locais através de uma rota em dev, ou
 corre MinIO localmente com um disco `s3`).
 
@@ -213,6 +232,8 @@ Sem processador, o terminal do pipeline lança
 | --- | --- | --- | --- |
 | `driver` | `'local' \| 's3' \| StorageDriver` | — (obrigatório) | `'local'` precisa de `root`; `'s3'` recebe as opções S3; uma instância liga GCS/Azure/custom |
 | `scope` | `(() => string \| undefined) \| null` | `tenants/<ctx().tenant.id>` | Prefixo de path dinâmico resolvido em **todas** as operações — isolamento automático por tenant. `null` desativa-o |
+| `onMissingScope` | `'root' \| 'error'` | `'error'` com tenancy registado e o `scope` predefinido; `'root'` caso contrário | O que uma operação faz sem tenant no contexto: `'error'` lança `StorageTenantRequiredError`, `'root'` usa a chave contra a raiz do disco. Um valor explícito ganha sempre |
+| `maxTemporaryUrlTtl` | `DurationInput` | `'7d'` | Duração máxima que `temporaryUrl` aceita; acima disso lança `TemporaryUrlTtlTooLongError` |
 
 ### `PutOptions` (por `put`)
 
@@ -243,6 +264,9 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` com `allowedContentTypes` definido e um content type em falta/fora da lista |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | `disk('name')` para um disco que não foi declarado |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | `temporaryUrl` num driver sem suporte (ex.: `local`) |
+| `TemporaryUrlTtlTooLongError` | `STORAGE_TEMPORARY_URL_TTL` (400) | `temporaryUrl` com duração ≤ 0 ou acima de `maxTemporaryUrlTtl` (7 dias por omissão) |
+| `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` (400) | Um disco com scope de tenant correu sem tenant no contexto com tenancy registado — resolve um tenant, ou dá a um disco central `scope: null` / `onMissingScope: 'root'` |
+| `StorageInvalidScopeError` | `STORAGE_INVALID_SCOPE` | O id do tenant (ou um `scope` próprio) não é um prefixo de path seguro (`..`, uma `/` dentro do id, caracteres de controlo) |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | Terminal de `disk.image(…)` sem `imageProcessor` configurado |
 
 Todos estendem `BasaltError` e transportam o `code` acima.

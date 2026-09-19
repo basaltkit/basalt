@@ -161,6 +161,8 @@ export {
   type OutboxStore,
   type OutboxDispatch,
   type OutboxOptions,
+  type MemoryOutboxStoreOptions,
+  type OutboxPendingFilter,
   type OutboxPluginOptions,
   type FlushResult,
 } from './outbox.js'

@@ -41,17 +41,114 @@ async function parseBody(context: Context): Promise<unknown> {
   }
 }
 
-async function toNeutralRequest(context: Context): Promise<HttpRequest> {
+/** Resolves the client address for a request, or `undefined` when unknown. */
+export type ClientIpResolver = (context: Context) => string | undefined
+
+/**
+ * Default client-address resolution: the transport's socket address, never a
+ * client-controlled header. Supports `@hono/node-server` (`env.incoming`) and
+ * Bun (`env.requestIP`). Other runtimes (edge, Deno) need `getClientIp`.
+ */
+export const defaultClientIp: ClientIpResolver = (context) => {
+  const env = context.env as
+    | {
+        incoming?: { socket?: { remoteAddress?: unknown } }
+        requestIP?: (request: Request) => { address?: unknown } | null | undefined
+      }
+    | undefined
+  if (!env || typeof env !== 'object') return undefined
+  const nodeAddress = env.incoming?.socket?.remoteAddress
+  if (typeof nodeAddress === 'string' && nodeAddress) return nodeAddress
+  if (typeof env.requestIP === 'function') {
+    try {
+      const address = env.requestIP(context.req.raw)?.address
+      if (typeof address === 'string' && address) return address
+    } catch {
+      /* not Bun's server object */
+    }
+  }
+  return undefined
+}
+
+async function toNeutralRequest(
+  context: Context,
+  getClientIp: ClientIpResolver = defaultClientIp,
+  withBody = true,
+): Promise<HttpRequest> {
+  const ip = getClientIp(context)
   return {
     method: context.req.method,
     url: context.req.url,
     headers: Object.fromEntries(context.req.raw.headers.entries()),
     params: context.req.param() as Record<string, string>,
     query: context.req.query(),
-    body: await parseBody(context),
+    body: withBody ? await parseBody(context) : undefined,
+    ...(ip ? { ip } : {}),
     ...(context.req.routePath ? { routePattern: context.req.routePath } : {}),
     raw: context,
   }
+}
+
+/** The 413 body, in the neutral `{ error: { code, message } }` envelope. */
+const payloadTooLarge = (bodyLimit: number) => ({
+  error: {
+    code: 'PAYLOAD_TOO_LARGE',
+    message: `Request body exceeds the ${bodyLimit}-byte limit.`,
+  },
+})
+
+/**
+ * Reads the request body with a hard cap on the bytes actually received — a
+ * `Content-Length` header alone is not enough (chunked/streamed bodies carry
+ * none, and a runtime that does not frame the body on it lets a client send
+ * more than it declared). Returns false when the cap is exceeded; otherwise
+ * the buffered body replaces `context.req.raw` so every later reader sees the
+ * bounded copy.
+ */
+async function bufferBoundedBody(context: Context, bodyLimit: number): Promise<boolean> {
+  const raw = context.req.raw
+  if (!raw.body) return true
+  const reader = raw.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > bodyLimit) {
+      await reader.cancel().catch(() => {})
+      return false
+    }
+    chunks.push(value)
+  }
+  const body = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  context.req.raw = new Request(raw, { body })
+  return true
+}
+
+/** Contexts whose body has already been bounded (by the plugin middleware). */
+const boundedBodies = new WeakSet<Context>()
+
+/**
+ * Enforces `bodyLimit` on a request: a declared `Content-Length` above it is
+ * rejected without reading, and every body is then counted while it is read —
+ * the declared length is never trusted to bound the bytes. Returns false when
+ * the body is too large. Idempotent per context.
+ */
+async function enforceBodyLimit(context: Context, bodyLimit: number): Promise<boolean> {
+  if (boundedBodies.has(context)) return true
+  const length = context.req.header('content-length')
+  if (length !== undefined && /^\d+$/.test(length) && Number(length) > bodyLimit) return false
+  const method = context.req.method
+  // GET/HEAD bodies are never parsed (and a Request cannot carry one).
+  if (method !== 'GET' && method !== 'HEAD' && !(await bufferBoundedBody(context, bodyLimit))) return false
+  boundedBodies.add(context)
+  return true
 }
 
 /** Streams an SSE producer as a Response backed by a ReadableStream (Web streams). */
@@ -133,11 +230,16 @@ function handlerFor(
   enrichers: RequestEnricher[],
   guards: RouteGuard[],
   onError?: HttpErrorReporter,
+  getClientIp: ClientIpResolver = defaultClientIp,
+  bodyLimit: number = DEFAULT_BODY_LIMIT,
 ) {
   return async (context: Context): Promise<Response> => {
     const reply = new HonoReply(context)
+    // Bounded here too, so routes mounted with `registerRoutes()` alone (no
+    // plugin middleware in front) never parse an unbounded body.
+    if (!(await enforceBodyLimit(context, bodyLimit))) return toResponse(reply.code(413), payloadTooLarge(bodyLimit))
     try {
-      const result = await runRoute(definition, await toNeutralRequest(context), reply, {
+      const result = await runRoute(definition, await toNeutralRequest(context, getClientIp), reply, {
         ...(container ? { container } : {}),
         enrichers,
         guards,
@@ -148,13 +250,22 @@ function handlerFor(
       const { status, body } = toErrorResponse(error)
       // This adapter previously reported nothing at all — a 500 reached the
       // client and left no trace whatsoever on the server.
-      const entry = { error, status, code: body.error.code, method: context.req.method, url: context.req.url }
-      if (onError) onError(entry)
-      else reportHttpError(entry)
-      return new Response(JSON.stringify(body), {
+      const entry = {
+        error,
         status,
-        headers: { 'content-type': 'application/json' },
-      })
+        code: body.error.code,
+        method: context.req.method,
+        url: context.req.url,
+      }
+      try {
+        if (onError) onError(entry)
+        else reportHttpError(entry)
+      } catch {
+        /* a broken reporter must not change what the client receives */
+      }
+      // Built from the context so headers accumulated before the failure
+      // (security headers, CORS, x-request-id) are kept on error responses.
+      return toResponse(reply.code(status), body)
     }
   }
 }
@@ -167,9 +278,15 @@ export function registerRoutes(
   enrichers: RequestEnricher[] = [],
   guards: RouteGuard[] = [],
   onError?: HttpErrorReporter,
+  getClientIp: ClientIpResolver = defaultClientIp,
+  bodyLimit: number = DEFAULT_BODY_LIMIT,
 ): void {
   for (const definition of routes) {
-    app.on(definition.method, definition.url, handlerFor(definition, container, enrichers, guards, onError))
+    app.on(
+      definition.method,
+      definition.url,
+      handlerFor(definition, container, enrichers, guards, onError, getClientIp, bodyLimit),
+    )
   }
 }
 
@@ -198,11 +315,23 @@ export interface HonoPluginOptions {
   onError?: HttpErrorReporter
   notFound?: boolean
   /**
-   * Maximum request body size in bytes. A request whose `Content-Length`
-   * exceeds this is rejected with 413 before the body is read — Hono/edge has
-   * no default cap, so without this a large upload is unbounded. Default: 1 MiB.
+   * Maximum request body size in bytes, enforced on the bytes actually read:
+   * a declared `Content-Length` above it is rejected up front, and a body
+   * without one (chunked/streamed) is counted while buffering and rejected
+   * with 413 the moment it crosses the limit. Hono/edge has no default cap,
+   * so without this a large upload is unbounded. Default: 1 MiB.
    */
   bodyLimit?: number
+  /**
+   * Resolves the client address exposed as `request.ip` — the key for
+   * per-client rate limiting (`securityPlugin`) and the IP login throttle.
+   * Default: the socket address on `@hono/node-server` and Bun; `undefined`
+   * elsewhere (a one-time warning is printed, and rate limits then share a
+   * single bucket). On an edge runtime or behind a trusted proxy, supply it,
+   * e.g. `(c) => c.req.header('cf-connecting-ip')` on Cloudflare. Never read
+   * `X-Forwarded-For` unless a proxy you control overwrites it.
+   */
+  getClientIp?: ClientIpResolver
 }
 
 /**
@@ -234,15 +363,32 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
 
       // Mount once edge plugins have registered their hooks/routes.
       const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT
+      const customIp = options.getClientIp
+      let warnedNoIp = false
+      const getClientIp: ClientIpResolver = (context) => {
+        const ip = (customIp ?? defaultClientIp)(context)
+        if (ip === undefined && !warnedNoIp) {
+          warnedNoIp = true
+          console.warn(
+            '[basalt:hono] Could not resolve the client IP (request.ip is undefined): rate limits share one bucket ' +
+              'and the IP login throttle is off. Pass honoPlugin({ getClientIp }) for this runtime.',
+          )
+        }
+        return ip
+      }
       hooks.on('app:booted', () => {
-        // Reject oversized bodies up front (Hono/edge has no default cap).
+        // Bound the body on the bytes read, not only the declared length
+        // (Hono/edge has no default cap). Runs before anything parses it.
         app.use(async (context: Context, next: Next) => {
-          const declared = Number(context.req.header('content-length') ?? '')
-          if (Number.isFinite(declared) && declared > bodyLimit) {
-            return context.json(
-              { code: 'PAYLOAD_TOO_LARGE', message: `Request body exceeds the ${bodyLimit}-byte limit.` },
-              413,
-            )
+          const tooLarge = !(await enforceBodyLimit(context, bodyLimit))
+          if (tooLarge) {
+            // Run the pre-hooks (without a body) so the 413 carries the same
+            // security/CORS headers — and counts against the rate limit.
+            const reply = new HonoReply(context)
+            if (await collector.runPre(await toNeutralRequest(context, getClientIp, false), reply)) {
+              return toResponse(reply, reply.payload)
+            }
+            return toResponse(reply.code(413), payloadTooLarge(bodyLimit))
           }
           return next()
         })
@@ -250,16 +396,23 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
           app.use(async (context: Context, next: Next) => {
             const start = Date.now()
             await next()
-            await collector.runAfter(await toNeutralRequest(context), new HonoReply(context), context.res.status, Date.now() - start)
+            await collector.runAfter(
+              await toNeutralRequest(context, getClientIp),
+              new HonoReply(context),
+              context.res.status,
+              Date.now() - start,
+            )
           })
         }
         app.use(async (context: Context, next: Next) => {
           const reply = new HonoReply(context)
-          if (await collector.runPre(await toNeutralRequest(context), reply)) return toResponse(reply, reply.payload)
+          if (await collector.runPre(await toNeutralRequest(context, getClientIp), reply)) {
+            return toResponse(reply, reply.payload)
+          }
           await next()
           return undefined
         })
-        registerRoutes(app, routes, container, enrichers, guards, options.onError)
+        registerRoutes(app, routes, container, enrichers, guards, options.onError, getClientIp, bodyLimit)
         // Neutral JSON 404 (an app's own later `notFound` call replaces it).
         if (options.notFound !== false) {
           app.notFound((context: Context) => context.json(NOT_FOUND_RESPONSE, 404))
@@ -267,7 +420,10 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
         for (const { method, url, handler } of collector.extraRoutes) {
           app.on(method, url, async (context: Context) => {
             const reply = new HonoReply(context)
-            const result = await handler({ request: await toNeutralRequest(context), reply })
+            const result = await handler({
+              request: await toNeutralRequest(context, getClientIp),
+              reply,
+            })
             return toResponse(reply, reply.sent ? reply.payload : result)
           })
         }

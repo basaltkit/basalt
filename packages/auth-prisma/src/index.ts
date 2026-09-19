@@ -95,6 +95,7 @@ interface PMfa {
 export interface PrismaAuthClient {
   authUser: {
     findUnique(a: any): Promise<PUser | null>
+    findFirst(a: any): Promise<PUser | null>
     create(a: any): Promise<PUser>
     update(a: any): Promise<PUser>
   }
@@ -123,6 +124,7 @@ export interface PrismaAuthClient {
   }
   authMfa: {
     findUnique(a: any): Promise<PMfa | null>
+    updateMany(a: any): Promise<{ count: number }>
     upsert(a: any): Promise<PMfa>
     deleteMany(a: any): Promise<{ count: number }>
   }
@@ -152,12 +154,40 @@ const toUser = (r: PUser): AuthUser => ({
   emailVerified: r.emailVerified,
 })
 
+/** Escapes LIKE/ILIKE metacharacters (backslash, `%`, `_`) with the default backslash escape. */
+const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, '\\$&')
+
 export class PrismaUserSource implements UserSource {
   constructor(private readonly client: PrismaAuthClient) {}
 
+  /**
+   * Emails are case-insensitive identities: new rows are stored canonical
+   * (trimmed, lowercased) and looked up that way; a row written before that, in
+   * mixed case, is still found through a case-insensitive fallback query.
+   */
   async findByEmail(email: string): Promise<AuthUser | null> {
-    const r = await this.client.authUser.findUnique({ where: { email } })
-    return r ? toUser(r) : null
+    const canonical = email.trim().toLowerCase()
+    const r = await this.client.authUser.findUnique({ where: { email: canonical } })
+    if (r) return toUser(r)
+    try {
+      // On PostgreSQL Prisma compiles an insensitive `equals` to `email ILIKE $1`
+      // WITHOUT escaping the value, so `_` and `%` (both legal in an address)
+      // would be wildcards and `a_min@corp.test` would resolve to
+      // `admin@corp.test` (account takeover through social login, a fresh
+      // login-throttle budget per pattern). Escape them, and re-check the match
+      // in code so no provider's pattern semantics can return another account.
+      const legacy = await this.client.authUser.findFirst({
+        where: { email: { equals: escapeLikePattern(canonical), mode: 'insensitive' } },
+        orderBy: { id: 'asc' },
+      })
+      return legacy && legacy.email.trim().toLowerCase() === canonical ? toUser(legacy) : null
+    } catch (err) {
+      // `mode: 'insensitive'` is PostgreSQL/MongoDB-only; providers without it
+      // (MySQL, SQLite) already compare with a case-insensitive collation or
+      // hold only canonical rows, so the exact lookup above is authoritative.
+      if ((err as { name?: unknown } | null)?.name === 'PrismaClientValidationError') return null
+      throw err
+    }
   }
 
   async findById(id: string): Promise<AuthUser | null> {
@@ -167,7 +197,7 @@ export class PrismaUserSource implements UserSource {
 
   async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
     const r = await this.client.authUser.create({
-      data: { id: randomUUID(), email: data.email, passwordHash: data.passwordHash, emailVerified: false },
+      data: { id: randomUUID(), email: data.email.trim().toLowerCase(), passwordHash: data.passwordHash, emailVerified: false },
     })
     return toUser(r)
   }
@@ -505,6 +535,32 @@ export class PrismaMfaStore implements MfaStore {
 
   async delete(userId: string): Promise<void> {
     await this.client.authMfa.deleteMany({ where: { userId } })
+  }
+
+  /** Conditional UPDATE: only one caller can move the TOTP step forward. */
+  async consumeTotpStep(userId: string, step: number): Promise<boolean> {
+    const { count } = await this.client.authMfa.updateMany({
+      where: { userId, enabled: true, OR: [{ lastUsedStep: null }, { lastUsedStep: { lt: step } }] },
+      data: { lastUsedStep: step },
+    })
+    return count > 0
+  }
+
+  /** Compare-and-swap on the stored list: a concurrent consumer makes this one fail. */
+  async consumeRecoveryCode(userId: string, hash: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const r = await this.client.authMfa.findUnique({ where: { userId } })
+      if (!r || !r.enabled) return false
+      const index = r.recoveryCodes.indexOf(hash)
+      if (index === -1) return false
+      const next = r.recoveryCodes.filter((_, i) => i !== index)
+      const { count } = await this.client.authMfa.updateMany({
+        where: { userId, recoveryCodes: { equals: r.recoveryCodes } },
+        data: { recoveryCodes: next },
+      })
+      if (count > 0) return true
+    }
+    return false
   }
 }
 

@@ -129,6 +129,16 @@ export function migrate(db: DatabaseSync): void {
     // Existing databases already have the column.
   }
 
+  // Emails are case-insensitive identities: enforce it for new rows. A legacy
+  // database that already holds case-variant duplicates cannot take the index;
+  // it keeps working (lookups are case-insensitive either way) until they are
+  // merged by hand.
+  try {
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_email_nocase ON auth_users (email COLLATE NOCASE)')
+  } catch {
+    /* pre-existing case-variant duplicates */
+  }
+
   // Migrate existing databases: add the anti-replay column if it's absent.
   // (ADD COLUMN throws when it already exists — ignore that.)
   try {
@@ -159,8 +169,8 @@ export class SqliteUserSource implements UserSource {
 
   async findByEmail(email: string): Promise<AuthUser | null> {
     const row = this.db
-      .prepare('SELECT * FROM auth_users WHERE email = ?')
-      .get(email) as UserRow | undefined
+      .prepare('SELECT * FROM auth_users WHERE email = ? COLLATE NOCASE ORDER BY rowid LIMIT 1')
+      .get(email.trim()) as UserRow | undefined
     return row ? toUser(row) : null
   }
 
@@ -483,6 +493,35 @@ export class SqliteMfaStore implements MfaStore {
 
   async delete(userId: string): Promise<void> {
     this.db.prepare('DELETE FROM auth_mfa WHERE user_id = ?').run(userId)
+  }
+
+  /** Conditional UPDATE: only one caller can move the step forward. */
+  async consumeTotpStep(userId: string, step: number): Promise<boolean> {
+    const { changes } = this.db
+      .prepare(
+        'UPDATE auth_mfa SET last_used_step = ? WHERE user_id = ? AND enabled = 1 AND (last_used_step IS NULL OR last_used_step < ?)',
+      )
+      .run(step, userId, step)
+    return Number(changes) > 0
+  }
+
+  /** Compare-and-swap on the stored list: a concurrent consumer makes this one fail. */
+  async consumeRecoveryCode(userId: string, hash: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const row = this.db
+        .prepare('SELECT recovery_codes, enabled FROM auth_mfa WHERE user_id = ?')
+        .get(userId) as Pick<MfaRow, 'recovery_codes' | 'enabled'> | undefined
+      if (!row || row.enabled !== 1) return false
+      const codes = JSON.parse(row.recovery_codes) as string[]
+      const index = codes.indexOf(hash)
+      if (index === -1) return false
+      codes.splice(index, 1)
+      const { changes } = this.db
+        .prepare('UPDATE auth_mfa SET recovery_codes = ? WHERE user_id = ? AND recovery_codes = ?')
+        .run(JSON.stringify(codes), userId, row.recovery_codes)
+      if (Number(changes) > 0) return true
+    }
+    return false
   }
 }
 

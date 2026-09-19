@@ -70,7 +70,70 @@ class ExpressReply implements HttpReply {
   }
 }
 
-type Register = (path: string, handler: (req: Request, res: Response) => unknown) => void
+type Register = (path: string, handler: (req: Request, res: Response, next: NextFunction) => unknown) => void
+
+/**
+ * Maps an error raised outside the route pipeline (body-parser, a pre-hook,
+ * an edge route) to the neutral envelope. Body-parser errors keep their 4xx
+ * status with a fixed message; everything else goes through `toErrorResponse`,
+ * so no stack, path or driver message ever reaches the client.
+ */
+function toMiddlewareErrorResponse(error: unknown): ReturnType<typeof toErrorResponse> {
+  const status =
+    (error as { status?: unknown; statusCode?: unknown } | null)?.status ??
+    (error as { statusCode?: unknown } | null)?.statusCode
+  // body-parser raises http-errors: a string `type` and/or `expose: true`.
+  const { type, expose } = (error ?? {}) as {
+    type?: unknown
+    expose?: unknown
+  }
+  const fromBodyParser = typeof type === 'string' || expose === true
+  // The router raises a 400 URIError for a path parameter that is not valid
+  // percent-encoding (`/items/%E0%A4%A`): a client error, not a server bug.
+  const fromRouter = error instanceof URIError
+  if (typeof status === 'number' && status >= 400 && status < 500 && (fromBodyParser || fromRouter)) {
+    if (status === 413) {
+      return {
+        status,
+        body: {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: 'Request body is too large.',
+          },
+        },
+      }
+    }
+    if (status === 415) {
+      return {
+        status,
+        body: {
+          error: {
+            code: 'UNSUPPORTED_MEDIA_TYPE',
+            message: 'Unsupported request body encoding.',
+          },
+        },
+      }
+    }
+    const message = fromRouter ? 'Malformed request path.' : 'Malformed request body.'
+    return { status: 400, body: { error: { code: 'BAD_REQUEST', message } } }
+  }
+  return toErrorResponse(error)
+}
+
+/**
+ * Reports a failed request without ever letting the reporter itself break the
+ * response: a throwing `onError` would otherwise reach Express's finalhandler
+ * (an HTML page with the reporter's stack and message) or, on Express 4, an
+ * unhandled rejection.
+ */
+function reportSafely(onError: HttpErrorReporter | undefined, entry: Parameters<HttpErrorReporter>[0]): void {
+  try {
+    if (onError) onError(entry)
+    else reportHttpError(entry)
+  } catch {
+    /* a broken reporter must not change what the client receives */
+  }
+}
 
 function basaltHandler(
   definition: BasaltRoute,
@@ -101,9 +164,13 @@ function basaltHandler(
       const { status, body } = toErrorResponse(error)
       // This adapter previously reported nothing at all — a 500 reached the
       // client and left no trace whatsoever on the server.
-      const entry = { error, status, code: body.error.code, method: req.method, url: req.originalUrl }
-      if (onError) onError(entry)
-      else reportHttpError(entry)
+      reportSafely(onError, {
+        error,
+        status,
+        code: body.error.code,
+        method: req.method,
+        url: req.originalUrl,
+      })
       if (!res.headersSent) res.status(status).json(body)
     }
   }
@@ -151,6 +218,14 @@ export interface ExpressPluginOptions {
    */
   onError?: HttpErrorReporter
   notFound?: boolean
+  /**
+   * Mount a final error middleware that turns errors raised outside a route
+   * (malformed/oversized bodies, a failing pre-hook) into the neutral JSON
+   * envelope instead of Express's default HTML page, which includes the stack
+   * trace unless `NODE_ENV=production`. Default: true. Pass false only if you
+   * mount your own `(err, req, res, next)` handler after boot.
+   */
+  errorHandler?: boolean
 }
 
 /**
@@ -199,17 +274,31 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
             next()
           })
         }
+        const preHooked = new WeakSet<Request>()
         app.use(async (req: Request, res: Response, next: NextFunction) => {
-          const reply = new ExpressReply(res)
-          if (await collector.runPre(toNeutralRequest(req), reply)) return
+          preHooked.add(req)
+          try {
+            const reply = new ExpressReply(res)
+            if (await collector.runPre(toNeutralRequest(req), reply)) return
+          } catch (error) {
+            // Express 4 does not catch a rejected async middleware.
+            return next(error)
+          }
           next()
         })
         registerRoutes(app, routes, container, enrichers, guards, options.onError)
         for (const { method, url, handler } of collector.extraRoutes) {
-          router[method.toLowerCase()]!(url, async (req: Request, res: Response) => {
-            const reply = new ExpressReply(res)
-            const result = await handler({ request: toNeutralRequest(req), reply })
-            if (!reply.sent) reply.send(result)
+          router[method.toLowerCase()]!(url, async (req: Request, res: Response, next: NextFunction) => {
+            try {
+              const reply = new ExpressReply(res)
+              const result = await handler({
+                request: toNeutralRequest(req),
+                reply,
+              })
+              if (!reply.sent) reply.send(result)
+            } catch (error) {
+              next(error)
+            }
           })
         }
         // Mounted last, so anything unmatched gets the neutral JSON 404
@@ -217,6 +306,32 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
         if (options.notFound !== false) {
           app.use((_req: Request, res: Response) => {
             if (!res.headersSent) res.status(404).json(NOT_FOUND_RESPONSE)
+          })
+        }
+        if (options.errorHandler !== false) {
+          app.use(async (error: unknown, req: Request, res: Response, next: NextFunction) => {
+            if (res.headersSent) return next(error)
+            const { status, body } = toMiddlewareErrorResponse(error)
+            reportSafely(options.onError, {
+              error,
+              status,
+              code: body.error.code,
+              method: req.method,
+              url: req.originalUrl,
+            })
+            // A body-parser failure happens before the pre-hooks ran: run them
+            // (with no body) so the error carries the same security/CORS
+            // headers and still counts against the rate limit.
+            if (!preHooked.has(req)) {
+              preHooked.add(req)
+              try {
+                req.body = undefined
+                if (await collector.runPre(toNeutralRequest(req), new ExpressReply(res))) return
+              } catch {
+                /* already failing — answer with the original error */
+              }
+            }
+            if (!res.headersSent) res.status(status).json(body)
           })
         }
       })

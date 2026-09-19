@@ -21,7 +21,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/sync-versions.mjs && tsc -p tsconfig.build.json",
+    "sync-versions": "node scripts/sync-versions.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -38,6 +39,7 @@
     "@basaltkit/mcp": "workspace:^",
     "@basaltkit/prisma": "workspace:^",
     "@basaltkit/subscriptions": "workspace:^",
+    "@basaltkit/teams": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/testing": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",

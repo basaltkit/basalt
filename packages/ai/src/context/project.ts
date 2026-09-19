@@ -172,8 +172,12 @@ function firstExisting(reader: ProjectReader, candidates: string[]): { path: str
 }
 
 function detectAppFile(reader: ProjectReader): AppFileInfo | null {
-  const found = firstExisting(reader, APP_CANDIDATES)
-  if (!found) return null
+  const raw = firstExisting(reader, APP_CANDIDATES)
+  if (!raw) return null
+  // Match against CODE only: a commented-out `// tenantMembershipPlugin()` (or the
+  // name inside a string) must never count as a registration — that silenced
+  // security rules for exactly the apps that had disabled the guard.
+  const found = { path: raw.path, content: codeOnly(raw.content) }
   const plugins = PLUGIN_FACTORIES.filter((factory) =>
     new RegExp(`\\b${factory}\\s*\\(`).test(found.content),
   )
@@ -194,6 +198,84 @@ function detectAppFile(reader: ProjectReader): AppFileInfo | null {
     ...new Set(Array.from(found.content.matchAll(/\b([A-Za-z][A-Za-z0-9]*Plugin)\s*\(/g), (m) => m[1] as string)),
   ]
   return { path: found.path, plugins, fastifyLoggerConfigured, memorySources, pluginCalls }
+}
+
+/**
+ * The source with comments removed and string/template-literal TEXT blanked
+ * (quotes and `${…}` expressions are kept, newlines preserved), so detection
+ * regexes only ever see code. A lexer-lite, not a parser: regex literals are
+ * not special-cased, which is fine for app composition files.
+ */
+function codeOnly(source: string): string {
+  let out = ''
+  let i = 0
+  // Stack of open template literals; each entry is the `${` brace depth inside it.
+  const templates: number[] = []
+  const blank = (ch: string): string => (ch === '\n' ? '\n' : ' ')
+  const inTemplateText = (): boolean => templates.length > 0 && templates[templates.length - 1] === -1
+  while (i < source.length) {
+    const ch = source[i] as string
+    const next = source[i + 1]
+    if (inTemplateText()) {
+      if (ch === '\\') {
+        out += '  '
+        i += 2
+      } else if (ch === '`') {
+        templates.pop()
+        out += ch
+        i++
+      } else if (ch === '$' && next === '{') {
+        templates[templates.length - 1] = 0
+        out += '${'
+        i += 2
+      } else {
+        out += blank(ch)
+        i++
+      }
+      continue
+    }
+    if (ch === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n') {
+        out += ' '
+        i++
+      }
+    } else if (ch === '/' && next === '*') {
+      const end = source.indexOf('*/', i + 2)
+      const stop = end === -1 ? source.length : end + 2
+      for (; i < stop; i++) out += blank(source[i] as string)
+    } else if (ch === "'" || ch === '"') {
+      out += ch
+      i++
+      while (i < source.length && source[i] !== ch && source[i] !== '\n') {
+        if (source[i] === '\\') {
+          out += ' '
+          i++
+        }
+        if (i < source.length) out += blank(source[i] as string)
+        i++
+      }
+      if (i < source.length) {
+        out += source[i]
+        i++
+      }
+    } else if (ch === '`') {
+      templates.push(-1)
+      out += ch
+      i++
+    } else {
+      if (templates.length > 0) {
+        const top = templates.length - 1
+        if (ch === '{') templates[top] = (templates[top] as number) + 1
+        else if (ch === '}') {
+          if (templates[top] === 0) templates[top] = -1
+          else templates[top] = (templates[top] as number) - 1
+        }
+      }
+      out += ch
+      i++
+    }
+  }
+  return out
 }
 
 function detectServerFile(reader: ProjectReader): ServerFileInfo | null {

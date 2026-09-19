@@ -6,7 +6,7 @@ import {
   ensureMetadata,
   type Container,
 } from '@basaltkit/core'
-import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/http'
+import { route, type BasaltRoute, type RouteGuard, type RouteMeta } from '@basaltkit/http'
 import { Invoices, renderInvoiceHtml, InvoiceNotFoundError, type InvoicesOptions } from './invoice.js'
 import { z } from 'zod'
 import type { BillingGateway } from './gateway.js'
@@ -168,6 +168,52 @@ export interface BillingRoutesOptions {
    * (gateway/proxy) — a deliberate, documented opt-out.
    */
   auth?: boolean
+  /**
+   * Extra route metadata merged into BOTH checkout and portal — use it to
+   * require a billing role, e.g. `{ teamRole: 'owner' }` (@basaltkit/teams) or
+   * `{ can: 'billing:manage' }` (@basaltkit/permissions). Without it, ANY
+   * authenticated member of the tenant can start checkouts and open the portal
+   * (change plan, card, or cancel). It cannot switch `auth` off — use the
+   * `auth` option for that.
+   */
+  meta?: RouteMeta
+  /**
+   * Extra origins a per-request `successUrl`/`cancelUrl`/`returnUrl` override
+   * may point to (e.g. `['https://www.example.com']`). Overrides are otherwise
+   * limited to the origins of the configured URLs — anything else is a 400, so
+   * a checkout/portal link can never be turned into an open redirect. Entries
+   * must be https (http is accepted for localhost only).
+   */
+  allowedRedirectOrigins?: string[]
+}
+
+/** A per-request redirect URL override points outside the allowed origins. */
+export class BillingRedirectNotAllowedError extends BasaltError {
+  readonly status = 400
+  constructor(field: string) {
+    super(
+      'BILLING_REDIRECT_NOT_ALLOWED',
+      `"${field}" must point to one of the app's configured billing origins.`,
+    )
+  }
+}
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+const originOf = (value: string, label: string): string => {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new BasaltError('BILLING_REDIRECT_CONFIG', `billingRoutes: ${label} is not a valid URL: ${value}`)
+  }
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname))) {
+    throw new BasaltError(
+      'BILLING_REDIRECT_CONFIG',
+      `billingRoutes: ${label} must use https (http is only allowed for localhost): ${value}`,
+    )
+  }
+  return url.origin
 }
 
 /**
@@ -175,18 +221,47 @@ export interface BillingRoutesOptions {
  * (subscribe via the gateway's hosted page) and `POST /billing/portal`
  * (self-service management). Both return `{ url }` to redirect to. The
  * success/cancel/return URLs are configured here; the request body may
- * override them per call.
+ * override them per call, but only with URLs on the configured origins (or
+ * `allowedRedirectOrigins`).
  */
 export function billingRoutes(options: BillingRoutesOptions): BasaltRoute[] {
   const portalReturn = options.portalReturnUrl ?? options.successUrl
   // Secure by default: payment-management routes require an authenticated
   // user. (Ecosystem review 2026-08-b, finding S-1.)
   const authMeta = options.auth === false ? undefined : { auth: true }
+  // App-supplied authorization (e.g. a billing role) — `auth: true` always wins.
+  const meta: RouteMeta | undefined =
+    options.meta || authMeta ? { ...options.meta, ...authMeta } : undefined
+
+  // Redirect overrides may only target the app's own billing origins: the
+  // configured URLs plus an explicit allow-list. Validated at construction so a
+  // bad config fails at boot, not at the first checkout.
+  const allowedOrigins = new Set<string>([
+    new URL(options.successUrl).origin,
+    new URL(options.cancelUrl).origin,
+    new URL(portalReturn).origin,
+    ...(options.allowedRedirectOrigins ?? []).map((o) => originOf(o, 'allowedRedirectOrigins entry')),
+  ])
+  const allowedRedirect = (value: string | undefined, fallback: string, field: string): string => {
+    if (value === undefined) return fallback
+    let origin: string
+    try {
+      origin = new URL(value).origin
+    } catch {
+      throw new BillingRedirectNotAllowedError(field)
+    }
+    // "null" is the origin of every opaque URL (javascript:, data:, file:, a
+    // custom-scheme deep link): it identifies nothing, so it never matches —
+    // even when a configured URL is itself a deep link.
+    if (origin === 'null' || !allowedOrigins.has(origin)) throw new BillingRedirectNotAllowedError(field)
+    return value
+  }
+
   return [
     route({
       method: 'POST',
       url: '/billing/checkout',
-      ...(authMeta ? { meta: authMeta } : {}),
+      ...(meta ? { meta } : {}),
       body: z.object({
         plan: z.string(),
         period: z.enum(['monthly', 'yearly']).optional(),
@@ -194,9 +269,11 @@ export function billingRoutes(options: BillingRoutesOptions): BasaltRoute[] {
         cancelUrl: z.string().url().optional(),
       }),
       async handler({ body }) {
+        const successUrl = allowedRedirect(body.successUrl, options.successUrl, 'successUrl')
+        const cancelUrl = allowedRedirect(body.cancelUrl, options.cancelUrl, 'cancelUrl')
         return subscriptions().checkout(billable(), body.plan, {
-          successUrl: body.successUrl ?? options.successUrl,
-          cancelUrl: body.cancelUrl ?? options.cancelUrl,
+          successUrl,
+          cancelUrl,
           ...(body.period !== undefined ? { period: body.period } : {}),
         })
       },
@@ -205,10 +282,11 @@ export function billingRoutes(options: BillingRoutesOptions): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/billing/portal',
-      ...(authMeta ? { meta: authMeta } : {}),
+      ...(meta ? { meta } : {}),
       body: z.object({ returnUrl: z.string().url().optional() }).optional(),
       async handler({ body }) {
-        return subscriptions().portal(billable(), { returnUrl: body?.returnUrl ?? portalReturn })
+        const returnUrl = allowedRedirect(body?.returnUrl, portalReturn, 'returnUrl')
+        return subscriptions().portal(billable(), { returnUrl })
       },
     }),
   ]

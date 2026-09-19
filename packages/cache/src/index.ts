@@ -100,13 +100,18 @@ function isSwr(value: DurationInput | SwrOptions): value is SwrOptions {
 
 const defaultScope = (): string | undefined => {
   const tenant = tryCtx()?.['tenant'] as { id?: string } | undefined
-  return tenant?.id ? `tenant:${tenant.id}` : undefined
+  // The id is encoded, not concatenated raw: ':' is the key delimiter, so a
+  // tenant id like 'globex:user' would otherwise address (read, poison, flush)
+  // globex's 'user:*' keys. encodeURIComponent is injective and leaves the
+  // canonical tenant-id grammar (a-z, 0-9, '-', '_') unchanged, so existing
+  // keys keep their layout.
+  return tenant?.id ? `tenant:${encodeURIComponent(tenant.id)}` : undefined
 }
 
 export class Cache {
   private readonly prefix: string
   private readonly scope: (() => string | undefined) | null
-  private readonly onMissingScope: 'global' | 'error'
+  private readonly onMissingScope: 'global' | 'error' | undefined
   private readonly now: () => number
   /** dedupe of in-flight factories — per-process stampede protection (also dedupes SWR revalidation) */
   private readonly pending = new Map<string, Promise<unknown>>()
@@ -123,7 +128,7 @@ export class Cache {
   ) {
     this.prefix = options.prefix ?? 'basalt'
     this.scope = options.scope === undefined ? defaultScope : options.scope
-    this.onMissingScope = options.onMissingScope ?? 'global'
+    this.onMissingScope = options.onMissingScope
     this.now = options.now ?? Date.now
   }
 
@@ -168,7 +173,7 @@ export class Cache {
     // EVERY tenant's cache. In a single-tenant app the whole prefix IS this
     // app's cache, which is exactly what flush() means — so it proceeds.
     // `scope:null` (deliberate global) is fine either way.
-    const failClosed = this.tenancyActive() || this.onMissingScope === 'error'
+    const failClosed = this.tenancyActive() || this.missingScopeMode() === 'error'
     if (failClosed && this.scope !== null && this.scope() === undefined) {
       throw new MissingCacheScopeError('flush')
     }
@@ -294,12 +299,23 @@ export class Cache {
   private root(): string {
     if (this.scope === null) return `${this.prefix}:` // deliberate global cache
     const scope = this.scope()
-    if (scope === undefined && this.onMissingScope === 'error') throw new MissingCacheScopeError('operation')
+    if (scope === undefined && this.missingScopeMode() === 'error') throw new MissingCacheScopeError('operation')
     return scope ? `${this.prefix}:${scope}:` : `${this.prefix}:`
   }
 
   private key(key: string): string {
     return this.root() + key
+  }
+
+  /**
+   * An explicit `onMissingScope` wins. Otherwise a cache on the default tenant
+   * scope fails closed whenever tenancy is registered — read on every
+   * operation, so it does not depend on plugin order (a cache resolved before
+   * tenancyPlugin registered) — and uses the global namespace when it is not.
+   */
+  private missingScopeMode(): 'global' | 'error' {
+    if (this.onMissingScope !== undefined) return this.onMissingScope
+    return this.scope === defaultScope && this.tenancyActive() ? 'error' : 'global'
   }
 }
 
@@ -333,12 +349,10 @@ export function cachePlugin(options: CachePluginOptions = {}) {
         // with no resolvable tenant scope throws instead of silently sharing
         // one global namespace across tenants. Single-tenant apps (no tenancy)
         // are untouched, and an explicit `onMissingScope`/custom `scope` wins.
+        // Read lazily (per operation, inside Cache), so the marker is seen even
+        // when this singleton is resolved before tenancyPlugin has registered.
         const tenancyActive = () => ensureMetadata(container).get('tenancy:active').length > 0
-        const resolved: CacheOptions =
-          options.onMissingScope === undefined && options.scope === undefined && tenancyActive()
-            ? { ...options, onMissingScope: 'error' }
-            : options
-        return new Cache(driver, resolved, tenancyActive)
+        return new Cache(driver, options, tenancyActive)
       })
     },
     async shutdown() {

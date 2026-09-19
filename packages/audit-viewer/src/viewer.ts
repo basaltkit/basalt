@@ -8,6 +8,18 @@ export class AuditTenantRequiredError extends BasaltError {
   }
 }
 
+/**
+ * An explicit `tenantId` named a different tenant than the one the call runs
+ * in. The context tenant is authoritative; an argument may narrow to it, never
+ * widen past it.
+ */
+export class AuditTenantMismatchError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('AUDIT_TENANT_MISMATCH', 'The tenantId does not match the current tenant.')
+  }
+}
+
 export interface ViewerQuery {
   /** Wildcard pattern over the event name (e.g. `auth:**`). */
   event?: string
@@ -158,8 +170,14 @@ export class AuditViewer {
    * ambient tenant whenever one exists.
    */
   private tenant(explicit?: string): string | undefined {
-    const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (id) return id
+    // The context tenant wins: an explicit value is only honoured when it
+    // agrees with it, or when there is no context tenant (jobs, CLI, scripts).
+    const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    if (ambient) {
+      if (explicit !== undefined && explicit !== ambient) throw new AuditTenantMismatchError()
+      return ambient
+    }
+    if (explicit) return explicit
     if (this.tenancyActive()) throw new AuditTenantRequiredError()
     return undefined
   }

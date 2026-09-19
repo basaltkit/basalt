@@ -277,7 +277,10 @@ const app = await createApp({
 
 When the limit is exceeded, the client receives `429` with the `RATE_LIMITED` code and the `Retry-After` header. Every response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`.
 
-The default storage is in memory (`MemoryRateLimitStore`) — per process. For a cluster, use the bundled `RedisRateLimitStore`, or implement `RateLimitStore` yourself and pass it in `rateLimit.store`:
+The default storage is in memory (`MemoryRateLimitStore`) — per process, and bounded:
+expired buckets are swept as traffic arrives and at most `maxEntries` (default `100_000`)
+are kept, evicting the oldest window first (`new MemoryRateLimitStore({ maxEntries })`).
+For a cluster, use the bundled `RedisRateLimitStore`, or implement `RateLimitStore` yourself and pass it in `rateLimit.store`:
 
 ```ts
 import { RedisRateLimitStore, securityPlugin } from '@basaltkit/http'
@@ -294,7 +297,11 @@ every caller shares one bucket (fail closed). Behind a trusted proxy, configure 
 adapter to populate `request.ip` (on Fastify: `fastify: { trustProxy: true }`).
 
 **Per-route override.** A route carrying `meta.rateLimit` gets its own bucket, keyed by
-client **and** route, at a stricter threshold — so login can be tighter than the rest:
+client **and** route pattern, at a stricter threshold — so login can be tighter than the
+rest. It is enforced by a route guard the plugin registers, so it holds on Fastify,
+Express and Hono alike, and when the route runs as an MCP tool. (On Express and Hono the
+request also counts against the global bucket, since their edge hook runs before
+routing; on Fastify it is counted once.)
 
 ```ts
 route({
@@ -474,6 +481,7 @@ readonly field — it is a boot failure, never an HTTP response.
 | `frameOptions` | `'DENY' \| 'SAMEORIGIN' \| false` | `'DENY'` | Clickjacking. Loosen only if you intentionally frame your own pages. |
 | `referrerPolicy` | `string \| false` | `'no-referrer'` | Keeps URLs (which often carry ids/tokens) out of outbound `Referer` headers. |
 | `crossOriginOpenerPolicy` | `string \| false` | `'same-origin'` | Process-isolates the page from cross-origin openers. |
+| `cacheControl` | `string \| false` | `DEFAULT_CACHE_CONTROL` = `'no-store'` | **On by default.** Keeps responses carrying tokens, API keys or MFA secrets out of browser and proxy caches. A route that is safe to cache sets its own `Cache-Control` (it replaces this one) — e.g. `private, no-cache` on `meta.etag` routes. |
 | `contentSecurityPolicy` | `string \| false` | `DEFAULT_CSP` = `"default-src 'none'; frame-ancestors 'none'"` | **On by default.** Correct for a JSON API (renders nothing, frames nothing). Pass your own string for HTML routes, or `false` to omit the header — but prefer a route-scoped `pageCsp()` over disabling it app-wide. |
 
 `CorsOptions`:

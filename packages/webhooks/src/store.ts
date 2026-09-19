@@ -22,8 +22,22 @@ export function matchesEvent(patterns: string[], event: string): boolean {
   })
 }
 
+/**
+ * Normalises a store's tenant argument: only a non-empty string names a tenant.
+ * `undefined`, `null`, `''` (or anything else) mean "no tenant" — fail-closed.
+ */
+function storeTenantId(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
 /** Where webhook subscriptions live. Default in-memory; back it with a DB in production. */
 export interface WebhookStore {
+  /**
+   * Active endpoints subscribed to `event`, fail-closed on tenancy: with a
+   * `tenantId`, that tenant's endpoints plus tenant-agnostic ones; WITHOUT one
+   * (or with `null`/`''`), tenant-agnostic endpoints ONLY — never every
+   * tenant's. A deliberate system-wide read goes through `list()` instead.
+   */
   forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]>
   add(endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string }): Promise<WebhookEndpoint>
   /** Removes an endpoint. When `tenantId` is given, only if it owns the endpoint. */
@@ -35,11 +49,12 @@ export class MemoryWebhookStore implements WebhookStore {
   private readonly endpoints = new Map<string, WebhookEndpoint>()
 
   async forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]> {
+    const scope = storeTenantId(tenantId)
     return [...this.endpoints.values()].filter(
       (endpoint) =>
         (endpoint.active ?? true) &&
         matchesEvent(endpoint.events, event) &&
-        (tenantId === undefined || endpoint.tenantId === undefined || endpoint.tenantId === tenantId),
+        (endpoint.tenantId === undefined || (scope !== undefined && endpoint.tenantId === scope)),
     )
   }
 

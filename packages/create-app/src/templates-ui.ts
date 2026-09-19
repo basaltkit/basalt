@@ -1,7 +1,4 @@
-import type { ProjectOptions } from './templates.js'
-
-/** Kept in sync with the monorepo release line (mirror of templates.ts). */
-const BASALT_VERSION = '^1.0.0'
+import { versionOf, type ProjectOptions } from './templates.js'
 
 /**
  * The `web/` frontend emitted when `--ui` is passed: a Vite + React app on
@@ -34,9 +31,9 @@ function webPackageJson(options: ProjectOptions): string {
       type: 'module',
       scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' },
       dependencies: {
-        '@basaltkit/admin': BASALT_VERSION,
-        '@basaltkit/admin-shadcn': BASALT_VERSION,
-        '@basaltkit/sdk': BASALT_VERSION,
+        '@basaltkit/admin': versionOf('@basaltkit/admin'),
+        '@basaltkit/admin-shadcn': versionOf('@basaltkit/admin-shadcn'),
+        '@basaltkit/sdk': versionOf('@basaltkit/sdk'),
         react: '^18.3.1',
         'react-dom': '^18.3.1',
         // Matches the peer every @basaltkit package now declares. Scaffolding a

@@ -49,7 +49,10 @@ export function pinnedRequest(url: URL, init: PinnedRequestInit, pinned: Validat
 
     const req = mod.request(options, (res) => {
       const status = res.statusCode ?? 0
-      res.resume() // drain so the socket is freed; we only need the status line
+      // Only the status line matters. Destroy the response (and its socket)
+      // instead of draining the body: draining is unbounded in time and bytes, so
+      // a receiver trickling an endless body would pin sockets/FDs indefinitely.
+      res.destroy()
       resolve({ ok: status >= 200 && status < 300, status, type: 'basic' })
     })
     req.on('error', reject)

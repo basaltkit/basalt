@@ -514,3 +514,74 @@ describe('deliverLocal crash-safety (review 2026-08-b, Q-3)', () => {
     expect(seen).toEqual([{ tenantId: 't', channel: 'c', event: 'e', data: 1 }])
   })
 })
+
+describe('security: realtime (tenant, channel) keys cannot collide across tenants', () => {
+  it("a tenant id containing the NUL key delimiter does not receive another tenant's channel", async () => {
+    const hub = new RealtimeHub()
+    await hub.start()
+    // attacker tenant 'acme<NUL>x' + channel 'y' used to share the map key of
+    // tenant 'acme' + channel 'x<NUL>y' (the hub joined them with a NUL)
+    const attacker = new FakeConnection('evil', 'acme\u0000x', 'u-evil')
+    const victim = new FakeConnection('v', 'acme', 'u-victim')
+    hub.register(attacker)
+    hub.register(victim)
+    await hub.subscribe('evil', 'y')
+    await hub.subscribe('v', 'x\u0000y')
+
+    await hub.publish('acme', 'x\u0000y', 'secret', { payroll: 1 })
+    expect(victim.received).toHaveLength(1)
+    expect(attacker.received).toHaveLength(0)
+
+    // and the reverse direction: attacker cannot inject into acme's channel
+    await hub.publish('acme\u0000x', 'y', 'spoof', {})
+    expect(victim.received).toHaveLength(1)
+    expect(attacker.received).toHaveLength(1)
+
+    // presence/count do not leak across the boundary either
+    expect(hub.presence('acme', 'x\u0000y')).toEqual(['u-victim'])
+    expect(hub.count('acme\u0000x', 'y')).toBe(1)
+  })
+})
+
+describe('security: re-registering a connection id never inherits the previous subscriptions', () => {
+  it("a connection from another tenant that reuses a live id does not receive the old tenant's channels", async () => {
+    const hub = new RealtimeHub()
+    await hub.start()
+    // An app that lets the client pick (or echo back) its connection id, e.g.
+    // for reconnection. The id alone must not carry another tenant's channels.
+    const victim = new FakeConnection('shared-id', 'acme', 'u-victim')
+    hub.register(victim)
+    await hub.subscribe('shared-id', 'payroll')
+
+    const attacker = new FakeConnection('shared-id', 'globex', 'u-evil')
+    hub.register(attacker)
+
+    await hub.publish('acme', 'payroll', 'salary', { amount: 1 })
+    expect(attacker.received).toHaveLength(0)
+    expect(hub.count('acme', 'payroll')).toBe(0)
+    expect(hub.presence('acme', 'payroll')).toEqual([])
+
+    // The newcomer starts clean: it can subscribe within its own tenant only.
+    await hub.subscribe('shared-id', 'payroll')
+    await hub.publish('acme', 'payroll', 'salary', { amount: 2 })
+    expect(attacker.received).toHaveLength(0)
+    await hub.publish('globex', 'payroll', 'salary', { amount: 3 })
+    expect(attacker.received).toHaveLength(1)
+
+    // Unregistering the newcomer leaves no stale entry behind in acme's channel.
+    hub.unregister('shared-id')
+    expect(hub.count('acme', 'payroll')).toBe(0)
+    expect(hub.count('globex', 'payroll')).toBe(0)
+  })
+
+  it('re-registering the same connection object keeps its subscriptions (idempotent)', async () => {
+    const hub = new RealtimeHub()
+    await hub.start()
+    const conn = new FakeConnection('c1', 'acme', 'u1')
+    hub.register(conn)
+    await hub.subscribe('c1', 'notes')
+    hub.register(conn)
+    await hub.publish('acme', 'notes', 'created', {})
+    expect(conn.received).toHaveLength(1)
+  })
+})

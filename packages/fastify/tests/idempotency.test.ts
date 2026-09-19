@@ -65,7 +65,7 @@ async function boot() {
 describe('idempotencyPlugin', () => {
   it('replays the first response for a repeated key and runs the handler once', async () => {
     const { app, server } = await boot()
-    const headers = { 'idempotency-key': 'abc-123' }
+    const headers = { authorization: 'Bearer user-1', 'idempotency-key': 'abc-123' }
 
     const first = await server.inject({ method: 'POST', url: '/charge', headers, payload: { amount: 10 } })
     const second = await server.inject({ method: 'POST', url: '/charge', headers, payload: { amount: 10 } })
@@ -80,7 +80,7 @@ describe('idempotencyPlugin', () => {
 
   it('scopes keys by route — same key on another endpoint does not collide', async () => {
     const { app, server } = await boot()
-    const headers = { 'idempotency-key': 'shared' }
+    const headers = { authorization: 'Bearer user-1', 'idempotency-key': 'shared' }
     const a = await server.inject({ method: 'POST', url: '/charge', headers, payload: { amount: 1 } })
     const b = await server.inject({ method: 'POST', url: '/boom', headers })
     expect(a.statusCode).toBe(201)
@@ -90,7 +90,7 @@ describe('idempotencyPlugin', () => {
 
   it('does not cache 5xx — the client can retry', async () => {
     const { app, server } = await boot()
-    const headers = { 'idempotency-key': 'retry-me' }
+    const headers = { authorization: 'Bearer user-1', 'idempotency-key': 'retry-me' }
     const first = await server.inject({ method: 'POST', url: '/boom', headers })
     const second = await server.inject({ method: 'POST', url: '/boom', headers })
     expect(first.statusCode).toBe(500)
@@ -128,7 +128,7 @@ describe('idempotencyPlugin', () => {
       plugins: [fastifyPlugin({ routes: slowRoutes }), idempotencyPlugin({ store })],
     }).boot()
     const server = app.container.get(FASTIFY)
-    const headers = { 'idempotency-key': 'race-1' }
+    const headers = { authorization: 'Bearer user-1', 'idempotency-key': 'race-1' }
 
     const [a, b] = await Promise.all([
       server.inject({ method: 'POST', url: '/charge', headers, payload: { amount: 10 } }),
@@ -150,7 +150,7 @@ describe('idempotencyPlugin', () => {
       plugins: [fastifyPlugin({ routes }), idempotencyPlugin({ store })],
     }).boot()
     const server = app.container.get(FASTIFY)
-    const headers = { 'idempotency-key': 'replay-1' }
+    const headers = { authorization: 'Bearer user-1', 'idempotency-key': 'replay-1' }
 
     const first = await server.inject({ method: 'POST', url: '/charge', headers, payload: { amount: 7 } })
     const second = await server.inject({ method: 'POST', url: '/charge', headers, payload: { amount: 7 } })

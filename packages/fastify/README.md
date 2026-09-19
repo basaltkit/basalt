@@ -209,9 +209,19 @@ curl -X POST http://localhost:3000/charge \
 Rules:
 - A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - Responses `>= 500` are **not** stored — genuine failures can still be retried.
-- Keys are scoped by **caller credential + method + route + key**. The credential is a
-  short sha256 fingerprint of `Authorization` (or `x-session-id`), so one user's cached
-  response can never be replayed to another — a cross-tenant leak.
+- Keys are scoped by **caller credentials + tenant + method + route + key**, and the store
+  only ever sees a SHA-256 hash of that scope. The credentials are every header in
+  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`, `x-api-key`)
+  and the tenant is `x-tenant-id` + `host`, so one user's cached response can never be
+  replayed to another. The replay runs before route guards — if your app authenticates
+  with a different header, add it to `credentialHeaders`.
+- Requests carrying **none** of the credential headers are not cached or replayed:
+  anonymous callers have no identity to scope a replay by. Opt in explicitly with
+  `allowAnonymous: true` only for public endpoints whose responses hold nothing private.
+- An `Idempotency-Key` longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
+- `MemoryIdempotencyStore` sweeps expired entries lazily and is capped
+  (`new MemoryIdempotencyStore(ttlMs, clock, { maxEntries })`, default 10 000; the oldest
+  entries are evicted first).
 - The reservation is taken with an **atomic** `setPending()` before the handler runs. A
   plain get-then-set has a TOCTOU window where two concurrent first-time requests both
   execute — the double-charge this plugin exists to prevent.

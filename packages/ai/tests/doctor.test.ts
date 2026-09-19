@@ -106,6 +106,59 @@ describe('missing-tenant-membership (custodian for F1)', () => {
     const ids = runDoctor(ctx).map((x) => x.id)
     expect(ids).not.toContain('missing-tenant-membership')
   })
+  it('is not silenced by a COMMENTED-OUT tenantMembershipPlugin() (security)', () => {
+    // The realistic regression: production 403s until members are seeded, so a
+    // developer comments the guard out — the doctor must still flag the app.
+    for (const disabled of [
+      '// tenantMembershipPlugin(),',
+      '/* tenantMembershipPlugin(), */',
+      '/*\n tenantMembershipPlugin({ role: "member" }),\n */',
+    ]) {
+      const ctx = detectProject('/commented', memoryReader({ ...base, 'src/app.ts': appWith('').replace('teamsPlugin(),', `teamsPlugin(),\n      ${disabled}`) }))
+      const d = runDoctor(ctx).find((x) => x.id === 'missing-tenant-membership')
+      expect(d?.severity, disabled).toBe('error')
+    }
+  })
+
+  it('is not silenced by the plugin name inside a string literal', () => {
+    const app = appWith('').replace('teamsPlugin(),', "teamsPlugin(),\n      log('TODO: tenantMembershipPlugin() later'),")
+    const d = runDoctor(detectProject('/string', memoryReader({ ...base, 'src/app.ts': app }))).find((x) => x.id === 'missing-tenant-membership')
+    expect(d?.severity).toBe('error')
+  })
+
+  it('still sees a real registration next to comments and URL strings', () => {
+    const app = appWith('tenantMembershipPlugin').replace(
+      'securityPlugin(),',
+      "securityPlugin({ cors: { origin: ['https://app.example.com'] } }), // https://x/*y\n      /* note */",
+    )
+    const ids = runDoctor(detectProject('/mixed', memoryReader({ ...base, 'src/app.ts': app }))).map((x) => x.id)
+    expect(ids).not.toContain('missing-tenant-membership')
+    expect(ids).not.toContain('missing-security-plugin')
+  })
+
+  it('fires even when @basaltkit/teams is NOT installed (security: never silent on tenancy + auth)', () => {
+    const noTeams = {
+      'package.json': JSON.stringify({
+        dependencies: { '@basaltkit/fastify': '^1.0.0', '@basaltkit/tenancy': '^1.0.0', '@basaltkit/auth': '^1.0.0' },
+      }),
+      'src/env.ts': 'APP_SECRET: secret({ minLength: 32 }),',
+      'src/app.ts': `
+        import { securityPlugin, fastifyPlugin } from '@basaltkit/fastify'
+        import { tenancyPlugin, headerResolver, MemoryTenantSource } from '@basaltkit/tenancy'
+        import { authPlugin, MemoryUserSource } from '@basaltkit/auth'
+        export const app = createApp({ plugins: [
+          securityPlugin(),
+          tenancyPlugin({ source: new MemoryTenantSource(), resolvers: [headerResolver()] }),
+          authPlugin({ users: new MemoryUserSource(), secret: env.APP_SECRET }),
+          fastifyPlugin({ routes: [] }),
+        ] })
+      `,
+    }
+    const d = runDoctor(detectProject('/noteams', memoryReader(noTeams))).find((x) => x.id === 'missing-tenant-membership')
+    expect(d?.severity).toBe('error')
+    // Tells the developer to install the package that provides the guard.
+    expect(d?.recommended).toContain('@basaltkit/teams')
+  })
 })
 
 describe('runDoctor on a healthy project', () => {

@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata, tryCtx, type Container } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx, type BasaltHooks, type Container, type HookBus } from '@basaltkit/core'
 import {
   newDelegationId,
   type TemporaryGrant,
@@ -7,10 +7,38 @@ import {
   type DelegationStore,
 } from './delegation.js'
 import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/http'
-import { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError } from './errors.js'
+import { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError, ReservedScopeError } from './errors.js'
 
-export { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError, PermissionDeniedError } from './errors.js'
+export {
+  AuthRequiredGuardError,
+  InvalidCanMetaError,
+  MissingPolicyError,
+  PermissionDeniedError,
+  ReservedScopeError,
+} from './errors.js'
 import { PermissionDeniedError } from './errors.js'
+
+declare module '@basaltkit/core' {
+  interface BasaltHooks {
+    /** A permission check refused the caller (`authorize()`, `meta.can`, audiences). */
+    'permission:denied': { userId: string; permission: string; scope: string }
+    /** `gate.assignRole()` gave a user a role. */
+    'permission:role_assigned': { userId: string; role: string; scope: string }
+    /** `gate.removeRole()` took a role away. */
+    'permission:role_removed': { userId: string; role: string; scope: string }
+    /** Permissions were granted — to a role (`role`) or directly to a user (`userId`). */
+    'permission:granted': {
+      role?: string
+      userId?: string
+      permissions: string[]
+      scope: string
+      /** Set for time-boxed grants (`grantTemporarily()`). */
+      expiresAt?: number
+    }
+    /** `gate.delegate()` let one user act with a subset of another's authority. */
+    'permission:delegated': { fromUserId: string; toUserId: string; permissions: string[]; scope: string; expiresAt?: number }
+  }
+}
 
 declare module '@basaltkit/http' {
   interface RouteMeta {
@@ -44,8 +72,53 @@ export interface AudienceRule {
 }
 
 
-/** Global scope key — role/permission grants outside any tenant. */
-export const GLOBAL_SCOPE = 'global'
+/**
+ * Global scope key — role/permission grants that apply in every tenant.
+ *
+ * Deliberately NOT a value a tenant id can take (no slug, hostname label, uuid
+ * or cuid contains '@'): grants are keyed by the tenant id, so a global scope
+ * spelt like a tenant id lets whoever owns a tenant with that id write
+ * platform-wide grants. The Gate also refuses to evaluate a tenant whose id is
+ * a reserved scope ({@link ReservedScopeError}).
+ */
+export const GLOBAL_SCOPE = '@global'
+
+/**
+ * The historic value of {@link GLOBAL_SCOPE} (≤ 1.4). Rows stored under it are
+ * NOT read as global unless the Gate is built with `readLegacyGlobalScope:
+ * true` — migrate them (`UPDATE … SET scope = '@global' WHERE scope = 'global'`)
+ * instead. A tenant whose id is `'global'` is always refused.
+ */
+export const LEGACY_GLOBAL_SCOPE = 'global'
+
+const RESERVED_SCOPES: ReadonlySet<string> = new Set([GLOBAL_SCOPE, LEGACY_GLOBAL_SCOPE])
+
+/**
+ * True when `id` is a scope the Gate reserves for global grants. Tenant
+ * registries (and anything that mirrors grants under a tenant id, like teams)
+ * should refuse such ids.
+ */
+export function isReservedScope(id: string): boolean {
+  return RESERVED_SCOPES.has(id)
+}
+
+/**
+ * The permission scope of the current request: the tenant id, or
+ * {@link GLOBAL_SCOPE} outside a tenant. Throws {@link ReservedScopeError} when
+ * the tenant id is itself a reserved scope.
+ */
+export function currentScope(): string {
+  const tenant: unknown = tryCtx()?.['tenant']
+  // No tenant at all is the central scope. A tenant that IS there but carries
+  // no usable id is a broken context, not a central request: falling back to
+  // GLOBAL_SCOPE would evaluate — and let default-scoped writes land in — the
+  // platform-wide bucket.
+  if (tenant === undefined || tenant === null) return GLOBAL_SCOPE
+  const id = typeof tenant === 'object' ? (tenant as { id?: unknown }).id : undefined
+  if (typeof id !== 'string' || id.length === 0) throw new ReservedScopeError('')
+  if (isReservedScope(id)) throw new ReservedScopeError(id)
+  return id
+}
 
 /**
  * Where grants live — the app's database in production. `scope` is the
@@ -66,8 +139,10 @@ export class MemoryAccessStore implements AccessStore {
   private readonly userPermissions = new Map<string, Set<string>>()
   private readonly rolePermissions = new Map<string, Set<string>>()
 
+  // JSON-encoded tuple, not `${scope}::${id}`: a separator that ids may contain
+  // makes ('a::b', 'c') and ('a', 'b::c') the same key.
   private key(a: string, scope: string): string {
-    return `${scope}::${a}`
+    return JSON.stringify([scope, a])
   }
 
   async getUserRoles(userId: string, scope: string): Promise<string[]> {
@@ -167,12 +242,31 @@ export interface GateOptions {
    * fall-through for apps that pass resources opportunistically.
    */
   onMissingPolicy?: 'error' | 'rbac'
+  /**
+   * Also read grants stored under the historic global scope `'global'`
+   * ({@link LEGACY_GLOBAL_SCOPE}) as global. Default `false`. A transition aid
+   * only: while it is on, anything that writes grants under a tenant id of
+   * `'global'` (e.g. teams mirroring a membership) writes global grants — so
+   * reserve that tenant id in your tenant registry, then migrate the rows to
+   * {@link GLOBAL_SCOPE} and turn this off.
+   */
+  readLegacyGlobalScope?: boolean
+  /**
+   * Hook bus to emit `permission:*` events on (denials, role and grant
+   * changes) — `permissionsPlugin` wires the app's bus, which `auditPlugin`
+   * captures by default.
+   */
+  hooks?: HookBus
 }
 
-const defaultScope = (): string => {
-  const tenant = tryCtx()?.['tenant'] as { id?: string } | undefined
-  return tenant?.id ?? GLOBAL_SCOPE
-}
+const defaultScope = currentScope
+
+type PermissionHook =
+  | 'permission:denied'
+  | 'permission:role_assigned'
+  | 'permission:role_removed'
+  | 'permission:granted'
+  | 'permission:delegated'
 
 export class Gate {
   /** The grants this gate reads. Exposed for `accessRoutes()`; treat as read-only. */
@@ -260,7 +354,75 @@ export class Gate {
   }
 
   private scopes(): string[] {
-    return [this.scope(), GLOBAL_SCOPE].filter((scope, index, all) => all.indexOf(scope) === index)
+    const scopes = [this.scope(), GLOBAL_SCOPE]
+    if (this.options.readLegacyGlobalScope) scopes.push(LEGACY_GLOBAL_SCOPE)
+    return scopes.filter((scope, index, all) => all.indexOf(scope) === index)
+  }
+
+  /** The union of the user's roles over every scope a check consults. */
+  async effectiveRoles(userId: string): Promise<string[]> {
+    const roles = new Set<string>()
+    for (const scope of this.scopes()) {
+      for (const role of await this.options.store.getUserRoles(userId, scope)) roles.add(role)
+    }
+    return [...roles]
+  }
+
+  /**
+   * The roles the audience guard confines on. Inside a tenant, the roles held
+   * IN that tenant decide; the global (and legacy) roles decide only when the
+   * tenant grants none. Not the {@link effectiveRoles} union: one unnamed
+   * global role (a baseline `user` every signup gets) would otherwise count as
+   * "something else" and un-confine a tenant's portal client in every tenant.
+   * A confined role assigned globally still confines wherever the user holds
+   * no tenant role, and a tenant role that no rule names still un-confines.
+   */
+  async audienceRoles(userId: string): Promise<string[]> {
+    const [current, ...fallback] = this.scopes()
+    const own = await this.options.store.getUserRoles(userId, current!)
+    if (own.length > 0) return [...new Set(own)]
+    const roles = new Set<string>()
+    for (const scope of fallback) {
+      for (const role of await this.options.store.getUserRoles(userId, scope)) roles.add(role)
+    }
+    return [...roles]
+  }
+
+  private async emit<K extends PermissionHook>(hook: K, payload: BasaltHooks[K]): Promise<void> {
+    await this.options.hooks?.emit(hook, payload)
+  }
+
+  /**
+   * Emits `permission:denied` and returns the error to throw. Every refusal
+   * the package makes goes through here, so the audit trail sees them all.
+   */
+  async denied(userId: string, permission: string): Promise<PermissionDeniedError> {
+    await this.emit('permission:denied', { userId, permission, scope: this.scope() })
+    return new PermissionDeniedError(permission)
+  }
+
+  /** Gives `userId` a role in `scope` (default: the current scope) and emits `permission:role_assigned`. */
+  async assignRole(userId: string, role: string, scope: string = this.scope()): Promise<void> {
+    await this.options.store.assignRole(userId, role, scope)
+    await this.emit('permission:role_assigned', { userId, role, scope })
+  }
+
+  /** Takes a role away and emits `permission:role_removed`. */
+  async removeRole(userId: string, role: string, scope: string = this.scope()): Promise<void> {
+    await this.options.store.removeRole(userId, role, scope)
+    await this.emit('permission:role_removed', { userId, role, scope })
+  }
+
+  /** Grants permissions to a role and emits `permission:granted`. */
+  async grantToRole(role: string, permissions: string[], scope: string = this.scope()): Promise<void> {
+    await this.options.store.grantToRole(role, permissions, scope)
+    await this.emit('permission:granted', { role, permissions, scope })
+  }
+
+  /** Grants permissions directly to a user and emits `permission:granted`. */
+  async grantToUser(userId: string, permissions: string[], scope: string = this.scope()): Promise<void> {
+    await this.options.store.grantToUser(userId, permissions, scope)
+    await this.emit('permission:granted', { userId, permissions, scope })
   }
 
   /** Standing grants (user + roles) plus active temporary grants — no delegation. */
@@ -313,6 +475,12 @@ export class Gate {
       ...(options.reason !== undefined ? { reason: options.reason } : {}),
     }
     await this.options.temporaryGrants.add(grant)
+    await this.emit('permission:granted', {
+      userId,
+      permissions,
+      scope: grant.scope,
+      expiresAt: grant.expiresAt,
+    })
     return grant
   }
 
@@ -335,20 +503,26 @@ export class Gate {
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
     }
     await this.options.delegations.add(delegation)
+    await this.emit('permission:delegated', {
+      fromUserId: delegation.fromUserId,
+      toUserId: delegation.toUserId,
+      permissions: delegation.permissions,
+      scope: delegation.scope,
+      ...(delegation.expiresAt !== undefined ? { expiresAt: delegation.expiresAt } : {}),
+    })
     return delegation
   }
 
   /** Like can(), but throws PERMISSION_DENIED (403). */
   async authorize(user: PolicyUser, permission: string, resource?: unknown): Promise<void> {
     if (!(await this.can(user, permission, resource))) {
-      throw new PermissionDeniedError(permission)
+      throw await this.denied(user.id, permission)
     }
   }
 
   async hasRole(user: PolicyUser, role: string): Promise<boolean> {
     if (await this.options.superAdmin?.(user)) return true
-    const scopes = [this.scope(), GLOBAL_SCOPE]
-    for (const scope of scopes) {
+    for (const scope of this.scopes()) {
       if ((await this.options.store.getUserRoles(user.id, scope)).includes(role)) return true
     }
     return false
@@ -396,7 +570,7 @@ export function accessRoutes(
         const store = options.store ?? (container?.has(GATE) ? container.get(GATE).store : undefined)
         if (!store) return { roles: [], permissions: [] }
 
-        const scope = (context?.['tenant'] as { id: string } | undefined)?.id ?? GLOBAL_SCOPE
+        const scope = currentScope()
         const roles = await store.getUserRoles(user.id, scope)
 
         // Direct grants plus everything each role carries. The union is what a
@@ -435,8 +609,8 @@ export type PermissionsPluginOptions = GateOptions & {
 export function permissionsPlugin(options: PermissionsPluginOptions) {
   return definePlugin({
     name: 'basalt:permissions',
-    register({ container }) {
-      container.singleton(GATE, () => new Gate(options))
+    register({ container, hooks }) {
+      container.singleton(GATE, () => new Gate({ ...options, hooks: options.hooks ?? hooks }))
 
       // Guard: routes declaring meta.can require the permission(s). A string
       // requires that permission; an array requires ALL of them (all-of). Any
@@ -477,11 +651,14 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
         // anonymous caller here would turn every public route into a 403.
         if (!actor) return
 
-        // `PolicyUser` is open (`[key: string]: unknown`), so `roles` arrives
-        // untyped even though `gate.actor()` is what filled it. Narrowed here
-        // rather than cast: a store that returned something else should make
-        // this guard do nothing, not throw inside a security check.
-        const raw = actor['roles']
+        // The tenant's own roles, or — when the tenant grants none — the
+        // global ones (`gate.audienceRoles()`). Not `actor.roles` alone (a
+        // confined role assigned globally would vanish inside a tenant and its
+        // holder reach internal routes), and not the union with global roles
+        // either (one unnamed global baseline role would un-confine a tenant's
+        // client everywhere). Narrowed rather than cast: a store returning
+        // non-strings must not throw here.
+        const raw: unknown = await gate.audienceRoles(actor.id)
         const roles: string[] = Array.isArray(raw) ? raw.filter((r): r is string => typeof r === 'string') : []
         // No roles at all is not an audience. Such a caller holds no permission
         // either, so `meta.can` already answers for every route that declares
@@ -502,11 +679,11 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
         // mentions an audience is not reachable by a confined role. Reversing
         // this — allow unless marked internal — is what let a portal client
         // read an internal listing.
-        if (typeof audience !== 'string') throw new PermissionDeniedError('audience')
+        if (typeof audience !== 'string') throw await gate.denied(actor.id, 'audience')
         // The union of what their rules allow: two confined roles each grant
         // reach to their own surface, and holding both grants reach to both.
         if (!confining.some((rule) => rule.allow.includes(audience))) {
-          throw new PermissionDeniedError(`audience:${audience}`)
+          throw await gate.denied(actor.id, `audience:${audience}`)
         }
       }
 

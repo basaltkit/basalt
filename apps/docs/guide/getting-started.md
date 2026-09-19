@@ -93,11 +93,13 @@ cp .env.example .env
 
 `.env.example` lists `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` and — with auth — a
 commented-out `APP_SECRET`. All of them are declared and validated in
-`src/env.ts` with [`@basaltkit/env`](/guide/config), and all have development
-defaults, so the app boots even with an empty environment. `APP_SECRET` uses
-`secret({ minLength: 32 })`: it falls back to a throwaway value in development
-and **refuses to boot in production** until you set a real one of at least 32
-characters (`openssl rand -base64 48`).
+`src/env.ts` with [`@basaltkit/env`](/guide/config). `pnpm dev` runs
+`src/dev.ts`, which sets `NODE_ENV=development` (unless it is already set), so
+the app boots even with an empty environment. `APP_SECRET` uses
+`secret({ minLength: 32 })`: it falls back to a throwaway value **only** with
+`NODE_ENV=development`/`test`. `pnpm start` runs `src/server.ts` directly, where
+an unset `NODE_ENV` counts as production, so it **refuses to boot** until you set
+a real `APP_SECRET` of at least 32 characters (`openssl rand -base64 48`).
 
 ::: tip `.env` is not loaded for you
 `defineEnv` reads `process.env` and nothing else — copying the file does not

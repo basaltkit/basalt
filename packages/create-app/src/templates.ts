@@ -11,48 +11,43 @@ export interface ProjectOptions {
   mcp: boolean
 }
 
-/** Base release line for @basaltkit/* deps. */
-const BASALT_VERSION = '^1.0.0'
+import { SCAFFOLD_VERSIONS } from './versions.js'
+
+export { SCAFFOLD_VERSIONS } from './versions.js'
 
 /**
- * Per-package range overrides. In semver 0.x, `^0.4.0` locks the minor, so a
- * package that advances past the base line needs its own range or a fresh app
- * can't install it. Add an entry when a package crosses a minor.
+ * The dependency range for a @basaltkit/* package: the current release line
+ * (`^<major>.<minor>.0`) of its workspace version, from the generated
+ * {@link SCAFFOLD_VERSIONS} map. Throws for an unknown package rather than
+ * guessing a range — a stale guess once pinned new apps to frozen 1.x lines.
  */
-const VERSIONS: Record<string, string> = {
-  // ai-mcp is on the 0.x line (published separately from the 1.x framework base).
-  '@basaltkit/ai-mcp': '^0.1.0',
+export const versionOf = (pkg: string): string => {
+  const range = SCAFFOLD_VERSIONS[pkg]
+  if (range === undefined) {
+    throw new Error(`create-basalt: no release line for ${pkg} — add it to scripts/sync-versions.mjs.`)
+  }
+  return range
 }
 
-/** The dependency range for a @basalt package (override, else the base line). */
-export const versionOf = (pkg: string): string => VERSIONS[pkg] ?? BASALT_VERSION
+/** True when the scaffold binds users to the tenant they act on (tenancy + auth). */
+export const enforcesMembership = (options: ProjectOptions): boolean => options.tenancy && options.auth
 
 export function packageJson(options: ProjectOptions): string {
-  const dependencies: Record<string, string> = {
-    '@basaltkit/config': BASALT_VERSION,
-    '@basaltkit/core': BASALT_VERSION,
-    '@basaltkit/env': BASALT_VERSION,
-    '@basaltkit/events': BASALT_VERSION,
-    '@basaltkit/fastify': BASALT_VERSION,
-    '@basaltkit/logger': BASALT_VERSION,
-    zod: '^4.0.0',
-  }
-  if (options.tenancy) dependencies['@basaltkit/tenancy'] = BASALT_VERSION
-  if (options.auth) dependencies['@basaltkit/auth'] = BASALT_VERSION
-  if (options.billing) dependencies['@basaltkit/subscriptions'] = BASALT_VERSION
-  if (options.mcp) dependencies['@basaltkit/mcp'] = BASALT_VERSION
+  const basalt = ['@basaltkit/config', '@basaltkit/core', '@basaltkit/env', '@basaltkit/events', '@basaltkit/fastify', '@basaltkit/logger']
+  if (options.tenancy) basalt.push('@basaltkit/tenancy')
+  if (options.auth) basalt.push('@basaltkit/auth')
+  // Tenancy + auth: @basaltkit/teams binds each user to the tenants they belong
+  // to (tenantMembershipPlugin) — without it x-tenant-id/Host is a free choice.
+  if (enforcesMembership(options)) basalt.push('@basaltkit/teams')
+  if (options.billing) basalt.push('@basaltkit/subscriptions')
+  if (options.mcp) basalt.push('@basaltkit/mcp')
   if (options.cli) {
     // Runtime deps: app.ts uses commandsPlugin (@basaltkit/cli); prisma powers
     // prismaPlugin + `basalt prisma:sync`. @basaltkit/generator is dev-only (below).
-    dependencies['@basaltkit/cli'] = BASALT_VERSION
-    dependencies['@basaltkit/prisma'] = BASALT_VERSION
+    basalt.push('@basaltkit/cli', '@basaltkit/prisma')
   }
-  // Apply per-package range overrides. Only @basaltkit/* packages: versionOf
-  // falls back to BASALT_VERSION, which would clobber third-party ranges
-  // (this once rewrote zod's range to the @basalt base line).
-  for (const pkg of Object.keys(dependencies)) {
-    if (pkg.startsWith('@basaltkit/')) dependencies[pkg] = versionOf(pkg)
-  }
+  const dependencies: Record<string, string> = { zod: '^4.0.0' }
+  for (const pkg of basalt) dependencies[pkg] = versionOf(pkg)
 
   const devDependencies: Record<string, string> = {
     '@basaltkit/testing': versionOf('@basaltkit/testing'),
@@ -81,7 +76,9 @@ export function packageJson(options: ProjectOptions): string {
       private: true,
       type: 'module',
       scripts: {
-        dev: 'tsx watch src/server.ts',
+        // dev opts into NODE_ENV=development (src/dev.ts); start does not, so an
+        // unset NODE_ENV counts as production and secrets are required.
+        dev: 'tsx watch src/dev.ts',
         start: 'tsx src/server.ts',
         test: 'vitest run',
         typecheck: 'tsc --noEmit',
@@ -127,11 +124,13 @@ export const env = defineEnv({
   // Typed against the logger's LogLevel union — a free-form string here fails
   // \`pnpm typecheck\` where loggerPlugin({ level }) consumes it.
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),${
+  // Unset counts as production (fail-closed); \`pnpm dev\` sets development.
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),${
     options.auth
       ? `
-  // Signs JWTs and sessions. secret() is fail-closed: required in production
-  // (no fallback), rejected if it looks like a placeholder. Dev uses devDefault.
+  // Signs JWTs and sessions. secret() is fail-closed: required unless NODE_ENV
+  // is explicitly development/test (no fallback when NODE_ENV is unset),
+  // rejected if it looks like a placeholder. \`pnpm dev\` uses devDefault.
   APP_SECRET: secret({ minLength: 32, devDefault: 'dev-only-insecure-secret-please-change-me' }),`
       : ''
   }
@@ -144,7 +143,7 @@ export function envExample(options: ProjectOptions): string {
 HOST=0.0.0.0
 LOG_LEVEL=info
 NODE_ENV=development
-${options.auth ? '# Required in production (the app refuses to boot without it).\n# Generate a strong one:  openssl rand -base64 48\n# APP_SECRET=\n' : ''}`
+${options.auth ? '# Required unless NODE_ENV is development/test — `pnpm start` refuses to boot\n# without it. Generate a strong one:  openssl rand -base64 48\n# APP_SECRET=\n' : ''}`
 }
 
 export function appTs(options: ProjectOptions): string {
@@ -161,8 +160,11 @@ export function appTs(options: ProjectOptions): string {
     `eventsPlugin()`,
     `securityPlugin({
       // Secure response headers (HSTS, X-Frame-Options, nosniff, …) are on by
-      // default. Turn on rate limiting and a CORS allow-list for production:
-      // rateLimit: { limit: 120, windowMs: 60_000 },
+      // default, and so is a global per-IP rate limit (auth routes add their
+      // own stricter budget). Behind a proxy, make the adapter set request.ip
+      // from it; with several replicas, pass a shared \`store\`.
+      rateLimit: { limit: 120, windowMs: 60_000 },
+      // Add a CORS allow-list if a browser app on another origin calls the API:
       // cors: { origin: ['https://app.example.com'], credentials: true },
     })`,
   ]
@@ -191,6 +193,25 @@ export function appTs(options: ProjectOptions): string {
     // authRoutes(): register, login, logout, refresh, me, email verification and
     // password recovery. mfaRoutes(): TOTP enroll/activate/status/disable.
     routesExpression = '[...appRoutes, ...authRoutes(), ...mfaRoutes()]'
+  }
+  if (enforcesMembership(options)) {
+    // Secure by default: the tenant comes from client input (x-tenant-id / Host),
+    // so it is identification, never authorization. tenantMembershipPlugin()
+    // rejects (403) every authenticated request for a tenant the user is not a
+    // member of. Routes that act outside a single tenant opt out with
+    // meta: { central: true }.
+    imports[0] = `import { createApp, definePlugin } from '@basaltkit/core'`
+    imports.push(`import { TEAMS, teamsPlugin, tenantMembershipPlugin } from '@basaltkit/teams'`)
+    plugins.push(`teamsPlugin({
+      // TODO: the default membership/invitation stores are in-memory — pass
+      // persistent ones (memberships, invitations) before production.
+    })`)
+    plugins.push(`// Rejects authenticated requests for a tenant the user is not a member of.
+      tenantMembershipPlugin()`)
+    plugins.push(`// Dev-only seed: each new registrant joins the 'demo' tenant so the scaffold
+      // works out of the box. Never in production — add members explicitly there
+      // (on tenant creation, or via TEAMS invite()/accept()).
+      ...(env.NODE_ENV === 'production' ? [] : [demoMembershipSeed()])`)
   }
   if (options.billing) {
     imports.push(`import { definePlans, subscriptionsPlugin } from '@basaltkit/subscriptions'`)
@@ -243,7 +264,23 @@ export function buildApp(options: BuildAppOptions = {}) {
     ],
   })
 }
+${
+  enforcesMembership(options)
+    ? `
+/** Dev-only: adds each new registrant as a member of the 'demo' tenant. */
+function demoMembershipSeed() {
+  return definePlugin({
+    name: 'app:demo-membership-seed',
+    register({ container, hooks }) {
+      hooks.on('auth:registered', async ({ user }) => {
+        await container.get(TEAMS).addMember('demo', user.id, 'member')
+      })
+    },
+  })
+}
 `
+    : ''
+}`
 }
 
 export function routesTs(options: ProjectOptions): string {
@@ -320,12 +357,30 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 `
 }
 
+/**
+ * `pnpm dev` entrypoint. Opts into NODE_ENV=development (dev secret defaults,
+ * pretty logs) unless NODE_ENV is already set, then starts the server. Kept out
+ * of server.ts on purpose: `pnpm start` runs server.ts directly, where an unset
+ * NODE_ENV counts as production and secrets are required (fail-closed).
+ */
+export function devTs(): string {
+  return `// Development entrypoint (\`pnpm dev\`). \`pnpm start\` runs server.ts directly,
+// where an unset NODE_ENV counts as production: secrets are then required.
+process.env['NODE_ENV'] ??= 'development'
+await import('./server.js')
+`
+}
+
 export function basaltBin(): string {
   return `#!/usr/bin/env node
 import { runCli } from '@basaltkit/cli'
 import { generatorCommands } from '@basaltkit/generator'
 import { prismaSyncCommand } from '@basaltkit/prisma'
-import { buildApp } from '../src/app.js'
+
+// Dev tooling: opt into development defaults unless NODE_ENV is already set
+// (imported dynamically below so env.ts is evaluated after this line).
+process.env['NODE_ENV'] ??= 'development'
+const { buildApp } = await import('../src/app.js')
 
 // The 'basalt' CLI: boots the app WITH the dev/CLI commands, runs one, shuts down.
 // The dev tools (@basaltkit/generator; add @basaltkit/ai for ai:*) are imported
@@ -484,6 +539,30 @@ export function mcpJson(_options: ProjectOptions): string {
     null,
     2,
   )}\n`
+}
+
+/**
+ * Keeps secrets and local state out of Docker build contexts, so a
+ * `COPY . .` can never bake `.env` or private keys into an image layer. Every
+ * rule is `**`-prefixed: .dockerignore patterns are anchored at the context
+ * root, so a bare `.env` or `*.pem` would still let `prisma/.env` or
+ * `certs/server.key` through.
+ */
+export function dockerignore(): string {
+  return `**/.env
+**/.env.*
+!**/.env.example
+**/.npmrc
+**/.git
+**/node_modules
+**/coverage
+**/*.log
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/.DS_Store
+`
 }
 
 export function gitignore(): string {

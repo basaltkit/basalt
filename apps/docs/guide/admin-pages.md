@@ -64,7 +64,7 @@ const app = await createApp({
         ...teamRoutes(), ...teamsUiRoutes(),        // → /team/ui
         ...billingRoutes({ successUrl: 'https://app/ok', cancelUrl: 'https://app/billing' }),
         ...billingUiRoutes({ plans }),              // → /billing/ui
-        ...auditViewerRoutes(),                     // → /audit/view
+        ...auditViewerRoutes({ meta: { teamRole: 'admin' } }), // → /audit/view
       ],
     }),
   ],
@@ -122,6 +122,23 @@ Serves **`/audit/view`**: browse the tenant's audit trail with filters (event,
 actor, source, time range), pagination and aggregate stats. The JSON behind it
 (`/audit`, `/audit/stats`, `/audit/:id`) is queryable directly too. Read-only —
 the trail stays append-only.
+
+The trail holds every user's actions, emails and event payloads, so
+`auditViewerRoutes()` **requires an authorization guard**: pass it as `meta`,
+merged into all four routes on top of `auth: true`. Without one it throws
+`AuditViewerUnguardedError` (`AUDIT_VIEWER_UNGUARDED`) when the routes are
+built. `allowAnyAuthenticated: true` is the explicit opt-out, for apps where
+every user is an administrator.
+
+```ts
+auditViewerRoutes({ meta: { can: 'audit:read' } })   // @basaltkit/permissions
+auditViewerRoutes({ meta: { teamRole: 'admin' } })   // @basaltkit/teams
+auditViewerRoutes({ allowAnyAuthenticated: true })   // every user may read the whole trail
+```
+
+Inside a tenant context an explicit `tenantId` passed to `AuditViewer` must name
+that tenant; any other value throws `AuditTenantMismatchError` (`403
+AUDIT_TENANT_MISMATCH`).
 
 ## Use the HTML directly
 

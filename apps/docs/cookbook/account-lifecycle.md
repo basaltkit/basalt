@@ -200,8 +200,11 @@ authPlugin({ users, secret, mfaIssuer: 'Acme' })
 ## 6. API keys
 
 `apiKeysPlugin()` authenticates `mk_live_…` keys (via `Authorization: Bearer`
-or `x-api-key`) and enforces **scopes** declared on routes. Keys are
-tenant-scoped and created by a logged-in user.
+or `x-api-key`) and enforces **scopes** declared on routes. Keys are created by
+a logged-in user (never by another key) and are bound to the tenant they were
+created in: a key is refused (`403 AUTH_APIKEY_TENANT_MISMATCH`) on a request
+that resolves any other tenant. A key without `*` only reaches routes declaring
+scopes it holds.
 
 ```ts
 apiKeysPlugin({ users })                 // `users` lets a key also populate ctx().user
@@ -244,13 +247,14 @@ import { TEAMS } from '@basaltkit/teams'
 await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 ```
 
-The `teamRole` guard protects admin actions; accepting an invite only needs a
-logged-in user.
+The `teamRole` guard protects admin actions. Accepting an invite needs a
+logged-in user whose email is verified and matches the invited address (section 3
+covers verification). Otherwise the route answers `403 TEAM_EMAIL_NOT_VERIFIED`.
 
 | Endpoint | Requires | |
 | --- | --- | --- |
 | `POST /team/invites` `{ email, role? }` | `admin` | emails a token via `team:invited` |
-| `POST /team/invites/accept` `{ token }` | login | enrolls the user at the invited role |
+| `POST /team/invites/accept` `{ token }` | login, verified email | enrolls the user at the invited role |
 | `GET /team/invites` · `DELETE /team/invites/:id` | `admin` | list / revoke pending |
 | `GET /team/members` | `member` | |
 | `PATCH /team/members/:userId` `{ role }` · `DELETE …` | `admin` | change role / remove |

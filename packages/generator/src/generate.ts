@@ -44,7 +44,7 @@ export function generateResource(name: string, options: GeneratorOptions = {}): 
     serviceFile(n, options),
     pluginFile(n, options),
     routesFile(n, options),
-    testFile(n),
+    testFile(n, options),
   ]
 }
 

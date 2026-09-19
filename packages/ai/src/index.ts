@@ -92,6 +92,7 @@ export type {
 
 // Implementation (spec §4 Implement) — execute a plan via the generator + review gate.
 export { runMake } from './make/make.js'
+export { assertSafePlan, UnsafePlanError } from './plan/identifiers.js'
 export { renderMakeResult } from './make/render.js'
 export { verifyProject, type VerifyResult } from './make/verify.js'
 export {

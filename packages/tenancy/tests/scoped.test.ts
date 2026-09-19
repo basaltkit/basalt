@@ -55,8 +55,9 @@ describe('tenantScoped', () => {
     })
   })
 
-  it('honours an explicit tenantId in where when no tenant is in context', () => {
-    expect(tenantScoped({ tenantId: 'globex' })).toEqual({ tenantId: 'globex' })
+  it('never uses a tenantId from where as the fallback when no tenant is in context', () => {
+    // where is routinely client-derived — system code pins a tenant with requireTenantId(id)
+    expect(() => tenantScoped({ tenantId: 'globex' })).toThrowError(TenantRequiredError)
   })
 
   it('fails closed with no tenant anywhere — never emits tenantId: undefined', () => {

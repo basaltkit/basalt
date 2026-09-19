@@ -283,6 +283,21 @@ comportamentos, todos verificáveis em `@basaltkit/events`:
   (`type: 'fixed'` mantém-no constante, `backoff: false` faz retry em cada tick).
   O calendário é **local ao processo** — sem alteração de schema, e um restart
   esquece-o, pelo que o pior caso é um retry antecipado. Continua at-least-once.
+  As entradas em backoff nunca enchem o lote — o relay pede mais entradas para as
+  saltar — por isso um destino em falha (ex. o endpoint de um tenant) não
+  consegue deixar as entradas mais recentes à espera.
+- **Um dispatch lento não serializa o lote.** Até `concurrency` entradas
+  (default 8) são despachadas em paralelo; define `concurrency: 1` para entrega
+  estritamente sequencial.
+- **Os tenants são servidos de forma justa.** Quando o backlog de um tenant enche
+  uma página inteira, o relay volta a consultar excluindo os tenants já vistos (o
+  `pending(limit, maxAttempts, filter)` do store) e intercala o lote em
+  round-robin por tenant — cada tenant mantém-se FIFO. Um tenant nunca tem mais
+  de `tenantConcurrency` dispatches em curso, e um flush espera no máximo
+  `dispatchTimeoutMs` por entrada: um dispatch mais lento continua *destacado*
+  (não é cancelado nem reenviado) e o resultado é registado quando termina. Um
+  tenant com um destino pendurado não consegue deixar os outros à espera, por
+  muito que emita.
 - **As entradas mortas são ruidosas.** Uma entrada que atinge `maxAttempts` é
   excluída dos futuros scans de `pending()` e reportada uma vez através de
   `onDead(entry, error)`; fica no store com o seu `lastError` para inspeção. Nada
@@ -321,12 +336,15 @@ outboxPlugin({
 | Opção | Tipo | Predefinição | Para que serve |
 | --- | --- | --- | --- |
 | `dispatch` | `(entry: OutboxEntry) => void \| Promise<void>` | — (**obrigatório**) | Entrega uma entrada confirmada ao mundo exterior; lançar marca a entrada como falhada e agenda um retry |
-| `store` | `OutboxStore` | `new MemoryOutboxStore()` | Onde vivem as entradas — toda a garantia depende de este ser durável |
+| `store` | `OutboxStore` | `new MemoryOutboxStore()` | Onde vivem as entradas — toda a garantia depende de este ser durável. O store em memória guarda as últimas 1000 entradas publicadas (`new MemoryOutboxStore({ retainPublished })`) |
 | `captureEvents` | `string[]` | `[]` | Padrões de evento registados automaticamente (`'order.*'`); uma lista não vazia faz o plugin depender de `basalt:events` |
 | `intervalMs` | `number` | — (manual) | Intervalo de polling do relay. Omite para fazeres flush tu via o token `OUTBOX`; o temporizador tem `unref()` por isso nunca mantém o processo vivo |
 | `batchSize` | `number` | `50` | Entradas selecionadas por flush — sobe para throughput, desce para limitar o trabalho de um tick |
 | `maxAttempts` | `number` | `10` | Tentativas antes de uma entrada ficar morta e ser reportada ao `onDead` |
 | `backoff` | `OutboxBackoff \| false` | `{ type: 'exponential', delayMs: 1000, maxDelayMs: 60_000 }` | Ritmo de retry para entradas falhadas; `false` faz retry em cada tick |
+| `concurrency` | `number` | `8` | Entradas de um flush despachadas em paralelo, para que um destino pendurado ocupe um lugar e não o lote. `1` = sequencial |
+| `tenantConcurrency` | `number` | `ceil(concurrency / 2)` | Máximo de dispatches em curso de um tenant (ou de todas as entradas sem tenant juntas), entre flushes |
+| `dispatchTimeoutMs` | `number \| false` | `10_000` | Espera máxima por entrada antes de o flush avançar; o dispatch continua destacado e o resultado é registado na mesma. `false` espera indefinidamente |
 | `onDead` | `(entry, error) => void` | `console.error` | Uma entrada esgotou `maxAttempts` — chama alguém, isto é uma entrega externa perdida |
 | `onFlushError` | `(error) => void` | `console.error` | O flush falhou ao nível do store (tick do temporizador ou drenagem no encerramento). Nunca pode lançar |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |

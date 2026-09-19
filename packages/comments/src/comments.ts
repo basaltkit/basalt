@@ -16,6 +16,50 @@ export class CommentTenantRequiredError extends BasaltError {
   }
 }
 
+/**
+ * An explicit `tenantId` named a different tenant than the one the call runs
+ * in. The context tenant is authoritative; an argument may narrow to it, never
+ * widen past it.
+ */
+export class CommentTenantMismatchError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('COMMENT_TENANT_MISMATCH', 'The tenantId does not match the current tenant.')
+  }
+}
+
+/**
+ * `parentId` does not name a comment of the same thread. A reply may only hang
+ * off a comment of the resource it is posted on: linking it to another thread
+ * would sidestep that thread's authorization (a caller allowed on an open
+ * resource replying "into" a restricted one, notifying its author).
+ */
+export class CommentParentNotFoundError extends BasaltError {
+  readonly status = 400
+  constructor() {
+    super('COMMENT_PARENT_NOT_FOUND', 'The parent comment does not exist in this thread.')
+  }
+}
+
+export class CommentTooLongError extends BasaltError {
+  readonly status = 400
+  constructor(max: number) {
+    super('COMMENT_TOO_LONG', `A comment may be at most ${max} characters.`)
+  }
+}
+
+export class CommentMentionLimitError extends BasaltError {
+  readonly status = 400
+  constructor(max: number) {
+    super('COMMENT_TOO_MANY_MENTIONS', `A comment may mention at most ${max} users.`)
+  }
+}
+
+/** Default `maxBodyLength`. */
+export const DEFAULT_MAX_COMMENT_LENGTH = 10_000
+/** Default `maxMentions`. */
+export const DEFAULT_MAX_MENTIONS = 50
+
 /** A comment plus its nested replies. */
 export interface CommentNode extends Comment {
   replies: CommentNode[]
@@ -33,6 +77,22 @@ export interface CommentsOptions {
   hooks?: HookBus
   /** Regex whose first capture group is a mentioned user id. Default `@([\w-]+)`. */
   mentionPattern?: RegExp
+  /** Longest body accepted, in characters. Default {@link DEFAULT_MAX_COMMENT_LENGTH}. */
+  maxBodyLength?: number
+  /**
+   * Most distinct @mentions one comment may carry — each one emits a
+   * `comment:mentioned` hook (a notification). Default {@link DEFAULT_MAX_MENTIONS}.
+   */
+  maxMentions?: number
+  /**
+   * Filters the mentioned ids down to the users that may be mentioned — typically
+   * the members of `tenantId`. Ids it drops are neither stored nor notified.
+   *
+   * Without it every `@id` in the body is taken at face value, so a mention can
+   * address a user of another tenant: wire it whenever `comment:mentioned`
+   * reaches a real notification channel.
+   */
+  resolveMentions?: (ids: string[], tenantId: string) => string[] | Promise<string[]>
   now?: () => number
 }
 
@@ -69,6 +129,9 @@ export class Comments {
   private readonly store: CommentStore
   private readonly hooks: HookBus | undefined
   private readonly mentionPattern: RegExp
+  private readonly maxBodyLength: number
+  private readonly maxMentions: number
+  private readonly resolveMentions: CommentsOptions['resolveMentions']
   private readonly now: () => number
 
   constructor(
@@ -84,6 +147,9 @@ export class Comments {
     this.store = options.store ?? new MemoryCommentStore()
     this.hooks = options.hooks
     this.mentionPattern = options.mentionPattern ?? /@([\w-]+)/g
+    this.maxBodyLength = options.maxBodyLength ?? DEFAULT_MAX_COMMENT_LENGTH
+    this.maxMentions = options.maxMentions ?? DEFAULT_MAX_MENTIONS
+    this.resolveMentions = options.resolveMentions
     this.now = options.now ?? Date.now
   }
 
@@ -103,7 +169,8 @@ export class Comments {
   async edit(id: string, body: string, tenantId?: string): Promise<Comment> {
     const tenant = this.tenant(tenantId)
     if (!(await this.store.find(tenant, id))) throw new CommentNotFoundError()
-    const updated = await this.store.update(tenant, id, { body, mentions: this.mentions(body), editedAt: this.now() })
+    const mentions = await this.mentions(body, tenant)
+    const updated = await this.store.update(tenant, id, { body, mentions, editedAt: this.now() })
     await this.hooks?.emit('comment:updated', { comment: updated! })
     return updated!
   }
@@ -139,7 +206,13 @@ export class Comments {
     resourceId: string,
     input: AddCommentInput,
   ): Promise<Comment> {
-    const mentions = this.mentions(input.body)
+    const mentions = await this.mentions(input.body, tenantId)
+    if (input.parentId !== undefined) {
+      const parent = await this.store.find(tenantId, input.parentId)
+      if (!parent || parent.resourceType !== resourceType || parent.resourceId !== resourceId) {
+        throw new CommentParentNotFoundError()
+      }
+    }
     const comment: Comment = {
       id: randomUUID(),
       tenantId,
@@ -163,10 +236,23 @@ export class Comments {
     return (await this.store.update(tenant, id, patch))!
   }
 
-  private mentions(body: string): string[] {
+  /**
+   * Validates the body and extracts its mentions. Bounded on both counts: an
+   * unbounded body with one `@id` per few bytes turned a single request into
+   * hundreds of thousands of `comment:mentioned` notifications.
+   */
+  private async mentions(body: string, tenantId: string): Promise<string[]> {
+    if (body.length > this.maxBodyLength) throw new CommentTooLongError(this.maxBodyLength)
     const ids = new Set<string>()
-    for (const match of body.matchAll(this.mentionPattern)) if (match[1]) ids.add(match[1])
-    return [...ids]
+    for (const match of body.matchAll(this.mentionPattern)) {
+      if (!match[1]) continue
+      ids.add(match[1])
+      if (ids.size > this.maxMentions) throw new CommentMentionLimitError(this.maxMentions)
+    }
+    const found = [...ids]
+    if (!this.resolveMentions || found.length === 0) return found
+    const allowed = new Set(await this.resolveMentions(found, tenantId))
+    return found.filter((id) => allowed.has(id))
   }
 
   /**
@@ -177,8 +263,14 @@ export class Comments {
    * dimension, so every comment shares {@link SINGLE_TENANT_SCOPE}.
    */
   private tenant(explicit?: string): string {
-    const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (id) return id
+    // The context tenant wins: an explicit value is only honoured when it
+    // agrees with it, or when there is no context tenant (jobs, CLI, scripts).
+    const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    if (ambient) {
+      if (explicit !== undefined && explicit !== ambient) throw new CommentTenantMismatchError()
+      return ambient
+    }
+    if (explicit) return explicit
     if (this.tenancyActive()) throw new CommentTenantRequiredError()
     return SINGLE_TENANT_SCOPE
   }

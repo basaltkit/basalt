@@ -64,7 +64,7 @@ const app = await createApp({
         ...teamRoutes(), ...teamsUiRoutes(),        // → /team/ui
         ...billingRoutes({ successUrl: 'https://app/ok', cancelUrl: 'https://app/billing' }),
         ...billingUiRoutes({ plans }),              // → /billing/ui
-        ...auditViewerRoutes(),                     // → /audit/view
+        ...auditViewerRoutes({ meta: { teamRole: 'admin' } }), // → /audit/view
       ],
     }),
   ],
@@ -122,6 +122,23 @@ Serve **`/audit/view`**: navega no rasto de auditoria do tenant com filtros (eve
 ator, fonte, intervalo de tempo), paginação e estatísticas agregadas. O JSON por trás
 (`/audit`, `/audit/stats`, `/audit/:id`) também é consultável diretamente. Só-leitura —
 o rasto mantém-se append-only.
+
+O rasto guarda as ações, emails e payloads de eventos de todos os utilizadores,
+por isso `auditViewerRoutes()` **exige uma guarda de autorização**: passa-a como
+`meta`, fundida nas quatro rotas por cima de `auth: true`. Sem ela lança
+`AuditViewerUnguardedError` (`AUDIT_VIEWER_UNGUARDED`) quando as rotas são
+construídas. `allowAnyAuthenticated: true` é a exceção explícita, para apps em
+que todos os utilizadores são administradores.
+
+```ts
+auditViewerRoutes({ meta: { can: 'audit:read' } })   // @basaltkit/permissions
+auditViewerRoutes({ meta: { teamRole: 'admin' } })   // @basaltkit/teams
+auditViewerRoutes({ allowAnyAuthenticated: true })   // qualquer utilizador lê o rasto inteiro
+```
+
+Dentro de um contexto de tenant, um `tenantId` explícito passado ao `AuditViewer`
+tem de nomear esse tenant; qualquer outro valor lança `AuditTenantMismatchError`
+(`403 AUDIT_TENANT_MISMATCH`).
 
 ## Usar o HTML diretamente
 

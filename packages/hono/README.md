@@ -116,7 +116,11 @@ The adapter reads the body based on `Content-Type`: `application/json` → JSON 
 Hono and edge runtimes impose **no** default cap on a request body, so an upload is
 unbounded unless something stops it. The plugin installs a guard that rejects any request
 whose `Content-Length` exceeds the limit with `413` and
-`{ code: 'PAYLOAD_TOO_LARGE', message: … }` — **before the body is read**.
+`{ error: { code: 'PAYLOAD_TOO_LARGE', message: … } }` — **before the body is read**. Every
+other body (chunked, streamed, or with a small declared `Content-Length`) is counted as it is
+read and rejected the moment it crosses the limit, so the cap holds on the bytes actually
+received — the declared length is never trusted on its own. Routes mounted with
+`registerRoutes()` alone enforce the same limit.
 
 ```ts
 import { DEFAULT_BODY_LIMIT, honoPlugin } from '@basaltkit/hono'
@@ -125,8 +129,18 @@ honoPlugin({ routes, bodyLimit: 5 * 1024 * 1024 }) // 5 MiB
 DEFAULT_BODY_LIMIT // 1_048_576 — 1 MiB, the default
 ```
 
-> Note this checks the declared `Content-Length`; it is a cheap first line of defence, not
-> a streaming byte counter.
+### Client IP (`request.ip`)
+
+Per-client rate limiting (`securityPlugin`) and the IP login throttle key on `request.ip`.
+By default the adapter reads the socket address on `@hono/node-server` and Bun — never a
+client-controlled header. On other runtimes (edge, Deno) or behind a trusted proxy, pass a
+resolver; without one, a one-time warning is printed and rate limits share one bucket.
+
+```ts
+honoPlugin({ routes, getClientIp: (c) => c.req.header('cf-connecting-ip') }) // Cloudflare
+```
+
+Only read `X-Forwarded-For` if a proxy you control overwrites it.
 
 ### Guarded route meta — the boot check
 
@@ -266,7 +280,7 @@ registerRoutes(app, [ping]) // container, enrichers, and guards are optional
 export default app
 ```
 
-In this mode errors are still standardized (each handler wraps `toErrorResponse`), but there are no edge plugins and no route registration for OpenAPI/CLI.
+In this mode errors are still standardized (each handler wraps `toErrorResponse`) and each handler still enforces the body limit on the bytes read (`DEFAULT_BODY_LIMIT` unless you pass `bodyLimit`), but there are no edge plugins and no route registration for OpenAPI/CLI.
 
 ## API reference
 
@@ -278,7 +292,9 @@ In this mode errors are still standardized (each handler wraps `toErrorResponse`
 | `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
 | `app` | `Hono` | No | `new Hono()` | Bring your own Hono app; otherwise a new one is created. |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes. A later `hono.notFound(…)` of your own still wins; `false` opts out entirely. |
-| `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` = `1_048_576` (1 MiB) | Maximum request body in bytes. A request whose `Content-Length` exceeds it is rejected `413 PAYLOAD_TOO_LARGE` before the body is read — Hono/edge has no default cap of its own. |
+| `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` = `1_048_576` (1 MiB) | Maximum request body in bytes, enforced on the bytes read. A request whose `Content-Length` exceeds it is rejected `413 PAYLOAD_TOO_LARGE` before the body is read; a chunked/streamed body is cut off at the limit — Hono/edge has no default cap of its own. |
+| `getClientIp` | `(c: Context) => string \| undefined` | No | `defaultClientIp` (socket address on `@hono/node-server` / Bun) | Resolves `request.ip` for rate limiting and the IP login throttle. |
+| `onError` | `HttpErrorReporter` | No | `console.error`/`console.warn` | Where failed requests are reported. |
 
 Behavior: registers the Hono app on the `HONO` token and an `HttpServerCollector` on the `HTTP_SERVER` token. On the `app:booted` event it mounts, in order: *after-hooks* middleware (metrics/tracing, measuring duration), *pre-hooks* middleware (security/CORS/rate limit; if one of these responds, the route doesn't run), the Basalt routes, and the extra edge plugin routes (`/livez`, `/metrics`, `/openapi.json`, …). Publishes the routes to the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
@@ -297,7 +313,7 @@ reason about it or reuse it.
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
-| — | `PAYLOAD_TOO_LARGE` | 413 | Declared `Content-Length` exceeds `bodyLimit`. Body shape here is flat (`{ code, message }`), not the nested `{ error: … }` envelope. |
+| — | `PAYLOAD_TOO_LARGE` | 413 | The body (declared or actually read) exceeds `bodyLimit`. Same `{ error: { code, message } }` envelope as every other error. |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
 | — | `INTERNAL_ERROR` | 500 | Any other thrown error. The real message never reaches the client. |
 
@@ -305,7 +321,7 @@ reason about it or reuse it.
 
 Dependency injection token (`Token<Hono>`): `app.container.get(HONO)` returns the Hono app — use `hono.fetch` to serve (on Node via `@hono/node-server`, or export it in an edge runtime) and for testing.
 
-### `registerRoutes(app, routes, container?, enrichers?, guards?)`
+### `registerRoutes(app, routes, container?, enrichers?, guards?, onError?, getClientIp?, bodyLimit?)`
 
 | Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
@@ -314,10 +330,13 @@ Dependency injection token (`Token<Hono>`): `app.container.get(HONO)` returns th
 | `container` | `Container` | No | — | DI container; without it there's no per-request scope or enrichers/guards. |
 | `enrichers` | `RequestEnricher[]` | No | `[]` | Functions that enrich the context before the guards. |
 | `guards` | `RouteGuard[]` | No | `[]` | Functions that can reject the request (by throwing an error). |
+| `onError` | `HttpErrorReporter` | No | `console.error`/`console.warn` | Where failed requests are reported. A throwing reporter never changes the response. |
+| `getClientIp` | `ClientIpResolver` | No | `defaultClientIp` | Resolves `request.ip`. |
+| `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` | Maximum request body in bytes, counted while reading (a declared `Content-Length` is never trusted to bound the bytes). |
 
 ### What to import from where
 
-This package exports `honoPlugin`, `registerRoutes`, `HONO`, `DEFAULT_BODY_LIMIT`, and `HonoPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `NOT_FOUND_RESPONSE`, `sse`, `securityPlugin`, `RedisRateLimitStore`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, `escapeHtml`/`pageCsp`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**. (Unlike `@basaltkit/fastify`, this package re-exports nothing; that is a naming choice, not a capability gap.)
+This package exports `honoPlugin`, `registerRoutes`, `HONO`, `DEFAULT_BODY_LIMIT`, `defaultClientIp`, `ClientIpResolver`, and `HonoPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `NOT_FOUND_RESPONSE`, `sse`, `securityPlugin`, `RedisRateLimitStore`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, `escapeHtml`/`pageCsp`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**. (Unlike `@basaltkit/fastify`, this package re-exports nothing; that is a naming choice, not a capability gap.)
 
 ## Common errors and solutions (FAQ)
 

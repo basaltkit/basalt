@@ -192,7 +192,10 @@ await service.restore(candidate.id, process.env.RESTORE_DATABASE_URL!, {
 })
 ```
 
-`restore()` uses `--clean --if-exists --no-owner --exit-on-error`. It refuses
+`restore()` refuses with `BackupIntegrityError` when the manifest does not
+point at the canonical `<prefix>/<id>.dump` key or the artifact does not match
+the recorded SHA-256 checksum, before `pg_restore` runs. It then uses
+`--clean --if-exists --no-owner --exit-on-error`. It refuses
 production unless `allowProduction: true` is passed, and rejects a confirmation
 callback that returns `false`. Restore into a disposable database first; the
 destination may be different from the source database.
@@ -239,8 +242,11 @@ const dockerRunner = async (command, args, options) => {
       arg !== '--file' && args[index - 1] !== '--file',
     )
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('docker', ['exec', container, command, ...dumpArgs], {
+      // `-e PGPASSWORD` forwards the variable by name only, so the password
+      // never appears on the docker command line.
+      const child = spawn('docker', ['exec', '-e', 'PGPASSWORD', container, command, ...dumpArgs], {
         cwd: options.cwd,
+        env: { ...process.env, ...options.env },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       const output = createWriteStream(options.output)
@@ -263,15 +269,18 @@ const dockerRunner = async (command, args, options) => {
     await execFileAsync('docker', ['cp', input, `${container}:${remoteInput}`])
     try {
       const restoreArgs = [...args.slice(0, -1), remoteInput]
-      await execFileAsync('docker', ['exec', container, command, ...restoreArgs])
+      await execFileAsync('docker', ['exec', '-e', 'PGPASSWORD', container, command, ...restoreArgs], {
+        env: { ...process.env, ...options.env },
+      })
     } finally {
       await execFileAsync('docker', ['exec', container, 'rm', '-f', remoteInput])
     }
     return
   }
 
-  await execFileAsync('docker', ['exec', container, command, ...args], {
+  await execFileAsync('docker', ['exec', '-e', 'PGPASSWORD', container, command, ...args], {
     cwd: options.cwd,
+    env: { ...process.env, ...options.env },
   })
 }
 
@@ -315,6 +324,7 @@ This keeps deployment-specific process details out of the reusable package.
 | `args` | `string[]` | Argument list; never concatenate into a shell command. |
 | `options.cwd` | `string` | Temporary working directory for this operation. |
 | `options.output` | `string \| undefined` | Host path for `pg_dump` binary output. Required by streaming Docker runners. |
+| `options.env` | `Record<string, string> \| undefined` | Extra tool environment such as `PGPASSWORD`. The password is never on `args`; custom runners must forward this to the child process. |
 
 ### `BackupTarget`
 

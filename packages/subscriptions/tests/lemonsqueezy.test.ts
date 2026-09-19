@@ -62,7 +62,7 @@ describe('LemonSqueezyBillingGateway — API calls', () => {
     expect(calls[0]!.headers.accept).toBe('application/vnd.api+json')
     const body = JSON.parse(calls[0]!.body!)
     expect(body.data.type).toBe('checkouts')
-    expect(body.data.attributes.checkout_data.custom).toEqual({ billableId: 'acme' })
+    expect(body.data.attributes.checkout_data.custom).toEqual({ billableId: 'acme', plan: 'pro', period: 'monthly' })
     expect(body.data.relationships.store.data.id).toBe('42')
     expect(body.data.relationships.variant.data.id).toBe('var_pro_monthly')
   })

@@ -48,6 +48,18 @@ export class FileTenantRequiredError extends BasaltError {
   }
 }
 
+/**
+ * An explicit `tenantId` named a different tenant than the one the call runs
+ * in. The context tenant is authoritative; an argument may narrow to it, never
+ * widen past it.
+ */
+export class FileTenantMismatchError extends BasaltError {
+  readonly status = 403
+  constructor() {
+    super('FILE_TENANT_MISMATCH', 'The tenantId does not match the current tenant.')
+  }
+}
+
 export interface FileValidation {
   /** Max size in bytes. */
   maxSize?: number
@@ -84,8 +96,16 @@ export interface UploadInput {
  * dimension and nothing to cross.
  */
 export function resolveFileTenant(explicit: string | undefined, tenancyActive: boolean): string | undefined {
-  const id = explicit ?? (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-  if (id) return id
+  // The context tenant wins: an explicit value is only honoured when it agrees
+  // with it, or when there is no context tenant at all (jobs, CLI, scripts).
+  // Letting the argument override the context let a caller that forwards
+  // client input (`?tenantId=`) read and write another tenant's files.
+  const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+  if (ambient) {
+    if (explicit !== undefined && explicit !== ambient) throw new FileTenantMismatchError()
+    return ambient
+  }
+  if (explicit) return explicit
   if (tenancyActive) throw new FileTenantRequiredError()
   return undefined
 }
@@ -130,6 +150,8 @@ export class Files {
   private readonly maxTotalBytes: number | undefined
   private readonly checkQuota: FilesOptions['checkQuota']
   private readonly now: () => number
+  /** Per-scope tail of the upload chain — see {@link Files.serialized}. */
+  private readonly quotaQueues = new Map<string, Promise<unknown>>()
 
   constructor(
     options: FilesOptions,
@@ -157,8 +179,33 @@ export class Files {
     const scope = tenantId ?? SINGLE_TENANT_SCOPE
     const size = content.length
     this.validate(input.contentType, size)
-    await this.enforceQuota(scope, size)
 
+    const quotaEnforced = this.maxTotalBytes !== undefined || this.checkQuota !== undefined
+    const store = async (): Promise<FileRecord> => {
+      await this.enforceQuota(scope, size)
+      const record = await this.write(content, input, tenantId, scope)
+      // Re-checked after the insert: the in-process queue cannot see uploads
+      // handled by another instance against the same store. An overrun found
+      // here is rolled back rather than kept.
+      if (this.maxTotalBytes !== undefined && (await this.store.totalSize(scope)) > this.maxTotalBytes) {
+        await this.store.delete(scope, record.id)
+        await this.inTenant(tenantId, () => this.disk.delete(record.path))
+        throw new StorageQuotaExceededError()
+      }
+      return record
+    }
+
+    const record = quotaEnforced ? await this.serialized(scope, store) : await store()
+    await this.hooks?.emit('file:uploaded', { file: record })
+    return record
+  }
+
+  private async write(
+    content: Buffer,
+    input: UploadInput,
+    tenantId: string | undefined,
+    scope: string,
+  ): Promise<FileRecord> {
     const id = randomUUID()
     const path = storagePath(id)
     const checksum = createHash('sha256').update(content).digest('hex')
@@ -169,7 +216,7 @@ export class Files {
       tenantId: scope,
       name: input.name,
       contentType: input.contentType,
-      size,
+      size: content.length,
       path,
       checksum,
       createdAt: this.now(),
@@ -177,8 +224,25 @@ export class Files {
       ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
     }
     await this.store.create(record)
-    await this.hooks?.emit('file:uploaded', { file: record })
     return record
+  }
+
+  /**
+   * Runs quota-checked uploads of one scope one at a time.
+   *
+   * The quota is check-then-act: read the total, then write. Run concurrently,
+   * every upload reads the same total and all of them pass, so twenty parallel
+   * uploads could each fit a quota that only one of them fits.
+   */
+  private serialized<T>(scope: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.quotaQueues.get(scope) ?? Promise.resolve()
+    const run = previous.then(fn, fn)
+    const tail = run.catch(() => undefined)
+    this.quotaQueues.set(scope, tail)
+    void tail.then(() => {
+      if (this.quotaQueues.get(scope) === tail) this.quotaQueues.delete(scope)
+    })
+    return run
   }
 
   async get(id: string, tenantId?: string): Promise<FileRecord | null> {

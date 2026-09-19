@@ -48,3 +48,34 @@ describe('secret()', () => {
     })
   })
 })
+
+describe('secret() — fail-closed unless NODE_ENV explicitly opts into dev (security)', () => {
+  it('requires the variable when NODE_ENV is unset (devDefault never applies)', () => {
+    delete process.env['NODE_ENV']
+    expect(() =>
+      defineEnv({ APP_SECRET: secret({ devDefault: 'dev-only-insecure-secret-please-change-me' }) }, { source: {} }),
+    ).toThrow(/APP_SECRET/)
+  })
+
+  it('requires the variable for any NODE_ENV other than development/test', () => {
+    for (const value of ['staging', 'prod', 'Production', '']) {
+      process.env['NODE_ENV'] = value
+      expect(() => defineEnv({ APP_SECRET: secret({ devDefault: 'dev-only-insecure-secret' }) }, { source: {} })).toThrow(
+        /APP_SECRET/,
+      )
+    }
+  })
+
+  it('rejects placeholder-looking secrets when NODE_ENV is unset', () => {
+    delete process.env['NODE_ENV']
+    expect(() =>
+      defineEnv({ APP_SECRET: secret() }, { source: { APP_SECRET: 'dev-only-insecure-secret-please-change-me' } }),
+    ).toThrow(/placeholder/)
+  })
+
+  it('still applies the devDefault under NODE_ENV=test', () => {
+    process.env['NODE_ENV'] = 'test'
+    const env = defineEnv({ APP_SECRET: secret({ devDefault: 'dev-only-insecure-secret' }) }, { source: {} })
+    expect(env.APP_SECRET).toBe('dev-only-insecure-secret')
+  })
+})

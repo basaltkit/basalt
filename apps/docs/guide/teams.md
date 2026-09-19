@@ -102,6 +102,16 @@ outside the map have rank 0):
 teamsPlugin({ roleRank: { owner: 4, admin: 3, editor: 2, viewer: 1 } })
 ```
 
+A team member acting through the routes can only grant roles that are **in the
+map**. An unranked role (say a `billing-admin` permission role mirrored through
+`access`) is refused with `TeamRoleNotGrantableError`
+(`403 TEAM_ROLE_NOT_GRANTABLE`), so a free-form `role` string can't be used to
+grant it. To let members grant an extra unranked role, list it explicitly:
+
+```ts
+teamsPlugin({ grantableRoles: ['viewer'] })
+```
+
 A team always keeps at least one owner — the service refuses to demote or remove
 the last one (`LastOwnerError`, `TEAM_LAST_OWNER`). Promote someone else first.
 
@@ -111,6 +121,9 @@ enforces two rules: the actor can never grant a role **above their own rank**
 (an `admin` can't invite or promote anyone — including themselves — to
 `owner`), and can never re-role or demote a member who currently **outranks**
 them. Violations throw `InsufficientTeamRoleError` (`403 TEAM_ROLE_REQUIRED`).
+The same applies to removal: `DELETE /team/members/:userId` can only remove
+yourself or a member who doesn't outrank you, so an `admin` can't remove an
+`owner`. Roles missing from `roleRank` can't be granted (see above).
 Service calls without `actingUserId` (trusted server-side seeding) skip the
 check.
 :::
@@ -133,11 +146,14 @@ await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 | Endpoint | Requires |
 | --- | --- |
 | `POST /team/invites` `{ email, role? }` | `admin` |
-| `POST /team/invites/accept` `{ token }` | login |
+| `POST /team/invites/accept` `{ token }` | login with a **verified** email |
 | `GET /team/invites` · `DELETE /team/invites/:id` | `admin` |
 | `GET /team/members` | `member` |
 | `PATCH /team/members/:userId` `{ role }` | `admin` |
 | `DELETE /team/members/:userId` | `admin` |
+
+`teamRoutes(options)` accepts `requireVerifiedEmail` (default `true`), described
+in the Invitations section below.
 
 ## Role guard
 
@@ -264,7 +280,7 @@ const membership = await teams.accept(token, 'bob-id')
 // → { tenantId: 'acme', userId: 'bob-id', role: 'member', createdAt }
 ```
 
-Two safety properties are built in:
+These safety properties are built in:
 
 - **Tokens are stored hashed.** Only the SHA-256 of the token is persisted — a
   leak of the invitations table can't be replayed to join a team; the raw token
@@ -274,7 +290,20 @@ Two safety properties are built in:
   leaked link redeemed by a *different* account fails with the same
   `TEAM_INVITE_INVALID` as a bogus token — a wrong recipient can't distinguish
   a real token from a fake one. In code, pass the caller's **verified** email;
-  omit it only for trusted server-side flows.
+  omit it only for trusted server-side flows. A caller with no email in
+  `ctx().user` is refused (`TEAM_INVITE_INVALID`), never enrolled unbound.
+- **The address must be verified.** By default the accept route also requires
+  `ctx().user.emailVerified === true` and otherwise answers
+  `403 TEAM_EMAIL_NOT_VERIFIED`. Without it, anyone who registers the
+  invitee's address could redeem a leaked link. Only apps that prove address
+  ownership some other way should opt out with
+  `teamRoutes({ requireVerifiedEmail: false })`. The address binding still
+  applies.
+- **Single use, even under concurrency.** Stores accept an invitation with a
+  compare-and-set (`markAccepted` resolves `false` if the invitation is no
+  longer pending), so one token enrolls at most one account. A custom
+  `InvitationStore` should do the same. Returning `void` is still accepted, but
+  you lose that guarantee.
 
 An unknown, used, revoked, or expired token throws `TeamInviteInvalidError`
 (`400 TEAM_INVITE_INVALID`). Wire the email hook once at startup:
@@ -299,7 +328,11 @@ await teams.revokeInvite(invitationId)            // DELETE /team/invites/:id
 ```
 
 `changeRole` and `removeMember` throw `LastOwnerError` (`400 TEAM_LAST_OWNER`) if
-they would leave the team without an owner.
+they would leave the team without an owner. The rule is re-checked after the
+write, and the write is rolled back if it lost a race. This stops two
+concurrent demotions/removals from leaving the team with zero owners. Pass
+`{ actingUserId }` to `changeRole`/`removeMember`/`addMember` to apply the rank
+rules to a user-initiated call, as the routes do.
 
 ## Mirroring roles into permissions
 
@@ -325,6 +358,7 @@ teamsPlugin({ access })
 | `access` | `RoleAssigner` | — | Mirrors every membership change into a `@basaltkit/permissions` role grant in the tenant's scope |
 | `inviteTtl` | `DurationInput` | `'7d'` | Invitation link lifetime |
 | `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Role hierarchy; roles outside the map have rank 0 |
+| `grantableRoles` | `TeamRole[]` | `[]` | Unranked roles an acting user may still grant; any other role outside `roleRank` is refused (`TEAM_ROLE_NOT_GRANTABLE`) |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 
 `tenantMembershipPlugin(options)`:
@@ -333,7 +367,13 @@ teamsPlugin({ access })
 | --- | --- | --- | --- |
 | `role` | `TeamRole` | — (existence check) | Require a minimum *ranked* role instead of any membership record |
 | `exempt` | `(context) => boolean` | — | WHO-based escape for cross-tenant identities (platform admin, support); never cached |
-| `cache` | `{ ttlMs: number; maxEntries?: number }` | off | Opt-in in-process decision cache; hook-invalidated same-process, `ttlMs` bounds cross-replica staleness, `maxEntries` default 10 000 |
+| `cache` | `{ ttlMs: number; maxEntries?: number }` | off | Opt-in in-process decision cache; hook-invalidated same-process (a lookup that overlaps an invalidation is not cached), `ttlMs` bounds cross-replica staleness, `maxEntries` default 10 000 |
+
+`teamRoutes(options)`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `requireVerifiedEmail` | `boolean` | `true` | Require `ctx().user.emailVerified === true` to accept an invitation |
 
 ## Failure modes & troubleshooting
 
@@ -341,7 +381,9 @@ teamsPlugin({ access })
 | --- | --- | --- | --- |
 | `TeamInviteInvalidError` | `TEAM_INVITE_INVALID` | 400 | Token unknown, used, revoked, expired — or redeemed by an account whose email isn't the invited one |
 | `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 | `tenantMembershipPlugin` found no membership; or a `meta.teamRole` route ran with no user **or** no tenant in context |
-| `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | Role rank below the required one — including an actor trying to grant/demote above their own rank |
+| `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | Role rank below the required one, including an actor trying to grant, demote or remove above their own rank |
+| `TeamRoleNotGrantableError` | `TEAM_ROLE_NOT_GRANTABLE` | 403 | An acting user tried to grant a role that is neither in `roleRank` nor in `grantableRoles` |
+| `TeamEmailNotVerifiedError` | `TEAM_EMAIL_NOT_VERIFIED` | 403 | `POST /team/invites/accept` by a user whose email isn't verified (see `requireVerifiedEmail`) |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | The change would leave the team with no owner |
 | `TEAM_NO_TENANT` | `TEAM_NO_TENANT` | 400 | A `teamRoutes()` endpoint was called with no tenant in context — register tenancy and send the tenant identifier |
 | `TEAM_INVITE_NOT_FOUND` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` for an id that doesn't exist or belongs to another tenant |

@@ -5,6 +5,7 @@ import {
   Exports,
   UnknownExportFormatError,
   csvFormatter,
+  tsvFormatter,
   defineExport,
   exportsPlugin,
   type ExportFormatter,
@@ -47,6 +48,52 @@ describe('formatters', () => {
     // a genuine negative NUMBER is untouched (only strings are guarded)
     const nums = csvFormatter.render(['N'], [[-5]]).toString()
     expect(nums).toBe('N\r\n-5')
+  })
+
+  it('guards the final cell text against formula injection for non-string values (arrays, objects)', () => {
+    const custom = { toString: () => '=HYPERLINK("http://evil","x")' }
+    const boxed = Object('+cmd') as object // a boxed String is typeof 'object'
+    const csv = csvFormatter
+      .render(['Tags', 'Obj', 'Boxed'], [[['=HYPERLINK("http://evil")', 'b'], custom, boxed]])
+      .toString()
+    const [, line] = csv.split('\r\n')
+    // every rendered cell that would start with a trigger is prefixed with a quote
+    expect(line).toBe('"\'=HYPERLINK(""http://evil""),b","\'=HYPERLINK(""http://evil"",""x"")",\'+cmd')
+
+    const tsv = tsvFormatter.render(['Tags'], [[['@SUM(1)', 'x']]]).toString()
+    expect(tsv).toBe("Tags\r\n'@SUM(1),x")
+
+    // safe primitives still render as-is: negative numbers/bigints, booleans, dates
+    const safe = csvFormatter
+      .render(['N', 'B', 'Bool', 'D'], [[-5, -10n, false, new Date('2026-01-02T00:00:00Z')]])
+      .toString()
+    expect(safe).toBe('N,B,Bool,D\r\n-5,-10,false,2026-01-02T00:00:00.000Z')
+  })
+
+  it('guards Date-branded values on their rendered text (spoofed toISOString)', () => {
+    // `instanceof Date` is only a prototype check; the rendered text is what matters
+    const spoofed = Object.setPrototypeOf({ toISOString: () => '=HYPERLINK("http://evil")' }, Date.prototype)
+    class EvilDate extends Date {
+      override toISOString(): string {
+        return '@SUM(1)'
+      }
+    }
+    const csv = csvFormatter.render(['A', 'B'], [[spoofed, new EvilDate(0)]]).toString()
+    expect(csv).toBe('A,B\r\n"\'=HYPERLINK(""http://evil"")",\'@SUM(1)')
+  })
+
+  it('guards line-feed, full-width and whitespace-prefixed formula triggers', () => {
+    const csv = csvFormatter
+      .render(
+        ['A', 'B', 'C', 'D', 'E', 'F'],
+        [['\n=1+1', '＝HYPERLINK(1)', '＋1', '＠SUM(1)', ' =1+1', ' 　-1+1']],
+      )
+      .toString()
+    expect(csv).toBe(
+      "A,B,C,D,E,F\r\n\"'\n=1+1\",'＝HYPERLINK(1),'＋1,'＠SUM(1),' =1+1,' 　-1+1",
+    )
+    // plain text, and text with a trigger later on, stay untouched
+    expect(csvFormatter.render(['A'], [['a=b']]).toString()).toBe('A\r\na=b')
   })
 })
 

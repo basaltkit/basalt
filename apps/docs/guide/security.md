@@ -25,8 +25,11 @@ table is the map; each row's guide has the details and the opt-out.
 
 One plugin covers rate limiting, CORS and secure response headers. **Secure
 response headers are on by default**; rate limiting and CORS are opt-in — enable
-them explicitly for production. New apps ship `securityPlugin()` in the scaffold,
-so headers are protected from the first deploy.
+them explicitly for production. New apps ship `securityPlugin()` in the scaffold
+with a global per-IP rate limit enabled (`rateLimit: { limit: 120, windowMs: 60_000 }`),
+so headers and request budgets are protected from the first deploy. With tenancy
+and auth, the scaffold also registers `teamsPlugin()` + `tenantMembershipPlugin()`
+(see *Never trust a client-supplied tenant* below).
 
 ```ts
 import { securityPlugin } from '@basaltkit/fastify'
@@ -55,13 +58,21 @@ securityPlugin({
 })
 ```
 
-The default store is in-memory (`MemoryRateLimitStore`). For multiple instances
+The default store is in-memory (`MemoryRateLimitStore`). Its memory is bounded:
+expired buckets are swept as traffic arrives, and at most `maxEntries` (default
+100 000) buckets are kept — past that the oldest windows are evicted first, so a
+flood of distinct client addresses cannot grow the process without limit
+(`new MemoryRateLimitStore({ maxEntries })` to size it). For multiple instances
 implement the `RateLimitStore` interface over Redis — the same driver pattern
 used by `@basaltkit/cache`.
 
 **Per-route limits.** A route can tighten the budget for a sensitive endpoint
-via `meta.rateLimit` — it gets its own bucket (keyed by IP + route) at that
-threshold, while every other route uses the global one:
+via `meta.rateLimit` — it gets its own bucket (keyed by IP + route pattern) at
+that threshold. It is enforced as a route guard, so it holds identically on
+Fastify, Express and Hono, and also when the route is invoked as an MCP tool.
+On Express and Hono (where the edge hook runs before routing) the request also
+counts against the global bucket; on Fastify it is counted once, in its own
+bucket:
 
 ```ts
 route({
@@ -91,9 +102,14 @@ requests.
 `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
 `Cross-Origin-Opener-Policy: same-origin` and a restrictive default
 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` (right for
-a JSON API). Pass an object to customize (e.g. your own `contentSecurityPolicy`
-for an HTML/docs surface), `contentSecurityPolicy: false` to omit just the CSP,
-or `headers: false` to disable them all.
+a JSON API), plus `Cache-Control: no-store` so no browser or intermediary cache
+keeps a response carrying a session token, API key or MFA secret. Pass an object
+to customize (e.g. your own `contentSecurityPolicy` for an HTML/docs surface, or
+`cacheControl: 'private, no-cache'`), `contentSecurityPolicy: false` /
+`cacheControl: false` to omit just that header, or `headers: false` to disable
+them all. A route that is safe to cache sets its own `Cache-Control` header,
+which replaces the default — do so on `meta.etag` routes (e.g.
+`private, no-cache`), since `no-store` keeps browsers from revalidating.
 
 ## Resource limits & DoS resistance
 
@@ -165,10 +181,13 @@ export const env = defineEnv({
 })
 ```
 
-- **Development**: uses `devDefault` when unset — the app just runs.
-- **Production** (`NODE_ENV=production`): the variable is **required**, must
-  meet a minimum length, and is **rejected if it looks like a placeholder**
-  (`change-me`, `secret`, `password`, …). The app refuses to boot otherwise.
+- **Development** (`NODE_ENV=development` or `test`, set explicitly): uses
+  `devDefault` when unset — the app just runs.
+- **Everywhere else** — `NODE_ENV=production`, `staging`, **or unset**: the
+  variable is **required**, must meet a minimum length, and is **rejected if it
+  looks like a placeholder** (`change-me`, `secret`, `password`, …). The app
+  refuses to boot otherwise, so forgetting `NODE_ENV` on a deploy can never
+  fall back to the public dev default.
 
 ## Brute-force lockout
 
@@ -227,10 +246,19 @@ idempotencyPlugin() // guards POST by default
 - Repeat with the same key → the cached response, with `Idempotent-Replayed: true`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - `5xx` responses are **not** cached, so genuine failures stay retryable.
-- Keys are scoped by **caller + method + route**: a per-caller fingerprint is
-  mixed into the stored key, so one user's cached response can never be replayed
-  to another (no cross-user/tenant leak), and the same key on two endpoints
-  can't collide.
+- Keys are scoped by **caller credentials + tenant + method + route**, hashed
+  with SHA-256 before they reach the store. The credentials are every header in
+  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`,
+  `x-api-key`) and the tenant is `x-tenant-id` + `host`, so one user's cached
+  response can never be replayed to another (no cross-user/tenant leak), and the
+  same key on two endpoints can't collide. The replay runs before route guards:
+  if you authenticate with another header, add it to `credentialHeaders`.
+- Requests with **no** credential header are not cached or replayed by default
+  (a stranger who guessed the key would otherwise get the response). Opt in with
+  `allowAnonymous: true` only for public endpoints with nothing private in them.
+- Keys longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`;
+  `MemoryIdempotencyStore` sweeps expired entries and is capped by `maxEntries`
+  (default 10 000).
 
 ## Revoking access tokens
 
@@ -369,18 +397,25 @@ tenantMembershipPlugin({
 })
 ```
 
-### 3. Automatic tenant scoping covers the ORM — not raw SQL or nested writes
+### 3. Automatic tenant scoping covers the ORM — not raw SQL or foreign-key scalars
 
-The Prisma tenancy extension scopes standard model operations and **fails
-closed** without a tenant context. Two paths sit *outside* that net:
+The Prisma tenancy extension scopes model operations (nested relation writes
+included) and **fails closed**: without a tenant context, and for any
+operation it cannot scope (`PRISMA_UNSCOPED_OPERATION`). Update data cannot
+move a row to another tenant (`PRISMA_CROSS_TENANT_WRITE`). Two paths sit
+*outside* that net:
 
-- **Raw queries** — `$queryRaw` / `$executeRaw` bypass model scoping. Basalt now
-  **refuses them by default when a tenant is in scope** (`PRISMA_RAW_IN_TENANT`),
-  so a raw query can't silently read across tenants. Run them in central code
-  (no tenant in context), or add the `tenant_id = $1` predicate yourself and set
-  `onRawInTenant: 'allow'`.
-- **Nested writes** — a `connect` / nested `create` reaching another model isn't
-  re-scoped. Verify the related record belongs to the current tenant first.
+- **Raw queries** — `$queryRaw`, `$executeRaw`, `$queryRawTyped`,
+  `$runCommandRaw` (every client-level operation) and MongoDB `findRaw` /
+  `aggregateRaw` bypass model scoping. Basalt **refuses them by default when a
+  tenant is in scope** (`PRISMA_RAW_IN_TENANT`), so a raw query can't silently
+  read across tenants. Run them in central code (no tenant in context), or add
+  the `tenant_id = $1` predicate yourself and set `onRawInTenant: 'allow'`.
+- **Foreign-key scalars** — nested `connect` / `create` are scoped, but a raw
+  FK value (`data: { projectId: body.projectId }`) is not checked, and an
+  `include` follows whatever FK is stored. Use composite foreign keys
+  `(tenantId, id)` (the database then refuses a cross-tenant link) and RLS, or
+  verify the related record belongs to the current tenant first.
 
 ```ts
 // ❌ raw query inside a tenant context now throws PRISMA_RAW_IN_TENANT
@@ -422,8 +457,14 @@ attaches *automatically* (cookies, HTTP Basic). A custom header is never sent
 cross-origin on a forged request, so an attacker's page can't ride the victim's
 session. **Keep auth in a header and there is nothing to do.**
 
-You take on CSRF the moment you move that credential into a **cookie** — e.g.
-storing the session id or JWT in a cookie so the browser sends it automatically.
+The session cookie `authRoutes()` sets on login (`basalt_session`) is covered by
+`authPlugin`'s built-in check: a cookie-only request with an unsafe method that
+the browser marks `cross-site`/`same-site`, or whose `Origin` is not your own host
+or a `csrf.trustedOrigins` entry, is not authenticated (`403 AUTH_CSRF_REJECTED`
+on `meta.auth` routes) — see [Cookie sessions and CSRF](/guide/auth#cookie-sessions-and-csrf).
+
+You take on CSRF yourself the moment you move a credential into a cookie of your
+**own** — e.g. storing a JWT in a cookie so the browser sends it automatically.
 If you do, protect it yourself:
 
 - Set the cookie `SameSite=Lax` (or `Strict`), `HttpOnly`, and `Secure`.
@@ -448,9 +489,10 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 security invariants — offline, no API key. Two checks encode the most important
 guarantees from the security guide:
 
-- **`missing-tenant-membership`** (error) — you wire tenancy + auth + teams but no
-  `tenantMembershipPlugin`, so a resolved tenant is never bound to a verified
-  member. This is the cross-tenant-access class in section 2.
+- **`missing-tenant-membership`** (error) — you wire tenancy + auth but no
+  `tenantMembershipPlugin` (whether or not `@basaltkit/teams` is installed — if
+  it is not, the fix is to install it), so a resolved tenant is never bound to a
+  verified member. This is the cross-tenant-access class in section 2.
 - **`missing-security-plugin`** (warning) — no `securityPlugin()`, so responses
   ship without secure headers.
 

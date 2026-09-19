@@ -1160,6 +1160,9 @@ importers:
       '@basaltkit/subscriptions':
         specifier: workspace:^
         version: link:../subscriptions
+      '@basaltkit/teams':
+        specifier: workspace:^
+        version: link:../teams
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy

@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { BasaltError } from '@basaltkit/core'
 import type { BillingPeriod } from '../plans.js'
 import {
+  attestedPlanForPrice,
+  requireWebhookSecret,
   WebhookInvalidError,
   type BillingGateway,
   type CheckoutInput,
@@ -104,7 +106,7 @@ export class PaddleBillingGateway implements BillingGateway {
       items: [{ price_id: this.options.priceId(input.plan, input.period), quantity: 1 }],
       customer_id: customer,
       collection_mode: 'automatic',
-      custom_data: { billableId: input.billableId },
+      custom_data: { billableId: input.billableId, plan: input.plan, period: input.period },
     })
     return { gatewayRef: String((created as { id?: string }).id) }
   }
@@ -121,7 +123,7 @@ export class PaddleBillingGateway implements BillingGateway {
       items: [{ price_id: this.options.priceId(input.plan, input.period), quantity: 1 }],
       customer_id: customer,
       collection_mode: 'automatic',
-      custom_data: { billableId: input.billableId },
+      custom_data: { billableId: input.billableId, plan: input.plan, period: input.period },
       checkout: { url: input.successUrl },
     })) as { id?: string; checkout?: { url?: string } }
     return { url: String(created.checkout?.url), id: String(created.id) }
@@ -145,6 +147,9 @@ export class PaddleBillingGateway implements BillingGateway {
   }
 
   verifyWebhook(rawBody: string, signature: string | undefined): WebhookEvent | null {
+    // Fail closed before anything else: an empty/missing secret would make the
+    // HMAC forgeable by anyone.
+    const secret = requireWebhookSecret('PaddleBillingGateway', this.options.webhookSecret)
     if (!signature) throw new WebhookInvalidError()
 
     // Paddle-Signature: `ts=1700000000;h1=<hex hmac>`
@@ -157,7 +162,7 @@ export class PaddleBillingGateway implements BillingGateway {
     const timestamp = Number(parts.ts)
     if (!Number.isFinite(timestamp) || !parts.h1) throw new WebhookInvalidError()
 
-    const expected = createHmac('sha256', this.options.webhookSecret)
+    const expected = createHmac('sha256', secret)
       .update(`${parts.ts}:${rawBody}`)
       .digest('hex')
     const a = Buffer.from(expected)
@@ -180,7 +185,22 @@ export class PaddleBillingGateway implements BillingGateway {
     // Transaction events carry the subscription id in `subscription_id`;
     // subscription events carry it in `id`.
     const gatewayRef = event.data?.subscription_id ?? event.data?.id
-    return { id: event.event_id, type, billableId, ...(gatewayRef ? { gatewayRef } : {}) }
+    // The plan/period we stamped next to the charged price (signed payload).
+    // Bound to the price this event actually charges: custom_data is stamped
+    // at checkout and goes stale when the subscription's price changes later.
+    const { plan, period } = attestedPlanForPrice(
+      event.data?.custom_data,
+      paddleChargedPrices(event.data?.['items']),
+      this.options.priceId,
+    )
+    return {
+      id: event.event_id,
+      type,
+      billableId,
+      ...(gatewayRef ? { gatewayRef } : {}),
+      ...(plan !== undefined ? { plan } : {}),
+      ...(period !== undefined ? { period } : {}),
+    }
   }
 
   private async request(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<unknown> {
@@ -200,4 +220,18 @@ export class PaddleBillingGateway implements BillingGateway {
     // Paddle wraps successful responses in `{ data: … }`.
     return (json as { data?: unknown }).data ?? json
   }
+}
+
+/** Price ids on a Paddle transaction/subscription's `items` (`price.id` or `price_id`). */
+function paddleChargedPrices(items: unknown): string[] {
+  if (!Array.isArray(items)) return []
+  const prices: string[] = []
+  for (const raw of items as unknown[]) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as { price?: { id?: unknown } | null; price_id?: unknown }
+    for (const value of [item.price?.id, item.price_id]) {
+      if (typeof value === 'string' && value !== '') prices.push(value)
+    }
+  }
+  return prices
 }

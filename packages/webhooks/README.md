@@ -33,10 +33,13 @@ import { webhooksPlugin } from '@basaltkit/webhooks'
 
 const app = await createApp({
   plugins: [
-    webhooksPlugin({ secret: 'whsec_my_secret' }),
+    // Default secret (min 16 chars) — signs tenant-agnostic endpoints only.
+    webhooksPlugin({ secret: process.env.WEBHOOK_SECRET }),
   ],
 }).boot()
 ```
+
+Deliveries are never sent unsigned by default: with no secret at all a delivery is refused (`allowUnsigned: true` opts out).
 
 2. **Register an endpoint** (a subscription: the destination URL and the events it wants to receive):
 
@@ -45,12 +48,15 @@ import { WEBHOOKS } from '@basaltkit/webhooks'
 
 const webhooks = app.container.get(WEBHOOKS)
 
-await webhooks.register({
+const endpoint = await webhooks.register({
   url: 'https://client.example.com/hooks',
   events: ['invoice.*'],        // all events starting with "invoice."
-  tenantId: 'acme',             // optional: only events for this tenant
+  tenantId: 'acme',             // forced from ctx() when a tenant is in context
 })
+endpoint.secret // per-endpoint signing secret (whsec_…), generated and returned ONCE
 ```
+
+Every tenant endpoint gets its **own** signing secret (generated when you don't pass one), so one tenant can never forge webhooks another tenant's receiver accepts. A tenant endpoint with only the plugin-wide secret is refused (`allowSharedSecret: true` opts out).
 
 3. **Dispatch an event.** Each subscribed endpoint receives a `POST` with signed JSON:
 
@@ -65,10 +71,13 @@ console.log(results)
 ```
 content-type: application/json
 x-basalt-event: invoice.paid
+x-basalt-delivery: <uuid>
 x-basalt-signature: t=1712345678,v1=<hmac-sha256>
 
-{"event":"invoice.paid","data":{"amount":42},"sentAt":"2026-08-07T10:00:00.000Z"}
+{"id":"<uuid>","event":"invoice.paid","endpointId":"<endpoint id>","data":{"amount":42},"sentAt":"2026-08-07T10:00:00.000Z"}
 ```
+
+`id` is unique per delivery (stable across its retries) and is signed — dedupe on it.
 
 5. **The recipient verifies the signature** with `verifySignature` (the same scheme as Stripe: HMAC-SHA256 over `timestamp.body`, rejecting old timestamps to prevent *replays*):
 
@@ -76,7 +85,8 @@ x-basalt-signature: t=1712345678,v1=<hmac-sha256>
 import { verifySignature } from '@basaltkit/webhooks'
 
 // in an HTTP handler on the recipient's side:
-const valid = verifySignature(signatureHeader, rawRequestBody, 'whsec_my_secret')
+// the secret register() returned for THIS endpoint (a secret under 16 chars always fails)
+const valid = verifySignature(signatureHeader, rawRequestBody, endpointSecret)
 if (!valid) {
   // reject with 400
 }
@@ -100,11 +110,13 @@ You can test a pattern with `matchesEvent(['invoice.*'], 'invoice.paid') // true
 
 In a SaaS, each tenant (customer of your platform) registers its endpoints with its own `tenantId`. When dispatching with `dispatch(event, data, tenantId)`, only that tenant's endpoints and endpoints without a `tenantId` (global) receive it. An endpoint from tenant `acme` never receives events from tenant `globex`.
 
+A dispatch with **no** tenant (no tenant in context, none passed — e.g. a scheduler job) reaches only global endpoints, never a tenant-bound one. A deliberate broadcast to every tenant opts in: `dispatch(event, data, { allTenants: true })`. With `tenancyPlugin` active, `register` / `list` / `unregister` without any tenant throw `WebhookTenantRequiredError` unless called with `{ system: true }`.
+
 ### Managing endpoints
 
 ```ts
 const endpoint = await webhooks.register({ url: 'https://x.example.com/h', events: ['*'] })
-await webhooks.list()          // all endpoints
+await webhooks.list()          // all endpoints (secrets redacted: `hasSecret` instead)
 await webhooks.list('acme')    // only tenant "acme"'s
 await webhooks.unregister(endpoint.id)
 ```
@@ -152,6 +164,8 @@ class DbWebhookStore implements WebhookStore {
 
 webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 ```
+
+`forEvent` must **fail closed**: with a `tenantId`, return that tenant's endpoints plus tenant-agnostic ones; with no tenant (`undefined`, `null` or `''`), return tenant-agnostic endpoints **only** — never every tenant's. A deliberate `dispatch(event, data, { allTenants: true })` reads endpoints through `list()` instead, and the manager re-filters every result, so a store that gets this wrong still can't widen delivery.
 
 ## API reference
 
