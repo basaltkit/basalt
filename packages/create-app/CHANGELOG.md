@@ -1,5 +1,20 @@
 # create-basalt
 
+## 1.5.0
+
+### Minor Changes
+
+- 34c3641: New projects now get the latest published version of every dependency. Before writing files, the CLI asks the npm registry (`npm_config_registry`, else `registry.npmjs.org`) for each package's `latest` and writes `^<latest>` into the root and `web/` package.json. `@basaltkit/*` packages always take the latest release; third-party packages take it only on the major the templates are written for (a newer major keeps the bundled range and prints a notice). If the registry is unreachable or slow, the ranges bundled at build time are used with a single warning, and the scaffold never fails because of the registry. `--offline` skips the lookup. Programmatically, `createProject({ resolveLatest: true, registry: { fetch, registry } })` opts in; the default still touches no network.
+  
+  The templates move to current majors: TypeScript 7, Vitest 5, `@types/node` 26, React 19, Vite 8 with `@vitejs/plugin-react` 6, and Tailwind CSS 4. The UI now loads Tailwind through `@tailwindcss/vite`, keeps its config in `web/src/index.css` (`@import 'tailwindcss'`, `@source` for `@basaltkit/admin-shadcn`, `@theme inline` for the shadcn tokens, a class-based `dark` variant), and no longer emits `tailwind.config.js`, `postcss.config.js`, `postcss` or `autoprefixer`. `web/tsconfig.json` adds `vite/client` types, so `import './index.css'` typechecks under TypeScript 6+, and `web/` gets a `typecheck` script.
+- fb85c40: Security (scaffold & dev tooling hardening):
+  
+  - `create-basalt`: with tenancy + auth (the default), new apps now depend on `@basaltkit/teams` and register `teamsPlugin()` + `tenantMembershipPlugin()`, so an authenticated user can no longer act on a tenant they do not belong to by changing `x-tenant-id`/`Host` (a dev-only seed adds registrants to the `demo` tenant). The `securityPlugin` global per-IP rate limit is now enabled, not commented out. `pnpm dev` runs a new `src/dev.ts` that opts into `NODE_ENV=development`; `pnpm start` does not, and the app's `NODE_ENV` now defaults to `production`. `@basaltkit/*` dependency ranges are generated from each package's current release line instead of a frozen `^1.0.0`. A `.dockerignore` is scaffolded.
+  - `@basaltkit/env`: `secret()` applies `devDefault`, and accepts placeholder-looking values, only when `NODE_ENV` is explicitly `development` or `test`. An unset `NODE_ENV` (or any other value) now counts as production, so a deploy that forgets `NODE_ENV` can no longer boot on the public dev default. Set `NODE_ENV=development` locally (the scaffold's `pnpm dev` does this).
+  - `@basaltkit/ai`: the `missing-tenant-membership` doctor rule now fires for tenancy + auth even when `@basaltkit/teams` is not installed (recommending installing it). Plans are validated before code generation: field and relation names must be plain identifiers, entity and audit-event names are restricted, and enum values are emitted as escaped string literals, so a crafted plan cannot inject code into generated sources (`assertSafePlan` / `UnsafePlanError`).
+  - `@basaltkit/ai-mcp`: `basalt_make` validates the client-supplied plan against `ArchitecturePlanSchema` instead of casting it, and rejects invalid plans.
+  - `@basaltkit/cli`: `basalt publish dockerfile` also writes a `.dockerignore`, so `COPY . .` can no longer bake `.env` or private keys into image layers.
+
 ## 1.4.2
 
 ### Patch Changes

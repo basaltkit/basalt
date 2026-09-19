@@ -1,5 +1,12 @@
 # @basaltkit/comments-prisma
 
+## 1.0.4
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/comments@3.0.0
+
 ## 1.0.3
 
 ### Patch Changes

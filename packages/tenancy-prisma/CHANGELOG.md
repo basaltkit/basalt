@@ -1,5 +1,12 @@
 # @basaltkit/tenancy-prisma
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/tenancy@2.0.0
+
 ## 1.2.0
 
 ### Minor Changes

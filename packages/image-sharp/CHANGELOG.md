@@ -1,5 +1,12 @@
 # @basaltkit/image-sharp
 
+## 1.1.5
+
+### Patch Changes
+
+- Updated dependencies [fb85c40]
+  - @basaltkit/storage@3.0.0
+
 ## 1.1.4
 
 ### Patch Changes
