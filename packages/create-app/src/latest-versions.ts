@@ -110,12 +110,14 @@ export function registryUrl(explicit?: string, env: NodeJS.ProcessEnv = process.
   } catch {
     return DEFAULT_REGISTRY
   }
-  return candidate.replace(/\/+$/, '')
+  let end = candidate.length
+  while (end > 0 && candidate[end - 1] === '/') end--
+  return candidate.slice(0, end)
 }
 
 /** `<registry>/<name>/latest`, with a scoped name's `/` encoded as `%2f`. */
 export const latestUrl = (registry: string, name: string): string =>
-  `${registry}/${name.replace('/', '%2f')}/latest`
+  `${registry}/${name.replaceAll('/', '%2f')}/latest`
 
 /** Outcome of one registry lookup: a version, a definitive miss, or a transient failure. */
 type Lookup = { version: string } | 'miss' | 'transient'
