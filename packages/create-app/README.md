@@ -30,7 +30,7 @@ yarn create basalt my-app
 bun create basalt my-app
 ```
 
-> Requirements: Node.js 18+ and a package manager. Projects with `--ui` require **pnpm** (explained below).
+> Requirements: Node.js 22.5+ and a package manager. Projects with `--ui` require **pnpm** (explained below).
 
 ## Get started in 5 minutes
 
@@ -93,6 +93,7 @@ Usage: npm create basalt <name> [options]
 | `--mcp` | off | Exposes read-only routes as MCP tools (`@basaltkit/mcp`) over HTTP at `POST /mcp` — the overview and health endpoints are opted in via `meta.mcp` |
 | `--install` | off | Installs dependencies at the end (with the detected/chosen manager) |
 | `--git` | off | Runs `git init` + first commit ("Initial commit from create-basalt") |
+| `--offline` | off | Don't query the npm registry for the latest versions; use the ranges bundled with this create-basalt release |
 | `--pm=<manager>` | autodetect | Package manager: `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `-y`, `--yes` | — | Skips the questions and accepts the defaults |
 | `-h`, `--help` | — | Shows help and exits |
@@ -102,6 +103,7 @@ Behavior notes (faithful to the code):
 - **Package manager detection**: by default, detects who invoked the command via the `npm_config_user_agent` variable (set by npm/pnpm/yarn/bun); unknown managers fall back to `npm`. `--pm=` overrides this.
 - **`--ui` forces pnpm**: the `web/` frontend is a member of a pnpm *workspace* (declared in the generated `pnpm-workspace.yaml`). npm, yarn, and bun can't install or run that structure, so if you request `--ui` with another manager, you'll see `Note: --ui projects are pnpm workspaces — using pnpm instead of <manager>.` and pnpm is used.
 - **Interactive wizard**: when you don't pass a name, you're in a terminal (TTY), and you didn't use `--yes`, you get the guided wizard — an intro, a **starting-point preset** (SaaS starter / API only / Full stack / Minimal / Custom), an arrow-key **feature multiselect** on the custom path, package-manager select, and a **summary + confirm** step before anything is written. Ctrl+C (or declining the final confirm) ends cleanly with "Cancelled." (exit code 130).
+- **Latest dependency versions**: before writing files, the CLI asks the npm registry (`npm_config_registry` when set by your package manager, else `registry.npmjs.org`) for the `latest` version of every dependency the project will contain and writes `^<latest>`. `@basaltkit/*` packages always take the latest release. Third-party packages (TypeScript, Vitest, React, Vite, Tailwind, …) take the latest only on the major the templates are written for — a newer major keeps the bundled range and prints a `Note:`. If the registry can't be reached (offline, timeout), the bundled ranges are used with one `Warning:` line; the scaffold never fails because of the registry. `--offline` skips the lookup entirely.
 - **Occupied folder**: if the destination folder exists and isn't empty, the command refuses with `Target directory "<dir>" already exists and is not empty.` and exits with code 1.
 - At the end, it prints the created files and the "Next steps" appropriate to your choices.
 
@@ -144,7 +146,7 @@ my-app/
 └── tests/app.test.ts     # smoke test adapted to the options
 ```
 
-With `--cli`, adds `bin/basalt.ts` and the `"basalt": "tsx bin/basalt.ts"` script. With `--ui`, adds the `web/` folder (Vite + React + Tailwind + shadcn, with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
+With `--cli`, adds `bin/basalt.ts` and the `"basalt": "tsx bin/basalt.ts"` script. With `--ui`, adds the `web/` folder (Vite 8 + React 19 + Tailwind CSS 4 via `@tailwindcss/vite` + shadcn — Tailwind is configured in `web/src/index.css`, no `tailwind.config.js`/PostCSS — with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
 
 ### With `--ui`: running the API and frontend
 
@@ -185,7 +187,7 @@ console.log(result.files)   // relative paths, sorted
 console.log(detectPackageManager()) // 'pnpm' | 'npm' | 'yarn' | 'bun'
 ```
 
-Note: `createProject` **only writes files** — it doesn't install dependencies or initialize git (that's the executable's job, with `--install`/`--git`).
+Note: `createProject` **only writes files** — it doesn't install dependencies or initialize git (that's the executable's job, with `--install`/`--git`). It also uses the bundled dependency ranges unless you pass `resolveLatest: true` (what the executable does), so a script never touches the network by surprise.
 
 ## API reference
 
@@ -205,6 +207,8 @@ Exported from `create-basalt` (in addition to the `create-basalt` executable):
 | `ui` | `boolean` | No | `false` | Generate the `web/` frontend |
 | `cli` | `boolean` | No | `false` | Generate the `basalt` CLI |
 | `mcp` | `boolean` | No | `false` | Expose read-only routes as MCP tools at `/mcp` |
+| `resolveLatest` | `boolean` | No | `false` | Resolve every dependency to `^<latest>` from the npm registry before writing (falls back to the bundled ranges on any registry failure) |
+| `registry` | `ResolveLatestOptions` | No | — | `{ fetch?, registry?, timeoutMs?, overallTimeoutMs?, concurrency? }` — injectable fetch (tests), registry URL (default `npm_config_registry` or `https://registry.npmjs.org`), timeouts (5 s per request, 15 s overall) |
 
 `CreateProjectResult`:
 
@@ -213,6 +217,7 @@ Exported from `create-basalt` (in addition to the `create-basalt` executable):
 | `dir` | `string` | Absolute path of the created folder |
 | `files` | `string[]` | Files written (relative, sorted) |
 | `options` | `ProjectOptions` | The options actually applied (with defaults resolved) |
+| `versions` | `VersionResolution \| undefined` | With `resolveLatest`: `{ versions, resolved, failed, heldBack, registry }` — the final ranges, which packages got `^<latest>`, which kept the fallback after a registry failure, and third-party packages held back because their latest is a new major |
 
 Throws `TargetNotEmptyError` if the destination folder exists and isn't empty.
 

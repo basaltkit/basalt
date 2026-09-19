@@ -19,6 +19,13 @@ import {
   type ProjectOptions,
 } from './templates.js'
 import { uiFiles } from './templates-ui.js'
+import {
+  applyVersions,
+  collectDependencies,
+  resolveLatestVersions,
+  type ResolveLatestOptions,
+  type VersionResolution,
+} from './latest-versions.js'
 
 export type { ProjectOptions } from './templates.js'
 
@@ -35,12 +42,23 @@ export interface CreateProjectInput {
   cli?: boolean
   /** Expose opted-in routes as MCP tools over HTTP at `/mcp`. Default: false. */
   mcp?: boolean
+  /**
+   * Resolve every dependency to its latest published version (npm registry)
+   * before writing files. Default: false — the embedded fallback ranges are
+   * used and no network is touched. The `create-basalt` CLI turns it on
+   * (unless `--offline`). Registry failures never fail the scaffold.
+   */
+  resolveLatest?: boolean
+  /** Registry options for `resolveLatest` (injectable fetch, registry, timeouts). */
+  registry?: ResolveLatestOptions
 }
 
 export interface CreateProjectResult {
   dir: string
   files: string[]
   options: ProjectOptions
+  /** How dependency versions were resolved — present only with `resolveLatest`. */
+  versions?: VersionResolution
 }
 
 export class TargetNotEmptyError extends Error {
@@ -121,14 +139,34 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     ...(options.ui ? uiFiles(options) : {}),
   }
 
+  let versions: VersionResolution | undefined
+  if (input.resolveLatest) {
+    const manifests = Object.keys(files).filter((path) => path === 'package.json' || path.endsWith('/package.json'))
+    versions = await resolveLatestVersions(
+      collectDependencies(manifests.map((path) => files[path] as string)),
+      input.registry,
+    )
+    for (const path of manifests) files[path] = applyVersions(files[path] as string, versions.versions)
+  }
+
   for (const [path, content] of Object.entries(files)) {
     const target = join(dir, path)
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, content)
   }
 
-  return { dir, files: Object.keys(files).sort(), options }
+  return { dir, files: Object.keys(files).sort(), options, ...(versions ? { versions } : {}) }
 }
 
+export {
+  THIRD_PARTY_VERSIONS,
+  DEFAULT_REGISTRY,
+  describeResolution,
+  resolveLatestVersions,
+  registryUrl,
+  type HeldBackVersion,
+  type ResolveLatestOptions,
+  type VersionResolution,
+} from './latest-versions.js'
 export { runWizard, validateProjectName, PRESETS, FEATURES, type WizardResult, type WizardOptions, type FeatureKey } from './wizard.js'
 export { ttyPrompter, scriptedPrompter, WizardCancelledError, type Prompter, type Choice } from './prompt.js'

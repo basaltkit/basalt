@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createProject, detectPackageManager, TargetNotEmptyError, resolveRunDefaults } from '../src/index.js'
-import { versionOf } from '../src/templates.js'
+import { thirdPartyVersionOf, versionOf } from '../src/templates.js'
 
 let root: string
 
@@ -50,7 +50,8 @@ describe('createProject', () => {
     expect(pkg.devDependencies).toHaveProperty('@basaltkit/testing')
     // Regression: the @basalt range override loop once clobbered third-party
     // ranges (zod ended up as "^0.1.0", which no @basalt peer accepts).
-    expect(pkg.dependencies.zod).toBe('^4.0.0')
+    expect(pkg.dependencies.zod).toBe(thirdPartyVersionOf('zod'))
+    expect(pkg.dependencies.zod).toMatch(/^\^4\./)
 
     const app = await read(result.dir, 'src/app.ts')
     expect(app).toContain('tenancyPlugin')

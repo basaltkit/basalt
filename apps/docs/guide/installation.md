@@ -82,6 +82,7 @@ order:
 | `--mcp` | off | Expose opted-in read-only routes as MCP tools at `POST /mcp`, plus a `.mcp.json` for AI dev tools — see [MCP](/guide/mcp) |
 | `--install` / `--no-install` | on in a TTY, off in CI | Install dependencies at the end |
 | `--git` / `--no-git` | on in a TTY, off in CI | `git init` plus an initial commit |
+| `--offline` | off | Skip the npm registry lookup and use the dependency ranges bundled with this create-basalt release |
 | `--pm=<manager>` | auto-detected | Force `pnpm` \| `npm` \| `yarn` \| `bun` |
 | `-y`, `--yes` | — | Accept all defaults, no prompts (also disables the wizard) |
 | `-h`, `--help` | — | Print usage and exit |
@@ -97,6 +98,15 @@ pnpm, yarn and bun all set), falling back to npm. `--install` and `--git` are
 tri-state: an explicit flag always wins, and only when you pass neither does the
 environment decide — a TTY that isn't CI gets both, everything else gets
 neither, so automation never gets a surprise install.
+
+New projects get the **latest published version** of every dependency: before
+writing files the scaffolder asks the registry (`npm_config_registry`, else
+`registry.npmjs.org`) for each package's `latest` and writes `^<latest>`.
+`@basaltkit/*` always takes the latest release; third-party packages (TypeScript,
+Vitest, React, Vite, Tailwind, …) take it only on the major the templates are
+written for — a newer major keeps the bundled range and prints a `Note:`. When the
+registry can't be reached, the bundled ranges are used with a single `Warning:`
+line; the scaffold never fails because of it. `--offline` skips the lookup.
 
 ::: warning `--ui` requires pnpm
 The `web/` frontend is a member of a pnpm workspace (`pnpm-workspace.yaml`),
