@@ -23,7 +23,7 @@
     "@basaltkit/mcp": "workspace:*",
     "@basaltkit/tenancy": "workspace:*",
     "@hono/node-server": "^2.1.1",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:*",
