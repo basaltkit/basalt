@@ -1,0 +1,59 @@
+{
+  "name": "@basaltkit/drives",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "Connect a tenant's external file-storage accounts (Google Drive, OneDrive/SharePoint, Dropbox) to a Basalt app: provider-neutral contract, encrypted credentials with refresh and rotation, paginated listing, streaming import into @basaltkit/files, and incremental sync.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/webhooks": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/drives"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/drives#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "google-drive",
+    "onedrive",
+    "sharepoint",
+    "dropbox",
+    "oauth",
+    "file-import",
+    "multi-tenant"
+  ]
+}
