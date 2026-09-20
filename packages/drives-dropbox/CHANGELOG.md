@@ -1,8 +1,8 @@
 # @basaltkit/drives-dropbox
 
-## 0.2.0
+## 0.1.0
 
-### Minor Changes
+### Initial release
 
 - aff3f6a: Drives phase 2a: the first real provider adapter, and the HTTP routes phase 1 deferred.
   
