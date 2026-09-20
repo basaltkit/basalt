@@ -1,5 +1,28 @@
 # @basaltkit/fastify
 
+## 2.3.0
+
+### Minor Changes
+
+- 6d446ef: Streaming responses: a handler can return a stream, on every adapter (BK-019, last open item).
+  
+  `@basaltkit/storage` learned to stream in both directions and `files.downloadStream()` followed, but the framework had nowhere to put the result: a handler could only return a value the adapter serialised, so `fileRoutes` still served downloads through the buffered `files.download()` and a route could not pipe a request body straight into storage. **`stream()`** closes that gap — the neutral streaming response, next to `sse()`.
+  
+  - **`stream(source, { contentType?, contentLength?, filename?, disposition?, headers?, status? })`** (new, `@basaltkit/http`). `source` is a Node `Readable`, a web `ReadableStream`, or any `AsyncIterable<Uint8Array>`. Fastify hands it to its own stream path, Express uses `pipeline()`, Hono answers with a `Response` over a web stream — none of them buffers it. `filename` goes through the same `sanitizeFilename()` the multipart parser uses and is written as a quoted printable-ASCII `filename=` plus an RFC 5987 `filename*=UTF-8''…` when anything was lost, so a client-supplied name can never inject a header; the disposition defaults to `attachment`, because an uploaded HTML or SVG must never render on your origin.
+  - **The robustness is the feature, and it is identical on all three.** A client that disconnects mid-download **destroys the source** — no leaked file descriptor, no leaked S3 socket. Backpressure is real: a slow client slows the read instead of filling memory. An error **before** the first byte is still a normal JSON error response (the streaming headers are withdrawn first, so the envelope does not inherit the download's `Content-Type`/`Content-Disposition`). An error **after** the headers cuts the connection rather than appending anything to a partly sent body, and is reported **once** through the adapter's `onError` reporter (`STREAM_FAILED`, status 500) instead of being swallowed or double-counted. `HEAD` sends no body, keeps the headers a `GET` would have carried, and reads nothing from the source — on Fastify that means bypassing its auto-generated HEAD route, which would otherwise drain the whole source to discard it and answer `content-length: 0`. All of it is held to one shared parity suite the three adapters run, including a multi-MiB body compared byte for byte.
+  - There is deliberately **no `maxDurationMs`** (unlike `sse()`): a large download legitimately takes a long time and a framework-level cap would truncate it. The adapters' own server timeouts are documented instead.
+  - `meta: { etag: true }` now skips a streamed (or SSE) result — hashing the marker object would have answered `304` for a body that was never sent.
+  - **`fileRoutes()` gains `GET /files/:id/content`**, streamed with `files.downloadStream()` and falling back to the buffered read only on a driver with no `getStream` (`files.canStreamDownloads()` is new, and public). It keeps every existing rule: object-level authorization (a new `'download'` action, alongside `'read' | 'url' | 'delete'`), the quarantine gate (423/403) and the 404-for-unreachable, all of which close **before the first byte**. `fileRoutes({ download: false })` leaves it out.
+  - **`fileRoutes({ upload: { maxBytes, maxFiles?, allowedTypes? } })`** mounts `POST /files` — **opt-in, off by default** — a streamed multipart upload straight into storage with `uploadedBy` set to the caller and the same tenant scoping, validation and quota rules as `files.upload()`.
+  - **Uploading straight into storage** now works end to end: `UploadedFile.declaredLength` exposes the part's **own** `Content-Length` when the client sent one, so it can be passed to `files.upload(stream, { contentLength })` and a backend that needs an exact size (S3) streams instead of buffering. The docs say plainly that this is usually absent — RFC 7578 does not require a per-part `Content-Length` and no browser sends one — and that the request's `Content-Length` (also exposed, as `UploadBody.contentLength`) covers every part plus the framing, so it is an upper bound for one file and never its size. Without a declared length the write is bounded by `validate.maxSize`, as before.
+  
+  No existing API changes. `'download'` is a new value a custom `fileRoutes({ authorize })` will now be asked about; a policy that switches exhaustively on `action` denies it, which fails closed.
+
+### Patch Changes
+
+- Updated dependencies [6d446ef]
+  - @basaltkit/http@2.4.0
+
 ## 2.2.0
 
 ### Minor Changes
