@@ -5,9 +5,12 @@ import {
   MemoryMembershipStore,
   type Invitation,
   type InvitationStore,
+  type MemberUser,
+  type MemberUserSource,
   type Membership,
   type MembershipStore,
   type PublicInvitation,
+  type TeamMemberWithUser,
   type TeamRole,
 } from './stores.js'
 
@@ -49,6 +52,20 @@ export class TeamRoleNotGrantableError extends BasaltError {
   }
 }
 
+/**
+ * A contact listing (`membersWithUsers` / `roleRecipients`) was requested
+ * without a `users` directory configured on the service.
+ */
+export class TeamUserSourceMissingError extends BasaltError {
+  readonly status = 500
+  constructor() {
+    super(
+      'TEAM_USER_SOURCE_MISSING',
+      'Team member contacts need a user directory — pass `users` to teamsPlugin()/new Teams() (e.g. your @basaltkit/auth UserSource).',
+    )
+  }
+}
+
 /** Refused because it would leave the team with no owner. */
 export class LastOwnerError extends BasaltError {
   readonly status = 400
@@ -70,6 +87,13 @@ export const OWNER: TeamRole = 'owner'
 export interface TeamsOptions {
   memberships?: MembershipStore
   invitations?: InvitationStore
+  /**
+   * A read-only user directory, used by `membersWithUsers` / `roleRecipients`
+   * to attach contact details to memberships. An `@basaltkit/auth` `UserSource`
+   * satisfies it structurally: `teamsPlugin({ users: yourUserSource })`. Teams
+   * never imports auth — only this shape.
+   */
+  users?: MemberUserSource
   /** Wired to @basaltkit/permissions to mirror memberships into role grants. */
   access?: RoleAssigner
   hooks?: HookBus
@@ -95,6 +119,19 @@ const publicInvite = (i: Invitation): PublicInvitation => {
 }
 
 /**
+ * Projects whatever the directory returned onto the three safe fields. The
+ * fallback path calls `findById`, which on an `@basaltkit/auth` `UserSource`
+ * hands back the FULL stored record (password hash, and anything else the app
+ * keeps on its user row) — this is the single place that guarantees none of it
+ * reaches a caller.
+ */
+const toMemberUser = (user: MemberUser): MemberUser => ({
+  id: user.id,
+  email: user.email,
+  emailVerified: user.emailVerified ?? false,
+})
+
+/**
  * Team membership and email invitations for multi-user tenants. Decoupled from
  * auth and tenancy: identifiers are passed in. Optionally mirrors role changes
  * into a {@link RoleAssigner} (e.g. @basaltkit/permissions).
@@ -102,6 +139,7 @@ const publicInvite = (i: Invitation): PublicInvitation => {
 export class Teams {
   private readonly memberships: MembershipStore
   private readonly invitations: InvitationStore
+  private readonly users: MemberUserSource | undefined
   private readonly access: RoleAssigner | undefined
   private readonly hooks: HookBus | undefined
   private readonly inviteTtl: DurationInput
@@ -112,6 +150,7 @@ export class Teams {
   constructor(options: TeamsOptions = {}) {
     this.memberships = options.memberships ?? new MemoryMembershipStore()
     this.invitations = options.invitations ?? new MemoryInvitationStore()
+    this.users = options.users
     this.access = options.access
     this.hooks = options.hooks
     this.inviteTtl = options.inviteTtl ?? '7d'
@@ -262,6 +301,77 @@ export class Teams {
 
   async members(tenantId: string): Promise<Membership[]> {
     return this.memberships.list(tenantId)
+  }
+
+  /**
+   * The tenant's memberships with each member's contact details attached —
+   * the primitive behind "notify everyone with this role", and the ONE place
+   * the user lookup is batched.
+   *
+   * Requires a `users` directory (an `@basaltkit/auth` `UserSource` fits). When
+   * it implements `findByIds` the whole team resolves in a single bulk lookup;
+   * otherwise it falls back to one `findById` per member, so an app gets the
+   * fast path automatically the day its driver grows one, with no code change.
+   *
+   * Tenant safety: the ids come from THIS tenant's membership records and
+   * nowhere else — a caller never chooses which accounts are looked up — and a
+   * user the directory returns that was not asked for is discarded. A
+   * membership whose account does not exist is skipped (see
+   * {@link TeamMemberWithUser}); the membership record itself is left alone.
+   *
+   * Order follows {@link members}.
+   */
+  async membersWithUsers(tenantId: string): Promise<TeamMemberWithUser[]> {
+    const source = this.users
+    if (!source) throw new TeamUserSourceMissingError()
+
+    const memberships = await this.memberships.list(tenantId)
+    if (memberships.length === 0) return []
+
+    const ids = [...new Set(memberships.map((m) => m.userId))]
+    const wanted = new Set(ids)
+    const found = new Map<string, MemberUser>()
+    if (typeof source.findByIds === 'function') {
+      for (const user of await source.findByIds(ids)) {
+        if (wanted.has(user.id)) found.set(user.id, toMemberUser(user))
+      }
+    } else {
+      for (const id of ids) {
+        const user = await source.findById(id)
+        if (user && user.id === id) found.set(id, toMemberUser(user))
+      }
+    }
+
+    const out: TeamMemberWithUser[] = []
+    for (const membership of memberships) {
+      const user = found.get(membership.userId)
+      if (user) out.push({ ...membership, user })
+    }
+    return out
+  }
+
+  /**
+   * Who to notify for a role — a thin filter over {@link membersWithUsers},
+   * so it costs no extra lookup.
+   *
+   * A **ranked** role (one present in `roleRank`) includes everyone at or above
+   * it: `roleRecipients(t, 'admin')` also returns the owners, which is what
+   * "tell the admins" almost always means. Roles outside `roleRank` have no
+   * hierarchy — every unranked role ranks 0, so treating them by rank would
+   * notify all of them — and are therefore matched **exactly**; ranked roles
+   * can be narrowed the same way with `{ exact: true }`.
+   */
+  async roleRecipients(
+    tenantId: string,
+    role: TeamRole,
+    opts: { exact?: boolean } = {},
+  ): Promise<TeamMemberWithUser[]> {
+    const all = await this.membersWithUsers(tenantId)
+    if (opts.exact === true || !this.isRanked(role)) return all.filter((m) => m.role === role)
+    const minimum = this.rankOf(role)
+    // `isRanked` on the member's role too: a custom, unranked role must never
+    // be swept into a ranked query by ranking 0.
+    return all.filter((m) => this.isRanked(m.role) && this.rankOf(m.role) >= minimum)
   }
 
   async pendingInvites(tenantId: string): Promise<PublicInvitation[]> {

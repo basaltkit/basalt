@@ -28,7 +28,38 @@ export interface UserSource {
   create(data: { email: string; passwordHash: string }): Promise<AuthUser>
   /** Required for email verification and password reset. Returns the updated user. */
   update?(id: string, patch: UserPatch): Promise<AuthUser | null>
+  /**
+   * Bulk counterpart of {@link UserSource.findById}, for resolving the contact
+   * details of accounts the caller already knows — e.g. "email every admin of
+   * this tenant" (`@basaltkit/teams`' `roleRecipients`). Without it a caller
+   * either makes one round trip per id or reads the auth tables directly; the
+   * point of this method is that it has to do neither.
+   *
+   * Contract:
+   *  - resolves {@link PublicUser}, **never** `AuthUser` — a directory lookup
+   *    has no business carrying a password hash, and a driver should not even
+   *    SELECT the credential columns;
+   *  - one entry per **found** id, in the order of `ids`; ids with no account
+   *    are omitted, so the result may be shorter than the input;
+   *  - duplicate ids yield a single entry, and an empty list resolves to `[]`
+   *    without touching the database.
+   *
+   * Optional: stores written before it keep compiling, and callers fall back to
+   * one `findById` per id.
+   */
+  findByIds?(ids: readonly string[]): Promise<PublicUser[]>
 }
+
+/**
+ * Projects a stored user onto the safe, non-credential shape. Local to this
+ * module: the exported `publicUser` lives in `auth.ts`, which imports from
+ * here, so stores can't reach for it without a cycle.
+ */
+const contactOf = (user: AuthUser): PublicUser => ({
+  id: user.id,
+  email: user.email,
+  emailVerified: user.emailVerified ?? false,
+})
 
 export class MemoryUserSource implements UserSource {
   private readonly users = new Map<string, AuthUser>()
@@ -45,6 +76,19 @@ export class MemoryUserSource implements UserSource {
 
   async findById(id: string): Promise<AuthUser | null> {
     return this.users.get(id) ?? null
+  }
+
+  async findByIds(ids: readonly string[]): Promise<PublicUser[]> {
+    const out: PublicUser[] = []
+    const seen = new Set<string>()
+    for (const id of ids) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      const user = this.users.get(id)
+      // Project, never hand out the live record: this is a contact list.
+      if (user) out.push(contactOf(user))
+    }
+    return out
   }
 
   async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {

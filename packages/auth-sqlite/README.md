@@ -56,6 +56,18 @@ const app = await createApp({
 That's the whole change — the rest of your auth code is untouched, because these
 classes implement the exact same store contracts as the in-memory ones.
 
+### Bulk contact lookup (`findByIds`)
+
+`SqliteUserSource.findByIds(ids)` resolves a set of accounts in one
+`WHERE id IN (…)` instead of one statement per id — the fast path behind
+`@basaltkit/teams`' `roleRecipients` ("email every admin of this tenant").
+
+It selects only `id`, `email` and `email_verified` (the password hash is never
+read), keeps the order of `ids`, omits ids with no row, and **chunks** the list
+at 500 ids per statement so it stays inside SQLite's per-statement variable cap
+(`SQLITE_MAX_VARIABLE_NUMBER` — 999 on older builds). Tune it with
+`new SqliteUserSource(db, { idChunkSize: 1000 })`.
+
 ## Pick individual stores
 
 Every store is exported on its own and takes a `DatabaseSync`, so you can mix

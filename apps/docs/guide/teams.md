@@ -148,7 +148,7 @@ await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 | `POST /team/invites` `{ email, role? }` | `admin` |
 | `POST /team/invites/accept` `{ token }` | login with a **verified** email |
 | `GET /team/invites` · `DELETE /team/invites/:id` | `admin` |
-| `GET /team/members` | `member` |
+| `GET /team/members` | `member` (adds `user` with `memberContacts: true`) |
 | `PATCH /team/members/:userId` `{ role }` | `admin` |
 | `DELETE /team/members/:userId` | `admin` |
 
@@ -342,6 +342,80 @@ concurrent demotions/removals from leaving the team with zero owners. Pass
 `{ actingUserId }` to `changeRole`/`removeMember`/`addMember` to apply the rank
 rules to a user-initiated call, as the routes do.
 
+## Notifying everyone with a role
+
+`members()` returns identifiers, not people: `{ tenantId, userId, role }`. To
+*email* the admins of a tenant you also need their addresses — and looking them
+up in the auth tables from application code couples your product to the auth
+schema, while calling `findById` once per member is N round trips.
+
+Give `Teams` a user directory and neither is necessary. An `@basaltkit/auth`
+`UserSource` satisfies the contract as it stands, so it is the same object you
+already pass to `authPlugin`:
+
+```ts
+const users = sqliteAuthStores('./data/auth.db').users
+
+plugins: [
+  authPlugin({ users, secret }),
+  teamsPlugin({ users }),   // the same directory — nothing else to wire
+]
+```
+
+```ts
+const teams = app.container.get(TEAMS)
+
+// Everyone who can act as an admin — owners included (rank 3 >= admin 2).
+for (const { user, role } of await teams.roleRecipients('acme', 'admin')) {
+  await mailer.send(ApprovalPending, { role }, { to: user.email })
+}
+
+// The whole team, with contacts, in one lookup.
+await teams.membersWithUsers('acme')
+// [{ tenantId: 'acme', userId: 'u1', role: 'owner', createdAt: 1_7…,
+//    user: { id: 'u1', email: 'ada@acme.test', emailVerified: true } }, …]
+```
+
+`membersWithUsers` is the primitive: it is the one place the user lookup
+happens, and `roleRecipients` is a filter over it that costs no extra query.
+What the pair guarantees:
+
+- **One lookup, automatically.** When the directory implements
+  [`findByIds`](/guide/auth#bulk-contact-lookup-findbyids) the whole
+  team resolves in a single batched query; otherwise it falls back to one
+  `findById` per member. The decision lives in one place, so an app gets the
+  fast path the day its driver grows one, with no code change.
+- **No credential ever leaks.** Whatever the directory hands back — `findById`
+  returns the *full* stored record — is projected down to
+  `{ id, email, emailVerified }`.
+- **Tenant scoped.** The ids come from that tenant's membership records and
+  nowhere else, so no caller can point the lookup at accounts of its choosing,
+  and a user the directory returns that wasn't asked for is discarded.
+- **Missing accounts don't break the list.** A membership whose account no
+  longer exists (deleted, or an invite that never became a real user) is
+  *skipped* — `user` is required on `TeamMemberWithUser`, so the result is
+  always safe to email. The membership record itself is untouched, and
+  `members()` still shows it.
+
+`roleRecipients` honours the hierarchy for **ranked** roles and matches
+**unranked** ones exactly — every role outside `roleRank` ranks 0, so ranking
+them would notify all of them at once:
+
+```ts
+await teams.roleRecipients('acme', 'admin')                  // owners + admins
+await teams.roleRecipients('acme', 'admin', { exact: true }) // admins only
+await teams.roleRecipients('acme', 'billing-contact')        // exact (unranked)
+```
+
+Without a `users` directory both methods throw `TeamUserSourceMissingError`
+(`500 TEAM_USER_SOURCE_MISSING`) instead of quietly returning contact-less rows.
+
+Over HTTP the same data is opt-in: `teamRoutes({ memberContacts: true })` adds
+`user` to each entry of `GET /team/members` (still `member`-only). It is off by
+default so a team's email addresses go over the wire only when you say so, and
+the ids resolved are always the tenant's own memberships — never anything the
+request supplied.
+
 ## Mirroring roles into permissions
 
 Pass an `access` store (a `@basaltkit/permissions` `AccessStore` satisfies the
@@ -369,6 +443,7 @@ catalogue into every tenant — see
 | --- | --- | --- | --- |
 | `memberships` | `MembershipStore` | in-memory | Where memberships live — swap for `teams-sqlite`/`teams-prisma` in production |
 | `invitations` | `InvitationStore` | in-memory | Where invitations (hashed tokens) live |
+| `users` | `MemberUserSource` | — | Read-only user directory behind `membersWithUsers` / `roleRecipients`; an `@basaltkit/auth` `UserSource` fits as-is |
 | `access` | `RoleAssigner` | — | Mirrors every membership change into a `@basaltkit/permissions` role grant in the tenant's scope |
 | `inviteTtl` | `DurationInput` | `'7d'` | Invitation link lifetime |
 | `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Role hierarchy; roles outside the map have rank 0 |
@@ -388,6 +463,7 @@ catalogue into every tenant — see
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `requireVerifiedEmail` | `boolean` | `true` | Require `ctx().user.emailVerified === true` to accept an invitation |
+| `memberContacts` | `boolean` | `false` | Include each member's `user: { id, email, emailVerified }` in `GET /team/members`, resolved through the `users` directory |
 
 ## Failure modes & troubleshooting
 
@@ -398,6 +474,7 @@ catalogue into every tenant — see
 | `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | Role rank below the required one, including an actor trying to grant, demote or remove above their own rank |
 | `TeamRoleNotGrantableError` | `TEAM_ROLE_NOT_GRANTABLE` | 403 | An acting user tried to grant a role that is neither in `roleRank` nor in `grantableRoles` |
 | `TeamEmailNotVerifiedError` | `TEAM_EMAIL_NOT_VERIFIED` | 403 | `POST /team/invites/accept` by a user whose email isn't verified (see `requireVerifiedEmail`) |
+| `TeamUserSourceMissingError` | `TEAM_USER_SOURCE_MISSING` | 500 | `membersWithUsers` / `roleRecipients` (or `memberContacts: true`) ran with no `users` directory configured |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | The change would leave the team with no owner |
 | `TEAM_NO_TENANT` | `TEAM_NO_TENANT` | 400 | A `teamRoutes()` endpoint was called with no tenant in context — register tenancy and send the tenant identifier |
 | `TEAM_INVITE_NOT_FOUND` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` for an id that doesn't exist or belongs to another tenant |

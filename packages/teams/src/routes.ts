@@ -46,6 +46,18 @@ export interface TeamRoutesOptions {
    * invited-address binding itself still applies).
    */
   requireVerifiedEmail?: boolean
+  /**
+   * Include each member's contact details (`user: { id, email, emailVerified }`)
+   * in `GET /team/members`, resolved through the `users` directory configured
+   * on `teamsPlugin`. Default **false**: a team's email addresses are only
+   * exposed over HTTP when you say so, and the plain membership listing stays
+   * byte-for-byte what it was.
+   *
+   * The ids looked up come from the tenant's own memberships — never from the
+   * request — and a membership whose account is gone is omitted. Without a
+   * `users` directory the route fails with `TEAM_USER_SOURCE_MISSING` (500).
+   */
+  memberContacts?: boolean
 }
 
 class NoTenantError extends BasaltError {
@@ -71,6 +83,7 @@ const roleBody = z.object({ role: z.string().min(1) })
  */
 export function teamRoutes(options: TeamRoutesOptions = {}): BasaltRoute[] {
   const requireVerifiedEmail = options.requireVerifiedEmail !== false
+  const memberContacts = options.memberContacts === true
   return [
     route({
       method: 'POST',
@@ -140,7 +153,8 @@ export function teamRoutes(options: TeamRoutesOptions = {}): BasaltRoute[] {
       url: '/team/members',
       meta: { auth: true, teamRole: 'member' },
       async handler() {
-        return teams().members(tenantId())
+        const id = tenantId()
+        return memberContacts ? teams().membersWithUsers(id) : teams().members(id)
       },
     }),
 

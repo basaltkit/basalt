@@ -9,6 +9,42 @@ export interface Membership {
   createdAt: number
 }
 
+/**
+ * The safe, non-credential fields of a user account that a team listing may
+ * expose. Structurally identical to `@basaltkit/auth`'s `PublicUser` — teams
+ * never imports auth, so the two packages stay independent in both directions.
+ */
+export interface MemberUser {
+  id: string
+  email: string
+  emailVerified?: boolean
+}
+
+/**
+ * A read-only directory of user accounts, used to attach contact details to a
+ * team's memberships. `@basaltkit/auth`'s `UserSource` satisfies it as it
+ * stands, so the wiring is just `teamsPlugin({ users: yourUserSource })`.
+ *
+ * Implement `findByIds` for the batched fast path — one query per chunk of
+ * ids. Without it `Teams` falls back to one `findById` per member: correct,
+ * but N round trips.
+ */
+export interface MemberUserSource {
+  findById(id: string): Promise<MemberUser | null>
+  /** Bulk lookup; may resolve fewer entries than asked for (unknown ids). */
+  findByIds?(ids: readonly string[]): Promise<MemberUser[]>
+}
+
+/**
+ * A membership plus the contact details of the account behind it. `user` is
+ * required on purpose: a membership whose account does not exist (an invite
+ * never accepted as a real user, a deleted account) is **omitted** from the
+ * listing rather than carrying a null, so the result is always safe to email.
+ */
+export interface TeamMemberWithUser extends Membership {
+  user: MemberUser
+}
+
 /** An outstanding invitation to join a team. */
 export interface Invitation {
   id: string
