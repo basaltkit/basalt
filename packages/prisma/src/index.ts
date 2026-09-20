@@ -47,6 +47,23 @@ export {
   type RlsPolicyOptions,
 } from './rls.js'
 export {
+  crossTenantScanSql,
+  crossTenantScan,
+  crossTenantSweep,
+  CrossTenantScanInTenantError,
+  CrossTenantScanShapeError,
+  CROSS_TENANT_ID_COLUMN,
+  CROSS_TENANT_ROW_COLUMN,
+  type CrossTenantScanSqlOptions,
+  type CrossTenantScanColumn,
+  type CrossTenantScanArgs,
+  type CrossTenantScanRow,
+  type CrossTenantCursor,
+  type CrossTenantPage,
+  type CrossTenantSweepOptions,
+  type CrossTenantSweepResult,
+} from './cross-tenant.js'
+export {
   tenantSchema,
   schemaUrl,
   provisionTenantSchema,

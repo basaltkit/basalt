@@ -2,24 +2,29 @@ import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { createApp, type BasaltApp } from '@basaltkit/core'
 import {
-  fetchSend,
+  httpFetcher,
+  sendWith,
   errorDetailsParitySuite,
   rateLimitKeyParitySuite,
+  streamParitySuite,
   uploadParitySuite,
   type ParityDriver,
 } from '../../http/tests/adapter-parity.js'
+import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
 import { EXPRESS, expressPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
 let server: Server | undefined
 
 const driver: ParityDriver = {
-  async boot(routes, plugins) {
-    app = await createApp({ plugins: [expressPlugin({ routes, onError: () => {} }), ...plugins] }).boot()
+  async boot(routes, plugins, options) {
+    app = await createApp({
+      plugins: [expressPlugin({ routes, onError: options?.onError ?? (() => {}) }), ...plugins],
+    }).boot()
     server = app.container.get(EXPRESS).listen(0, '127.0.0.1')
     await new Promise<void>((resolve) => server!.once('listening', () => resolve()))
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-    return (request) => fetchSend(base, request)
+    return sendWith(httpFetcher(base))
   },
   async close() {
     if (server) {
@@ -35,3 +40,5 @@ const driver: ParityDriver = {
 uploadParitySuite('express', driver)
 rateLimitKeyParitySuite('express', driver)
 errorDetailsParitySuite('express', driver)
+streamParitySuite('express', driver)
+fileRoutesParitySuite('express', driver)

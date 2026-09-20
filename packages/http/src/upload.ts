@@ -40,6 +40,16 @@ export interface UploadedFile {
    * requested. It errors with the limit's HttpError if the upload breaks one.
    */
   stream: Readable
+  /**
+   * The size the client declared for THIS part (its own `Content-Length`
+   * header), when it sent one. RFC 7578 does not require it and browsers never
+   * send it, so it is usually `undefined` — there is no honest way to derive a
+   * per-file size from the request's `Content-Length`, which covers every part
+   * plus the multipart framing. Pass it straight to a backend that wants an
+   * exact size (`files.upload(file.stream, { contentLength })`); the real size
+   * is still measured from the bytes that arrive.
+   */
+  declaredLength?: number
 }
 
 /** What an `upload()` route's handler receives as `body`. */
@@ -55,6 +65,13 @@ export interface UploadBody {
    * when that file is yielded, and every field once `files` is exhausted.
    */
   fields: Record<string, string>
+  /**
+   * The request's declared `Content-Length`, when the client sent one (a
+   * chunked upload carries none). It bounds the WHOLE body — every part plus
+   * the multipart framing — so it is an upper bound for a single file, never
+   * its size. For that, use `file.declaredLength`.
+   */
+  contentLength?: number
 }
 
 export interface ResolvedUploadOptions {
@@ -295,7 +312,11 @@ export class UploadSession {
         return { done: true, value: undefined }
       },
     }
-    return { files: { [Symbol.asyncIterator]: () => iterator }, fields: this.fields }
+    return {
+      files: { [Symbol.asyncIterator]: () => iterator },
+      fields: this.fields,
+      ...(length !== undefined ? { contentLength: length } : {}),
+    }
   }
 
   /**
@@ -444,7 +465,17 @@ export class UploadSession {
       this.kick()
     })
     this.demand = false
-    const file = { field: part.name, filename: sanitizeFilename(part.filename), declaredType, stream }
+    const file: UploadedFile & { stream: FileStream } = {
+      field: part.name,
+      filename: sanitizeFilename(part.filename),
+      declaredType,
+      stream,
+      // Only when the part itself declared one — never derived from the
+      // request's Content-Length, which covers the other parts too.
+      ...(part.contentLength !== undefined && part.contentLength <= this.options.maxFileBytes
+        ? { declaredLength: part.contentLength }
+        : {}),
+    }
     this.current = { kind: 'file', file, bytes: 0 }
     this.queue.push(file)
     if (this.discarding) skip(file)

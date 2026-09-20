@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { runRoute, route, computeEtag, ifNoneMatchSatisfied, type HttpReply, type HttpRequest } from '../src/index.js'
+import { Readable } from 'node:stream'
+import { runRoute, route, computeEtag, ifNoneMatchSatisfied, sse, stream, type HttpReply, type HttpRequest } from '../src/index.js'
 
 class Reply implements HttpReply {
   statusCode = 200
@@ -66,5 +67,27 @@ describe('runRoute ETag (meta.etag)', () => {
     const r2 = new Reply()
     await runRoute(post, req({ method: 'POST' }), r2)
     expect(r2.headers['etag']).toBeUndefined()
+  })
+
+  it('leaves a streamed or event-stream result alone — there is no payload to hash', async () => {
+    // Hashing the marker object would tag every download with the same ETag and
+    // answer 304 for a body that was never sent.
+    const download = route({
+      method: 'GET',
+      url: '/d',
+      meta: { etag: true },
+      handler: () => stream(Readable.from(['bytes']), { contentType: 'text/plain' }),
+    })
+    const r1 = new Reply()
+    const streamed = await runRoute(download, req({ url: '/d' }), r1)
+    expect(r1.headers['etag']).toBeUndefined()
+    expect(r1.statusCode).toBe(200)
+    expect(streamed).toBeDefined()
+
+    const events = route({ method: 'GET', url: '/e', meta: { etag: true }, handler: () => sse(() => {}) })
+    const r2 = new Reply()
+    const produced = await runRoute(events, req({ url: '/e' }), r2)
+    expect(r2.headers['etag']).toBeUndefined()
+    expect(produced).toBeDefined()
   })
 })

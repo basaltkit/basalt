@@ -144,6 +144,58 @@ await tenantTransaction(db, async (tx) => {
 - **The raw guard stays on**: that exact `set_config` statement, for the tenant already in scope, is the only raw query allowed inside a tenant context; any other still throws `PRISMA_RAW_IN_TENANT`.
 - An `onMissingTenant: 'bypass'` client sends no setting, so it sees nothing under RLS — connect central/admin code with its own role.
 
+#### Sweeping every tenant (cross-tenant scan)
+
+A reconciler ([`defineReconciler`](https://github.com/basaltkit/basalt/tree/main/packages/scheduler#definereconcilert-options-reconcileroptionst-reconciler)) has to answer a question no tenant-scoped query can answer: *which rows, anywhere, are still `PROCESSING`?* Under RLS the application role only ever sees one tenant, and the extension refuses unscoped queries — so the sweep cannot be an ordinary query at all.
+
+`crossTenantScanSql` installs one narrow, audited door: a `SECURITY DEFINER` function that returns **identifier columns only**, across every tenant. `crossTenantSweep` pages through it and processes each row back inside its own tenant's scope.
+
+```ts
+import { crossTenantScanSql, crossTenantScan, crossTenantSweep } from '@basaltkit/prisma'
+
+// once, in a SQL migration (run it as a role that bypasses the table's RLS)
+crossTenantScanSql({
+  name: 'stuck_jobs',
+  table: 'jobs',
+  tenantColumn: 'tenantId',
+  columns: ['id'],                                  // identifiers ONLY — never tenant data
+  where: `t."status" = 'PROCESSING' AND t."updatedAt" < now() - interval '15 minutes'`,
+  role: 'app',                                      // the role the app connects as
+  owner: 'app_owner',                               // BYPASSRLS / superuser — see below
+  maxRows: 500,
+})
+
+// in the reconciler (central code — no tenant in scope)
+await crossTenantSweep({
+  client: db,
+  scanFunction: 'stuck_jobs',
+  run: (tenantId, fn) => tenancy.run(tenantId, fn),  // each item under its own tenant
+  handle: (item) => RetryJob.dispatch({ jobId: item.id }),
+})
+
+// or just the identifiers
+const stuck = await crossTenantScan(db, 'stuck_jobs', { limit: 200 })
+```
+
+- **It is a deliberate RLS bypass** — inside the function the policies do not apply. That is only safe because of what it returns: identifiers. Never widen it to a column holding tenant data; read the data itself inside `tenancy.run(tenantId, …)` through the scoped client. The generated SQL says so, loudly, in a comment.
+- **Hardened by construction** — `SET search_path` is pinned inside the function (a `SECURITY DEFINER` function without one is a privilege-escalation hole), it is `STABLE` / `PARALLEL SAFE`, every identifier is validated and quoted, and `EXECUTE` is revoked from `PUBLIC` and granted only to the roles you name.
+- **Owned by a role the policies don't reach** — `rlsPolicySql` sets `FORCE ROW LEVEL SECURITY`, so a function owned by the table owner would be filtered too and return nothing. Give it a `BYPASSRLS` owner (or create it as a superuser).
+- **Bounded** — `p_limit` is clamped to `maxRows` in the function itself and `(p_after_tenant, p_after_id)` is an ordered cursor, so a sweep pages instead of pulling millions of rows. `crossTenantSweep` adds `limit` (per page) and `maxItems` (per sweep, default 10 000).
+- **Guarded at runtime** — the scan refuses to run inside a tenant context (`PRISMA_CROSS_TENANT_IN_TENANT`: it is central code by definition, which is also why it is *not* exempt from the `PRISMA_RAW_IN_TENANT` guard the internal `set_config` is), and it refuses a deployed function whose returned columns are not a subset of the ones you declared (`PRISMA_CROSS_TENANT_SCAN_SHAPE`) — a function widened after the fact never reaches application code.
+- **Without RLS none of this is needed**: a central client (`onMissingTenant: 'bypass'`, or one without the extension) can select the identifiers directly. Pass that query as `scan` and keep the paging, grouping and per-tenant execution:
+
+```ts
+await crossTenantSweep({
+  scan: ({ limit, after }) => central.job.findMany({
+    where: { status: 'PROCESSING', ...(after ? { OR: [{ tenantId: { gt: after.tenantId } }, { tenantId: after.tenantId, id: { gt: after.id } }] } : {}) },
+    select: { tenantId: true, id: true },
+    orderBy: [{ tenantId: 'asc' }, { id: 'asc' }],
+    take: limit,
+  }),
+  handle: (item) => RetryJob.dispatch({ jobId: item.id }),
+})
+```
+
 ### Mode 2 — Schema per tenant (PostgreSQL)
 
 Each tenant has its own schema (`tenant_acme`, `tenant_globex`, …) in the same database. Each tenant's client connects with `?schema=<name>` in the URL — Prisma is what sets the `search_path` on connection (the reliable way to do this):
@@ -340,6 +392,44 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 | `tenantConfigParams` | `tenantConfigParams(tenantId: string, setting?: string): [string, string]` | Params for `setTenantConfigSql` (validates the setting name). |
 | `DEFAULT_TENANT_SETTING` | `'app.tenant_id'` | Default setting. |
 
+### Cross-tenant scan helpers
+
+| Export | Signature | Description |
+|---|---|---|
+| `crossTenantScanSql` | `crossTenantScanSql(options: CrossTenantScanSqlOptions): string` | Idempotent SQL for a `SECURITY DEFINER` function returning the identifiers of matching rows across every tenant (a deliberate RLS bypass — identifiers only). |
+| `crossTenantScan` | `crossTenantScan(client, name, args?: CrossTenantScanArgs): Promise<CrossTenantScanRow[]>` | Calls that function and returns `{ tenantId, id }` rows. Refuses to run inside a tenant context; refuses columns you did not declare. |
+| `crossTenantSweep` | `crossTenantSweep(options: CrossTenantSweepOptions): Promise<CrossTenantSweepResult>` | Pages through the scan and runs `handle` for every row inside its own tenant's context, grouped by tenant. |
+| `CROSS_TENANT_ID_COLUMN` / `CROSS_TENANT_ROW_COLUMN` | `'tenant_id'` / `'id'` | The fixed output column names of the generated function. |
+
+`crossTenantScanSql(options)`:
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `name` | `string` | — | Name of the generated function. |
+| `table` | `string` | — | Table to scan. |
+| `tenantColumn` | `string` | `'tenant_id'` | Column holding the tenant id; returned as `tenant_id`. |
+| `tenantType` | `string` | `'text'` | SQL type of that column. |
+| `columns` | `Array<string \| { name, type? }>` | — | Identifier columns to return (max 4, **never tenant data**). The first is the row identifier: returned as `id`, orders the scan, carries the cursor — so it must be unique within a tenant. |
+| `where` | `string` | `true` | The "stuck" predicate; the table is aliased `t`. Migration SQL you write — semicolons, comments and `$` are refused. |
+| `schema` | `string` | `'public'` | Schema of the table and the function. |
+| `role` | `string \| string[]` | — | Role(s) granted `EXECUTE` (`PUBLIC` is revoked). |
+| `owner` | `string` | — | Role the function runs as. Must not be subject to the table's RLS (`BYPASSRLS`/superuser) or the scan returns nothing. |
+| `maxRows` | `number` | `1000` | Hard cap on the rows one call may return. |
+
+`crossTenantSweep(options)`:
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `client` | `PrismaClient` | — | Client used for the scan. Required unless `scan` is given. |
+| `scanFunction` | `string` | — | Function generated by `crossTenantScanSql`. |
+| `schema` / `columns` | `string` / `string[]` | `'public'` / `[]` | Schema of the function; identifier columns besides `tenant_id`/`id`. |
+| `scan` | `(page) => rows` | — | Replaces the function call — what a deployment **without** RLS uses (a plain central query ordered by `(tenantId, id)`). |
+| `handle` | `(item, tenantId) => void \| Promise<void>` | — | Processes one item, inside its tenant's context. Must be idempotent. |
+| `limit` | `number` | `500` | Rows per page. |
+| `maxItems` | `number` | `10000` | Cap on the items one sweep processes (`truncated` in the result). |
+| `run` | `(tenantId, fn) => Promise<void>` | context only | Enters the tenant. Pass `(id, fn) => tenancy.run(id, fn)` for the real tenant record and the `tenancy:switched` hook. |
+| `onError` | `(error, item) => void` | `console.error` | An item's `handle` threw; the sweep continues. |
+
 ### `assertMigrated(client, options?)`
 
 `assertMigrated(client, options?: { tables?: string[] }): Promise<void>` — what `prismaPlugin({ assertMigrated })` runs at boot; usable on its own (a readiness probe, a script). Throws `DatabaseNotMigratedError` when `_prisma_migrations` or a listed table is missing, or the check cannot run (driver errors are included with URL credentials masked by `redactCredentials`).
@@ -428,6 +518,8 @@ Returns a `CommandDefinition` (`@basaltkit/cli`) named `tenant:migrate`.
 | `RawQueryInTenantContextError` | Code `PRISMA_RAW_IN_TENANT` — raw/client-level operation inside a tenant context. |
 | `UnscopedOperationError` | Code `PRISMA_UNSCOPED_OPERATION` — an operation the extension cannot scope, inside a tenant context. |
 | `CrossTenantWriteError` | Code `PRISMA_CROSS_TENANT_WRITE` — update data tried to set the tenant field to another tenant. |
+| `CrossTenantScanInTenantError` | Code `PRISMA_CROSS_TENANT_IN_TENANT` — a cross-tenant scan/sweep was started inside a tenant context; it is central code. |
+| `CrossTenantScanShapeError` | Code `PRISMA_CROSS_TENANT_SCAN_SHAPE` — the deployed scan function returned a column that was not declared as an identifier (or a NULL identifier). |
 | `InvalidTenantSchemaError` | Code `PRISMA_INVALID_SCHEMA` — tenant id without a valid schema identifier. |
 | `DatabaseNotMigratedError` | Code `PRISMA_NOT_MIGRATED` — `assertMigrated` found no `_prisma_migrations` (or a listed table) in the database it reached. |
 | `EmptyTenantSchemaError` | Code `PRISMA_TENANT_SCHEMA_EMPTY` — the migration exited cleanly but produced no tables. |
@@ -439,6 +531,9 @@ You called `db()` outside an HTTP request or `tenancy.run()`, or `prismaPlugin` 
 
 **`PRISMA_TENANT_MISSING` on a query.**
 The query ran without a tenant in context (`onMissingTenant` defaults to `'error'`). Identify the tenant beforehand (tenancy plugin / `tenancy.run()`). For deliberate central queries use a separate admin client built with `onMissingTenant: 'bypass'` — do not set it on the main client.
+
+**My reconciler has to find stuck rows in every tenant, but RLS only shows it one.**
+That is what the [cross-tenant scan](#sweeping-every-tenant-cross-tenant-scan) is for: `crossTenantScanSql` (a `SECURITY DEFINER` function returning identifiers only) plus `crossTenantSweep`, which processes each identifier inside its own tenant's context. Starting it inside a tenant context throws `PRISMA_CROSS_TENANT_IN_TENANT` — run the sweep as central code. Without RLS you don't need the SQL function at all: pass your own `scan` query.
 
 **I passed `where: { tenantId: 'other' }` and "it didn't work".**
 That's expected: the extension forces the current tenant's filter over whatever the code passes — that's the isolation guarantee. For cross-tenant operations use a client without the extension (administrative context).

@@ -5,9 +5,11 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
-  fetchSend,
+  httpFetcher,
+  sendWith,
   errorDetailsParitySuite,
   rateLimitKeyParitySuite,
+  streamParitySuite,
   uploadParitySuite,
   type ParityDriver,
 } from '../../http/tests/adapter-parity.js'
@@ -16,14 +18,19 @@ import { FASTIFY, fastifyPlugin } from '../src/index.js'
 let app: BasaltApp | undefined
 
 const driver: ParityDriver = {
-  async boot(routes, plugins) {
-    app = await createApp({ plugins: [fastifyPlugin({ routes, onError: () => {} }), ...plugins] }).boot()
+  async boot(routes, plugins, options) {
+    app = await createApp({
+      plugins: [fastifyPlugin({ routes, onError: options?.onError ?? (() => {}) }), ...plugins],
+    }).boot()
     const instance = app.container.get(FASTIFY)
     await instance.listen({ port: 0, host: '127.0.0.1' })
     const base = `http://127.0.0.1:${(instance.server.address() as AddressInfo).port}`
-    return (request) => fetchSend(base, request)
+    return sendWith(httpFetcher(base))
   },
   async close() {
+    // A request whose body the server never read (e.g. a 404 answered early)
+    // leaves a socket the graceful close would wait on forever.
+    app?.container.get(FASTIFY).server.closeAllConnections()
     await app?.shutdown()
     app = undefined
   },
@@ -32,6 +39,7 @@ const driver: ParityDriver = {
 uploadParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
+streamParitySuite('fastify', driver)
 
 describe('fastify: multipart on routes that are not upload() routes', () => {
   it('still answers 415 (the pass-through parser only serves upload() routes)', async () => {

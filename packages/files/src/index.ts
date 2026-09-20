@@ -38,6 +38,7 @@ export {
   FILES,
   type FilesPluginOptions,
   type FileRoutesOptions,
+  type FileUploadRouteOptions,
   type FileAction,
   type FileRouteUser,
 } from './plugin.js'

@@ -76,6 +76,7 @@ para as saltar:
 
 ```bash
 pnpm create basalt my-saas --billing --cli   # adiciona subscrições + a CLI `basalt`
+pnpm create basalt my-saas --prisma           # PostgreSQL via Prisma, ligado de ponta a ponta
 pnpm create basalt my-saas -y                 # aceita todos os defaults, sem perguntas
 ```
 
@@ -175,6 +176,15 @@ pnpm test
 O scaffold arranca com **stores em memória** — perfeitos para dev e CI, mas
 esquecem tudo ao reiniciar. Cada store no Basalt é uma interface com um default
 em memória, por isso tornar-se durável é uma troca, não uma reescrita.
+
+::: tip Começar já com a base de dados ligada
+Com o `--prisma` não há nada para trocar: recebes o `prisma/schema.prisma` com
+os modelos de cada domínio que ativaste, o `src/db.ts` com o cliente com escopo
+de tenant, as stores Prisma no `src/app.ts`, um `MY_SAAS_DATABASE_URL`
+obrigatório e o `prismaPlugin({ assertMigrated: true })`, que falha o arranque
+quando a app é apontada a uma base de dados que nunca foi migrada. Vê
+[PostgreSQL com `--prisma`](/pt/guide/installation#postgresql-com-prisma).
+:::
 
 Abre `src/app.ts`: o `authPlugin` está configurado com um `MemoryUserSource`.
 Troca-o por um conjunto durável de stores suportado pelo SQLite embutido do Node

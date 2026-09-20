@@ -63,9 +63,9 @@ Pergunta, por esta ordem:
 
 | Predefinição | Funcionalidades |
 | --- | --- |
-| **SaaS starter** | tenancy + auth + faturação + CLI |
+| **SaaS starter** | tenancy + auth + faturação + base de dados + CLI |
 | **API only** | auth + MCP — sem tenancy, sem UI |
-| **Full stack** | tudo, incluindo a web UI |
+| **Full stack** | tudo, incluindo a base de dados e a web UI |
 | **Minimal** | nenhuma — acrescentas depois |
 | **Custom** | escolhes da lista de funcionalidades |
 
@@ -81,6 +81,7 @@ Pergunta, por esta ordem:
 | `--ui` | desativado | Adiciona um frontend `web/` React + shadcn — vê [Web UI](/pt/guide/web-ui). **Força pnpm** |
 | `--cli` | desativado | Adiciona `bin/basalt.ts`, o script `basalt`, os geradores e o `prisma:sync` |
 | `--mcp` | desativado | Expõe rotas só-de-leitura marcadas como ferramentas MCP em `POST /mcp`, mais um `.mcp.json` para ferramentas de IA — vê [MCP](/pt/guide/mcp) |
+| `--prisma` (`--db`) | desativado | Assenta a app em PostgreSQL através do Prisma: `prisma/schema.prisma`, migrações, `src/db.ts`, as stores Prisma e uma verificação no arranque de que a base de dados é a migrada — vê [PostgreSQL com `--prisma`](#postgresql-com-prisma) |
 | `--install` / `--no-install` | ativo em TTY, desativado em CI | Instala dependências no fim |
 | `--git` / `--no-git` | ativo em TTY, desativado em CI | `git init` mais um commit inicial |
 | `--offline` | desativado | Não consulta o registry npm e usa os intervalos de dependências incluídos nesta versão do create-basalt |
@@ -92,6 +93,7 @@ Pergunta, por esta ordem:
 pnpm create basalt my-saas --billing --cli --install --git   # stack completa, instalada e commitada
 npm create basalt service-api --no-tenancy --no-auth         # API mínima
 pnpm create basalt agent-api --mcp -y                        # API + ferramentas MCP, sem perguntas
+pnpm create basalt my-saas --prisma --billing                # com PostgreSQL desde o primeiro commit
 ```
 
 O gestor de pacotes é detetado a partir de `npm_config_user_agent` (a variável
@@ -143,6 +145,7 @@ mudam o que está lá dentro:
 | `tests/app.test.ts` | Um smoke test que arranca a app e chama `/` e `/health` |
 | `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — um `NODE_ENV` não definido conta como produção), `test`, `typecheck` — mais `basalt` com `--cli`. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` usa os nomes com prefixo da app e, com o README, explica a [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
+| `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | Com `--prisma`: o schema (os modelos de cada domínio Basalt ativo mais os teus), a configuração do Prisma 7 com o URL de ligação, o(s) cliente(s) que a app usa e o seed do tenant `demo` |
 | `bin/basalt.ts` | Com `--cli`: o ponto de entrada da CLI que liga os geradores e o `prisma:sync` |
 | `.mcp.json` | Com `--mcp`: regista a ponte `basalt-ai-mcp`, **só de desenvolvimento**, para clientes MCP |
 | `web/…` | Com `--ui`: o frontend React + shadcn, membro do workspace pnpm |
@@ -157,6 +160,52 @@ pnpm test
 ```
 
 Para uma execução guiada ponta-a-ponta, vê [Começar](/pt/guide/getting-started).
+
+### PostgreSQL com `--prisma`
+
+**Sem a flag, o scaffold não tem base de dados nenhuma.** Arranca sobre fontes
+em memória (`MemoryUserSource`, `MemoryTenantSource`, as stores predefinidas de
+equipas e subscrições): ótimo para a primeira execução, para CI e para testes, e
+perdido no reinício seguinte. Trocar uma store de cada vez está descrito em
+[Persistência e stores duráveis](/pt/guide/persistence).
+
+O `--prisma` (ou `--db`, se preferires) gera antes a forma assente em base de
+dados:
+
+| Ficheiro | O que é |
+| --- | --- |
+| `prisma/schema.prisma` | Os modelos de referência de cada pacote `@basaltkit/*-prisma` que o projeto usa — exatamente o que o [`basalt prisma:sync`](/pt/guide/persistence) junta — mais o teu modelo `Project` |
+| `prisma.config.ts` | No Prisma 7 o URL de ligação vive aqui, não no schema. Lê primeiro `MY_SAAS_DATABASE_URL` e só depois o `DATABASE_URL` simples — a mesma precedência do `src/env.ts`, para que a CLI e a app nunca falem de bases de dados diferentes |
+| `src/db.ts` | `prisma` (sem escopo — usado pelas stores do framework) e, com tenancy, `db = prisma.$extends(tenancyExtension())`, o cliente que cada pedido recebe |
+| `src/app.ts` | `prismaPlugin({ client: db, assertMigrated: true })` mais `prismaTenantSource`, `prismaAuthStores`, `prismaTeamsStores` e `prismaSubscriptionsStores` no lugar das versões em memória |
+| `prisma/seed.ts` | O tenant `demo` que os resolvers de header e de subdomínio esperam |
+
+O `MY_SAAS_DATABASE_URL` passa a ser uma variável **obrigatória** (`src/env.ts`)
+e o `.env.example` inclui-a já sem comentário. Os scripts do `package.json` são
+`db:migrate` (`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`),
+`db:generate` e `db:seed`; o `postinstall` corre `prisma generate` para que o
+`pnpm typecheck` tenha os tipos do cliente logo a seguir à instalação.
+
+```bash
+pnpm create basalt my-saas --prisma
+cd my-saas && pnpm install
+cp .env.example .env     # aponta MY_SAAS_DATABASE_URL para a tua base de dados
+pnpm db:migrate          # cria as tabelas e semeia o tenant demo
+pnpm dev
+```
+
+::: warning Migrações, nunca `db push`
+O `src/app.ts` gerado arranca com `assertMigrated: true`, que recusa arrancar a
+menos que a base de dados alcançada tenha a tabela `_prisma_migrations` —
+escrita pelo `prisma migrate dev` / `migrate deploy` e **não** pelo
+`prisma db push`. É essa verificação que transforma um `DATABASE_URL` errado
+(uma shell que exportou o de outro projeto, uma gralha no nome da base de dados)
+num erro de arranque que nomeia a base de dados e o host, em vez de um `500` no
+primeiro pedido que toque numa tabela inexistente.
+:::
+
+O `tests/app.test.ts` gerado salta-se a si próprio quando não há base de dados
+configurada, por isso o `pnpm test` continua verde numa máquina sem PostgreSQL.
 
 ### O `--env-file` nunca sobrepõe variáveis exportadas
 

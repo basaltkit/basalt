@@ -48,6 +48,7 @@ Subscriptions / billing? (y/N) n
 Web UI (React + shadcn)? (y/N) n
 MCP server (routes as AI-agent tools)? (y/N) n
 'basalt' CLI (code generators)? (y/N) n
+Database (PostgreSQL via Prisma)? (y/N) n
 Install dependencies now? (y/N) y
 Initialize a git repository? (y/N) y
 ```
@@ -91,6 +92,7 @@ Usage: npm create basalt <name> [options]
 | `--ui` | off | Generates the `web/` frontend (React + shadcn via `@basaltkit/admin-shadcn` + `@basaltkit/sdk`). **Forces pnpm** — see note below |
 | `--cli` | off | Generates the `basalt` CLI (`bin/basalt.ts`, `pnpm basalt` script, `make:*` generators from `@basaltkit/generator`) |
 | `--mcp` | off | Exposes read-only routes as MCP tools (`@basaltkit/mcp`) over HTTP at `POST /mcp` — the overview and health endpoints are opted in via `meta.mcp` |
+| `--prisma` (alias `--db`) | off | Backs the app with PostgreSQL through Prisma: `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, the `@basaltkit/*-prisma` stores instead of the in-memory ones, a required `<APP>_DATABASE_URL`, the `db:*` scripts and `prismaPlugin({ assertMigrated: true })` — see *With `--prisma`* below |
 | `--install` | off | Installs dependencies at the end (with the detected/chosen manager) |
 | `--git` | off | Runs `git init` + first commit ("Initial commit from create-basalt") |
 | `--offline` | off | Don't query the npm registry for the latest versions; use the ranges bundled with this create-basalt release |
@@ -115,7 +117,7 @@ Behavior notes (faithful to the code):
 pnpm create basalt
 
 # Full project, no questions, with everything:
-pnpm create basalt my-app --billing --ui --cli --install --git
+pnpm create basalt my-app --billing --ui --cli --prisma --install --git
 
 # Minimal API (no tenancy or auth), in another folder:
 npm create basalt service-api --no-tenancy --no-auth --dir=./apps/service-api
@@ -147,7 +149,7 @@ my-app/
 └── tests/app.test.ts     # smoke test adapted to the options
 ```
 
-With `--cli`, adds `bin/basalt.ts` and the `"basalt": "tsx bin/basalt.ts"` script. With `--ui`, adds the `web/` folder (Vite 8 + React 19 + Tailwind CSS 4 via `@tailwindcss/vite` + shadcn — Tailwind is configured in `web/src/index.css`, no `tailwind.config.js`/PostCSS — with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
+With `--prisma`, adds `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` (with tenancy) and the `db:generate` / `db:migrate` / `db:deploy` / `db:seed` scripts. With `--cli`, adds `bin/basalt.ts` and the `"basalt": "tsx bin/basalt.ts"` script. With `--ui`, adds the `web/` folder (Vite 8 + React 19 + Tailwind CSS 4 via `@tailwindcss/vite` + shadcn — Tailwind is configured in `web/src/index.css`, no `tailwind.config.js`/PostCSS — with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
 
 ### With `--ui`: running the API and frontend
 
@@ -158,6 +160,44 @@ pnpm --filter my-app-web dev       # terminal 2 — UI at http://localhost:5180
 ```
 
 Vite's dev server proxies `/api` to the API — there's no CORS to configure.
+
+### With `--prisma`: a PostgreSQL-backed app
+
+Without the flag the generated app has **no database**: it boots on
+`MemoryUserSource` / `MemoryTenantSource` and the default in-memory team and
+subscription stores, which is ideal for a first run and for CI and is gone on
+the next restart.
+
+`--prisma` (or `--db`) generates the database-backed shape instead:
+
+| File | What it holds |
+| --- | --- |
+| `prisma/schema.prisma` | The reference models of every `@basaltkit/*-prisma` package the project uses — the same blocks `basalt prisma:sync` merges — plus a `Project` model of your own |
+| `prisma.config.ts` | Prisma 7 keeps the connection URL here. It reads `MY_APP_DATABASE_URL` first and the bare `DATABASE_URL` only as a fallback — the same precedence as `src/env.ts`, so the CLI and the app can never mean two different databases |
+| `src/db.ts` | `prisma` (unscoped — the framework stores use it, they run before a tenant is known) and, with tenancy, `db = prisma.$extends(tenancyExtension())` |
+| `src/app.ts` | `prismaPlugin({ client: db, assertMigrated: true })`, `prismaTenantSource`, `prismaAuthStores`, `prismaTeamsStores`, `prismaSubscriptionsStores` |
+| `prisma/seed.ts` | The `demo` tenant the header and subdomain resolvers expect |
+
+```bash
+pnpm create basalt my-app --prisma
+cd my-app && pnpm install     # postinstall runs `prisma generate`
+cp .env.example .env          # point MY_APP_DATABASE_URL at your database
+pnpm db:migrate               # prisma migrate dev — creates the tables and seeds `demo`
+pnpm dev
+```
+
+**Migrations, never `prisma db push`.** The generated app boots with
+`assertMigrated: true`, which refuses to start unless the database it reached has
+the `_prisma_migrations` table — written by `prisma migrate dev` /
+`prisma migrate deploy`, and *not* by `db push`. That is what turns a wrong
+`DATABASE_URL` (a shell that exported another project's) into a boot error naming
+the database and host instead of a `500` on the first request. In production:
+`pnpm db:deploy`.
+
+The generated `tests/app.test.ts` skips itself when no database is configured, so
+`pnpm test` stays green on a machine without PostgreSQL. To add another Basalt
+domain later, install its `@basaltkit/<domain>-prisma` package, run
+`pnpm basalt prisma:sync` (with `--cli`) and then `pnpm db:migrate`.
 
 ### With `--cli`: the `basalt` command line
 
@@ -240,6 +280,7 @@ Exported from `create-basalt` (in addition to the `create-basalt` executable):
 | `ui` | `boolean` | No | `false` | Generate the `web/` frontend |
 | `cli` | `boolean` | No | `false` | Generate the `basalt` CLI |
 | `mcp` | `boolean` | No | `false` | Expose read-only routes as MCP tools at `/mcp` |
+| `prisma` | `boolean` | No | `false` | Back the app with PostgreSQL through Prisma (schema, migrations, Prisma-backed stores, `assertMigrated`) |
 | `resolveLatest` | `boolean` | No | `false` | Resolve every dependency to `^<latest>` from the npm registry before writing (falls back to the bundled ranges on any registry failure) |
 | `registry` | `ResolveLatestOptions` | No | — | `{ fetch?, registry?, timeoutMs?, overallTimeoutMs?, concurrency?, minimumReleaseAge?, now? }` — injectable fetch (tests), registry URL (default `npm_config_registry` or `https://registry.npmjs.org`), timeouts (5 s per request, 15 s overall), release-age window in minutes (default `pnpm_config_minimum_release_age` / `npm_config_minimum_release_age`, else 1440; `0` disables the probe), clock (tests) |
 
@@ -267,7 +308,7 @@ Error (extends `Error`) with the message `Target directory "<dir>" already exist
 | Type | Description |
 | --- | --- |
 | `PackageManager` | `'pnpm' \| 'npm' \| 'yarn' \| 'bun'` |
-| `ProjectOptions` | `{ name, tenancy, auth, billing, ui, cli }` — all resolved (no optionals) |
+| `ProjectOptions` | `{ name, tenancy, auth, billing, ui, cli, mcp, prisma }` — all resolved (no optionals) |
 | `CreateProjectInput`, `CreateProjectResult` | Described above |
 
 ## Common errors and solutions (FAQ)
@@ -290,6 +331,20 @@ Automatic installation failed (network, Node version, etc.). Go into the folder 
 **I started the app and `GET /auth/login` gives a secret error.**
 With auth on, `src/env.ts` requires `APP_SECRET` — read as `MY_SAAS_APP_SECRET`, with at least 32 characters (`secret()` supplies a development default only when `NODE_ENV` is explicitly `development`/`test`). Copy `.env.example` to `.env` and set your own secret before going to production.
 
+**With `--prisma`, the app refuses to boot: `PRISMA_NOT_MIGRATED`.**
+`assertMigrated` reached a database without the `_prisma_migrations` table. The
+message names the database and host it actually reached (never the
+credentials): either it is not the database you meant — check
+`env | grep DATABASE_URL`, a shell may have exported another project's — or it
+was never migrated: run `pnpm db:migrate` (development) or `pnpm db:deploy`
+(production). A database set up with `prisma db push` has no
+`_prisma_migrations` at all; this scaffold is migration-based on purpose.
+
+**With `--prisma`, `pnpm typecheck` can't find `./generated/prisma/client.js`.**
+The Prisma client is generated code, not a checked-in file. `pnpm install` runs
+`prisma generate` for you (`postinstall`); after a `git clone` without install,
+or after editing the schema, run `pnpm db:generate`.
+
 **My app connects to the wrong database / port.**
 A variable exported in your shell beats `--env-file`. The generated `src/env.ts` already reads app-prefixed names (`MY_SAAS_PORT`), so set those rather than the generic ones — the bare names are only a fallback. Check `env | grep DATABASE_URL`, and see *Environment variables and `--env-file`*.
 
@@ -307,6 +362,7 @@ There's no "re-scaffold" command. Either generate a new project with the right f
 - **`@basaltkit/tenancy`** — included by default (remove with `--no-tenancy`): header and subdomain resolvers, with a demo `MemoryTenantSource`.
 - **`@basaltkit/auth`** — included by default (remove with `--no-auth`): `/auth/*` routes and `APP_SECRET` validated in `env.ts`.
 - **`@basaltkit/subscriptions`** — with `--billing`: example `free`/`pro` plans with trial and feature limits.
+- **`@basaltkit/prisma` + `@basaltkit/{tenancy,auth,teams,subscriptions}-prisma`** — with `--prisma`: the PostgreSQL layer — `prismaPlugin` (tenant-scoped client, boot-time `assertMigrated`), the composed `prisma/schema.prisma` and the Prisma-backed stores for whichever domains are on.
 - **`@basaltkit/cli` + `@basaltkit/generator`** — with `--cli`: `bin/basalt.ts` calls `runCli`, and `commandsPlugin(generatorCommands())` registers the `make:*` generators.
 - **`@basaltkit/sdk` + `@basaltkit/admin-shadcn` + `@basaltkit/admin`** — with `--ui`: the `web/` frontend calls the API through a typed client and uses the shadcn components.
 - **`@basaltkit/testing`** — always present in `devDependencies`, with a generated smoke test in `tests/app.test.ts`.

@@ -305,7 +305,8 @@ route({
 | `allowedTypes` | `string[]` | any | `415 UNSUPPORTED_MEDIA_TYPE` (exact `image/png` or wildcard `image/*`, matched against the **declared** type) |
 
 The handler's `body` is an `UploadBody`: `files`, an async iterable of `UploadedFile`,
-and `fields`, a null-prototype `Record<string, string>` that fills as parts arrive. A
+`fields`, a null-prototype `Record<string, string>` that fills as parts arrive, and
+`contentLength`, the request's declared size when the client sent one. A
 file you do not read is skipped when you ask for the next one. When the handler
 returns or throws before the end, the rest is drained up to `maxBytes` and the reply
 gets `Connection: close`, so nothing hangs.
@@ -319,6 +320,90 @@ bidi characters and caps the name at 255 bytes. Treat the result as a label, nev
 storage key. Adapters set `request.bodyStream` (the unread request stream) for upload
 routes only; `isUploadBody(schema)` tells them which routes those are. OpenAPI documents
 the body as `multipart/form-data`.
+
+**Streaming a file straight into storage.** Backends that need an exact size (S3) can
+stream instead of buffering when you hand them one, so `UploadedFile` carries
+`declaredLength`: the part's **own** `Content-Length` header, when the client sent one.
+Be honest about what that is — RFC 7578 does not require a per-part `Content-Length` and
+no browser sends one, so it is usually `undefined`. The request's `Content-Length`
+(`body.contentLength`) covers every part plus the multipart framing, so it is an upper
+bound for one file, never its size; there is no way to derive the per-file size before
+the bytes arrive. `@basaltkit/files` handles both cases — with no declared length it uses
+the configured `validate.maxSize` as the backend's bound:
+
+```ts
+for await (const file of body.files) {
+  await files.upload(file.stream, {
+    name: file.filename,
+    contentType: file.declaredType,
+    ...(file.declaredLength !== undefined ? { contentLength: file.declaredLength } : {}),
+  })
+}
+```
+
+### Streaming responses — `stream()`
+
+Return `stream(source, options)` from a handler and the adapter sends the bytes without
+ever collecting them: Fastify pipes the `Readable`, Express uses `pipeline()`, Hono
+answers with a `Response` over a web stream. `source` is a Node `Readable`, a web
+`ReadableStream` or any `AsyncIterable<Uint8Array>`.
+
+```ts
+import { route, stream } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/invoices/:id/pdf',
+  meta: { auth: true },
+  async handler({ params }) {
+    const { record, stream: body } = await files.downloadStream(params.id)  // 423/403 here, before any byte
+    return stream(body, {
+      contentType: record.contentType,
+      contentLength: record.size,       // omit when unknown — the response is then chunked
+      filename: record.name,            // Content-Disposition: attachment, sanitised
+    })
+  },
+})
+```
+
+| `StreamOptions` | Type | Default | What it does |
+|---|---|---|---|
+| `contentType` | `string` | `application/octet-stream` | `Content-Type` of the body. |
+| `contentLength` | `number` | *(none)* | `Content-Length`, when the exact size is known. Never guess: a wrong value truncates or hangs the download. |
+| `filename` | `string` | *(none)* | `Content-Disposition` with the name, run through `sanitizeFilename()` and encoded per RFC 5987 (printable-ASCII `filename=` fallback plus `filename*=UTF-8''…`). |
+| `disposition` | `'attachment' \| 'inline'` | `attachment` | Only read when `filename` is set. `attachment` is the default on purpose: an uploaded HTML/SVG file must never render on your origin. |
+| `headers` | `Record<string, string>` | `{}` | Extra headers (CR/LF stripped from every value). |
+| `status` | `number` | `200` | Response status. |
+
+What every adapter guarantees, held to the same parity suite:
+
+- **Never buffered, and backpressure is real.** A slow client slows the source; nothing
+  accumulates in memory.
+- **A disconnect destroys the source**, so no file descriptor or backend socket leaks
+  when a user closes the tab mid-download.
+- **An error before the first byte is a normal JSON error response** — the streaming
+  headers are withdrawn and the usual `{ error: { code, message } }` envelope is sent.
+- **An error after the headers cuts the connection.** Nothing is ever appended to a body
+  that is already partly sent; the client sees a truncated download, and the failure is
+  reported **once** through the adapter's `onError` reporter (status 500, code
+  `STREAM_FAILED`).
+- **`HEAD` sends no body**, keeps the headers a `GET` would have carried, and reads
+  nothing from the source.
+- `meta: { etag: true }` is skipped for a streamed body — there is no payload to hash.
+
+There is deliberately no `maxDurationMs` here (unlike `sse()`): a large download
+legitimately takes a long time, and a framework-level cap would truncate it. Bound it at
+the server instead — `fastifyPlugin({ fastify: { requestTimeout, connectionTimeout } })`,
+Express's `server.setTimeout()`, or your runtime's own limit on Hono.
+
+| Export | Description |
+|---|---|
+| `stream(source, options?)` → `StreamResponse` | What the handler returns. |
+| `StreamSource` | `Readable \| ReadableStream<Uint8Array> \| AsyncIterable<Uint8Array>`. |
+| `contentDisposition(filename, disposition?)` | The header value on its own, if you build one by hand. |
+| `isStreamResponse` / `streamPayloadOf` | Adapter plumbing: recognise the marker, read `{ source, status, headers }`. |
+| `toNodeStream` / `destroyStreamSource` | Adapter plumbing: any source as a Node `Readable`; release a source nobody will read. |
+| `streamPump` / `openStreamPump` / `nodeStreamFrom` / `webStreamFrom` | Adapter plumbing: pull one chunk at a time, peek the first chunk before the headers flush, rebuild a Node or web stream from the pump. |
 
 ### Server-Sent Events — `sse()`
 

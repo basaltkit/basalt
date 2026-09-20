@@ -34,6 +34,12 @@ export interface PartHeaders {
   filename?: string
   /** The part's declared media type essence, lower-cased, parameters dropped. */
   contentType?: string
+  /**
+   * The part's own `Content-Length`, when it sent a valid one. RFC 7578 does
+   * not require it and no browser sends it, so it is usually absent — treat it
+   * as a hint, never as the number of bytes that will actually arrive.
+   */
+  contentLength?: number
 }
 
 export interface MultipartHandlers {
@@ -283,6 +289,12 @@ function parsePartHeaders(block: Buffer): PartHeaders {
     const essence = parseHeaderValue(type).value
     if (!MEDIA_TYPE.test(essence)) throw malformed()
     part.contentType = essence
+  }
+  const length = headers.get('content-length')
+  // A part length is advisory: anything but a plain safe integer is simply
+  // ignored, because the bytes are counted as they arrive either way.
+  if (length !== undefined && /^\d{1,15}$/.test(length) && Number.isSafeInteger(Number(length))) {
+    part.contentLength = Number(length)
   }
   return part
 }

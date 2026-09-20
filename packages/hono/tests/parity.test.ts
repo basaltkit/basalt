@@ -6,10 +6,13 @@ import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
   rateLimitKeyParitySuite,
+  sendWith,
+  streamParitySuite,
   uploadParitySuite,
   type ParityDriver,
   type ParityRequest,
 } from '../../http/tests/adapter-parity.js'
+import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
 import { HONO, honoPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
@@ -18,7 +21,11 @@ let app: BasaltApp | undefined
 const env = { incoming: { socket: { remoteAddress: '203.0.113.20' } } }
 
 function toRequest(request: ParityRequest): Request {
-  const init: RequestInit & { duplex?: 'half' } = { method: request.method, headers: request.headers ?? {} }
+  const init: RequestInit & { duplex?: 'half' } = {
+    method: request.method,
+    headers: request.headers ?? {},
+    ...(request.signal ? { signal: request.signal } : {}),
+  }
   if (Array.isArray(request.body)) {
     const chunks = [...request.body]
     init.body = new ReadableStream<Uint8Array>({
@@ -37,20 +44,12 @@ function toRequest(request: ParityRequest): Request {
 }
 
 const driver: ParityDriver = {
-  async boot(routes, plugins) {
-    app = await createApp({ plugins: [honoPlugin({ routes, onError: () => {} }), ...plugins] }).boot()
+  async boot(routes, plugins, options) {
+    app = await createApp({
+      plugins: [honoPlugin({ routes, onError: options?.onError ?? (() => {}) }), ...plugins],
+    }).boot()
     const hono = app.container.get(HONO)
-    return async (request) => {
-      const res = await hono.fetch(toRequest(request), env)
-      const raw = await res.text()
-      let json: unknown = raw
-      try {
-        json = raw ? JSON.parse(raw) : undefined
-      } catch {
-        /* not JSON */
-      }
-      return { status: res.status, json, headers: Object.fromEntries(res.headers.entries()) }
-    }
+    return sendWith(async (request) => hono.fetch(toRequest(request), env))
   },
   async close() {
     await app?.shutdown()
@@ -61,6 +60,8 @@ const driver: ParityDriver = {
 uploadParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
+streamParitySuite('hono', driver)
+fileRoutesParitySuite('hono', driver)
 
 describe('hono: multipart on routes that are not upload() routes', () => {
   const echo = route({

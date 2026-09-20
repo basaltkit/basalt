@@ -9,6 +9,12 @@ export interface ProjectOptions {
   cli: boolean
   /** Expose opted-in routes as MCP tools (@basaltkit/mcp) over HTTP at `/mcp`. */
   mcp: boolean
+  /**
+   * Back the app with a real PostgreSQL database: a `prisma/schema.prisma`,
+   * `src/db.ts`, `prismaPlugin({ assertMigrated: true })` and the Prisma-backed
+   * stores instead of the in-memory ones.
+   */
+  prisma: boolean
 }
 
 import { THIRD_PARTY_VERSIONS } from './latest-versions.js'
@@ -59,12 +65,28 @@ export function packageJson(options: ProjectOptions): string {
   if (options.mcp) basalt.push('@basaltkit/mcp')
   if (options.cli) {
     // Runtime deps: app.ts uses commandsPlugin (@basaltkit/cli); prisma powers
-    // `basalt prisma:sync` (and prismaPlugin once the app adds a PrismaClient —
-    // the scaffold wires no database itself). @basaltkit/generator is dev-only (below).
+    // `basalt prisma:sync` (and prismaPlugin, wired by --prisma).
+    // @basaltkit/generator is dev-only (below).
     basalt.push('@basaltkit/cli', '@basaltkit/prisma')
+  }
+  if (options.prisma) {
+    // The database layer: prismaPlugin + tenancyExtension, plus the store
+    // packages for whichever domains are on (the memory ones are gone).
+    if (!options.cli) basalt.push('@basaltkit/prisma')
+    if (options.tenancy) basalt.push('@basaltkit/tenancy-prisma')
+    if (options.auth) basalt.push('@basaltkit/auth-prisma')
+    if (enforcesMembership(options)) basalt.push('@basaltkit/teams-prisma')
+    if (options.billing) basalt.push('@basaltkit/subscriptions-prisma')
   }
   const dependencies: Record<string, string> = { zod: thirdPartyVersionOf('zod') }
   for (const pkg of basalt) dependencies[pkg] = versionOf(pkg)
+  if (options.prisma) {
+    // Prisma 7 talks to PostgreSQL through a driver adapter, so `pg` is a real
+    // runtime dependency (see src/db.ts); the `prisma` CLI is dev-only.
+    for (const pkg of ['@prisma/adapter-pg', '@prisma/client', 'pg']) {
+      dependencies[pkg] = thirdPartyVersionOf(pkg)
+    }
+  }
 
   const devDependencies: Record<string, string> = {
     '@basaltkit/testing': versionOf('@basaltkit/testing'),
@@ -83,6 +105,9 @@ export function packageJson(options: ProjectOptions): string {
     // app ships and runs without it (see `.mcp.json` for the client config).
     devDependencies['@basaltkit/ai-mcp'] = versionOf('@basaltkit/ai-mcp')
   }
+  if (options.prisma) {
+    for (const pkg of ['@types/pg', 'prisma']) devDependencies[pkg] = thirdPartyVersionOf(pkg)
+  }
 
   return `${JSON.stringify(
     {
@@ -98,6 +123,21 @@ export function packageJson(options: ProjectOptions): string {
         test: 'vitest run',
         typecheck: 'tsc --noEmit',
         ...(options.cli ? { basalt: 'tsx bin/basalt.ts' } : {}),
+        ...(options.prisma
+          ? {
+              // Generate right after install so `pnpm typecheck` has the client
+              // types (generation needs no database).
+              postinstall: 'prisma generate',
+              'db:generate': 'prisma generate',
+              // Development and deployment BOTH go through migrations: they are
+              // what creates `_prisma_migrations`, which the app's
+              // prismaPlugin({ assertMigrated: true }) requires at boot. There
+              // is deliberately no `db:push` script.
+              'db:migrate': 'prisma migrate dev',
+              'db:deploy': 'prisma migrate deploy',
+              ...(options.tenancy ? { 'db:seed': 'tsx prisma/seed.ts' } : {}),
+            }
+          : {}),
       },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
       devDependencies: Object.fromEntries(Object.entries(devDependencies).sort()),
@@ -107,7 +147,7 @@ export function packageJson(options: ProjectOptions): string {
   )}\n`
 }
 
-export function tsconfigJson(): string {
+export function tsconfigJson(options: ProjectOptions): string {
   return `${JSON.stringify(
     {
       compilerOptions: {
@@ -121,7 +161,10 @@ export function tsconfigJson(): string {
         noEmit: true,
         types: ['node'],
       },
-      include: ['src', 'tests'],
+      // The generated Prisma client lives under src/generated (git-ignored, and
+      // re-created by `prisma generate`); the seed script under prisma/ is
+      // type-checked too.
+      include: ['src', 'tests', ...(options.prisma && options.tenancy ? ['prisma/seed.ts'] : [])],
     },
     null,
     2,
@@ -144,6 +187,15 @@ export const env = defineEnv(
     // Unset counts as production (fail-closed); \`pnpm dev\` sets development.
     // NODE_ENV is a Node-wide convention and is never prefixed.
     NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),${
+      options.prisma
+        ? `
+    // Required: the PostgreSQL connection string, read as ${prefix}_DATABASE_URL
+    // first (a stray DATABASE_URL exported in your shell must not win — that is
+    // how an app boots against another project's database). src/db.ts builds the
+    // Prisma client from it; prisma.config.ts gives the CLI the same URL.
+    DATABASE_URL: z.string().min(1),`
+        : ''
+    }${
       options.auth
         ? `
     // Signs JWTs and sessions. secret() is fail-closed: required unless NODE_ENV
@@ -207,10 +259,23 @@ ${
 # ${prefix}_APP_SECRET=
 `
       : ''
-  }# When you add a database, declare DATABASE_URL in src/env.ts and set it here
-# under the prefixed name:
+  }${
+    options.prisma
+      ? `# Required: the app does not boot without it. The Prisma CLI reads the same
+# name from prisma.config.ts, so \`pnpm db:migrate\` and the running app always
+# agree on which database they mean.
+${prefix}_DATABASE_URL=postgres://postgres:postgres@localhost:5432/${databaseName(options.name)}
+`
+      : `# When you add a database, declare DATABASE_URL in src/env.ts and set it here
+# under the prefixed name (or scaffold with --prisma, which does it for you):
 # ${prefix}_DATABASE_URL=postgres://user:pass@localhost:5432/${options.name.replace(/^@[^/]+\//, '')}
 `
+  }`
+}
+
+/** A PostgreSQL-safe database name derived from the project name. */
+export function databaseName(name: string): string {
+  return name.replace(/^@[^/]+\//, '').replace(/[^a-zA-Z0-9]+/g, '_').toLowerCase()
 }
 
 export function appTs(options: ProjectOptions): string {
@@ -236,27 +301,77 @@ export function appTs(options: ProjectOptions): string {
     })`,
   ]
   let routesExpression = 'appRoutes'
+  /** Module-level bindings emitted between the imports and `buildApp`. */
+  const preamble: string[] = []
+
+  if (options.prisma) {
+    imports.push(`import { prismaPlugin } from '@basaltkit/prisma'`)
+    imports.push(`import { db, prisma } from './db.js'`)
+    plugins.push(`prismaPlugin({
+      // \`db\` is the tenant-scoped client (src/db.ts): db<PrismaClient>() in a
+      // handler returns it, already filtered by the request's tenant.
+      client: db,
+      // Fail the BOOT when this database is not the migrated one — a shell that
+      // exported another project's DATABASE_URL, a typo in the database name.
+      // Without it the app starts and dies on the first query instead. Needs
+      // \`prisma migrate dev\`/\`migrate deploy\` (they write _prisma_migrations);
+      // \`prisma db push\` does not, so never use it against this app.
+      assertMigrated: true,
+    })`)
+  }
 
   if (options.tenancy) {
-    imports.push(
-      `import { headerResolver, MemoryTenantSource, subdomainResolver, tenancyPlugin } from '@basaltkit/tenancy'`,
-    )
-    plugins.push(`tenancyPlugin({
+    if (options.prisma) {
+      imports.push(
+        `import { headerResolver, subdomainResolver, tenancyPlugin } from '@basaltkit/tenancy'`,
+      )
+      imports.push(`import { prismaTenantSource } from '@basaltkit/tenancy-prisma'`)
+      // The stores read their own tables, outside any tenant context (a login
+      // happens before a tenant is known) — so they take the UNSCOPED client.
+      preamble.push(`/** Tenants live in the \`tenants\` table — seed one with \`pnpm db:seed\`. */
+const tenants = prismaTenantSource(prisma)`)
+      plugins.push(`tenancyPlugin({
+      source: tenants,
+      resolvers: [headerResolver(), subdomainResolver({ base: 'localhost' })],
+    })`)
+    } else {
+      imports.push(
+        `import { headerResolver, MemoryTenantSource, subdomainResolver, tenancyPlugin } from '@basaltkit/tenancy'`,
+      )
+      plugins.push(`tenancyPlugin({
       // Replace MemoryTenantSource with your database-backed source.
       source: new MemoryTenantSource().add({ id: 'demo', name: 'Demo Tenant' }),
       resolvers: [headerResolver(), subdomainResolver({ base: 'localhost' })],
     })`)
+    }
   }
   if (options.auth) {
-    imports.push(`import { authPlugin, authRoutes, mfaRoutes, MemoryUserSource } from '@basaltkit/auth'`)
-    imports.push(`import { env } from './env.js'`)
-    plugins.push(`authPlugin({
+    if (options.prisma) {
+      imports.push(`import { authPlugin, authRoutes, mfaRoutes } from '@basaltkit/auth'`)
+      imports.push(`import { prismaAuthStores } from '@basaltkit/auth-prisma'`)
+      imports.push(`import { env } from './env.js'`)
+      preamble.push(`/** Users, sessions, refresh tokens, email/reset tokens, MFA and API keys. */
+const authStores = prismaAuthStores(prisma)`)
+      plugins.push(`authPlugin({
+      users: authStores.users,
+      sessions: authStores.sessions,
+      refreshTokens: authStores.refreshTokens,
+      // Email verification and password reset.
+      tokens: authStores.tokens,
+      mfa: authStores.mfa,
+      secret: env.APP_SECRET,
+    })`)
+    } else {
+      imports.push(`import { authPlugin, authRoutes, mfaRoutes, MemoryUserSource } from '@basaltkit/auth'`)
+      imports.push(`import { env } from './env.js'`)
+      plugins.push(`authPlugin({
       // Replace MemoryUserSource with your database-backed source (e.g.
       // @basaltkit/auth-sqlite or @basaltkit/auth-prisma). The default in-memory
       // MFA store is enough for the ready-made TOTP flow below.
       users: new MemoryUserSource(),
       secret: env.APP_SECRET,
     })`)
+    }
     // authRoutes(): register, login, logout, refresh, me, email verification and
     // password recovery. mfaRoutes(): TOTP enroll/activate/status/disable.
     routesExpression = '[...appRoutes, ...authRoutes(), ...mfaRoutes()]'
@@ -269,10 +384,20 @@ export function appTs(options: ProjectOptions): string {
     // meta: { central: true }.
     imports[0] = `import { createApp, definePlugin } from '@basaltkit/core'`
     imports.push(`import { TEAMS, teamsPlugin, tenantMembershipPlugin } from '@basaltkit/teams'`)
-    plugins.push(`teamsPlugin({
+    if (options.prisma) {
+      imports.push(`import { prismaTeamsStores } from '@basaltkit/teams-prisma'`)
+      preamble.push(`/** Memberships and invitations (\`team_memberships\`, \`team_invitations\`). */
+const teamStores = prismaTeamsStores(prisma)`)
+      plugins.push(`teamsPlugin({
+      memberships: teamStores.memberships,
+      invitations: teamStores.invitations,
+    })`)
+    } else {
+      plugins.push(`teamsPlugin({
       // TODO: the default membership/invitation stores are in-memory — pass
       // persistent ones (memberships, invitations) before production.
     })`)
+    }
     plugins.push(`// Rejects authenticated requests for a tenant the user is not a member of.
       tenantMembershipPlugin()`)
     plugins.push(`// Dev-only seed: each new registrant joins the 'demo' tenant so the scaffold
@@ -282,12 +407,24 @@ export function appTs(options: ProjectOptions): string {
   }
   if (options.billing) {
     imports.push(`import { definePlans, subscriptionsPlugin } from '@basaltkit/subscriptions'`)
+    if (options.prisma) {
+      imports.push(`import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'`)
+      preamble.push(`/** Subscriptions, usage counters and webhook idempotency. */
+const subscriptionStores = prismaSubscriptionsStores(prisma)`)
+    }
     plugins.push(`subscriptionsPlugin({
       plans: definePlans({
         free: { price: 0, features: { projects: 3 } },
         pro: { price: { monthly: 29, yearly: 290 }, trial: '14d', features: { projects: 50 } },
       }),
-      fallbackPlan: 'free',
+      fallbackPlan: 'free',${
+        options.prisma
+          ? `
+      store: subscriptionStores.store,
+      usage: subscriptionStores.usage,
+      webhooks: subscriptionStores.webhooks,`
+          : ''
+      }
     })`)
   }
   if (options.cli) {
@@ -318,7 +455,7 @@ export function appTs(options: ProjectOptions): string {
 
   return `${imports.join('\n')}
 import { appRoutes } from './routes.js'
-
+${preamble.length > 0 ? `\n${preamble.join('\n\n')}\n` : ''}
 export interface BuildAppOptions {
   logLevel?: LogLevel
   pretty?: boolean${commandsField}
@@ -466,14 +603,353 @@ process.exit(await runCli({ app }))
 `
 }
 
+
+/**
+ * The models each `@basaltkit/<domain>-prisma` package needs, copied VERBATIM
+ * from that package's reference `prisma/schema.prisma` — the same blocks
+ * `basalt prisma:sync` merges into an existing schema. The scaffold ships the
+ * merged result so a new app can run `prisma migrate dev` straight away;
+ * `tests/prisma.test.ts` fails if a package's reference schema drifts from the
+ * copy here.
+ */
+const PRISMA_MODELS: Readonly<Record<'tenancy' | 'auth' | 'teams' | 'subscriptions', string>> = {
+  tenancy: `model Tenant {
+  id      String         @id
+  // The open tenant record ({ id, ...anything }) as JSON — attach whatever
+  // per-tenant fields you like; they round-trip unchanged.
+  data    Json
+  domains TenantDomain[]
+
+  @@map("tenants")
+}
+
+model TenantDomain {
+  domain   String @id
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("tenant_domains")
+}`,
+  auth: `model AuthUser {
+  id            String  @id
+  email         String  @unique
+  passwordHash  String
+  emailVerified Boolean @default(false)
+
+  @@map("auth_users")
+}
+
+model AuthSession {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model AuthRefreshToken {
+  token     String    @id
+  familyId  String
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([familyId])
+  @@index([userId])
+  @@map("auth_refresh_tokens")
+}
+
+model AuthToken {
+  token     String    @id
+  userId    String
+  purpose   String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([userId, purpose])
+  @@map("auth_tokens")
+}
+
+model AuthApiKey {
+  id         String    @id
+  name       String
+  prefix     String
+  hash       String    @unique
+  tenantId   String?
+  userId     String?
+  scopes     String[]
+  createdAt  DateTime
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("auth_api_keys")
+}
+
+model AuthMfa {
+  userId        String   @id
+  secret        String
+  enabled       Boolean  @default(false)
+  recoveryCodes String[]
+  lastUsedStep  Int?
+
+  @@map("auth_mfa")
+}
+
+model AuthTokenVersion {
+  userId  String @id
+  version Int    @default(0)
+
+  @@map("auth_token_versions")
+}`,
+  teams: `model TeamMembership {
+  tenantId  String
+  userId    String
+  role      String
+  createdAt DateTime
+
+  @@id([tenantId, userId])
+  @@map("team_memberships")
+}
+
+model TeamInvitation {
+  id         String    @id
+  tenantId   String
+  email      String
+  role       String
+  token      String    @unique
+  invitedBy  String?
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId, email])
+  @@map("team_invitations")
+}`,
+  subscriptions: `model Subscription {
+  billableId        String    @id
+  plan              String
+  period            String
+  status            String
+  trialEndsAt       DateTime?
+  cancelAtPeriodEnd Boolean?
+  canceledAt        DateTime?
+  gatewayRef        String?
+  pendingPlan       String?
+  pendingPeriod     String?
+
+  @@map("subscriptions")
+}
+
+model UsageCounter {
+  billableId String
+  feature    String
+  periodKey  String
+  value      Int    @default(0)
+
+  @@id([billableId, feature, periodKey])
+  @@map("usage_counters")
+}
+
+model WebhookEvent {
+  id     String   @id
+  seenAt DateTime @default(now())
+
+  @@map("webhook_events")
+}`,
+}
+
+/**
+ * `prisma/schema.prisma` — the datasource, the client generator, the models of
+ * every Basalt domain this app enables, and the app's own first model.
+ *
+ * Prisma 7 no longer takes the connection URL here (prisma.config.ts does), and
+ * the client needs an explicit `output`; src/db.ts imports it from there.
+ */
+export function prismaSchema(options: ProjectOptions): string {
+  const domains: string[] = []
+  if (options.tenancy) domains.push(PRISMA_MODELS.tenancy)
+  if (options.auth) domains.push(PRISMA_MODELS.auth)
+  if (enforcesMembership(options)) domains.push(PRISMA_MODELS.teams)
+  if (options.billing) domains.push(PRISMA_MODELS.subscriptions)
+
+  return `// Prisma schema for ${options.name}.
+//
+// The blocks below the header are the reference models of the @basaltkit/*-prisma
+// packages this app uses — exactly what \`basalt prisma:sync\` merges. Add another
+// Basalt domain later by installing its \`*-prisma\` package and running
+// \`pnpm basalt prisma:sync\` (with --cli), then \`pnpm db:migrate\`.
+//
+// Apply changes with \`pnpm db:migrate\` (\`prisma migrate dev\`) — never
+// \`prisma db push\`: push writes no _prisma_migrations table, and src/app.ts
+// boots with prismaPlugin({ assertMigrated: true }), which requires it.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  // The URL lives in prisma.config.ts (Prisma 7) — and in src/env.ts for the app.
+  provider = "postgresql"
+}
+${domains.map((block) => `\n${block}\n`).join('')}
+// ---------------------------------------------------------------------------
+// Your models.${
+    options.tenancy
+      ? ` \`tenantId\` is the column tenancyExtension() (src/db.ts)
+// forces onto every query and every write, so keep it on everything a tenant
+// owns — and make cross-model foreign keys composite (@@unique([tenantId, id])
+// on the target) so the database refuses a cross-tenant link too.`
+      : ''
+  }
+
+model Project {
+  id        String   @id @default(uuid())${options.tenancy ? '\n  tenantId  String' : ''}
+  name      String
+  createdAt DateTime @default(now())
+${options.tenancy ? '\n  @@index([tenantId])' : ''}
+  @@map("projects")
+}
+`
+}
+
+/**
+ * `prisma.config.ts` — Prisma 7 reads the connection URL (and the seed command)
+ * from here instead of from schema.prisma. It applies the SAME precedence as
+ * src/env.ts: the app-prefixed name first, the bare `DATABASE_URL` only as a
+ * fallback, so the CLI and the running app can never mean different databases.
+ */
+export function prismaConfigTs(options: ProjectOptions): string {
+  const prefix = envPrefix(options.name)
+  return `import { loadEnvFile } from 'node:process'
+import { defineConfig } from 'prisma/config'
+
+// Prisma loads no .env for you (neither does the app — see src/env.ts). This
+// mirrors \`node --env-file=.env\`: a variable already exported in your shell
+// still wins, the file only fills in what is missing.
+try {
+  loadEnvFile('.env')
+} catch {
+  // No .env file — the variables come from the environment.
+}
+
+export default defineConfig({
+  schema: 'prisma/schema.prisma',${
+    options.tenancy
+      ? `
+  // Runs after \`prisma migrate dev\` / \`prisma migrate reset\`.
+  migrations: { seed: 'tsx prisma/seed.ts' },`
+      : ''
+  }
+  datasource: {
+    // ${prefix}_DATABASE_URL first, bare DATABASE_URL only as a fallback: a
+    // stray DATABASE_URL from another project must never decide which database
+    // gets migrated.
+    url: process.env['${prefix}_DATABASE_URL'] ?? process.env['DATABASE_URL'] ?? '',
+  },
+})
+`
+}
+
+/**
+ * `src/db.ts` — the Prisma client(s). Two bindings on purpose: the unscoped
+ * `prisma` for the framework stores (they key their own rows and run outside a
+ * tenant context) and, with tenancy, the `db` client the whole application uses,
+ * where every query is filtered by the request's tenant.
+ */
+export function dbTs(options: ProjectOptions): string {
+  return `import { PrismaPg } from '@prisma/adapter-pg'${
+    options.tenancy ? `\nimport { tenancyExtension } from '@basaltkit/prisma'` : ''
+  }
+import { PrismaClient } from './generated/prisma/client.js'
+import { env } from './env.js'
+
+/**
+ * The base client. Prisma 7 talks to PostgreSQL through a driver adapter, so the
+ * connection string is passed here; prisma.config.ts hands the CLI the same one.
+ *
+ * ${
+   options.tenancy
+     ? `This client is NOT tenant-scoped: the framework stores (auth, tenancy,
+ * teams, …) read and write their own tables, keyed by their own columns, and do
+ * it before a tenant is known (a login has no tenant yet). Application code
+ * should use \`db\` below — or \`db<PrismaClient>()\` from @basaltkit/prisma.`
+     : `Application code can also reach it with \`db<PrismaClient>()\` from
+ * @basaltkit/prisma, which returns the client registered by prismaPlugin.`
+ }
+ */
+export const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: env.DATABASE_URL }),
+})
+${
+  options.tenancy
+    ? `
+/**
+ * The application client: tenancyExtension() forces the current tenant's
+ * \`tenantId\` onto every read, stamps it onto every write, and fails closed
+ * (MissingTenantError) when there is no tenant in context — application code
+ * cannot forget the filter. src/app.ts registers it with prismaPlugin, so
+ * \`db<PrismaClient>()\` inside a handler returns this one.
+ */
+export const db = prisma.$extends(tenancyExtension())
+`
+    : `
+/** Registered by prismaPlugin in src/app.ts. */
+export const db = prisma
+`
+}`
+}
+
+/**
+ * `prisma/seed.ts` — creates the `demo` tenant the scaffolded resolvers expect
+ * (`x-tenant-id: demo`, `demo.localhost`). Runs from `pnpm db:seed` and after
+ * `prisma migrate dev` (prisma.config.ts declares it).
+ */
+export function prismaSeedTs(options: ProjectOptions): string {
+  return `import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
+import { prisma } from '../src/db.js'
+
+// The demo tenant the header and subdomain resolvers look for out of the box.
+// \`save\` is an upsert, so re-seeding is safe. Tenants are open records: add
+// whatever per-tenant fields you like — they round-trip unchanged.
+const tenants = prismaTenantSource(prisma)
+await tenants.save({ id: 'demo', name: 'Demo Tenant' })
+console.log('Seeded tenant "demo" for ${options.name}.')
+
+await prisma.$disconnect()
+`
+}
+
 export function appTest(options: ProjectOptions): string {
+  const prefix = envPrefix(options.name)
+  // With a database the app cannot boot without one: src/env.ts requires
+  // DATABASE_URL and prismaPlugin({ assertMigrated: true }) checks the schema.
+  // So the suite is gated on a configured database and imports src/app.ts
+  // lazily — an eager import would throw at module load instead of skipping.
   return `import { describe, expect, it } from 'vitest'
 import { FASTIFY } from '@basaltkit/fastify'
-import { buildApp } from '../src/app.js'
+${
+  options.prisma
+    ? `
+// Needs a migrated database: set ${prefix}_DATABASE_URL (see .env.example), then
+// \`pnpm db:migrate${options.tenancy ? ' && pnpm db:seed' : ''}\`. Without one the suite skips instead of failing.
+const database = process.env['${prefix}_DATABASE_URL'] ?? process.env['DATABASE_URL']
+
+describe.skipIf(!database)('app', () => {
+  it('boots and responds on /health', async () => {
+    const { buildApp } = await import('../src/app.js')
+    const app = await buildApp({ logLevel: 'silent' }).boot()`
+    : `import { buildApp } from '../src/app.js'
 
 describe('app', () => {
   it('boots and responds on /health', async () => {
-    const app = await buildApp({ logLevel: 'silent' }).boot()
+    const app = await buildApp({ logLevel: 'silent' }).boot()`
+}
     const server = app.container.get(FASTIFY)
 
     const index = await server.inject({ method: 'GET', url: '/' })
@@ -505,6 +981,7 @@ export function readme(options: ProjectOptions): string {
     'typed routes with Zod validation',
     'structured logging with request/tenant context',
     'typed domain events',
+    ...(options.prisma ? ['PostgreSQL persistence through Prisma (migrations + tenant-scoped client)'] : []),
     ...(options.tenancy ? ['multi-tenancy (header + subdomain resolvers)'] : []),
     ...(options.auth ? ['authentication (register/login/refresh/me)'] : []),
     ...(options.billing ? ['subscriptions with plans and feature limits'] : []),
@@ -521,11 +998,76 @@ Included: ${features.join(' · ')}.
 ## Getting started
 
 \`\`\`bash
-pnpm install
+pnpm install${
+    options.prisma
+      ? `
+# point ${envPrefix(options.name)}_DATABASE_URL at a PostgreSQL database (.env.example), then
+pnpm db:migrate # create the tables${options.tenancy ? ` (runs the seed too)` : ''}`
+      : ''
+  }
 pnpm dev        # API on http://localhost:3000
 pnpm test
 \`\`\`
+${
+  options.prisma
+    ? `
+## Database
 
+PostgreSQL through [Prisma](https://www.prisma.io). \`prisma/schema.prisma\` holds
+the models this app needs — the reference models of the \`@basaltkit/*-prisma\`
+packages it uses, plus your own \`Project\` at the end.
+
+\`\`\`bash
+pnpm db:migrate     # prisma migrate dev  — change the schema, write a migration${
+        options.tenancy
+          ? `
+pnpm db:seed        # the 'demo' tenant the resolvers expect (also run by db:migrate)`
+          : ''
+      }
+pnpm db:generate    # prisma generate — refresh src/generated/prisma (also runs on install)
+pnpm db:deploy      # prisma migrate deploy — apply pending migrations in production
+\`\`\`
+
+**Never use \`prisma db push\` on this project.** \`src/app.ts\` boots with
+\`prismaPlugin({ client: db, assertMigrated: true })\`, which refuses to start
+unless the database it reached has the \`_prisma_migrations\` table — the one
+\`migrate dev\` / \`migrate deploy\` write and \`db push\` does not. That check is
+what turns "wrong \`DATABASE_URL\`" (a shell that exported another project's, a
+typo in the database name) into a boot error naming the database and host,
+instead of a 500 on the first request that touches a missing table.
+
+\`src/db.ts\` exports two clients:
+
+- \`prisma\` — unscoped. The framework stores (auth${options.tenancy ? ', tenancy' : ''}${
+        enforcesMembership(options) ? ', teams' : ''
+      }${options.billing ? ', subscriptions' : ''}) use it: they key
+  their own tables and run before a tenant is known.${
+    options.tenancy
+      ? `
+- \`db\` — \`prisma.$extends(tenancyExtension())\`. Registered with \`prismaPlugin\`,
+  so \`db<PrismaClient>()\` inside a handler returns a client that filters every
+  read by the request's tenant, stamps every write, and throws instead of running
+  unscoped. Keep \`tenantId\` on every model a tenant owns.`
+      : ''
+  }
+${
+  options.cli
+    ? `
+Adding another Basalt domain later (audit, comments, notifications, …): install
+its \`@basaltkit/<domain>-prisma\` package, run \`pnpm basalt prisma:sync\` to merge
+its models into the schema, then \`pnpm db:migrate\`.
+`
+    : `
+Adding another Basalt domain later (audit, comments, notifications, …): install
+its \`@basaltkit/<domain>-prisma\` package, copy the models from its
+\`schema.prisma\` into yours, then \`pnpm db:migrate\`. (With the \`basalt\` CLI —
+scaffold with \`--cli\` — \`pnpm basalt prisma:sync\` does the merge for you.)
+`
+}
+\`pnpm test\` skips the generated suite when no database is configured.
+`
+    : ''
+}
 ## Environment
 
 \`src/env.ts\` validates \`process.env\` — nothing loads \`.env\` for you. Copy
@@ -535,6 +1077,8 @@ export the variables.
 The variables are **app-prefixed**: \`${envPrefix(options.name)}_PORT\`,
 \`${envPrefix(options.name)}_HOST\`, \`${envPrefix(options.name)}_LOG_LEVEL\`${
     options.auth ? `, \`${envPrefix(options.name)}_APP_SECRET\`` : ''
+  }${
+    options.prisma ? `, \`${envPrefix(options.name)}_DATABASE_URL\`` : ''
   }. \`NODE_ENV\` is never prefixed.
 
 Why: **\`--env-file\` never overrides a variable that is already exported.** In a
@@ -543,8 +1087,15 @@ the generic name boots against THAT value and only fails on the first request
 that touches it. \`src/env.ts\` therefore passes \`prefix: '${envPrefix(options.name)}'\` to
 \`defineEnv\`: each variable is read as \`${envPrefix(options.name)}_<NAME>\` first and
 **falls back** to the bare \`<NAME>\`, so a deployment that already exports the
-generic names keeps booting while a stray one in your shell loses. Add a
-database and \`DATABASE_URL\` is read as \`${envPrefix(options.name)}_DATABASE_URL\`.
+generic names keeps booting while a stray one in your shell loses.${
+    options.prisma
+      ? ` That is
+exactly how \`DATABASE_URL\` is read here (\`${envPrefix(options.name)}_DATABASE_URL\` first), and
+\`prisma.config.ts\` applies the same precedence — so \`pnpm db:migrate\` and the
+running app can never mean two different databases.`
+      : ` Add a
+database and \`DATABASE_URL\` is read as \`${envPrefix(options.name)}_DATABASE_URL\`.`
+  }
 
 To drop the fallback entirely (prefixed names only), write
 \`prefix: { value: '${envPrefix(options.name)}', fallback: false }\`. When in doubt about what
@@ -668,14 +1219,20 @@ export function dockerignore(): string {
 `
 }
 
-export function gitignore(): string {
+export function gitignore(options: ProjectOptions): string {
   return `node_modules/
 dist/
 .env
 .env.*
 !.env.example
 *.log
+${
+  options.prisma
+    ? `# Generated by \`prisma generate\` (runs on install) — never edit or commit it.
+src/generated/
 `
+    : ''
+}`
 }
 
 /**

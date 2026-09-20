@@ -130,19 +130,33 @@ while the source is destroyed (Node `Readable`) or cancelled (web
 
 | Capability | S3 | Azure | GCS | Local |
 | --- | --- | --- | --- | --- |
-| `putStream` | `PutObject` — needs `contentLength` **or** `maxBytes` | `uploadStream` (any length) | `createWriteStream` (any length) | `fs` write stream |
+| `putStream` | `PutObject` with `contentLength` or `maxBytes`; multipart without either | `uploadStream` (any length) | `createWriteStream` (any length) | `fs` write stream |
 | `getStream` | `GetObject` body | `download()` | `createReadStream` | `fs` read stream |
 | `copy` | `CopyObject` | `syncCopyFromURL` (≤ 256 MiB) | `file.copy()` | `fs.copyFile` |
 | `stat` | `HeadObject` | `getProperties()` | `getMetadata()` | `fs.stat` (size + mtime only) |
 
-::: warning S3 needs a known length
+::: warning S3 and the body length
 `PutObject` cannot send a body of unknown size. `putStream` streams straight
 through when you pass `contentLength`; with only `maxBytes` it buffers up to
-that cap (bounded memory, chosen deliberately); with neither it throws
-`StorageStreamLengthRequiredError` (`400 STORAGE_STREAM_LENGTH_REQUIRED`). For
-genuinely unbounded streams, drive `@aws-sdk/lib-storage`'s multipart `Upload`
-yourself — it is deliberately not a dependency of `@basaltkit/storage-s3`.
-Azure and GCS chunk unknown-length streams natively.
+that cap (bounded memory, chosen deliberately). With **neither**, the driver
+uploads the body **multipart** — any size, with only
+`partSizeBytes × queueSize` in memory — provided the optional peer
+`@aws-sdk/lib-storage` is installed:
+
+```bash
+pnpm add @aws-sdk/lib-storage
+```
+
+It is loaded lazily, only on that path, so an app that does not install it is
+unaffected — and there `putStream` with neither option still throws
+`StorageStreamLengthRequiredError` (`400 STORAGE_STREAM_LENGTH_REQUIRED`),
+naming the package that would allow it. Tune the upload with the `partSizeBytes`
+(default 5 MiB, S3's minimum) and `queueSize` (default 4) disk options. A failed
+part — the `maxBytes` cap included — aborts the upload and destroys the source,
+so no orphan parts are left; add an `AbortIncompleteMultipartUpload` lifecycle
+rule to the bucket as the belt-and-braces, since incomplete parts are invisible
+in listings and billed until removed. Azure and GCS chunk unknown-length streams
+natively.
 :::
 
 `copy` falls back when a server-side copy is impossible — a different driver, or
@@ -493,7 +507,7 @@ The disposition default is honoured by all three signing drivers — S3
 | `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | `getStream` on a driver without the capability |
 | `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | `copy({ requireServerSide: true })` with no server-side copy available (a different driver, or one without `copy`) |
 | `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | `stat` on a driver without the capability |
-| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` (400) | `putStream` on S3 with neither `contentLength` nor `maxBytes` |
+| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` (400) | `putStream` on S3 with neither `contentLength` nor `maxBytes`, and without the optional `@aws-sdk/lib-storage` peer that enables multipart |
 | `StorageSigningEndpointInvalidError` | `STORAGE_SIGNING_ENDPOINT_INVALID` (400) | An `endpoint` override that is not an absolute `http(s)` URL, or carries credentials, a query string or a fragment |
 
 All extend `BasaltError` and carry the `code` above.
