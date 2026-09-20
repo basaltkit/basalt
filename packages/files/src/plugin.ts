@@ -1,6 +1,7 @@
+import { Readable } from 'node:stream'
 import { BasaltError, createToken, ctx, definePlugin, ensureMetadata, parseDuration, type Container, type DurationInput } from '@basaltkit/core'
 import { STORAGE, type Disk } from '@basaltkit/storage'
-import { route, type BasaltRoute } from '@basaltkit/http'
+import { route, stream, upload, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { Files, type FileValidation, type FilesOptions } from './files.js'
 import type { FileRecord, FileStore } from './store.js'
@@ -58,8 +59,11 @@ class FileAuthRequiredError extends BasaltError {
   }
 }
 
-/** What a caller is trying to do with a file through {@link fileRoutes}. */
-export type FileAction = 'read' | 'url' | 'delete'
+/**
+ * What a caller is trying to do with a file through {@link fileRoutes}.
+ * `'read'` is the record (metadata), `'download'` the bytes.
+ */
+export type FileAction = 'read' | 'download' | 'url' | 'delete'
 
 /** The authenticated user a route runs as (`ctx().user`). */
 export interface FileRouteUser {
@@ -85,6 +89,34 @@ export interface FileRoutesOptions {
   shared?: boolean
   /** Longest lifetime a client may request for a signed URL. Default `'1h'`. */
   maxUrlTtl?: DurationInput
+  /**
+   * Serve the bytes from `GET /files/:id/content`, streamed. Default `true`.
+   * Authorized with the `'download'` action, gated by the quarantine rules
+   * (423/403 before a single byte) and sent as `Content-Disposition:
+   * attachment`. Pass `false` for a deployment that only ever hands out signed
+   * URLs.
+   */
+  download?: boolean
+  /**
+   * Mount `POST /files` — a streamed `multipart/form-data` upload straight
+   * into storage. **Off by default**: the limits are yours to choose, so the
+   * route only exists once you state them.
+   */
+  upload?: FileUploadRouteOptions
+}
+
+/** Limits for the opt-in `POST /files` upload route. */
+export interface FileUploadRouteOptions {
+  /** Most bytes one request may carry, multipart framing included. Over it: 413. */
+  maxBytes: number
+  /** Most files accepted per request. Default `1`. One more: 400 `TOO_MANY_FILES`. */
+  maxFiles?: number
+  /**
+   * Declared file types accepted at the edge — exact (`image/png`) or a
+   * wildcard subtype (`image/*`). Default: any. This is the client's claim;
+   * `filesPlugin({ validate: { sniff: true } })` is what checks the bytes.
+   */
+  allowedTypes?: readonly string[]
 }
 
 const DEFAULT_URL_TTL = '15m'
@@ -100,13 +132,14 @@ const currentUser = (): FileRouteUser => {
 const notFound = { error: { code: 'FILE_NOT_FOUND', message: 'File not found.' } }
 
 /**
- * Read/manage routes for the current tenant's files: list, metadata, a signed
- * URL, and delete. Uploading is transport-specific (multipart) — call
- * `FILES.upload(bufferOrStream, input)` from your own upload handler, passing
- * `uploadedBy: ctx().user.id`.
+ * Read/manage routes for the current tenant's files: list, metadata, the bytes
+ * (streamed), a signed URL, and delete. `POST /files` — a streamed upload
+ * straight into storage — is opt-in via `upload: { maxBytes, … }`; without it
+ * you write the upload route yourself with the neutral `upload()` body kind.
  *
- * With `requireScan`, `POST /files/:id/url` answers 423 `FILE_NOT_SCANNED`
- * until the file is scanned clean and 403 `FILE_INFECTED` after a failed scan
+ * With `requireScan`, `GET /files/:id/content` and `POST /files/:id/url`
+ * answer 423 `FILE_NOT_SCANNED` until the file is scanned clean and 403
+ * `FILE_INFECTED` after a failed scan — before any byte of the body is sent
  * (the errors carry their status, so every adapter maps them the same way);
  * `GET /files` and `GET /files/:id` still list the record with its scan state.
  *
@@ -141,7 +174,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
       }
     }, `expiresIn must be a positive duration of at most ${String(options.maxUrlTtl ?? DEFAULT_MAX_URL_TTL)}.`)
 
-  return [
+  const routes: BasaltRoute[] = [
     route({
       method: 'GET',
       url: '/files',
@@ -186,4 +219,71 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
       },
     }),
   ]
+
+  if (options.download !== false) {
+    routes.push(
+      route({
+        method: 'GET',
+        url: '/files/:id/content',
+        meta: { auth: true },
+        params: z.object({ id: z.string() }),
+        async handler({ params, reply }) {
+          // Both gates close before a single byte leaves: `reachable` answers
+          // 404 for a missing file and for one this caller may not have, and
+          // the download call throws 423/403 while the file is quarantined.
+          const record = await reachable(params.id, 'download')
+          if (!record) return reply.code(404).send(notFound)
+          const service = files()
+          const body = service.canStreamDownloads()
+            ? (await service.downloadStream(params.id)).stream
+            : // A driver with no `getStream` still serves — buffered, as before.
+              Readable.from([(await service.download(params.id)).content])
+          return stream(body, {
+            contentType: record.contentType,
+            contentLength: record.size,
+            // Always an attachment: an uploaded HTML or SVG file must never
+            // render on this origin. Use a signed URL for inline rendering.
+            filename: record.name,
+          })
+        },
+      }),
+    )
+  }
+
+  const uploads = options.upload
+  if (uploads) {
+    routes.push(
+      route({
+        method: 'POST',
+        url: '/files',
+        meta: { auth: true },
+        body: upload({
+          maxBytes: uploads.maxBytes,
+          maxFiles: uploads.maxFiles ?? 1,
+          ...(uploads.allowedTypes ? { allowedTypes: uploads.allowedTypes } : {}),
+        }),
+        async handler({ body, reply }) {
+          const user = currentUser()
+          const stored: FileRecord[] = []
+          for await (const file of body.files) {
+            // Straight from the socket into storage: `Files` applies the same
+            // tenant scoping, validation and quota rules as any other upload,
+            // and a declared per-part length (when the client sent one) lets a
+            // backend that needs an exact size stream instead of buffering.
+            stored.push(
+              await files().upload(file.stream, {
+                name: file.filename,
+                contentType: file.declaredType,
+                uploadedBy: user.id,
+                ...(file.declaredLength !== undefined ? { contentLength: file.declaredLength } : {}),
+              }),
+            )
+          }
+          return reply.code(201).send(stored)
+        },
+      }),
+    )
+  }
+
+  return routes
 }

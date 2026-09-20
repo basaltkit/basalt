@@ -1130,6 +1130,9 @@ importers:
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
+      '@basaltkit/auth-prisma':
+        specifier: ^1.5.1
+        version: 1.5.1(@basaltkit/auth@packages+auth)
       '@basaltkit/cli':
         specifier: workspace:^
         version: link:../cli
@@ -1163,21 +1166,45 @@ importers:
       '@basaltkit/subscriptions':
         specifier: workspace:^
         version: link:../subscriptions
+      '@basaltkit/subscriptions-prisma':
+        specifier: ^2.2.3
+        version: 2.2.3(@basaltkit/subscriptions@packages+subscriptions)
       '@basaltkit/teams':
         specifier: workspace:^
         version: link:../teams
+      '@basaltkit/teams-prisma':
+        specifier: ^1.0.3
+        version: 1.0.3(@basaltkit/teams@packages+teams)
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
+      '@basaltkit/tenancy-prisma':
+        specifier: ^1.2.0
+        version: 1.2.0(@basaltkit/tenancy@packages+tenancy)
       '@basaltkit/testing':
         specifier: workspace:^
         version: link:../testing
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
+      '@prisma/adapter-pg':
+        specifier: ^7.10.0
+        version: 7.10.0
+      '@prisma/client':
+        specifier: ^7.10.0
+        version: 7.10.0(prisma@7.10.0(@types/node@26.6.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.5.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2))(typescript@7.0.2)
       '@types/node':
         specifier: ^26.3.0
         version: 26.6.1
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
+      pg:
+        specifier: ^8.23.0
+        version: 8.23.0
+      prisma:
+        specifier: ^7.10.0
+        version: 7.10.0(@types/node@26.6.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.5.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@7.0.2)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -2212,6 +2239,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.1133.0
         version: 3.1133.0
+      '@aws-sdk/lib-storage':
+        specifier: ^3.1133.0
+        version: 3.1136.0(@aws-sdk/client-s3@3.1133.0)
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1133.0
         version: 3.1133.0
@@ -2821,6 +2851,12 @@ packages:
     resolution: {integrity: sha512-uylIQSUWpfLuH2LovxEEfwzJGM/SabLOfLMg6YXu/E8jJEKUdpdILCVCQCdFvHyu/7dLJOHPMfrSwduxO56NkQ==}
     engines: {node: '>=20.0.0'}
 
+  '@aws-sdk/lib-storage@3.1136.0':
+    resolution: {integrity: sha512-oosImwm5kgYTDySuQZ/bCCCISf6cETUDS6Q1MhIyZ7+oZLiacKxKqqQz59/Ic+V9iiNZOXXbEgANChm2WveXsg==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      '@aws-sdk/client-s3': ^3.1136.0
+
   '@aws-sdk/middleware-sdk-s3@3.972.76':
     resolution: {integrity: sha512-NfnTkVUTBKTBuBgqaapFK9r3YdkKt1b2oRvgLzZq91bwNKh6ZS0S7sEcheguttREaL4iyfs/xQnqD7Z7AsWSsA==}
     engines: {node: '>=20.0.0'}
@@ -2956,6 +2992,34 @@ packages:
   '@babel/types@7.29.8':
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
+
+  '@basaltkit/auth-prisma@1.5.1':
+    resolution: {integrity: sha512-z8KubEHmix0m/vN1eUvAzYEDehYWRqFxcx5Ymi+xGWPFDOOnaoYKNNqA8VUnCVu7LguBySZavPUQVtIbJOdpMQ==}
+    engines: {node: '>=22.5.0'}
+    peerDependencies:
+      '@basaltkit/auth': ^2.2.0
+
+  '@basaltkit/core@1.3.1':
+    resolution: {integrity: sha512-9zFMzURK+3a62o62mwo/fFCx/OipPKNkIMs8lIl1TvkarULNC9akUp0eV9Fq9q9mJQ9+JELV5Dbkg0wf5JXjoA==}
+    engines: {node: '>=22.5.0'}
+
+  '@basaltkit/subscriptions-prisma@2.2.3':
+    resolution: {integrity: sha512-5Dod66DkEJTtkVL7089vlQeYwyPZM55ie4ONUdTnO1KDZbdxQfQJ6JViPULt/4vz9LdpzHufubGJJfQvC6cdtg==}
+    engines: {node: '>=22.5.0'}
+    peerDependencies:
+      '@basaltkit/subscriptions': ^3.0.0
+
+  '@basaltkit/teams-prisma@1.0.3':
+    resolution: {integrity: sha512-o9ihsRSImu5XsgUOs/NKDCitOOWclBwf0Ivd9NMDsSW8YeS9h4XLTInn3zLcHJuWrqxV/vy+BjmIV1TZMfPUTQ==}
+    engines: {node: '>=22.5.0'}
+    peerDependencies:
+      '@basaltkit/teams': ^2.0.0
+
+  '@basaltkit/tenancy-prisma@1.2.0':
+    resolution: {integrity: sha512-jytQBWf9kJlVeTk2Pd+/ty7J2vLjCJI0vbbgUbkoCgm3DiumzlwU8AgFbgDmZojkHZmOUTqv/I3sRKopGnlWKA==}
+    engines: {node: '>=22.5.0'}
+    peerDependencies:
+      '@basaltkit/tenancy': ^1.11.0
 
   '@bcoe/v8-coverage@1.0.2':
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
@@ -4245,10 +4309,6 @@ packages:
     resolution: {integrity: sha512-CyogUINxvi7C7LDsh8Syo6hVJOT9ckz4rG8dRZfTJ8r91HkMY59PnNooaj7WcHyxEkxPfBAmbgztZU+xTo76lg==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/core@3.33.3':
-    resolution: {integrity: sha512-CsOeKq/9kA3y6VJHt+/+VTCtBaxJ4OTFpgrjIUhPpDIKxBci1k2bJaQASF2h/ELWrulGp+t97DZ0mevfAD8idg==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/core@3.34.1':
     resolution: {integrity: sha512-dLcOUxz8YCv1RZUMKq6GbyUf95pLbrqh34bPvpCZ1+CByFF31BEAFewZjsGCnVsZTKdThNENfGyAgk2TJqVwSw==}
     engines: {node: '>=18.0.0'}
@@ -4287,10 +4347,6 @@ packages:
 
   '@smithy/types@4.16.1':
     resolution: {integrity: sha512-0JFs3V2y2M9tKW5na/qxe69Zv+uxLMO7QBbhxF/FHu/Gp2NFZAAL9tWl9PU02xxo07pb3G9FTyjNc6D5uZrJIg==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/types@4.17.2':
-    resolution: {integrity: sha512-FOKpVZob9MPTn2znRzGrnsMHv7BOsKVw3XiP/cOyYLDVZ9qKp4nifIiSCuUU/fIj5Vu0UOAxCFr+qRAtG0NUkA==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/types@4.18.0':
@@ -5121,6 +5177,9 @@ packages:
 
   buffer-more-ints@1.0.0:
     resolution: {integrity: sha512-EMetuGFz5SLsT0QTnXzINh4Ksr+oo4i+UGTXEshiGCQWnsgSs7ZhJ8fzlwQ+OzEMs0MpDAMr1hxnblp5a4vcHg==}
+
+  buffer@5.6.0:
+    resolution: {integrity: sha512-/gDYp/UtU0eA1ys8bOs9J6a+E/KWIY+DZ+Q2WESNUA0jFRsJOc0SNUO6xJ5SGA1xueg3NL65W6s+NY5l9cunuw==}
 
   buffer@5.7.1:
     resolution: {integrity: sha512-EHcyIPBQ4BSGlvjB16k5KgAJ27CIsHY/2JBmCRReo48y9rQ3MaUzWX3KVlBa4U7MyX02HdVj0K7C3WaB3ju7FQ==}
@@ -6443,9 +6502,6 @@ packages:
     peerDependencies:
       pg: '>=8.0'
 
-  pg-protocol@1.15.0:
-    resolution: {integrity: sha512-cq9sECI5s0+uPUXjbz8ioyPJni6RzsRib0US67i5IoTZKw8fNeYlVE7u8F4dG7vEJJtc5wdD1K189lCCUwqWTQ==}
-
   pg-protocol@1.16.0:
     resolution: {integrity: sha512-sILXutLVjCLjcDuOmvhX5e2Z4cS5qG/6Bu3VkpFwdf/633ElGLpEh9bgmuI5I4sqKqkifQiGyiCcx1HdtrK7tg==}
 
@@ -6860,6 +6916,9 @@ packages:
 
   std-env@4.2.0:
     resolution: {integrity: sha512-oCUKSupKTHX53EyjDtuZQ64pjLJ6yYCtpmEw0goYxtjG9KpbRe8KAsl2tBUGU9DyMcJ0RwJ8GqJAFzMXcXW1Rw==}
+
+  stream-browserify@3.0.0:
+    resolution: {integrity: sha512-H73RAHsVBapbim0tU2JwwOiXUj+fikfiaoYAKHF3VJfA0pe2BCzkhAHBlLG6REzE+2WNZcxOXjK7lkso+9euLA==}
 
   stream-events@1.0.5:
     resolution: {integrity: sha512-E1GUzBSgvct8Jsb3v2X15pjzN1tYebtbLaMg+eBOUOAxgbLoSbT2NS91ckc5lJD1KfLjId+jXJRgo0qnV5Nerg==}
@@ -7529,9 +7588,9 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@aws-sdk/xml-builder': 3.972.37
       '@aws/lambda-invoke-store': 0.3.0
-      '@smithy/core': 3.33.3
+      '@smithy/core': 3.34.1
       '@smithy/signature-v4': 5.6.12
-      '@smithy/types': 4.17.2
+      '@smithy/types': 4.18.0
       bowser: 2.14.1
       tslib: 2.8.1
 
@@ -7641,9 +7700,9 @@ snapshots:
       '@aws-sdk/credential-provider-sso': 3.973.11
       '@aws-sdk/credential-provider-web-identity': 3.972.73
       '@aws-sdk/types': 3.974.5
-      '@smithy/core': 3.33.3
+      '@smithy/core': 3.34.1
       '@smithy/credential-provider-imds': 4.4.16
-      '@smithy/types': 4.17.2
+      '@smithy/types': 4.18.0
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-node@3.972.83':
@@ -7714,6 +7773,16 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
+  '@aws-sdk/lib-storage@3.1136.0(@aws-sdk/client-s3@3.1133.0)':
+    dependencies:
+      '@aws-sdk/client-s3': 3.1133.0
+      '@smithy/core': 3.34.1
+      '@smithy/types': 4.18.0
+      buffer: 5.6.0
+      events: 3.3.0
+      stream-browserify: 3.0.0
+      tslib: 2.8.1
+
   '@aws-sdk/middleware-sdk-s3@3.972.76':
     dependencies:
       '@aws-sdk/core': 3.978.0
@@ -7726,8 +7795,8 @@ snapshots:
   '@aws-sdk/middleware-sdk-sqs@3.972.39':
     dependencies:
       '@aws-sdk/types': 3.974.5
-      '@smithy/core': 3.33.3
-      '@smithy/types': 4.17.2
+      '@smithy/core': 3.34.1
+      '@smithy/types': 4.18.0
       tslib: 2.8.1
 
   '@aws-sdk/nested-clients@3.997.41':
@@ -7799,7 +7868,7 @@ snapshots:
 
   '@aws-sdk/types@3.974.2':
     dependencies:
-      '@smithy/types': 4.17.2
+      '@smithy/types': 4.18.0
       tslib: 2.8.1
 
   '@aws-sdk/types@3.974.5':
@@ -7952,6 +8021,25 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
+
+  '@basaltkit/auth-prisma@1.5.1(@basaltkit/auth@packages+auth)':
+    dependencies:
+      '@basaltkit/auth': link:packages/auth
+      '@basaltkit/core': 1.3.1
+
+  '@basaltkit/core@1.3.1': {}
+
+  '@basaltkit/subscriptions-prisma@2.2.3(@basaltkit/subscriptions@packages+subscriptions)':
+    dependencies:
+      '@basaltkit/subscriptions': link:packages/subscriptions
+
+  '@basaltkit/teams-prisma@1.0.3(@basaltkit/teams@packages+teams)':
+    dependencies:
+      '@basaltkit/teams': link:packages/teams
+
+  '@basaltkit/tenancy-prisma@1.2.0(@basaltkit/tenancy@packages+tenancy)':
+    dependencies:
+      '@basaltkit/tenancy': link:packages/tenancy
 
   '@bcoe/v8-coverage@1.0.2': {}
 
@@ -8996,11 +9084,6 @@ snapshots:
 
   '@smithy/core@3.31.1':
     dependencies:
-      '@smithy/types': 4.17.2
-      tslib: 2.8.1
-
-  '@smithy/core@3.33.3':
-    dependencies:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
@@ -9023,8 +9106,8 @@ snapshots:
 
   '@smithy/fetch-http-handler@5.6.13':
     dependencies:
-      '@smithy/core': 3.33.3
-      '@smithy/types': 4.17.2
+      '@smithy/core': 3.34.1
+      '@smithy/types': 4.18.0
       tslib: 2.8.1
 
   '@smithy/fetch-http-handler@5.8.0':
@@ -9041,8 +9124,8 @@ snapshots:
 
   '@smithy/node-http-handler@4.9.13':
     dependencies:
-      '@smithy/core': 3.33.3
-      '@smithy/types': 4.17.2
+      '@smithy/core': 3.34.1
+      '@smithy/types': 4.18.0
       tslib: 2.8.1
 
   '@smithy/signature-v4@5.6.12':
@@ -9058,10 +9141,6 @@ snapshots:
       tslib: 2.8.1
 
   '@smithy/types@4.16.1':
-    dependencies:
-      tslib: 2.8.1
-
-  '@smithy/types@4.17.2':
     dependencies:
       tslib: 2.8.1
 
@@ -9301,7 +9380,7 @@ snapshots:
   '@types/pg@8.23.1':
     dependencies:
       '@types/node': 26.6.1
-      pg-protocol: 1.15.0
+      pg-protocol: 1.16.0
       pg-types: 2.2.0
 
   '@types/qs@6.15.1': {}
@@ -9927,6 +10006,11 @@ snapshots:
   buffer-equal-constant-time@1.0.1: {}
 
   buffer-more-ints@1.0.0: {}
+
+  buffer@5.6.0:
+    dependencies:
+      base64-js: 1.5.1
+      ieee754: 1.2.1
 
   buffer@5.7.1:
     dependencies:
@@ -11298,8 +11382,6 @@ snapshots:
     dependencies:
       pg: 8.23.0
 
-  pg-protocol@1.15.0: {}
-
   pg-protocol@1.16.0: {}
 
   pg-types@2.2.0:
@@ -11784,6 +11866,11 @@ snapshots:
   std-env@3.10.0: {}
 
   std-env@4.2.0: {}
+
+  stream-browserify@3.0.0:
+    dependencies:
+      inherits: 2.0.4
+      readable-stream: 3.6.2
 
   stream-events@1.0.5:
     dependencies:

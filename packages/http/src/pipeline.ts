@@ -5,6 +5,8 @@ import { sanitizeErrorDetails, type ErrorDetails } from './error-details.js'
 import { RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
+import { isSseResponse } from './sse.js'
+import { isStreamResponse } from './stream.js'
 import { UploadSession, uploadOptionsOf } from './upload.js'
 
 declare module '@basaltkit/core' {
@@ -100,6 +102,10 @@ function applyEtag(
   if ((method !== 'GET' && method !== 'HEAD') || reply.sent || result === undefined || result === null) {
     return result
   }
+  // A streamed body (`stream()`) or an event stream (`sse()`) is a marker the
+  // adapter renders, not a payload: serialising it would hash the marker and
+  // answer 304 for a body that was never sent.
+  if (isStreamResponse(result) || isSseResponse(result)) return result
   const body = typeof result === 'string' ? result : JSON.stringify(result)
   const etag = computeEtag(body)
   reply.header('etag', etag)

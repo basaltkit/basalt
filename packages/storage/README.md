@@ -168,12 +168,13 @@ source is destroyed (Node) or cancelled (web stream).
 
 Notes worth knowing:
 
-- **S3 needs a length.** `PutObject` cannot send a body of unknown size, so
+- **S3 and the body length.** `PutObject` cannot send a body of unknown size, so
   `putStream` wants a `contentLength` (streamed straight through) or a
-  `maxBytes` (buffered up to that cap, bounded memory). With neither it throws
-  `STORAGE_STREAM_LENGTH_REQUIRED`; for unbounded streams drive
-  `@aws-sdk/lib-storage`'s multipart `Upload` yourself. Azure and GCS chunk
-  streams of unknown length natively.
+  `maxBytes` (buffered up to that cap, bounded memory). With neither,
+  `@basaltkit/storage-s3` uploads it **multipart** when the optional peer
+  `@aws-sdk/lib-storage` is installed, and throws
+  `STORAGE_STREAM_LENGTH_REQUIRED` when it is not. Azure and GCS chunk streams
+  of unknown length natively.
 - **`copy` falls back.** Across two different drivers (or one without a
   server-side copy) it streams `getStream` → `putStream`, and finally
   `get` → `put`. Pass `{ requireServerSide: true }` to make a fallback an error
@@ -505,7 +506,7 @@ host is a silently broken one.
 | `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | 500 | `getStream()` on a driver without the capability. |
 | `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | 500 | `copy({ requireServerSide: true })` with no server-side copy available. |
 | `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | 500 | `stat()` on a driver without the capability. |
-| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` | **400** | `putStream()` on S3 with neither `contentLength` nor `maxBytes`. |
+| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` | **400** | `putStream()` on S3 with neither `contentLength` nor `maxBytes`, and without the optional `@aws-sdk/lib-storage` peer that enables multipart. |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | 500 | An image-pipeline terminal ran with no `imageProcessor` configured. |
 
 All extend `BasaltError` from `@basaltkit/core` and carry the `code` above.

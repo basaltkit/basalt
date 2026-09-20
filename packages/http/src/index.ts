@@ -101,6 +101,24 @@ export {
   type SseSink,
 } from './sse.js'
 
+export {
+  stream,
+  isStreamResponse,
+  streamPayloadOf,
+  contentDisposition,
+  toNodeStream,
+  destroyStreamSource,
+  streamPump,
+  openStreamPump,
+  nodeStreamFrom,
+  webStreamFrom,
+  type StreamSource,
+  type StreamOptions,
+  type StreamPayload,
+  type StreamResponse,
+  type StreamPump,
+} from './stream.js'
+
 export { escapeHtml, scriptJson, pageCsp, cspHash, type PageCspOptions } from './html.js'
 export {
   GUARDED_META_BUCKET,

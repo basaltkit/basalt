@@ -16,10 +16,15 @@
   "dependencies": { "@basaltkit/storage": "workspace:^" },
   "peerDependencies": {
     "@aws-sdk/client-s3": "^3.1133.0",
+    "@aws-sdk/lib-storage": "^3.1133.0",
     "@aws-sdk/s3-request-presigner": "^3.1133.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/lib-storage": { "optional": true }
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1133.0",
+    "@aws-sdk/lib-storage": "^3.1133.0",
     "@aws-sdk/s3-request-presigner": "^3.1133.0",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.6.1",

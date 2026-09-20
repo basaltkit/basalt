@@ -47,15 +47,37 @@ The upload validates, checks the quota, writes the bytes **isolated per tenant**
 
 ## Receiving an upload over HTTP
 
-The upload itself is *multipart* (adapter-specific), so there's no ready-made route for it. In your handler, read the file and call the service:
+The quickest route is the opt-in one: `fileRoutes({ upload: { maxBytes, maxFiles?, allowedTypes? } })`
+mounts `POST /files`, a streamed `multipart/form-data` upload that goes straight into
+storage with the same tenant scoping, validation and quota rules as any other upload. It
+is off by default — the limits are yours to choose, so the route only exists once you
+state them.
+
+For your own route, declare the neutral `upload()` body from `@basaltkit/http` (it works
+identically on Fastify, Express and Hono) and hand each file's stream to the service:
 
 ```ts
-// example with Fastify and @fastify/multipart
-app.post('/upload', async (req) => {
-  const part = await req.file()
-  const buffer = await part.toBuffer()
-  return files.upload(buffer, { name: part.filename, contentType: part.mimetype, uploadedBy: ctx().user?.id })
-  // tenantId comes from the request context (tenancy)
+import { route, upload } from '@basaltkit/http'
+
+route({
+  method: 'POST',
+  url: '/documents',
+  body: upload({ maxBytes: 20 * 1024 * 1024, maxFiles: 1, allowedTypes: ['application/pdf'] }),
+  meta: { auth: true },
+  async handler({ body }) {
+    for await (const file of body.files) {
+      await files.upload(file.stream, {
+        name: file.filename,
+        contentType: file.declaredType,
+        uploadedBy: ctx().user?.id,
+        // The part's own Content-Length, when the client sent one — usually absent
+        // (no browser sends it), and never derived from the request's Content-Length,
+        // which covers every part plus the multipart framing.
+        ...(file.declaredLength !== undefined ? { contentLength: file.declaredLength } : {}),
+      })
+      // tenantId comes from the request context (tenancy)
+    }
+  },
 })
 ```
 
@@ -86,15 +108,28 @@ object.
 file into memory:
 
 ```ts
-const { record, stream } = await files.downloadStream(id)
-reply.header('content-type', record.contentType)
-reply.header('content-disposition', `attachment; filename="${record.name}"`)
-await pipeline(stream, reply.raw)
+import { route, stream } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/documents/:id',
+  meta: { auth: true },
+  async handler({ params }) {
+    const { record, stream: body } = await files.downloadStream(params.id)
+    return stream(body, { contentType: record.contentType, contentLength: record.size, filename: record.name })
+  },
+})
 ```
 
+`stream()` is the neutral streaming response: every adapter sends it without buffering,
+destroys the source when the client disconnects, and answers `HEAD` with the headers
+alone. `fileRoutes()` uses exactly this for `GET /files/:id/content`.
+
 **Consume the stream or `destroy()` it** — an abandoned one holds a connection
-(S3/Azure/GCS) or a file descriptor (local) open. A driver that cannot stream
-throws `STORAGE_GET_STREAM_UNSUPPORTED`; use `download()` there.
+(S3/Azure/GCS) or a file descriptor (local) open; returning it through `stream()` hands
+that responsibility to the adapter. `files.canStreamDownloads()` says whether the disk's
+driver can stream at all; one that cannot throws `STORAGE_GET_STREAM_UNSUPPORTED`, so
+fall back to `download()` there (which is what `fileRoutes()` does).
 
 ## Checking the real type (`validate.sniff`)
 
@@ -102,7 +137,7 @@ By default `allowedTypes` trusts the client-declared `contentType` — an HTML p
 
 ## Quarantine until scanned (`requireScan`)
 
-With `filesPlugin({ requireScan: true })`, `download()` / `temporaryUrl()` (and `POST /files/:id/url`) throw `423 FILE_NOT_SCANNED` until `markScanned` reports the file clean, and `403 FILE_INFECTED` after a failed scan. Listing still shows every record with its scan state. The scanner reads the quarantined bytes with `files.download(id, tenantId, { bypassQuarantine: true })`.
+With `filesPlugin({ requireScan: true })`, `download()` / `downloadStream()` / `temporaryUrl()` (and `GET /files/:id/content`, `POST /files/:id/url`) throw `423 FILE_NOT_SCANNED` until `markScanned` reports the file clean, and `403 FILE_INFECTED` after a failed scan. Listing still shows every record with its scan state. The scanner reads the quarantined bytes with `files.download(id, tenantId, { bypassQuarantine: true })`.
 
 The other operations have ready-made routes via `fileRoutes()`:
 
@@ -110,10 +145,17 @@ The other operations have ready-made routes via `fileRoutes()`:
 |---|---|
 | `GET /files` | Lists the current tenant's files. |
 | `GET /files/:id` | A file's metadata. |
+| `GET /files/:id/content` | The bytes, **streamed** (`Content-Disposition: attachment`). Authorized with the `'download'` action; with `requireScan` it answers 423/403 before a single byte. `fileRoutes({ download: false })` leaves it out. |
+| `POST /files` | **Opt-in** (`fileRoutes({ upload: { maxBytes, maxFiles?, allowedTypes? } })`): a streamed multipart upload into storage, `uploadedBy` set to the caller. Returns `201` with the created `FileRecord[]`. |
 | `POST /files/:id/url` `{ expiresIn? }` | Temporary signed URL. |
 | `DELETE /files/:id` | Deletes bytes + metadata. |
 
-**Owner-only by default:** a user reaches only files whose `uploadedBy` is their own id; anything else answers 404. Choose another policy explicitly with `fileRoutes({ shared: true })` (tenant-wide drive) or `fileRoutes({ authorize: (action, record, user) => boolean })` (`action` is `'read' | 'url' | 'delete'`). `expiresIn` must be positive and at most `maxUrlTtl` (default `'1h'`), otherwise 400; when omitted it defaults to 15 minutes, lowered to `maxUrlTtl` if that is shorter.
+**Owner-only by default:** a user reaches only files whose `uploadedBy` is their own id; anything else answers 404. Choose another policy explicitly with `fileRoutes({ shared: true })` (tenant-wide drive) or `fileRoutes({ authorize: (action, record, user) => boolean })` (`action` is `'read' | 'download' | 'url' | 'delete'`; `'read'` is the record, `'download'` the bytes). `expiresIn` must be positive and at most `maxUrlTtl` (default `'1h'`), otherwise 400; when omitted it defaults to 15 minutes, lowered to `maxUrlTtl` if that is shorter.
+
+`POST /files` has no per-record `authorize` decision to make — there is no record yet — so
+it accepts any authenticated caller and applies `Files`' own rules: the tenant from the
+request context, `validate` (size/type/sniff), and the quota. Bound it at the edge with
+`maxBytes`/`maxFiles`/`allowedTypes`, and rate-limit it like any other write route.
 
 ## Post-processing with hooks
 
@@ -163,6 +205,7 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 | `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. `content`: `Buffer`/`Uint8Array`, Node `Readable`, `AsyncIterable<Uint8Array>` or web `ReadableStream`. A stream goes straight to the backend when the driver supports `putStream`. `input.contentLength` (optional) is the client-declared size — a hint that lets S3 stream instead of buffer; the real size is always measured. |
 | `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`. Gated by `requireScan`; `bypassQuarantine` is for the scanner only. |
 | `downloadStream(id, tenantId?, { bypassQuarantine? })` | `{ record, stream }` — the same contract as `download`, quarantine included, without buffering. The caller must consume or `destroy()` the stream. Needs a driver with `getStream`. |
+| `canStreamDownloads()` | `true` when this disk's driver implements `getStream` (local, S3, Azure, GCS), so callers can take the streaming path and buffer where it does not exist instead of catching `STORAGE_GET_STREAM_UNSUPPORTED`. |
 | `temporaryUrl(id, expiresIn, tenantId?, options?)` | Signed URL. Served `Content-Disposition: attachment` by default; pass `{ disposition: 'inline' }` only when top-level rendering is deliberate — an uploaded HTML/SVG file served inline is stored XSS on the storage origin. Embedded `<img>`/`<video>` uses render regardless. |
 | `get(id, tenantId?)` · `list(tenantId?)` | Metadata. |
 | `delete(id, tenantId?)` | Deletes bytes + metadata; emits `file:deleted`. |

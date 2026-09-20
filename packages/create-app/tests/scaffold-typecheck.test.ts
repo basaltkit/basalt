@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { createProject } from '../src/index.js'
 
@@ -54,3 +55,59 @@ describe('scaffolded apps typecheck out of the box', () => {
     expect(typecheck(dir)).toBe('')
   }, 60_000)
 })
+
+/**
+ * The `--prisma` variant needs more than the templates: the generated `src/db.ts`
+ * imports the client `prisma generate` writes, and the app imports the
+ * `@basaltkit/*-prisma` store packages. create-app does not declare those, so in
+ * an environment without them the suite SKIPS with a reason instead of
+ * pretending to have checked (and instead of failing on a missing module).
+ */
+const prismaToolchain = (): string | undefined => {
+  const require_ = createRequire(pathToFileURL(join(packageDir, 'noop.js')))
+  /** Installed for create-app? (An ESM-only package resolves but has no CJS entry.) */
+  const present = (pkg: string): boolean => {
+    if (existsSync(join(packageDir, 'node_modules', ...pkg.split('/')))) return true
+    try {
+      require_.resolve(pkg)
+      return true
+    } catch (error) {
+      return (error as { code?: string }).code === 'ERR_PACKAGE_PATH_NOT_EXPORTED'
+    }
+  }
+  for (const pkg of [
+    '@prisma/adapter-pg',
+    '@prisma/client',
+    '@basaltkit/auth-prisma',
+    '@basaltkit/teams-prisma',
+    '@basaltkit/tenancy-prisma',
+    'pg',
+  ]) {
+    if (!present(pkg)) return `${pkg} is not installed for create-app`
+  }
+  const cli = join(packageDir, 'node_modules', '.bin', 'prisma')
+  return existsSync(cli) ? undefined : 'the prisma CLI is not installed for create-app'
+}
+
+const missingToolchain = prismaToolchain()
+
+describe.skipIf(missingToolchain !== undefined)(
+  // The reason travels in the name, so a skipped run says WHY it was skipped.
+  `the --prisma scaffold typechecks once generated${missingToolchain ? ` [skipped: ${missingToolchain}]` : ''}`,
+  () => {
+    it('generates the client and compiles src/db.ts, src/app.ts and prisma/seed.ts', async () => {
+      const dir = join(root, 'prisma')
+      rmSync(dir, { recursive: true, force: true })
+      mkdirSync(dir, { recursive: true })
+      await createProject({ name: 'scaffold-prisma', dir, prisma: true, billing: true, cli: true })
+
+      // `prisma generate` needs no database — only the schema.
+      execFileSync(join(packageDir, 'node_modules', '.bin', 'prisma'), ['generate'], {
+        cwd: dir,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      })
+      expect(typecheck(dir)).toBe('')
+    }, 120_000)
+  },
+)

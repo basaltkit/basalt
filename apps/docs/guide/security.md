@@ -505,6 +505,44 @@ await tenantTransaction(db, async (tx) => {
   sees nothing: give central/admin code its own database role (`BYPASSRLS`, or
   one the policies don't cover).
 
+**Sweeping every tenant — the one hole, made narrow.** A reconciler has to find
+stuck rows *across all tenants*, which under RLS the application role can never
+see. `crossTenantScanSql` generates the only safe shape of that query: a
+`SECURITY DEFINER` function that returns **identifiers only** (tenant id + row
+id), owned by a role the policies don't reach, with `search_path` pinned inside
+it and `EXECUTE` revoked from `PUBLIC`. `crossTenantSweep` then processes every
+identifier back inside its own tenant's scope, where the policies apply again:
+
+```ts
+import { crossTenantScanSql, crossTenantSweep } from '@basaltkit/prisma'
+
+// migration (once): identifiers only — never a column holding tenant data
+crossTenantScanSql({
+  name: 'stuck_jobs', table: 'jobs', tenantColumn: 'tenantId', columns: ['id'],
+  where: `t."status" = 'PROCESSING' AND t."updatedAt" < now() - interval '15 minutes'`,
+  role: 'app', owner: 'app_owner', maxRows: 500,
+})
+
+// reconciler (central code, no tenant in scope)
+await crossTenantSweep({
+  client: db,
+  scanFunction: 'stuck_jobs',
+  run: (tenantId, fn) => tenancy.run(tenantId, fn),
+  handle: (item) => RetryJob.dispatch({ jobId: item.id }),
+})
+```
+
+The function is a **deliberate RLS bypass**, so treat its definition as
+security-critical: widen it to one data column and every caller with `EXECUTE`
+reads every tenant. Basalt fails closed around it — the scan refuses to run
+inside a tenant context (`PRISMA_CROSS_TENANT_IN_TENANT`; unlike the internal
+`set_config`, it gets no exemption from the raw guard), refuses a deployed
+function that returns columns you did not declare
+(`PRISMA_CROSS_TENANT_SCAN_SHAPE`), and pages with a capped, ordered cursor so a
+sweep can't pull the whole table. Without RLS the function isn't needed at all:
+pass an ordinary central query as `scan`. See
+[the scheduler guide](/guide/scheduler#sweeping-every-tenant).
+
 When in doubt, prefer model operations (which are scoped automatically) over raw
 SQL, and review every `connect` against the current tenant.
 

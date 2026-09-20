@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   countTenantTables,
+  crossTenantScanSql,
   migrateTenants,
   provisionTenantSchema,
   rlsPolicySql,
@@ -236,6 +237,140 @@ describe.skipIf(!Ctor)('PostgreSQL integration (pglite)', () => {
       const { rows } = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM project')
       await db.exec('RESET ROLE')
       expect(Number(rows[0]?.n ?? -1)).toBe(0)
+    })
+  })
+
+  describe('cross-tenant scan — sweeping every tenant under RLS', () => {
+    // The reconciler's problem: with RLS the app role only ever sees one tenant,
+    // so "which rows, anywhere, are stuck?" has no answer as an ordinary query.
+    // crossTenantScanSql opens exactly one narrow, identifiers-only door.
+    const seed = async () => {
+      await db.exec(`
+        CREATE TABLE jobs (
+          id text primary key,
+          tenant_id text,
+          status text,
+          payload text
+        )`)
+      await db.query(`INSERT INTO jobs VALUES
+        ('j1','acme','PROCESSING','acme secret'),
+        ('j2','acme','DONE','acme done'),
+        ('j3','globex','PROCESSING','globex secret'),
+        ('j4','initech','PROCESSING','initech secret')`)
+      await db.exec(rlsPolicySql({ tables: ['jobs'] }))
+      await db.exec('CREATE ROLE app_user')
+      await db.exec('CREATE ROLE other_user')
+      await db.exec('GRANT SELECT, UPDATE ON jobs TO app_user')
+      await db.exec(
+        crossTenantScanSql({
+          name: 'stuck_jobs',
+          table: 'jobs',
+          columns: ['id'],
+          where: `t."status" = 'PROCESSING'`,
+          role: 'app_user',
+          maxRows: 2,
+        }),
+      )
+    }
+
+    it('the generated function is accepted by PostgreSQL and returns identifiers for every tenant', async () => {
+      await seed()
+      await db.exec('SET ROLE app_user')
+
+      // The app role cannot see across tenants on its own (RLS, no tenant set).
+      const unscoped = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM jobs')
+      expect(Number(unscoped.rows[0]?.n ?? -1)).toBe(0)
+
+      // …but the SECURITY DEFINER function does — identifiers only.
+      const page = await db.query<Record<string, unknown>>('SELECT * FROM stuck_jobs($1, $2, $3)', [2, null, null])
+      await db.exec('RESET ROLE')
+      expect(page.rows.map((r) => [r['tenant_id'], r['id']])).toEqual([
+        ['acme', 'j1'],
+        ['globex', 'j3'],
+      ])
+      // no payload, no status — a caller cannot read tenant data through it
+      expect(Object.keys(page.rows[0] ?? {}).sort()).toEqual(['id', 'tenant_id'])
+    })
+
+    it('caps the page size and resumes from the cursor', async () => {
+      await seed()
+      await db.exec('SET ROLE app_user')
+      // asks for 1000, the function was generated with maxRows: 2
+      const first = await db.query<Record<string, unknown>>('SELECT * FROM stuck_jobs($1, $2, $3)', [1000, null, null])
+      const next = await db.query<Record<string, unknown>>('SELECT * FROM stuck_jobs($1, $2, $3)', [1000, 'globex', 'j3'])
+      await db.exec('RESET ROLE')
+      expect(first.rows).toHaveLength(2)
+      expect(next.rows.map((r) => r['id'])).toEqual(['j4'])
+    })
+
+    it('runs with a pinned search_path, so it cannot be redirected at a table of the caller', async () => {
+      await seed()
+      const { rows } = await db.query<{ config: string[] | null }>(
+        `SELECT proconfig AS config FROM pg_proc WHERE proname = 'stuck_jobs'`,
+      )
+      expect(rows[0]?.config).toEqual(['search_path=pg_catalog, public'])
+      const meta = await db.query<{ definer: boolean; volatile: string; parallel: string }>(
+        `SELECT prosecdef AS definer, provolatile AS volatile, proparallel AS parallel
+           FROM pg_proc WHERE proname = 'stuck_jobs'`,
+      )
+      expect(meta.rows[0]).toMatchObject({ definer: true, volatile: 's', parallel: 's' })
+    })
+
+    it('only the granted role may execute it — EXECUTE is revoked from PUBLIC', async () => {
+      await seed()
+      await db.exec('SET ROLE other_user')
+      let refused: string | undefined
+      try {
+        await db.query('SELECT * FROM stuck_jobs($1, $2, $3)', [2, null, null])
+      } catch (error) {
+        refused = (error as Error).message
+      }
+      await db.exec('RESET ROLE')
+      expect(refused).toMatch(/permission denied/i)
+    })
+
+    it('the identifiers it hands back are processed under the row\'s own tenant scope', async () => {
+      await seed()
+      await db.exec('SET ROLE app_user')
+      const { rows } = await db.query<Record<string, string>>('SELECT * FROM stuck_jobs($1, $2, $3)', [2, null, null])
+
+      // What crossTenantSweep does per tenant: enter the tenant, then work
+      // through the ordinary (RLS-filtered) path.
+      for (const row of rows) {
+        await db.exec('BEGIN')
+        await db.query(setTenantConfigSql(), tenantConfigParams(row['tenant_id'] as string))
+        await db.query(`UPDATE jobs SET status = 'RETRIED' WHERE id = $1`, [row['id']])
+        await db.exec('COMMIT')
+      }
+      await db.exec('RESET ROLE')
+
+      const { rows: after } = await db.query<{ id: string; status: string }>(
+        'SELECT id, status FROM jobs ORDER BY id',
+      )
+      expect(after).toEqual([
+        { id: 'j1', status: 'RETRIED' },
+        { id: 'j2', status: 'DONE' },
+        { id: 'j3', status: 'RETRIED' },
+        { id: 'j4', status: 'PROCESSING' }, // beyond the capped page — next sweep
+      ])
+    })
+
+    it('a tenant cannot use it to reach another tenant\'s data', async () => {
+      await seed()
+      await db.exec('SET ROLE app_user')
+      await db.exec('BEGIN')
+      await db.query(setTenantConfigSql(), tenantConfigParams('acme'))
+      const { rows } = await db.query<Record<string, unknown>>('SELECT * FROM stuck_jobs($1, $2, $3)', [2, null, null])
+      // The identifiers of other tenants are visible (that is the point), but
+      // joining them back to the table stays RLS-filtered to acme.
+      const joined = await db.query<{ id: string }>(
+        `SELECT j.id FROM jobs j WHERE j.id = ANY($1::text[]) ORDER BY j.id`,
+        [rows.map((r) => r['id'])],
+      )
+      await db.exec('COMMIT')
+      await db.exec('RESET ROLE')
+      expect(rows.map((r) => r['tenant_id'])).toEqual(['acme', 'globex'])
+      expect(joined.rows.map((r) => r.id)).toEqual(['j1'])
     })
   })
 })

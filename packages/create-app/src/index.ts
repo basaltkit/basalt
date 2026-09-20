@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import {
   appTest,
   appTs,
+  dbTs,
   devTs,
   dockerignore,
   envExample,
@@ -12,6 +13,9 @@ import {
   basaltBin,
   packageJson,
   pnpmWorkspaceYaml,
+  prismaConfigTs,
+  prismaSchema,
+  prismaSeedTs,
   readme,
   routesTs,
   serverTs,
@@ -42,6 +46,12 @@ export interface CreateProjectInput {
   cli?: boolean
   /** Expose opted-in routes as MCP tools over HTTP at `/mcp`. Default: false. */
   mcp?: boolean
+  /**
+   * Back the app with PostgreSQL through Prisma: `prisma/schema.prisma`,
+   * `src/db.ts`, `prismaPlugin({ assertMigrated: true })` and the Prisma-backed
+   * stores instead of the in-memory ones. Default: false (no database at all).
+   */
+  prisma?: boolean
   /**
    * Resolve every dependency to its latest published version (npm registry)
    * before writing files. Default: false — the embedded fallback ranges are
@@ -114,6 +124,7 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     ui: input.ui ?? false,
     cli: input.cli ?? false,
     mcp: input.mcp ?? false,
+    prisma: input.prisma ?? false,
   }
   const dir = resolve(input.dir ?? input.name)
 
@@ -122,9 +133,9 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 
   const files: Record<string, string> = {
     'package.json': packageJson(options),
-    'tsconfig.json': tsconfigJson(),
+    'tsconfig.json': tsconfigJson(options),
     '.env.example': envExample(options),
-    '.gitignore': gitignore(),
+    '.gitignore': gitignore(options),
     '.dockerignore': dockerignore(),
     'README.md': readme(options),
     'pnpm-workspace.yaml': pnpmWorkspaceYaml(options),
@@ -134,6 +145,15 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     'src/server.ts': serverTs(),
     'src/dev.ts': devTs(),
     'tests/app.test.ts': appTest(options),
+    ...(options.prisma
+      ? {
+          'prisma/schema.prisma': prismaSchema(options),
+          'prisma.config.ts': prismaConfigTs(options),
+          'src/db.ts': dbTs(options),
+          // The demo tenant only exists where tenancy does.
+          ...(options.tenancy ? { 'prisma/seed.ts': prismaSeedTs(options) } : {}),
+        }
+      : {}),
     ...(options.cli ? { 'bin/basalt.ts': basaltBin() } : {}),
     ...(options.mcp ? { '.mcp.json': mcpJson(options) } : {}),
     ...(options.ui ? uiFiles(options) : {}),
