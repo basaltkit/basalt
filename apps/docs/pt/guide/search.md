@@ -277,6 +277,29 @@ A `table` pode ser qualificada com schema (`table: 'app.search'`); o índice GIN
 permite um nome de índice qualificado com schema. Continua a ficar no schema da
 própria tabela.
 
+### Com row-level security, acrescenta `searchFunction`
+
+Se a tabela de pesquisa estiver protegida por RLS do Postgres (`rlsPolicySql`,
+`tenancyExtension({ rls: true })`), **o índice GIN deixa de ser usado em
+silêncio**: `@@` não é um operador `LEAKPROOF`, por isso nunca pode ser avaliado
+antes da política de segurança de linha, e cada pesquisa passa a ser uma
+varredura sequencial sobre os documentos de todos os tenants (medido: 14,7 ms em
+vez de 1,9 ms em 30 200 documentos, e cresce com o corpus).
+
+Gera uma função de pesquisa `SECURITY DEFINER` com âmbito de tenant através do
+`rlsSearchFunctionSql` do `@basaltkit/prisma` e aponta o driver para ela:
+
+```ts
+new PostgresSearchDriver({ client: pgPool, searchFunction: 'basalt_search_scoped' })
+```
+
+A função não recebe nenhum parâmetro de tenant — lê o mesmo `current_setting(…)`
+que a política lê, por isso um tenant por definir não devolve linhas. **Não**
+recorras a `ALTER FUNCTION … LEAKPROOF`: isso enfraquece a regra em toda a base
+de dados. Receita completa e planos no
+[guia de segurança](/pt/guide/security#_3-o-scoping-automatico-de-tenant-cobre-o-orm-—-nao-sql-bruto-nem-escalares-de-chave-estrangeira) e no
+[README do `@basaltkit/search-postgres`](https://github.com/basaltkit/basalt/tree/main/packages/search-postgres#row-level-security-the-gin-index-trap).
+
 ## Elasticsearch / OpenSearch
 
 Para relevância em grande escala, o `@basaltkit/search-elasticsearch` aponta

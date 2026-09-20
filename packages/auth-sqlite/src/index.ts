@@ -18,6 +18,7 @@ import type {
   AuthUser,
   MfaRecord,
   MfaStore,
+  PublicUser,
   TokenVersionStore,
   RefreshRecord,
   RefreshTokenStore,
@@ -150,11 +151,15 @@ export function migrate(db: DatabaseSync): void {
 
 // --- users ------------------------------------------------------------------
 
-interface UserRow {
+/** The non-credential columns a directory lookup (`findByIds`) selects. */
+interface UserContactRow {
   id: string
   email: string
-  password_hash: string
   email_verified: number
+}
+
+interface UserRow extends UserContactRow {
+  password_hash: string
 }
 
 const toUser = (r: UserRow): AuthUser => ({
@@ -164,8 +169,28 @@ const toUser = (r: UserRow): AuthUser => ({
   emailVerified: r.email_verified === 1,
 })
 
+/**
+ * How many ids go into one `WHERE id IN (…)` of {@link SqliteUserSource.findByIds}.
+ * SQLite caps bound variables per statement (`SQLITE_MAX_VARIABLE_NUMBER` —
+ * 32 766 on modern builds, 999 on older ones), so chunking keeps a tenant of
+ * any size inside the limit whichever build `node:sqlite` was compiled against.
+ */
+const DEFAULT_ID_CHUNK_SIZE = 500
+
+export interface SqliteUserSourceOptions {
+  /** Ids per `IN (…)` query in `findByIds`. Default {@link DEFAULT_ID_CHUNK_SIZE}. */
+  idChunkSize?: number
+}
+
 export class SqliteUserSource implements UserSource {
-  constructor(private readonly db: DatabaseSync) {}
+  private readonly idChunkSize: number
+
+  constructor(
+    private readonly db: DatabaseSync,
+    options: SqliteUserSourceOptions = {},
+  ) {
+    this.idChunkSize = Math.max(1, Math.trunc(options.idChunkSize ?? DEFAULT_ID_CHUNK_SIZE))
+  }
 
   async findByEmail(email: string): Promise<AuthUser | null> {
     const row = this.db
@@ -179,6 +204,30 @@ export class SqliteUserSource implements UserSource {
       .prepare('SELECT * FROM auth_users WHERE id = ?')
       .get(id) as UserRow | undefined
     return row ? toUser(row) : null
+  }
+
+  /**
+   * One `WHERE id IN (…)` per chunk instead of one statement per id. Only the
+   * non-credential columns are selected, so the password hash is never read;
+   * ids with no row are absent from the result, which keeps the caller's order.
+   */
+  async findByIds(ids: readonly string[]): Promise<PublicUser[]> {
+    const unique = [...new Set(ids)]
+    if (unique.length === 0) return []
+    const found = new Map<string, PublicUser>()
+    for (let i = 0; i < unique.length; i += this.idChunkSize) {
+      const chunk = unique.slice(i, i + this.idChunkSize)
+      const rows = this.db
+        .prepare(`SELECT id, email, email_verified FROM auth_users WHERE id IN (${chunk.map(() => '?').join(', ')})`)
+        .all(...chunk) as unknown as UserContactRow[]
+      for (const r of rows) {
+        found.set(r.id, { id: r.id, email: r.email, emailVerified: r.email_verified === 1 })
+      }
+    }
+    return unique.flatMap((id) => {
+      const user = found.get(id)
+      return user ? [user] : []
+    })
   }
 
   async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {

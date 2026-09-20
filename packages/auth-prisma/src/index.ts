@@ -10,6 +10,7 @@ import type {
   AuthUser,
   MfaRecord,
   MfaStore,
+  PublicUser,
   RefreshRecord,
   RefreshTokenStore,
   SessionRecord,
@@ -32,12 +33,18 @@ import type {
 
 // --- the client surface these stores need — satisfied by a PrismaClient -----
 
-/** A row as Prisma returns it (DateTime → Date, Boolean → boolean). */
-interface PUser {
+/**
+ * The non-credential columns of a user row — all a directory lookup
+ * (`findByIds`) selects, so the password hash never leaves the database.
+ */
+interface PUserContact {
   id: string
   email: string
-  passwordHash: string
   emailVerified: boolean
+}
+/** A row as Prisma returns it (DateTime → Date, Boolean → boolean). */
+interface PUser extends PUserContact {
+  passwordHash: string
 }
 interface PSession {
   id: string
@@ -96,6 +103,9 @@ export interface PrismaAuthClient {
   authUser: {
     findUnique(a: any): Promise<PUser | null>
     findFirst(a: any): Promise<PUser | null>
+    // Only ever called with a `select` of the non-credential columns, so the
+    // return type is narrowed to those (a full row is assignable to it).
+    findMany(a: any): Promise<PUserContact[]>
     create(a: any): Promise<PUser>
     update(a: any): Promise<PUser>
   }
@@ -157,8 +167,28 @@ const toUser = (r: PUser): AuthUser => ({
 /** Escapes LIKE/ILIKE metacharacters (backslash, `%`, `_`) with the default backslash escape. */
 const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, '\\$&')
 
+/**
+ * How many ids go into one `WHERE id IN (…)` of {@link PrismaUserSource.findByIds}.
+ * 500 sits far below PostgreSQL's 65 535 bind parameters and well inside
+ * MySQL's `max_allowed_packet`, so even a ten-thousand-member tenant resolves
+ * without the driver refusing the statement.
+ */
+const DEFAULT_ID_CHUNK_SIZE = 500
+
+export interface PrismaUserSourceOptions {
+  /** Ids per `IN (…)` query in `findByIds`. Default {@link DEFAULT_ID_CHUNK_SIZE}. */
+  idChunkSize?: number
+}
+
 export class PrismaUserSource implements UserSource {
-  constructor(private readonly client: PrismaAuthClient) {}
+  private readonly idChunkSize: number
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaUserSourceOptions = {},
+  ) {
+    this.idChunkSize = Math.max(1, Math.trunc(options.idChunkSize ?? DEFAULT_ID_CHUNK_SIZE))
+  }
 
   /**
    * Emails are case-insensitive identities: new rows are stored canonical
@@ -193,6 +223,29 @@ export class PrismaUserSource implements UserSource {
   async findById(id: string): Promise<AuthUser | null> {
     const r = await this.client.authUser.findUnique({ where: { id } })
     return r ? toUser(r) : null
+  }
+
+  /**
+   * One `WHERE id IN (…)` per chunk instead of one query per id. `select`
+   * lists only the non-credential columns, so the password hash is never even
+   * read; ids with no row are simply absent from the result, which stays in
+   * the order the caller asked for.
+   */
+  async findByIds(ids: readonly string[]): Promise<PublicUser[]> {
+    const unique = [...new Set(ids)]
+    if (unique.length === 0) return []
+    const found = new Map<string, PublicUser>()
+    for (let i = 0; i < unique.length; i += this.idChunkSize) {
+      const rows = await this.client.authUser.findMany({
+        where: { id: { in: unique.slice(i, i + this.idChunkSize) } },
+        select: { id: true, email: true, emailVerified: true },
+      })
+      for (const r of rows) found.set(r.id, { id: r.id, email: r.email, emailVerified: r.emailVerified })
+    }
+    return unique.flatMap((id) => {
+      const user = found.get(id)
+      return user ? [user] : []
+    })
   }
 
   async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {

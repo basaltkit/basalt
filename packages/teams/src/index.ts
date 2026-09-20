@@ -7,6 +7,7 @@ export {
   InsufficientTeamRoleError,
   LastOwnerError,
   TeamRoleNotGrantableError,
+  TeamUserSourceMissingError,
   type TeamsOptions,
   type RoleAssigner,
 } from './teams.js'
@@ -17,6 +18,9 @@ export {
   type Membership,
   type Invitation,
   type PublicInvitation,
+  type MemberUser,
+  type MemberUserSource,
+  type TeamMemberWithUser,
   type MembershipStore,
   type InvitationStore,
 } from './stores.js'
