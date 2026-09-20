@@ -1,8 +1,8 @@
 # @basaltkit/drives-microsoft
 
-## 0.2.0
+## 0.1.0
 
-### Minor Changes
+### Initial release
 
 - aff3f6a: Drives phase 2c: the OneDrive / SharePoint adapter, and the three contract
   changes Microsoft forced.
