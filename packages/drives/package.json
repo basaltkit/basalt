@@ -28,13 +28,22 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
+    "@basaltkit/http": "workspace:^",
     "@basaltkit/webhooks": "workspace:^"
   },
   "devDependencies": {
+    "@basaltkit/express": "workspace:^",
+    "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/hono": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
+    "@hono/node-server": "^2.1.1",
+    "@types/express": "^5.0.0",
     "@types/node": "^26.6.1",
+    "express": "^5.0.0",
+    "hono": "^4.13.8",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "zod": "^4.6.5"
   },
   "publishConfig": {
     "access": "public"
@@ -55,5 +64,8 @@
     "oauth",
     "file-import",
     "multi-tenant"
-  ]
+  ],
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  }
 }

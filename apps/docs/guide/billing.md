@@ -552,11 +552,24 @@ const { url } = await subscriptions.checkout('acme', 'pro', {
 const portal = await subscriptions.portal('acme', { returnUrl: 'https://app.example.com/account' })
 ```
 
-::: warning Raw body required
-Stripe verifies the signature against the **untouched** request bytes. Configure
-a raw-body parser for the webhook route so the handler receives the original
-string — re-serializing a parsed object breaks the HMAC. A 400
-`BILLING_WEBHOOK_INVALID` that won't go away is almost always this.
+::: tip The raw body is handled for you
+Stripe verifies the signature against the **untouched** request bytes.
+`billingWebhookRoute()` declares its body with
+[`rawBody()`](/guide/adapters#raw-request-bodies-webhook-signatures), so Fastify,
+Express and Hono all hand it the exact octets — no content-type parser, no
+`verify` hook, nothing to configure.
+
+This used to be a real bug: the route fell back to `JSON.stringify(request.body)`
+whenever a raw body was absent, which it was on every adapter by default, so a
+genuine Stripe delivery failed verification **every time**. If your app has been
+answering 400 `BILLING_WEBHOOK_INVALID` to real webhooks, this was why. The
+fallback no longer exists.
+
+The one caveat is on Express, and only when you bring your own app with
+`express.json()` already mounted: body-parser consumes the stream first, so add
+`app.use(express.json({ verify: captureRawBody }))` (from `@basaltkit/express`).
+Without it the route answers `500 RAW_BODY_UNAVAILABLE` — it refuses rather than
+verify a reconstructed message.
 :::
 
 For development and tests there is `FakeBillingGateway`, which records every call
@@ -864,26 +877,34 @@ would populate `url` or `push` instead.
 ### Receive the webhook
 
 Point your ProxyPay `payment` webhook at a route, pass the **raw** body to
-`verifyWebhook`, and act on `payment.succeeded`. This is a plain HTTP route, not
-`billingWebhookRoute` (that one is for card `BillingGateway` drivers).
+`verifyWebhook`, and act on `payment.succeeded`. This is your own route, not
+`billingWebhookRoute` (that one is for card `BillingGateway` drivers) — declare
+it with `rawBody()` and the bytes arrive untouched on every adapter.
 
 ```ts
-import { FASTIFY } from '@basaltkit/fastify'
+import { rawBody, route } from '@basaltkit/http'
 import { payments } from './billing/payments.js'
 import { subscriptions } from './billing/subscriptions.js'
 
-const fastify = app.container.get(FASTIFY)
+route({
+  method: 'POST',
+  url: '/webhooks/proxypay',
+  body: rawBody({ maxBytes: 64 * 1024 }),
+  async handler({ body, request, reply }) {
+    // body.text() — the exact bytes, decoded as UTF-8. The signature is over
+    // these; a re-serialized object would be a different message.
+    const event = payments.verifyWebhook(
+      body.text(),
+      request.headers['x-signature'] as string | undefined,
+    )
 
-fastify.post('/webhooks/proxypay', async (request, reply) => {
-  const raw = request.rawBody as string // exact bytes — needed for the signature
-  const event = payments.verifyWebhook(raw, request.headers['x-signature'] as string | undefined)
+    if (event?.type === 'payment.succeeded') {
+      // event = { id, type, paymentId, amount, billableId?, reference?, raw? }
+      await subscriptions.subscribe(event.billableId!, 'pro', { period: 'monthly' })
+    }
 
-  if (event?.type === 'payment.succeeded') {
-    // event = { id, type, paymentId, amount, billableId?, reference?, raw? }
-    await subscriptions.subscribe(event.billableId!, 'pro', { period: 'monthly' })
-  }
-
-  reply.code(200).send()
+    return reply.code(200).send()
+  },
 })
 ```
 
@@ -891,10 +912,13 @@ fastify.post('/webhooks/proxypay', async (request, reply) => {
 returns `null` for verified events that aren't payments. Deduplicate on
 `event.id` if you want idempotency across retries.
 
-::: warning Raw body required
-Just like Stripe, signature verification runs over the untouched request bytes.
-Register the route with a raw-body parser so `request.rawBody` holds the
-original string.
+::: tip The raw body is handled for you
+Just like Stripe, signature verification runs over the untouched request bytes —
+which is what
+[`rawBody()`](/guide/adapters#raw-request-bodies-webhook-signatures) delivers, on
+Fastify, Express and Hono alike, with nothing to configure. A hand-written
+`fastify.post` would need its own raw-body parser *and* would skip Basalt's
+enrichers, guards and rate limiting.
 :::
 
 ::: tip Recurring = one reference per period
@@ -1065,9 +1089,11 @@ story is in [Reference & mobile-money payments](/guide/reference-payments).
   directly: `await subscriptions.get(tenantId)` — `null` means nothing was ever
   written, `incomplete` means the webhook is missing.
 - **`400 BILLING_WEBHOOK_INVALID` that won't go away** — the signature is
-  computed over the untouched request bytes. Configure a raw-body parser for
-  `/billing/webhook`; re-serializing a parsed object changes the bytes and breaks
-  the HMAC.
+  computed over the untouched request bytes, and `billingWebhookRoute()` now
+  receives them on every adapter, so a re-serialized body is no longer a possible
+  cause. Check the `webhookSecret` and clock skew (5-minute tolerance). On
+  Express with an app-supplied `express.json()`, add `verify: captureRawBody`;
+  without it the route answers `500 RAW_BODY_UNAVAILABLE` instead of guessing.
 - **Every request gets `402 BILLING_SUBSCRIPTION_REQUIRED`, even on the free
   plan** — the guard resolves the billable from `ctx().tenant.id`. No tenancy
   plugin, or no tenant identifier on the request, means no billable. Check

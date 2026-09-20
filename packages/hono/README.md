@@ -111,7 +111,19 @@ Unexpected errors respond with `500` and `{ error: { code: 'INTERNAL_ERROR', ...
 
 The adapter reads the body based on `Content-Type`: `application/json` → JSON object; forms (`form`) → Hono's `parseBody()`; other text → string; empty or invalid body → `undefined` (Zod validation handles the rest). `GET`/`HEAD` requests never have a body.
 
-A `multipart/form-data` body is only read inside the route handler: pre-hooks and after-hooks never see it. On an `upload()` route (`body: upload({ … })` from `@basaltkit/http`), the raw `ReadableStream` goes, unbuffered, to the neutral streaming parser after enrichers and guards ran. The route's own `maxBytes` applies there, not `bodyLimit`. On any other route, a multipart body is still bounded by `bodyLimit` and parsed with `parseBody()`. See the [`@basaltkit/http` README](../http/README.md#file-uploads--upload).
+A `multipart/form-data` body is only read inside the route handler: pre-hooks and after-hooks never see it. On an `upload()` route (`body: upload({ … })` from `@basaltkit/http`), the raw `ReadableStream` goes, unbuffered, to the neutral streaming parser after enrichers and guards ran. The route's own `maxBytes` applies there, not `bodyLimit`. On any other route, a multipart body is still bounded by `bodyLimit` and parsed with `parseBody()`. A `rawBody()` route is treated the same way — nothing reads or buffers its body before the handler. See the [`@basaltkit/http` README](../http/README.md#file-uploads--upload).
+
+### Raw request bodies — `rawBody()`
+
+`body: rawBody({ maxBytes? })` from `@basaltkit/http` gives a route the **untouched
+request bytes** — what a webhook signature (Stripe, Paddle, Dropbox, GitHub) is computed
+over. Nothing to configure: for those paths the plugin's bounded pre-read and its
+pre/after hooks step aside, so the web `Request`'s own stream still carries the octets and
+the neutral pipeline reads them after enrichers and guards, without parsing.
+
+The route's own `maxBytes` bounds it, not `bodyLimit` — the same arrangement `upload()`
+has, and for the same reason: the cap must be enforced *after* the guards, not before
+them. See the [`@basaltkit/http` README](../http/README.md#raw-request-bodies--rawbody).
 
 ### Body-size limit — `bodyLimit`
 

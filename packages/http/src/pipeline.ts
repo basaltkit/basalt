@@ -7,6 +7,7 @@ import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 import { isSseResponse } from './sse.js'
 import { isStreamResponse } from './stream.js'
+import { RawBodySession, rawBodyOptionsOf } from './raw-body.js'
 import { UploadSession, uploadOptionsOf } from './upload.js'
 
 declare module '@basaltkit/core' {
@@ -142,6 +143,12 @@ export async function runRoute(
   const uploadOptions = uploadOptionsOf(definition.body)
   const session = uploadOptions ? new UploadSession(request, uploadOptions) : undefined
 
+  // A `rawBody()` body is the same bargain: nothing is read from the transport
+  // until enrichers and guards have all passed, the bytes are handed over
+  // untouched, and a body the route never got to read is released.
+  const rawOptions = rawBodyOptionsOf(definition.body)
+  const rawSession = rawOptions ? new RawBodySession(request, rawOptions) : undefined
+
   return runWithContext(context, async () => {
     try {
       const scoped = context.container
@@ -158,11 +165,11 @@ export async function runRoute(
         for (const guard of pipeline.guards ?? [])
           await guard({ route: definition, request, context, container: scoped, reply })
       }
-      const parsedBody = session ? undefined : parsePart('body', definition.body, request.body)
+      const parsedBody = session || rawSession ? undefined : parsePart('body', definition.body, request.body)
       const query = parsePart('query', definition.query, request.query)
       const params = parsePart('params', definition.params, request.params)
       const result = await definition.handler({
-        body: session ? session.open() : parsedBody,
+        body: session ? session.open() : rawSession ? await rawSession.read() : parsedBody,
         query,
         params,
         request,
@@ -171,6 +178,7 @@ export async function runRoute(
       return applyEtag(definition, request, reply, result)
     } finally {
       session?.release(reply)
+      rawSession?.release(reply)
     }
   })
 }

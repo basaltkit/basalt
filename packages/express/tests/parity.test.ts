@@ -6,6 +6,7 @@ import {
   sendWith,
   errorDetailsParitySuite,
   rateLimitKeyParitySuite,
+  rawBodyParitySuite,
   streamParitySuite,
   uploadParitySuite,
   type ParityDriver,
@@ -38,6 +39,7 @@ const driver: ParityDriver = {
 }
 
 uploadParitySuite('express', driver)
+rawBodyParitySuite('express', driver)
 rateLimitKeyParitySuite('express', driver)
 errorDetailsParitySuite('express', driver)
 streamParitySuite('express', driver)

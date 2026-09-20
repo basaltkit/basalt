@@ -1,6 +1,7 @@
 import { definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
 import { z, type ZodTypeAny } from 'zod'
 import { HTTP_SERVER } from './server.js'
+import { isRawBody } from './raw-body.js'
 import { isUploadBody } from './upload.js'
 
 type JsonSchema = Record<string, unknown>
@@ -143,6 +144,13 @@ export function generateOpenApi(routes: RouteLike[], info: OpenApiInfo, tags: Op
             schema: { type: 'object', additionalProperties: { type: 'string', format: 'binary' } },
           },
         },
+      }
+    } else if (route.body && isRawBody(route.body)) {
+      // A `rawBody()` body: whatever the client sent, verbatim. There is no
+      // schema to publish — the bytes are the message.
+      operation.requestBody = {
+        required: true,
+        content: { '*/*': { schema: { type: 'string', format: 'binary' } } },
       }
     } else if (route.body) {
       operation.requestBody = {

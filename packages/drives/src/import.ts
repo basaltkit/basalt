@@ -193,6 +193,19 @@ export async function importItem(
 
   if (item.kind === 'folder') return skip('filtered')
   if (options.filter && !options.filter(item)) return skip('filtered')
+  /**
+   * An item with no downloadable bytes cannot be copied, and asking the adapter
+   * to try produces a terminal `DRIVE_UNSUPPORTED` — which, for a Google Drive
+   * full of Docs and Sheets, is a permanently failing import job for every one
+   * of them, re-enqueued by every sync because a failure never reaches the
+   * ledger. `no-content` was declared as a skip reason in phase 1 for exactly
+   * this case and nothing ever emitted it; the second adapter is where it
+   * finally has a subject.
+   *
+   * Only under `copy`: `reference` never opens a byte, so an app that wants to
+   * run its own export still gets the item handed to its sink.
+   */
+  if (strategy === 'copy' && item.exportOnly === true) return skip('no-content')
 
   const version = contentVersion(item)
   if (!options.force) {

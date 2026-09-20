@@ -155,6 +155,45 @@ don't mount a global multipart middleware in front of upload routes: it would co
 stream first, and those requests would fail with `400 MALFORMED_MULTIPART`. See the
 [`@basaltkit/http` README](../http/README.md#file-uploads--upload).
 
+### Raw request bodies — `rawBody()`
+
+`body: rawBody({ maxBytes? })` from `@basaltkit/http` gives a route the **untouched
+request bytes** — what a webhook signature (Stripe, Paddle, Lemon Squeezy, Dropbox,
+GitHub) is computed over. `JSON.stringify` of a parsed object is a different message, so
+verifying against it fails every genuine delivery.
+
+Express is the adapter where the neutral marker alone cannot win, because `express.json()`
+is mounted on the whole app. Two things close the gap, and **both are installed only when
+a `rawBody()` route exists**, so an app without one is byte-for-byte unchanged:
+
+1. `express.json()` and `express.urlencoded()` get a `type` filter that returns false for
+   `rawBody()` paths, so body-parser never reads them — the stream reaches the pipeline
+   unread, after enrichers and guards, exactly like `upload()`.
+2. They also get a `verify` hook (`captureRawBody`) that keeps the buffer, as a second
+   line for anything the path matching could not predict.
+
+**The caveat, honestly:** if you bring your own app (`expressPlugin({ app })`) with
+`express.json()` already mounted, body-parser consumes the stream before any Basalt route
+runs and the original bytes are gone. Give it the hook:
+
+```ts
+import express from 'express'
+import { captureRawBody, expressPlugin } from '@basaltkit/express'
+
+const app = express()
+app.use(express.json({ verify: captureRawBody }))
+app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
+
+expressPlugin({ app, routes })
+```
+
+The widespread `verify: (req, _res, buf) => { req.rawBody = buf }` convention is honoured
+too, so an app already doing that needs no change. With neither, the route answers
+`500 RAW_BODY_UNAVAILABLE` — a deliberate refusal, never a reconstruction. The same
+applies to `registerRoutes()` used without the plugin: it mounts routes, not parsers.
+
+See the [`@basaltkit/http` README](../http/README.md#raw-request-bodies--rawbody).
+
 ### Enrichers and guards (authentication, tenancy, …)
 
 Plugins register these functions in the container's metadata "buckets"; the adapter applies them to every route. Real example (from the package's tests) — a tenancy-style enricher and an auth-style guard:
@@ -308,7 +347,7 @@ Dependency-injection token (`Token<Express>`): `app.container.get(EXPRESS)` retu
 
 ### What to import from where
 
-This package only exports `expressPlugin`, `registerRoutes`, `EXPRESS`, and `ExpressPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `NOT_FOUND_RESPONSE`, `sse`, `securityPlugin`, `RedisRateLimitStore`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, `escapeHtml`/`pageCsp`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**. (Unlike `@basaltkit/fastify`, this package re-exports nothing; that is a naming choice, not a capability gap.)
+This package only exports `expressPlugin`, `registerRoutes`, `captureRawBody`, `EXPRESS`, and `ExpressPluginOptions`. Everything else — `route`, `HttpError`, `RequestValidationError`, `NOT_FOUND_RESPONSE`, `sse`, `securityPlugin`, `RedisRateLimitStore`, `healthPlugin`, `metricsPlugin`, `tracingPlugin`, `openapiPlugin`, `escapeHtml`/`pageCsp`, types like `RequestEnricher`/`RouteGuard` — is imported from **`@basaltkit/http`**. (Unlike `@basaltkit/fastify`, this package re-exports nothing; that is a naming choice, not a capability gap.)
 
 ## Common errors and solutions (FAQ)
 

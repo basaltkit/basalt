@@ -1,0 +1,53 @@
+{
+  "name": "@basaltkit/drives-google",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "Google Drive provider adapter for @basaltkit/drives: offline OAuth with PKCE, files.list pagination, changes.list incremental sync, streaming download through the CDN redirect, md5 checksums, 403-based rate-limit mapping, and per-channel push notifications.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@basaltkit/drives": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/drives": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/drives-google"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/drives-google#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "google-drive",
+    "drives",
+    "oauth",
+    "file-import"
+  ]
+}

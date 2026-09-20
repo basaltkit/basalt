@@ -65,7 +65,7 @@ describe('handleNotification', () => {
     })
 
     expect(outcome.shouldSync).toBe(true)
-    expect(outcome.connection?.id).toBe(view.id)
+    expect(outcome.connections.map((c) => c.id)).toEqual([view.id])
   })
 
   it('answers a handshake challenge without touching any connection', async () => {
@@ -104,13 +104,14 @@ describe('handleNotification', () => {
       )
     })
 
-    it('refuses a valid secret paired with someone else’s channel id', async () => {
+    it('does not act on a valid secret paired with someone else’s channel id', async () => {
       const { h, watch, connections } = await watched()
       const mixed = h.fake.notificationFor(watch.id)
       mixed.headers['x-fake-channel-id'] = 'channel-999'
-      await expect(handleNotification(h.drives, mixed, { provider: 'fake', connections })).rejects.toThrow(
-        DriveNotificationInvalidError,
-      )
+      const outcome = await handleNotification(h.drives, mixed, { provider: 'fake', connections })
+      expect(outcome.shouldSync).toBe(false)
+      expect(outcome.connections).toEqual([])
+      expect(outcome.reason).toBe('unmatched')
     })
 
     it('cannot reach a connection that is not in the candidate list', async () => {
@@ -118,20 +119,45 @@ describe('handleNotification', () => {
       // cannot address another tenant's connection at all — there is no path
       // from this endpoint to a cross-tenant read.
       const { h, watch } = await watched()
-      await expect(
-        handleNotification(h.drives, h.fake.notificationFor(watch.id), { provider: 'fake', connections: [] }),
-      ).rejects.toThrow(DriveNotificationInvalidError)
+      const outcome = await handleNotification(h.drives, h.fake.notificationFor(watch.id), {
+        provider: 'fake',
+        connections: [],
+      })
+      expect(outcome.shouldSync).toBe(false)
+      expect(outcome.connections).toEqual([])
     })
 
     it('does not match a connection belonging to a different tenant', async () => {
       const { h, watch, connections } = await watched()
-      await expect(
-        handleNotification(h.drives, h.fake.notificationFor(watch.id), {
-          provider: 'fake',
-          tenantId: 'globex',
-          connections,
-        }),
-      ).rejects.toThrow(DriveNotificationInvalidError)
+      const outcome = await handleNotification(h.drives, h.fake.notificationFor(watch.id), {
+        provider: 'fake',
+        tenantId: 'globex',
+        connections,
+      })
+      expect(outcome.shouldSync).toBe(false)
+      expect(outcome.connections).toEqual([])
+    })
+
+    it('answers an unknown channel exactly as it answers a known one', async () => {
+      // The property the three cases above are really testing: an
+      // unauthenticated caller must learn nothing from the difference between
+      // "that channel exists here" and "it does not". Phase 1 threw a 400 for
+      // the unknown case and answered 200 for the known one, which is an oracle
+      // for which accounts and channels a deployment holds.
+      const { h, watch, connections } = await watched()
+      const known = await handleNotification(h.drives, h.fake.notificationFor(watch.id, { state: 'sync' }), {
+        provider: 'fake',
+        connections,
+      })
+      const unknown = await handleNotification(h.drives, h.fake.notificationFor(watch.id, { state: 'sync' }), {
+        provider: 'fake',
+        connections: [],
+      })
+      expect(known.shouldSync).toBe(unknown.shouldSync)
+      expect(known.challenge).toBe(unknown.challenge)
+      // Only the server-side reason differs, and that never reaches the wire.
+      expect(known.reason).toBe('no-change')
+      expect(unknown.reason).toBe('unmatched')
     })
 
     it('never causes a download — a notification is a hint, never data', async () => {
@@ -239,5 +265,96 @@ describe('verifyHmacSignature', () => {
   it('supports base64 encoding', () => {
     const b64 = createHmac('sha256', secret).update(body).digest('base64')
     expect(verifyHmacSignature({ body, signature: b64, secret, encoding: 'base64' })).toBe(true)
+  })
+})
+
+describe('account-keyed notifications (the Dropbox shape)', () => {
+  async function connected(options: { accountId?: string } = {}) {
+    const h = harness({ provider: { accountId: options.accountId ?? 'fake-account' } })
+    const first = await connect(h, { tenantId: 'acme', label: 'Drive Finance' })
+    const second = await connect(h, { tenantId: 'acme', label: 'Drive HR' })
+    const other = await connect(h, { tenantId: 'globex', label: 'Their Drive' })
+    return { h, first, second, other, connections: await h.store.list('acme') }
+  }
+
+  it('resolves to every connection on the account, not just the first', async () => {
+    const { h, first, second, connections } = await connected()
+    const outcome = await handleNotification(h.drives, h.fake.notificationForAccount(), {
+      provider: 'fake',
+      connections,
+    })
+    // One Dropbox account connected twice is two connections, and a single
+    // notification concerns both.
+    expect(outcome.shouldSync).toBe(true)
+    expect(outcome.connections.map((c) => c.id).sort()).toEqual([first.id, second.id].sort())
+  })
+
+  it('asks a resolver for candidates, with the ids the adapter authenticated', async () => {
+    const { h, first } = await connected()
+    let asked: readonly string[] | undefined
+    const outcome = await handleNotification(h.drives, h.fake.notificationForAccount(['fake-account']), {
+      provider: 'fake',
+      connections: async (query) => {
+        asked = query.accountIds
+        return (await h.store.list('acme')).filter((c) => c.id === first.id)
+      },
+    })
+    expect(asked).toEqual(['fake-account'])
+    expect(outcome.connections.map((c) => c.id)).toEqual([first.id])
+  })
+
+  it('never reaches another tenant’s connection through an account id', async () => {
+    const { h, other, connections } = await connected()
+    const outcome = await handleNotification(h.drives, h.fake.notificationForAccount(), {
+      provider: 'fake',
+      connections,
+    })
+    expect(outcome.connections.map((c) => c.id)).not.toContain(other.id)
+  })
+
+  it('fails closed for a connection with no recorded account', async () => {
+    const { h, connections } = await connected()
+    const blanked = connections.map((c) => ({ ...c, account: undefined }))
+    // A missing account id must never behave like a wildcard.
+    const outcome = await handleNotification(h.drives, h.fake.notificationForAccount(), {
+      provider: 'fake',
+      connections: blanked,
+    })
+    expect(outcome.connections).toEqual([])
+    expect(outcome.reason).toBe('unmatched')
+  })
+
+  it('rejects a notification that identifies nothing at all', async () => {
+    const { h, connections } = await connected()
+    // Neither a channel secret nor an account: there is nothing to attribute
+    // it to, and guessing would mean syncing a connection the caller picked.
+    await expect(
+      handleNotification(h.drives, h.fake.notificationForAccount([]), { provider: 'fake', connections }),
+    ).rejects.toThrow(DriveNotificationInvalidError)
+  })
+
+  it('rejects a forged app signature before any lookup happens', async () => {
+    const { h, connections } = await connected()
+    await expect(
+      handleNotification(h.drives, h.fake.notificationForAccount(['fake-account'], { signature: 'forged' }), {
+        provider: 'fake',
+        connections,
+      }),
+    ).rejects.toThrow(DriveNotificationInvalidError)
+  })
+
+  it('collapses a replayed delivery across the whole fan-out', async () => {
+    const { h, connections } = await connected()
+    const guard = new MemoryReplayGuard(h.now)
+    const delivery = h.fake.notificationForAccount()
+
+    const first = await handleNotification(h.drives, delivery, { provider: 'fake', connections, replayGuard: guard })
+    const second = await handleNotification(h.drives, delivery, { provider: 'fake', connections, replayGuard: guard })
+
+    // One delivery is one key, whatever its fan-out — keying per connection
+    // would let a replay through whenever the fan-out differed.
+    expect(first.shouldSync).toBe(true)
+    expect(second.reason).toBe('replay')
+    expect(second.connections).toHaveLength(2)
   })
 })
