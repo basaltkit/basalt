@@ -27,7 +27,7 @@ const CATEGORIES: { key: string; bases: string[] }[] = [
   { key: 'tenancy', bases: ['tenancy', 'teams'] },
   { key: 'billing', bases: ['subscriptions', 'billing-ui'] },
   { key: 'search', bases: ['search'] },
-  { key: 'capabilities', bases: ['realtime', 'notifications', 'mailer', 'comments', 'webhooks', 'activity', 'audit', 'i18n', 'exports', 'flags'] },
+  { key: 'capabilities', bases: ['realtime', 'notifications', 'mailer', 'comments', 'webhooks', 'activity', 'audit', 'i18n', 'exports', 'flags', 'drives'] },
   { key: 'admin', bases: ['admin', 'dashboard'] },
   { key: 'devx', bases: ['cli', 'generator', 'ai', 'testing'] },
 ]
