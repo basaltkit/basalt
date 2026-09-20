@@ -34,9 +34,18 @@ import type { DriveConnection } from './store.js'
  * ## What the providers actually send
  *
  * - **Dropbox** — `X-Dropbox-Signature`, an HMAC-SHA256 of the **raw** body
- *   under the app secret, plus a one-time `GET ?challenge=` echo when the URI
- *   is registered. This is the only one of the three with a real signature,
- *   which is why {@link verifyHmacSignature} exists here as a shared helper.
+ *   under the app secret, plus a `GET ?challenge=` echo that arrives *before*
+ *   any connection exists (the URI is verified when it is saved in the App
+ *   Console). This is the only one of the three with a real signature, which is
+ *   why {@link verifyHmacSignature} exists here as a shared helper.
+ *
+ *   It is also the one that breaks the per-subscription-secret assumption: the
+ *   webhook is registered once per **app**, so there is no subscription and no
+ *   place to put a secret. The body names the *accounts* that changed
+ *   (`list_folder.accounts`), and correlation runs through
+ *   {@link DriveNotificationResult.accountIds} instead — which is why
+ *   {@link DriveNotificationOutcome} returns a list of connections rather than
+ *   one.
  * - **Microsoft Graph** — a `POST ?validationToken=` handshake that must be
  *   echoed as `text/plain` within seconds, then notifications carrying the
  *   `clientState` we chose. There is no signature; `clientState` *is* the
@@ -69,6 +78,39 @@ export class MemoryReplayGuard implements NotificationReplayGuard {
   }
 }
 
+/**
+ * What the engine knows about a verified notification, handed to a candidate
+ * resolver so an app can fetch exactly the connections it might concern.
+ *
+ * Everything in it was **authenticated by the adapter** — an HMAC over the raw
+ * body for Dropbox, a secret we generated for Graph and Google. Nothing here is
+ * a value the caller merely asserted.
+ */
+export interface DriveNotificationQuery {
+  provider: string
+  /** Set when the route is scoped to one tenant. */
+  tenantId?: string | undefined
+  /** Provider subscription/channel id, when the notification named one. */
+  watchId?: string | undefined
+  /** Provider account ids the notification named — Dropbox's `dbid:…`. */
+  accountIds?: readonly string[] | undefined
+}
+
+/**
+ * Where candidate connections come from.
+ *
+ * An array for the simple case. A function for Dropbox, whose webhook URI is
+ * registered once per *app*: a notification arrives naming account ids and no
+ * tenant at all, so the app must look connections up by
+ * `(provider, account.id)` — a lookup that necessarily spans tenants. That is
+ * safe precisely because the id came from a signature-verified payload and
+ * never from the caller, and it stays the **app's** query rather than becoming
+ * a framework-wide table scan.
+ */
+export type DriveConnectionCandidates =
+  | readonly DriveConnection[]
+  | ((query: DriveNotificationQuery) => Promise<readonly DriveConnection[]> | readonly DriveConnection[])
+
 export interface HandleNotificationOptions {
   /** The provider the route is mounted for. */
   provider: string
@@ -81,9 +123,9 @@ export interface HandleNotificationOptions {
    * connections from an unauthenticated endpoint — is precisely the
    * cross-tenant read this design refuses to have. An app with a per-tenant
    * callback URL passes that tenant's connections; an app with one global
-   * callback resolves the tenant from its own routing first.
+   * callback passes a resolver (see {@link DriveConnectionCandidates}).
    */
-  connections: readonly DriveConnection[]
+  connections: DriveConnectionCandidates
   replayGuard?: NotificationReplayGuard
   /** Replay window. Default 5 minutes. */
   replayTtlMs?: number
@@ -92,21 +134,39 @@ export interface HandleNotificationOptions {
 export interface DriveNotificationOutcome {
   /** Answer the provider with this body and `content-type: text/plain`, then stop. */
   challenge?: string | undefined
-  /** The connection the notification belongs to, when one matched. */
-  connection?: DriveConnection | undefined
+  /**
+   * The connections the notification concerns — empty when nothing matched.
+   *
+   * A list, not one connection: a Dropbox notification names *accounts*, and one
+   * Dropbox account can be connected several times (two labels in one tenant,
+   * or the same account connected by two tenants). Phase 1 returned a single
+   * connection, which would have silently synced one of them and left the rest
+   * stale.
+   */
+  connections: readonly DriveConnection[]
   /** Whether the app should schedule a sync. */
   shouldSync: boolean
-  /** Why nothing is going to happen, when `shouldSync` is false. */
-  reason?: 'challenge' | 'no-change' | 'replay' | undefined
+  /**
+   * Why nothing is going to happen, when `shouldSync` is false.
+   *
+   * `unmatched` is a *verified* notification that concerns no connection we
+   * hold. It is deliberately not an error: answering it differently from a
+   * matched one turns the endpoint into an oracle for "is this account/channel
+   * connected here". The app may log it; the HTTP response must not differ.
+   */
+  reason?: 'challenge' | 'no-change' | 'replay' | 'unmatched' | undefined
 }
 
 /**
- * Verifies an inbound notification and resolves it to a connection.
+ * Verifies an inbound notification and resolves it to the connections it
+ * concerns.
  *
- * Returns rather than throws for the benign outcomes (a handshake, a
- * content-free ping, a replay); throws {@link DriveNotificationInvalidError}
- * only when the notification cannot be trusted, which a route should answer
- * with a flat 400 and no detail.
+ * Returns rather than throws for every outcome that a verified notification can
+ * legitimately have (a handshake, a content-free ping, a replay, nothing that
+ * matches); throws {@link DriveNotificationInvalidError} only when the
+ * notification itself could not be *trusted* — a bad signature, a missing
+ * channel secret, a body that is not a notification at all. A route answers the
+ * first group with an identical 200 and the second with a flat 400.
  */
 export async function handleNotification(
   drives: Drives,
@@ -129,33 +189,86 @@ export async function handleNotification(
   }
 
   if (verified.challenge !== undefined) {
-    return { challenge: verified.challenge, shouldSync: false, reason: 'challenge' }
+    return { challenge: verified.challenge, connections: [], shouldSync: false, reason: 'challenge' }
   }
-  if (verified.secret === undefined) {
-    throw new DriveNotificationInvalidError('the notification carried no channel secret.')
+  if (
+    verified.secret === undefined &&
+    (verified.secrets === undefined || verified.secrets.length === 0) &&
+    (verified.accountIds === undefined || verified.accountIds.length === 0)
+  ) {
+    // Neither correlation the contract offers. Whatever this is, it is not a
+    // notification we can attribute, and guessing would mean syncing a
+    // connection an unauthenticated caller picked.
+    throw new DriveNotificationInvalidError('the notification carried nothing that identifies a connection.')
   }
 
-  // Constant-time match against the subscriptions we actually registered. The
-  // scan is over a caller-supplied candidate list, never the whole table.
-  const connection = options.connections.find(
+  const query: DriveNotificationQuery = {
+    provider: provider.name,
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+    ...(verified.watchId !== undefined ? { watchId: verified.watchId } : {}),
+    ...(verified.accountIds !== undefined ? { accountIds: verified.accountIds } : {}),
+  }
+  const candidates =
+    typeof options.connections === 'function' ? await options.connections(query) : options.connections
+
+  const matched = candidates.filter(
     (candidate) =>
       candidate.provider === provider.name &&
-      candidate.watch !== undefined &&
-      safeEqual(candidate.watch.secret, verified.secret as string) &&
-      (verified.watchId === undefined || candidate.watch.id === verified.watchId) &&
-      (options.tenantId === undefined || candidate.tenantId === options.tenantId),
+      (options.tenantId === undefined || candidate.tenantId === options.tenantId) &&
+      matches(candidate, verified),
   )
-  if (!connection) throw new DriveNotificationInvalidError('no connection matches this notification.')
-  if (!verified.changed) return { connection, shouldSync: false, reason: 'no-change' }
+
+  // Uniform answer whether nothing matched, the account belongs to another
+  // tenant, or the resolver returned an empty set: the caller learns the same
+  // thing in every case, which is nothing.
+  if (matched.length === 0) return { connections: [], shouldSync: false, reason: 'unmatched' }
+  if (!verified.changed) return { connections: matched, shouldSync: false, reason: 'no-change' }
 
   if (options.replayGuard) {
-    const key = `${connection.tenantId}:${connection.id}:${verified.watchId ?? ''}:${input.headers['x-goog-message-number'] ?? hashBody(input.body)}`
+    // One key for the whole notification, not one per connection: a Dropbox
+    // notification naming two accounts is one delivery, and collapsing it per
+    // connection would let a replay through whenever the fan-out differed.
+    const key = `${provider.name}:${matched.map((c) => `${c.tenantId}/${c.id}`).sort().join(',')}:${verified.watchId ?? ''}:${input.headers['x-goog-message-number'] ?? hashBody(input.body)}`
     if (!(await options.replayGuard.firstSeen(key, options.replayTtlMs ?? 5 * 60_000))) {
-      return { connection, shouldSync: false, reason: 'replay' }
+      return { connections: matched, shouldSync: false, reason: 'replay' }
     }
   }
 
-  return { connection, shouldSync: true }
+  return { connections: matched, shouldSync: true }
+}
+
+/**
+ * Whether one connection is the subject of a verified notification.
+ *
+ * Two correlations, and they are not interchangeable:
+ *
+ * - **A channel secret** — the value we generated at subscribe time and the
+ *   provider echoed back. Compared in constant time, and only against a
+ *   connection that actually holds a subscription.
+ * - **A provider account id** — Dropbox, which has no per-subscription secret
+ *   at all. Compared against `account.id`, which is recorded at connect time
+ *   from the provider's own profile call, never from anything a caller sends.
+ *   A connection with no recorded account can never match, so a missing
+ *   `account.id` fails closed instead of matching everything.
+ */
+function matches(candidate: DriveConnection, verified: DriveNotificationResult): boolean {
+  // One secret for an ordinary delivery, several when a provider batches
+  // notifications for subscriptions that share a URL (Microsoft Graph does).
+  const secrets = verified.secret !== undefined ? [verified.secret] : (verified.secrets ?? [])
+  if (secrets.length > 0) {
+    const watch = candidate.watch
+    return (
+      watch !== undefined &&
+      secrets.some((secret) => safeEqual(watch.secret, secret)) &&
+      // A batch names several subscriptions, so `watchId` is only reported
+      // when every entry agreed on one; when it is absent the secret alone
+      // decides, which is what it authenticates.
+      (verified.watchId === undefined || watch.id === verified.watchId)
+    )
+  }
+  const accountId = candidate.account?.id
+  if (accountId === undefined || accountId === '') return false
+  return (verified.accountIds ?? []).some((id) => safeEqual(id, accountId))
 }
 
 const hashBody = (body: Buffer): string => createHmac('sha256', 'drive-notification').update(body).digest('base64url')

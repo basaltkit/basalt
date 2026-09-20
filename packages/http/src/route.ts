@@ -22,11 +22,21 @@ export interface HttpRequest {
   routePattern?: string
   /**
    * The unread request body as a stream — a Node `Readable` or a web
-   * `ReadableStream`. Adapters set it only for `upload()` routes, whose
-   * body they deliberately leave unparsed; the pipeline streams it through
-   * the multipart parser. Absent everywhere else.
+   * `ReadableStream`. Adapters set it only for `upload()` and `rawBody()`
+   * routes, whose body they deliberately leave unparsed; the pipeline streams
+   * it through the multipart parser, or reads it to a capped buffer. Absent
+   * everywhere else.
    */
   bodyStream?: Readable | ReadableStream<Uint8Array>
+  /**
+   * The untouched request bytes, when the adapter could NOT leave the body
+   * unread and kept them instead — an app-wide `express.json()` is the case
+   * this exists for, since its `verify` hook is the only place the original
+   * bytes still are. Set only for `rawBody()` routes, and only when
+   * `bodyStream` cannot be offered; the pipeline prefers it over reading a
+   * stream that is already spent. Absent everywhere else.
+   */
+  bodyBytes?: Uint8Array
   raw: unknown
 }
 

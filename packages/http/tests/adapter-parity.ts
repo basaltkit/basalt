@@ -1,7 +1,7 @@
 /**
  * Shared adapter parity matrix for `upload()` bodies (BK-006), keyed per-route
- * rate limits (BK-008), structured error details (BK-021) and streaming
- * responses (BK-019). Not a test file on its own: each adapter package
+ * rate limits (BK-008), structured error details (BK-021), streaming
+ * responses (BK-019) and `rawBody()` bodies (BK-029). Not a test file on its own: each adapter package
  * (fastify, express, hono) runs it against its own driver, so the three are
  * held to the exact same assertions.
  */
@@ -11,6 +11,7 @@ import { ctx, definePlugin, ensureMetadata, type BasaltPlugin } from '@basaltkit
 import {
   HttpError,
   MAX_ERROR_DETAILS_BYTES,
+  rawBody,
   route,
   securityPlugin,
   stream,
@@ -250,6 +251,161 @@ export function uploadParitySuite(adapter: string, driver: ParityDriver): void {
       expect((await post('/limited', one, { 'x-user': 'alice' })).status).toBe(200)
       expect((await post('/limited', one, { 'x-user': 'alice' })).status).toBe(429)
       expect((await post('/limited', one, { 'x-user': 'bob' })).status).toBe(200)
+    })
+  })
+}
+
+/**
+ * A body whose bytes cannot survive a parse-and-re-serialise round trip: keys
+ * out of alphabetical order, irregular whitespace, a number that re-prints
+ * differently, and an escape a serialiser would normalise. `JSON.stringify` of
+ * the parsed object differs from this at the first byte — which is exactly why
+ * a signature computed over it fails against every real provider.
+ */
+const AWKWARD_JSON = Buffer.from(
+  '{  "zeta" : 1.50,\n\t"alpha":"caf\\u00e9",  "nested":{ "b":2,"a":1 } }',
+  'utf8',
+)
+
+export function rawBodyParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: rawBody() parity (BK-029)`, () => {
+    const order: string[] = []
+    const routes = [
+      route({
+        method: 'POST',
+        url: '/hook',
+        body: rawBody({ maxBytes: 1024 }),
+        async handler({ body }) {
+          order.push('handler')
+          return {
+            hex: body.bytes.toString('hex'),
+            length: body.bytes.length,
+            contentType: body.contentType ?? null,
+            contentLength: body.contentLength ?? null,
+            text: body.text(),
+          }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/guarded-hook',
+        body: rawBody({ maxBytes: 1024 * 1024 }),
+        meta: { signedIn: true },
+        async handler({ body }) {
+          order.push('handler')
+          return { length: body.bytes.length }
+        },
+      }),
+      // A neighbour on the same app, parsed the ordinary way: a rawBody()
+      // route must not change how anything else is served.
+      route({
+        method: 'POST',
+        url: '/json',
+        body: z.object({ a: z.number() }),
+        handler: ({ body }) => ({ parsed: body }),
+      }),
+    ]
+    let send: Send
+    afterEach(() => driver.close())
+
+    const boot = async () => {
+      order.length = 0
+      send = await driver.boot(routes, [identity(order)])
+    }
+    const post = (url: string, body: Buffer | Buffer[], headers: Record<string, string> = {}) =>
+      send({ method: 'POST', url, body, headers })
+
+    it('hands the handler byte-identical JSON', async () => {
+      await boot()
+      const payload = Buffer.from('{"id":"evt_1","type":"payment.failed"}', 'utf8')
+      const res = await post('/hook', payload, { 'content-type': 'application/json' })
+      expect(res.status).toBe(200)
+      expect(res.json).toMatchObject({
+        hex: payload.toString('hex'),
+        length: payload.length,
+        contentType: 'application/json',
+        text: payload.toString('utf8'),
+      })
+    })
+
+    it('preserves whitespace and key order a re-serialisation would destroy', async () => {
+      await boot()
+      const res = await post('/hook', AWKWARD_JSON, { 'content-type': 'application/json; charset=utf-8' })
+      expect(res.status).toBe(200)
+      const got = res.json as { hex: string; text: string; contentType: string }
+      expect(got.hex).toBe(AWKWARD_JSON.toString('hex'))
+      // The whole point: these bytes are NOT what a parse + stringify yields.
+      expect(got.text).not.toBe(JSON.stringify(JSON.parse(AWKWARD_JSON.toString('utf8'))))
+      // The parameters are stripped from the essence, the bytes are not touched.
+      expect(got.contentType).toBe('application/json')
+    })
+
+    it('hands over a non-JSON body untouched, including bytes that are not text', async () => {
+      await boot()
+      const payload = Buffer.from([0x00, 0x1f, 0x7b, 0xff, 0xfe, 0x0a, 0x0d])
+      const res = await post('/hook', payload, { 'content-type': 'application/octet-stream' })
+      expect(res.status).toBe(200)
+      expect(res.json).toMatchObject({
+        hex: payload.toString('hex'),
+        length: payload.length,
+        contentType: 'application/octet-stream',
+      })
+    })
+
+    it('accepts a body sent without a Content-Length (chunked)', async () => {
+      await boot()
+      const parts = [Buffer.from('{"a":'), Buffer.from('1}')]
+      const res = await post('/hook', parts, { 'content-type': 'application/json' })
+      expect(res.status).toBe(200)
+      expect(res.json).toMatchObject({ hex: Buffer.concat(parts).toString('hex'), contentLength: null })
+    })
+
+    it('answers 413 over maxBytes — declared or actually sent', async () => {
+      await boot()
+      const declared = await post('/hook', Buffer.alloc(4096, 0x61), { 'content-type': 'application/json' })
+      expect(declared.status).toBe(413)
+      expect((declared.json as { error: { code: string } }).error.code).toBe('PAYLOAD_TOO_LARGE')
+      // No Content-Length at all: the cap has to hold on the bytes received.
+      const streamed = await post('/hook', [Buffer.alloc(2048, 0x61), Buffer.alloc(2048, 0x61)], {
+        'content-type': 'application/json',
+      })
+      expect(streamed.status).toBe(413)
+      expect(order).not.toContain('handler')
+    })
+
+    it('runs the guards before the body is read', async () => {
+      await boot()
+      // Large enough that a body read before the guards would answer 413
+      // (Hono's bounded pre-read) or hand the handler something; the guard has
+      // to win, and the handler must never run.
+      const res = await post('/guarded-hook', Buffer.alloc(300 * 1024, 0x61), {
+        'content-type': 'application/json',
+      })
+      expect(res.status).toBe(401)
+      expect((res.json as { error: { code: string } }).error.code).toBe('UNAUTHENTICATED')
+      expect(order).toEqual(['enricher', 'guard'])
+      // The connection is closed rather than left waiting on an unread body.
+      expect(order).not.toContain('handler')
+      const ok = await post('/guarded-hook', Buffer.from('{"a":1}'), {
+        'content-type': 'application/json',
+        'x-user': 'alice',
+      })
+      expect(ok.status).toBe(200)
+      expect(ok.json).toEqual({ length: 7 })
+    })
+
+    it('leaves neighbouring JSON routes parsed exactly as before', async () => {
+      await boot()
+      const parsed = await post('/json', Buffer.from('{"a":1}'), { 'content-type': 'application/json' })
+      expect(parsed.status).toBe(200)
+      expect(parsed.json).toEqual({ parsed: { a: 1 } })
+      // Still validated, and still a 400 when it does not fit the schema.
+      const bad = await post('/json', Buffer.from('{"a":"x"}'), { 'content-type': 'application/json' })
+      expect(bad.status).toBe(400)
+      // And a rawBody() route in the same app did not turn the JSON one into
+      // a raw one: the handler saw an object, not bytes.
+      const again = await post('/hook', Buffer.from('{"a":1}'), { 'content-type': 'application/json' })
+      expect((again.json as { hex: string }).hex).toBe(Buffer.from('{"a":1}').toString('hex'))
     })
   })
 }

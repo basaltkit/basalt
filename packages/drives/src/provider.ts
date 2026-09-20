@@ -18,9 +18,37 @@ import type { GuardedFetch } from './fetch.js'
  *   is host-allowlisted, SSRF-validated, IP-pinned, byte-capped and timed out.
  */
 
-/** A digest the provider publishes for an item's content. */
+/**
+ * A digest the provider publishes for an item's content.
+ *
+ * **Comparable within one provider — and not always even that.** The algorithm
+ * name is part of the value for a reason: an adapter reports what the vendor
+ * actually published, and the vendors publish different functions of different
+ * inputs.
+ *
+ * - **Dropbox** — `dropboxContentHash`, a block-tree construction. It is *not*
+ *   the SHA-256 of the file, despite being built out of SHA-256.
+ * - **Google Drive** — `md5`, a real MD5, and **only for binary files**. A
+ *   native Doc, Sheet or Slide publishes no checksum and no `size` at all; it
+ *   carries {@link DriveItem.exportOnly} instead, and `contentVersion` falls
+ *   back to `updatedAt` for it.
+ * - **Microsoft Graph** — `quickXorHash` (base64) on OneDrive for Business and
+ *   SharePoint, `sha1`/`sha256` on personal OneDrive. "The same provider" is
+ *   therefore not a fine enough grain here: **two connections of the same
+ *   adapter can report incomparable digests for identical bytes.**
+ *
+ * The rule an app needs: compare `algorithm` before `value`, and do not dedup
+ * on a checksum across connections without checking both. {@link contentVersion}
+ * already does — it uses the checksum only behind the provider's own revision,
+ * and prefixes the algorithm onto the version string so two algorithms can
+ * never collide into "unchanged".
+ *
+ * An app that wants one digest it can compare everywhere should hash the bytes
+ * it imported rather than the ones the vendor described: `@basaltkit/files`
+ * computes a SHA-256 as they stream past.
+ */
 export interface DriveChecksum {
-  /** Lowercase algorithm name as the provider calls it: `md5`, `sha1`, `sha256`, `quickXor`, `dropboxContentHash`. */
+  /** Lowercase algorithm name as the provider calls it: `md5`, `sha1`, `sha256`, `quickXorHash`, `dropboxContentHash`. */
   algorithm: string
   /** Lowercase hex, or the provider's own encoding when it is not a plain digest. */
   value: string
@@ -52,6 +80,11 @@ export interface DriveItem {
    * sync that an item it already imported has actually changed.
    */
   version?: string
+  /**
+   * Read {@link DriveChecksum} before comparing one against anything: it is
+   * comparable within a provider, and on Microsoft only within one account
+   * type, and a Google-native document has none at all.
+   */
   checksum?: DriveChecksum
   /** Epoch ms. */
   createdAt?: number
@@ -89,7 +122,26 @@ export interface DrivePage<T> {
 /** What changed since a delta cursor. */
 export type DriveChange =
   | { type: 'upserted'; item: DriveItem }
-  | { type: 'removed'; externalId: string }
+  /**
+   * An item the provider says is gone.
+   *
+   * Both fields are optional because the vendors genuinely disagree about what
+   * a deletion *is*, and phase 1 was hiding that behind a required id:
+   *
+   * - **Google Drive** and **Microsoft Graph** report a deletion against the
+   *   item's id, which is what the import ledger is keyed by.
+   * - **Dropbox** does not. A deleted entry in `files/list_folder` is
+   *   `{".tag":"deleted", name, path_lower, path_display}` — it carries **no
+   *   id at all**, because the id belonged to the thing that no longer exists.
+   *   The only handle is the path.
+   *
+   * Putting a path in `externalId` would have kept the type tidy and made every
+   * ledger lookup silently miss. An adapter sets whichever it actually has (at
+   * least one), and the engine reports both to `onRemoved` so an app can
+   * correlate on the path it stored at import time (`filesSink` records it as
+   * `metadata.drivePath`).
+   */
+  | { type: 'removed'; externalId?: string | undefined; path?: string | undefined }
 
 /**
  * One page of a delta/change feed.
@@ -176,6 +228,18 @@ export interface DriveExchangeInput {
 export interface DriveRefreshInput {
   refreshToken: string
   fetch: GuardedFetch
+  /**
+   * The scopes the connection was actually granted, as stored on it.
+   *
+   * Present because the Microsoft identity platform wants a refresh request's
+   * `scope` to be a subset of the original grant's, and an adapter that has to
+   * guess can only guess its own defaults. A connection that consented to
+   * `Sites.Read.All` would then be refreshed down to `Files.Read`: it keeps
+   * working until the next call that needs the wider scope, which fails as a
+   * permissions problem a long way from the cause. Dropbox and Google ignore
+   * it.
+   */
+  scopes?: readonly string[] | undefined
 }
 
 /** Who the tokens belong to at the provider — shown in the UI, and used to spot duplicate connections. */
@@ -259,14 +323,56 @@ export interface DriveNotificationInput {
 export interface DriveNotificationResult {
   /** Respond 200 with exactly this body (and `content-type: text/plain`), and do nothing else. */
   challenge?: string | undefined
-  /** Secret the provider echoed back, for the engine to match against a connection. */
+  /**
+   * Secret the provider echoed back, for the engine to match against a
+   * connection — present only for vendors that let us choose one (Graph
+   * `clientState`, Google channel `token`).
+   *
+   * **Dropbox has none.** Its webhook URI is registered once per *app* in the
+   * App Console, not per connection: there is no subscription to attach a
+   * secret to, the payload is signed with the app secret instead, and the
+   * connection is identified by {@link accountIds}. Phase 1 assumed every
+   * vendor authenticates with a secret we generated; the first real adapter
+   * proved otherwise, so a result may now carry `accountIds` instead.
+   */
   secret?: string | undefined
+  /**
+   * Several secrets, when **one delivery batches notifications for more than
+   * one subscription**.
+   *
+   * Microsoft Graph posts a `{"value":[…]}` envelope, and every subscription
+   * that shares a notification URL can contribute an entry to it — two
+   * connections of one tenant, or two tenants behind one route. Reporting only
+   * the first `clientState` would sync one connection and leave the rest
+   * stale, which is the same failure {@link accountIds} and
+   * `DriveNotificationOutcome.connections` were introduced for in phase 2a,
+   * arriving from the other direction.
+   *
+   * An adapter sets {@link secret} for the ordinary one-subscription delivery
+   * and this for a batch; the engine matches a connection against either.
+   */
+  secrets?: readonly string[] | undefined
   /** Provider subscription/channel id, when the notification carries one. */
   watchId?: string | undefined
   /** Whether this notification means "there is new work" (most are content-free pings). */
   changed: boolean
   /** Vendor id the notification is about, when it names one. Most vendors do not. */
   externalIds?: readonly string[] | undefined
+  /**
+   * Provider **account** ids the notification is about — Dropbox's
+   * `list_folder.accounts` (`dbid:…`).
+   *
+   * Matched against {@link DriveConnectionAccount.id}. One notification can name
+   * several accounts, and one account can be connected more than once (two
+   * labels, or two tenants), so this resolves to a **set** of connections rather
+   * than one.
+   *
+   * It is only ever consulted once the adapter has *authenticated* the
+   * notification — for Dropbox, an HMAC-SHA256 over the raw body under the app
+   * secret. An account id a caller merely asserts must never select a
+   * connection.
+   */
+  accountIds?: readonly string[] | undefined
 }
 
 /**
@@ -298,12 +404,50 @@ export interface DriveProvider {
   get?(session: DriveSession, externalId: string): Promise<DriveItem | null>
   /** Opens the item's bytes. Must not buffer them. */
   download(session: DriveSession, item: DriveItem): Promise<DriveContent>
-  /** Writes a file back to the provider. Optional — most apps only read. */
+  /**
+   * Writes a file back to the provider. Optional — most apps only read.
+   *
+   * **Every adapter has a hard size ceiling, and it is low.** A single-request
+   * upload is all any of them implements, because the alternative on all three
+   * vendors is a multi-call resumable session with its own chunking, its own
+   * 308-based resumption and its own failure modes:
+   *
+   * | Adapter | Ceiling | What a larger file would need |
+   * |---|---|---|
+   * | `@basaltkit/drives-microsoft` | **4 MB** | `createUploadSession` |
+   * | `@basaltkit/drives-google` | **5 MB** | `uploadType=resumable` |
+   * | `@basaltkit/drives-dropbox` | **150 MB** | `files/upload_session/*` |
+   *
+   * Anything larger is refused with {@link DriveContentTooLargeError} — **up
+   * front** when {@link DriveUploadInput.size} is given, and mid-stream
+   * otherwise. Nothing here silently truncates, and nothing here promises large
+   * files; an app that needs them should upload to the provider itself for now.
+   */
   upload?(session: DriveSession, input: DriveUploadInput): Promise<DriveItem>
-  /** Establishes the initial delta cursor ("everything from now on"). */
+  /** Establishes the initial delta cursor. See {@link deltaIncludesExisting}. */
   startDelta?(session: DriveSession, options: { folderId?: string | undefined }): Promise<string>
   /** Reads one page of changes since `cursor`. */
   delta?(session: DriveSession, cursor: string): Promise<DriveDelta>
+  /**
+   * Whether the cursor {@link startDelta} returns replays the items that
+   * already exist, or only changes from that moment on.
+   *
+   * This is the difference the neutral cursor was flattening, and it decides
+   * whether a first sync imports a tenant's drive or silently imports nothing:
+   *
+   * - **Dropbox — `true`.** `files/list_folder` *is* the head of the feed: its
+   *   first page enumerates the folder and `/continue` carries on into changes.
+   *   Backfill and delta are one continuum.
+   * - **Google Drive — `false`.** `changes.getStartPageToken` is explicitly
+   *   "from now"; the existing corpus never appears in `changes.list`.
+   * - **Microsoft Graph — `true`.** `/delta` with no token enumerates the drive
+   *   first, then hands over a `deltaLink`.
+   *
+   * Defaults to `false`, the safe direction: the engine runs one full listing
+   * pass before the first delta run, so an adapter that forgets to declare it
+   * costs extra metadata reads instead of losing a tenant's files.
+   */
+  readonly deltaIncludesExisting?: boolean
   /** Subscribes to push notifications. */
   watch?(session: DriveSession, input: DriveWatchInput): Promise<DriveWatch>
   /** Cancels a subscription. */
@@ -312,15 +456,73 @@ export interface DriveProvider {
    * Verifies an inbound notification. **Pure and synchronous**: it gets no
    * session and no network, so verification cannot be turned into a request
    * amplifier by an unauthenticated caller hammering the webhook route.
+   *
+   * ## "Verified" is not one guarantee
+   *
+   * The engine treats every result the same way, and an app that reads
+   * `shouldSync: true` cannot tell which of these produced it. They are not
+   * equivalent, and the difference is the vendors', not this contract's:
+   *
+   * - **Dropbox — a real signature.** `X-Dropbox-Signature` is an HMAC-SHA256
+   *   over the **raw body** under the app secret. It authenticates the message
+   *   itself, which is what makes it safe for the engine to act on an
+   *   {@link DriveNotificationResult.accountIds} lookup that necessarily spans
+   *   tenants.
+   * - **Google and Microsoft — a secret we chose**, echoed back
+   *   (`X-Goog-Channel-Token`, Graph's `clientState`). Neither vendor signs
+   *   anything. This authenticates the *subscription*, not the bytes: anyone
+   *   holding the secret can send any body, and a body is not covered at all.
+   *   That is why the engine matches such a result only against a connection
+   *   that holds the subscription, and never across tenants.
+   *
+   * What makes the weaker one acceptable is not the secret, it is the blast
+   * radius: **no vendor sends the changed data**. A verified notification only
+   * ever causes the engine to go and ask the provider, with its own
+   * credentials, for its own tenant. A perfect forgery costs a wasted sync.
+   * Anything that changed that — a notification whose *content* was trusted —
+   * would need the guarantees to be equalised first.
    */
   verifyNotification?(input: DriveNotificationInput): DriveNotificationResult
+  /**
+   * Reads a vendor-specific "slow down" hint out of a 429/503 body.
+   *
+   * `Retry-After` is the interoperable answer and always wins, but Dropbox
+   * frequently answers `429` with no header at all and puts the number in the
+   * body instead (`{"error":{".tag":"too_many_requests","retry_after":300}}`).
+   * The guarded fetch destroys a rate-limited body before an adapter can see
+   * it — deliberately, so nothing unbounded is read on an error path — so the
+   * hint has to be declared here, where the engine can apply it under its own
+   * cap.
+   *
+   * Returns milliseconds, or `undefined` when the body carries no hint. It must
+   * be pure: it runs on a hostile-ish path and gets at most a few kilobytes.
+   */
+  retryAfterFromBody?(body: string): number | undefined
 }
 
+/**
+ * One file to write back. See {@link DriveProvider.upload} for the per-adapter
+ * size ceilings, which are **4 MB / 5 MB / 150 MB** and are not negotiable.
+ */
 export interface DriveUploadInput {
   name: string
   contentType: string
+  /** The bytes. Streamed onto the socket and never buffered, at any size. */
   content: Readable
   /** Destination folder; defaults to the connection root. */
   folderId?: string | undefined
+  /**
+   * Length of {@link content} in bytes, when the caller knows it — and worth
+   * knowing, because it is what moves the refusal of an oversized file from
+   * *mid-stream* to *up front*.
+   *
+   * With it, an adapter compares against its own ceiling before it opens a
+   * socket and throws {@link DriveContentTooLargeError} having sent nothing.
+   * Without it the upload starts, the byte cap trips part-way through and the
+   * request is destroyed — the same refusal, the same error, but after the
+   * bytes have been on the wire. It is never trusted in place of the cap: a
+   * source that under-reports its size is still caught by the bytes that
+   * actually flow.
+   */
   size?: number | undefined
 }

@@ -98,6 +98,30 @@ route a streamed multipart body. It runs the same on Express and Hono, so you do
 `@fastify/multipart`, and a raw `fastify.post` would skip enrichers and guards. See the
 [`@basaltkit/http` README](../http/README.md#file-uploads--upload) for options and errors.
 
+### Raw request bodies — `rawBody()`
+
+`body: rawBody({ maxBytes? })` from `@basaltkit/http` gives a route the **untouched
+request bytes** — what a webhook signature (Stripe, Paddle, Dropbox, GitHub) is computed
+over. Nothing to configure: the adapter mounts those routes in their own encapsulated
+Fastify scope whose only content-type parser hands the request stream over unread, for any
+content type. The neutral pipeline then reads it, after enrichers and guards, without
+parsing it.
+
+```ts
+fastifyPlugin({ routes: [route({
+  method: 'POST', url: '/webhooks/stripe',
+  body: rawBody({ maxBytes: 64 * 1024 }),
+  handler: ({ body }) => verify(body.text()),
+})] })
+```
+
+Because the scope is encapsulated, **your own parsers are never removed or overridden** —
+the adapter's JSON parser, `@fastify/multipart`, anything you registered by hand — and they
+keep serving every other route unchanged (a non-JSON body on a JSON route still answers
+`415`). Hooks, decorators and the error handler are inherited, so these routes behave like
+every other one. See the
+[`@basaltkit/http` README](../http/README.md#raw-request-bodies--rawbody).
+
 ## Usage guide
 
 ### Typed routes with params, query and errors

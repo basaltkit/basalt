@@ -1,4 +1,4 @@
-import { DriveRateLimitedError } from './errors.js'
+import { DriveProviderError, DriveRateLimitedError } from './errors.js'
 
 /**
  * Retry with exponential backoff and full jitter, honouring the provider's own
@@ -56,6 +56,11 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => set
  */
 export function isRetryable(error: unknown): boolean {
   if (error instanceof DriveRateLimitedError) return true
+  // The one `DRIVE_` code that is a *fault* rather than a decision: an adapter
+  // mapped a provider response it could not classify, and 5xx means the request
+  // never reached a decision. The adapter says which, because only it knows the
+  // vendor's taxonomy.
+  if (error instanceof DriveProviderError) return error.retryable
   const code = (error as { code?: unknown } | null)?.code
   if (typeof code === 'string') {
     // Transport-level faults: the request never reached a decision.

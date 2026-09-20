@@ -1,0 +1,55 @@
+{
+  "name": "@basaltkit/drives-microsoft",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "Microsoft OneDrive / SharePoint provider adapter for @basaltkit/drives: Entra ID OAuth with PKCE and rotating refresh tokens, /delta change feed, opaque @odata.nextLink pagination, pre-signed streaming downloads, quickXorHash checksums and clientState-authenticated Graph subscriptions.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@basaltkit/drives": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/drives": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/drives-microsoft"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/drives-microsoft#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "microsoft-graph",
+    "onedrive",
+    "sharepoint",
+    "drives",
+    "oauth",
+    "file-import"
+  ]
+}

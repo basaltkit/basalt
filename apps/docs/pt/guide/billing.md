@@ -559,11 +559,25 @@ const { url } = await subscriptions.checkout('acme', 'pro', {
 const portal = await subscriptions.portal('acme', { returnUrl: 'https://app.example.com/account' })
 ```
 
-::: warning Aviso: corpo bruto obrigatório
-O Stripe verifica a assinatura contra os bytes **intactos** do pedido. Configura
-um parser de corpo bruto para a rota do webhook, para que o handler receba a
-string original — re-serializar um objeto já parseado quebra o HMAC. Um 400
-`BILLING_WEBHOOK_INVALID` que não desaparece é quase sempre isto.
+::: tip O corpo bruto já está tratado
+O Stripe verifica a assinatura contra os bytes **intactos** do pedido. O
+`billingWebhookRoute()` declara o corpo com
+[`rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook),
+por isso o Fastify, o Express e o Hono entregam-lhe os octetos exactos — sem
+content-type parser, sem hook `verify`, sem nada para configurar.
+
+Isto era um bug a sério: a rota recorria a `JSON.stringify(request.body)` sempre
+que faltava o corpo bruto — o que acontecia em todos os adaptadores, por
+predefinição — e portanto uma entrega legítima do Stripe falhava a verificação
+**sempre**. Se a tua aplicação andava a responder 400
+`BILLING_WEBHOOK_INVALID` a webhooks verdadeiros, era por isto. O fallback
+deixou de existir.
+
+A única ressalva é no Express, e só quando trazes a tua própria aplicação com o
+`express.json()` já montado: o body-parser consome o stream primeiro, por isso
+acrescenta `app.use(express.json({ verify: captureRawBody }))` (de
+`@basaltkit/express`). Sem isso a rota responde `500 RAW_BODY_UNAVAILABLE` —
+recusa em vez de verificar uma mensagem reconstruída.
 :::
 
 Para desenvolvimento e testes há o `FakeBillingGateway`, que regista cada chamada
@@ -872,26 +886,34 @@ redirect ou push preencheriam `url` ou `push` em vez disso.
 ### Receber o webhook
 
 Aponta o webhook `payment` do ProxyPay para uma rota, passa o corpo **bruto** a
-`verifyWebhook`, e atua sobre `payment.succeeded`. Esta é uma rota HTTP simples,
-não `billingWebhookRoute` (essa é para drivers `BillingGateway` de cartão).
+`verifyWebhook`, e atua sobre `payment.succeeded`. Esta é uma rota tua, não o
+`billingWebhookRoute` (esse é para drivers `BillingGateway` de cartão) —
+declara-a com `rawBody()` e os bytes chegam intactos em qualquer adaptador.
 
 ```ts
-import { FASTIFY } from '@basaltkit/fastify'
+import { rawBody, route } from '@basaltkit/http'
 import { payments } from './billing/payments.js'
 import { subscriptions } from './billing/subscriptions.js'
 
-const fastify = app.container.get(FASTIFY)
+route({
+  method: 'POST',
+  url: '/webhooks/proxypay',
+  body: rawBody({ maxBytes: 64 * 1024 }),
+  async handler({ body, request, reply }) {
+    // body.text() — os bytes exatos, descodificados como UTF-8. A assinatura é
+    // sobre estes; um objeto reserializado seria uma mensagem diferente.
+    const event = payments.verifyWebhook(
+      body.text(),
+      request.headers['x-signature'] as string | undefined,
+    )
 
-fastify.post('/webhooks/proxypay', async (request, reply) => {
-  const raw = request.rawBody as string // bytes exatos — necessários para a assinatura
-  const event = payments.verifyWebhook(raw, request.headers['x-signature'] as string | undefined)
+    if (event?.type === 'payment.succeeded') {
+      // event = { id, type, paymentId, amount, billableId?, reference?, raw? }
+      await subscriptions.subscribe(event.billableId!, 'pro', { period: 'monthly' })
+    }
 
-  if (event?.type === 'payment.succeeded') {
-    // event = { id, type, paymentId, amount, billableId?, reference?, raw? }
-    await subscriptions.subscribe(event.billableId!, 'pro', { period: 'monthly' })
-  }
-
-  reply.code(200).send()
+    return reply.code(200).send()
+  },
 })
 ```
 
@@ -899,10 +921,13 @@ fastify.post('/webhooks/proxypay', async (request, reply) => {
 devolve `null` para eventos verificados que não são pagamentos. Deduplica em
 `event.id` se quiseres idempotência entre retentativas.
 
-::: warning Aviso: corpo bruto obrigatório
+::: tip O corpo bruto já está tratado
 Tal como no Stripe, a verificação da assinatura corre sobre os bytes intactos do
-pedido. Regista a rota com um parser de corpo bruto para que `request.rawBody`
-contenha a string original.
+pedido — que é o que o
+[`rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook)
+entrega, no Fastify, no Express e no Hono, sem nada para configurar. Um
+`fastify.post` escrito à mão precisaria do seu próprio parser de corpo bruto *e*
+saltaria os enrichers, os guards e o rate limiting da Basalt.
 :::
 
 ::: tip Dica: recorrente = uma referência por período
@@ -1077,9 +1102,12 @@ acrescenta OAuth2 (`clientId`, `clientSecret`, `tokenUrl`, `scope?`) e
   diretamente: `await subscriptions.get(tenantId)` — `null` significa que nunca
   se escreveu nada, `incomplete` significa que falta o webhook.
 - **`400 BILLING_WEBHOOK_INVALID` que não desaparece** — a assinatura é calculada
-  sobre os bytes intocados do pedido. Configura um parser de corpo raw para
-  `/billing/webhook`; reserializar um objeto já processado muda os bytes e parte
-  o HMAC.
+  sobre os bytes intocados do pedido, e o `billingWebhookRoute()` passou a
+  recebê-los em todos os adaptadores, por isso um corpo reserializado já não é
+  causa possível. Verifica o `webhookSecret` e o desvio de relógio (tolerância de
+  5 minutos). No Express com um `express.json()` trazido pela aplicação,
+  acrescenta `verify: captureRawBody`; sem isso a rota responde
+  `500 RAW_BODY_UNAVAILABLE` em vez de adivinhar.
 - **Todos os pedidos recebem `402 BILLING_SUBSCRIPTION_REQUIRED`, mesmo no plano
   gratuito** — o guard resolve o billable a partir de `ctx().tenant.id`. Sem
   plugin de tenancy, ou sem identificador de tenant no pedido, não há billable.

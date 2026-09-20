@@ -351,6 +351,99 @@ Express's `json()`/`urlencoded()` parsers never read multipart. Hono skips its
 multipart body within `bodyLimit`. In OpenAPI the route's request body is
 documented as `multipart/form-data`.
 
+## Raw request bodies (webhook signatures)
+
+Some bodies must not be parsed at all. Stripe, Paddle, Lemon Squeezy, Dropbox,
+Microsoft Graph and GitHub all sign the **octets they sent**, so a signature can
+only be checked against those exact bytes. `JSON.stringify` of the parsed object
+is not an approximation of them — different whitespace, different key order,
+`1.50` re-printed as `1.5` — and verifying against it fails every genuine
+delivery.
+
+Give such a route `body: rawBody({ … })` from `@basaltkit/http` and it receives
+the untouched bytes on all three frameworks:
+
+```ts
+import { rawBody, route } from '@basaltkit/http'
+
+route({
+  method: 'POST',
+  url: '/webhooks/stripe',
+  body: rawBody({ maxBytes: 64 * 1024 }),
+  async handler({ body, request }) {
+    const event = stripe.webhooks.constructEvent(
+      body.text(),                                  // the bytes, decoded as UTF-8
+      request.headers['stripe-signature'] as string,
+      process.env.STRIPE_WEBHOOK_SECRET!,
+    )
+    // body.bytes        → Buffer, exactly what arrived
+    // body.contentType  → 'application/json' (essence, lower-cased)
+    // body.contentLength→ what the client declared, when it declared one
+    return { received: true }
+  },
+})
+```
+
+- **The pipeline runs first**, exactly as for `upload()`: pre-hooks (rate
+  limit, CORS), enrichers and guards all run before a single body byte is read.
+  A body the route never gets to read is drained and the response carries
+  `Connection: close`, so nothing hangs.
+- **Nothing parses the bytes** — not Basalt, not the app's own parsers. The
+  handler gets a `Buffer`, and `request.body` stays undefined.
+- **The cap holds on the bytes received**, not on what the client declares. A
+  `Content-Length` over `maxBytes` is refused before anything is read.
+- **Neighbouring routes are untouched.** A `rawBody()` route in an app does not
+  change how any other route is parsed or validated.
+- **In OpenAPI** the request body is published as opaque bytes (`*/*`,
+  `format: binary`) rather than an invented schema.
+
+| `rawBody()` option | Default | Past it |
+|---|---|---|
+| `maxBytes` | 1 MiB | `413 PAYLOAD_TOO_LARGE`, on the declared `Content-Length` or on the bytes received |
+
+Other errors: `400 BAD_REQUEST` when the body ends mid-flight (client hung up),
+and `500 RAW_BODY_UNAVAILABLE` when the request **declared** bytes (a
+`Content-Length` above zero, or a `Transfer-Encoding`) and no adapter could
+supply them — a refusal, deliberately, rather than a reconstruction.
+
+A request that declared **no** body is a different case: `Content-Length: 0`, or
+no framing headers at all, yields a zero-length `Buffer`. That is a fact about
+the request rather than a guess about a message, and it is the shape several
+providers validate a webhook URL with — Microsoft Graph posts
+`?validationToken=…` with no body at all, before the subscription it would sign
+for exists. Refusing those would surface a body-parser problem as
+`subscriptionValidationFailed`, pointing the operator at entirely the wrong
+thing.
+
+### What each adapter does — and the one caveat
+
+| Adapter | How the bytes survive | Caveat |
+|---|---|---|
+| **Fastify** | `rawBody()` routes are mounted in their own encapsulated scope whose only content-type parser hands the request stream over unread, for any content type. | None. Your own parsers (the adapter's JSON one, `@fastify/multipart`, anything you registered) are never removed or overridden — they keep serving every other route, and a non-JSON body on a JSON route still answers `415`. |
+| **Hono** | The plugin's bounded pre-read and its pre/after hooks step aside for these paths, so the web `Request`'s own stream still carries the octets. | None. `bodyLimit` does not apply to the route; its own `maxBytes` does. |
+| **Express** | `expressPlugin` gives `express.json()` and `express.urlencoded()` a `type` filter that returns false for `rawBody()` paths, so body-parser never reads them, plus a `verify` hook that keeps the buffer as a second line of defence. Both are installed **only** when a `rawBody()` route exists. | One, and it is real — see below. |
+
+The Express caveat: `express.json()` is mounted on the whole app, so if **you**
+bring your own app with its own parser already mounted, body-parser consumes the
+stream before any Basalt route runs and the original bytes are gone. Give it the
+`verify` hook and they survive:
+
+```ts
+import express from 'express'
+import { captureRawBody, expressPlugin } from '@basaltkit/express'
+
+const app = express()
+app.use(express.json({ verify: captureRawBody }))
+app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
+
+expressPlugin({ app, routes })
+```
+
+The common `verify: (req, _res, buf) => { req.rawBody = buf }` convention is
+honoured too, so an app already doing that needs no change. With neither, the
+route answers `500 RAW_BODY_UNAVAILABLE`. That is the point: it refuses rather
+than verify a signature against a message nobody sent.
+
 ## Streaming responses
 
 A handler can return **a stream** instead of a JSON payload: `stream(source, options)`

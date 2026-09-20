@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { DriveCredentialsInvalidError, DriveNotificationInvalidError, DriveRateLimitedError } from './errors.js'
+import {
+  DriveCredentialsInvalidError,
+  DriveCursorResetError,
+  DriveNotificationInvalidError,
+  DriveRateLimitedError,
+} from './errors.js'
 import type {
   DriveAccount,
   DriveAuthorization,
@@ -72,6 +77,24 @@ export interface FakeDriveProviderOptions {
   supportsWatch?: boolean
   /** Support writing back. Default false, matching most real integrations. */
   supportsUpload?: boolean
+  /**
+   * Whether `startDelta` hands back a cursor that replays the files that
+   * already exist.
+   *
+   * Default `true`, which is what this fake genuinely does — cursor `'0'` is
+   * the head of the change log and the seeded files are its first entries, the
+   * Dropbox shape. Set it to `false` to model Google Drive's
+   * `changes.getStartPageToken`, where the cursor means "from now" and the
+   * engine has to run a listing pass before its first delta run.
+   */
+  deltaIncludesExisting?: boolean
+  /**
+   * Account id reported by `authorization.account`, and the id this fake's
+   * account-keyed notifications name — the Dropbox shape, where the webhook is
+   * app-wide and identifies a connection by `dbid:…` rather than by a secret we
+   * chose. Default `fake-account`.
+   */
+  accountId?: string
   now?: () => number
 }
 
@@ -88,6 +111,10 @@ export class FakeDriveProvider implements DriveProvider {
   readonly name: string
   readonly allowedHosts: readonly string[]
   readonly authorization: DriveAuthorization
+  /** Cursor `'0'` really is the head of the change log — see the option's note. */
+  readonly deltaIncludesExisting: boolean
+  /** The account this fake's tokens belong to. */
+  readonly accountId: string
 
   private readonly state: FakeState = { files: new Map(), changes: [] }
   private readonly pageSize: number
@@ -118,11 +145,30 @@ export class FakeDriveProvider implements DriveProvider {
   enforceTokenExpiry = true
   /** Deliberately fail the next download after this many bytes. */
   failDownloadAfterBytes: number | undefined
+  /**
+   * Deliberately fail the next `list` with this error.
+   *
+   * For asserting what the engine does with a failure it did not create — in
+   * particular that `drive:sync_failed` forwards a *message* and never an error
+   * object, because a guarded-fetch refusal is raised on a path where the URL
+   * being refused can be a provider download URL, which is itself a bearer
+   * credential.
+   */
+  failNextListWith: Error | undefined
+  /**
+   * When true, the next `delta` call reports the cursor as dead — Dropbox's
+   * `reset/`, Graph's `resyncRequired`, an expired Google `pageToken`. The
+   * engine must drop the cursor, or a persisted dead cursor fails every run for
+   * ever.
+   */
+  resetNextDelta = false
 
   constructor(options: FakeDriveProviderOptions = {}) {
     this.options = options
     this.name = options.name ?? 'fake'
     this.allowedHosts = options.allowedHosts ?? ['fake-drive.test']
+    this.deltaIncludesExisting = options.deltaIncludesExisting ?? true
+    this.accountId = options.accountId ?? 'fake-account'
     this.pageSize = options.pageSize ?? 50
     this.accessTokenTtl = options.accessTokenTtlMs ?? 60 * 60_000
     this.now = options.now ?? Date.now
@@ -175,7 +221,7 @@ export class FakeDriveProvider implements DriveProvider {
       },
       account: async (): Promise<DriveAccount> => {
         this.count('account')
-        return { id: 'fake-account', email: 'drive@example.test', name: 'Fake Account' }
+        return { id: this.accountId, email: 'drive@example.test', name: 'Fake Account' }
       },
     }
   }
@@ -280,6 +326,11 @@ export class FakeDriveProvider implements DriveProvider {
 
   async list(session: DriveSession, options: DriveListOptions): Promise<DrivePage<DriveItem>> {
     this.check(session, 'list')
+    const failure = this.failNextListWith
+    if (failure !== undefined) {
+      this.failNextListWith = undefined
+      throw failure
+    }
     const all = [...this.state.files.values()]
       .filter((item) => (options.folderId === undefined ? true : item.parentId === options.folderId))
       .sort((a, b) => a.externalId.localeCompare(b.externalId))
@@ -332,13 +383,20 @@ export class FakeDriveProvider implements DriveProvider {
   async startDelta(session: DriveSession): Promise<string> {
     this.check(session, 'startDelta')
     if (this.options.supportsDelta === false) throw new Error('delta is disabled on this fake')
-    // Cursor 0 = "from the beginning", so a first sync sees the seeded files.
-    return '0'
+    // Cursor 0 = "from the beginning", so a first sync sees the seeded files —
+    // the Dropbox shape. With `deltaIncludesExisting: false` the cursor points
+    // past everything that already exists instead, which is Google's shape, and
+    // the engine answers by running a listing pass first.
+    return this.deltaIncludesExisting ? '0' : String(this.state.changes.length)
   }
 
   async delta(session: DriveSession, cursor: string): Promise<DriveDelta> {
     this.check(session, 'delta')
     if (this.options.supportsDelta === false) throw new Error('delta is disabled on this fake')
+    if (this.resetNextDelta) {
+      this.resetNextDelta = false
+      throw new DriveCursorResetError(this.name)
+    }
     const from = Number(cursor)
     const slice = this.state.changes.slice(from, from + this.pageSize)
     const next = from + slice.length
@@ -367,6 +425,23 @@ export class FakeDriveProvider implements DriveProvider {
     this.count('verifyNotification')
     const challenge = input.query['challenge']
     if (challenge !== undefined) return { challenge, changed: false }
+
+    // The Dropbox shape: no subscription and no secret of ours, an app-level
+    // signature instead, and the body naming the accounts that changed. The
+    // "signature" here is a fixed header value — the point of the fake is to
+    // exercise the *correlation* path, not to re-test HMAC (`verifyHmacSignature`
+    // has its own suite, and the Dropbox adapter tests the real scheme).
+    const signature = input.headers['x-fake-signature']
+    if (signature !== undefined) {
+      if (signature !== FAKE_SIGNATURE) throw new DriveNotificationInvalidError('bad signature.')
+      let accounts: string[]
+      try {
+        accounts = (JSON.parse(input.body.toString('utf8')) as { accounts?: string[] }).accounts ?? []
+      } catch {
+        throw new DriveNotificationInvalidError('malformed notification body.')
+      }
+      return { accountIds: accounts, changed: accounts.length > 0 }
+    }
 
     const secret = input.headers['x-fake-channel-token']
     const watchId = input.headers['x-fake-channel-id']
@@ -399,7 +474,27 @@ export class FakeDriveProvider implements DriveProvider {
       body: Buffer.from('{}'),
     }
   }
+
+  /**
+   * Builds an account-keyed notification — the Dropbox shape, where nothing
+   * identifies a connection except a provider account id inside a body the app
+   * secret signed.
+   */
+  notificationForAccount(
+    accountIds: readonly string[] = [this.accountId],
+    options: { signature?: string } = {},
+  ): DriveNotificationInput {
+    return {
+      method: 'POST',
+      headers: { 'x-fake-signature': options.signature ?? FAKE_SIGNATURE },
+      query: {},
+      body: Buffer.from(JSON.stringify({ accounts: accountIds })),
+    }
+  }
 }
+
+/** Stand-in for a real app-secret HMAC; see {@link FakeDriveProvider.verifyNotification}. */
+const FAKE_SIGNATURE = 'fake-app-signature'
 
 /** Drops the fake's private `content` field before an item crosses the contract. */
 function strip(item: DriveItem & { content?: string }): DriveItem {
