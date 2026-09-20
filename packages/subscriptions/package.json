@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/subscriptions",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "engines": {
     "node": ">=22.5.0"
   },
