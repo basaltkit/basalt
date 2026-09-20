@@ -22,6 +22,7 @@ import {
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
+  isRawBody,
   isStreamResponse,
   streamPayloadOf,
   toNodeStream,
@@ -213,8 +214,10 @@ export function registerRoutes(
   guards: RouteGuard[] = [],
   onError?: HttpErrorReporter,
 ): void {
-  if (routes.some((definition) => isUploadBody(definition.body))) allowMultipartPassthrough(instance)
-  for (const definition of routes) {
+  const parsed = routes.filter((definition) => !isRawBody(definition.body))
+  const raw = routes.filter((definition) => isRawBody(definition.body))
+  if (parsed.some((definition) => isUploadBody(definition.body))) allowMultipartPassthrough(instance)
+  for (const definition of parsed) {
     const uploads = isUploadBody(definition.body)
     instance.route({
       method: definition.method,
@@ -223,6 +226,48 @@ export function registerRoutes(
       handler: wrapHandler(definition, container, enrichers, guards, onError),
     })
   }
+  if (raw.length > 0) registerRawRoutes(instance, raw, container, enrichers, guards, onError)
+}
+
+/**
+ * Mounts the `rawBody()` routes in their own encapsulated Fastify scope.
+ *
+ * Fastify content-type parsers are per-scope: a child created with `register()`
+ * gets a *copy* of the parsers in force, so clearing them there and installing
+ * a single pass-through affects these routes and nothing else. The app's own
+ * parsers — the adapter's JSON one, `@fastify/multipart`, anything registered
+ * by hand — are left exactly as they are, and every other route keeps going
+ * through them (a non-JSON body on a JSON route still answers 415).
+ *
+ * Inside the scope the parser hands the request stream on untouched for ANY
+ * content type, so the neutral pipeline reads the bytes itself, after the
+ * enrichers and guards have passed. Hooks, decorators and error handlers are
+ * inherited from the parent, so these routes behave like every other one.
+ */
+function registerRawRoutes(
+  instance: FastifyInstance,
+  routes: BasaltRoute[],
+  container: Container | undefined,
+  enrichers: RequestEnricher[],
+  guards: RouteGuard[],
+  onError?: HttpErrorReporter,
+): void {
+  void instance.register(async (scope: FastifyInstance) => {
+    scope.removeAllContentTypeParsers()
+    scope.addContentTypeParser(
+      '*',
+      (_request: FastifyRequest, _payload: unknown, done: (err: Error | null, value?: unknown) => void) => {
+        done(null, undefined)
+      },
+    )
+    for (const definition of routes) {
+      scope.route({
+        method: definition.method,
+        url: definition.url,
+        handler: wrapHandler(definition, container, enrichers, guards, onError),
+      })
+    }
+  })
 }
 
 /** Route-config flag marking an `upload()` route, read by the multipart pass-through parser. */
@@ -278,8 +323,9 @@ function wrapHandler(
 
     try {
       const neutral = toNeutralRequest(request)
-      // An upload() route streams the raw body (the pass-through parser left it unread).
-      if (isUploadBody(definition.body)) neutral.bodyStream = request.raw
+      // An upload() route streams the raw body, and a rawBody() route reads it
+      // to a capped buffer — both left unread by their pass-through parser.
+      if (isUploadBody(definition.body) || isRawBody(definition.body)) neutral.bodyStream = request.raw
       const result = await runRoute(
         definition,
         neutral,

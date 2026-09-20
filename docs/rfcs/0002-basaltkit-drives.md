@@ -1,6 +1,6 @@
 # RFC 0002 — `@basaltkit/drives`: connecting a tenant's external file-storage accounts
 
-- **Status:** Draft (phase 1 implemented — core abstraction + fake provider; provider adapters pending maintainer approval)
+- **Status:** Draft (phases 1 and 2a implemented — core abstraction, fake provider, HTTP routes and the first real adapter, `@basaltkit/drives-dropbox`; see Appendix B for what the first adapter changed)
 - **Author:** basalt-principal-architect
 - **Date:** 2026-09-20
 - **Affects:** a new `@basaltkit/drives`; composes `@basaltkit/files`, `@basaltkit/storage`, `@basaltkit/webhooks`, `@basaltkit/queue`, `@basaltkit/scheduler`, `@basaltkit/audit`; proposes a promotion out of `@basaltkit/auth`
@@ -604,8 +604,9 @@ lower. Proposed as **BK-028**.
 | Phase | Deliverable | Status |
 |---|---|---|
 | **1** | `@basaltkit/drives` 0.1.0 — contract, credentials, connections, listing, streaming download, dedup, sync, retry, notification verification, fake provider, 231 tests, docs EN + PT | **done in this change** |
-| **2** | HTTP routes (`driveRoutes()` over `@basaltkit/http`, all three adapters) + the **first** adapter, `@basaltkit/drives-dropbox` — chosen first because it is the only one with a real HMAC signature, so it validates the notification contract hardest | proposed |
-| **3** | `@basaltkit/drives-google` and `@basaltkit/drives-microsoft`; `drives-prisma` and `drives-sqlite` stores | proposed |
+| **2a** | HTTP routes (`driveRoutes()` over `@basaltkit/http`, parity-tested on all three adapters) + the **first** adapter, `@basaltkit/drives-dropbox` — chosen first because it is the only one with a real HMAC signature, so it validates the notification contract hardest | **done**; findings in Appendix B |
+| **2b** | `@basaltkit/drives-google` and `@basaltkit/drives-microsoft` — see Appendix B.6 for what they inherit from 2a | proposed |
+| **3** | `drives-prisma` and `drives-sqlite` stores | proposed |
 | **4** | Consuming-app integration; admin UI for connections; `basalt drives:*` CLI if a second consumer justifies it | proposed |
 
 Each adapter is expected to be small — the contract is designed so that an
@@ -651,3 +652,472 @@ suite (the fake provider is its executable specification).
 | Coverage gate thresholds | `vitest.coverage.config.ts` |
 
 *End of RFC 0002.*
+
+---
+
+## Appendix B — phase 2a findings (the first real adapter)
+
+Phase 2a implemented `@basaltkit/drives-dropbox` and the HTTP routes §6.4
+deferred. The contract held up, with **eight** changes — every one of them a
+place where phase 1 had flattened a real vendor difference, and every one found
+by writing the adapter rather than by reading the spec again.
+
+### B.1 What changed, and why
+
+| # | Phase 1 assumed | Dropbox does | Change |
+|---|---|---|---|
+| 1 | every vendor authenticates a notification with a secret **we** generated, so `verifyNotification` returns `secret` | no per-connection subscription at all: one webhook URI per *app*, signed with the app secret, naming the **accounts** that changed | `DriveNotificationResult.accountIds`; `handleNotification` correlates on `DriveConnection.account.id` when no secret is present |
+| 2 | one notification resolves to one connection | one account can be connected many times (two labels, or two tenants) | `DriveNotificationOutcome.connections` is a list; phase 1 would have synced one and left the rest stale |
+| 3 | a verified notification that matches nothing is an error (400) | — | it is now `reason: 'unmatched'` with a 200, because a different answer tells an unauthenticated caller which accounts a deployment holds |
+| 4 | `startDelta` means "everything from now on" | `list_folder` **is** the head of the feed; there is no way to get a beginning-cursor without receiving the first page, and `get_latest_cursor` skips what exists | `DriveProvider.deltaIncludesExisting`, defaulting to `false` (the safe direction). The engine runs a listing pass before the first delta run when it is false — which is what Google Drive needs, and phase 1 would have imported **nothing** on a first sync there |
+| 5 | a removal always names an id | a `deleted` entry is `{".tag":"deleted", name, path_lower, path_display}` and carries **no id** | `DriveChange`'s removal variant and `DriveRemoval` carry `externalId` *or* `path`. Smuggling a path into `externalId` would have made every ledger lookup miss in silence |
+| 6 | a rate limit is a `Retry-After` header | frequently `429` with no header and `{"error":{"retry_after":300}}` in the body, which the guarded fetch destroys before an adapter sees it | `DriveProvider.retryAfterFromBody`, applied by the guard under a hard 8 KiB read bound |
+| 7 | a change cursor, once obtained, stays valid | `list_folder` cursors age out and answer `409 reset/` — as Graph answers `410 resyncRequired` and Google invalidates a `pageToken` | `DriveCursorResetError`. The cursor is **persisted**, so mapped to any other error one expiry made every future sync of that connection fail identically for ever, with no retry policy able to help. `syncConnection` drops the cursor and reports `reset: true`; the next run re-primes |
+| 8 | a request body is `string \| Buffer` | `files/upload` takes up to 150 MB | `GuardedRequestInit.body` accepts a `Readable`, piped and never buffered. Phase 1 made `DriveProvider.upload` unimplementable without a full in-memory copy per concurrent job |
+
+Two additions and one bug fix came out of the same work:
+
+- **`DRIVE_ACCESS_DENIED`, `DRIVE_ITEM_NOT_FOUND`, `DRIVE_PROVIDER_ERROR`.**
+  Dropbox answers `403` for a team-policy refusal while the token is perfectly
+  valid; folding that into `DRIVE_CREDENTIALS_INVALID` tells a tenant to
+  re-consent forever over something re-consenting cannot fix. `DRIVE_PROVIDER_ERROR`
+  is the one `DRIVE_` code whose retryability the *adapter* decides, so a
+  provider 5xx is retried and a 4xx is not.
+- **The reactive refresh in `Drives.run` did not exist.** §4.4 and the method's
+  own doc comment described "a single reactive refresh if the provider rejects a
+  token we believed was valid", and the code did not do it:
+  `DRIVE_CREDENTIALS_INVALID` is terminal for `withRetry`, so a `401` from the
+  provider failed the call outright. It now refreshes **once per `run`** (not
+  per retry attempt, so a dead grant cannot drive one token-endpoint call per
+  attempt) and retries the operation.
+
+### B.2 The routes (§6.4 resolved)
+
+`driveRoutes()` ships the connect flow and **one** notification endpoint over
+`route()` from `@basaltkit/http`, parity-tested on Fastify, Express and Hono.
+`DriveNotificationResult.challenge` did exactly what it was designed to do: one
+route answers Dropbox's pre-subscription `GET ?challenge=`, Graph's
+`POST ?validationToken=` and Google's `sync` message, and the Dropbox handshake
+confirmed the important part — it arrives **before any connection exists**, so a
+route that looked a connection up first could never have answered it.
+
+The echo is `text/plain` with `X-Content-Type-Options: nosniff`, because it
+reflects attacker-chosen text on the app's own origin.
+
+### B.3 The one thing the neutral layer cannot do
+
+**`@basaltkit/http` cannot give a route the raw request bytes.** Fastify,
+Express and Hono all parse `application/json` before a handler runs, and the
+neutral layer only leaves a body unread for `upload()` routes. Dropbox signs the
+bytes that arrived, so a re-serialised body is a different message.
+
+The route therefore **fails closed** (`DRIVE_NOTIFICATION_INVALID`) rather than
+reconstructing one, and accepts the bytes from an explicit resolver,
+`request.body` when it is already a `Buffer`/`string`, or `request.raw.rawBody`
+— the convention a Fastify content-type parser and Express's `json({ verify })`
+both use. The parity suite proves all three adapters work with one documented
+line of wiring each, and proves the fail-closed path.
+
+This is worth promoting, as **BK-029**: a `rawBody()` body marker in
+`@basaltkit/http` mirroring `upload()`, with the same `isUploadBody`-style
+probe in each adapter. It is not fully solvable in the neutral layer alone —
+`express.json()` is installed app-wide by `expressPlugin` and would still need a
+`type` filter or the `verify` hook — so the honest end state is a marker plus a
+documented Express note, not a silent fix.
+
+While reading for this, one adjacent latent bug surfaced and is **not** fixed
+here because it belongs to another package: `billingWebhookRoute` in
+`@basaltkit/subscriptions` falls back to `JSON.stringify(request.body)` when the
+raw body is absent. Against a real Stripe endpoint that silently produces a
+signature mismatch on every delivery.
+
+### B.4 Multi-provider coexistence
+
+Phase 1 was structurally multi-provider and **no test proved it** — every suite
+registered a single adapter. With two real implementations in the tree that gap
+is now closed by `packages/drives-dropbox/tests/multi-provider.test.ts`: one
+tenant holding a fake connection and a Dropbox connection whose items share an
+`externalId` *and* a path, asserting that calls route by connection rather than
+by id, that the ledger stays distinct, that disconnecting one leaves the other
+untouched, that a capability unsupported by one is unaffected for the other,
+that a refresh touches exactly one row, and that a notification for one provider
+can never select another's connection — including when a connection carries the
+other vendor's account id. No contract change was needed: the model was right,
+only unproven.
+
+### B.5 Not verifiable without a real Dropbox app
+
+Tested against a faithful fetch-level fake of the documented HTTP surface, with
+no credentials. Open points, listed in the adapter's README: PKCE combined with
+an app secret; whether a refresh ever returns a new `refresh_token`; the exact
+`error_summary` strings for scope and team-policy refusals; whether a `429` ever
+carries both a `Retry-After` and a body hint; and `content_hash` against a real
+file (no official vector is published).
+
+### B.6 What Google and Microsoft will need
+
+- Declare `deltaIncludesExisting` **explicitly**. Google's
+  `changes.getStartPageToken` is `false`; Graph's `/delta` is `true`.
+- Both have per-subscription secrets, so both use
+  `DriveNotificationResult.secret` and can keep `watch`/`unwatch`. Neither needs
+  `accountIds`.
+- Graph's `validationToken` handshake is already served by the shared route.
+- Graph rotates refresh tokens; the engine's compare-and-set and
+  rotation-race handling (§4.4) exists for exactly that and is unchanged.
+- Graph's `@microsoft.graph.downloadUrl` and Google's redirect to
+  `googleusercontent.com` are the SSRF cases §5.1 was written for; add the CDN
+  hosts as `.suffix` entries, never bare parents.
+- Both report deletions by id, so neither needs the `path` removal shape.
+
+---
+
+## Appendix C — phase 2b findings: `@basaltkit/drives-google`
+
+The Google Drive half of phase 2b is implemented. Appendix B.6 predicted five
+things about it; **all five held**, which is the more interesting result than any
+one of them, because it means the contract's shape was derived correctly from
+the vendor documentation rather than from the one vendor that had been built.
+
+The contract needed **no change**. One engine *behaviour* changed — a skip
+reason phase 1 declared and nothing ever emitted — and four places where the
+contract deliberately flattens a difference turned out to cost something real
+enough to write down.
+
+### C.1 What B.6 predicted, and what happened
+
+| B.6 said | Outcome |
+|---|---|
+| Declare `deltaIncludesExisting` explicitly; Google is `false` | **Confirmed.** `changes.getStartPageToken` is "from now on". A test declares `true` on purpose and asserts that the first sync reports success and imports nothing — which is what phase 1 would have shipped. |
+| Per-subscription secret, so `watch`/`unwatch` and `DriveNotificationResult.secret`; no `accountIds` | **Confirmed.** `changes.watch` takes a `token` we choose, echoed as `X-Goog-Channel-Token`. `accountIds` is unused; `account.id` (the `permissionId`) is display data only. |
+| The `googleusercontent.com` redirect is the SSRF case §5.1 was written for; add CDN hosts as `.suffix`, never bare parents | **Confirmed, and it is the load-bearing control.** `.googleusercontent.com` is allowlisted as a suffix; tests assert that both `googleusercontent.com` and `evilgoogleusercontent.com` are refused, and that no signed URL reaches an error. |
+| Deletions by id, so no `path` removal shape | **Confirmed** — with a wrinkle the appendix could not have known (C.3). |
+| Graph rotates refresh tokens; Google does not | **Confirmed.** Google returns a new access token only, and the engine's "keep the stored one when a provider omits it" rule is exactly right. |
+
+### C.2 The one engine change
+
+`importItem` now skips an item with `exportOnly: true` under the `copy`
+strategy, with `reason: 'no-content'` — the skip reason phase 1 declared for
+precisely this case and which nothing had ever emitted.
+
+Without it, a Google Drive full of Docs and Sheets produces a permanently
+failing import job per native document: `download` raises `DRIVE_UNSUPPORTED`,
+which is terminal, the ledger never records a failure, and every subsequent sync
+re-enqueues the same items for ever. Dropbox Paper docs have the same shape and
+the same latent bug; this fixes both. `reference` is untouched, so an app that
+wants to run `files.export` itself still receives the item in its sink.
+
+### C.3 Where the contract flattens a real difference (Google column)
+
+The four that cost something. None of them is worth a contract change; all four
+are worth knowing about.
+
+1. **`changes.list` is account-wide, and the contract has no vocabulary for
+   that.** Dropbox's `list_folder` cursor is folder-scoped; Graph's `/delta` can
+   be taken on a folder; Google has exactly one feed per account. A connection
+   confined to a `rootId` therefore filters **client-side**, walking each changed
+   file's `parents` upwards with one metadata read per unseen folder. That cost
+   is invisible to the engine: `syncConnection` counts what the adapter reports,
+   not what it discarded. The adapter caches ancestry for the duration of a
+   single `delta` call and never longer — a shared cache keyed by file id would
+   be a cross-connection leak waiting for a collision — and a hard lookup budget
+   fails loudly rather than guessing, because guessing "in scope" leaks another
+   folder's metadata and guessing "out of scope" loses a tenant's file.
+
+   The isolation requirement is the sharp end of this: an out-of-scope change is
+   dropped **before** it becomes a `DriveChange`, so it reaches neither
+   `onRemoved`, nor the hooks, nor a ledger lookup. There is a test that asserts
+   `result.seen === 0` for a change in a sibling folder.
+
+2. **Drive has no recursive listing query, and `DriveListOptions.folderId` reads
+   as if it did.** `'<id>' in parents` is one level. `syncConnection`'s backfill
+   calls `list({ folderId: connection.rootId })`, so an adapter that answered
+   literally would give a scoped connection a top-level-only first sync — and
+   then the account-wide change feed would deliver the subfolders' files
+   afterwards, as if they had appeared from nowhere. The adapter walks the
+   subtree instead, carrying its folder queue inside the opaque cursor. The
+   cursor being opaque by contract is what makes that legal; it is the same
+   latitude Dropbox used for its synthetic start cursor, and it is the second
+   time that one design decision has paid for itself.
+
+3. **A hard deletion is unscopable.** Google reports deletions by id, as
+   predicted — but `{fileId, removed: true}` carries no file resource at all, so
+   a root-scoped connection cannot tell whether the deleted file was ever in its
+   folder. Forwarding it would put an id from outside the connection's scope into
+   the app's hooks; dropping it loses a real deletion. Neither is right, so the
+   adapter drops it by default and offers `includeUnscopedRemovals` for apps that
+   would rather correlate against their own ledger — which is the one component
+   that genuinely knows which ids it imported. A trash (the ordinary Drive
+   delete) carries the full resource and is scoped normally, so the common case
+   is unaffected.
+
+4. **`invalid_grant` means three different things.** Revoked consent, a deleted
+   OAuth client, and a grant that simply went unused for six months (seven days
+   while the app is in "testing") are the same string on the wire. The contract
+   has one terminal status, `invalid`, and cannot distinguish them. That is
+   acceptable — the available action is identical in all three cases — but an
+   operator reading "needs to be reconnected" cannot tell a revocation from an
+   expiry, and no adapter can tell them.
+
+Two flattenings that are **right** and should stay: the single opaque cursor
+(Google's `nextPageToken` / `newStartPageToken` pair collapses into it honestly,
+with `hasMore` carrying the distinction), and `contentType` as an untrusted hint
+(Drive's `mimeType` is authoritative for native documents and a client-supplied
+guess for everything else, so "hint" is correct for both).
+
+### C.4 The rate-limit shape, and why it nearly went wrong
+
+Google throttles with **`403`**, not `429`:
+
+```json
+{"error":{"code":403,"errors":[{"domain":"usageLimits",
+  "reason":"userRateLimitExceeded","message":"User Rate Limit Exceeded"}]}}
+```
+
+The guarded fetch's `429`/`503` interception therefore never fires for the common
+case, and the obvious implementation — map `403` to `DRIVE_ACCESS_DENIED`, as the
+Dropbox adapter correctly does — makes every throttle **terminal**, because
+`isRetryable` treats `DRIVE_ACCESS_DENIED` as a decision rather than a fault. A
+tenant whose sync merely went too fast would get a permanently failed job and a
+message about a permission problem they do not have.
+
+So the adapter reads `error.errors[].reason` and splits `403` three ways:
+`usageLimits` throttles become `DRIVE_RATE_LIMITED` (retryable), genuine
+permission refusals become `DRIVE_ACCESS_DENIED` (terminal), and anything
+unrecognised becomes `DRIVE_PROVIDER_ERROR` — never a permission claim, because
+telling a tenant to fix a permission they cannot see is worse than saying the
+provider failed.
+
+`retryAfterFromBody` is **not** declared: Google uses `Retry-After` when it
+sends a hint at all, which is the interoperable path the engine already takes.
+The member exists for Dropbox and stays Dropbox-shaped.
+
+### C.5 Contract-validation matrix — Google column
+
+Same rows as B's matrix. "Fits" means it maps with no caveat worth writing down.
+
+| Capability | Google | Note |
+|---|---|---|
+| OAuth | fits | `access_type=offline` + `prompt=consent` + PKCE S256, all inside the pure `authorizeUrl`. `prompt=consent` is not optional: without it a user who already consented gets no refresh token on any later connect. |
+| Refresh token | fits | No rotation. "Keep the stored one when the response omits it" is exactly right. |
+| Revocation | caveat | Revoking the **refresh** token revokes the grant. But `invalid_grant` conflates revocation with disuse expiry (C.3.4). |
+| List files | caveat | No recursive query; a scoped listing walks the subtree inside the opaque cursor (C.3.2). |
+| List folders | fits | Folders are files with a folder mime type; the engine skips them for import and the walk follows them. |
+| Pagination | fits | `pageToken` is an opaque resumable cursor — the contract's shape exactly. |
+| Download | caveat | Streams, but via `302` to a signed `*.googleusercontent.com` URL that the guarded fetch re-validates. Google-native documents cannot be downloaded at all. |
+| File metadata | caveat | No `path` (Drive is a graph; a file may have several parents). `version` is `headRevisionId`, not Drive's `version` counter, which moves on a rename and would force a re-download. |
+| Change detection | caveat ×2 | `deltaIncludesExisting: false`, and the feed is account-wide (C.3.1). |
+| Webhooks | fits | Per-subscription channel with our token; `expiresAt` carries Google's own expiration; `raw` carries the `resourceId` that `channels.stop` needs. Renewal is the app's, via `defineReconciler`. |
+| Webhook verification | fits, weakly | The `secret` correlation is right, but Google signs nothing — the channel token is the entire authentication. A vendor property, not a contract gap. |
+| Rate limits | caveat | A throttle is a `403` (C.4). |
+| Retry | fits | `isRetryable` already covers `DRIVE_RATE_LIMITED` and a retryable `DRIVE_PROVIDER_ERROR`. |
+| Large files | caveat | Download unbounded (the engine's cap applies); **upload capped at 5 MB** because `uploadType=resumable` is not implemented, refused up front with `DRIVE_CONTENT_TOO_LARGE`. |
+| Errors | fits | `DRIVE_ACCESS_DENIED` / `DRIVE_ITEM_NOT_FOUND` / `DRIVE_PROVIDER_ERROR` / `DRIVE_CURSOR_RESET` cover Google's taxonomy with nothing left over. |
+
+### C.6 Multi-provider coexistence, again
+
+`packages/drives-google/tests/multi-provider.test.ts` repeats B.4's suite with
+Google in place of Dropbox, and adds the collision Google makes possible: both
+the fake and Google authenticate a notification with **a secret the engine
+generated**, so the test gives the fake connection the Google connection's
+channel secret verbatim and asserts that the provider filter — not luck — is
+what keeps them apart. The ids and paths collide too. No contract change was
+needed; the model was right, and is now proven for a third adapter.
+
+### C.7 Not verifiable without a real Google project
+
+Tested against a faithful fetch-level fake of the documented HTTP surface, with
+no credentials. Open points, listed in the adapter's README: the exact maximum
+channel TTL for `changes.watch` and whether Google clamps or refuses a larger
+one; whether an aged-out `pageToken` really answers `400 invalid` (Google
+publishes no distinct code, and `404 notFound` is mapped too); whether the
+download redirect ever leaves `*.googleusercontent.com` (if it does, downloads
+fail **closed** and visibly); whether a refresh ever returns a new
+`refresh_token`; PKCE together with a client secret on a Web-application client;
+and the `403` reason strings for Workspace DLP and sharing-policy refusals.
+
+---
+
+## Appendix D — phase 2c findings: `@basaltkit/drives-microsoft`
+
+The OneDrive / SharePoint half is implemented. Appendix B.6 predicted six things
+about Microsoft; **all six held**. The contract needed **three changes** — two
+additive fields and one behaviour fix in the guarded fetch — and every one of
+them is a place where the contract, or the guard, was right for the two vendors
+already built and wrong for the third.
+
+### D.1 What B.6 predicted, and what happened
+
+| B.6 said | Outcome |
+|---|---|
+| Declare `deltaIncludesExisting` explicitly; Graph is `true` | **Confirmed.** `/delta` with no token enumerates the drive and only then hands over a `deltaLink`. The first sync runs in `delta` mode and a test asserts no `/children` call happens at all. |
+| Per-subscription secret, so `watch`/`unwatch` and `DriveNotificationResult.secret`; no `accountIds` | **Confirmed — with one wrinkle (D.2.1).** `clientState` is the whole authentication; `accountIds` is unused. |
+| The `validationToken` handshake is already served by the shared route | **Confirmed**, and it arrives *inside* `POST /subscriptions` rather than at registration time, so `watch()` itself fails if the route is unreachable. One caveat for the routes owner, D.5. |
+| Graph rotates refresh tokens; the §4.4 compare-and-set exists for exactly that | **Confirmed, and it is load-bearing.** A test drives the race: a stale worker's `invalid_grant` is byte-identical to a revoked grant, and without the re-read the engine would mark a healthy connection `invalid` at random under load. |
+| `@microsoft.graph.downloadUrl` is the SSRF case §5.1 was written for; add CDN hosts as `.suffix`, never bare parents | **Confirmed, and it exposed a guard bug (D.2.3).** `.files.1drv.com`, `.sharepoint.com` and `.svc.ms`; tests assert `sharepoint.com` and `evilsharepoint.com` are both refused. |
+| Deletions by id, so no `path` removal shape | **Confirmed.** `{ id, deleted: { state } }`, and `DriveRemoval.targetId` resolves. |
+
+### D.2 What the contract had to change
+
+**1. `DriveNotificationResult.secrets` — a delivery can name several
+subscriptions.** Graph posts `{"value":[…]}`, and every subscription that shares
+a notification URL can contribute an entry. Two connections in one tenant behind
+one route is the ordinary case, not an exotic one. With a single `secret` the
+adapter could only report the first, and the engine would sync one connection
+and leave the rest stale — the same failure `accountIds` and
+`DriveNotificationOutcome.connections` were introduced for in phase 2a, arriving
+from the other direction. `matches()` now accepts either shape; an adapter sets
+`secret` for the ordinary delivery and `secrets` for a batch.
+
+**2. `DriveRefreshInput.scopes` — the engine knew, and was not telling.**
+Microsoft wants a refresh request's `scope` to be a subset of the original
+grant's. `DriveRefreshInput` carried only the refresh token, so an adapter could
+only send its own defaults: a connection that consented to `Sites.Read.All`
+would be refreshed down to `Files.Read` and keep working until the first
+SharePoint call, which then fails as a permissions problem a long way from the
+cause. The connection already stores its granted scopes, so `credentials.ts`
+passes them. Dropbox and Google ignore the field.
+
+There is a matching asymmetry that is **not** fixed, deliberately:
+`DriveExchangeInput` has no `scopes`, so an adapter cannot know what
+`startAuthorization({ scopes })` asked for. For Microsoft that turned out to be
+the right shape — the authorization code already names the consent, Entra ID
+reports the granted scopes back in the token response, and this adapter
+therefore sends **no** `scope` on the code exchange. An adapter that needed it
+would have a real gap; none of the three does.
+
+**3. The guarded fetch forwarded credentials across a cross-host redirect.**
+Not an API change — a bug the first two adapters could not reach.
+`createDriveFetch` re-validated every hop (allowlist, SSRF, pinning) but reused
+`init.headers` unchanged, so an `Authorization` header followed a `302` to
+another host. Graph's `/content` redirects to a SharePoint or `1drv.com` CDN,
+and Google Drive's download redirects to `googleusercontent.com`: in both cases
+the framework would have presented a provider-wide bearer token to a host that
+already holds a narrow pre-signed URL and needs nothing. The hop is now stripped
+of `authorization`, `cookie` and `proxy-authorization` when the host changes.
+The allowlist bounds *which* hosts a redirect may reach; it never made them
+entitled to the token.
+
+An adapter-side consequence worth stating: this adapter's primary download path
+does not rely on the fix. It reads `@microsoft.graph.downloadUrl` and fetches it
+**unauthenticated**, so the token is never on that wire at all; `/content` is
+only a fallback. The guard fix is what makes the fallback safe — and what makes
+it safe for anyone else who authenticates a request that then redirects.
+
+### D.3 Where the contract flattens a real difference (Microsoft column)
+
+Four that cost something. None is worth a further contract change.
+
+1. **`revoke` does not exist, and `revoked: false` is the only way to say so.**
+   Graph has no per-application revocation endpoint at all —
+   `POST /me/revokeSignInSessions` invalidates the user's tokens for *every*
+   application, which is not what "disconnect this drive" means. The contract
+   makes `revoke?` optional, which is exactly the right latitude, and
+   `disconnect` reports `revoked: false`. But that one boolean carries two very
+   different meanings: on Dropbox it means "we tried and the provider was down",
+   and here it means "there is nothing to try, and the grant may still be live
+   until the user removes it in their account portal". An operator reading a
+   `drive:disconnected` event cannot tell those apart. Documented loudly in the
+   adapter README and the guide rather than encoded, because a third status
+   would be a contract change carrying one vendor's absence into every adapter.
+
+2. **`rootId` is one opaque string, and Graph needs a *pair*.** A connection can
+   mean a personal OneDrive, a specific drive by id, or a SharePoint site's
+   default document library, and a Graph drive id and site id are both opaque
+   strings that cannot be told apart by inspection. The adapter defines a small
+   grammar inside `rootId` (`drive:{id}`, `site:{id}`, `.../item:{id}`) and
+   exports `microsoftRoot()` to build one. The opacity of `rootId` is what makes
+   this legal — the same latitude Dropbox used for its synthetic start cursor and
+   Google used for its folder-queue cursor, now paying for itself a third time.
+   The sharp edge is that `rootId` is **caller-controlled**: `driveRoutes()`
+   takes it from `?rootId=` and it becomes part of a Graph request path, so every
+   segment is validated (`.`, `..`, `/`, `?`, `#`, `%`, `:` and whitespace all
+   refused) and the refusal never echoes the handle back.
+
+3. **A checksum is comparable within one provider — and here, only within one
+   account type.** `DriveChecksum` carries the algorithm name, which is what
+   makes this survivable, but Graph publishes `quickXorHash` on Business and
+   SharePoint and `sha1Hash`/`sha256Hash` on personal OneDrive. So "the same
+   provider" is not a fine enough grain for Microsoft: two connections of the
+   same adapter can report incomparable digests for identical bytes. The adapter
+   labels what it actually got and the README says so; nothing in the contract
+   needs to change, but an app that dedups on `checksum` across connections will
+   be wrong on Microsoft in a way it is not wrong on Dropbox.
+
+4. **A subscription is drive-scoped while a connection can be folder-scoped.**
+   Graph only accepts a drive root as a `driveItem` subscription resource, so a
+   connection confined to a subfolder is still *notified* about the whole drive.
+   The contract has no vocabulary for "the watch is wider than the connection",
+   and it costs a wasted sync rather than a wrong one — the sync itself stays
+   confined — so it is documented rather than modelled.
+
+One flattening that is **right** and should stay: the single opaque cursor.
+Graph's `@odata.nextLink`/`@odata.deltaLink` pair is a full URL rather than a
+token, which looks like a problem for an opaque `string` and is not: the adapter
+wraps the URL, `hasMore` carries the next/final distinction honestly, and
+wrapping is what keeps a provider URL out of an app's database as something
+fetchable. Unwrapping re-checks that it still points at Graph before the guard
+re-validates it for real — a provider-supplied URL the framework then fetches is
+precisely what §5.1 is about.
+
+### D.4 Contract-validation matrix — Microsoft column
+
+Same rows as B's and C's. "Fits" means it maps with no caveat worth writing down.
+
+| Capability | Microsoft | Note |
+|---|---|---|
+| OAuth | fits | `login.microsoftonline.com/{tenant}/oauth2/v2.0`, PKCE S256, `offline_access`, `response_mode=query`, all inside the pure `authorizeUrl`. `common` / `organizations` / `consumers` / a tenant GUID are one option; the tenant is validated at construction because it lands in the authority path. |
+| Refresh token | **caveat — and the contract changed** | Rotates on **every** refresh; the old token dies immediately. The engine's compare-and-set and lost-race re-read (§4.4) handle it, tested. `DriveRefreshInput.scopes` had to be added (D.2.2), because Microsoft wants the refresh scope to be a subset of the grant. |
+| Revocation | **does not fit — and the contract already said it might** | No per-application revoke exists. `revoke?` is optional, so it is omitted and `disconnect` reports `revoked: false`; the grant may stay live until the user removes consent in their portal (D.3.1). |
+| List files | caveat | `/children` is one level, which is what the contract means, and `folderId` narrows within the connection's drive only — a handle naming another drive is refused, not ignored. `rootId` carries a drive/site selector (D.3.2). |
+| List folders | fits | A `folder` facet; the engine skips them for import and a listing walks them by id. |
+| Pagination | caveat | `@odata.nextLink` is a **complete URL**, not a token. Wrapped in an opaque cursor, host-checked on the way out, then SSRF-validated by the guard. |
+| Download | caveat ×2 | `@microsoft.graph.downloadUrl` is a pre-signed URL on a CDN host **and is itself a bearer credential** — never selected into a listing, never in `raw`, never in an error, fetched with no `Authorization`. `/content` is a `302` fallback, and following it safely required the guard fix (D.2.3). |
+| File metadata | caveat | `version` is `cTag`, not `eTag` (which moves on a rename and would force a re-download). `path` is reconstructed from `parentReference.path` by stripping Graph's `…root:` addressing prefix. `checksum` differs by account type (D.3.3). |
+| Change detection | fits | `deltaIncludesExisting: true`, so the feed *is* the backfill. `/delta` works on a drive root or a folder. `410 resyncRequired` → `DRIVE_CURSOR_RESET`, which drops the persisted cursor and re-primes. |
+| Webhooks | caveat | Per-subscription `clientState` we generate; `expiresAt` surfaced and renewal is the app's, via `defineReconciler`. Two caveats: Graph validates the notification URL **synchronously inside** `POST /subscriptions`, so an unreachable route fails `watch()` itself; and a subscription is drive-scoped even when the connection is not (D.3.4). |
+| Webhook verification | **caveat — and the contract changed** | No signature anywhere: `clientState` is the entire authentication, so an entry without one is rejected. One delivery can batch several subscriptions, which needed `DriveNotificationResult.secrets` (D.2.1). |
+| Rate limits | fits | `429`/`503` with `Retry-After`, always — the interoperable path the guard already takes. No `retryAfterFromBody`: a parser that could only return `undefined` would make the guard read a body it is right to destroy. (Contrast Google, C.4, where a throttle is a `403`.) |
+| Retry | fits | `isRetryable` covers it, plus one 4xx worth retrying: `423 Locked` (checked out, virus-scanned, co-authored) maps to a retryable `DRIVE_PROVIDER_ERROR`, which is the member's whole purpose. |
+| Large files | caveat | Download unbounded (the engine's cap applies); **upload capped at 4 MB** — the lowest of the three — because `createUploadSession` is not implemented. Refused up front with `DRIVE_CONTENT_TOO_LARGE`. |
+| Errors | fits | Real HTTP status codes, unlike Dropbox's universal `409` and Google's `403` throttle. `DRIVE_CREDENTIALS_INVALID` / `DRIVE_ACCESS_DENIED` / `DRIVE_ITEM_NOT_FOUND` / `DRIVE_CURSOR_RESET` / `DRIVE_PROVIDER_ERROR` cover Graph's taxonomy with nothing left over. Only `error.code` is forwarded — `error.message` quotes the request, and on a download path the request is a credential. |
+
+### D.5 One thing for the routes owner
+
+The shared POST notification route reads the raw body **before** it looks at the
+query string. Graph's validation handshake is a POST with `?validationToken=…`
+and an **empty** body, so it only survives `rawBodyOf` where the app's raw-body
+wiring yields an empty `Buffer`/string rather than nothing at all — and a
+Fastify or Express app with no parser registered for Graph's `text/plain`
+content type may yield nothing. The fail-closed behaviour is right in general
+and wrong for this one shape: a handshake that cannot be answered means
+`watch()` fails, with a `subscriptionValidationFailed` that points at the wrong
+thing. Checking the query for a challenge before demanding bytes would fix it;
+it is in `packages/drives/src/routes.ts`, which phase 2c did not touch.
+
+### D.6 Multi-provider coexistence, again
+
+`packages/drives-microsoft/tests/multi-provider.test.ts` repeats B.4's and C.6's
+suite a third time, and adds the two collisions Microsoft makes possible: the
+fake connection is given the Graph connection's **channel secret** verbatim (the
+provider filter, not luck, is what keeps them apart), and the rotation test
+asserts that rotating Microsoft's refresh token leaves the fake's sealed blob and
+revision untouched — a rotation that bled across providers would leave the other
+connection holding a token its own provider never issued. It also asserts the
+capability asymmetry in both directions: the fake refuses uploads and revokes its
+grant, Microsoft accepts small uploads and has no revocation to perform.
+
+### D.7 Not verifiable without a real Entra ID app registration
+
+Tested against a faithful fetch-level fake of Graph's documented HTTP surface,
+with no credentials and no network. Open points, listed in the adapter's README:
+whether every account type really rotates the refresh token (the fake always
+does, which is the harder direction); the exact `error.code` strings for a
+missing `Sites.Read.All`, a sensitivity label and a conditional-access refusal;
+whether a `429` ever arrives without `Retry-After` (if it does, this adapter
+should declare `retryAfterFromBody` after all); whether `$select` really
+suppresses `@microsoft.graph.downloadUrl` on every tenant, which is what keeps
+the credential out of listings; `/delta` on a large SharePoint library and
+whether a `deltaLink` outlives the sync interval; the exact
+`expirationDateTime` ceiling per resource type; and whether a batched delivery
+really mixes `clientState` values in the wild — the handling exists because the
+envelope allows it.

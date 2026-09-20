@@ -9,6 +9,10 @@ export {
   DriveHostNotAllowedError,
   DriveContentTooLargeError,
   DriveUnsupportedError,
+  DriveAccessDeniedError,
+  DriveCursorResetError,
+  DriveItemNotFoundError,
+  DriveProviderError,
   DriveNotificationInvalidError,
   DriveSecretMalformedError,
   DriveSecretKeyUnknownError,
@@ -30,6 +34,7 @@ export {
   capStream,
   DEFAULT_MAX_BYTES,
   DEFAULT_TIMEOUT_MS,
+  RATE_LIMIT_BODY_BYTES,
   type GuardedFetch,
   type GuardedRequestInit,
   type GuardedResponse,
@@ -107,6 +112,7 @@ export {
   type DrivesOptions,
   type ConnectInput,
   type DisconnectOptions,
+  type DriveRevocationOutcome,
 } from './drives.js'
 
 export {
@@ -137,9 +143,22 @@ export {
   watchConnection,
   verifyHmacSignature,
   MemoryReplayGuard,
+  type DriveConnectionCandidates,
   type DriveNotificationOutcome,
+  type DriveNotificationQuery,
   type HandleNotificationOptions,
   type NotificationReplayGuard,
 } from './notifications.js'
+
+export {
+  driveRoutes,
+  readCookie,
+  notificationBytes,
+  DEFAULT_DRIVES_BASE_PATH,
+  DEFAULT_CONNECT_COOKIE,
+  DEFAULT_NOTIFICATION_MAX_BYTES,
+  type DriveRoutesOptions,
+  type DriveNotificationRoutes,
+} from './routes.js'
 
 export { drivesPlugin, DRIVES, type DrivesPluginOptions } from './plugin.js'

@@ -27,7 +27,11 @@ import { DriveContentTooLargeError, DriveHostNotAllowedError, DriveRateLimitedEr
  *    last code that should exist twice in a repository.
  * 3. **Manual redirects** — never followed automatically. Each hop is
  *    re-validated from scratch and the hop count is capped, so a redirect chain
- *    cannot walk out of the allowlist or spin forever.
+ *    cannot walk out of the allowlist or spin forever. A hop to a **different
+ *    host** also drops the caller's credential headers: `/content` on Graph
+ *    and a Google Drive download both redirect to a CDN that already holds a
+ *    pre-signed URL, and handing it a provider-wide bearer token as well is a
+ *    credential given to a host that never needed it.
  * 4. **Byte cap** — enforced *while streaming*, so an oversized body (or a
  *    decompression bomb) is abandoned mid-flight rather than after it has been
  *    written somewhere.
@@ -44,8 +48,17 @@ export type GuardedFetch = (url: string, init?: GuardedRequestInit) => Promise<G
 export interface GuardedRequestInit {
   method?: string
   headers?: Record<string, string>
-  /** Request body. A string or buffer only — an adapter that needs to stream a body uses `upload`. */
-  body?: string | Buffer
+  /**
+   * Request body.
+   *
+   * A `Readable` is streamed straight onto the socket and never buffered.
+   * Phase 1 allowed only `string | Buffer`, which made {@link DriveProvider.upload}
+   * unimplementable without holding a whole file in memory — Dropbox's
+   * single-shot `files/upload` takes up to 150 MB. A streamed body is **not
+   * replayable**, so a redirect destroys it instead of silently re-sending
+   * nothing; the content endpoints these adapters post to do not redirect.
+   */
+  body?: string | Buffer | Readable
   signal?: AbortSignal
   /**
    * Overrides the default byte cap for this call. Metadata calls want a small
@@ -95,6 +108,15 @@ export interface DriveFetchOptions {
    * cleartext as a side effect of allowing a private address.
    */
   allowedSchemes?: readonly string[]
+  /**
+   * Reads a vendor-specific retry hint out of a 429/503 body — see
+   * {@link DriveProvider.retryAfterFromBody}.
+   *
+   * At most {@link RATE_LIMIT_BODY_BYTES} of the body are read before it is
+   * abandoned, so an error path can never be turned into an unbounded read.
+   * A `Retry-After` header, when present, wins.
+   */
+  retryAfterFromBody?: (body: string) => number | undefined
   /** Injected resolver (tests). Matches `@basaltkit/webhooks`' guard option. */
   lookup?: (host: string) => Promise<{ address: string; family?: number }[]>
   /**
@@ -107,13 +129,27 @@ export interface DriveFetchOptions {
 /** What performs the validated request. Replaceable so the guard can be tested without sockets. */
 export type Transport = (
   url: URL,
-  init: { method: string; headers: Record<string, string>; body?: string | Buffer; signal?: AbortSignal; timeoutMs: number },
+  init: {
+    method: string
+    headers: Record<string, string>
+    body?: string | Buffer | Readable
+    signal?: AbortSignal
+    timeoutMs: number
+  },
   pinned: ValidatedAddress | null,
 ) => Promise<{ status: number; headers: Record<string, string>; body: Readable }>
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024
 export const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_REDIRECTS = 3
+/**
+ * How much of a 429/503 body may be read to find a vendor retry hint.
+ *
+ * Small on purpose: the whole point of destroying a rate-limited body is that a
+ * throttled provider must not be able to make us read more, and a provider that
+ * answers 429 with a gigabyte is exactly the case this bound exists for.
+ */
+export const RATE_LIMIT_BODY_BYTES = 8 * 1024
 
 /**
  * Host allowlist check.
@@ -180,6 +216,34 @@ export function capStream(source: Readable, maxBytes: number): Readable {
   return capped
 }
 
+/**
+ * Reads at most {@link RATE_LIMIT_BODY_BYTES} of a rate-limited body and asks
+ * the provider's parser for a hint. Anything that goes wrong — a truncated
+ * body, a parser that throws, a socket that dies — produces `undefined` and the
+ * caller falls back to its own backoff schedule. An error path must not be able
+ * to raise a second, different error.
+ */
+async function readRateLimitHint(
+  body: Readable,
+  parse: (body: string) => number | undefined,
+): Promise<number | undefined> {
+  try {
+    const chunks: Buffer[] = []
+    let seen = 0
+    for await (const chunk of body) {
+      chunks.push(chunk as Buffer)
+      seen += (chunk as Buffer).length
+      if (seen >= RATE_LIMIT_BODY_BYTES) break
+    }
+    const hint = parse(Buffer.concat(chunks).subarray(0, RATE_LIMIT_BODY_BYTES).toString('utf8'))
+    return typeof hint === 'number' && Number.isFinite(hint) && hint >= 0 ? hint : undefined
+  } catch {
+    return undefined
+  } finally {
+    body.destroy()
+  }
+}
+
 async function collect(body: Readable): Promise<Buffer> {
   const chunks: Buffer[] = []
   for await (const chunk of body) chunks.push(chunk as Buffer)
@@ -199,17 +263,34 @@ export function createDriveFetch(options: DriveFetchOptions): GuardedFetch {
     let target = rawUrl
     let method = init.method ?? 'GET'
     let body = init.body
+    // Mutable, because a redirect to another host must not carry the caller's
+    // credentials with it. See `stripCredentials`.
+    let headers: Record<string, string> = { ...init.headers }
 
     for (let hop = 0; ; hop++) {
-      const url = new URL(target)
+      const url = parseTarget(target, options.provider)
       if (!hostAllowed(url.hostname, options.allowedHosts)) {
         throw new DriveHostNotAllowedError(url.hostname, options.provider)
       }
-      const validated = await resolveAndValidate(target, {
-        allowedSchemes: [...(options.allowedSchemes ?? ['https:'])],
-        ...(options.allowPrivateHosts ? { allowPrivateHosts: true } : {}),
-        ...(options.lookup ? { lookup: options.lookup } : {}),
-      })
+      // The refusal is re-raised as our own error, carrying the HOST and
+      // nothing else. `resolveAndValidate` reports the URL it refused — right
+      // for a webhook endpoint an operator configured, wrong here, where the
+      // URL being validated is routinely a pre-signed download URL that is
+      // itself a bearer credential for the file (`@microsoft.graph.downloadUrl`,
+      // Google's `googleusercontent.com` redirect target). That message reaches
+      // `drive:sync_failed`, an app's logger and `@basaltkit/audit` verbatim.
+      // No `cause`, deliberately: a cause chain puts it straight back into
+      // anything that inspects or serialises the error.
+      let validated: Awaited<ReturnType<typeof resolveAndValidate>>
+      try {
+        validated = await resolveAndValidate(target, {
+          allowedSchemes: [...(options.allowedSchemes ?? ['https:'])],
+          ...(options.allowPrivateHosts ? { allowPrivateHosts: true } : {}),
+          ...(options.lookup ? { lookup: options.lookup } : {}),
+        })
+      } catch {
+        throw new DriveHostNotAllowedError(url.hostname, options.provider, 'the address failed validation')
+      }
 
       const response = await transport(
         validated.url,
@@ -219,7 +300,7 @@ export function createDriveFetch(options: DriveFetchOptions): GuardedFetch {
             // Deliberately no accept-encoding: see note 5 at the top. A body we
             // never inflate cannot be a decompression bomb.
             accept: 'application/json',
-            ...init.headers,
+            ...headers,
           },
           ...(body !== undefined ? { body } : {}),
           ...(init.signal ? { signal: init.signal } : {}),
@@ -235,17 +316,46 @@ export function createDriveFetch(options: DriveFetchOptions): GuardedFetch {
         }
         // Resolve relative Locations against the hop we are on, then loop — the
         // next iteration re-runs the allowlist and the SSRF guard from scratch.
-        target = new URL(response.headers['location'] as string, validated.url).toString()
+        // A `Location` can itself be a pre-signed URL, so a malformed one is
+        // refused without quoting it back.
+        let next: URL
+        try {
+          next = new URL(response.headers['location'] as string, validated.url)
+        } catch {
+          throw new DriveHostNotAllowedError(url.hostname, options.provider, 'the redirect target could not be parsed')
+        }
+        // A hop to a DIFFERENT host does not get the caller's credentials.
+        // This is not hypothetical: Graph's `/content` answers 302 to a CDN and
+        // Google Drive redirects to `googleusercontent.com`, and forwarding the
+        // `Authorization` header would present a provider-wide bearer token to
+        // a host that already has a pre-signed URL and needs nothing. The
+        // allowlist bounds which hosts those are; it does not make them
+        // entitled to the token.
+        if (next.host !== url.host) headers = stripCredentials(headers)
+        target = next.toString()
         // A redirected non-GET is replayed as GET without a body, matching what
         // every HTTP client does for 303 and what these APIs actually mean.
+        // A streamed body cannot be replayed at all, so it is destroyed rather
+        // than left dangling on a socket nobody is reading.
         method = 'GET'
+        if (body !== undefined && typeof body !== 'string' && !Buffer.isBuffer(body)) body.destroy()
         body = undefined
         continue
       }
 
       if (response.status === 429 || response.status === 503) {
-        response.body.destroy()
-        throw new DriveRateLimitedError(parseRetryAfter(response.headers['retry-after']), options.provider)
+        // The header is the interoperable answer and wins. Only when it is
+        // absent is a bounded prefix of the body read, and only when the
+        // provider declared a parser for it: Dropbox routinely answers 429 with
+        // no header and `retry_after` in the JSON instead.
+        const headerHint = parseRetryAfter(response.headers['retry-after'])
+        let hint = headerHint
+        if (hint === undefined && options.retryAfterFromBody) {
+          hint = await readRateLimitHint(response.body, options.retryAfterFromBody)
+        } else {
+          response.body.destroy()
+        }
+        throw new DriveRateLimitedError(hint, options.provider)
       }
 
       const capped = capStream(response.body, maxBytes)
@@ -269,6 +379,39 @@ export function createDriveFetch(options: DriveFetchOptions): GuardedFetch {
       }
     }
   }
+}
+
+/**
+ * Parses a target URL without letting the URL escape into the failure.
+ *
+ * Node's `ERR_INVALID_URL` carries the offending string on `error.input`, which
+ * a logger that prints a whole error object will happily emit — and the string
+ * here can be a provider download URL, which is a credential. There is no
+ * hostname to report for something that did not parse, so the refusal says so.
+ */
+function parseTarget(target: string, provider: string): URL {
+  try {
+    return new URL(target)
+  } catch {
+    throw new DriveHostNotAllowedError('(unparseable url)', provider, 'the url could not be parsed')
+  }
+}
+
+/**
+ * Headers that must not survive a redirect to another host.
+ *
+ * Matched case-insensitively, because a caller writes `Authorization` as often
+ * as `authorization` and only one of the two spellings being dropped is worse
+ * than neither.
+ */
+const CREDENTIAL_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization'])
+
+function stripCredentials(headers: Record<string, string>): Record<string, string> {
+  const kept: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (!CREDENTIAL_HEADERS.has(key.toLowerCase())) kept[key] = value
+  }
+  return kept
 }
 
 /**
@@ -309,6 +452,15 @@ const pinnedTransport: Transport = (url, init, pinned) =>
     // a worker forever, and a connect-only timeout does not catch it.
     request.setTimeout(init.timeoutMs, () => request.destroy(new Error('drive request timed out')))
     request.on('error', reject)
-    if (init.body !== undefined) request.write(init.body)
+    const body = init.body
+    if (body !== undefined && typeof body !== 'string' && !Buffer.isBuffer(body)) {
+      // Streamed upload: piped, never buffered, and a source that fails takes
+      // the request down with it rather than sending a truncated file the
+      // provider would happily accept as complete.
+      body.on('error', (error) => request.destroy(error))
+      body.pipe(request)
+      return
+    }
+    if (body !== undefined) request.write(body)
     request.end()
   })

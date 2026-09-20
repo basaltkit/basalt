@@ -6,6 +6,7 @@ import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
   rateLimitKeyParitySuite,
+  rawBodyParitySuite,
   sendWith,
   streamParitySuite,
   uploadParitySuite,
@@ -58,6 +59,7 @@ const driver: ParityDriver = {
 }
 
 uploadParitySuite('hono', driver)
+rawBodyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
 streamParitySuite('hono', driver)

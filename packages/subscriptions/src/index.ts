@@ -125,8 +125,10 @@ export {
   UnknownPlanMetaError,
   BillingRedirectNotAllowedError,
   INVOICES,
+  DEFAULT_WEBHOOK_MAX_BYTES,
   type SubscriptionsPluginOptions,
   type BillingRoutesOptions,
+  type BillingWebhookRouteOptions,
 } from './plugin.js'
 export {
   Invoices,

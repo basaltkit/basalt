@@ -87,6 +87,18 @@ export {
 export { sanitizeFilename } from './multipart.js'
 
 export {
+  rawBody,
+  isRawBody,
+  rawBodyOptionsOf,
+  rawBodyRouteMatcher,
+  RawBodySession,
+  DEFAULT_RAW_BODY_MAX_BYTES,
+  type RawBodyOptions,
+  type RawBody,
+  type ResolvedRawBodyOptions,
+} from './raw-body.js'
+
+export {
   sse,
   isSseResponse,
   sseProducerOf,

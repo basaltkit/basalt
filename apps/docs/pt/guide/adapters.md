@@ -362,6 +362,100 @@ rota que não é de upload continua a analisar um body multipart dentro do
 `bodyLimit`. No OpenAPI, o body do pedido da rota fica documentado como
 `multipart/form-data`.
 
+## Corpos de pedido em bruto (assinaturas de webhook)
+
+Há corpos que não podem ser analisados de todo. A Stripe, a Paddle, a Lemon
+Squeezy, a Dropbox, a Microsoft Graph e o GitHub assinam **os octetos que
+enviaram**, por isso uma assinatura só pode ser verificada contra esses bytes
+exactos. `JSON.stringify` do objecto analisado não é uma aproximação deles —
+espaços diferentes, ordem de chaves diferente, `1.50` reimpresso como `1.5` — e
+verificar contra isso falha em todas as entregas legítimas.
+
+Dê a essa rota `body: rawBody({ … })` de `@basaltkit/http` e ela recebe os bytes
+intactos nas três frameworks:
+
+```ts
+import { rawBody, route } from '@basaltkit/http'
+
+route({
+  method: 'POST',
+  url: '/webhooks/stripe',
+  body: rawBody({ maxBytes: 64 * 1024 }),
+  async handler({ body, request }) {
+    const event = stripe.webhooks.constructEvent(
+      body.text(),                                  // os bytes, descodificados como UTF-8
+      request.headers['stripe-signature'] as string,
+      process.env.STRIPE_WEBHOOK_SECRET!,
+    )
+    // body.bytes        → Buffer, exactamente o que chegou
+    // body.contentType  → 'application/json' (essência, em minúsculas)
+    // body.contentLength→ o que o cliente declarou, quando declarou
+    return { received: true }
+  },
+})
+```
+
+- **O pipeline corre primeiro**, tal como em `upload()`: pre-hooks (rate limit,
+  CORS), enrichers e guards correm todos antes de ler um único byte do corpo. Um
+  corpo que a rota nunca chega a ler é drenado e a resposta leva
+  `Connection: close`, por isso nada fica pendurado.
+- **Nada analisa os bytes** — nem a Basalt, nem os parsers da própria aplicação.
+  O handler recebe um `Buffer` e `request.body` fica `undefined`.
+- **O limite vale sobre os bytes recebidos**, não sobre o que o cliente declara.
+  Um `Content-Length` acima de `maxBytes` é recusado antes de se ler o que quer
+  que seja.
+- **As rotas vizinhas não são afectadas.** Uma rota `rawBody()` numa aplicação
+  não muda como qualquer outra rota é analisada ou validada.
+- **No OpenAPI** o corpo do pedido é publicado como bytes opacos (`*/*`,
+  `format: binary`) em vez de um esquema inventado.
+
+| Opção de `rawBody()` | Predefinição | Ao ultrapassar |
+|---|---|---|
+| `maxBytes` | 1 MiB | `413 PAYLOAD_TOO_LARGE`, sobre o `Content-Length` declarado ou sobre os bytes recebidos |
+
+Outros erros: `400 BAD_REQUEST` quando o corpo termina a meio (o cliente
+desligou) e `500 RAW_BODY_UNAVAILABLE` quando o pedido **declarou** bytes (um
+`Content-Length` acima de zero, ou um `Transfer-Encoding`) e nenhum adaptador os
+conseguiu fornecer — uma recusa, deliberadamente, em vez de uma reconstrução.
+
+Um pedido que **não** declarou corpo nenhum é um caso diferente:
+`Content-Length: 0`, ou nenhum header de framing, devolve um `Buffer` de
+comprimento zero. Isso é um facto sobre o pedido e não um palpite sobre uma
+mensagem — e é a forma com que vários fornecedores validam um URL de webhook: a
+Microsoft Graph faz POST de `?validationToken=…` sem corpo nenhum, antes de a
+subscrição para a qual assinaria sequer existir. Recusar esses faria um problema
+de body-parser aparecer como `subscriptionValidationFailed`, apontando o
+operador para a coisa completamente errada.
+
+### O que cada adaptador faz — e a única ressalva
+
+| Adaptador | Como os bytes sobrevivem | Ressalva |
+|---|---|---|
+| **Fastify** | As rotas `rawBody()` são montadas num scope encapsulado próprio cujo único content-type parser entrega o stream do pedido por ler, para qualquer content type. | Nenhuma. Os seus parsers (o JSON do adaptador, `@fastify/multipart`, qualquer um que tenha registado) nunca são removidos nem sobrepostos — continuam a servir todas as outras rotas, e um corpo não-JSON numa rota JSON continua a responder `415`. |
+| **Hono** | A leitura limitada do plugin e os seus pre/after hooks afastam-se destes caminhos, por isso o stream do próprio `Request` web continua a levar os octetos. | Nenhuma. O `bodyLimit` não se aplica à rota; aplica-se o `maxBytes` dela. |
+| **Express** | O `expressPlugin` dá ao `express.json()` e ao `express.urlencoded()` um filtro `type` que devolve falso para os caminhos `rawBody()`, por isso o body-parser nunca os lê, mais um hook `verify` que guarda o buffer como segunda linha de defesa. Ambos são instalados **apenas** quando existe uma rota `rawBody()`. | Uma, e é real — ver abaixo. |
+
+A ressalva do Express: o `express.json()` é montado sobre toda a aplicação, por
+isso se **você** trouxer a sua própria aplicação com o parser já montado, o
+body-parser consome o stream antes de qualquer rota Basalt correr e os bytes
+originais desaparecem. Dê-lhe o hook `verify` e eles sobrevivem:
+
+```ts
+import express from 'express'
+import { captureRawBody, expressPlugin } from '@basaltkit/express'
+
+const app = express()
+app.use(express.json({ verify: captureRawBody }))
+app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
+
+expressPlugin({ app, routes })
+```
+
+A convenção comum `verify: (req, _res, buf) => { req.rawBody = buf }` também é
+honrada, por isso uma aplicação que já faça isso não precisa de mudar nada. Sem
+nenhuma das duas, a rota responde `500 RAW_BODY_UNAVAILABLE`. É esse o objectivo:
+recusa em vez de verificar uma assinatura contra uma mensagem que ninguém enviou.
+
 ## Respostas em stream
 
 Um handler pode devolver **um stream** em vez de um payload JSON: `stream(source, options)`
