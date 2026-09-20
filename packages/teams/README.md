@@ -140,6 +140,74 @@ await teams.removeMember('acme', 'u2')
 
 Last-owner protection: `changeRole` and `removeMember` throw `LastOwnerError` (400) if they would leave the team without any `owner`.
 
+### Notifying everyone with a role
+
+`members()` returns identifiers, not people: `{ tenantId, userId, role }`. To
+*email* the admins of a tenant you also need their addresses — and looking them
+up in the auth tables from application code couples your product to the auth
+schema, while calling `findById` once per member is N round trips.
+
+Give `Teams` a user directory and both problems go away:
+
+```ts
+import { authPlugin } from '@basaltkit/auth'
+import { teamsPlugin } from '@basaltkit/teams'
+
+const users = sqliteAuthStores('./data/auth.db').users   // any UserSource
+
+plugins: [
+  authPlugin({ users, secret }),
+  teamsPlugin({ users }),          // the same directory, nothing else to wire
+]
+```
+
+```ts
+const teams = app.container.get(TEAMS)
+
+// Everyone who can act as an admin — owners included (rank 3 >= admin 2).
+for (const { user, role } of await teams.roleRecipients('acme', 'admin')) {
+  await mailer.send(user.email, 'A task is waiting for approval', { role })
+}
+
+// The whole team, with contacts, in one lookup.
+const everyone = await teams.membersWithUsers('acme')
+// [{ tenantId: 'acme', userId: 'u1', role: 'owner', createdAt: 1_7…,
+//    user: { id: 'u1', email: 'ada@acme.test', emailVerified: true } }, …]
+```
+
+What the pair guarantees:
+
+- **One lookup, automatically.** If the directory implements `findByIds`
+  (`MemoryUserSource` and both shipped drivers do), the whole team resolves in a
+  single batched query; otherwise `Teams` falls back to one `findById` per
+  member. The decision lives in one place, so an app gets the fast path the day
+  its driver grows one, with no code change.
+- **No credential ever leaks.** Whatever the directory hands back — `findById`
+  on an `@basaltkit/auth` `UserSource` returns the *full* stored record — is
+  projected down to `{ id, email, emailVerified }`.
+- **Tenant scoped.** The ids come from that tenant's membership records and
+  nowhere else, so no caller can point the lookup at arbitrary accounts, and a
+  user the directory returns that wasn't asked for is discarded.
+- **Missing accounts don't break the list.** A membership whose account no
+  longer exists (deleted, or never became a real user) is *skipped* — `user` is
+  required on `TeamMemberWithUser`, so the result is always safe to email. The
+  membership record itself is untouched; `members()` still shows it.
+
+`roleRecipients` honours the hierarchy for **ranked** roles and matches
+**unranked** ones exactly (every role outside `roleRank` ranks 0, so ranking
+them would notify all of them at once). Narrow a ranked role the same way with
+`{ exact: true }`:
+
+```ts
+await teams.roleRecipients('acme', 'admin')                 // owners + admins
+await teams.roleRecipients('acme', 'admin', { exact: true })// admins only
+await teams.roleRecipients('acme', 'billing-contact')       // exact (unranked)
+```
+
+Without a `users` directory both methods throw `TeamUserSourceMissingError`
+(`TEAM_USER_SOURCE_MISSING`, 500) rather than silently returning contact-less
+rows.
+
 ### Custom role hierarchy
 
 Roles are free-form strings; the hierarchy is a name → rank map (roles outside the map have rank 0):
@@ -208,9 +276,11 @@ Options (`TeamsOptions`; `TeamsPluginOptions` is the same minus `hooks`) — all
 |---|---|---|---|
 | `memberships` | `MembershipStore` | `MemoryMembershipStore` | Where memberships live. |
 | `invitations` | `InvitationStore` | `MemoryInvitationStore` | Where invitations live. |
+| `users` | `MemberUserSource` | — | Read-only user directory for `membersWithUsers` / `roleRecipients`. An `@basaltkit/auth` `UserSource` fits as-is. |
 | `access` | `RoleAssigner` | — | Mirrors roles (e.g. permissions' AccessStore). |
 | `inviteTtl` | `DurationInput` | `'7d'` | Invitation link validity. |
 | `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Role hierarchy. |
+| `grantableRoles` | `readonly TeamRole[]` | `[]` | Unranked roles an acting user may still grant. |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests). |
 | `hooks` | `HookBus` | — | Class only; the plugin injects it. |
 
@@ -252,6 +322,8 @@ member can also be denied for up to `ttlMs`.
 | `invite(input)` | `Promise<{ invitation, token }>` | Creates/replaces the invitation; emits `team:invited`. Only the token hash is stored. |
 | `accept(token, userId, acceptingEmail?)` | `Promise<Membership>` | Consumes the token and enrolls the user. Pass the caller's verified email to bind acceptance to the invited address. |
 | `members(tenantId)` | `Promise<Membership[]>` | Lists the members. |
+| `membersWithUsers(tenantId)` | `Promise<TeamMemberWithUser[]>` | Memberships + each member's `{ id, email, emailVerified }`, batched through `users`. Memberships with no account are skipped. Needs `users`. |
+| `roleRecipients(tenantId, role, opts?)` | `Promise<TeamMemberWithUser[]>` | Who to notify for a role — a filter over `membersWithUsers` (no extra lookup). Ranked roles include higher ranks; unranked roles (and `opts.exact`) match exactly. |
 | `pendingInvites(tenantId)` | `Promise<PublicInvitation[]>` | Non-expired pending invitations. |
 | `invitation(id)` | `Promise<PublicInvitation \| null>` | One invitation (without the token). |
 | `revokeInvite(id)` | `Promise<void>` | Cancels a pending invitation. |
@@ -271,9 +343,16 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 | `POST /team/invites/accept` `{ token }` | (login only) | Accepts the invitation. |
 | `GET /team/invites` | admin | Lists pending invitations. |
 | `DELETE /team/invites/:id` | admin | Revokes it (404 if from another tenant). |
-| `GET /team/members` | member | Lists members. |
+| `GET /team/members` | member | Lists members. With `teamRoutes({ memberContacts: true })` each entry also carries `user: { id, email, emailVerified }`. |
 | `PATCH /team/members/:userId` `{ role }` | admin | Changes the role. |
 | `DELETE /team/members/:userId` | admin | Removes the member. |
+
+`TeamRoutesOptions`:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `requireVerifiedEmail` | `boolean` | `true` | Require `ctx().user.emailVerified === true` to accept an invitation. |
+| `memberContacts` | `boolean` | `false` | Include each member's `user: { id, email, emailVerified }` in `GET /team/members`, resolved through the `users` directory. Off by default: a team's addresses go over HTTP only when you say so. The ids looked up come from the tenant's own memberships, never from the request. |
 
 ### Types, stores, and constants
 
@@ -284,6 +363,9 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 | `Invitation` / `PublicInvitation` | Invitation with/without the `token` field. |
 | `MembershipStore` / `InvitationStore` | Interfaces for you to implement over your DB. |
 | `MemoryMembershipStore` / `MemoryInvitationStore` | In-memory implementations (dev/testing). |
+| `MemberUser` | `{ id, email, emailVerified? }` — the safe user shape a team listing exposes. |
+| `MemberUserSource` | `{ findById(id), findByIds?(ids) }` — the user directory `users` expects; `@basaltkit/auth`'s `UserSource` satisfies it structurally, so neither package imports the other. |
+| `TeamMemberWithUser` | `Membership & { user: MemberUser }`. |
 | `RoleAssigner` | `{ assignRole(userId, role, scope), removeRole(...) }`. |
 | `DEFAULT_ROLE_RANK` | `{ owner: 3, admin: 2, member: 1 }`. |
 | `OWNER` | The string `'owner'`. |
@@ -297,6 +379,7 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 | `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 | `tenantMembershipPlugin` found no membership; a `meta.teamRole` route ran with no user **or** no tenant in context; or an `actingUserId` isn't a member of the team. |
 | `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | The role's rank is below what's required — including an actor trying to grant, or re-role someone, above their own rank. |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | The change would leave the team with no `owner`. |
+| `TeamUserSourceMissingError` | `TEAM_USER_SOURCE_MISSING` | 500 | `membersWithUsers` / `roleRecipients` (or `teamRoutes({ memberContacts: true })`) ran without a `users` directory on the service. |
 | `NoTenantError` | `TEAM_NO_TENANT` | 400 | A `teamRoutes()` endpoint ran with no `ctx().tenant` (or, on accept, no `ctx().user`). Not exported — matched by code. |
 | `InviteNotFoundError` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` for an id that doesn't exist or belongs to another tenant. Not exported — matched by code. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.teamRole` and `teamsPlugin` isn't registered. Raised by the adapter, from `@basaltkit/http`. |

@@ -137,8 +137,51 @@ const users: UserSource = {
   },
   // Optional, but required for email verification and password reset:
   async update(id, patch: UserPatch) { /* UPDATE ... */ return null },
+  // Optional: bulk contact lookup (see below).
+  async findByIds(ids) { /* SELECT id, email, email_verified WHERE id IN (...) */ return [] },
 }
 ```
+
+| Method | Required? | Returns | Purpose |
+|---|---|---|---|
+| `findByEmail(email)` | Yes | `AuthUser \| null` | Sign-in and registration lookups. Emails are case-insensitive identities. |
+| `findById(id)` | Yes | `AuthUser \| null` | Resolving the user behind a token, session or API key. |
+| `create({ email, passwordHash })` | Yes | `AuthUser` | Registration; the hash arrives already computed. |
+| `update(id, patch)` | No | `AuthUser \| null` | Email verification and password reset need it (`AUTH_UPDATE_UNSUPPORTED` without it). |
+| `findByIds(ids)` | No | `PublicUser[]` | **Bulk contact lookup** — see below. |
+
+#### `findByIds` — one lookup instead of N
+
+`findById` resolves one account at a time, which pushes anything that needs the
+*contact details of a group* ("email every admin of this tenant") into either N
+round trips or — worse — reading the auth tables directly from application code,
+coupling the product to the auth schema.
+
+`findByIds` is the bulk counterpart, and its contract is deliberately narrower
+than `findById`'s:
+
+- it resolves **`PublicUser`**, never `AuthUser` — a directory lookup has no
+  business carrying a password hash, and the shipped drivers do not even
+  `SELECT` the credential columns;
+- one entry per **found** id, **in the order of `ids`**; ids with no account are
+  omitted, so the result may be shorter than the input;
+- duplicate ids collapse to one entry, and an empty list resolves to `[]`
+  without touching the database.
+
+It is optional: stores written before it keep compiling, and callers fall back
+to one `findById` per id. `@basaltkit/teams` does exactly that — pass the same
+`UserSource` to `teamsPlugin({ users })` and `teams.roleRecipients(tenantId,
+'admin')` returns the admins' contacts, taking the batched path automatically
+when your driver has one.
+
+```ts
+const contacts = await users.findByIds?.(['u1', 'u2', 'ghost'])
+// → [{ id: 'u1', email: 'ada@acme.test', emailVerified: true }, { id: 'u2', ... }]
+```
+
+The shipped drivers (`@basaltkit/auth-prisma`, `@basaltkit/auth-sqlite`) and
+`MemoryUserSource` all implement it; the SQL ones chunk the id list so a large
+tenant can't exceed the driver's bind-parameter limit.
 
 ### Register, login, and logout (by code)
 
@@ -442,7 +485,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 
 | Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `users` | `UserSource` | Yes | — | Where users come from (your DB). |
+| `users` | `UserSource` | Yes | — | Where users come from (your DB). Implement the optional `findByIds` for batched contact lookups. |
 | `secret` | `string` | Yes | — | Secret that signs the JWTs (HS256). |
 | `hasher` | `PasswordHasher` | No | `ScryptPasswordHasher` | Password hashing algorithm. |
 | `sessions` | `SessionStore` | No | `MemorySessionStore` | Session storage. |
@@ -509,6 +552,7 @@ Options (`ApiKeysPluginOptions`):
 | `ThrottleStore` / `MemoryThrottleStore` / `RedisThrottleStore` (`RedisThrottleClient`: `eval` + `del`) | Where throttle counters live; Redis shares them across replicas. |
 | `generateTotpSecret`, `totp`, `verifyTotp`, `otpauthUri`, `base32Encode`, `base32Decode` | TOTP primitives (RFC 6238). Advanced. |
 | `publicUser(user)` | Converts `AuthUser` → `PublicUser` (removes the hash). |
+| `UserSource.findByIds(ids)` | Optional bulk contact lookup: `PublicUser[]`, in the order of `ids`, missing ids omitted. Powers `@basaltkit/teams`' `roleRecipients`. |
 | `AUTH`, `API_KEYS`, `OAUTH` | Injection tokens: `container.get(AUTH)` returns the `Auth` instance; `OAUTH` returns the `OAuth` instance. |
 | `oauthPlugin`, `oauthRoutes` | Social-login plugin (`{ secret, providers }`) and its routes (`{ callbackBaseUrl, successRedirect? }`). |
 | `googleProvider`, `githubProvider`, `oidcProvider`, `discoverOidcProvider` | OAuth 2.0 / OpenID Connect providers. Each takes `{ clientId, clientSecret, scopes? }`. |

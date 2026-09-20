@@ -517,6 +517,69 @@ await tenantTransaction(db, async (tx) => {
   RLS não vê nada: dá ao código central/admin o seu próprio role de base de
   dados (`BYPASSRLS`, ou um que as políticas não cubram).
 
+**Pesquisa full-text com RLS — o índice GIN desaparece em silêncio.** Ativar RLS
+numa tabela que também tem uma coluna `tsvector` com índice GIN (o que o
+`@basaltkit/search-postgres` cria) é uma armadilha que nada assinala: o
+PostgreSQL só pode avaliar um qualificador *antes* de uma política de segurança
+de linha se esse qualificador for `LEAKPROOF`, e o operador de pesquisa de texto
+`@@` não é. Por isso, precisamente para o role que a política protege,
+`tsv @@ plainto_tsquery(…)` nunca pode ser uma condição de índice — passa a ser
+um filtro aplicado depois da política, e o plano degrada-se para uma varredura
+sequencial sobre as linhas de todos os tenants. Medido em 30 200 documentos
+(PostgreSQL 16):
+
+```text
+-- como owner                          -- como role da aplicação, o mesmo SQL
+->  Bitmap Heap Scan                    ->  Seq Scan on basalt_search
+      Recheck Cond: (tsv @@ …)                Filter: (… AND (tsv @@ …))
+      ->  Bitmap Index Scan on                Rows Removed by Filter: 30197
+            basalt_search_tsv_idx       Execution Time: 14.702 ms
+Execution Time: 4.920 ms                                (~24x mais lento, quente)
+```
+
+O `rlsSearchFunctionSql` gera a correção: uma função de pesquisa
+`SECURITY DEFINER` que volta a aplicar ela própria o predicado do tenant, de
+modo que `@@` volta a ser uma condição de índice enquanto as linhas que ela pode
+devolver continuam a ser exatamente as de um tenant.
+
+```ts
+import { rlsSearchFunctionSql } from '@basaltkit/prisma'
+
+// migração (uma vez), executada por um role que ignora o RLS da tabela
+rlsSearchFunctionSql({
+  name: 'basalt_search_scoped', table: 'basalt_search', vectorColumn: 'tsv',
+  partitionColumn: 'idx', filterColumn: 'document',
+  columns: [{ name: 'document', type: 'jsonb' }],
+  role: 'app', owner: 'app_owner', maxRows: 100,
+})
+
+// runtime — o driver encaminha as queries de texto pela função
+new PostgresSearchDriver({ client: pool, searchFunction: 'basalt_search_scoped' })
+```
+
+```text
+-- como role da aplicação, através da função
+->  Bitmap Heap Scan on basalt_search t
+      Filter: ((idx = 'notes') AND (tenant_id = current_setting('app.tenant_id', true)))
+      ->  Bitmap Index Scan on basalt_search_tsv_idx
+Execution Time: 1.850 ms
+```
+
+A função **não recebe nenhum parâmetro de tenant**: lê o tenant do mesmo
+`current_setting(…)` que a política lê (o que o `tenancyExtension({ rls: true })`
+já define), por isso não há nada que um chamador possa apontar para outro lado,
+e uma definição por preencher lê-se como `NULL` — nenhuma linha, nunca todas.
+É endurecida como o cross-tenant scan (`search_path` fixado, identificadores
+validados, `EXECUTE` revogado de `PUBLIC`, `p_limit` limitado), e o driver ainda
+recusa qualquer linha devolvida cujo tenant não seja o que pediu.
+
+**Nunca faças `ALTER FUNCTION ts_match_vq(tsvector, tsquery) LEAKPROOF`.** É o
+atalho que todos os resultados de pesquisa sugerem, e de facto traz o índice de
+volta — enfraquecendo a regra leakproof **em toda a base de dados**, para todas
+as tabelas e todas as políticas, de modo que um `@@` bem construído passa a ser
+um canal lateral para sondar linhas que uma política esconde. Uma aceleração
+local paga com uma perda global de isolamento.
+
 **Varrer todos os tenants — o único buraco, mantido estreito.** Um reconciler
 tem de encontrar linhas encalhadas *em todos os tenants*, o que com RLS o role
 da aplicação nunca consegue ver. O `crossTenantScanSql` gera a única forma

@@ -315,6 +315,9 @@ importers:
       '@basaltkit/permissions-prisma':
         specifier: workspace:*
         version: link:../../packages/permissions-prisma
+      '@basaltkit/search-postgres':
+        specifier: workspace:*
+        version: link:../../packages/search-postgres
       '@basaltkit/subscriptions':
         specifier: workspace:*
         version: link:../../packages/subscriptions

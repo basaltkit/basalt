@@ -47,6 +47,16 @@ export {
   type RlsPolicyOptions,
 } from './rls.js'
 export {
+  rlsSearchFunctionSql,
+  RLS_SEARCH_TENANT_COLUMN,
+  RLS_SEARCH_ID_COLUMN,
+  RLS_SEARCH_SCORE_COLUMN,
+  RLS_SEARCH_TOTAL_COLUMN,
+  type RlsSearchFunctionSqlOptions,
+  type RlsSearchColumn,
+  type RlsSearchQueryParser,
+} from './rls-search.js'
+export {
   crossTenantScanSql,
   crossTenantScan,
   crossTenantSweep,

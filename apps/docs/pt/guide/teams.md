@@ -151,7 +151,7 @@ await app.container.get(TEAMS).addMember(tenant.id, creator.id, 'owner')
 | `POST /team/invites` `{ email, role? }` | `admin` |
 | `POST /team/invites/accept` `{ token }` | login com email **verificado** |
 | `GET /team/invites` · `DELETE /team/invites/:id` | `admin` |
-| `GET /team/members` | `member` |
+| `GET /team/members` | `member` (acrescenta `user` com `memberContacts: true`) |
 | `PATCH /team/members/:userId` `{ role }` | `admin` |
 | `DELETE /team/members/:userId` | `admin` |
 
@@ -352,6 +352,83 @@ despromoções/remoções concorrentes deixem a equipa com zero owners. Passa
 `{ actingUserId }` a `changeRole`/`removeMember`/`addMember` para aplicar as
 regras de rank a uma chamada iniciada por um utilizador, como fazem as rotas.
 
+## Notificar toda a gente com um papel
+
+O `members()` devolve identificadores, não pessoas: `{ tenantId, userId, role }`.
+Para *enviar email* aos admins de um tenant também precisas dos endereços — e
+ir buscá-los às tabelas de auth a partir do código da aplicação acopla o produto
+ao schema de auth, enquanto chamar `findById` uma vez por membro são N idas à
+base de dados.
+
+Dá um directório de utilizadores ao `Teams` e nenhuma das duas é necessária. Um
+`UserSource` do `@basaltkit/auth` satisfaz o contrato tal como está, por isso é o
+mesmo objecto que já passas ao `authPlugin`:
+
+```ts
+const users = sqliteAuthStores('./data/auth.db').users
+
+plugins: [
+  authPlugin({ users, secret }),
+  teamsPlugin({ users }),   // o mesmo directório — não há mais nada a ligar
+]
+```
+
+```ts
+const teams = app.container.get(TEAMS)
+
+// Toda a gente que pode agir como admin — owners incluídos (rank 3 >= admin 2).
+for (const { user, role } of await teams.roleRecipients('acme', 'admin')) {
+  await mailer.send(ApprovalPending, { role }, { to: user.email })
+}
+
+// A equipa inteira, com contactos, numa só consulta.
+await teams.membersWithUsers('acme')
+// [{ tenantId: 'acme', userId: 'u1', role: 'owner', createdAt: 1_7…,
+//    user: { id: 'u1', email: 'ada@acme.test', emailVerified: true } }, …]
+```
+
+O `membersWithUsers` é a primitiva: é o único sítio onde a consulta ao
+directório acontece, e o `roleRecipients` é um filtro sobre ela que não custa
+nenhuma consulta adicional. O que o par garante:
+
+- **Uma consulta, automaticamente.** Quando o directório implementa
+  [`findByIds`](/pt/guide/auth#pesquisa-de-contactos-em-lote-findbyids), a equipa
+  inteira resolve-se numa única consulta em lote; caso contrário recorre a um
+  `findById` por membro. A decisão vive num só sítio, por isso uma aplicação
+  ganha o caminho rápido no dia em que o seu driver o tiver, sem alterar código.
+- **Nenhuma credencial escapa.** O que quer que o directório devolva — o
+  `findById` devolve o registo *completo* — é projectado para
+  `{ id, email, emailVerified }`.
+- **Âmbito do tenant.** Os ids vêm dos registos de membership desse tenant e de
+  mais lado nenhum, por isso nenhum chamador pode apontar a consulta a contas à
+  sua escolha, e um utilizador que o directório devolva sem ter sido pedido é
+  descartado.
+- **Contas em falta não partem a lista.** Um membership cuja conta já não existe
+  (apagada, ou um convite que nunca chegou a ser um utilizador real) é
+  *ignorado* — `user` é obrigatório em `TeamMemberWithUser`, por isso o resultado
+  é sempre seguro para enviar email. O registo de membership fica intacto e o
+  `members()` continua a mostrá-lo.
+
+O `roleRecipients` respeita a hierarquia para papéis **com rank** e faz
+correspondência exacta para os **sem rank** — todos os papéis fora de `roleRank`
+têm rank 0, por isso tratá-los por rank notificaria todos de uma vez:
+
+```ts
+await teams.roleRecipients('acme', 'admin')                  // owners + admins
+await teams.roleRecipients('acme', 'admin', { exact: true }) // só admins
+await teams.roleRecipients('acme', 'billing-contact')        // exacto (sem rank)
+```
+
+Sem um directório `users`, ambos os métodos lançam `TeamUserSourceMissingError`
+(`500 TEAM_USER_SOURCE_MISSING`) em vez de devolverem calados linhas sem
+contactos.
+
+Em HTTP os mesmos dados são opt-in: `teamRoutes({ memberContacts: true })`
+acrescenta `user` a cada entrada de `GET /team/members` (continua a exigir
+`member`). Está desligado por predefinição para que os endereços de email da
+equipa só saiam pela rede quando tu o disseres, e os ids resolvidos são sempre
+os memberships do próprio tenant — nunca algo que o pedido tenha fornecido.
+
 ## Espelhar roles para permissions
 
 Passa um store `access` (um `AccessStore` de `@basaltkit/permissions` satisfaz o
@@ -379,6 +456,7 @@ de conceder o catálogo em cada tenant — vê
 | --- | --- | --- | --- |
 | `memberships` | `MembershipStore` | em memória | Onde vivem os memberships — troca por `teams-sqlite`/`teams-prisma` em produção |
 | `invitations` | `InvitationStore` | em memória | Onde vivem os convites (tokens em hash) |
+| `users` | `MemberUserSource` | — | Directório de utilizadores (só de leitura) por trás de `membersWithUsers` / `roleRecipients`; um `UserSource` do `@basaltkit/auth` serve tal como está |
 | `access` | `RoleAssigner` | — | Espelha cada mudança de membership numa concessão de role de `@basaltkit/permissions` no âmbito do tenant |
 | `inviteTtl` | `DurationInput` | `'7d'` | Tempo de vida do link de convite |
 | `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Hierarquia de roles; roles fora do mapa têm rank 0 |
@@ -398,6 +476,7 @@ de conceder o catálogo em cada tenant — vê
 | Opção | Tipo | Predefinição | Propósito |
 | --- | --- | --- | --- |
 | `requireVerifiedEmail` | `boolean` | `true` | Exigir `ctx().user.emailVerified === true` para aceitar um convite |
+| `memberContacts` | `boolean` | `false` | Incluir `user: { id, email, emailVerified }` de cada membro em `GET /team/members`, resolvido através do directório `users` |
 
 ## Modos de falha e troubleshooting
 
@@ -409,6 +488,7 @@ de conceder o catálogo em cada tenant — vê
 | `TeamRoleNotGrantableError` | `TEAM_ROLE_NOT_GRANTABLE` | 403 | Um utilizador ativo tentou conceder um role que não está em `roleRank` nem em `grantableRoles` |
 | `TeamEmailNotVerifiedError` | `TEAM_EMAIL_NOT_VERIFIED` | 403 | `POST /team/invites/accept` por um utilizador cujo email não está verificado (ver `requireVerifiedEmail`) |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | A mudança deixaria a equipa sem owner |
+| `TeamUserSourceMissingError` | `TEAM_USER_SOURCE_MISSING` | 500 | `membersWithUsers` / `roleRecipients` (ou `memberContacts: true`) correu sem directório `users` configurado |
 | `TEAM_NO_TENANT` | `TEAM_NO_TENANT` | 400 | Um endpoint de `teamRoutes()` foi chamado sem tenant no contexto — regista a tenancy e envia o identificador do tenant |
 | `TEAM_INVITE_NOT_FOUND` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` para um id que não existe ou pertence a outro tenant |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | arranque | Uma rota declara `meta.teamRole` e `teamsPlugin` não está registado |

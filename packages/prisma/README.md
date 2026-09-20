@@ -144,6 +144,63 @@ await tenantTransaction(db, async (tx) => {
 - **The raw guard stays on**: that exact `set_config` statement, for the tenant already in scope, is the only raw query allowed inside a tenant context; any other still throws `PRISMA_RAW_IN_TENANT`.
 - An `onMissingTenant: 'bypass'` client sends no setting, so it sees nothing under RLS — connect central/admin code with its own role.
 
+#### Full-text search under RLS (the GIN-index trap)
+
+Enabling RLS on a table that also has a `tsvector` column with a GIN index — exactly what [`@basaltkit/search-postgres`](https://github.com/basaltkit/basalt/tree/main/packages/search-postgres) creates — **silently stops using that index**. PostgreSQL may only evaluate a qualifier *before* a row-security policy if the qualifier is `LEAKPROOF`, and the text-search operator `@@` is not. So for a role the policy applies to, `tsv @@ plainto_tsquery(…)` can never be an index condition: it is demoted to a filter applied after the policy, and the plan collapses to a sequential scan over every tenant's rows. Nothing warns you, and a development dataset never shows it.
+
+Measured on 30 200 documents (one tenant's 30 000 plus a second tenant's 200), PostgreSQL 16:
+
+```text
+-- as the owner (no policy in the way)
+->  Bitmap Heap Scan on basalt_search                     (actual rows=3)
+      Recheck Cond: (tsv @@ 'zarbalux'::tsquery)
+      ->  Bitmap Index Scan on basalt_search_tsv_idx      (actual rows=203)
+Execution Time: 4.920 ms          -- warm: ~0.6 ms
+
+-- as the application role (NOSUPERUSER NOBYPASSRLS) — the same query
+->  Seq Scan on basalt_search                             (actual rows=3)
+      Filter: ((tenant_id = 'acme') AND (idx = 'notes') AND (tsv @@ 'zarbalux'::tsquery))
+      Rows Removed by Filter: 30197
+Execution Time: 14.702 ms         -- ~24x slower warm, and it grows with the corpus
+```
+
+`rlsSearchFunctionSql` generates the fix: a `SECURITY DEFINER` function, owned by a role the policies don't reach, that re-applies the tenant predicate **itself** — so inside it `@@` is an index condition again, while the rows it can ever return are still exactly one tenant's.
+
+```ts
+import { rlsPolicySql, rlsSearchFunctionSql } from '@basaltkit/prisma'
+
+rlsPolicySql({ tables: ['basalt_search'] })          // the policy, as usual
+
+rlsSearchFunctionSql({
+  name: 'basalt_search_scoped',
+  table: 'basalt_search',
+  vectorColumn: 'tsv',              // the column with the GIN index
+  partitionColumn: 'idx',           // optional extra equality filter
+  filterColumn: 'document',         // jsonb column the p_filters argument matches on
+  columns: [{ name: 'document', type: 'jsonb' }],
+  role: 'app',                      // the role the app connects as
+  owner: 'app_owner',               // BYPASSRLS / superuser — see below
+  maxRows: 100,
+})
+```
+
+```text
+-- as the application role, through the function
+SELECT * FROM basalt_search_scoped('zarbalux', 'notes', NULL, 20, 0);
+-- its body, planned as the owner runs it:
+->  Bitmap Heap Scan on basalt_search t                   (actual rows=3)
+      Filter: ((idx = 'notes') AND (tenant_id = current_setting('app.tenant_id', true)))
+      ->  Bitmap Index Scan on basalt_search_tsv_idx      (actual rows=203)
+Execution Time: 1.850 ms          -- warm: ~0.6 ms
+```
+
+- **No tenant parameter, on purpose.** The tenant comes from `current_setting(<setting>, true)` — the same value the policy reads and the same one `tenancyExtension({ rls: true })` sets. There is nothing for a caller to point at somebody else, and an unset setting reads as `NULL`, so the function returns **no rows**. It fails closed exactly like the policy. Keep `setting` identical to the one you gave `rlsPolicySql`.
+- **This is not an isolation bypass**, unlike a cross-tenant scan: it is tenant-scoped by construction, so returning tenant data (the document, a title, a snippet) is the point. The property to protect is the other one — that it can never read a *different* tenant.
+- **Hardened the same way** — pinned `search_path`, `STABLE` / `PARALLEL SAFE`, every identifier validated and quoted, `EXECUTE` revoked from `PUBLIC` and granted only to the roles you name, and `p_limit` clamped to `maxRows` inside the function. Filters are applied inside it too, so the cap and the returned `total` stay honest.
+- **Owned by a role the policies don't reach** — `rlsPolicySql` sets `FORCE ROW LEVEL SECURITY`, so a function owned by the table owner is filtered too and you are back to the sequential scan. Give it a `BYPASSRLS` owner (or create it as a superuser).
+- **Never `ALTER FUNCTION ts_match_vq(tsvector, tsquery) LEAKPROOF`.** It is the first shortcut you will find suggested, and it does restore the index — but it weakens the leakproof rule *database-wide*, for every table and every policy, turning a crafted `@@` into a side channel for probing rows a policy hides. The generated SQL carries that warning in a comment.
+- **`@basaltkit/search-postgres` wires it for you**: pass `searchFunction: 'basalt_search_scoped'` to `PostgresSearchDriver` and its text queries go through the function instead of the table.
+
 #### Sweeping every tenant (cross-tenant scan)
 
 A reconciler ([`defineReconciler`](https://github.com/basaltkit/basalt/tree/main/packages/scheduler#definereconcilert-options-reconcileroptionst-reconciler)) has to answer a question no tenant-scoped query can answer: *which rows, anywhere, are still `PROCESSING`?* Under RLS the application role only ever sees one tenant, and the extension refuses unscoped queries — so the sweep cannot be an ordinary query at all.
@@ -388,6 +445,7 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 | Export | Signature | Description |
 |---|---|---|
 | `rlsPolicySql` | `rlsPolicySql(options: RlsPolicyOptions): string` | Idempotent SQL enabling (and by default forcing) RLS plus a tenant-isolation policy per table. Options: `tables`, `tenantColumn` (default `'tenant_id'`), `setting`, `policyName`, `schema`, `force` (default `true`). |
+| `rlsSearchFunctionSql` | `rlsSearchFunctionSql(options: RlsSearchFunctionSqlOptions): string` | Idempotent SQL for a `SECURITY DEFINER` full-text search function scoped to the tenant in `setting` (no tenant parameter), so the GIN index is still used under RLS. Options: `name`, `table`, `vectorColumn`, `idColumn`, `tenantColumn`, `columns`, `partitionColumn`, `filterColumn`, `setting`, `language`, `parser`, `schema`, `role`, `owner`, `maxRows` (default `100`). |
 | `setTenantConfigSql` | `setTenantConfigSql(): string` | `select set_config($1, $2, true)`. |
 | `tenantConfigParams` | `tenantConfigParams(tenantId: string, setting?: string): [string, string]` | Params for `setTenantConfigSql` (validates the setting name). |
 | `DEFAULT_TENANT_SETTING` | `'app.tenant_id'` | Default setting. |

@@ -270,6 +270,29 @@ tenant — the same isolation guarantee, no extra infrastructure.
 with the separator flattened (`app_search_tsv_idx`), because Postgres does not
 allow a schema-qualified index name. It still lands in the table's own schema.
 
+### Under row-level security, add `searchFunction`
+
+If the search table is protected by Postgres RLS (`rlsPolicySql`,
+`tenancyExtension({ rls: true })`), **the GIN index silently stops being used**:
+`@@` is not a `LEAKPROOF` operator, so it can never be evaluated before the
+row-security policy, and every search becomes a sequential scan over every
+tenant's documents (measured: 14.7 ms instead of 1.9 ms on 30 200 documents, and
+it grows with the corpus).
+
+Generate a tenant-scoped `SECURITY DEFINER` search function with
+`rlsSearchFunctionSql` from `@basaltkit/prisma` and point the driver at it:
+
+```ts
+new PostgresSearchDriver({ client: pgPool, searchFunction: 'basalt_search_scoped' })
+```
+
+The function takes no tenant parameter — it reads the same `current_setting(…)`
+the policy reads, so an unset tenant returns no rows. Do **not** reach for
+`ALTER FUNCTION … LEAKPROOF` instead: it weakens the rule database-wide. Full
+recipe and plans in the
+[security guide](/guide/security#_3-automatic-tenant-scoping-covers-the-orm-—-not-raw-sql-or-foreign-key-scalars) and the
+[`@basaltkit/search-postgres` README](https://github.com/basaltkit/basalt/tree/main/packages/search-postgres#row-level-security-the-gin-index-trap).
+
 ## Elasticsearch / OpenSearch
 
 For large-scale relevance, `@basaltkit/search-elasticsearch` targets the

@@ -28,6 +28,17 @@ export function makeFakeClient(): PrismaAuthClient {
         }
         return null
       },
+      async findMany({ where, select }) {
+        const ids = (where?.id?.in ?? []) as string[]
+        const rows = ids.flatMap((id) => {
+          const u = users.get(id)
+          return u ? [u] : []
+        })
+        // Honour `select` the way Prisma does: unlisted columns (the hash
+        // included) are simply absent from the objects that come back.
+        if (!select) return rows
+        return rows.map((u) => Object.fromEntries(Object.entries(u).filter(([k]) => select[k] === true))) as PUserRow[]
+      },
       async create({ data }) {
         if ([...users.values()].some((u) => u.email === data.email)) throw new Error('unique email')
         const row = { ...data }

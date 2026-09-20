@@ -25,8 +25,12 @@
  */
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
-// A custom GUC must be namespaced: `app.tenant_id`, `basalt.tenant`, …
-const SETTING = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/
+/**
+ * A custom GUC must be namespaced: `app.tenant_id`, `basalt.tenant`, …
+ * Internal: shared with the other SQL generators of this package (they must all
+ * validate the setting the same way). Not re-exported from the package entry.
+ */
+export const SETTING = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/
 
 /** Default Postgres setting (GUC) that carries the active tenant id. */
 export const DEFAULT_TENANT_SETTING = 'app.tenant_id'

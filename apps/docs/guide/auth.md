@@ -159,9 +159,44 @@ const users: UserSource = {
     return { id: crypto.randomUUID(), ...data } as AuthUser
   },
   async update(id, patch: UserPatch) { /* UPDATE … */ return null },
+  // Optional: bulk contact lookup — see below.
+  async findByIds(ids) { /* SELECT id, email, email_verified WHERE id IN (…) */ return [] },
 }
 ```
 :::
+
+### Bulk contact lookup (`findByIds`)
+
+`findById` answers one id at a time, which pushes anything that needs the
+**contact details of a group** ("email every admin of this tenant") into either
+N round trips or — worse — reading the auth tables directly from application
+code, coupling your product to the auth schema.
+
+`findByIds` is the optional bulk counterpart, and its contract is deliberately
+narrower than `findById`'s:
+
+- it resolves **`PublicUser`**, never `AuthUser` — a directory lookup has no
+  business carrying a password hash, and the shipped drivers do not even
+  `SELECT` the credential columns;
+- one entry per **found** id, **in the order of `ids`**; ids with no account are
+  omitted, so the result can be shorter than the input;
+- duplicate ids collapse to one entry, and an empty list resolves to `[]`
+  without touching the database.
+
+```ts
+await users.findByIds?.(['u1', 'u2', 'ghost'])
+// → [{ id: 'u1', email: 'ada@acme.test', emailVerified: true }, { id: 'u2', … }]
+```
+
+`MemoryUserSource` and both shipped drivers implement it; the SQL ones send one
+`WHERE id IN (…)` per chunk of 500 ids, so a large tenant can't exceed the
+driver's bind-parameter limit (`idChunkSize` tunes it).
+
+Callers that need it treat it as an optimisation, never a requirement:
+[`@basaltkit/teams`](/guide/teams#notifying-everyone-with-a-role) takes the
+batched path when your source has `findByIds` and falls back to one `findById`
+per member when it doesn't — pass the same `UserSource` to `teamsPlugin({ users })`
+and `teams.roleRecipients('acme', 'admin')` returns the admins' contacts.
 
 ## Ready-made routes
 
@@ -853,7 +888,7 @@ the plugin supplies:
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `users` | `UserSource` | — (required) | Where accounts live. `MemoryUserSource` in dev; `auth-sqlite`/`auth-prisma`, or your own four methods over your tables |
+| `users` | `UserSource` | — (required) | Where accounts live. `MemoryUserSource` in dev; `auth-sqlite`/`auth-prisma`, or your own four methods over your tables. The optional fifth, `findByIds`, adds batched contact lookups |
 | `secret` | `string` | — (required) | HS256 signing key for access tokens. Rejected empty, and rejected under 32 chars when `NODE_ENV=production` (`AUTH_WEAK_SECRET`) |
 | `hasher` | `PasswordHasher` | `new ScryptPasswordHasher()` | Password hashing. Swap for an argon2id implementation without touching call sites |
 | `sessions` | `SessionStore` | in-memory | Cookie/`x-session-id` sessions — swap for durability |

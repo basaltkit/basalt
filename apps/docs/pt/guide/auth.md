@@ -161,9 +161,44 @@ const users: UserSource = {
     return { id: crypto.randomUUID(), ...data } as AuthUser
   },
   async update(id, patch: UserPatch) { /* UPDATE … */ return null },
+  // Opcional: pesquisa de contactos em lote — ver abaixo.
+  async findByIds(ids) { /* SELECT id, email, email_verified WHERE id IN (…) */ return [] },
 }
 ```
 :::
+
+### Pesquisa de contactos em lote (`findByIds`)
+
+O `findById` responde por um id de cada vez, o que empurra tudo o que precisa dos
+**contactos de um grupo** ("enviar email a todos os admins deste tenant") ou para
+N idas à base de dados ou — pior — para ler as tabelas de auth directamente no
+código da aplicação, acoplando o produto ao schema de auth.
+
+O `findByIds` é o equivalente em lote (opcional) e tem um contrato
+deliberadamente mais estreito do que o do `findById`:
+
+- devolve **`PublicUser`**, nunca `AuthUser` — uma pesquisa de directório não tem
+  nada que transportar uma hash de password, e os drivers incluídos nem sequer
+  fazem `SELECT` das colunas de credenciais;
+- uma entrada por id **encontrado**, **pela ordem de `ids`**; os ids sem conta são
+  omitidos, por isso o resultado pode ser mais curto do que a entrada;
+- ids repetidos colapsam numa única entrada e uma lista vazia devolve `[]` sem
+  tocar na base de dados.
+
+```ts
+await users.findByIds?.(['u1', 'u2', 'ghost'])
+// → [{ id: 'u1', email: 'ada@acme.test', emailVerified: true }, { id: 'u2', … }]
+```
+
+O `MemoryUserSource` e os dois drivers incluídos implementam-no; os de SQL enviam
+um `WHERE id IN (…)` por bloco de 500 ids, para que um tenant grande não exceda o
+limite de parâmetros do driver (`idChunkSize` afina esse valor).
+
+Quem o consome trata-o como uma optimização, nunca como um requisito: o
+[`@basaltkit/teams`](/pt/guide/teams#notificar-toda-a-gente-com-um-papel) usa o
+caminho em lote quando a tua fonte tem `findByIds` e recorre a um `findById` por
+membro quando não tem — passa o mesmo `UserSource` a `teamsPlugin({ users })` e
+`teams.roleRecipients('acme', 'admin')` devolve os contactos dos admins.
 
 ## Rotas prontas a usar
 
@@ -856,7 +891,7 @@ plugin fornece:
 
 | Opção | Tipo | Predefinição | Propósito |
 | --- | --- | --- | --- |
-| `users` | `UserSource` | — (obrigatório) | Onde vivem as contas. `MemoryUserSource` em dev; `auth-sqlite`/`auth-prisma`, ou os teus quatro métodos sobre as tuas tabelas |
+| `users` | `UserSource` | — (obrigatório) | Onde vivem as contas. `MemoryUserSource` em dev; `auth-sqlite`/`auth-prisma`, ou os teus quatro métodos sobre as tuas tabelas. O quinto, opcional, `findByIds`, acrescenta pesquisas de contactos em lote |
 | `secret` | `string` | — (obrigatório) | Chave de assinatura HS256 dos access tokens. Rejeitada vazia, e rejeitada abaixo de 32 caracteres com `NODE_ENV=production` (`AUTH_WEAK_SECRET`) |
 | `hasher` | `PasswordHasher` | `new ScryptPasswordHasher()` | Hashing de passwords. Troca por uma implementação argon2id sem mexer nos pontos de chamada |
 | `sessions` | `SessionStore` | em memória | Sessões por cookie/`x-session-id` — troca para durabilidade |
