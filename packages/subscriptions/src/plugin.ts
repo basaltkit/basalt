@@ -6,7 +6,7 @@ import {
   ensureMetadata,
   type Container,
 } from '@basaltkit/core'
-import { route, type BasaltRoute, type RouteGuard, type RouteMeta } from '@basaltkit/http'
+import { rawBody, route, type BasaltRoute, type RouteGuard, type RouteMeta } from '@basaltkit/http'
 import { Invoices, renderInvoiceHtml, InvoiceNotFoundError, type InvoicesOptions } from './invoice.js'
 import { z } from 'zod'
 import type { BillingGateway } from './gateway.js'
@@ -293,24 +293,50 @@ export function billingRoutes(options: BillingRoutesOptions): BasaltRoute[] {
 }
 
 /**
- * Webhook endpoint: POST /billing/webhook — signature verified by the
- * gateway driver, processing idempotent by event id. Returns 200 with
- * { received, duplicate } so gateways stop retrying.
+ * Most bytes of a webhook delivery that will be read. Stripe, Paddle and Lemon
+ * Squeezy events are measured in kilobytes; the endpoint is unauthenticated by
+ * construction (the signature IS the authentication, and it can only be checked
+ * once the bytes are in memory), so the cap is what stops it being a memory
+ * amplifier. Raise it with `billingWebhookRoute(gateway, { maxBytes })` if a
+ * gateway you use sends more.
  */
-export function billingWebhookRoute(gateway: BillingGateway): BasaltRoute {
+export const DEFAULT_WEBHOOK_MAX_BYTES = 256 * 1024
+
+export interface BillingWebhookRouteOptions {
+  /** Most bytes of body to read. Over it: 413. Default {@link DEFAULT_WEBHOOK_MAX_BYTES}. */
+  maxBytes?: number
+}
+
+/**
+ * Webhook endpoint: POST /billing/webhook — signature verified by the
+ * gateway driver over the **raw** request bytes, processing idempotent by
+ * event id. Returns 200 with { received, duplicate } so gateways stop retrying.
+ *
+ * The body is declared with `rawBody()` from `@basaltkit/http`, so every
+ * adapter (Fastify, Express, Hono) hands the handler the exact bytes that
+ * arrived, untouched and unparsed, after the pipeline's guards have run. That
+ * is not a nicety: Stripe, Paddle, Lemon Squeezy and GitHub all sign the
+ * octets, and `JSON.stringify` of a parsed object is a different message —
+ * different whitespace, different key order, `1.50` re-printed as `1.5`. This
+ * route used to fall back to exactly that when a raw body was absent, which it
+ * always was, so every genuine delivery failed verification. There is no
+ * fallback any more: no bytes means a refusal, never a reconstruction.
+ */
+export function billingWebhookRoute(
+  gateway: BillingGateway,
+  options: BillingWebhookRouteOptions = {},
+): BasaltRoute {
   return route({
     method: 'POST',
     url: '/billing/webhook',
-    body: z.unknown(),
-    async handler({ request, reply }) {
-      // Real gateways (Stripe) verify the signature against the UNTOUCHED raw
-      // body — re-serializing a parsed object changes bytes and breaks the
-      // HMAC. Configure a raw-body parser for this route so `request.body`
-      // arrives as a string; we fall back to stringify for the fake/dev path.
-      const rawBody = typeof request.body === 'string' ? request.body : JSON.stringify(request.body)
+    body: rawBody({ maxBytes: options.maxBytes ?? DEFAULT_WEBHOOK_MAX_BYTES }),
+    async handler({ body, request, reply }) {
       const header = request.headers['stripe-signature'] ?? request.headers['x-billing-signature']
       const event = gateway.verifyWebhook(
-        rawBody,
+        // The bytes as they arrived. Gateways specify their HMAC over the UTF-8
+        // payload, which is what `text()` decodes — and it is decoded from the
+        // original buffer, never re-encoded from a parsed object.
+        body.text(),
         Array.isArray(header) ? header[0] : header,
       )
       const subscriptions = (ctx().container as Container).get(SUBSCRIPTIONS)

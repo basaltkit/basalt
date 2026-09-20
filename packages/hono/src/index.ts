@@ -19,6 +19,8 @@ import {
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
+  isRawBody,
+  rawBodyRouteMatcher,
   isStreamResponse,
   streamPayloadOf,
   destroyStreamSource,
@@ -305,14 +307,23 @@ function handlerFor(
     // An upload() route streams the raw body through the neutral multipart
     // parser, which enforces its own limits — it is never buffered here.
     const uploads = isUploadBody(definition.body)
+    // A rawBody() route carries its own cap and must not be read before the
+    // guards have run, so the bounded pre-read steps aside for it too.
+    const raws = isRawBody(definition.body)
     // Bounded here too, so routes mounted with `registerRoutes()` alone (no
     // plugin middleware in front) never parse an unbounded body.
-    if (!uploads && !(await enforceBodyLimit(context, bodyLimit))) {
+    if (!uploads && !raws && !(await enforceBodyLimit(context, bodyLimit))) {
       return toResponse(reply.code(413), payloadTooLarge(bodyLimit))
     }
     try {
-      const request = await toNeutralRequest(context, getClientIp, uploads ? false : 'route')
+      const request = await toNeutralRequest(context, getClientIp, uploads || raws ? false : 'route')
       if (uploads && context.req.raw.body) request.bodyStream = context.req.raw.body
+      if (raws) {
+        // The web Request's own stream, never `c.req.json()`/`parseBody()`:
+        // the bytes are the message and a parsed object cannot be un-parsed.
+        if (context.req.raw.body) request.bodyStream = context.req.raw.body
+        else request.bodyBytes = new Uint8Array(0)
+      }
       const result = await runRoute(definition, request, reply, {
         ...(container ? { container } : {}),
         enrichers,
@@ -451,6 +462,15 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
         }
         return ip
       }
+      // Paths whose body must reach the handler untouched and unread until the
+      // guards have passed — the middleware below would otherwise buffer it
+      // (the bounded pre-read) or consume it outright (`c.req.json()` while
+      // building the neutral request for the pre/after hooks).
+      const rawBodyPath = rawBodyRouteMatcher(routes)
+      const isRawBodyPath = (context: Context): boolean => rawBodyPath(context.req.method, context.req.path)
+      /** The neutral request for a hook: never with the body of a rawBody() route. */
+      const hookRequest = (context: Context, withBody = true) =>
+        toNeutralRequest(context, getClientIp, withBody && !isRawBodyPath(context))
       hooks.on('app:booted', () => {
         // Bound the body on the bytes read, not only the declared length
         // (Hono/edge has no default cap). Runs before anything parses it.
@@ -458,12 +478,15 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
           // A multipart body is bounded where it is read: by the route handler
           // (bodyLimit) or, for an upload() route, by its own streaming limits.
           if (isMultipart(context)) return next()
+          // Same for a rawBody() route: its own `maxBytes` bounds it, inside
+          // the pipeline, after the guards.
+          if (isRawBodyPath(context)) return next()
           const tooLarge = !(await enforceBodyLimit(context, bodyLimit))
           if (tooLarge) {
             // Run the pre-hooks (without a body) so the 413 carries the same
             // security/CORS headers — and counts against the rate limit.
             const reply = new HonoReply(context)
-            if (await collector.runPre(await toNeutralRequest(context, getClientIp, false), reply)) {
+            if (await collector.runPre(await hookRequest(context, false), reply)) {
               return toResponse(reply, reply.payload)
             }
             return toResponse(reply.code(413), payloadTooLarge(bodyLimit))
@@ -475,7 +498,7 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
             const start = Date.now()
             await next()
             await collector.runAfter(
-              await toNeutralRequest(context, getClientIp),
+              await hookRequest(context),
               new HonoReply(context),
               context.res.status,
               Date.now() - start,
@@ -484,7 +507,7 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
         }
         app.use(async (context: Context, next: Next) => {
           const reply = new HonoReply(context)
-          if (await collector.runPre(await toNeutralRequest(context, getClientIp), reply)) {
+          if (await collector.runPre(await hookRequest(context), reply)) {
             return toResponse(reply, reply.payload)
           }
           await next()

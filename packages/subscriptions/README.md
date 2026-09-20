@@ -322,11 +322,43 @@ Invoice ownership is enforced against the current tenant: another tenant's invoi
 as `404 INVOICE_NOT_FOUND`, never `403` (which would confirm the id exists). Issuing and
 finalizing invoices stays server-side, through the `INVOICES` token.
 
-Important: Stripe (and Paddle) verify the signature over the request's **raw body** — any
-re-serialization changes bytes and breaks the HMAC. Configure a raw-body parser for the
-webhook route so `request.body` arrives as a string. The route reads the signature from
-`stripe-signature`, falling back to `x-billing-signature`. A verified-but-irrelevant event
-returns `{ received: true, ignored: true }`; a duplicate returns `duplicate: true`.
+#### The webhook route and the raw body
+
+Stripe, Paddle and Lemon Squeezy all verify the signature over the request's **raw body**:
+any re-serialization changes the bytes and breaks the HMAC.
+
+`billingWebhookRoute()` declares its body with `rawBody()` from `@basaltkit/http`, so the
+Fastify, Express and Hono adapters all hand it the exact octets that arrived, unparsed,
+after the pipeline's guards have run. **There is nothing to configure** — no content-type
+parser, no `verify` hook, no adapter-specific wiring:
+
+```ts
+fastifyPlugin({ routes: [billingWebhookRoute(gateway)] })   // that is all
+```
+
+> **Bug fix (was silently breaking Stripe).** Before this, the route fell back to
+> `JSON.stringify(request.body)` whenever a raw body was absent — which it was on every
+> adapter, by default. Against a real Stripe/Paddle/Lemon endpoint that produces a
+> signature mismatch on **every delivery**. If your app has been answering 400
+> `BILLING_WEBHOOK_INVALID` to genuine webhooks, this is why. The fallback is gone: there
+> is no path back to a re-serialized body, and a request whose bytes cannot be obtained
+> answers `500 RAW_BODY_UNAVAILABLE` rather than verifying a message nobody sent.
+
+The body is capped at `DEFAULT_WEBHOOK_MAX_BYTES` (256 KiB) — raise it with
+`billingWebhookRoute(gateway, { maxBytes })` if a gateway you use sends more; past it the
+route answers `413`. The signature is read from `stripe-signature`, falling back to
+`x-billing-signature`. A verified-but-irrelevant event returns
+`{ received: true, ignored: true }`; a duplicate returns `duplicate: true`.
+
+One caveat, on Express only: if you bring your own app with `express.json()` already
+mounted, body-parser consumes the stream before any route runs. Give it the capture hook
+and the bytes survive — see the
+[`rawBody()` per-adapter notes](../http/README.md#raw-request-bodies--rawbody):
+
+```ts
+import { captureRawBody } from '@basaltkit/express'
+app.use(express.json({ verify: captureRawBody }))
+```
 
 ### Invoices
 
@@ -573,7 +605,7 @@ are mapped straight to that HTTP status by the adapters.
 | `QuotaExceededError` | `BILLING_QUOTA_EXCEEDED` | 402 | `features().consume()` would exceed the limit for the current period. |
 | `GatewayUnsupportedError` | `BILLING_GATEWAY_UNSUPPORTED` | 501 | `checkout()`/`portal()` with no gateway configured, or a driver that doesn't implement that capability. |
 | `UnknownPlanError` | `BILLING_UNKNOWN_PLAN` | — | A plan name isn't in `definePlans()`. Also thrown **at construction** for a bad `fallbackPlan`, so typos fail at boot. |
-| `WebhookInvalidError` | `BILLING_WEBHOOK_INVALID` | 400 | Signature verification failed. Almost always a re-serialized body or the wrong secret. |
+| `WebhookInvalidError` | `BILLING_WEBHOOK_INVALID` | 400 | Signature verification failed — the wrong secret, or a forged/expired delivery. (A re-serialized body is no longer a possible cause: `billingWebhookRoute()` verifies over the raw bytes.) |
 | `WebhookSecretMissingError` | `BILLING_WEBHOOK_SECRET_MISSING` | 500 | A gateway was asked to verify a webhook with no signing secret configured. Verification fails **closed** — an unsigned callback is never trusted. |
 | `PaymentAmountMismatchError` | `BILLING_PAYMENT_AMOUNT_MISMATCH` | 400 | A confirmed payment's amount ≠ the amount requested for that payment id. |
 | `InvoiceNotFoundError` | `INVOICE_NOT_FOUND` | 404 | Unknown invoice id — also what another tenant's invoice looks like. |
@@ -624,7 +656,7 @@ Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`
 | `subscriptionsPlugin(options)` | Registers both services and the `meta.subscribed`/`meta.feature` guard, and claims both keys for the adapters' guarded-meta boot check |
 | `billingRoutes(options)` | `POST /billing/checkout` + `POST /billing/portal` for the current tenant |
 | `invoiceRoutes(options?)` | `GET /billing/invoices`, `/:id`, `/:id/html` for the current tenant |
-| `billingWebhookRoute(gateway)` | `POST /billing/webhook` — signature verified by the driver, idempotent processing |
+| `billingWebhookRoute(gateway, options?)` | `POST /billing/webhook` — body declared with `rawBody()`, so every adapter hands the driver the untouched bytes; signature verified by the driver, idempotent processing. `options.maxBytes` defaults to `DEFAULT_WEBHOOK_MAX_BYTES` (256 KiB) |
 
 `SubscriptionsPluginOptions` = `SubscriptionsOptions` **without** `hooks` (the plugin supplies the app's `HookBus`), plus:
 
@@ -651,7 +683,7 @@ Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`
 
 **Unexpected `QuotaExceededError`** — The plan's limit ran out for the current period. Remember: `meter(n)` resets by calendar month; a plain `number` is a lifetime balance that never resets.
 
-**The Stripe webhook always returns 400 `BILLING_WEBHOOK_INVALID`** — It's almost always the raw body: Stripe signs the exact bytes, and any re-serialization breaks the HMAC. Configure raw body on the webhook route and confirm the `webhookSecret`. Also check clock skew (5-minute tolerance).
+**The Stripe webhook always returns 400 `BILLING_WEBHOOK_INVALID`** — It used to be the raw body, on every adapter: the route re-serialized the parsed payload and the HMAC never matched. That is fixed — `billingWebhookRoute()` now declares `rawBody()` and receives the exact bytes with no wiring. If you still see it, confirm the `webhookSecret` and check clock skew (5-minute tolerance). On Express, if you brought your own app with its own `express.json()`, add `verify: captureRawBody` — without it the route answers `500 RAW_BODY_UNAVAILABLE` (it refuses rather than verify a reconstructed message).
 
 **After Checkout, the subscription stays `incomplete` forever** — The `payment.succeeded` webhook never arrived. Confirm the `/billing/webhook` endpoint is reachable by Stripe and that the `invoice.paid`/`invoice.payment_succeeded` events are enabled on the Stripe endpoint.
 

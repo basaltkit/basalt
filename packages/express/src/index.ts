@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http'
 import { pipeline } from 'node:stream/promises'
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
@@ -20,6 +21,8 @@ import {
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
+  isRawBody,
+  rawBodyRouteMatcher,
   isStreamResponse,
   streamPayloadOf,
   nodeStreamFrom,
@@ -30,6 +33,15 @@ import {
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
 export const EXPRESS = createToken<Express>('express')
+
+/** The request's declared media type, lower-cased and without parameters. */
+function mediaType(req: IncomingMessage): string {
+  const header = req.headers['content-type']
+  const value = Array.isArray(header) ? header[0] : header
+  if (value === undefined) return ''
+  const cut = value.indexOf(';')
+  return (cut < 0 ? value : value.slice(0, cut)).trim().toLowerCase()
+}
 
 function toNeutralRequest(req: Request): HttpRequest {
   return {
@@ -143,6 +155,70 @@ function reportSafely(onError: HttpErrorReporter | undefined, entry: Parameters<
   }
 }
 
+/**
+ * The untouched bytes of a request an Express body parser already read.
+ *
+ * `express.json()` is mounted on the whole app, so for a `rawBody()` route the
+ * neutral "leave it unread" marker is not enough on its own: by the time the
+ * route runs, body-parser may already have consumed the stream. Its `verify`
+ * hook is the one place the original bytes still exist, and this is where they
+ * are kept — in a WeakMap keyed by the request, so nothing is added to the
+ * request object and the buffer dies with it.
+ */
+const CAPTURED = new WeakMap<object, Buffer>()
+
+/**
+ * A body-parser `verify` hook that keeps the untouched bytes for `rawBody()`
+ * routes. `expressPlugin` installs it automatically on the parsers it mounts;
+ * pass it yourself when you bring your own app with its own parsers:
+ *
+ * ```ts
+ * app.use(express.json({ verify: captureRawBody }))
+ * app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
+ * ```
+ *
+ * It only stores a reference to the buffer body-parser has already allocated,
+ * so it costs nothing beyond keeping it alive for the length of the request.
+ */
+export function captureRawBody(req: unknown, _res: unknown, buf: Buffer): void {
+  if (typeof req === 'object' && req !== null && Buffer.isBuffer(buf)) CAPTURED.set(req, buf)
+}
+
+/**
+ * The bytes kept for this request, from our own `verify` hook or from the
+ * `req.rawBody` convention an app may already be using. `undefined` when
+ * nothing captured them.
+ */
+function capturedRawBody(req: Request): Buffer | undefined {
+  const mine = CAPTURED.get(req)
+  if (mine !== undefined) return mine
+  const theirs = (req as Request & { rawBody?: unknown }).rawBody
+  if (Buffer.isBuffer(theirs)) return theirs
+  if (typeof theirs === 'string') return Buffer.from(theirs, 'utf8')
+  return undefined
+}
+
+/** True once a body parser has consumed the stream — `req` can no longer be read. */
+const bodyAlreadyRead = (req: Request): boolean =>
+  (req as Request & { _body?: unknown })._body === true || req.readableEnded
+
+/**
+ * Hands a `rawBody()` route its bytes, whichever way they survived.
+ *
+ * The parsers `expressPlugin` mounts step aside for these paths, so the
+ * stream is normally still unread and streams straight into the pipeline's
+ * capped reader — guards first, nothing parsed. When some other parser got
+ * there first (an app that brought its own `express.json()`), the captured
+ * buffer is used instead. When neither holds, nothing is set and the pipeline
+ * fails closed with `RAW_BODY_UNAVAILABLE` rather than verifying a signature
+ * against a message nobody sent.
+ */
+function attachRawBody(request: HttpRequest, req: Request): void {
+  const captured = capturedRawBody(req)
+  if (captured !== undefined) request.bodyBytes = captured
+  else if (!bodyAlreadyRead(req)) request.bodyStream = req
+}
+
 function basaltHandler(
   definition: BasaltRoute,
   container: Container | undefined,
@@ -157,6 +233,7 @@ function basaltHandler(
       // An upload() route streams the raw body. `express.json()` and
       // `express.urlencoded()` skip multipart/form-data, so `req` is unread.
       if (isUploadBody(definition.body)) request.bodyStream = req
+      else if (isRawBody(definition.body)) attachRawBody(request, req)
       const result = await runRoute(definition, request, reply, {
         ...(container ? { container } : {}),
         enrichers,
@@ -319,9 +396,31 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
     register({ container }) {
       container.singleton(EXPRESS, () => {
         const app = options.app ?? express()
-        app.use(express.json())
+        const routes = options.routes ?? []
+        // Only when a rawBody() route exists: otherwise the parsers stay
+        // exactly as they were, with no per-request matching and no buffer
+        // held alive past parsing.
+        const raw = routes.some((definition) => isRawBody(definition.body))
+        const isRawBodyPath = rawBodyRouteMatcher(routes)
+        const parses = (type: string) => (req: IncomingMessage): boolean =>
+          mediaType(req) === type && !isRawBodyPath(req.method ?? 'GET', req.url ?? '/')
+        app.use(
+          express.json(
+            raw ? { type: parses('application/json'), verify: captureRawBody } : {},
+          ),
+        )
         // HTML forms and the SAML ACS binding post application/x-www-form-urlencoded.
-        app.use(express.urlencoded({ extended: false }))
+        app.use(
+          express.urlencoded(
+            raw
+              ? {
+                  extended: false,
+                  type: parses('application/x-www-form-urlencoded'),
+                  verify: captureRawBody,
+                }
+              : { extended: false },
+          ),
+        )
         return app
       })
       container.singleton(HTTP_SERVER, () => collector)

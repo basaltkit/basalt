@@ -166,6 +166,10 @@ export class DriveCredentials {
       fresh = await authorization.refresh({
         refreshToken: current.refreshToken,
         fetch: this.options.fetchFor(connection),
+        // The scopes this connection actually consented to, not the adapter's
+        // defaults: Microsoft wants a refresh scoped to a subset of the
+        // original grant, and guessing narrows a connection silently.
+        ...(current.scopes !== undefined ? { scopes: current.scopes } : {}),
       })
     } catch (error) {
       if (error instanceof DriveCredentialsInvalidError) {

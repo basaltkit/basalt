@@ -1,0 +1,53 @@
+{
+  "name": "@basaltkit/drives-dropbox",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "Dropbox provider adapter for @basaltkit/drives: OAuth with offline refresh, list_folder cursors, streaming download and upload, content_hash checksums, rate-limit and error mapping, and signed webhook verification.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@basaltkit/drives": "workspace:^"
+  },
+  "devDependencies": {
+    "@basaltkit/drives": "workspace:^",
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/drives-dropbox"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/drives-dropbox#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "typescript",
+    "dropbox",
+    "drives",
+    "oauth",
+    "file-import"
+  ]
+}

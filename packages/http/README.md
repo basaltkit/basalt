@@ -341,6 +341,86 @@ for await (const file of body.files) {
 }
 ```
 
+### Raw request bodies — `rawBody()`
+
+Webhook providers — Stripe, Paddle, Lemon Squeezy, Dropbox, Microsoft Graph, GitHub — sign
+**the octets they sent**. A signature can only be checked against those exact bytes, and
+`JSON.stringify` of the parsed object is a *different message*: different whitespace,
+different key order, `1.50` re-printed as `1.5`. Verify against it and every genuine
+delivery fails.
+
+`rawBody()` is the neutral marker that keeps the bytes. It works the same way `upload()`
+does: the adapter leaves the body unread, and the pipeline reads it — after the guards —
+without parsing it.
+
+```ts
+import { rawBody, route } from '@basaltkit/http'
+
+route({
+  method: 'POST',
+  url: '/webhooks/stripe',
+  body: rawBody({ maxBytes: 64 * 1024 }),
+  async handler({ body, request }) {
+    const event = stripe.webhooks.constructEvent(
+      body.text(),                                    // bytes decoded as UTF-8
+      request.headers['stripe-signature'] as string,
+      process.env.STRIPE_WEBHOOK_SECRET!,
+    )
+    return { received: true }
+  },
+})
+```
+
+The handler's `body` is a `RawBody`:
+
+| Field | Type | Description |
+|---|---|---|
+| `bytes` | `Buffer` | Exactly what arrived. Never parsed, never re-serialised. |
+| `contentType` | `string \| undefined` | The declared media type, lower-cased and without parameters (`application/json`). The client's claim, not a fact about the bytes. |
+| `contentLength` | `number \| undefined` | What the client declared, when it declared one (a chunked body carries none). |
+| `text()` | `() => string` | `bytes` decoded as UTF-8 — the form most signature schemes are specified against. Lossy for bytes that are not valid UTF-8; use `bytes` when the scheme is specified over octets. |
+
+| `rawBody()` option | Default | Past it |
+|---|---|---|
+| `maxBytes` | 1 MiB | `413 PAYLOAD_TOO_LARGE`, refused on the declared `Content-Length` when there is one and on the bytes actually received when there is not |
+
+- **The pipeline runs first.** Pre-hooks (rate limit, CORS), enrichers and guards all run
+  before a single body byte is read — the same guarantee `upload()` gives.
+- **Nothing hangs.** A body the route never got to read (a guard rejected first) is
+  drained up to `maxBytes` and the response carries `Connection: close`.
+- **No fallback, ever.** When a request *declared* bytes (a `Content-Length` above zero, or
+  a `Transfer-Encoding`) and no adapter can supply them, the route answers
+  `500 RAW_BODY_UNAVAILABLE`. It refuses rather than verify a message nobody sent.
+- **A request that declared no body has an empty one.** `Content-Length: 0`, or no framing
+  headers at all, yields a zero-length `Buffer` — a fact about the request, not a guess
+  about a message. This matters: several providers validate a webhook URL with a **POST
+  carrying no body** (Microsoft Graph's `?validationToken=` handshake, sent before the
+  subscription exists). Refusing those would report a body-parser problem as a
+  subscription failure.
+- **In OpenAPI** the request body is published as opaque bytes (`*/*`, `format: binary`).
+
+#### Per-adapter notes
+
+| Adapter | How the bytes survive | Caveat |
+|---|---|---|
+| **Fastify** | `rawBody()` routes are mounted in their own encapsulated scope, whose only content-type parser hands the request stream over unread for any content type. | None. Parsers you registered yourself are never removed or overridden; every other route keeps going through them, and a non-JSON body on a JSON route still answers 415. |
+| **Hono** | The plugin's bounded pre-read and its pre/after hooks step aside for these paths, so the web `Request`'s own stream still carries the octets. | None. `bodyLimit` does not bound the route; its own `maxBytes` does. |
+| **Express** | `expressPlugin` gives `express.json()`/`express.urlencoded()` a `type` filter that returns false for `rawBody()` paths (body-parser never reads them) plus a `verify` hook keeping the buffer as a second line. Both only when a `rawBody()` route exists. | One — see below. |
+
+**The Express caveat.** `express.json()` is app-wide, so an app you built yourself with
+its own parser already mounted consumes the stream before any Basalt route runs. Give the
+parser a `verify` hook and the bytes survive:
+
+```ts
+import { captureRawBody, expressPlugin } from '@basaltkit/express'
+
+app.use(express.json({ verify: captureRawBody }))
+app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
+```
+
+The widespread `verify: (req, _res, buf) => { req.rawBody = buf }` convention is honoured
+too. With neither, the route answers `500 RAW_BODY_UNAVAILABLE` rather than guessing.
+
 ### Streaming responses — `stream()`
 
 Return `stream(source, options)` from a handler and the adapter sends the bytes without
@@ -634,7 +714,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 |---|---|---|---|---|
 | `method` | `'GET' \| 'POST' \| 'PUT' \| 'PATCH' \| 'DELETE' \| 'HEAD' \| 'OPTIONS'` | Yes | — | HTTP method. |
 | `url` | `string` | Yes | — | Path, with `:name` parameters. |
-| `body` | `ZodType` \| `upload(…)` | No | `undefined` | Request body schema; validated at runtime. Or `upload({ … })` for a streamed `multipart/form-data` body (see [Uploads](#file-uploads--upload)). |
+| `body` | `ZodType` \| `upload(…)` \| `rawBody(…)` | No | `undefined` | Request body schema; validated at runtime. Or `upload({ … })` for a streamed `multipart/form-data` body (see [Uploads](#file-uploads--upload)), or `rawBody({ … })` for the untouched request bytes (see [Raw request bodies](#raw-request-bodies--rawbody)). |
 | `query` | `ZodType` | No | `undefined` | Query string schema; validated at runtime. |
 | `params` | `ZodType` | No | `undefined` | URL parameters schema; validated at runtime. |
 | `response` | `Record<number, ZodType>` | No | `undefined` | Response schemas per status — only for OpenAPI/SDK, not validated at runtime. |
@@ -650,10 +730,11 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
 | — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
 | — (no class) | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. `Retry-After` is set. |
-| `HttpError` | `PAYLOAD_TOO_LARGE` | 413 | An `upload()` body passed `maxBytes`, `maxFileBytes` or `maxFieldBytes`. |
+| `HttpError` | `PAYLOAD_TOO_LARGE` | 413 | An `upload()` body passed `maxBytes`, `maxFileBytes` or `maxFieldBytes`, or a `rawBody()` body passed its `maxBytes`. |
 | `HttpError` | `TOO_MANY_FILES` / `TOO_MANY_FIELDS` | 400 | An `upload()` body passed `maxFiles` / `maxFields`. |
 | `HttpError` | `UNSUPPORTED_MEDIA_TYPE` | 415 | An `upload()` route got a non-multipart body, or a file outside `allowedTypes`. |
 | `HttpError` | `MALFORMED_MULTIPART` | 400 | Bad boundary, truncated body, malformed/oversized part headers, or a nested multipart part. |
+| `HttpError` | `RAW_BODY_UNAVAILABLE` | 500 | A `rawBody()` route ran on an adapter that could not supply the bytes — another body parser consumed them first. A deliberate refusal, never a reconstruction. See [Raw request bodies](#raw-request-bodies--rawbody). |
 | — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. |
 
 `HttpError` and `RequestValidationError` extend `BasaltError`, so `error.code` is stable

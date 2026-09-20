@@ -1,6 +1,5 @@
 import { Readable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
-import { WebhookUrlBlockedError } from '@basaltkit/webhooks'
 import { capStream, createDriveFetch, hostAllowed, parseRetryAfter, type Transport } from '../src/fetch.js'
 import { DriveContentTooLargeError, DriveHostNotAllowedError, DriveRateLimitedError } from '../src/errors.js'
 
@@ -105,19 +104,32 @@ describe('createDriveFetch — host allowlist', () => {
 
   it('refuses plain http even for a listed host', async () => {
     const guarded = fetchWith(() => ok('{}'))
-    await expect(guarded('http://api.provider.test/files')).rejects.toThrow(WebhookUrlBlockedError)
+    await expect(guarded('http://api.provider.test/files')).rejects.toThrow(DriveHostNotAllowedError)
   })
 })
 
 describe('createDriveFetch — SSRF', () => {
   it('refuses a listed host that resolves to a private address', async () => {
     const guarded = fetchWith(() => ok('{}'), { lookup: async () => [{ address: '10.0.0.5', family: 4 }] })
-    await expect(guarded('https://api.provider.test/files')).rejects.toThrow(WebhookUrlBlockedError)
+    await expect(guarded('https://api.provider.test/files')).rejects.toThrow(DriveHostNotAllowedError)
+  })
+
+  it('reports the refusal as this package’s error, never the guard’s URL-quoting one', async () => {
+    // `@basaltkit/webhooks` names the URL it refused, which is right for an
+    // endpoint an operator configured and wrong here: the URL being validated
+    // is routinely a pre-signed download URL, and this message reaches
+    // `drive:sync_failed`, an app's logger and the audit trail.
+    const guarded = fetchWith(() => ok('{}'), { lookup: async () => [{ address: '10.0.0.5', family: 4 }] })
+    const error = (await guarded('https://api.provider.test/files?sig=SECRET').catch((e: unknown) => e)) as Error
+    expect(error.message).not.toContain('SECRET')
+    expect(error.message).not.toContain('/files')
+    // The host is the diagnostic, and it is not a credential.
+    expect(error.message).toContain('api.provider.test')
   })
 
   it('refuses the cloud metadata address', async () => {
     const guarded = fetchWith(() => ok('{}'), { lookup: async () => [{ address: '169.254.169.254', family: 4 }] })
-    await expect(guarded('https://api.provider.test/files')).rejects.toThrow(WebhookUrlBlockedError)
+    await expect(guarded('https://api.provider.test/files')).rejects.toThrow(DriveHostNotAllowedError)
   })
 
   it('refuses when ANY resolved address is private, not just the first', async () => {
@@ -127,7 +139,7 @@ describe('createDriveFetch — SSRF', () => {
         { address: '127.0.0.1', family: 4 },
       ],
     })
-    await expect(guarded('https://api.provider.test/files')).rejects.toThrow(WebhookUrlBlockedError)
+    await expect(guarded('https://api.provider.test/files')).rejects.toThrow(DriveHostNotAllowedError)
   })
 
   it('pins the socket to the validated address', async () => {
@@ -175,7 +187,7 @@ describe('createDriveFetch — redirects', () => {
       lookup: async (host) =>
         host === 'api.provider.test' ? [{ address: '93.184.216.34', family: 4 }] : [{ address: '127.0.0.1', family: 4 }],
     })
-    await expect(guarded('https://api.provider.test/content')).rejects.toThrow(WebhookUrlBlockedError)
+    await expect(guarded('https://api.provider.test/content')).rejects.toThrow(DriveHostNotAllowedError)
   })
 
   it('caps the redirect chain', async () => {
@@ -191,7 +203,7 @@ describe('createDriveFetch — redirects', () => {
   })
 
   it('does not carry the request body across a redirect', async () => {
-    const seen: (string | Buffer | undefined)[] = []
+    const seen: (string | Buffer | Readable | undefined)[] = []
     const transport: Transport = (url, init) => {
       seen.push(init.body)
       return url.pathname === '/start'

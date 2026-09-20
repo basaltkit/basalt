@@ -9,6 +9,7 @@ import {
 import { DriveCredentials } from './credentials.js'
 import {
   DriveConnectionNotFoundError,
+  DriveCredentialsInvalidError,
   DriveProviderUnknownError,
   DriveTenantMismatchError,
   DriveTenantRequiredError,
@@ -41,11 +42,46 @@ import {
 /** Single-tenant apps still need a key for the composite store keys. */
 export const SINGLE_TENANT_SCOPE = 'default'
 
+/**
+ * What happened when `disconnect` tried to revoke the grant at the provider.
+ *
+ * `revoked: false` used to be the whole answer, and it meant three different
+ * things an operator has to act on differently:
+ *
+ * - `revoked` — the provider accepted it. The grant is gone.
+ * - `skipped` — the caller asked for a local-only disconnect (`revoke: false`).
+ * - `unsupported` — the adapter has **no revocation endpoint to call**, and
+ *   never will. Microsoft Graph is this: there is no per-application revoke, so
+ *   the grant lives until the user removes it at `myaccount.microsoft.com`.
+ *   Nothing an operator retries will change it.
+ * - `failed` — we asked and the provider did not answer: it was down, or the
+ *   token was already dead. The grant **may still be live**, and unlike
+ *   `unsupported` this is worth trying again.
+ *
+ * Distinguishing the last two is the point. RFC 0002 §D.3.1 identified the
+ * ambiguity and left it documented rather than encoded, on the grounds that a
+ * third connection *status* would carry one vendor's absence into every
+ * adapter. That reasoning is sound and does not apply here: this is decided
+ * entirely by the engine, from facts it already has, and no adapter gains a
+ * member or changes a line. Meanwhile the guide's own example branched on the
+ * boolean to tell the user to go and withdraw consent by hand — the right
+ * advice for `unsupported` and the wrong advice for `failed`.
+ */
+export type DriveRevocationOutcome = 'revoked' | 'skipped' | 'unsupported' | 'failed'
+
 /** Hooks this package emits. Named `<domain>:<verb>` like every other Basalt package. */
 declare module '@basaltkit/core' {
   interface BasaltHooks {
     'drive:connected': { tenantId: string; connectionId: string; provider: string; label: string }
-    'drive:disconnected': { tenantId: string; connectionId: string; provider: string; revoked: boolean }
+    'drive:disconnected': {
+      tenantId: string
+      connectionId: string
+      provider: string
+      /** Whether the grant was actually revoked at the provider. */
+      revoked: boolean
+      /** Why, when it was not — see {@link DriveRevocationOutcome}. */
+      revocation: DriveRevocationOutcome
+    }
     'drive:credentials_refreshed': { tenantId: string; connectionId: string; provider: string; rotated: boolean }
     'drive:credentials_invalid': { tenantId: string; connectionId: string; provider: string; reason: string }
   }
@@ -199,6 +235,11 @@ export class Drives {
       ...(this.options.allowPrivateHosts ? { allowPrivateHosts: true } : {}),
       ...(this.options.lookup ? { lookup: this.options.lookup } : {}),
       ...(this.options.transport ? { transport: this.options.transport } : {}),
+      // Only the adapter knows where its vendor hides a retry hint that is not
+      // in `Retry-After`; the engine still decides how long it will honour one.
+      ...(provider.retryAfterFromBody
+        ? { retryAfterFromBody: (body: string): number | undefined => provider.retryAfterFromBody!(body) }
+        : {}),
     })
   }
 
@@ -359,6 +400,14 @@ export class Drives {
     const provider = this.provider(connection.provider)
     const revoke = options.revoke !== false
     let revoked = false
+    // Decided up front so the two "we did not revoke" cases stay distinguishable:
+    // an adapter with no `revoke` will never have one, while a call that threw
+    // is worth trying again.
+    let revocation: DriveRevocationOutcome = !revoke
+      ? 'skipped'
+      : provider.authorization.revoke === undefined
+        ? 'unsupported'
+        : 'failed'
 
     if (revoke && provider.authorization.revoke) {
       try {
@@ -371,12 +420,15 @@ export class Drives {
         ) as DriveTokens
         await provider.authorization.revoke({ tokens, fetch: this.fetchFor(provider) })
         revoked = true
+        revocation = 'revoked'
       } catch {
         // A provider that is down, or a grant already revoked from the vendor's
         // own console, must not leave an undeletable row behind. The local
-        // credentials still go away; `revoked: false` records that the remote
-        // grant may survive, which is exactly what an operator needs to know.
+        // credentials still go away; `revocation: 'failed'` records that the
+        // remote grant may survive **and that asking again might work** — which
+        // is the part `revoked: false` alone could never say.
         revoked = false
+        revocation = 'failed'
       }
     }
 
@@ -396,6 +448,7 @@ export class Drives {
       connectionId: connection.id,
       provider: connection.provider,
       revoked,
+      revocation,
     })
   }
 
@@ -437,10 +490,16 @@ export class Drives {
   ): Promise<T> {
     const provider = this.provider(connection.provider)
     let current = connection
-    return withRetry(async () => {
-      const { accessToken, connection: refreshed } = await this.credentials.use(current, provider.authorization)
-      current = refreshed
-      const session = this.sessionFor(
+    /**
+     * The reactive refresh is allowed **once per `run`**, not once per retry
+     * attempt: a genuinely dead grant must not be able to drive one token-endpoint
+     * call per attempt, which is how one broken connection gets a whole
+     * application throttled.
+     */
+    let reactiveRefreshUsed = false
+
+    const sessionWith = (accessToken: string): DriveSession =>
+      this.sessionFor(
         {
           accessToken,
           tenantId: current.tenantId,
@@ -450,7 +509,30 @@ export class Drives {
         },
         provider,
       )
-      return operation(session, provider)
+
+    return withRetry(async () => {
+      const { accessToken, connection: refreshed } = await this.credentials.use(current, provider.authorization)
+      current = refreshed
+      try {
+        return await operation(sessionWith(accessToken), provider)
+      } catch (error) {
+        // A token we believed was valid was rejected anyway — clock skew, a
+        // provider that expires early under load, a grant reissued behind our
+        // back, or simply an access token with no `expires_in` (the contract
+        // treats an unknown expiry as "still good", so this is the only thing
+        // that catches it). Phase 1 documented this reactive refresh on `run`
+        // and did not implement it: `DRIVE_CREDENTIALS_INVALID` is terminal
+        // for `withRetry`, so the call failed and the tenant saw a dead
+        // connection. Refresh once, then try the operation again.
+        if (reactiveRefreshUsed || !(error instanceof DriveCredentialsInvalidError)) throw error
+        reactiveRefreshUsed = true
+        const { accessToken: renewed, connection: rotated } = await this.credentials.refreshNow(
+          current,
+          provider.authorization,
+        )
+        current = rotated
+        return await operation(sessionWith(renewed), provider)
+      }
     }, this.retry)
   }
 

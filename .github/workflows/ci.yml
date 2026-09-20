@@ -29,6 +29,20 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # A raw control character inside a regex literal makes git treat the file
+      # as binary: `git diff` shows `Bin`, and `grep` (a reviewer's or a security
+      # sweep's) SKIPS it silently. Three shipped files reached final review that
+      # way, one of them 630 lines of HTTP routes. Escapes (\u0000) read the same
+      # to the engine and keep the file reviewable.
+      - name: Source files must be text
+        run: |
+          binary=$(comm -23 <(git ls-files -- '*.ts' '*.tsx' '*.js' '*.mjs' | sort) <(git grep -Il '' -- '*.ts' '*.tsx' '*.js' '*.mjs' | sort))
+          if [ -n "$binary" ]; then
+            echo "::error::These source files contain control characters and are invisible to git diff and grep. Use \uXXXX escapes:"
+            echo "$binary"
+            exit 1
+          fi
+
       - name: Build
         run: pnpm build
 
