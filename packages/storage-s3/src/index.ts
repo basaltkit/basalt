@@ -30,7 +30,34 @@ import {
  */
 export type S3ServerSideEncryption = 'AES256' | { kms: string }
 
-export interface S3DriverOptions {
+/**
+ * S3's multipart floor: every part but the last must be at least 5 MiB, so a
+ * smaller `partSizeBytes` is rejected rather than discovered on the wire.
+ */
+export const S3_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024
+
+/** Parts uploaded in parallel by default — small enough to stay cheap in memory. */
+const DEFAULT_QUEUE_SIZE = 4
+
+/**
+ * Multipart knobs. Settable on the driver (a default for every upload) and per
+ * {@link S3StorageDriver.putStream} call, which wins.
+ */
+export interface S3MultipartOptions {
+  /**
+   * Bytes per part. Defaults to 5 MiB — S3's minimum for every part but the
+   * last, and therefore the lowest value accepted. Larger parts mean fewer
+   * requests and more memory: up to `partSizeBytes × queueSize` is in flight.
+   */
+  partSizeBytes?: number
+  /** Parts uploaded in parallel. Defaults to 4. Must be at least 1. */
+  queueSize?: number
+}
+
+/** What {@link S3StorageDriver.putStream} accepts — the shared options plus the multipart knobs. */
+export interface S3PutStreamOptions extends PutStreamOptions, S3MultipartOptions {}
+
+export interface S3DriverOptions extends S3MultipartOptions {
   bucket: string
   region?: string
   /** Custom endpoint — set this to use MinIO or any S3-compatible service. */
@@ -72,6 +99,8 @@ const S3_DRIVER_OPTION_KEYS = {
   forcePathStyle: true,
   serverSideEncryption: true,
   signingEndpoint: true,
+  partSizeBytes: true,
+  queueSize: true,
 } satisfies Record<keyof S3DriverOptions, true>
 
 const sseInput = (sse: S3ServerSideEncryption | undefined) =>
@@ -88,6 +117,94 @@ const sseHeaders = (sse: S3ServerSideEncryption | undefined): Record<string, str
       ? { 'x-amz-server-side-encryption': 'AES256' }
       : { 'x-amz-server-side-encryption': 'aws:kms', 'x-amz-server-side-encryption-aws-kms-key-id': sse.kms }
 
+/** The `Upload` instance `@aws-sdk/lib-storage` hands back. */
+interface MultipartUpload {
+  done(): Promise<unknown>
+  abort(): Promise<unknown>
+}
+
+/**
+ * The slice of `@aws-sdk/lib-storage` this driver uses, described structurally
+ * so the package is never a build-time dependency either — nothing here needs
+ * its types to compile.
+ */
+interface MultipartUploadConstructor {
+  new (options: {
+    client: S3Client
+    params: Record<string, unknown>
+    partSize?: number
+    queueSize?: number
+    leavePartsOnError?: boolean
+  }): MultipartUpload
+}
+
+/** Resolved once per process: the constructor, or `null` when the package is not installed. */
+let libStorage: Promise<MultipartUploadConstructor | null> | undefined
+
+/**
+ * "This package is not installed", told apart from every other load failure.
+ *
+ * Node throws `ERR_MODULE_NOT_FOUND`; loaders and bundlers (vitest, ts-node,
+ * webpack) re-throw their own error with the original on `cause`, so the chain
+ * is walked — bounded, because a `cause` cycle is not impossible.
+ */
+function isModuleNotFound(error: unknown): boolean {
+  for (let current = error, depth = 0; current !== undefined && current !== null && depth < 8; depth += 1) {
+    const code = (current as { code?: unknown }).code
+    if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') return true
+    current = (current as { cause?: unknown }).cause
+  }
+  return false
+}
+
+/**
+ * Loads `@aws-sdk/lib-storage` on first use.
+ *
+ * The import is dynamic and lives here, in the only code path that needs it:
+ * importing this module never touches it, so apps that do not install the
+ * optional peer are unaffected. A missing package resolves to `null`; any
+ * OTHER failure (a broken install, a module that throws while loading) is
+ * rethrown rather than quietly degraded into "multipart unavailable".
+ */
+async function loadMultipartUpload(): Promise<MultipartUploadConstructor | null> {
+  libStorage ??= import('@aws-sdk/lib-storage').then(
+    (module) => {
+      const Upload = (module as unknown as { Upload?: MultipartUploadConstructor }).Upload
+      if (typeof Upload !== 'function') {
+        throw new TypeError('@aws-sdk/lib-storage is installed but does not export `Upload`; check the installed version.')
+      }
+      return Upload
+    },
+    (error: unknown) => {
+      if (isModuleNotFound(error)) return null
+      throw error
+    },
+  )
+  try {
+    return await libStorage
+  } catch (error) {
+    // Never cache a hard failure: a later call gets a real attempt again.
+    libStorage = undefined
+    throw error
+  }
+}
+
+function assertPartSize(value: number): number {
+  if (!Number.isInteger(value) || value < S3_MIN_PART_SIZE_BYTES) {
+    throw new RangeError(
+      `partSizeBytes must be an integer of at least ${S3_MIN_PART_SIZE_BYTES} bytes (S3's 5 MiB minimum part size); received ${value}.`,
+    )
+  }
+  return value
+}
+
+function assertQueueSize(value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError(`queueSize must be an integer of at least 1; received ${value}.`)
+  }
+  return value
+}
+
 /** S3-compatible driver — works with AWS S3, MinIO, Cloudflare R2, etc. */
 export class S3StorageDriver implements StorageDriver {
   readonly name = 's3'
@@ -96,6 +213,8 @@ export class S3StorageDriver implements StorageDriver {
   private readonly serverSideEncryption: S3ServerSideEncryption | undefined
   private readonly clientConfig: S3ClientConfig
   private readonly signingEndpoint: string | undefined
+  private readonly partSizeBytes: number
+  private readonly queueSize: number
   /** Presigning clients, keyed by the endpoint they sign for ('' = the driver's own). */
   private readonly signers = new Map<string, { download: S3Client; upload: S3Client }>()
 
@@ -103,6 +222,10 @@ export class S3StorageDriver implements StorageDriver {
     this.bucket = options.bucket
     this.serverSideEncryption = options.serverSideEncryption
     this.signingEndpoint = options.signingEndpoint
+    // Validated here so a misconfigured disk fails at boot, not on the first
+    // large upload hours later.
+    this.partSizeBytes = options.partSizeBytes === undefined ? S3_MIN_PART_SIZE_BYTES : assertPartSize(options.partSizeBytes)
+    this.queueSize = options.queueSize === undefined ? DEFAULT_QUEUE_SIZE : assertQueueSize(options.queueSize)
     this.clientConfig = {
       region: options.region ?? 'us-east-1',
       ...(options.endpoint ? { endpoint: options.endpoint } : {}),
@@ -154,27 +277,25 @@ export class S3StorageDriver implements StorageDriver {
   }
 
   /**
-   * Streams a body into `PutObject`.
+   * Streams a body into S3.
    *
-   * S3 cannot take a body of unknown length in a single request, so one of
-   * these must hold:
+   * `PutObject` cannot send a body of unknown length in a single request, so
+   * the route depends on what the caller knows:
    *
-   * - `contentLength` is known — the stream goes straight to S3, nothing is
-   *   buffered (this is what `files.upload()` does when the client sends a
-   *   `Content-Length`);
+   * - `contentLength` is known — the stream goes straight to `PutObject`,
+   *   nothing is buffered (this is what `files.upload()` does when the client
+   *   sends a `Content-Length`);
    * - `maxBytes` is set — the body is buffered up to that cap and sent as one
    *   object (bounded memory, chosen deliberately);
-   * - otherwise {@link StorageStreamLengthRequiredError}. For unbounded
-   *   uploads install `@aws-sdk/lib-storage` and drive its `Upload` (multipart)
-   *   yourself, or pass one of the two options above.
+   * - neither — multipart upload, when the optional peer
+   *   `@aws-sdk/lib-storage` is installed: the body is uploaded part by part,
+   *   unbounded, holding only `partSizeBytes × queueSize` at a time. Without
+   *   that package the call still fails with
+   *   {@link StorageStreamLengthRequiredError}, which now names it.
    */
-  async putStream(path: string, source: Readable, options: PutStreamOptions): Promise<void> {
+  async putStream(path: string, source: Readable, options: S3PutStreamOptions): Promise<void> {
     if (options.contentLength === undefined && options.maxBytes === undefined) {
-      throw new StorageStreamLengthRequiredError(
-        this.name,
-        'S3 PutObject cannot send a body of unknown length. Pass contentLength when you know it, or maxBytes to buffer up to a cap; ' +
-          'for unbounded streams use @aws-sdk/lib-storage Upload (multipart) directly.',
-      )
+      return this.putMultipart(path, source, options)
     }
     // With a known length the stream is forwarded as-is; without one it is
     // collected under the cap the caller accepted.
@@ -191,6 +312,56 @@ export class S3StorageDriver implements StorageDriver {
         ...sseInput(this.serverSideEncryption),
       }),
     )
+  }
+
+  /**
+   * Multipart upload of a stream whose length nobody knows, through
+   * `@aws-sdk/lib-storage`.
+   *
+   * The same `Key` (already tenant-scoped by the Disk), `ContentType` and
+   * server-side encryption a `PutObject` would carry are sent on
+   * `CreateMultipartUpload`, so a multipart object is stored exactly like a
+   * single-shot one. A failure — including the facade's `maxBytes` cap firing
+   * mid-stream — aborts the upload so S3 keeps no incomplete parts, which are
+   * invisible in listings and billed until removed.
+   */
+  private async putMultipart(path: string, source: Readable, options: S3PutStreamOptions): Promise<void> {
+    // Validated before anything is loaded or read: a bad part size is a
+    // configuration bug and should say so whatever else is installed.
+    const partSize = options.partSizeBytes === undefined ? this.partSizeBytes : assertPartSize(options.partSizeBytes)
+    const queueSize = options.queueSize === undefined ? this.queueSize : assertQueueSize(options.queueSize)
+    const Upload = await loadMultipartUpload()
+    if (Upload === null) {
+      source.destroy()
+      throw new StorageStreamLengthRequiredError(
+        this.name,
+        'S3 PutObject cannot send a body of unknown length. Pass contentLength when you know it, or maxBytes to buffer up to a cap; ' +
+          'install the optional peer @aws-sdk/lib-storage to stream bodies of any size (multipart upload).',
+      )
+    }
+    const upload = new Upload({
+      client: this.client,
+      params: {
+        Bucket: this.bucket,
+        Key: path,
+        Body: source,
+        ...(options.contentType ? { ContentType: options.contentType } : {}),
+        ...sseInput(this.serverSideEncryption),
+      },
+      partSize,
+      queueSize,
+      leavePartsOnError: false,
+    })
+    try {
+      await upload.done()
+    } catch (error) {
+      // lib-storage already aborts on its own failures; this covers the rest
+      // (and is cheap). Belt and braces: an `AbortIncompleteMultipartUpload`
+      // lifecycle rule on the bucket sweeps up whatever no process got to.
+      await upload.abort().catch(() => undefined)
+      if (!source.destroyed) source.destroy()
+      throw error
+    }
   }
 
   async get(path: string): Promise<Buffer> {

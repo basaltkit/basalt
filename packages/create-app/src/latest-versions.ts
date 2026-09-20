@@ -32,12 +32,17 @@
  * major. Bump a range to a new major only together with the templates.
  */
 export const THIRD_PARTY_VERSIONS: Readonly<Record<string, string>> = {
+  '@prisma/adapter-pg': '^7.10.0',
+  '@prisma/client': '^7.10.0',
   '@tailwindcss/vite': '^4.3.3',
   '@types/node': '^26.6.2',
+  '@types/pg': '^8.15.6',
   '@types/react': '^19.3.0',
   '@types/react-dom': '^19.3.0',
   '@vitejs/plugin-react': '^6.1.1',
+  pg: '^8.16.3',
   'pino-pretty': '^13.1.3',
+  prisma: '^7.10.0',
   react: '^19.3.0',
   'react-dom': '^19.3.0',
   tailwindcss: '^4.3.3',

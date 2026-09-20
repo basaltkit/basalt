@@ -50,12 +50,20 @@ export interface RlsPolicyOptions {
   force?: boolean
 }
 
-const quote = (ident: string, label: string): string => {
+/**
+ * Validates a SQL identifier and returns it double-quoted. Every identifier the
+ * SQL generators of this package put in a statement goes through here —
+ * nothing reaches a statement uninspected. Internal: not re-exported from the
+ * package entry point.
+ */
+export const quoteIdentifier = (ident: string, label: string): string => {
   if (!IDENTIFIER.test(ident)) {
     throw new Error(`Invalid ${label} "${ident}" — must match ${IDENTIFIER}.`)
   }
   return `"${ident}"`
 }
+
+const quote = quoteIdentifier
 
 /**
  * Idempotent SQL that enables RLS and installs a tenant-isolation policy on each

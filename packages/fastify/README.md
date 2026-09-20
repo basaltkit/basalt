@@ -180,6 +180,18 @@ from `@basaltkit/http`) — instead of Fastify's own default. It is installed at
 wins (the adapter's call is guarded). To register one *after* `app:booted`, pass
 `notFound: false` — Fastify allows only one handler.
 
+### Streaming a body — `stream()`
+
+A handler returning `stream(source, { contentType, contentLength?, filename? })` from
+`@basaltkit/http` is handed to Fastify as a `Readable` payload, so it is piped, never
+buffered: backpressure is Node's, a client disconnect destroys the source, a failure
+before the first byte becomes the usual JSON error (with the streaming headers
+withdrawn), and one after the headers destroys the connection and is reported once
+through `onError` as `STREAM_FAILED`. `HEAD` answers with the headers alone — Fastify's
+auto-generated HEAD route would otherwise drain the whole source to discard it and report
+`content-length: 0`. Bound long downloads with `fastify: { requestTimeout, connectionTimeout }`.
+Same handler code as on Express and Hono.
+
 ### Streaming — SSE
 
 A handler returning `sse(producer)` from `@basaltkit/http` is streamed over the raw Node

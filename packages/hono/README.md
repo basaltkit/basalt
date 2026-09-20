@@ -171,6 +171,17 @@ from `@basaltkit/http`) — instead of Hono's plain-text default. An app that ca
 `hono.notFound(…)` *later* still wins (Hono keeps the last handler); pass `notFound: false`
 to opt out entirely.
 
+### Streaming a body — `stream()`
+
+A handler returning `stream(source, { contentType, contentLength?, filename? })` from
+`@basaltkit/http` becomes a `Response` backed by a web `ReadableStream`, so it streams on
+Node, Bun, Deno and edge alike. The stream pulls only when the consumer has room (real
+backpressure), the first chunk is pulled before the `Response` exists so an immediate
+failure is still a JSON error, `request.signal` aborting destroys the source, and a
+failure mid-stream errors the body — reported once through `onError` as `STREAM_FAILED` —
+instead of appending anything to bytes already sent. `HEAD` answers with the headers and
+no body. Same handler code as on Fastify and Express.
+
 ### Streaming — SSE
 
 A handler returning `sse(producer)` from `@basaltkit/http` becomes a `Response` backed by a

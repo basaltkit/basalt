@@ -128,6 +128,17 @@ from `@basaltkit/http`) — instead of Express's HTML default, which fingerprint
 framework. It is mounted last, at `app:booted`. Pass `notFound: false` to keep Express's
 own handling, e.g. when your app mounts its own catch-all afterwards.
 
+### Streaming a body — `stream()`
+
+A handler returning `stream(source, { contentType, contentLength?, filename? })` from
+`@basaltkit/http` is sent with `pipeline()`, never buffered. The first chunk is pulled
+before anything is written, so a source that fails immediately still becomes the usual
+JSON error; headers go out with the first byte; a client disconnect destroys the source;
+and a failure after the headers destroys the response (reported once through `onError` as
+`STREAM_FAILED`) rather than appending anything to a partly sent body. `HEAD` answers
+with the headers and no body. Bound long downloads with `server.setTimeout()`. Same
+handler code as on Fastify and Hono.
+
 ### Streaming — SSE
 
 A handler returning `sse(producer)` from `@basaltkit/http` is streamed straight onto the

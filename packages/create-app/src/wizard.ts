@@ -1,7 +1,7 @@
 import type { PackageManager } from './index.js'
 import { WizardCancelledError, type Choice, type Prompter } from './prompt.js'
 
-export type FeatureKey = 'tenancy' | 'auth' | 'billing' | 'ui' | 'cli' | 'mcp'
+export type FeatureKey = 'tenancy' | 'auth' | 'billing' | 'ui' | 'cli' | 'mcp' | 'prisma'
 
 /** The feature toggles offered in the "custom" preset (and shown in the summary). */
 export const FEATURES: Choice<FeatureKey>[] = [
@@ -11,6 +11,7 @@ export const FEATURES: Choice<FeatureKey>[] = [
   { value: 'ui', label: 'Web UI', hint: 'React + shadcn + SDK (pnpm workspace)' },
   { value: 'cli', label: 'basalt CLI', hint: 'code generators + commands' },
   { value: 'mcp', label: 'MCP server', hint: 'expose routes as AI-agent tools (/mcp)' },
+  { value: 'prisma', label: 'Database', hint: 'PostgreSQL via Prisma (migrations + real stores)' },
 ]
 
 interface Preset {
@@ -22,9 +23,9 @@ interface Preset {
 }
 
 export const PRESETS: Preset[] = [
-  { value: 'saas', label: 'SaaS starter', hint: 'tenancy + auth + billing + CLI', features: ['tenancy', 'auth', 'billing', 'cli'] },
+  { value: 'saas', label: 'SaaS starter', hint: 'tenancy + auth + billing + database + CLI', features: ['tenancy', 'auth', 'billing', 'prisma', 'cli'] },
   { value: 'api', label: 'API only', hint: 'auth + MCP, no tenancy or UI', features: ['auth', 'mcp'] },
-  { value: 'full', label: 'Full stack', hint: 'everything + web UI', features: ['tenancy', 'auth', 'billing', 'ui', 'cli', 'mcp'] },
+  { value: 'full', label: 'Full stack', hint: 'everything + web UI', features: ['tenancy', 'auth', 'billing', 'prisma', 'ui', 'cli', 'mcp'] },
   { value: 'minimal', label: 'Minimal', hint: 'no batteries, add them later', features: [] },
   { value: 'custom', label: 'Custom', hint: 'pick features yourself', features: null },
 ]
@@ -55,6 +56,7 @@ export interface WizardResult {
   ui: boolean
   cli: boolean
   mcp: boolean
+  prisma: boolean
   pm: PackageManager
   install: boolean
   git: boolean
@@ -136,6 +138,7 @@ export async function runWizard(prompter: Prompter, options: WizardOptions = {})
     ui: featureSet.has('ui'),
     cli: featureSet.has('cli'),
     mcp: featureSet.has('mcp'),
+    prisma: featureSet.has('prisma'),
     pm,
     install,
     git,

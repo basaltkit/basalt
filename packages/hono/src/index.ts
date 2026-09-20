@@ -19,7 +19,13 @@ import {
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
+  isStreamResponse,
+  streamPayloadOf,
+  destroyStreamSource,
+  openStreamPump,
+  webStreamFrom,
   type SseProducer,
+  type StreamPayload,
 } from '@basaltkit/http'
 import { Hono, type Context, type Next } from 'hono'
 
@@ -186,6 +192,54 @@ function sseResponse(context: Context, producer: SseProducer): Response {
   return new Response(stream, { headers })
 }
 
+/**
+ * Renders a `stream()` response as a `Response` backed by a web stream.
+ *
+ * The first chunk is pulled BEFORE the Response exists, so a source that fails
+ * immediately still becomes a normal JSON error (the failure is rethrown into
+ * the handler's catch). After that the stream pulls only when the consumer has
+ * room — real backpressure — the request's abort signal closes the source, and
+ * a mid-stream failure errors the body (a truncated download) instead of
+ * appending anything to bytes already sent.
+ */
+async function streamResponse(
+  context: Context,
+  payload: StreamPayload,
+  onError?: HttpErrorReporter,
+): Promise<Response> {
+  const headers = new Headers(context.res?.headers)
+  for (const [name, value] of Object.entries(payload.headers)) headers.set(name, value)
+  if (context.req.method === 'HEAD') {
+    // Nothing is read: the source is released and only the headers a GET would
+    // have carried are sent.
+    destroyStreamSource(payload.source)
+    return new Response(null, { status: payload.status, headers })
+  }
+  const { pump, first } = await openStreamPump(payload.source)
+  const body = webStreamFrom(pump, first, (error) => {
+    // A read that fails because the source was released on abort is the client
+    // leaving, not a broken payload — never report that as a server error.
+    if (context.req.raw.signal.aborted) return
+    try {
+      const entry = {
+        error,
+        status: 500,
+        code: 'STREAM_FAILED',
+        method: context.req.method,
+        url: context.req.url,
+      }
+      if (onError) onError(entry)
+      else reportHttpError(entry)
+    } catch {
+      /* a broken reporter must not change what the client receives */
+    }
+  })
+  // The client disconnecting must release the source even when the runtime
+  // never cancels the response body (an in-process `fetch`, an edge worker).
+  context.req.raw.signal.addEventListener('abort', () => void pump.close(), { once: true })
+  return new Response(body, { status: payload.status, headers })
+}
+
 /** Neutral reply that buffers the response; the handler emits a native Response. */
 class HonoReply implements HttpReply {
   private _status = 200
@@ -265,6 +319,7 @@ function handlerFor(
         guards,
       })
       if (isSseResponse(result)) return sseResponse(context, sseProducerOf(result))
+      if (isStreamResponse(result)) return await streamResponse(context, streamPayloadOf(result), onError)
       return toResponse(reply, reply.sent ? reply.payload : result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)

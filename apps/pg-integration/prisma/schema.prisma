@@ -39,6 +39,22 @@ model RlsTask {
   @@map("rls_tasks")
 }
 
+// --- cross-tenant scan: crossTenantScanSql / crossTenantScan / crossTenantSweep ---
+// Stuck work a reconciler must find across EVERY tenant, while the application
+// role only ever sees one tenant at a time. `payload` is tenant data the scan
+// must never be able to return.
+
+model RlsJob {
+  id        String   @id
+  tenantId  String
+  status    String
+  payload   String
+  updatedAt DateTime @default(now())
+
+  @@index([tenantId, status])
+  @@map("rls_jobs")
+}
+
 // --- store models (for @basaltkit/*-prisma integration tests) ---
 
 

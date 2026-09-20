@@ -577,6 +577,16 @@ export class Files {
   }
 
   /**
+   * Whether {@link downloadStream} works on this disk — i.e. its driver
+   * implements `getStream` (local, S3, Azure, GCS do; a custom one may not).
+   * Lets a caller take the streaming path where it exists and buffer where it
+   * does not, instead of catching `STORAGE_GET_STREAM_UNSUPPORTED`.
+   */
+  canStreamDownloads(): boolean {
+    return this.disk.supports('getStream')
+  }
+
+  /**
    * The file's record and a stream of its bytes — the same contract as
    * {@link download} (quarantine included), without holding the file in
    * memory. Requires a disk whose driver implements `getStream`; otherwise the

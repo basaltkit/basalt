@@ -2,7 +2,10 @@
   "extends": "@basaltkit/tsconfig/base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": ".",
+    // "..": the tests import the shared adapter parity types and multipart
+    // fixtures from packages/http/tests (typecheck only — the build config
+    // pins rootDir to src).
+    "rootDir": "..",
     "types": ["node"],
     "noEmit": true
   },

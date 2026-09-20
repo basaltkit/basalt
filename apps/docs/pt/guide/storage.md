@@ -133,20 +133,34 @@ cancelada (`ReadableStream` web) — nada para além do limite chega a ser lido.
 
 | Capacidade | S3 | Azure | GCS | Local |
 | --- | --- | --- | --- | --- |
-| `putStream` | `PutObject` — precisa de `contentLength` **ou** `maxBytes` | `uploadStream` (qualquer tamanho) | `createWriteStream` (qualquer tamanho) | stream de escrita `fs` |
+| `putStream` | `PutObject` com `contentLength` ou `maxBytes`; multipart sem nenhum dos dois | `uploadStream` (qualquer tamanho) | `createWriteStream` (qualquer tamanho) | stream de escrita `fs` |
 | `getStream` | corpo do `GetObject` | `download()` | `createReadStream` | stream de leitura `fs` |
 | `copy` | `CopyObject` | `syncCopyFromURL` (≤ 256 MiB) | `file.copy()` | `fs.copyFile` |
 | `stat` | `HeadObject` | `getProperties()` | `getMetadata()` | `fs.stat` (só tamanho + mtime) |
 
-::: warning O S3 precisa de um tamanho conhecido
+::: warning O S3 e o tamanho do corpo
 O `PutObject` não consegue enviar um corpo de tamanho desconhecido. O
 `putStream` transmite diretamente quando passas `contentLength`; só com
-`maxBytes` acumula até esse limite (memória limitada, escolha deliberada); sem
-nenhum dos dois lança `StorageStreamLengthRequiredError`
-(`400 STORAGE_STREAM_LENGTH_REQUIRED`). Para streams verdadeiramente ilimitadas,
-usa tu o `Upload` multipart do `@aws-sdk/lib-storage` — não é dependência do
-`@basaltkit/storage-s3` de propósito. Azure e GCS fragmentam streams de tamanho
-desconhecido nativamente.
+`maxBytes` acumula até esse limite (memória limitada, escolha deliberada). Sem
+**nenhum dos dois**, o driver envia o corpo em **multipart** — qualquer tamanho,
+com apenas `partSizeBytes × queueSize` em memória — desde que o peer opcional
+`@aws-sdk/lib-storage` esteja instalado:
+
+```bash
+pnpm add @aws-sdk/lib-storage
+```
+
+É carregado de forma preguiçosa, só nesse caminho, por isso uma app que não o
+instale fica exatamente como estava — e aí o `putStream` sem nenhuma das duas
+opções continua a lançar `StorageStreamLengthRequiredError`
+(`400 STORAGE_STREAM_LENGTH_REQUIRED`), nomeando o pacote que o permitiria.
+Afina o envio com as opções de disco `partSizeBytes` (por omissão 5 MiB, o
+mínimo do S3) e `queueSize` (por omissão 4). Uma parte que falhe — incluindo o
+limite `maxBytes` — aborta o upload e destrói a fonte, para não ficarem partes
+órfãs; acrescenta ao bucket uma regra de ciclo de vida
+`AbortIncompleteMultipartUpload` como rede de segurança, já que partes
+incompletas não aparecem nas listagens e são faturadas até serem removidas.
+Azure e GCS fragmentam streams de tamanho desconhecido nativamente.
 :::
 
 O `copy` recorre a alternativas quando uma cópia server-side é impossível — um
@@ -500,7 +514,7 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | `getStream` num driver sem a capacidade |
 | `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | `copy({ requireServerSide: true })` sem cópia server-side disponível (um driver diferente, ou um sem `copy`) |
 | `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | `stat` num driver sem a capacidade |
-| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` (400) | `putStream` no S3 sem `contentLength` nem `maxBytes` |
+| `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` (400) | `putStream` no S3 sem `contentLength` nem `maxBytes`, e sem o peer opcional `@aws-sdk/lib-storage` que ativa o multipart |
 | `StorageSigningEndpointInvalidError` | `STORAGE_SIGNING_ENDPOINT_INVALID` (400) | Um `endpoint` que não é um URL `http(s)` absoluto, ou que traz credenciais, query string ou fragmento |
 
 Todos estendem `BasaltError` e transportam o `code` acima.

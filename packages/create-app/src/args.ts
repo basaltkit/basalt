@@ -11,6 +11,9 @@ Options:
   --ui            Scaffold a web/ frontend (React + shadcn + SDK)
   --cli           Scaffold the 'basalt' CLI (code generators + commands)
   --mcp           Expose read-only routes as MCP tools at /mcp
+  --prisma, --db  Back the app with PostgreSQL through Prisma: schema,
+                  migrations, prisma-backed stores and a boot-time check
+                  that the database is the migrated one
   --install       Install dependencies (default: yes in an interactive
                   terminal, skipped in CI/non-TTY; --no-install to opt out)
   --no-install    Never install dependencies
@@ -35,6 +38,7 @@ export interface Flags {
   ui: boolean
   cli: boolean
   mcp: boolean
+  prisma: boolean
   /** Tri-state: undefined = decide from the environment (TTY yes, CI no). */
   install?: boolean
   git?: boolean
@@ -51,6 +55,7 @@ export function parseArgs(argv: string[]): Flags {
     ui: false,
     cli: false,
     mcp: false,
+    prisma: false,
     yes: false,
     offline: false,
   }
@@ -61,6 +66,9 @@ export function parseArgs(argv: string[]): Flags {
     else if (token === '--ui') flags.ui = true
     else if (token === '--cli') flags.cli = true
     else if (token === '--mcp') flags.mcp = true
+    // `--db` reads naturally in a sentence ("scaffold it with a db") and is the
+    // same switch; the canonical spelling stays the package name, like --mcp.
+    else if (token === '--prisma' || token === '--db') flags.prisma = true
     else if (token === '--install') flags.install = true
     else if (token === '--no-install') flags.install = false
     else if (token === '--git') flags.git = true

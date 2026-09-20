@@ -517,6 +517,45 @@ await tenantTransaction(db, async (tx) => {
   RLS não vê nada: dá ao código central/admin o seu próprio role de base de
   dados (`BYPASSRLS`, ou um que as políticas não cubram).
 
+**Varrer todos os tenants — o único buraco, mantido estreito.** Um reconciler
+tem de encontrar linhas encalhadas *em todos os tenants*, o que com RLS o role
+da aplicação nunca consegue ver. O `crossTenantScanSql` gera a única forma
+segura dessa query: uma função `SECURITY DEFINER` que devolve **apenas
+identificadores** (id do tenant + id da linha), detida por um role que as
+políticas não alcançam, com o `search_path` fixado dentro dela e o `EXECUTE`
+revogado ao `PUBLIC`. O `crossTenantSweep` processa depois cada identificador de
+volta no âmbito do seu próprio tenant, onde as políticas voltam a aplicar-se:
+
+```ts
+import { crossTenantScanSql, crossTenantSweep } from '@basaltkit/prisma'
+
+// migração (uma vez): apenas identificadores — nunca uma coluna com dados do tenant
+crossTenantScanSql({
+  name: 'stuck_jobs', table: 'jobs', tenantColumn: 'tenantId', columns: ['id'],
+  where: `t."status" = 'PROCESSING' AND t."updatedAt" < now() - interval '15 minutes'`,
+  role: 'app', owner: 'app_owner', maxRows: 500,
+})
+
+// reconciler (código central, sem tenant em contexto)
+await crossTenantSweep({
+  client: db,
+  scanFunction: 'stuck_jobs',
+  run: (tenantId, fn) => tenancy.run(tenantId, fn),
+  handle: (item) => RetryJob.dispatch({ jobId: item.id }),
+})
+```
+
+A função é um **bypass deliberado ao RLS**, por isso trata a sua definição como
+crítica para a segurança: basta alargá-la a uma coluna de dados para que
+qualquer chamador com `EXECUTE` leia todos os tenants. O Basalt falha fechado à
+volta dela — o scan recusa correr dentro de um contexto de tenant
+(`PRISMA_CROSS_TENANT_IN_TENANT`; ao contrário do `set_config` interno, não tem
+isenção da guarda de queries brutas), recusa uma função instalada que devolva
+colunas que não declaraste (`PRISMA_CROSS_TENANT_SCAN_SHAPE`) e pagina com um
+cursor ordenado e limitado, para que um varrimento não puxe a tabela inteira.
+Sem RLS a função nem é precisa: passa uma query central normal como `scan`. Vê
+[o guia do scheduler](/pt/guide/scheduler#varrer-todos-os-tenants).
+
 Na dúvida, prefere operações de modelo (limitadas automaticamente) a SQL bruto,
 e revê cada `connect` contra o tenant atual.
 

@@ -228,6 +228,42 @@ A entrada chama-se `reconciler:<name>`, por isso `basalt schedule:run reconciler
 corre-a a pedido. A tabela completa de opções está no
 [README do pacote](https://github.com/basaltkit/basalt/tree/main/packages/scheduler#definereconcilert-options-reconcileroptionst-reconciler).
 
+### Varrer todos os tenants
+
+Um reconciler é código central: tem de ver trabalho encalhado em **todos** os tenants — exatamente
+o que o scoping por tenant proíbe. Com o RLS do Postgres ligado, o `find` nem consegue correr: o
+role da aplicação só vê um tenant de cada vez, e a extensão de tenancy do Prisma recusa queries
+sem âmbito.
+
+O `@basaltkit/prisma` traz a peça que falta. O `crossTenantScanSql` gera uma função `SECURITY
+DEFINER` que devolve **apenas identificadores** (id do tenant + id da linha) em todos os tenants,
+limitada e paginada pela própria base de dados; o `find` chama-a e o `redispatch` processa cada
+item de volta dentro do seu tenant:
+
+```ts
+import { crossTenantScan } from '@basaltkit/prisma'
+
+defineReconciler({
+  name: 'stuck-jobs',
+  every: '5m',
+  // código central — sem tenant em contexto; a função limita o tamanho da página
+  find: () => crossTenantScan(db, 'stuck_jobs', { limit: 200 }),
+  // de volta ao tenant do item: o cliente com âmbito e as políticas RLS voltam a aplicar-se
+  redispatch: (item) => tenancy.run(item.tenantId, () => ProcessJob.dispatch({ jobId: item.id })),
+}).schedule(schedule)
+```
+
+O `crossTenantSweep({ client, scanFunction, run, handle })` faz o mesmo numa só chamada quando
+queres também a paginação e o agrupamento: percorre todas as páginas e entra em cada tenant uma
+vez por página, em vez de uma vez por item. Sem RLS nenhum deles precisa da função SQL — passa uma
+query central normal como `scan`.
+
+A função de scan é um **bypass deliberado ao RLS**, por isso as suas regras (apenas
+identificadores, `EXECUTE` restrito ao role da app, `search_path` fixado, cursor limitado) fazem
+parte da tua revisão de segurança: vê o
+[guia de segurança](/pt/guide/security#_3-o-scoping-automatico-de-tenant-cobre-o-orm-—-nao-sql-bruto-nem-escalares-de-chave-estrangeira)
+e o [README do @basaltkit/prisma](https://github.com/basaltkit/basalt/tree/main/packages/prisma#sweeping-every-tenant-cross-tenant-scan).
+
 ## Correr a pedido
 
 `schedule:run` dispara uma entrada a partir da CLI, ignorando o seu cron — para
