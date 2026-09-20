@@ -22,6 +22,9 @@ const driver: ParityDriver = {
     return sendWith(httpFetcher(`http://127.0.0.1:${(instance.server.address() as AddressInfo).port}`))
   },
   async close() {
+    // A request whose body the server never read (e.g. a 404 answered early)
+    // leaves a socket the graceful close would wait on forever.
+    app?.container.get(FASTIFY).server.closeAllConnections()
     await app?.shutdown()
     app = undefined
   },

@@ -113,6 +113,20 @@ Every store is also exported on its own (`PrismaUserSource`, `PrismaSessionStore
 | `PrismaApiKeyStore` | `ApiKeyStore` | `AuthApiKey` |
 | `PrismaMfaStore` | `MfaStore` | `AuthMfa` |
 
+### Bulk contact lookup (`findByIds`)
+
+`PrismaUserSource.findByIds(ids)` resolves a set of accounts in one
+`WHERE id IN (…)` instead of one query per id — the fast path behind
+`@basaltkit/teams`' `roleRecipients` ("email every admin of this tenant").
+
+- It `select`s only `id`, `email` and `emailVerified`, so the password hash is
+  never read, let alone returned.
+- The id list is **chunked** (500 per query by default, far below PostgreSQL's
+  65 535 bind parameters), so a ten-thousand-member tenant can't blow the
+  driver's parameter limit. Tune it with
+  `new PrismaUserSource(prisma, { idChunkSize: 1000 })`.
+- The result keeps the order of `ids`; ids with no row are omitted.
+
 ## Multi-tenant?
 
 Pair with [`@basaltkit/prisma`](https://github.com/basaltkit/basalt/tree/main/packages/prisma):
@@ -136,6 +150,10 @@ it, so each tenant's auth data lives in its own database/schema.
 Prisma generates each method as a generic whose exact `where`/`data` shapes a
 hand-written interface can't reproduce without importing your generated client.
 This is what lets a real `PrismaClient` be assignable so you can pass it directly.
+
+The `authUser` delegate now also needs `findMany` (used by `findByIds`). A real
+`PrismaClient` has it; only a hand-written stub of `PrismaAuthClient` needs the
+method added.
 
 ## License
 

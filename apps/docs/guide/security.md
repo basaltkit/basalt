@@ -505,6 +505,66 @@ await tenantTransaction(db, async (tx) => {
   sees nothing: give central/admin code its own database role (`BYPASSRLS`, or
   one the policies don't cover).
 
+**Full-text search under RLS — the GIN index silently disappears.** RLS on a
+table that also has a `tsvector` column with a GIN index (what
+`@basaltkit/search-postgres` creates) is a trap nothing warns about: PostgreSQL
+may only evaluate a qualifier *before* a row-security policy if that qualifier
+is `LEAKPROOF`, and the text-search operator `@@` is not. So for the very role
+the policy protects you with, `tsv @@ plainto_tsquery(…)` can never be an index
+condition — it becomes a filter applied after the policy, and the plan degrades
+to a sequential scan over every tenant's rows. Measured on 30 200 documents
+(PostgreSQL 16):
+
+```text
+-- as the owner                        -- as the application role, same SQL
+->  Bitmap Heap Scan                    ->  Seq Scan on basalt_search
+      Recheck Cond: (tsv @@ …)                Filter: (… AND (tsv @@ …))
+      ->  Bitmap Index Scan on                Rows Removed by Filter: 30197
+            basalt_search_tsv_idx       Execution Time: 14.702 ms
+Execution Time: 4.920 ms                                (~24x slower, warm)
+```
+
+`rlsSearchFunctionSql` generates the fix: a `SECURITY DEFINER` search function
+that re-applies the tenant predicate itself, so `@@` is an index condition again
+while the rows it can ever return are still exactly one tenant's.
+
+```ts
+import { rlsSearchFunctionSql } from '@basaltkit/prisma'
+
+// migration (once), run as a role that bypasses the table's RLS
+rlsSearchFunctionSql({
+  name: 'basalt_search_scoped', table: 'basalt_search', vectorColumn: 'tsv',
+  partitionColumn: 'idx', filterColumn: 'document',
+  columns: [{ name: 'document', type: 'jsonb' }],
+  role: 'app', owner: 'app_owner', maxRows: 100,
+})
+
+// runtime — the driver routes text queries through the function
+new PostgresSearchDriver({ client: pool, searchFunction: 'basalt_search_scoped' })
+```
+
+```text
+-- as the application role, through the function
+->  Bitmap Heap Scan on basalt_search t
+      Filter: ((idx = 'notes') AND (tenant_id = current_setting('app.tenant_id', true)))
+      ->  Bitmap Index Scan on basalt_search_tsv_idx
+Execution Time: 1.850 ms
+```
+
+The function takes **no tenant parameter**: it reads the tenant from the same
+`current_setting(…)` the policy reads (the one `tenancyExtension({ rls: true })`
+already sets), so there is nothing for a caller to point elsewhere, and an unset
+setting reads as `NULL` — no rows, never all rows. It is hardened like the
+cross-tenant scan (pinned `search_path`, validated identifiers, `EXECUTE`
+revoked from `PUBLIC`, `p_limit` clamped), and the driver additionally refuses
+any returned row whose tenant is not the one it asked for.
+
+**Never `ALTER FUNCTION ts_match_vq(tsvector, tsquery) LEAKPROOF`.** It is the
+shortcut every search result suggests, and it does bring the index back — by
+weakening the leakproof rule **database-wide**, for every table and every policy
+in the database, so a crafted `@@` becomes a side channel for probing rows a
+policy hides. A local speed-up bought with a global loss of isolation.
+
 **Sweeping every tenant — the one hole, made narrow.** A reconciler has to find
 stuck rows *across all tenants*, which under RLS the application role can never
 see. `crossTenantScanSql` generates the only safe shape of that query: a

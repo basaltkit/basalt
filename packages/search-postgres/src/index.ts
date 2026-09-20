@@ -5,6 +5,29 @@ export interface PgClientLike {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>
 }
 
+/**
+ * Routes full-text queries through a `SECURITY DEFINER` function instead of
+ * querying the table directly — the fix for the row-level-security plan trap.
+ *
+ * On a search table protected by Postgres RLS, `tsv @@ to_tsquery(…)` can never
+ * become an index condition for a role the policy applies to: `@@` is not
+ * `LEAKPROOF`, so it must be evaluated *after* the policy, and the GIN index
+ * silently drops out of the plan (sequential scan over every tenant's rows).
+ * Generate the function with `rlsSearchFunctionSql()` from `@basaltkit/prisma`
+ * and name it here; the driver then calls it, and the index is used again.
+ *
+ * The function takes no tenant parameter: it reads the tenant from the same
+ * `current_setting(…)` the policy reads, so it can only ever return rows of the
+ * tenant already set on the connection. The driver still checks every returned
+ * row against the query's `tenantId` and refuses a mismatch.
+ */
+export interface PostgresSearchFunctionOptions {
+  /** Unqualified name of the function (`rlsSearchFunctionSql`'s `name`). */
+  name: string
+  /** Schema it lives in. Default `public`. */
+  schema?: string
+}
+
 export interface PostgresSearchOptions {
   /** A connected `pg` Pool or Client. */
   client: PgClientLike
@@ -12,10 +35,34 @@ export interface PostgresSearchOptions {
   table?: string
   /** Text-search configuration (stemming/stop-words). Default `english`. */
   language?: string
+  /**
+   * Name of a `SECURITY DEFINER` search function to route text queries through
+   * — required when the search table is under Postgres RLS, otherwise the GIN
+   * index is not used. See {@link PostgresSearchFunctionOptions}.
+   */
+  searchFunction?: string | PostgresSearchFunctionOptions
 }
 
 /** A single unquoted SQL identifier: starts with a letter/underscore, then word chars. */
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Validate a dotted SQL name (`table`, `schema.table`) before it is
+ * string-interpolated into DDL/DML. Configuration-time identifiers are never
+ * request input, but a developer wiring one from an external value would
+ * otherwise have a SQL injection. Returns the (unchanged) name.
+ */
+function assertValidName(name: string, label: string): string {
+  const parts = name.split('.')
+  if (parts.length > 2 || parts.some((part) => !SAFE_IDENTIFIER.test(part))) {
+    throw new Error(
+      `PostgresSearchDriver: invalid ${label} ${JSON.stringify(name)} — ` +
+        'must be a SQL identifier matching /^[A-Za-z_][A-Za-z0-9_]*$/ ' +
+        `(optionally schema-qualified as "schema.${label === 'table name' ? 'table' : 'name'}").`,
+    )
+  }
+  return name
+}
 
 /**
  * Validate a table name before it is string-interpolated into DDL/DML. The
@@ -25,15 +72,7 @@ const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
  * valid identifier. Returns the (unchanged) name so it can be used inline.
  */
 export function assertValidTableName(table: string): string {
-  const parts = table.split('.')
-  if (parts.length > 2 || parts.some((part) => !SAFE_IDENTIFIER.test(part))) {
-    throw new Error(
-      `PostgresSearchDriver: invalid table name ${JSON.stringify(table)} — ` +
-        'must be a SQL identifier matching /^[A-Za-z_][A-Za-z0-9_]*$/ ' +
-        '(optionally schema-qualified as "schema.table").',
-    )
-  }
-  return table
+  return assertValidName(table, 'table name')
 }
 
 /**
@@ -47,12 +86,20 @@ export class PostgresSearchDriver implements SearchDriver {
   private readonly client: PgClientLike
   private readonly table: string
   private readonly language: string
+  private readonly searchFunction: string | undefined
   private readonly configs = new Map<string, IndexDefinition>()
 
   constructor(options: PostgresSearchOptions) {
     this.client = options.client
     this.table = assertValidTableName(options.table ?? 'basalt_search')
     this.language = options.language ?? 'english'
+    const fn = options.searchFunction
+    this.searchFunction =
+      fn === undefined
+        ? undefined
+        : typeof fn === 'string'
+          ? assertValidName(fn, 'search function name')
+          : `${assertValidName(fn.schema ?? 'public', 'search function schema')}.${assertValidName(fn.name, 'search function name')}`
   }
 
   async register(index: IndexDefinition): Promise<void> {
@@ -99,11 +146,15 @@ export class PostgresSearchDriver implements SearchDriver {
   }
 
   async search(indexName: string, query: SearchQuery): Promise<SearchResult> {
+    const q = (query.q ?? '').trim()
+    // Only a *text* query needs the function: `idx = $1 AND tenant_id = $2` is
+    // plain equality, which IS leakproof, so RLS leaves the primary key alone.
+    if (q && this.searchFunction !== undefined) return await this.searchViaFunction(q, indexName, query)
+
     const params: unknown[] = [indexName, query.tenantId]
     let score = '0'
     let where = 'idx = $1 AND tenant_id = $2'
 
-    const q = (query.q ?? '').trim()
     if (q) {
       const langIdx = params.push(this.language)
       const qIdx = params.push(q)
@@ -144,6 +195,56 @@ export class PostgresSearchDriver implements SearchDriver {
         document: row['document'] as SearchDocument,
       })),
       total: Number(total[0]?.['total'] ?? rows.length),
+    }
+  }
+
+  /**
+   * The RLS fast path: one call into the `SECURITY DEFINER` function generated
+   * by `rlsSearchFunctionSql()`, which re-applies the tenant predicate itself
+   * and so keeps the GIN index in the plan.
+   *
+   * The function has **no tenant parameter** — it scopes to the tenant the
+   * connection already has in `current_setting(…)`, the same value the RLS
+   * policy reads, and returns nothing when that is unset. This driver does not
+   * (and must not) get to choose the tenant here; what it can do is verify,
+   * which it does: a row for any tenant other than the one asked for is a
+   * misconfiguration (a connection left on another tenant, a function pointed
+   * at a different setting than the policy) and is refused rather than
+   * returned.
+   */
+  private async searchViaFunction(q: string, indexName: string, query: SearchQuery): Promise<SearchResult> {
+    const filters = query.filters ?? {}
+    const entries = Object.entries(filters)
+    const payload: Record<string, string | string[]> = {}
+    for (const [field, value] of entries) {
+      payload[field] = Array.isArray(value) ? value.map(String) : String(value)
+    }
+    const rows = (
+      await this.client.query(
+        `SELECT tenant_id, id, document, score, total FROM ${this.searchFunction}($1, $2, $3::jsonb, $4, $5)`,
+        [q, indexName, entries.length > 0 ? JSON.stringify(payload) : null, query.limit ?? 20, query.offset ?? 0],
+      )
+    ).rows
+
+    for (const row of rows) {
+      if (String(row['tenant_id']) !== query.tenantId) {
+        throw new Error(
+          `PostgresSearchDriver: ${this.searchFunction}() returned a row for tenant ` +
+            `${JSON.stringify(String(row['tenant_id']))} while searching ` +
+            `${JSON.stringify(query.tenantId)}. The function scopes to the tenant in the connection's ` +
+            'setting (the one the RLS policy reads) — run the search inside that tenant\'s transaction, ' +
+            'and make sure the function was generated with the same `setting` as rlsPolicySql().',
+        )
+      }
+    }
+
+    return {
+      hits: rows.map((row) => ({
+        id: String(row['id']),
+        score: Number(row['score'] ?? 0),
+        document: row['document'] as SearchDocument,
+      })),
+      total: Number(rows[0]?.['total'] ?? 0),
     }
   }
 
