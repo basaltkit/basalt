@@ -317,6 +317,15 @@ route({
 - **Nothing hangs.** When the handler returns (or throws) without reading
   everything, the rest is drained in the background up to `maxBytes` and the
   response carries `Connection: close`.
+- **Straight into storage.** `file.declaredLength` is the part's **own**
+  `Content-Length`, when the client sent one — pass it to
+  `files.upload(file.stream, { contentLength })` so a backend that needs an exact
+  size (S3) streams instead of buffering. Be honest about it: RFC 7578 does not
+  require a per-part `Content-Length` and no browser sends one, so it is usually
+  `undefined`. The request's `Content-Length` (`body.contentLength`) covers every
+  part plus the framing, so it is an upper bound for one file, never its size.
+  Without a declared length `@basaltkit/files` bounds the write with
+  `validate.maxSize` instead.
 
 | `upload()` option | Default | Past it |
 |---|---|---|
@@ -341,6 +350,70 @@ Express's `json()`/`urlencoded()` parsers never read multipart. Hono skips its
 `bodyLimit` buffering for multipart; a non-upload route still parses a
 multipart body within `bodyLimit`. In OpenAPI the route's request body is
 documented as `multipart/form-data`.
+
+## Streaming responses
+
+A handler can return **a stream** instead of a JSON payload: `stream(source, options)`
+from `@basaltkit/http` is the neutral streaming response, and each adapter sends it over
+its own transport without ever buffering it.
+
+```ts
+import { route, stream } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/invoices/:id/pdf',
+  meta: { auth: true },
+  async handler({ params }) {
+    const { record, stream: body } = await files.downloadStream(params.id)
+    return stream(body, {
+      contentType: record.contentType,
+      contentLength: record.size,   // omit when unknown — the response is then chunked
+      filename: record.name,        // Content-Disposition: attachment, sanitised
+    })
+  },
+})
+```
+
+`source` is a Node `Readable`, a web `ReadableStream`, or any
+`AsyncIterable<Uint8Array>`. Options: `contentType` (default
+`application/octet-stream`), `contentLength`, `filename`, `disposition`
+(`'attachment'` by default — an uploaded HTML/SVG file must never render on your
+origin), extra `headers`, and `status`.
+
+### The same guarantees on all three
+
+These are not "best effort": one shared parity suite runs them against Fastify, Express
+and Hono, and a download of several MiB is compared byte for byte on each.
+
+| Behaviour | Fastify | Express | Hono |
+|---|---|---|---|
+| How it is sent | `reply.send(readable)` (Fastify's stream path) | `pipeline(readable, res)` | `Response` over a web `ReadableStream` |
+| Never buffered, real backpressure — a slow client slows the source | ✅ | ✅ | ✅ |
+| Client disconnects → the source is destroyed (no leaked file descriptor or S3 socket) | ✅ | ✅ | ✅ (`request.signal`) |
+| Error **before** the first byte → normal JSON error body, streaming headers withdrawn | ✅ | ✅ | ✅ |
+| Error **after** the headers → connection cut, nothing appended to the partial body | ✅ | ✅ | ✅ (body errored) |
+| That late failure reported **once** through `onError` (`STREAM_FAILED`, status 500) | ✅ | ✅ | ✅ |
+| `HEAD` → the headers a `GET` would carry, no body, source released unread | ✅ | ✅ | ✅ |
+| `Content-Length` / `Content-Disposition` (RFC 5987) | ✅ | ✅ | ✅ |
+
+::: tip Filenames are sanitised
+`filename` goes through the same `sanitizeFilename()` the multipart parser uses —
+directories (`../../x`, `C:\x`), control characters and bidi overrides are stripped —
+and is then written as a quoted printable-ASCII `filename=` plus an RFC 5987
+`filename*=UTF-8''…` when anything was lost. A client-supplied name can never inject a
+header.
+:::
+
+::: warning There is no `maxDurationMs`
+Unlike [`sse()`](/guide/realtime), a streamed body has no framework-level lifetime cap —
+a large download legitimately takes a long time, and a cap would truncate it. Bound it at
+the server: `fastifyPlugin({ fastify: { requestTimeout, connectionTimeout } })`, Express's
+`server.setTimeout()`, or your runtime's own limit on Hono.
+:::
+
+`meta: { etag: true }` is skipped for a streamed body — there is no payload to hash, and
+hashing the marker would answer `304` for a body that was never sent.
 
 ## How it works
 

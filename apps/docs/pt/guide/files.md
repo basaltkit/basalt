@@ -77,7 +77,16 @@ teus ficheiros sem autenticação. Vê o [guia de adaptadores](/pt/guide/adapter
 
 ## Fazer upload
 
-Declara o body da rota com `upload()` do `@basaltkit/http`: um body
+O caminho mais curto é a rota opcional:
+`fileRoutes({ upload: { maxBytes: 25 * 1024 * 1024, maxFiles: 1, allowedTypes: ['application/pdf'] } })`
+monta `POST /files` — um upload em stream diretamente para o armazenamento, com
+`uploadedBy` do utilizador que chama, o tenant do contexto do pedido e as mesmas
+regras de validação e quota de qualquer outro upload. Está **desligada por
+predefinição**: os limites são teus, por isso a rota só existe depois de os
+declarares.
+
+Escreve a tua quando precisares de outra forma (campos extra, o teu próprio
+registo, outro URL). Declara o body da rota com `upload()` do `@basaltkit/http`: um body
 `multipart/form-data` em stream que funciona igual em Fastify, Express e Hono. É
 uma `route()` normal, por isso o pipeline inteiro (rate limit, enrichers de
 tenant e utilizador, guards `auth`/`can`) corre **antes de ser lido um único
@@ -122,6 +131,15 @@ O body é analisado enquanto o handler o lê (nunca vai para um buffer), e todos
 os limites são aplicados aos bytes efetivamente recebidos. O
 [guia de adaptadores](/pt/guide/adapters#uploads) lista todas as opções e erros.
 Continuas a poder passar um `Buffer` a `FILES.upload`.
+
+Passa `contentLength: file.declaredLength` quando existir e um backend que
+precisa de um tamanho exato (S3) faz stream em vez de buffer. `declaredLength` é
+o cabeçalho `Content-Length` da **própria parte**; o RFC 7578 não o exige e
+nenhum browser o envia, por isso normalmente é `undefined` — e o
+`Content-Length` do pedido (`body.contentLength`) cobre todas as partes mais o
+enquadramento multipart, por isso é um limite superior para um ficheiro, nunca o
+seu tamanho. Sem um tamanho declarado, a escrita é limitada por
+`validate.maxSize`.
 
 O `FileRecord` devolvido é `{ id, tenantId, name, contentType, size, path,
 checksum, uploadedBy?, metadata?, scannedAt?, createdAt }`. O `path` é a chave
@@ -300,28 +318,46 @@ Quando tens mesmo de servir um ficheiro grande pela app, o `downloadStream()`
 espelha o `download()` — mesmo scope de tenant, mesma quarentena — sem o
 carregar para memória:
 
-```ts
-import { pipeline } from 'node:stream/promises'
+Devolve-a com `stream()` do `@basaltkit/http` — a
+[resposta em stream neutra](/pt/guide/adapters#respostas-em-stream) — e o
+adaptador trata do envio em Fastify, Express e Hono por igual:
 
-const { record, stream } = await files.downloadStream(id)
-reply.header('content-type', record.contentType)
-reply.header('content-disposition', `attachment; filename="${encodeURIComponent(record.name)}"`)
-await pipeline(stream, reply.raw)
+```ts
+import { route, stream } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/documents/:id',
+  meta: { auth: true },
+  async handler({ params }) {
+    const { record, stream: body } = await files.downloadStream(params.id)
+    return stream(body, { contentType: record.contentType, contentLength: record.size, filename: record.name })
+  },
+})
 ```
 
+A partir daí a stream é do adaptador: um cliente que se desliga a meio do
+download destrói a fonte (sem socket S3 nem descritor de ficheiro pendurado), um
+cliente lento abranda a leitura em vez de encher a memória, e o `HEAD` responde
+apenas com os cabeçalhos. O `filename` é sanitizado e codificado segundo o
+RFC 5987, por isso um nome vindo do utilizador não consegue injetar um cabeçalho.
+
 **Consome a stream ou faz `destroy()`** — uma stream abandonada mantém uma
-ligação (S3, Azure, GCS) ou um descritor de ficheiro (local) aberto. Com
-`requireScan`, um ficheiro em quarentena lança `423 FILE_NOT_SCANNED` /
-`403 FILE_INFECTED` antes de a stream sequer ser aberta; o
-`{ bypassQuarantine: true }` é só para o scanner. Um driver sem `getStream`
-lança `STORAGE_GET_STREAM_UNSUPPORTED` — nesse caso usa o `download()`.
+ligação (S3, Azure, GCS) ou um descritor de ficheiro (local) aberto; entregá-la a
+`stream()` passa essa responsabilidade ao adaptador. Com `requireScan`, um
+ficheiro em quarentena lança `423 FILE_NOT_SCANNED` / `403 FILE_INFECTED` antes
+de a stream sequer ser aberta; o `{ bypassQuarantine: true }` é só para o
+scanner. O `files.canStreamDownloads()` diz-te se o driver do disco consegue
+fazer stream — um que não consiga lança `STORAGE_GET_STREAM_UNSUPPORTED`, por
+isso volta ao `download()` nesse caso (é o que o `fileRoutes()` faz).
 
 ### Quarentena até à análise (`requireScan`)
 
 `markScanned(id, { clean: false })` regista uma análise falhada, mas por si só
 não impede que o ficheiro seja servido. `filesPlugin({ requireScan: true })`
-torna a análise uma barreira: `download()` e `temporaryUrl()` (e portanto
-`POST /files/:id/url`) lançam `FileNotScannedError` (`423 FILE_NOT_SCANNED`) até
+torna a análise uma barreira: `download()`, `downloadStream()` e
+`temporaryUrl()` (e portanto `GET /files/:id/content` e `POST /files/:id/url`)
+lançam `FileNotScannedError` (`423 FILE_NOT_SCANNED`) até
 uma análise reportar o ficheiro limpo, e `FileInfectedError`
 (`403 FILE_INFECTED`) depois de uma o reportar não limpo — até nova análise
 limpa. Um instante de análise sem veredicto limpo conta como não analisado
@@ -413,16 +449,33 @@ Sem um processador configurado, o terminal do pipeline lança
 
 `fileRoutes()` monta endpoints de leitura/gestão para os ficheiros do **tenant
 atual**. São construídas sobre o `route()` neutro de `@basaltkit/http`, por isso
-servem de forma idêntica em Fastify, Express e Hono. O upload não está entre
-elas — escreves tu essa rota com o body neutro `upload()` mostrado em
-[Fazer upload](#fazer-upload), e assim escolhes os limites, a autorização e os nomes.
+servem de forma idêntica em Fastify, Express e Hono. O upload é opcional
+(`upload: { maxBytes, … }`); sem ele, escreves tu essa rota com o body neutro
+`upload()` mostrado em [Fazer upload](#fazer-upload).
 
 | Rota | Corpo | Devolve |
 | --- | --- | --- |
 | `GET /files` | — | `FileRecord[]` que o utilizador pode ler |
 | `GET /files/:id` | — | um `FileRecord`, ou `404 FILE_NOT_FOUND` |
+| `GET /files/:id/content` | — | os bytes, **em stream**, `Content-Disposition: attachment`; `404`, ou `423`/`403` enquanto em quarentena |
+| `POST /files` *(opcional)* | `multipart/form-data` | `201` com os `FileRecord[]` criados |
 | `POST /files/:id/url` | `{ expiresIn? }` (predefinição `'15m'`, no máximo `maxUrlTtl`) | `{ url }` — assinado, `attachment` |
 | `DELETE /files/:id` | — | `204`, ou `404 FILE_NOT_FOUND` |
+
+O `GET /files/:id/content` faz stream diretamente do disco com
+[`stream()`](/pt/guide/adapters#respostas-em-stream): nada vai para buffer, um
+cliente que se desliga a meio do download destrói a fonte, e o `HEAD` responde
+apenas com os cabeçalhos. É autorizado com a ação `'download'`, e tanto a
+barreira de quarentena (423/403) como o 404 fecham **antes do primeiro byte**. Um
+driver que não consegue fazer stream (sem `getStream`) continua a servir, com
+buffer. Desliga a rota com `fileRoutes({ download: false })` se a tua instalação
+só distribui URLs assinados.
+
+O `POST /files` só é montado quando passas `upload`. Não tem decisão de
+`authorize` por registo — ainda não há registo — por isso aceita qualquer
+utilizador autenticado e apoia-se nas regras do próprio `Files` (scope de tenant,
+`validate`, quota). Limita-o na borda com `maxBytes` / `maxFiles` /
+`allowedTypes`, e aplica-lhe rate limit como a qualquer outra rota de escrita.
 
 **Só o dono, por predefinição.** Um utilizador só alcança os ficheiros cujo
 `uploadedBy` é o seu próprio `ctx().user.id` — por isso passa `uploadedBy` no
@@ -513,9 +566,11 @@ com `new Files({ disk, ... })` quando quiseres o pipeline sem o contentor de DI.
 
 | Opção | Tipo | Predefinição | Função |
 | --- | --- | --- | --- |
-| `authorize` | `(action, record, user) => boolean \| Promise<boolean>` | só o dono | A tua política por registo. `action` é `'read'`, `'url'` ou `'delete'`; `user` é `ctx().user`. Substitui a predefinição |
+| `authorize` | `(action, record, user) => boolean \| Promise<boolean>` | só o dono | A tua política por registo. `action` é `'read'` (o registo), `'download'` (os bytes), `'url'` ou `'delete'`; `user` é `ctx().user`. Substitui a predefinição |
 | `shared` | `boolean` | `false` | Todos os utilizadores autenticados do tenant alcançam todos os ficheiros (ignorado quando `authorize` está definido) |
 | `maxUrlTtl` | `DurationInput` | `'1h'` | O `expiresIn` mais longo que um cliente pode pedir a `POST /files/:id/url` |
+| `download` | `boolean` | `true` | Monta `GET /files/:id/content`, o download em stream |
+| `upload` | `{ maxBytes, maxFiles?, allowedTypes? }` | — (desligado) | Monta `POST /files`, o upload em stream. `maxFiles` é `1` por predefinição; `allowedTypes` compara com o tipo **declarado** (`image/png`, `image/*`) |
 
 Todas as rotas declaram `meta: { auth: true }` — não há
 escape `auth: false`, ao contrário de `billingRoutes`. Se a autenticação
@@ -536,6 +591,7 @@ a disposição `attachment`.
 | `list(tenantId?)` | Todos os registos do tenant |
 | `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`; lança `FileNotFoundError`, e com `requireScan` `FileNotScannedError` / `FileInfectedError` salvo `bypassQuarantine` (só para o scanner) |
 | `downloadStream(id, tenantId?, { bypassQuarantine? })` | `{ record, stream }` — o mesmo contrato do `download`, quarentena incluída, sem buffer. Quem chama tem de consumir ou fazer `destroy()` da stream; precisa de um driver com `getStream` |
+| `canStreamDownloads()` | `true` quando o driver do disco implementa `getStream` (local, S3, Azure, GCS) — segue o caminho em stream onde existe, e usa buffer onde não existe |
 | `temporaryUrl(id, expiresIn, tenantId?, { disposition? })` | URL assinado; `attachment` por predefinição. Sujeito a `requireScan` como o `download` |
 | `delete(id, tenantId?)` | Remove objeto + registo, emite `file:deleted`; idempotente |
 | `markScanned(id, { clean, detail? }, tenantId?)` | Regista o resultado de uma análise fora de banda, emite `file:scanned` |

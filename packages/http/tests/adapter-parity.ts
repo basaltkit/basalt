@@ -1,17 +1,23 @@
 /**
  * Shared adapter parity matrix for `upload()` bodies (BK-006), keyed per-route
- * rate limits (BK-008) and structured error details (BK-021). Not a test file
- * on its own: each adapter package (fastify, express, hono) runs it against its
- * own driver, so the three are held to the exact same assertions.
+ * rate limits (BK-008), structured error details (BK-021) and streaming
+ * responses (BK-019). Not a test file on its own: each adapter package
+ * (fastify, express, hono) runs it against its own driver, so the three are
+ * held to the exact same assertions.
  */
+import { createHash } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { ctx, definePlugin, ensureMetadata, type BasaltPlugin } from '@basaltkit/core'
 import {
   HttpError,
   MAX_ERROR_DETAILS_BYTES,
   route,
   securityPlugin,
+  stream,
   upload,
   type BasaltRoute,
+  type HttpErrorReport,
+  type HttpErrorReporter,
   type RequestEnricher,
   type RouteGuard,
 } from '@basaltkit/http'
@@ -25,21 +31,55 @@ export interface ParityRequest {
   headers?: Record<string, string>
   /** One buffer is sent with a Content-Length; an array is streamed chunked, without one. */
   body?: Buffer | Buffer[]
+  /** Aborting it stands in for the client disconnecting mid-response. */
+  signal?: AbortSignal
 }
 
 export interface ParityResponse {
   status: number
   json: unknown
   headers: Record<string, string>
+  /** The raw body, for responses that are not JSON (a streamed download). */
+  bytes: Buffer
 }
 
-export type Send = (request: ParityRequest) => Promise<ParityResponse>
+/** Sends a request and hands back the untouched `Response` — body still unread. */
+export type Fetcher = (request: ParityRequest) => Promise<Response>
+
+export interface Send {
+  (request: ParityRequest): Promise<ParityResponse>
+  /** The raw `Response`, so a test can read the body chunk by chunk or abort it. */
+  raw: Fetcher
+}
+
+/** Options every adapter plugin honours, so a suite can observe what was reported. */
+export interface ParityOptions {
+  onError?: HttpErrorReporter
+}
 
 export interface ParityDriver {
   /** Boots the adapter with these routes (+ plugins) and returns a way to send requests. */
-  boot(routes: BasaltRoute[], plugins: BasaltPlugin[]): Promise<Send>
+  boot(routes: BasaltRoute[], plugins: BasaltPlugin[], options?: ParityOptions): Promise<Send>
   /** Tears down whatever `boot` started. */
   close(): Promise<void>
+}
+
+/** Wraps a raw fetcher as the `Send` the suites use. */
+export function sendWith(fetcher: Fetcher): Send {
+  const send = async (request: ParityRequest): Promise<ParityResponse> => {
+    const res = await fetcher(request)
+    const bytes = Buffer.from(await res.arrayBuffer())
+    const raw = bytes.toString('utf8')
+    let json: unknown = raw
+    try {
+      json = raw ? JSON.parse(raw) : undefined
+    } catch {
+      /* not JSON */
+    }
+    return { status: res.status, json, headers: Object.fromEntries(res.headers.entries()), bytes }
+  }
+  send.raw = fetcher
+  return send
 }
 
 /** Sets `ctx().user` / `ctx().tenant` from headers (standing in for auth + tenancy) and guards `meta.signedIn`. */
@@ -330,29 +370,254 @@ export function errorDetailsParitySuite(adapter: string, driver: ParityDriver): 
   })
 }
 
-/** Sends a request over real HTTP with fetch (Fastify/Express listen on a port). */
-export async function fetchSend(base: string, request: ParityRequest): Promise<ParityResponse> {
-  const init: RequestInit & { duplex?: 'half' } = { method: request.method, headers: request.headers ?? {} }
-  if (Array.isArray(request.body)) {
-    const chunks = request.body
-    init.body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        const next = chunks.shift()
-        if (next) controller.enqueue(new Uint8Array(next))
-        else controller.close()
-      },
-    })
-    init.duplex = 'half'
-  } else if (request.body) {
-    init.body = new Uint8Array(request.body)
+/** 64 KiB of a deterministic pattern — a wrong byte anywhere shows up in the digest. */
+const CHUNK = Buffer.from(Uint8Array.from({ length: 64 * 1024 }, (_, i) => (i * 31 + 7) % 251))
+/** Exactly 48 chunks (3 MiB): big enough that nothing can quietly buffer it whole. */
+const DOWNLOAD_BYTES = 48 * CHUNK.length
+/** 256 chunks (16 MiB): far past any socket or fetch buffer, so a stalled reader stalls the source. */
+const BIG_BYTES = 256 * CHUNK.length
+const DOWNLOAD_DIGEST = createHash('sha256')
+  .update(Buffer.concat(Array.from({ length: 48 }, () => CHUNK)))
+  .digest('hex')
+
+/** A source that records how much it produced and whether it was destroyed. */
+class CountingSource extends Readable {
+  produced = 0
+  constructor(private remaining: number) {
+    super({ highWaterMark: CHUNK.length })
   }
-  const res = await fetch(`${base}${request.url}`, init)
-  const raw = await res.text()
-  let json: unknown = raw
-  try {
-    json = raw ? JSON.parse(raw) : undefined
-  } catch {
-    /* not JSON */
+  override _read(): void {
+    if (this.remaining <= 0) {
+      this.push(null)
+      return
+    }
+    const size = Math.min(CHUNK.length, this.remaining)
+    this.remaining -= size
+    this.produced += size
+    this.push(size === CHUNK.length ? CHUNK : CHUNK.subarray(0, size))
   }
-  return { status: res.status, json, headers: Object.fromEntries(res.headers.entries()) }
 }
+
+/** A source that hands over `before` chunks and then fails. */
+class FailingSource extends Readable {
+  private sent = 0
+  constructor(private readonly before: number) {
+    super({ highWaterMark: CHUNK.length })
+  }
+  override _read(): void {
+    if (this.sent >= this.before) {
+      this.destroy(new Error('source exploded'))
+      return
+    }
+    this.sent += 1
+    this.push(CHUNK)
+  }
+}
+
+const settle = (ms = 10): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function until(predicate: () => boolean, label: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${label}`)
+    await settle()
+  }
+}
+
+/** Reads a response body to the end; rejects the way a cut connection does. */
+async function readAll(response: Response): Promise<{ bytes: Buffer; failed: unknown }> {
+  const reader = response.body!.getReader()
+  const chunks: Uint8Array[] = []
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+    }
+    return { bytes: Buffer.concat(chunks), failed: undefined }
+  } catch (error) {
+    return { bytes: Buffer.concat(chunks), failed: error }
+  }
+}
+
+/**
+ * Streaming responses (`stream()`): every adapter must send the bytes without
+ * buffering them, honour backpressure, and — this is the part that matters —
+ * never leak the source when things go wrong.
+ */
+export function streamParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: stream() parity (BK-019)`, () => {
+    const sources: { download?: CountingSource; big?: CountingSource } = {}
+    const reports: HttpErrorReport[] = []
+    const onError: HttpErrorReporter = (entry) => {
+      reports.push(entry)
+    }
+
+    const routes = [
+      route({
+        method: 'GET',
+        url: '/download',
+        meta: { etag: true },
+        handler() {
+          const source = new CountingSource(DOWNLOAD_BYTES)
+          sources.download = source
+          return stream(source, {
+            contentType: 'application/pdf',
+            contentLength: DOWNLOAD_BYTES,
+            filename: '../relatório "final".pdf',
+          })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/big',
+        handler() {
+          const source = new CountingSource(BIG_BYTES)
+          sources.big = source
+          return stream(source, { contentType: 'application/octet-stream' })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/guarded',
+        handler() {
+          throw new HttpError(423, 'FILE_NOT_SCANNED', 'Quarantined.')
+        },
+      }),
+      route({ method: 'GET', url: '/fail-first', handler: () => stream(new FailingSource(0)) }),
+      route({ method: 'GET', url: '/fail-later', handler: () => stream(new FailingSource(2)) }),
+      route({ method: 'GET', url: '/empty', handler: () => stream(Readable.from([]), { contentType: 'text/plain' }) }),
+    ]
+
+    let send: Send
+    const boot = async () => {
+      reports.length = 0
+      delete sources.download
+      delete sources.big
+      send = await driver.boot(routes, [], { onError })
+    }
+    afterEach(() => driver.close())
+
+    it('streams a multi-MiB body through intact, with Content-Length and Content-Disposition', async () => {
+      await boot()
+      const res = await send({ method: 'GET', url: '/download' })
+      expect(res.status).toBe(200)
+      expect(res.bytes.length).toBe(DOWNLOAD_BYTES)
+      expect(createHash('sha256').update(res.bytes).digest('hex')).toBe(DOWNLOAD_DIGEST)
+      expect(res.headers['content-type']).toBe('application/pdf')
+      expect(res.headers['content-length']).toBe(String(DOWNLOAD_BYTES))
+      // Sanitised (no `../`), quoted ASCII fallback plus the RFC 5987 form.
+      expect(res.headers['content-disposition']).toBe(
+        `attachment; filename="relat_rio _final_.pdf"; filename*=UTF-8''relat%C3%B3rio%20%22final%22.pdf`,
+      )
+      // A streamed body is not a payload to hash: `meta.etag` must stay out of it.
+      expect(res.headers['etag']).toBeUndefined()
+      expect(reports).toEqual([])
+    })
+
+    it('sends no body for HEAD, keeps the headers, and reads nothing from the source', async () => {
+      await boot()
+      const res = await send({ method: 'HEAD', url: '/download' })
+      expect(res.status).toBe(200)
+      expect(res.bytes.length).toBe(0)
+      expect(res.headers['content-type']).toBe('application/pdf')
+      expect(res.headers['content-length']).toBe(String(DOWNLOAD_BYTES))
+      expect(sources.download?.produced).toBe(0)
+      expect(sources.download?.destroyed).toBe(true)
+    })
+
+    it('destroys the source when the client disconnects mid-download', async () => {
+      await boot()
+      const controller = new AbortController()
+      const res = await send.raw({ method: 'GET', url: '/big', signal: controller.signal })
+      const reader = res.body!.getReader()
+      expect((await reader.read()).done).toBe(false)
+      controller.abort()
+      await until(() => sources.big?.destroyed === true, 'the source to be destroyed')
+      // A disconnect is not a server fault — it must not be reported as one.
+      expect(reports.filter((entry) => entry.status >= 500)).toEqual([])
+    })
+
+    it('backpressures: a client that stops reading stops the source', async () => {
+      await boot()
+      const controller = new AbortController()
+      const res = await send.raw({ method: 'GET', url: '/big', signal: controller.signal })
+      const reader = res.body!.getReader()
+      await reader.read()
+      await settle(250)
+      expect(sources.big!.produced).toBeGreaterThan(0)
+      expect(sources.big!.produced).toBeLessThan(BIG_BYTES / 2)
+      controller.abort()
+      await until(() => sources.big?.destroyed === true, 'the source to be destroyed')
+    })
+
+    it('answers JSON when the handler refuses before the first byte', async () => {
+      await boot()
+      const res = await send({ method: 'GET', url: '/guarded' })
+      expect(res.status).toBe(423)
+      expect(res.json).toEqual({ error: { code: 'FILE_NOT_SCANNED', message: 'Quarantined.' } })
+      expect(res.headers['content-type']).toContain('application/json')
+    })
+
+    it('answers JSON when the source fails before the first byte', async () => {
+      await boot()
+      const res = await send({ method: 'GET', url: '/fail-first' })
+      expect(res.status).toBe(500)
+      expect(res.json).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' } })
+      expect(res.headers['content-type']).toContain('application/json')
+      expect(res.headers['content-disposition']).toBeUndefined()
+      // Reported once — not swallowed, not duplicated.
+      expect(reports).toHaveLength(1)
+      expect(reports[0]!.status).toBe(500)
+    })
+
+    it('cuts the connection — never appends an error body — when the source fails after the headers', async () => {
+      await boot()
+      const res = await send.raw({ method: 'GET', url: '/fail-later' })
+      expect(res.status).toBe(200)
+      const { bytes, failed } = await readAll(res)
+      expect(failed).toBeDefined()
+      // Whatever arrived is the real payload, byte for byte: no JSON tacked on.
+      expect(bytes.length).toBeLessThanOrEqual(2 * CHUNK.length)
+      expect(bytes.equals(Buffer.concat([CHUNK, CHUNK]).subarray(0, bytes.length))).toBe(true)
+      await until(() => reports.length > 0, 'the failure to be reported')
+      await settle(50)
+      expect(reports).toHaveLength(1)
+      expect(reports[0]!.status).toBe(500)
+    })
+
+    it('serves an empty source as an empty 200', async () => {
+      await boot()
+      const res = await send({ method: 'GET', url: '/empty' })
+      expect(res.status).toBe(200)
+      expect(res.bytes.length).toBe(0)
+      expect(res.headers['content-type']).toBe('text/plain')
+    })
+  })
+}
+
+/** Sends requests over real HTTP with fetch (Fastify/Express listen on a port). */
+export function httpFetcher(base: string): Fetcher {
+  return (request) => {
+    const init: RequestInit & { duplex?: 'half' } = {
+      method: request.method,
+      headers: request.headers ?? {},
+      ...(request.signal ? { signal: request.signal } : {}),
+    }
+    if (Array.isArray(request.body)) {
+      const chunks = [...request.body]
+      init.body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const next = chunks.shift()
+          if (next) controller.enqueue(new Uint8Array(next))
+          else controller.close()
+        },
+      })
+      init.duplex = 'half'
+    } else if (request.body) {
+      init.body = new Uint8Array(request.body)
+    }
+    return fetch(`${base}${request.url}`, init)
+  }
+}
+

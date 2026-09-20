@@ -62,9 +62,9 @@ order:
 
 | Preset | Features |
 | --- | --- |
-| **SaaS starter** | tenancy + auth + billing + CLI |
+| **SaaS starter** | tenancy + auth + billing + database + CLI |
 | **API only** | auth + MCP — no tenancy, no UI |
-| **Full stack** | everything, including the web UI |
+| **Full stack** | everything, including the database and the web UI |
 | **Minimal** | none — add them later |
 | **Custom** | you pick from the feature list |
 
@@ -80,6 +80,7 @@ order:
 | `--ui` | off | Add a React + shadcn `web/` frontend — see [Web UI](/guide/web-ui). **Forces pnpm** |
 | `--cli` | off | Add `bin/basalt.ts`, the `basalt` script, generators and `prisma:sync` |
 | `--mcp` | off | Expose opted-in read-only routes as MCP tools at `POST /mcp`, plus a `.mcp.json` for AI dev tools — see [MCP](/guide/mcp) |
+| `--prisma` (`--db`) | off | Back the app with PostgreSQL through Prisma: `prisma/schema.prisma`, migrations, `src/db.ts`, the Prisma-backed stores and a boot-time check that the database is the migrated one — see [PostgreSQL with `--prisma`](#postgresql-with-prisma) |
 | `--install` / `--no-install` | on in a TTY, off in CI | Install dependencies at the end |
 | `--git` / `--no-git` | on in a TTY, off in CI | `git init` plus an initial commit |
 | `--offline` | off | Skip the npm registry lookup and use the dependency ranges bundled with this create-basalt release |
@@ -91,6 +92,7 @@ order:
 pnpm create basalt my-saas --billing --cli --install --git   # full stack, installed and committed
 npm create basalt service-api --no-tenancy --no-auth         # minimal API
 pnpm create basalt agent-api --mcp -y                        # API + MCP tools, no prompts
+pnpm create basalt my-saas --prisma --billing                # PostgreSQL-backed from the first commit
 ```
 
 The package manager is detected from `npm_config_user_agent` (the variable npm,
@@ -139,6 +141,7 @@ inside it:
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
 | `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck` — plus `basalt` with `--cli`. `@basaltkit/*` ranges track each package's current release line |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` uses the app-prefixed names and, with the README, explains the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
+| `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | With `--prisma`: the schema (the models of every enabled Basalt domain plus your own), the Prisma 7 config carrying the connection URL, the client(s) the app uses, and the `demo` tenant seed |
 | `bin/basalt.ts` | With `--cli`: the CLI entrypoint wiring the generators and `prisma:sync` |
 | `.mcp.json` | With `--mcp`: registers the **dev-only** `basalt-ai-mcp` bridge for MCP clients |
 | `web/…` | With `--ui`: the React + shadcn frontend, a pnpm workspace member |
@@ -153,6 +156,52 @@ pnpm test
 ```
 
 For a guided end-to-end run, see [Getting Started](/guide/getting-started).
+
+### PostgreSQL with `--prisma`
+
+**Without the flag the scaffold has no database at all.** It boots on in-memory
+sources (`MemoryUserSource`, `MemoryTenantSource`, the default team and
+subscription stores): perfect for a first run, CI and tests, and gone on the next
+restart. Swapping one store at a time is described in
+[Persistence & durable stores](/guide/persistence).
+
+`--prisma` (spelled `--db` if you prefer) generates the database-backed shape
+instead:
+
+| File | What it is |
+| --- | --- |
+| `prisma/schema.prisma` | The reference models of every `@basaltkit/*-prisma` package the project uses — exactly what [`basalt prisma:sync`](/guide/persistence) merges — plus your own `Project` model |
+| `prisma.config.ts` | Prisma 7 keeps the connection URL here, not in the schema. It reads `MY_SAAS_DATABASE_URL` first and the bare `DATABASE_URL` only as a fallback — the same precedence as `src/env.ts`, so the CLI and the app can never mean two different databases |
+| `src/db.ts` | `prisma` (unscoped — the framework stores use it) and, with tenancy, `db = prisma.$extends(tenancyExtension())`, the client every request gets |
+| `src/app.ts` | `prismaPlugin({ client: db, assertMigrated: true })` plus `prismaTenantSource`, `prismaAuthStores`, `prismaTeamsStores` and `prismaSubscriptionsStores` in place of the memory ones |
+| `prisma/seed.ts` | The `demo` tenant the header and subdomain resolvers expect |
+
+`MY_SAAS_DATABASE_URL` becomes a **required** variable (`src/env.ts`), and
+`.env.example` ships it uncommented. The package scripts are `db:migrate`
+(`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`), `db:generate` and
+`db:seed`; `postinstall` runs `prisma generate` so `pnpm typecheck` has the
+client types right after install.
+
+```bash
+pnpm create basalt my-saas --prisma
+cd my-saas && pnpm install
+cp .env.example .env     # point MY_SAAS_DATABASE_URL at your database
+pnpm db:migrate          # creates the tables and seeds the demo tenant
+pnpm dev
+```
+
+::: warning Migrations, never `db push`
+The generated `src/app.ts` boots with `assertMigrated: true`, which refuses to
+start unless the database it reached has the `_prisma_migrations` table —
+written by `prisma migrate dev` / `migrate deploy` and **not** by
+`prisma db push`. That check is what turns a wrong `DATABASE_URL` (a shell that
+exported another project's, a typo in the database name) into a boot error
+naming the database and host, instead of a `500` on the first request that
+touches a missing table.
+:::
+
+The generated `tests/app.test.ts` skips itself when no database is configured, so
+`pnpm test` stays green on a machine without PostgreSQL.
 
 ### `--env-file` never overrides exported variables
 

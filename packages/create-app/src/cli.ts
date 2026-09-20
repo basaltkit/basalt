@@ -12,6 +12,7 @@ import {
   WizardCancelledError,
 } from './index.js'
 import { parseArgs, resolvesLatest, USAGE } from './args.js'
+import { envPrefix } from './templates.js'
 
 /** Runs a command inheriting stdio; resolves false on non-zero exit (never throws). */
 function run(command: string, args: string[], cwd: string): Promise<boolean> {
@@ -48,6 +49,7 @@ if (!flags.yes && flags.name === undefined && stdin.isTTY) {
     flags.ui = result.ui
     flags.cli = result.cli
     flags.mcp = result.mcp
+    flags.prisma = result.prisma
     flags.install = result.install
     flags.git = result.git
     flags.pm = result.pm
@@ -81,6 +83,7 @@ try {
     ui: flags.ui,
     cli: flags.cli,
     mcp: flags.mcp,
+    prisma: flags.prisma,
     // New apps get the latest published version of every dependency (with the
     // bundled ranges as an offline fallback); --offline skips the registry.
     resolveLatest: resolvesLatest(flags),
@@ -127,6 +130,12 @@ try {
 
   const steps = [`cd ${result.dir}`]
   if (!run_.install) steps.push(`${pm} install`)
+  if (flags.prisma) {
+    // Nothing boots before the database exists: env.DATABASE_URL is required and
+    // the app asserts at boot that it reached the MIGRATED database.
+    steps.push(`cp .env.example .env   # then point ${envPrefix(result.options.name)}_DATABASE_URL at your database`)
+    steps.push(`${pm} run db:migrate${flags.tenancy ? '   # creates the tables and seeds the demo tenant' : '   # creates the tables'}`)
+  }
   steps.push(`${pm} run dev${flags.ui ? '        # API on :3000' : ''}`)
   // `web` is wired as a pnpm workspace member (pnpm-workspace.yaml), so its dev
   // server is launched with a pnpm filter regardless of the root package manager.

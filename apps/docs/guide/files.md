@@ -77,7 +77,15 @@ See the [adapters guide](/guide/adapters).
 
 ## Uploading
 
-Declare the route body with `upload()` from `@basaltkit/http`: a streaming
+The shortest path is the opt-in route:
+`fileRoutes({ upload: { maxBytes: 25 * 1024 * 1024, maxFiles: 1, allowedTypes: ['application/pdf'] } })`
+mounts `POST /files` — a streamed upload straight into storage, `uploadedBy` set
+to the caller, the tenant from the request context, and the same validation and
+quota rules as any other upload. It is **off by default**: the limits are yours
+to choose, so the route only exists once you state them.
+
+Write your own when you need a different shape (extra fields, your own record,
+a different URL). Declare the route body with `upload()` from `@basaltkit/http`: a streaming
 `multipart/form-data` body that works the same on Fastify, Express and Hono. It is
 a normal `route()`, so the whole pipeline (rate limit, tenant and user enrichers,
 `auth`/`can` guards) runs **before a single body byte is read**, and an
@@ -120,6 +128,14 @@ export const uploadFile = route({
 The body is parsed while the handler reads it (it is never buffered), with every
 limit enforced on the bytes actually received. The [adapters guide](/guide/adapters#uploads)
 lists every option and error. You can still pass a `Buffer` to `FILES.upload`.
+
+Add `contentLength: file.declaredLength` when it is present and a backend that
+needs an exact size (S3) will stream instead of buffering. `declaredLength` is
+the part's **own** `Content-Length` header; RFC 7578 does not require one and no
+browser sends it, so it is usually `undefined` — and the request's
+`Content-Length` (`body.contentLength`) covers every part plus the multipart
+framing, so it is an upper bound for one file, never its size. Without a declared
+length the write is bounded by `validate.maxSize` instead.
 
 The returned `FileRecord` is `{ id, tenantId, name, contentType, size, path,
 checksum, uploadedBy?, metadata?, scannedAt?, createdAt }`. `path` is the key
@@ -290,27 +306,45 @@ await files.temporaryUrl(id, '15m', undefined, { disposition: 'inline' })
 When you must proxy a large file, `downloadStream()` mirrors `download()` —
 same tenant scoping, same quarantine gate — without loading it into memory:
 
-```ts
-import { pipeline } from 'node:stream/promises'
+Return it with `stream()` from `@basaltkit/http` — the neutral
+[streaming response](/guide/adapters#streaming-responses) — and the adapter pipes
+it for you on Fastify, Express and Hono alike:
 
-const { record, stream } = await files.downloadStream(id)
-reply.header('content-type', record.contentType)
-reply.header('content-disposition', `attachment; filename="${encodeURIComponent(record.name)}"`)
-await pipeline(stream, reply.raw)
+```ts
+import { route, stream } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/documents/:id',
+  meta: { auth: true },
+  async handler({ params }) {
+    const { record, stream: body } = await files.downloadStream(params.id)
+    return stream(body, { contentType: record.contentType, contentLength: record.size, filename: record.name })
+  },
+})
 ```
 
+The adapter owns the stream from there: a client that disconnects mid-download
+destroys the source (no leaked S3 socket or file descriptor), a slow client slows
+the read instead of filling memory, and `HEAD` answers with the headers alone.
+`filename` is sanitised and RFC 5987-encoded, so a user-supplied name cannot
+inject a header.
+
 **Consume the stream or `destroy()` it** — an abandoned one holds a connection
-(S3, Azure, GCS) or a file descriptor (local) open. With `requireScan` a
-quarantined file throws `423 FILE_NOT_SCANNED` / `403 FILE_INFECTED` before the
-stream is ever opened; `{ bypassQuarantine: true }` is for the scanner only. A
-driver without `getStream` throws `STORAGE_GET_STREAM_UNSUPPORTED` — use
-`download()` there.
+(S3, Azure, GCS) or a file descriptor (local) open; handing it to `stream()`
+passes that responsibility to the adapter. With `requireScan` a quarantined file
+throws `423 FILE_NOT_SCANNED` / `403 FILE_INFECTED` before the stream is ever
+opened; `{ bypassQuarantine: true }` is for the scanner only.
+`files.canStreamDownloads()` tells you whether the disk's driver can stream at
+all — one that cannot throws `STORAGE_GET_STREAM_UNSUPPORTED`, so fall back to
+`download()` there (which is what `fileRoutes()` does).
 
 ### Quarantine until scanned (`requireScan`)
 
 `markScanned(id, { clean: false })` records a failed scan, but on its own does
 not stop the file being served. `filesPlugin({ requireScan: true })` makes the
-scan a gate: `download()` and `temporaryUrl()` (and so `POST /files/:id/url`)
+scan a gate: `download()`, `downloadStream()` and `temporaryUrl()` (and so
+`GET /files/:id/content` and `POST /files/:id/url`)
 throw `FileNotScannedError` (`423 FILE_NOT_SCANNED`) until a scan reports the
 file clean, and `FileInfectedError` (`403 FILE_INFECTED`) once one reports it
 not clean — forever, until a new clean scan. A scan timestamp without a clean
@@ -409,8 +443,25 @@ write that route yourself with the neutral `upload()` body kind shown in
 | --- | --- | --- |
 | `GET /files` | — | `FileRecord[]` the caller may read |
 | `GET /files/:id` | — | one `FileRecord`, or `404 FILE_NOT_FOUND` |
+| `GET /files/:id/content` | — | the bytes, **streamed**, `Content-Disposition: attachment`; `404`, or `423`/`403` while quarantined |
+| `POST /files` *(opt-in)* | `multipart/form-data` | `201` with the created `FileRecord[]` |
 | `POST /files/:id/url` | `{ expiresIn? }` (default `'15m'`, at most `maxUrlTtl`) | `{ url }` — signed, `attachment` |
 | `DELETE /files/:id` | — | `204`, or `404 FILE_NOT_FOUND` |
+
+`GET /files/:id/content` streams straight from the disk with
+[`stream()`](/guide/adapters#streaming-responses): nothing is buffered, a client
+that disconnects mid-download destroys the source, and `HEAD` answers with the
+headers alone. It is authorized with the `'download'` action, and both the
+quarantine gate (423/403) and the 404 close **before the first byte**. A driver
+that cannot stream (no `getStream`) still serves it, buffered. Turn the route off
+with `fileRoutes({ download: false })` if your deployment only ever hands out
+signed URLs.
+
+`POST /files` is mounted only when you pass `upload`. It has no per-record
+`authorize` decision to make — there is no record yet — so it accepts any
+authenticated caller and leans on `Files`' own rules (tenant scoping, `validate`,
+quota). Bound it at the edge with `maxBytes` / `maxFiles` / `allowedTypes`, and
+rate-limit it like any other write route.
 
 **Owner-only by default.** A user reaches only the files whose `uploadedBy` is
 their own `ctx().user.id` — so pass `uploadedBy` in your upload handler (above).
@@ -499,9 +550,11 @@ container.
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `authorize` | `(action, record, user) => boolean \| Promise<boolean>` | owner-only | Your per-record policy. `action` is `'read'`, `'url'` or `'delete'`; `user` is `ctx().user`. Replaces the default |
+| `authorize` | `(action, record, user) => boolean \| Promise<boolean>` | owner-only | Your per-record policy. `action` is `'read'` (the record), `'download'` (the bytes), `'url'` or `'delete'`; `user` is `ctx().user`. Replaces the default |
 | `shared` | `boolean` | `false` | Every authenticated user of the tenant reaches every file (ignored when `authorize` is set) |
 | `maxUrlTtl` | `DurationInput` | `'1h'` | Longest `expiresIn` a client may request from `POST /files/:id/url` |
+| `download` | `boolean` | `true` | Mount `GET /files/:id/content`, the streamed download |
+| `upload` | `{ maxBytes, maxFiles?, allowedTypes? }` | — (off) | Mount `POST /files`, the streamed upload. `maxFiles` defaults to `1`; `allowedTypes` matches the **declared** type (`image/png`, `image/*`) |
 
 Every route declares `meta: { auth: true }` — there is no
 `auth: false` escape hatch, unlike `billingRoutes`. If authentication genuinely
@@ -522,6 +575,7 @@ the `attachment` disposition.
 | `list(tenantId?)` | Every record for the tenant |
 | `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`; throws `FileNotFoundError`, and with `requireScan` `FileNotScannedError` / `FileInfectedError` unless `bypassQuarantine` (for the scanner only) |
 | `downloadStream(id, tenantId?, { bypassQuarantine? })` | `{ record, stream }` — the same contract as `download`, quarantine included, without buffering. The caller must consume or `destroy()` the stream; needs a driver with `getStream` |
+| `canStreamDownloads()` | `true` when the disk's driver implements `getStream` (local, S3, Azure, GCS) — take the streaming path where it exists, buffer where it does not |
 | `temporaryUrl(id, expiresIn, tenantId?, { disposition? })` | Signed URL; `attachment` by default. Gated by `requireScan` like `download` |
 | `delete(id, tenantId?)` | Removes object + record, emits `file:deleted`; idempotent |
 | `markScanned(id, { clean, detail? }, tenantId?)` | Records an out-of-band scan result, emits `file:scanned` |

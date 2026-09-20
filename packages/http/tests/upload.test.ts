@@ -563,3 +563,64 @@ describe('upload() over a web ReadableStream (Hono, Bun, Deno, edge)', () => {
     expect(pulled).toBe(total)
   })
 })
+
+describe('upload() — the sizes the client declared (BK-019)', () => {
+  /** A route that reports what each file and the body declared about their size. */
+  const sizes = route({
+    method: 'POST',
+    url: '/upload',
+    body: upload({ maxBytes: 1024 * 1024, maxFiles: 5 }),
+    async handler({ body }) {
+      const files: (number | null)[] = []
+      for await (const file of body.files) {
+        files.push(file.declaredLength ?? null)
+        file.stream.resume()
+      }
+      return { files, body: body.contentLength ?? null } as unknown as Received
+    },
+  })
+
+  const one = (length: number | undefined, data = 'abcdef') =>
+    multipart([{ name: 'doc', filename: 'a.pdf', type: 'application/pdf', data, ...(length !== undefined ? { length } : {}) }])
+
+  it("exposes a part's own Content-Length, and the request's, when they are sent", async () => {
+    const body = one(6)
+    const got = await run(sizes, source([body]).stream, {
+      'content-type': contentType(),
+      'content-length': String(body.length),
+    })
+    expect(got.result).toEqual({ files: [6], body: body.length })
+  })
+
+  it('leaves both undefined when nothing is declared — no size is ever invented', async () => {
+    const got = await run(sizes, source(chunked(one(undefined), 7)).stream)
+    expect(got.result).toEqual({ files: [null], body: null })
+  })
+
+  it('ignores a part length that is not a plain byte count, or that exceeds maxFileBytes', async () => {
+    // (Leading/trailing whitespace is ordinary header OWS, trimmed before this.)
+    for (const raw of ['-1', '1.5', '0x10', '1234567890123456789012', '']) {
+      const body = multipart([
+        { raw: `--${BOUNDARY}\r\nContent-Disposition: form-data; name="doc"; filename="a.pdf"\r\nContent-Type: application/pdf\r\nContent-Length: ${raw}\r\n\r\nabcdef\r\n--${BOUNDARY}--\r\n` },
+      ])
+      const got = await run(sizes, source([body]).stream)
+      expect(got.result, raw).toEqual({ files: [null], body: null })
+    }
+    // A part claiming more than the route allows is a claim, not a limit — it is
+    // dropped rather than handed on to a backend as an allocation hint.
+    const oversized = route({
+      method: 'POST',
+      url: '/upload',
+      body: upload({ maxBytes: 1024 * 1024, maxFiles: 1, maxFileBytes: 8 }),
+      async handler({ body }) {
+        const files: (number | null)[] = []
+        for await (const file of body.files) {
+          files.push(file.declaredLength ?? null)
+          file.stream.resume()
+        }
+        return { files, body: body.contentLength ?? null } as unknown as Received
+      },
+    })
+    expect((await run(oversized, source([one(1024)]).stream)).result).toEqual({ files: [null], body: null })
+  })
+})

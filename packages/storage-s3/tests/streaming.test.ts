@@ -49,14 +49,16 @@ describe('S3StorageDriver.putStream (BK-019)', () => {
     expect(command.input.Body).toBe(body)
   })
 
-  it('refuses an unknown-length stream with STORAGE_STREAM_LENGTH_REQUIRED', async () => {
+  it('uploads an unknown-length stream through lib-storage instead of refusing it (BK-021)', async () => {
     const sent = mockSend()
     const driver = new S3StorageDriver(base)
-    await expect(driver.putStream('a.txt', Readable.from(['x']), { contentType: 'text/plain' })).rejects.toMatchObject({
-      code: 'STORAGE_STREAM_LENGTH_REQUIRED',
-      status: 400,
-    })
-    expect(sent).toHaveLength(0)
+    await driver.putStream('a.txt', Readable.from(['x']), { contentType: 'text/plain' })
+    // One byte does not fill a part, so the multipart uploader sends it as a
+    // single PutObject. STORAGE_STREAM_LENGTH_REQUIRED survives only when the
+    // optional peer is absent — see multipart-missing.test.ts.
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toBeInstanceOf(PutObjectCommand)
+    expect((sent[0] as PutObjectCommand).input.ContentType).toBe('text/plain')
   })
 
   it('buffers up to maxBytes when the length is unknown, and sends the measured length', async () => {

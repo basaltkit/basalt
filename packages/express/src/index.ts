@@ -1,3 +1,4 @@
+import { pipeline } from 'node:stream/promises'
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
   NOT_FOUND_RESPONSE,
@@ -19,6 +20,12 @@ import {
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
+  isStreamResponse,
+  streamPayloadOf,
+  nodeStreamFrom,
+  openStreamPump,
+  destroyStreamSource,
+  type StreamPayload,
 } from '@basaltkit/http'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
@@ -164,6 +171,10 @@ function basaltHandler(
         })
         return
       }
+      if (isStreamResponse(result)) {
+        await sendStream(req, res, streamPayloadOf(result), onError)
+        return
+      }
       if (!reply.sent) reply.send(result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
@@ -177,6 +188,69 @@ function basaltHandler(
         url: req.originalUrl,
       })
       if (!res.headersSent) res.status(status).json(body)
+    }
+  }
+}
+
+/**
+ * A stream ending because the other side went away, not because the payload
+ * failed — a client that closed the tab is not a server error worth alerting on.
+ */
+const clientGone = (error: unknown): boolean => {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'ERR_STREAM_PREMATURE_CLOSE' || code === 'ERR_STREAM_DESTROYED' || code === 'EPIPE' || code === 'ECONNRESET'
+}
+
+/**
+ * Sends a `stream()` response over Express.
+ *
+ * The first chunk is pulled before anything is written, so a source that fails
+ * immediately still becomes a normal JSON error response instead of a dead
+ * socket. Headers then go through `setHeader`, flushed by the first byte, and
+ * `pipeline()` carries the backpressure, destroys the source when the client
+ * disconnects, and — once bytes are on the wire — destroys the response rather
+ * than appending anything to a body that is already partly sent.
+ */
+async function sendStream(
+  req: Request,
+  res: Response,
+  payload: StreamPayload,
+  onError?: HttpErrorReporter,
+): Promise<void> {
+  if (req.method === 'HEAD') {
+    destroyStreamSource(payload.source)
+    res.writeHead(payload.status, payload.headers)
+    res.end()
+    return
+  }
+  // Throws before any header is written when the source fails at once — the
+  // handler's catch then answers with the neutral JSON envelope.
+  const { pump, first } = await openStreamPump(payload.source)
+  const body = nodeStreamFrom(pump, first)
+  res.statusCode = payload.status
+  for (const [name, value] of Object.entries(payload.headers)) res.setHeader(name, value)
+  try {
+    await pipeline(body, res)
+  } catch (error) {
+    const gone = clientGone(error)
+    if (!res.headersSent && !gone) {
+      // Nothing reached the client: drop the streaming headers so the normal
+      // error path can answer with JSON.
+      for (const name of Object.keys(payload.headers)) res.removeHeader(name)
+      throw error
+    }
+    // Bytes are on the wire (or the client already left): destroying the
+    // response is the only honest ending — never an error payload appended to
+    // a partly sent body.
+    if (!res.destroyed) res.destroy()
+    if (!gone) {
+      reportSafely(onError, {
+        error,
+        status: 500,
+        code: 'STREAM_FAILED',
+        method: req.method,
+        url: req.originalUrl,
+      })
     }
   }
 }

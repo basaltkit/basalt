@@ -327,6 +327,15 @@ route({
 - **Nada fica pendurado.** Quando o handler retorna (ou lança) sem ler tudo, o
   resto é drenado em segundo plano até `maxBytes` e a resposta leva
   `Connection: close`.
+- **Direto para o armazenamento.** `file.declaredLength` é o `Content-Length` da
+  **própria parte**, quando o cliente enviou um — passa-o a
+  `files.upload(file.stream, { contentLength })` para que um backend que precisa de
+  um tamanho exato (S3) faça stream em vez de buffer. Sê honesto quanto a isto: o
+  RFC 7578 não exige um `Content-Length` por parte e nenhum browser o envia, por
+  isso normalmente é `undefined`. O `Content-Length` do pedido
+  (`body.contentLength`) cobre todas as partes mais o enquadramento, por isso é um
+  limite superior para um ficheiro, nunca o seu tamanho. Sem um tamanho declarado,
+  o `@basaltkit/files` limita a escrita com `validate.maxSize`.
 
 | Opção de `upload()` | Predefinição | Acima do limite |
 |---|---|---|
@@ -352,6 +361,71 @@ nunca leem multipart. O Hono salta o buffer do `bodyLimit` para multipart; uma
 rota que não é de upload continua a analisar um body multipart dentro do
 `bodyLimit`. No OpenAPI, o body do pedido da rota fica documentado como
 `multipart/form-data`.
+
+## Respostas em stream
+
+Um handler pode devolver **um stream** em vez de um payload JSON: `stream(source, options)`
+do `@basaltkit/http` é a resposta em stream neutra, e cada adaptador envia-a pelo seu
+próprio transporte sem nunca a guardar em buffer.
+
+```ts
+import { route, stream } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/invoices/:id/pdf',
+  meta: { auth: true },
+  async handler({ params }) {
+    const { record, stream: body } = await files.downloadStream(params.id)
+    return stream(body, {
+      contentType: record.contentType,
+      contentLength: record.size,   // omite quando é desconhecido — a resposta fica chunked
+      filename: record.name,        // Content-Disposition: attachment, sanitizado
+    })
+  },
+})
+```
+
+`source` é um `Readable` do Node, um `ReadableStream` web, ou qualquer
+`AsyncIterable<Uint8Array>`. Opções: `contentType` (predefinição
+`application/octet-stream`), `contentLength`, `filename`, `disposition`
+(`'attachment'` por omissão — um ficheiro HTML/SVG enviado por um utilizador nunca
+pode renderizar na tua origem), `headers` extra e `status`.
+
+### As mesmas garantias nos três
+
+Isto não é "na medida do possível": uma única suite de paridade corre-as contra Fastify,
+Express e Hono, e um download de vários MiB é comparado byte a byte em cada um.
+
+| Comportamento | Fastify | Express | Hono |
+|---|---|---|---|
+| Como é enviado | `reply.send(readable)` (o caminho de stream do Fastify) | `pipeline(readable, res)` | `Response` sobre um `ReadableStream` web |
+| Nunca em buffer, backpressure real — um cliente lento abranda a fonte | ✅ | ✅ | ✅ |
+| O cliente desliga-se → a fonte é destruída (sem descritor de ficheiro nem socket S3 pendurado) | ✅ | ✅ | ✅ (`request.signal`) |
+| Erro **antes** do primeiro byte → corpo de erro JSON normal, cabeçalhos de stream retirados | ✅ | ✅ | ✅ |
+| Erro **depois** dos cabeçalhos → ligação cortada, nada acrescentado ao corpo parcial | ✅ | ✅ | ✅ (corpo em erro) |
+| Essa falha tardia é reportada **uma vez** via `onError` (`STREAM_FAILED`, estado 500) | ✅ | ✅ | ✅ |
+| `HEAD` → os cabeçalhos que um `GET` levaria, sem corpo, fonte libertada sem ser lida | ✅ | ✅ | ✅ |
+| `Content-Length` / `Content-Disposition` (RFC 5987) | ✅ | ✅ | ✅ |
+
+::: tip Os nomes de ficheiro são sanitizados
+`filename` passa pelo mesmo `sanitizeFilename()` que o parser multipart usa —
+diretórios (`../../x`, `C:\x`), caracteres de controlo e overrides bidi são removidos —
+e é depois escrito como um `filename=` ASCII imprimível entre aspas mais um
+`filename*=UTF-8''…` do RFC 5987 quando algo se perdeu. Um nome vindo do cliente nunca
+consegue injetar um cabeçalho.
+:::
+
+::: warning Não existe `maxDurationMs`
+Ao contrário do [`sse()`](/pt/guide/realtime), um corpo em stream não tem limite de
+duração ao nível da framework — um download grande demora legitimamente muito tempo, e um
+limite truncá-lo-ia. Limita-o no servidor:
+`fastifyPlugin({ fastify: { requestTimeout, connectionTimeout } })`, o
+`server.setTimeout()` do Express, ou o limite do teu runtime no Hono.
+:::
+
+`meta: { etag: true }` é ignorado para um corpo em stream — não há payload para fazer
+hash, e fazer hash do marcador responderia `304` para um corpo que nunca foi enviado.
 
 ## Como funciona
 

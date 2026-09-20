@@ -17,6 +17,7 @@ const SCAFFOLDED = [
   '@basaltkit/admin-shadcn',
   '@basaltkit/ai-mcp',
   '@basaltkit/auth',
+  '@basaltkit/auth-prisma',
   '@basaltkit/cli',
   '@basaltkit/config',
   '@basaltkit/core',
@@ -29,8 +30,11 @@ const SCAFFOLDED = [
   '@basaltkit/prisma',
   '@basaltkit/sdk',
   '@basaltkit/subscriptions',
+  '@basaltkit/subscriptions-prisma',
   '@basaltkit/teams',
+  '@basaltkit/teams-prisma',
   '@basaltkit/tenancy',
+  '@basaltkit/tenancy-prisma',
   '@basaltkit/testing',
 ]
 

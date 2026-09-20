@@ -225,6 +225,40 @@ The entry is named `reconciler:<name>`, so `basalt schedule:run reconciler:stuck
 on demand. The full option table is in the
 [package README](https://github.com/basaltkit/basalt/tree/main/packages/scheduler#definereconcilert-options-reconcileroptionst-reconciler).
 
+### Sweeping every tenant
+
+A reconciler is central code: it must see stuck work in **all** tenants — exactly what tenant
+scoping forbids. With Postgres RLS on, `find` cannot even run: the application role only ever sees
+one tenant, and the Prisma tenancy extension refuses unscoped queries.
+
+`@basaltkit/prisma` supplies the missing piece. `crossTenantScanSql` generates a `SECURITY
+DEFINER` function that returns **identifiers only** (tenant id + row id) across every tenant,
+capped and paged by the database itself; `find` calls it, and `redispatch` processes each item
+back inside its own tenant:
+
+```ts
+import { crossTenantScan } from '@basaltkit/prisma'
+
+defineReconciler({
+  name: 'stuck-jobs',
+  every: '5m',
+  // central code — no tenant in scope; the function caps the page size itself
+  find: () => crossTenantScan(db, 'stuck_jobs', { limit: 200 }),
+  // back inside the item's tenant: the scoped client and the RLS policies apply again
+  redispatch: (item) => tenancy.run(item.tenantId, () => ProcessJob.dispatch({ jobId: item.id })),
+}).schedule(schedule)
+```
+
+`crossTenantSweep({ client, scanFunction, run, handle })` is the same thing in one call when you
+want the paging and the grouping too: it walks every page and enters each tenant once per page
+instead of once per item. Without RLS neither needs the SQL function — pass an ordinary central
+query as `scan`.
+
+The scan function is a **deliberate RLS bypass**, so its rules (identifiers only, `EXECUTE`
+restricted to the app role, `search_path` pinned, capped cursor) are part of your security review:
+see the [security guide](/guide/security#_3-automatic-tenant-scoping-covers-the-orm-—-not-raw-sql-or-foreign-key-scalars)
+and the [@basaltkit/prisma README](https://github.com/basaltkit/basalt/tree/main/packages/prisma#sweeping-every-tenant-cross-tenant-scan).
+
 ## Run on demand
 
 `schedule:run` triggers an entry from the CLI, ignoring its cron — for testing a

@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream'
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
   NOT_FOUND_RESPONSE,
@@ -21,6 +22,11 @@ import {
   GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
+  isStreamResponse,
+  streamPayloadOf,
+  toNodeStream,
+  destroyStreamSource,
+  type StreamPayload,
 } from '@basaltkit/http'
 import Fastify, {
   type FastifyError,
@@ -295,6 +301,10 @@ function wrapHandler(
         })
         return
       }
+      // Handed back to Fastify rather than sent here: `reply.sent` stays false
+      // while a stream is still piping, so sending it inline would let the
+      // route's own return value overwrite it with an empty body.
+      if (isStreamResponse(result)) return prepareStream(request, reply, streamPayloadOf(result), onError)
       if (!neutralReply.sent) {
         neutralReply.send(result)
       }
@@ -310,6 +320,55 @@ function wrapHandler(
     }
   }
 }
+
+/**
+ * Prepares a `stream()` response and returns the payload for Fastify to send
+ * over its own stream path.
+ *
+ * Fastify pipes a `Readable` payload without buffering, destroys the source
+ * when the client disconnects, turns a failure before the first byte into the
+ * normal JSON error response, and cuts the connection when one happens after
+ * the headers — the only honest ending once bytes are on the wire. Two things
+ * are added here: the streaming headers are withdrawn when the source fails
+ * before anything was written (otherwise the JSON error would inherit the
+ * download's `Content-Type`/`Content-Disposition`), and a late failure is
+ * reported to the app's error reporter, which Fastify's own logging bypasses.
+ */
+function prepareStream(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  payload: StreamPayload,
+  onError?: HttpErrorReporter,
+): Readable | undefined {
+  if (request.method === 'HEAD') {
+    // Fastify's auto-generated HEAD route drains a stream payload to discard
+    // it and answers `content-length: 0`. Read nothing, and send the same
+    // headers a GET would have carried.
+    destroyStreamSource(payload.source)
+    reply.hijack()
+    if (!reply.raw.headersSent) {
+      const headers = { ...reply.getHeaders(), ...payload.headers } as Record<string, number | string | string[] | undefined>
+      reply.raw.writeHead(payload.status, headers)
+    }
+    reply.raw.end()
+    return undefined
+  }
+  const body = toNodeStream(payload.source)
+  body.on('error', (error: Error) => {
+    if (reply.raw.headersSent) {
+      report(onError, error, 500, 'STREAM_FAILED', request)
+      return
+    }
+    for (const name of Object.keys(payload.headers)) {
+      reply.removeHeader(name)
+      reply.raw.removeHeader(name)
+    }
+  })
+  reply.code(payload.status)
+  for (const [name, value] of Object.entries(payload.headers)) reply.header(name, value)
+  return body
+}
+
 /** Applies edge-plugin hooks and routes (from the collector) to the Fastify instance. */
 function mountCollector(instance: FastifyInstance, collector: HttpServerCollector): void {
   for (const hook of collector.preHooks) {

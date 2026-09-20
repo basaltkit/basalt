@@ -4,7 +4,8 @@ export const BOUNDARY = '----basaltTestBoundary7MA4YWxk'
 
 export type Part =
   | { name: string; value: string }
-  | { name: string; filename: string; type?: string; data: string | Uint8Array }
+  /** `length` adds the part's own `Content-Length` header (rare, but legal). */
+  | { name: string; filename: string; type?: string; data: string | Uint8Array; length?: number }
   | { raw: string }
 
 /** Serialises parts into a multipart body. `{ raw }` injects bytes verbatim (for malformed cases). */
@@ -21,7 +22,9 @@ export function multipart(parts: Part[], options: { boundary?: string; close?: b
       chunks.push(
         Buffer.from(
           `Content-Disposition: form-data; name="${part.name}"; filename="${part.filename}"\r\n` +
-            `Content-Type: ${part.type ?? 'application/octet-stream'}\r\n\r\n`,
+            `Content-Type: ${part.type ?? 'application/octet-stream'}\r\n` +
+            (part.length === undefined ? '' : `Content-Length: ${part.length}\r\n`) +
+            '\r\n',
         ),
       )
       chunks.push(typeof part.data === 'string' ? Buffer.from(part.data) : Buffer.from(part.data))
