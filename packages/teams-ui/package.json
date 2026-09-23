@@ -32,7 +32,7 @@
     "@basaltkit/teams": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1",
     "zod": "^4.6.5"

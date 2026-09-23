@@ -33,7 +33,7 @@
     "@basaltkit/hono": "workspace:^",
     "@basaltkit/http": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "express": "^5.0.0",
     "fastify": "^5.12.5",
     "hono": "^4.13.8",

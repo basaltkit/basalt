@@ -30,8 +30,8 @@
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.6.1",
-    "@types/nodemailer": "^7.0.4",
+    "@types/node": "^26.6.2",
+    "@types/nodemailer": "^8.0.2",
     "nodemailer": "^10.0.10",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
