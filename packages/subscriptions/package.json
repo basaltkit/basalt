@@ -35,7 +35,7 @@
     "@basaltkit/hono": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@hono/node-server": "^2.1.1",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "express": "^5.0.0",
     "hono": "^4.13.8",
     "typescript": "^7.0.2",

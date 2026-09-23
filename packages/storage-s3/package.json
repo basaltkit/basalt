@@ -15,19 +15,19 @@
   },
   "dependencies": { "@basaltkit/storage": "workspace:^" },
   "peerDependencies": {
-    "@aws-sdk/client-s3": "^3.1133.0",
+    "@aws-sdk/client-s3": "^3.1136.0",
     "@aws-sdk/lib-storage": "^3.1133.0",
-    "@aws-sdk/s3-request-presigner": "^3.1133.0"
+    "@aws-sdk/s3-request-presigner": "^3.1136.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/lib-storage": { "optional": true }
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.1133.0",
+    "@aws-sdk/client-s3": "^3.1136.0",
     "@aws-sdk/lib-storage": "^3.1133.0",
-    "@aws-sdk/s3-request-presigner": "^3.1133.0",
+    "@aws-sdk/s3-request-presigner": "^3.1136.0",
     "@basaltkit/tsconfig": "workspace:^",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
   },

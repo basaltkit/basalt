@@ -41,7 +41,7 @@
     "@basaltkit/tsconfig": "workspace:*",
     "@basaltkit/webhooks": "workspace:*",
     "@basaltkit/webhooks-prisma": "workspace:*",
-    "@types/node": "^26.6.1",
+    "@types/node": "^26.6.2",
     "@types/pg": "^8.11.0",
     "prisma": "^7.10.0",
     "typescript": "^7.0.2",
