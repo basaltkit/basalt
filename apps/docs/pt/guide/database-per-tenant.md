@@ -159,26 +159,44 @@ tráfego do novo tenant imediatamente, e o pool constrói o seu cliente no prime
 ## Stores duráveis, um por tenant
 
 Aqui está o retorno. Os [`*-prisma` stores](/pt/guide/persistence) recebem um
-`PrismaClient`. Em vez de um cliente fixo, dá-lhes um pequeno **proxy que resolve
-`db()` no momento da chamada** — para que cada operação de store corra contra a base de
-dados de qualquer que seja o tenant ativo no pedido atual:
+`PrismaClient` **uma vez, no arranque** — muito antes de existir um pedido. Com
+base-por-tenant o cliente certo só se conhece por pedido, portanto o que eles
+têm de guardar não é um cliente, é uma forma de lá chegar. É o `tenantClient()`:
 
 ```ts
-import { db } from '@basaltkit/prisma'
+import { tenantClient } from '@basaltkit/prisma'
 import type { PrismaClient } from '@prisma/client'
 import { prismaAuthStores } from '@basaltkit/auth-prisma'
 import { prismaAccessStore } from '@basaltkit/permissions-prisma'
 import { prismaCommentsStore } from '@basaltkit/comments-prisma'
 
-// Cada acesso a modelo resolve para o cliente do tenant ATIVO. Constrói uma vez.
-const tenantDb = new Proxy({} as PrismaClient, {
-  get: (_t, model: string) => (db() as unknown as Record<string, unknown>)[model],
-})
+// Cada acesso resolve para o cliente do tenant ATIVO. Constrói uma vez.
+const tenantDb = tenantClient<PrismaClient>()
 
 const auth = prismaAuthStores(tenantDb)
 const access = prismaAccessStore(tenantDb)
 const comments = prismaCommentsStore(tenantDb)
 ```
+
+::: warning Não escrevas este proxy à mão
+Um `new Proxy({}, { get: (_t, p) => db()[p] })` de duas linhas parece
+equivalente, e para `client.user.findMany()` é. Continua a ser a ferramenta
+errada, por duas razões.
+
+Um trap `get` sozinho é só meio cliente. `'user' in client` responde `false`,
+`Object.keys(client)` responde `[]` e `Object.getOwnPropertyDescriptor` não
+encontra nada — não são erros, são respostas erradas, dadas a qualquer store que
+sonde o cliente antes de o usar. O `tenantClient()` implementa `has`, `ownKeys`
+e `getOwnPropertyDescriptor` contra o cliente activo, e encaminha o `get` com
+`Reflect` para que propriedades accessor vejam o mesmo receiver que veriam no
+cliente.
+
+E o erro habitual com um proxy feito à mão nem sequer é o proxy: é passar o
+cliente central ao store "por agora", porque um cliente é o que a assinatura
+pede. Isso não lança erro nenhum. Todos os tenants lêem e escrevem no schema
+central, em silêncio. Uma primitiva que não recebe cliente não deixa nada para
+errar.
+:::
 
 Agora liga-os aos seus plugins como de costume. `tenancyPlugin` resolve o tenant;
 `prismaPlugin({ forTenant })` faz pool de um cliente por tenant e coloca-o no contexto
@@ -280,6 +298,83 @@ servir duas populações:
 Um utilizador central não entra num subdomínio de tenant, e um de tenant não
 entra no domínio principal — não porque um handler verifique, mas porque os dois
 procuram em schemas diferentes.
+
+### O plano central não é um segundo sistema de identidade
+
+É este o ponto que escapa às pessoas, e escapa caro. As pessoas que **operam** o
+SaaS — dono, suporte, financeiro, operações — são uma população diferente das
+que estão dentro de cada empresa cliente. O mesmo e-mail nos dois sítios não é a
+mesma pessoa, e uma conta central nunca deve abrir um tenant.
+
+Essa separação é real e importa. O que ela **não** exige é uma segunda pilha de
+autenticação. Como o `db()` segue o plano do pedido, a população central recebe
+`authPlugin`, `authRoutes()`, `mfaRoutes()`, recuperação de palavra-passe,
+sessões, chaves de API e `permissionsPlugin` — tudo — do registo que já fizeste:
+
+```ts
+// prisma/schema.prisma          → o plano CENTRAL (schema public)
+model AuthUser  { id String @id  email String @unique  passwordHash String  … }
+model AuthSession { … }
+model PermUserRole { scope String  userId String  role String  @@id([scope, userId, role]) }
+model Tenant  { … }   // o registo de clientes, planos, subscrições, pagamentos
+
+// prisma/tenants/schema.prisma  → o que cada empresa cliente tem de seu
+generator client { provider = "prisma-client-js", output = "../../generated/tenant" }
+model AuthUser  { id String @id  email String @unique  passwordHash String  … }
+model Invoice   { id String @id  … }   // sem tenantId: o schema É o tenant
+```
+
+Dois schemas, **dois generators**, dois clientes. O segundo `output` não é
+cosmético: com um só cliente os modelos dos dois planos têm de ser declarados no
+mesmo schema, e a base central passa a ter tabelas que devem ficar vazias para
+sempre — e uma tabela vazia no plano errado é exactamente onde uma escrita
+perdida vai parar.
+
+Autorizar a área central é depois o sistema de permissões normal, com um âmbito
+próprio:
+
+```ts
+import { GLOBAL_SCOPE } from '@basaltkit/permissions'
+
+export const PLATFORM_ADMIN = 'platform_admin'
+
+// Ligado ao cliente CENTRAL explicitamente — isto semeia e atribui fora de
+// qualquer pedido, onde o db() não tem plano a seguir e por isso lança.
+const centralAccess = prismaAccessStore(prisma).store
+await centralAccess.grantToRole(PLATFORM_ADMIN, ['tenant:approve', 'platform:read'], GLOBAL_SCOPE)
+
+route({ method: 'POST', url: '/central/admin/tenants/:id/approve',
+        meta: { tenant: false, auth: true, can: 'tenant:approve' }, handler })
+```
+
+O scope é `GLOBAL_SCOPE`, não uma string tua. Um pedido sem tenant é avaliado
+em `GLOBAL_SCOPE` (`'@global'`) e o Gate não lê mais nada aí: uma atribuição
+escrita sob `'global'` — o valor anterior à 1.5 — nunca é consultada, por isso
+a rota acima negaria precisamente o administrador que acabaste de criar, e nada
+te diz porquê. Vê
+[o scope global não pode ser um tenant](/pt/guide/authorization#o-scope-global-nao-pode-ser-um-tenant).
+
+`meta: { tenant: false, auth: true, can: '…' }` — as mesmas três chaves que
+qualquer rota de tenant usa. Nomeia o primeiro administrador pela CLI, não por
+uma rota: o primeiro não tem quem o nomeie, e um endpoint desprotegido para
+«criar o primeiro» é a porta que fica aberta porque ninguém se lembra de a
+fechar. Quem corre um comando no servidor já alcança a base de dados.
+
+::: danger O anti-padrão: uma identidade de operador feita à mão
+O atalho tentador é um modelo `PlatformOperator` com o seu próprio hashing de
+palavra-passe, a sua tabela de sessões, o seu cookie, o seu token CSRF e o seu
+`if (role === 'OWNER')`. Escreve-se depressa e parece bom isolamento.
+
+Não é. É uma segunda base de código crítica para a segurança que começa sem nada
+do que o framework já te dá, e vais reimplementar cada peça mal e tarde:
+recuperação de palavra-passe, TOTP e a sua janela de repetição, links de
+convite, bloqueio por tentativas, revogação de sessões, um catálogo de
+permissões, um trilho de auditoria. Entretanto quem opera o serviço fica
+protegido *pior* do que os clientes a quem o vende — que é ao contrário.
+
+Se te apanhares a escrever `requireOperator()`, pára: a separação que queres é a
+que o `db()` já dá, e o `can:` já exprime o resto.
+:::
 
 ::: warning Isto troca uma falha ruidosa por uma silenciosa
 Sem `client`, uma rota de tenant alcançada sem tenant lança `DB_UNAVAILABLE`.
