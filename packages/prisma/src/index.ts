@@ -164,12 +164,18 @@ export function db<T = unknown>(): T {
  */
 export function tenantClient<T extends object = Record<string, unknown>>(): T {
   return new Proxy({} as T, {
-    // `Reflect` and not a bare read: it preserves the receiver, so a store
-    // calling `client.user.findMany()` reaches the model with `this` intact.
+    // `Reflect` and not a bare read so accessor properties on the client see
+    // the same receiver they would when read directly. (It does not affect
+    // `this` for `client.$transaction()`: a call's `this` is always the object
+    // the property was read from, i.e. this proxy, whatever the trap does.)
     get: (_target, prop, receiver) => Reflect.get(db<object>(), prop, receiver),
+    // A `get` trap alone answers `'user' in client` with false and
+    // `Object.keys(client)` with [] — wrong answers, not errors — to any store
+    // that probes the client before using it.
     has: (_target, prop) => Reflect.has(db<object>(), prop),
-    // `ownKeys` needs a matching descriptor or the proxy invariant throws —
-    // which is what `Object.keys()` on a store's client would hit.
+    // `ownKeys` needs a matching descriptor, or `Object.keys()` drops every
+    // key it reports; `configurable: true` keeps the proxy invariant happy on
+    // an empty target.
     ownKeys: () => Reflect.ownKeys(db<object>()),
     getOwnPropertyDescriptor: (_target, prop) => ({
       ...Reflect.getOwnPropertyDescriptor(db<object>(), prop),
