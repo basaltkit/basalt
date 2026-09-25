@@ -286,9 +286,9 @@ request alone. See [Security](/guide/security) for the full picture.
 | Your situation | Use this | How you create a tenant |
 | --- | --- | --- |
 | Learning, tests, a quick demo | `MemoryTenantSource` | `.add({ id, name })` |
-| A real product, simplest path | `PrismaTenantSource` (`@basaltkit/tenancy-prisma`) | `source.save({ id, name })` |
+| A real product, simplest path | `PrismaTenantSource` (`@basaltkit/tenancy-prisma`) | `TENANCY.create({ id, name })` |
 | Tenants already in your own table | Your own `TenantSource` | your own insert + `find`/`list` |
-| Real sign-up, creator becomes owner | Onboarding route + `@basaltkit/teams` | `POST /onboarding` → `save` + `addMember(..., 'owner')` |
+| Real sign-up, creator becomes owner | Onboarding route + `@basaltkit/teams` | `POST /onboarding` → `TENANCY.create` + `addMember(..., 'owner')` |
 
 Start at Level 1 to learn, move to Level 2 the moment you need tenants to
 survive a restart, and add Level 4 when you have real customers signing
