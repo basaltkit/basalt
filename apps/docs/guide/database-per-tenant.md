@@ -233,11 +233,18 @@ column, no query needs a tenant filter — the isolation is the connection. Beca
 `db()` throws outside a tenant context, an operation that isn't scoped to a
 tenant fails loudly instead of silently touching the wrong data.
 
-::: tip Shared-database mode is simpler
-If you don't need physical isolation, pass a single `client` (extended with
-`tenancyExtension()`) to `prismaPlugin` and to the store factories directly — no
-proxy. Row-level scoping keeps tenants apart with one database. Reach for
-database/schema-per-tenant when the isolation guarantee has to be physical.
+::: tip Shared-database mode is simpler — with one rule
+If you don't need physical isolation, one database with a `tenantId` column on
+every model and `prisma.$extends(tenancyExtension())` as the app client keeps
+tenants apart by row, no proxy needed. The rule: the framework stores get the
+**plain** client, not the extended one. `auth_users`, `perm_*` and `tenants`
+carry no `tenantId` — a login has no tenant yet — and the extension scopes every
+model, so an extended client makes the stores throw `PRISMA_TENANT_MISSING` on
+the first request. This is how `create-basalt` scaffolds it: `prisma` to the
+stores, `db` (extended) to your code. Identity is then global: one account
+across tenants, access by membership. Reach for database/schema-per-tenant when
+the isolation has to be physical — or when staff and customers must be
+different populations, see [the multi-tenant pattern](/guide/multi-tenant-pattern).
 :::
 
 ## Serving central and tenant routes from one app

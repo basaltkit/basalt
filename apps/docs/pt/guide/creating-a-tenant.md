@@ -295,9 +295,9 @@ ao pedido em bruto. Vê [Segurança](/pt/guide/security) para o quadro completo.
 | A tua situação | Usa isto | Como crias um tenant |
 | --- | --- | --- |
 | Aprender, testes, uma demo rápida | `MemoryTenantSource` | `.add({ id, name })` |
-| Um produto real, caminho mais simples | `PrismaTenantSource` (`@basaltkit/tenancy-prisma`) | `source.save({ id, name })` |
+| Um produto real, caminho mais simples | `PrismaTenantSource` (`@basaltkit/tenancy-prisma`) | `TENANCY.create({ id, name })` |
 | Tenants já na tua própria tabela | A tua própria `TenantSource` | o teu insert + `find`/`list` |
-| Registo real, criador torna-se owner | Rota de onboarding + `@basaltkit/teams` | `POST /onboarding` → `save` + `addMember(..., 'owner')` |
+| Registo real, criador torna-se owner | Rota de onboarding + `@basaltkit/teams` | `POST /onboarding` → `TENANCY.create` + `addMember(..., 'owner')` |
 
 Começa no Nível 1 para aprender, passa para o Nível 2 no momento em que precisas
 que os tenants sobrevivam a um reinício, e acrescenta o Nível 4 quando tiveres

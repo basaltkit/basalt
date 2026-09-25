@@ -230,12 +230,19 @@ conexão. Porque `db()` lança fora de um contexto de tenant, uma operação que
 com scope de um tenant falha ruidosamente em vez de tocar silenciosamente nos dados
 errados.
 
-::: tip O modo de base de dados partilhada é mais simples
-Se não precisas de isolamento físico, passa um único `client` (estendido com
-`tenancyExtension()`) ao `prismaPlugin` e às factories de store diretamente — sem
-proxy. O scope ao nível da linha mantém os tenants separados com uma base de dados.
-Recorre a database/schema-per-tenant quando a garantia de isolamento tiver de ser
-física.
+::: tip O modo de base de dados partilhada é mais simples — com uma regra
+Se não precisas de isolamento físico, uma base de dados com uma coluna `tenantId`
+em todos os modelos e `prisma.$extends(tenancyExtension())` como cliente da app
+mantém os tenants separados por linha, sem proxy. A regra: os stores do framework
+recebem o cliente **simples**, não o estendido. `auth_users`, `perm_*` e
+`tenants` não levam `tenantId` — um login ainda não tem tenant — e a extensão
+faz scope de todos os modelos, por isso um cliente estendido faz os stores
+lançarem `PRISMA_TENANT_MISSING` no primeiro pedido. É assim que o
+`create-basalt` gera o projecto: `prisma` para os stores, `db` (estendido) para o
+teu código. A identidade passa a ser global: uma conta em todos os tenants,
+acesso por membership. Recorre a database/schema-per-tenant quando o isolamento
+tiver de ser físico — ou quando staff e clientes tiverem de ser populações
+diferentes, vê [o padrão multi-tenant](/pt/guide/multi-tenant-pattern).
 :::
 
 ## Servir rotas centrais e de tenant na mesma app
