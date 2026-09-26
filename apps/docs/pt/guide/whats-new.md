@@ -1,14 +1,260 @@
-# Novidades no Basalt 1.10
+# Novidades no Basalt 1.11
 
-> *"Basalt 1.10" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.11" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são publicados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
 > pacote que o traz.*
 
+::: warning Catorze pacotes publicam um major
+Esta vaga muda predefinições de segurança. `auth` 3, `auth-saml` 2, `env` 3,
+`permissions` 2, `prisma` 2, `tenancy` 2, `storage` 3, `files` 4, `comments` 3,
+`audit-viewer` 3, `webhooks` 2, `subscriptions` 4, `teams` 3 e `mcp` 3 partem
+cada um algo que funcionava *porque* funcionava sem ninguém ter pedido. A regra
+para todos: uma app a funcionar parte sem alteração de código, configuração ou
+dados. Ver [Atualização](#atualizacao) — a maioria das edições é uma opção, duas
+precisam de migração de dados.
+:::
+
+O Basalt 1.11 é a versão que **falha fechado**. Aconteceram duas coisas no mesmo
+mês. Uma segunda auditoria profunda de segurança — catorze auditores, oitenta e
+sete achados distintos, um crítico — percorreu o framework à procura não de bugs
+nos pacotes mas de bugs *entre* eles: uma API key válida em todos os tenants
+porque as chaves e a tenancy nunca tinham sido apresentadas; uma operação Prisma
+que a extensão de tenant não conhecia e por isso não delimitava; um endpoint de
+webhook assinado com o segredo global do plugin porque ninguém tinha dito a que
+tenant pertencia. E duas aplicações continuaram a construir sobre o framework —
+um SaaS de gestão documental e um SaaS de logística — e mantiveram a lista de
+todos os sítios em que o framework as fez escrever o que devia ter escrito:
+streaming, erros estruturados, um trilho de auditoria verificável, roles para
+todos os tenants, uma forma de encontrar trabalho preso sob row-level security.
+
+Setenta e sete dos achados estão corrigidos com testes de regressão, e vinte e
+oito itens da lista das aplicações estão fechados. O tema que partilham é a
+predefinição. Onde o 1.10 fornecia a metade que faltava, o 1.11 muda o que
+acontece quando uma metade falta: um disco sem tenant recusa em vez de escrever
+na raiz do bucket; uma query raw dentro de um tenant recusa em vez de ver tudo;
+um `NODE_ENV` por definir conta como produção em vez de desenvolvimento. Nada
+nesta lista é uma capacidade nova. Cada uma é uma capacidade que era opt-in a
+tornar-se aquilo de que é preciso fazer opt *out*.
+
+## Destaques
+
+### Bugs de composição que a auditoria encontrou
+- **As API keys ficam ligadas ao seu tenant.** Uma chave emitida dentro de um
+  tenant é recusada em qualquer pedido que resolva outro tenant, ou nenhum
+  (`403 AUTH_APIKEY_TENANT_MISMATCH`); uma chave emitida sem tenant é recusada em
+  pedidos de tenant salvo com `allowTenantlessKeys`. Foi o único achado crítico:
+  chaves e tenancy funcionavam cada uma, e juntas uma chave era válida em todo o
+  lado. Os scopes passam também a ser um tecto — uma chave sem `*` não age como
+  o dono em rotas sem `meta.scopes`, e `meta.apiKey: false` torna uma rota só de
+  sessão. *(`@basaltkit/auth` 3.0)*
+- **A extensão de tenant do Prisma recusa o que não consegue delimitar.**
+  Operações raw ao nível do cliente, leituras raw do MongoDB e
+  `updateManyAndReturn` dentro de um tenant são recusadas
+  (`PRISMA_RAW_IN_TENANT`, `PRISMA_UNSCOPED_OPERATION`); escritas aninhadas em
+  relações ficam restritas ao tenant e dados de update que mudem o campo do
+  tenant lançam `PRISMA_CROSS_TENANT_WRITE`. O `tenantSchema()` é injectivo, por
+  isso dois ids já não partilham um schema. *(`@basaltkit/prisma` 2.0)*
+- **Storage, cache e realtime falham fechado sem tenant.** Um disco no scope por
+  omissão, com tenancy activa, recusa uma escrita sem tenant
+  (`STORAGE_TENANT_REQUIRED`) em vez de recuar para a raiz do bucket; os discos
+  centrais dizem `scope: null`. Os URLs temporários ficam limitados a sete dias.
+  Um id de tenant com `:` não consegue endereçar as chaves de cache nem os canais
+  de outro tenant, porque o id passa a ser validado
+  (`/^[a-z0-9][a-z0-9_-]{0,62}$/`, `global` reservado) antes de se escrever seja
+  o que for. *(`@basaltkit/tenancy` 2.0, `storage` 3.0, `cache` 2.0.1, `realtime` 1.4.1)*
+- **O scope global de permissões não pode ser um tenant.** `GLOBAL_SCOPE` é
+  `'@global'`, um valor que nenhum id de tenant pode ter; o Gate recusa avaliar
+  um tenant cujo id seja um scope reservado. As linhas escritas sob o antigo
+  `'global'` precisam de uma migração de uma linha. *(`@basaltkit/permissions` 2.0)*
+- **Os webhooks de tenant têm o seu próprio segredo.** Um endpoint de tenant
+  nunca é assinado com o segredo global do plugin e as entregas nunca saem sem
+  assinatura por omissão; um dispatch sem tenant só chega a endpoints
+  agnósticos de tenant. O guard de SSRF classifica IPv6 pelos bytes, por isso
+  endereços privados mapeados e traduzidos são recusados também.
+  *(`@basaltkit/webhooks` 2.0)*
+- **Autorização ao nível do objecto em ficheiros, comentários e visualizador de
+  auditoria.** O `fileRoutes()` é só-dono salvo indicação; o
+  `auditViewerRoutes()` recusa arrancar sem guard; um argumento `tenantId`
+  explícito dentro de um contexto de tenant tem de coincidir com ele.
+  *(`@basaltkit/files` 4.0, `comments` 3.0, `audit-viewer` 3.0, `search` 1.6)*
+- **Convites, facturação, SSO e MCP fecham as suas portas.** Aceitar um convite
+  de equipa exige e-mail verificado e um token inscreve uma conta; um driver de
+  facturação com `webhookSecret` vazio lança em vez de aceitar um HMAC vazio, e
+  os redirects do checkout ficam restritos a origens conhecidas; cada provider
+  SAML fica restrito aos domínios de e-mail que pode afirmar; um servidor MCP
+  lançado herda uma allow-list de variáveis de ambiente, não o `APP_SECRET`.
+  *(`@basaltkit/teams` 3.0, `subscriptions` 4.0, `auth-saml` 2.0, `mcp` 3.0)*
+- **Um `NODE_ENV` por definir é produção.** O `secret()` aplica o `devDefault`
+  só quando `NODE_ENV` é explicitamente `development` ou `test`, por isso um
+  deploy que se esqueça da variável já não arranca com o segredo público de
+  desenvolvimento. As apps novas recebem também `teamsPlugin()` +
+  `tenantMembershipPlugin()` por omissão, e o `make:resource` gera código
+  autenticado e pertencente ao tenant, com um teste que o prova.
+  *(`@basaltkit/env` 3.0, `create-basalt` 1.5, `generator` 1.4)*
+
+### O que duas aplicações fizeram o framework escrever
+- **Streaming, nos dois sentidos, em todos os adapters.** `disk.putStream` /
+  `getStream` / `copy` / `stat` em S3, Azure e GCS, com `maxBytes` aplicado
+  enquanto os bytes chegam; multipart no S3 para streams de tamanho desconhecido
+  como capacidade opcional; `route({ body: upload({ maxBytes, maxFiles, allowedTypes }) })`
+  para multipart em Fastify, Express e Hono por igual; e um handler que devolve
+  `stream(source, { contentType, filename })` — a backpressure é real, um
+  cliente que desliga destrói a fonte, e o `GET /files/:id/content` usa-o.
+  *(`@basaltkit/storage` 3.2, `storage-s3` 1.3, `http` 2.2 e 2.4, `files` 4.1–4.3)*
+- **`rawBody()` — os octetos que foram mesmo enviados.** Todos os providers de
+  webhooks assinam os bytes que enviaram, e todos os adapters faziam parse do
+  JSON antes de um handler os ver; o `JSON.stringify` do objecto parseado não são
+  esses bytes. As apps a verificar assinaturas do Stripe, Paddle ou Lemon
+  Squeezy podiam estar a falhar todas as entregas genuínas. Uma rota `rawBody()`
+  deixa o corpo por ler até depois dos guards, e recusa (`RAW_BODY_UNAVAILABLE`)
+  em vez de reconstruir. *(`@basaltkit/http` 2.5, `fastify` 2.4, `express` 1.9,
+  `hono` 1.9, `subscriptions` 4.0.1)*
+- **Os erros levam dados.** `new HttpError(status, code, message, { details })`
+  e `BasaltError` expõem `error.details`, limitado e sanitizado pelo serializer,
+  para uma UI deixar de extrair "Checks failed: A, B" de uma mensagem.
+  `BasaltClientError.errorDetails` lê-o de volta. *(`@basaltkit/core` 1.4,
+  `http` 2.3, `sdk` 2.1)*
+- **Um trilho de auditoria verificável.** `integrity: 'hash-chain'` dá a cada
+  entrada uma sequência e um hash sobre a anterior; `audit.verify()` detecta
+  linhas editadas, apagadas, reordenadas e forjadas; `requestContext: true`
+  regista IP e user-agent através do redactor. *(`@basaltkit/audit` 1.6,
+  `audit-prisma` / `audit-sqlite` 1.2)*
+- **MFA por política, throttles entre réplicas.** `authPlugin({ requireMfa })`
+  recusa credenciais obtidas sem segundo factor; os tokens levam `amr`; um
+  `ThrottleStore` (memória ou Redis) suporta os throttles de login e de e-mail
+  entre instâncias; o logout termina uma sessão de cookie com corpo vazio; as
+  rotas de auth levam `meta.account`, que o guard de membership respeita.
+  *(`@basaltkit/auth` 3.1, `teams` 3.0.1)*
+- **Row-level security, aplicada e varrida.** `tenancyExtension({ rls: true })`
+  define o tenant na ligação antes de cada operação, para as políticas do
+  Postgres filtrarem também; `prismaPlugin({ assertMigrated })` recusa arrancar
+  contra a base errada; `crossTenantScan` / `crossTenantSweep` dão a um
+  reconciliador uma forma auditada de encontrar trabalho preso em todos os
+  tenants e tratar cada linha dentro do contexto do seu tenant; e o índice GIN
+  sobrevive à pesquisa full-text sob RLS. *(`@basaltkit/prisma` 2.1–2.3,
+  `search-postgres` 1.1, `scheduler` 1.5, `events` 1.3)*
+- **Roles para todos os tenants, uma vez.** O `roleCatalog` no Gate é um mapa
+  role → permissões definido em código e válido em todos os scopes, por isso um
+  catálogo já não tem de ser copiado para cada tenant; o `teams.members()` e a
+  fonte de utilizadores conseguem nomear toda a gente com um role sem tocar nas
+  tabelas de auth. *(`@basaltkit/permissions` 2.1, `auth` 3.2, `teams` 3.1)*
+- **Uploads directos pré-assinados**, com Content-Type, tamanho e SHA-256
+  ligados à assinatura no S3 (e o subconjunto honesto no Azure e GCS), mais a
+  correcção do `s3Disk` que deixava cair todas as opções do disco excepto
+  `scope`. *(`@basaltkit/storage` 3.1)*
+- **Os ficheiros sabem o que são.** `validate.sniff` lê o tipo real dos magic
+  bytes; `requireScan` põe um ficheiro em quarentena até um scanner o libertar
+  (`423 FILE_NOT_SCANNED`). *(`@basaltkit/files` 4.1)*
+- **Prefixos de env por app.** `defineEnv(shape, { prefix: 'MY_SAAS' })` lê
+  primeiro `MY_SAAS_DATABASE_URL`, por isso `node --env-file` já não arranca uma
+  app contra a base exportada de outro projecto. Os scaffolds ligam-no.
+  *(`@basaltkit/env` 3.1, `create-basalt` 1.7)*
+- **Código gerado que compila.** O `make:service` sozinho já não importa um
+  repositório que nunca criou; todos os `make:<kind>` nomeiam os irmãos que
+  ainda faltam. O `create-basalt` pergunta ao registry a versão mais recente de
+  cada dependência, e `--prisma` gera uma app com PostgreSQL.
+  *(`@basaltkit/generator` 1.5, `create-basalt` 1.5–1.8)*
+
+### Dois pacotes estreiam
+- **`@basaltkit/backup`** — backups PostgreSQL como serviço: dumps em formato
+  custom transmitidos para qualquer disco Basalt, manifestos com checksums,
+  retenção, restauro com verificação de integridade, alvos por schema e por base
+  de tenant, integração com o scheduler e a CLI. As passwords chegam ao
+  `pg_dump` pelo ambiente, nunca pela linha de comandos. *(0.3.0)*
+- **`@basaltkit/drives`** — ligar o armazenamento externo de ficheiros de um
+  tenant e mantê-lo sincronizado: fluxo de ligação OAuth, listagem, feeds de
+  alterações com reset de cursor, download e upload em streaming, notificações
+  assinadas num endpoint neutro testado em paridade nos três adapters. Três
+  adapters saem com ele: **`drives-dropbox`**, **`drives-google`** e
+  **`drives-microsoft`** (OneDrive / SharePoint). A auditoria de fase 2 dos
+  adapters encontrou uma fuga de credenciais e um bug silencioso de perda de
+  dados antes de mais alguém. *(0.2.0 / 0.1.0)*
+
+### Docs
+- **[O padrão multi-tenant](/pt/guide/multi-tenant-pattern)** — a forma canónica
+  de construir um SaaS schema-per-tenant em Basalt, escrita como dez regras
+  verificáveis depois de auditar três apps de produção, com as cadeias de
+  privilégio que cada uma delas realmente entregou. A dica de base partilhada,
+  o troubleshooting de tenancy e o cookbook foram corrigidos onde a contradiziam.
+- Guias de [backups](/pt/guide/backup) e [drives externos](/pt/guide/drives).
+
+## Atualização
+
+Os pacotes são independentes — sobe só o que usas. Cada major abaixo tem um
+opt-out explícito ao lado; prefere corrigir a app.
+
+### Predefinições que passam a recusar
+
+| Pacote | O que recusa | Opt-out / correcção |
+| --- | --- | --- |
+| `auth` 3 | API keys fora do seu tenant; chaves estreitas em rotas sem scope; escritas cross-site só com cookie (`AUTH_CSRF_REJECTED`); login social com e-mail não verificado; OAuth sem binding ao browser | `apiKeysPlugin({ allowTenantlessKeys, allowNarrowKeysOnUnscopedRoutes })`, `authPlugin({ csrf: { trustedOrigins } })`, `socialLogin({ mfa: 'skip' })`, usar `OAuth.authorize()` |
+| `env` 3 | `devDefault` com `NODE_ENV` por definir | define `NODE_ENV=development` onde era essa a intenção |
+| `tenancy` 2 | ids fora da gramática; `tenantScoped()` sem tenant em contexto | renomear ids; `requireTenantId(id)` / `tenancy.run(id, …)` em código de sistema |
+| `prisma` 2 | operações raw e escritas cross-tenant dentro de um tenant; nomes de schema não canónicos | `setTenantConfigSql` é a única instrução raw permitida; renomear schemas uma vez (README) |
+| `storage` 3 | acesso sem tenant num disco com scope de tenant; URLs temporários acima de 7 dias | `scope: null` nos discos centrais; `maxTemporaryUrlTtl` |
+| `permissions` 2 | avaliar um tenant com nome de scope | migrar as linhas `'global'` (abaixo) |
+| `files` 4 / `comments` 3 / `audit-viewer` 3 | acesso a ficheiros de outro dono; visualizador de auditoria sem guard; um `tenantId` diferente do contexto | `fileRoutes({ authorize, shared })`, `auditViewerRoutes({ meta: { can } })` |
+| `webhooks` 2 | entregas de tenant sem assinatura ou com segredo partilhado; register/list sem tenant | `allowUnsigned`, `allowSharedSecret`, `{ system: true }` |
+| `subscriptions` 4 | `webhookSecret` vazio; URLs de redirect fora das origens configuradas | definir o segredo; `allowedRedirectOrigins` |
+| `teams` 3 | aceitar convite sem e-mail verificado; atribuir roles acima do teu | `teamRoutes({ requireVerifiedEmail: false })`, `grantableRoles` |
+| `auth-saml` 2 | asserções de outros domínios; respostas iniciadas pelo IdP; node-saml < 5.1 | `allowedEmailDomains`, `validateInResponseTo: 'ifPresent'` |
+| `mcp` 3 | `process.env` completo para servidores lançados | allow-list `env` no cliente |
+
+### Duas migrações de dados
+
+**Permissões.** As atribuições escritas sob o scope global anterior à 2.0
+deixam de ser lidas. Renomeia-as uma vez:
+
+```sql
+UPDATE perm_user_roles       SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_user_permissions SET scope = '@global' WHERE scope = 'global';
+UPDATE perm_role_permissions SET scope = '@global' WHERE scope = 'global';
+```
+
+`readLegacyGlobalScope: true` no Gate continua a ler as linhas antigas enquanto
+a migração é agendada — uma ajuda de transição, não uma definição para manter.
+
+**Nomes de schema do Prisma.** O `tenantSchema()` passa a acrescentar um sufixo
+a qualquer id que não seja canónico (`acme`, `acme_co` mantêm o nome; `Acme Co`
+passa a `tenant_acme_co__<hash>`). Os tenants com ids não canónicos têm um
+schema com o nome antigo e têm de ser renomeados uma vez — o README do
+`@basaltkit/prisma` tem a instrução. Os ids canónicos não são afectados.
+
+### Colunas que se acrescentam, nunca se exigem
+
+O `@basaltkit/audit-prisma` 1.2 acrescenta `ip`, `userAgent`, `chain`, `seq`,
+`prevHash`, `hash` (todas nullable) e um único `(chain, seq)`; só se escrevem
+quando `integrity` ou `requestContext` está ligado. O `@basaltkit/events-prisma`
+1.2 acrescenta `lockedUntil` / `lockedBy` para o claim da outbox entre réplicas
+(`claim: true`). Corre `basalt prisma:sync` e uma migração; os stores SQLite
+acrescentam as colunas sozinhos.
+
+### `GLOBAL_SCOPE` é uma constante, não uma string
+
+Se algum código escreve `'global'` — um script de seed, um comando da CLI, um
+teste — passa a atribuir para um scope que ninguém lê. Importa `GLOBAL_SCOPE`
+de `@basaltkit/permissions`. O
+[padrão multi-tenant](/pt/guide/multi-tenant-pattern#regra-7-—-um-sistema-de-permissoes-com-scope-por-plano)
+tem a forma.
+
+### `sharp` e `nodemailer`
+
+O `@basaltkit/image-sharp` 1.1.4 exige um `sharp` corrigido (vulnerabilidades
+do libheif); o `@basaltkit/mailer-smtp` 1.0.1 aceita nodemailer 9 e 10.
+
+---
+
+## Anteriormente — Basalt 1.10
+
+> *A versão das **metades que faltavam**: um tenant que pode ser destruído, um
+> índice que pode ser reconstruído, um store durável para ficheiros, revisões
+> para documentos, e permissões que sabem quem pergunta.*
+
 ::: warning Dois contratos mudaram
 O `@basaltkit/files` revê o contrato do seu store, e o `app.server` do
 `@basaltkit/testing` passa a ser esperado com `await`. As duas edições são
-mecânicas — ver [Atualização](#atualizacao). As apps Prisma que usam API keys
+mecânicas — ver [Atualizar para 1.10](#atualizar-para-1-10). As apps Prisma que usam API keys
 precisam também de uma coluna nova.
 :::
 
@@ -23,8 +269,6 @@ Uma metade que falta não se anuncia. Não há stack trace para uma pergunta a q
 framework não tem resposta: cada aplicação inventa a sua, as invenções divergem,
 e a que está errada é exatamente igual à que está certa — até alguém ver um
 registo que não era seu.
-
-## Destaques
 
 ### Capacidades que só funcionavam num sentido
 - **Um tenant pode ser removido.** O `TenantSource` tinha `find`, `findByDomain`,
@@ -127,12 +371,12 @@ registo que não era seu.
   nomeava nem o pacote nem a diferença de versões. Um peer não pode duplicar.
   *(`@basaltkit/testing`)*
 
-## Atualização
+### Atualizar para 1.10
 
 Os pacotes são independentes — sobe só o que usas. Dois contratos mudaram, e as
 duas edições são mecânicas.
 
-### O `app.server` passa a ser esperado
+#### O `app.server` passa a ser esperado
 
 ```ts
 const server = await app.server()   // era: app.server
@@ -147,7 +391,7 @@ Se o `pnpm install` começar a avisar de um peer `fastify` por satisfazer, o avi
 é o objetivo: é a diferença de versões que antes aparecia em runtime como um
 token que não existe.
 
-### O contrato do store de ficheiros tem três revisões
+#### O contrato do store de ficheiros tem três revisões
 
 O `@basaltkit/files` publica um major. Um `FileStore` próprio precisa de três
 edições:
@@ -161,7 +405,7 @@ edições:
 O `prisma:sync` aprende o domínio dos ficheiros, por isso os seus modelos juntam-se
 como os de todos os outros.
 
-### As apps Prisma acrescentam uma coluna para a expiração das API keys
+#### As apps Prisma acrescentam uma coluna para a expiração das API keys
 
 O `@basaltkit/auth-prisma` 1.5.0 acrescentou uma coluna `expiresAt` anulável ao
 `AuthApiKey` (`auth_api_keys`) para a nova expiração opcional das chaves.
@@ -181,7 +425,7 @@ por nada. Desde o `auth-prisma` 1.5.1 uma coluna em falta lança
 Prisma. O `@basaltkit/auth-sqlite` não precisa de nada: acrescenta a coluna
 sozinho quando a base de dados é aberta.
 
-### Dois pacotes estreiam em 0.1.0
+#### Dois pacotes estreiam em 0.1.0
 
 O `files-prisma` e o `files-versions` publicam `0.1.0`, e não `1.0.0`. Nenhum foi
 ainda corrido contra uma base de dados a sério por ninguém, e juntá-los ao
