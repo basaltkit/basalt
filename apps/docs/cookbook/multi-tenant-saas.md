@@ -44,7 +44,7 @@ In shared-database mode with `@basaltkit/prisma`, every query scopes to
 `ctx().tenant` automatically. Here is the idea in miniature:
 
 ```ts
-import { ctx } from '@basaltkit/core'
+import { requireTenantId } from '@basaltkit/tenancy'
 
 export class ProjectRepository {
   private readonly stores = new Map<string, Map<string, Project>>()
@@ -60,7 +60,7 @@ export class ProjectRepository {
   }
 
   private store() {
-    const scope = ctx().tenant?.id ?? 'central'
+    const scope = requireTenantId()   // fails closed: no tenant, no store
     let store = this.stores.get(scope)
     if (!store) this.stores.set(scope, (store = new Map()))
     return store

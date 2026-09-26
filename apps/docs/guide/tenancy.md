@@ -672,7 +672,7 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
 
 ## CLI commands
 
-`tenancyPlugin` registers five commands into the CLI bucket, so they show up as
+`tenancyPlugin` registers six commands into the CLI bucket, so they show up as
 soon as `@basaltkit/cli` is present — no extra wiring:
 
 | Command | Needs | What it does |
@@ -894,7 +894,9 @@ takeover.
   explicitly: `requireTenantId(job.tenantId)`.
 - **`TENANT_REQUIRED` on a legitimately central route** (sign-up, landing page,
   platform admin) — those routes shouldn't be calling `tenantScoped()` at all.
-  Query the unscoped table deliberately, and keep `required: false` on the plugin.
+  Query the central table deliberately, and declare `meta: { tenant: false }` on
+  the route rather than loosening `required` for the whole app — see
+  [the multi-tenant pattern](/guide/multi-tenant-pattern#rule-5-—-three-kinds-of-route-declared-in-meta).
 - **`TENANCY_NOT_RESOLVED` although the header/subdomain looks right** — the ref
   resolved but the record didn't load. An unknown id falls through *silently* to
   the next resolver, so this is almost always a tenant missing from the source
@@ -913,6 +915,7 @@ takeover.
 | --- | --- |
 | `tenancy:switched` | `{ tenant }` — emitted on every entry into a tenant context, by the HTTP enricher and by `tenancy.run()` |
 | `tenancy:created` | `{ tenant }` — emitted once a new tenant is created **and provisioned**, so a listener may assume its storage exists. Does not fire if `onProvision` threw |
+| `tenancy:destroyed` | `{ tenant }` — emitted by `tenancy.destroy()` after `onDeprovision` ran and the record was deleted from the source |
 
 Durable tenant registries and the per-tenant database options are covered in
 [Persistence](/guide/persistence); the end-to-end sign-up flow is in the

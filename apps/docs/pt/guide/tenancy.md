@@ -688,7 +688,7 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
 
 ## Comandos da CLI
 
-O `tenancyPlugin` regista cinco comandos no bucket da CLI, por isso aparecem assim
+O `tenancyPlugin` regista seis comandos no bucket da CLI, por isso aparecem assim
 que o `@basaltkit/cli` está presente — sem ligação extra:
 
 | Comando | Precisa de | O que faz |
@@ -916,8 +916,9 @@ a tomada de domínios pendentes.
   explicitamente: `requireTenantId(job.tenantId)`.
 - **`TENANT_REQUIRED` numa rota legitimamente central** (sign-up, landing page,
   administração da plataforma) — essas rotas não deviam sequer chamar
-  `tenantScoped()`. Consulta a tabela sem âmbito deliberadamente, e mantém
-  `required: false` no plugin.
+  `tenantScoped()`. Consulta a tabela central deliberadamente, e declara
+  `meta: { tenant: false }` na rota em vez de aliviar o `required` para a app
+  toda — vê [o padrão multi-tenant](/pt/guide/multi-tenant-pattern#regra-5-—-tres-tipos-de-rota-declarados-no-meta).
 - **`TENANCY_NOT_RESOLVED` embora o header/subdomínio pareça correto** — a
   referência resolveu mas o registo não carregou. Um id desconhecido cai
   *silenciosamente* para o resolver seguinte, por isso é quase sempre um tenant em
@@ -935,6 +936,7 @@ a tomada de domínios pendentes.
 | Hook | Payload |
 | --- | --- |
 | `tenancy:switched` | `{ tenant }` — emitido em cada entrada num contexto de tenant, pelo enricher HTTP e pelo `tenancy.run()` |
+| `tenancy:destroyed` | `{ tenant }` — emitido pelo `tenancy.destroy()` depois de o `onDeprovision` correr e o registo ser apagado da source |
 
 Os registos duráveis de tenants e as opções de base de dados por tenant estão em
 [Persistência](/pt/guide/persistence); o fluxo de sign-up ponta a ponta está no

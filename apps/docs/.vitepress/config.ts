@@ -126,6 +126,7 @@ export default defineConfig({
               items: [
                 { text: 'Multi-tenancy', link: '/pt/guide/tenancy' },
                 { text: 'Criar um tenant', link: '/pt/guide/creating-a-tenant' },
+                { text: 'O padrão multi-tenant', link: '/pt/guide/multi-tenant-pattern' },
                 { text: 'Autenticação', link: '/pt/guide/auth' },
                 { text: 'Autorização', link: '/pt/guide/authorization' },
                 { text: 'Equipas', link: '/pt/guide/teams' },
@@ -258,6 +259,7 @@ export default defineConfig({
           items: [
             { text: 'Multi-tenancy', link: '/guide/tenancy' },
             { text: 'Creating a tenant', link: '/guide/creating-a-tenant' },
+            { text: 'The multi-tenant pattern', link: '/guide/multi-tenant-pattern' },
             { text: 'Authentication', link: '/guide/auth' },
             { text: 'Authorization', link: '/guide/authorization' },
             { text: 'Teams', link: '/guide/teams' },
