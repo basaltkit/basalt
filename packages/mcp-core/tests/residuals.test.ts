@@ -182,8 +182,10 @@ describe('serveHttp: Mcp-Session-Id sessions (FA-037 residual)', () => {
     expect((await post(list, { 'mcp-session-id': session, 'x-user': 'bob' })).status).toBe(404)
   })
 
-  it('expires idle sessions and caps how many live at once (least recently used goes first)', async () => {
-    handle = await serveHttp(new McpServer({ tools: [gate().tool] }), { port: 0, sessions: { ttlMs: 40, maxSessions: 2 } })
+  it('caps how many sessions live at once (least recently used goes first)', async () => {
+    // A long TTL so only the cap can end a session — a real-time TTL of a few
+    // ms races a slow CI runner.
+    handle = await serveHttp(new McpServer({ tools: [gate().tool] }), { port: 0, sessions: { ttlMs: 60_000, maxSessions: 2 } })
     const list = { jsonrpc: '2.0', id: 1, method: 'tools/list' }
     const a = await init()
     const b = await init()
@@ -192,8 +194,13 @@ describe('serveHttp: Mcp-Session-Id sessions (FA-037 residual)', () => {
     expect((await post(list, { 'mcp-session-id': b })).status).toBe(404)
     expect((await post(list, { 'mcp-session-id': a })).status).toBe(200)
     expect((await post(list, { 'mcp-session-id': c })).status).toBe(200)
-    await new Promise((r) => setTimeout(r, 80))
-    expect((await post(list, { 'mcp-session-id': a })).status).toBe(404)
+  })
+
+  it('expires an idle session', async () => {
+    handle = await serveHttp(new McpServer({ tools: [gate().tool] }), { port: 0, sessions: { ttlMs: 40 } })
+    const a = await init()
+    await new Promise((r) => setTimeout(r, 120))
+    expect((await post({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'mcp-session-id': a })).status).toBe(404)
   })
 
   it('DELETE ends a session; a failed initialize opens none', async () => {

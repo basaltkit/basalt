@@ -264,8 +264,9 @@ Todos os pedidos de uma sessão partilham um âmbito de cancelamento, por isso u
 `notifications/cancelled` enviado por `POST` enquanto a chamada corre cancela-a —
 e uma sessão diferente, mesmo que adivinhe o id do pedido, nunca consegue. Uma
 sessão fica **ligada a quem a abriu**: o `ctx().user` autenticado (no seu tenant)
-ou, para um chamador anónimo, um hash das credenciais `Authorization` /
-`x-api-key`. O mesmo id apresentado por outra pessoa dá 404. As sessões expiram
+ou, para um chamador anónimo, uma impressão com chave do seu header
+`Authorization` (uma API key aceite pelos plugins de auth já resolveu um
+utilizador). O mesmo id apresentado por outra pessoa dá 404. As sessões expiram
 após 30 minutos inativas, e há no máximo 1000 vivas em simultâneo (a usada há
 mais tempo é despejada — o seu cliente simplesmente volta a inicializar):
 `mcpRoutes({ sessions: { ttlMs, maxSessions } })`.
