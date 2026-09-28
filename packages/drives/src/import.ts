@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Readable } from 'node:stream'
-import { toView, type Drives } from './drives.js'
+import { SINGLE_TENANT_SCOPE, toView, type Drives } from './drives.js'
 import type { DriveItem } from './provider.js'
 import type { DriveConnectionView, DriveImportStrategy } from './store.js'
 
@@ -113,7 +113,10 @@ export function filesSink(files: FileUploadTarget, options: { uploadedBy?: strin
       // The declared type is only a starting point — `validate.sniff` overrides
       // it from the bytes and keeps this one as `metadata.declaredType`.
       contentType: content.contentType ?? item.contentType ?? 'application/octet-stream',
-      tenantId: connection.tenantId,
+      // A single-tenant connection is keyed by the sentinel, which is not a
+      // tenant id: `Files` resolves its own single-tenant key from no tenant
+      // (and refuses the sentinel as one).
+      ...(connection.tenantId !== SINGLE_TENANT_SCOPE ? { tenantId: connection.tenantId } : {}),
       ...(options.uploadedBy !== undefined ? { uploadedBy: options.uploadedBy } : {}),
       ...(content.size !== undefined ? { contentLength: content.size } : {}),
       metadata: {
@@ -220,7 +223,7 @@ export async function importItem(
     result = await sink({ connection: view, item, version, strategy })
   } else {
     const content = await drives.download(connection.id, item, {
-      tenantId: connection.tenantId,
+      ...(connection.tenantId !== SINGLE_TENANT_SCOPE ? { tenantId: connection.tenantId } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     })
     try {

@@ -13,6 +13,7 @@ import {
   DriveProviderUnknownError,
   DriveTenantMismatchError,
   DriveTenantRequiredError,
+  DriveTenantReservedError,
   DriveUnsupportedError,
 } from './errors.js'
 import { createDriveFetch, type GuardedFetch } from './fetch.js'
@@ -39,8 +40,17 @@ import {
   type DriveImportLedger,
 } from './store.js'
 
-/** Single-tenant apps still need a key for the composite store keys. */
-export const SINGLE_TENANT_SCOPE = 'default'
+/**
+ * Single-tenant apps still need a key for the composite store keys.
+ *
+ * A sentinel no tenant id can equal: `@` is outside `@basaltkit/tenancy`'s
+ * grammar, and a context or explicit tenant carrying it is refused with
+ * {@link DriveTenantReservedError}. It used to be `'default'` — a perfectly
+ * valid tenant id, so a tenant named `default` listed, used and disconnected a
+ * single-tenant app's connections. Rows written under `'default'` must be
+ * re-keyed once (see the changelog for the migration).
+ */
+export const SINGLE_TENANT_SCOPE = '@single'
 
 /**
  * What happened when `disconnect` tried to revoke the grant at the provider.
@@ -219,9 +229,9 @@ export class Drives {
     const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
     if (ambient) {
       if (explicit !== undefined && explicit !== ambient) throw new DriveTenantMismatchError()
-      return ambient
+      return assertNotReserved(ambient)
     }
-    if (explicit) return explicit
+    if (explicit) return assertNotReserved(explicit)
     if (this.tenancyActive()) throw new DriveTenantRequiredError(operation)
     return SINGLE_TENANT_SCOPE
   }
@@ -311,7 +321,9 @@ export class Drives {
       provider: provider.name,
       label: input.label,
       tokens,
-      tenantId,
+      // The single-tenant key is not a tenant id and `connect` refuses it as
+      // one; leaving it out resolves to the same key.
+      ...(tenantId !== SINGLE_TENANT_SCOPE ? { tenantId } : {}),
       ...(input.rootId !== undefined ? { rootId: input.rootId } : {}),
     })
   }
@@ -624,4 +636,9 @@ export class Drives {
 export function toView(connection: DriveConnection): DriveConnectionView {
   const { secret: _secret, watch, ...rest } = connection
   return { ...rest, watching: watch !== undefined }
+}
+
+function assertNotReserved(tenantId: string): string {
+  if (tenantId === SINGLE_TENANT_SCOPE) throw new DriveTenantReservedError(SINGLE_TENANT_SCOPE)
+  return tenantId
 }

@@ -102,7 +102,9 @@ Registers the `COMMENTS` token. `mentionPattern` is a regex whose first group is
 | `remove(id, tenantId?)` | Deletes; emits `comment:deleted`. |
 | `resolve(id, by, tenantId?)` · `reopen(id, tenantId?)` | Emits `comment:resolved` / `comment:reopened`. |
 
-Without `tenantId`, uses `ctx().tenant.id` (otherwise `CommentTenantRequiredError`).
+Without `tenantId`, uses `ctx().tenant.id` (otherwise `CommentTenantRequiredError`). Inside a tenant context an explicit `tenantId` must equal it (`CommentTenantMismatchError`, 403). An app without `@basaltkit/tenancy` has no tenant dimension: its comments are keyed by `SINGLE_TENANT_SCOPE` (`'@single'`, a sentinel outside the tenant-id grammar; a tenant carrying it is refused with `CommentTenantReservedError`, `COMMENT_TENANT_RESERVED`, 400).
+
+> **Upgrading from 3.x (single-tenant data):** the key used to be `'default'`, a valid tenant id — a tenant named `default` could read, edit and delete the single-tenant comments. Re-key persisted rows once: `UPDATE comments SET "tenantId" = '@single' WHERE "tenantId" = 'default'` (`@basaltkit/comments-prisma`; with `@basaltkit/comments-sqlite` the column is `tenant_id`). Skip it if `default` was ever a real tenant in that database.
 
 ### Events
 

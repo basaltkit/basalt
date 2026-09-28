@@ -62,6 +62,19 @@ export class DriveTenantMismatchError extends BasaltError {
 }
 
 /**
+ * A tenant id equal to the single-tenant store key (`SINGLE_TENANT_SCOPE`).
+ * That string keys a single-tenant app's connections, so a tenant carrying it
+ * would list, use and disconnect them. The default tenancy grammar can never
+ * produce it; a custom one that does must pick another id.
+ */
+export class DriveTenantReservedError extends BasaltError {
+  readonly status = 400
+  constructor(reserved: string) {
+    super('DRIVE_TENANT_RESERVED', `"${reserved}" is reserved for single-tenant drive connections and cannot be a tenant id.`)
+  }
+}
+
+/**
  * The stored credentials no longer work and cannot be recovered without the
  * user re-consenting. The connection is marked `invalid` and stops being used.
  */
@@ -114,6 +127,12 @@ export class DriveRateLimitedError extends BasaltError {
  */
 export class DriveHostNotAllowedError extends BasaltError {
   readonly status = 502
+  /**
+   * The host and reason stay in the message and `details` for the log, the
+   * `drive:sync_failed` event and the audit trail; an HTTP client only gets
+   * the code — naming an internal host it was refused is an SSRF oracle.
+   */
+  readonly expose = false
   constructor(host: string, provider: string, reason = 'it is not on its allowed-hosts list') {
     super(
       'DRIVE_HOST_NOT_ALLOWED',

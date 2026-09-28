@@ -263,6 +263,24 @@ object.
 | `upload(id, input, options?)` | Writes a file back, when the adapter supports it |
 | `providerNames()` | Registered adapters |
 
+Every call resolves its tenant like `@basaltkit/files`: the context tenant wins, an explicit `tenantId` must agree with it (`DRIVE_TENANT_MISMATCH`), and with no tenant resolvable it throws `DRIVE_TENANT_REQUIRED` **only when `@basaltkit/tenancy` is registered**. An app without it keys its connections and ledger by `SINGLE_TENANT_SCOPE` (`'@single'`, a sentinel outside the tenant-id grammar; a tenant carrying it is refused with `DriveTenantReservedError`). That value shows up as `connection.tenantId`, but it is a store key, not a tenant id — in a single-tenant app, leave `tenantId` out of calls instead of passing it back. `filesSink` does so for you.
+
+> **Upgrading from 0.2 (single-tenant data):** the key used to be `'default'`, a valid tenant id — a tenant named `default` could list, use and disconnect the single-tenant connections. Re-keying needs more than SQL, because each `secret` is sealed with its `tenantId` as associated data: re-seal it under the new key, then move the ledger.
+>
+> ```ts
+> import { DriveSecretBox, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
+> const box = new DriveSecretBox(keys) // the same key ring `Drives` uses
+> for (const row of await db.driveConnection.findMany({ where: { tenantId: 'default' } })) {
+>   const context = { connectionId: row.id, provider: row.provider }
+>   const plain = box.open(row.secret, { ...context, tenantId: 'default' })
+>   const secret = box.seal(plain, { ...context, tenantId: SINGLE_TENANT_SCOPE })
+>   await db.driveConnection.update({ where: { id: row.id }, data: { tenantId: SINGLE_TENANT_SCOPE, secret } })
+> }
+> // then, for the import ledger:  UPDATE <ledger table> SET "tenantId" = '@single' WHERE "tenantId" = 'default'
+> ```
+>
+> Skip it if `default` was ever a real tenant in that database. An authorization started before the upgrade fails its callback once (its `state` names the old key); the user just connects again.
+
 ### Functions
 
 | Function | What it does |
@@ -327,6 +345,7 @@ two that matter.
 
 `DRIVE_PROVIDER_UNKNOWN` · `DRIVE_CONNECTION_NOT_FOUND` (404, also for another
 tenant's connection) · `DRIVE_TENANT_REQUIRED` · `DRIVE_TENANT_MISMATCH` ·
+`DRIVE_TENANT_RESERVED` (400 — the tenant id equals `SINGLE_TENANT_SCOPE`) ·
 `DRIVE_CREDENTIALS_INVALID` · `DRIVE_AUTHORIZATION_INVALID` ·
 `DRIVE_RATE_LIMITED` · `DRIVE_HOST_NOT_ALLOWED` · `DRIVE_CONTENT_TOO_LARGE` ·
 `DRIVE_ACCESS_DENIED` (403 — the grant is fine, this operation is not
@@ -421,7 +440,10 @@ redirect target. It is kept out of listings (`$select`ed away), out of
 `DriveItem.raw`, out of sinks and the ledger, and out of every error: a refusal
 from the guarded fetch names the **host and a fixed reason, never the URL**,
 which is why `DRIVE_HOST_NOT_ALLOWED` is raised here instead of letting
-`@basaltkit/webhooks`' guard — which quotes the URL it refused — escape.
+`@basaltkit/webhooks`' guard — which quotes the URL it refused — escape. The
+host and reason reach the log, `drive:sync_failed` and the audit trail, never an
+HTTP client: the error sets `expose = false`, so a route answers only its code
+and `Bad gateway.`.
 
 ## License
 

@@ -121,6 +121,10 @@ Three decisions hide in that block.
 tenant without DNS. It also lets any client pick any tenant, so it never runs
 outside `NODE_ENV === 'test'`. "Not production" is not the same condition:
 staging runs with other values and inherits the door.
+Even where it runs, it cannot override the host: the subdomain and domain
+resolvers are authoritative, so `nosuch.example.com` answers 404 instead of
+asking the header, and the header is only consulted when the host names no
+tenant at all.
 
 **One reserved list.** `www`, `app`, `api`, `admin`, `central`, `platform`,
 `mail`, `static`, `docs`, `status` — whatever names your apex, your API host and

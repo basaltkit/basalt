@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { syncConnection, type DriveImportTask, type DriveRemoval } from '@basaltkit/drives'
+import { syncConnection, type DriveImportTask, type DriveRemoval, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { connect, harness } from './helpers.js'
 
 const FILES = [
@@ -49,7 +49,7 @@ describe('Dropbox change feed', () => {
     const first = collector()
     const run = await syncConnection(h.drives, view.id, { enqueue: first.enqueue, maxPages: 2 })
     expect(run.truncated).toBe(true)
-    const stored = (await h.store.find('default', view.id))!
+    const stored = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     expect(stored.cursor).toBeTruthy()
 
     const second = collector()

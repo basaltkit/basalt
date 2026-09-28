@@ -51,11 +51,26 @@ declare module '@basaltkit/core' {
 
 export const FASTIFY = createToken<FastifyInstance>('fastify')
 
+/**
+ * The neutral reply over a `FastifyReply`.
+ *
+ * `sent` is tracked here, not read from `reply.sent`: Fastify reports a reply
+ * as sent only once the response has *ended*, and an async `onSend` hook (the
+ * idempotency plugin's, any app's) defers that past the call to `send()`. Code
+ * that trusted `reply.sent` right after sending saw `false`, sent again, and
+ * produced a second write — `ERR_HTTP_HEADERS_SENT` and a response the hooks
+ * processed twice.
+ */
 class FastifyReplyAdapter implements HttpReply {
-  constructor(private readonly reply: FastifyReply) {}
+  private sendCalled = false
+
+  constructor(
+    private readonly reply: FastifyReply,
+    private readonly rawValue: unknown = reply,
+  ) {}
 
   get sent(): boolean {
-    return this.reply.sent
+    return this.sendCalled || this.reply.sent
   }
 
   get statusCode(): number {
@@ -63,7 +78,7 @@ class FastifyReplyAdapter implements HttpReply {
   }
 
   get raw(): unknown {
-    return this.reply
+    return this.rawValue
   }
 
   code(status: number): this {
@@ -76,7 +91,8 @@ class FastifyReplyAdapter implements HttpReply {
     return this
   }
 
-  send(payload: unknown): this {
+  send(payload?: unknown): this {
+    this.sendCalled = true
     this.reply.send(payload)
     return this
   }
@@ -351,19 +367,23 @@ function wrapHandler(
       // while a stream is still piping, so sending it inline would let the
       // route's own return value overwrite it with an empty body.
       if (isStreamResponse(result)) return prepareStream(request, reply, streamPayloadOf(result), onError)
-      if (!neutralReply.sent) {
-        neutralReply.send(result)
-      }
+      if (!neutralReply.sent) neutralReply.send(result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
       // This site used to swallow everything, including 500s: an error thrown
       // inside the route pipeline never reached `setErrorHandler` below.
       report(onError, error, status, body.error.code, request)
 
-      if (!reply.sent) {
-        reply.code(status).send(body)
-      }
+      if (!neutralReply.sent) neutralReply.code(status).send(body)
     }
+    // The reply has been sent (by the handler, a guard or just above). Returning
+    // it — Fastify's documented "return reply" — makes the handler's promise
+    // settle when the response finishes. Resolving with `undefined` instead lets
+    // Fastify, which still sees the reply as unsent while an async `onSend` hook
+    // runs, send a second, empty response: the idempotency plugin then released
+    // its reservation (so retries re-ran the handler) and every request
+    // reported a spurious 500.
+    return reply
   }
 }
 
@@ -419,8 +439,10 @@ function prepareStream(
 function mountCollector(instance: FastifyInstance, collector: HttpServerCollector): void {
   for (const hook of collector.preHooks) {
     instance.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-      await hook({ request: toNeutralRequest(request), reply: reply as unknown as HttpReply })
-      if (reply.sent) return reply
+      // `raw` stays the Node response, as it was when hooks got the FastifyReply.
+      const neutralReply = new FastifyReplyAdapter(reply, reply.raw)
+      await hook({ request: toNeutralRequest(request), reply: neutralReply })
+      if (neutralReply.sent) return reply
       return undefined
     })
   }
@@ -439,8 +461,9 @@ function mountCollector(instance: FastifyInstance, collector: HttpServerCollecto
       method,
       url,
       handler: async (request: FastifyRequest, reply: FastifyReply) => {
-        const result = await handler({ request: toNeutralRequest(request), reply: reply as unknown as HttpReply })
-        return reply.sent ? undefined : result
+        const neutralReply = new FastifyReplyAdapter(reply, reply.raw)
+        const result = await handler({ request: toNeutralRequest(request), reply: neutralReply })
+        return neutralReply.sent ? reply : result
       },
     })
   }

@@ -565,7 +565,8 @@ No. Without `connection`, the plugin uses `SyncQueueDriver`. You can also instan
 
 The inline sync driver (the default without a `connection`) is at-most-once:
 handler errors reject `dispatch()` and an exhausted job is lost. Selecting it
-implicitly in production logs a boot warning — pass `driver: new
+implicitly in production (any `NODE_ENV` but an explicit `development` or
+`test` — unset included) logs a boot warning — pass `driver: new
 SyncQueueDriver()` to opt in deliberately. Its `executed[]` history is capped
 at 1000 entries.
 

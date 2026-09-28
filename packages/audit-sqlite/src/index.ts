@@ -6,7 +6,9 @@ const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import {
   AUDIT_SCAN_PAGE,
+  AUDIT_SYSTEM_CHAIN,
   assertAuditLimit,
+  assertAuditQuery,
   AuditChainConflictError,
   auditChainKey,
   type AuditChainHead,
@@ -14,6 +16,7 @@ import {
   type AuditEntry,
   type AuditQuery,
   type AuditStore,
+  type AuditUnchainedRange,
   exactEventMatch,
   parseAuditChainKey,
   patternMatches,
@@ -55,7 +58,7 @@ export function migrate(db: DatabaseSync): void {
   `)
   // Hash-chain and request columns, added to databases created before them.
   // (ADD COLUMN throws when the column already exists — ignore that.) Old rows
-  // keep NULLs: `verify()` reports them as unchained, never as broken.
+  // keep NULLs: `verify()` reports them as unchained (legacy), not as broken.
   for (const column of ['chain TEXT', 'seq INTEGER', 'prev_hash TEXT', 'hash TEXT', 'ip TEXT', 'user_agent TEXT']) {
     try {
       db.exec(`ALTER TABLE audit_entries ADD COLUMN ${column}`)
@@ -167,6 +170,26 @@ export class SqliteAuditStore implements AuditStore {
     return Number(row.n)
   }
 
+  /**
+   * Rows of the tenant outside its chain: no `seq`, a `seq` below 1, or a
+   * `chain` other than the tenant's (NULL or a forged name). Those claiming a
+   * chain position are returned whatever their `at` — a legacy row has neither.
+   */
+  async readUnchained(tenantId: string | undefined, range: AuditUnchainedRange): Promise<AuditEntry[]> {
+    assertAuditLimit(range.limit)
+    if (typeof range.since !== 'number' || !Number.isFinite(range.since)) throw new TypeError('readUnchained: `since` must be a finite number')
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM audit_entries
+          WHERE tenant_id IS ?
+            AND NOT (chain IS NOT NULL AND chain = ? AND seq IS NOT NULL AND seq >= 1)
+            AND (at >= ? OR seq IS NOT NULL OR chain IS NOT NULL)
+          ORDER BY at ASC, rowid ASC LIMIT ?`,
+      )
+      .all(tenantId ?? null, auditChainKey(tenantId), range.since, range.limit) as unknown as AuditRow[]
+    return rows.map(toEntry)
+  }
+
   async chainTenants(): Promise<Array<string | undefined>> {
     const rows = this.db.prepare('SELECT DISTINCT chain FROM audit_entries WHERE chain IS NOT NULL').all() as unknown as Array<{
       chain: string
@@ -176,7 +199,7 @@ export class SqliteAuditStore implements AuditStore {
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {
     // Validated here too, not only in Audit.trail(): the store is public API.
-    assertAuditLimit(query.limit)
+    assertAuditQuery(query)
     // Exact filters — including an event name with no wildcard — push down to SQL,
     // and so does the limit. Only a wildcard pattern still needs matching in code,
     // and then rows are read in bounded LIMIT/OFFSET pages: a `limit: 50` query must
@@ -199,6 +222,12 @@ export class SqliteAuditStore implements AuditStore {
     if (exact !== undefined) {
       where.push('event = ?')
       args.push(exact)
+    }
+    if (query.chainedOnly === true) {
+      // In the chain its own tenant maps to — a row with a NULL or forged
+      // `chain` is left out even when it carries a `seq`.
+      where.push("seq IS NOT NULL AND seq >= 1 AND chain = (CASE WHEN tenant_id IS NULL THEN ? ELSE 't:' || tenant_id END)")
+      args.push(AUDIT_SYSTEM_CHAIN)
     }
     const base =
       'SELECT * FROM audit_entries' +

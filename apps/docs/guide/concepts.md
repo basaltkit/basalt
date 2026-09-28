@@ -216,7 +216,12 @@ plus `message`. HTTP-facing errors carry a `status`; `toErrorResponse` maps any
 thrown error to the standard body `{ error: { code, message, … } }`. Throw
 `HttpError(status, code, message)` for intentional HTTP errors from any layer.
 Unknown/unexpected errors become a 500 **without leaking the internal
-message**. Codes you'll meet in these docs are real and stable — e.g.
+message**, and so does a framework error with `status` 500 (other than an
+`HttpError`, or one that sets `expose = true`): the client gets its `code` and
+a fixed message, the log gets the real one. An error that sets
+`expose = false` gets the same treatment at any status (a 502 answers
+`Bad gateway.`) — used where the message quotes an upstream reply or an
+internal host. Codes you'll meet in these docs are real and stable — e.g.
 `AUTH_REQUIRED`, `PERMISSION_DENIED`, `PERMISSION_META_INVALID`,
 `TENANT_REQUIRED`, `TEAM_NOT_A_MEMBER`, `DI_CAPTIVE_DEPENDENCY`,
 `HTTP_VALIDATION`, `NOT_FOUND` — treat them as API.

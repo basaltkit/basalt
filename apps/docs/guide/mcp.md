@@ -67,7 +67,17 @@ await createApp({
 - **Input schema** is generated from the route's `params` + `query` + `body` Zod
   schemas, merged into one flat object.
 - **Same pipeline** — a `tools/call` runs enrichers, guards and validation before
-  the handler; request headers (tenant, authorization) propagate into the call.
+  the handler. The tool request inherits an **allowlist** of the caller's
+  headers (`authorization`, `cookie`, `x-api-key`, `x-tenant-id`, `host`,
+  `accept-language`, `user-agent` — extend it with `mcpPlugin({ forwardHeaders })`),
+  the client **ip** (`request.ip`), `request.routePattern` (the tool route's
+  template) and the concrete `request.url` (`/projects/p%201?q=x`, not
+  `/projects/:id`). Everything else — `x-request-id`, `if-none-match`,
+  forwarding and hop-by-hop headers — is dropped.
+- **Status is honoured** — a handler that replies `reply.code(403)` (any status
+  ≥ 400) produces a tool result with `isError: true`.
+- **Cancellation** — `notifications/cancelled` answers the call as cancelled at
+  once; a long handler can stop early by checking `toolSignal(request)?.aborted`.
 
 ::: warning Guards apply — and must be enforceable
 A route with `meta.auth` (or `meta.can` / `meta.teamRole`) keeps that guard when
@@ -214,14 +224,22 @@ Connections are lazy-safe: `callTool` / `listTools` connect on demand, so
 The HTTP transport is a neutral `route()`, verified on all three adapters — the
 same tool surface regardless of the server underneath.
 
+It is hardened for browsers: a request whose `Origin` is neither same-origin
+nor listed in `mcpRoutes({ allowedOrigins })` gets **403**, and the body must be
+sent as `application/json` (**415** otherwise), so a cross-site page can never
+drive a tool with a visitor's cookies. Non-browser clients send no `Origin` and
+are unaffected. By default `initialize` and `tools/list` are anonymous (tool
+*calls* still run each route's guards); `mcpRoutes({ auth: true })` requires an
+authenticated caller for the endpoint itself. JSON-RPC batches are accepted.
+Each `POST` is its own MCP session, so a `notifications/cancelled` sent in a
+later request does not reach an earlier one.
+
 On an exposed deployment, give `/mcp` its own rate-limit budget:
 `mcpRoutes({ rateLimit: { limit: 30, windowMs: 60_000 } })` stamps
 `meta.rateLimit` on the route, and `securityPlugin` enforces it in a dedicated
 bucket. A tool route's own `meta.rateLimit` is enforced by a route guard, so it
-applies to tool calls through `/mcp` too. A tool call carries no client address,
-so unless you give `securityPlugin({ rateLimit: { key } })` one, every tool
-caller shares that route's bucket (fail closed). (Auth and guards run
-identically on both paths.)
+applies to tool calls through `/mcp` too, keyed by the `/mcp` caller's ip,
+which the tool request inherits. (Auth and guards run identically on both paths.)
 
 
 ## Options reference
@@ -235,6 +253,7 @@ The tables below are the complete public options of the four entry points.
 | `routes` | `BasaltRoute[]` | — (required) | The routes scanned for `meta.mcp` — typically the same array you pass the adapter |
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | What `initialize` reports to clients |
 | `filter` | `(route: BasaltRoute) => boolean` | expose every opted-in route | A deployment-level gate on top of `meta.mcp` (e.g. hide admin routes in one environment) |
+| `forwardHeaders` | `string[]` | none | Extra request headers a tool call inherits, on top of `DEFAULT_FORWARDED_HEADERS` (e.g. a custom tenant header); every other header is dropped |
 
 ### `mcpRoutes(options)`
 
@@ -242,6 +261,9 @@ The tables below are the complete public options of the four entry points.
 | --- | --- | --- | --- |
 | `path` | `string` | `'/mcp'` | Where the JSON-RPC POST endpoint mounts |
 | `rateLimit` | `{ limit: number; windowMs: number }` | none | Stamps `meta.rateLimit` on `/mcp` (enforced by `securityPlugin` in a dedicated bucket) — the budget for all tool traffic; a tool route's own `meta.rateLimit` applies on top |
+| `allowedOrigins` | `string[] \| '*'` | same-origin only | Browser origins allowed to call `/mcp`; a foreign `Origin` gets 403. Requests without `Origin` are unaffected. `'*'` disables the check |
+| `auth` | `boolean` | `false` | Sets `meta.auth` on `/mcp` (enforced by `authPlugin`) so even `initialize`/`tools/list` need an authenticated caller |
+| `meta` | `Record<string, unknown>` | none | Extra `meta` for the `/mcp` route (e.g. `{ can: 'mcp:use' }`) |
 
 ### `serveMcpStdio(app, options)`
 
@@ -273,7 +295,10 @@ Protocol errors use JSON-RPC codes:
 | `isError: true` with an `UNAUTHORIZED`/`FORBIDDEN` body | The tool's route is guarded and the call carried no (or bad) credentials | Send `Authorization`/tenant headers with `POST /mcp`, or `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Tool name not registered — route missing `meta.mcp`, excluded by `filter`, or renamed | Check `tools/list`; remember overrides via `meta.mcp.name` |
 | JSON-RPC `-32601` `Method not found` | The client called an MCP method the server doesn't implement | Only `initialize`, `ping`, `tools/list`, `tools/call` (plus resources/prompts when registered) exist |
-| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp`, and tool calls carry no client ip, so all callers share one bucket | Pass a `key` to `securityPlugin({ rateLimit })`, or raise the route's budget |
+| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp` too (per caller ip) | Raise the route's budget, or pass a `key` to `securityPlugin({ rateLimit })` |
+| `403` `MCP_ORIGIN_FORBIDDEN` from `POST /mcp` | A browser sent a cross-origin request | Add the page's origin to `mcpRoutes({ allowedOrigins })` |
+| `415` from `POST /mcp` | The body was not sent as `Content-Type: application/json` | Send `application/json` (MCP clients do) |
+| A tool reads a header that arrives `undefined` | The header is not in the forwarded-header allowlist | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | Claude Desktop shows a broken/dead server | Something printed to stdout — it is the JSON-RPC channel | `logLevel: 'silent'`, remove `console.log`; see the stdio checklist above |
 | `202` response from `POST /mcp` with empty body | The message was a JSON-RPC *notification* — by spec it gets no reply | Expected behaviour, not an error |
 

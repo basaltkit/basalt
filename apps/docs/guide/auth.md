@@ -29,7 +29,9 @@ whole family.
 
 For browser applications, `POST /auth/login` also creates a server-side session
 and returns a `Set-Cookie` header. The default `basalt_session` cookie is
-`HttpOnly`, `SameSite=Lax`, scoped to `/`, and marked `Secure` in production.
+`HttpOnly`, `SameSite=Lax`, scoped to `/`, and marked `Secure` in production —
+which, as everywhere in Basalt, means anything but an explicit
+`NODE_ENV=development` or `test` (an unset `NODE_ENV` counts as production).
 Same-origin browser requests then authenticate without exposing the JWT to page
 JavaScript. Keep the access and refresh tokens out of `localStorage`.
 
@@ -889,7 +891,7 @@ the plugin supplies:
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `users` | `UserSource` | — (required) | Where accounts live. `MemoryUserSource` in dev; `auth-sqlite`/`auth-prisma`, or your own four methods over your tables. The optional fifth, `findByIds`, adds batched contact lookups |
-| `secret` | `string` | — (required) | HS256 signing key for access tokens. Rejected empty, and rejected under 32 chars when `NODE_ENV=production` (`AUTH_WEAK_SECRET`) |
+| `secret` | `string` | — (required) | HS256 signing key for access tokens. Rejected empty, and rejected under 32 chars unless `NODE_ENV` is explicitly `development`/`test` — unset counts as production (`AUTH_WEAK_SECRET`) |
 | `hasher` | `PasswordHasher` | `new ScryptPasswordHasher()` | Password hashing. Swap for an argon2id implementation without touching call sites |
 | `sessions` | `SessionStore` | in-memory | Cookie/`x-session-id` sessions — swap for durability |
 | `refreshTokens` | `RefreshTokenStore` | in-memory | Refresh-token families; in-memory means every redeploy logs everyone out |
@@ -898,7 +900,7 @@ the plugin supplies:
 | `accessTtl` | `DurationInput` | `'15m'` | Access-token lifetime. Short by design — the refresh token is what carries the session |
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults to production only |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test` |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
@@ -920,7 +922,7 @@ the plugin supplies:
 | `windowMs` | `number` | `900_000` (15m) | Fixed window opened by the first attempt; a successful login clears the counter |
 | `store` | `ThrottleStore` | a private `MemoryThrottleStore` | Where counters live — `RedisThrottleStore` to share them across replicas |
 | `namespace` | `string` | — | Key prefix separating throttles that share one store |
-| `maxEntries` | `number` | `100_000` | Cap on tracked identifiers (in-memory store); expired entries are swept, then the oldest evicted |
+| `maxEntries` | `number` | `100_000` | Cap on tracked identifiers (in-memory store); expired entries are swept, then the oldest unlocked ones evicted — a locked identifier is kept (it is only evicted when every tracked entry is locked) |
 | `clock` | `() => number` | `Date.now` | Injectable clock for the in-memory store (tests) |
 
 With a synchronous store (the default) every `LoginThrottle` method stays
@@ -964,7 +966,7 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `mfa` | `'required' \| 'skip'` | `'required'` | An existing account with MFA enabled is refused (`AUTH_MFA_REQUIRED`); `'skip'` only for an IdP that enforces its own MFA |
 | `callbackBaseUrl` (routes) | `string` | — (required) | Public base URL of your app; the redirect URI is `${callbackBaseUrl}/auth/oauth/:provider/callback` and must be registered with each provider |
 | `successRedirect` (routes) | `string` | — (JSON response) | Bounce the browser here with `#access_token=…&refresh_token=…` instead of returning JSON — the SPA flow |
-| `bindingCookie` (routes) | `{ secure?, maxAgeSeconds? }` | secure in production, 15 min | The HttpOnly cookie binding the flow to the browser (`__Host-basalt_oauth` when secure) |
+| `bindingCookie` (routes) | `{ secure?, maxAgeSeconds? }` | secure unless `NODE_ENV` is `development`/`test`, 15 min | The HttpOnly cookie binding the flow to the browser (`__Host-basalt_oauth` when secure) |
 
 Register `oauthPlugin` **after** `authPlugin`: the service resolves `AUTH` to log
 users in.
@@ -989,7 +991,7 @@ users in.
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset |
-| `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars under `NODE_ENV=production` |
+| `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars outside an explicit `NODE_ENV=development`/`test` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | A key used outside the tenant it was issued in (or a tenantless key on a tenant-scoped request) |
 | `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | A key used on a session-only route (`meta.apiKey: false`: key management, MFA) |
@@ -1004,7 +1006,7 @@ users in.
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | `:provider` isn't in the `providers` array |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, older than `stateTtlMs`, already used, or arrived without the browser's binding cookie |
 | `SocialLinkRefusedError` | `AUTH_SOCIAL_LINK_REFUSED` | 403 | A social login matched an existing account by an email the provider did not verify |
-| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange or the profile fetch failed |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange or the profile fetch failed. The provider's reply stays in the log; the client gets `Bad gateway.` |
 | `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The assertion failed validation — bad signature, expired, missing/unknown `InResponseTo`, already used, or an email outside the provider's `allowedEmailDomains` |
 | `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, or `@node-saml/node-saml` < 5.1.0 |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.auth` and `authPlugin` isn't registered |
@@ -1027,8 +1029,9 @@ users in.
   trip first under shared NAT or a load test. Tune `ipLoginThrottle`, and remember
   both throttles are in-process: with several replicas the effective budget is
   per replica.
-- **`AUTH_WEAK_SECRET` only in production** — the length floor is enforced when
-  `NODE_ENV=production`; a dev-length secret boots locally and fails on deploy.
+- **`AUTH_WEAK_SECRET` only in production** — the length floor is enforced unless
+  `NODE_ENV` is explicitly `development` or `test` (an unset `NODE_ENV` counts as
+  production); a dev-length secret boots locally and fails on deploy.
 
 ## Events
 

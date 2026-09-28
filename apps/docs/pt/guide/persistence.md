@@ -232,7 +232,12 @@ audit:verify [--tenant=<id> | --all]` — deteta linhas editadas, apagadas,
 reordenadas e forjadas. Ambos os stores têm uma **restrição única em `(chain, seq)`**,
 pelo que réplicas a escrever ao mesmo tempo repetem a tentativa em vez de bifurcar
 a cadeia. Linhas escritas antes de ativar `integrity` são reportadas como
-*unchained* (fora da cadeia), não como corrompidas.
+*unchained* (fora da cadeia), não como corrompidas; qualquer outra linha fora da
+cadeia (escrita depois de ela começar, ou com `seq` sob um nome de cadeia ausente
+ou alheio) falha a verificação e aparece em `unverified` — usa
+`trail({ chainedOnly: true })` para uma leitura com valor de prova. Apagar a cauda
+não deixa lacuna: passa uma head registada noutro sítio como
+`verify({ expectedHead })` (ou `--expected-head=<seq>:<hash>`) para detetar truncatura.
 
 `requestContext: true` adiciona um enricher HTTP (igual em fastify, express e hono)
 e guarda o `ip` e o `userAgent` do cliente. O IP é dado pessoal: com

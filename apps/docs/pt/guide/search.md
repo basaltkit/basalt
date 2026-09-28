@@ -4,8 +4,9 @@ O `@basaltkit/search` dá à tua app pesquisa full-text que é **restrita ao ten
 por construção** — cada query é forçada ao tenant de quem a faz, por isso os
 resultados nunca vazam entre tenants. Numa app sem `tenancyPlugin` não há tenant
 a que delimitar: o `tenantId` passa a opcional no `index()` e no `search()`, e
-ambos resolvem para um único âmbito interno `'default'`, por isso concordam
-sempre (vê [Para além do SaaS](/pt/guide/beyond-saas)). Traz um driver em memória para dev/testes e
+ambos resolvem para um único âmbito interno, `SINGLE_TENANT_SCOPE` (`'@single'` —
+fora da gramática de ids de tenant, logo nenhum tenant pode receber esses
+documentos), por isso concordam sempre (vê [Para além do SaaS](/pt/guide/beyond-saas)). Traz um driver em memória para dev/testes e
 um driver Meilisearch para produção, atrás de uma única API; os pacotes de driver
 separados [Postgres](#ja-estas-em-postgres) e [Elasticsearch / OpenSearch](#elasticsearch-opensearch)
 encaixam no mesmo ponto.
@@ -17,7 +18,22 @@ de nomear esse tenant, e qualquer outro valor lança `SearchTenantMismatchError`
 cliente nunca alarga uma query nem planta um documento noutro tenant. Fora de um
 contexto de tenant (jobs, CLI) o valor explícito escolhe o tenant. O `reindex()`
 é uma operação de sistema sobre todos os tenants e mantém o tenant que cada
-regra de sincronização mapeia.
+regra de sincronização mapeia. Um id de tenant igual a `SINGLE_TENANT_SCOPE` —
+vindo do contexto, de um argumento, de um documento ou de uma linha do
+`reindex()` — é recusado com `SearchTenantReservedError`
+(`400 SEARCH_TENANT_RESERVED`).
+
+::: warning Atualizar índices single-tenant
+Antes do `@basaltkit/search` 2.0 o âmbito single-tenant era `'default'` — um id
+de tenant válido, logo um tenant chamado `default` encontrava, substituía e
+removia os documentos single-tenant. O índice é um dado derivado: reconstrói-o
+uma vez (`search.reindex(nome)` para regras com `backfill`, ou volta a correr a
+tua indexação). Com o `@basaltkit/search-postgres` podes mudar a chave no sítio:
+`UPDATE basalt_search SET tenant_id = '@single', document = jsonb_set(document, '{tenantId}', '"@single"') WHERE tenant_id = 'default'`.
+O Meilisearch e o Elasticsearch derivam a chave primária do tenant, por isso aí
+só a reconstrução funciona. Salta este passo se `default` alguma vez foi um
+tenant real.
+:::
 
 [[toc]]
 

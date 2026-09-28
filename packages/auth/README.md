@@ -79,7 +79,11 @@ curl -b cookies.txt http://localhost:3000/auth/me
 ```
 
 The cookie defaults to `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` in
-production. Customize its public attributes when mounting the plugin:
+production — anything but an explicit `NODE_ENV=development` or `test` (an
+unset `NODE_ENV` counts as production, as in `@basaltkit/env`). The same rule
+gates the 32-character minimum on `secret` (`AUTH_WEAK_SECRET`). A cookie whose
+value cannot be decoded (malformed percent-encoding) is ignored: the request is
+simply anonymous. Customize its public attributes when mounting the plugin:
 
 ```ts
 authPlugin({
@@ -190,7 +194,7 @@ All operations are also available programmatically through the `Auth` class:
 ```ts
 import { Auth, MemoryUserSource } from '@basaltkit/auth'
 
-const auth = new Auth({ users: new MemoryUserSource(), secret: 'a-strong-secret' })
+const auth = new Auth({ users: new MemoryUserSource(), secret: process.env.AUTH_SECRET! }) // >= 32 chars in production
 
 const user = await auth.register('ada@example.com', 'secretpassword1')
 const { tokens } = await auth.login('ada@example.com', 'secretpassword1')
@@ -473,6 +477,12 @@ login/MFA, per-IP and email-request throttles with one atomic Redis script per
 attempt. `redis` is any ioredis-compatible client — only `eval` and `del` are
 used, no Redis dependency. Implement `ThrottleStore` for another backend.
 
+The in-memory store is bounded (`maxEntries`, default 100 000): when full it
+sweeps expired entries, then evicts the oldest *unlocked* ones — a flood of junk
+identifiers cannot flush a locked account out of the store and hand the
+attacker a fresh budget. Only when every tracked entry is locked does the oldest
+lock go (the memory bound is absolute).
+
 ### Hooks (events)
 
 The application can react to authentication events: `auth:registered`, `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
@@ -493,7 +503,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `accessTtl` | `DurationInput` | No | `'15m'` | Access token validity. |
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
 | `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
-| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults to production only. |
+| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
 | `throttleStore` | `ThrottleStore` | No | in-memory, per process | Counters of the default login / per-IP / email-request throttles — `RedisThrottleStore` for one budget across replicas. |
 | `requireMfa` | `boolean \| (user, context) => boolean \| Promise<boolean>` | No | off | Plugin only. Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones. |
@@ -583,7 +593,7 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 |
-| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 (message kept for the log; the client gets `Bad gateway.`) |
 
 ## Common issues and solutions (FAQ)
 

@@ -227,9 +227,13 @@ modelo de segurança é o ponto central.
   resolve o realpath do ancestral **existente** mais próximo, por isso uma fuga por
   symlink é apanhada mesmo para um caminho que ainda não existe. Um agente não
   consegue escrever fora do teu projeto.
-- **Confirmação.** Quando o cliente suporta elicitation MCP, um `apply` é confirmado
-  interativamente com um resumo de uma linha do que será escrito; o fluxo explícito
-  de duas chamadas preview → apply é o mínimo.
+- **Confirmação — falha fechado.** Um `apply` é confirmado por elicitation MCP com
+  um resumo de uma linha do que será escrito. Em stdio isto funciona quando o
+  cliente anuncia a capacidade `elicitation` no `initialize`. Quando **não é
+  possível** perguntar ao cliente (sem suporte de elicitation, ou o transporte
+  HTTP), o `apply` é **recusado** — revê a pré-visualização e aplica-a tu — a não
+  ser que o servidor tenha arrancado com `--allow-unconfirmed-apply`
+  (programaticamente: `allowUnconfirmedApply: true`).
 
 O ciclo recomendado:
 
@@ -345,10 +349,15 @@ O transporte HTTP liga-se a `127.0.0.1` e rejeita pedidos cujo header `Host` nã
 seja um nome de loopback (anti-DNS-rebinding) ou cujo `Origin`, *quando presente*,
 não seja uma origem de loopback (anti-CSRF — um browser envia sempre `Origin` num
 POST cross-site, por isso a sua ausência significa um cliente não-browser). Um
-pedido rejeitado recebe `403` e nunca chega a uma ferramenta. Se ligares
-deliberadamente noutro sítio (`--host=0.0.0.0` para CI), tens de alargar o guard
-programaticamente com `allowedHosts` / `allowedOrigins` / `allowRequest` — o bin não
-tem flag para isso, de propósito.
+pedido rejeitado recebe `403` e nunca chega a uma ferramenta.
+
+Esse guard trava browsers; **não é autenticação** (qualquer cliente que não seja um
+browser pode enviar `Host: 127.0.0.1`). Por isso, ligar noutro sítio
+(`--host=0.0.0.0` para CI) é **recusado**, a não ser que dês também um token —
+`--token=<segredo>` ou `BASALT_AI_MCP_TOKEN` — que todos os pedidos têm então de
+enviar como `Authorization: Bearer <segredo>`. Acrescenta os hostnames que os
+clientes usam com `--allowed-hosts=ci.internal,…`. Os corpos dos pedidos têm um
+tecto de 1 MiB (`413`).
 :::
 
 ## Uso programático
@@ -375,7 +384,10 @@ um projeto em memória), e `createProvider` (para injetar um modelo falso — se
 | --- | --- | --- | --- |
 | `--cwd=<path>` | string | `process.cwd()` | A raiz do projeto que todas as ferramentas e recursos leem. Com `.mcp.json`, `--cwd=.` resolve para o diretório que o cliente abriu |
 | `--http` / `--http=<port>` | boolean / number | stdio (desligado) | Muda para o transporte HTTP. `--http` sozinho usa a porta `0` — uma porta efémera, impressa no stdout como `basalt-ai-mcp listening on <url>` |
-| `--host=<host>` | string | `127.0.0.1` | Endereço de bind; só é lido quando o `--http` está presente. Ligar fora do loopback exige alargar o guard de pedidos (só programaticamente) |
+| `--host=<host>` | string | `127.0.0.1` | Endereço de bind; só é lido quando o `--http` está presente. Ligar fora do loopback exige `--token` |
+| `--token=<segredo>` | string | `BASALT_AI_MCP_TOKEN` | Só HTTP: exige `Authorization: Bearer <segredo>` em todos os pedidos. Obrigatório para um `--host` fora do loopback |
+| `--allowed-hosts=<a,b>` | lista separada por vírgulas | só nomes de loopback | Só HTTP: hostnames `Host` extra a aceitar quando ligado fora do loopback |
+| `--allow-unconfirmed-apply` | boolean | desligado | Deixa o `basalt_make` aplicar quando o cliente não consegue confirmar (sem elicitation). Desligado por omissão: esse apply é recusado |
 
 ### `buildAiMcpServer(options)` · `createAiMcpServer(options)`
 
@@ -388,6 +400,7 @@ streams de stdio.
 | `env` | `Record<string, string \| undefined>` | `process.env` | De onde a configuração do provider é lida — injeta um ambiente fixo em vez do do processo |
 | `createReader` | `(root: string) => ProjectReader` | `nodeReader` | Como os ficheiros do projeto são lidos. Injeta um reader em memória para testar sem disco |
 | `createProvider` | `() => AIProvider` | construído a partir do `env` | Injeta um modelo falso — sem rede, sem chaves |
+| `allowUnconfirmedApply` | `boolean` | `false` | Deixa o `basalt_make` aplicar sem confirmação por elicitation. Por omissão: recusa (falha fechado) |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Só stdio: ler JSON-RPC de outro stream (testes) |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Só stdio: escrever JSON-RPC para outro destino (testes) |
 
@@ -406,7 +419,10 @@ stdin.
 | `path` | `string` | `'/mcp'` | Caminho do endpoint JSON-RPC. Sem flag no CLI; só programaticamente |
 | `allowedHosts` | `string[]` | só nomes de loopback | Hostnames `Host` extra a aceitar quando ligas deliberadamente fora do loopback. Comparados sem distinguir maiúsculas, porta ignorada |
 | `allowedOrigins` | `string[]` | só origens de loopback | Valores `Origin` extra a aceitar (esquema + host + porta completos) |
-| `allowRequest` | `(origin, host) => boolean` | — | Substituição total do guard; **substitui** as verificações de loopback/`allowedHosts`/`allowedOrigins` |
+| `allowRequest` | `(origin, host, req) => boolean` | — | Substituição total do guard; **substitui** as verificações de loopback/`allowedHosts`/`allowedOrigins` |
+| `token` | `string` | — | Exige `Authorization: Bearer <token>` (comparação em tempo constante, via `bearerAuthorizer`). Necessário para um `host` fora do loopback |
+| `authorize` | `(req) => boolean \| Promise<boolean>` | — | Autenticação própria em vez de `token`; `false` responde `401` |
+| `maxBodyBytes` | `number` | `1048576` | Corpos maiores recebem `413` |
 
 ### Argumentos das ferramentas
 
@@ -439,10 +455,13 @@ malformado produz um código de erro de protocolo.
 | `Refused: absolute path not allowed: <p>` · `Refused: path escapes workspace: <p>` · `Refused: path resolves outside workspace via symlink: <p>` | `isError` | `assertConfined` | Um ficheiro-alvo cairia fora do workspace |
 | `Refusing to overwrite N existing file(s) without force:true — …` | `isError` | `basalt_make` | Um `apply` esbarrou em `preview.clashes`. Revê os diffs e volta a correr com `force:true` |
 | `Apply cancelled — not confirmed.` | `isError` | `basalt_make` | O prompt de elicitation do cliente foi recusado |
+| `Refusing to apply without confirmation — …` | `isError` | `basalt_make` | O cliente não suporta elicitation (ou transporte HTTP) e o servidor não arrancou com `--allow-unconfirmed-apply` |
 | `Cancelled.` | `isError` | qualquer ferramenta com modelo | Um `notifications/cancelled` abortou a chamada em curso |
 | `Unknown tool: <name>` | JSON-RPC `-32602` | `mcp-core` | O cliente chamou uma ferramenta que não é uma das cinco |
 | `Method not found: <method>` | JSON-RPC `-32601` | `mcp-core` | Um método MCP fora do conjunto implementado |
 | `Forbidden: host/origin not allowed` | HTTP `403` | `serveHttp` | O guard HTTP rejeitou um `Host`/`Origin` estranho antes do dispatch |
+| `Unauthorized` | HTTP `401` | `serveHttp` | O `--token` está definido e o bearer token do pedido falta ou está errado |
+| `failed to start HTTP server — serveHttp: refusing to bind non-loopback host …` | arranque | bin | `--host` fora do loopback sem `--token` |
 
 - **O agente não vê o meu projeto** — verifica que o `--cwd` aponta para a raiz do
   projeto (onde vivem o `package.json` / `prisma/schema.prisma`). Os recursos usam

@@ -225,6 +225,22 @@ describe('log driver body redaction (S-6)', () => {
     }
   })
 
+  it('redacts the body when NODE_ENV is unset — unset counts as production (FA-013)', async () => {
+    const prev = process.env.NODE_ENV
+    delete process.env.NODE_ENV
+    try {
+      const lines: string[] = []
+      const mailer = new Mailer(new LogMailDriver((line) => void lines.push(line)), {
+        from: 'noreply@basalt.dev',
+      })
+      await mailer.send(WelcomeEmail, { name: 'Ada' }, { to: 'ada@example.com' })
+      expect(lines[0]).not.toContain('Hello Ada')
+      expect(lines[0]).toContain('redacted')
+    } finally {
+      process.env.NODE_ENV = prev
+    }
+  })
+
   it('logs the body in production only with an explicit logBody: true', async () => {
     const prev = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'

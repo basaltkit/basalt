@@ -14,6 +14,7 @@ export {
   SINGLE_TENANT_SCOPE,
   TenantRequiredError,
   SearchTenantMismatchError,
+  SearchTenantReservedError,
   type SearchOptions,
 } from './search.js'
 export {

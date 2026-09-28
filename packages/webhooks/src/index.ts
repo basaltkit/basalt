@@ -1,6 +1,6 @@
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
-import { generateWebhookSecret, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
+import { deriveDeliveryId, generateWebhookSecret, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
 import { matchesEvent, MemoryWebhookStore, type WebhookEndpoint, type WebhookStore } from './store.js'
 
 export {
@@ -16,7 +16,10 @@ export {
   generateWebhookSecret,
   MIN_WEBHOOK_SECRET_LENGTH,
   PINNED_ADDRESS,
+  pinnedFetch,
+  deriveDeliveryId,
   type DeliveryResult,
+  type DeliverOptions,
   type WebhookDelivererOptions,
 } from './deliver.js'
 export {
@@ -62,7 +65,7 @@ export class WebhookTenantRequiredError extends Error {
 /** An endpoint as returned by {@link WebhookManager.list}: the signing secret is never included. */
 export type WebhookEndpointView = Omit<WebhookEndpoint, 'secret'> & { hasSecret: boolean }
 
-const redact = ({ secret, ...rest }: WebhookEndpoint): WebhookEndpointView => ({ ...rest, hasSecret: secret !== undefined })
+const redact = ({ secret, ...rest }: WebhookEndpoint): WebhookEndpointView => ({ ...rest, hasSecret: secret != null })
 
 export interface WebhookManagerOptions {
   /**
@@ -84,6 +87,15 @@ export interface WebhookDispatchOptions {
    * reaches only tenant-agnostic endpoints.
    */
   allTenants?: boolean
+  /**
+   * Idempotency key of this logical dispatch (e.g. an outbox entry id). When
+   * set, each endpoint's delivery id is derived from it and the endpoint id
+   * ({@link deriveDeliveryId}), so re-dispatching the same key re-sends the SAME
+   * `id` the receiver dedupes on. Default: a fresh id per delivery.
+   */
+  idempotencyKey?: string
+  /** Endpoint ids to skip (e.g. already delivered for this idempotency key). */
+  skipEndpointIds?: Iterable<string>
 }
 
 /** Register/list subscriptions and dispatch events to matching endpoints. */
@@ -149,6 +161,15 @@ export class WebhookManager {
   async unregister(id: string, options: { tenantId?: string; system?: boolean } = {}): Promise<void> {
     const tenantId = currentTenantId() ?? asTenantId(options.tenantId)
     this.requireScope('unregister', tenantId, options.system)
+    if (tenantId !== undefined) {
+      // Re-verify ownership here instead of trusting the store to honour its
+      // `tenantId` argument (a store that implements `remove(id)` only would let
+      // one tenant delete another's endpoint). The result is re-filtered, so a
+      // store whose `list` ignores the tenant can't widen it either. Fail closed:
+      // not provably ours → no-op.
+      const owned = (await this.store.list(tenantId)).some((e) => e.id === id && e.tenantId === tenantId)
+      if (!owned) return
+    }
     return this.store.remove(id, tenantId)
   }
 
@@ -192,7 +213,22 @@ export class WebhookManager {
     } else {
       endpoints = (await this.store.forEvent(event)).filter((e) => e.tenantId == null)
     }
-    return Promise.all(endpoints.map((endpoint) => this.deliverer.deliver(endpoint, event, data)))
+    const skip = new Set(options.skipEndpointIds ?? [])
+    const key = options.idempotencyKey
+    // One endpoint's failure — even an unexpected throw (a malformed store row,
+    // a resolver bug) — must never reject the whole dispatch and starve the rest.
+    return Promise.all(
+      endpoints
+        .filter((endpoint) => !skip.has(endpoint.id))
+        .map(async (endpoint): Promise<DeliveryResult> => {
+          try {
+            return await this.deliverer.deliver(endpoint, event, data, key !== undefined ? { deliveryId: deriveDeliveryId(key, endpoint.id) } : {})
+          } catch (error) {
+            console.error(`[basalt:webhooks] delivery to endpoint "${endpoint.id}" threw:`, error)
+            return { endpointId: endpoint.id, ok: false, attempts: 0, error: 'internal delivery error', retryable: true }
+          }
+        }),
+    )
   }
 }
 
@@ -249,4 +285,5 @@ export {
   webhookOutboxDispatch,
   webhookOutboxPlugin,
   type WebhookOutboxOptions,
+  type WebhookOutboxDispatchOptions,
 } from './outbox.js'

@@ -217,7 +217,12 @@ por máquina) mais `message`. Erros virados ao HTTP transportam um `status`;
 `toErrorResponse` mapeia qualquer erro lançado para o corpo padrão
 `{ error: { code, message, … } }`. Lança `HttpError(status, code, message)`
 para erros HTTP intencionais em qualquer camada. Erros
-desconhecidos/inesperados tornam-se 500 **sem vazar a mensagem interna**. Os
+desconhecidos/inesperados tornam-se 500 **sem vazar a mensagem interna**, tal
+como um erro da framework com `status` 500 (que não seja um `HttpError`, nem
+defina `expose = true`): o cliente recebe o seu `code` e uma mensagem fixa, o
+log recebe a verdadeira. Um erro que defina `expose = false` recebe o mesmo
+tratamento com qualquer status (um 502 responde `Bad gateway.`) — usado quando
+a mensagem cita a resposta de um serviço externo ou um host interno. Os
 códigos que encontras nestes docs são reais e estáveis — p.ex. `AUTH_REQUIRED`,
 `PERMISSION_DENIED`, `PERMISSION_META_INVALID`, `TENANT_REQUIRED`,
 `TEAM_NOT_A_MEMBER`, `DI_CAPTIVE_DEPENDENCY`, `HTTP_VALIDATION`, `NOT_FOUND` —

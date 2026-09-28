@@ -29,7 +29,9 @@ revoga a família inteira.
 
 Para aplicações de browser, o `POST /auth/login` também cria uma sessão no
 servidor e devolve um cabeçalho `Set-Cookie`. O cookie `basalt_session` é
-`HttpOnly`, `SameSite=Lax`, limitado a `/` e marcado como `Secure` em produção.
+`HttpOnly`, `SameSite=Lax`, limitado a `/` e marcado como `Secure` em produção —
+o que, como em todo o Basalt, significa tudo excepto um `NODE_ENV=development`
+ou `test` explícito (um `NODE_ENV` não definido conta como produção).
 Pedidos same-origin do browser enviam-no automaticamente, sem expor o JWT ao
 JavaScript. Mantém os access e refresh tokens fora de `localStorage`.
 
@@ -892,7 +894,7 @@ plugin fornece:
 | Opção | Tipo | Predefinição | Propósito |
 | --- | --- | --- | --- |
 | `users` | `UserSource` | — (obrigatório) | Onde vivem as contas. `MemoryUserSource` em dev; `auth-sqlite`/`auth-prisma`, ou os teus quatro métodos sobre as tuas tabelas. O quinto, opcional, `findByIds`, acrescenta pesquisas de contactos em lote |
-| `secret` | `string` | — (obrigatório) | Chave de assinatura HS256 dos access tokens. Rejeitada vazia, e rejeitada abaixo de 32 caracteres com `NODE_ENV=production` (`AUTH_WEAK_SECRET`) |
+| `secret` | `string` | — (obrigatório) | Chave de assinatura HS256 dos access tokens. Rejeitada vazia, e rejeitada abaixo de 32 caracteres salvo com `NODE_ENV` explicitamente `development`/`test` — não definido conta como produção (`AUTH_WEAK_SECRET`) |
 | `hasher` | `PasswordHasher` | `new ScryptPasswordHasher()` | Hashing de passwords. Troca por uma implementação argon2id sem mexer nos pontos de chamada |
 | `sessions` | `SessionStore` | em memória | Sessões por cookie/`x-session-id` — troca para durabilidade |
 | `refreshTokens` | `RefreshTokenStore` | em memória | Famílias de refresh tokens; em memória significa que cada redeploy expulsa toda a gente |
@@ -901,7 +903,7 @@ plugin fornece:
 | `accessTtl` | `DurationInput` | `'15m'` | Duração do access token. Curta por desenho — é o refresh token que sustenta a sessão |
 | `refreshTtl` | `DurationInput` | `'30d'` | Duração do refresh token — na prática, "quanto tempo até o utilizador ter de entrar outra vez" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor |
-| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` predefinido apenas em produção |
+| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test` |
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |
@@ -923,7 +925,7 @@ plugin fornece:
 | `windowMs` | `number` | `900_000` (15m) | Janela fixa aberta pela primeira tentativa; um login bem-sucedido limpa o contador |
 | `store` | `ThrottleStore` | um `MemoryThrottleStore` próprio | Onde vivem os contadores — `RedisThrottleStore` para os partilhar entre réplicas |
 | `namespace` | `string` | — | Prefixo de chave que separa throttles que partilham um store |
-| `maxEntries` | `number` | `100_000` | Limite de identificadores seguidos (store em memória); as entradas expiradas são limpas e depois as mais antigas despejadas |
+| `maxEntries` | `number` | `100_000` | Limite de identificadores seguidos (store em memória); as entradas expiradas são limpas e depois as mais antigas não bloqueadas despejadas — um identificador bloqueado é mantido (só é despejado quando todas as entradas estão bloqueadas) |
 | `clock` | `() => number` | `Date.now` | Relógio injetável do store em memória (testes) |
 
 Com um store síncrono (o por omissão) todos os métodos de `LoginThrottle`
@@ -968,7 +970,7 @@ ambos.
 | `mfa` | `'required' \| 'skip'` | `'required'` | Uma conta existente com MFA ativo é recusada (`AUTH_MFA_REQUIRED`); `'skip'` só para um IdP que impõe o seu próprio MFA |
 | `callbackBaseUrl` (rotas) | `string` | — (obrigatório) | URL base pública da tua app; o redirect URI é `${callbackBaseUrl}/auth/oauth/:provider/callback` e tem de ser registado em cada fornecedor |
 | `successRedirect` (rotas) | `string` | — (resposta JSON) | Devolve o browser para aqui com `#access_token=…&refresh_token=…` em vez de responder JSON — o fluxo para SPA |
-| `bindingCookie` (rotas) | `{ secure?, maxAgeSeconds? }` | secure em produção, 15 min | O cookie HttpOnly que liga o fluxo ao browser (`__Host-basalt_oauth` quando secure) |
+| `bindingCookie` (rotas) | `{ secure?, maxAgeSeconds? }` | secure salvo com `NODE_ENV` `development`/`test`, 15 min | O cookie HttpOnly que liga o fluxo ao browser (`__Host-basalt_oauth` quando secure) |
 
 Regista o `oauthPlugin` **depois** do `authPlugin`: o serviço resolve o `AUTH` para
 autenticar os utilizadores.
@@ -993,7 +995,7 @@ autenticar os utilizadores.
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | Uma rota `meta.auth` recebeu um pedido cross-site, só com cookie, que altera estado |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | O orçamento de logins falhados por email ou por IP esgotou-se; traz `retryAfterMs` |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição |
-| `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres com `NODE_ENV=production` |
+| `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres fora de um `NODE_ENV=development`/`test` explícito |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`), ou uma chave sem `*` chamou uma rota protegida por identidade que não declara `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | Uma chave usada fora do tenant em que foi emitida (ou uma chave sem tenant num pedido com tenant) |
 | `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | Uma chave usada numa rota só de sessão (`meta.apiKey: false`: gestão de chaves, MFA) |
@@ -1008,7 +1010,7 @@ autenticar os utilizadores.
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | O `:provider` não está no array `providers` |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | O `state` de CSRF está em falta, foi adulterado, é mais velho que `stateTtlMs`, já foi usado, ou chegou sem o cookie de ligação do browser |
 | `SocialLinkRefusedError` | `AUTH_SOCIAL_LINK_REFUSED` | 403 | Um login social encontrou uma conta existente por um email que o provider não verificou |
-| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | O fornecedor rejeitou a troca do código ou a obtenção do perfil falhou |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | O fornecedor rejeitou a troca do código ou a obtenção do perfil falhou. A resposta do fornecedor fica no log; o cliente recebe `Bad gateway.` |
 | `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | A assertion falhou a validação — assinatura errada, expirada, `InResponseTo` ausente/desconhecido, já usada, ou um email fora dos `allowedEmailDomains` do provider |
 | `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | arranque | Vários providers SAML sem `allowedEmailDomains`, uma entrada de domínio inválida, ou `@node-saml/node-saml` < 5.1.0 |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | arranque | Uma rota declara `meta.auth` e o `authPlugin` não está registado |
@@ -1031,8 +1033,9 @@ autenticar os utilizadores.
   por *IP* pode disparar primeiro com NAT partilhado ou num teste de carga. Ajusta o
   `ipLoginThrottle`, e lembra-te de que ambos os throttles são em processo: com
   várias réplicas, o orçamento efetivo é por réplica.
-- **`AUTH_WEAK_SECRET` só em produção** — o mínimo de comprimento é imposto com
-  `NODE_ENV=production`; um secret de tamanho de dev arranca localmente e falha no
+- **`AUTH_WEAK_SECRET` só em produção** — o mínimo de comprimento é imposto salvo com
+  `NODE_ENV` explicitamente `development` ou `test` (um `NODE_ENV` não definido
+  conta como produção); um secret de tamanho de dev arranca localmente e falha no
   deploy.
 
 ## Eventos

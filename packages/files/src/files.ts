@@ -108,6 +108,19 @@ export class FileTenantMismatchError extends BasaltError {
   }
 }
 
+/**
+ * A tenant id equal to {@link SINGLE_TENANT_SCOPE}. That string is the store
+ * key of a single-tenant app's files, so a tenant carrying it would read and
+ * delete them. The default tenancy grammar can never produce it; a custom one
+ * that does must pick another id.
+ */
+export class FileTenantReservedError extends BasaltError {
+  readonly status = 400
+  constructor() {
+    super('FILE_TENANT_RESERVED', `"${SINGLE_TENANT_SCOPE}" is reserved for single-tenant files and cannot be a tenant id.`)
+  }
+}
+
 export interface FileValidation {
   /** Max size in bytes. */
   maxSize?: number
@@ -187,11 +200,16 @@ export function resolveFileTenant(explicit: string | undefined, tenancyActive: b
   const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
   if (ambient) {
     if (explicit !== undefined && explicit !== ambient) throw new FileTenantMismatchError()
-    return ambient
+    return assertNotReserved(ambient)
   }
-  if (explicit) return explicit
+  if (explicit) return assertNotReserved(explicit)
   if (tenancyActive) throw new FileTenantRequiredError()
   return undefined
+}
+
+function assertNotReserved(tenantId: string): string {
+  if (tenantId === SINGLE_TENANT_SCOPE) throw new FileTenantReservedError()
+  return tenantId
 }
 
 /**
@@ -252,8 +270,15 @@ const storagePath = (id: string): string => `files/${id}`
  * Store key every record is filed under when the app has no tenancy at all.
  * The {@link FileStore} contract is tenant-keyed, so a single-tenant app still
  * needs one stable key — it just shouldn't have to invent it.
+ *
+ * A sentinel no tenant id can equal: `@` is outside `@basaltkit/tenancy`'s
+ * grammar, and a context or explicit tenant carrying it is refused with
+ * {@link FileTenantReservedError}. It used to be `'default'` — a perfectly
+ * valid tenant id, so a tenant named `default` read (and orphaned, on delete)
+ * the single-tenant files. Rows written under `'default'` by a single-tenant
+ * app must be re-keyed once (see the changelog for the migration).
  */
-export const SINGLE_TENANT_SCOPE = 'default'
+export const SINGLE_TENANT_SCOPE = '@single'
 
 /**
  * Upload pipeline over a storage {@link Disk}: validates size/type, enforces a
@@ -462,7 +487,7 @@ export class Files {
       ...(input.uploadedBy !== undefined ? { uploadedBy: input.uploadedBy } : {}),
       ...(metadata !== undefined ? { metadata } : {}),
     }
-    await this.store.create(record)
+    await this.createRecord(record, tenantId)
     return record
   }
 
@@ -527,8 +552,23 @@ export class Files {
       ...(input.uploadedBy !== undefined ? { uploadedBy: input.uploadedBy } : {}),
       ...(metadata !== undefined ? { metadata } : {}),
     }
-    await this.store.create(record)
+    await this.createRecord(record, tenantId)
     return record
+  }
+
+  /**
+   * Inserts the record of bytes that are already on the disk. When the insert
+   * fails, the object is deleted (best effort) before the error propagates: a
+   * failed upload leaves neither a record nor an object nobody can list, count
+   * against the quota, or delete.
+   */
+  private async createRecord(record: FileRecord, tenantId: string | undefined): Promise<void> {
+    try {
+      await this.store.create(record)
+    } catch (error) {
+      await this.inTenant(tenantId, () => this.disk.delete(record.path)).catch(() => undefined)
+      throw error
+    }
   }
 
   /**

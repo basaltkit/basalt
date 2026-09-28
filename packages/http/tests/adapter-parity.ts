@@ -1,7 +1,7 @@
 /**
  * Shared adapter parity matrix for `upload()` bodies (BK-006), keyed per-route
  * rate limits (BK-008), structured error details (BK-021), streaming
- * responses (BK-019) and `rawBody()` bodies (BK-029). Not a test file on its own: each adapter package
+ * responses (BK-019), `rawBody()` bodies (BK-029) and CORS preflights (FA-015). Not a test file on its own: each adapter package
  * (fastify, express, hono) runs it against its own driver, so the three are
  * held to the exact same assertions.
  */
@@ -751,6 +751,48 @@ export function streamParitySuite(adapter: string, driver: ParityDriver): void {
     })
   })
 }
+
+export function corsPreflightParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: CORS preflight parity (FA-015)`, () => {
+    const routes = [route({ method: 'GET', url: '/x', handler: () => ({ ok: true }) })]
+    afterEach(() => driver.close())
+    const preflight = (origin: string, url = '/x') => ({
+      method: 'OPTIONS',
+      url,
+      headers: { origin, 'access-control-request-method': 'DELETE', 'access-control-request-headers': 'x-custom' },
+    })
+
+    it('counts preflights against the global rate limit', async () => {
+      const send = await driver.boot(routes, [
+        securityPlugin({ rateLimit: { limit: 2, windowMs: 60_000 }, cors: { origin: true }, headers: false }),
+      ])
+      const first = await send(preflight('https://app.test'))
+      expect(first.status).toBe(204)
+      expect(first.headers['x-ratelimit-limit']).toBe('2')
+      expect((await send(preflight('https://app.test'))).status).toBe(204)
+      expect((await send(preflight('https://app.test'))).status).toBe(429)
+      // The budget is shared: the real request that follows is limited too.
+      expect((await send({ method: 'GET', url: '/x' })).status).toBe(429)
+    })
+
+    it('discloses no Allow-* headers to an origin that is not allowed', async () => {
+      const send = await driver.boot(routes, [securityPlugin({ cors: { origin: ['https://good.test'] }, headers: false })])
+      const evil = await send(preflight('https://evil.test'))
+      expect(evil.status).toBe(204)
+      expect(evil.headers['access-control-allow-origin']).toBeUndefined()
+      expect(evil.headers['access-control-allow-methods']).toBeUndefined()
+      expect(evil.headers['access-control-allow-headers']).toBeUndefined()
+      expect(evil.headers['access-control-max-age']).toBeUndefined()
+
+      const good = await send(preflight('https://good.test'))
+      expect(good.status).toBe(204)
+      expect(good.headers['access-control-allow-origin']).toBe('https://good.test')
+      expect(good.headers['access-control-allow-methods']).toContain('DELETE')
+      expect(good.headers['access-control-allow-headers']).toBe('x-custom')
+    })
+  })
+}
+
 
 /** Sends requests over real HTTP with fetch (Fastify/Express listen on a port). */
 export function httpFetcher(base: string): Fetcher {

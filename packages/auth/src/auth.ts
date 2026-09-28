@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
+import { BasaltError, isProductionEnvironment, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle, type ThrottleStore } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
@@ -188,7 +188,10 @@ export interface SessionCookieOptions {
   httpOnly?: boolean
   /** SameSite policy. Default: `Lax`. */
   sameSite?: 'Strict' | 'Lax' | 'None'
-  /** Whether to require HTTPS. Defaults to production-only. */
+  /**
+   * Whether to require HTTPS. Defaults to true unless `NODE_ENV` is explicitly
+   * `development` or `test` (an unset NODE_ENV counts as production).
+   */
   secure?: boolean
 }
 
@@ -296,9 +299,10 @@ export class Auth {
     this.users = options.users
     this.secret = options.secret
     // Fail closed on a weak signing key. Always reject an empty secret; in
-    // production require >= 32 chars (a short HS256 key is offline-forgeable).
+    // production (anything but an explicit NODE_ENV=development/test, unset
+    // included) require >= 32 chars (a short HS256 key is offline-forgeable).
     if (!this.secret) throw new WeakJwtSecretError('missing')
-    if (process.env['NODE_ENV'] === 'production' && this.secret.length < 32) {
+    if (isProductionEnvironment() && this.secret.length < 32) {
       throw new WeakJwtSecretError('too short')
     }
     this.hasher = options.hasher ?? new ScryptPasswordHasher()
@@ -312,7 +316,7 @@ export class Auth {
       path: options.sessionCookie?.path ?? '/',
       httpOnly: options.sessionCookie?.httpOnly ?? true,
       sameSite: options.sessionCookie?.sameSite ?? 'Lax',
-      secure: options.sessionCookie?.secure ?? process.env['NODE_ENV'] === 'production',
+      secure: options.sessionCookie?.secure ?? isProductionEnvironment(),
     }
     this.hooks = options.hooks
     const shared = options.throttleStore ? { store: options.throttleStore } : {}
@@ -672,7 +676,15 @@ export class Auth {
     for (const part of cookieHeader.split(';')) {
       const [name, ...rest] = part.trim().split('=')
       if (name === this.sessionCookie.name && rest.length > 0) {
-        return decodeURIComponent(rest.join('='))
+        // An unreadable cookie (malformed percent-encoding, e.g. tossed by a
+        // sibling subdomain) is no credential: the request is anonymous. It
+        // must never throw — the enricher runs on every route, public ones
+        // included, so a URIError here would 500 the whole site.
+        try {
+          return decodeURIComponent(rest.join('='))
+        } catch {
+          return null
+        }
       }
     }
     return null

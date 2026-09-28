@@ -3,6 +3,7 @@ export {
   DriveConnectionNotFoundError,
   DriveTenantRequiredError,
   DriveTenantMismatchError,
+  DriveTenantReservedError,
   DriveCredentialsInvalidError,
   DriveAuthorizationInvalidError,
   DriveRateLimitedError,

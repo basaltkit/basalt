@@ -66,7 +66,9 @@ describe('Disk (local driver)', () => {
   })
 
   it('isolates tenants automatically via context', async () => {
-    const disk = makeDisk()
+    // onMissingScope: 'root' — a hand-built scoped disk otherwise refuses to
+    // run without a tenant (it cannot know whether tenancy exists).
+    const disk = makeDisk({ onMissingScope: 'root' })
 
     await runWithContext({ tenant: { id: 'acme' } }, () => disk.put('logo.png', 'acme-logo'))
     await runWithContext({ tenant: { id: 'globex' } }, () => disk.put('logo.png', 'globex-logo'))

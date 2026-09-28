@@ -105,7 +105,8 @@ Sem `driver`, o plugin usa o driver **sync**: `dispatch` executa
 semântica antes de dependeres dele: é **at-most-once** (um job que esgota os
 retries inline perde-se), erros do handler **rejeitam a chamada `dispatch()`**
 (o teu request falha em vez de haver retry em background), e não se destina a
-produção — um deploy de produção que caia nele sem `driver` regista um
+produção — um deploy de produção (qualquer `NODE_ENV` excepto `development`/`test`
+explícito, incluindo não definido) que caia nele sem `driver` regista um
 aviso no boot (passa `driver: new SyncQueueDriver()` para optar deliberadamente). A `queue` de
 um worker **tem de corresponder** à `queue` de um job, ou o job vai parar ao backend
 mas ninguém o consome.

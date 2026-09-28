@@ -126,6 +126,10 @@ teste escolher qualquer tenant sem DNS. Também deixa qualquer cliente escolher
 qualquer tenant, por isso nunca corre fora de `NODE_ENV === 'test'`. "Não é
 produção" não é a mesma condição: o staging corre com outros valores e herda a
 porta aberta.
+Mesmo onde corre, não se sobrepõe ao host: os resolvers de subdomínio e de
+domínio são autoritativos, por isso `nosuch.example.com` responde 404 em vez de
+perguntar ao header, e o header só é consultado quando o host não nomeia tenant
+nenhum.
 
 **Uma lista reservada.** `www`, `app`, `api`, `admin`, `central`, `platform`,
 `mail`, `static`, `docs`, `status` — os nomes que o teu apex, o host da API e as

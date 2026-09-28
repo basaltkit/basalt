@@ -30,7 +30,8 @@ class FakeDriver implements StorageDriver {
   async disconnect(): Promise<void> {}
 }
 
-const disk = (): Disk => new Disk('uploads', new FakeDriver())
+// 'root' without a tenant: the suite covers single-tenant and tenant paths on one disk.
+const disk = (): Disk => new Disk('uploads', new FakeDriver(), { onMissingScope: 'root' })
 
 /**
  * A1 · documents have revisions; files do not.

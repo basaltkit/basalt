@@ -77,7 +77,7 @@ x-basalt-signature: t=1712345678,v1=<hmac-sha256>
 {"id":"<uuid>","event":"invoice.paid","endpointId":"<endpoint id>","data":{"amount":42},"sentAt":"2026-08-07T10:00:00.000Z"}
 ```
 
-`id` is unique per delivery (stable across its retries) and is signed — dedupe on it.
+`id` is unique per delivery (stable across its retries) and is signed — dedupe on it. Through the webhook outbox (or `dispatch(event, data, { idempotencyKey })`) it is derived from the outbox entry id and the endpoint id, so it also stays the same across outbox retries and restarts. Each attempt is signed with its own timestamp `t`, so a retry after a long backoff still passes the receiver's tolerance.
 
 5. **The recipient verifies the signature** with `verifySignature` (the same scheme as Stripe: HMAC-SHA256 over `timestamp.body`, rejecting old timestamps to prevent *replays*):
 
@@ -86,6 +86,7 @@ import { verifySignature } from '@basaltkit/webhooks'
 
 // in an HTTP handler on the recipient's side:
 // the secret register() returned for THIS endpoint (a secret under 16 chars always fails)
+// (a toleranceSeconds that is NaN/negative/infinite throws a RangeError — it would disable replay protection)
 const valid = verifySignature(signatureHeader, rawRequestBody, endpointSecret)
 if (!valid) {
   // reject with 400
@@ -146,7 +147,11 @@ await app.container.get(EVENTS).emit(InvoicePaid, { amount: 42 })
 
 ### Retries and failures
 
-The deliverer only retries transient failures — network errors, timeouts and `5xx` responses — with *exponential backoff* (a wait that doubles each attempt: 500 ms, 1 s, 2 s, ...). `4xx` responses are client errors and are **not** retried. The result of each delivery is a `DeliveryResult` with `ok`, `status`, `attempts` and `error`.
+The deliverer only retries transient failures — network errors, timeouts and `5xx` responses — with *exponential backoff* (a wait that doubles each attempt: 500 ms, 1 s, 2 s, ...). `4xx` responses are client errors and are **not** retried. The result of each delivery is a `DeliveryResult` with `ok`, `status`, `attempts`, `error` and — on failures — `retryable` (`true` for network/timeout/`5xx`/`408`/`429`, `false` for SSRF-blocked URLs, redirects, other `4xx` and refused secrets). One endpoint's delivery throwing unexpectedly never rejects the whole `dispatch`: it becomes a failed result (`internal delivery error`).
+
+The webhook outbox (`webhookOutboxDispatch`) re-queues an entry only for **retryable** failures, skips endpoints that already accepted it, and re-sends the same delivery `id`. Permanent failures go to `onPermanentFailure` (default `console.warn`) instead of re-delivering to healthy endpoints.
+
+A URL blocked on a DNS verdict (the host doesn't resolve, or resolves to a private address) reports one generic `error` with no address, so whoever registers endpoints can't map your internal DNS; the address is on `WebhookUrlBlockedError.resolvedAddress` for server-side logs.
 
 ### Persistent store
 
@@ -158,12 +163,15 @@ import { webhooksPlugin, type WebhookStore, type WebhookEndpoint, matchesEvent }
 class DbWebhookStore implements WebhookStore {
   async forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]> { /* SELECT + matchesEvent */ return [] }
   async add(endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string }): Promise<WebhookEndpoint> { /* INSERT */ throw 0 }
-  async remove(id: string): Promise<void> { /* DELETE */ }
+  // DELETE … WHERE id = ? [AND tenant_id = ?] — with a tenantId, only if that tenant owns it
+  async remove(id: string, tenantId?: string): Promise<void> { /* DELETE */ }
   async list(tenantId?: string): Promise<WebhookEndpoint[]> { /* SELECT */ return [] }
 }
 
 webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 ```
+
+`remove(id, tenantId)` must only delete an endpoint that tenant owns (the manager also re-checks ownership through `list(tenantId)` before calling it). Rows may carry `null` for an absent `secret` / `tenantId` — the deliverer treats `null` as absent.
 
 `forEvent` must **fail closed**: with a `tenantId`, return that tenant's endpoints plus tenant-agnostic ones; with no tenant (`undefined`, `null` or `''`), return tenant-agnostic endpoints **only** — never every tenant's. A deliberate `dispatch(event, data, { allTenants: true })` reads endpoints through `list()` instead, and the manager re-filters every result, so a store that gets this wrong still can't widen delivery.
 
@@ -176,9 +184,9 @@ webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 | Method | Signature | Description |
 |---|---|---|
 | `register` | `(endpoint: Omit<WebhookEndpoint,'id'> & { id?: string }) => Promise<WebhookEndpoint>` | Creates a subscription (id generated if omitted) |
-| `unregister` | `(id: string) => Promise<void>` | Removes a subscription |
+| `unregister` | `(id: string, options?: { tenantId?: string; system?: boolean }) => Promise<void>` | Removes a subscription — a no-op unless the (ambient or given) tenant owns it |
 | `list` | `(tenantId?: string) => Promise<WebhookEndpoint[]>` | Lists subscriptions, optionally by tenant |
-| `dispatch` | `(event: string, data: unknown, tenantId?: string) => Promise<DeliveryResult[]>` | Delivers to all endpoints subscribed to the event |
+| `dispatch` | `(event: string, data: unknown, scope?: string \| { tenantId?, allTenants?, idempotencyKey?, skipEndpointIds? }) => Promise<DeliveryResult[]>` | Delivers to all endpoints subscribed to the event; `idempotencyKey` derives stable delivery ids |
 
 ### `interface WebhookEndpoint`
 
@@ -213,18 +221,33 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 | `maxRetries` | `number` | No | `3` | Retries after the first attempt |
 | `backoffMs` | `number` | No | `500` | Base wait in ms, doubled per attempt |
 | `timeoutMs` | `number` | No | `10000` | Timeout per attempt in ms |
-| `fetchImpl` | `typeof fetch` | No | global `fetch` | (Advanced) injectable fetch, for tests |
+| `fetchImpl` | `typeof fetch` | No | built-in **pinned** transport (not global `fetch`) | (Advanced) injectable HTTP client. It gets the validated IP under `init[PINNED_ADDRESS]`, which plain `fetch` ignores — delegate to `pinnedFetch` to keep DNS-rebind protection. Otherwise a one-time `BASALT_WEBHOOKS_UNPINNED_FETCH` warning is emitted and the host is re-validated before every retry (narrows, doesn't close, the rebind window) |
+| `fetchImplPinsAddress` | `boolean` | No | `false` | Declares that `fetchImpl` honours `PINNED_ADDRESS` (e.g. wraps `pinnedFetch`); silences the warning |
 | `sleep` | `(ms) => Promise<void>` | No | `setTimeout` | (Advanced) injectable wait, for tests |
 | `now` | `() => number` | No | real clock | (Advanced) clock in seconds, for tests |
 
-`DeliveryResult`: `{ endpointId: string, ok: boolean, status?: number, attempts: number, error?: string }`.
+`DeliveryResult`: `{ endpointId: string, ok: boolean, status?: number, attempts: number, error?: string, retryable?: boolean }`.
+
+Keeping pinning with an instrumented client:
+
+```ts
+import { pinnedFetch, WebhookDeliverer } from '@basaltkit/webhooks'
+
+new WebhookDeliverer({
+  secret: process.env.WEBHOOK_SECRET,
+  fetchImpl: async (url, init) => { console.time('hook'); try { return await pinnedFetch(url, init) } finally { console.timeEnd('hook') } },
+  fetchImplPinsAddress: true,
+})
+```
+
+Rewriting the URL host to the validated IP is not an option for plain `fetch`: it can't set TLS SNI separately, so `https` certificate validation would fail.
 
 ### Signature functions
 
 | Function | Signature | Description |
 |---|---|---|
 | `signPayload` | `(body: string, secret: string, timestampSeconds: number) => string` | Generates the `t=<unix>,v1=<hmac-sha256>` header |
-| `verifySignature` | `(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds?) => boolean` | Verifies in constant time; `true` if any `v1` matches (secret rotation); rejects timestamps outside the tolerance |
+| `verifySignature` | `(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds?) => boolean` | Verifies in constant time; `true` if any `v1` matches (secret rotation); rejects timestamps outside the tolerance; throws `RangeError` if `toleranceSeconds` isn't a finite number ≥ 0 or `nowSeconds` isn't finite |
 | `matchesEvent` | `(patterns: string[], event: string) => boolean` | Tests whether an event matches the patterns |
 
 ### Other exports
@@ -234,6 +257,9 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 | `WEBHOOKS` | token | Key for `WebhookManager` in the container |
 | `MemoryWebhookStore` | class | In-memory store (dev/tests) |
 | `WebhookStore` | type (Advanced) | Contract for persistent stores |
+| `pinnedFetch` | function | `fetch`-compatible client over the pinned transport (honours `PINNED_ADDRESS`) |
+| `deriveDeliveryId` | function | `(idempotencyKey, endpointId) => string` — the stable delivery id used by the outbox |
+| `webhookOutboxDispatch` | function | `(webhooks, { onPermanentFailure?, maxTrackedEntries? }?) => OutboxDispatch` |
 
 ## Common errors and solutions (FAQ)
 

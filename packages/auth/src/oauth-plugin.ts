@@ -1,4 +1,4 @@
-import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { createToken, ctx, definePlugin, isProductionEnvironment, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { AUTH } from './plugin.js'
@@ -41,7 +41,8 @@ export interface OAuthRoutesOptions {
   successRedirect?: string
   /**
    * The HttpOnly cookie that binds a login to the browser that started it.
-   * `secure` defaults to production-only; when secure, the cookie is named
+   * `secure` defaults to true unless `NODE_ENV` is explicitly `development`
+   * or `test` (an unset NODE_ENV counts as production); when secure, the cookie is named
    * `__Host-basalt_oauth` (host-only, so a sibling subdomain cannot plant it).
    */
   bindingCookie?: { secure?: boolean; maxAgeSeconds?: number }
@@ -71,7 +72,7 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
   const oauth = () => (ctx().container as Container).get(OAUTH)
   const base = stripTrailingSlashes(options.callbackBaseUrl)
   const redirectUri = (provider: string): string => `${base}/auth/oauth/${provider}/callback`
-  const secure = options.bindingCookie?.secure ?? process.env['NODE_ENV'] === 'production'
+  const secure = options.bindingCookie?.secure ?? isProductionEnvironment()
   const cookieName = secure ? '__Host-basalt_oauth' : 'basalt_oauth'
   const maxAge = options.bindingCookie?.maxAgeSeconds ?? 15 * 60
   // SameSite=Lax: the provider redirects back with a top-level GET, which Lax allows.

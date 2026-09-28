@@ -146,7 +146,8 @@ silenciosamente no driver de log, porque isso imprimiria todo o mail de saída
 (links de reset incluídos) no stdout num deploy que só tinha um typo na config.
 
 ::: warning O driver de log redige os corpos em produção
-Com `NODE_ENV=production`, o `LogMailDriver` substitui o corpo por
+Salvo com `NODE_ENV` explicitamente `development` ou `test` (portanto também
+não definido ou `staging`), o `LogMailDriver` substitui o corpo por
 `(body redacted in production — …)` — os corpos de mail transportam
 rotineiramente links de reset de password, magic links e tokens, que não devem
 ficar retidos num agregador de logs só porque um deploy ficou no driver por
@@ -250,7 +251,7 @@ Para agrupar notificações de baixa prioridade num resumo periódico, junta-as 
 | `replyTo` | `string` | — | Reply-to por omissão |
 | `layout` | `(html, { mail, data }) => string` | nenhum | Wrapper HTML partilhado aplicado a todos os corpos HTML |
 | `sink` | `(line: string) => void` | `console.log` | Destino do output do driver de log |
-| `logBody` | `boolean` | `true` fora de produção, `false` em produção | Só no driver de log: inclui o corpo na linha de log — os corpos transportam links de reset/tokens |
+| `logBody` | `boolean` | `true` com `NODE_ENV=development`/`test`, `false` em qualquer outro caso (incluindo não definido) | Só no driver de log: inclui o corpo na linha de log — os corpos transportam links de reset/tokens |
 | `previews` | `MailPreview[]` | — | Mails expostos pelo servidor de dev `basalt mail:preview` |
 
 ## Modos de falha e resolução de problemas
@@ -267,7 +268,7 @@ Para agrupar notificações de baixa prioridade num resumo periódico, junta-as 
 | `MailHeaderInjectionError` | `MAIL_HEADER_INJECTION` | CR/LF ou endereço malformado em subject/from/to/cc/bcc/replyTo — bloqueado antes de qualquer driver |
 | `MailDeliveryError` | `MAIL_DELIVERY_FAILED` | Um driver de API (Resend, SES, Mailgun) recebeu uma resposta de erro do fornecedor |
 | O arranque lança `Unknown mail driver "…"` | — | Typo na string `driver` — falha alto por desenho; válidos: `smtp, resend, ses, mailgun, memory, log` |
-| Os corpos de mail mostram `(body redacted in production — …)` | — | Driver de log + `NODE_ENV=production`; passa `logBody: true` ou configura um driver real |
+| Os corpos de mail mostram `(body redacted in production — …)` | — | Driver de log + `NODE_ENV` não explicitamente `development`/`test` (não definido conta como produção); passa `logBody: true` ou configura um driver real |
 
 Combina com o [`@basaltkit/i18n`](/pt/guide/i18n) para renderizar conteúdo de
 saída no locale do destinatário, e com o [`@basaltkit/queue`](/pt/guide/queues)

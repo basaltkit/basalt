@@ -1,11 +1,29 @@
 import { isIP, type LookupFunction } from 'node:net'
 import { lookup as dnsLookup } from 'node:dns/promises'
 
-/** Thrown when a delivery URL points somewhere we refuse to send (SSRF guard). */
+/**
+ * Thrown when a delivery URL points somewhere we refuse to send (SSRF guard).
+ *
+ * The message never contains a DNS-resolved address — echoing it would turn the
+ * guard into an internal-DNS oracle (register `db.internal`, read back its IP).
+ * The offending resolved address is kept on {@link resolvedAddress} for
+ * server-side logging only; never forward it to whoever configured the URL.
+ */
 export class WebhookUrlBlockedError extends Error {
-  constructor(url: string, reason: string) {
+  /** The resolved (private/reserved) address that caused the block, when DNS produced one. Server-side only. */
+  readonly resolvedAddress: string | undefined
+  /**
+   * True when the verdict came from resolving the hostname (did not resolve /
+   * resolves to a private address). Such reasons reveal internal DNS, so the
+   * deliverer reports them outward with one indistinguishable generic message.
+   */
+  readonly dnsDerived: boolean
+
+  constructor(url: string, reason: string, detail: { resolvedAddress?: string; dnsDerived?: boolean } = {}) {
     super(`Refusing to deliver webhook to ${url}: ${reason}.`)
     this.name = 'WebhookUrlBlockedError'
+    this.resolvedAddress = detail.resolvedAddress
+    this.dnsDerived = detail.dnsDerived ?? false
   }
 }
 
@@ -182,13 +200,16 @@ export async function resolveAndValidate(rawUrl: string, options: SsrfGuardOptio
   try {
     resolved = await lookup(host)
   } catch {
-    throw new WebhookUrlBlockedError(rawUrl, `host "${host}" could not be resolved`)
+    throw new WebhookUrlBlockedError(rawUrl, `host "${host}" could not be resolved`, { dnsDerived: true })
   }
-  if (resolved.length === 0) throw new WebhookUrlBlockedError(rawUrl, `host "${host}" did not resolve`)
+  if (resolved.length === 0) throw new WebhookUrlBlockedError(rawUrl, `host "${host}" did not resolve`, { dnsDerived: true })
   const addresses: ValidatedAddress[] = resolved.map((r) => ({ address: r.address, family: r.family ?? familyOf(r.address) }))
   for (const { address } of addresses) {
     if (isPrivateIp(address)) {
-      throw new WebhookUrlBlockedError(rawUrl, `host "${host}" resolves to a private address (${address})`)
+      throw new WebhookUrlBlockedError(rawUrl, `host "${host}" resolves to a private or reserved address`, {
+        resolvedAddress: address,
+        dnsDerived: true,
+      })
     }
   }
   // Every returned address is public; pin the first (IPv4 or IPv6) for connect.

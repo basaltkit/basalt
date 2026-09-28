@@ -26,6 +26,12 @@ export class OAuthStateInvalidError extends BasaltError {
 
 export class OAuthExchangeError extends BasaltError {
   readonly status = 502
+  /**
+   * The message quotes the provider's reply (`error_description`, an HTTP
+   * status, a discovery URL): diagnostic for the log, not for the client, who
+   * only gets the code and a neutral message.
+   */
+  readonly expose = false
   constructor(detail: string) {
     super('AUTH_OAUTH_EXCHANGE_FAILED', `OAuth token/profile exchange failed: ${detail}`)
   }

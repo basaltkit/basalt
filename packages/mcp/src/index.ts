@@ -13,6 +13,8 @@ export {
 export {
   collectTools,
   defaultToolName,
+  toolSignal,
+  DEFAULT_FORWARDED_HEADERS,
   type McpTool,
   type ToolCallContext,
 } from './tools.js'
@@ -26,6 +28,7 @@ export {
   type McpServerOptions,
   type McpPluginOptions,
   type McpRoutesOptions,
+  type McpCallContext,
 } from './server.js'
 
 export {

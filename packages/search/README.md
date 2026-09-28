@@ -180,7 +180,9 @@ Registers the `SEARCH` token (`Search`).
 | `search(indexName, q, options?)` | Searches. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`, `authorize?`, `maxScan?`. |
 | `reindex(indexName)` | Rebuilds the index from its rules' `backfill`, through their own `document`. Clears first; returns how many documents were written. Throws if no rule declares the index, or none has a `backfill`. |
 
-Without an explicit `tenantId`, `search`/`remove` use `ctx().tenant.id`; if there's no tenant, they throw `TenantRequiredError`.
+Without an explicit `tenantId`, `search`/`remove` use `ctx().tenant.id`; if there's no tenant, they throw `TenantRequiredError` — **only when `@basaltkit/tenancy` is registered**. An app without it has no tenant dimension: every document lands in `SINGLE_TENANT_SCOPE` (`'@single'`, a sentinel outside the tenant-id grammar; a tenant carrying it — from the context, an argument, a document or a `reindex()` row — is refused with `SearchTenantReservedError`, `SEARCH_TENANT_RESERVED`, 400).
+
+> **Upgrading from 1.x (single-tenant data):** the scope used to be `'default'`, a valid tenant id — a tenant named `default` found, overwrote and removed the single-tenant documents. The index is derived data: rebuild it once (`search.reindex(name)` for rules with a `backfill`, or re-run your indexing). With `@basaltkit/search-postgres` you can re-key in place instead: `UPDATE basalt_search SET tenant_id = '@single', document = jsonb_set(document, '{tenantId}', '"@single"') WHERE tenant_id = 'default'`. Meilisearch and Elasticsearch derive their primary key from the tenant, so there only a rebuild works. Skip it if `default` was ever a real tenant.
 
 ### `defineIndex({ name, fields, filterable? })`
 

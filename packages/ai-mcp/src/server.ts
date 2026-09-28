@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto'
+import type { IncomingMessage } from 'node:http'
 import {
   McpServer,
   serveHttp,
@@ -55,7 +57,25 @@ export function createAiMcpServer(options: StartOptions = {}): StdioHandle {
   return serveStdio(server, stdioOptions)
 }
 
-export interface HttpStartOptions extends AiMcpOptions, ServeHttpOptions {}
+export interface HttpStartOptions extends AiMcpOptions, ServeHttpOptions {
+  /**
+   * Shared secret: every request must carry `Authorization: Bearer <token>`.
+   * Required to bind a non-loopback `host` (unless `authorize`/`allowRequest`
+   * is given) — the Host/Origin guard is not authentication.
+   */
+  token?: string
+}
+
+/** `authorize` hook comparing `Authorization: Bearer <token>` in constant time. */
+export function bearerAuthorizer(token: string): (req: IncomingMessage) => boolean {
+  const expected = Buffer.from(`Bearer ${token}`)
+  return (req) => {
+    const header = req.headers.authorization
+    if (typeof header !== 'string') return false
+    const got = Buffer.from(header)
+    return got.length === expected.length && timingSafeEqual(got, expected)
+  }
+}
 
 /**
  * Build the server and serve it over the optional HTTP transport (opt-in;
@@ -70,5 +90,8 @@ export function createAiMcpHttpServer(options: HttpStartOptions = {}): Promise<H
   if (options.allowedHosts !== undefined) httpOptions.allowedHosts = options.allowedHosts
   if (options.allowedOrigins !== undefined) httpOptions.allowedOrigins = options.allowedOrigins
   if (options.allowRequest !== undefined) httpOptions.allowRequest = options.allowRequest
+  if (options.maxBodyBytes !== undefined) httpOptions.maxBodyBytes = options.maxBodyBytes
+  if (options.authorize !== undefined) httpOptions.authorize = options.authorize
+  else if (options.token) httpOptions.authorize = bearerAuthorizer(options.token)
   return serveHttp(server, httpOptions)
 }

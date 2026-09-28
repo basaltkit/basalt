@@ -932,6 +932,40 @@ O isolamento é imposto na **camada de dados**, não apenas nas rotas:
 - O tenant do contexto ganha sempre. Um `tenantId` explícito só é respeitado
   quando concorda — por isso uma rota que reencaminhe `?tenantId=` vindo do
   cliente recebe `DRIVE_TENANT_MISMATCH`, e não os dados de outro tenant.
+- Numa app **single-tenant** — sem `tenancyPlugin` — as ligações e o ledger
+  ficam na chave `SINGLE_TENANT_SCOPE` (`'@single'` — fora da gramática de ids
+  de tenant, logo nenhum tenant as pode receber). Um id de tenant igual a ela é
+  recusado com `DRIVE_TENANT_RESERVED` (400). Aparece como
+  `connection.tenantId`, mas é uma chave de store, não um id de tenant: numa app
+  single-tenant omite o `tenantId` nas chamadas (o `watchConnection` de um
+  reconciler, o `importItem` de um job) em vez de o devolver. O `filesSink` já
+  o faz.
+
+::: warning Atualizar dados single-tenant
+Antes do `@basaltkit/drives` 0.3 a chave single-tenant era `'default'` — um id
+de tenant válido, logo um tenant chamado `default` podia listar, usar e desligar
+as ligações single-tenant. Cada `secret` é selado com o seu `tenantId` como
+dados associados, por isso mudar a chave de uma ligação obriga a voltar a
+selá-la:
+
+```ts
+import { DriveSecretBox, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
+
+const box = new DriveSecretBox(keys) // o mesmo anel de chaves que o `Drives` usa
+for (const row of await db.driveConnection.findMany({ where: { tenantId: 'default' } })) {
+  const context = { connectionId: row.id, provider: row.provider }
+  const plain = box.open(row.secret, { ...context, tenantId: 'default' })
+  const secret = box.seal(plain, { ...context, tenantId: SINGLE_TENANT_SCOPE })
+  await db.driveConnection.update({ where: { id: row.id }, data: { tenantId: SINGLE_TENANT_SCOPE, secret } })
+}
+// O ledger de importações são dados simples:
+//   UPDATE <tabela do ledger> SET "tenantId" = '@single' WHERE "tenantId" = 'default'
+```
+
+Salta este passo se `default` alguma vez foi um tenant real nessa base de dados.
+Uma autorização iniciada antes da atualização falha o callback uma vez (o seu
+`state` nomeia a chave antiga); o utilizador volta a ligar.
+:::
 
 Uma ligação que pertence a outro tenant devolve **404, nunca 403**: dizer a quem
 chama "existe mas não é tua" transforma os ids das ligações num oráculo.

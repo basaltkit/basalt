@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDriveFetch } from '@basaltkit/drives'
+import { createDriveFetch, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { APP_KEY, connect, harness } from './helpers.js'
 
 describe('Dropbox OAuth', () => {
@@ -61,7 +61,7 @@ describe('Dropbox OAuth', () => {
   it('refreshes proactively and keeps the stored refresh token (Dropbox does not rotate)', async () => {
     const h = harness()
     const view = await connect(h)
-    const before = (await h.store.find('default', view.id))!
+    const before = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
 
     // Four hours on: the engine refreshes before the token expires, not after
     // a 401.
@@ -71,7 +71,7 @@ describe('Dropbox OAuth', () => {
     const refresh = h.dropbox.requests.filter((r) => r.url.includes('/oauth2/token')).at(-1)!
     expect(new URLSearchParams(refresh.body).get('grant_type')).toBe('refresh_token')
     expect(new URLSearchParams(refresh.body).get('refresh_token')).toBe('refresh-1')
-    const after = (await h.store.find('default', view.id))!
+    const after = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     // The credentials were re-sealed, so the row changed…
     expect(after.secret).not.toBe(before.secret)
     // …and the refresh token survived, because the response omitted one.
@@ -86,7 +86,7 @@ describe('Dropbox OAuth', () => {
     h.advance(4 * 60 * 60_000)
 
     await expect(h.drives.listItems(view.id)).rejects.toMatchObject({ code: 'DRIVE_CREDENTIALS_INVALID' })
-    expect((await h.store.find('default', view.id))!.status).toBe('invalid')
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.status).toBe('invalid')
   })
 
   it('does not condemn the connection when the app itself is misconfigured', async () => {
@@ -110,13 +110,13 @@ describe('Dropbox OAuth', () => {
     const revoke = h.dropbox.requests.find((r) => r.url.includes('/2/auth/token/revoke'))
     expect(revoke).toBeDefined()
     expect(revoke!.headers['authorization']).toMatch(/^Bearer /)
-    expect(await h.store.find('default', view.id)).toBeNull()
+    expect(await h.store.find(SINGLE_TENANT_SCOPE, view.id)).toBeNull()
   })
 
   it('never lets a token reach a hook payload or a serialised connection', async () => {
     const h = harness()
     const view = await connect(h)
-    const stored = (await h.store.find('default', view.id))!
+    const stored = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     const serialised = JSON.stringify(view)
     expect(serialised).not.toContain('refresh-1')
     expect(serialised).not.toContain('access-')

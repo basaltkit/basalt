@@ -153,7 +153,7 @@ describe('WebhookDeliverer — SSRF guard', () => {
     })
     const result = await deliverer.deliver({ id: 'x', url: 'https://evil.example', events: ['*'] }, 'e', {})
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/resolves to a private address/)
+    expect(result.error).toMatch(/does not resolve to an allowed public address/)
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 

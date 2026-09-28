@@ -18,11 +18,13 @@ import {
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
   TenantNotReadyError,
+  TenantResolutionConflictError,
   isTenantReady,
   type Tenant,
   type TenantSource,
   type TenantStatus,
 } from './tenant.js'
+import { tryNormalizeDomain } from './custom-domains.js'
 
 export {
   MemoryTenantSource,
@@ -37,12 +39,14 @@ export {
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
   TenantNotReadyError,
+  TenantResolutionConflictError,
   isTenantReady,
   type Tenant,
   type TenantSource,
   type TenantStatus,
 } from './tenant.js'
 export {
+  authoritative,
   subdomainResolver,
   domainResolver,
   headerResolver,
@@ -97,8 +101,13 @@ export class Tenancy {
     private readonly provisionMode: 'inline' | 'deferred' = 'inline',
     private readonly onDeprovision?: (tenant: Tenant) => void | Promise<void>,
     private readonly canonicalDomain?: (tenant: Tenant) => string | undefined,
-    /** The tenant-id grammar `create()` enforces. Default {@link isValidTenantId}. */
+    /**
+     * The tenant-id grammar `create()`, `run()` and `resolve()` enforce.
+     * Default {@link isValidTenantId}.
+     */
     private readonly validateTenantId: (id: string) => boolean = isValidTenantId,
+    /** How `resolve()` treats resolvers that name different tenants. */
+    private readonly resolution: { onConflict?: ResolverConflictPolicy } = {},
   ) {}
 
   /** The tenant of the active context, if any. */
@@ -201,6 +210,7 @@ export class Tenancy {
    * `migrate deploy`.
    */
   async provision(tenantOrId: Tenant | string): Promise<Tenant> {
+    if (typeof tenantOrId === 'string') assertValidTenantId(tenantOrId, this.validateTenantId)
     const tenant =
       typeof tenantOrId === 'string' ? await this.source.find(tenantOrId) : tenantOrId
     if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
@@ -246,6 +256,9 @@ export class Tenancy {
   async destroy(id: string, options: { force?: boolean } = {}): Promise<void> {
     const remove = this.source.delete
     if (!remove) throw new TenantDeleteUnsupportedError()
+    // Before any write: `run()` refuses an id outside the grammar, and finding
+    // that out after the record is marked `deleting` would strand it there.
+    assertValidTenantId(id, this.validateTenantId)
 
     const tenant = await this.source.find(id)
     if (!tenant) throw new TenantNotFoundError(id)
@@ -300,9 +313,38 @@ export class Tenancy {
     return write.call(this.source, next)
   }
 
-  /** Runs the resolvers in order; the first ref that loads a tenant wins. */
+  /**
+   * Identifies the request's tenant.
+   *
+   * **Authoritative resolvers first** (subdomain, domain, route — anything the
+   * platform controls), in list order; the first ref that loads a tenant wins.
+   * If any of them named a tenant and none loaded, the answer is **no tenant**:
+   * the request does not fall through to a client-controlled resolver, so
+   * `nosuch.app.com` + `x-tenant-id: globex` is not globex. Only when no
+   * authoritative resolver named anything are the fallbacks (header, unmarked
+   * custom resolvers) tried, in list order.
+   *
+   * A ref whose id fails the tenant-id grammar, or whose domain is not a
+   * hostname, counts as not found — it never reaches the source.
+   *
+   * With `onConflict: 'error'` every resolver runs and two refs that load
+   * DIFFERENT tenants throw `TenantResolutionConflictError` (400).
+   */
   async resolve(request: ResolutionRequest): Promise<Tenant | null> {
-    for (const resolver of this.resolvers) {
+    const primary = this.resolvers.filter((r) => r.authoritative === true)
+    const fallback = this.resolvers.filter((r) => r.authoritative !== true)
+    if (this.resolution.onConflict === 'error') return this.resolveStrict(request, primary, fallback)
+
+    let claimed = false
+    for (const resolver of primary) {
+      const ref = await resolver(request)
+      if (!ref) continue
+      claimed = true
+      const tenant = await this.load(ref)
+      if (tenant) return tenant
+    }
+    if (claimed) return null
+    for (const resolver of fallback) {
       const ref = await resolver(request)
       if (!ref) continue
       const tenant = await this.load(ref)
@@ -311,11 +353,42 @@ export class Tenancy {
     return null
   }
 
+  /** `onConflict: 'error'` — same precedence, but every resolver must agree. */
+  private async resolveStrict(
+    request: ResolutionRequest,
+    primary: TenantResolver[],
+    fallback: TenantResolver[],
+  ): Promise<Tenant | null> {
+    let claimed = false
+    let chosen: Tenant | null = null
+    const ids = new Set<string>()
+    for (const [resolvers, authoritative] of [[primary, true], [fallback, false]] as const) {
+      for (const resolver of resolvers) {
+        const ref = await resolver(request)
+        if (!ref) continue
+        const tenant = await this.load(ref)
+        if (authoritative) claimed = true
+        if (!tenant) continue
+        ids.add(tenant.id)
+        if (!chosen && (authoritative || !claimed)) chosen = tenant
+      }
+    }
+    if (ids.size > 1) throw new TenantResolutionConflictError([...ids])
+    return chosen
+  }
+
   /**
    * Runs `fn` inside the tenant's context (preserving the surrounding
    * context) and emits 'tenancy:switched'.
+   *
+   * The id — given, or on the tenant object — must pass the tenant-id grammar
+   * (`InvalidTenantIdError`, 400): it becomes a namespace segment in every
+   * tenant-scoped package, so a hand-built `{ id: '../x' }` must never become
+   * the context tenant.
    */
   async run<T>(tenantOrId: Tenant | string, fn: () => T | Promise<T>): Promise<T> {
+    const id = typeof tenantOrId === 'string' ? tenantOrId : tenantOrId?.id
+    assertValidTenantId(id, this.validateTenantId)
     const tenant =
       typeof tenantOrId === 'string' ? await this.source.find(tenantOrId) : tenantOrId
     if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
@@ -347,8 +420,15 @@ export class Tenancy {
   }
 
   private async load(ref: TenantRef): Promise<Tenant | null> {
-    if ('id' in ref) return this.source.find(ref.id)
-    return this.source.findByDomain ? this.source.findByDomain(ref.domain) : null
+    if ('id' in ref) {
+      // Client-supplied ids (`x-tenant-id: ../x`, a 10 KB string) never reach
+      // the source: an id outside the grammar cannot name a tenant.
+      if (typeof ref.id !== 'string' || !this.validateTenantId(ref.id)) return null
+      return this.source.find(ref.id)
+    }
+    if (!this.source.findByDomain || typeof ref.domain !== 'string') return null
+    const domain = tryNormalizeDomain(ref.domain)
+    return domain === null ? null : this.source.findByDomain(domain)
   }
 }
 
@@ -374,9 +454,13 @@ export function isTenantRequired(
   if (!required) return false
   if (required === true) return true
   const path = pathOf(url)
-  return !required.except.some((pattern) =>
-    typeof pattern === 'string' ? pattern === path : pattern.test(path),
-  )
+  return !required.except.some((pattern) => {
+    if (typeof pattern === 'string') return pattern === path
+    // A /g or /y RegExp carries `lastIndex` between calls, so `test()` would
+    // alternate true/false on the same path — an intermittent 404.
+    pattern.lastIndex = 0
+    return pattern.test(path)
+  })
 }
 
 /**
@@ -395,9 +479,28 @@ function pathOf(url: string | undefined): string {
   }
 }
 
+/**
+ * What `resolve()` does when resolvers name different tenants.
+ *
+ * - `'precedence'` (default) — authoritative resolvers win over fallbacks; among
+ *   each group the first ref that loads a tenant wins. A client header that
+ *   disagrees with the Host is ignored.
+ * - `'error'` — every resolver runs, and two that load different tenants throw
+ *   `TenantResolutionConflictError` (400). Costs one lookup per resolver.
+ */
+export type ResolverConflictPolicy = 'precedence' | 'error'
+
 export interface TenancyPluginOptions {
   source: TenantSource
+  /**
+   * Authoritative resolvers (subdomain, domain, route, or `authoritative(fn)`)
+   * run first; a tenant they name that does not exist resolves to NO tenant
+   * rather than falling through. Fallbacks (header, unmarked custom resolvers)
+   * run, in list order, only when no authoritative resolver named anything.
+   */
   resolvers: TenantResolver[]
+  /** See {@link ResolverConflictPolicy}. Default `'precedence'`. */
+  onConflict?: ResolverConflictPolicy
   /**
    * Reject requests without a tenant (404 `TENANCY_NOT_RESOLVED`). Default: false.
    *
@@ -522,7 +625,8 @@ export interface TenancyPluginOptions {
   /**
    * The tenant-id grammar `tenancy.create()` (and `basalt tenant:create`)
    * enforces; an id it rejects throws `InvalidTenantIdError` (400) before
-   * anything is written. Default {@link isValidTenantId}:
+   * anything is written. `tenancy.run()` enforces it too, and a resolver ref
+   * whose id fails it resolves to no tenant. Default {@link isValidTenantId}:
    * `/^[a-z0-9][a-z0-9_-]{0,62}$/`, minus the reserved id `global`.
    *
    * Tenant ids become namespace segments (`tenant:<id>:` cache keys,
@@ -549,6 +653,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             options.onDeprovision,
             options.canonicalDomain,
             options.validateTenantId,
+            options.onConflict !== undefined ? { onConflict: options.onConflict } : {},
           ),
       )
       registerTenantCommands(container, options)
@@ -795,7 +900,11 @@ export {
   CustomDomains,
   MemoryDomainStore,
   normalizeDomain,
+  tryNormalizeDomain,
   findByVerifiedDomain,
+  DEFAULT_CLAIM_TTL_MS,
+  InvalidDomainError,
+  DomainReservedError,
   DomainTakenError,
   DomainNotFoundError,
   DomainForbiddenError,

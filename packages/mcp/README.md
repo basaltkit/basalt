@@ -57,7 +57,26 @@ await createApp({
 - **Input schema**: built automatically from the route's `params` + `query` +
   `body` Zod schemas (merged into one flat object).
 - **Same pipeline**: a `tools/call` runs enrichers, guards and validation, then
-  the handler — request headers (tenant, authorization) propagate into the call.
+  the handler. The tool request inherits an allowlist of the caller's headers
+  (`DEFAULT_FORWARDED_HEADERS`: `authorization`, `cookie`, `x-api-key`,
+  `x-tenant-id`, `host`, `accept-language`, `user-agent`; extend with
+  `mcpPlugin({ forwardHeaders })`), the client `ip`, `routePattern` (the route
+  template) and the concrete `url` built from the arguments. Other headers
+  (`x-request-id`, `if-none-match`, forwarding/hop-by-hop) are dropped.
+- **Status honoured**: a handler replying `reply.code(>= 400)` yields `isError: true`.
+- **Cancellation**: `notifications/cancelled` answers the call as cancelled at
+  once; a handler can stop early by checking `toolSignal(request)?.aborted`.
+
+### Browser safety and endpoint auth
+
+`POST /mcp` answers **403** to a request whose `Origin` is neither same-origin nor
+in `mcpRoutes({ allowedOrigins })` (`'*'` disables the check), and **415** unless
+the body is `application/json` — a cross-site page can never drive a tool with a
+visitor's cookies. Non-browser clients send no `Origin` and are unaffected.
+`initialize`/`tools/list` are anonymous by default (tool *calls* still run each
+route's guards); `mcpRoutes({ auth: true })` puts `meta.auth` on the endpoint
+itself (`meta` adds any other guard key). JSON-RPC batches are accepted; each
+POST is its own MCP session.
 
 ### stdio
 
@@ -122,6 +141,6 @@ server + client round-trips.
 
 `mcpRoutes({ rateLimit: { limit, windowMs } })` stamps `meta.rateLimit` on the
 endpoint so `securityPlugin` enforces a dedicated budget. A tool route's own
-`meta.rateLimit` applies to its direct HTTP registration only — not when it is
-invoked as a tool through `/mcp` — so this budget is the throttle for tool
-traffic.
+`meta.rateLimit` also applies when it is invoked as a tool through `/mcp`
+(enforced as a route guard), keyed by the `/mcp` caller's ip, which the tool
+request inherits.

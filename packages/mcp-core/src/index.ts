@@ -33,13 +33,17 @@ export {
   type McpPromptDef,
 } from './server.js'
 
+// Single-message or batch dispatch, shared by every transport.
+export { dispatchPayload } from './dispatch.js'
+
 // Stdio transport.
 export {
   serveStdio,
+  DEFAULT_MAX_LINE_LENGTH,
   type StdioServerLike,
   type ServeStdioOptions,
   type StdioHandle,
 } from './stdio.js'
 
 // Optional HTTP transport (opt-in; stdio stays primary).
-export { serveHttp, type ServeHttpOptions, type HttpHandle } from './http.js'
+export { serveHttp, DEFAULT_MAX_BODY_BYTES, type ServeHttpOptions, type HttpHandle } from './http.js'

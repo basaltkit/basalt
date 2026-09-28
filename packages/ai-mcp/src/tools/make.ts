@@ -34,8 +34,9 @@ const inputSchema: Record<string, unknown> = {
  * `basalt_make` — implement a plan: scaffold the resource vertical and wire it
  * in. Safe by construction: **preview is the default and writes nothing**;
  * `apply` is explicit; overwrites need `force`; `prisma db push` needs `migrate`;
- * all writes are confined to the workspace; an `apply` is confirmed via
- * elicitation when the client supports it.
+ * all writes are confined to the workspace; an `apply` must be confirmed via
+ * elicitation — when the client cannot be asked, it is REFUSED (fail closed)
+ * unless the server was started with `allowUnconfirmedApply`.
  */
 export function makeTool(session: Session): McpToolDef {
   return {
@@ -133,6 +134,13 @@ export function makeTool(session: Session): McpToolDef {
       if (ctx.elicit) {
         const confirmed = await ctx.elicit(summary)
         if (!confirmed) return toolError('Apply cancelled — not confirmed.')
+      } else if (!session.allowUnconfirmedApply) {
+        // No way to ask the user: never write on the agent's say-so alone.
+        return toolError(
+          'Refusing to apply without confirmation — this client does not support elicitation, so the user ' +
+            'cannot approve the write. Review the preview and apply it yourself, use a client with elicitation ' +
+            'support, or restart the server with --allow-unconfirmed-apply.',
+        )
       }
 
       // 5) Real write — force/migrate only as explicitly requested.

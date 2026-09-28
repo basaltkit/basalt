@@ -27,3 +27,24 @@ describe('ai-mcp HTTP transport (opt-in)', () => {
     }
   })
 })
+
+describe('ai-mcp HTTP transport — bind policy and bearer token (FA-039)', () => {
+  it('refuses a non-loopback bind without a token', async () => {
+    await expect(createAiMcpHttpServer({ cwd: '/proj', createReader: () => memoryReader(PROJECT_FILES), host: '0.0.0.0', port: 0 })).rejects.toThrow(/non-loopback/)
+  })
+
+  it('with a token, requests need Authorization: Bearer <token>', async () => {
+    const handle = await createAiMcpHttpServer({ cwd: '/proj', createReader: () => memoryReader(PROJECT_FILES), port: 0, token: 's3cret' })
+    try {
+      const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' })
+      const anon = await fetch(handle.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body })
+      expect(anon.status).toBe(401)
+      const wrong = await fetch(handle.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer nope' }, body })
+      expect(wrong.status).toBe(401)
+      const ok = await fetch(handle.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer s3cret' }, body })
+      expect(ok.status).toBe(200)
+    } finally {
+      await handle.close()
+    }
+  })
+})

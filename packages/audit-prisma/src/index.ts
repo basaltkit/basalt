@@ -1,6 +1,7 @@
 import {
   AUDIT_SCAN_PAGE,
   assertAuditLimit,
+  assertAuditQuery,
   AuditChainConflictError,
   auditChainKey,
   type AuditChainHead,
@@ -8,6 +9,7 @@ import {
   type AuditEntry,
   type AuditQuery,
   type AuditStore,
+  type AuditUnchainedRange,
   exactEventMatch,
   parseAuditChainKey,
   patternMatches,
@@ -144,6 +146,30 @@ export class PrismaAuditStore implements AuditStore {
     return (await this.client.auditEntry.findMany({ where, select: { id: true } })).length
   }
 
+  /**
+   * Rows of the tenant outside its chain: no `seq`, a `seq` below 1, or a
+   * `chain` other than the tenant's (NULL or a forged name). Those claiming a
+   * chain position are returned whatever their `at` — a legacy row has neither.
+   * Spelled with `OR` rather than `NOT`: SQL `NOT (chain = x AND …)` is NULL,
+   * not true, for a NULL `chain`, and would hide exactly the rows sought.
+   */
+  async readUnchained(tenantId: string | undefined, range: AuditUnchainedRange): Promise<AuditEntry[]> {
+    assertAuditLimit(range.limit)
+    if (typeof range.since !== 'number' || !Number.isFinite(range.since)) throw new TypeError('readUnchained: `since` must be a finite number')
+    const rows = await this.client.auditEntry.findMany({
+      where: {
+        tenantId: tenantId ?? null,
+        AND: [
+          { OR: [{ chain: null }, { chain: { not: auditChainKey(tenantId) } }, { seq: null }, { seq: { lt: 1 } }] },
+          { OR: [{ at: { gte: at(range.since) } }, { seq: { not: null } }, { chain: { not: null } }] },
+        ],
+      },
+      orderBy: [{ at: 'asc' }, { id: 'asc' }],
+      take: range.limit,
+    })
+    return rows.map(toEntry)
+  }
+
   async chainTenants(): Promise<Array<string | undefined>> {
     const rows = await this.client.auditEntry.findMany({
       where: { chain: { not: null } },
@@ -154,6 +180,10 @@ export class PrismaAuditStore implements AuditStore {
   }
 
   async query(query: AuditQuery): Promise<AuditEntry[]> {
+    // Validated here too, not only in Audit.trail(): the store is public API, and
+    // a filter that is an object (`{ not: 'x' }` from `?tenantId[not]=x`) would be
+    // read by Prisma as an operator, and a string `limit` would reach `take`.
+    assertAuditQuery(query)
     // Exact filters — including an event name with no wildcard — push down to the
     // database, and so does the limit. Only a wildcard pattern still needs matching
     // in code, and then the rows are read in bounded pages: a `limit: 50` query must
@@ -164,10 +194,20 @@ export class PrismaAuditStore implements AuditStore {
     if (query.since !== undefined) where.at = { gte: at(query.since) }
     const exact = exactEventMatch(query.event)
     if (exact !== undefined) where.event = exact
+    if (query.chainedOnly === true) {
+      // Prisma cannot compare two columns, so "the chain its own tenant maps
+      // to" is checked in code below (on the paged path).
+      where.seq = { gte: 1 }
+      where.chain = { not: null }
+    }
     const orderBy = [{ at: 'desc' }, { id: 'desc' }] // newest first, deterministic ties
     const needsPatternMatch = query.event !== undefined && exact === undefined
+    const needsCodeFilter = needsPatternMatch || query.chainedOnly === true
+    const keep = (row: PAuditEntry, entry: AuditEntry): boolean =>
+      (!needsPatternMatch || patternMatches(query.event as string, entry.event)) &&
+      (query.chainedOnly !== true || row.chain === auditChainKey(entry.tenantId))
 
-    if (!needsPatternMatch) {
+    if (!needsCodeFilter) {
       const rows = await this.client.auditEntry.findMany({
         where,
         orderBy,
@@ -176,13 +216,12 @@ export class PrismaAuditStore implements AuditStore {
       return rows.map(toEntry)
     }
 
-    const pattern = query.event as string
     const out: AuditEntry[] = []
     for (let skip = 0; ; skip += AUDIT_SCAN_PAGE) {
       const rows = await this.client.auditEntry.findMany({ where, orderBy, take: AUDIT_SCAN_PAGE, skip })
       for (const row of rows) {
         const entry = toEntry(row)
-        if (!patternMatches(pattern, entry.event)) continue
+        if (!keep(row, entry)) continue
         out.push(entry)
         if (query.limit !== undefined && out.length >= query.limit) return out
       }

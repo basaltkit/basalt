@@ -73,7 +73,8 @@ Then `prisma migrate dev`.
 
 An application that never registers `@basaltkit/tenancy` never writes that
 column — `@basaltkit/files` fills it with `SINGLE_TENANT_SCOPE`, the literal
-string `'default'`, and every row reads the same. Nothing to configure, nothing
+string `'@single'` (`'default'` before `@basaltkit/files` 5.0 — see its
+changelog to re-key older rows), and every row reads the same. Nothing to configure, nothing
 that fails; the cost is one column that looks unused.
 
 It stays in the key on purpose. With `@@id([tenantId, id])` a lookup with the

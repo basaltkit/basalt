@@ -14,7 +14,7 @@ You need this module when the same application serves multiple customers/organiz
 
 **Multi-tenancy** means a single application deployment serves several "tenants" — companies, teams, or organizations — each with its own data, like a building where each unit has its own key. The challenge is: when an HTTP request arrives, how does the application know which tenant it belongs to? And how do you ensure the code that runs afterward always "knows" which tenant it's in, without passing that value from function to function?
 
-This module solves both parts. First, the **resolvers**: small functions that look at the request and identify the tenant — by subdomain (`acme.myapp.com` → tenant `acme`), by a customer's own domain (`app.acme.com`), by a header (`x-tenant-id`), or by a route parameter (`/t/acme/...`). You can combine several: the first one to find an existing tenant wins.
+This module solves both parts. First, the **resolvers**: small functions that look at the request and identify the tenant — by subdomain (`acme.myapp.com` → tenant `acme`), by a customer's own domain (`app.acme.com`), by a header (`x-tenant-id`), or by a route parameter (`/t/acme/...`). You can combine several: the ones the platform controls (subdomain, domain, route) decide first, and a header is only a fallback.
 
 Second, the **context**: once resolved, the tenant is placed in `ctx().tenant` (using Node's AsyncLocalStorage — an "invisible thread" that follows each request), accessible in any handler, service, or hook without passing arguments. You can also run code "as" a tenant outside an HTTP request (jobs, migrations) with `tenancy.run()`, and iterate over all tenants with `tenancy.forEach()`.
 
@@ -100,7 +100,12 @@ headerResolver({ header: 'x-org' })
 routeResolver({ param: 'tenant' })
 ```
 
-You can pass several in `resolvers: [...]` — they're tried in order, and the first whose reference matches an **existing** tenant in the source wins (a reference to an unknown tenant falls through to the next one).
+You can pass several in `resolvers: [...]`. They come in two kinds:
+
+- **Authoritative** — `subdomainResolver`, `domainResolver`, `routeResolver`, and any custom resolver wrapped in `authoritative(fn)`. They read something the platform controls, so they are always consulted **first** (in list order; the first reference that loads a tenant wins). If one of them names a tenant that does **not** exist, the request resolves to **no tenant** — it does not fall through. `nosuch.myapp.com` + `x-tenant-id: globex` is not `globex`, and a header can never override a real subdomain, whatever the list order.
+- **Fallback** — `headerResolver` and unmarked custom resolvers. Consulted, in list order, only when no authoritative resolver named anything (the bare apex, `localhost`, `www`); the first that loads an existing tenant wins.
+
+A reference whose id fails the tenant-id grammar (`validateTenantId`, default `isValidTenantId`) or whose domain is not a hostname counts as not found and never reaches the source. Want disagreement to be an error rather than a precedence rule? Pass `onConflict: 'error'`: every resolver runs, and two that load different tenants answer `400 TENANCY_CONFLICT`.
 
 ### Connecting to your database (TenantSource)
 
@@ -141,7 +146,7 @@ await tenancy.forEach(
 )
 ```
 
-`run()` accepts either the `Tenant` object or the `id` (which is loaded from the source; if it doesn't exist, it throws `TenantNotFoundError`).
+`run()` accepts either the `Tenant` object or the `id` (which is loaded from the source; if it doesn't exist, it throws `TenantNotFoundError`). Either way the id must pass the tenant-id grammar — `run({ id: '../x' }, …)` throws `InvalidTenantIdError` (400) instead of making `../x` the context tenant.
 
 ### Fail-closed scoping — `tenantScoped()` and friends
 
@@ -237,7 +242,8 @@ it inside `<id>`'s context — e.g. `basalt tenant:run acme queue:retry`.
 | Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `source` | `TenantSource` | Yes | — | Where tenants are loaded from. |
-| `resolvers` | `TenantResolver[]` | Yes | — | Tried in order; the first one that loads a tenant wins. |
+| `resolvers` | `TenantResolver[]` | Yes | — | Authoritative resolvers (subdomain, domain, route, `authoritative(fn)`) first — an unknown tenant they name resolves to none; fallbacks (header) only when no authoritative resolver named anything. Within each group, the first that loads a tenant wins. |
+| `onConflict` | `'precedence' \| 'error'` | No | `'precedence'` | `'error'` runs every resolver and answers `400 TENANCY_CONFLICT` when two load different tenants. |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. `{ except: ['/health'] }` exempts those paths (matched without the query string) and guards everything else. |
 | `onMigrate` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant migration work for `basalt tenant:migrate`. The framework iterates tenants and enters each context; you do the DB-specific part. Without it the command errors. |
 | `onSeed` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant seeding for `basalt tenant:seed`, same contract. |
@@ -275,7 +281,7 @@ The plugin registers the facade in the container under the `TENANCY` token, and 
 
 ### `Tenancy` class
 
-Constructor: `new Tenancy(source, resolvers, hooks?)` (normally created by the plugin).
+Constructor: `new Tenancy(source, resolvers, hooks?, …)` (normally created by the plugin).
 
 | Method | Returns | Description |
 |---|---|---|
@@ -284,20 +290,23 @@ Constructor: `new Tenancy(source, resolvers, hooks?)` (normally created by the p
 | `create(tenant)` | `Promise<Tenant>` | Persists a new tenant, applies `canonicalDomain`, runs `onProvision` and emits `tenancy:created`. The creation path — the source only writes the row. An id that already exists is refused with `TenantAlreadyExistsError` (409) before anything is written; retry a failed tenant with `provision(id)`, update one with `source.save()`. |
 | `provision(tenantOrId)` | `Promise<Tenant>` | Runs `onProvision` for a tenant left `provisioning` by `provision: 'deferred'`, then flips it to `ready`. |
 | `destroy(id, { force? })` | `Promise<void>` | Marks the tenant `deleting`, runs `onDeprovision` in its context and removes the record. `force` removes it even if the teardown threw. |
-| `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }`. |
-| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched`. |
+| `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }` — authoritative first, fallbacks only if none named a tenant. Throws `TenantResolutionConflictError` under `onConflict: 'error'`. |
+| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched`. Throws `InvalidTenantIdError` for an id outside the grammar. |
 | `forEach(fn, { concurrency? })` | `Promise<void>` | Runs `fn` for each tenant (requires `source.list`); default concurrency 5. |
 
 ### Resolvers
 
 | Function | Options | Returns |
 |---|---|---|
-| `subdomainResolver(options)` | `base: string` (required) | `{ id: subdomain }`; ignores `www`, the base domain, nested subdomains, and the port. |
-| `domainResolver()` | — | `{ domain: host }`; requires `source.findByDomain`. |
-| `headerResolver(options?)` | `header?: string` (default `'x-tenant-id'`) | `{ id: headerValue }`. |
-| `routeResolver(options?)` | `param?: string` (default `'tenant'`) | `{ id: params[param] }`. |
+| `subdomainResolver(options)` | `base: string` (required) | `{ id: subdomain }`; ignores `www`, the base domain, nested subdomains, and the port. Authoritative. |
+| `domainResolver()` | — | `{ domain: host }`; requires `source.findByDomain`. Authoritative. |
+| `headerResolver(options?)` | `header?: string` (default `'x-tenant-id'`) | `{ id: headerValue }`. Fallback (client-controlled). |
+| `routeResolver(options?)` | `param?: string` (default `'tenant'`) | `{ id: params[param] }`. Authoritative. |
+| `authoritative(fn)` | — | Marks a custom resolver as authoritative (e.g. one reading a claim your gateway signed). |
 
-A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promise<...>`, where `TenantRef` is `{ id: string }` or `{ domain: string }`. You can write your own — it's just a function. (Advanced.)
+A `Host` outside the hostname grammar (userinfo, path, `%`, non-ASCII, IP literal) matches nothing.
+
+A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promise<...>` with an optional `authoritative?: boolean` property, where `TenantRef` is `{ id: string }` or `{ domain: string }`. You can write your own — it's just a function; unmarked it is a fallback. (Advanced.)
 
 ### Types and errors
 
@@ -310,7 +319,7 @@ A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promis
 | `TENANCY` | Injection token: `container.get(TENANCY)` → `Tenancy`. |
 | `requireTenant`, `requireTenantId`, `tenantScoped` | Fail-closed scoping helpers — see above. |
 | `CustomDomains`, `MemoryDomainStore`, `DomainStore`, `CustomDomain`, `DnsVerification`, `CustomDomainsOptions` | Custom-domain registration + DNS TXT ownership verification. |
-| `normalizeDomain(input)` | Canonicalizes a domain/Host: lowercase, trim, strip port and trailing dots, IDNA-encode. The same function backs registration, lookup and the Host resolver, so a domain keys identically however it was typed. |
+| `normalizeDomain(input)` / `tryNormalizeDomain(input)` | Canonicalizes a domain/Host: lowercase, trim, strip a numeric port and trailing dots, then **validate** the RFC 1123 hostname grammar (`[a-z0-9.-]` labels, ≤ 253 chars, last label not all digits). Anything else — userinfo (`acme.app@evil.com`), a path, `%65`, full-width or other non-ASCII characters, IPv4/IPv6 literals — is rejected, never rewritten: `normalizeDomain` throws `InvalidDomainError` (400), `tryNormalizeDomain` returns `null`. IDNs must be passed in `xn--` form (`domainToASCII()` from `node:url`). The same function backs registration, lookup and the Host resolver. |
 | `findByVerifiedDomain(customDomains, find)` | Builds a `findByDomain` that resolves **only verified** domains — wire it into your `TenantSource` so a forged Host header can never resolve. |
 
 ### Custom domains
@@ -318,6 +327,13 @@ A `TenantResolver` is `(request: ResolutionRequest) => TenantRef | null | Promis
 `CustomDomains` adds ownership proof around the domain resolver: register a
 domain (unverified), publish the returned `_basalt-verify.<domain>` TXT record,
 then `verify()`. Only verified domains resolve, via `findByVerifiedDomain`.
+
+An unverified claim does not hold a domain forever: after `claimTtlMs` (72 h by
+default) another tenant's `add()` takes it over. With `challengeSecret` set, the
+real owner does not have to wait — it publishes the record from
+`challenge(tenantId, domain)` and its `add()` wins immediately, verified (the
+verified TXT wins). Set `reservedDomains` to your platform apex so no tenant can
+claim it or a subdomain of it.
 `verify(tenantId, domain, { force: true })` re-checks an already-verified domain
 and **un-verifies** it if the record is gone — run it on a schedule to defend
 against dangling-domain takeover.
@@ -330,6 +346,12 @@ against dangling-domain takeover.
 | `now` | `() => number` | `Date.now` | Injectable clock. |
 | `token` | `() => string` | 24 random bytes, base64url | Verification-token generator. |
 | `resolveTxt` | `(hostname) => Promise<string[][]>` | `node:dns/promises` `resolveTxt` | Injectable DNS lookup (tests, or a custom resolver). |
+| `claimTtlMs` | `number` | `72 * 60 * 60 * 1000` | How long an **unverified** claim holds a domain before another tenant can take it. Verified domains never expire. |
+| `reservedDomains` | `string[]` | `[]` | Your platform's own domains; each and every subdomain of it is refused with `DomainReservedError`. |
+| `challengeSecret` | `string` | — | Enables `challenge()`: the owner proves DNS control and takes over a squatted unverified claim at once. Same value on every instance. |
+
+A durable `DomainStore` should also implement `replace(expected, next)` as a
+conditional update, so handing an expired claim over is atomic.
 
 ### Failure modes & troubleshooting
 
@@ -342,6 +364,10 @@ against dangling-domain takeover.
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | The domain is already registered (by any tenant). |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | Acting on a domain that isn't registered. |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | Acting on a domain that belongs to a different tenant. |
+| `DomainReservedError` | `DOMAIN_RESERVED` | 403 | `add()` for a domain in `reservedDomains` or a subdomain of one. |
+| `InvalidDomainError` | `DOMAIN_INVALID` | 400 | A value that is not a hostname (see `normalizeDomain`). |
+| `InvalidTenantIdError` | `TENANT_ID_INVALID` | 400 | `create()`, `run()`, `provision(id)` or `destroy(id)` with an id outside the grammar. |
+| `TenantResolutionConflictError` | `TENANCY_CONFLICT` | 400 | `onConflict: 'error'` and two resolvers loaded different tenants. |
 
 `TenantNotFoundError` declares no `status`, so adapters surface it as a generic
 500 `INTERNAL_ERROR`; the others carry the code above.
@@ -349,9 +375,10 @@ against dangling-domain takeover.
 - **`TENANT_REQUIRED` inside a queue job** — jobs don't inherit the request
   context. Wrap the body in `tenancy.run(tenantId, …)`, or pass an explicit
   fallback to `requireTenantId(id)`.
-- **`ctx().tenant` is undefined even though the header is set** — the resolver
-  produced a ref, but `source.find()` returned `null`; an unknown id falls
-  through to the next resolver rather than failing.
+- **`ctx().tenant` is undefined even though the header is set** — either the
+  header named an unknown (or grammar-invalid) id, or an authoritative resolver
+  already named a tenant from the `Host`: a header is only consulted when the
+  subdomain/domain/route resolvers named nothing.
 - **A verified custom domain stopped resolving** — a `force` re-check found the
   TXT record missing and un-verified it. Re-publish the record and verify again.
 
@@ -366,7 +393,7 @@ context is typed everywhere once this package is installed.
 
 ## Common errors and solutions (FAQ)
 
-**"`ctx().tenant` is always `undefined`."** Check: (1) `tenancyPlugin` is registered **before** you read the context; (2) the request actually carries what the resolver expects (correct header, correct subdomain); (3) the tenant exists in the source — a resolver that identifies an unknown id is ignored.
+**"`ctx().tenant` is always `undefined`."** Check: (1) `tenancyPlugin` is registered **before** you read the context; (2) the request actually carries what the resolver expects (correct header, correct subdomain); (3) the tenant exists in the source — an unknown id from a header is ignored, and an unknown subdomain/domain resolves to no tenant at all (it does not fall through to the header).
 
 **"404 TENANCY_NOT_RESOLVED on requests that should pass."** You have `required: true` and no resolver managed to load a tenant. For "central" routes (landing page, sign-up) use `required: false` and handle the absence of a tenant in the handler.
 
