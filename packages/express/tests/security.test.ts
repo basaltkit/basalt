@@ -73,7 +73,8 @@ describe('express error middleware (security: no stack traces or internals in er
 
   it('maps an oversized body to a 413 JSON envelope', async () => {
     const base = await boot()
-    const res = await post(base, JSON.stringify({ n: 1, pad: 'a'.repeat(200_000) }))
+    // Over the 1 MiB default (DEFAULT_BODY_LIMIT, as on Fastify and Hono).
+    const res = await post(base, JSON.stringify({ n: 1, pad: 'a'.repeat(1_100_000) }))
     const text = await res.text()
     expect(res.status).toBe(413)
     expect(JSON.parse(text)).toEqual({
@@ -83,6 +84,13 @@ describe('express error middleware (security: no stack traces or internals in er
       },
     })
     expect(text).not.toMatch(/node_modules|<pre>/)
+  })
+
+  it('honours bodyLimit for JSON bodies', async () => {
+    const base = await boot({ bodyLimit: 64 })
+    expect((await post(base, JSON.stringify({ n: 1 }))).status).toBe(200)
+    const res = await post(base, JSON.stringify({ n: 1, pad: 'a'.repeat(100) }))
+    expect(res.status).toBe(413)
   })
 
   it('maps an unsupported body charset to a 415 JSON envelope', async () => {

@@ -1,6 +1,12 @@
 import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import type { RouteGuard } from '@basaltkit/http'
-import { InsufficientTeamRoleError, NotATeamMemberError, Teams, type TeamsOptions } from './teams.js'
+import {
+  InsufficientTeamRoleError,
+  NotATeamMemberError,
+  Teams,
+  UnknownTeamRoleError,
+  type TeamsOptions,
+} from './teams.js'
 import type { Membership, PublicInvitation, TeamRole } from './stores.js'
 
 declare module '@basaltkit/core' {
@@ -30,15 +36,21 @@ export function teamsPlugin(options: TeamsPluginOptions = {}) {
       const metadata = ensureMetadata(container)
 
       const guard: RouteGuard = async ({ route, context, container: c }) => {
-        const required = route.meta?.['teamRole'] as TeamRole | undefined
-        if (!required) return
+        const required: unknown = route.meta?.['teamRole']
+        // Same opt-off rule as the adapters' boot check: only `undefined` and
+        // `false` mean "no requirement". Anything else was declared — and the
+        // boot check counts it as protected — so an empty string, a typo
+        // (`'Admin'`) or a non-string is a misconfiguration: fail closed.
+        if (required === undefined || required === false) return
+        const teams = c.get(TEAMS)
+        if (!teams.isKnownRole(required)) throw new UnknownTeamRoleError(required)
 
         const ctxLike = context as { tenant?: { id: string }; user?: { id: string } }
         const tenantId = ctxLike.tenant?.id
         const userId = ctxLike.user?.id
         if (!tenantId || !userId) throw new NotATeamMemberError()
 
-        if (!(await c.get(TEAMS).can(tenantId, userId, required))) {
+        if (!(await teams.can(tenantId, userId, required))) {
           throw new InsufficientTeamRoleError(required)
         }
       }
@@ -139,7 +151,12 @@ export function tenantMembershipPlugin(options: TenantMembershipPluginOptions = 
         // record exist?", not "does the role outrank 'member'?" — otherwise a
         // genuine member with a custom role missing from roleRank (rank 0)
         // would be rejected. Rank semantics apply only with an explicit `role`.
-        if (required !== undefined) return teams.can(tenantId, userId, required)
+        if (required !== undefined) {
+          // A typo'd `role` must not silently degrade into an exact-match check
+          // nobody passes (or, before 4.0, a rank-0 check everybody passed).
+          if (!teams.isKnownRole(required)) throw new UnknownTeamRoleError(required)
+          return teams.can(tenantId, userId, required)
+        }
         return (await teams.roleOf(tenantId, userId)) !== null
       }
 

@@ -788,8 +788,8 @@ operation — see the RLS part of the [Security guide](/guide/security).
 **Schema per tenant** — one database, one PostgreSQL schema per tenant. Each
 tenant gets a client whose connection URL carries `?schema=tenant_<id>`, so
 Prisma sets the `search_path` at connect time (reliable, unlike per-request
-`search_path` switching on a shared pool). Clients are held in a bounded LRU
-pool:
+`search_path` switching on a shared pool). Clients are held in a bounded pool
+(only idle clients are evicted; see [the per-tenant client pool](./database-per-tenant#the-per-tenant-client-pool)):
 
 ```ts
 import { PrismaClient } from '@prisma/client'

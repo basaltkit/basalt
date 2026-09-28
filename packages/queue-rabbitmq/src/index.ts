@@ -4,12 +4,16 @@ import type {
   JobExecutor,
   QueueDriver,
 } from '@basaltkit/queue'
-import { queuePlugin, type QueuePluginOptions } from '@basaltkit/queue'
+import { queuePlugin, splitQueuePluginOptions, type QueuePluginOptions } from '@basaltkit/queue'
 
 /** The subset of an amqplib channel this driver uses. */
 export interface AmqpChannel {
-  /** amqplib channels are EventEmitters; optional so test fakes stay tiny. */
-  on?(event: 'error', listener: (error: unknown) => void): void
+  /**
+   * amqplib channels are EventEmitters; optional so test fakes stay tiny.
+   * `'close'` is what drives reconnection — without it a lost channel is
+   * permanent.
+   */
+  on?(event: 'error' | 'close', listener: (error?: unknown) => void): void
   assertQueue(queue: string, options?: Record<string, unknown>): Promise<unknown>
   sendToQueue(queue: string, content: Uint8Array, options?: Record<string, unknown>): boolean
   consume(
@@ -35,7 +39,7 @@ export interface AmqpMessage {
 
 export interface AmqpConnection {
   /** amqplib connections are EventEmitters; optional so test fakes stay tiny. */
-  on?(event: 'error', listener: (error: unknown) => void): void
+  on?(event: 'error' | 'close', listener: (error?: unknown) => void): void
   createChannel(): Promise<AmqpChannel>
   /** Preferred when present: publisher-confirm channel (amqplib supports it). */
   createConfirmChannel?(): Promise<AmqpChannel>
@@ -56,6 +60,17 @@ const HEADER = {
 /** Hard ceilings on retries and backoff so a crafted message can't demand unbounded ones. */
 const MAX_ATTEMPTS = 50
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000 // 24h
+
+/**
+ * The attempt number a message carries, as an integer in `[1, MAX_ATTEMPTS]`.
+ * The header is untrusted: a negative or fractional value used to satisfy
+ * `attempt < attempts` for a million rounds, bypassing the retry ceiling.
+ */
+function readAttempt(raw: unknown): number {
+  const value = Number(raw ?? 1)
+  if (!Number.isFinite(value) || value < 1) return 1
+  return Math.min(Math.trunc(value), MAX_ATTEMPTS)
+}
 
 const defaultConnect: AmqpConnect = async (url) => {
   // Bare-specifier dynamic import kept opaque to the bundler/type-checker so
@@ -82,9 +97,19 @@ export interface RabbitmqDriverOptions {
    * unacked, so the broker redelivers them.
    */
   drainTimeoutMs?: number
+  /**
+   * After the connection or channel closes unexpectedly (broker restart,
+   * network cut, a channel-level protocol error), how long to wait before
+   * reconnecting — doubled on each consecutive failure, capped at 30s. The
+   * next `add()` reconnects on demand; workers are re-subscribed by the
+   * reconnect loop. Default 1000 ms.
+   */
+  reconnectDelayMs?: number
   /** Injectable connector — defaults to amqplib. Tests pass a fake. */
   connect?: AmqpConnect
 }
+
+const MAX_RECONNECT_DELAY_MS = 30_000
 
 /**
  * RabbitMQ queue driver for `@basaltkit/queue`. Retries and backoff use a
@@ -116,11 +141,17 @@ export class RabbitmqQueueDriver implements QueueDriver {
   /** In-flight message handlers — close() drains these before tearing down. */
   private readonly inflight = new Set<Promise<void>>()
   private closing = false
+  /** Workers started on this driver — re-subscribed after a reconnect. */
+  private readonly workers = new Map<string, { concurrency?: number }>()
+  private readonly reconnectDelayMs: number
+  private reconnectTimer: NodeJS.Timeout | undefined
+  private reconnectAttempt = 0
 
   constructor(private readonly options: RabbitmqDriverOptions) {
     this.maxPriority = options.maxPriority ?? 10
     this.connect = options.connect ?? defaultConnect
     this.drainTimeoutMs = options.drainTimeoutMs ?? 10_000
+    this.reconnectDelayMs = options.reconnectDelayMs ?? 1000
     this.onError =
       options.onError ??
       ((error: unknown, info: { source: 'connection' | 'channel' }) =>
@@ -161,25 +192,30 @@ export class RabbitmqQueueDriver implements QueueDriver {
   }
 
   startWorker(queue: string, options: { concurrency?: number } = {}): void {
-    void (async () => {
-      const channel = await this.channel()
-      await this.ensureTopology(channel, queue)
-      await channel.prefetch(options.concurrency ?? 1)
-      await channel.consume(queue, (message) => {
-        if (!message) return
-        // handle() never rejects; track it so close() can drain in-flight work.
-        const pending = this.handle(channel, queue, message).finally(() => this.inflight.delete(pending))
-        this.inflight.add(pending)
-      })
-    })().catch((error) => {
+    this.workers.set(queue, options)
+    this.consume(queue, options).catch((error) => {
       // A broker-connect/consume failure at boot must be visible — otherwise the
       // app reports healthy with zero workers (and the rejection would be fatal).
       this.onError(error, { source: 'connection' })
+      this.scheduleReconnect()
+    })
+  }
+
+  private async consume(queue: string, options: { concurrency?: number }): Promise<void> {
+    const channel = await this.channel()
+    await this.ensureTopology(channel, queue)
+    await channel.prefetch(options.concurrency ?? 1)
+    await channel.consume(queue, (message) => {
+      if (!message) return
+      // handle() never rejects; track it so close() can drain in-flight work.
+      const pending = this.handle(channel, queue, message).finally(() => this.inflight.delete(pending))
+      this.inflight.add(pending)
     })
   }
 
   async close(): Promise<void> {
     this.closing = true
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     // Drain: let in-flight handlers finish (bounded), so their acks land on a
     // live channel. Anything unfinished stays unacked and gets redelivered.
     if (this.inflight.size > 0) {
@@ -212,7 +248,7 @@ export class RabbitmqQueueDriver implements QueueDriver {
     }
     try {
       if (failed) {
-        const attempt = Number(headers[HEADER.attempt] ?? 1)
+        const attempt = readAttempt(headers[HEADER.attempt])
         // Clamp the max-attempts read from the (untrusted) message to a hard
         // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
         const attempts = Math.min(Number(headers[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
@@ -240,7 +276,10 @@ export class RabbitmqQueueDriver implements QueueDriver {
   }
 
   private backoffDelay(headers: Record<string, unknown>, attempt: number): number {
-    const base = Number(headers[HEADER.backoffMs] ?? 0)
+    // A negative/NaN base became `expiration: "-5"`, which the broker answers
+    // with a channel-closing PRECONDITION_FAILED.
+    const raw = Number(headers[HEADER.backoffMs] ?? 0)
+    const base = Number.isFinite(raw) && raw > 0 ? Math.min(Math.trunc(raw), MAX_BACKOFF_MS) : 0
     if (!base) return 0
     if (headers[HEADER.backoffType] !== 'exponential') return base
     // Clamp the exponent (attempt comes from the message) so the TTL can't blow
@@ -266,18 +305,63 @@ export class RabbitmqQueueDriver implements QueueDriver {
 
   private async channel(): Promise<AmqpChannel> {
     if (!this.channelPromise) {
-      this.channelPromise = (async () => {
-        this.connection = await this.connect(this.options.url)
+      const opening = (async () => {
+        const connection = await this.connect(this.options.url)
+        this.connection = connection
         // Unlistened EventEmitter 'error' events are fatal in Node (Q-2).
-        this.connection.on?.('error', (error) => this.onError(error, { source: 'connection' }))
+        connection.on?.('error', (error) => this.onError(error, { source: 'connection' }))
+        connection.on?.('close', () => this.lost(opening))
         // Prefer a publisher-confirm channel: sendToQueue can then be awaited
         // via waitForConfirms, so ack only happens after the broker took over.
-        const channel = await (this.connection.createConfirmChannel?.() ?? this.connection.createChannel())
+        const channel = await (connection.createConfirmChannel?.() ?? connection.createChannel())
         channel.on?.('error', (error) => this.onError(error, { source: 'channel' }))
+        channel.on?.('close', () => this.lost(opening))
         return channel
       })()
+      // A failed open must not be cached: the next call retries it.
+      opening.catch(() => {
+        if (this.channelPromise === opening) this.channelPromise = undefined
+      })
+      this.channelPromise = opening
     }
     return this.channelPromise
+  }
+
+  /**
+   * The channel (or its connection) closed. Unless we are shutting down, drop
+   * the cached channel and topology so the next `add()` reopens them, and
+   * schedule a reconnect that re-subscribes every worker. Unacked messages of
+   * the dead channel are redelivered by the broker.
+   */
+  private lost(opening: Promise<AmqpChannel>): void {
+    if (this.closing || this.channelPromise !== opening) return // stale or deliberate
+    this.channelPromise = undefined
+    this.connection = undefined
+    this.asserted.clear()
+    this.onError(new Error('RabbitMQ channel closed — reconnecting'), { source: 'channel' })
+    this.scheduleReconnect()
+  }
+
+  private scheduleReconnect(): void {
+    if (this.closing || this.reconnectTimer || this.workers.size === 0) return
+    const delay = Math.min(this.reconnectDelayMs * 2 ** this.reconnectAttempt, MAX_RECONNECT_DELAY_MS)
+    this.reconnectAttempt++
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined
+      void this.resubscribe()
+    }, delay)
+    this.reconnectTimer.unref?.()
+  }
+
+  private async resubscribe(): Promise<void> {
+    if (this.closing) return
+    try {
+      for (const [queue, options] of this.workers) await this.consume(queue, options)
+      this.reconnectAttempt = 0
+    } catch (error) {
+      this.onError(error, { source: 'connection' })
+      this.scheduleReconnect()
+    }
   }
 
   private delayQueue(queue: string): string {
@@ -314,15 +398,8 @@ export interface RabbitmqQueuePluginOptions
  * only reads defaults, and every connection is opened lazily on first use.
  */
 export function rabbitmqQueuePlugin(options: RabbitmqQueuePluginOptions) {
-  // Split by the CORE's keys, not the driver's: a new driver option then flows
-  // through untouched, and only a change to QueuePluginOptions needs an edit here.
-  const { jobs, workers, onUnsupported, removeOnComplete, removeOnFail, ...driver } = options
-  return queuePlugin({
-    ...(jobs !== undefined ? { jobs } : {}),
-    ...(workers !== undefined ? { workers } : {}),
-    ...(onUnsupported !== undefined ? { onUnsupported } : {}),
-    ...(removeOnComplete !== undefined ? { removeOnComplete } : {}),
-    ...(removeOnFail !== undefined ? { removeOnFail } : {}),
-    driver: new RabbitmqQueueDriver(driver),
-  })
+  // Split by the CORE's key list: a new core option (e.g. `signingKey`) reaches
+  // queuePlugin, and every other key flows to the driver untouched.
+  const { core, driver } = splitQueuePluginOptions(options)
+  return queuePlugin({ ...core, driver: new RabbitmqQueueDriver(driver) })
 }

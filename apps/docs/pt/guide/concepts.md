@@ -331,6 +331,11 @@ e o que um novo tem de fazer):
    `app:booted`, e serve o 404 neutro.
 3. `shutdown`: fecha o servidor.
 
+Código que conduz o `runRoute()` directamente, sem adaptador, corre o mesmo check
+de boot com o container já arrancado: `assertRoutesGuarded(routes, app.container)`
+lança `UnguardedRouteMetaError` para uma rota cujo meta de segurança nenhum plugin
+aplica.
+
 As features apontam ao contrato neutro, nunca a um adapter — um teste de
 fronteira no CI garante que packages de features runtime não importam um
 adapter.

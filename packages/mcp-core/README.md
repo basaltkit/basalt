@@ -180,7 +180,7 @@ and resolves any pending elicitation as declined.
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `port` | `number` | `0` | `0` picks an ephemeral port — read the real one from the handle. |
-| `host` | `string` | `'127.0.0.1'` | Loopback, because this is a dev-only surface. Change it only deliberately. |
+| `host` | `string` | `'127.0.0.1'` | Loopback, because this is a dev-only surface. Change it only deliberately. An IPv6 address works bare or bracketed (`'::1'` / `'[::1]'`); `handle.url` brackets it (`http://[::1]:8848/mcp`). |
 | `path` | `string` | `'/mcp'` | The JSON-RPC endpoint. Anything else answers `404`. |
 | `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`, beyond loopback. Needed when you bind a non-loopback `host` (e.g. `0.0.0.0` in CI). Compared case-insensitively, port ignored. |
 | `allowedOrigins` | `string[]` | `[]` | Extra origins accepted in `Origin`, beyond loopback. Compared case-insensitively against the full origin. |
@@ -188,7 +188,14 @@ and resolves any pending elicitation as declined.
 | `authorize` | `(req) => boolean \| Promise<boolean>` | — | Authenticates a request that passed the guard; `false` answers `401`. Required (or `allowRequest`) for a non-loopback `host`. |
 | `maxBodyBytes` | `number` | `1048576` (1 MiB) | Larger bodies get `413` and are not buffered. |
 
-`HttpHandle` is `{ port, url, close(): Promise<void> }`.
+`HttpHandle` is `{ port, url, close(): Promise<void> }`. The promise rejects with the
+`listen()` error (`EADDRINUSE`, `EADDRNOTAVAIL`, …) when the address cannot be bound.
+
+Over HTTP, `ctx.headers` holds the request headers with their multiplicity kept: a header
+sent once is a string, a header sent more than once is a `string[]` of every value, in
+order. Node's own `req.headers` would join most repeats with `, ` and keep only the first
+`authorization`/`host`/`content-type` — a tool that treats a duplicated header as ambiguous
+(and refuses) should check `Array.isArray(ctx.headers[name])`.
 
 ### Protocol helpers
 
@@ -222,6 +229,9 @@ Symptoms:
   `0.0.0.0`, or a proxy rewrites `Host`). Add it to `allowedHosts`.
 - **`serveHttp` rejects with "refusing to bind non-loopback host"** — give it `authorize`
   (or `allowRequest`); the Host guard alone does not protect a network-reachable server.
+- **`serveHttp` rejects with `EADDRINUSE`** — the port is taken (another server, or a
+  previous run still alive). Pick another `port`, or `0` for an ephemeral one. Releases
+  before 0.4.0 never settled in this case.
 - **Progress updates never arrive over HTTP** — expected: that transport has no
   server→client channel. Use stdio.
 - **A cancelled call keeps running** — the tool ignored `ctx.signal`; the abort is

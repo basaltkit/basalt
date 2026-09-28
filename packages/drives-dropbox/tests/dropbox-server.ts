@@ -35,6 +35,8 @@ export interface FakeDropboxFile {
   isDownloadable?: boolean
   clientModified?: string
   serverModified?: string
+  /** A folder entry rather than a file — so a test can hand out a folder id. */
+  isFolder?: boolean
 }
 
 interface Entry {
@@ -94,7 +96,7 @@ export class FakeDropbox {
   put(file: FakeDropboxFile): void {
     const name = file.path.split('/').filter(Boolean).pop() ?? file.path
     const entry: Entry & { content: string } = {
-      '.tag': 'file',
+      '.tag': file.isFolder === true ? 'folder' : 'file',
       id: file.id,
       name,
       path_lower: file.path.toLowerCase(),

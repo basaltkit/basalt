@@ -62,6 +62,9 @@ export interface PrismaTeamsClient {
 
 // The @basaltkit/teams contracts model time as epoch-ms numbers; Prisma models it
 // as DateTime. Convert at the edges.
+// Same folding as `canonicalInviteEmail` in @basaltkit/teams (kept local so this
+// store works against any 3.x/4.x teams peer).
+const canonicalEmail = (email: string): string => email.trim().toLowerCase()
 const ms = (d: Date): number => d.getTime()
 const at = (n: number): Date => new Date(n)
 
@@ -166,8 +169,16 @@ export class PrismaInvitationStore implements InvitationStore {
     return rows.map(toInvitation)
   }
 
+  /**
+   * Matches the canonical (trimmed, lower-cased) address on both sides, so a
+   * mixed-case row written before `@basaltkit/teams` 4.0 canonicalised emails
+   * is still found. Filtered in JS: Prisma's `mode: 'insensitive'` exists only
+   * on PostgreSQL/MongoDB, and this store must work on every provider.
+   */
   async findPending(tenantId: string, email: string): Promise<Invitation | null> {
-    const r = await this.client.teamInvitation.findFirst({ where: { tenantId, email, ...PENDING } })
+    const wanted = canonicalEmail(email)
+    const rows = await this.client.teamInvitation.findMany({ where: { tenantId, ...PENDING } })
+    const r = rows.find((row) => canonicalEmail(row.email) === wanted)
     return r ? toInvitation(r) : null
   }
 

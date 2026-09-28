@@ -1,4 +1,4 @@
-import type { UsageConsumeResult, UsageStore } from '../stores.js'
+import { assertUsageAmount, type UsageConsumeResult, type UsageStore } from '../stores.js'
 
 /** Minimal ioredis-compatible surface — inject your client, no hard dependency. */
 export interface RedisLike {
@@ -19,6 +19,9 @@ local current = tonumber(redis.call('GET', KEYS[1]) or '0')
 local amount = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
+if amount == nil or amount <= 0 or amount ~= math.floor(amount) then
+  return redis.error_reply('ERR usage amount must be a positive integer')
+end
 if current + amount > limit then
   return {0, current}
 end
@@ -70,6 +73,7 @@ export class RedisUsageStore implements UsageStore {
     periodKey: string,
     amount: number,
   ): Promise<number> {
+    assertUsageAmount(amount)
     // Unlimited path: reuse the script with an effectively-infinite limit.
     const reply = await this.redis.eval(
       CONSUME_SCRIPT,
@@ -89,6 +93,7 @@ export class RedisUsageStore implements UsageStore {
     amount: number,
     limit: number,
   ): Promise<UsageConsumeResult> {
+    assertUsageAmount(amount)
     const reply = (await this.redis.eval(
       CONSUME_SCRIPT,
       1,

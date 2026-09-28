@@ -116,7 +116,9 @@ syncRule({
 await search.reindex('notes')   // → number of documents written
 ```
 
-`backfill` yields **hook payloads**, not rows, so the same `document` function maps both. A second mapping written by hand is the drift this prevents: let it disagree and the same search returns different things depending on whether a record predates the last rebuild. The index is cleared first — a rebuild that appends leaves documents for records that no longer exist — and an index whose rules have no `backfill` raises, rather than reporting a rebuild that did nothing.
+`backfill` yields **hook payloads**, not rows, so the same `document` function maps both. A second mapping written by hand is the drift this prevents: let it disagree and the same search returns different things depending on whether a record predates the last rebuild. Every row is mapped and validated **before** the index is cleared (two walks over `backfill`, memory bounded by one page), so a rebuild that would fail leaves the old index in place instead of an empty one; rows that change between the walks can still fail the second — rerun then. The index is then cleared, not appended to — a rebuild that appends leaves documents for records that no longer exist — and an index whose rules have no `backfill` raises, rather than reporting a rebuild that did nothing.
+
+A rebuild covers every tenant, so it never takes the tenant from the context it runs in: in a multi-tenant app `document` must return `tenantId`, and a row without one throws `TenantRequiredError` whenever `@basaltkit/tenancy` is registered or a tenant context is active. Only a single-tenant app with no context tenant files tenant-less rows under `SINGLE_TENANT_SCOPE`. `reindex()` clears the **whole** index, so `backfill` must yield every tenant's records — never call it once per tenant (e.g. inside `tenancy.run`), or each call wipes the others.
 
 ## How relevance works (in-memory driver)
 
@@ -165,8 +167,9 @@ Both keep the same guarantee as the built-in drivers: **every query is constrain
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `driver` | `SearchDriver` | `MemorySearchDriver` | Search backend. |
-| `indexes` | `IndexDefinition[]` | `[]` | Indexes to register on startup. |
+| `indexes` | `IndexDefinition[]` | `[]` | Indexes to register on startup. A listed index only accepts `filters` on its `filterable` fields. |
 | `sync` | `SyncRule[]` | `[]` | Hook → index rules (use `syncRule(...)`). |
+| `maxLimit` | `number` | `1000` | Largest `limit` one `search()` may ask for; above it throws `SearchPaginationError`. |
 
 Registers the `SEARCH` token (`Search`).
 
@@ -177,8 +180,14 @@ Registers the `SEARCH` token (`Search`).
 | `index(indexName, document)` | Indexes/updates a document (carries `id` and `tenantId`). |
 | `bulk(indexName, documents)` | Indexes several. |
 | `remove(indexName, id, tenantId?)` | Removes a document (tenant from context if omitted). |
-| `search(indexName, q, options?)` | Searches. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`, `authorize?`, `maxScan?`. |
-| `reindex(indexName)` | Rebuilds the index from its rules' `backfill`, through their own `document`. Clears first; returns how many documents were written. Throws if no rule declares the index, or none has a `backfill`. |
+| `search(indexName, q, options?)` | Searches. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`, `authorize?`, `maxScan?`. Validated first — see below. |
+| `reindex(indexName)` | Rebuilds the index from its rules' `backfill`, through their own `document`. Validates every row, then clears and writes; returns how many documents were written. Throws if no rule declares the index, none has a `backfill`, or a row has no `tenantId` where a tenant could exist. |
+
+`search()` validates its input before any driver runs (each a `400`):
+
+- `limit`/`offset` must be non-negative integers and `limit` ≤ `maxLimit` (default `1000`, `searchPlugin({ maxLimit })`) — `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`).
+- On an index listed in `searchPlugin({ indexes })` (or `new Search({ indexes })`), a filter may only name a `filterable` field or `tenantId` — `SearchFilterNotFilterableError` (`SEARCH_FILTER_NOT_FILTERABLE`). Indexes not listed keep passing any field to the driver.
+- A filter value must be a string, a finite number, a boolean, or a flat array of those; `null`/`undefined` are refused rather than dropped (dropping would widen the result) — `SearchFilterValueError` (`SEARCH_INVALID_FILTER_VALUE`). `MeilisearchDriver` repeats this check, since it splices values into its filter DSL.
 
 Without an explicit `tenantId`, `search`/`remove` use `ctx().tenant.id`; if there's no tenant, they throw `TenantRequiredError` — **only when `@basaltkit/tenancy` is registered**. An app without it has no tenant dimension: every document lands in `SINGLE_TENANT_SCOPE` (`'@single'`, a sentinel outside the tenant-id grammar; a tenant carrying it — from the context, an argument, a document or a `reindex()` row — is refused with `SearchTenantReservedError`, `SEARCH_TENANT_RESERVED`, 400).
 

@@ -1,4 +1,32 @@
+import { BasaltError } from '@basaltkit/core'
 import type { BillingPeriod } from './plans.js'
+
+/**
+ * A usage amount that is not a positive safe integer. A negative amount would
+ * hand quota back, `NaN` would poison the counter (`NaN + 1 > limit` is false
+ * forever, so the quota never binds again) and a fraction cannot be stored by
+ * the integer counters of the durable stores.
+ */
+export class InvalidUsageAmountError extends BasaltError {
+  readonly status = 400
+  constructor(amount: unknown) {
+    super(
+      'BILLING_INVALID_USAGE_AMOUNT',
+      `Usage amount must be a positive integer, got ${String(amount)}.`,
+    )
+  }
+}
+
+/**
+ * Throws {@link InvalidUsageAmountError} unless `amount` is a positive safe
+ * integer. Every `UsageStore` (memory, Redis, Prisma, SQLite) calls it too, so a
+ * store used directly is as strict as `features().consume()`.
+ */
+export function assertUsageAmount(amount: unknown): asserts amount is number {
+  if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) {
+    throw new InvalidUsageAmountError(amount)
+  }
+}
 
 export type SubscriptionStatus = 'active' | 'trialing' | 'past_due' | 'canceled' | 'incomplete'
 
@@ -80,7 +108,10 @@ export interface UsageConsumeResult {
 /** Usage counters: `periodKey` is 'lifetime' or 'YYYY-MM' for meters. */
 export interface UsageStore {
   get(billableId: string, feature: string, periodKey: string): Promise<number>
-  /** Unconditional increment — used for unlimited features. Returns the new total. */
+  /**
+   * Unconditional increment — used for unlimited features. Returns the new total.
+   * `amount` must be a positive safe integer (see {@link assertUsageAmount}).
+   */
   increment(
     billableId: string,
     feature: string,
@@ -89,7 +120,9 @@ export interface UsageStore {
   ): Promise<number>
   /**
    * Atomically increments by `amount` only if the result stays within `limit`.
-   * Must be atomic under concurrency so a quota is never overshot.
+   * Must be atomic under concurrency so a quota is never overshot. `amount`
+   * must be a positive safe integer — implementations reject anything else
+   * with {@link assertUsageAmount} (a negative amount would refund quota).
    */
   consume(
     billableId: string,
@@ -117,6 +150,7 @@ export class MemoryUsageStore implements UsageStore {
     periodKey: string,
     amount: number,
   ): Promise<number> {
+    assertUsageAmount(amount)
     const key = this.key(billableId, feature, periodKey)
     const total = (this.counters.get(key) ?? 0) + amount
     this.counters.set(key, total)
@@ -130,6 +164,7 @@ export class MemoryUsageStore implements UsageStore {
     amount: number,
     limit: number,
   ): Promise<UsageConsumeResult> {
+    assertUsageAmount(amount)
     // No await between read and write — atomic in the single-threaded event loop.
     const key = this.key(billableId, feature, periodKey)
     const current = this.counters.get(key) ?? 0

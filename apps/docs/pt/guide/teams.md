@@ -96,8 +96,11 @@ uma rota que requer `admin` também aceita `owner`:
 | `admin` | 2 |
 | `member` | 1 |
 
-Os roles são strings livres; sobrepõe a hierarquia com um mapa nome → rank (roles
-fora do mapa têm rank 0):
+Os roles são strings livres; sobrepõe a hierarquia com um mapa nome → rank. Só os
+roles **com rank** têm hierarquia: um requisito com rank admite esse rank ou
+superior (nunca quem tem um role sem rank), e um requisito fora do mapa (p. ex.
+uma entrada de `grantableRoles`) é comparado de forma **exacta** — nunca tem
+rank 0 nem admite todos os membros:
 
 ```ts
 teamsPlugin({ roleRank: { owner: 4, admin: 3, editor: 2, viewer: 1 } })
@@ -128,7 +131,9 @@ remoção: `DELETE /team/members/:userId` só pode remover o próprio ator ou um
 membro que não o supere em rank, por isso um `admin` não pode remover um
 `owner`. Roles ausentes de `roleRank` não podem ser concedidos (ver acima).
 Chamadas ao serviço sem `actingUserId` (seeding server-side de confiança)
-saltam a verificação.
+saltam a verificação. "Não o supere" é intencional — pares gerem pares (um admin
+pode alterar o role ou remover outro admin); dá a um nível o seu próprio rank se
+só puder ser gerido de cima.
 :::
 
 ## Seeding do primeiro owner
@@ -175,6 +180,13 @@ route({
   async handler() { return { created: true } },
 })
 ```
+
+O role exigido tem de ser **conhecido** — estar em `roleRank` ou em
+`grantableRoles`. Um erro de escrita (`'Admin'`, `'adimn'`), uma string vazia ou
+um valor não-string falha fechado com `500 TEAM_ROLE_UNKNOWN` em todos os pedidos
+a essa rota (antes do `@basaltkit/teams` 4.0 tinha rank 0 e admitia qualquer
+membro). Só `undefined` e `false` significam "sem requisito". O mesmo vale para
+`tenantMembershipPlugin({ role })`.
 
 `teamsPlugin` reclama a chave `teamRole` na verificação de meta-guardada feita
 pelos adaptadores no arranque — declarar `meta.teamRole` numa rota **sem**
@@ -268,7 +280,10 @@ Vê [Billing](/pt/guide/billing) e o [guia de segurança](/pt/guide/security).
 `POST /team/invites` cunha um token de uso único e expirável (padrão 7 dias) e emite
 `team:invited` que o transporta. **O token é enviado por email — nunca devolvido por HTTP.**
 Um novo convite para o mesmo endereço substitui qualquer um pendente (um convite pendente
-por email por equipa). Por HTTP:
+por email por equipa). Os endereços são comparados e guardados na forma canónica
+(sem espaços, em minúsculas — a mesma normalização do `@basaltkit/auth`), por isso
+`Bob@x.test` e `bob@x.test` são o mesmo convidado, incluindo linhas com maiúsculas
+anteriores à 4.0. Por HTTP:
 
 ```bash
 # 1. Um admin convida o Bob (201; a resposta nunca contém o token)
@@ -459,7 +474,7 @@ de conceder o catálogo em cada tenant — vê
 | `users` | `MemberUserSource` | — | Directório de utilizadores (só de leitura) por trás de `membersWithUsers` / `roleRecipients`; um `UserSource` do `@basaltkit/auth` serve tal como está |
 | `access` | `RoleAssigner` | — | Espelha cada mudança de membership numa concessão de role de `@basaltkit/permissions` no âmbito do tenant |
 | `inviteTtl` | `DurationInput` | `'7d'` | Tempo de vida do link de convite |
-| `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Hierarquia de roles; roles fora do mapa têm rank 0 |
+| `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Hierarquia de roles; roles fora do mapa não têm rank (comparação exacta) |
 | `grantableRoles` | `TeamRole[]` | `[]` | Roles sem rank que um utilizador ativo pode ainda conceder; qualquer outro role fora de `roleRank` é recusado (`TEAM_ROLE_NOT_GRANTABLE`) |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
@@ -488,6 +503,7 @@ de conceder o catálogo em cada tenant — vê
 | `TeamRoleNotGrantableError` | `TEAM_ROLE_NOT_GRANTABLE` | 403 | Um utilizador ativo tentou conceder um role que não está em `roleRank` nem em `grantableRoles` |
 | `TeamEmailNotVerifiedError` | `TEAM_EMAIL_NOT_VERIFIED` | 403 | `POST /team/invites/accept` por um utilizador cujo email não está verificado (ver `requireVerifiedEmail`) |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | A mudança deixaria a equipa sem owner |
+| `UnknownTeamRoleError` | `TEAM_ROLE_UNKNOWN` | 500 | `meta.teamRole` / `tenantMembershipPlugin({ role })` indica um role que não está em `roleRank` nem em `grantableRoles` (erro de escrita, `''`, não-string) |
 | `TeamUserSourceMissingError` | `TEAM_USER_SOURCE_MISSING` | 500 | `membersWithUsers` / `roleRecipients` (ou `memberContacts: true`) correu sem directório `users` configurado |
 | `TEAM_NO_TENANT` | `TEAM_NO_TENANT` | 400 | Um endpoint de `teamRoutes()` foi chamado sem tenant no contexto — regista a tenancy e envia o identificador do tenant |
 | `TEAM_INVITE_NOT_FOUND` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` para um id que não existe ou pertence a outro tenant |
@@ -497,8 +513,12 @@ de conceder o catálogo em cada tenant — vê
   `ttlMs` da cache de membership limita a desatualização entre réplicas em ambos
   os sentidos; a decisão é refrescada dentro de `ttlMs`.
 - **Um role personalizado continua a receber `TEAM_ROLE_REQUIRED`** — roles fora
-  de `roleRank` têm rank 0. Adiciona o role ao mapa, ou (para o guard de
-  membership) confia na semântica de existência predefinida em vez de `role:`.
+  de `roleRank` não têm rank: nunca satisfazem um requisito com rank. Adiciona o
+  role ao mapa, ou (para o guard de membership) confia na semântica de
+  existência predefinida em vez de `role:`.
+- **`500 TEAM_ROLE_UNKNOWN` numa rota** — o seu `meta.teamRole` não está em
+  `roleRank` nem em `grantableRoles`; normalmente um erro de escrita (os roles
+  distinguem maiúsculas).
 - **`403` numa rota central (login, registo, criação de tenant)** — marca-a com
   `meta: { central: true }`, ou isenta a identidade que chama com `exempt`.
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 import {
+  DriveAccessDeniedError,
   DriveAuthorizationInvalidError,
   DriveContentTooLargeError,
   DriveCredentialsInvalidError,
@@ -422,6 +423,12 @@ export class GoogleDrive implements DriveProvider {
    */
   async list(session: DriveSession, options: DriveListOptions): Promise<DrivePage<DriveItem>> {
     const scope = options.folderId ?? session.rootId
+    // A folder other than the root has to be inside it (FA-073). Checked once,
+    // on the first page: a continuation cursor reached the caller through the
+    // engine's MAC, so it can only name folders this listing already vetted.
+    if (options.folderId !== undefined && options.cursor === undefined) {
+      await this.assertInRoot(session, assertFileId(options.folderId))
+    }
     const limit = Math.min(Math.max(1, options.limit ?? this.pageSize), GOOGLE_MAX_PAGE_SIZE)
     if (scope === undefined || this.options.listMode === 'children') {
       const page = await this.listPage(session, scope, limit, options.cursor)
@@ -496,7 +503,12 @@ export class GoogleDrive implements DriveProvider {
       if ((error as { code?: string }).code === 'DRIVE_ITEM_NOT_FOUND') return null
       throw error
     }
-    return toDriveItem((await response.json()) as GoogleFile)
+    const file = (await response.json()) as GoogleFile
+    // Outside the connection's root is, for this connection, not there at all
+    // — the same `null` a deleted file gets, so the answer is no oracle for
+    // what else the account holds (FA-073).
+    if (!(await this.scope(session).contains(file))) return null
+    return toDriveItem(file)
   }
 
   /**
@@ -525,6 +537,9 @@ export class GoogleDrive implements DriveProvider {
     if (item.kind === 'folder') {
       throw new DriveUnsupportedError(this.name, `downloading the folder "${item.name}"`)
     }
+    // The item is caller-supplied, so its id is checked against the root
+    // before a byte is requested — not after, when it would already be here.
+    await this.assertInRoot(session, item.externalId)
     const response = await this.request(
       session,
       `${API_BASE}/files/${encodeURIComponent(item.externalId)}?alt=media&supportsAllDrives=true`,
@@ -566,6 +581,14 @@ export class GoogleDrive implements DriveProvider {
       throw new DriveContentTooLargeError(this.uploadMaxBytes)
     }
     const folder = input.folderId ?? session.rootId
+    if (input.folderId !== undefined) {
+      try {
+        await this.assertInRoot(session, assertFileId(input.folderId))
+      } catch (error) {
+        input.content.destroy()
+        throw error
+      }
+    }
     const metadata: Record<string, unknown> = { name: input.name, mimeType: input.contentType }
     if (folder !== undefined) metadata['parents'] = [assertFileId(folder)]
 
@@ -767,14 +790,45 @@ export class GoogleDrive implements DriveProvider {
     if (token.length > 256) throw new DriveNotificationInvalidError('the channel token is too long.')
     const channelId = input.headers['x-goog-channel-id']
     const state = input.headers['x-goog-resource-state']
+    // The body is empty, so the per-channel message counter is the only thing
+    // that tells one delivery from the next. It is reported here because the
+    // engine no longer reads it from arbitrary providers' headers (FA-075). It
+    // is unsigned, but so is everything else Google sends: whoever holds the
+    // channel token can already mint any notification they like.
+    const messageNumber = input.headers['x-goog-message-number']
     return {
       secret: token,
       changed: state !== 'sync',
       ...(channelId !== undefined && channelId !== '' ? { watchId: channelId } : {}),
+      ...(messageNumber !== undefined && /^\d{1,20}$/.test(messageNumber) ? { replayKey: messageNumber } : {}),
     }
   }
 
   // ----------------------------------------------------------------- guts
+
+  /** A scope check for one call. Never shared: see {@link ScopeCheck}. */
+  private scope(session: DriveSession): ScopeCheck {
+    return new ScopeCheck(this, session, this.ancestryMaxDepth, this.ancestryMaxLookups)
+  }
+
+  /**
+   * Refuses an id that is not inside the connection's root (FA-073).
+   *
+   * `DriveSession.rootId` promised confinement, and phase 2 only kept it for
+   * the change feed: a `folderId`, an item to read or download, and an upload
+   * target all went straight to the API, which answers for anything the
+   * *token* can see — the whole account. Drive has no "is X under Y" query, so
+   * this walks `parents` up to the root, costing one metadata read per level
+   * (bounded by `ancestryMaxDepth` / `ancestryMaxLookups`). An unconfined
+   * connection pays nothing.
+   */
+  private async assertInRoot(session: DriveSession, fileId: string): Promise<void> {
+    if (session.rootId === undefined) return
+    if (!(await this.scope(session).containsId(fileId))) {
+      throw new DriveAccessDeniedError(this.name, 'the item is outside the folder this connection is confined to')
+    }
+  }
+
 
   /**
    * Fetches a file's parents.
@@ -806,6 +860,20 @@ export class GoogleDrive implements DriveProvider {
     }
     const json = (await response.json()) as GoogleFile
     return json.parents ?? []
+  }
+
+  /**
+   * The real id behind an alias such as `root`.
+   *
+   * @internal used by {@link ScopeCheck}.
+   */
+  async idOf(session: DriveSession, fileId: string): Promise<string> {
+    const json = await this.call<{ id?: string }>(
+      session,
+      `${API_BASE}/files/${encodeURIComponent(fileId)}?fields=id&supportsAllDrives=true`,
+    )
+    if (typeof json.id !== 'string' || json.id === '') throw new DriveProviderError(this.name, 'rootUnresolvable', 502, true)
+    return json.id
   }
 
   /** One JSON call, mapped on failure. */
@@ -918,12 +986,38 @@ class ScopeCheck {
   ) {}
 
   async contains(file: GoogleFile): Promise<boolean> {
-    const root = this.session.rootId
-    if (root === undefined) return true
-    if (file.id === root) return true
-    let frontier = file.parents ?? []
-    if (file.id !== undefined) this.parents.set(file.id, frontier)
-    const seen = new Set<string>(file.id !== undefined ? [file.id] : [])
+    if (this.session.rootId === undefined) return true
+    const root = await this.root()
+    if (file.id === root || file.id === this.session.rootId) return true
+    if (file.id !== undefined) this.parents.set(file.id, file.parents ?? [])
+    return this.walk(file.id, file.parents ?? [], root)
+  }
+
+  /** {@link contains} for a bare id — the file's own parents are read first. */
+  async containsId(fileId: string): Promise<boolean> {
+    if (this.session.rootId === undefined || fileId === this.session.rootId) return true
+    const root = await this.root()
+    if (fileId === root) return true
+    return this.walk(fileId, await this.lookup(fileId), root)
+  }
+
+  private resolvedRoot: string | undefined
+
+  /**
+   * The root as a real file id. Drive's `root` alias names the caller's My
+   * Drive, but a file's `parents` always carry the real id — so a walk looking
+   * for the literal `root` would never find it and would refuse everything.
+   */
+  private async root(): Promise<string> {
+    const root = this.session.rootId as string
+    if (root !== 'root') return root
+    this.resolvedRoot ??= await this.drive.idOf(this.session, root)
+    return this.resolvedRoot
+  }
+
+  private async walk(id: string | undefined, parents: string[], root: string): Promise<boolean> {
+    let frontier = parents
+    const seen = new Set<string>(id !== undefined ? [id] : [])
 
     for (let depth = 0; depth < this.maxDepth && frontier.length > 0; depth++) {
       if (frontier.includes(root)) return true

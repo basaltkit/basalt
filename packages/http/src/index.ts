@@ -74,6 +74,7 @@ export {
 } from './openapi.js'
 
 export { computeEtag, ifNoneMatchSatisfied } from './etag.js'
+export { DEFAULT_BODY_LIMIT, isJsonMediaType, mediaTypeOf } from './media-type.js'
 
 export {
   upload,
@@ -94,6 +95,7 @@ export {
   RawBodySession,
   DEFAULT_RAW_BODY_MAX_BYTES,
   type RawBodyOptions,
+  type RawBodyRouteMatcherOptions,
   type RawBody,
   type ResolvedRawBodyOptions,
 } from './raw-body.js'

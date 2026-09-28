@@ -451,10 +451,15 @@ export class FakeDriveProvider implements DriveProvider {
     // nothing, which is the bug this whole path exists to prevent.
     const known = [...this.watches.values()].some((entry) => safeEqual(entry.secret, secret))
     if (!known) throw new DriveNotificationInvalidError('unknown channel token.')
+    // The Google shape: an empty-ish body, so the message number is what tells
+    // one delivery from the next — reported by the adapter, as the contract
+    // requires, rather than picked up by the engine from any provider.
+    const messageNumber = input.headers['x-goog-message-number']
     return {
       secret,
       changed: input.headers['x-fake-resource-state'] !== 'sync',
       ...(watchId !== undefined ? { watchId } : {}),
+      ...(messageNumber !== undefined ? { replayKey: messageNumber } : {}),
     }
   }
 

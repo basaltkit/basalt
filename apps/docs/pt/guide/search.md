@@ -18,7 +18,9 @@ de nomear esse tenant, e qualquer outro valor lança `SearchTenantMismatchError`
 cliente nunca alarga uma query nem planta um documento noutro tenant. Fora de um
 contexto de tenant (jobs, CLI) o valor explícito escolhe o tenant. O `reindex()`
 é uma operação de sistema sobre todos os tenants e mantém o tenant que cada
-regra de sincronização mapeia. Um id de tenant igual a `SINGLE_TENANT_SCOPE` —
+regra de sincronização mapeia — nunca o tira do contexto em que corre, por isso
+uma regra cujo `document` omite o `tenantId` é recusada (`TenantRequiredError`)
+sempre que possa existir um tenant. Um id de tenant igual a `SINGLE_TENANT_SCOPE` —
 vindo do contexto, de um argumento, de um documento ou de uma linha do
 `reindex()` — é recusado com `SearchTenantReservedError`
 (`400 SEARCH_TENANT_RESERVED`).
@@ -252,9 +254,29 @@ divergência que isto evita: deixa-o discordar e a mesma pesquisa passa a dar
 coisas diferentes consoante o registo seja anterior ou posterior à última
 reconstrução.
 
-O índice é limpo primeiro — uma reconstrução que acrescenta deixa documentos de
-registos que já não existem — e um índice cujas regras não tenham `backfill`
-lança, em vez de reportar uma reconstrução que não fez nada.
+Cada linha é mapeada e validada **antes** de o índice ser limpo, por isso uma
+reconstrução que ia falhar deixa o índice antigo no lugar em vez de um índice
+vazio. Isso custa duas passagens pelo `backfill` (a memória fica limitada a uma
+página); linhas que mudem entre as passagens ainda podem falhar a segunda —
+nesse caso volta a correr o `reindex()`. Depois o índice é limpo, e não
+acrescentado — uma reconstrução que acrescenta deixa documentos de registos que
+já não existem — e um índice cujas regras não tenham `backfill` lança, em vez de
+reportar uma reconstrução que não fez nada.
+
+Numa app multi-tenant o `document` tem de devolver o `tenantId`. Uma
+reconstrução cobre todos os tenants, por isso o tenant não pode vir do contexto:
+uma linha sem ele lança `TenantRequiredError` sempre que o `@basaltkit/tenancy`
+está registado ou a reconstrução corre dentro de um contexto de tenant. Só uma
+app single-tenant sem tenant no contexto arquiva linhas sem tenant em
+`SINGLE_TENANT_SCOPE`.
+
+::: warning Uma reconstrução, todos os tenants
+O `reindex()` limpa o índice **inteiro**, por isso o seu `backfill` tem de
+devolver os registos de todos os tenants. Não o chames uma vez por tenant (por
+exemplo dentro de `tenancy.run(id, …)` com um `backfill` de base de dados por
+tenant): cada chamada apagaria os documentos dos outros tenants e voltaria a
+escrever só os de um.
+:::
 
 ## Produção com Meilisearch
 
@@ -338,7 +360,10 @@ um `track_total_hits` exato. Os documentos recebem um id composto
 de um id de tenant ou de documento não faça o tenant `a:b` + id `c` colidir com o
 tenant `a` + id `b:c` — e **cada pesquisa carrega um filtro `tenantId`
 obrigatório**, a mesma garantia de isolamento de qualquer outro driver. Ids
-simples de UUID/slug não são alterados pela codificação.
+simples de UUID/slug não são alterados pela codificação. O corpo do bulk leva
+esse id tal e qual e o caminho `/_doc/<id>` codifica-o mais uma vez (o ES
+descodifica os segmentos do caminho), por isso `index()`, `bulk()` e `remove()`
+endereçam sempre o mesmo documento.
 
 ::: warning Aviso: password vs API key
 `username` + `password` usam **Basic auth** HTTP. `apiKey` envia o header
@@ -407,12 +432,27 @@ await search.search('notes', 'report', {
 })
 ```
 
+Ambos costumam vir de uma query string, por isso o `search()` valida-os antes de
+correr qualquer driver e lança um `400` em vez de os reencaminhar:
+
+- `limit`/`offset` têm de ser inteiros não negativos, e o `limit` no máximo
+  `maxLimit` (por omissão `1000`, configurável com `searchPlugin({ maxLimit })`)
+  — `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`).
+- Num índice listado em `searchPlugin({ indexes })`, um filtro só pode nomear um
+  campo `filterable` (ou `tenantId`) — `SearchFilterNotFilterableError`
+  (`SEARCH_FILTER_NOT_FILTERABLE`). Caso contrário qualquer campo guardado vira
+  um oráculo para valores que o índice nunca quis expor.
+- Um valor de filtro tem de ser uma string, um número finito, um booleano, ou um
+  array simples desses — `SearchFilterValueError` (`SEARCH_INVALID_FILTER_VALUE`).
+  `null`/`undefined` são recusados, não ignorados: `{ ownerId: user?.id }` sem
+  utilizador não pode passar a ser, em silêncio, "todos os donos".
+
 ## Referência
 
 | API | Objetivo |
 | --- | --- |
 | `defineIndex({ name, fields, filterable? })` | Declarar um índice. |
-| `searchPlugin({ driver?, indexes?, sync? })` | Registar o serviço, índices e regras de sync. |
+| `searchPlugin({ driver?, indexes?, sync?, maxLimit? })` | Registar o serviço, índices e regras de sync. |
 | `SEARCH` | Token de DI → o serviço `Search`. |
 | `search.index/bulk/remove/search` | Indexar, indexar em bloco, remover, consultar. |
 | `MemorySearchDriver` · `MeilisearchDriver` | Backends incluídos de dev/teste e de produção. |

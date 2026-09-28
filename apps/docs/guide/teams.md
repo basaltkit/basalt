@@ -95,8 +95,11 @@ Roles are a ranked hierarchy — higher outranks lower, so a route that requires
 | `admin` | 2 |
 | `member` | 1 |
 
-Roles are free-form strings; override the hierarchy with a name → rank map (roles
-outside the map have rank 0):
+Roles are free-form strings; override the hierarchy with a name → rank map. Only
+**ranked** roles have a hierarchy: a ranked requirement admits that rank or
+higher (never a holder of an unranked role), and a requirement outside the map
+(e.g. a `grantableRoles` entry) is matched **exactly** — it never ranks 0 and
+admits every member:
 
 ```ts
 teamsPlugin({ roleRank: { owner: 4, admin: 3, editor: 2, viewer: 1 } })
@@ -125,7 +128,9 @@ The same applies to removal: `DELETE /team/members/:userId` can only remove
 yourself or a member who doesn't outrank you, so an `admin` can't remove an
 `owner`. Roles missing from `roleRank` can't be granted (see above).
 Service calls without `actingUserId` (trusted server-side seeding) skip the
-check.
+check. "Doesn't outrank" is deliberate — peers can manage peers (an admin can
+re-role or remove another admin); give a tier its own rank if it must only be
+managed from above.
 :::
 
 ## Seeding the first owner
@@ -172,6 +177,12 @@ route({
   async handler() { return { created: true } },
 })
 ```
+
+The required role must be **known** — in `roleRank` or `grantableRoles`. A typo
+(`'Admin'`, `'adimn'`), an empty string or a non-string fails closed with
+`500 TEAM_ROLE_UNKNOWN` on every request to that route (before `@basaltkit/teams`
+4.0 it ranked 0 and admitted every member). Only `undefined` and `false` mean
+"no requirement". The same applies to `tenantMembershipPlugin({ role })`.
 
 `teamsPlugin` claims the `teamRole` key in the adapters' boot-time guarded-meta
 check — declaring `meta.teamRole` on a route **without** registering the plugin
@@ -259,7 +270,9 @@ calling checkout/portal/invoices with tenant B's identifier is stopped with
 `POST /team/invites` mints a one-time, expiring token (default 7 days) and emits
 `team:invited` carrying it. **The token is emailed — never returned over HTTP.**
 A fresh invite for the same address supersedes any pending one (one pending
-invite per email per team). Over HTTP:
+invite per email per team). Addresses are compared and stored in canonical form
+(trimmed, lower-cased — the folding `@basaltkit/auth` uses), so `Bob@x.test` and
+`bob@x.test` are one invitee, including mixed-case rows from before 4.0. Over HTTP:
 
 ```bash
 # 1. An admin invites Bob (201; response never contains the token)
@@ -446,7 +459,7 @@ catalogue into every tenant — see
 | `users` | `MemberUserSource` | — | Read-only user directory behind `membersWithUsers` / `roleRecipients`; an `@basaltkit/auth` `UserSource` fits as-is |
 | `access` | `RoleAssigner` | — | Mirrors every membership change into a `@basaltkit/permissions` role grant in the tenant's scope |
 | `inviteTtl` | `DurationInput` | `'7d'` | Invitation link lifetime |
-| `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Role hierarchy; roles outside the map have rank 0 |
+| `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Role hierarchy; roles outside the map have no rank (matched exactly) |
 | `grantableRoles` | `TeamRole[]` | `[]` | Unranked roles an acting user may still grant; any other role outside `roleRank` is refused (`TEAM_ROLE_NOT_GRANTABLE`) |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 
@@ -474,6 +487,7 @@ catalogue into every tenant — see
 | `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | Role rank below the required one, including an actor trying to grant, demote or remove above their own rank |
 | `TeamRoleNotGrantableError` | `TEAM_ROLE_NOT_GRANTABLE` | 403 | An acting user tried to grant a role that is neither in `roleRank` nor in `grantableRoles` |
 | `TeamEmailNotVerifiedError` | `TEAM_EMAIL_NOT_VERIFIED` | 403 | `POST /team/invites/accept` by a user whose email isn't verified (see `requireVerifiedEmail`) |
+| `UnknownTeamRoleError` | `TEAM_ROLE_UNKNOWN` | 500 | `meta.teamRole` / `tenantMembershipPlugin({ role })` names a role neither in `roleRank` nor in `grantableRoles` (typo, `''`, non-string) |
 | `TeamUserSourceMissingError` | `TEAM_USER_SOURCE_MISSING` | 500 | `membersWithUsers` / `roleRecipients` (or `memberContacts: true`) ran with no `users` directory configured |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | The change would leave the team with no owner |
 | `TEAM_NO_TENANT` | `TEAM_NO_TENANT` | 400 | A `teamRoutes()` endpoint was called with no tenant in context — register tenancy and send the tenant identifier |
@@ -484,8 +498,11 @@ catalogue into every tenant — see
   membership cache's `ttlMs` bounds cross-replica staleness in both directions;
   the decision refreshes within `ttlMs`.
 - **A custom role keeps getting `TEAM_ROLE_REQUIRED`** — roles outside
-  `roleRank` have rank 0. Add the role to the map, or (for the membership
-  guard) rely on the default existence semantics instead of `role:`.
+  `roleRank` have no rank: they never satisfy a ranked requirement. Add the role
+  to the map, or (for the membership guard) rely on the default existence
+  semantics instead of `role:`.
+- **`500 TEAM_ROLE_UNKNOWN` on a route** — its `meta.teamRole` isn't in
+  `roleRank` or `grantableRoles`; usually a typo (roles are case-sensitive).
 - **`403` on a central route (login, sign-up, tenant creation)** — mark it
   `meta: { central: true }`, or exempt the calling identity with `exempt`.
 

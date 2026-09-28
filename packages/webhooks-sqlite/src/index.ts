@@ -62,6 +62,19 @@ const toEndpoint = (r: EndpointRow): WebhookEndpoint => ({
   ...(r.active !== null ? { active: r.active === 1 } : {}),
 })
 
+/**
+ * The endpoint id is held by a different scope (another tenant, or a global
+ * endpoint when adding a tenant one, or vice versa).
+ */
+export class WebhookEndpointIdInUseError extends Error {
+  readonly code = 'WEBHOOK_ENDPOINT_ID_IN_USE'
+  readonly status = 409
+  constructor(id: string) {
+    super(`@basaltkit/webhooks-sqlite: endpoint id "${id}" is already in use by another scope.`)
+    this.name = 'WebhookEndpointIdInUseError'
+  }
+}
+
 export class SqliteWebhookStore implements WebhookStore {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -86,20 +99,38 @@ export class SqliteWebhookStore implements WebhookStore {
   async add(endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string }): Promise<WebhookEndpoint> {
     const id = endpoint.id ?? randomUUID()
     const record: WebhookEndpoint = { ...endpoint, id }
-    // INSERT OR REPLACE mirrors MemoryWebhookStore: re-adding the same id replaces it.
-    this.db
+    const tenantId = record.tenantId ?? null
+    const values = [
+      record.url,
+      JSON.stringify(record.events),
+      record.secret ?? null,
+      record.active === undefined ? null : record.active ? 1 : 0,
+    ] as const
+    // Re-adding an id replaces the endpoint — but only within its own scope
+    // (the same tenant, or global). Not INSERT OR REPLACE: that let a tenant
+    // overwrite an endpoint another tenant registered under the same id, and
+    // the manager's check-before-write cannot close that race on its own.
+    const updated = this.db
       .prepare(
-        `INSERT OR REPLACE INTO webhook_endpoints (id, url, events, tenant_id, secret, active)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `UPDATE webhook_endpoints SET url = ?, events = ?, secret = ?, active = ?
+         WHERE id = ? AND tenant_id IS ?`,
       )
-      .run(
-        id,
-        record.url,
-        JSON.stringify(record.events),
-        record.tenantId ?? null,
-        record.secret ?? null,
-        record.active === undefined ? null : record.active ? 1 : 0,
-      )
+      .run(...values, id, tenantId)
+    if (Number(updated.changes) > 0) return record
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO webhook_endpoints (url, events, secret, active, id, tenant_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(...values, id, tenantId)
+    } catch (error) {
+      // The primary key is held by another scope.
+      if (/UNIQUE constraint failed/.test((error as Error)?.message ?? '')) {
+        throw new WebhookEndpointIdInUseError(id)
+      }
+      throw error
+    }
     return record
   }
 

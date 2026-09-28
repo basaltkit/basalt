@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { BasaltError, createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { BasaltError, createToken, ctx, definePlugin, isProductionEnvironment, type Container } from '@basaltkit/core'
 import { AUTH, type Auth, type PublicUser, type TokenPair } from '@basaltkit/auth'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
@@ -55,8 +55,23 @@ export interface SamlProvider {
   issuer: string
   /** ACS URL the IdP POSTs the SAMLResponse to. */
   callbackUrl: string
-  /** Attribute to read the email from. Default: `email` / common email claims / an email-shaped NameID. */
+  /**
+   * Attribute to read the email from. When set, ONLY this attribute is read (an
+   * assertion without it is refused — no silent fallback to another claim or the
+   * NameID). Default: `email` / common email claims / an email-shaped NameID.
+   */
   emailAttribute?: string
+  /**
+   * Require the whole `<Response>` to be signed, on top of the assertion (which
+   * is always required to be signed). Default `true`. Some IdPs (AD FS, Entra ID
+   * by default) sign only the assertion — set `false` for those.
+   */
+  wantAuthnResponseSigned?: boolean
+  /**
+   * Clock skew tolerated on `NotBefore` / `NotOnOrAfter`, ms. Default 0 (node-saml's
+   * default); at most 5 minutes.
+   */
+  acceptedClockSkewMs?: number
   /**
    * Email domains this IdP is trusted to assert (exact, case-insensitive match on
    * the part after `@`; list subdomains explicitly). An assertion for any other
@@ -106,6 +121,18 @@ export interface SamlOptions {
    * unique DB row…) on multi-replica deployments that opt in to IdP-initiated SSO.
    */
   assertionReplayCache?: SamlAssertionReplayCache
+  /**
+   * Bind every SP-initiated login to the browser that started it (login-CSRF
+   * protection). Default `true`: {@link Saml.authorize} returns a random
+   * `binding` to keep in an HttpOnly cookie ({@link samlRoutes} does) and sends
+   * its hash as the `RelayState`; {@link Saml.consume} refuses a response whose
+   * `RelayState` does not match the binding presented with it — so a
+   * SAMLResponse the attacker obtained for their own account cannot be posted
+   * from a victim's browser. Enforced with `validateInResponseTo: 'always'` (the
+   * default); IdP-initiated SSO (`'ifPresent'` / `'never'`) cannot be bound to a
+   * browser and is login-CSRF-able by nature. `false` opts out.
+   */
+  bindToBrowser?: boolean
 }
 
 /** Single-use store for consumed assertion ids. */
@@ -153,6 +180,10 @@ export interface SamlCacheProvider {
  * security-relevant defaults are assertable without constructing a real client.
  */
 export function samlClientConfig(p: SamlProvider, options: SamlOptions = {}): Record<string, unknown> {
+  const skew = p.acceptedClockSkewMs
+  if (skew !== undefined && (!Number.isSafeInteger(skew) || skew < 0 || skew > MAX_CLOCK_SKEW_MS)) {
+    throw new SamlProviderConfigError(`provider "${p.name}" has an acceptedClockSkewMs outside 0..${MAX_CLOCK_SKEW_MS}`)
+  }
   return {
     callbackUrl: p.callbackUrl,
     entryPoint: p.entryPoint,
@@ -160,11 +191,17 @@ export function samlClientConfig(p: SamlProvider, options: SamlOptions = {}): Re
     idpCert: p.idpCert,
     // Require the IdP to sign assertions — never trust an unsigned response.
     wantAssertionsSigned: true,
+    // The envelope signature on top (node-saml's default); opt-out for IdPs that sign only the assertion.
+    wantAuthnResponseSigned: p.wantAuthnResponseSigned ?? true,
+    ...(skew !== undefined ? { acceptedClockSkewMs: skew } : {}),
     // Reject replays of a captured assertion (see ValidateInResponseToMode).
     validateInResponseTo: options.validateInResponseTo ?? 'always',
     ...(options.cacheProvider ? { cacheProvider: options.cacheProvider } : {}),
   }
 }
+
+/** Upper bound on {@link SamlProvider.acceptedClockSkewMs}. */
+const MAX_CLOCK_SKEW_MS = 5 * 60_000
 
 /** First @node-saml/node-saml release without CVE-2025-54369 / CVE-2025-54419 (signature bypass). */
 const MIN_NODE_SAML = [5, 1, 0] as const
@@ -214,8 +251,11 @@ const EMAIL_CLAIMS = [
 /** Extracts the user's email from a validated assertion. */
 export function extractEmail(profile: SamlProfile, attribute?: string): string | undefined {
   if (attribute) {
+    // An explicitly configured attribute is the only source: falling back to
+    // another claim (or a NameID the user may be able to shape) would log in
+    // an identity the app never agreed to trust.
     const v = profile[attribute]
-    if (typeof v === 'string' && v) return v
+    return typeof v === 'string' && v.includes('@') ? v : undefined
   }
   for (const key of EMAIL_CLAIMS) {
     const v = profile[key]
@@ -288,6 +328,18 @@ function assertionExpiry(profile: SamlProfile): number | undefined {
   return Number.isFinite(t) ? t : undefined
 }
 
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('base64url')
+const safeEqual = (a: string, b: string): boolean => {
+  const x = Buffer.from(a)
+  const y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+
+/** The `RelayState` sent to the IdP for a browser `binding` (its SHA-256, so the cookie value never leaves the SP). */
+export function samlRelayStateFor(binding: string): string {
+  return sha256(binding)
+}
+
 /**
  * SAML 2.0 SP-initiated SSO. Signature verification, canonicalization and the
  * SAML protocol are delegated to `@node-saml/node-saml`; this only wires the
@@ -342,21 +394,66 @@ export class Saml {
     return { provider, client }
   }
 
-  /** The IdP redirect URL to start login (SP-initiated). */
+  /** Whether {@link consume} requires the browser binding (see {@link SamlOptions.bindToBrowser}). */
+  get bindsToBrowser(): boolean {
+    return this.options.bindToBrowser !== false && (this.options.validateInResponseTo ?? 'always') === 'always'
+  }
+
+  /**
+   * Starts an SP-initiated login bound to the browser: returns the IdP redirect
+   * URL and the `binding` to keep in an HttpOnly cookie until the ACS POST
+   * (pass it back to {@link consume}).
+   */
+  async authorize(name: string): Promise<{ url: string; binding: string }> {
+    const binding = randomBytes(32).toString('base64url')
+    return { url: await this.loginUrl(name, samlRelayStateFor(binding)), binding }
+  }
+
+  /**
+   * The IdP redirect URL with a caller-chosen `RelayState`. Low level: when
+   * {@link bindsToBrowser} is on, the response is only accepted if `relayState`
+   * is `samlRelayStateFor(binding)` for the binding given to {@link consume} —
+   * prefer {@link authorize}.
+   */
   loginUrl(name: string, relayState = ''): Promise<string> {
     return this.lookup(name).client.getAuthorizeUrlAsync(relayState, this.options.host, {})
   }
 
-  /** Validates a posted SAMLResponse and logs the user in by email. */
+  /**
+   * Validates a posted SAMLResponse and logs the user in by email. With
+   * {@link bindsToBrowser} on (the default), `options.binding` must be the one
+   * {@link authorize} returned to this browser.
+   */
   async consume(
     name: string,
     body: { SAMLResponse: string; RelayState?: string },
+    options: { binding?: string | undefined } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean }> {
     const { provider, client } = this.lookup(name)
-    const { profile } = await client.validatePostResponseAsync({
-      SAMLResponse: body.SAMLResponse,
-      ...(body.RelayState ? { RelayState: body.RelayState } : {}),
-    })
+    if (this.bindsToBrowser) {
+      const { binding } = options
+      if (
+        typeof binding !== 'string' ||
+        binding.length < 32 ||
+        typeof body.RelayState !== 'string' ||
+        !safeEqual(samlRelayStateFor(binding), body.RelayState)
+      ) {
+        throw new SamlResponseInvalidError('the response is not bound to the browser that started the login')
+      }
+    }
+    let result: { profile: SamlProfile | null; loggedOut: boolean }
+    try {
+      result = await client.validatePostResponseAsync({
+        SAMLResponse: body.SAMLResponse,
+        ...(body.RelayState ? { RelayState: body.RelayState } : {}),
+      })
+    } catch {
+      // node-saml throws plain Errors for every invalid input (bad signature,
+      // malformed XML, unknown InResponseTo, encrypted assertion without a key…):
+      // all of them are the client's fault, never a 500.
+      throw new SamlResponseInvalidError()
+    }
+    const { profile } = result
     if (!profile) throw new SamlResponseInvalidError()
     const email = extractEmail(profile, provider.emailAttribute)
     if (!email) throw new SamlResponseInvalidError('no email in the assertion')
@@ -427,6 +524,41 @@ export interface SamlRoutesOptions {
    * `#access_token=…&refresh_token=…`. Omitted → JSON `{ user, accessToken, refreshToken }`.
    */
   successRedirect?: string
+  /**
+   * The HttpOnly cookie binding a login to the browser that started it (see
+   * {@link SamlOptions.bindToBrowser}). The IdP returns with a cross-site POST,
+   * so the cookie is `SameSite=None`, which browsers only keep with `Secure`:
+   * `secure` defaults to true unless `NODE_ENV` is explicitly `development` or
+   * `test`, and a secure cookie is named `__Host-basalt_saml`. Browsers treat
+   * `http://localhost` as secure, so `secure: true` also works there; a
+   * non-secure cookie carries no `SameSite` attribute and relies on the
+   * browser's default.
+   */
+  bindingCookie?: { secure?: boolean; maxAgeSeconds?: number }
+  /**
+   * `meta.rateLimit` on the login and ACS routes (enforced by the http
+   * `securityPlugin`'s rate limiter). Default 10 requests per minute per ip and
+   * route. `false` removes it.
+   */
+  rateLimit?: { limit: number; windowMs: number } | false
+}
+
+/** SAML caps RelayState at 80 bytes; allow headroom for IdP-initiated targets. */
+const MAX_RELAY_STATE = 1024
+
+const readCookie = (header: unknown, name: string): string | undefined => {
+  if (typeof header !== 'string') return undefined
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=')
+    if (key === name && rest.length > 0) {
+      try {
+        return decodeURIComponent(rest.join('='))
+      } catch {
+        return undefined
+      }
+    }
+  }
+  return undefined
 }
 
 /**
@@ -437,27 +569,45 @@ export interface SamlRoutesOptions {
  */
 export function samlRoutes(options: SamlRoutesOptions = {}): BasaltRoute[] {
   const saml = () => (ctx().container as Container).get(SAML_SSO)
+  const secure = options.bindingCookie?.secure ?? isProductionEnvironment()
+  const cookieName = secure ? '__Host-basalt_saml' : 'basalt_saml'
+  const maxAge = options.bindingCookie?.maxAgeSeconds ?? 15 * 60
+  const cookie = (value: string, age: number): string =>
+    `${cookieName}=${encodeURIComponent(value)}; Path=/; HttpOnly; Max-Age=${age}${secure ? '; SameSite=None; Secure' : ''}`
+  const limit = options.rateLimit === false ? {} : { rateLimit: options.rateLimit ?? { limit: 10, windowMs: 60_000 } }
   return [
     route({
       method: 'GET',
       url: '/auth/saml/:provider/login',
+      meta: { ...limit },
       params: z.object({ provider: z.string() }),
-      query: z.object({ RelayState: z.string().optional() }),
+      query: z.object({ RelayState: z.string().max(MAX_RELAY_STATE).optional() }),
       async handler({ params, query, reply }) {
-        const url = await saml().loginUrl(params.provider, query.RelayState ?? '')
-        return reply.code(302).header('location', url).send()
+        const service = saml()
+        if (!service.bindsToBrowser) {
+          const url = await service.loginUrl(params.provider, query.RelayState ?? '')
+          return reply.code(302).header('location', url).send()
+        }
+        // Bound login: the RelayState slot carries the binding hash.
+        const { url, binding } = await service.authorize(params.provider)
+        return reply.code(302).header('set-cookie', cookie(binding, maxAge)).header('location', url).send()
       },
     }),
     route({
       method: 'POST',
       url: '/auth/saml/:provider/acs',
+      meta: { ...limit },
       params: z.object({ provider: z.string() }),
-      body: z.object({ SAMLResponse: z.string(), RelayState: z.string().optional() }),
-      async handler({ params, body, reply }) {
-        const { user, tokens } = await saml().consume(params.provider, {
-          SAMLResponse: body.SAMLResponse,
-          ...(body.RelayState ? { RelayState: body.RelayState } : {}),
-        })
+      body: z.object({ SAMLResponse: z.string(), RelayState: z.string().max(MAX_RELAY_STATE).optional() }),
+      async handler({ params, body, request, reply }) {
+        const service = saml()
+        // Single-use: the binding cookie is cleared whatever the outcome.
+        if (service.bindsToBrowser) reply.header('set-cookie', cookie('', 0))
+        const { user, tokens } = await service.consume(
+          params.provider,
+          { SAMLResponse: body.SAMLResponse, ...(body.RelayState ? { RelayState: body.RelayState } : {}) },
+          { binding: readCookie(request.headers.cookie, cookieName) },
+        )
         if (options.successRedirect) {
           const url = new URL(options.successRedirect)
           url.hash = new URLSearchParams({

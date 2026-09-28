@@ -160,8 +160,9 @@ meets `onUnsupported: 'throw'`; everything else surfaces through `onError`.
 ### Hard limits
 
 The attempt counters travel in message headers, which any producer on the topic could write, so
-the consumer clamps the `x-basalt-attempts` it reads to at most **50**. A crafted message cannot
-drive an unbounded retry loop.
+the consumer clamps what it reads: the current `x-basalt-attempt` to an integer in **1..50** (a
+negative value used to buy unlimited retries) and `x-basalt-attempts` to at most **50**. A
+crafted message cannot drive an unbounded retry loop.
 
 ### The plugin, and the driver underneath it
 

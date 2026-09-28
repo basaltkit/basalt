@@ -104,7 +104,7 @@ the `<queue>-dead` queue for exhausted jobs.
 | `deadSuffix` | `string` | `'-dead'` | Suffix appended to the queue name to derive the dead-letter queue. |
 | `waitTimeSeconds` | `number` | `20` | Long-poll duration per `ReceiveMessage`. 20 is SQS's maximum and the cheapest setting — lower it only if you need a faster shutdown. |
 | `visibilityTimeout` | `number` | `30` | How long a received message stays hidden from other consumers. Must exceed your slowest handler, or the job is delivered twice. |
-| `onError` | `(error: unknown, info: { queue: string }) => void` | `console.error` with the queue | A `ReceiveMessage` call failed — see below. |
+| `onError` | `(error: unknown, info: { queue: string; stage?: 'receive' \| 'delete' \| 'reroute' }) => void` | `console.error` with the queue and stage | An SQS call failed — see below. |
 | `errorPauseMs` | `number` | `1000` | Pause after a failed receive before polling again. This is what keeps a persistent fault from becoming a CPU-burning hot spin against the SQS endpoint. |
 | `api` | `SqsApi` | `@aws-sdk/client-sqs` | Injectable API (`sendMessage` / `receiveMessages` / `deleteMessage`) — tests pass a fake so no AWS is needed. |
 
@@ -115,9 +115,9 @@ The driver implements `add`, `startWorker`, `setExecutor`, `close` and `capabili
 
 ### Failure hooks
 
-`onError` is the only callback and it fires on exactly one thing: a failed **receive**
-(credentials expired, network partition, queue deleted, throttling). The default is
-`console.error`, so a persistent fault is always visible.
+`onError` is the only callback. `stage` says which SQS call failed: `'receive'` (credentials
+expired, network partition, queue deleted, throttling), `'delete'` or `'reroute'` (below). The
+default is `console.error`, so a persistent fault is always visible.
 
 After reporting, the poller waits `errorPauseMs` and polls again — it never gives up, because a
 transient AWS error must not silently stop the worker. There is no `onJobFailed`: a job that
@@ -127,12 +127,14 @@ queue's `ApproximateNumberOfMessagesVisible`.
 Handler failures never reach `onError` — they are caught and turned into a redelivery (with the
 backoff as `DelaySeconds`) or a DLQ send, after which the original is deleted.
 
-If *that* re-send or the delete itself throws, the exception escapes the message loop and ends
-**this poller**. The original message was never deleted, so SQS makes it visible again after
-`visibilityTimeout` and another poller picks it up — the job is not lost. But with
-`concurrency: 1` there is no other poller, so the worker stops consuming that queue until the
-process restarts. Run more than one poller per queue if you need the worker to survive a
-transient send failure, and alarm on queue depth.
+If *that* re-send throws, it is reported with `stage: 'reroute'` and the original is **not**
+deleted, so SQS makes it visible again after `visibilityTimeout` and it is retried — the job is
+not lost. If a **delete** throws — including the delete after a job *succeeded* — it is reported
+with `stage: 'delete'` and nothing else happens: SQS redelivers the message after the visibility
+timeout (at-least-once), but the driver no longer mistakes the failed delete for a failed job and
+re-sends a retry copy of work that already completed. None of these ends the poller: it keeps
+consuming, and a poller that fails before its loop starts (SDK import, a throwing `queueUrl`) is
+reported through `onError` instead of becoming an unhandled rejection.
 
 ### Exported errors
 
@@ -147,8 +149,10 @@ retrying sooner.
 
 ### Hard limits
 
-Attempt counters travel in message attributes, so the consumer clamps the `x-basalt-attempts` it
-reads to at most **50** — a crafted message cannot drive an unbounded retry loop.
+Attempt counters travel in message attributes, so the consumer clamps what it reads: the
+current `x-basalt-attempt` to an integer in **1..50** (a negative value used to buy unlimited
+retries) and `x-basalt-attempts` to at most **50**; a negative backoff counts as none. A crafted
+message cannot drive an unbounded retry loop.
 
 ### The plugin, and the driver underneath it
 

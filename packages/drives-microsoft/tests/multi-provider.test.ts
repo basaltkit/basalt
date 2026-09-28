@@ -336,7 +336,7 @@ describe('a notification never crosses a provider boundary', () => {
             value: [
               {
                 subscriptionId: graphRow.watch!.id,
-                clientState: graphRow.watch!.secret,
+                clientState: world.graphServer.subscriptions.get(graphRow.watch!.id)!.clientState,
                 changeType: 'updated',
                 resource: 'me/drive/root',
               },
@@ -373,7 +373,7 @@ describe('a notification never crosses a provider boundary', () => {
         query: {},
         body: Buffer.from(
           JSON.stringify({
-            value: [{ subscriptionId: graphRow.watch!.id, clientState: graphRow.watch!.secret, changeType: 'updated' }],
+            value: [{ subscriptionId: graphRow.watch!.id, clientState: world.graphServer.subscriptions.get(graphRow.watch!.id)!.clientState, changeType: 'updated' }],
           }),
         ),
       },

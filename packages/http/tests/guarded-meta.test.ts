@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { route } from '../src/index.js'
-import { assertRoutesGuarded, GUARDED_META_KEYS, UnguardedRouteMetaError } from '../src/guarded-meta.js'
+import { assertRoutesGuarded, GUARDED_META_BUCKET, GUARDED_META_KEYS, UnguardedRouteMetaError } from '../src/guarded-meta.js'
 
 const authRoute = route({ method: 'GET', url: '/me', meta: { auth: true }, handler: async () => ({}) })
 const canRoute = route({ method: 'DELETE', url: '/p/:id', meta: { can: 'p:delete' }, handler: async () => ({}) })
@@ -98,5 +98,24 @@ describe('assertRoutesGuarded — security meta declared with no enforcing guard
   it('non-security meta keys are never flagged', () => {
     const metered = route({ method: 'GET', url: '/m', meta: { rateLimit: { max: 1 } }, handler: async () => ({}) })
     expect(() => assertRoutesGuarded([metered], new Set())).not.toThrow()
+  })
+})
+
+describe('assertRoutesGuarded(routes, container) — the check for code that calls runRoute() itself (FA-H25)', () => {
+  it('reads the claimed keys from a booted container, as the adapters do', async () => {
+    const { createApp, definePlugin, ensureMetadata } = await import('@basaltkit/core')
+    const bare = await createApp({ plugins: [] }).boot()
+    expect(() => assertRoutesGuarded([authRoute, plain], bare.container)).toThrow(UnguardedRouteMetaError)
+    expect(() => assertRoutesGuarded([authRoute], bare.container, ['auth'])).not.toThrow()
+
+    const claimsAuth = definePlugin({
+      name: 'test:claims-auth',
+      register({ container }) {
+        ensureMetadata(container).add(GUARDED_META_BUCKET, 'auth')
+      },
+    })
+    const guarded = await createApp({ plugins: [claimsAuth] }).boot()
+    expect(() => assertRoutesGuarded([authRoute, plain], guarded.container)).not.toThrow()
+    expect(() => assertRoutesGuarded([canRoute], guarded.container)).toThrow(/meta\.can \(enforced by permissionsPlugin\)/)
   })
 })

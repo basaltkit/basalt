@@ -1,4 +1,5 @@
 import { BasaltError } from '@basaltkit/core'
+import { assertFilterValue } from '../search.js'
 import type { IndexDefinition, SearchDocument, SearchDriver, SearchQuery, SearchResult } from '../types.js'
 
 export class MeilisearchError extends BasaltError {
@@ -126,6 +127,11 @@ export class MeilisearchDriver implements SearchDriver {
     const parts = [`tenantId = ${quote(tenantId)}`]
     for (const [field, value] of Object.entries(filters ?? {})) {
       if (!SAFE_FILTER_FIELD.test(field)) throw new SearchFilterFieldError(field)
+      // Values are spliced into the filter DSL as JSON literals, which is only
+      // sound for scalars: an object or a nested array became DSL the engine
+      // rejects (or reads its own way). `Search` checks this too; the driver
+      // repeats it because it can be used on its own.
+      assertFilterValue(field, value)
       parts.push(Array.isArray(value) ? `${field} IN [${value.map(quote).join(', ')}]` : `${field} = ${quote(value)}`)
     }
     return parts.join(' AND ')

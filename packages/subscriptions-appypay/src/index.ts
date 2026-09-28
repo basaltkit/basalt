@@ -2,9 +2,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import {
   assertMinorUnits,
   toMajor,
+  requireWebhookSecret,
   toMinor,
   WebhookInvalidError,
-  WebhookSecretMissingError,
   type PaymentEvent,
   type PaymentGateway,
   type PaymentInstruction,
@@ -83,8 +83,10 @@ export interface AppyPayOptions {
   defaultMethod?: AppyPayMethod
   /**
    * Shared secret to verify webhook signatures (HMAC-SHA256 of the raw body,
-   * hex). Omit to skip verification. TODO(verify) AppyPay's real callback auth
-   * scheme (header name + whether it's HMAC, Basic, or a bearer token).
+   * hex). Required to receive webhooks: without it (or with an empty /
+   * whitespace-only one) `verifyWebhook` throws `WebhookSecretMissingError`
+   * (fail closed). TODO(verify) AppyPay's real callback auth scheme (header
+   * name + whether it's HMAC, Basic, or a bearer token).
    */
   webhookSecret?: string
   /** Header carrying the webhook signature. Default `x-signature`. TODO(verify). */
@@ -177,7 +179,8 @@ export class AppyPayGateway implements PaymentGateway {
   async createPayment(request: PaymentRequest): Promise<PaymentInstruction> {
     // Caller can force a method via metadata.appypay_method; else the default.
     const method = (request.metadata?.appypay_method as AppyPayMethod) ?? this.defaultMethod
-    if (!(method in WIRE.method)) {
+    // Own keys only: `'constructor' in WIRE.method` is true through the prototype.
+    if (typeof method !== 'string' || !Object.hasOwn(WIRE.method, method)) {
       throw new AppyPayRequestError(400, `unknown AppyPay method: ${method}`)
     }
     if (method === 'express' && !request.customer?.phone) {
@@ -196,7 +199,8 @@ export class AppyPayGateway implements PaymentGateway {
       paymentMethod: WIRE.method[method],
       ...(request.description ? { description: request.description } : {}),
       ...(request.customer?.phone ? { paymentInfo: { phoneNumber: request.customer.phone } } : {}),
-      ...(request.metadata ? { metadata: { billable_id: request.billableId, ...request.metadata } } : { metadata: { billable_id: request.billableId } }),
+      // billable_id last: caller metadata must not redirect the payment to another billable.
+      metadata: { ...(request.metadata ?? {}), billable_id: request.billableId },
     }
 
     const data = await this.post(WIRE.chargesPath, charge)
@@ -236,14 +240,14 @@ export class AppyPayGateway implements PaymentGateway {
     // callback, and an unsigned webhook lets anyone forge a `payment.succeeded`
     // to settle an invoice. Refuse rather than silently trust it.
     // TODO(verify): AppyPay's real callback auth (header name + signing scheme).
-    if (!this.webhookSecret) throw new WebhookSecretMissingError('AppyPayGateway')
-    const expected = createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex')
+    const secret = requireWebhookSecret('AppyPayGateway', this.webhookSecret)
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex')
     const a = Buffer.from(signature ?? '', 'utf8')
     const b = Buffer.from(expected, 'utf8')
     if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
 
     // TODO(verify): the real webhook payload shape + status field.
-    const payload = JSON.parse(rawBody) as {
+    type Payload = {
       id?: string | number
       merchantTransactionId?: string | number
       transactionId?: string | number
@@ -251,19 +255,33 @@ export class AppyPayGateway implements PaymentGateway {
       amount?: string | number
       metadata?: Record<string, string>
     }
+    // A signed but malformed body is a bad delivery (400), not a crash (500).
+    let payload: Payload
+    try {
+      payload = JSON.parse(rawBody) as Payload
+    } catch {
+      throw new WebhookInvalidError()
+    }
+    if (!payload || typeof payload !== 'object') throw new WebhookInvalidError()
 
     const status = String(payload.status ?? '').toUpperCase()
     const isPaid = (WIRE.paidStatuses as readonly string[]).includes(status)
     const isFailed = (WIRE.failedStatuses as readonly string[]).includes(status)
     if (!isPaid && !isFailed) return null // not a terminal payment event we act on
 
+    const amount = Number(payload.amount ?? 0)
+    if (!Number.isFinite(amount) || amount < 0) throw new WebhookInvalidError()
     const paymentId = String(payload.merchantTransactionId ?? payload.id ?? payload.transactionId ?? '')
+    const type = isPaid ? 'payment.succeeded' : 'payment.failed'
     return {
-      id: String(payload.id ?? payload.transactionId ?? paymentId),
-      type: isPaid ? 'payment.succeeded' : 'payment.failed',
+      // The outcome is part of the idempotency key: a FAILED callback and a
+      // later SUCCESS for the same transaction may carry the same id, and the
+      // success must not be dropped as a duplicate of the failure.
+      id: `${String(payload.id ?? payload.transactionId ?? paymentId)}:${type}`,
+      type,
       paymentId,
       // TODO(verify): AppyPay's webhook amount unit. Assumed major → minor here.
-      amount: toMinor(Number(payload.amount ?? 0), 'AOA'),
+      amount: toMinor(amount, 'AOA'),
       ...(payload.metadata?.billable_id ? { billableId: payload.metadata.billable_id } : {}),
       ...(payload.metadata?.reference ? { reference: payload.metadata.reference } : {}),
       raw: payload,

@@ -136,7 +136,7 @@ describe('rls helpers (defense in depth)', () => {
     expect(sql).toContain('ALTER TABLE "project" ENABLE ROW LEVEL SECURITY;')
     expect(sql).toContain('ALTER TABLE "project" FORCE ROW LEVEL SECURITY;')
     expect(sql).toContain('DROP POLICY IF EXISTS "tenant_isolation" ON "project";')
-    expect(sql).toContain(`"tenant_id" = current_setting('app.tenant_id', true)`)
+    expect(sql).toContain(`"tenant_id" = NULLIF(current_setting('app.tenant_id', true), '')`)
   })
 
   it('rejects identifiers that could carry SQL injection (config-time guard)', () => {
@@ -159,6 +159,8 @@ describe('TenantClientPool', () => {
       create: (tenantId) => ({ tenant: tenantId, n: ++created }),
       destroy: (_client, tenantId) => void destroyed.push(tenantId),
       max,
+      // evict on the spot: these tests are about LRU order, not the in-use window
+      idleMs: 0,
     })
     return { pool, destroyed }
   }

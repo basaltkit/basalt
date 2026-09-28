@@ -65,6 +65,12 @@ O `schema` torna o payload type-safe de ponta a ponta — o argumento de `handle
 payload de `dispatch` são ambos inferidos a partir dele, e o payload é validado no
 dispatch.
 
+`attempts` tem de ser um inteiro positivo (`defineJob` lança com `0`, um negativo
+ou uma fração). O `name` do job é a chave de encaminhamento entre producer e
+worker, por isso tem de ser **único por manager**: registar uma definição
+*diferente* com um nome já usado lança `DuplicateJobError` (registar a mesma duas
+vezes é um no-op).
+
 ## Registá-lo
 
 O plugin do teu backend regista um `QueueManager` sob o token `QUEUE`, arranca os
@@ -148,6 +154,58 @@ await SendWelcome.dispatch({ userId: 'u-1' }, { delay: '5m', priority: 5 })
 `dispatch` retorna assim que o job é enfileirado. O contexto do pedido
 (`requestId`, `tenantId`, …) é capturado e restaurado dentro do worker.
 
+A entrega é **at-least-once** em todos os drivers com broker: um crash entre "o
+handler terminou" e "o broker confirmou" corre o job outra vez, e o `dispatch`
+não tem chave de idempotência. Escreve handlers para os quais uma segunda
+execução é inofensiva (upserts, verificações "já enviado?", uma restrição única
+sobre o efeito).
+
+## O contexto no worker — e a fronteira de confiança
+
+O worker não restaura o contexto do envelope por inteiro. Reconstrói-o a partir
+de uma allowlist, validando cada campo:
+
+| Campo | Restaurado como | Se estiver malformado |
+| --- | --- | --- |
+| `requestId`, `correlationId`, `traceId` | a mesma chave (strings curtas e imprimíveis) | descartado — só etiquetam logs |
+| `tenant` / `tenantId` | `tenant: { id }` e `tenantId` — o id tem de cumprir a gramática do tenancy (ou o teu `validateTenantId`), e os dois têm de coincidir | o job é **rejeitado** (`JobContextError`) — descartar o tenant correria o job no âmbito central |
+| `userId` (de `user.id` no dispatch) | `userId` **e** um actor mínimo `user: { id }` | o job é **rejeitado** (`JobContextError`) |
+
+Tudo o resto na mensagem é ignorado. O actor é só o id: o audit regista-o como
+`actorId`, e `gate.actor()` volta a ler os papéis desse utilizador no permission
+store *no tenant do job* — os papéis nunca vêm da mensagem. Assim, um job
+despachado a partir de um pedido corre com as permissões atuais de quem o
+despachou, e um job despachado fora de um pedido não tem actor.
+
+**Por defeito, o broker é de confiança.** Sem uma chave de assinatura, quem
+consegue escrever no backend da queue pode enfileirar um job, escolher o
+payload e indicar qualquer tenant e user id válidos. Fecha isso com uma **chave
+de assinatura** partilhada por producers e workers:
+
+```ts
+bullmqQueuePlugin({
+  connection: process.env.REDIS_URL!,
+  jobs,
+  signingKey: process.env.QUEUE_SIGNING_KEY!,          // ≥ 32 bytes
+  // rotação: [novaChave, chaveAntiga] — a primeira assina, todas verificam
+})
+```
+
+Cada envelope passa a levar um HMAC-SHA256 (`sig`) sobre o nome do job, o
+payload e o contexto, e o worker **rejeita** um job cuja assinatura falte ou
+esteja errada (`JobSignatureError`) antes de o handler correr — um tenant
+adulterado, um producer estranho e um payload assinado reutilizado sob o nome de
+outro job falham todos. A assinatura não impede o *replay* de uma mensagem
+idêntica e genuína por quem consegue ler o broker; handlers idempotentes cobrem
+isso.
+
+Para a introduzir: faz deploy da chave nos producers e nos workers ao mesmo
+tempo; jobs já enfileirados sem assinatura são rejeitados por um worker que tem
+chave, por isso esvazia primeiro as filas (ou volta a tentá-los a partir do
+conjunto de falhados/dead-letter depois da introdução). Uma app que definiu uma
+gramática de tenant id própria no `tenancyPlugin` passa a mesma função como
+`validateTenantId`.
+
 ## Drivers
 
 O backend é escolhido pelo plugin que registas — cada um constrói o seu driver
@@ -198,9 +256,9 @@ queuePlugin({ driver: new BullmqQueueDriver({ connection: process.env.REDIS_URL!
 
 | Opção | Tipo | Predefinição | Porquê |
 | --- | --- | --- | --- |
-| `connection` | `string \| ConnectionOptions` | — (obrigatória) | URL Redis (`redis://`/`rediss://`, TLS inferido) ou opções ioredis. |
+| `connection` | `string \| ConnectionOptions` | — (obrigatória) | URL Redis (`redis://`/`rediss://`, TLS inferido) ou opções ioredis. Credenciais percent-encoded (`p%40ss` para `p@ss`) são descodificadas antes de chegarem ao Redis. |
 | `onError` | `(error, { queue, source: 'worker' \| 'queue' }) => void` | `console.error` com contexto | O BullMQ emite erros de infraestrutura (Redis em baixo) como eventos `'error'` de EventEmitter — sem handler, **derrubam o processo**. O driver anexa sempre um listener; esta opção encaminha-o para o teu logger/alerting. |
-| `onJobFailed` | `({ queue, job, jobId?, error }) => void` | `console.error` com contexto | Dispara quando um job esgota os retries (`'failed'` do BullMQ). Sem isto, jobs falhados permanentemente só eram visíveis a consultar `queue:stats`. |
+| `onJobFailed` | `({ queue, job, jobId?, error }) => void` | `console.error` com contexto | Dispara **uma vez**, quando um job esgota os retries (ou lança o `UnrecoverableError` do BullMQ). O BullMQ emite `'failed'` após cada tentativa; o driver ignora as que vai voltar a tentar. Sem isto, jobs falhados permanentemente só eram visíveis a consultar `queue:stats`. |
 
 ### RabbitMQ
 
@@ -219,12 +277,21 @@ retry/dead-letter — fazer ack antes de a publicação estar confirmada seria u
 janela silenciosa de perda de jobs. `close()` drena primeiro os handlers em
 curso; o que não terminar fica sem ack, e o broker reentrega-o.
 
+Se o canal ou a ligação fecharem por baixo do driver (reinício do broker, corte
+de rede, um erro de protocolo ao nível do canal), ele volta a ligar: o próximo
+`add()` abre um canal novo, e os workers voltam a subscrever com backoff
+exponencial (`reconnectDelayMs`, a duplicar até 30 s). As mensagens sem ack no
+canal morto são reentregues pelo broker. Os headers de retry de uma mensagem não
+são de confiança: o número da tentativa é limitado a `1..50` e um backoff
+negativo passa a `0`.
+
 | Opção | Tipo | Predefinição | Porquê |
 | --- | --- | --- | --- |
 | `url` | `string` | — (obrigatória) | URL AMQP, p. ex. `amqp://user:pass@host:5672`. |
 | `onError` | `(error, { source: 'connection' \| 'channel' }) => void` | `console.error` com contexto | O amqplib expõe falhas do broker como eventos `'error'` de EventEmitter — sem handler, **derrubam o processo**. Recebe também a falha de connect/consume de um worker no boot (senão a app reportar-se-ia saudável com zero workers) e uma re-publicação/ack falhada após a falha de um job (a cópia durável fica no broker e é reentregue). |
 | `maxPriority` | `number` | `10` | `x-max-priority` das filas com prioridade. |
 | `drainTimeoutMs` | `number` | `10_000` | Quanto tempo `close()` espera pelos handlers em curso, para que os acks caiam num canal vivo. Passado o limite, jobs por terminar ficam sem ack e são reentregues — shutdown limitado no tempo, sem perda de jobs. |
+| `reconnectDelayMs` | `number` | `1000` | Primeira espera antes de voltar a subscrever os workers depois de o canal/ligação fechar; duplica a cada falha consecutiva, até 30 s. |
 | `connect` | `AmqpConnect` | amqplib | Conector injetável — os testes correm sem broker. |
 
 ::: tip Delays mistos em escala
@@ -255,7 +322,7 @@ todos os nomes de fila — **incluindo os nomes das DLQ** — para o seu URL SQS
 | `deadSuffix` | `string` | `'-dead'` | Sufixo do nome da dead-letter queue. |
 | `waitTimeSeconds` | `number` | `20` | Long-poll por receive. |
 | `visibilityTimeout` | `number` | `30` | Quanto tempo uma mensagem recebida fica oculta enquanto é processada. |
-| `onError` | `(error, { queue }) => void` | `console.error` com contexto | Uma chamada de receive falhou (rede, credenciais, fila apagada). Sem isto o poller re-tentava imediata e silenciosamente — um hot spin sem uma linha de log perante uma falha persistente. |
+| `onError` | `(error, { queue, stage? }) => void` | `console.error` com contexto | Uma chamada ao SQS falhou; `stage` é `'receive'` (rede, credenciais, fila apagada — sem isto o poller re-tentava imediata e silenciosamente, um hot spin), `'delete'` (o job **teve sucesso** mas a mensagem não pôde ser apagada — o SQS reentrega-a após o visibility timeout; *não* é reenviada como falha) ou `'reroute'` (um reenvio de retry/dead-letter falhou — o original é mantido, e volta a ser tentado após o visibility timeout). Nunca é fatal: o poller continua a correr. |
 | `errorPauseMs` | `number` | `1000` | Pausa entre receives falhados consecutivos — limita o ritmo de retry contra um endpoint avariado. |
 | `api` | `SqsApi` | AWS SDK | API injetável — os testes correm sem AWS. |
 
@@ -413,7 +480,7 @@ id    name             state   attempts  age  reason
 |---|---|---|
 | `--queue` | `default` | Que queue inspecionar. |
 | `--states` | `completed,failed,waiting,active` | Separados por vírgula: `waiting`, `active`, `completed`, `failed`, `delayed`. Um estado desconhecido é rejeitado com a lista válida. |
-| `--limit` | `20` | Máximo de linhas no **total** (mais recentes primeiro), limitado a `1000`. |
+| `--limit` | `20` | Máximo de linhas no **total** (mais recentes primeiro), limitado a `1000`. Tem de ser um inteiro positivo — `0`, um negativo ou um não-número é recusado (também no `queue:retry`, onde `--limit 0` voltava a enfileirar *todos* os jobs falhados). |
 | `--payload` | desligado | Mostra também o payload de cada job. Desligado por omissão — vê o aviso abaixo. |
 
 **Porque é que `completed` e `failed` estão nos estados por omissão.** Pelo ciclo
@@ -508,7 +575,11 @@ noutro sítio, lê uma queue diferente e reporta-a como vazia.
 
 `queuedOn` faz a ponte `@basaltkit/events` → queue: `emit` apenas enfileira um job, e
 o handler corre no worker com retries e contexto restaurado. Retorna a função de
-unsubscribe; o job criado tem o nome `listener:<event>`.
+unsubscribe; o job criado tem o nome `listener:<event>`. Os nomes de jobs são
+únicos por manager, por isso um **segundo** listener em queue no mesmo evento
+precisa do seu próprio `name` (`{ name: 'order.created:crm' }`) — sem isso,
+`queuedOn` lança `DuplicateJobError` em vez de substituir em silêncio o handler
+do primeiro listener.
 
 ```ts
 import { EventBus, defineEvent } from '@basaltkit/events'
@@ -535,6 +606,9 @@ await bus.emit(OrderCreated, { orderId: 'o-1' })
 | `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `dispatch` antes de o job ter sido registado num manager (adiciona-o a `jobs`) |
 | `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | Um job chegou a um worker que não o registou (as listas de jobs do producer/worker diferem) |
 | `UnsupportedJobOptionError` | — | Um dispatch pediu uma opção que o driver não consegue honrar, com `onUnsupported: 'throw'` |
+| `DuplicateJobError` | `QUEUE_DUPLICATE_JOB` | Um job diferente foi registado com um nome já usado neste manager (lançado em `register`/`dispatch`/`queuedOn`) |
+| `JobSignatureError` | `QUEUE_BAD_SIGNATURE` | Com `signingKey`: um job chegou sem assinatura ou com uma assinatura que não verifica (lançado no worker; o handler nunca corre) |
+| `JobContextError` | `QUEUE_INVALID_CONTEXT` | O contexto de um job trazia `tenant`/`tenantId`/`userId` malformados (lançado no worker; o handler nunca corre) |
 | `SqsDelayTooLongError` | — | Um `delay` acima do máximo de 15 minutos do SQS (`@basaltkit/queue-sqs`, lançado no `dispatch`) |
 
 ## Modos de falha e resolução de problemas
@@ -545,6 +619,8 @@ await bus.emit(OrderCreated, { orderId: 'o-1' })
 | `dispatch()` rejeita com o erro do teu handler | Semântica do driver sync: os erros propagam-se ao despachante por design (um driver com broker retornaria de imediato e re-tentaria em background) | Esperado em dev/testes; usa um driver com broker onde precisares de retries em background |
 | Um job é enfileirado mas nunca corre | Nenhum worker declarado para a `queue` do job, ou o nome da `queue` do worker não corresponde ao do job | Alinha `defineJob({ queue })` com `workers: [{ queue }]` |
 | `UnknownJobError` nos logs do worker | O job chegou a um worker que não o registou — as listas `jobs` do producer e do worker diferem | Regista o mesmo array `jobs` nos dois processos |
+| `JobSignatureError` nos logs do worker | O worker tem `signingKey` e o job veio sem assinatura (enfileirado antes da introdução, ou por um producer sem a chave) ou foi alterado no broker | Dá a mesma chave a todos os producers (ou junta a chave antiga à lista de rotação); investiga escritas inesperadas no broker |
+| `JobContextError` nos logs do worker | O tenant id do job não cumpre a gramática do worker (p. ex. uma gramática própria no `tenancyPlugin`) ou os campos de tenant/user estão malformados | Passa ao plugin da queue o mesmo `validateTenantId` que ao `tenancyPlugin`; investiga escritas inesperadas |
 | `[basalt:queue] bullmq worker error (queue "…")` repetido | Falha de infraestrutura do Redis (conectividade, failover); o BullMQ religa-se sozinho | Encaminha `onError` para alerting; verifica o Redis |
 | `[basalt:queue] job "…" on queue "…" failed permanently` | O job esgotou os `attempts`; fica no conjunto de falhados (a retenção por defeito mantém todos) | Inspeciona, corrige a causa, `basalt queue:retry --queue <q>`; encaminha `onJobFailed` para alerting |
 | `UnsupportedJobOptionError` no dispatch | O driver não consegue honrar uma opção pedida (p. ex. `delay` em Kafka) com `onUnsupported: 'throw'` | Remove a opção ou muda de driver |
@@ -611,7 +687,12 @@ queuePlugin({ driver: new MyQueueDriver(), jobs, workers })
   retry topic).
 - **Transporta o estado de retry na mensagem.** `attempts`/`backoff` vêm do `add`;
   carimba a tentativa atual nos metadados da mensagem para que o worker saiba quando
-  fazer retry versus dead-letter.
+  fazer retry versus dead-letter. Trata o que lês de volta como **não
+  confiável**: limita a tentativa a um inteiro em `1..MAX_JOB_ATTEMPTS` (uma
+  tentativa negativa daria retries ilimitados) e o backoff a um valor não negativo.
+- **Transporta `data` de forma opaca.** É o envelope do dispatch (payload,
+  contexto e, com `signingKey`, a assinatura); faz-lhe round-trip em JSON, sem
+  alterações.
 - **Torna o cliente injetável.** Cada driver incluído recebe um conector injetável
   (`connect`/`client`/`api`), pelo que a sua lógica de retry e dead-letter é testada
   unitariamente sem um broker em execução. Faz o mesmo e o teu driver fica testável

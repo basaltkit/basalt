@@ -27,34 +27,42 @@ function rowMatches(row: Row, where: any): boolean {
   return true
 }
 
-function makeFakeClient(): PrismaWebhooksClient {
+/**
+ * `collation: 'ci'` models MySQL's default case-insensitive collation, where
+ * the primary key 'abc' and 'ABC' are the same row.
+ */
+function makeFakeClient(options: { collation?: 'ci' } = {}): PrismaWebhooksClient {
   const rows = new Map<string, Row>()
+  const key = (id: string): string => (options.collation === 'ci' ? id.toLowerCase() : id)
+  const same = (a: unknown, b: unknown): boolean =>
+    typeof a === 'string' && typeof b === 'string' ? key(a) === key(b) : a === b
   return {
     webhookEndpoint: {
+      async updateMany({ where, data }) {
+        let count = 0
+        for (const row of rows.values()) {
+          if (same(row.id, where.id) && same(row.tenantId, where.tenantId)) {
+            Object.assign(row, data)
+            count++
+          }
+        }
+        return { count }
+      },
+      async create({ data }) {
+        if (rows.has(key(data.id))) {
+          throw Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), { code: 'P2002' })
+        }
+        const row: Row = { tenantId: null, secret: null, active: null, ...data }
+        rows.set(key(row.id), row)
+        return row
+      },
       async findMany({ where, orderBy }) {
         let list = [...rows.values()].filter((r) => rowMatches(r, where))
         if (orderBy?.id === 'asc') list = list.sort((a, b) => a.id.localeCompare(b.id))
         return list
       },
-      async upsert({ where, create, update }) {
-        const existing = rows.get(where.id)
-        if (existing) {
-          Object.assign(existing, update)
-          return existing
-        }
-        const row: Row = {
-          id: create.id,
-          url: create.url,
-          events: create.events,
-          tenantId: create.tenantId ?? null,
-          secret: create.secret ?? null,
-          active: create.active ?? null,
-        }
-        rows.set(row.id, row)
-        return row
-      },
       async deleteMany({ where }) {
-        return { count: rows.delete(where.id) ? 1 : 0 }
+        return { count: rows.delete(key(where.id)) ? 1 : 0 }
       },
     },
   }
@@ -118,6 +126,41 @@ describe('PrismaWebhookStore', () => {
     const [ep] = await store.list()
     expect(ep?.url).toBe('new')
     expect(ep?.events).toEqual(['invoice.*'])
+  })
+})
+
+// FA-069 (and D8): the write was an upsert keyed by `id` alone. Under MySQL's
+// case-insensitive collation 'ABC' IS 'abc', so tenant A re-registering 'ABC'
+// rewrote tenant B's endpoint — its url, its secret, its tenant. The manager's
+// JS guard compares ids exactly and cannot see it; the store must refuse.
+describe('add() never writes over another scope (FA-069)', () => {
+  it("case-insensitive collation: tenant A's 'ABC' cannot rewrite tenant B's 'abc'", async () => {
+    const store = new PrismaWebhookStore(makeFakeClient({ collation: 'ci' }))
+    await store.add({ id: 'abc', url: 'https://b.test/hook', events: ['*'], tenantId: 'globex', secret: 'b' })
+
+    await expect(
+      store.add({ id: 'ABC', url: 'https://evil.test', events: ['*'], tenantId: 'acme', secret: 'a' }),
+    ).rejects.toThrow(/already in use/)
+    expect(await store.list()).toEqual([
+      { id: 'abc', url: 'https://b.test/hook', events: ['*'], tenantId: 'globex', secret: 'b' },
+    ])
+  })
+
+  it('an id owned by another tenant (or a global endpoint) is refused', async () => {
+    const store = new PrismaWebhookStore(makeFakeClient())
+    await store.add({ id: 'x', url: 'global', events: ['*'] })
+    await store.add({ id: 'y', url: 'globex', events: ['*'], tenantId: 'globex' })
+
+    await expect(store.add({ id: 'x', url: 'evil', events: ['*'], tenantId: 'acme' })).rejects.toThrow(/already in use/)
+    await expect(store.add({ id: 'y', url: 'evil', events: ['*'] })).rejects.toThrow(/already in use/)
+    expect((await store.list()).map((e) => e.url)).toEqual(['global', 'globex'])
+  })
+
+  it('the same tenant re-adding its own id still replaces it', async () => {
+    const store = new PrismaWebhookStore(makeFakeClient({ collation: 'ci' }))
+    await store.add({ id: 'x', url: 'old', events: ['*'], tenantId: 'acme', secret: 's' })
+    await store.add({ id: 'x', url: 'new', events: ['invoice.*'], tenantId: 'acme' })
+    expect(await store.list('acme')).toEqual([{ id: 'x', url: 'new', events: ['invoice.*'], tenantId: 'acme' }])
   })
 })
 

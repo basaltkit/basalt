@@ -341,6 +341,7 @@ describe('TenantClientPool concurrency (F67)', () => {
     const pool = new TenantClientPool<{ id: string; $disconnect(): Promise<void> }>({
       create: (id) => ({ id, $disconnect: async () => void disconnected.push(id) }),
       max: 1,
+      idleMs: 0,
     })
     await pool.get('a')
     await pool.get('b')

@@ -90,12 +90,32 @@ export class SqliteAccessStore implements AccessStore {
 
   async grantToRole(role: string, permissions: string[], scope: string): Promise<void> {
     const stmt = this.db.prepare('INSERT OR IGNORE INTO perm_role_permissions (scope, role, permission) VALUES (?, ?, ?)')
-    for (const permission of permissions) stmt.run(scope, role, permission)
+    this.atomically(() => {
+      for (const permission of permissions) stmt.run(scope, role, permission)
+    })
   }
 
   async grantToUser(userId: string, permissions: string[], scope: string): Promise<void> {
     const stmt = this.db.prepare('INSERT OR IGNORE INTO perm_user_permissions (scope, user_id, permission) VALUES (?, ?, ?)')
-    for (const permission of permissions) stmt.run(scope, userId, permission)
+    this.atomically(() => {
+      for (const permission of permissions) stmt.run(scope, userId, permission)
+    })
+  }
+
+  /**
+   * All of a multi-row grant, or none of it. A SAVEPOINT rather than BEGIN, so
+   * it also nests inside a transaction the caller already opened on this db.
+   */
+  private atomically(fn: () => void): void {
+    this.db.exec('SAVEPOINT basalt_perm_grant')
+    try {
+      fn()
+    } catch (error) {
+      this.db.exec('ROLLBACK TO basalt_perm_grant')
+      this.db.exec('RELEASE basalt_perm_grant')
+      throw error
+    }
+    this.db.exec('RELEASE basalt_perm_grant')
   }
 }
 

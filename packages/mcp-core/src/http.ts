@@ -235,7 +235,7 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
     // HTTP has no server→client channel here; `headers` carry per-call metadata.
     // Every request is its own session — cancellation never crosses requests.
     const ctx: CallContext = {
-      headers: normalizeHeaders(req.headers),
+      headers: normalizeHeaders(req),
       session: {},
       signal: controller.signal,
       ...(req.socket.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
@@ -251,13 +251,24 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
     res.end(JSON.stringify(response))
   }
 
-  return new Promise<HttpHandle>((resolve) => {
-    httpServer.listen(options.port ?? 0, host, () => {
+  // `[::1]` and `::1` name the same interface: `listen()` wants it bare, a URL
+  // wants it bracketed (`http://::1:8848/mcp` is not a URL).
+  const bindHost = host.trim().replace(/^\[(.*)\]$/, '$1')
+  const urlHost = bindHost.includes(':') ? `[${bindHost}]` : bindHost
+
+  return new Promise<HttpHandle>((resolve, rejectListen) => {
+    // A port already in use (or an address this machine does not have) is an
+    // error to the caller — not an unhandled 'error' event and a promise that
+    // never settles.
+    const onListenError = (error: Error): void => rejectListen(error)
+    httpServer.once('error', onListenError)
+    httpServer.listen(options.port ?? 0, bindHost, () => {
+      httpServer.off('error', onListenError)
       const address = httpServer.address()
       const port = typeof address === 'object' && address ? address.port : (options.port ?? 0)
       resolve({
         port,
-        url: `http://${host}:${port}${path}`,
+        url: `http://${urlHost}:${port}${path}`,
         close: () =>
           new Promise<void>((done, reject) => httpServer.close((err) => (err ? reject(err) : done()))),
       })
@@ -265,8 +276,21 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
   })
 }
 
-function normalizeHeaders(
-  headers: import('node:http').IncomingHttpHeaders,
-): Record<string, string | string[] | undefined> {
-  return headers as Record<string, string | string[] | undefined>
+/**
+ * The request headers as tools see them: a header sent once is a string, a
+ * header sent more than once is an array of every value, in order.
+ *
+ * `req.headers` would not do: Node joins most repeated headers with `, `
+ * (`x-tenant: a` twice becomes `'a, a'`… or `'acme, globex'`) and silently keeps
+ * only the first of others (`authorization`, `host`, `content-type`), so a tool
+ * could never apply "a duplicated header is ambiguous — refuse". Built from
+ * `headersDistinct`, which keeps the multiplicity.
+ */
+function normalizeHeaders(req: IncomingMessage): Record<string, string | string[] | undefined> {
+  const headers: Record<string, string | string[] | undefined> = {}
+  for (const [name, values] of Object.entries(req.headersDistinct)) {
+    if (values === undefined || values.length === 0) continue
+    headers[name] = values.length === 1 ? values[0] : values
+  }
+  return headers
 }

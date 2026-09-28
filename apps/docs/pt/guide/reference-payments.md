@@ -143,7 +143,7 @@ const payments = new ProxyPayGateway({
   apiKey: process.env.PROXYPAY_API_KEY!, // Authorization: Token <key>
   entity: process.env.PROXYPAY_ENTITY!,  // a tua Entidade Multicaixa
   sandbox: process.env.NODE_ENV !== 'production',
-  // webhookSecret predefine para a API key (o que o ProxyPay usa para assinar); '' desativa.
+  // webhookSecret predefine para a API key (o que o ProxyPay usa para assinar); não pode ser desligado.
 })
 
 const inst = await payments.createPayment({
@@ -161,6 +161,8 @@ ambas: envia sempre `end_datetime` (a partir de `expiresAt` ou da opção
 `expiryDays`, predefinição 30), e reserva uma referência numérica a menos que
 passes uma `reference` numérica tua. Uma `reference` não numérica (ex. um id de
 encomenda) é guardada em `custom_fields` enquanto o ProxyPay atribui a numérica.
+O teu `metadata` também vai em `custom_fields`, mas nunca pode sobrepor
+`billable_id` nem `reference` — é contra esses que o webhook é reconciliado.
 
 ### Opções do ProxyPay
 
@@ -170,7 +172,7 @@ encomenda) é guardada em `custom_fields` enquanto o ProxyPay atribui a numéric
 | `entity` | — | A tua Entidade Multicaixa (Entidade) |
 | `sandbox` | `false` | Usa o host de sandbox |
 | `baseUrl` | prod/sandbox | Substitui o host por completo |
-| `webhookSecret` | `apiKey` | Segredo HMAC; `''` para desativar a verificação |
+| `webhookSecret` | `apiKey` | Segredo HMAC. Sempre verificado: um segredo vazio/só com espaços lança `WebhookSecretMissingError` |
 | `callbackUrl` | — | Ecoado como `custom_fields.callback_url` por referência |
 | `expiryDays` | `30` | Validade de fallback quando `expiresAt` é omitido |
 | `fetch` | `fetch` global | Cliente HTTP injetável |
@@ -250,6 +252,15 @@ const rec = await ledger.get(reference) // { id, status, amount, createdAt, upda
 Um callback repetido devolve `{ fresh: false }` e não altera nada. Se a
 persistência lançar, a reclamação é **libertada** para que a retentativa da
 gateway possa reprocessar.
+
+O ledger é também uma máquina de estados: `pending → paid | failed`,
+`failed → paid` (uma retentativa com sucesso), e **`paid` é terminal**. Um
+evento para um pagamento já pago — um `payment.failed` tardio, ou um segundo
+`payment.succeeded` com um novo id de evento — não altera nada, não corre o
+`onFresh` e devolve `{ fresh: false }`, por isso um pagamento nunca deixa de
+estar pago e os seus efeitos nunca correm duas vezes. Um `payment.failed` nunca
+sobrescreve o montante pedido, por isso a verificação de pagamento a menos
+continua armada para a retentativa.
 
 ### Efeitos secundários de domínio atómicos
 
@@ -410,6 +421,10 @@ subscrição).
 | `handleEvent(event)` | Aplica uma vez; estende `paidThrough` em sucesso, `past_due` em falha |
 | `due(now?)` | Subscrições que precisam da próxima referência (dentro de `leadDays`) |
 | `get` / `cancel` | Lê / cancela uma subscrição |
+
+Os períodos somam-se em UTC e são limitados ao fim do mês (`addInterval`): uma
+subscrição paga até 31 de janeiro renova para 28/29 de fevereiro, não para 2/3
+de março. Passa `now: () => number` para injetar o relógio (testes, simulações).
 
 ::: tip Dica: agendamento
 Corre `due()` → `issueNext()` a partir de um cron job, de um job de

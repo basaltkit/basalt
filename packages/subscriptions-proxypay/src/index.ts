@@ -2,9 +2,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import {
   assertMinorUnits,
   toMajor,
+  requireWebhookSecret,
   toMinor,
   WebhookInvalidError,
-  WebhookSecretMissingError,
   type PaymentEvent,
   type PaymentGateway,
   type PaymentInstruction,
@@ -49,8 +49,9 @@ export interface ProxyPayOptions {
    * Secret used to verify webhook signatures — HMAC-SHA256 of the raw request
    * body, hex-encoded, delivered in the `x-signature` header. **Defaults to your
    * API key**, which is what ProxyPay signs the callback with, so verification is
-   * on out of the box. Override only if you configured a different secret; pass
-   * an empty string (`''`) to disable verification entirely.
+   * on out of the box. Override only if you configured a different secret.
+   * Verification cannot be turned off: an empty or whitespace-only secret makes
+   * `verifyWebhook` throw `WebhookSecretMissingError` (fail closed).
    */
   webhookSecret?: string
   /**
@@ -142,11 +143,14 @@ export class ProxyPayGateway implements PaymentGateway {
     const numericSupplied =
       request.reference && /^\d+$/.test(request.reference) ? request.reference : undefined
     const referenceId = numericSupplied ?? (await this.reserveReferenceId())
+    // Caller metadata first, the driver's own fields last: `billable_id` and
+    // `reference` are what the webhook is reconciled against, so metadata must
+    // never be able to redirect a payment to another billable or order.
     const customFields: Record<string, string> = {
-      billable_id: request.billableId,
-      ...(request.reference ? { reference: request.reference } : {}),
       ...(this.callbackUrl ? { callback_url: this.callbackUrl } : {}),
       ...(request.metadata ?? {}),
+      billable_id: request.billableId,
+      ...(request.reference ? { reference: request.reference } : {}),
     }
     // ProxyPay requires `end_datetime`, so always send one — from the request's
     // expiresAt, or a default `expiryDays` window from now. It's a date
@@ -171,15 +175,15 @@ export class ProxyPayGateway implements PaymentGateway {
     // an unsigned webhook lets anyone forge a `payment.succeeded`. Previously an
     // explicit `webhookSecret: ''` silently disabled verification — now it's
     // refused. (The default is the API key, so normal setups always verify.)
-    if (!this.webhookSecret) throw new WebhookSecretMissingError('ProxyPayGateway')
-    const expected = createHmac('sha256', this.webhookSecret).update(rawBody).digest('hex')
+    const secret = requireWebhookSecret('ProxyPayGateway', this.webhookSecret)
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex')
     const a = Buffer.from(signature ?? '', 'utf8')
     const b = Buffer.from(expected, 'utf8')
     if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
     // ProxyPay POSTs a FLAT payment object when a reference is paid — the same
     // shape as an item in `GET /payments`: top-level `reference_id`, `amount`,
     // `id`, `custom_fields`. There is no `event_type` and no nested `data`.
-    const payload = JSON.parse(rawBody) as {
+    type Payload = {
       id?: string | number
       reference_id?: string | number
       amount?: string | number
@@ -187,15 +191,25 @@ export class ProxyPayGateway implements PaymentGateway {
       datetime?: string
       custom_fields?: Record<string, string>
     }
+    // A signed but malformed body is a bad delivery (400), not a crash (500).
+    let payload: Payload
+    try {
+      payload = JSON.parse(rawBody) as Payload
+    } catch {
+      throw new WebhookInvalidError()
+    }
+    if (!payload || typeof payload !== 'object') throw new WebhookInvalidError()
     // Not a payment callback (no reference id) — ignore.
     if (payload.reference_id == null) return null
+    const amount = Number(payload.amount)
+    if (!Number.isFinite(amount) || amount < 0) throw new WebhookInvalidError()
     const cf = payload.custom_fields ?? {}
     return {
       id: String(payload.id ?? payload.transaction_id ?? payload.reference_id),
       type: 'payment.succeeded',
       paymentId: String(payload.reference_id),
       // ProxyPay reports a major-unit amount (e.g. "10.00"); store minor units.
-      amount: toMinor(Number(payload.amount), CURRENCY),
+      amount: toMinor(amount, CURRENCY),
       ...(cf.billable_id ? { billableId: cf.billable_id } : {}),
       ...(cf.reference ? { reference: cf.reference } : {}),
       raw: payload,

@@ -168,6 +168,9 @@ const connectQuery = z.object({
   rootId: z.string().max(512).optional(),
 })
 
+/** An OAuth `error` code as RFC 6749 §4.1.2.1 shapes one — the only form that is echoed back. */
+const OAUTH_ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
+
 const callbackQuery = z.object({
   code: z.string().max(4096).optional(),
   state: z.string().max(4096).optional(),
@@ -263,7 +266,15 @@ export function driveRoutes(options: DriveRoutesOptions): BasaltRoute[] {
           // vendor text echoed into our own error message, so it is not
           // forwarded — only the machine-readable code, which is a fixed
           // vocabulary.
-          throw new DriveAuthorizationInvalidError(`the provider returned "${query.error}".`)
+          //
+          // Even the code is attacker-chosen text on an unauthenticated URL, so
+          // it is named only when it has the shape RFC 6749 gives one
+          // (`access_denied`, `consent_required`): anything else is reported as
+          // an unrecognised refusal instead of being reflected (FA-076).
+          const code = OAUTH_ERROR_CODE.test(query.error) ? query.error : 'an unrecognised error'
+          throw new DriveAuthorizationInvalidError(
+            code === query.error ? `the provider returned "${code}".` : `the provider returned ${code}.`,
+          )
         }
         const cookie = decodeBinding(readCookie(request, cookieName))
         const connection = await drives.completeAuthorization({
@@ -313,6 +324,12 @@ function notificationRoutes(
    */
   const receive = async (provider: string, input: DriveNotificationInput): Promise<string | undefined> => {
     const drives = resolve()
+    // An unknown `:provider` gets the same flat refusal as any unverifiable
+    // delivery. `DRIVE_PROVIDER_UNKNOWN` lists every registered adapter, which
+    // is useful to a developer and none of an anonymous caller's business.
+    if (!drives.providerNames().includes(provider)) {
+      throw new DriveNotificationInvalidError('this endpoint does not accept that notification.')
+    }
     const candidates = options.connections
     // Always wrapped, array or resolver alike, so `onChange` is told the same
     // authenticated query either way — an app should not get a different

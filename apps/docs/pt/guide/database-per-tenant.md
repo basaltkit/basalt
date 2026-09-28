@@ -63,7 +63,7 @@ isso uma app sem ele não está desprotegida, tem apenas uma camada em vez de du
 
 ## O pool de clientes por tenant
 
-Dá ao `prismaPlugin` uma factory e ele mantém um pool LRU limitado de clientes, um por
+Dá ao `prismaPlugin` uma factory e ele mantém um pool limitado de clientes, um por
 tenant, construindo-os a pedido:
 
 ```ts
@@ -74,7 +74,23 @@ import { prismaPlugin } from '@basaltkit/prisma'
 prismaPlugin({
   forTenant: (tenantId) => new PrismaClient({ datasourceUrl: urlFor(tenantId) }),
   destroy: (client) => client.$disconnect(),
-  max: 20, // clientes usados mais recentemente mantidos abertos
+  max: 20, // no máximo 20 clientes de tenant abertos — nunca excedido
+  idleMs: 30_000, // um cliente entregue a um pedido conta como em uso durante este tempo
+  acquireTimeoutMs: 10_000, // quanto um tenant novo espera por uma vaga
+})
+```
+
+O pool só fecha clientes **inactivos** (o menos usado recentemente primeiro). Um
+cliente entregue a um pedido conta como em uso durante `idleMs` — mantém-no acima do
+teu pedido mais longo — por isso nunca é desligado a meio de uma query. Quando todos
+os `max` clientes estão em uso, um pedido para um tenant novo espera até
+`acquireTimeoutMs` e depois falha com `TenantPoolExhaustedError` (503): dimensiona
+`max` para os tenants activos *ao mesmo tempo*. Trabalho que possa durar mais do que
+`idleMs` segura o cliente com um lease:
+
+```ts
+await app.container.get(DB_POOL).use(tenantId, async (client) => {
+  // nunca despejado até este callback terminar
 })
 ```
 
@@ -95,7 +111,9 @@ prismaPlugin({
 ```
 
 Em ambos os casos, o plugin anexa o cliente certo ao contexto do pedido — em pedidos
-HTTP (a partir do tenant resolvido) e dentro de `tenancy.run()` (workers, jobs).
+HTTP (a partir do tenant resolvido) e dentro de `tenancy.run()` (workers, jobs). Um
+`tenancy.run()` para um tenant sem cliente no plugin limpa o `db` herdado do tenant
+exterior, para que `db()` falhe em vez de escrever na base de dados errada.
 Lê-lo com `db()`:
 
 ```ts

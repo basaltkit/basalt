@@ -54,12 +54,26 @@ export class MemoryRecurringStore implements RecurringStore {
   }
 }
 
-/** Add one billing interval to an epoch-ms instant (calendar-aware). */
+/**
+ * Add one billing interval to an epoch-ms instant (calendar-aware, in UTC).
+ * The day of month is clamped to the target month's length, so Jan 31 renews
+ * on Feb 28/29 (not Mar 2/3, which skipped February) and Feb 29 on Feb 28 of the
+ * next year. UTC keeps the result independent of the server's time zone/DST.
+ */
 export function addInterval(ms: number, interval: RecurringInterval): number {
   const d = new Date(ms)
-  if (interval === 'yearly') d.setFullYear(d.getFullYear() + 1)
-  else d.setMonth(d.getMonth() + 1)
-  return d.getTime()
+  const year = d.getUTCFullYear() + (interval === 'yearly' ? 1 : 0)
+  const month = d.getUTCMonth() + (interval === 'yearly' ? 0 : 1)
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+  return Date.UTC(
+    year,
+    month,
+    Math.min(d.getUTCDate(), lastDay),
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds(),
+    d.getUTCMilliseconds(),
+  )
 }
 
 export interface RecurringBillingOptions {
@@ -73,6 +87,8 @@ export interface RecurringBillingOptions {
   leadDays?: number
   /** ISO 4217 currency passed to the gateway (defaults to the gateway's own). */
   currency?: string
+  /** Clock in epoch ms (tests, simulations). Default: `Date.now`. */
+  now?: () => number
 }
 
 export interface SubscribeInput {
@@ -102,8 +118,10 @@ export class RecurringReferenceBilling {
   private readonly store: RecurringStore
   private readonly leadMs: number
   private readonly currency: string | undefined
+  private readonly now: () => number
 
   constructor(options: RecurringBillingOptions) {
+    this.now = options.now ?? (() => Date.now())
     this.gateway = options.gateway
     this.ledger = options.ledger ?? new PaymentLedger()
     this.store = options.store ?? new MemoryRecurringStore()
@@ -119,7 +137,7 @@ export class RecurringReferenceBilling {
   async subscribe(
     input: SubscribeInput,
   ): Promise<{ subscription: RecurringSubscription; instruction: PaymentInstruction }> {
-    const now = Date.now()
+    const now = this.now()
     const subscription: RecurringSubscription = {
       billableId: input.billableId,
       plan: input.plan,
@@ -150,7 +168,7 @@ export class RecurringReferenceBilling {
     sub: RecurringSubscription,
     metadata?: Record<string, string>,
   ): Promise<PaymentInstruction> {
-    const reference = `${sub.billableId}:${sub.plan}:${Date.now()}`
+    const reference = `${sub.billableId}:${sub.plan}:${this.now()}`
     const request: PaymentRequest = {
       billableId: sub.billableId,
       amount: sub.amount,
@@ -162,7 +180,7 @@ export class RecurringReferenceBilling {
     const instruction = await this.gateway.createPayment(request)
     await this.ledger.created(instruction, request)
     sub.pendingPaymentId = instruction.id
-    sub.updatedAt = Date.now()
+    sub.updatedAt = this.now()
     await this.store.save(sub)
     return instruction
   }
@@ -181,14 +199,15 @@ export class RecurringReferenceBilling {
       const sub = await this.store.get(billableId)
       if (!sub || event.paymentId !== sub.pendingPaymentId) return // not the awaited reference
       if (event.type === 'payment.succeeded') {
-        const base = sub.paidThrough && sub.paidThrough > Date.now() ? sub.paidThrough : Date.now()
+        const now = this.now()
+        const base = sub.paidThrough && sub.paidThrough > now ? sub.paidThrough : now
         sub.paidThrough = addInterval(base, sub.interval)
         sub.status = 'active'
         delete sub.pendingPaymentId
       } else {
         sub.status = 'past_due'
       }
-      sub.updatedAt = Date.now()
+      sub.updatedAt = this.now()
       await this.store.save(sub)
       subscription = sub
     })
@@ -200,7 +219,7 @@ export class RecurringReferenceBilling {
    * nothing outstanding, and within `leadDays` of the paid-through date (or
    * never paid). Run this on a schedule and call `issueNext()` for each.
    */
-  async due(now: number = Date.now()): Promise<RecurringSubscription[]> {
+  async due(now: number = this.now()): Promise<RecurringSubscription[]> {
     const subs = await this.store.list()
     return subs.filter(
       (s) =>
@@ -215,7 +234,7 @@ export class RecurringReferenceBilling {
     if (!sub) return
     sub.status = 'canceled'
     delete sub.pendingPaymentId
-    sub.updatedAt = Date.now()
+    sub.updatedAt = this.now()
     await this.store.save(sub)
   }
 }

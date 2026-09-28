@@ -343,9 +343,21 @@ const { userId } = await passkeys.finishAuthentication(sessionKey, browserRespon
 > credential id is rejected (`PASSKEY_EXISTS`) rather than overwriting an existing one.
 
 `finishAuthentication` looks the credential up by id, verifies it, checks the
-signature counter **increased** (a non-increasing counter throws `PasskeyClonedError`),
-and persists the new counter. Use `passkeys.list(userId)` / `passkeys.remove(id)`
-for a "manage devices" screen.
+signature counter **increased** (a non-increasing counter throws `PasskeyClonedError`;
+a non-integer counter from the verifier is refused), and persists the new counter.
+When `startAuthentication(sessionKey, userId)` names a user (step-up,
+re-authentication), only **that user's** passkey satisfies the challenge — any
+other account's passkey throws `WEBAUTHN_SUBJECT_MISMATCH`.
+
+Use `passkeys.list(userId)` / `passkeys.remove(userId, credentialId)` for a "manage
+devices" screen. `remove` only deletes a passkey that belongs to `userId` (an unknown
+or foreign id throws `PASSKEY_NOT_FOUND`), so pass the id of the **authenticated**
+user, never one from the request.
+
+> **User verification:** the default `userVerification: 'preferred'` lets an
+> authenticator without a PIN/biometric sign, so the assertion proves possession
+> only. When a passkey is the only factor (passwordless login), set
+> `userVerification: 'required'`.
 
 ### Social login (OAuth)
 
@@ -407,9 +419,42 @@ enforces its own MFA. `Auth.socialLogin(email, { emailVerified })` is the
 underlying primitive for custom providers.
 
 **Enterprise SSO (OIDC):** any OpenID Connect IdP (Okta, Entra ID, Auth0,
-Keycloak…) plugs in via `oidcProvider({ clientId, clientSecret, authorizationUrl,
-tokenUrl, userinfoUrl })`, or let `discoverOidcProvider(issuerUrl, keys)` read the
-endpoints from the IdP's `.well-known/openid-configuration`.
+Keycloak…) plugs in via `oidcProvider({ name, clientId, clientSecret, authorizeUrl,
+tokenUrl, userInfoUrl, issuer? })`, or let `await discoverOidcProvider({ name, issuer,
+clientId, clientSecret })` read the endpoints from the IdP's
+`.well-known/openid-configuration` (the document's `issuer` must equal yours and every
+endpoint must be `https:` — plain `http:` only to a loopback host).
+
+**Restrict each enterprise IdP to its email domains.** A customer's IdP admin
+decides which emails it asserts as verified; without a restriction, Acme's IdP could
+assert `ceo@globex.com` and log into Globex's CEO account (any verified email links
+to the existing account). Pass `allowedEmailDomains`:
+
+```ts
+oidcProvider({ name: 'acme', /* …endpoints, keys… */ allowedEmailDomains: ['acme.com'] })
+await discoverOidcProvider({ name: 'globex', issuer, clientId, clientSecret, allowedEmailDomains: ['globex.com'] })
+```
+
+A login for any other domain fails with `AUTH_OAUTH_EXCHANGE_FAILED` before an
+account is looked up (exact, case-insensitive match; list subdomains explicitly). With
+**more than one provider configured**, every `oidcProvider` / `discoverOidcProvider`
+entry must declare `allowedEmailDomains` or `allowAnyEmailDomain: true` (only for an
+IdP you fully control) — otherwise `OAuth` refuses to start with
+`AUTH_OAUTH_PROVIDER_CONFIG`. Google and GitHub are not affected (they only assert
+emails they verified themselves); any custom `OAuthProvider` can opt in with
+`enterprise: true` or set `allowedEmailDomains` directly.
+
+Accounts are matched by **email**, not by the provider's `subject`: a verified email
+from any configured provider logs into the account holding it. Keep that in mind
+when you add a provider — the domain allowlist is what scopes it.
+
+**Provider replies are validated:** a profile without a string `sub`/`email` (or an
+email that is not a single-`@` address) fails the login; an `openid` flow must return
+an `id_token` whose `nonce`, `aud` (your client id), `exp` and — when the provider
+declares an `issuer` — `iss` match; a non-JSON token-endpoint reply is an exchange
+error; every provider call has a deadline (`oauthPlugin({ timeoutMs })`, default 10 s).
+`oauthRoutes` carry `meta.rateLimit` (10 per minute per ip and route by default,
+enforced by the http `securityPlugin`; `oauthRoutes({ rateLimit: false })` removes it).
 
 ### API keys
 
@@ -445,7 +490,7 @@ const app = await createApp({
 
 `apiKeysPlugin` claims the `scopes` key in the adapters' boot-time guarded-meta check, so a route declaring `meta.scopes` **without** the plugin registered fails loud at boot (`UnguardedRouteMetaError`) instead of serving unchecked.
 
-The key is presented in the `Authorization: Bearer mk_live_...` or `x-api-key` header. A **scope** is a granular permission on the key (e.g. `reports:read`); `*` means all. After authenticating, `ctx().apiKey` contains `{ id, scopes, tenantId?, userId? }`.
+The key is presented in the `Authorization: Bearer mk_live_...` or `x-api-key` header — one of them: a request carrying two **different** keys (one in each) is refused with 400 `AUTH_APIKEY_AMBIGUOUS` rather than letting one silently win. A **scope** is a granular permission on the key (e.g. `reports:read`); `*` means all. After authenticating, `ctx().apiKey` contains `{ id, scopes, tenantId?, userId? }`.
 
 The guard enforces, on every key-authenticated request: **tenant binding** (a key
 issued in a tenant is refused with `403 AUTH_APIKEY_TENANT_MISMATCH` on any request
@@ -537,7 +582,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 - Every `authRoutes()`, `mfaRoutes()` and `oauthRoutes()` route declares `meta.account: true` (about the caller, not a tenant's data — `@basaltkit/teams`' membership guard lets non-members through) and, except MFA disable, `meta.mfa: false` (reachable under `requireMfa`). `ACCOUNT_META` exports the pair for your own profile routes.
 - `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
-- `oauthRoutes({ callbackBaseUrl, successRedirect? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider.
+- `oauthRoutes({ callbackBaseUrl, successRedirect?, bindingCookie?, rateLimit? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider (rate-limited by default).
 
 ### `apiKeysPlugin(options)` and the `ApiKeys` class
 
@@ -546,7 +591,7 @@ Options (`ApiKeysPluginOptions`):
 | Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `store` | `ApiKeyStore` | No | `MemoryApiKeyStore` | Key storage. |
-| `header` | `string` | No | `'x-api-key'` | Alternative header to Bearer. |
+| `header` | `string` | No | `'x-api-key'` | Alternative header to Bearer. Two different keys (Bearer + header) → 400 `AUTH_APIKEY_AMBIGUOUS`. |
 | `users` | `UserSource` | No | — | If given, a key with `userId` also populates `ctx().user`. |
 | `now` | `() => number` | No | `Date.now` | Injectable clock (tests). |
 
@@ -557,7 +602,7 @@ Options (`ApiKeysPluginOptions`):
 | Export | Description |
 |---|---|
 | `signJwt(claims, { secret, expiresIn? })` / `verifyJwt(token, secret)` | Dependency-free HS256 JWT. Advanced. |
-| `ScryptPasswordHasher` / `PasswordHasher` | Password hashing (scrypt, memory-hard). Advanced. |
+| `ScryptPasswordHasher` / `PasswordHasher` | Password hashing (scrypt, memory-hard). Advanced. A stored hash declaring more than N=2^20, r=32, p=16 (or 512 MiB) never verifies, so a tampered row cannot pin the CPU. |
 | `LoginThrottle` (`maxAttempts` def. 5, `windowMs` def. 15 min, `store`, `namespace`, `clock`) | Anti brute-force. |
 | `ThrottleStore` / `MemoryThrottleStore` / `RedisThrottleStore` (`RedisThrottleClient`: `eval` + `del`) | Where throttle counters live; Redis shares them across replicas. |
 | `generateTotpSecret`, `totp`, `verifyTotp`, `otpauthUri`, `base32Encode`, `base32Decode` | TOTP primitives (RFC 6238). Advanced. |
@@ -594,6 +639,9 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 |
 | `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 (message kept for the log; the client gets `Bad gateway.`) |
+| `OAuthProviderConfigError` | `AUTH_OAUTH_PROVIDER_CONFIG` | boot (several providers with an unrestricted enterprise IdP, an invalid domain entry, a duplicate name) |
+| `ApiKeyAmbiguousError` | `AUTH_APIKEY_AMBIGUOUS` | 400 |
+| `PasskeyNotFoundError` / `WebAuthnSubjectMismatchError` | `PASSKEY_NOT_FOUND` / `WEBAUTHN_SUBJECT_MISMATCH` | 404/403 |
 
 ## Common issues and solutions (FAQ)
 

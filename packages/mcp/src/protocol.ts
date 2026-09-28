@@ -1,8 +1,9 @@
 /**
  * The JSON-RPC 2.0 + MCP wire protocol now lives in the zero-dependency
  * `@basaltkit/mcp-core` package, so the runtime server here and the dev-only AI
- * bridge share one implementation. This module re-exports the same names to keep
- * `@basaltkit/mcp`'s public surface byte-identical.
+ * bridge share one implementation. This module re-exports the names the rest of
+ * this package uses internally; the public surface is whatever `index.ts`
+ * re-exports from here (the constants and types, not the `ok`/`fail` helpers).
  */
 export {
   SUPPORTED_PROTOCOL_VERSIONS,

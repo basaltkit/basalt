@@ -91,6 +91,11 @@ over it.
   keyed on the `@@id([tenantId, userId])` compound id.
 - **Pending** invitations are those with `acceptedAt` and `revokedAt` both null;
   expiry is the caller's concern, exactly as in the in-memory store.
+- **Emails**: `findPending` compares the canonical address (trimmed,
+  lower-cased) on both sides, so a mixed-case row written before
+  `@basaltkit/teams` 4.0 is still found. `@basaltkit/teams` 4.0+ stores new
+  invitations in canonical form and supersedes every pending invite for the
+  same address itself — no data migration needed.
 - `markAccepted`/`revoke` use `updateMany`, so they're tolerant no-ops if the row
   is gone — same semantics as the in-memory and SQLite stores.
 

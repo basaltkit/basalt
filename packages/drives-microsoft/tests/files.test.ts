@@ -60,7 +60,10 @@ describe('listing', () => {
     // `DriveSyncResult`. A raw provider URL there leaks Graph's paging state
     // into an app's database and invites somebody to fetch it.
     expect(first.cursor).not.toContain('https://')
-    expect(first.cursor).toMatch(/^basalt\.msgraph\.list:/)
+    // The engine binds it to this connection (`bkl1.<adapter cursor>.<mac>`);
+    // the adapter's own cursor inside is the wrapped nextLink, still no URL.
+    const inner = Buffer.from(first.cursor!.split('.')[1]!, 'base64url').toString('utf8')
+    expect(inner).toMatch(/^basalt\.msgraph\.list:/)
 
     const second = await h.drives.listItems(view.id, { cursor: first.cursor })
     expect(second.items).toHaveLength(1)
@@ -80,6 +83,22 @@ describe('listing', () => {
       code: 'DRIVE_ACCESS_DENIED',
     })
     expect(h.graph.requests.some((r) => r.url.includes('evil.test'))).toBe(false)
+  })
+
+  it('refuses a caller-authored cursor naming another drive on Graph itself (FA-072)', async () => {
+    const h = harness({ server: { files: FILES } })
+    const view = await connect(h, { rootId: microsoftRoot({ driveId: 'b!acme-drive' }) })
+    // Host and scheme are Graph's, so the adapter's own pre-check and the
+    // allowlist both pass — this used to be fetched with the connection's
+    // bearer token, reading a drive the connection was never scoped to.
+    const forged = `basalt.msgraph.list:${Buffer.from(
+      'https://graph.microsoft.com/v1.0/drives/b!somebody-else/root/children',
+    ).toString('base64url')}`
+
+    await expect(h.drives.listItems(view.id, { cursor: forged })).rejects.toMatchObject({
+      code: 'DRIVE_ACCESS_DENIED',
+    })
+    expect(h.graph.requests.some((r) => r.url.includes('somebody-else'))).toBe(false)
   })
 
   it('confines a connection to its own drive, whatever handle a caller passes', async () => {

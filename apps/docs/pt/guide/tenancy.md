@@ -808,8 +808,8 @@ cada operação — ver a parte de RLS do [guia de Segurança](/pt/guide/securit
 **Schema por tenant** — uma base de dados, um schema PostgreSQL por tenant. Cada
 tenant recebe um client cujo URL de ligação transporta `?schema=tenant_<id>`, para que
 o Prisma defina o `search_path` no momento da ligação (fiável, ao contrário da troca de
-`search_path` por pedido num pool partilhado). Os clients são mantidos num pool LRU
-limitado:
+`search_path` por pedido num pool partilhado). Os clients são mantidos num pool
+limitado (só clients inactivos são despejados; ver [o pool de clientes por tenant](./database-per-tenant#o-pool-de-clientes-por-tenant)):
 
 ```ts
 import { PrismaClient } from '@prisma/client'

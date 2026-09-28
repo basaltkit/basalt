@@ -139,3 +139,22 @@ describe('rawBody() on an app that brought its own parsers', () => {
     expect(body.error.message).toContain('body parser')
   })
 })
+
+describe('rawBody() and Express\'s case-insensitive routing (FA-080)', () => {
+  it('steps the parser aside for /HOOK too — the same route Express serves for /hook', async () => {
+    const big = route({
+      method: 'POST',
+      url: '/hook',
+      body: rawBody({ maxBytes: 4 * 1024 * 1024 }),
+      handler: ({ body }) => ({ size: body.bytes.length }),
+    })
+    // An app of your own keeps Express's case-insensitive routing (the one
+    // expressPlugin creates is case-sensitive, like Fastify and Hono).
+    const base = await boot([big], express())
+    // Larger than the JSON parser's limit: only the route's own maxBytes may apply.
+    const payload = JSON.stringify({ pad: 'x'.repeat(2 * 1024 * 1024) })
+    const res = await post(base, '/HOOK', payload)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ size: Buffer.byteLength(payload) })
+  })
+})

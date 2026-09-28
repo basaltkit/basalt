@@ -99,7 +99,13 @@ export function subscriptionsPlugin(options: SubscriptionsPluginOptions) {
             throw new NotSubscribedError()
           }
         }
-        if (typeof requiredFeature === 'string') {
+        if (requiredFeature !== undefined) {
+          // The key is claimed (see `http:guarded-meta`), so any value must gate
+          // the route: a non-string or empty one (`feature: true`, `['a']`, '')
+          // names no feature and fails closed instead of being skipped.
+          if (typeof requiredFeature !== 'string' || requiredFeature === '') {
+            throw new FeatureUnavailableError(String(requiredFeature))
+          }
           if (!billableId || !(await subscriptions.features(billableId).can(requiredFeature))) {
             throw new FeatureUnavailableError(requiredFeature)
           }
@@ -305,7 +311,15 @@ export const DEFAULT_WEBHOOK_MAX_BYTES = 256 * 1024
 export interface BillingWebhookRouteOptions {
   /** Most bytes of body to read. Over it: 413. Default {@link DEFAULT_WEBHOOK_MAX_BYTES}. */
   maxBytes?: number
+  /**
+   * Header(s) carrying the signature, overriding the gateway's own
+   * `signatureHeader`. Default: the gateway's, else `stripe-signature` /
+   * `x-billing-signature`.
+   */
+  signatureHeader?: string | readonly string[]
 }
+
+const LEGACY_SIGNATURE_HEADERS = ['stripe-signature', 'x-billing-signature'] as const
 
 /**
  * Webhook endpoint: POST /billing/webhook — signature verified by the
@@ -326,12 +340,23 @@ export function billingWebhookRoute(
   gateway: BillingGateway,
   options: BillingWebhookRouteOptions = {},
 ): BasaltRoute {
+  // Each driver declares where its signature travels (Paddle: `paddle-signature`,
+  // Lemon Squeezy: `x-signature`); reading only Stripe's header made every
+  // Paddle/Lemon Squeezy delivery a 400.
+  const configured = options.signatureHeader ?? gateway.signatureHeader ?? LEGACY_SIGNATURE_HEADERS
+  const headerNames = (typeof configured === 'string' ? [configured] : [...configured]).map((h) =>
+    h.toLowerCase(),
+  )
   return route({
     method: 'POST',
     url: '/billing/webhook',
     body: rawBody({ maxBytes: options.maxBytes ?? DEFAULT_WEBHOOK_MAX_BYTES }),
     async handler({ body, request, reply }) {
-      const header = request.headers['stripe-signature'] ?? request.headers['x-billing-signature']
+      let header: string | string[] | undefined
+      for (const name of headerNames) {
+        header = request.headers[name]
+        if (header !== undefined) break
+      }
       const event = gateway.verifyWebhook(
         // The bytes as they arrived. Gateways specify their HMAC over the UTF-8
         // payload, which is what `text()` decodes — and it is decoded from the

@@ -1,4 +1,5 @@
 import {
+  DriveAccessDeniedError,
   DriveAuthorizationInvalidError,
   DriveContentTooLargeError,
   DriveCredentialsInvalidError,
@@ -243,6 +244,12 @@ export interface MicrosoftDriveOptions {
   subscriptionTtlMs?: number
   /** Change types to subscribe to. Default `['updated']`, which covers create, edit and delete. */
   changeTypes?: readonly string[]
+  /**
+   * Folder levels a confinement check may walk up from an item towards a
+   * folder-scoped connection's root (`item:{id}`). Default 32. An item deeper
+   * than this below the root is refused rather than guessed about.
+   */
+  ancestryMaxDepth?: number
   /** Injected clock (tests). */
   now?: () => number
 }
@@ -301,6 +308,7 @@ export class MicrosoftDrive implements DriveProvider {
   private readonly scopes: readonly string[]
   private readonly refreshScopes: readonly string[] | undefined
   private readonly pageSize: number
+  private readonly ancestryMaxDepth: number
   private readonly uploadMaxBytes: number
   private readonly subscriptionTtl: number
   private readonly changeTypes: readonly string[]
@@ -319,6 +327,7 @@ export class MicrosoftDrive implements DriveProvider {
     this.scopes = options.scopes ?? DEFAULT_SCOPES
     this.refreshScopes = options.refreshScopes
     this.pageSize = Math.min(Math.max(1, options.pageSize ?? 200), GRAPH_MAX_PAGE_SIZE)
+    this.ancestryMaxDepth = Math.max(1, options.ancestryMaxDepth ?? 32)
     this.uploadMaxBytes = Math.min(options.uploadMaxBytes ?? GRAPH_SIMPLE_UPLOAD_MAX_BYTES, GRAPH_SIMPLE_UPLOAD_MAX_BYTES)
     this.subscriptionTtl = Math.min(options.subscriptionTtlMs ?? GRAPH_MAX_SUBSCRIPTION_MS, GRAPH_MAX_SUBSCRIPTION_MS)
     this.changeTypes = options.changeTypes ?? ['updated']
@@ -477,7 +486,7 @@ export class MicrosoftDrive implements DriveProvider {
     const url =
       options.cursor !== undefined
         ? openLinkCursor(options.cursor, 'list', GRAPH_HOST, this.name)
-        : `${GRAPH_BASE}${itemResource(this.targetOf(session, options.folderId))}/children` +
+        : `${GRAPH_BASE}${itemResource(await this.confinedTarget(session, options.folderId))}/children` +
           `?$top=${Math.min(Math.max(1, options.limit ?? this.pageSize), GRAPH_MAX_PAGE_SIZE)}` +
           `&$select=${ITEM_SELECT}`
     const page = await this.call<GraphPage>(session, url)
@@ -490,6 +499,9 @@ export class MicrosoftDrive implements DriveProvider {
 
   async get(session: DriveSession, externalId: string): Promise<DriveItem | null> {
     const root = this.rootOf(session)
+    // Outside a folder-scoped connection's root is, for this connection, not
+    // there — the same `null` a deleted item gets (FA-073).
+    if (!(await this.withinRoot(session, root, externalId))) return null
     const response = await this.request(
       session,
       `${GRAPH_BASE}${itemInDrive(root, externalId, this.name)}?$select=${ITEM_SELECT}`,
@@ -531,6 +543,8 @@ export class MicrosoftDrive implements DriveProvider {
       throw new DriveUnsupportedError(this.name, `downloading the export-only item "${item.name}"`)
     }
     const root = this.rootOf(session)
+    // Caller-supplied, so checked before the pre-signed URL is even asked for.
+    if (!(await this.withinRoot(session, root, item.externalId))) throw outsideRoot(this.name)
     const meta = await this.call<GraphItem>(
       session,
       `${GRAPH_BASE}${itemInDrive(root, item.externalId, this.name)}?$select=${DOWNLOAD_SELECT}`,
@@ -595,7 +609,13 @@ export class MicrosoftDrive implements DriveProvider {
       input.content.destroy()
       throw new DriveContentTooLargeError(this.uploadMaxBytes)
     }
-    const target = this.targetOf(session, input.folderId)
+    let target: MicrosoftRoot
+    try {
+      target = await this.confinedTarget(session, input.folderId)
+    } catch (error) {
+      input.content.destroy()
+      throw error
+    }
     const name = encodeURIComponent(sanitizeName(input.name))
     const response = await session.fetch(
       `${GRAPH_BASE}${itemResource(target)}:/${name}:/content?%40microsoft.graph.conflictBehavior=rename`,
@@ -627,7 +647,7 @@ export class MicrosoftDrive implements DriveProvider {
    * declare {@link deltaIncludesExisting} `true` honestly.
    */
   async startDelta(session: DriveSession, options: { folderId?: string | undefined }): Promise<string> {
-    return sealDeltaStart(itemResource(this.targetOf(session, options.folderId)))
+    return sealDeltaStart(itemResource(await this.confinedTarget(session, options.folderId)))
   }
 
   async delta(session: DriveSession, cursor: string): Promise<DriveDelta> {
@@ -821,6 +841,58 @@ export class MicrosoftDrive implements DriveProvider {
     return { ...root, ...(folder.itemId !== undefined ? { itemId: folder.itemId } : {}) }
   }
 
+  /**
+   * {@link targetOf}, plus the check that a folder handle lies **inside** a
+   * folder-scoped connection's root rather than merely inside its drive.
+   */
+  private async confinedTarget(session: DriveSession, folderId: string | undefined): Promise<MicrosoftRoot> {
+    const target = this.targetOf(session, folderId)
+    const root = this.rootOf(session)
+    if (target.itemId !== undefined && !(await this.withinRoot(session, root, target.itemId))) {
+      throw outsideRoot(this.name)
+    }
+    return target
+  }
+
+  /**
+   * Whether `itemId` is the root folder or lies below it (FA-073).
+   *
+   * `driveBase` already keeps every call inside the connection's **drive**; a
+   * connection rooted at a folder (`item:{id}`) was promised that folder, and
+   * phase 2 kept only the drive half of the promise. Graph has no "is X under
+   * Y" query, so this walks `parentReference.id` upward — one small read per
+   * level, bounded by `ancestryMaxDepth` — and fails closed on anything it
+   * cannot read. A connection without a folder root pays nothing.
+   */
+  private async withinRoot(session: DriveSession, root: MicrosoftRoot, itemId: string): Promise<boolean> {
+    const top = root.itemId
+    if (top === undefined || top === 'root' || itemId === top) return true
+    const seen = new Set<string>()
+    let current = itemId
+    for (let depth = 0; depth < this.ancestryMaxDepth; depth++) {
+      if (seen.has(current)) return false
+      seen.add(current)
+      const response = await this.request(
+        session,
+        `${GRAPH_BASE}${itemInDrive(root, current, this.name)}?$select=id,parentReference`,
+      )
+      if (!response.ok) {
+        const error = toGraphError(response.status, await this.readText(response), {
+          provider: this.name,
+          connectionId: session.connectionId,
+        })
+        // An ancestor we cannot see is not one we can vouch for.
+        if (error instanceof DriveItemNotFoundError || error instanceof DriveAccessDeniedError) return false
+        throw error
+      }
+      const parent = (await response.json<GraphItem>()).parentReference?.id
+      if (parent === undefined || !isSafeId(parent)) return false
+      if (parent === top) return true
+      current = parent
+    }
+    return false
+  }
+
   /** One Graph call, mapped on failure. */
   private async call<T>(
     session: DriveSession,
@@ -924,6 +996,11 @@ export class MicrosoftDrive implements DriveProvider {
       ...(json.scope !== undefined ? { scopes: json.scope.split(' ').filter(Boolean) } : {}),
     }
   }
+}
+
+/** The refusal for an id outside a folder-scoped connection's root. Names nothing the caller sent. */
+function outsideRoot(provider: string): Error {
+  return new DriveAccessDeniedError(provider, 'the item is outside the folder this connection is confined to')
 }
 
 /**

@@ -27,8 +27,10 @@ describe('Elasticsearch document ids', () => {
     await es.index('posts', doc('acme', 'a b/c') as never)
     await es.bulk('posts', [doc('acme', 'a b/c') as never])
 
+    // ES percent-decodes a path segment and takes a bulk `_id` verbatim, so
+    // that is the comparison — decoding BOTH (as this test once did) hid FA-061.
     const single = decodeURIComponent(calls[0]!.path.split('/_doc/')[1] as string)
-    const bulked = decodeURIComponent(JSON.parse(calls[1]!.body!.split('\n')[0] as string).index._id as string)
+    const bulked = JSON.parse(calls[1]!.body!.split('\n')[0] as string).index._id as string
     expect(bulked).toBe(single)
   })
 
@@ -40,7 +42,7 @@ describe('Elasticsearch document ids', () => {
     await es.remove('posts', 'acme', 'a b/c')
 
     const bulked = JSON.parse(calls[0]!.body!.split('\n')[0] as string).index._id as string
-    expect(calls[1]!.path).toContain(`/_doc/${bulked}`)
+    expect(decodeURIComponent(calls[1]!.path.split('/_doc/')[1] as string)).toBe(bulked)
   })
 
   it('F-7 · a `:` in a tenant id cannot collide with another tenant', async () => {

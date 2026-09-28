@@ -3,6 +3,13 @@ import { defineJob, type JobBackoff } from './job.js'
 import type { QueueManager } from './manager.js'
 
 export interface QueuedListenerOptions {
+  /**
+   * The job name. Default `listener:<event name>`. Job names must be unique
+   * per QueueManager, so a SECOND queued listener on the same event needs its
+   * own name — registering it under the default throws `DuplicateJobError`
+   * (it used to replace the first listener's handler silently).
+   */
+  name?: string
   queue?: string
   attempts?: number
   backoff?: JobBackoff
@@ -25,7 +32,7 @@ export function queuedOn<T>(
   options: QueuedListenerOptions = {},
 ): () => void {
   const job = defineJob<T>({
-    name: `listener:${event.name}`,
+    name: options.name ?? `listener:${event.name}`,
     ...(event.schema ? { schema: event.schema } : {}),
     ...(options.queue ? { queue: options.queue } : {}),
     ...(options.attempts !== undefined ? { attempts: options.attempts } : {}),

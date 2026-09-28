@@ -7,7 +7,22 @@ function makeFakeClient(): PrismaTenancyClient {
   const tenants = new Map<string, { id: string; data: unknown }>()
   const domains = new Map<string, { domain: string; tenantId: string }>()
 
-  return {
+  const client: PrismaTenancyClient = {
+    // Interactive transaction: all-or-nothing, like Prisma's — the callback's
+    // writes are rolled back when it throws.
+    async $transaction(fn) {
+      const savedTenants = new Map([...tenants].map(([k, v]) => [k, { ...v }]))
+      const savedDomains = new Map([...domains].map(([k, v]) => [k, { ...v }]))
+      try {
+        return await fn(client)
+      } catch (error) {
+        tenants.clear()
+        for (const [k, v] of savedTenants) tenants.set(k, v)
+        domains.clear()
+        for (const [k, v] of savedDomains) domains.set(k, v)
+        throw error
+      }
+    },
     tenant: {
       async findUnique({ where }) {
         return tenants.get(where.id) ?? null
@@ -61,13 +76,16 @@ function makeFakeClient(): PrismaTenancyClient {
       },
       async createMany({ data }) {
         for (const row of data as { domain: string; tenantId: string }[]) {
-          if (domains.has(row.domain)) throw new Error(`unique constraint: ${row.domain}`)
+          if (domains.has(row.domain)) {
+            throw Object.assign(new Error(`Unique constraint failed on the fields: (\`domain\`)`), { code: 'P2002' })
+          }
           domains.set(row.domain, row)
         }
         return { count: (data as unknown[]).length }
       },
     },
   }
+  return client
 }
 
 describe('PrismaTenantSource', () => {
@@ -169,6 +187,53 @@ describe('PrismaTenantSource', () => {
     expect(await source.remove('acme')).toBe(false)
     expect(await source.find('acme')).toBeNull()
     expect(await source.findByDomain('app.acme.com')).toBeNull()
+  })
+})
+
+// FA-068: save/create wrote the tenant, deleted its domains and re-inserted
+// them as separate statements. Any failure after the delete — a domain listed
+// twice, or claimed by another tenant between the pre-flight and the insert —
+// left the tenant rewritten and its existing domains gone.
+describe('save()/create() are atomic (FA-068)', () => {
+  it('a domain listed twice is stored once, without losing the tenant', async () => {
+    const source = new PrismaTenantSource(makeFakeClient())
+    await source.save({ id: 'acme', domains: ['old.acme.com'] })
+    await source.save({ id: 'acme', name: 'Acme', domains: ['app.acme.com', 'app.acme.com'] })
+    expect((await source.findByDomain('app.acme.com'))?.id).toBe('acme')
+    expect(await source.findByDomain('old.acme.com')).toBeNull()
+  })
+
+  it('a domain claimed by another tenant mid-save rolls the whole save back', async () => {
+    const client = makeFakeClient()
+    const source = new PrismaTenantSource(client)
+    await source.save({ id: 'acme', name: 'Acme', domains: ['old.acme.com'] })
+    await source.save({ id: 'globex', name: 'Globex' })
+
+    // globex claims the domain right after acme's pre-flight read of it
+    const findUnique = client.tenantDomain.findUnique.bind(client.tenantDomain)
+    client.tenantDomain.findUnique = async (args) => {
+      const owner = await findUnique(args)
+      if (args.where.domain === 'new.acme.com') {
+        await client.tenantDomain.createMany({ data: [{ domain: 'new.acme.com', tenantId: 'globex' }] })
+      }
+      return owner
+    }
+
+    await expect(source.save({ id: 'acme', name: 'Renamed', domains: ['new.acme.com'] })).rejects.toThrow(
+      /new\.acme\.com|domain/,
+    )
+    expect(await source.find('acme')).toEqual({ id: 'acme', name: 'Acme', domains: ['old.acme.com'] })
+    expect((await source.findByDomain('old.acme.com'))?.id).toBe('acme')
+  })
+
+  it('create(): a domain failure leaves no half-created tenant behind', async () => {
+    const client = makeFakeClient()
+    const source = new PrismaTenantSource(client)
+    client.tenantDomain.createMany = async () => {
+      throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+    }
+    await expect(source.create({ id: 'acme', domains: ['app.acme.com'] })).rejects.toThrow()
+    expect(await source.find('acme')).toBeNull()
   })
 })
 

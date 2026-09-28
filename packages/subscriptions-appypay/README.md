@@ -23,7 +23,7 @@ const payments = new AppyPayGateway({
   tokenUrl: process.env.APPYPAY_TOKEN_URL!, // OAuth2 client-credentials endpoint
   sandbox: process.env.NODE_ENV !== 'production',
   defaultMethod: 'reference', // 'express' | 'reference' | 'card'
-  webhookSecret: process.env.APPYPAY_WEBHOOK_SECRET, // if AppyPay signs callbacks
+  webhookSecret: process.env.APPYPAY_WEBHOOK_SECRET, // required to verify callbacks (fails closed)
 })
 
 // Reference payment (Multicaixa)
@@ -59,6 +59,8 @@ app.post('/webhooks/appypay', async (request, reply) => {
 ## Picking a method
 
 Per request via `metadata.appypay_method` (`'express' | 'reference' | 'card'`), or set `defaultMethod` on the gateway. `express` requires `customer.phone`.
+
+`webhookSecret` is required to receive callbacks — without it (or with an empty / whitespace-only one) `verifyWebhook` throws `WebhookSecretMissingError`. A signed but malformed body throws `WebhookInvalidError` (400). The event id includes the outcome (`<id>:payment.succeeded` / `<id>:payment.failed`), so a SUCCESS callback that reuses the id of an earlier FAILED one is not dropped as a duplicate. Caller `metadata` can never override `billable_id`.
 
 | Method | Returns | Customer experience |
 | --- | --- | --- |

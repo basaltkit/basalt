@@ -47,6 +47,22 @@ beforeAll(async () => {
       response.end()
       return
     }
+    if (url.pathname === '/trickle-body') {
+      // Headers at once, then one byte every 50 ms for ever: never idle long
+      // enough to trip a socket inactivity timeout.
+      response.writeHead(200, { 'content-type': 'application/octet-stream' })
+      const timer = setInterval(() => response.write('x'), 50)
+      response.on('close', () => clearInterval(timer))
+      return
+    }
+    if (url.pathname === '/trickle-headers') {
+      // The status line, then one header byte every 50 ms: a response whose
+      // headers never finish arriving, and never go quiet either.
+      response.socket?.write('HTTP/1.1 200 OK\r\nx-slow: ')
+      const timer = setInterval(() => response.socket?.write('a'), 50)
+      response.socket?.on('close', () => clearInterval(timer))
+      return
+    }
     if (url.pathname === '/slow') {
       // Accepts the connection, then never finishes: the case a connect-only
       // timeout would miss entirely.
@@ -62,6 +78,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  // The trickling routes never end on their own.
+  server.closeAllConnections()
   await new Promise<void>((resolve) => server.close(() => resolve()))
 })
 
@@ -128,6 +146,22 @@ describe('production transport', () => {
       const response = await guarded({ timeoutMs: 150 })(`${base}/slow`)
       await response.text()
     }).rejects.toThrow()
+  })
+
+  it('bounds the wait for response headers by the timeout, not just the gaps between bytes (FA-076)', async () => {
+    const started = Date.now()
+    await expect(guarded({ timeoutMs: 300 })(`${base}/trickle-headers`)).rejects.toThrow(/timed out/)
+    // An idle-only timeout never fires here: a byte arrives every 50 ms.
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
+
+  it('enforces a whole-exchange deadline on a body that trickles for ever (FA-076)', async () => {
+    const started = Date.now()
+    await expect(async () => {
+      const response = await guarded({ timeoutMs: 300, deadlineMs: 400 })(`${base}/trickle-body`)
+      await response.text()
+    }).rejects.toThrow(/deadline/)
+    expect(Date.now() - started).toBeLessThan(2000)
   })
 
   it('still refuses a host outside the allowlist, even with allowPrivateHosts', async () => {

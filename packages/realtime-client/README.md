@@ -104,22 +104,41 @@ another mechanism (`connect(handlers)`, `send(command)`, `close()`, optional `tr
 
 ### Server side (WebSocket)
 
-`@basaltkit/realtime` decides subscriptions via `hub.subscribe(...)`. Interpret the client's commands in your WebSocket handler:
+`@basaltkit/realtime` decides subscriptions via `hub.subscribe(...)`. Interpret the client's commands in your WebSocket handler — defensively, because every frame is attacker-controlled:
 
 ```ts
+// 1. First thing on a new socket (or in your server's upgrade hook): refuse foreign origins — see below.
+const ALLOWED_ORIGINS = new Set(['https://app.example.com'])
+if (!ALLOWED_ORIGINS.has(String(request.headers.origin))) return socket.close()
+
 socket.on('message', async (raw) => {
-  const cmd = JSON.parse(raw)
+  // 2. A throw in an async listener is an unhandled rejection — fatal on Node by default.
+  let cmd: { type?: unknown; channel?: unknown }
+  try {
+    cmd = JSON.parse(String(raw))
+  } catch {
+    return socket.close() // not JSON
+  }
+  if (typeof cmd?.channel !== 'string') return socket.close()
   if (cmd.type === 'subscribe') {
     // subscribe() resolves false when the server's `authorize` gate or a cap refused it
     if (!(await hub.subscribe(conn.id, cmd.channel))) socket.close()
+  } else if (cmd.type === 'unsubscribe') {
+    hub.unsubscribe(conn.id, cmd.channel)
   }
-  if (cmd.type === 'unsubscribe') hub.unsubscribe(conn.id, cmd.channel)
 })
 ```
 
 Channel names in these commands come straight from the client, so authorize them on the server:
 pass `realtimePlugin({ authorize })` and honour the boolean `hub.subscribe()` returns. Never
 trust the client.
+
+**Check `Origin` on the upgrade (cross-site WebSocket hijacking).** Browsers send cookies with a
+WebSocket handshake from any site, and the same-origin policy does not cover WebSockets. If the
+socket is authenticated by a cookie, a malicious page can open it as the logged-in user and read
+every event pushed to them. Refuse the upgrade unless the `Origin` header is one of your own
+origins — or authenticate with a token the page must send explicitly (a query parameter or first
+message) rather than an ambient cookie.
 
 ## Hooks & events
 

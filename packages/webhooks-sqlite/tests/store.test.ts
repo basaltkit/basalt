@@ -66,6 +66,39 @@ describe('SqliteWebhookStore', () => {
   })
 })
 
+// FA-070 / D8: the manager's "is this id someone else's?" check runs before
+// the write, so two tenants registering the same id at once both pass it — and
+// INSERT OR REPLACE then let the second one overwrite the first's endpoint.
+// The store itself must refuse an id held by another scope.
+describe('add() never writes over another scope (FA-070/D8)', () => {
+  it('an id held by another tenant is refused, and that endpoint is untouched', async () => {
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'x', url: 'https://globex.test', events: ['*'], tenantId: 'globex', secret: 'g' })
+    await expect(store.add({ id: 'x', url: 'https://evil.test', events: ['*'], tenantId: 'acme' })).rejects.toThrow(
+      /already in use/,
+    )
+    expect(await store.list()).toEqual([
+      { id: 'x', url: 'https://globex.test', events: ['*'], tenantId: 'globex', secret: 'g' },
+    ])
+  })
+
+  it('a global id cannot be taken by a tenant, nor a tenant id by a global endpoint', async () => {
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'g', url: 'global', events: ['*'] })
+    await store.add({ id: 't', url: 'tenant', events: ['*'], tenantId: 'acme' })
+    await expect(store.add({ id: 'g', url: 'evil', events: ['*'], tenantId: 'acme' })).rejects.toThrow(/already in use/)
+    await expect(store.add({ id: 't', url: 'evil', events: ['*'] })).rejects.toThrow(/already in use/)
+    expect((await store.list()).map((e) => e.url)).toEqual(['global', 'tenant'])
+  })
+
+  it('the same scope re-adding its id still replaces it', async () => {
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'x', url: 'old', events: ['*'], tenantId: 'acme', secret: 's' })
+    await store.add({ id: 'x', url: 'new', events: ['a.*'], tenantId: 'acme' })
+    expect(await store.list()).toEqual([{ id: 'x', url: 'new', events: ['a.*'], tenantId: 'acme' }])
+  })
+})
+
 describe('sqliteWebhookStore + durability', () => {
   const dir = mkdtempSync(join(tmpdir(), 'basalt-webhooks-'))
   const file = join(dir, 'webhooks.db')

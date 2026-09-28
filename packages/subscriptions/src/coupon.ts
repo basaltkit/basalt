@@ -58,7 +58,15 @@ export function assertValidCoupon(coupon: Coupon): void {
   if (hasPercent === hasAmount) {
     throw new CouponInvalidError(coupon.code, 'set exactly one of percentOff or amountOff')
   }
-  if (hasPercent && (coupon.percentOff! < 0 || coupon.percentOff! > 100)) {
+  // `Number.isFinite` first: `NaN < 0 || NaN > 100` is false, so a NaN
+  // percentOff used to pass and turn every invoice total into NaN.
+  if (
+    hasPercent &&
+    (typeof coupon.percentOff !== 'number' ||
+      !Number.isFinite(coupon.percentOff) ||
+      coupon.percentOff < 0 ||
+      coupon.percentOff > 100)
+  ) {
     throw new CouponInvalidError(coupon.code, 'percentOff must be between 0 and 100')
   }
   if (hasAmount) {
@@ -66,8 +74,14 @@ export function assertValidCoupon(coupon: Coupon): void {
     if (coupon.amountOff! < 0) throw new CouponInvalidError(coupon.code, 'amountOff must be ≥ 0')
     if (!coupon.currency) throw new CouponInvalidError(coupon.code, 'amountOff requires a currency')
   }
-  if (coupon.maxRedemptions !== undefined && coupon.maxRedemptions < 1) {
-    throw new CouponInvalidError(coupon.code, 'maxRedemptions must be ≥ 1')
+  if (
+    coupon.maxRedemptions !== undefined &&
+    (!Number.isSafeInteger(coupon.maxRedemptions) || coupon.maxRedemptions < 1)
+  ) {
+    throw new CouponInvalidError(coupon.code, 'maxRedemptions must be an integer ≥ 1')
+  }
+  if (coupon.redeemBy !== undefined && !Number.isFinite(coupon.redeemBy)) {
+    throw new CouponInvalidError(coupon.code, 'redeemBy must be an epoch-ms timestamp')
   }
 }
 
@@ -102,8 +116,15 @@ export interface CouponStore {
   save(coupon: CouponRecord): Promise<void>
   get(code: string): Promise<CouponRecord | null>
   all(): Promise<CouponRecord[]>
-  /** Atomically increment the redemption counter; returns the new count. */
-  incrementRedemptions(code: string): Promise<number>
+  /**
+   * Atomically increment the redemption counter; returns the new count. When
+   * `limit` is given, increment ONLY while the count is below it and return
+   * `null` when the cap is already reached — a single conditional write, so two
+   * concurrent redemptions of the last slot cannot both succeed. (A store that
+   * ignores `limit` still works: `redeem()` rejects a count above the cap, but
+   * the counter is then left one over.)
+   */
+  incrementRedemptions(code: string, limit?: number): Promise<number | null>
 }
 
 /** In-memory store — swap for a durable one in production. */
@@ -120,9 +141,11 @@ export class MemoryCouponStore implements CouponStore {
   async all(): Promise<CouponRecord[]> {
     return [...this.records.values()].map((c) => ({ ...c }))
   }
-  async incrementRedemptions(code: string): Promise<number> {
+  async incrementRedemptions(code: string, limit?: number): Promise<number | null> {
     const record = this.records.get(code)
     if (!record) throw new CouponNotFoundError(code)
+    // No await between check and write — atomic in the event loop.
+    if (limit !== undefined && record.redemptions >= limit) return null
     record.redemptions += 1
     return record.redemptions
   }
@@ -181,9 +204,24 @@ export class Coupons {
     return { coupon, discount }
   }
 
-  /** Record a successful redemption (increments the counter). */
+  /**
+   * Record a successful redemption (increments the counter). Enforces the
+   * coupon's rules at the moment of redemption — not only in `quote()`, whose
+   * answer can be stale by the time the charge succeeds: an expired coupon
+   * (`redeemBy`) or one whose `maxRedemptions` is reached throws
+   * `CouponNotRedeemableError`, and the cap is checked-and-incremented
+   * atomically by the store.
+   */
   async redeem(code: string): Promise<CouponRecord> {
-    await this.store.incrementRedemptions(code)
+    const coupon = await this.store.get(code)
+    if (!coupon) throw new CouponNotFoundError(code)
+    if (coupon.redeemBy !== undefined && this.now() > coupon.redeemBy) {
+      throw new CouponNotRedeemableError(code, 'expired')
+    }
+    const count = await this.store.incrementRedemptions(code, coupon.maxRedemptions)
+    if (count === null || (coupon.maxRedemptions !== undefined && count > coupon.maxRedemptions)) {
+      throw new CouponNotRedeemableError(code, 'redemption limit reached')
+    }
     const updated = await this.store.get(code)
     if (!updated) throw new CouponNotFoundError(code)
     return updated

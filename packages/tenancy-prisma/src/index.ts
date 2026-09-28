@@ -30,7 +30,16 @@ interface PTenantDomain {
  * precise.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export interface PrismaTenancyClient {
+export interface PrismaTenancyClient extends PrismaTenancyDelegates {
+  /**
+   * Prisma's interactive transaction. `save`/`create` write the tenant and its
+   * domain set inside one, so a failure part-way leaves nothing half-written.
+   */
+  $transaction<R>(fn: (tx: PrismaTenancyDelegates) => Promise<R>, options?: any): Promise<R>
+}
+
+/** The model delegates the source uses — also what a transaction client offers. */
+export interface PrismaTenancyDelegates {
   tenant: {
     findUnique(a: any): Promise<PTenant | null>
     findMany(a: any): Promise<PTenant[]>
@@ -46,32 +55,51 @@ export interface PrismaTenancyClient {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-/** The custom domains a tenant claims — a `string[]` under `tenant.domains`. */
+/** The custom domains a tenant claims — a `string[]` under `tenant.domains`, each once. */
 const domainsOf = (tenant: Tenant): string[] => {
   const value = (tenant as { domains?: unknown }).domains
-  return Array.isArray(value) ? value.filter((d): d is string => typeof d === 'string') : []
+  return Array.isArray(value) ? [...new Set(value.filter((d): d is string => typeof d === 'string'))] : []
 }
+
+const isUniqueViolation = (error: unknown): boolean =>
+  (error as { code?: unknown } | null)?.code === 'P2002'
+
+/** A domain in the set was claimed by another tenant after the pre-flight read. */
+const domainTakenError = (tenantId: string, domains: string[], cause: unknown): Error =>
+  new Error(
+    `@basaltkit/tenancy-prisma: one of the domains of tenant "${tenantId}" (${domains.join(', ')}) ` +
+      'was claimed by another tenant meanwhile; nothing was written.',
+    { cause },
+  )
 
 export class PrismaTenantSource implements TenantSource {
   constructor(private readonly client: PrismaTenancyClient) {}
 
   /**
    * Insert or update a tenant and replace its custom-domain set. Domains are
-   * globally unique — a domain already owned by a *different* tenant is rejected
-   * up front (before any write), so routing stays unambiguous.
+   * globally unique — a domain already owned by a *different* tenant is
+   * rejected, and nothing is written.
+   *
+   * The record and its domain set are written in ONE transaction: a failure
+   * part-way (a domain another tenant claimed in the meantime, a lost
+   * connection) rolls the whole save back instead of leaving the tenant
+   * rewritten with its domains deleted. The tenant row is written first, so
+   * two concurrent saves of the same tenant serialise on its row lock.
    *
    * An upsert replaces the whole record. That is right for an intentional
    * update and for status transitions; it is wrong for creating a tenant, which
    * is what `create` is for.
    */
   async save(tenant: Tenant): Promise<Tenant> {
-    const domains = await this.claimableDomains(tenant)
-    await this.client.tenant.upsert({
-      where: { id: tenant.id },
-      create: { id: tenant.id, data: tenant as object },
-      update: { data: tenant as object },
+    const domains = domainsOf(tenant)
+    await this.client.$transaction(async (tx) => {
+      await tx.tenant.upsert({
+        where: { id: tenant.id },
+        create: { id: tenant.id, data: tenant as object },
+        update: { data: tenant as object },
+      })
+      await this.writeDomains(tx, tenant.id, domains)
     })
-    await this.replaceDomains(tenant.id, domains)
     return tenant
   }
 
@@ -84,46 +112,46 @@ export class PrismaTenantSource implements TenantSource {
    * wins — which no read in application code can guarantee. This is what
    * `tenancy.create()` calls.
    *
-   * Domains are pre-flighted exactly as in `save`, before the insert, so a
-   * domain conflict writes nothing either.
+   * Same transaction as `save`: a domain conflict leaves no tenant behind.
    */
   async create(tenant: Tenant): Promise<Tenant> {
-    const domains = await this.claimableDomains(tenant)
-    try {
-      await this.client.tenant.create({ data: { id: tenant.id, data: tenant as object } })
-    } catch (error) {
-      // P2002 is Prisma's unique-constraint violation. Only the tenant insert
-      // is inside this try, so the constraint can only be the tenant's id.
-      if ((error as { code?: unknown } | null)?.code === 'P2002') {
-        throw new TenantAlreadyExistsError(tenant.id)
+    const domains = domainsOf(tenant)
+    await this.client.$transaction(async (tx) => {
+      try {
+        await tx.tenant.create({ data: { id: tenant.id, data: tenant as object } })
+      } catch (error) {
+        // P2002 is Prisma's unique-constraint violation. Only the tenant insert
+        // is inside this try, so the constraint can only be the tenant's id.
+        if (isUniqueViolation(error)) throw new TenantAlreadyExistsError(tenant.id)
+        throw error
       }
-      throw error
-    }
-    await this.replaceDomains(tenant.id, domains)
+      await this.writeDomains(tx, tenant.id, domains)
+    })
     return tenant
   }
 
-  /** The tenant's domains, after refusing any owned by a different tenant — before any write. */
-  private async claimableDomains(tenant: Tenant): Promise<string[]> {
-    const domains = domainsOf(tenant)
+  /**
+   * Refuses any domain owned by a different tenant, then replaces the tenant's
+   * domain set — inside the caller's transaction, so a refusal rolls back the
+   * tenant write too.
+   */
+  private async writeDomains(tx: PrismaTenancyDelegates, tenantId: string, domains: string[]): Promise<void> {
     for (const domain of domains) {
-      const owner = await this.client.tenantDomain.findUnique({ where: { domain } })
-      if (owner && owner.tenantId !== tenant.id) {
+      const owner = await tx.tenantDomain.findUnique({ where: { domain } })
+      if (owner && owner.tenantId !== tenantId) {
         throw new Error(
           `@basaltkit/tenancy-prisma: domain "${domain}" is already owned by tenant "${owner.tenantId}".`,
         )
       }
     }
-    return domains
-  }
-
-  /** Replace this tenant's domain set. */
-  private async replaceDomains(tenantId: string, domains: string[]): Promise<void> {
-    await this.client.tenantDomain.deleteMany({ where: { tenantId } })
-    if (domains.length > 0) {
-      await this.client.tenantDomain.createMany({
-        data: domains.map((domain) => ({ domain, tenantId })),
-      })
+    await tx.tenantDomain.deleteMany({ where: { tenantId } })
+    if (domains.length === 0) return
+    try {
+      await tx.tenantDomain.createMany({ data: domains.map((domain) => ({ domain, tenantId })) })
+    } catch (error) {
+      // The pre-flight saw the domains free; another tenant took one since.
+      if (isUniqueViolation(error)) throw domainTakenError(tenantId, domains, error)
+      throw error
     }
   }
 

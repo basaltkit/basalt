@@ -15,7 +15,12 @@ export {
   TenantRequiredError,
   SearchTenantMismatchError,
   SearchTenantReservedError,
+  SearchPaginationError,
+  SearchFilterNotFilterableError,
+  SearchFilterValueError,
+  DEFAULT_MAX_LIMIT,
   type SearchOptions,
+  type SearchServiceOptions,
 } from './search.js'
 export {
   MeilisearchDriver,

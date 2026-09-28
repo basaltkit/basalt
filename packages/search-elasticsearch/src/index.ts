@@ -116,15 +116,31 @@ export class ElasticsearchDriver implements SearchDriver {
 
   /**
    * The document's `_id`: each segment percent-encoded, the `:` separator kept
-   * literal. ONE definition for both the bulk body and the URL path — they used to
-   * differ, so a document indexed singly and in bulk landed under two different ids
-   * (and `remove()` could not delete a bulk-indexed one) whenever a segment carried
-   * a URL-special character. Encoding the segments also removes the `:` ambiguity:
-   * tenant `a:b` + id `c` no longer collides with tenant `a` + id `b:c`. Plain
-   * UUID/slug ids are unaffected — `encodeURIComponent` leaves them untouched.
+   * literal. Encoding the segments removes the `:` ambiguity: tenant `a:b` + id
+   * `c` never collides with tenant `a` + id `b:c`. Plain UUID/slug ids are
+   * unaffected — `encodeURIComponent` leaves them untouched.
+   *
+   * This is the id ES stores. The bulk body carries it verbatim; a URL path
+   * must go through {@link docPath}, because ES percent-decodes path segments.
    */
   private pk(tenantId: string, id: string): string {
     return `${encodeURIComponent(tenantId)}:${encodeURIComponent(id)}`
+  }
+
+  /**
+   * `/<index>/_doc/<_id>` for the SAME `_id` {@link pk} writes in a bulk body.
+   *
+   * ES decodes each path segment, so the `_id` is encoded once more here (the
+   * `:` stays literal — it is legal in a path and only occurs once, as the
+   * separator, since {@link pk} encodes any `:` inside a segment). It
+   * used to go in raw: `acme:a%20b` in the path became `_id` `acme:a b`, while
+   * `_bulk` stored `acme:a%20b` — so `remove()` of a bulk-indexed document with
+   * any URL-special character silently deleted nothing, and `index()` + `bulk()`
+   * of one document produced two (FA-061).
+   */
+  private docPath(indexName: string, tenantId: string, id: string): string {
+    const encoded = this.pk(tenantId, id).split(':').map(encodeURIComponent).join(':')
+    return `/${this.idx(indexName)}/_doc/${encoded}`
   }
 
   private refreshQuery(): string {
@@ -179,8 +195,7 @@ export class ElasticsearchDriver implements SearchDriver {
   }
 
   async index(indexName: string, document: SearchDocument): Promise<void> {
-    const id = this.pk(document.tenantId, document.id)
-    await this.request('PUT', `/${this.idx(indexName)}/_doc/${id}${this.refreshQuery()}`, document)
+    await this.request('PUT', `${this.docPath(indexName, document.tenantId, document.id)}${this.refreshQuery()}`, document)
   }
 
   async bulk(indexName: string, documents: SearchDocument[]): Promise<void> {
@@ -195,9 +210,8 @@ export class ElasticsearchDriver implements SearchDriver {
   }
 
   async remove(indexName: string, tenantId: string, id: string): Promise<void> {
-    const docId = this.pk(tenantId, id)
     try {
-      await this.request('DELETE', `/${this.idx(indexName)}/_doc/${docId}${this.refreshQuery()}`)
+      await this.request('DELETE', `${this.docPath(indexName, tenantId, id)}${this.refreshQuery()}`)
     } catch (error) {
       if (error instanceof ElasticsearchError && error.httpStatus === 404) return // already gone
       throw error

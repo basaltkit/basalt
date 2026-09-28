@@ -119,7 +119,8 @@ The metered `consume()` uses a conditional `updateMany` (`value <= limit -
 amount`) that the database's row lock serializes, so a plan quota is **never
 overshot under concurrency**. Webhook idempotency is an atomic
 `createMany({ skipDuplicates: true })` claim, so a redelivered event is processed
-once across restarts and instances.
+once across restarts and instances. `consume()`/`increment()` reject an amount that is
+not a positive integer with `InvalidUsageAmountError` (a negative amount would refund quota).
 
 | Export | Contract | Model |
 | --- | --- | --- |

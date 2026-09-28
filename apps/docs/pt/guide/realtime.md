@@ -58,19 +58,31 @@ const fastify = app.container.get(FASTIFY)
 const hub = app.container.get(REALTIME_HUB)
 await fastify.register(fastifyWebsocket)
 
+const ALLOWED_ORIGINS = new Set(['https://app.example.com'])
+
 fastify.get('/realtime', { websocket: true }, (socket, request) => {
+  // recusa páginas alheias primeiro — vê "Sequestro de WebSocket entre sites" abaixo
+  if (!ALLOWED_ORIGINS.has(String(request.headers.origin))) return socket.close()
   // autentica a connection (JWT na query, cookie, header…) → tenant + utilizador
   const { tenantId, userId } = authenticate(request)
   const conn = websocketConnection({ tenantId, userId }, socket)
   hub.register(conn)
 
   socket.on('message', async (raw) => {
-    const cmd = JSON.parse(raw.toString()) as { type: 'subscribe' | 'unsubscribe'; channel: string }
+    // cada frame é controlada pelo cliente; um throw aqui é uma rejeição não tratada (fatal no Node)
+    let cmd: { type?: unknown; channel?: unknown }
+    try {
+      cmd = JSON.parse(raw.toString())
+    } catch {
+      return socket.close()
+    }
+    if (typeof cmd?.channel !== 'string') return socket.close()
     if (cmd.type === 'subscribe') {
       const ok = await hub.subscribe(conn.id, cmd.channel) // false = recusado
       if (!ok) socket.send(JSON.stringify({ error: 'subscribe_refused', channel: cmd.channel }))
+    } else if (cmd.type === 'unsubscribe') {
+      hub.unsubscribe(conn.id, cmd.channel)
     }
-    if (cmd.type === 'unsubscribe') hub.unsubscribe(conn.id, cmd.channel)
   })
   socket.on('close', () => hub.unregister(conn.id))
 })
@@ -116,11 +128,14 @@ registada sem ele recebe entregas normalmente mas nunca aparece em `presence()`.
 
 Na rede, uma connection WebSocket recebe `JSON.stringify({ channel, event, data })`;
 uma connection SSE recebe uma frame `event: <event>` cujo `data:` é
-`{ channel, data }`. O `@basaltkit/realtime-client` normaliza ambos de volta para a
+`{ channel, data }` (CR, LF e NUL são removidos do nome do evento, para que um
+nome de evento nunca consiga injectar campos ou frames SSE extra). O `@basaltkit/realtime-client` normaliza ambos de volta para a
 mesma assinatura de handler.
 
 ::: warning O `unregister` é da tua responsabilidade
-O hub só remove uma connection automaticamente quando o seu `send` **lança**. Um
+O hub só remove uma connection automaticamente quando o seu `send` **lança** — e
+nesse caso chama também o seu `close()`, para que o cliente veja a queda e volte
+a ligar. Um
 socket que fecha limpamente continua registado até chamares
 `hub.unregister(conn.id)` — liga-o sempre ao evento de fecho do teu transporte,
 ou as subscrições e a presença ficam a vazar durante toda a vida do processo.
@@ -130,7 +145,8 @@ ou as subscrições e a presença ficam a vazar durante toda a vida do processo.
 
 `hub.subscribe(connectionId, channel)` é `async` e devolve um **booleano**:
 `false` significa que a subscrição foi recusada. É recusada quando o id da
-connection é desconhecido, quando o nome do canal está vazio ou é mais longo que
+connection é desconhecido — ou foi removido ou substituído enquanto o `authorize`
+ainda decidia — quando o canal não é uma string, quando está vazio ou é mais longo que
 `maxChannelLength` (predefinição 256), quando a connection já detém
 `maxSubscriptionsPerConnection` canais (predefinição 1000), ou quando o portão
 `authorize` devolveu `false`. Voltar a subscrever um canal que já detém é
@@ -159,8 +175,22 @@ algo que não é legível por todos os membros do tenant, e verifica o booleano 
 :::
 
 Os dois tetos são limites anti-DoS, não regras de negócio: impedem que um socket
-aloque entradas de subscrição sem limite com nomes de canal gerados. Vê
+aloque entradas de subscrição sem limite com nomes de canal gerados. O teto e a
+connection voltam a ser verificados depois de o `authorize` resolver, por isso
+uma rajada de comandos `subscribe` concorrentes não ultrapassa o teto, e um
+socket que fechou a meio do portão nunca deixa uma subscrição fantasma. Vê
 [Segurança](/pt/guide/security) para os equivalentes na borda do pedido.
+
+::: danger Sequestro de WebSocket entre sites
+Os browsers anexam cookies ao handshake de um WebSocket vindo de **qualquer**
+site, e a política de mesma origem não se aplica a WebSockets. Se o teu socket
+autentica por cookie, uma página maliciosa pode abri-lo como o utilizador com
+sessão iniciada e ler todos os eventos enviados para ele — o `authorize` não
+distingue, porque *é* esse utilizador. Verifica o header `Origin` contra uma
+lista de permitidos antes de aceitar o upgrade (como faz o arranque rápido), ou
+autentica com um token que a página tenha de enviar explicitamente em vez de um
+cookie ambiente.
+:::
 
 ## SSE simples a partir de uma rota
 
@@ -347,12 +377,36 @@ Um emit faz `PUBLISH` num canal Redis; cada instância recebe-o via `SUBSCRIBE`
 (**incluindo a origem**) e entrega às suas connections locais. Fornece **dois**
 clientes: uma connection em modo de subscrição não pode publicar.
 
+O canal Redis é partilhado por **tudo o que, nesse Redis, use o mesmo nome**, e
+uma mensagem identifica o seu tenant apenas pelo id. Duas apps — ou staging e
+produção — que mantenham ambas o `'basalt:realtime'` predefinido entregam nos
+tenants uma da outra, e qualquer um capaz de fazer `PUBLISH` nesse Redis pode
+enviar um evento para qualquer tenant. Dá a cada deployment o seu próprio
+`channel`, e define `secret` para assinar as mensagens com HMAC-SHA256:
+
+```ts
+new RedisBackplane({
+  publisher,
+  subscriber,
+  channel: 'myapp:prod:realtime',
+  secret: process.env.REALTIME_BACKPLANE_SECRET!, // [novaChave, chaveAntiga] durante a rotação
+})
+```
+
+Com `secret`, mensagens não assinadas, adulteradas ou com outra chave são
+descartadas e registadas. A primeira chave assina e todas verificam, por isso a
+rotação é: publica `[nova, antiga]` em todo o lado, depois só `nova`. Todas as
+instâncias têm de concordar — um nó com secret e outro sem descartam os envios
+um do outro.
+
 Estão embutidas duas propriedades de robustez, porque uma exceção que escape ao
 emissor `'message'` do ioredis é um `uncaughtException` e mataria o processo:
 payloads não analisáveis e payloads sem `tenantId`/`channel`/`event` são
 **descartados e registados** em vez de lançados, e um único socket morto durante a
-entrega local é removido enquanto os restantes destinatários continuam a receber a
-mensagem.
+entrega local é removido (e fechado) enquanto os restantes destinatários continuam
+a receber a mensagem. Um payload que o JSON não consegue codificar (um `BigInt`,
+um ciclo) nem chega lá: o `emit()` rejeita com o `TypeError` em qualquer
+backplane, antes de enviar o que quer que seja.
 
 ::: warning Fecha tu os clientes Redis
 O `app.shutdown()` fecha cada connection e chama o `close()` opcional do backplane.
@@ -448,7 +502,8 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | --- | --- | --- | --- |
 | `publisher` | `RedisRealtimeClient` | — | Cliente usado para `PUBLISH` (não pode estar em modo de subscrição) |
 | `subscriber` | `RedisRealtimeClient` | — | Cliente usado para `SUBSCRIBE` |
-| `channel` | `string` | `'basalt:realtime'` | Canal Redis partilhado pelas instâncias; muda-o para isolar ambientes num só Redis |
+| `channel` | `string` | `'basalt:realtime'` | Canal Redis partilhado pelas instâncias; dá a cada app/ambiente num só Redis o seu próprio |
+| `secret` | `string \| string[]` | sem assinatura | Chave(s) HMAC-SHA256: a primeira assina, todas verificam; mensagens sem assinatura ou mal assinadas são descartadas. Vazio lança na construção |
 
 `sse(producer, options)` (de `@basaltkit/http`):
 
@@ -477,9 +532,10 @@ vez de propagada. Estes são os sinais a vigiar:
 | --- | --- | --- | --- |
 | Broadcast da ponte rejeitado | `onBridgeError(error, { hook, channel, event })` | `console.error`, evento descartado | O backplane está em baixo/inacessível quando uma regra de ponte dispara |
 | Evento da ponte sem tenant | `onBridgeSkipped({ hook, channel, event, reason: 'no-tenant' })` | `console.warn` uma vez por regra, evento descartado | Uma regra sem `tenant` disparou fora de um contexto com tenant (boot, cron, worker sem contexto) |
-| Escrita local num socket lançou | `onDeliveryError(error, { connectionId, tenantId, channel, event })` | `console.error`, connection **removida**, restantes destinatários servidos na mesma | Um socket morreu entre a última escrita e esta |
-| Subscrição recusada | `hub.subscribe()` resolve `false` | nada — silencioso se não verificares | Id de connection desconhecido, canal vazio/demasiado longo, teto por connection atingido, ou `authorize` devolveu `false` |
-| Payload malformado no backplane | `console.error` do driver Redis | mensagem descartada | Outra coisa fez `PUBLISH` no mesmo canal Redis, ou há incompatibilidade de versões |
+| Escrita local num socket lançou | `onDeliveryError(error, { connectionId, tenantId, channel, event })` | `console.error`, connection **removida e fechada**, restantes destinatários servidos na mesma | Um socket morreu entre a última escrita e esta |
+| Payload não serializável em JSON | `emit()` / `hub.publish()` rejeita com `TypeError` (na ponte: `onBridgeError`) | nada é enviado, nenhum subscritor é afectado | `data` contém um `BigInt`, um ciclo, ou semelhante |
+| Subscrição recusada | `hub.subscribe()` resolve `false` | nada — silencioso se não verificares | Id de connection desconhecido (ou fechou/foi substituído durante o `authorize`), canal não-string/vazio/demasiado longo, teto por connection atingido, ou `authorize` devolveu `false` |
+| Payload malformado no backplane | `console.error` do driver Redis | mensagem descartada | Outra coisa fez `PUBLISH` no mesmo canal Redis, há incompatibilidade de versões, ou — com `secret` — a assinatura falta/é inválida ou as instâncias têm chaves diferentes |
 | `UnknownTokenError` (`DI_UNKNOWN_TOKEN`) | lançado ao resolver | boot/pedido falha | `REALTIME` / `REALTIME_HUB` resolvido sem `realtimePlugin` registado |
 | `Error: No WebSocket implementation; pass WebSocketImpl.` | lançado por `createRealtimeClient` | construção do cliente falha | A correr fora de um browser sem `WebSocketImpl`/`EventSourceImpl` injetado |
 

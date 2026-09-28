@@ -31,7 +31,7 @@ export function webauthnPlugin(options: WebAuthnPluginOptions) {
       // removes them with the rest.
       hooks.on('auth:social_account_adopted', async ({ user }) => {
         const service = container.get(WEBAUTHN)
-        for (const credential of await service.list(user.id)) await service.remove(credential.id)
+        for (const credential of await service.list(user.id)) await service.remove(user.id, credential.id)
       })
       container.singleton(
         WEBAUTHN,

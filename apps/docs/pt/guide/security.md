@@ -110,9 +110,11 @@ route({
 A chave é resolvida no guard de rota, depois de os enrichers correrem, por isso
 a autenticação e a tenancy já definiram `ctx().user` / `ctx().tenant`. Quando o
 id falta (um chamador anónimo, nenhum tenant resolvido, ou a função não devolve
-nada), o balde **recua para o IP do cliente**. Nunca recua para um balde único
-partilhado, e os baldes anónimos nunca se misturam com os de utilizadores
-autenticados. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
+nada), o balde **recua para o IP do cliente**, e os baldes anónimos nunca se
+misturam com os de utilizadores autenticados. Quando o adaptador também não
+conseguiu resolver um IP (`request.ip` undefined — Hono num runtime sem
+`getClientIp`), todos esses pedidos partilham um só balde: falha fechada, em vez
+de um balde por header falsificável. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
 Redis entre instâncias). Uma rota com chave continua a contar para o limite
 global por IP em todos os adaptadores, porque o hook anterior ao routing ainda
 não conhece o utilizador.
@@ -509,6 +511,12 @@ await tenantTransaction(db, async (tx) => {
   que a tabela tenha `FORCE ROW LEVEL SECURITY` (o `rlsPolicySql` adiciona-o por
   omissão). Corre a app com um role de login simples e deixa migrações/admin
   noutro.
+- **Sem tenant não há linhas — mesmo numa ligação reutilizada.** A política
+  compara com `NULLIF(current_setting('app.tenant_id', true), '')`: depois de uma
+  sessão do pool ter definido o tenant numa transação qualquer, o Postgres passa a
+  devolver `''` (não `NULL`), e uma comparação simples apanharia linhas cuja coluna
+  de tenant é `''`. Políticas geradas antes do `@basaltkit/prisma` 3.0 não têm o
+  `NULLIF` — volta a correr o `rlsPolicySql` (idempotente) numa nova migração.
 - **Custos.** Cada operação limitada ao tenant passa a ser uma transação batch
   curta (`BEGIN`, `set_config`, a query, `COMMIT`) — algumas instruções extra na
   mesma ligação (≈ +2 ms p50 nas medições da equipa da app). A definição é local
@@ -569,7 +577,7 @@ new PostgresSearchDriver({ client: pool, searchFunction: 'basalt_search_scoped' 
 ```text
 -- como role da aplicação, através da função
 ->  Bitmap Heap Scan on basalt_search t
-      Filter: ((idx = 'notes') AND (tenant_id = current_setting('app.tenant_id', true)))
+      Filter: ((idx = 'notes') AND (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')))
       ->  Bitmap Index Scan on basalt_search_tsv_idx
 Execution Time: 1.850 ms
 ```

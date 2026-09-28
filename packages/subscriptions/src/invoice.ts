@@ -77,6 +77,14 @@ export class InvoiceNotFoundError extends BasaltError {
   }
 }
 
+/** An invoice input that would produce a wrong (negative, NaN) or unsafe total. */
+export class InvoiceInputError extends BasaltError {
+  readonly status = 400
+  constructor(field: string, reason: string) {
+    super('INVOICE_INVALID_INPUT', `Invoice ${field} ${reason}.`)
+  }
+}
+
 export class InvoiceStateError extends BasaltError {
   readonly status = 409
   constructor(from: InvoiceStatus, action: string) {
@@ -148,9 +156,29 @@ export interface InvoicesOptions {
 
 const round = (n: number): number => Math.round(n)
 
+/** A finite, non-negative number — else InvoiceInputError. */
+function nonNegative(value: number, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new InvoiceInputError(field, `must be a finite number ≥ 0, got ${String(value)}`)
+  }
+  return value
+}
+
+/** ISO 4217 shape: three letters. Anything else is refused before it reaches a rendered invoice. */
+function assertCurrency(currency: string): void {
+  if (typeof currency !== 'string' || !/^[A-Za-z]{3}$/.test(currency)) {
+    throw new InvoiceInputError('currency', `must be a 3-letter ISO 4217 code, got ${JSON.stringify(currency)}`)
+  }
+}
+
 /** Build a concrete line (with derived `amount`) from a `NewLineItem`. */
 function toLine(input: NewLineItem): InvoiceLineItem {
   const quantity = input.quantity ?? 1
+  // A negative (or fractional/NaN) quantity produced negative or non-integer
+  // line amounts — a credit smuggled in as a line, or a NaN total.
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    throw new InvoiceInputError('quantity', `must be a positive integer, got ${String(quantity)}`)
+  }
   assertMinorUnits(input.unitAmount, 'unitAmount')
   return {
     description: input.description,
@@ -183,7 +211,7 @@ export class Invoices {
   constructor(options: InvoicesOptions = {}) {
     this.store = options.store ?? new MemoryInvoiceStore()
     this.prefix = options.numberPrefix ?? 'INV'
-    this.taxRate = options.taxRate ?? 0
+    this.taxRate = nonNegative(options.taxRate ?? 0, 'taxRate')
     this.now = options.now ?? (() => Date.now())
     this.newId = options.idFactory ?? (() => randomUUID())
   }
@@ -191,6 +219,7 @@ export class Invoices {
   /** Create a `draft` invoice with computed totals. No number is assigned yet. */
   async draft(input: DraftInvoiceInput): Promise<Invoice> {
     const now = this.now()
+    assertCurrency(input.currency)
     const lineItems = input.lineItems.map(toLine)
     const subtotal = lineItems.reduce((sum, l) => sum + l.amount, 0)
     let couponOff = 0
@@ -198,14 +227,16 @@ export class Invoices {
       assertValidCoupon(input.coupon)
       couponOff = couponDiscount(input.coupon, subtotal, input.currency)
     }
-    const discount = Math.min(Math.max(0, round(input.discount ?? 0)) + couponOff, subtotal)
+    const discount = Math.min(round(nonNegative(input.discount ?? 0, 'discount')) + couponOff, subtotal)
     const taxable = subtotal - discount
+    // Tax is never negative (a negative tax was a discount that bypassed the
+    // discount clamp) and never NaN.
     const tax =
       input.tax === undefined
         ? round(taxable * this.taxRate)
         : typeof input.tax === 'number'
-          ? round(input.tax)
-          : round(taxable * input.tax.rate)
+          ? round(nonNegative(input.tax, 'tax'))
+          : round(taxable * nonNegative(input.tax.rate, 'tax rate'))
 
     const invoice: Invoice = {
       id: this.newId(),
@@ -357,12 +388,18 @@ export function renderInvoiceText(invoice: Invoice, locale = 'en-US'): string {
 
 /** Minimal self-contained HTML invoice (no external assets). */
 export function renderInvoiceHtml(invoice: Invoice, locale = 'en-US'): string {
-  const m = (n: number) => formatMoney(n, invoice.currency, locale)
-  const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!)
+  const esc = (s: string) =>
+    String(s).replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
+    )
+  // Escaped too: when Intl rejects the currency, formatMoney falls back to the
+  // raw currency string — a stored `<script>` currency was rendered verbatim.
+  const m = (n: number) => esc(formatMoney(n, invoice.currency, locale))
   const rows = invoice.lineItems
     .map(
       (l) =>
-        `<tr><td>${esc(l.description)}</td><td class="n">${l.quantity}</td><td class="n">${m(l.unitAmount)}</td><td class="n">${m(l.amount)}</td></tr>`,
+        `<tr><td>${esc(l.description)}</td><td class="n">${esc(String(l.quantity))}</td><td class="n">${m(l.unitAmount)}</td><td class="n">${m(l.amount)}</td></tr>`,
     )
     .join('')
   const extra = [
@@ -374,7 +411,7 @@ export function renderInvoiceHtml(invoice: Invoice, locale = 'en-US'): string {
 h1{font-size:1.25rem}.status{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;padding:.2em .6em;border-radius:99px;background:#eef}
 table{width:100%;border-collapse:collapse;margin-top:1rem}td,th{padding:.5rem;border-bottom:1px solid #e5e7eb;text-align:left}
 .n{text-align:right;font-variant-numeric:tabular-nums}tfoot th,tfoot td{border:0}tfoot .total td{font-weight:700;border-top:2px solid #1a1a2e}</style>
-<h1>Invoice ${esc(invoice.number || '(draft)')} <span class="status">${invoice.status}</span></h1>
+<h1>Invoice ${esc(invoice.number || '(draft)')} <span class="status">${esc(invoice.status)}</span></h1>
 <p>Billed to <strong>${esc(invoice.billableId)}</strong></p>
 <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Unit</th><th class="n">Amount</th></tr></thead>
 <tbody>${rows}</tbody>

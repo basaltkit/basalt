@@ -82,7 +82,9 @@ Beyond mounting routes, `fastifyPlugin` sets three defaults that plain Fastify d
 - **An `application/json` parser that treats an empty body as no body.** Fastify's default
   throws on an empty body, so a `POST` with `content-type: application/json` and no
   payload (exactly what an `@basaltkit/sdk` call with no arguments sends) surfaced as a
-  500. Genuinely malformed JSON still gets a `400`.
+  500. Genuinely malformed JSON still gets a `400 BAD_REQUEST` ("Malformed request body.",
+  the same body Express and Hono answer). The same parser serves structured `+json` types
+  (`application/merge-patch+json`, `application/vnd.api+json`), as on every adapter.
 - **An `application/x-www-form-urlencoded` parser.** Fastify ships none; HTML forms and the
   SAML ACS binding need it.
 - **A pass-through `multipart/form-data` parser, but only when a route uses `upload()`.**
@@ -220,7 +222,12 @@ Same handler code as on Express and Hono.
 
 A handler returning `sse(producer)` from `@basaltkit/http` is streamed over the raw Node
 response (`reply.hijack()` + `SSE_HEADERS`), with client disconnects relayed to
-`stream.onClose()`. Same handler code as on Express and Hono.
+`stream.onClose()`. The headers already set on the reply — CORS, security headers,
+rate-limit counters, `x-request-id` — are carried onto the hijacked response and flushed at
+once, so a cross-origin `EventSource` opens even before the first event. Edge after-hooks
+(metrics, tracing) follow the Node response (`finish`/`close`), so they also see hijacked
+`sse()` replies and abandoned responses, which Fastify's `onResponse` skips. Same handler
+code as on Express and Hono.
 
 ### Idempotency — `idempotencyPlugin()` (Fastify-only)
 

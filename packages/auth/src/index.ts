@@ -102,6 +102,7 @@ export {
   API_KEYS,
   ApiKeyTenantMismatchError,
   ApiKeyNotAllowedError,
+  ApiKeyAmbiguousError,
   type ApiKeysPluginOptions,
 } from './apikeys-plugin.js'
 export {
@@ -125,6 +126,7 @@ export {
   OAuthProviderUnknownError,
   OAuthStateInvalidError,
   OAuthExchangeError,
+  OAuthProviderConfigError,
   type OAuthProvider,
   type OAuthProfile,
   type OAuthOptions,

@@ -92,6 +92,20 @@ describe('bullmqQueuePlugin forwards both halves of its options', () => {
     await app.shutdown()
   })
 
+  it('forwards the envelope-integrity options (signingKey) to the core, not the driver (FA-062)', async () => {
+    const app = await createApp({
+      plugins: [
+        bullmqQueuePlugin({ connection: 'redis://localhost:6379', jobs: [SendWelcome], signingKey: 'k'.repeat(32) }),
+      ],
+    })
+    await app.boot()
+    await app.container.get(QUEUE).dispatch(SendWelcome, undefined)
+    // Pre-fix the wrapper's hand-written split handed unknown keys to the
+    // driver, so the envelope went out unsigned.
+    expect((FakeQueue.added[0]!.data as { sig?: string }).sig).toMatch(/^v1:/)
+    await app.shutdown()
+  })
+
   it('omitting every optional key still boots — on the sync-free BullMQ path', async () => {
     // `connection` is the only required option; nothing else may become
     // mandatory by accident through the wrapper's destructuring.

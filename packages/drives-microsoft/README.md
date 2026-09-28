@@ -145,6 +145,13 @@ validated: `/`, `?`, `#`, `%`, `:`, whitespace, `.` and `..` are all refused wit
 `DRIVE_ACCESS_DENIED`, and the refusal never echoes the handle back. A
 `folderId` may narrow a call to a folder but **never** name another drive.
 
+A root that names a **folder** (`item:{id}`) confines the connection to that
+folder's subtree, not merely to its drive: a `folderId`, `getItem()`,
+`download()` and an upload target are checked by walking `parentReference.id`
+up to the root — one small read per level, bounded by `ancestryMaxDepth` — and
+refused with `DRIVE_ACCESS_DENIED` (`getItem()` answers `null`) when they lie
+outside it. A drive-level root pays nothing.
+
 ## Options
 
 | Option | Default | Notes |
@@ -160,6 +167,7 @@ validated: `/`, `?`, `#`, `%`, `:`, whitespace, `.` and `..` are all refused wit
 | `uploadMaxBytes` | `4 MB` | also the maximum |
 | `subscriptionTtlMs` | ~29.4 days | clamped to Graph's ceiling |
 | `changeTypes` | `['updated']` | covers create, edit and delete |
+| `ancestryMaxDepth` | `32` | folder levels a confinement check may walk for an `item:` root |
 
 ## What maps to what
 
@@ -211,7 +219,11 @@ are complete URLs you GET verbatim. They are wrapped in an opaque cursor
 (`basalt.msgraph.list:…`, `basalt.msgraph.delta:…`) so Graph's paging state never
 lands in an app's database or logs as something fetchable, and unwrapped only
 after checking that the URL still points at Graph — before the guarded fetch
-re-validates it for real.
+re-validates it for real. Host and scheme alone cannot tell *this* drive's link
+from another drive's on `graph.microsoft.com`, so the cursor `drives.listItems()`
+returns is additionally MAC-bound by the engine to the tenant and connection; a
+cursor the engine did not issue is refused with `DRIVE_ACCESS_DENIED` before
+this adapter sees it. Call `list()` directly only with cursors it produced.
 
 **Notifications use a secret we chose.** `clientState` is set from the engine's
 per-subscription random secret and compared in constant time on the way back.

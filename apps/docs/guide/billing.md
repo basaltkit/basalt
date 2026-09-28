@@ -134,6 +134,22 @@ await subscriptions.onTrial('acme')           // boolean
 await subscriptions.get('acme')               // SubscriptionRecord | null
 ```
 
+`swap()` never grants a paid plan for free. A subscription with no gateway
+subscription behind it (a free or locally granted one) cannot be swapped onto a
+paid or `'custom'` plan — it throws `PaymentRequiredError` (402); send the
+customer through `checkout()` instead (see [Two doors](#two-doors-into-a-subscription)). Pass `{ allowUnpaid: true }` only when payment really is collected
+elsewhere (manual invoicing, reference payments, a sales-led deal). Swapping
+down to a free plan needs no payment. A gateway-backed subscription is swapped
+at the gateway first; a gateway without `swapSubscription` throws
+`GatewayUnsupportedError` instead of changing only the local plan while the
+gateway keeps charging the old price.
+
+`resume()` withdraws the scheduled cancellation **at the gateway** too
+(`resumeSubscription`) — otherwise the gateway would still end the subscription
+at the period end and its `subscription.canceled` webhook would cancel the
+"resumed" one locally. A gateway without `resumeSubscription` throws
+`GatewayUnsupportedError`.
+
 A `SubscriptionRecord` is `{ billableId, plan, period, status, trialEndsAt?,
 cancelAtPeriodEnd?, canceledAt?, gatewayRef?, pendingPlan?, pendingPeriod? }`
 where `status` is one of
@@ -176,7 +192,9 @@ await subscriptions.subscribe('acme', 'free')   // status: 'active', no gateway 
 
 Paid plans still call the gateway's `createSubscription` to get a
 `gatewayRef` — but the local record is written as active regardless, because
-*you* are asserting the subscription exists.
+*you* are asserting the subscription exists. Checkout-first gateways (Paddle,
+Lemon Squeezy) cannot create a paid subscription server-side at all: their
+`createSubscription` throws `CheckoutRequiredError` — use `checkout()`.
 
 ### `checkout()` — two steps, and it is not finished when it returns
 
@@ -340,6 +358,11 @@ await features.consume('projects', 2)      // create 2 projects
 await features.consume('api.requests', 1)  // metered; resets monthly
 ```
 
+The amount must be a positive integer. A negative amount would hand quota back
+and `NaN` would disable the quota for good, so `consume()` — and every
+`UsageStore` (memory, Redis, SQLite, Prisma) — rejects anything else with
+`InvalidUsageAmountError` (`BILLING_INVALID_USAGE_AMOUNT`, 400).
+
 `consume` throws `QuotaExceededError` (`BILLING_QUOTA_EXCEEDED`, 402) when the
 limit runs out, and `FeatureUnavailableError` (`BILLING_FEATURE_UNAVAILABLE`,
 403) when the plan does not grant the feature at all. Catch these to show an
@@ -411,6 +434,8 @@ route({ method: 'GET', url: '/api/data', meta: { feature: 'api' }, async handler
 `meta: { subscribed: true }` requires any active subscription;
 `meta: { subscribed: 'pro' }` requires that specific plan. Unmet requirements
 return `402 BILLING_SUBSCRIPTION_REQUIRED` or `403 BILLING_FEATURE_UNAVAILABLE`.
+`meta.feature` must be a non-empty string: any other value (`true`, an array,
+`''`) names no feature and fails closed with `403` instead of being skipped.
 
 ## Stripe: checkout, portal, webhook
 
@@ -637,8 +662,11 @@ const invoice = await invoices.draft({
 await coupons.redeem('LAUNCH20') // once the charge succeeds, consume a redemption
 ```
 
-`quote()` validates redeemability **without** consuming; `redeem()` increments
-the counter. A fixed-amount coupon only applies to invoices in its own currency.
+`quote()` validates redeemability **without** consuming; `redeem()` re-checks
+`redeemBy` and increments the counter only while it is below `maxRedemptions` —
+one atomic step in the store, so two concurrent redemptions of the last slot
+cannot both succeed (the loser gets `CouponNotRedeemableError`). A
+fixed-amount coupon only applies to invoices in its own currency.
 Back the registry with a durable `CouponStore` in production (the default is
 in-memory).
 
@@ -845,7 +873,7 @@ export const payments = new ProxyPayGateway({
 | `entity` | `string` | — (required) | Your Multicaixa Entity, assigned by ProxyPay/EMIS |
 | `sandbox` | `boolean` | `false` | Use the sandbox host `api.sandbox.proxypay.co.ao` |
 | `baseUrl` | `string` | derived from `sandbox` | Override the base URL entirely |
-| `webhookSecret` | `string` | **your `apiKey`** | HMAC-SHA256 (hex) over the raw body, in `x-signature`. Verification is therefore **on out of the box**; pass `''` to disable it entirely |
+| `webhookSecret` | `string` | **your `apiKey`** | HMAC-SHA256 (hex) over the raw body, in `x-signature`. Verification is **on out of the box** and cannot be turned off: an empty or whitespace-only secret makes `verifyWebhook` throw `WebhookSecretMissingError` |
 | `callbackUrl` | `string` | — | Echoed back on the webhook as `custom_fields.callback_url`. ProxyPay's real delivery target is set account-wide in the dashboard |
 | `expiryDays` | `number` | `30` | Fallback validity window when `PaymentRequest.expiresAt` is omitted — ProxyPay *requires* an end date, so one is always sent |
 | `fetch` | `FetchLike` | global `fetch` | Injected fetch |
@@ -948,6 +976,7 @@ the app's `HookBus`), plus `invoices`.
 | `store` | `SubscriptionStore` | in-memory | Where subscriptions live — swap for `subscriptions-sqlite`/`-prisma` or they vanish on restart |
 | `usage` | `UsageStore` | in-memory | Metering counters. The default is per-process, so a quota **can be overshot** across replicas; use SQLite/Prisma/Redis for atomic `consume` |
 | `webhooks` | `WebhookStore` | in-memory | Gateway-event dedupe by event id. Per-process by default, which means a retry landing on another replica is reprocessed |
+| `now` | `() => number` | `Date.now` | Injectable clock (trials, meter periods, cancellations) — tests and simulations |
 | `invoices` | `InvoicesOptions` | `{}` | Config for the `Invoices` engine registered under `INVOICES` (below) |
 
 ### `billingRoutes(options)`
@@ -972,10 +1001,15 @@ All three routes are read-only and ownership-checked: an invoice whose
 `billableId` isn't the current tenant reads as `404 INVOICE_NOT_FOUND`, never as
 someone else's data. Issuing and finalizing stay server-side through `INVOICES`.
 
-### `billingWebhookRoute(gateway)`
+### `billingWebhookRoute(gateway, options?)`
 
-Takes the gateway instance as its only argument — no options. It is deliberately
-**not** `meta.auth`-protected: the gateway signature is the authentication.
+Takes the gateway instance and optional `{ maxBytes, signatureHeader }`. It is
+deliberately **not** `meta.auth`-protected: the gateway signature is the
+authentication. The signature is read from the header the driver declares in
+`signatureHeader` — `stripe-signature` (Stripe), `paddle-signature` (Paddle),
+`x-signature` (Lemon Squeezy); a custom driver that declares none falls back to
+`stripe-signature` / `x-billing-signature`, and `options.signatureHeader`
+overrides both.
 Returns `200 { received: true, ignored: true }` for an event the driver doesn't
 map, and `200 { received: true, duplicate: true }` for one already processed.
 
@@ -993,7 +1027,7 @@ map, and `200 { received: true, duplicate: true }` for one already processed.
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `store` | `CouponStore` | `MemoryCouponStore` | Durable coupon registry; `incrementRedemptions` must be atomic or `maxRedemptions` leaks |
+| `store` | `CouponStore` | `MemoryCouponStore` | Durable coupon registry; `incrementRedemptions(code, limit)` must increment only while the count is below `limit`, atomically, and return `null` at the cap — or `maxRedemptions` leaks |
 | `now` | `() => number` | `Date.now` | Injectable clock, for `redeemBy` |
 
 ### `StripeBillingGateway(options)`
@@ -1022,9 +1056,12 @@ map, and `200 { received: true, duplicate: true }` for one already processed.
 | `tolerance` | `number` (seconds) | `300` | Webhook timestamp tolerance |
 | `fetch` / `now` / `apiBase` | — | global `fetch` / `Date.now` / `https://api.paddle.com` | Injection points for tests |
 
-Paddle is checkout-first: both `createSubscription` and `createCheckoutSession`
-create a **transaction**, and the durable subscription id arrives later on a
-`subscription.*` webhook as `gatewayRef`.
+Paddle is checkout-first: `createCheckoutSession` creates a **transaction**, and
+the durable subscription id arrives later on the webhooks as `gatewayRef`.
+There is no server-side "create a paid subscription", so `createSubscription`
+throws `CheckoutRequiredError` — use `checkout()`. `resumeSubscription` removes
+the scheduled cancellation. During a secret rotation Paddle sends one `h1` per
+active secret; every one is tried (Stripe's `v1` likewise).
 
 ### `LemonSqueezyBillingGateway(options)`
 
@@ -1036,11 +1073,16 @@ create a **transaction**, and the durable subscription id arrives later on a
 | `variantId` | `(plan, period) => string` | — (required) | Maps a plan + period to a Variant ID |
 | `customerId` | `(billableId) => string \| Promise<string>` | — | **Required for the portal only**; omit it and `portal()` has nothing to open |
 | `resolveBillableId` | `(event) => string \| undefined` | reads `meta.custom_data.billableId` | Override for events carrying the id elsewhere |
-| `fetch` / `apiBase` | — | global `fetch` / `https://api.lemonsqueezy.com/v1` | Injection points for tests |
+| `maxEventAgeSeconds` | `number` | off | Opt-in replay window: rejects an event whose `updated_at` (or `created_at`) is older, or missing. Leave off if you re-send old events from the dashboard |
+| `fetch` / `now` / `apiBase` | — | global `fetch` / `Date.now` / `https://api.lemonsqueezy.com/v1` | Injection points for tests |
 
 Lemon Squeezy is a merchant of record and checkout-first, with the same
-"subscription id arrives by webhook" shape as Paddle. It has no timestamp
-tolerance — the `X-Signature` scheme carries no timestamp.
+"subscription id arrives by webhook" shape as Paddle (`createSubscription`
+throws `CheckoutRequiredError`). The `X-Signature` scheme carries no timestamp,
+so a captured delivery stays valid and only the webhook dedupe store stops a
+replay — `maxEventAgeSeconds` adds a window. Its events have no id either: the
+driver keys idempotency on the event name, the object id (the invoice on payment
+events, so every renewal is distinct) and its `updated_at`.
 
 ### `ProxyPayGateway(options)` / `AppyPayGateway(options)`
 
@@ -1066,7 +1108,10 @@ story is in [Reference & mobile-money payments](/guide/reference-payments).
 | `NotSubscribedError` | `BILLING_SUBSCRIPTION_REQUIRED` | 402 | `meta.subscribed` unmet; **or no tenant in context** on a billing/invoice route; or `swap`/`cancel`/`resume` with no active subscription |
 | `FeatureUnavailableError` | `BILLING_FEATURE_UNAVAILABLE` | 403 | `meta.feature` not granted; or `consume()` on a feature whose limit is 0 (or with no plan and no `fallbackPlan`) |
 | `QuotaExceededError` | `BILLING_QUOTA_EXCEEDED` | 402 | `consume()` would take usage past the limit — the store's atomic check refused |
-| `GatewayUnsupportedError` | `BILLING_GATEWAY_UNSUPPORTED` | 501 | `checkout()` or `portal()` with no gateway, or one that doesn't implement that capability |
+| `InvalidUsageAmountError` | `BILLING_INVALID_USAGE_AMOUNT` | 400 | `consume()`/a `UsageStore` given an amount that is not a positive integer (negative, zero, fractional, `NaN`) |
+| `PaymentRequiredError` | `BILLING_PAYMENT_REQUIRED` | 402 | `swap()` onto a paid or `'custom'` plan from a subscription with no gateway subscription — use `checkout()`, or `{ allowUnpaid: true }` when payment is collected elsewhere |
+| `GatewayUnsupportedError` | `BILLING_GATEWAY_UNSUPPORTED` | 501 | `checkout()` or `portal()` with no gateway, or `swap()`/`resume()` of a gateway-backed subscription whose gateway lacks `swapSubscription`/`resumeSubscription` |
+| `CheckoutRequiredError` | `BILLING_CHECKOUT_REQUIRED` | 501 | `subscribe()` to a paid plan on a checkout-first gateway (Paddle, Lemon Squeezy) — use `checkout()` |
 | `UnknownPlanError` | `BILLING_UNKNOWN_PLAN` | — | A plan name absent from the catalog — including a mistyped `fallbackPlan`, which throws at construction |
 | `WebhookInvalidError` | `BILLING_WEBHOOK_INVALID` | 400 | Signature verification failed — almost always a parsed (re-serialized) body |
 | `WebhookSecretMissingError` | `BILLING_WEBHOOK_SECRET_MISSING` | 500 | `verifyWebhook` with no signing secret configured. Fails closed: an unsigned callback is never trusted |
@@ -1074,7 +1119,8 @@ story is in [Reference & mobile-money payments](/guide/reference-payments).
 | `StripeRequestError` · `PaddleRequestError` · `LemonSqueezyRequestError` | `BILLING_GATEWAY_ERROR` | — | The gateway's REST API returned a non-2xx; the original status is on `err.httpStatus` |
 | `InvoiceNotFoundError` | `INVOICE_NOT_FOUND` | 404 | Unknown invoice id — **or** one belonging to another tenant, via `invoiceRoutes` |
 | `InvoiceStateError` | `INVOICE_INVALID_STATE` | 409 | `finalize` a non-draft, `markPaid` a non-open, `void` a paid one, `addLine` to a finalized one — or `planLine()` on a `'custom'` price |
-| `CouponInvalidError` | `COUPON_INVALID` | 422 | Bad shape: both/neither of `percentOff`/`amountOff`, percent outside 0–100, `amountOff` without a currency, `maxRedemptions < 1` |
+| `InvoiceInputError` | `INVOICE_INVALID_INPUT` | 400 | A line `quantity` that is not a positive integer, a negative or `NaN` `tax`/`discount`/tax rate, or a `currency` that is not a 3-letter ISO 4217 code |
+| `CouponInvalidError` | `COUPON_INVALID` | 422 | Bad shape: both/neither of `percentOff`/`amountOff`, percent outside 0–100 (or `NaN`), `amountOff` without a currency, `maxRedemptions` not an integer ≥ 1 |
 | `CouponNotRedeemableError` | `COUPON_NOT_REDEEMABLE` | 422 | Expired (`redeemBy`), redemption cap reached, or the invoice currency differs from a fixed-amount coupon's |
 | `CouponNotFoundError` | `COUPON_NOT_FOUND` | 404 | No coupon with that code |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | `billingRoutes()`/`invoiceRoutes()` registered with their default `auth: true` but no `authPlugin` |
