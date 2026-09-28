@@ -256,8 +256,9 @@ All requests of a session share one cancellation scope, so a
 `notifications/cancelled` `POST`ed while the call runs cancels it — and a
 different session, even one that guesses the request id, never can. A session
 is **bound to the caller that opened it**: the authenticated `ctx().user` (in
-its tenant) or, for an anonymous caller, a hash of the `Authorization` /
-`x-api-key` credentials. The same id presented by anyone else is a 404. Sessions
+its tenant) or, for an anonymous caller, a keyed fingerprint of its
+`Authorization` header (an API key the auth plugins accepted already resolved a
+user). The same id presented by anyone else is a 404. Sessions
 expire after 30 minutes idle, and at most 1000 live at once (the least recently
 used is evicted — its client just re-initializes):
 `mcpRoutes({ sessions: { ttlMs, maxSessions } })`.

@@ -252,13 +252,15 @@ function isJsonContentType(request: HttpRequest): boolean {
 /**
  * Keys the credential fingerprint below. Sessions live in this process only, so
  * a per-process random key is enough — and it means a leaked session table
- * can't be used to guess API keys offline, which a bare hash would allow.
+ * can't be used to guess credentials offline, which a bare hash would allow.
  */
 const PRINCIPAL_KEY = randomBytes(32)
 
 /**
  * The identity a session is bound to: the authenticated user (in its tenant),
- * or — without one — the credentials the request presented, hashed.
+ * or — without one — the request's `Authorization` header, fingerprinted. An
+ * `x-api-key` that the auth plugins accepted already resolved a user; one they
+ * didn't is not an identity, so it doesn't bind the session.
  */
 function principalOf(context: Record<string, unknown>, request: HttpRequest): string {
   const user = context['user'] as { id?: unknown } | undefined
@@ -266,8 +268,8 @@ function principalOf(context: Record<string, unknown>, request: HttpRequest): st
   if (user && (typeof user.id === 'string' || typeof user.id === 'number')) {
     return `user:${JSON.stringify([tenant?.id ?? null, user.id])}`
   }
-  const credentials = [headerValue(request.headers['authorization']), headerValue(request.headers['x-api-key'])]
-  return `anon:${createHmac('sha256', PRINCIPAL_KEY).update(JSON.stringify(credentials)).digest('base64url')}`
+  const authorization = headerValue(request.headers['authorization']) ?? ''
+  return `anon:${createHmac('sha256', PRINCIPAL_KEY).update(authorization).digest('base64url')}`
 }
 
 /**

@@ -85,8 +85,8 @@ without it; **404** for an unknown, expired or foreign session — the client
 re-initializes), and `DELETE /mcp` with it ends the session. All POSTs of a
 session share one cancellation scope, so a `notifications/cancelled` sent while a
 call runs cancels it; another session never can. A session is bound to the
-caller that opened it (`ctx().user` + tenant; anonymous: a hash of
-`Authorization`/`x-api-key`), expires after 30 min idle, and at most 1000 live at
+caller that opened it (`ctx().user` + tenant; anonymous: a keyed fingerprint
+of `Authorization`), expires after 30 min idle, and at most 1000 live at
 once (LRU eviction): `mcpRoutes({ sessions: { ttlMs, maxSessions } })`. Sessions
 are in-process memory — behind replicas use sticky sessions, or
 `mcpRoutes({ sessions: false })` to run stateless. `HttpClientTransport` carries
