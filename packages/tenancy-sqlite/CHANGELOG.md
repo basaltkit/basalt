@@ -1,5 +1,13 @@
 # @basaltkit/tenancy-sqlite
 
+## 1.2.2
+
+### Patch Changes
+
+- Updated dependencies [b69ea05]
+- Updated dependencies [e54b7b1]
+  - @basaltkit/tenancy@3.0.0
+
 ## 1.2.1
 
 ### Patch Changes

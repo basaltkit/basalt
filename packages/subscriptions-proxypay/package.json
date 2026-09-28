@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/subscriptions-proxypay",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "engines": {
     "node": ">=22.5.0"
   },

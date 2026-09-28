@@ -1,5 +1,20 @@
 # @basaltkit/backup
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e53db52]
+- Updated dependencies [b69ea05]
+- Updated dependencies [b69ea05]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e54b7b1]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/prisma@3.0.0
+  - @basaltkit/storage@4.0.0
+  - @basaltkit/scheduler@1.5.1
+
 ## 0.3.0
 
 ### Minor Changes

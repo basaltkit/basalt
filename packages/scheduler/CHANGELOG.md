@@ -1,5 +1,15 @@
 # @basaltkit/scheduler
 
+## 1.5.1
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e53db52]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/queue@3.0.0
+
 ## 1.5.0
 
 ### Minor Changes

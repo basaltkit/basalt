@@ -1,5 +1,38 @@
 # @basaltkit/auth-saml
 
+## 3.0.0
+
+### Major Changes
+
+- e53db52: Security fixes from the framework audit, pass 2 (FA-057, FA-060).
+  
+  - **SAML logins are bound to the browser that started them (FA-057, login CSRF).** The ACS consumed any valid `SAMLResponse`, so an attacker could start a login in their own browser and auto-POST the resulting response from a victim's browser, logging the victim into the attacker's account. New `Saml.authorize(name)` returns `{ url, binding }` and sends `samlRelayStateFor(binding)` (its SHA-256) as the `RelayState`; `Saml.consume(name, body, { binding })` refuses a response whose `RelayState` does not match. `samlRoutes` keep the binding in an HttpOnly `__Host-basalt_saml` cookie (`SameSite=None; Secure`, as the IdP returns with a cross-site POST; `bindingCookie: { secure?, maxAgeSeconds? }`). Enforced with `validateInResponseTo: 'always'` (the default); `bindToBrowser: false` opts out.
+  - **node-saml errors are a 400 (FA-057).** Every error `validatePostResponseAsync` throws (malformed XML, bad signature, unknown `InResponseTo`, encrypted assertion…) is now `AUTH_SAML_RESPONSE_INVALID` instead of a 500.
+  - **Hardening (FA-060).** A configured `emailAttribute` is now the only email source (no silent fallback to other claims or the NameID). New per-provider `wantAuthnResponseSigned` (default `true`; `false` for IdPs that sign only the assertion) and `acceptedClockSkewMs` (at most 5 min). `RelayState` is capped at 1024 characters, and the login and ACS routes carry `meta.rateLimit` (10/min per ip and route by default; `samlRoutes({ rateLimit: false })` removes it).
+  
+  **Why major, and how to migrate:** with the default options, `Saml.consume()` now requires the browser binding. `samlRoutes()` handle it for you. Custom routes must start the login with `saml.authorize(name)`, keep `binding` where only that browser can present it (an HttpOnly cookie that survives a cross-site POST), and pass it to `saml.consume(name, body, { binding })` — or set `bindToBrowser: false` to keep the old behaviour. The login route no longer forwards a caller-supplied `RelayState` while binding is on (the slot carries the binding). A provider with `emailAttribute` whose assertions lack that attribute (and used to fall back to `email`/NameID) is now refused — fix the attribute name.
+- b69ea05: SAML responses signed with SHA-1 are refused by default (framework audit FA-060).
+  
+  node-saml 5 verifies XML-DSig with any algorithm xml-crypto supports, SHA-1 included, and has no verification-side option to restrict it. `Saml.consume()` now parses the `SAMLResponse` (with the same `@xmldom/xmldom` parser node-saml uses) before handing it to node-saml and requires every `SignatureMethod` and `DigestMethod` — the envelope signature and the nested assertion signature, in any namespace prefix — to use an allowlisted algorithm. Default: RSA-SHA256/384/512 and ECDSA-SHA256/384/512 signatures over SHA-256/384/512 digests (exported as `DEFAULT_SAML_SIGNATURE_ALGORITHMS` / `DEFAULT_SAML_DIGEST_ALGORITHMS`). Anything else, a `SignatureMethod`/`DigestMethod` without an `Algorithm`, or a response carrying a DOCTYPE / entity declarations is a `400 AUTH_SAML_RESPONSE_INVALID`.
+  
+  New per-provider options: `allowSha1: true` (legacy opt-in, adds `rsa-sha1` / `ecdsa-sha1` and the `sha1` digest), `signatureAlgorithms` and `digestAlgorithms` (algorithm URI lists replacing the defaults; an empty or invalid list fails at boot with `AUTH_SAML_PROVIDER_CONFIG`). New exports `samlAlgorithmPolicy(provider)` and `assertSamlResponseAlgorithms(samlResponse, policy)` (for a custom `createClient`). The node-saml client is now configured with `signatureAlgorithm: 'sha256'` and `digestAlgorithm: 'sha256'` for what this SP signs (node-saml's default is SHA-1).
+  
+  **Why major, and how to migrate:** an IdP that still signs with SHA-1 (older AD FS / Shibboleth configurations) now fails every login with `AUTH_SAML_RESPONSE_INVALID`. Switch the IdP to SHA-256 (recommended), or set `allowSha1: true` on that provider until it can. The check also runs in front of an injected `createClient`, so test stubs must post a well-formed (base64) XML `SAMLResponse`.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+  - @basaltkit/auth@4.0.0
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+
 ## 2.0.0
 
 ### Major Changes

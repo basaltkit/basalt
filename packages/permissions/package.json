@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/permissions",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "engines": {
     "node": ">=22.5.0"
   },

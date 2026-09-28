@@ -1,5 +1,71 @@
 # @basaltkit/auth
 
+## 4.0.0
+
+### Major Changes
+
+- b69ea05: Framework audit — the open auth items (FA-058 account linking, FA-059 clone detection, FA-070/D9 legacy emails, FA-H16/BK-027 secret box).
+  
+  - **OAuth/OIDC logins are bound to the provider subject (FA-058).** A login used to be matched by email alone and the provider's `sub` was ignored. `Auth` now keeps account links (provider + subject → user) in a new `AccountLinkStore` (`authPlugin({ accountLinks })`; `MemoryAccountLinkStore` by default, `PrismaAccountLinkStore` / `SqliteAccountLinkStore` for production, both in `prismaAuthStores()` / `sqliteAuthStores()` as `accountLinks`). `socialLogin(email, { identity: { provider, subject } })` — which `OAuth.callback` now always passes — looks the link up first: a linked provider account reaches its account even after the email changes at the IdP. Without a link the first login matches by email under the existing rules (an existing account only through a provider-verified email, after `allowedEmailDomains`) and records the link (`auth:account_linked`). A **different** subject of the same provider asserting the email of an account already linked to that provider is refused with the new `AccountLinkConflictError` (`409 AUTH_ACCOUNT_LINK_CONFLICT`) unless `oauthPlugin({ subjectConflict: 'link' })`. Adopting a never-verified account also drops the account links its first registrant made.
+  - **WebAuthn clone detection is atomic (FA-059).** `PasskeyStore` gains `compareAndSetCounter(id, expected, next, lastUsedAt): Promise<boolean>`, and `finishAuthentication` writes the counter only through it: two concurrent assertions presenting the same counter (a cloned authenticator racing the genuine one) can no longer both pass — the loser gets `PASSKEY_CLONED`. `MemoryPasskeyStore`, the new `PrismaPasskeyStore` and `SqlitePasskeyStore` implement it as a conditional update. `updateCounter` is deprecated and optional; a store without `compareAndSetCounter` is refused when `WebAuthnService` is built (`PasskeyStoreOutdatedError`, `PASSKEY_STORE_OUTDATED`).
+  - **Legacy mixed-case emails (FA-070/D9).** `PrismaUserSource.findByEmail` matches case-insensitively on PostgreSQL and **refuses ambiguity**: two rows differing only in letter case throw the new `AccountEmailAmbiguousError` (`AUTH_EMAIL_AMBIGUOUS`, not exposed) instead of the canonical row winning; `create` refuses a case variant of an existing row (`EmailTakenError`, also for a `P2002` from a concurrent insert). `SqliteUserSource.findByEmail` refuses the same ambiguity instead of returning the oldest row. Both packages export `normalizeAuthUserEmails()` — lowercases lone mixed-case rows and reports the twins (`{ normalized, conflicts }`, `dryRun`); the SQLite one then builds the `NOCASE` unique index. On MySQL the insensitive probe is attempted once, then the exact (collation-insensitive) lookup is used.
+  - **TOTP secret box (FA-H16 / BK-027).** Secrets are sealed as `bka2.<keyId>.<iv>.<tag>.<ct>`: AES-256-GCM with HKDF-SHA256 keys (was a bare SHA-256 of the key), a key id, and the user id bound as associated data (a ciphertext copied into another user's row does not open). `authPlugin({ mfaEncryption: { keys: [{ id, key }, …] } })` is a key ring — the first key seals, the others stay readable — and `auth.reencryptMfaSecret(userId)` re-seals a row under the active key. A stored value that is not an envelope is **refused** (`SecretUnreadableError`, `AUTH_SECRET_UNREADABLE`): a database write can no longer downgrade an encrypted TOTP secret to a plaintext one the writer knows. `SecretBox` is exported.
+  - **auth-prisma schema:** new models `AuthAccountLink` (`auth_account_links`) and `AuthPasskey` (`auth_passkeys`), MySQL-safe (hashed primary keys, `BigInt` counter, JSON-text transports). The delegates are optional in `PrismaAuthClient`; a client without them throws `AuthModelMissingError` (`AUTH_PRISMA_MODEL_MISSING`) at first use of those stores. `authUser.findFirst` is no longer used. auth-sqlite's `migrate()` creates `auth_account_links` and `auth_passkeys` on existing databases.
+  - **create-basalt:** the `--prisma` scaffold's schema includes the two new auth models.
+  
+  **Why major, and how to migrate:**
+  
+  - **MFA encryption.** Keys must be at least 32 bytes (`AUTH_SECRET_BOX_KEY_INVALID` otherwise), and rows written before (`v1:` envelopes, or plaintext) are refused. Upgrade with a temporary opt-in, re-encrypt, then remove it:
+    ```ts
+    authPlugin({ …, mfaEncryption: { keys: [{ id: '2026-09', key: NEW_KEY_32_BYTES }], legacy: { v1Keys: [OLD_MFA_ENCRYPTION_KEY], plaintext: true } } })
+    for (const userId of usersWithMfa) await auth.reencryptMfaSecret(userId)
+    // then drop `legacy`
+    ```
+    Setting both `mfaEncryption` and `mfaEncryptionKey` throws. Apps without MFA encryption are unaffected.
+  - **Custom `PasskeyStore`s** must implement `compareAndSetCounter` (one `UPDATE … WHERE id = ? AND counter = ?` returning whether a row changed).
+  - **OAuth:** configure a durable `accountLinks` store (`s.accountLinks`). Existing users are linked on their next login by verified email, as before; from then on a second IdP account claiming the same email gets `409 AUTH_ACCOUNT_LINK_CONFLICT`. Custom `Auth.socialLogin` callers should pass `identity: { provider, subject }`.
+  - **auth-prisma:** add the `AuthAccountLink` and `AuthPasskey` models (copy from `@basaltkit/auth-prisma/schema.prisma` or `basalt prisma:sync`), then `prisma migrate dev --name auth_account_links_passkeys` — in every tenant schema with schema-per-tenant; on MySQL copy them from `@basaltkit/auth-prisma/schema.mysql.prisma` instead (`subject`, `credentialId` and `publicKey` are `@db.Text` there). Run `normalizeAuthUserEmails(prisma, { dryRun: true })`, then without `dryRun`, and merge any reported `conflicts` — until then those emails throw `AUTH_EMAIL_AMBIGUOUS`. Hand-written `PrismaAuthClient` stubs: `authUser.findMany` must honour `where.email` (`equals`/`mode`), `orderBy` and `take`.
+  - **auth-sqlite:** run `normalizeAuthUserEmails(db)` on a legacy database with case-variant duplicates and merge the reported `conflicts`.
+- e53db52: Security fixes from the framework audit, pass 2 (FA-051, FA-056, FA-058, FA-059, FA-H22, scrypt cost ceiling).
+  
+  - **`WebAuthnService.remove()` checks the owner (FA-051).** `remove(credentialId)` deleted any user's passkey by id. It is now `remove(userId, credentialId)` and throws `PASSKEY_NOT_FOUND` for an unknown id or one `userId` does not own (the same error for both).
+  - **OIDC providers can be restricted to their email domains (FA-056).** A customer's IdP could assert `victim@other.com` with `email_verified` and log into that account. `oidcProvider` / `discoverOidcProvider` (and any `OAuthProvider`) accept `allowedEmailDomains` (and `allowAnyEmailDomain: true`); a login for another domain fails with `AUTH_OAUTH_EXCHANGE_FAILED` before an account is looked up. With more than one provider configured, every enterprise (OIDC) provider must declare one or the other — `OAuth` otherwise refuses to start with the new `OAuthProviderConfigError` (`AUTH_OAUTH_PROVIDER_CONFIG`), which also rejects duplicate provider names and malformed domains.
+  - **Provider replies are validated (FA-058).** A profile without a string `sub`/`email` no longer logs into an account literally named `"undefined"`; the email must be a single-`@` address. An `openid` flow must return an `id_token`, whose `aud` (client id), `exp` and — when the provider declares an `issuer` — `iss` are now checked alongside the nonce (`googleProvider` declares Google's issuer; `discoverOidcProvider` uses the discovered one). Discovery refuses a document for another issuer or with non-`https:` endpoints (plain `http:` only to loopback). A non-JSON token-endpoint reply is `AUTH_OAUTH_EXCHANGE_FAILED` instead of a 500 `SyntaxError`, and every provider call has a deadline (`oauthPlugin({ timeoutMs })`, default 10 s). `oauthRoutes` carry `meta.rateLimit` (10/min per ip and route by default; `rateLimit: false` removes it).
+  - **WebAuthn authentication hardening (FA-059).** `startAuthentication(sessionKey, userId)` now binds the challenge to `userId`: another user's passkey throws `WEBAUTHN_SUBJECT_MISMATCH` (step-up could be satisfied by any account). A non-integer `newCounter` from the verifier is refused instead of disabling clone detection for good. `MemoryWebAuthnChallengeStore.save()` purges expired entries in amortized O(1) instead of scanning the whole store.
+  - **Two different API keys on one request are ambiguous (FA-H22).** A forged `Authorization: Bearer mk_…` used to shadow a valid `x-api-key` (→ 403). When both carriers are present and differ, `apiKeysPlugin` now answers `400 AUTH_APIKEY_AMBIGUOUS` (new `ApiKeyAmbiguousError`); the same key in both is accepted.
+  - **The scrypt cost read from a stored hash is capped.** `ScryptPasswordHasher.verify()` returns `false` for a hash declaring more than N=2^20, r=32, p=16 or 512 MiB, or malformed parameters (it used to run — or throw — at whatever cost the row declared). The constructor refuses such parameters.
+  
+  **Why major, and how to migrate:**
+  - `passkeys.remove(id)` → `passkeys.remove(userId, id)`, with `userId` from the authenticated session.
+  - An `OAuth` setup with **several providers** that includes an `oidcProvider` / `discoverOidcProvider` without `allowedEmailDomains` now fails at startup: add `allowedEmailDomains: ['customer.com']` per IdP, or `allowAnyEmailDomain: true` for an IdP you fully control.
+  - `discoverOidcProvider` now requires the discovery document's `issuer` to equal the configured one and `https:` endpoints; an `openid`-scoped provider must return an `id_token` with a matching `aud` and a future `exp`.
+  - A step-up `startAuthentication(sessionKey, userId)` answered with another user's passkey now throws instead of returning that user.
+  - Clients sending two different API keys get 400; send exactly one.
+  - A `ScryptPasswordHasher` configured beyond the ceilings throws at construction.
+- e54b7b1: Security fixes from the framework audit (FA-012, FA-013, FA-014, FA-042).
+  
+  - **An unset `NODE_ENV` is production (FA-013).** `Auth` used to apply its production defaults only on `NODE_ENV === 'production'`, while `@basaltkit/env` (and the docs) treat an unset `NODE_ENV` as production — so a deploy that forgot `NODE_ENV` booted with a short signing secret and minted session cookies without `Secure`. The 32-character secret floor (`AUTH_WEAK_SECRET`), the session cookie's `Secure` default and the OAuth binding cookie's `Secure`/`__Host-` default now use `isProductionEnvironment()` from `@basaltkit/core`: anything but an explicit `NODE_ENV=development` or `test` is production.
+  - **An unreadable session cookie is anonymous, not a 500 (FA-012).** `sessionIdFromCookie()` threw a `URIError` on a malformed percent-encoding (`basalt_session=%E0%A4%A`); the enricher runs on every route, so any request carrying such a cookie — e.g. one tossed by a sibling subdomain — got `500` on public routes too. It now returns `null`.
+  - **Throttle eviction no longer unlocks a locked account (FA-014).** When the in-memory `MemoryThrottleStore` is full it evicts the oldest *unlocked* entries; a locked identifier is only evicted when every tracked entry is locked (the memory bound stays absolute). `ThrottleStore.hit()` gains an optional third parameter, `limit` (the caller's budget), which `LoginThrottle` now passes; existing custom stores that ignore it keep working.
+  - **JWT strings are no longer malleable (FA-042).** `verifyJwt()` rejects segments with characters outside the base64url alphabet and non-canonical signature encodings — `token + '!!!'` or a tweaked final character used to verify, defeating denylists or idempotency keyed on the exact token string.
+  
+  **Why major:** an app that runs without `NODE_ENV` (or with `staging`, etc.) and a secret shorter than 32 characters now fails to boot with `AUTH_WEAK_SECRET`, and its session / OAuth binding cookies now carry `Secure` (they are not sent over plain HTTP). Set `NODE_ENV=development` locally, use a secret of at least 32 characters (`secret({ minLength: 32 })` from `@basaltkit/env`), or pass `sessionCookie: { secure: false }` / `bindingCookie: { secure: false }` explicitly. Vitest sets `NODE_ENV=test`, so test suites are unaffected.
+
+### Patch Changes
+
+- e54b7b1: 502 errors no longer echo upstream detail to HTTP clients (framework audit, FA-041 follow-up).
+  
+  - `OAuthExchangeError` (`AUTH_OAUTH_EXCHANGE_FAILED`) quoted the provider's reply — `error_description`, an HTTP status, the discovery URL. It now sets `expose = false`: the client gets the code and `Bad gateway.`, the log keeps the full message.
+  - `DriveHostNotAllowedError` (`DRIVE_HOST_NOT_ALLOWED`) named the host it refused to reach and why, which made every download route an oracle for internal host names. Same treatment; the message and `details` still reach the log, `drive:sync_failed` and the audit trail unchanged.
+  
+  Requires `@basaltkit/http` with `expose = false` support (same release).
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+
 ## 3.2.0
 
 ### Minor Changes
