@@ -543,7 +543,7 @@ export class DropboxDrive implements DriveProvider {
     if (normalized.startsWith('/')) {
       const segments = normalized.split('/').slice(1)
       if (segments.some((segment) => segment === '.' || segment === '..')) return undefined
-      return normalized.replace(/\/+$/, '').toLowerCase()
+      return stripTrailingSlashes(normalized).toLowerCase()
     }
     const response = await this.rpc(session, `https://${API_HOST}/2/files/get_metadata`, { path: normalized })
     if (!response.ok) {
@@ -708,4 +708,11 @@ function sanitizeName(name: string): string {
   // eslint-disable-next-line no-control-regex
   const cleaned = name.replace(/[/\\\u0000-\u001f\u007f]/g, '_').replace(/^\.+/, '_').trim()
   return cleaned === '' ? 'file' : cleaned.slice(0, 255)
+}
+
+/** Drops trailing `/` in linear time (a `/\/+$/` regex is polynomial on provider input). */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--
+  return value.slice(0, end)
 }

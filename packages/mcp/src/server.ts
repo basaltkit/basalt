@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
 import { HttpError, route, type BasaltRoute, type HttpRequest } from '@basaltkit/http'
 import { z } from 'zod'
@@ -222,12 +222,19 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value
 }
 
+/** Drops trailing `/` in linear time (a `/\/+$/` regex is polynomial on client input). */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--
+  return value.slice(0, end)
+}
+
 /** Same-origin (Origin's host equals the request's Host) or explicitly allowed. */
 function originAllowed(request: HttpRequest, allowed: readonly string[] | '*' | undefined): boolean {
   const origin = headerValue(request.headers['origin'])
   if (origin === undefined || allowed === '*') return true
-  const normalized = origin.trim().toLowerCase().replace(/\/+$/, '')
-  if ((allowed ?? []).some((o) => o.trim().toLowerCase().replace(/\/+$/, '') === normalized)) return true
+  const normalized = stripTrailingSlashes(origin.trim().toLowerCase())
+  if ((allowed ?? []).some((o) => stripTrailingSlashes(o.trim().toLowerCase()) === normalized)) return true
   const host = headerValue(request.headers['host'])?.trim().toLowerCase()
   try {
     return host !== undefined && new URL(normalized).host === host
@@ -243,6 +250,13 @@ function isJsonContentType(request: HttpRequest): boolean {
 }
 
 /**
+ * Keys the credential fingerprint below. Sessions live in this process only, so
+ * a per-process random key is enough — and it means a leaked session table
+ * can't be used to guess API keys offline, which a bare hash would allow.
+ */
+const PRINCIPAL_KEY = randomBytes(32)
+
+/**
  * The identity a session is bound to: the authenticated user (in its tenant),
  * or — without one — the credentials the request presented, hashed.
  */
@@ -253,7 +267,7 @@ function principalOf(context: Record<string, unknown>, request: HttpRequest): st
     return `user:${JSON.stringify([tenant?.id ?? null, user.id])}`
   }
   const credentials = [headerValue(request.headers['authorization']), headerValue(request.headers['x-api-key'])]
-  return `anon:${createHash('sha256').update(JSON.stringify(credentials)).digest('base64url')}`
+  return `anon:${createHmac('sha256', PRINCIPAL_KEY).update(JSON.stringify(credentials)).digest('base64url')}`
 }
 
 /**
