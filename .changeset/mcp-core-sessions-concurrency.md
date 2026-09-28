@@ -1,9 +1,0 @@
----
-'@basaltkit/mcp-core': minor
----
-
-Cross-POST cancellation, stdio concurrency cap and tool visibility (framework audit FA-037 / FA-040 / FA-035 residuals). Minor because the package is 0.x — one default changes (marked **breaking**).
-
-- **Breaking — stdio concurrency cap.** `serveStdio` admits at most `maxConcurrentRequests` (new, default `DEFAULT_MAX_CONCURRENT_REQUESTS` = 16) requests in flight per connection; one more is answered at once with the new `RPC_ERRORS.SERVER_BUSY` (`-32000`) JSON-RPC error (inside the batch reply for a batch). Notifications — `notifications/cancelled` included — are never counted nor refused.
-- **Streamable-HTTP sessions (opt-in).** `serveHttp({ sessions: true | { ttlMs, maxSessions } })`: a successful `initialize` answers with an `Mcp-Session-Id` header; later requests must carry it (400 without, 404 for an unknown/expired/foreign one) and `DELETE` ends it. All requests of a session share one cancellation scope, so a `notifications/cancelled` POSTed separately cancels the call it names — no other session can. Sessions are bound to a principal (new `principal(req)` option; default a hash of `Authorization`), expire when idle (30 min) and are capped (1000, least recently used evicted). The default stays stateless so header-less clients keep working. The session table is exported as `McpSessions` (+ `isInitializeRequest`, `MCP_SESSION_HEADER`, `DEFAULT_SESSION_TTL_MS`, `DEFAULT_MAX_SESSIONS`).
-- **Tool visibility.** `McpToolDef.visible?(ctx)` — a side-effect-free listing filter; `tools/list` omits tools it rejects (a throwing hook hides the tool). Never consulted by `tools/call`. New `CallContext.caller` carries the transport's view of the caller to it; `McpServer.listTools(ctx)` returns the filtered list (a promise). New `ToolDescriptor` type.

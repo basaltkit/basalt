@@ -1,5 +1,79 @@
 # @basaltkit/auth-sqlite
 
+## 2.0.0
+
+### Major Changes
+
+- b69ea05: Framework audit — the open auth items (FA-058 account linking, FA-059 clone detection, FA-070/D9 legacy emails, FA-H16/BK-027 secret box).
+  
+  - **OAuth/OIDC logins are bound to the provider subject (FA-058).** A login used to be matched by email alone and the provider's `sub` was ignored. `Auth` now keeps account links (provider + subject → user) in a new `AccountLinkStore` (`authPlugin({ accountLinks })`; `MemoryAccountLinkStore` by default, `PrismaAccountLinkStore` / `SqliteAccountLinkStore` for production, both in `prismaAuthStores()` / `sqliteAuthStores()` as `accountLinks`). `socialLogin(email, { identity: { provider, subject } })` — which `OAuth.callback` now always passes — looks the link up first: a linked provider account reaches its account even after the email changes at the IdP. Without a link the first login matches by email under the existing rules (an existing account only through a provider-verified email, after `allowedEmailDomains`) and records the link (`auth:account_linked`). A **different** subject of the same provider asserting the email of an account already linked to that provider is refused with the new `AccountLinkConflictError` (`409 AUTH_ACCOUNT_LINK_CONFLICT`) unless `oauthPlugin({ subjectConflict: 'link' })`. Adopting a never-verified account also drops the account links its first registrant made.
+  - **WebAuthn clone detection is atomic (FA-059).** `PasskeyStore` gains `compareAndSetCounter(id, expected, next, lastUsedAt): Promise<boolean>`, and `finishAuthentication` writes the counter only through it: two concurrent assertions presenting the same counter (a cloned authenticator racing the genuine one) can no longer both pass — the loser gets `PASSKEY_CLONED`. `MemoryPasskeyStore`, the new `PrismaPasskeyStore` and `SqlitePasskeyStore` implement it as a conditional update. `updateCounter` is deprecated and optional; a store without `compareAndSetCounter` is refused when `WebAuthnService` is built (`PasskeyStoreOutdatedError`, `PASSKEY_STORE_OUTDATED`).
+  - **Legacy mixed-case emails (FA-070/D9).** `PrismaUserSource.findByEmail` matches case-insensitively on PostgreSQL and **refuses ambiguity**: two rows differing only in letter case throw the new `AccountEmailAmbiguousError` (`AUTH_EMAIL_AMBIGUOUS`, not exposed) instead of the canonical row winning; `create` refuses a case variant of an existing row (`EmailTakenError`, also for a `P2002` from a concurrent insert). `SqliteUserSource.findByEmail` refuses the same ambiguity instead of returning the oldest row. Both packages export `normalizeAuthUserEmails()` — lowercases lone mixed-case rows and reports the twins (`{ normalized, conflicts }`, `dryRun`); the SQLite one then builds the `NOCASE` unique index. On MySQL the insensitive probe is attempted once, then the exact (collation-insensitive) lookup is used.
+  - **TOTP secret box (FA-H16 / BK-027).** Secrets are sealed as `bka2.<keyId>.<iv>.<tag>.<ct>`: AES-256-GCM with HKDF-SHA256 keys (was a bare SHA-256 of the key), a key id, and the user id bound as associated data (a ciphertext copied into another user's row does not open). `authPlugin({ mfaEncryption: { keys: [{ id, key }, …] } })` is a key ring — the first key seals, the others stay readable — and `auth.reencryptMfaSecret(userId)` re-seals a row under the active key. A stored value that is not an envelope is **refused** (`SecretUnreadableError`, `AUTH_SECRET_UNREADABLE`): a database write can no longer downgrade an encrypted TOTP secret to a plaintext one the writer knows. `SecretBox` is exported.
+  - **auth-prisma schema:** new models `AuthAccountLink` (`auth_account_links`) and `AuthPasskey` (`auth_passkeys`), MySQL-safe (hashed primary keys, `BigInt` counter, JSON-text transports). The delegates are optional in `PrismaAuthClient`; a client without them throws `AuthModelMissingError` (`AUTH_PRISMA_MODEL_MISSING`) at first use of those stores. `authUser.findFirst` is no longer used. auth-sqlite's `migrate()` creates `auth_account_links` and `auth_passkeys` on existing databases.
+  - **create-basalt:** the `--prisma` scaffold's schema includes the two new auth models.
+  
+  **Why major, and how to migrate:**
+  
+  - **MFA encryption.** Keys must be at least 32 bytes (`AUTH_SECRET_BOX_KEY_INVALID` otherwise), and rows written before (`v1:` envelopes, or plaintext) are refused. Upgrade with a temporary opt-in, re-encrypt, then remove it:
+    ```ts
+    authPlugin({ …, mfaEncryption: { keys: [{ id: '2026-09', key: NEW_KEY_32_BYTES }], legacy: { v1Keys: [OLD_MFA_ENCRYPTION_KEY], plaintext: true } } })
+    for (const userId of usersWithMfa) await auth.reencryptMfaSecret(userId)
+    // then drop `legacy`
+    ```
+    Setting both `mfaEncryption` and `mfaEncryptionKey` throws. Apps without MFA encryption are unaffected.
+  - **Custom `PasskeyStore`s** must implement `compareAndSetCounter` (one `UPDATE … WHERE id = ? AND counter = ?` returning whether a row changed).
+  - **OAuth:** configure a durable `accountLinks` store (`s.accountLinks`). Existing users are linked on their next login by verified email, as before; from then on a second IdP account claiming the same email gets `409 AUTH_ACCOUNT_LINK_CONFLICT`. Custom `Auth.socialLogin` callers should pass `identity: { provider, subject }`.
+  - **auth-prisma:** add the `AuthAccountLink` and `AuthPasskey` models (copy from `@basaltkit/auth-prisma/schema.prisma` or `basalt prisma:sync`), then `prisma migrate dev --name auth_account_links_passkeys` — in every tenant schema with schema-per-tenant; on MySQL copy them from `@basaltkit/auth-prisma/schema.mysql.prisma` instead (`subject`, `credentialId` and `publicKey` are `@db.Text` there). Run `normalizeAuthUserEmails(prisma, { dryRun: true })`, then without `dryRun`, and merge any reported `conflicts` — until then those emails throw `AUTH_EMAIL_AMBIGUOUS`. Hand-written `PrismaAuthClient` stubs: `authUser.findMany` must honour `where.email` (`equals`/`mode`), `orderBy` and `take`.
+  - **auth-sqlite:** run `normalizeAuthUserEmails(db)` on a legacy database with case-variant duplicates and merge the reported `conflicts`.
+
+### Patch Changes
+
+- e53db52: Framework audit, pass 2 — persistent stores (FA-068, FA-069, FA-070).
+  
+  Major for tenancy-prisma, webhooks-prisma, webhooks-sqlite and auth-prisma: a generated PrismaClient still fits the new client interfaces (`$transaction`, `create`/`updateMany`), but hand-written clients and test fakes must add those methods, and cross-scope writes that used to succeed now throw.
+  
+  - **tenancy-prisma — `save()` / `create()` are atomic (FA-068).** The tenant
+    row, the domain check and the domain set (`deleteMany` + `createMany`) now
+    run in one interactive `$transaction`. Before, any failure after the delete —
+    a domain listed twice, a domain another tenant claimed between the
+    pre-flight and the insert, a lost connection — left the tenant rewritten with
+    its existing domains gone. Duplicate domains in the array are stored once.
+    `PrismaTenancyClient` now includes `$transaction` (a generated
+    `PrismaClient` has it; a hand-written client must add it).
+  - **webhooks-prisma — writes are keyed by `(id, tenantId)` (FA-069).**
+    `add()` was an upsert by `id` alone: on MySQL's case-insensitive collation
+    tenant A re-registering `ABC` rewrote tenant B's `abc` endpoint (url,
+    secret, tenant). It is now an `updateMany` scoped to the endpoint's own
+    tenant (or global scope), falling back to `create`; an id held by another
+    scope throws the new `WebhookEndpointIdInUseError` (409). Re-adding an id in
+    its own scope still replaces it. `PrismaWebhooksClient` now needs
+    `create`/`updateMany` instead of `upsert` (a generated `PrismaClient` has
+    them).
+  - **webhooks-sqlite — no `INSERT OR REPLACE` across scopes (FA-070/D8).** The
+    manager's check-before-write cannot stop two tenants registering the same id
+    at once; the store now refuses an id held by another scope with
+    `WebhookEndpointIdInUseError` (409) instead of overwriting that endpoint.
+  - **auth-prisma — `touch()`/`revoke()` of a missing API key are no-ops
+    (FA-070/I4)**, as in the other stores, instead of a Prisma `P2025` thrown
+    out of `verify()`. The client surface uses `authApiKey.updateMany` (no longer
+    `update`).
+  - **auth-sqlite — email uniqueness without the NOCASE index (FA-070/D9).** A
+    legacy database holding case-variant duplicates cannot build the
+    case-insensitive unique index, and `migrate()` skipped it silently; `create`
+    now refuses an email that exists in any letter case inside the `INSERT`
+    itself, throwing `EmailTakenError` (409) — also for the race between two
+    concurrent sign-ups.
+  - **files-prisma — `prismaFilesStore()` fails fast** when the client has no
+    `file` model, like every other `*-prisma` factory (FA-070/I4).
+  - **permissions-sqlite — multi-permission grants are all-or-nothing**
+    (FA-070/I5): `grantToRole` / `grantToUser` run in one savepoint.
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+- Updated dependencies [e54b7b1]
+  - @basaltkit/auth@4.0.0
+
 ## 1.7.0
 
 ### Minor Changes

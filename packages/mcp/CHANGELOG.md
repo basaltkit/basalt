@@ -1,5 +1,67 @@
 # @basaltkit/mcp
 
+## 4.0.0
+
+### Major Changes
+
+- e54b7b1: Harden the runtime MCP surface (framework audit FA-034 – FA-038).
+  
+  **Breaking** (hence major — each changes a default a caller may rely on):
+  
+  - `POST /mcp` now answers **403** to a request whose `Origin` header is neither
+    same-origin nor listed in the new `mcpRoutes({ allowedOrigins })` (`'*'`
+    disables the check), and **415** unless the body is sent as
+    `application/json`. Non-browser MCP clients send no `Origin` and are
+    unaffected; a browser-hosted client on another origin must be allow-listed.
+  - A tool call no longer inherits every header of the `/mcp` request. It gets
+    an allowlist — `DEFAULT_FORWARDED_HEADERS` (`authorization`, `cookie`,
+    `x-api-key`, `x-tenant-id`, `host`, `accept-language`, `user-agent`) — and
+    `mcpPlugin({ forwardHeaders })` extends it. `x-request-id`, `if-none-match`,
+    forwarding and hop-by-hop headers are dropped. The same filter applies to
+    `McpServer.callTool(name, args, { headers })`.
+  - A handler that replies `reply.code(status)` with `status >= 400` now yields a
+    tool result with `isError: true` (it used to arrive as a success).
+  
+  **Fixes / additions:**
+  
+  - The synthetic tool request carries the caller's `ip` (`ToolCallContext.ip`;
+    the `/mcp` route passes `request.ip`), `routePattern` (the tool route's
+    template) and the concrete `url` built from the arguments (encoded params +
+    query string) instead of the route template.
+  - Cancellation reaches route-backed tools: the abort signal is passed through,
+    the call answers "cancelled" (`isError`) as soon as it fires, and a handler
+    can observe it with the new `toolSignal(request)`.
+  - `mcpRoutes({ auth: true })` sets `meta.auth` on the endpoint so even
+    `initialize`/`tools/list` require an authenticated caller; `mcpRoutes({ meta })`
+    adds any other guard key.
+  - `/mcp` accepts JSON-RPC batches; each POST is its own MCP session, so a
+    cancel from one caller never reaches another's request.
+- b69ea05: `/mcp` sessions (cross-POST cancellation) and a filtered `tools/list` (framework audit FA-037 / FA-035 residuals).
+  
+  **Breaking** (defaults change):
+  
+  - **Sessions on by default.** `mcpRoutes()` issues an `Mcp-Session-Id` on a successful `initialize` and requires it on every later POST — **400** without it, **404** for an unknown, expired or foreign session (spec clients then re-initialize). A session is bound to the caller that opened it (`ctx().user` + tenant; anonymous: a keyed fingerprint of `Authorization`), expires after 30 min idle and at most 1000 live at once (least recently used evicted) — `mcpRoutes({ sessions: { ttlMs, maxSessions } })`. A `notifications/cancelled` in a later POST of the **same** session now cancels the call it names; another session never can. A `DELETE` route on the same path ends a session. In-memory per process: use sticky sessions behind replicas, or `mcpRoutes({ sessions: false })` for the old stateless behaviour. Browser clients on another origin need `Mcp-Session-Id` in CORS `exposeHeaders`.
+  - **`tools/list` hides what the caller cannot use** (`mcpRoutes({ listVisibleOnly })`, default `true`), using only side-effect-free checks — no guard runs, so no rate-limit consumption, audit or denial records: `meta.auth` tools are hidden from anonymous callers (when a guard claims `auth`), and any key whose plugin registers an `http:route-visibility` check (`teamsPlugin` → `meta.teamRole`, `permissionsPlugin` → `meta.can`). Not filtered: `mfa`, `scopes`, `subscribed`/`feature`, audiences, rate limits, handler-level checks. `tools/call` is unchanged — every guard still runs.
+  
+  **Additions:** `HttpClientTransport` keeps the session id (`sessionId`), sends it on every request and ends the session on `close()`; `serveMcpStdio` accepts `maxConcurrentRequests` (default 16) and `maxLineLength`; `McpTool.visible(context)`; re-exports `MCP_SESSION_HEADER` and `McpSessionOptions`.
+- e53db52: `StdioClientTransport` no longer crashes the host or hangs forever (framework audit, Melhorias 8).
+  
+  - A command that can't be spawned (`ENOENT`) emitted an unhandled `'error'` on the child process, which took down the host at boot (`mcpClientPlugin` with a mistyped command). Spawn errors, a server that exits, and `EPIPE` on its stdin now reject the calls in flight with a clear error, and the next call spawns the server again.
+  - New `timeoutMs` option (default 60 000 ms): a request the server never answers rejects instead of staying pending forever. Raise it for tools that legitimately run longer.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e53db52]
+- Updated dependencies [b69ea05]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+  - @basaltkit/mcp-core@0.4.0
+
 ## 3.0.0
 
 ### Major Changes

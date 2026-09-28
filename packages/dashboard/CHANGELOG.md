@@ -1,5 +1,12 @@
 # @basaltkit/dashboard
 
+## 1.4.5
+
+### Patch Changes
+
+- Updated dependencies [e53db52]
+  - @basaltkit/subscriptions@5.0.0
+
 ## 1.4.4
 
 ### Patch Changes

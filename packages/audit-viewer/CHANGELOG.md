@@ -1,5 +1,19 @@
 # @basaltkit/audit-viewer
 
+## 3.0.1
+
+### Patch Changes
+
+- Updated dependencies [b69ea05]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+  - @basaltkit/audit@2.0.0
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+
 ## 3.0.0
 
 ### Major Changes
