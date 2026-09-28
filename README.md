@@ -14,20 +14,22 @@ lock-in, TypeScript inference from the route to the client.
 Runs on **Fastify, Express or Hono** (swap adapters without touching your
 routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.11 — the release that fails closed. 95 packages, each
+> **Status: Basalt 1.12 — the release that keeps its word. 95 packages, each
 > versioned independently. 🎉**
-> A second deep security audit — fourteen auditors, eighty-seven findings, one
-> critical — looked for bugs *between* packages rather than inside them: an API
-> key valid in every tenant, a Prisma operation the tenant extension did not
-> scope, a tenant webhook signed with the plugin-wide secret. Seventy-seven are
-> fixed with regression tests, and **fourteen packages publish a major** because
-> the secure behaviour is now the default: a disk with no tenant refuses, a raw
-> query inside a tenant refuses, an unset `NODE_ENV` is production. Two
-> applications building on the framework closed twenty-eight more items —
-> streaming on every adapter, `rawBody()` for webhook signatures, structured
-> error details, a hash-chained audit trail, MFA by policy, RLS applied and
-> swept — and two packages debut: `@basaltkit/backup` and `@basaltkit/drives`
-> with Dropbox, Google Drive and OneDrive adapters. Before that, 1.10 supplied
+> An independent audit, in two passes, read every package's source next to its
+> documentation and found eighty places where the two disagreed — ten rated high:
+> an audit trail that let a forged row pass `verify()`, an idempotency plugin
+> that re-ran handlers returning a value, a policy for `project:constructor`
+> that authorized anyone, a typo'd `meta.teamRole` that admitted every member, a
+> `swap()` that granted a paid plan for free. All eighty are closed, each real
+> defect with a regression test, and **thirty-two packages publish a major**: a
+> single-tenant key that cannot be a tenant's name, a Host resolver a header
+> cannot overrule, social logins bound to the provider's subject, the same bytes
+> for the same route on Fastify, Express and Hono, `/mcp` sessions bound to their
+> caller. Before that, 1.11 failed closed — a second security audit's
+> eighty-seven findings, fourteen majors that made secure behaviour the default,
+> streaming on every adapter, a verifiable audit trail, and two new packages,
+> `@basaltkit/backup` and `@basaltkit/drives`. Before that, 1.10 supplied
 > missing halves: a tenant that can be destroyed, an index that can be rebuilt, a
 > durable store for files, revisions for documents, permissions that know who is
 > asking. Before that, 1.9 was written by an application rather than by
