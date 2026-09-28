@@ -1,5 +1,57 @@
 # @basaltkit/hono
 
+## 2.0.0
+
+### Major Changes
+
+- e53db52: Wire-level parity with Fastify and Express (framework audit FA-078, FA-079, FA-080).
+  Major because several defaults change what a handler receives.
+  
+  - **Breaking (FA-079):** JSON is recognised by its exact media type —
+    `application/json` or a `+json` type, parameters ignored — never by a
+    substring. `text/plain; application/json` (CORS-safelisted, sent cross-site
+    with no preflight) is no longer parsed as JSON. A malformed JSON body is
+    answered `400 BAD_REQUEST` ("Malformed request body.") instead of reaching the
+    handler as `body: undefined`.
+  - **Breaking (FA-080):** a repeated query key is an array (`?a=1&a=2` →
+    `['1', '2']`), as on Fastify and Express; it used to keep only the first value.
+  - **Breaking:** `request.url` is the path and query string (`/items?x=1`), as
+    `HttpRequest.url` is documented and as the other adapters report it; it used
+    to be the absolute URL (`http://host/items?x=1`). Error reports carry the same.
+  - **FA-078:** an `sse()` response keeps the headers set before it — CORS,
+    security headers, rate-limit counters, `x-request-id`; a cross-origin
+    `EventSource` failed its CORS check.
+  - **FA-078:** new `errorHandler` option (default `true`) installs an
+    `app.onError`: an error raised outside a route handler — a failing pre-hook or
+    edge route, an unreadable body — gets the neutral JSON envelope and reaches
+    `onError`, instead of Hono's plain-text 500 that nobody logged. An
+    `HTTPException` from your own Hono middleware keeps its response. Pass
+    `errorHandler: false` if you install your own `onError`.
+  - A failing after-hook is reported (`AFTER_HOOK_FAILED`) and no longer replaces
+    the response with a 500.
+  - `DEFAULT_BODY_LIMIT` is now re-exported from `@basaltkit/http` (same value, 1 MiB).
+  
+  Migration: send JSON with a JSON media type; read repeated query keys as
+  `string | string[]` (`z.union([z.string(), z.array(z.string())])`); if you parsed
+  `request.url` as an absolute URL, build it with `new URL(request.url, base)`.
+
+### Minor Changes
+
+- b69ea05: Boot-time route-meta validation and side-effect-free route visibility (framework audit FA-044 / FA-035 residuals).
+  
+  - **Route-meta validators.** Plugins can register a `RouteMetaValidator` in the new `META_VALIDATORS_BUCKET` (`'http:meta-validators'`) to check the *values* their meta keys carry. Every adapter (Fastify, Express, Hono — identically, covered by the shared parity suite) runs them over its full route list at boot, right after the guarded-meta check, and refuses to boot with the new `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`, listing every `route: problem`). A validator that throws counts as a problem. `allowUnguardedMeta` never waives them. `assertRoutesGuarded(routes, container)` now runs them too, and `assertRouteMetaValid(routes, container)` runs them alone — for code driving `runRoute()` without an adapter. Passing a plain `Set` of claimed keys keeps the old behaviour (no validators).
+  - **Route visibility.** New `ROUTE_VISIBILITY_BUCKET` (`'http:route-visibility'`) + `RouteVisibilityCheck` contract: a pure, side-effect-free companion of a guard ("could this caller possibly pass?") for surfaces that list routes. `isRouteVisible(route, context, container)` hides a `meta.auth` route from a caller without `context.user` (only when a guard claimed `auth`) and applies every registered check (a throwing check hides the route). Visibility is never authorization.
+  - The adapters now pass the container to `assertRoutesGuarded` instead of a `Set`.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+
 ## 1.9.0
 
 ### Minor Changes

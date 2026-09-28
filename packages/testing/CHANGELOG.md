@@ -1,5 +1,21 @@
 # @basaltkit/testing
 
+## 2.0.3
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e53db52]
+- Updated dependencies [e53db52]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e53db52]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/express@2.0.0
+  - @basaltkit/hono@2.0.0
+  - @basaltkit/mailer@2.1.0
+  - @basaltkit/queue@3.0.0
+
 ## 2.0.2
 
 ### Patch Changes

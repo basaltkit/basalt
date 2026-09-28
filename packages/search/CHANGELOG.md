@@ -1,5 +1,58 @@
 # @basaltkit/search
 
+## 2.0.0
+
+### Major Changes
+
+- e53db52: `reindex()` never guesses a tenant and never clears before it knows it can finish; `search()` validates paging and filters (framework audit, FA-050 and the search parts of FA-066).
+  
+  - **FA-050 — `reindex()` from inside a tenant filed every tenant-less record under that tenant.** A rebuild covers every tenant, so it now takes the tenant only from the rule's own `document`. A row without `tenantId` throws `TenantRequiredError` whenever a tenant could exist (`@basaltkit/tenancy` registered, or a tenant context active); only a single-tenant app with no context tenant files it under `SINGLE_TENANT_SCOPE`.
+  - **FA-050 — `clear()` ran before the error.** With tenancy on and no context the index was wiped and *then* `TenantRequiredError` was thrown. `reindex()` now walks the `backfill` once to map and validate every row (tenant, reserved `'@single'`, a `backfill` that throws), and only then clears and writes in a second walk. Memory stays bounded by one page; rows that change between the walks can still fail the second one.
+  - **FA-066 — paging.** `limit`/`offset` must be non-negative integers and `limit` ≤ `maxLimit` (default `1000`, new `searchPlugin({ maxLimit })` / `new Search({ maxLimit })`); otherwise `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`, 400). A `limit: -1` used to reach the memory driver as `slice(0, -1)`.
+  - **FA-066 — filters on undeclared fields.** For an index listed in `searchPlugin({ indexes })` (forwarded to the service; or `new Search({ indexes })`), a filter may only name a `filterable` field or `tenantId` — `SearchFilterNotFilterableError` (`SEARCH_FILTER_NOT_FILTERABLE`, 400). The memory, Postgres and Elasticsearch drivers filtered on any stored field, an oracle for values the index never declared. Indexes not listed are unchanged.
+  - **FA-066 — filter values.** A value must be a string, a finite number, a boolean, or a flat array of those — `SearchFilterValueError` (`SEARCH_INVALID_FILTER_VALUE`, 400). `null`/`undefined` are refused rather than dropped (dropping would widen `{ ownerId: user?.id }` to every owner). `MeilisearchDriver` repeats the check, since it spliced any JSON (objects, nested arrays) into its filter DSL.
+  - FA-066's `'default'` scope item was already closed by the `'@single'` sentinel (FA-030).
+  
+  **Why major — migration:**
+  
+  1. A sync rule whose `document` omits `tenantId` in a multi-tenant app now makes `reindex()` throw (it used to put every row in the calling tenant, or clear and throw). Return `tenantId` from `document`. (Rebuilding one tenant at a time is now safe — see `search-reindex-tenant-scope`.)
+  2. `search()` with a `limit` over 1000 throws — pass `searchPlugin({ maxLimit })` if you page larger.
+  3. Filters on a field not in the index's `filterable` throw — declare the field `filterable` (Meilisearch already required this).
+  4. Filters with `null`/`undefined`/object values throw — omit the key when there is nothing to filter by.
+- b69ea05: `reindex()` can rebuild one tenant without touching the others, and `search()` bounds `offset` and the authorize scan.
+  
+  - **Tenant-scoped rebuild.** `search.reindex(index, { tenantId?, all? })`. Inside a tenant context (a request, `tenancy.run`, `tenancy.forEach`) — or with `{ tenantId }` — it clears only that tenant's documents and writes only the backfill rows mapped to that tenant (other tenants' rows are validated, then skipped). `{ all: true }` clears and rebuilds the whole index, and is only allowed outside a tenant context. Until now `reindex()` always cleared the **whole** index, so the documented `tenancy.run(id, () => search.reindex(name))` over a database-per-tenant `backfill` left only the last tenant searchable. The "validate every row before any destructive step" guarantee is unchanged, and the scope is checked before the backfill is even read.
+  - **New driver method `clearTenant(index, tenantId)`** (optional on `SearchDriver`), implemented by `MemorySearchDriver`, `MeilisearchDriver` (delete-by-filter, Meilisearch ≥ 1.2), `PostgresSearchDriver` (`DELETE … WHERE idx AND tenant_id`) and `ElasticsearchDriver` (`_delete_by_query` on a `tenantId` term). A custom driver without it gets `SearchDriverCapabilityError` (`SEARCH_DRIVER_UNSUPPORTED`, 501) for a scoped rebuild — before anything is read or cleared, never a fallback to `clear()`.
+  - **Elasticsearch:** `clear()`/`clearTenant()` throw `ElasticsearchError` when `_delete_by_query` answers 200 with `failures` (version conflicts, shard errors), instead of letting a rebuild write over a half-cleared index.
+  - **Paging bounds.** `offset` above `maxOffset` (default `10000`, Elasticsearch's own `max_result_window`) throws `SearchPaginationError`. An authorized search's scan is capped by a `maxScan` ceiling (default `10000`); the default budget (20 pages, floor 200) is clamped to it, and a per-call `maxScan` above it, or not a positive integer, throws `SearchPaginationError`. Both are `searchPlugin({ maxOffset, maxScan })` / `new Search({ … })` options.
+  - New exports: `ReindexOptions`, `SearchReindexScopeError` (`SEARCH_REINDEX_SCOPE`, 400), `SearchDriverCapabilityError`, `DEFAULT_MAX_OFFSET`, `DEFAULT_MAX_SCAN`.
+  
+  **Why major — migration (`@basaltkit/search`):**
+  
+  1. With `@basaltkit/tenancy` registered, a bare `search.reindex(name)` **outside** a tenant context now throws `SearchReindexScopeError`. For the old whole-index rebuild (jobs, CLI, deploy scripts), write `search.reindex(name, { all: true })`.
+  2. `reindex()` **inside** a tenant context now rebuilds only that tenant (it used to clear and rebuild every tenant). If you relied on the old behaviour, move the call outside the context and pass `{ all: true }` — which is refused inside a tenant context.
+  3. A single-tenant app (no tenancy) is unchanged: a bare `reindex(name)` still rebuilds the whole index.
+  4. A custom `SearchDriver` keeps compiling; implement `clearTenant(index, tenantId)` to support tenant-scoped rebuilds.
+  5. `search()` with `offset` over 10000, or an explicit `maxScan` over 10000, throws — raise `searchPlugin({ maxOffset, maxScan })` if you need to, or narrow deep pages with a filter.
+- e54b7b1: The single-tenant scope is a reserved sentinel (framework audit, FA-030 — same fix as `@basaltkit/files`).
+  
+  `SINGLE_TENANT_SCOPE` is now `'@single'` instead of `'default'`. `'default'` is a valid tenant id, so in an app without `@basaltkit/tenancy` a request carrying a tenant named `default` found the app's documents, and could overwrite or `remove` them. `@` is outside the tenant-id grammar, and a tenant equal to the sentinel — from the context, an explicit argument, a document's `tenantId`, or a row mapped by `reindex()` — is refused with the new `SearchTenantReservedError` (`SEARCH_TENANT_RESERVED`, 400).
+  
+  **Why major — migration:** a single-tenant app's existing documents are indexed under `'default'` and no longer match. The index is derived data, so rebuild it once — `search.reindex(name)` for rules with a `backfill`, or re-run your own indexing. With `@basaltkit/search-postgres` you can re-key in place instead:
+  
+  ```sql
+  UPDATE basalt_search
+     SET tenant_id = '@single', document = jsonb_set(document, '{tenantId}', '"@single"')
+   WHERE tenant_id = 'default';
+  ```
+  
+  Meilisearch and Elasticsearch/OpenSearch derive the primary key from the tenant, so there only a rebuild works (clear the stale `'default'` documents, which `reindex()` does). Skip it if `default` was ever a real tenant. No legacy fallback read is kept on purpose: it would re-open the collision in the other direction.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+  - @basaltkit/core@1.5.0
+
 ## 1.6.1
 
 ### Patch Changes

@@ -1,5 +1,91 @@
 # @basaltkit/webhooks-prisma
 
+## 2.0.0
+
+### Major Changes
+
+- e53db52: Framework audit, pass 2 — persistent stores (FA-068, FA-069, FA-070).
+  
+  Major for tenancy-prisma, webhooks-prisma, webhooks-sqlite and auth-prisma: a generated PrismaClient still fits the new client interfaces (`$transaction`, `create`/`updateMany`), but hand-written clients and test fakes must add those methods, and cross-scope writes that used to succeed now throw.
+  
+  - **tenancy-prisma — `save()` / `create()` are atomic (FA-068).** The tenant
+    row, the domain check and the domain set (`deleteMany` + `createMany`) now
+    run in one interactive `$transaction`. Before, any failure after the delete —
+    a domain listed twice, a domain another tenant claimed between the
+    pre-flight and the insert, a lost connection — left the tenant rewritten with
+    its existing domains gone. Duplicate domains in the array are stored once.
+    `PrismaTenancyClient` now includes `$transaction` (a generated
+    `PrismaClient` has it; a hand-written client must add it).
+  - **webhooks-prisma — writes are keyed by `(id, tenantId)` (FA-069).**
+    `add()` was an upsert by `id` alone: on MySQL's case-insensitive collation
+    tenant A re-registering `ABC` rewrote tenant B's `abc` endpoint (url,
+    secret, tenant). It is now an `updateMany` scoped to the endpoint's own
+    tenant (or global scope), falling back to `create`; an id held by another
+    scope throws the new `WebhookEndpointIdInUseError` (409). Re-adding an id in
+    its own scope still replaces it. `PrismaWebhooksClient` now needs
+    `create`/`updateMany` instead of `upsert` (a generated `PrismaClient` has
+    them).
+  - **webhooks-sqlite — no `INSERT OR REPLACE` across scopes (FA-070/D8).** The
+    manager's check-before-write cannot stop two tenants registering the same id
+    at once; the store now refuses an id held by another scope with
+    `WebhookEndpointIdInUseError` (409) instead of overwriting that endpoint.
+  - **auth-prisma — `touch()`/`revoke()` of a missing API key are no-ops
+    (FA-070/I4)**, as in the other stores, instead of a Prisma `P2025` thrown
+    out of `verify()`. The client surface uses `authApiKey.updateMany` (no longer
+    `update`).
+  - **auth-sqlite — email uniqueness without the NOCASE index (FA-070/D9).** A
+    legacy database holding case-variant duplicates cannot build the
+    case-insensitive unique index, and `migrate()` skipped it silently; `create`
+    now refuses an email that exists in any letter case inside the `INSERT`
+    itself, throwing `EmailTakenError` (409) — also for the race between two
+    concurrent sign-ups.
+  - **files-prisma — `prismaFilesStore()` fails fast** when the client has no
+    `file` model, like every other `*-prisma` factory (FA-070/I4).
+  - **permissions-sqlite — multi-permission grants are all-or-nothing**
+    (FA-070/I5): `grantToRole` / `grantToUser` run in one savepoint.
+
+### Minor Changes
+
+- b69ea05: MySQL no longer truncates long values silently (framework audit FA-070).
+  
+  On MySQL Prisma maps a bare `String` to `VARCHAR(191)`, and a server outside
+  strict mode cuts a longer value with only a warning: a webhook URL delivered
+  elsewhere, a file `path` stopped naming its object, JSON payloads stopped
+  parsing, and a truncated audit payload or hash broke the hash chain for good.
+  
+  - Each package ships **`schema.mysql.prisma`** (exported as
+    `@basaltkit/<pkg>/schema.mysql.prisma`): the same models with the free-text
+    columns widened (`@db.Text`, `@db.MediumText`, `@db.VarChar(255)`) and the
+    keys left at `VARCHAR(191)`. `comments-prisma`'s variant stores `mentions` as
+    `Json` (MySQL has no scalar lists); the store now reads either form.
+  - Every factory and store class takes an optional **`columnLimits`**
+    (`'mysql'` — the preset matching that schema, exported as
+    `<domain>MysqlColumnLimits` — or your own per-model limits, in characters or
+    `{ bytes }`). With it set, a value longer than its column is refused with
+    `ColumnLengthError` (`COLUMN_LENGTH_EXCEEDED`, 422) before anything is
+    written. The outbox's diagnostic `lastError` is shortened (marked
+    `…[truncated]`) instead, so `markFailed` still counts the attempt.
+  - `basalt prisma:sync` (`@basaltkit/prisma`) copies the MySQL variant when the
+    app's `datasource` provider is `mysql`, and warns about a package without one.
+  
+  Unset, nothing changes: PostgreSQL and SQLite are unaffected, and existing
+  calls keep their signatures (the option is a new trailing parameter).
+
+### Patch Changes
+
+- b69ea05: `WebhookEndpointIdInUseError` is now the `@basaltkit/webhooks` class.
+  
+  Both stores defined their own error with the same `code`
+  (`WEBHOOK_ENDPOINT_ID_IN_USE`) and `status` (409), so an `instanceof` check
+  against the class `@basaltkit/webhooks` exports — which `MemoryWebhookStore`
+  and `WebhookManager.register()` throw — missed a refusal from the SQLite or
+  Prisma store. They now throw that class and re-export it under the same name,
+  so existing imports from the store packages keep working and one `instanceof`
+  covers every store. The message now starts with `@basaltkit/webhooks:`.
+- Updated dependencies [b69ea05]
+- Updated dependencies [e54b7b1]
+  - @basaltkit/webhooks@3.0.0
+
 ## 1.2.0
 
 ### Minor Changes

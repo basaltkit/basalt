@@ -1,5 +1,33 @@
 # @basaltkit/tenancy
 
+## 3.0.0
+
+### Major Changes
+
+- b69ea05: Framework audit residual: stale verified custom-domain claims.
+  
+  A verified custom-domain claim never expired, and only the operator's `verify(tenantId, domain, { force: true })` — which needs the stale owner's tenant id — could displace it; the new owner of a lapsed domain had no supported path.
+  
+  - **`CustomDomains.reverify(domain)`** (system-only) re-checks whichever tenant holds the domain and un-verifies the claim when DNS definitively says the record is gone (NXDOMAIN, no TXT, no matching value). A timeout/SERVFAIL returns `dns-error` and changes nothing; the un-verify is conditional through `DomainStore.replace`, so a claim that changed hands meanwhile is left alone (`changed`). Returns `{ domain, tenantId, status }` (`DomainReverifyStatus`: `valid` | `revoked` | `dns-error` | `unverified` | `changed`), or `null` for an unknown domain.
+  - **`CustomDomains.reverifyAll({ domains? })`** runs it over every verified domain from the new optional `DomainStore.listVerified()` (implemented by `MemoryDomainStore`), or over the domains you pass; returns `{ checked, revoked, errors, results }`. Meant for a scheduled job.
+  - **A stale verified claim yields to a proven challenger.** With `challengeSecret` set, when the new owner publishes its `challenge()` record and calls `add()`, and the same lookup no longer shows the incumbent's record, the domain is handed over, verified. While the incumbent's record is still published, or the lookup fails, `add()` still throws `DomainTakenError`.
+  
+  **Why major:** a verified domain is no longer permanent — another tenant can take it over once the incumbent's TXT record is gone and the challenger's is published. Migration: keep the `_basalt-verify.<domain>` TXT record published for as long as a domain should stay verified (the docs already required this for `force` re-checks); schedule `reverifyAll()`; durable `DomainStore`s should implement `replace()` and `listVerified()`.
+- e54b7b1: Security fixes from the framework audit (FA-007..FA-011).
+  
+  - **Authoritative resolvers: no fall-through to a client header (FA-007).** `subdomainResolver`, `domainResolver` and `routeResolver` are now *authoritative* (new `TenantResolver.authoritative` flag; wrap a custom resolver with the new `authoritative(fn)` helper). They always run before fallback resolvers (`headerResolver`, unmarked custom ones), whatever the list order, and when one names a tenant that does not exist the request resolves to **no tenant** instead of handing the decision to `x-tenant-id`. `nosuch.app.com` + `x-tenant-id: globex` no longer resolves to `globex`, and `[headerResolver(), subdomainResolver()]` no longer lets the header override `acme.app.com`. Fallbacks still answer when no authoritative resolver named anything (bare apex, `www`, `localhost`). New `tenancyPlugin({ onConflict: 'error' })` runs every resolver and rejects disagreement with `TenantResolutionConflictError` (`TENANCY_CONFLICT`, 400); the default `'precedence'` applies the rule above.
+  - **The tenant-id grammar applies to resolution and `run()` (FA-008).** A resolver ref whose id fails `validateTenantId` (default `isValidTenantId`) — `Evil:x`, `../x`, a 10 KB string — resolves to no tenant without reaching `source.find`; a `{ domain }` ref that is not a hostname never reaches `findByDomain`. `tenancy.run()`, `provision(id)` and `destroy(id)` throw `InvalidTenantIdError` (400) for such an id (`destroy` before marking anything).
+  - **`normalizeDomain()` validates instead of URL-parsing (FA-009).** It now holds the value to the RFC 1123 hostname grammar (numeric `:port` and trailing dots stripped) and throws the new `InvalidDomainError` (`DOMAIN_INVALID`, 400) for userinfo (`acme.basalt.app@evil.com` used to become `evil.com`), paths, `%`-escapes, full-width/non-ASCII characters and IPv4/IPv6 literals. New `tryNormalizeDomain()` returns `null` instead; the Host resolvers use it, so such a Host matches nothing. IDNs must be given in `xn--` form (`domainToASCII()` from `node:url`).
+  - **Custom-domain squatting (FA-010).** Unverified claims expire: `CustomDomainsOptions.claimTtlMs` (default 72 h, `DEFAULT_CLAIM_TTL_MS`); after that another tenant's `add()` takes the domain over. With the new `challengeSecret` option, `challenge(tenantId, domain)` returns a per-tenant TXT record, and publishing it lets the real owner's `add()` take over a fresh unverified claim immediately, already verified (the verified TXT wins). New `reservedDomains` option refuses the platform apex and its subdomains with `DomainReservedError` (`DOMAIN_RESERVED`, 403). `DomainStore` gains an optional atomic `replace(expected, next)` (implemented by `MemoryDomainStore`).
+  - **`required.except` with a `/g` or `/y` RegExp is stable (FA-011).** `lastIndex` is reset before each test, so the exemption no longer alternates between requests.
+  
+  **Why major:** resolution defaults change. An app relying on an unknown subdomain/domain falling through to the header, on a header overriding the Host, or on custom resolvers listed before the built-ins taking precedence now resolves differently (mark such a resolver with `authoritative()` if its input is trusted). Tenant ids outside the configured grammar no longer resolve and `run()` rejects them — widen `validateTenantId` for legacy ids. `normalizeDomain()` throws on input it used to rewrite, and `CustomDomains.add()` refuses non-hostnames and unicode (non-punycode) domains.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+  - @basaltkit/core@1.5.0
+
 ## 2.0.0
 
 ### Major Changes

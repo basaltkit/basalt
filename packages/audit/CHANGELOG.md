@@ -1,5 +1,31 @@
 # @basaltkit/audit
 
+## 2.0.0
+
+### Major Changes
+
+- b69ea05: Framework audit residuals: `verifyAll()` coverage and `audit:verify --all=true`.
+  
+  - **`verifyAll()` visits tenants that have rows but no chain.** It used to verify only tenants listed by `chainTenants()`, so a tenant whose only rows were forged seq-less inserts was never checked. Such tenants are now verified too; their legacy cut-off defaults to the moment integrity began for the whole store (the earliest first entry of any chain), so a row written after it fails with `unchained-entry`. An explicit `legacyUntil` applies to them as well. The tenant list comes from the new optional `AuditStore.auditTenants()` (implemented by `MemoryAuditStore`); a store without it is scanned through `query({})`.
+  - **`audit:verify` parses its flags strictly.** `--all=true` (a string) used to be read as "not `--all`": it verified only the system chain and exited 0. `--all`, `--all=true|1|yes` now verify every chain, `--all=false|0|no` a single one, and any other value throws. `--all` combined with `--tenant`/`--from`/`--to`/`--expected-head` throws, and `--tenant` without a value throws instead of silently verifying the system chain.
+  
+  **Why major:** `verifyAll()` / `audit:verify --all` can now report `ok: false` (exit 1) for a trail they used to pass, and flag combinations that were silently ignored now throw. Migration: if old replicas wrote unchained rows for tenants that never got a chain after integrity was enabled, pass `legacyUntil` (the timestamp the rollout finished). Custom stores should implement `auditTenants()` (`SELECT DISTINCT tenant_id`) to avoid the full scan.
+- e54b7b1: Security and correctness fixes from the framework audit (FA-016..FA-020, FA-H17).
+  
+  - **Rows outside the chain no longer pass silently (FA-016).** `trail()` serves every row of the table, but `verify()` only read the chain, so a row inserted straight into the database (no `seq`, or a `seq` under `chain = NULL` / a foreign chain name) was listed as history while `verify()` stayed `ok: true`. `verify()` now also reads the tenant's rows outside its chain: rows written before the chain began stay *legacy* (counted in `unchained`, never broken); any other one is listed in the new `unverified` field (ids, at most 100) and fails with `reason: 'unchained-entry'`. The legacy cut-off defaults to the `at` of the chain's first entry and can be set with `verify({ legacyUntil })` (`0` = accept no legacy row) or `basalt audit:verify --legacy-until=<ms>`. New `trail({ chainedOnly: true })` reads only rows in their tenant's chain. `verifyAll()` reports a chain name that maps to no tenant as `'unknown-chain'`. New optional store method `readUnchained(tenantId, { since, limit })`, implemented by the memory, SQLite and Prisma stores (a custom store without it is checked through `query()`).
+  - **External anchor (FA-H17).** `verify({ expectedHead: { seq, hash } })` fails with `'truncated'` when the anchored entry is gone (deleting the tail leaves no gap) and `'head-mismatch'` when its hash differs; `verifyAll({ expectedHeads })` does the same per chain key, including a chain deleted wholesale. CLI: `--expected-head=<seq>:<hash>`.
+  - **Deep freeze (FA-017).** `record()` and `MemoryAuditStore` keep a deep-frozen copy of the payload, so mutating `entry.payload.x` can no longer rewrite the in-memory history (and break the chain). The caller's own object is never frozen.
+  - **Redaction gaps (FA-018).** Secret keys are matched on the key's words (`isSensitiveKey`, now exported): `pwd`, `privateKey`, `jwt`, `auth`, `accessKey`, `client_secret`, `dsn`, `connectionString`, `sessionId`… are masked, while `compass`, `bypass`, `author` and `sessionCount` no longer are. A `__proto__` / `constructor` / `prototype` key stays visible as an own property with the value `'[redacted]'` instead of making the subtree vanish into the copy's prototype. `redactSensitiveAndPii` now pseudonymizes phone-shaped values as the README promised — international form only (`+` and 8–15 digits), so order ids, dates and amounts are left alone.
+  - **Tenant scoping (FA-019).** `verifyAll()` inside a tenant context verifies and reports only that tenant's chain, like `verify()`. The README now spells out that a hand-built `new Audit(store)` assumes a single-tenant app (pass `tenancyActive: () => true` otherwise).
+  - **Filter validation (FA-020).** New `assertAuditQuery()`, applied by `trail()`, `systemTrail()` and every bundled store: `tenantId`, `actorId` and `event` must be strings, `since` a finite number, `chainedOnly` a boolean, `limit` a non-negative safe integer. Previously the Prisma store copied `{ not: 'x' }` (what `qs` makes of `?tenantId[not]=x`) into `where` — reading every other tenant — and passed an unvalidated `limit` to `take`.
+  
+  **Why major:** no export or option was removed, but behaviour that existing code can observe changed (all of it on broken or unsafe paths): `verify()` now fails where it wrongly passed (a row outside the chain written after it began — if that is a known, benign source such as replicas still running without `integrity` during a rolling deploy, pass `legacyUntil`); `trail()`/stores throw a `TypeError` for filters that were never valid for the declared types; the redactor masks more real secret keys and stops masking a few ordinary words (`compass`, `bypass`, `sessionCount`). `AuditVerifyResult` gained a required `unverified` field — code that constructs such results by hand (not just reads them) must add it.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+  - @basaltkit/core@1.5.0
+
 ## 1.6.0
 
 ### Minor Changes

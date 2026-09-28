@@ -1,5 +1,62 @@
 # @basaltkit/drives
 
+## 0.3.0
+
+### Minor Changes
+
+- e53db52: Framework audit, pass 2, section E (FA-072..FA-076): drives hardening.
+  
+  **`@basaltkit/drives` (0.x — minor is the breaking slot)**
+  
+  - **Signed listing cursors (FA-072/FA-073).** `listItems()` now returns `bkl1.<adapter cursor>.<mac>`, MAC-bound (key derived from `secret`) to the tenant and connection, and refuses any other cursor with `DRIVE_ACCESS_DENIED` before the adapter sees it. A Graph cursor is a URL fetched with the connection's bearer token, so a caller-authored one could read another drive. *Migration:* pass cursors back unchanged; a cursor issued before the upgrade or under a rotated `secret` must be dropped (list again from the start). Stored sync cursors are unaffected.
+  - **Refresh race (FA-074).** A worker told `invalid_grant` now invalidates only by compare-and-set, and only if the row still holds the rejected refresh token (otherwise it adopts the newer credentials); a winner that finds itself invalidated by such a loser restores the connection with its fresh tokens. No API change.
+  - **Per-provider replay keys (FA-075).** The replay guard no longer reads `x-goog-message-number` from every provider; it keys on the new optional `DriveNotificationResult.replayKey` or a digest of the raw body. *Migration (custom adapters):* report `replayKey` if your vendor's body does not distinguish deliveries.
+  - **FA-076.** `DriveSecretBox` pins a 16-byte GCM tag (truncated tags refused) and rejects NUL in the AAD context; watch secrets are stored as a `sha256:` digest (legacy plain rows still match); `timeoutMs` is documented as an inactivity timeout and now also bounds each wait for response headers, with a new opt-in whole-exchange `deadlineMs` (`DrivesOptions`, `DriveFetchOptions`, `GuardedRequestInit`); the OAuth callback echoes only a well-formed `?error=` code; the anonymous notification route answers an unknown provider with `DRIVE_NOTIFICATION_INVALID` instead of listing registered providers.
+  
+  **Adapters (major: `rootId` confinement now refuses calls that used to succeed)**
+  
+  - **Root confinement (FA-073).** With a `rootId`, a `folderId`, `getItem`, `download` and an upload target outside the root are refused with `DRIVE_ACCESS_DENIED` (`get` returns `null`). Google walks `parents` (resolving the `root` alias); Microsoft walks `parentReference.id` for an `item:` root (new `ancestryMaxDepth` option); Dropbox compares `path_lower` (lexically for paths, one `get_metadata` for `id:`/`ns:`, the download's `Dropbox-API-Result` before its body is read). *Migration:* a connection that relied on reaching outside its root must be reconnected with a wider root (or none).
+  - `@basaltkit/drives-google` reports `X-Goog-Message-Number` as `replayKey`. Requires `@basaltkit/drives` ≥ 0.3.
+- e54b7b1: The single-tenant store key is a reserved sentinel (framework audit, FA-030 — same fix as `@basaltkit/files`).
+  
+  `SINGLE_TENANT_SCOPE` is now `'@single'` instead of `'default'`. `'default'` is a valid tenant id, so in an app without `@basaltkit/tenancy` a request carrying a tenant named `default` could `list` the app's drive connections, read and import through them, and `disconnect` them. `@` is outside the tenant-id grammar, and a context or explicit tenant equal to the sentinel is refused with the new `DriveTenantReservedError` (`DRIVE_TENANT_RESERVED`, 400).
+  
+  The sentinel surfaces as `connection.tenantId`, but it is a store key, not a tenant id: in a single-tenant app leave `tenantId` out of calls instead of passing it back. The engine does so internally (`completeAuthorization` → `connect`, `importItem` → `download`), and `filesSink` no longer forwards it to `@basaltkit/files` — before, a single-tenant import uploaded under the tenant `'default'` rather than the files single-tenant key.
+  
+  **Breaking (0.x minor) — migration:** a single-tenant app with persisted connections must re-key them once. Plain SQL is not enough: each `secret` is sealed with its `tenantId` as AES-GCM associated data, so re-seal it with the same key ring `Drives` uses:
+  
+  ```ts
+  import { DriveSecretBox, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
+  
+  const box = new DriveSecretBox(keys)
+  for (const row of await db.driveConnection.findMany({ where: { tenantId: 'default' } })) {
+    const context = { connectionId: row.id, provider: row.provider }
+    const plain = box.open(row.secret, { ...context, tenantId: 'default' })
+    const secret = box.seal(plain, { ...context, tenantId: SINGLE_TENANT_SCOPE })
+    await db.driveConnection.update({ where: { id: row.id }, data: { tenantId: SINGLE_TENANT_SCOPE, secret } })
+  }
+  ```
+  
+  then move the import ledger (`UPDATE <ledger table> SET "tenantId" = '@single' WHERE "tenantId" = 'default'`). Skip it if `default` was ever a real tenant in that database. An authorization started before the upgrade fails its callback once (its `state` names the old key). No legacy fallback read is kept on purpose: it would re-open the collision in the other direction.
+
+### Patch Changes
+
+- e54b7b1: 502 errors no longer echo upstream detail to HTTP clients (framework audit, FA-041 follow-up).
+  
+  - `OAuthExchangeError` (`AUTH_OAUTH_EXCHANGE_FAILED`) quoted the provider's reply — `error_description`, an HTTP status, the discovery URL. It now sets `expose = false`: the client gets the code and `Bad gateway.`, the log keeps the full message.
+  - `DriveHostNotAllowedError` (`DRIVE_HOST_NOT_ALLOWED`) named the host it refused to reach and why, which made every download route an oracle for internal host names. Same treatment; the message and `details` still reach the log, `drive:sync_failed` and the audit trail unchanged.
+  
+  Requires `@basaltkit/http` with `expose = false` support (same release).
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e54b7b1]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+  - @basaltkit/webhooks@3.0.0
+
 ## 0.2.0
 
 ### Minor Changes

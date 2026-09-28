@@ -1,5 +1,41 @@
 # @basaltkit/fastify
 
+## 2.5.0
+
+### Minor Changes
+
+- e53db52: Wire-level parity with Express and Hono (framework audit FA-078…FA-080).
+  
+  - An `sse()` response keeps the headers set before it (CORS, security headers,
+    rate-limit counters, `x-request-id`): the hijacked reply used to drop them, so
+    a cross-origin `EventSource` failed its CORS check. The headers are flushed at
+    once, so a stream that starts quiet still opens.
+  - Structured `+json` bodies (`application/merge-patch+json`,
+    `application/vnd.api+json`) are parsed as JSON, as on every adapter (they were
+    answered `415`). A malformed JSON body answers `400 BAD_REQUEST` with the same
+    message as Express and Hono ("Malformed request body.").
+  - After-hooks (metrics, tracing) now run for every request, including hijacked
+    `sse()` replies and responses the client abandoned — Fastify's `onResponse`
+    skipped both, so `http_requests_in_flight` leaked. A failing after-hook is
+    reported through `onError` (`AFTER_HOOK_FAILED`).
+- b69ea05: Boot-time route-meta validation and side-effect-free route visibility (framework audit FA-044 / FA-035 residuals).
+  
+  - **Route-meta validators.** Plugins can register a `RouteMetaValidator` in the new `META_VALIDATORS_BUCKET` (`'http:meta-validators'`) to check the *values* their meta keys carry. Every adapter (Fastify, Express, Hono — identically, covered by the shared parity suite) runs them over its full route list at boot, right after the guarded-meta check, and refuses to boot with the new `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`, listing every `route: problem`). A validator that throws counts as a problem. `allowUnguardedMeta` never waives them. `assertRoutesGuarded(routes, container)` now runs them too, and `assertRouteMetaValid(routes, container)` runs them alone — for code driving `runRoute()` without an adapter. Passing a plain `Set` of claimed keys keeps the old behaviour (no validators).
+  - **Route visibility.** New `ROUTE_VISIBILITY_BUCKET` (`'http:route-visibility'`) + `RouteVisibilityCheck` contract: a pure, side-effect-free companion of a guard ("could this caller possibly pass?") for surfaces that list routes. `isRouteVisible(route, context, container)` hides a `meta.auth` route from a caller without `context.user` (only when a guard claimed `auth`) and applies every registered check (a throwing check hides the route). Visibility is never authorization.
+  - The adapters now pass the container to `assertRoutesGuarded` instead of a `Set`.
+
+### Patch Changes
+
+- e54b7b1: Fix `idempotencyPlugin` for handlers that return their payload (FA-001).
+  
+  With `idempotencyPlugin()`, a route whose handler *returns* a value — the shape every `route()` example uses — was never replayed: the handler ran on every retry of the same `Idempotency-Key`, and every response reported a spurious `500` (`ERR_HTTP_HEADERS_SENT`) to `onError`. Only handlers that called `reply.code().send()` themselves were covered. The adapter now tracks whether it sent the reply itself (Fastify's `reply.sent` stays `false` while an async `onSend` hook runs) and returns the reply to Fastify instead of resolving with `undefined`, so the response is sent exactly once. This also fixes the same double send for thrown errors and for edge pre-hooks (a rate-limit `429`) whenever any async `onSend` hook is installed.
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+
 ## 2.4.0
 
 ### Minor Changes
