@@ -78,6 +78,13 @@ throws its own errors (locked database, disk I/O) unchanged. The authorization
 errors a client sees — `PERMISSION_DENIED`, `AUTH_REQUIRED`,
 `PERMISSION_META_INVALID` — come from `@basaltkit/permissions`.
 
+Direct writes (`assignRole`, `removeRole`, `grantToRole`, `grantToUser`) throw a
+`TypeError` for an empty or non-string user id, role name or scope, and for a
+permission list that is not an array of non-empty strings — nothing is written.
+`''`, `null` and `undefined` would otherwise share one "nobody" row whose grants
+apply to every caller with a missing id. Seed scripts that write through the
+store directly get the same guarantee as writes through the `Gate`.
+
 The one failure worth naming: on Node 22.x, importing this package without
 `--experimental-sqlite` fails at load with an unknown-builtin error for
 `node:sqlite`. Node 24 needs no flag.

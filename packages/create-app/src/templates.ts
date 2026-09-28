@@ -705,6 +705,36 @@ model AuthTokenVersion {
   version Int    @default(0)
 
   @@map("auth_token_versions")
+}
+
+model AuthAccountLink {
+  // SHA-256 (hex) of provider + NUL + subject — the natural key hashed so the
+  // primary key stays short on MySQL (an OIDC \`sub\` may be 255 characters).
+  id        String   @id
+  provider  String
+  subject   String
+  userId    String
+  email     String
+  createdAt DateTime
+
+  @@index([userId])
+  @@map("auth_account_links")
+}
+
+model AuthPasskey {
+  // SHA-256 (hex) of the credential id (credential ids reach 1 023 bytes).
+  id           String    @id
+  credentialId String
+  userId       String
+  publicKey    String
+  counter      BigInt
+  transports   String?
+  deviceName   String?
+  createdAt    DateTime
+  lastUsedAt   DateTime?
+
+  @@index([userId])
+  @@map("auth_passkeys")
 }`,
   teams: `model TeamMembership {
   tenantId  String

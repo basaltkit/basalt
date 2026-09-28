@@ -379,6 +379,7 @@ project), and `createProvider` (to inject a mock model — no network).
 | `--host=<host>` | string | `127.0.0.1` | Bind address; only read when `--http` is present. Binding off loopback requires `--token` |
 | `--token=<secret>` | string | `BASALT_AI_MCP_TOKEN` | HTTP only: require `Authorization: Bearer <secret>` on every request. Mandatory for a non-loopback `--host` |
 | `--allowed-hosts=<a,b>` | comma list | loopback names only | HTTP only: extra `Host` hostnames to accept when bound off loopback |
+| `--sessions` | boolean | off (stateless) | HTTP only: turn on `Mcp-Session-Id` sessions, so a `notifications/cancelled` POSTed separately cancels a running call (see `sessions` below) |
 | `--allow-unconfirmed-apply` | boolean | off | Let `basalt_make` apply when the client cannot confirm (no elicitation). Off by default: such an apply is refused |
 
 ### `buildAiMcpServer(options)` · `createAiMcpServer(options)`
@@ -414,6 +415,8 @@ listener.
 | `token` | `string` | — | Require `Authorization: Bearer <token>` (constant-time compare, via `bearerAuthorizer`). Needed for a non-loopback `host` |
 | `authorize` | `(req) => boolean \| Promise<boolean>` | — | Custom authentication instead of `token`; `false` answers `401` |
 | `maxBodyBytes` | `number` | `1048576` | Larger bodies get `413` |
+| `sessions` | `boolean \| { ttlMs?, maxSessions? }` | `false` | Streamable-HTTP sessions: `initialize` answers with an `Mcp-Session-Id`, every later request must carry it (`400` without, `404` unknown/expired/foreign — re-initialize), `DELETE` ends it, and a separate `notifications/cancelled` cancels the call it names within the same session only. Off by default so header-less clients keep working |
+| `principal` | `(req) => string \| undefined` | hash of `Authorization` | Who owns a session — a request resolving to another principal gets `404` |
 
 ### Tool arguments
 
@@ -453,6 +456,8 @@ produces a protocol error code.
 | `Forbidden: host/origin not allowed` | HTTP `403` | `serveHttp` | The HTTP guard rejected a foreign `Host`/`Origin` before dispatch |
 | `Unauthorized` | HTTP `401` | `serveHttp` | `--token` is set and the request's bearer token is missing/wrong |
 | `failed to start HTTP server — serveHttp: refusing to bind non-loopback host …` | startup | bin | `--host` off loopback without `--token` |
+| `Bad Request: Mcp-Session-Id header required …` | HTTP `400` | `serveHttp` | `--sessions` is on and the request carries no session header — `initialize` first |
+| `Session not found (expired or unknown) — initialize again` | HTTP `404` | `serveHttp` | `--sessions` is on and the session id is unknown, expired or opened by another token |
 
 - **The agent can't see my project** — check `--cwd` points at the project root
   (where `package.json` / `prisma/schema.prisma` live). Resources always use the

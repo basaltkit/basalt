@@ -1,6 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { BasaltError } from '@basaltkit/core'
+import { AccountEmailAmbiguousError, EmailTakenError } from '@basaltkit/auth'
 import type {
+  AccountLink,
+  AccountLinkStore,
   ApiKeyFilter,
   ApiKeyRecord,
   ApiKeyStore,
@@ -10,6 +13,8 @@ import type {
   AuthUser,
   MfaRecord,
   MfaStore,
+  PasskeyCredential,
+  PasskeyStore,
   PublicUser,
   RefreshRecord,
   RefreshTokenStore,
@@ -19,6 +24,17 @@ import type {
   UserPatch,
   UserSource,
 } from '@basaltkit/auth'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/auth-prisma'
 
 /**
  * Prisma-backed implementations of every `@basaltkit/auth` store — the reference
@@ -85,6 +101,25 @@ interface PMfa {
   recoveryCodes: string[]
   lastUsedStep: number | null
 }
+interface PAccountLink {
+  id: string
+  provider: string
+  subject: string
+  userId: string
+  email: string
+  createdAt: Date
+}
+interface PPasskey {
+  id: string
+  credentialId: string
+  userId: string
+  publicKey: string
+  counter: bigint | number
+  transports: string | null
+  deviceName: string | null
+  createdAt: Date
+  lastUsedAt: Date | null
+}
 
 /**
  * The minimal Prisma delegate surface the stores call. A real `PrismaClient`
@@ -102,9 +137,9 @@ interface PMfa {
 export interface PrismaAuthClient {
   authUser: {
     findUnique(a: any): Promise<PUser | null>
-    findFirst(a: any): Promise<PUser | null>
-    // Only ever called with a `select` of the non-credential columns, so the
-    // return type is narrowed to those (a full row is assignable to it).
+    // Typed as the non-credential columns (a full row is assignable to it):
+    // directory lookups `select` only those; `findByEmail` reads full rows
+    // (no `select`) and says so where it calls it.
     findMany(a: any): Promise<PUserContact[]>
     create(a: any): Promise<PUser>
     update(a: any): Promise<PUser>
@@ -142,6 +177,25 @@ export interface PrismaAuthClient {
     findUnique(a: any): Promise<{ userId: string; version: number } | null>
     upsert(a: any): Promise<{ userId: string; version: number }>
   }
+  /**
+   * `AuthAccountLink` (OAuth/OIDC provider subject → user). Optional so a client
+   * generated before 2.0 still type-checks; {@link PrismaAccountLinkStore}
+   * throws an actionable error at first use when it is missing.
+   */
+  authAccountLink?: {
+    findUnique(a: any): Promise<PAccountLink | null>
+    findMany(a: any): Promise<PAccountLink[]>
+    create(a: any): Promise<PAccountLink>
+    deleteMany(a: any): Promise<{ count: number }>
+  }
+  /** `AuthPasskey` (WebAuthn credentials). Optional, like {@link authAccountLink}. */
+  authPasskey?: {
+    findUnique(a: any): Promise<PPasskey | null>
+    findMany(a: any): Promise<PPasskey[]>
+    create(a: any): Promise<PPasskey>
+    updateMany(a: any): Promise<{ count: number }>
+    deleteMany(a: any): Promise<{ count: number }>
+  }
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -154,6 +208,68 @@ const ms = (d: Date): number => d.getTime()
 const at = (n: number): Date => new Date(n)
 /** SHA-256 of a session id — only this is persisted, never the raw cookie value. */
 const hashSessionId = (id: string): string => createHash('sha256').update(id).digest('hex')
+/**
+ * A string-list column: `String[]` on PostgreSQL, a `Json` array on MySQL
+ * (`schema.mysql.prisma` — MySQL has no scalar lists). Anything else reads as empty.
+ */
+const stringList = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
+
+// --- column limits (MySQL) --------------------------------------------------
+
+export type AuthColumnLimits = ColumnLimits<{
+  AuthUser: 'id' | 'email' | 'passwordHash'
+  AuthSession: 'id' | 'userId'
+  AuthRefreshToken: 'token' | 'familyId' | 'userId'
+  AuthToken: 'token' | 'userId' | 'purpose'
+  AuthApiKey: 'id' | 'name' | 'prefix' | 'hash' | 'tenantId' | 'userId'
+  AuthMfa: 'userId' | 'secret'
+  AuthTokenVersion: 'userId'
+  AuthAccountLink: 'id' | 'provider' | 'subject' | 'userId' | 'email'
+  AuthPasskey: 'id' | 'credentialId' | 'userId' | 'publicKey' | 'transports' | 'deviceName'
+}>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Keys and hashed tokens stay VARCHAR(191); a user's email
+ * is VARCHAR(254), the longest valid address; password hashes, sealed TOTP
+ * secrets, provider subjects, credential ids and public keys are TEXT.
+ * Spread it to override one column after widening it.
+ */
+export const authMysqlColumnLimits: AuthColumnLimits = {
+  AuthUser: { id: V, email: 254, passwordHash: MYSQL_TEXT },
+  AuthSession: { id: V, userId: V },
+  AuthRefreshToken: { token: V, familyId: V, userId: V },
+  AuthToken: { token: V, userId: V, purpose: V },
+  AuthApiKey: { id: V, name: MYSQL_TEXT, prefix: V, hash: V, tenantId: V, userId: V },
+  AuthMfa: { userId: V, secret: MYSQL_TEXT },
+  AuthTokenVersion: { userId: V },
+  AuthAccountLink: { id: V, provider: V, subject: MYSQL_TEXT, userId: V, email: MYSQL_TEXT },
+  AuthPasskey: {
+    id: V,
+    credentialId: MYSQL_TEXT,
+    userId: V,
+    publicKey: MYSQL_TEXT,
+    transports: MYSQL_TEXT,
+    deviceName: MYSQL_TEXT,
+  },
+}
+
+/** Options every auth store (and {@link prismaAuthStores}) takes. */
+export interface PrismaAuthStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a cut
+   * password hash never verifies and a cut sealed TOTP secret no longer opens.
+   * `'mysql'` uses the limits of the bundled `schema.mysql.prisma`; pass an
+   * object for a schema of your own. Default: unchecked (PostgreSQL and
+   * SQLite store any length).
+   */
+  columnLimits?: 'mysql' | AuthColumnLimits
+}
+
+const limitsOf = (options: PrismaAuthStoreOptions): AuthColumnLimits | undefined =>
+  resolveColumnLimits(PKG, options.columnLimits, authMysqlColumnLimits)
 
 // --- users ------------------------------------------------------------------
 
@@ -175,49 +291,62 @@ const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, '\
  */
 const DEFAULT_ID_CHUNK_SIZE = 500
 
-export interface PrismaUserSourceOptions {
+export interface PrismaUserSourceOptions extends PrismaAuthStoreOptions {
   /** Ids per `IN (…)` query in `findByIds`. Default {@link DEFAULT_ID_CHUNK_SIZE}. */
   idChunkSize?: number
 }
 
 export class PrismaUserSource implements UserSource {
   private readonly idChunkSize: number
+  private readonly limits: AuthColumnLimits | undefined
 
   constructor(
     private readonly client: PrismaAuthClient,
     options: PrismaUserSourceOptions = {},
   ) {
     this.idChunkSize = Math.max(1, Math.trunc(options.idChunkSize ?? DEFAULT_ID_CHUNK_SIZE))
+    this.limits = limitsOf(options)
   }
+
+  /** Set once the provider rejects `mode: 'insensitive'` (MySQL, SQLite), so it is not retried per lookup. */
+  private insensitiveUnsupported = false
 
   /**
    * Emails are case-insensitive identities: new rows are stored canonical
-   * (trimmed, lowercased) and looked up that way; a row written before that, in
-   * mixed case, is still found through a case-insensitive fallback query.
+   * (trimmed, lowercased). Rows written before that may be mixed-case, so on
+   * PostgreSQL the lookup is case-insensitive and **refuses ambiguity**: when
+   * two rows differ only in letter case it throws
+   * {@link AccountEmailAmbiguousError} instead of picking one (run
+   * {@link normalizeAuthUserEmails} to find and fix them). On MySQL the column
+   * collation is already case-insensitive and the unique index rules out
+   * case-variant duplicates, so the exact lookup is authoritative.
    */
   async findByEmail(email: string): Promise<AuthUser | null> {
     const canonical = email.trim().toLowerCase()
-    const r = await this.client.authUser.findUnique({ where: { email: canonical } })
-    if (r) return toUser(r)
-    try {
-      // On PostgreSQL Prisma compiles an insensitive `equals` to `email ILIKE $1`
-      // WITHOUT escaping the value, so `_` and `%` (both legal in an address)
-      // would be wildcards and `a_min@corp.test` would resolve to
-      // `admin@corp.test` (account takeover through social login, a fresh
-      // login-throttle budget per pattern). Escape them, and re-check the match
-      // in code so no provider's pattern semantics can return another account.
-      const legacy = await this.client.authUser.findFirst({
-        where: { email: { equals: escapeLikePattern(canonical), mode: 'insensitive' } },
-        orderBy: { id: 'asc' },
-      })
-      return legacy && legacy.email.trim().toLowerCase() === canonical ? toUser(legacy) : null
-    } catch (err) {
-      // `mode: 'insensitive'` is PostgreSQL/MongoDB-only; providers without it
-      // (MySQL, SQLite) already compare with a case-insensitive collation or
-      // hold only canonical rows, so the exact lookup above is authoritative.
-      if ((err as { name?: unknown } | null)?.name === 'PrismaClientValidationError') return null
-      throw err
+    if (!this.insensitiveUnsupported) {
+      try {
+        // On PostgreSQL Prisma compiles an insensitive `equals` to `email ILIKE $1`
+        // WITHOUT escaping the value, so `_` and `%` (both legal in an address)
+        // would be wildcards and `a_min@corp.test` would resolve to
+        // `admin@corp.test` (account takeover through social login, a fresh
+        // login-throttle budget per pattern). Escape them, and re-check the match
+        // in code so no provider's pattern semantics can return another account.
+        const rows = (await this.client.authUser.findMany({
+          where: { email: { equals: escapeLikePattern(canonical), mode: 'insensitive' } },
+          orderBy: { id: 'asc' },
+          take: 2,
+        })) as PUser[]
+        const matches = rows.filter((r) => r.email.trim().toLowerCase() === canonical)
+        if (matches.length > 1) throw new AccountEmailAmbiguousError(canonical)
+        return matches[0] ? toUser(matches[0]) : null
+      } catch (err) {
+        // `mode: 'insensitive'` is PostgreSQL/MongoDB-only.
+        if ((err as { name?: unknown } | null)?.name !== 'PrismaClientValidationError') throw err
+        this.insensitiveUnsupported = true
+      }
     }
+    const r = await this.client.authUser.findUnique({ where: { email: canonical } })
+    return r ? toUser(r) : null
   }
 
   async findById(id: string): Promise<AuthUser | null> {
@@ -248,11 +377,25 @@ export class PrismaUserSource implements UserSource {
     })
   }
 
+  /**
+   * Refuses an email that already exists in **any** letter case
+   * ({@link EmailTakenError}): the `@unique` index on PostgreSQL is
+   * case-sensitive, so a legacy `Bob@x.test` would not stop a new `bob@x.test`.
+   * A concurrent insert of the same canonical email loses on the index (P2002)
+   * and gets the same error.
+   */
   async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
-    const r = await this.client.authUser.create({
-      data: { id: randomUUID(), email: data.email.trim().toLowerCase(), passwordHash: data.passwordHash, emailVerified: false },
-    })
-    return toUser(r)
+    const email = data.email.trim().toLowerCase()
+    const row = { id: randomUUID(), email, passwordHash: data.passwordHash, emailVerified: false }
+    assertColumnLengths(PKG, this.limits, 'AuthUser', row)
+    if (await this.findByEmail(email)) throw new EmailTakenError()
+    try {
+      const r = await this.client.authUser.create({ data: row })
+      return toUser(r)
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code === 'P2002') throw new EmailTakenError()
+      throw err
+    }
   }
 
   async update(id: string, patch: UserPatch): Promise<AuthUser | null> {
@@ -260,6 +403,7 @@ export class PrismaUserSource implements UserSource {
     if (patch.passwordHash !== undefined) data.passwordHash = patch.passwordHash
     if (patch.emailVerified !== undefined) data.emailVerified = patch.emailVerified
     if (Object.keys(data).length === 0) return this.findById(id)
+    assertColumnLengths(PKG, this.limits, 'AuthUser', data)
     const r = await this.client.authUser.update({ where: { id }, data })
     return toUser(r)
   }
@@ -279,18 +423,25 @@ const toAuthToken = (r: PAuthToken): AuthTokenRecord => {
 }
 
 export class PrismaAuthTokenStore implements AuthTokenStore {
-  constructor(private readonly client: PrismaAuthClient) {}
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async create(record: AuthTokenRecord): Promise<void> {
-    await this.client.authToken.create({
-      data: {
-        token: record.token,
-        userId: record.userId,
-        purpose: record.purpose,
-        expiresAt: at(record.expiresAt),
-        usedAt: record.usedAt !== undefined ? at(record.usedAt) : null,
-      },
-    })
+    const data = {
+      token: record.token,
+      userId: record.userId,
+      purpose: record.purpose,
+      expiresAt: at(record.expiresAt),
+      usedAt: record.usedAt !== undefined ? at(record.usedAt) : null,
+    }
+    assertColumnLengths(PKG, this.limits, 'AuthToken', data)
+    await this.client.authToken.create({ data })
   }
 
   async find(token: string): Promise<AuthTokenRecord | null> {
@@ -316,16 +467,23 @@ export class PrismaAuthTokenStore implements AuthTokenStore {
 // --- sessions ---------------------------------------------------------------
 
 export class PrismaSessionStore implements SessionStore {
-  constructor(private readonly client: PrismaAuthClient) {}
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async create(userId: string, ttlMs: number): Promise<SessionRecord> {
     // Mint a raw id for the client (cookie), but store its hash so a dump of the
     // session table can't be replayed as a live session.
     const rawId = randomBytes(32).toString('base64url')
     const expiresAt = Date.now() + ttlMs
-    await this.client.authSession.create({
-      data: { id: hashSessionId(rawId), userId, expiresAt: at(expiresAt) },
-    })
+    const data = { id: hashSessionId(rawId), userId, expiresAt: at(expiresAt) }
+    assertColumnLengths(PKG, this.limits, 'AuthSession', data)
+    await this.client.authSession.create({ data })
     return { id: rawId, userId, expiresAt }
   }
 
@@ -366,18 +524,25 @@ const toRefresh = (r: PRefresh): RefreshRecord => {
 }
 
 export class PrismaRefreshTokenStore implements RefreshTokenStore {
-  constructor(private readonly client: PrismaAuthClient) {}
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async create(record: RefreshRecord): Promise<void> {
-    await this.client.authRefreshToken.create({
-      data: {
-        token: record.token,
-        familyId: record.familyId,
-        userId: record.userId,
-        expiresAt: at(record.expiresAt),
-        usedAt: record.usedAt !== undefined ? at(record.usedAt) : null,
-      },
-    })
+    const data = {
+      token: record.token,
+      familyId: record.familyId,
+      userId: record.userId,
+      expiresAt: at(record.expiresAt),
+      usedAt: record.usedAt !== undefined ? at(record.usedAt) : null,
+    }
+    assertColumnLengths(PKG, this.limits, 'AuthRefreshToken', data)
+    await this.client.authRefreshToken.create({ data })
   }
 
   async find(token: string): Promise<RefreshRecord | null> {
@@ -411,7 +576,7 @@ const toApiKey = (r: PApiKey): ApiKeyRecord => {
     name: r.name,
     prefix: r.prefix,
     hash: r.hash,
-    scopes: r.scopes,
+    scopes: stringList(r.scopes),
     createdAt: ms(r.createdAt),
   }
   if (r.expiresAt !== null) rec.expiresAt = ms(r.expiresAt)
@@ -482,28 +647,35 @@ const apiKeyError = (err: unknown): unknown =>
   isApiKeySchemaOutdated(err) ? new ApiKeySchemaOutdatedError(err) : err
 
 export class PrismaApiKeyStore implements ApiKeyStore {
-  constructor(private readonly client: PrismaAuthClient) {}
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   // Each query is wrapped so an un-migrated database surfaces as
   // AUTH_API_KEY_SCHEMA_OUTDATED instead of a raw "column does not exist".
 
   async create(record: ApiKeyRecord): Promise<void> {
+    const data = {
+      id: record.id,
+      name: record.name,
+      prefix: record.prefix,
+      hash: record.hash,
+      tenantId: record.tenantId ?? null,
+      userId: record.userId ?? null,
+      scopes: record.scopes,
+      createdAt: at(record.createdAt),
+      expiresAt: record.expiresAt !== undefined ? at(record.expiresAt) : null,
+      lastUsedAt: record.lastUsedAt !== undefined ? at(record.lastUsedAt) : null,
+      revokedAt: record.revokedAt !== undefined ? at(record.revokedAt) : null,
+    }
+    assertColumnLengths(PKG, this.limits, 'AuthApiKey', data)
     try {
-      await this.client.authApiKey.create({
-        data: {
-          id: record.id,
-          name: record.name,
-          prefix: record.prefix,
-          hash: record.hash,
-          tenantId: record.tenantId ?? null,
-          userId: record.userId ?? null,
-          scopes: record.scopes,
-          createdAt: at(record.createdAt),
-          expiresAt: record.expiresAt !== undefined ? at(record.expiresAt) : null,
-          lastUsedAt: record.lastUsedAt !== undefined ? at(record.lastUsedAt) : null,
-          revokedAt: record.revokedAt !== undefined ? at(record.revokedAt) : null,
-        },
-      })
+      await this.client.authApiKey.create({ data })
     } catch (err) {
       throw apiKeyError(err)
     }
@@ -561,7 +733,14 @@ export class PrismaApiKeyStore implements ApiKeyStore {
 // --- MFA --------------------------------------------------------------------
 
 export class PrismaMfaStore implements MfaStore {
-  constructor(private readonly client: PrismaAuthClient) {}
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async get(userId: string): Promise<MfaRecord | null> {
     const r = await this.client.authMfa.findUnique({ where: { userId } })
@@ -569,7 +748,7 @@ export class PrismaMfaStore implements MfaStore {
     return {
       secret: r.secret,
       enabled: r.enabled,
-      recoveryCodes: r.recoveryCodes,
+      recoveryCodes: stringList(r.recoveryCodes),
       ...(r.lastUsedStep !== null ? { lastUsedStep: r.lastUsedStep } : {}),
     }
   }
@@ -581,6 +760,7 @@ export class PrismaMfaStore implements MfaStore {
       recoveryCodes: record.recoveryCodes,
       lastUsedStep: record.lastUsedStep ?? null,
     }
+    assertColumnLengths(PKG, this.limits, 'AuthMfa', { userId, ...data })
     await this.client.authMfa.upsert({
       where: { userId },
       create: { userId, ...data },
@@ -606,9 +786,10 @@ export class PrismaMfaStore implements MfaStore {
     for (let attempt = 0; attempt < 5; attempt++) {
       const r = await this.client.authMfa.findUnique({ where: { userId } })
       if (!r || !r.enabled) return false
-      const index = r.recoveryCodes.indexOf(hash)
+      const codes = stringList(r.recoveryCodes)
+      const index = codes.indexOf(hash)
       if (index === -1) return false
-      const next = r.recoveryCodes.filter((_, i) => i !== index)
+      const next = codes.filter((_, i) => i !== index)
       const { count } = await this.client.authMfa.updateMany({
         where: { userId, recoveryCodes: { equals: r.recoveryCodes } },
         data: { recoveryCodes: next },
@@ -620,19 +801,249 @@ export class PrismaMfaStore implements MfaStore {
 }
 
 export class PrismaTokenVersionStore implements TokenVersionStore {
-  constructor(private readonly client: PrismaAuthClient) {}
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async get(userId: string): Promise<number> {
     return (await this.client.authTokenVersion.findUnique({ where: { userId } }))?.version ?? 0
   }
 
   async increment(userId: string): Promise<number> {
+    assertColumnLengths(PKG, this.limits, 'AuthTokenVersion', { userId })
     const r = await this.client.authTokenVersion.upsert({
       where: { userId },
       create: { userId, version: 1 },
       update: { version: { increment: 1 } },
     })
     return r.version
+  }
+}
+
+// --- legacy mixed-case emails ------------------------------------------------
+
+export interface NormalizeEmailsReport {
+  /** Rows whose email was rewritten to its canonical form (or would be, on a dry run). */
+  normalized: Array<{ id: string; from: string; to: string }>
+  /**
+   * Canonical emails held by more than one row. They are left untouched —
+   * which account is the real one is a decision for a human (merge, rename or
+   * delete the others); until then lookups of that email throw
+   * `AUTH_EMAIL_AMBIGUOUS`.
+   */
+  conflicts: Array<{ email: string; ids: string[] }>
+}
+
+/**
+ * One-off migration for users written before emails were canonicalised
+ * (trimmed, lowercased): rewrites every non-canonical email that has no
+ * case-variant twin, and reports the twins. Idempotent; pages through the table
+ * by id. Run it once after upgrading (`dryRun: true` to preview).
+ */
+export async function normalizeAuthUserEmails(
+  client: Pick<PrismaAuthClient, 'authUser'>,
+  options: { dryRun?: boolean; pageSize?: number } = {},
+): Promise<NormalizeEmailsReport> {
+  const pageSize = Math.max(1, Math.trunc(options.pageSize ?? 1000))
+  const groups = new Map<string, Array<{ id: string; email: string }>>()
+  let cursor: string | undefined
+  for (;;) {
+    const rows = await client.authUser.findMany({
+      ...(cursor !== undefined ? { where: { id: { gt: cursor } } } : {}),
+      select: { id: true, email: true },
+      orderBy: { id: 'asc' },
+      take: pageSize,
+    })
+    for (const r of rows) {
+      const canonical = r.email.trim().toLowerCase()
+      const group = groups.get(canonical)
+      if (group) group.push({ id: r.id, email: r.email })
+      else groups.set(canonical, [{ id: r.id, email: r.email }])
+    }
+    if (rows.length < pageSize) break
+    cursor = rows[rows.length - 1]!.id
+  }
+  const report: NormalizeEmailsReport = { normalized: [], conflicts: [] }
+  for (const [canonical, rows] of groups) {
+    if (rows.length > 1) {
+      report.conflicts.push({ email: canonical, ids: rows.map((r) => r.id) })
+      continue
+    }
+    const row = rows[0]!
+    if (row.email === canonical) continue
+    if (!options.dryRun) await client.authUser.update({ where: { id: row.id }, data: { email: canonical } })
+    report.normalized.push({ id: row.id, from: row.email, to: canonical })
+  }
+  return report
+}
+
+// --- federated identities (account links) -------------------------------------
+
+/**
+ * Primary key of a link / passkey row: SHA-256 (hex) of the natural key. OIDC
+ * subjects run to 255 characters and credential ids to 1 023 bytes — too long
+ * for an indexed `VARCHAR(191)` on MySQL — while 64 hex characters fit every
+ * provider's default string column.
+ */
+const rowKey = (...parts: string[]): string => createHash('sha256').update(parts.join('\0')).digest('hex')
+
+/** The Prisma client was generated without a model a store needs. */
+export class AuthModelMissingError extends BasaltError {
+  readonly status = 500
+  readonly expose = false
+  constructor(delegate: string, model: string) {
+    super(
+      'AUTH_PRISMA_MODEL_MISSING',
+      `The Prisma client has no \`${delegate}\` model. Add \`model ${model}\` from '@basaltkit/auth-prisma/schema.prisma' ` +
+        '(or run `basalt prisma:sync`), migrate, and run `prisma generate`.',
+    )
+  }
+}
+
+const toLink = (r: PAccountLink): AccountLink => ({
+  provider: r.provider,
+  subject: r.subject,
+  userId: r.userId,
+  email: r.email,
+  createdAt: ms(r.createdAt),
+})
+
+export class PrismaAccountLinkStore implements AccountLinkStore {
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
+
+  private get links(): NonNullable<PrismaAuthClient['authAccountLink']> {
+    const delegate = this.client.authAccountLink
+    if (!delegate) throw new AuthModelMissingError('authAccountLink', 'AuthAccountLink')
+    return delegate
+  }
+
+  async find(provider: string, subject: string): Promise<AccountLink | null> {
+    const r = await this.links.findUnique({ where: { id: rowKey(provider, subject) } })
+    // Re-check the natural key: never trust a hash match alone.
+    return r && r.provider === provider && r.subject === subject ? toLink(r) : null
+  }
+
+  /** The primary key is the link itself, so the insert is the atomic check. */
+  async create(link: AccountLink): Promise<boolean> {
+    const data = {
+      id: rowKey(link.provider, link.subject),
+      provider: link.provider,
+      subject: link.subject,
+      userId: link.userId,
+      email: link.email,
+      createdAt: at(link.createdAt),
+    }
+    assertColumnLengths(PKG, this.limits, 'AuthAccountLink', data)
+    try {
+      await this.links.create({ data })
+      return true
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code === 'P2002') return false
+      throw err
+    }
+  }
+
+  async forUser(userId: string): Promise<AccountLink[]> {
+    const rows = await this.links.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } })
+    return rows.map(toLink)
+  }
+
+  async remove(provider: string, subject: string): Promise<void> {
+    await this.links.deleteMany({ where: { id: rowKey(provider, subject) } })
+  }
+
+  async deleteAllForUser(userId: string): Promise<void> {
+    await this.links.deleteMany({ where: { userId } })
+  }
+}
+
+// --- WebAuthn passkeys --------------------------------------------------------
+
+const toPasskey = (r: PPasskey): PasskeyCredential => {
+  const cred: PasskeyCredential = {
+    id: r.credentialId,
+    userId: r.userId,
+    publicKey: r.publicKey,
+    counter: Number(r.counter),
+    createdAt: ms(r.createdAt),
+  }
+  if (r.transports !== null) cred.transports = JSON.parse(r.transports) as string[]
+  if (r.deviceName !== null) cred.deviceName = r.deviceName
+  if (r.lastUsedAt !== null) cred.lastUsedAt = ms(r.lastUsedAt)
+  return cred
+}
+
+/**
+ * `PasskeyStore` over the `AuthPasskey` model. The counter is a `BigInt`
+ * column (the WebAuthn counter is an unsigned 32-bit value, past `Int`), and
+ * `transports` is JSON text rather than a scalar list, so the model works on
+ * MySQL as well as PostgreSQL.
+ */
+export class PrismaPasskeyStore implements PasskeyStore {
+  private readonly limits: AuthColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuthClient,
+    options: PrismaAuthStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
+
+  private get passkeys(): NonNullable<PrismaAuthClient['authPasskey']> {
+    const delegate = this.client.authPasskey
+    if (!delegate) throw new AuthModelMissingError('authPasskey', 'AuthPasskey')
+    return delegate
+  }
+
+  async add(credential: PasskeyCredential): Promise<void> {
+    const data = {
+      id: rowKey(credential.id),
+      credentialId: credential.id,
+      userId: credential.userId,
+      publicKey: credential.publicKey,
+      counter: BigInt(credential.counter),
+      transports: credential.transports ? JSON.stringify(credential.transports) : null,
+      deviceName: credential.deviceName ?? null,
+      createdAt: at(credential.createdAt),
+      lastUsedAt: credential.lastUsedAt !== undefined ? at(credential.lastUsedAt) : null,
+    }
+    assertColumnLengths(PKG, this.limits, 'AuthPasskey', data)
+    await this.passkeys.create({ data })
+  }
+
+  async get(credentialId: string): Promise<PasskeyCredential | null> {
+    const r = await this.passkeys.findUnique({ where: { id: rowKey(credentialId) } })
+    return r && r.credentialId === credentialId ? toPasskey(r) : null
+  }
+
+  async forUser(userId: string): Promise<PasskeyCredential[]> {
+    const rows = await this.passkeys.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } })
+    return rows.map(toPasskey)
+  }
+
+  /** One conditional UPDATE: a concurrent assertion that moved the counter makes this one fail. */
+  async compareAndSetCounter(credentialId: string, expected: number, next: number, lastUsedAt: number): Promise<boolean> {
+    const { count } = await this.passkeys.updateMany({
+      where: { id: rowKey(credentialId), counter: BigInt(expected) },
+      data: { counter: BigInt(next), lastUsedAt: at(lastUsedAt) },
+    })
+    return count > 0
+  }
+
+  async remove(credentialId: string): Promise<void> {
+    await this.passkeys.deleteMany({ where: { id: rowKey(credentialId) } })
   }
 }
 
@@ -646,6 +1057,10 @@ export interface PrismaAuthStores {
   apiKeys: PrismaApiKeyStore
   mfa: PrismaMfaStore
   tokenVersions: PrismaTokenVersionStore
+  /** Needs the `AuthAccountLink` model (checked at first use). */
+  accountLinks: PrismaAccountLinkStore
+  /** Needs the `AuthPasskey` model (checked at first use). */
+  passkeys: PrismaPasskeyStore
 }
 
 /**
@@ -653,10 +1068,11 @@ export interface PrismaAuthStores {
  * `authPlugin` / `apiKeysPlugin`:
  *
  * ```ts
- * const s = prismaAuthStores(prisma)
+ * const s = prismaAuthStores(prisma) // on MySQL: prismaAuthStores(prisma, { columnLimits: 'mysql' })
  * authPlugin({ users: s.users, sessions: s.sessions, refreshTokens: s.refreshTokens,
- *              tokens: s.tokens, mfa: s.mfa, secret })
+ *              tokens: s.tokens, mfa: s.mfa, accountLinks: s.accountLinks, secret })
  * apiKeysPlugin({ store: s.apiKeys, users: s.users })
+ * webauthnPlugin({ config, verifier, credentials: s.passkeys })
  * ```
  */
 // Fail fast with an actionable message when the Prisma client lacks the models
@@ -676,15 +1092,17 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaAuthStores(client: PrismaAuthClient): PrismaAuthStores {
-  ensureModel(client, 'authUser', '@basaltkit/auth-prisma')
+export function prismaAuthStores(client: PrismaAuthClient, options: PrismaAuthStoreOptions = {}): PrismaAuthStores {
+  ensureModel(client, 'authUser', PKG)
   return {
-    users: new PrismaUserSource(client),
-    sessions: new PrismaSessionStore(client),
-    refreshTokens: new PrismaRefreshTokenStore(client),
-    tokens: new PrismaAuthTokenStore(client),
-    apiKeys: new PrismaApiKeyStore(client),
-    mfa: new PrismaMfaStore(client),
-    tokenVersions: new PrismaTokenVersionStore(client),
+    users: new PrismaUserSource(client, options),
+    sessions: new PrismaSessionStore(client, options),
+    refreshTokens: new PrismaRefreshTokenStore(client, options),
+    tokens: new PrismaAuthTokenStore(client, options),
+    apiKeys: new PrismaApiKeyStore(client, options),
+    mfa: new PrismaMfaStore(client, options),
+    tokenVersions: new PrismaTokenVersionStore(client, options),
+    accountLinks: new PrismaAccountLinkStore(client, options),
+    passkeys: new PrismaPasskeyStore(client, options),
   }
 }

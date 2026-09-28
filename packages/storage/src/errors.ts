@@ -20,7 +20,7 @@ export class StorageInvalidKeyError extends BasaltError {
     super(
       'STORAGE_INVALID_KEY',
       `Invalid storage key: "${key}". Keys may not start with "/" or "\\", ` +
-        `contain ".." path segments, or include NUL/control characters.`,
+        `contain "..", "." or empty path segments (e.g. "a//b", a trailing "/"), or include NUL/control characters.`,
     )
   }
 }

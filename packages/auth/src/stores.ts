@@ -105,6 +105,69 @@ export class MemoryUserSource implements UserSource {
   }
 }
 
+// --- federated identities (OAuth / OIDC account links) ----------------------
+
+/**
+ * A federated identity bound to a local account: the provider's stable subject
+ * (`sub`), not the email it happens to assert today. Once linked, the provider
+ * account keeps reaching the same local account even if its email changes at
+ * the IdP, and another subject asserting the same email does not.
+ */
+export interface AccountLink {
+  /** Provider name as configured (`'google'`, `'acme-okta'`, …). */
+  provider: string
+  /** The provider's stable subject identifier (OIDC `sub`, GitHub user id). */
+  subject: string
+  userId: string
+  /** The (canonical) email the provider asserted when the link was made — informational. */
+  email: string
+  createdAt: number
+}
+
+export interface AccountLinkStore {
+  /** The link for `(provider, subject)`, or null. */
+  find(provider: string, subject: string): Promise<AccountLink | null>
+  /**
+   * Inserts the link. MUST be atomic on `(provider, subject)`: when a link for
+   * that pair already exists (for any user) nothing is written and `false` is
+   * returned — two concurrent first logins cannot both bind the subject.
+   */
+  create(link: AccountLink): Promise<boolean>
+  /** Every link of a user (any provider). */
+  forUser(userId: string): Promise<AccountLink[]>
+  remove(provider: string, subject: string): Promise<void>
+  /** Drops every link of a user — fired when an unverified account is adopted. */
+  deleteAllForUser(userId: string): Promise<void>
+}
+
+/** NUL cannot occur in either part, so the key is unambiguous. */
+const linkKey = (provider: string, subject: string): string => `${provider}\0${subject}`
+
+export class MemoryAccountLinkStore implements AccountLinkStore {
+  private readonly links = new Map<string, AccountLink>()
+
+  async find(provider: string, subject: string): Promise<AccountLink | null> {
+    const found = this.links.get(linkKey(provider, subject))
+    return found ? { ...found } : null
+  }
+  // Synchronous check-and-insert: no await between the read and the write.
+  async create(link: AccountLink): Promise<boolean> {
+    const key = linkKey(link.provider, link.subject)
+    if (this.links.has(key)) return false
+    this.links.set(key, { ...link })
+    return true
+  }
+  async forUser(userId: string): Promise<AccountLink[]> {
+    return [...this.links.values()].filter((l) => l.userId === userId).map((l) => ({ ...l }))
+  }
+  async remove(provider: string, subject: string): Promise<void> {
+    this.links.delete(linkKey(provider, subject))
+  }
+  async deleteAllForUser(userId: string): Promise<void> {
+    for (const [key, link] of this.links) if (link.userId === userId) this.links.delete(key)
+  }
+}
+
 // --- one-time tokens (email verification, password reset) ------------------
 
 export type AuthTokenPurpose = 'verify_email' | 'reset_password'

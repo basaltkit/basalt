@@ -18,7 +18,12 @@ export {
   SearchPaginationError,
   SearchFilterNotFilterableError,
   SearchFilterValueError,
+  SearchReindexScopeError,
+  SearchDriverCapabilityError,
   DEFAULT_MAX_LIMIT,
+  DEFAULT_MAX_OFFSET,
+  DEFAULT_MAX_SCAN,
+  type ReindexOptions,
   type SearchOptions,
   type SearchServiceOptions,
 } from './search.js'

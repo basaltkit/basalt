@@ -593,7 +593,7 @@ nativos da sua framework.
 | Opção | Tipo | Default | Adapters | Porquê |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | `[]` | todos | As rotas neutras a montar. |
-| `allowUnguardedMeta` | `boolean \| string[]` | falha alto no boot | todos | Dispensa o check de boot de que cada rota que declara uma chave de segurança guardada (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) tem um guard registado a aplicá-la (`UnguardedRouteMetaError` caso contrário). Só para deployments onde a proteção acontece genuinamente numa edge exterior. |
+| `allowUnguardedMeta` | `boolean \| string[]` | falha alto no boot | todos | Dispensa o check de boot de que cada rota que declara uma chave de segurança guardada (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) tem um guard registado a aplicá-la (`UnguardedRouteMetaError` caso contrário). Só para deployments onde a proteção acontece genuinamente numa edge exterior. Nunca dispensa os validadores de meta de rota (`InvalidRouteMetaError`). |
 | `notFound` | `boolean` | `true` (corpo 404 neutro) | todos | Passa `false` para sair do `404 { error: { code: 'NOT_FOUND' } }` partilhado e manter o default da framework. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passado ao construtor `Fastify()` (logger, trustProxy, …). |
 | `app` | instância nativa | criada por ti ou pelo plugin | express, hono | Traz o teu próprio `express()` / `new Hono()` e o Basalt monta-se nele. |
@@ -606,6 +606,7 @@ nativos da sua framework.
 | Vês | Significa | Faz |
 |---|---|---|
 | `UnguardedRouteMetaError` no boot | uma rota declara meta de segurança que nenhum guard registado aplica | regista o plugin que a aplica, ou `allowUnguardedMeta` (vê [Segurança](/pt/guide/security)) |
+| `InvalidRouteMetaError` no boot | o validador de meta de rota de um plugin recusou um valor (ex.: um `meta.teamRole` desconhecido) | corrige o valor; o `allowUnguardedMeta` não o dispensa (vê [Segurança](/pt/guide/security)) |
 | `500 HTTP_GUARDS_UNRUNNABLE` | o pipeline da rota tem guards mas não tem container, por isso nenhum deles pôde correr | passa `container` ao pipeline — todos os adapters do kit passam; só pipelines feitos à mão chegam aqui |
 | `400 HTTP_VALIDATION` | o body/query/params falhou o schema Zod da rota | a resposta lista a parte e as issues por campo |
 | `404 { code: 'NOT_FOUND' }` numa rota que definiste | a rota não foi registada nesta instância do adapter | confirma que está em `routes: [...]` do plugin do adapter que arrancou |

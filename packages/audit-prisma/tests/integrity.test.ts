@@ -37,7 +37,10 @@ function fakeClient(opts: { legacySchema?: boolean } = {}) {
         const order = JSON.stringify(args.orderBy ?? '')
         if (order.includes('"seq":"desc"')) out = [...out].sort((a, b) => b.seq! - a.seq!)
         else if (order.includes('"seq":"asc"')) out = [...out].sort((a, b) => a.seq! - b.seq!)
-        if (args.distinct?.includes('chain')) out = out.filter((r, i) => out.findIndex((o) => o.chain === r.chain) === i)
+        for (const col of args.distinct ?? []) {
+          const key = col as keyof Row
+          out = out.filter((r, i) => out.findIndex((o) => o[key] === r[key]) === i)
+        }
         return args.take === undefined ? out : out.slice(0, args.take)
       },
       async count({ where }: { where?: Where }) {
@@ -120,5 +123,52 @@ describe('PrismaAuditStore — hash chain', () => {
 
     client.rows.splice(client.rows.indexOf(row), 1)
     expect(await audit.verify({ tenantId: 'acme' })).toMatchObject({ ok: false, firstBrokenAt: 2, reason: 'sequence-gap' })
+  })
+})
+
+describe('PrismaAuditStore.auditTenants()', () => {
+  it('returns every tenant with a row, chained or not, once — undefined for rows without a tenant', async () => {
+    const client = fakeClient()
+    const store = new PrismaAuditStore(client)
+    expect(await store.auditTenants()).toEqual([])
+    for (const entry of chainOf('acme', 2)) await store.append(entry)
+    await store.append({ id: 'g', source: 'manual', event: 'e', tenantId: 'globex', at: 1, payload: {} })
+    await store.append({ id: 's', source: 'manual', event: 'e', at: 1, payload: {} })
+    const tenants = await store.auditTenants()
+    expect(tenants).toHaveLength(3)
+    expect(new Set(tenants)).toEqual(new Set(['acme', 'globex', undefined]))
+  })
+
+  it('asks the database for DISTINCT tenantId, selecting only that column', async () => {
+    const client = fakeClient()
+    const calls: unknown[] = []
+    const findMany = client.auditEntry.findMany.bind(client.auditEntry)
+    client.auditEntry.findMany = (args: never) => {
+      calls.push(args)
+      return findMany(args)
+    }
+    await new PrismaAuditStore(client).auditTenants()
+    expect(calls).toEqual([{ distinct: ['tenantId'], select: { tenantId: true } }])
+  })
+
+  it('verifyAll() finds a forged row of a chainless tenant without scanning the trail', async () => {
+    const client = fakeClient()
+    const store = new PrismaAuditStore(client)
+    const audit = chained(client)
+    await audit.record('system:boot') // integrity is on from here
+    await store.append({ id: 'forged', source: 'manual', event: 'user:promoted', tenantId: 'victim', at: Date.now() + 5, payload: {} })
+    let scans = 0
+    const query = store.query.bind(store)
+    // `verifyAll()` must not fall back to query({}) — a read of the whole trail.
+    const spied = Object.assign(Object.create(Object.getPrototypeOf(store)), store, {
+      query: (q: never) => {
+        scans++
+        return query(q)
+      },
+    }) as PrismaAuditStore
+    const all = await new Audit(spied, undefined, undefined, { integrity: 'hash-chain' }).verifyAll()
+    expect(all.chains.find((c) => c.tenantId === 'victim')).toMatchObject({ ok: false, reason: 'unchained-entry', entryId: 'forged' })
+    expect(all.ok).toBe(false)
+    expect(scans).toBe(0)
   })
 })

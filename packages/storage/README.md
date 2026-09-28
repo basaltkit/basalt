@@ -129,6 +129,12 @@ tenant prefix or defeat prefix-based `list()` isolation. Keys that start with
 `StorageInvalidKeyError` (`STORAGE_INVALID_KEY`). Ordinary nested keys like
 `avatars/123/pic.png` are untouched.
 
+Keys must be canonical as well: a `.` or empty segment (`a/./b`, `./a`, `a//b`,
+a trailing `/`, `''`) is refused on every driver. The local driver would open
+the same file as `a/b` while S3/GCS/Azure store distinct objects, so these are
+rejected rather than normalized (a silent rewrite would let two different
+strings address one object). A `list()` prefix may be `''` or end in one `/`.
+
 ### Large files: streaming, server-side copy and stat
 
 `put`/`get` move whole buffers, which is the wrong shape for a 2 GB video or a
@@ -500,7 +506,7 @@ host is a silently broken one.
 |---|---|---|---|
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | 500 | `get()` on a path that doesn't exist. |
 | `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | 500 | The `local` driver resolved a path outside its `root` (`../…`). |
-| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | 500 | The key starts with `/` or `\`, has a `..` segment, or contains NUL/control characters. Checked for every driver. |
+| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | 500 | The key starts with `/` or `\`, has a `..`, `.` or empty segment (`a//b`, a trailing `/`, `''`), or contains NUL/control characters. Checked for every driver. |
 | `StorageTooLargeError` | `STORAGE_TOO_LARGE` | 500 | `put()` content exceeds the `maxBytes` you passed. |
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | 500 | `put()` `contentType` is missing from, or absent in, `allowedContentTypes`. |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | 500 | `storage.disk('name')` for a disk that isn't declared. |

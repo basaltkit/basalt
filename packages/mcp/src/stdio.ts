@@ -9,6 +9,13 @@ export interface McpStdioOptions {
   input?: NodeJS.ReadableStream
   /** Defaults to `process.stdout`. */
   output?: { write(chunk: string): unknown }
+  /** Longest accepted line, in characters. Default 4 MiB (see `@basaltkit/mcp-core`). */
+  maxLineLength?: number
+  /**
+   * Most requests in flight at once on this connection; one more is answered
+   * with a `SERVER_BUSY` (-32000) error. Default 16.
+   */
+  maxConcurrentRequests?: number
 }
 
 /** A running stdio server. `close()` detaches the stdin listener. */

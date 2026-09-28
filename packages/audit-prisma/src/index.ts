@@ -14,6 +14,18 @@ import {
   parseAuditChainKey,
   patternMatches,
 } from '@basaltkit/audit'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_MEDIUMTEXT,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/audit-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/audit` `AuditStore` for
@@ -85,8 +97,65 @@ function isChainConflict(error: unknown): boolean {
   return /chain|seq/i.test(text)
 }
 
+/** The `AuditEntry` columns the store writes as strings. */
+export type AuditColumn =
+  | 'id'
+  | 'source'
+  | 'event'
+  | 'payload'
+  | 'actorId'
+  | 'tenantId'
+  | 'requestId'
+  | 'ip'
+  | 'userAgent'
+  | 'chain'
+  | 'prevHash'
+  | 'hash'
+
+export type AuditColumnLimits = ColumnLimits<{ AuditEntry: AuditColumn }>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Spread it to override one column after widening it.
+ */
+export const auditMysqlColumnLimits: AuditColumnLimits = {
+  AuditEntry: {
+    id: V,
+    source: V,
+    event: V,
+    payload: MYSQL_MEDIUMTEXT,
+    actorId: V,
+    tenantId: V,
+    requestId: V,
+    ip: V,
+    userAgent: MYSQL_TEXT,
+    chain: V,
+    prevHash: V,
+    hash: V,
+  },
+}
+
+export interface PrismaAuditStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a
+   * truncated payload or hash silently breaks the hash chain. `'mysql'` uses
+   * the limits of the bundled `schema.mysql.prisma`; pass an object for a
+   * schema of your own. Default: unchecked (PostgreSQL and SQLite store any
+   * length).
+   */
+  columnLimits?: 'mysql' | AuditColumnLimits
+}
+
 export class PrismaAuditStore implements AuditStore {
-  constructor(private readonly client: PrismaAuditClient) {}
+  private readonly limits: AuditColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaAuditClient,
+    options: PrismaAuditStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, auditMysqlColumnLimits)
+  }
 
   async append(entry: AuditEntry): Promise<void> {
     // The 1.2 columns are only sent when set: an app that upgrades without
@@ -109,6 +178,9 @@ export class PrismaAuditStore implements AuditStore {
     }
     if (entry.ip !== undefined) data.ip = entry.ip
     if (entry.userAgent !== undefined) data.userAgent = entry.userAgent
+    // Before the insert: a truncated row would be written and then fail
+    // verification forever; a refused one leaves the chain as it was.
+    assertColumnLengths(PKG, this.limits, 'AuditEntry', data)
     try {
       await this.client.auditEntry.create({ data })
     } catch (error) {
@@ -179,6 +251,17 @@ export class PrismaAuditStore implements AuditStore {
     return rows.map((r) => parseAuditChainKey(r.chain as string))
   }
 
+  /**
+   * Every tenant with at least one row, chained or not (`undefined` = rows
+   * without a tenant) — a `SELECT DISTINCT "tenantId"` (served by the
+   * `[tenantId, at]` index), so `verifyAll()` reaches chainless tenants without
+   * reading the whole trail.
+   */
+  async auditTenants(): Promise<Array<string | undefined>> {
+    const rows = await this.client.auditEntry.findMany({ distinct: ['tenantId'], select: { tenantId: true } })
+    return rows.map((r) => r.tenantId ?? undefined)
+  }
+
   async query(query: AuditQuery): Promise<AuditEntry[]> {
     // Validated here too, not only in Audit.trail(): the store is public API, and
     // a filter that is an object (`{ not: 'x' }` from `?tenantId[not]=x`) would be
@@ -239,7 +322,7 @@ export interface PrismaAuditStores {
  * `auditPlugin`:
  *
  * ```ts
- * const a = prismaAuditStore(prisma)
+ * const a = prismaAuditStore(prisma) // on MySQL: prismaAuditStore(prisma, { columnLimits: 'mysql' })
  * auditPlugin({ store: a.store })
  * ```
  */
@@ -260,7 +343,7 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaAuditStore(client: PrismaAuditClient): PrismaAuditStores {
-  ensureModel(client, 'auditEntry', '@basaltkit/audit-prisma')
-  return { store: new PrismaAuditStore(client) }
+export function prismaAuditStore(client: PrismaAuditClient, options: PrismaAuditStoreOptions = {}): PrismaAuditStores {
+  ensureModel(client, 'auditEntry', PKG)
+  return { store: new PrismaAuditStore(client, options) }
 }

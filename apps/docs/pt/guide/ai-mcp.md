@@ -387,6 +387,7 @@ um projeto em memória), e `createProvider` (para injetar um modelo falso — se
 | `--host=<host>` | string | `127.0.0.1` | Endereço de bind; só é lido quando o `--http` está presente. Ligar fora do loopback exige `--token` |
 | `--token=<segredo>` | string | `BASALT_AI_MCP_TOKEN` | Só HTTP: exige `Authorization: Bearer <segredo>` em todos os pedidos. Obrigatório para um `--host` fora do loopback |
 | `--allowed-hosts=<a,b>` | lista separada por vírgulas | só nomes de loopback | Só HTTP: hostnames `Host` extra a aceitar quando ligado fora do loopback |
+| `--sessions` | boolean | desligado (sem estado) | Só HTTP: liga as sessões `Mcp-Session-Id`, para que um `notifications/cancelled` enviado noutro POST cancele uma chamada em curso (vê `sessions` abaixo) |
 | `--allow-unconfirmed-apply` | boolean | desligado | Deixa o `basalt_make` aplicar quando o cliente não consegue confirmar (sem elicitation). Desligado por omissão: esse apply é recusado |
 
 ### `buildAiMcpServer(options)` · `createAiMcpServer(options)`
@@ -423,6 +424,8 @@ stdin.
 | `token` | `string` | — | Exige `Authorization: Bearer <token>` (comparação em tempo constante, via `bearerAuthorizer`). Necessário para um `host` fora do loopback |
 | `authorize` | `(req) => boolean \| Promise<boolean>` | — | Autenticação própria em vez de `token`; `false` responde `401` |
 | `maxBodyBytes` | `number` | `1048576` | Corpos maiores recebem `413` |
+| `sessions` | `boolean \| { ttlMs?, maxSessions? }` | `false` | Sessões Streamable-HTTP: o `initialize` responde com um `Mcp-Session-Id`, cada pedido seguinte tem de o levar (`400` sem ele, `404` desconhecido/expirado/alheio — volta a inicializar), `DELETE` termina-a, e um `notifications/cancelled` enviado à parte cancela a chamada que nomeia, só dentro da mesma sessão. Desligado por predefinição para que clientes sem o header continuem a funcionar |
+| `principal` | `(req) => string \| undefined` | hash do `Authorization` | A quem pertence uma sessão — um pedido que resolva para outro principal recebe `404` |
 
 ### Argumentos das ferramentas
 
@@ -462,6 +465,8 @@ malformado produz um código de erro de protocolo.
 | `Forbidden: host/origin not allowed` | HTTP `403` | `serveHttp` | O guard HTTP rejeitou um `Host`/`Origin` estranho antes do dispatch |
 | `Unauthorized` | HTTP `401` | `serveHttp` | O `--token` está definido e o bearer token do pedido falta ou está errado |
 | `failed to start HTTP server — serveHttp: refusing to bind non-loopback host …` | arranque | bin | `--host` fora do loopback sem `--token` |
+| `Bad Request: Mcp-Session-Id header required …` | HTTP `400` | `serveHttp` | O `--sessions` está ligado e o pedido não traz o header de sessão — faz primeiro o `initialize` |
+| `Session not found (expired or unknown) — initialize again` | HTTP `404` | `serveHttp` | O `--sessions` está ligado e o id de sessão é desconhecido, expirou ou foi aberto por outro token |
 
 - **O agente não vê o meu projeto** — verifica que o `--cwd` aponta para a raiz do
   projeto (onde vivem o `package.json` / `prisma/schema.prisma`). Os recursos usam

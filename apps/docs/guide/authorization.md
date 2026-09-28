@@ -70,11 +70,18 @@ segment at a time**, and the segment counts must match:
 'projects:*'  covers 'projects:read'        // ✅
 'projects:*'  does NOT cover 'projects:delete:all' // ❌ 2 segments vs 3 — no match
 '*'           covers everything             // ✅ the one exception: a super admin
+'projects:*'  does NOT cover 'projects:'    // ❌ an empty segment never matches
 ```
 
 So a two-level grant never silently absorbs a deeper, more specific permission
 you add later — grant `projects:*:*` (or the exact string) if you mean the
 deeper level. The bare `'*'` matches any permission regardless of depth.
+
+A permission with an **empty segment** — `''`, `'projects:'`, `':read'`,
+`'projects::read'` — is malformed and matches nothing, not even itself, and no
+wildcard covers it (`hasEmptySegment()` tells you, from the same browser-safe
+`@basaltkit/permissions/match` entry). The Gate refuses such a permission
+outright: `can()`, every grant and `roleCatalog` throw a `TypeError`.
 
 ## Resource policies
 
@@ -123,7 +130,7 @@ policies — and only a two-segment `resource:action` selects a check:
 `project:update:billing` is a different permission from `project:update`, so
 the `update` check does not decide it. A check authorizes only when it returns
 `true` (a truthy non-boolean denies). `can()` refuses a permission that is not
-a non-empty string without whitespace (`TypeError`), and a user with no
+a non-empty string without whitespace or empty `:` segments (`TypeError`), and a user with no
 non-empty string `id` is unauthenticated: `can`/`authorize`/`hasRole` throw
 `AuthRequiredGuardError` (401) rather than evaluating — or crashing on — an
 anonymous caller.
@@ -161,6 +168,24 @@ unenforceable and **fails closed**: the guard throws `InvalidCanMetaError`
 (`PERMISSION_META_INVALID`, HTTP 500) on every request instead of silently
 skipping the check. And declaring `meta.can` without registering
 `permissionsPlugin` fails at **boot** — see the adapters guide.
+
+### Listings hide what the caller can't pass
+
+The plugin also registers a **pure visibility check** for `meta.can` in
+`http:route-visibility`, so listing surfaces — the [MCP `tools/list`](/guide/mcp#what-tools-list-shows)
+— leave out routes whose permission(s) the caller lacks. It asks the guard's
+own question, `gate.can(user, permission)` for every entry, in the current
+scope (`superAdmin` short-circuits, as in the guard), but **without side
+effects**: `can()` only reads grants — it never emits `permission:denied`, so a
+listing never lands in the audit trail (keep `superAdmin` pure; it runs here
+too). No user or a malformed `meta.can` hides the route, as the guard would
+refuse it.
+
+Policies never enter it: the guard passes no resource, so no policy decides
+`meta.can`. An ownership rule a handler runs on a loaded resource
+(`authorize(user, 'projects:update', project)`) is invisible to a listing — such
+a tool stays listed when RBAC allows and is refused on the call. Visibility is
+never authorization: every call still runs the guard.
 
 ## Audiences — which surface a route belongs to
 
@@ -401,8 +426,9 @@ cannot turn a time-boxed grant into a standing one.
 | `allowGlobalWrites` | `boolean` | `false` | Let a scope-less write outside a tenant fall back to `GLOBAL_SCOPE` even when tenancy is active. See [Writes need a tenant](#writes-need-a-tenant-or-an-explicit-scope) |
 | `tenancyActive` | `() => boolean` | the `tenancy:active` marker (plugin); `false` (`new Gate`) | Whether the app is multi-tenant — decides whether scope-less writes outside a tenant fail closed |
 
-The plugin registers the Gate under the `GATE` token, adds the `meta.can` guard,
-and claims the `can` key in the adapters' boot-time guarded-meta check.
+The plugin registers the Gate under the `GATE` token, adds the `meta.can` guard
+and its side-effect-free visibility check (`http:route-visibility`), and claims
+the `can` key in the adapters' boot-time guarded-meta check.
 
 ## Hooks — the audit trail
 

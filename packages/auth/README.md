@@ -256,6 +256,17 @@ enroll/activate/status. `meta: { mfa: true }` requires MFA on one route
 session cookie carries it HMAC-signed, and the request exposes it as
 `ctx().amr`. API-key requests are not subject to the policy. Off by default.
 
+**Encrypting secrets at rest.** `authPlugin({ mfaEncryption: { keys: [{ id, key }] } })`
+(or the shorthand `mfaEncryptionKey`) stores TOTP secrets as `bka2.<keyId>.…`
+envelopes: AES-256-GCM, HKDF-SHA256-derived keys (≥ 32 bytes of material), bound
+to the user as associated data. The first key of the ring seals, the others stay
+readable (rotation); `auth.reencryptMfaSecret(userId)` moves a row to the active
+key. A value that is not an envelope sealed for that user is refused
+(`AUTH_SECRET_UNREADABLE`) — a database write cannot swap in a plaintext secret.
+Old `v1:` envelopes and plaintext rows are read only with an explicit
+`legacy: { v1Keys: [oldKey], plaintext: true }`, for the migration window.
+`SecretBox` is exported for other secrets.
+
 ### Passkeys — WebAuthn (`webauthnPlugin`)
 
 Passkeys let users sign in with Face ID / Touch ID / a security key — no password.
@@ -344,7 +355,13 @@ const { userId } = await passkeys.finishAuthentication(sessionKey, browserRespon
 
 `finishAuthentication` looks the credential up by id, verifies it, checks the
 signature counter **increased** (a non-increasing counter throws `PasskeyClonedError`;
-a non-integer counter from the verifier is refused), and persists the new counter.
+a non-integer counter from the verifier is refused), and persists the new counter
+with `PasskeyStore.compareAndSetCounter(id, expected, next, lastUsedAt)` — a
+conditional update, so two concurrent assertions presenting the same counter (a
+cloned authenticator racing the genuine one) cannot both pass: the loser gets
+`PasskeyClonedError`. A custom store must implement it (`PASSKEY_STORE_OUTDATED`
+at construction otherwise); `@basaltkit/auth-sqlite` and `@basaltkit/auth-prisma`
+ship durable `passkeys` stores.
 When `startAuthentication(sessionKey, userId)` names a user (step-up,
 re-authentication), only **that user's** passkey satisfies the challenge — any
 other account's passkey throws `WEBAUTHN_SUBJECT_MISMATCH`.
@@ -410,13 +427,20 @@ character-for-character, or the provider rejects it with *"redirect_uri is not
 associated with this application"*.
 
 New accounts are created **passwordless** and a provider-verified email flips
-`emailVerified`. An **existing** account is only logged into when the provider
-verified the email (`SocialLinkRefusedError` otherwise); an existing account that
-had never verified its own email has its password, sessions, refresh tokens and
-MFA revoked before it is adopted; an account with MFA enabled requires the code
-(`MfaRequiredError`) unless `oauthPlugin({ mfa: 'skip' })` is set for an IdP that
-enforces its own MFA. `Auth.socialLogin(email, { emailVerified })` is the
-underlying primitive for custom providers.
+`emailVerified`. Logins are bound to the provider's **subject**: the first login
+of a provider account records an account link (provider + `sub` → account) in the
+`accountLinks` store (`authPlugin({ accountLinks })`, durable ones in
+`auth-sqlite` / `auth-prisma`). Once linked, an email change at the IdP still
+reaches the same account, and a different subject of that provider asserting the
+account's email is refused (`AccountLinkConflictError`, 409) unless
+`oauthPlugin({ subjectConflict: 'link' })`. A first login links an **existing**
+account only when the provider verified the email (`SocialLinkRefusedError`
+otherwise); an existing account that had never verified its own email has its
+password, sessions, refresh tokens, MFA and account links revoked before it is
+adopted; an account with MFA enabled requires the code (`MfaRequiredError`)
+unless `oauthPlugin({ mfa: 'skip' })` is set for an IdP that enforces its own
+MFA. `Auth.socialLogin(email, { emailVerified, identity: { provider, subject } })`
+is the underlying primitive for custom providers.
 
 **Enterprise SSO (OIDC):** any OpenID Connect IdP (Okta, Entra ID, Auth0,
 Keycloak…) plugs in via `oidcProvider({ name, clientId, clientSecret, authorizeUrl,
@@ -556,6 +580,9 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `verificationTtl` | `DurationInput` | No | `'24h'` | Email verification link validity. |
 | `resetTtl` | `DurationInput` | No | `'1h'` | Password reset link validity. |
 | `mfa` | `MfaStore` | No | `MemoryMfaStore` | Per-user MFA state. |
+| `accountLinks` | `AccountLinkStore` | No | `MemoryAccountLinkStore` | OAuth/OIDC account links (provider + subject → user). `create` must be atomic on the pair. |
+| `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy? }` | No | — (plaintext) | Encrypts TOTP secrets at rest with a key ring; see *Encrypting secrets at rest*. |
+| `mfaEncryptionKey` | `string \| Buffer` | No | — | Shorthand for a one-key ring (`id: 'default'`, ≥ 32 bytes). |
 | `mfaIssuer` | `string` | No | `'Basalt'` | Name shown in the authenticator app. |
 | `hooks` | `HookBus` | No | — | Only on the `Auth` class; the plugin injects it. |
 
@@ -574,7 +601,8 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
 | `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
 | `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | MFA state and verification. |
-| `socialLogin(email, { emailVerified?, mfaCode?, mfa? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; links to an existing account only with a provider-verified email and honours its MFA; returns `{ user, tokens }`. |
+| `socialLogin(email, { emailVerified?, mfaCode?, mfa?, identity?, subjectConflict? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; with `identity: { provider, subject }` the account link decides, otherwise it links to an existing account only with a provider-verified email; honours MFA; returns `{ user, tokens }`. |
+| `reencryptMfaSecret(userId)` | Re-seals a stored TOTP secret under the active `mfaEncryption` key (rotation / legacy migration): `'resealed'`, `'current'` or `'none'`. |
 
 ### Ready-made routes
 
@@ -611,7 +639,8 @@ Options (`ApiKeysPluginOptions`):
 | `AUTH`, `API_KEYS`, `OAUTH` | Injection tokens: `container.get(AUTH)` returns the `Auth` instance; `OAUTH` returns the `OAuth` instance. |
 | `oauthPlugin`, `oauthRoutes` | Social-login plugin (`{ secret, providers }`) and its routes (`{ callbackBaseUrl, successRedirect? }`). |
 | `googleProvider`, `githubProvider`, `oidcProvider`, `discoverOidcProvider` | OAuth 2.0 / OpenID Connect providers. Each takes `{ clientId, clientSecret, scopes? }`. |
-| In-memory stores | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore` — dev/testing. |
+| In-memory stores | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore`, `MemoryAccountLinkStore`, `MemoryPasskeyStore` — dev/testing. |
+| `SecretBox` | The at-rest envelope behind `mfaEncryption` (`seal` / `open` / `reseal` with a `{ purpose, subject }` context), for your own secrets. |
 
 #### Single-use tokens are consumed with a compare-and-swap
 
@@ -642,6 +671,10 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 | `OAuthProviderConfigError` | `AUTH_OAUTH_PROVIDER_CONFIG` | boot (several providers with an unrestricted enterprise IdP, an invalid domain entry, a duplicate name) |
 | `ApiKeyAmbiguousError` | `AUTH_APIKEY_AMBIGUOUS` | 400 |
 | `PasskeyNotFoundError` / `WebAuthnSubjectMismatchError` | `PASSKEY_NOT_FOUND` / `WEBAUTHN_SUBJECT_MISMATCH` | 404/403 |
+| `PasskeyClonedError` / `PasskeyStoreOutdatedError` | `PASSKEY_CLONED` / `PASSKEY_STORE_OUTDATED` | 401 / boot |
+| `AccountLinkConflictError` | `AUTH_ACCOUNT_LINK_CONFLICT` | 409 |
+| `AccountEmailAmbiguousError` | `AUTH_EMAIL_AMBIGUOUS` | 500 (not exposed; several rows differ only in email case) |
+| `SecretUnreadableError` / `SecretBoxKeyError` | `AUTH_SECRET_UNREADABLE` / `AUTH_SECRET_BOX_KEY_INVALID` | 500 / boot |
 
 ## Common issues and solutions (FAQ)
 

@@ -577,7 +577,7 @@ native extras.
 | Option | Type | Default | Adapters | Why |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | `[]` | all | The neutral routes to mount. |
-| `allowUnguardedMeta` | `boolean \| string[]` | fail loud at boot | all | Waives the boot check that every route declaring a guarded security key (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). Only for deployments where protection genuinely happens at an outer edge. |
+| `allowUnguardedMeta` | `boolean \| string[]` | fail loud at boot | all | Waives the boot check that every route declaring a guarded security key (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). Only for deployments where protection genuinely happens at an outer edge. Never waives the route-meta validators (`InvalidRouteMetaError`). |
 | `notFound` | `boolean` | `true` (neutral 404 body) | all | Pass `false` to opt out of the shared `404 { error: { code: 'NOT_FOUND' } }` and keep the framework default. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passed to the `Fastify()` constructor (logger, trustProxy, …). |
 | `app` | native instance | created for you | express, hono | Bring your own `express()` / `new Hono()` and Basalt mounts onto it. |
@@ -590,6 +590,7 @@ native extras.
 | You see | It means | Do |
 |---|---|---|
 | `UnguardedRouteMetaError` at boot | a route declares security meta no registered guard enforces | register the enforcing plugin, or `allowUnguardedMeta` (see [Security](/guide/security)) |
+| `InvalidRouteMetaError` at boot | a plugin's route-meta validator refused a value (e.g. an unknown `meta.teamRole`) | fix the value; `allowUnguardedMeta` does not waive it (see [Security](/guide/security)) |
 | `500 HTTP_GUARDS_UNRUNNABLE` | the route pipeline carries guards but no container, so none of them could run | pass `container` to the pipeline — every shipped adapter does; only hand-built pipelines can hit this |
 | `400 HTTP_VALIDATION` | body/query/params failed the route's Zod schema | the response lists the part and per-field issues |
 | `404 { code: 'NOT_FOUND' }` on a route you defined | the route wasn't registered on this adapter instance | check it is in `routes: [...]` of the adapter plugin that booted |

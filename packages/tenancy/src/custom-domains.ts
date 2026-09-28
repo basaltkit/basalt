@@ -104,6 +104,11 @@ export interface DomainStore {
    * swap is a remove followed by an add, which a concurrent claim can race.
    */
   replace?(expected: CustomDomain, next: CustomDomain): Promise<boolean>
+  /**
+   * Every verified domain, for {@link CustomDomains.reverifyAll}. Optional:
+   * without it, pass the domains to `reverifyAll({ domains })` yourself.
+   */
+  listVerified?(): Promise<CustomDomain[]>
 }
 
 export class MemoryDomainStore implements DomainStore {
@@ -138,6 +143,9 @@ export class MemoryDomainStore implements DomainStore {
   }
   async remove(domain: string): Promise<void> {
     this.domains.delete(domain)
+  }
+  async listVerified(): Promise<CustomDomain[]> {
+    return [...this.domains.values()].filter((d) => d.verified).map((d) => ({ ...d }))
   }
   async replace(expected: CustomDomain, next: CustomDomain): Promise<boolean> {
     const current = this.domains.get(expected.domain)
@@ -234,6 +242,37 @@ export interface CustomDomainsOptions {
   challengeSecret?: string
 }
 
+/**
+ * Outcome of re-checking one domain's TXT record ({@link CustomDomains.reverify}):
+ * - `valid` — verified and its record still resolves; unchanged.
+ * - `revoked` — verified, but the record is definitively gone (no such name,
+ *   no TXT, or no matching value); now unverified, so it stops resolving.
+ * - `dns-error` — the lookup failed for another reason (timeout, SERVFAIL…);
+ *   unchanged, so a DNS outage never un-verifies every domain at once.
+ * - `unverified` — the claim is not verified; nothing to re-check.
+ * - `changed` — the record changed hands while DNS was being checked; left alone.
+ */
+export type DomainReverifyStatus = 'valid' | 'revoked' | 'dns-error' | 'unverified' | 'changed'
+
+export interface DomainReverification {
+  domain: string
+  tenantId: string
+  status: DomainReverifyStatus
+}
+
+export interface DomainReverifySummary {
+  /** Verified domains whose record was looked up. */
+  checked: number
+  /** Domains un-verified by this run. */
+  revoked: string[]
+  /** Domains whose lookup failed transiently (left verified — retry on the next run). */
+  errors: string[]
+  results: DomainReverification[]
+}
+
+/** DNS answers that prove the record is absent (as opposed to a failed lookup). */
+const DEFINITIVE_DNS_MISS = new Set(['ENOTFOUND', 'ENODATA'])
+
 /** 72 hours. */
 export const DEFAULT_CLAIM_TTL_MS = 72 * 60 * 60 * 1000
 
@@ -278,7 +317,9 @@ export class CustomDomains {
    * platform's own domains (`DomainReservedError`). A domain another tenant
    * holds is refused with `DomainTakenError` — unless that claim is unverified
    * and either older than `claimTtlMs`, or the caller has already published its
-   * {@link challenge} TXT record (then the caller gets it, verified).
+   * {@link challenge} TXT record (then the caller gets it, verified). A
+   * verified claim yields only to a published challenge record when the
+   * incumbent's own TXT record is gone (see {@link reverify}).
    */
   async add(tenantId: string, domain: string): Promise<{ record: CustomDomain; dns: DnsVerification }> {
     const normalized = normalizeDomain(domain)
@@ -322,22 +363,31 @@ export class CustomDomains {
   }
 
   /**
-   * Hand an existing claim to `tenantId` when it is unverified AND either
-   * expired or contested by a DNS record proving `tenantId` controls the domain.
+   * Hand an existing claim to `tenantId` when either
+   * - it is unverified AND expired, or contested by a DNS record proving
+   *   `tenantId` controls the domain; or
+   * - it is verified but stale: `tenantId` proves DNS control with its
+   *   {@link challenge} record AND, in the same lookup, the incumbent's own
+   *   record is gone (a lapsed domain bought by someone else). A failed lookup
+   *   or an incumbent record still present keeps the claim where it is.
    * Returns the new record, or null when the claim stands.
    */
   private async takeOver(tenantId: string, domain: string, fresh: CustomDomain): Promise<CustomDomain | null> {
     const existing = await this.store.get(domain)
-    if (!existing || existing.verified || existing.tenantId === tenantId) return null
+    if (!existing || existing.tenantId === tenantId) return null
     let next: CustomDomain | null = null
     if (this.challengeSecret) {
       // The verified TXT wins: DNS control is what ownership means here.
       const token = this.challengeToken(tenantId, domain)
-      if (await this.hasTxt(domain, token)) {
+      const values = await this.lookupTxt(domain)
+      if (values !== 'error' && values.includes(`${TXT_PREFIX}${token}`)) {
+        // A verified incumbent yields only when its own record is gone too.
+        if (existing.verified && values.includes(`${TXT_PREFIX}${existing.verificationToken}`)) return null
         const at = this.now()
         next = { domain, tenantId, verified: true, verificationToken: token, createdAt: at, verifiedAt: at }
       }
     }
+    if (existing.verified && !next) return null // verified claims never expire
     if (!next && this.now() - existing.createdAt >= this.claimTtlMs) next = fresh
     if (!next) return null
     if (this.store.replace) return (await this.store.replace(existing, next)) ? next : null
@@ -349,6 +399,83 @@ export class CustomDomains {
   private async hasTxt(domain: string, token: string): Promise<boolean> {
     const txts = await this.resolveTxt(`_basalt-verify.${domain}`).catch(() => [] as string[][])
     return txts.map((chunks) => chunks.join('')).includes(`${TXT_PREFIX}${token}`)
+  }
+
+  /**
+   * The TXT values at `_basalt-verify.<domain>`, `[]` when DNS says there are
+   * none (NXDOMAIN / NODATA), or `'error'` when the lookup itself failed — a
+   * timeout must never be read as "the record is gone".
+   */
+  private async lookupTxt(domain: string): Promise<string[] | 'error'> {
+    try {
+      const txts = await this.resolveTxt(`_basalt-verify.${domain}`)
+      return txts.map((chunks) => chunks.join(''))
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code
+      return typeof code === 'string' && DEFINITIVE_DNS_MISS.has(code) ? [] : 'error'
+    }
+  }
+
+  /**
+   * SYSTEM-ONLY: re-check the TXT record of whichever tenant holds `domain`
+   * and un-verify the claim when the record is definitively gone. Unlike
+   * `verify(tenantId, domain, { force: true })` it needs no tenant id, and a
+   * failed lookup (timeout, SERVFAIL) leaves the claim verified (`dns-error`).
+   * The un-verify is conditional (`DomainStore.replace` when available), so a
+   * claim that changed hands meanwhile is left alone (`changed`).
+   *
+   * Run it — or {@link reverifyAll} — on a schedule: a verified domain whose
+   * owner let it lapse otherwise keeps resolving to them (dangling-domain
+   * takeover), and a new owner can then claim it through `add()`.
+   * Returns `null` for a domain nobody holds.
+   */
+  async reverify(domain: string): Promise<DomainReverification | null> {
+    const normalized = normalizeDomain(domain)
+    const record = await this.store.get(normalized)
+    if (!record) return null
+    const result = (status: DomainReverifyStatus): DomainReverification => ({ domain: normalized, tenantId: record.tenantId, status })
+    if (!record.verified) return result('unverified')
+    const values = await this.lookupTxt(normalized)
+    if (values === 'error') return result('dns-error')
+    if (values.includes(`${TXT_PREFIX}${record.verificationToken}`)) return result('valid')
+    if (this.store.replace) {
+      const { verifiedAt: _verifiedAt, ...rest } = record
+      return result((await this.store.replace(record, { ...rest, verified: false })) ? 'revoked' : 'changed')
+    }
+    await this.store.markUnverified(normalized)
+    return result('revoked')
+  }
+
+  /**
+   * SYSTEM-ONLY: {@link reverify} every verified domain — from
+   * `DomainStore.listVerified()`, or the `domains` you pass (required when the
+   * store does not implement it). Sequential, so a large portfolio does not
+   * burst the resolver. Meant for a scheduled job:
+   *
+   * ```ts
+   * scheduler.every('1h', async () => {
+   *   const { revoked, errors } = await customDomains.reverifyAll()
+   *   if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
+   * })
+   * ```
+   */
+  async reverifyAll(options: { domains?: Iterable<string> } = {}): Promise<DomainReverifySummary> {
+    let domains: Iterable<string>
+    if (options.domains !== undefined) domains = options.domains
+    else if (this.store.listVerified) domains = (await this.store.listVerified()).map((d) => d.domain)
+    else {
+      throw new TypeError('CustomDomains.reverifyAll(): the store has no listVerified(); pass { domains } explicitly.')
+    }
+    const summary: DomainReverifySummary = { checked: 0, revoked: [], errors: [], results: [] }
+    for (const domain of domains) {
+      const result = await this.reverify(domain)
+      if (result === null || result.status === 'unverified') continue
+      summary.results.push(result)
+      if (result.status !== 'changed') summary.checked++
+      if (result.status === 'revoked') summary.revoked.push(result.domain)
+      if (result.status === 'dns-error') summary.errors.push(result.domain)
+    }
+    return summary
   }
 
   /** The DNS record for one of the tenant's OWN domains (to show them again). */

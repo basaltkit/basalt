@@ -17,7 +17,8 @@
       "types": "./dist/versions.d.ts",
       "import": "./dist/versions.js"
     },
-    "./schema.prisma": "./prisma/schema.prisma"
+    "./schema.prisma": "./prisma/schema.prisma",
+    "./schema.mysql.prisma": "./prisma/schema.mysql.prisma"
   },
   "files": [
     "dist",

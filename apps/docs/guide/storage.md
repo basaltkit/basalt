@@ -98,6 +98,16 @@ a leading slash, a `..` segment, or control characters is rejected with
 `StorageInvalidKeyError` — so a user-supplied key can never escape its prefix or
 collide with another tenant's.
 
+Keys must also be **canonical**: a `.` segment or an empty one (`a/./b`, `./a`,
+`a//b`, a trailing `/`, `''`) is rejected too. The local driver resolves those
+to the same file as `a/b`, while S3, GCS and Azure keep them as distinct
+objects — so the same key would name one file on one backend and three on
+another. Basalt refuses rather than normalizes: silently rewriting a key would
+let two strings your app compares (an allow-list, a dedupe, an audit trail)
+address the same object. Build keys with `[a, b].join('/')` from non-empty
+parts. A `list()` prefix may be `''` (the disk root) or end in one `/`
+(`list('avatars/')`).
+
 Uploads are unrestricted by default **at this layer** (the higher-level
 [`@basaltkit/files`](/guide/files) pipeline caps uploads at 25 MiB even when you
 configure nothing); pass opt-in limits to `put` to cap size and constrain the
@@ -513,7 +523,7 @@ The disposition default is honoured by all three signing drivers — S3
 | Class | Code | When |
 | --- | --- | --- |
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` on a file that doesn't exist |
-| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | The key starts with `/`/`\\`, contains a `..` segment or control characters — the facade choke point rejects it on **every** operation, for every driver, before the tenant prefix is applied |
+| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | The key starts with `/`/`\\`, contains a `..`, `.` or empty segment (`a//b`, a trailing `/`, `''`) or control characters — the facade choke point rejects it on **every** operation, for every driver, before the tenant prefix is applied |
 | `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | A path escapes the disk root — the local driver's own second line of defence |
 | `StorageTooLargeError` | `STORAGE_TOO_LARGE` | `put` (or `temporaryUploadUrl`) with `maxBytes` set and a larger payload / declared length |
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` (or `temporaryUploadUrl`) with `allowedContentTypes` set and a missing/unlisted content type |

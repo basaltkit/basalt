@@ -48,14 +48,43 @@ createApp({ plugins: [permissionsPlugin({ store: p.store })] })
 
 | Export | Kind | Purpose |
 | --- | --- | --- |
-| `prismaAccessStore(client)` | function | Validates the client and returns `{ store }`, named to drop straight into `permissionsPlugin({ store })`. |
-| `PrismaAccessStore` | class | The `AccessStore` implementation. `new PrismaAccessStore(client)` — use it directly to share a client across stores. |
+| `prismaAccessStore(client, options?)` | function | Validates the client and returns `{ store }`, named to drop straight into `permissionsPlugin({ store })`. |
+| `PrismaAccessStore` | class | The `AccessStore` implementation. `new PrismaAccessStore(client, options?)` — use it directly to share a client across stores. |
+| `permissionsMysqlColumnLimits` / `ColumnLengthError` | const / class | The MySQL preset and the error the guard throws. |
 | `PrismaPermissionsClient` | interface | The three delegates the store touches: `permUserRole`, `permUserPermission`, `permRolePermission`. |
 | `PrismaPermissionsStores` | interface | `{ store: PrismaAccessStore }`. |
 
-`prismaAccessStore` takes the client only — there are no options to configure.
-Everything else (scope semantics, wildcards, super-admin) belongs to
+`prismaAccessStore` takes one option, `columnLimits` (`'mysql'` or your own
+limits — see [MySQL](#mysql)); unset, nothing is checked. Everything else (scope semantics, wildcards, super-admin) belongs to
 `@basaltkit/permissions`.
+
+## MySQL
+
+The reference schema above is written for PostgreSQL (and works on SQLite),
+where a bare `String` is `TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**,
+and a server outside strict mode truncates a longer value silently — the write
+succeeds, and the value read back is not the one written. Two long permission names cut to the same prefix collapse into one grant. Every column is part of a composite primary key, so the MySQL variant keeps them all at `VARCHAR(191)` (three per key fit InnoDB's 3 072-byte limit); the guard refuses a longer role, permission, user id or scope, and checks a whole `grantToRole`/`grantToUser` batch before writing any of it.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/permissions-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it when
+  your datasource is `mysql`): the free-text columns are widened with native
+  types, the keys stay `VARCHAR(191)` so they can be indexed.
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaAccessStore(prisma, { columnLimits: 'mysql' })
+  ```
+
+  `'mysql'` is `permissionsMysqlColumnLimits` — the capacities of `schema.mysql.prisma`. A number is
+  a limit in characters (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes
+  (the `TEXT` family). Widened a column yourself? Spread the preset and raise it:
+  `{ PermRolePermission: { ...permissionsMysqlColumnLimits.PermRolePermission, permission: 255 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
 
 ## Notes
 
@@ -71,6 +100,8 @@ This package defines no `BasaltError` subclasses and no error codes.
 
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
+| `TypeError` | — | — | A direct write (`assignRole`, `removeRole`, `grantToRole`, `grantToUser`) with an empty or non-string user id, role name or scope, or a permission list that is not an array of non-empty strings. Refused before Prisma is called: `''`/`null`/`undefined` would otherwise share one "nobody" key. |
+| `ColumnLengthError` | `COLUMN_LENGTH_EXCEEDED` | 422 | With `columnLimits`, a user id, role, permission or scope is longer than its column. Checked before the write: a refused batch writes nothing. |
 | `Error` | — | boot / first use | The client has no `permUserRole` model. `prismaAccessStore()` fails fast with a message naming the missing model and pointing at `basalt prisma:sync`, instead of a cryptic "reading 'findMany' of undefined". A lazy/proxy client (database-per-tenant) skips the check and is validated on first query. |
 
 Prisma's own errors (connection, constraint) propagate unchanged. The

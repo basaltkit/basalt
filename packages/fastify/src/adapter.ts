@@ -20,7 +20,6 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
-  GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
   isRawBody,
@@ -108,6 +107,9 @@ export interface FastifyPluginOptions {
    * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
    * `true` to waive everything (e.g. authentication handled at an outer
    * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   * It never waives the route-meta validators plugins register
+   * (`META_VALIDATORS_BUCKET`, e.g. teamsPlugin refusing an unknown
+   * `meta.teamRole`) — those also run at boot and fail it.
    */
   allowUnguardedMeta?: boolean | string[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
@@ -184,12 +186,9 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
       // Fail loud BEFORE traffic if a route declares security meta (auth/can/
-      // teamRole) that no registered guard enforces — it would serve open.
-      assertRoutesGuarded(
-        routes,
-        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
-        options.allowUnguardedMeta,
-      )
+      // teamRole) that no registered guard enforces — it would serve open —
+      // or meta a plugin's validator refuses (e.g. an unknown teamRole).
+      assertRoutesGuarded(routes, container, options.allowUnguardedMeta)
       const instance = container.get(FASTIFY)
       registerRoutes(instance, routes, container, enrichers, guards, options.onError)
       // Mount edge-plugin hooks/routes once every plugin has registered them.

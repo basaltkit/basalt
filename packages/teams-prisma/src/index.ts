@@ -5,6 +5,11 @@ import type {
   MembershipStore,
   TeamRole,
 } from '@basaltkit/teams'
+import { assertColumnLengths, type ColumnLimits, MYSQL_VARCHAR_DEFAULT as V, resolveColumnLimits } from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/teams-prisma'
 
 /**
  * Prisma-backed implementations of the `@basaltkit/teams` stores (memberships and
@@ -68,6 +73,36 @@ const canonicalEmail = (email: string): string => email.trim().toLowerCase()
 const ms = (d: Date): number => d.getTime()
 const at = (n: number): Date => new Date(n)
 
+// --- column limits ----------------------------------------------------------
+
+export type TeamsColumnLimits = ColumnLimits<{
+  TeamMembership: 'tenantId' | 'userId' | 'role'
+  TeamInvitation: 'id' | 'tenantId' | 'email' | 'role' | 'token' | 'invitedBy'
+}>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. `email` is VARCHAR(254), the longest valid address; the
+ * rest are keys or short identifiers at VARCHAR(191). Spread it to override
+ * one column after widening it.
+ */
+export const teamsMysqlColumnLimits: TeamsColumnLimits = {
+  TeamMembership: { tenantId: V, userId: V, role: V },
+  TeamInvitation: { id: V, tenantId: V, email: 254, role: V, token: V, invitedBy: V },
+}
+
+export interface PrismaTeamsStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a cut
+   * invitation email no longer matches its recipient and a cut token hash no
+   * longer matches the link that was sent. `'mysql'` uses the limits of the bundled
+   * `schema.mysql.prisma`; pass an object for a schema of your own. Default:
+   * unchecked (PostgreSQL and SQLite store any length).
+   */
+  columnLimits?: 'mysql' | TeamsColumnLimits
+}
+
 // --- memberships ------------------------------------------------------------
 
 const toMembership = (r: PMembership): Membership => ({
@@ -78,9 +113,21 @@ const toMembership = (r: PMembership): Membership => ({
 })
 
 export class PrismaMembershipStore implements MembershipStore {
-  constructor(private readonly client: PrismaTeamsClient) {}
+  private readonly limits: TeamsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaTeamsClient,
+    options: PrismaTeamsStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, teamsMysqlColumnLimits)
+  }
 
   async add(membership: Membership): Promise<void> {
+    assertColumnLengths(PKG, this.limits, 'TeamMembership', {
+      tenantId: membership.tenantId,
+      userId: membership.userId,
+      role: membership.role,
+    })
     await this.client.teamMembership.upsert({
       where: { tenantId_userId: { tenantId: membership.tenantId, userId: membership.userId } },
       create: {
@@ -104,6 +151,7 @@ export class PrismaMembershipStore implements MembershipStore {
   }
 
   async setRole(tenantId: string, userId: string, role: TeamRole): Promise<void> {
+    assertColumnLengths(PKG, this.limits, 'TeamMembership', { role })
     await this.client.teamMembership.updateMany({ where: { tenantId, userId }, data: { role } })
   }
 
@@ -133,22 +181,29 @@ const toInvitation = (r: PInvitation): Invitation => {
 const PENDING = { acceptedAt: null, revokedAt: null }
 
 export class PrismaInvitationStore implements InvitationStore {
-  constructor(private readonly client: PrismaTeamsClient) {}
+  private readonly limits: TeamsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaTeamsClient,
+    options: PrismaTeamsStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, teamsMysqlColumnLimits)
+  }
 
   async create(invitation: Invitation): Promise<void> {
-    await this.client.teamInvitation.create({
-      data: {
-        id: invitation.id,
-        tenantId: invitation.tenantId,
-        email: invitation.email,
-        role: invitation.role,
-        token: invitation.token,
-        invitedBy: invitation.invitedBy ?? null,
-        expiresAt: at(invitation.expiresAt),
-        acceptedAt: invitation.acceptedAt !== undefined ? at(invitation.acceptedAt) : null,
-        revokedAt: invitation.revokedAt !== undefined ? at(invitation.revokedAt) : null,
-      },
-    })
+    const data = {
+      id: invitation.id,
+      tenantId: invitation.tenantId,
+      email: invitation.email,
+      role: invitation.role,
+      token: invitation.token,
+      invitedBy: invitation.invitedBy ?? null,
+      expiresAt: at(invitation.expiresAt),
+      acceptedAt: invitation.acceptedAt !== undefined ? at(invitation.acceptedAt) : null,
+      revokedAt: invitation.revokedAt !== undefined ? at(invitation.revokedAt) : null,
+    }
+    assertColumnLengths(PKG, this.limits, 'TeamInvitation', data)
+    await this.client.teamInvitation.create({ data })
   }
 
   async findByToken(token: string): Promise<Invitation | null> {
@@ -208,7 +263,7 @@ export interface PrismaTeamsStores {
  * `teamsPlugin`:
  *
  * ```ts
- * const t = prismaTeamsStores(prisma)
+ * const t = prismaTeamsStores(prisma) // on MySQL: prismaTeamsStores(prisma, { columnLimits: 'mysql' })
  * teamsPlugin({ memberships: t.memberships, invitations: t.invitations })
  * ```
  */
@@ -229,10 +284,10 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaTeamsStores(client: PrismaTeamsClient): PrismaTeamsStores {
-  ensureModel(client, 'teamMembership', '@basaltkit/teams-prisma')
+export function prismaTeamsStores(client: PrismaTeamsClient, options: PrismaTeamsStoreOptions = {}): PrismaTeamsStores {
+  ensureModel(client, 'teamMembership', PKG)
   return {
-    memberships: new PrismaMembershipStore(client),
-    invitations: new PrismaInvitationStore(client),
+    memberships: new PrismaMembershipStore(client, options),
+    invitations: new PrismaInvitationStore(client, options),
   }
 }

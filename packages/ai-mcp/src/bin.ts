@@ -36,6 +36,8 @@ if (has('http')) {
     // Hostnames clients use to reach a remote bind (the Host header they send).
     ...(allowedHosts ? { allowedHosts } : {}),
     ...(token ? { token } : {}),
+    // `--sessions`: Mcp-Session-Id sessions, so a separate POST can cancel a call.
+    ...(has('sessions') ? { sessions: true } : {}),
   })
     .then((handle) => process.stdout.write(`basalt-ai-mcp listening on ${handle.url}\n`))
     .catch((error: unknown) => {

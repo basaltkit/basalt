@@ -11,6 +11,9 @@ export interface StdioServerLike {
 /** Default cap on one newline-delimited message: 4 MiB worth of characters. */
 export const DEFAULT_MAX_LINE_LENGTH = 4 * 1024 * 1024
 
+/** Default cap on requests in flight at once on one stdio connection. */
+export const DEFAULT_MAX_CONCURRENT_REQUESTS = 16
+
 export interface ServeStdioOptions {
   /** Static headers applied to every tool call — stdio has no per-request headers. */
   headers?: Record<string, string>
@@ -24,6 +27,15 @@ export interface ServeStdioOptions {
    * an `INVALID_REQUEST` error. Default {@link DEFAULT_MAX_LINE_LENGTH} (4 MiB).
    */
   maxLineLength?: number
+  /**
+   * Most requests (messages with an `id`) this connection may have in flight
+   * at once. One more is answered immediately with a `SERVER_BUSY` (-32000)
+   * JSON-RPC error instead of starting — the stream is a single client, but
+   * nothing else bounds how many tool calls it can pile up. Notifications
+   * (e.g. `notifications/cancelled`) are never counted nor refused.
+   * Default {@link DEFAULT_MAX_CONCURRENT_REQUESTS} (16).
+   */
+  maxConcurrentRequests?: number
 }
 
 /** A running stdio server. `close()` detaches the stdin listener. */
@@ -37,6 +49,19 @@ const CONFIRM_SCHEMA = {
   properties: { confirm: { type: 'boolean', title: 'Confirm' } },
   required: ['confirm'],
 } as const
+
+/**
+ * The id of a message that is a request (it will be answered), or `undefined`
+ * for a notification or anything the dispatcher will reject without running.
+ */
+function requestId(message: unknown): JsonRpcId | undefined {
+  if (message === null || typeof message !== 'object' || Array.isArray(message)) return undefined
+  const m = message as Record<string, unknown>
+  if (typeof m['method'] !== 'string' || !('id' in m) || m['id'] === undefined) return undefined
+  const id = m['id']
+  // A malformed id still takes a slot: the dispatcher answers it (with an error).
+  return typeof id === 'string' || typeof id === 'number' ? id : null
+}
 
 function isResponse(message: unknown): message is JsonRpcResponse {
   if (message === null || typeof message !== 'object' || Array.isArray(message)) return false
@@ -77,6 +102,8 @@ export function serveStdio(server: StdioServerLike, options: ServeStdioOptions =
   const output = options.output ?? process.stdout
   const headers = options.headers ?? {}
   const maxLineLength = options.maxLineLength ?? DEFAULT_MAX_LINE_LENGTH
+  const maxConcurrent = options.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS
+  let inFlight = 0 // requests admitted and not yet answered
   const session = {} // identity of this connection — scopes cancellation
   const decoder = new StringDecoder('utf8')
 
@@ -163,9 +190,41 @@ export function serveStdio(server: StdioServerLike, options: ServeStdioOptions =
       requests.push(message)
     }
     if (messages.length > 0 && requests.length === 0) return
-    const ctx: CallContext = { headers, notify, session, ...(clientCanElicit ? { elicit } : {}) }
-    const response = await dispatchPayload(server, Array.isArray(payload) ? requests : payload, ctx)
-    if (response !== null) emit(JSON.stringify(response))
+    // Admission control: every request (it carries an `id`) takes a slot until
+    // it is answered; past the cap it is refused on the spot. Notifications
+    // pass freely — a cancel must always get through to a saturated connection.
+    const admitted: unknown[] = []
+    const refused: JsonRpcResponse[] = []
+    for (const message of requests) {
+      const id = requestId(message)
+      if (id === undefined) {
+        admitted.push(message)
+      } else if (inFlight < maxConcurrent) {
+        inFlight++
+        admitted.push(message)
+      } else {
+        refused.push(
+          fail(id, RPC_ERRORS.SERVER_BUSY, `Too many requests in flight (max ${maxConcurrent}); retry later`),
+        )
+      }
+    }
+    const slots = admitted.length - admitted.filter((message) => requestId(message) === undefined).length
+    let response: JsonRpcResponse | JsonRpcResponse[] | null = null
+    try {
+      if (admitted.length > 0) {
+        const ctx: CallContext = { headers, notify, session, ...(clientCanElicit ? { elicit } : {}) }
+        response = await dispatchPayload(server, Array.isArray(payload) ? admitted : admitted[0], ctx)
+      }
+    } finally {
+      inFlight -= slots
+    }
+    if (!Array.isArray(payload)) {
+      const single = refused[0] ?? response
+      if (single !== null) emit(JSON.stringify(single))
+      return
+    }
+    const answers = [...(Array.isArray(response) ? response : response ? [response] : []), ...refused]
+    if (answers.length > 0) emit(JSON.stringify(answers))
   }
 
   input.on('data', onData)

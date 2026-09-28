@@ -5,7 +5,7 @@ const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import { randomUUID } from 'node:crypto'
-import { matchesEvent, type WebhookEndpoint, type WebhookStore } from '@basaltkit/webhooks'
+import { matchesEvent, WebhookEndpointIdInUseError, type WebhookEndpoint, type WebhookStore } from '@basaltkit/webhooks'
 
 /**
  * Durable, SQLite-backed implementation of the `@basaltkit/webhooks` `WebhookStore`
@@ -64,16 +64,11 @@ const toEndpoint = (r: EndpointRow): WebhookEndpoint => ({
 
 /**
  * The endpoint id is held by a different scope (another tenant, or a global
- * endpoint when adding a tenant one, or vice versa).
+ * endpoint when adding a tenant one, or vice versa). Re-exported from
+ * `@basaltkit/webhooks`: the same class the memory store and
+ * `WebhookManager.register()` throw, so one `instanceof` check covers every store.
  */
-export class WebhookEndpointIdInUseError extends Error {
-  readonly code = 'WEBHOOK_ENDPOINT_ID_IN_USE'
-  readonly status = 409
-  constructor(id: string) {
-    super(`@basaltkit/webhooks-sqlite: endpoint id "${id}" is already in use by another scope.`)
-    this.name = 'WebhookEndpointIdInUseError'
-  }
-}
+export { WebhookEndpointIdInUseError }
 
 export class SqliteWebhookStore implements WebhookStore {
   constructor(private readonly db: DatabaseSync) {}

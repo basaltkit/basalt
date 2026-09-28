@@ -194,16 +194,19 @@ limits, and in production back the WebAuthn `PasskeyStore` / `WebAuthnChallengeS
 ### Custom-domain re-verification
 
 A verified custom domain that later expires or repoints its DNS is a takeover risk.
-Re-verify on a schedule with [`@basaltkit/scheduler`](/guide/scheduler) — `verify(tenantId, domain, { force })`
-re-checks the TXT record and **revokes** the domain if it no longer matches:
+Re-verify on a schedule with [`@basaltkit/scheduler`](/guide/scheduler) — `reverifyAll()`
+re-checks the TXT record of every verified domain and **revokes** those whose
+record is definitively gone (a DNS timeout leaves them verified):
 
 ```ts
 schedule.call('reverify-domains', async () => {
-  for (const { tenantId, domain } of await listVerifiedDomains()) {
-    await customDomains.verify(tenantId, domain, { force: true })
-  }
+  const { revoked } = await customDomains.reverifyAll()
+  if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
 }).daily().at('04:00')
 ```
+
+A new owner of a lapsed domain can also take a stale verified claim over by
+publishing its `challenge()` record — see [Tenancy](/guide/tenancy#custom-domains-verified).
 
 ## Fail-closed secrets — `secret()`
 
@@ -323,14 +326,19 @@ offline-forgeable) — use `secret({ minLength: 32 })`.
 
 TOTP is replay-protected out of the box (a code's time-step is recorded, so an
 intercepted code is single-use). To also survive a database leak, encrypt the
-stored secrets with an app-held key — they're kept as AES-256-GCM envelopes and
+stored secrets with an app-held key (at least 32 bytes) — they're kept as
+AES-256-GCM envelopes (HKDF-derived key with a key id, bound to the user) and
 decrypted only when verifying a code:
 
 ```ts
 authPlugin({ users, secret: env.APP_SECRET, mfaEncryptionKey: env.MFA_KEY })
 ```
 
-Existing plaintext enrollments keep working and are encrypted on their next write.
+A stored value that is not such an envelope is refused, so a write to the table
+cannot downgrade a secret to a plaintext one the writer knows. Key rotation and
+migrating plaintext or `v1:` rows (an explicit `legacy` opt-in plus
+`auth.reencryptMfaSecret(userId)`) are covered in
+[Encrypting TOTP secrets at rest](/guide/auth#mfa-encryption).
 
 ## Shared responsibility — hardening your integration
 
@@ -370,6 +378,33 @@ If protection genuinely happens at an outer edge/gateway, opt out explicitly
 with the adapter option `allowUnguardedMeta: true` (or `['auth', …]` for
 specific keys). A custom guard plugin that enforces one of these keys should
 claim it: `ensureMetadata(container).add('http:guarded-meta', 'auth')`.
+
+Claiming a key proves *someone* enforces it; it says nothing about the
+**value**. For that, a plugin registers a route-meta validator in
+`http:meta-validators` (`META_VALIDATORS_BUCKET`): every adapter runs them over
+its full route list at boot, right after the guarded-meta check, and refuses to
+start with `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`) listing every
+`route: problem`. `teamsPlugin` uses it so `meta.teamRole: 'Admin'` (a typo)
+fails the boot instead of answering 500 on the first request.
+`allowUnguardedMeta` never waives validators.
+
+```ts
+const validator: RouteMetaValidator = ({ route, container }) =>
+  typeof route.meta?.['shape'] === 'string' || route.meta?.['shape'] === undefined
+    ? undefined
+    : `meta.shape must be a string` // or string[] for several problems; throwing counts too
+ensureMetadata(container).add(META_VALIDATORS_BUCKET, validator)
+```
+
+Driving `runRoute()` without an adapter? `assertRoutesGuarded(routes,
+app.container)` runs both checks; `assertRouteMetaValid(routes, app.container)`
+runs the validators alone.
+
+A guard may also publish a **pure visibility check** in `http:route-visibility`
+(`RouteVisibilityCheck`, evaluated by `isRouteVisible`) — "could this caller
+possibly pass?" with no side effects (no rate limit, no audit, no hooks), used
+by listing surfaces such as MCP's `tools/list`. Visibility is never
+authorization: the guard still runs on every call.
 
 ### 2. Never trust a client-supplied tenant — verify membership
 

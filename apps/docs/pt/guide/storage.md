@@ -98,6 +98,16 @@ uma key com barra inicial, um segmento `..` ou caracteres de controlo é rejeita
 com `StorageInvalidKeyError` — por isso uma key fornecida pelo utilizador nunca
 pode escapar ao seu prefixo nem colidir com a de outro tenant.
 
+As keys também têm de ser **canónicas**: um segmento `.` ou vazio (`a/./b`,
+`./a`, `a//b`, uma `/` final, `''`) também é rejeitado. O driver local resolve-os
+para o mesmo ficheiro que `a/b`, enquanto S3, GCS e Azure os guardam como
+objetos distintos — a mesma key nomearia um ficheiro num backend e três noutro.
+O Basalt recusa em vez de normalizar: reescrever uma key em silêncio deixaria
+duas strings que a tua app compara (uma allow-list, uma deduplicação, um trilho
+de auditoria) apontar para o mesmo objeto. Constrói as keys com
+`[a, b].join('/')` a partir de partes não vazias. Um prefixo de `list()` pode ser
+`''` (a raiz do disco) ou terminar numa `/` (`list('avatars/')`).
+
 Os uploads são ilimitados por omissão **nesta camada** (o pipeline de nível
 superior [`@basaltkit/files`](/pt/guide/files) limita os uploads a 25 MiB mesmo
 quando não configuras nada); passa limites opt-in ao `put` para limitar o
@@ -519,7 +529,7 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | Classe | Código | Quando |
 | --- | --- | --- |
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` num ficheiro que não existe |
-| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | A key começa por `/`/`\\`, contém um segmento `..` ou caracteres de controlo — o ponto único da fachada rejeita-a em **todas** as operações, para todos os drivers, antes de o prefixo de tenant ser aplicado |
+| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | A key começa por `/`/`\\`, contém um segmento `..`, `.` ou vazio (`a//b`, uma `/` final, `''`) ou caracteres de controlo — o ponto único da fachada rejeita-a em **todas** as operações, para todos os drivers, antes de o prefixo de tenant ser aplicado |
 | `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | Um path escapa à root do disco — a segunda linha de defesa própria do driver local |
 | `StorageTooLargeError` | `STORAGE_TOO_LARGE` | `put` (ou `temporaryUploadUrl`) com `maxBytes` definido e um payload / tamanho declarado maior |
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` (ou `temporaryUploadUrl`) com `allowedContentTypes` definido e um content type em falta/fora da lista |

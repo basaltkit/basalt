@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { fail, RPC_ERRORS } from './protocol.js'
+import { isInitializeRequest, MCP_SESSION_HEADER, McpSessions, type McpSessionOptions } from './sessions.js'
 import type { StdioServerLike } from './stdio.js'
 import type { CallContext } from './server.js'
 import { dispatchPayload } from './dispatch.js'
@@ -50,6 +52,31 @@ export interface ServeHttpOptions {
    * is never buffered. Default {@link DEFAULT_MAX_BODY_BYTES} (1 MiB).
    */
   maxBodyBytes?: number
+  /**
+   * Streamable-HTTP sessions — opt-in (`true`, or `{ ttlMs, maxSessions }`).
+   * A successful `initialize` then answers with an `Mcp-Session-Id` header;
+   * every later request must carry it (400 without it, 404 for an unknown,
+   * expired or foreign one — the client then re-initializes) and `DELETE`
+   * with it ends the session. All requests of a session share one
+   * cancellation scope, so a `notifications/cancelled` POSTed separately
+   * aborts the call it names — while another session, even one guessing the
+   * request id, never can.
+   *
+   * Default `false` (stateless): each POST is its own session, no header is
+   * issued or required, and only a client disconnect cancels a call. The
+   * default stays stateless so existing header-less clients of a dev bridge
+   * keep working; the runtime `/mcp` route of `@basaltkit/mcp` turns sessions
+   * on by default.
+   */
+  sessions?: boolean | McpSessionOptions
+  /**
+   * Who is calling, for binding sessions: a session is only usable by requests
+   * that resolve to the principal that opened it. Default: a hash of the
+   * `Authorization` header (so one bearer token cannot use another's session;
+   * without `Authorization`, every caller is the same principal and the
+   * unguessable id alone protects the session).
+   */
+  principal?: (req: IncomingMessage) => string | undefined | Promise<string | undefined>
 }
 
 export interface HttpHandle {
@@ -131,15 +158,22 @@ function isAllowedRequest(
  * Server→client notifications (progress) are not delivered over this transport —
  * use stdio when you need live progress.
  *
- * Each HTTP request is its own session: a `notifications/cancelled` POSTed
- * separately cannot abort another request's call. Instead, a call is aborted
- * when its client disconnects before the response is written. JSON-RPC batches
- * are accepted. Bodies over `maxBodyBytes` get 413 without being buffered.
+ * With `sessions` on (opt-in), `Mcp-Session-Id` scopes cancellation: a
+ * `notifications/cancelled` POSTed in a later request of the same session
+ * aborts the call it names; no other session can. Stateless (the default),
+ * each request is its own session. A call is always aborted when its client
+ * disconnects before the response is written.
+ * JSON-RPC batches are accepted. Bodies over `maxBodyBytes` get 413 without
+ * being buffered.
  */
 export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {}): Promise<HttpHandle> {
   const host = options.host ?? '127.0.0.1'
   const path = options.path ?? '/mcp'
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
+  const sessions =
+    options.sessions === undefined || options.sessions === false
+      ? undefined
+      : new McpSessions(options.sessions === true ? {} : options.sessions)
 
   if (!isLoopbackBind(host) && !options.authorize && !options.allowRequest) {
     return Promise.reject(
@@ -165,7 +199,13 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
       reject(res, 403, RPC_ERRORS.INVALID_REQUEST, 'Forbidden: host/origin not allowed')
       return
     }
-    if (req.method !== 'POST' || (req.url ?? '/').split('?')[0] !== path) {
+    const onPath = (req.url ?? '/').split('?')[0] === path
+    if (onPath && req.method === 'DELETE' && sessions) {
+      req.resume()
+      void endSession(req, res)
+      return
+    }
+    if (req.method !== 'POST' || !onPath) {
       req.resume()
       reject(res, 404, RPC_ERRORS.METHOD_NOT_FOUND, `Not found: ${req.method} ${req.url}`)
       return
@@ -182,19 +222,34 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
     reject(res, 413, RPC_ERRORS.INVALID_REQUEST, `Request body exceeds ${maxBodyBytes} bytes`)
   }
 
+  const principalOf = async (req: IncomingMessage): Promise<string> => {
+    if (options.principal) return (await options.principal(req)) ?? ''
+    const auth = headerOf(req, 'authorization')
+    return auth === undefined ? '' : createHash('sha256').update(auth).digest('base64url')
+  }
+
+  const authorized = async (req: IncomingMessage): Promise<boolean> => {
+    if (!options.authorize) return true
+    try {
+      return await options.authorize(req)
+    } catch {
+      return false
+    }
+  }
+
+  const endSession = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (!(await authorized(req))) return reject(res, 401, RPC_ERRORS.INVALID_REQUEST, 'Unauthorized')
+    const ended = sessions!.delete(headerOf(req, MCP_SESSION_HEADER), await principalOf(req))
+    if (!ended) return reject(res, 404, RPC_ERRORS.INVALID_REQUEST, 'Session not found')
+    res.writeHead(204)
+    res.end()
+  }
+
   const readAndHandle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (options.authorize) {
-      let authorized = false
-      try {
-        authorized = await options.authorize(req)
-      } catch {
-        authorized = false
-      }
-      if (!authorized) {
-        req.resume()
-        reject(res, 401, RPC_ERRORS.INVALID_REQUEST, 'Unauthorized')
-        return
-      }
+    if (!(await authorized(req))) {
+      req.resume()
+      reject(res, 401, RPC_ERRORS.INVALID_REQUEST, 'Unauthorized')
+      return
     }
     const declared = Number(req.headers['content-length'])
     if (Number.isFinite(declared) && declared > maxBodyBytes) {
@@ -227,27 +282,59 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
       reject(res, 400, RPC_ERRORS.PARSE_ERROR, 'Parse error')
       return
     }
+    // The cancellation scope: the session (shared by all its requests), or —
+    // stateless — this request alone.
+    let session: object = {}
+    let issued: string | undefined
+    let principal = ''
+    if (sessions) {
+      principal = await principalOf(req)
+      if (isInitializeRequest(payload)) {
+        const opened = sessions.create(principal)
+        session = opened
+        issued = opened.id
+      } else {
+        const id = headerOf(req, MCP_SESSION_HEADER)
+        if (id === undefined) {
+          reject(res, 400, RPC_ERRORS.INVALID_REQUEST, 'Bad Request: Mcp-Session-Id header required (send initialize first)')
+          return
+        }
+        const found = sessions.resolve(id, principal)
+        if (!found) {
+          reject(res, 404, RPC_ERRORS.INVALID_REQUEST, 'Session not found (expired or unknown) — initialize again')
+          return
+        }
+        session = found
+      }
+    }
     // A client that goes away before its answer is written cancels the call.
     const controller = new AbortController()
     res.on('close', () => {
       if (!res.writableFinished) controller.abort()
     })
     // HTTP has no server→client channel here; `headers` carry per-call metadata.
-    // Every request is its own session — cancellation never crosses requests.
     const ctx: CallContext = {
       headers: normalizeHeaders(req),
-      session: {},
+      session,
       signal: controller.signal,
       ...(req.socket.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
     }
     const response = await dispatchPayload(server, payload, ctx)
+    // A failed initialize opens nothing.
+    if (issued !== undefined && (response === null || Array.isArray(response) || response.error !== undefined)) {
+      sessions!.delete(issued, principal)
+      issued = undefined
+    }
     if (res.destroyed) return
     if (response === null) {
       res.writeHead(202)
       res.end()
       return
     }
-    res.writeHead(200, { 'content-type': 'application/json' })
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      ...(issued !== undefined ? { [MCP_SESSION_HEADER]: issued } : {}),
+    })
     res.end(JSON.stringify(response))
   }
 
@@ -274,6 +361,12 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
       })
     })
   })
+}
+
+/** One request header's first value. */
+function headerOf(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name]
+  return Array.isArray(value) ? value[0] : value
 }
 
 /**

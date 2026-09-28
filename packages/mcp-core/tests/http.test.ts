@@ -10,31 +10,37 @@ const echo: McpToolDef = {
   },
 }
 
-async function rpc(url: string, message: unknown): Promise<any> {
+async function rpc(url: string, message: unknown, session?: string): Promise<any> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(session ? { 'mcp-session-id': session } : {}) },
     body: JSON.stringify(message),
   })
-  return { status: res.status, body: res.status === 202 ? null : await res.json() }
+  return {
+    status: res.status,
+    session: res.headers.get('mcp-session-id') ?? undefined,
+    body: res.status === 202 ? null : await res.json(),
+  }
 }
 
 describe('serveHttp', () => {
   it('handles initialize -> tools/list -> tools/call over POST JSON-RPC', async () => {
     const server = new McpServer({ tools: [echo], serverInfo: { name: 'http-demo', version: '1.0.0' } })
-    const handle = await serveHttp(server, { port: 0 })
+    const handle = await serveHttp(server, { port: 0, sessions: true })
     try {
       const init = await rpc(handle.url, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })
       expect(init.status).toBe(200)
       expect(init.body.result.serverInfo).toEqual({ name: 'http-demo', version: '1.0.0' })
+      const session = init.session as string
+      expect(session).toMatch(/^[A-Za-z0-9_-]{32}$/)
 
-      const list = await rpc(handle.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+      const list = await rpc(handle.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, session)
       expect(list.body.result.tools.map((t: { name: string }) => t.name)).toEqual(['echo'])
 
-      const call = await rpc(handle.url, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'echo', arguments: { a: 1 } } })
+      const call = await rpc(handle.url, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'echo', arguments: { a: 1 } } }, session)
       expect(call.body.result.structuredContent).toEqual({ a: 1 })
 
-      const notif = await rpc(handle.url, { jsonrpc: '2.0', method: 'notifications/initialized' })
+      const notif = await rpc(handle.url, { jsonrpc: '2.0', method: 'notifications/initialized' }, session)
       expect(notif.status).toBe(202)
     } finally {
       await handle.close()

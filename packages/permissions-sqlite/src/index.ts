@@ -52,6 +52,26 @@ export function migrate(db: DatabaseSync): void {
   `)
 }
 
+/**
+ * Direct writes validate what they persist: an empty or non-string user id,
+ * role name or scope is refused with a `TypeError` instead of being written.
+ * `''`, `null` and `undefined` would otherwise collapse into one shared
+ * "nobody" key whose grants are honoured for every caller with a missing id.
+ * (The Gate validates too; these guards cover code that writes to the store
+ * directly — seed scripts, admin tools, migrations.)
+ */
+function assertKey(value: unknown, what: string, operation: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${operation}: ${what} must be a non-empty string`)
+  }
+}
+
+function assertPermissionList(value: unknown, operation: string): asserts value is string[] {
+  if (!Array.isArray(value) || !value.every((p) => typeof p === 'string' && p.length > 0)) {
+    throw new TypeError(`${operation}: permissions must be an array of non-empty strings`)
+  }
+}
+
 export class SqliteAccessStore implements AccessStore {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -77,18 +97,27 @@ export class SqliteAccessStore implements AccessStore {
   }
 
   async assignRole(userId: string, role: string, scope: string): Promise<void> {
+    assertKey(userId, 'userId', 'assignRole')
+    assertKey(role, 'role', 'assignRole')
+    assertKey(scope, 'scope', 'assignRole')
     this.db
       .prepare('INSERT OR IGNORE INTO perm_user_roles (scope, user_id, role) VALUES (?, ?, ?)')
       .run(scope, userId, role)
   }
 
   async removeRole(userId: string, role: string, scope: string): Promise<void> {
+    assertKey(userId, 'userId', 'removeRole')
+    assertKey(role, 'role', 'removeRole')
+    assertKey(scope, 'scope', 'removeRole')
     this.db
       .prepare('DELETE FROM perm_user_roles WHERE scope = ? AND user_id = ? AND role = ?')
       .run(scope, userId, role)
   }
 
   async grantToRole(role: string, permissions: string[], scope: string): Promise<void> {
+    assertKey(role, 'role', 'grantToRole')
+    assertPermissionList(permissions, 'grantToRole')
+    assertKey(scope, 'scope', 'grantToRole')
     const stmt = this.db.prepare('INSERT OR IGNORE INTO perm_role_permissions (scope, role, permission) VALUES (?, ?, ?)')
     this.atomically(() => {
       for (const permission of permissions) stmt.run(scope, role, permission)
@@ -96,6 +125,9 @@ export class SqliteAccessStore implements AccessStore {
   }
 
   async grantToUser(userId: string, permissions: string[], scope: string): Promise<void> {
+    assertKey(userId, 'userId', 'grantToUser')
+    assertPermissionList(permissions, 'grantToUser')
+    assertKey(scope, 'scope', 'grantToUser')
     const stmt = this.db.prepare('INSERT OR IGNORE INTO perm_user_permissions (scope, user_id, permission) VALUES (?, ?, ?)')
     this.atomically(() => {
       for (const permission of permissions) stmt.run(scope, userId, permission)

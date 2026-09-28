@@ -114,11 +114,42 @@ filesPlugin({ disk, store: files.store })
 Schema-per-tenant applications pass the tenant's client instead — see
 [`tenantClient()`](https://github.com/basaltkit/basalt/tree/main/packages/prisma).
 
+## MySQL
+
+The reference schema above is written for PostgreSQL (and works on SQLite),
+where a bare `String` is `TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**,
+and a server outside strict mode truncates a longer value silently — the write
+succeeds, and the value read back is not the one written. A cut `path` no longer names the stored object: the bytes are orphaned and the file cannot be served — the very failure this package exists to prevent.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/files-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it when
+  your datasource is `mysql`): the free-text columns are widened with native
+  types, the keys stay `VARCHAR(191)` so they can be indexed.
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaFilesStore(prisma, { columnLimits: 'mysql' })
+  prismaFileVersionsStore(prisma, { columnLimits: 'mysql' }) // @basaltkit/files-prisma/versions
+  ```
+
+  `'mysql'` is `filesMysqlColumnLimits` — the capacities of `schema.mysql.prisma`. A number is
+  a limit in characters (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes
+  (the `TEXT` family). Widened a column yourself? Spread the preset and raise it:
+  `{ File: { ...filesMysqlColumnLimits.File, checksum: 512 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
+
 ## API reference
 
-### `prismaFilesStore(client): { store }`
+### `prismaFilesStore(client, options?): { store }`
 
-Returns the store named to drop straight into `filesPlugin`.
+Returns the store named to drop straight into `filesPlugin`. `options.columnLimits`
+(`'mysql'` or your own limits) refuses a value longer than its MySQL column — see
+[MySQL](#mysql). `prismaFileVersionsStore(client, options?)` takes the same option.
 
 ### `PrismaFileStore`
 

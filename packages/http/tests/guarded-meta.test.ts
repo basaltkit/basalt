@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import { Container, ensureMetadata } from '@basaltkit/core'
 import { route } from '../src/index.js'
-import { assertRoutesGuarded, GUARDED_META_BUCKET, GUARDED_META_KEYS, UnguardedRouteMetaError } from '../src/guarded-meta.js'
+import {
+  assertRouteMetaValid,
+  assertRoutesGuarded,
+  GUARDED_META_BUCKET,
+  GUARDED_META_KEYS,
+  InvalidRouteMetaError,
+  META_VALIDATORS_BUCKET,
+  UnguardedRouteMetaError,
+  type RouteMetaValidator,
+} from '../src/guarded-meta.js'
+import { isRouteVisible, ROUTE_VISIBILITY_BUCKET, type RouteVisibilityCheck } from '../src/route-visibility.js'
 
 const authRoute = route({ method: 'GET', url: '/me', meta: { auth: true }, handler: async () => ({}) })
 const canRoute = route({ method: 'DELETE', url: '/p/:id', meta: { can: 'p:delete' }, handler: async () => ({}) })
@@ -117,5 +128,81 @@ describe('assertRoutesGuarded(routes, container) — the check for code that cal
     const guarded = await createApp({ plugins: [claimsAuth] }).boot()
     expect(() => assertRoutesGuarded([authRoute, plain], guarded.container)).not.toThrow()
     expect(() => assertRoutesGuarded([canRoute], guarded.container)).toThrow(/meta\.can \(enforced by permissionsPlugin\)/)
+  })
+})
+
+describe('route-meta validators (http:meta-validators) — FA-044 residual', () => {
+  const containerWith = (validators: RouteMetaValidator[], claimed: string[] = []) => {
+    const container = new Container()
+    const metadata = ensureMetadata(container)
+    for (const v of validators) metadata.add(META_VALIDATORS_BUCKET, v)
+    for (const k of claimed) metadata.add(GUARDED_META_BUCKET, k)
+    return container
+  }
+  const refuseAdmin: RouteMetaValidator = ({ route: r }) =>
+    r.meta?.['teamRole'] === 'Admin' ? 'unknown role "Admin"' : undefined
+
+  it('assertRouteMetaValid collects every problem across routes and validators', () => {
+    const container = containerWith([refuseAdmin, ({ route: r }) => (r.url === '/b' ? ['one', 'two'] : undefined)])
+    const routes = [
+      route({ method: 'GET', url: '/a', meta: { teamRole: 'Admin' }, handler: () => 'a' }),
+      route({ method: 'GET', url: '/b', handler: () => 'b' }),
+    ]
+    try {
+      assertRouteMetaValid(routes, container)
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBeInstanceOf(InvalidRouteMetaError)
+      expect((error as InvalidRouteMetaError).problems).toEqual([
+        { route: 'GET /a', problem: 'unknown role "Admin"' },
+        { route: 'GET /b', problem: 'one' },
+        { route: 'GET /b', problem: 'two' },
+      ])
+    }
+  })
+
+  it('assertRoutesGuarded(routes, container) runs the validators — even with allow: true', () => {
+    const container = containerWith([refuseAdmin], ['teamRole'])
+    const bad = [route({ method: 'GET', url: '/a', meta: { teamRole: 'Admin' }, handler: () => 'a' })]
+    expect(() => assertRoutesGuarded(bad, container)).toThrow(InvalidRouteMetaError)
+    expect(() => assertRoutesGuarded(bad, container, true)).toThrow(InvalidRouteMetaError)
+    // A plain set has no validators to run — the classic claimed-keys check only.
+    expect(() => assertRoutesGuarded(bad, new Set(['teamRole']))).not.toThrow()
+  })
+
+  it('the unguarded-meta check still runs first and the waiver still waives it', () => {
+    const container = containerWith([refuseAdmin])
+    const bad = [route({ method: 'GET', url: '/a', meta: { teamRole: 'admin' }, handler: () => 'a' })]
+    expect(() => assertRoutesGuarded(bad, container)).toThrow(UnguardedRouteMetaError)
+    expect(() => assertRoutesGuarded(bad, container, ['teamRole'])).not.toThrow()
+  })
+})
+
+describe('isRouteVisible (http:route-visibility)', () => {
+  const containerWith = (checks: RouteVisibilityCheck[], claimed: string[] = []) => {
+    const container = new Container()
+    const metadata = ensureMetadata(container)
+    for (const c of checks) metadata.add(ROUTE_VISIBILITY_BUCKET, c)
+    for (const k of claimed) metadata.add(GUARDED_META_BUCKET, k)
+    return container
+  }
+  const authed = route({ method: 'GET', url: '/me', meta: { auth: true }, handler: () => 'me' })
+
+  it('hides meta.auth routes from an anonymous caller only when a guard claimed `auth`', async () => {
+    expect(await isRouteVisible(authed, {}, containerWith([], ['auth']))).toBe(false)
+    expect(await isRouteVisible(authed, { user: { id: 'u' } }, containerWith([], ['auth']))).toBe(true)
+    // Edge-auth waiver: no guard claimed `auth`, no user ever appears — never hide.
+    expect(await isRouteVisible(authed, {}, containerWith([]))).toBe(true)
+    expect(await isRouteVisible(plain, {}, containerWith([], ['auth']))).toBe(true)
+  })
+
+  it('a registered check can hide a route; a throwing check hides it (fail closed)', async () => {
+    const hide: RouteVisibilityCheck = ({ route: r }) => (r.url === '/health' ? false : undefined)
+    expect(await isRouteVisible(plain, {}, containerWith([hide]))).toBe(false)
+    expect(await isRouteVisible(authed, { user: { id: 'u' } }, containerWith([hide]))).toBe(true)
+    const boom: RouteVisibilityCheck = async () => {
+      throw new Error('store down')
+    }
+    expect(await isRouteVisible(plain, {}, containerWith([boom]))).toBe(false)
   })
 })

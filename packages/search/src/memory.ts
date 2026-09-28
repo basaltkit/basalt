@@ -35,6 +35,13 @@ export class MemorySearchDriver implements SearchDriver {
     this.documents.set(indexName, new Map())
   }
 
+  async clearTenant(indexName: string, tenantId: string): Promise<void> {
+    const store = this.store(indexName)
+    for (const [key, document] of store) {
+      if (document.tenantId === tenantId) store.delete(key)
+    }
+  }
+
   async search(indexName: string, query: SearchQuery): Promise<SearchResult> {
     const fields = this.searchableFields(indexName)
     const terms = tokenize(query.q)

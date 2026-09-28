@@ -1,0 +1,44 @@
+// Reference schema for @basaltkit/audit-prisma — MySQL variant.
+//
+// Same model as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently — a truncated payload or hash breaks the hash chain.
+// Free-text columns are widened below; the keys stay VARCHAR(191) so they can
+// be indexed. Pair it with `prismaAuditStore(prisma, { columnLimits: 'mysql' })`,
+// which refuses a value that would still not fit instead of letting it be cut.
+// Also run MySQL in strict mode (sql_mode STRICT_TRANS_TABLES, the default
+// since 5.7) so the server refuses what the guard does not see.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AuditEntry {
+  id        String   @id
+  source    String
+  event     String
+  payload   String?  @db.MediumText
+  actorId   String?
+  tenantId  String?
+  requestId String?
+  at        DateTime
+  // Request context (opt-in: auditPlugin({ requestContext: true })). `ip` is PII.
+  ip        String?
+  userAgent String?  @db.Text
+  // Hash chain (opt-in: auditPlugin({ integrity: 'hash-chain' })). One chain per
+  // tenant plus '@system'; NULL on rows written before integrity was enabled.
+  chain     String?
+  seq       Int?
+  prevHash  String?
+  hash      String?
+
+  @@index([tenantId, at])
+  // One writer per (chain, seq): concurrent replicas cannot fork a chain.
+  @@unique([chain, seq])
+  @@map("audit_entries")
+}

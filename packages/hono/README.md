@@ -318,7 +318,7 @@ In this mode errors are still standardized (each handler wraps `toErrorResponse`
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
-| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. Never waives the route-meta validators plugins register (`InvalidRouteMetaError`). |
 | `app` | `Hono` | No | `new Hono()` | Bring your own Hono app; otherwise a new one is created. |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes. A later `hono.notFound(…)` of your own still wins; `false` opts out entirely. |
 | `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` = `1_048_576` (1 MiB) | Maximum request body in bytes, enforced on the bytes read. A request whose `Content-Length` exceeds it is rejected `413 PAYLOAD_TOO_LARGE` before the body is read; a chunked/streamed body is cut off at the limit — Hono/edge has no default cap of its own. An `upload()` route is bounded by its own `maxBytes` instead (streamed, never buffered). |
@@ -342,6 +342,7 @@ reason about it or reuse it.
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A plugin's route-meta validator (`http:meta-validators`) refused a value — e.g. `teamsPlugin` and an unknown `meta.teamRole`. Not waivable. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `BAD_REQUEST` | 400 | A JSON body could not be parsed. |
 | — | `PAYLOAD_TOO_LARGE` | 413 | The body (declared or actually read) exceeds `bodyLimit`. Same `{ error: { code, message } }` envelope as every other error. |

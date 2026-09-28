@@ -1,0 +1,85 @@
+// Reference schema for @basaltkit/subscriptions-prisma — MySQL variant.
+//
+// Same models as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently — a cut `raw` is no longer valid JSON. Free-text
+// columns are widened below; the keys stay VARCHAR(191) so they can be
+// indexed. Pair it with `{ columnLimits: 'mysql' }` on
+// `prismaSubscriptionsStores` and `prismaPaymentStores`, which refuses a value
+// that would still not fit instead of letting it be cut.
+//
+// Copy these models into your app's schema.prisma, run `prisma migrate dev`,
+// and pass the generated client to `prismaSubscriptionsStores()`.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Subscription {
+  billableId        String    @id
+  plan              String
+  period            String
+  status            String
+  trialEndsAt       DateTime?
+  cancelAtPeriodEnd Boolean?
+  canceledAt        DateTime?
+  gatewayRef        String?
+  pendingPlan       String?
+  pendingPeriod     String?
+
+  @@map("subscriptions")
+}
+
+model UsageCounter {
+  billableId String
+  feature    String
+  periodKey  String
+  value      Int    @default(0)
+
+  @@id([billableId, feature, periodKey])
+  @@map("usage_counters")
+}
+
+model WebhookEvent {
+  id     String   @id
+  seenAt DateTime @default(now())
+
+  @@map("webhook_events")
+}
+
+// For prismaPaymentStores() — PaymentLedger + RecurringReferenceBilling.
+// `amount` is BigInt (minor units / cents) to avoid the 32-bit Int ceiling.
+model Payment {
+  id         String   @id
+  status     String   @default("pending")
+  amount     BigInt
+  billableId String?
+  reference  String?
+  raw        String?  @db.MediumText
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status])
+  @@map("payments")
+}
+
+model RecurringSubscription {
+  billableId       String    @id
+  plan             String
+  amount           BigInt
+  interval         String
+  status           String
+  paidThrough      DateTime?
+  pendingPaymentId String?
+  customer         String?   @db.Text
+  createdAt        DateTime
+  updatedAt        DateTime
+
+  @@index([status])
+  @@map("recurring_subscriptions")
+}

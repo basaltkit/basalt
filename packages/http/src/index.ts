@@ -139,7 +139,16 @@ export {
   GUARDED_META_KEYS,
   UnguardedRouteMetaError,
   assertRoutesGuarded,
+  META_VALIDATORS_BUCKET,
+  InvalidRouteMetaError,
+  assertRouteMetaValid,
+  type RouteMetaValidator,
 } from './guarded-meta.js'
+export {
+  ROUTE_VISIBILITY_BUCKET,
+  isRouteVisible,
+  type RouteVisibilityCheck,
+} from './route-visibility.js'
 export { redactUrl, REDACTED } from './redact-url.js'
 export {
   reportHttpError,

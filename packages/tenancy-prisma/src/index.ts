@@ -1,4 +1,37 @@
 import { TenantAlreadyExistsError, type Tenant, type TenantSource } from '@basaltkit/tenancy'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/tenancy-prisma'
+
+export type TenancyColumnLimits = ColumnLimits<{ Tenant: 'id'; TenantDomain: 'domain' | 'tenantId' }>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. `domain` is VARCHAR(255): a DNS name reaches 253.
+ */
+export const tenancyMysqlColumnLimits: TenancyColumnLimits = {
+  Tenant: { id: V },
+  TenantDomain: { domain: 255, tenantId: V },
+}
+
+export interface PrismaTenantSourceOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a tenant id or domain longer than its
+   * column instead of letting the database truncate it — on MySQL outside
+   * strict mode two long domains cut to the same prefix collide, and a cut
+   * domain resolves nobody. `'mysql'` uses the limits of the bundled
+   * `schema.mysql.prisma`; pass an object for a schema of your own. Default:
+   * unchecked (PostgreSQL and SQLite store any length).
+   */
+  columnLimits?: 'mysql' | TenancyColumnLimits
+}
 
 /**
  * Prisma-backed implementation of the `@basaltkit/tenancy` `TenantSource` for
@@ -73,7 +106,20 @@ const domainTakenError = (tenantId: string, domains: string[], cause: unknown): 
   )
 
 export class PrismaTenantSource implements TenantSource {
-  constructor(private readonly client: PrismaTenancyClient) {}
+  private readonly limits: TenancyColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaTenancyClient,
+    options: PrismaTenantSourceOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, tenancyMysqlColumnLimits)
+  }
+
+  /** Before any write, so a refused tenant leaves nothing behind. */
+  private checkLengths(tenant: Tenant, domains: string[]): void {
+    assertColumnLengths(PKG, this.limits, 'Tenant', { id: tenant.id })
+    for (const domain of domains) assertColumnLengths(PKG, this.limits, 'TenantDomain', { domain, tenantId: tenant.id })
+  }
 
   /**
    * Insert or update a tenant and replace its custom-domain set. Domains are
@@ -92,6 +138,7 @@ export class PrismaTenantSource implements TenantSource {
    */
   async save(tenant: Tenant): Promise<Tenant> {
     const domains = domainsOf(tenant)
+    this.checkLengths(tenant, domains)
     await this.client.$transaction(async (tx) => {
       await tx.tenant.upsert({
         where: { id: tenant.id },
@@ -116,6 +163,7 @@ export class PrismaTenantSource implements TenantSource {
    */
   async create(tenant: Tenant): Promise<Tenant> {
     const domains = domainsOf(tenant)
+    this.checkLengths(tenant, domains)
     await this.client.$transaction(async (tx) => {
       try {
         await tx.tenant.create({ data: { id: tenant.id, data: tenant as object } })
@@ -209,12 +257,15 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  * Wire the tenant source to your Prisma client, ready for `tenancyPlugin`:
  *
  * ```ts
- * const tenants = prismaTenantSource(prisma)
+ * const tenants = prismaTenantSource(prisma) // on MySQL: prismaTenantSource(prisma, { columnLimits: 'mysql' })
  * await tenants.create({ id: 'acme', name: 'Acme', domains: ['app.acme.com'] })
  * tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'localhost' })] })
  * ```
  */
-export function prismaTenantSource(client: PrismaTenancyClient): PrismaTenantSource {
-  ensureModel(client, 'tenant', '@basaltkit/tenancy-prisma')
-  return new PrismaTenantSource(client)
+export function prismaTenantSource(
+  client: PrismaTenancyClient,
+  options: PrismaTenantSourceOptions = {},
+): PrismaTenantSource {
+  ensureModel(client, 'tenant', PKG)
+  return new PrismaTenantSource(client, options)
 }

@@ -183,10 +183,21 @@ route({
 
 O role exigido tem de ser **conhecido** — estar em `roleRank` ou em
 `grantableRoles`. Um erro de escrita (`'Admin'`, `'adimn'`), uma string vazia ou
-um valor não-string falha fechado com `500 TEAM_ROLE_UNKNOWN` em todos os pedidos
-a essa rota (antes do `@basaltkit/teams` 4.0 tinha rank 0 e admitia qualquer
-membro). Só `undefined` e `false` significam "sem requisito". O mesmo vale para
-`tenantMembershipPlugin({ role })`.
+um valor não-string **faz falhar o arranque**: o `teamsPlugin` regista um
+validador de meta de rota que todos os adaptadores correm sobre as suas rotas
+antes de servir, por isso a app recusa arrancar com `InvalidRouteMetaError`
+(`HTTP_INVALID_ROUTE_META`) a indicar a rota e o valor — o `allowUnguardedMeta`
+não o dispensa. Uma rota que escape à verificação de arranque (montada fora da
+lista do adaptador, ou corrida diretamente via `runRoute()`) continua a falhar
+fechado com `500 TEAM_ROLE_UNKNOWN` em todos os pedidos (antes do
+`@basaltkit/teams` 4.0 tinha rank 0 e admitia qualquer membro). Só `undefined` e
+`false` significam "sem requisito". O mesmo vale para
+`tenantMembershipPlugin({ role })`, que lança `UnknownTeamRoleError` no arranque.
+
+O `teamsPlugin` regista também uma verificação de visibilidade pura
+(`http:route-visibility`), por isso listagens como o `tools/list` do
+`@basaltkit/mcp` escondem uma rota com `meta.teamRole` de quem não tem esse role
+no tenant atual — vê [MCP](/pt/guide/mcp#what-tools-list-shows).
 
 `teamsPlugin` reclama a chave `teamRole` na verificação de meta-guardada feita
 pelos adaptadores no arranque — declarar `meta.teamRole` numa rota **sem**
@@ -516,9 +527,12 @@ de conceder o catálogo em cada tenant — vê
   de `roleRank` não têm rank: nunca satisfazem um requisito com rank. Adiciona o
   role ao mapa, ou (para o guard de membership) confia na semântica de
   existência predefinida em vez de `role:`.
+- **O arranque falha com `InvalidRouteMetaError` … `meta.teamRole "Admin" is not
+  a known team role`** — corrige o valor, ou dá rank ao role em `roleRank` /
+  lista-o em `grantableRoles` (os roles distinguem maiúsculas).
 - **`500 TEAM_ROLE_UNKNOWN` numa rota** — o seu `meta.teamRole` não está em
-  `roleRank` nem em `grantableRoles`; normalmente um erro de escrita (os roles
-  distinguem maiúsculas).
+  `roleRank` nem em `grantableRoles` e a rota escapou à verificação de arranque
+  (montada fora da lista de rotas do adaptador); normalmente um erro de escrita.
 - **`403` numa rota central (login, registo, criação de tenant)** — marca-a com
   `meta: { central: true }`, ou isenta a identidade que chama com `exempt`.
 

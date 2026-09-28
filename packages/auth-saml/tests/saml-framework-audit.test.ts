@@ -63,6 +63,10 @@ async function start(saml: Saml): Promise<{ irt: string; binding: string; relayS
   return { irt: /ID="([^"]+)"/.exec(xml)![1]!, binding, relayState: url.searchParams.get('RelayState')! }
 }
 
+/** Well-formed, signature-less responses for the stubbed-client route tests (the algorithm check runs first). */
+const STUB = Buffer.from('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="stub"/>').toString('base64')
+const BOOM = Buffer.from('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="boom"/>').toString('base64')
+
 const newAuth = () => new Auth({ users: new MemoryUserSource(), secret: 'x'.repeat(32) })
 
 describe('FA-057 · SAML login CSRF: a response is bound to the browser that started the login', () => {
@@ -162,7 +166,7 @@ describe.skipIf(!fastifyModule)('FA-057 · samlRoutes set and require the bindin
       return `https://idp.acme.example/sso?SAMLRequest=req&RelayState=${encodeURIComponent(relayState)}`
     },
     async validatePostResponseAsync(container) {
-      if (container['SAMLResponse'] === 'boom') throw new Error('Invalid signature')
+      if (container['SAMLResponse'] === BOOM) throw new Error('Invalid signature')
       return { profile: { nameID: 'ana@acme.com', email: 'ana@acme.com' }, loggedOut: false }
     },
     generateServiceProviderMetadata: () => '<x/>',
@@ -193,7 +197,7 @@ describe.skipIf(!fastifyModule)('FA-057 · samlRoutes set and require the bindin
     const relayState = new URL(login.headers['location']!).searchParams.get('RelayState')!
     expect(relayState).toBe(samlRelayStateFor(binding))
 
-    const forged = await f.inject({ method: 'POST', url: '/auth/saml/acme/acs', payload: { SAMLResponse: 'x', RelayState: relayState } })
+    const forged = await f.inject({ method: 'POST', url: '/auth/saml/acme/acs', payload: { SAMLResponse: STUB, RelayState: relayState } })
     expect(forged.statusCode).toBe(400)
     expect(forged.json().error.code).toBe('AUTH_SAML_RESPONSE_INVALID')
 
@@ -201,7 +205,7 @@ describe.skipIf(!fastifyModule)('FA-057 · samlRoutes set and require the bindin
       method: 'POST',
       url: '/auth/saml/acme/acs',
       headers: { cookie: `__Host-basalt_saml=${encodeURIComponent(binding)}` },
-      payload: { SAMLResponse: 'x', RelayState: relayState },
+      payload: { SAMLResponse: STUB, RelayState: relayState },
     })
     expect(ok.statusCode).toBe(200)
     expect(String(ok.headers['set-cookie'])).toContain('Max-Age=0')
@@ -215,11 +219,11 @@ describe.skipIf(!fastifyModule)('FA-057 · samlRoutes set and require the bindin
       method: 'POST',
       url: '/auth/saml/acme/acs',
       headers: { cookie: `__Host-basalt_saml=${encodeURIComponent(binding)}` },
-      payload: { SAMLResponse: 'boom', RelayState: samlRelayStateFor(binding) },
+      payload: { SAMLResponse: BOOM, RelayState: samlRelayStateFor(binding) },
     })
     expect(boom.statusCode).toBe(400)
     expect(boom.json().error.code).toBe('AUTH_SAML_RESPONSE_INVALID')
-    const long = await f.inject({ method: 'POST', url: '/auth/saml/acme/acs', payload: { SAMLResponse: 'x', RelayState: 'r'.repeat(2000) } })
+    const long = await f.inject({ method: 'POST', url: '/auth/saml/acme/acs', payload: { SAMLResponse: STUB, RelayState: 'r'.repeat(2000) } })
     expect(long.statusCode).toBe(400)
   })
 

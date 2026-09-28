@@ -69,9 +69,9 @@ response, or `null` for a notification (which by spec gets no reply). Implemente
 |---|---|---|
 | `initialize` | yes | Negotiates the protocol version and reports capabilities + `serverInfo`. |
 | `ping` | yes | Replies `{}`. |
-| `tools/list` · `tools/call` | yes | The core surface. |
+| `tools/list` · `tools/call` | yes | The core surface. `tools/list` omits tools whose optional `visible(ctx)` hook returns `false` (or throws); `tools/call` never consults it. |
 | `notifications/initialized` | yes | Accepted, no reply. |
-| `notifications/cancelled` | yes | Aborts the in-flight call with that `requestId` — **of the same session** only (`CallContext.session`; one per stdio stream, one per HTTP request). |
+| `notifications/cancelled` | yes | Aborts the in-flight call with that `requestId` — **of the same session** only (`CallContext.session`; one per stdio stream; over HTTP the `Mcp-Session-Id` session when `serveHttp({ sessions })` is on, else one per request). |
 | `resources/list` · `resources/read` | only when resources are registered | Otherwise `METHOD_NOT_FOUND`. |
 | `prompts/list` · `prompts/get` | only when prompts are registered | Otherwise `METHOD_NOT_FOUND`. |
 
@@ -140,6 +140,19 @@ attack surface:
   **refused** unless `authorize` (e.g. a bearer-token check → `401`) or `allowRequest` is set.
 - **Body cap** — bodies over `maxBodyBytes` (default 1 MiB) are answered `413` without
   being buffered.
+- **Sessions (opt-in)** — `sessions: true` (or `{ ttlMs, maxSessions }`) issues an
+  `Mcp-Session-Id` on a successful `initialize` and requires it afterwards (`400`
+  without, `404` for an unknown, expired or foreign one; `DELETE` ends it). All requests
+  of a session share one cancellation scope, so a `notifications/cancelled` POSTed
+  separately cancels the call — no other session can. A session is bound to
+  `principal(req)` (default: a hash of `Authorization`), expires after 30 min idle and at
+  most 1000 live (LRU eviction). Stateless by default, so header-less clients keep
+  working; the table is exported as `McpSessions`.
+
+stdio caps concurrency too: at most `maxConcurrentRequests` (default 16) requests run at
+once per connection; one more is answered at once with `-32000`
+(`RPC_ERRORS.SERVER_BUSY`). Notifications are never counted nor refused, so a cancel
+always gets through.
 
 ## API reference
 
@@ -154,7 +167,9 @@ attack surface:
 
 Definition shapes:
 
-- `McpToolDef` — `{ name, description, inputSchema, outputSchema?, invoke(args, ctx) }`.
+- `McpToolDef` — `{ name, description, inputSchema, outputSchema?, invoke(args, ctx), visible?(ctx) }`.
+  `visible` is a side-effect-free listing filter (it receives the `CallContext`,
+  including the opaque `caller` a transport supplies) — never authorization.
   Schemas are plain JSON Schema objects; `invoke` returns an `McpToolResult`
   (`{ content, structuredContent?, isError? }`) where `content` is `{ type: 'text', text }[]`.
 - `McpResourceDef` — `{ uri, name, description?, mimeType?, read(ctx) }`; `read` returns
@@ -170,6 +185,7 @@ Definition shapes:
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Injectable for tests. |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Injectable for tests. |
 | `maxLineLength` | `number` | `4194304` (4 MiB) | Longest accepted line, in characters. A longer one is dropped without buffering and answered `-32600`. |
+| `maxConcurrentRequests` | `number` | `16` (`DEFAULT_MAX_CONCURRENT_REQUESTS`) | Requests in flight at once on the connection; one more gets `-32000` (`SERVER_BUSY`). Notifications are never refused. |
 
 Input is decoded with a `StringDecoder`, so a multibyte character split across chunks is
 reassembled. `StdioHandle.close()` detaches the stdin listener (it does not end the process)
@@ -187,6 +203,8 @@ and resolves any pending elicitation as declined.
 | `allowRequest` | `(origin, host, req) => boolean` | — | Full override of the guard. When set it **replaces** the loopback + `allowedHosts`/`allowedOrigins` checks — you own the security decision. |
 | `authorize` | `(req) => boolean \| Promise<boolean>` | — | Authenticates a request that passed the guard; `false` answers `401`. Required (or `allowRequest`) for a non-loopback `host`. |
 | `maxBodyBytes` | `number` | `1048576` (1 MiB) | Larger bodies get `413` and are not buffered. |
+| `sessions` | `boolean \| { ttlMs?, maxSessions? }` | `false` | `Mcp-Session-Id` sessions (30 min idle, 1000 live by default) — cross-request cancellation, bound to the principal. |
+| `principal` | `(req) => string \| undefined \| Promise<…>` | hash of `Authorization` | Who a session is bound to; another principal presenting the id gets `404`. |
 
 `HttpHandle` is `{ port, url, close(): Promise<void> }`. The promise rejects with the
 `listen()` error (`EADDRINUSE`, `EADDRNOTAVAIL`, …) when the address cannot be bound.
@@ -236,7 +254,13 @@ Symptoms:
   server→client channel. Use stdio.
 - **A cancelled call keeps running** — the tool ignored `ctx.signal`; the abort is
   delivered, but only cooperative code stops. Or the cancel came from another session
-  (over HTTP every request is its own session — disconnect instead).
+  (over HTTP, turn on `serveHttp({ sessions: true })` and send the cancel with the same
+  `Mcp-Session-Id`; stateless, every request is its own session — disconnect instead).
+- **`400 Mcp-Session-Id header required` / `404 Session not found`** — with sessions on,
+  send `initialize` first and echo its header; a 404 means the session expired, was
+  evicted or ended, or another principal presented it — re-initialize.
+- **stdio answers `-32000 Too many requests in flight`** — more than
+  `maxConcurrentRequests` calls running on the connection; wait, or raise the cap.
 
 ## How it connects to other modules
 

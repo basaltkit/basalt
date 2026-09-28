@@ -147,6 +147,14 @@ export interface AuditStore {
   /** Tenants that have a chain (`undefined` = the system chain). */
   chainTenants?(): Promise<Array<string | undefined>>
   /**
+   * Every tenant that has at least one row, chained or not (`undefined` = rows
+   * without a tenant). Optional: {@link Audit.verifyAll} uses it to reach
+   * tenants whose rows were all written outside a chain — without it, it falls
+   * back to scanning `query({})`, which reads the whole trail. Implement it with
+   * a `SELECT DISTINCT tenant_id` in a durable store.
+   */
+  auditTenants?(): Promise<Array<string | undefined>>
+  /**
    * Rows attributed to the tenant (`undefined` = no tenant) that are NOT part of
    * its chain — no `seq`, or a `chain` other than `auditChainKey(tenantId)` —
    * with `at >= range.since`, plus every such row that carries a `seq` or a
@@ -220,6 +228,10 @@ export class MemoryAuditStore implements AuditStore {
   async chainTenants(): Promise<Array<string | undefined>> {
     const keys = new Set(this.entries.filter((e) => e.seq !== undefined).map((e) => auditChainKey(e.tenantId)))
     return [...keys].map(parseAuditChainKey)
+  }
+
+  async auditTenants(): Promise<Array<string | undefined>> {
+    return [...new Set(this.entries.map((e) => e.tenantId))]
   }
 
   async readUnchained(tenantId: string | undefined, range: AuditUnchainedRange): Promise<AuditEntry[]> {
@@ -615,7 +627,12 @@ export interface AuditVerifyAllOptions {
    * as `'truncated'` instead of silently disappearing.
    */
   expectedHeads?: Record<string, AuditChainHead>
-  /** Applied to every chain — see {@link AuditVerifyOptions.legacyUntil}. */
+  /**
+   * Applied to every chain — see {@link AuditVerifyOptions.legacyUntil}. A
+   * tenant that has rows but no chain at all defaults to the moment integrity
+   * began for the whole store (the earliest first entry of any chain): once
+   * `Audit` chains, it never writes an unchained row for any tenant again.
+   */
   legacyUntil?: number
 }
 
@@ -816,10 +833,20 @@ export class Audit {
       const tenantId = parseAuditChainKey(key)
       if (tenantId !== undefined) named.add(tenantId)
     }
-    const tenants = [undefined, ...[...named].sort()]
+    // Tenants with rows but no chain: every row of theirs sits outside a chain,
+    // so a forged insert under a tenant that never had one would otherwise go
+    // unvisited. Their legacy cut-off defaults to when integrity began.
+    const chainless = new Set<string>()
+    for (const tenantId of await this.tenantsWithRows(store)) {
+      if (typeof tenantId === 'string' && tenantId !== '' && !named.has(tenantId)) chainless.add(tenantId)
+    }
+    const integritySince = chainless.size > 0 && options.legacyUntil === undefined ? await this.integritySince(store, listed) : undefined
+    const tenants = [undefined, ...[...new Set([...named, ...chainless])].sort()]
     const chains: AuditVerifyResult[] = []
     for (const tenantId of tenants) {
-      const result = await this.verifyChain(tenantId, { ...legacy, ...anchorOf(tenantId) })
+      const cutoff =
+        tenantId !== undefined && chainless.has(tenantId) && integritySince !== undefined ? { legacyUntil: integritySince } : legacy
+      const result = await this.verifyChain(tenantId, { ...cutoff, ...anchorOf(tenantId) })
       // The store lists a chain that holds no entry for this tenant: its rows
       // carry a `chain` value no tenant maps to (a forged or corrupted name).
       const ghost =
@@ -899,6 +926,27 @@ export class Audit {
       return result({ ok: false, checked, entryId: unverified[0]!, reason: 'unchained-entry', ...(head ? { head } : {}) })
     }
     return result({ ok: true, checked, ...(head ? { head } : {}) })
+  }
+
+  /** Every tenant with at least one row — `auditTenants()`, or a scan of `query({})`. */
+  private async tenantsWithRows(store: ChainStore): Promise<Array<string | undefined>> {
+    if (typeof store.auditTenants === 'function') return store.auditTenants()
+    const rows = await store.query({})
+    return [...new Set(rows.map((e) => e.tenantId))]
+  }
+
+  /**
+   * When integrity began for the store: the earliest `at` among the first
+   * entries of every chain. `undefined` when there is no chain at all (then
+   * every row is legacy, as in {@link verify}).
+   */
+  private async integritySince(store: ChainStore, chains: Array<string | undefined>): Promise<number | undefined> {
+    let since: number | undefined
+    for (const tenantId of new Set<string | undefined>([undefined, ...chains])) {
+      const [first] = await store.readChain(tenantId, { fromSeq: 1, limit: 1 })
+      if (first !== undefined && (since === undefined || first.at < since)) since = first.at
+    }
+    return since
   }
 
   /**
@@ -1194,6 +1242,17 @@ const describeResult = (r: AuditVerifyResult): string => {
  * for rows outside the chain (`0` = none are legacy). Exits 1 when any chain is broken.
  */
 export function createAuditVerifyCommand(getAudit: () => Audit) {
+  // A CLI parser hands `--all` over as `true`, but `--all=true` as the string
+  // 'true' — and `flags.all === true` used to read that as "not --all" and
+  // verify only the system chain (exit 0). Anything unrecognised is an error.
+  const bool = (value: string | boolean | undefined, name: string): boolean => {
+    if (value === undefined || value === false) return false
+    if (value === true) return true
+    const v = value.trim().toLowerCase()
+    if (v === '' || v === 'true' || v === '1' || v === 'yes') return true
+    if (v === 'false' || v === '0' || v === 'no') return false
+    throw new TypeError(`--${name} must be a boolean (true/false), got "${value}"`)
+  }
   const int = (value: string | boolean, name: string): number => {
     const n = Number(value)
     if (!Number.isSafeInteger(n) || n < 1) throw new TypeError(`--${name} must be a positive integer`)
@@ -1204,6 +1263,17 @@ export function createAuditVerifyCommand(getAudit: () => Audit) {
     description:
       'Verify the audit trail hash chain (--tenant=<id> | --all, --from/--to=<seq>, --expected-head=<seq>:<hash>, --legacy-until=<ms>)',
     async handle({ flags, io }: AuditVerifyCommandContext): Promise<number> {
+      const all = bool(flags['all'], 'all')
+      if (flags['tenant'] !== undefined && (typeof flags['tenant'] !== 'string' || flags['tenant'] === '')) {
+        // `--tenant` with no value used to fall through to the system chain.
+        throw new TypeError('--tenant needs a tenant id (--tenant=<id>)')
+      }
+      if (all) {
+        const single = ['tenant', 'from', 'to', 'expected-head'].filter((f) => flags[f] !== undefined)
+        if (single.length > 0) {
+          throw new TypeError(`--all cannot be combined with ${single.map((f) => `--${f}`).join(', ')} (they select one chain)`)
+        }
+      }
       const audit = getAudit()
       let legacyUntil: number | undefined
       if (flags['legacy-until'] !== undefined) {
@@ -1220,7 +1290,7 @@ export function createAuditVerifyCommand(getAudit: () => Audit) {
       }
       const legacy = legacyUntil !== undefined ? { legacyUntil } : {}
       const results =
-        flags['all'] === true
+        all
           ? (await audit.verifyAll(legacy)).chains
           : [
               await audit.verify({

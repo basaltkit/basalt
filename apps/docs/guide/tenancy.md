@@ -907,7 +907,7 @@ literal) matches nothing.
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 | `token` | `() => string` | 24 random bytes, base64url | Verification-token generator (tests) |
 | `resolveTxt` | `(host) => Promise<string[][]>` | `node:dns/promises` `resolveTxt` | DNS lookup used by `verify()`; stub it in tests |
-| `claimTtlMs` | `number` | 72 h | How long an **unverified** claim holds a domain before another tenant's `add()` can take it. Verified domains never expire |
+| `claimTtlMs` | `number` | 72 h | How long an **unverified** claim holds a domain before another tenant's `add()` can take it. Verified domains never expire (a stale one yields only to a `challenge()` record — see `reverify()`) |
 | `reservedDomains` | `string[]` | `[]` | The platform's own domains; each one and every subdomain of it is refused with `DOMAIN_RESERVED` |
 | `challengeSecret` | `string` | — | Enables `challenge(tenantId, domain)`: publishing that TXT record lets the owner's `add()` take a squatted unverified claim at once. Same value on every instance |
 
@@ -916,6 +916,31 @@ already-verified domain unless `force` is set. Run it with `force: true` on a
 schedule: a domain whose DNS was later removed or repointed is **un**-verified on
 a failed re-check and stops resolving — the defence against dangling-domain
 takeover.
+
+For a scheduled job, prefer the system-level helpers, which need no tenant id:
+
+```ts
+schedule.call('reverify-domains', async () => {
+  const { revoked, errors } = await domains.reverifyAll()
+  if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
+}).hourly()
+```
+
+`domains.reverify(domain)` re-checks whichever tenant holds the domain and
+returns `{ domain, tenantId, status }`: `valid`, `revoked` (the record is
+definitively gone — NXDOMAIN, no TXT, or no matching value — so the claim is
+un-verified), `dns-error` (a timeout or SERVFAIL: left verified, so a DNS
+outage never un-verifies every domain at once), `unverified`, or `changed` (the
+record changed hands meanwhile; left alone). `reverifyAll()` runs it over
+`DomainStore.listVerified()` — or over `{ domains }` you pass, for a store
+without that method — and returns `{ checked, revoked, errors, results }`.
+
+A **stale verified claim** also yields to the new owner directly: when a domain
+lapses and someone else buys it, the new owner publishes its
+`challenge(tenantId, domain)` record (with `challengeSecret` set) and calls
+`add()`. If that same lookup no longer shows the incumbent's record, the domain
+is handed over, verified; while the incumbent's record is still published — or
+the lookup fails — the claim stands and `add()` throws `DOMAIN_TAKEN`.
 
 ## Failure modes & troubleshooting
 
@@ -929,7 +954,7 @@ takeover.
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning` or `failed`. 503, not 404: the tenant exists and the client may retry |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` on a source implementing neither `create()` nor `save()` — e.g. one backed by a static config file |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (or a source's `create()`) for an id that already exists. Nothing is written. A `failed`/`provisioning` tenant is retried with `tenancy.provision(id)`; an intentional update is `source.save()` |
-| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` for a domain another tenant registered — verified, or unverified and younger than `claimTtlMs` |
+| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` for a domain another tenant registered — verified (and its TXT record still published, or no `challenge()` record of yours), or unverified and younger than `claimTtlMs` |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` for a domain that isn't registered |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | A tenant acted on a domain belonging to a **different** tenant |
 | `DomainReservedError` | `DOMAIN_RESERVED` | 403 | `domains.add()` for a domain in `reservedDomains` or a subdomain of one |
@@ -955,7 +980,8 @@ takeover.
   point: the tenant resolved, the membership check then refused it. Tenant
   resolution is identification, never authorization — see [Teams](/guide/teams).
 - **A custom domain stopped resolving on its own** — a scheduled
-  `verify(…, { force: true })` re-check failed and un-verified it. Re-publish the
+  `reverify()` / `reverifyAll()` (or `verify(…, { force: true })`) re-check
+  failed and un-verified it. Re-publish the
   `_basalt-verify.<domain>` TXT record.
 
 ## Events

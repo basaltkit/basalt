@@ -89,6 +89,19 @@ item is a `WebhookEndpointView` with `hasSecret: boolean` instead, so a
 management route can't leak them. To rotate, register a new endpoint (or pass a
 new `secret`) and unregister the old one.
 
+`register()` validates the endpoint **before storing it**, so a subscription
+that could never be delivered to is refused up front instead of failing on
+every event: the `url` must parse as an absolute URL with a scheme the
+deliverer allows (`http:`/`https:`, or your `ssrf.allowedSchemes`), a `secret`
+you pass must be at least 16 characters, and `events` must be a non-empty list
+of non-empty patterns — otherwise it throws `WebhookEndpointInvalidError`
+(`WEBHOOK_ENDPOINT_INVALID`, 400). Whether the host is public is still decided
+at delivery, where DNS is resolved and the connection pinned. A caller-supplied
+`id` that another scope (another tenant, or global vs tenant) already holds
+throws `WebhookEndpointIdInUseError` (`WEBHOOK_ENDPOINT_ID_IN_USE`, 409); every
+bundled store enforces this in its own write, so two concurrent registrations of
+the same id can't overwrite each other.
+
 Scoping is **anti-widening**: inside a request with a tenant in context,
 `register`, `list`, `unregister` and `dispatch` are forced to that tenant — a
 caller-supplied `tenantId` (which may carry client input) can never widen or
@@ -425,7 +438,9 @@ hostile input. Before the first attempt the deliverer resolves the hostname
 **once** and refuses the delivery if the scheme isn't `http:`/`https:`, or if
 *any* resolved address is loopback, private (`10/8`, `172.16/12`, `192.168/16`),
 link-local (including the `169.254.169.254` cloud-metadata address), CGNAT,
-IPv6 ULA, or otherwise reserved. IPv6 is judged over the parsed address, so
+IPv6 ULA, documentation (`192.0.2/24`, `198.51.100/24`, `203.0.113/24`,
+`2001:db8::/32`, `3fff::/20`), benchmarking (`198.18/15`), the deprecated 6to4
+relay anycast (`192.88.99/24`), multicast, or otherwise reserved (`240/4`). IPv6 is judged over the parsed address, so
 every spelling counts: an IPv6 literal that embeds an IPv4 address —
 IPv4-mapped (`[::ffff:127.0.0.1]`, which URL parsing rewrites to
 `[::ffff:7f00:1]`), IPv4-compatible, NAT64 (`64:ff9b::/96`) or 6to4
@@ -707,6 +722,8 @@ Most delivery problems are **not exceptions** — they come back on the
 | --- | --- | --- | --- |
 | `WebhookUrlBlockedError` | — (`name` only) | — | Thrown by `assertDeliverableUrl` / `resolveAndValidate`; inside `deliver()` it is caught and turned into the failed result above |
 | `WebhookTenantRequiredError` | `WEBHOOKS_TENANT_REQUIRED` | — | `register` / `list` / `unregister` with tenancy active and no tenant (context or explicit) without `{ system: true }` |
+| `WebhookEndpointInvalidError` | `WEBHOOK_ENDPOINT_INVALID` | 400 | `register()` with a URL that doesn't parse or uses a scheme the deliverer refuses, a `secret` under 16 characters, or an empty `events` list — nothing is stored |
+| `WebhookEndpointIdInUseError` | `WEBHOOK_ENDPOINT_ID_IN_USE` | 409 | `register()` / `MemoryWebhookStore.add()` with an `id` another scope already holds (the SQL stores throw their own error with the same code) |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `container.get(WEBHOOKS)` without `webhooksPlugin` registered |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Your own endpoint-management routes declare `meta.auth` / `meta.teamRole` without the enforcing plugin |
 

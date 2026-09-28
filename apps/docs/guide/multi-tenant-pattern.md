@@ -358,9 +358,16 @@ by design, linked by an id in the tenant record, not the same row.
 ## Rule 9 — Outside a request, the tenant is explicit
 
 ```ts
-await tenancy.run(tenantId, () => reindex())          // one tenant
-await tenancy.forEach((tenant) => sendReminders())     // every tenant, in context
+await tenancy.run(tenantId, () => search.reindex('matters'))  // one tenant
+await tenancy.forEach((tenant) => sendReminders())             // every tenant, in context
 ```
+
+Anything tenant-scoped done in a loop must *only touch that tenant*. A
+search rebuild inside `tenancy.run` clears and rewrites that tenant's documents
+and leaves the rest; rebuilding every tenant at once is the explicit
+`search.reindex('matters', { all: true })`, outside any tenant context. With
+tenancy registered, a bare `reindex()` outside a tenant context is refused rather
+than guessed.
 
 Jobs carry `tenantId` in their payload and restore it with `tenancy.run` before
 touching `db()`; the queue integration does this for you. Scripts and CLI

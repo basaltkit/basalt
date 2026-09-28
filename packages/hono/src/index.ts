@@ -16,7 +16,6 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
-  GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
   isRawBody,
@@ -443,6 +442,9 @@ export interface HonoPluginOptions {
    * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
    * `true` to waive everything (e.g. authentication handled at an outer
    * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   * It never waives the route-meta validators plugins register
+   * (`META_VALIDATORS_BUCKET`, e.g. teamsPlugin refusing an unknown
+   * `meta.teamRole`) — those also run at boot and fail it.
    */
   allowUnguardedMeta?: boolean | string[]
   /** Bring your own Hono app; otherwise a fresh one is created. */
@@ -508,12 +510,9 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
       // Fail loud BEFORE traffic if a route declares security meta (auth/can/
-      // teamRole) that no registered guard enforces — it would serve open.
-      assertRoutesGuarded(
-        routes,
-        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
-        options.allowUnguardedMeta,
-      )
+      // teamRole) that no registered guard enforces — it would serve open —
+      // or meta a plugin's validator refuses (e.g. an unknown teamRole).
+      assertRoutesGuarded(routes, container, options.allowUnguardedMeta)
 
       // Mount once edge plugins have registered their hooks/routes.
       const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT

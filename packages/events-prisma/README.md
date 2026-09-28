@@ -85,7 +85,8 @@ Wire the store before its model exists and it **fails fast** with a message nami
 |---|---|---|
 | `prismaOutboxStore` | `(client: PrismaEventsClient, options?: PrismaOutboxStoreOptions) => { store: PrismaOutboxStore }` | The one you want. Validates the model exists, then returns the store — drop `store` into `outboxPlugin({ store })`. |
 | `PrismaOutboxStore` | `new PrismaOutboxStore(client, options?)` | The store itself, without the model check. `enqueue(entry, { tx })` writes through a Prisma transaction client. |
-| `PrismaOutboxStoreOptions` | type | `{ claim?: boolean }` — see below. |
+| `PrismaOutboxStoreOptions` | type | `{ claim?: boolean; columnLimits?: 'mysql' \| EventsColumnLimits }` — see below. |
+| `eventsMysqlColumnLimits` / `ColumnLengthError` | const / class | The MySQL preset and the error the guard throws — see [MySQL](#mysql). |
 | `PrismaOutboxTx` | type | What `tx` must provide: `outboxEntry.upsert` — the `tx` of `prisma.$transaction(async (tx) => …)` is assignable. |
 | `PrismaEventsClient` | type | The minimal delegate surface used: `outboxEntry.upsert` / `findMany` / `updateMany`. A real `PrismaClient` with the `OutboxEntry` model is assignable, so pass it directly — no cast. |
 
@@ -94,6 +95,7 @@ Wire the store before its model exists and it **fails fast** with a message nami
 | Option (`PrismaOutboxStoreOptions`) | Type | Default | Purpose |
 |---|---|---|---|
 | `claim` | `boolean` | `false` | Claim rows before dispatching, so **several relays (one per replica) never deliver the same entry at once**, and a failed entry's retry backoff holds on every replica. Needs the `lockedUntil` / `lockedBy` columns (reference schema; `basalt prisma:sync` + migrate). Off by default only so an existing table without those columns keeps working — turn it on whenever more than one process runs the relay. |
+| `columnLimits` | `'mysql' \| EventsColumnLimits` | unset | Refuse a value longer than its MySQL column instead of letting the server truncate it (`lastError` is shortened instead) — see [MySQL](#mysql). Unset: nothing checked. |
 
 Everything else (`maxAttempts`, `backoff`, `onDead`, `batchSize`, `intervalMs`, `onFlushError`,
 `claimLeaseMs`) lives on `outboxPlugin` / `OutboxOptions` in
@@ -126,6 +128,7 @@ and survives the relay crashing.
 | Error | Code | When |
 |---|---|---|
 | Plain `Error` — *"@basaltkit/events-prisma: the Prisma client has no `outboxEntry` model…"* | — | Thrown by `prismaOutboxStore()` at wiring time when the client lacks the model. The message names the missing delegate and points at `basalt prisma:sync`. A lazy/proxy client (database-per-tenant) skips the check and is validated at first use instead. |
+| `ColumnLengthError` (a `RangeError`) | `COLUMN_LENGTH_EXCEEDED` | With `columnLimits`, `enqueue` (or `claim`) was given a value longer than its column. Thrown before the write — inside your `{ tx }`, so the transaction rolls back. |
 | Prisma client errors (`PrismaClientKnownRequestError`, …) | — | Propagate from the delegate. They reach you through the outbox's `onFlushError` (store-level, e.g. `pending()` failing) or as the entry's `lastError`. |
 
 This package defines no `BasaltError` subclasses.
@@ -135,6 +138,34 @@ This package defines no `BasaltError` subclasses.
 None — this package is a storage adapter. The outbox's callbacks (`onDead`, `onFlushError`) and
 its retry policy live on `outboxPlugin` / `OutboxOptions` in
 [`@basaltkit/events`](https://www.npmjs.com/package/@basaltkit/events).
+
+## MySQL
+
+The reference schema above is written for PostgreSQL (and works on SQLite),
+where a bare `String` is `TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**,
+and a server outside strict mode truncates a longer value silently — the write
+succeeds, and the value read back is not the one written. A cut payload is no longer valid JSON, and the relay fails on it until the entry is dead. With the guard, `enqueue(…, { tx })` throws before the write, so the state change it belongs to rolls back with it. One column is shortened on purpose rather than refused: `lastError` is diagnostic, and refusing it would stop `markFailed` from counting the attempt, so an over-long error is cut to fit and marked `…[truncated]`.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/events-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it when
+  your datasource is `mysql`): the free-text columns are widened with native
+  types, the keys stay `VARCHAR(191)` so they can be indexed.
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaOutboxStore(prisma, { claim: true, columnLimits: 'mysql' })
+  ```
+
+  `'mysql'` is `eventsMysqlColumnLimits` — the capacities of `schema.mysql.prisma`. A number is
+  a limit in characters (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes
+  (the `TEXT` family). Widened a column yourself? Spread the preset and raise it:
+  `{ OutboxEntry: { ...eventsMysqlColumnLimits.OutboxEntry, event: 500 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
 
 ## Which backend?
 

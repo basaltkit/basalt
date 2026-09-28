@@ -191,7 +191,7 @@ describe('beyond-SaaS: the generic packages work without tenancyPlugin', () => {
 
     // --- webhooks: register / list / dispatch
     await exercise('webhooks.register', () =>
-      c.get(WEBHOOKS).register({ url: 'https://example.test/hook', events: ['order.created'], secret: 's' }),
+      c.get(WEBHOOKS).register({ url: 'https://example.test/hook', events: ['order.created'], secret: 'a-test-secret-of-32-characters!!' }),
     )
     expect(await exercise('webhooks.list', () => c.get(WEBHOOKS).list())).toHaveLength(1)
     await exercise('webhooks.dispatch', () => c.get(WEBHOOKS).dispatch('order.created', { orderId: 'o-1' }))

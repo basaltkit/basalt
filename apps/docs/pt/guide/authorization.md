@@ -72,12 +72,19 @@ por `:` de cada vez**, e o número de segmentos tem de coincidir:
 'projects:*'  covers 'projects:read'        // ✅
 'projects:*'  does NOT cover 'projects:delete:all' // ❌ 2 segments vs 3 — no match
 '*'           covers everything             // ✅ the one exception: a super admin
+'projects:*'  does NOT cover 'projects:'    // ❌ an empty segment never matches
 ```
 
 Assim, uma concessão de dois níveis nunca absorve silenciosamente uma permissão
 mais profunda e específica que adiciones mais tarde — concede `projects:*:*`
 (ou a string exata) se quiseres o nível mais profundo. O `'*'` simples
 corresponde a qualquer permissão, independentemente da profundidade.
+
+Uma permissão com um **segmento vazio** — `''`, `'projects:'`, `':read'`,
+`'projects::read'` — é malformada e não corresponde a nada, nem a si própria, e
+nenhum wildcard a cobre (`hasEmptySegment()` di-lo, a partir da mesma entrada
+`@basaltkit/permissions/match`, segura para o browser). O Gate recusa-a logo:
+`can()`, todas as concessões e o `roleCatalog` lançam `TypeError`.
 
 ## Políticas de recurso
 
@@ -126,7 +133,7 @@ são políticas em falta — e só um `resource:action` de dois segmentos escolh
 check: `project:update:billing` é uma permissão diferente de `project:update`,
 por isso o check `update` não a decide. Um check só autoriza quando devolve
 `true` (um valor truthy que não seja booleano nega). O `can()` recusa uma
-permissão que não seja uma string não vazia sem espaços (`TypeError`), e um
+permissão que não seja uma string não vazia sem espaços nem segmentos `:` vazios (`TypeError`), e um
 utilizador sem `id` de texto não vazio não está autenticado: `can`/`authorize`/
 `hasRole` lançam `AuthRequiredGuardError` (401) em vez de avaliar — ou rebentar
 com — um chamador anónimo.
@@ -165,6 +172,25 @@ aplicável e **falha fechada**: o guard lança `InvalidCanMetaError`
 (`PERMISSION_META_INVALID`, HTTP 500) em cada pedido em vez de saltar o check
 silenciosamente. E declarar `meta.can` sem registar o `permissionsPlugin` falha
 no **boot** — vê o guia de adapters.
+
+### As listagens escondem o que o chamador não passa
+
+O plugin regista também uma **verificação de visibilidade pura** para o
+`meta.can` em `http:route-visibility`, para que superfícies de listagem — o
+[`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows) — deixem de fora as
+rotas cujas permissões faltam ao chamador. Faz a mesma pergunta que o guard,
+`gate.can(user, permission)` para cada entrada, no scope atual (o `superAdmin`
+passa sempre, como no guard), mas **sem efeitos secundários**: o `can()` só lê
+grants — nunca emite `permission:denied`, por isso uma listagem nunca aparece no
+rasto de auditoria (mantém o `superAdmin` puro; também corre aqui). Sem
+utilizador, ou com um `meta.can` malformado, a rota fica escondida, tal como o
+guard a recusaria.
+
+As policies nunca entram: o guard não passa recurso, por isso nenhuma policy
+decide o `meta.can`. Uma regra de propriedade que um handler corre sobre um
+recurso carregado (`authorize(user, 'projects:update', project)`) é invisível a
+uma listagem — essa tool continua listada quando o RBAC permite e é recusada na
+chamada. Visibilidade nunca é autorização: cada chamada corre sempre o guard.
 
 ## Audiências — a que superfície uma rota pertence
 
@@ -412,8 +438,9 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | `allowGlobalWrites` | `boolean` | `false` | Deixar uma escrita sem scope fora de um tenant cair em `GLOBAL_SCOPE` mesmo com a tenancy ativa. Vê [As escritas precisam de um tenant](#as-escritas-precisam-de-um-tenant-ou-de-um-scope-explicito) |
 | `tenancyActive` | `() => boolean` | o marcador `tenancy:active` (plugin); `false` (`new Gate`) | Se a app é multi-tenant — decide se as escritas sem scope fora de um tenant falham fechadas |
 
-O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e
-reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
+O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e a
+sua verificação de visibilidade sem efeitos secundários (`http:route-visibility`),
+e reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
 
 ## Hooks — o rasto de auditoria
 
