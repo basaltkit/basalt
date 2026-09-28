@@ -170,6 +170,21 @@ await runWithContext({ requestId: 'req-7', tenant: { id: 'acme', name: 'Acme' } 
 // inside handle: requestId = 'req-7', tenant = { id: 'acme' }  (only the id is serialized)
 ```
 
+**What the worker restores — and what it trusts.** The context is rebuilt from an allowlist,
+never spread from the message: `requestId`/`correlationId`/`traceId` (dropped if malformed),
+`tenant: { id }` + `tenantId` (the id must pass the tenancy grammar, or your
+`validateTenantId`; otherwise the job is rejected with `JobContextError` rather than run in the
+central scope), and `userId` plus a minimal actor `user: { id }` — so `@basaltkit/audit` records
+the dispatcher as `actorId` and `gate.actor()` re-reads that user's roles in the job's tenant.
+Roles are never taken from the message.
+
+By default **the broker is trusted**: anyone who can write to it can enqueue jobs and name any
+valid tenant/user. Set `signingKey` (≥ 32 bytes, shared by producers and workers; an array
+rotates — the first signs, all verify) and every envelope carries an HMAC-SHA256 over the job
+name, payload and context; the worker rejects unsigned or altered jobs with
+`JobSignatureError` before the handler runs. Delivery stays at-least-once — write idempotent
+handlers.
+
 ### Turning an event listener into a job: `queuedOn`
 
 If you use `@basaltkit/events`, `queuedOn` bridges events→queue: `emit` just puts the job on the queue, and the handler runs on the worker with retries and restored context.
@@ -221,7 +236,7 @@ Registering `queuePlugin` also wires four CLI commands (run via the `@basaltkit/
 ```bash
 basalt queue:work --queue=default --concurrency=5   # run a worker until Ctrl+C
 basalt queue:stats --queue=billing                  # waiting/active/completed/failed/delayed
-basalt queue:retry --queue=billing --limit=100      # re-enqueue failed jobs
+basalt queue:retry --queue=billing --limit=100      # re-enqueue failed jobs (--limit: a positive integer)
 basalt queue:jobs  --queue=billing --states=failed  # list individual jobs
 ```
 
@@ -272,7 +287,7 @@ console.log(driver.executed) // [{ queue: 'default', jobName: 'demo', attempts: 
 | `name` | `string` | Yes | — | Unique job name (e.g. `'email.welcome'`). |
 | `schema` | `JobSchema<T>` (Zod-compatible) | No | — | Validates the payload on dispatch and on the worker. |
 | `queue` | `string` | No | `'default'` | Name of the queue the job goes into. |
-| `attempts` | `number` | No | `1` | Maximum number of attempts on failure. |
+| `attempts` | `number` | No | `1` | Maximum number of attempts on failure. A positive integer — `defineJob` throws otherwise. |
 | `backoff` | `JobBackoff` | No | — | Wait strategy between attempts. |
 | `removeOnComplete` | `JobRetention` | No | the `queuePlugin` default | Redis retention for this job once it completes — overrides the plugin-wide default. |
 | `removeOnFail` | `JobRetention` | No | the `queuePlugin` default | Redis retention for this job once it fails permanently — overrides the plugin-wide default. |
@@ -315,6 +330,8 @@ Basalt plugin that registers a `QueueManager` in the container under the `QUEUE`
 | `onUnsupported` | `'throw' \| 'warn' \| 'ignore'` | No | `'warn'` | What happens when a dispatch uses an option the active driver cannot honour (a delay on Kafka, a priority on SQS). `'warn'` logs once per job+feature and proceeds; `'throw'` raises `UnsupportedJobOptionError` — set it in production when the option is load-bearing; `'ignore'` is silent. |
 | `removeOnComplete` | `JobRetention` | No | driver default (BullMQ keeps the last `1000`) | Default retention for completed jobs, on backends that keep them. A job's own `removeOnComplete` wins. |
 | `removeOnFail` | `JobRetention` | No | driver default (BullMQ `false` — keep all) | Default retention for failed jobs. Keeping all is deliberate (inspection and `queue:retry`); set e.g. `{ age: '14d' }` so failures don't grow unbounded. |
+| `signingKey` | `QueueSigningKey \| QueueSigningKey[]` | No | — (broker trusted) | HMAC-SHA256 key(s), ≥ 32 bytes, that sign every job envelope; the worker rejects unsigned/tampered jobs (`JobSignatureError`). An array rotates: the first signs, every key verifies. |
+| `validateTenantId` | `(id: string) => boolean` | No | tenancy's default grammar | Tenant-id grammar accepted from a job's context. Pass the same function you gave `tenancyPlugin` if you customised it. |
 
 **Connection options live on your backend's plugin, not here.** Each driver package exports a
 plugin that takes these same keys *plus* its own connection settings and failure hooks —
@@ -331,8 +348,8 @@ const manager = app.container.get(QUEUE) // get the QueueManager from the contai
 | Method | Signature | Description |
 |---|---|---|
 | `constructor` | `new QueueManager(driver: QueueDriver, options?: QueueManagerOptions)` | Creates the manager over a driver. |
-| `register` | `(job) => this` | Registers a job and wires its `dispatch`. |
-| `dispatch` | `<T>(job, payload: T, options?: DispatchOptions) => Promise<void>` | Validates, snapshots the request context, checks the driver's capabilities, and enqueues. Auto-registers the job if not registered yet. |
+| `register` | `(job) => this` | Registers a job and wires its `dispatch`. The same definition twice is a no-op; a *different* job under a taken name throws `DuplicateJobError`. |
+| `dispatch` | `<T>(job, payload: T, options?: DispatchOptions) => Promise<void>` | Validates, snapshots the request context, signs the envelope (with a `signingKey`), checks the driver's capabilities, and enqueues. Auto-registers the job if not registered yet. |
 | `work` | `(queue = 'default', { concurrency? }?) => void` | Starts a worker for the queue (no-op on the sync driver). |
 | `stats` | `(queue = 'default') => Promise<QueueStats \| undefined>` | Job counts per state, or `undefined` when the driver can't introspect (sync). |
 | `retryFailed` | `(queue = 'default', { limit? }?) => Promise<number \| undefined>` | Re-enqueues failed jobs; returns the count, or `undefined` when the driver doesn't support it. |
@@ -347,6 +364,8 @@ const manager = app.container.get(QUEUE) // get the QueueManager from the contai
 | `warn` | `(message: string) => void` | `console.warn` | Where `'warn'` diagnostics go — point it at your logger. |
 | `removeOnComplete` | `JobRetention` | driver default | Default retention for completed jobs. |
 | `removeOnFail` | `JobRetention` | driver default | Default retention for failed jobs. |
+| `signingKey` | `QueueSigningKey \| QueueSigningKey[]` | — | Same as the plugin option. |
+| `validateTenantId` | `(id: string) => boolean` | tenancy's default grammar | Same as the plugin option. |
 
 ### Listing jobs — `manager.list(queue?, options?)`
 
@@ -410,13 +429,14 @@ Creates the event→job bridge. Returns the subscription cancel function.
 
 | Field | Type | Required? | Default | Description |
 |---|---|---|---|---|
+| `name` | `string` | No | `listener:<event>` | Job name. Names are unique per manager, so a second queued listener on the same event needs its own (otherwise `DuplicateJobError`). |
 | `queue` | `string` | No | `'default'` | Queue for the created job. |
 | `attempts` | `number` | No | `1` | Job attempts. |
 | `backoff` | `JobBackoff` | No | — | Job backoff. |
 
 ### Drivers
 
-- **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry). Public property `executed: { queue, jobName, attempts }[]` with the execution history (capped at 1000 entries). For testing and dev without Redis.
+- **`class SyncQueueDriver`** — runs inline on `dispatch`, honors `attempts` (immediate retry, capped at `MAX_JOB_ATTEMPTS` = 50). Public property `executed: { queue, jobName, attempts }[]` with the execution history (capped at 1000 entries). For testing and dev without Redis.
 - **`class BullmqQueueDriver`** — production over Redis; see the options table below. Lives in its own package, [`@basaltkit/queue-bullmq`](https://www.npmjs.com/package/@basaltkit/queue-bullmq), alongside `bullmqQueuePlugin`, exactly like the RabbitMQ/SQS/Kafka driver packages.
 - **`interface QueueDriver`** (Advanced) — contract for custom drivers: `setExecutor(executor)`, `add(queue, jobName, data, options: AddJobOptions)`, `startWorker(queue, { concurrency? })`, optional `stats(queue)` / `retryFailed(queue, { limit? })` / `list(queue, options)`, `close()`, plus the optional `name` and `capabilities` fields. Helper types: `AddJobOptions`, `JobExecutor`, `QueueStats`, `DriverCapabilities`, `JobState`, `JobSummary`, `JobEnvelope`, `ListJobsOptions`.
 
@@ -520,6 +540,9 @@ queuePlugin({
 | `JobNotRegisteredError` | `QUEUE_JOB_NOT_REGISTERED` | `job.dispatch()` was called before the job was registered in a `QueueManager`. |
 | `UnknownJobError` | `QUEUE_UNKNOWN_JOB` | A job reached the worker but is not registered in that process — producer and worker registered different job lists. |
 | `UnsupportedJobOptionError` | `QUEUE_UNSUPPORTED_OPTION` | With `onUnsupported: 'throw'`, a dispatch used an option the active driver's `capabilities` do not include. `status = 500`. |
+| `DuplicateJobError` | `QUEUE_DUPLICATE_JOB` | A different job was registered under a name already taken in this manager (`register`, `dispatch`, `queuedOn`). |
+| `JobSignatureError` | `QUEUE_BAD_SIGNATURE` | With a `signingKey`, a job arrived unsigned or with a signature no configured key verifies. Thrown in the worker; the handler never runs. |
+| `JobContextError` | `QUEUE_INVALID_CONTEXT` | A job's context carried a malformed `tenant`/`tenantId`/`userId`. Thrown in the worker; the handler never runs. |
 
 Errors thrown outside these classes come from the driver's client (ioredis, amqplib, kafkajs,
 the AWS SDK) and reach you through that driver's `onError`.
@@ -565,7 +588,8 @@ No. Without `connection`, the plugin uses `SyncQueueDriver`. You can also instan
 
 The inline sync driver (the default without a `connection`) is at-most-once:
 handler errors reject `dispatch()` and an exhausted job is lost. Selecting it
-implicitly in production logs a boot warning — pass `driver: new
+implicitly in production (any `NODE_ENV` but an explicit `development` or
+`test` — unset included) logs a boot warning — pass `driver: new
 SyncQueueDriver()` to opt in deliberately. Its `executed[]` history is capped
 at 1000 entries.
 

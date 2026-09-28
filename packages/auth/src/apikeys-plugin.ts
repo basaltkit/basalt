@@ -41,6 +41,18 @@ export class ApiKeyTenantMismatchError extends BasaltError {
   }
 }
 
+/**
+ * The request presented two DIFFERENT API keys (`Authorization: Bearer mk_…`
+ * and the key header). Neither is picked: which credential authorizes a
+ * request must never depend on header precedence.
+ */
+export class ApiKeyAmbiguousError extends BasaltError {
+  readonly status = 400
+  constructor() {
+    super('AUTH_APIKEY_AMBIGUOUS', 'Two different API keys were presented; send exactly one.')
+  }
+}
+
 /** The route only accepts an interactive session, not an API key. */
 export class ApiKeyNotAllowedError extends BasaltError {
   readonly status = 403
@@ -62,7 +74,8 @@ export const API_KEYS = createToken<ApiKeys>('auth:apikeys')
 export interface ApiKeysPluginOptions extends ApiKeysOptions {
   /**
    * Header carrying the key, besides `Authorization: Bearer mk_...`.
-   * Default `x-api-key`.
+   * Default `x-api-key`. A request carrying two different keys (one in each)
+   * is refused with 400 `AUTH_APIKEY_AMBIGUOUS`.
    */
   header?: string
   /**
@@ -114,8 +127,17 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
           typeof authHeader === 'string' && authHeader.startsWith('Bearer mk_')
             ? authHeader.slice('Bearer '.length)
             : undefined
-        const custom = request.headers[header]
-        const presented = bearer ?? (typeof custom === 'string' ? custom : undefined)
+        const rawCustom = request.headers[header]
+        const custom = typeof rawCustom === 'string' && rawCustom.length > 0 ? rawCustom : undefined
+        // Both carriers present and disagreeing is refused outright: letting one
+        // shadow the other means a stray or injected `Bearer mk_…` silently
+        // replaces the key the client meant (and vice versa). Identical values
+        // are harmless and accepted.
+        if (bearer !== undefined && custom !== undefined && bearer !== custom) {
+          await hooks.emit('auth:apikey_rejected', { reason: 'invalid' })
+          throw new ApiKeyAmbiguousError()
+        }
+        const presented = bearer ?? custom
         if (!presented) return
 
         const record = await c.get(API_KEYS).verify(presented)

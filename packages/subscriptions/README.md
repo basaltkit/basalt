@@ -88,7 +88,7 @@ await features.consume('projects', 2)             // records the creation of 2 p
 console.log(await features.remaining('projects')) // 48
 ```
 
-5. When the limit runs out, `consume` throws `QuotaExceededError`; a feature that's off in the plan throws `FeatureUnavailableError`. Just catch these errors to show an "upgrade" prompt.
+5. When the limit runs out, `consume` throws `QuotaExceededError`; a feature that's off in the plan throws `FeatureUnavailableError`. Just catch these errors to show an "upgrade" prompt. The amount must be a positive integer — a negative, zero, fractional or `NaN` amount throws `InvalidUsageAmountError` (400), in `consume()` and in every `UsageStore`.
 
 ## Usage guide
 
@@ -146,7 +146,9 @@ await subscriptions.swap('acme', 'scale')                    // with proration (
 await subscriptions.swap('acme', 'scale', { prorate: false }) // only changes at the next renewal
 ```
 
-Requires an active subscription (otherwise `NotSubscribedError`). If the subscription is linked to the gateway, the change is pushed there with the chosen proration behavior.
+Requires an active subscription (otherwise `NotSubscribedError`). If the subscription is linked to the gateway, the change is pushed there with the chosen proration behavior (a gateway without `swapSubscription` throws `GatewayUnsupportedError` rather than changing only the local plan).
+
+A subscription with **no** gateway subscription (a free or locally granted one) cannot be swapped onto a paid or `'custom'` plan — that would grant it without charging anything, so it throws `PaymentRequiredError` (402). Use `checkout()`; pass `{ allowUnpaid: true }` only when payment is collected elsewhere (manual invoicing, reference payments, sales-led deals). Downgrading to a free plan needs no payment.
 
 ### Canceling and resuming
 
@@ -155,6 +157,8 @@ await subscriptions.cancel('acme')                        // at the end of the p
 await subscriptions.resume('acme')                        // change your mind before the end: undoes the cancellation
 await subscriptions.cancel('acme', { atPeriodEnd: false }) // immediate: status 'canceled' right away
 ```
+
+For a gateway-backed subscription `resume()` also withdraws the scheduled cancellation at the gateway (`resumeSubscription`); a gateway that cannot throws `GatewayUnsupportedError` instead of letting the gateway end the subscription anyway.
 
 ### Customer portal (self-service)
 
@@ -202,7 +206,7 @@ export const subscriptions = new Subscriptions({ plans, gateway, fallbackPlan: '
 
 ### Paddle gateway
 
-`PaddleBillingGateway` targets **Paddle Billing** the same way (no SDK, injectable `fetch`), mapping plans to Paddle *Price IDs* (`pri_…`) and billables to *Customer IDs* (`ctm_…`). Paddle is checkout-first, so `createSubscription`/`createCheckoutSession` create a transaction and the durable subscription ref arrives on a `subscription.*` webhook.
+`PaddleBillingGateway` targets **Paddle Billing** the same way (no SDK, injectable `fetch`), mapping plans to Paddle *Price IDs* (`pri_…`) and billables to *Customer IDs* (`ctm_…`). Paddle is checkout-first: `createCheckoutSession` creates a transaction and the durable subscription ref arrives on the webhooks. `createSubscription` throws `CheckoutRequiredError` — a transaction id is not a subscription, so use `checkout()` (not `subscribe()`) for paid plans.
 
 ```ts
 import { PaddleBillingGateway, Subscriptions } from '@basaltkit/subscriptions'
@@ -215,11 +219,11 @@ const gateway = new PaddleBillingGateway({
 })
 ```
 
-Webhook signatures use Paddle's `Paddle-Signature` scheme (`ts=…;h1=…`, HMAC-SHA256 over `${ts}:${rawBody}`) — verified by the driver, with the same 5-minute timestamp tolerance as Stripe.
+Webhook signatures use Paddle's `Paddle-Signature` scheme (`ts=…;h1=…`, HMAC-SHA256 over `${ts}:${rawBody}`) — verified by the driver, with the same 5-minute timestamp tolerance as Stripe. During a secret rotation every `h1` in the header is tried (Stripe's `v1` likewise).
 
 ### Lemon Squeezy gateway
 
-`LemonSqueezyBillingGateway` targets the Lemon Squeezy REST API (JSON:API, no SDK), mapping plans to *Variant IDs* and using your *Store ID* for checkouts. Also checkout-first; webhook signatures use the `X-Signature` header (a bare HMAC-SHA256 hex of the raw body — no timestamp).
+`LemonSqueezyBillingGateway` targets the Lemon Squeezy REST API (JSON:API, no SDK), mapping plans to *Variant IDs* and using your *Store ID* for checkouts. Also checkout-first (`createSubscription` throws `CheckoutRequiredError`); webhook signatures use the `X-Signature` header (a bare HMAC-SHA256 hex of the raw body — no timestamp, so set `maxEventAgeSeconds` for an opt-in replay window). Events carry no id: idempotency keys on the event name, the object id (the invoice on payment events — every renewal is distinct) and its `updated_at`.
 
 ```ts
 import { LemonSqueezyBillingGateway, Subscriptions } from '@basaltkit/subscriptions'
@@ -233,7 +237,7 @@ const gateway = new LemonSqueezyBillingGateway({
 })
 ```
 
-For development and testing there's `FakeBillingGateway`, which records all calls in arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`) and accepts the webhook signature `'valid'`.
+For development and testing there's `FakeBillingGateway`, which records all calls in arrays (`created`, `canceled`, `checkouts`, `portals`, `swaps`, `resumed`) and accepts the webhook signature `'valid'`.
 
 ### Gateway webhooks
 
@@ -346,8 +350,10 @@ fastifyPlugin({ routes: [billingWebhookRoute(gateway)] })   // that is all
 
 The body is capped at `DEFAULT_WEBHOOK_MAX_BYTES` (256 KiB) — raise it with
 `billingWebhookRoute(gateway, { maxBytes })` if a gateway you use sends more; past it the
-route answers `413`. The signature is read from `stripe-signature`, falling back to
-`x-billing-signature`. A verified-but-irrelevant event returns
+route answers `413`. The signature is read from the header(s) the driver declares in
+`signatureHeader` (`stripe-signature`, `paddle-signature`, `x-signature` for Lemon Squeezy);
+a driver that declares none falls back to `stripe-signature` / `x-billing-signature`, and
+`billingWebhookRoute(gateway, { signatureHeader })` overrides both. A verified-but-irrelevant event returns
 `{ received: true, ignored: true }`; a duplicate returns `duplicate: true`.
 
 One caveat, on Express only: if you bring your own app with `express.json()` already
@@ -393,9 +399,12 @@ await invoices.markPaid(draft.id)
 | `get` · `list` | `(id)` · `(billableId)` | Read one, or a billable's invoices. |
 
 An action in the wrong state throws `InvoiceStateError` (`INVOICE_INVALID_STATE`, 409); an
-unknown id throws `InvoiceNotFoundError` (`INVOICE_NOT_FOUND`, 404). `renderInvoiceText`
+unknown id throws `InvoiceNotFoundError` (`INVOICE_NOT_FOUND`, 404). Inputs that would
+produce a wrong total are refused with `InvoiceInputError` (`INVOICE_INVALID_INPUT`, 400): a
+line `quantity` that is not a positive integer, a negative or `NaN` `tax`/`discount`/tax
+rate, or a `currency` that is not a 3-letter ISO 4217 code. `renderInvoiceText`
 and `renderInvoiceHtml` produce printable output (the HTML one backs
-`GET /billing/invoices/:id/html`).
+`GET /billing/invoices/:id/html`; every interpolated value, money included, is HTML-escaped).
 
 `InvoicesOptions`:
 
@@ -413,13 +422,15 @@ to quote a discount before applying it to an invoice.
 
 | Option (`CouponsOptions`) | Type | Default | Purpose |
 |---|---|---|---|
-| `store` | `CouponStore` | `MemoryCouponStore` | Persistence (`save`/`get`/`all`/`incrementRedemptions`). |
+| `store` | `CouponStore` | `MemoryCouponStore` | Persistence (`save`/`get`/`all`/`incrementRedemptions(code, limit)` — increments only below `limit`, atomically, returning `null` at the cap). |
 | `now` | `() => number` | `Date.now` | Clock injection, for expiry tests. |
 
 A `Coupon` is `{ code, percentOff? | amountOff?, currency?, duration?, maxRedemptions?, redeemBy?, metadata? }`.
 Rules enforced by `assertValidCoupon` (each throws `CouponInvalidError`, `COUPON_INVALID`, 422):
 exactly one of `percentOff`/`amountOff`; `percentOff` within 0–100; `amountOff` a
-non-negative minor-unit integer **and** accompanied by a `currency`; `maxRedemptions ≥ 1`.
+non-negative minor-unit integer **and** accompanied by a `currency`; `maxRedemptions` an
+integer ≥ 1. `redeem()` enforces `redeemBy` and `maxRedemptions` itself (not only `quote()`),
+so a stale quote or two concurrent redemptions of the last slot cannot over-redeem.
 A fixed-amount coupon in a different currency yields a discount of `0` rather than
 silently converting. Discounts are always clamped to `[0, subtotal]`.
 
@@ -443,7 +454,11 @@ await billing.handleEvent(verifiedPaymentEvent)    // idempotent; extends paidTh
 ```
 
 `PaymentLedger` ties payment records to webhook idempotency: `created()` records a pending
-payment, `apply(event)` dedupes by `event.id` and returns `{ fresh, record }`. It emits
+payment, `apply(event)` dedupes by `event.id` and returns `{ fresh, record }`. It is a state
+machine too: `paid` is terminal, so a late `payment.failed` or a second `payment.succeeded`
+under a new event id changes nothing, skips `onFresh` and returns `fresh: false`; a
+`payment.failed` never overwrites the requested amount. `addInterval` adds periods in UTC,
+clamped to the end of the month (Jan 31 → Feb 28/29). It emits
 `recorded`, `confirmed` and `failed` via `ledger.on(...)`; a listener that throws is
 reported to `onListenerError` (default: swallowed) and never rolls back a payment.
 
@@ -572,6 +587,7 @@ app.hooks.on('billing:trial_expired', ({ subscription }) => {
 | `webhooks` | `WebhookStore` | No | `MemoryWebhookStore` | Webhook dedupe (Redis in production) |
 | `fallbackPlan` | `string` | No | — | Plan for those without a subscription (validated at startup) |
 | `hooks` | `HookBus` | No | — | Hook bus (the plugin passes it automatically) |
+| `now` | `() => number` | No | `Date.now` | Injectable clock (trials, meter periods, cancellations) |
 
 Methods:
 
@@ -584,9 +600,9 @@ Methods:
 | `get` | `(billableId) => Promise<SubscriptionRecord \| null>` | Reads the subscription |
 | `subscribed` | `(billableId, plan?) => Promise<boolean>` | Active (or in a valid trial), optionally on a specific plan |
 | `onTrial` | `(billableId) => Promise<boolean>` | Is it in a trial period? |
-| `swap` | `(billableId, plan, { prorate? }?) => Promise<SubscriptionRecord>` | Changes plan (proration by default) |
+| `swap` | `(billableId, plan, { prorate?, allowUnpaid? }?) => Promise<SubscriptionRecord>` | Changes plan (proration by default); a paid target without a gateway subscription throws `PaymentRequiredError` |
 | `cancel` | `(billableId, { atPeriodEnd? }?) => Promise<SubscriptionRecord>` | Cancels (at the end of the period by default) |
-| `resume` | `(billableId) => Promise<SubscriptionRecord>` | Undoes a scheduled cancellation |
+| `resume` | `(billableId) => Promise<SubscriptionRecord>` | Undoes a scheduled cancellation — at the gateway too (`resumeSubscription`) |
 | `features` | `(billableId) => { can, limit, usage, remaining, consume }` | Features API (see above) |
 | `handleWebhook` | `(event: WebhookEvent) => Promise<boolean>` | Applies an event idempotently; `false` = duplicate |
 | `expireTrials` | `() => Promise<SubscriptionRecord[]>` | Settles expired local trials (run it in the scheduler) |
@@ -603,13 +619,17 @@ are mapped straight to that HTTP status by the adapters.
 | `NotSubscribedError` | `BILLING_SUBSCRIPTION_REQUIRED` | 402 | A `meta.subscribed` route was hit without an active subscription — or with no tenant in the context at all. Also thrown by `swap`/`cancel`/`resume` on a missing or inactive subscription. |
 | `FeatureUnavailableError` | `BILLING_FEATURE_UNAVAILABLE` | 403 | A `meta.feature` route, or `features().consume()`, for a feature whose plan limit is `0`/absent. |
 | `QuotaExceededError` | `BILLING_QUOTA_EXCEEDED` | 402 | `features().consume()` would exceed the limit for the current period. |
-| `GatewayUnsupportedError` | `BILLING_GATEWAY_UNSUPPORTED` | 501 | `checkout()`/`portal()` with no gateway configured, or a driver that doesn't implement that capability. |
+| `InvalidUsageAmountError` | `BILLING_INVALID_USAGE_AMOUNT` | 400 | `consume()` or a `UsageStore` given an amount that is not a positive integer. |
+| `PaymentRequiredError` | `BILLING_PAYMENT_REQUIRED` | 402 | `swap()` onto a paid/`'custom'` plan from a subscription with no gateway subscription (use `checkout()`, or `{ allowUnpaid: true }`). |
+| `GatewayUnsupportedError` | `BILLING_GATEWAY_UNSUPPORTED` | 501 | `checkout()`/`portal()` with no gateway configured, or a driver that doesn't implement that capability — including `swap()`/`resume()` of a gateway-backed subscription without `swapSubscription`/`resumeSubscription`. |
+| `CheckoutRequiredError` | `BILLING_CHECKOUT_REQUIRED` | 501 | `createSubscription` on a checkout-first gateway (Paddle, Lemon Squeezy) — `subscribe()` to a paid plan there; use `checkout()`. |
 | `UnknownPlanError` | `BILLING_UNKNOWN_PLAN` | — | A plan name isn't in `definePlans()`. Also thrown **at construction** for a bad `fallbackPlan`, so typos fail at boot. |
 | `WebhookInvalidError` | `BILLING_WEBHOOK_INVALID` | 400 | Signature verification failed — the wrong secret, or a forged/expired delivery. (A re-serialized body is no longer a possible cause: `billingWebhookRoute()` verifies over the raw bytes.) |
 | `WebhookSecretMissingError` | `BILLING_WEBHOOK_SECRET_MISSING` | 500 | A gateway was asked to verify a webhook with no signing secret configured. Verification fails **closed** — an unsigned callback is never trusted. |
 | `PaymentAmountMismatchError` | `BILLING_PAYMENT_AMOUNT_MISMATCH` | 400 | A confirmed payment's amount ≠ the amount requested for that payment id. |
 | `InvoiceNotFoundError` | `INVOICE_NOT_FOUND` | 404 | Unknown invoice id — also what another tenant's invoice looks like. |
 | `InvoiceStateError` | `INVOICE_INVALID_STATE` | 409 | An invoice action illegal in the current status (e.g. finalizing a finalized invoice). |
+| `InvoiceInputError` | `INVOICE_INVALID_INPUT` | 400 | A non-positive-integer `quantity`, negative/`NaN` tax or discount, or a non-ISO currency. |
 | `CouponInvalidError` | `COUPON_INVALID` | 422 | The coupon's shape is invalid (see the coupon rules above). |
 | `CouponNotRedeemableError` | `COUPON_NOT_REDEEMABLE` | 422 | Expired, or over `maxRedemptions`. |
 | `CouponNotFoundError` | `COUPON_NOT_FOUND` | 404 | Unknown coupon code. |
@@ -618,7 +638,7 @@ are mapped straight to that HTTP status by the adapters.
 
 ### Gateways
 
-`BillingGateway` (Advanced — the contract for writing a gateway driver): `name`, `createSubscription`, `cancelSubscription`, `verifyWebhook`, and, optionally, `createCheckoutSession`, `createPortalSession`, `swapSubscription`. `verifyWebhook(rawBody, signature)` validates the signature (throws `WebhookInvalidError`, `BILLING_WEBHOOK_INVALID`, 400) and translates the payload into a `WebhookEvent` — `{ id, type, billableId, gatewayRef? }` with `type ∈ 'subscription.canceled' | 'payment.failed' | 'payment.succeeded'` — or `null` for events that are verified but irrelevant.
+`BillingGateway` (Advanced — the contract for writing a gateway driver): `name`, `createSubscription`, `cancelSubscription`, `verifyWebhook`, and, optionally, `signatureHeader`, `createCheckoutSession`, `createPortalSession`, `swapSubscription`, `resumeSubscription`. `verifyWebhook(rawBody, signature)` validates the signature (throws `WebhookInvalidError`, `BILLING_WEBHOOK_INVALID`, 400) and translates the payload into a `WebhookEvent` — `{ id, type, billableId, gatewayRef? }` with `type ∈ 'subscription.canceled' | 'payment.failed' | 'payment.succeeded'` — or `null` for events that are verified but irrelevant.
 
 `StripeGatewayOptions`:
 
@@ -634,14 +654,14 @@ are mapped straight to that HTTP status by the adapters.
 
 Specific error: `StripeRequestError` (`BILLING_GATEWAY_ERROR`, with `httpStatus`).
 
-`FakeBillingGateway` — a test/development gateway; records calls in `created`, `canceled`, `checkouts`, `portals`, `swaps`, and only accepts the `'valid'` signature in `verifyWebhook`.
+`FakeBillingGateway` — a test/development gateway; records calls in `created`, `canceled`, `checkouts`, `portals`, `swaps`, `resumed`, and only accepts the `'valid'` signature in `verifyWebhook`.
 
 ### Stores
 
 | Export | Description |
 |---|---|
 | `SubscriptionStore` (Advanced) | `get/save/all` — implement over your DB; `MemorySubscriptionStore` included |
-| `UsageStore` (Advanced) | `get/increment/consume` — `consume` must be atomic; `MemoryUsageStore` included |
+| `UsageStore` (Advanced) | `get/increment/consume` — `consume` must be atomic, and both must reject a non-positive-integer amount (`assertUsageAmount`); `MemoryUsageStore` included |
 | `WebhookStore` (Advanced) | `markProcessed(id)` (claim; `true` = new) / `release(id)`; `MemoryWebhookStore` included |
 | `RedisUsageStore` | `new RedisUsageStore(redis, { prefix? = 'basalt:usage', ttlSeconds? = 60 days })` — atomic quotas via EVAL |
 | `RedisWebhookStore` | `new RedisWebhookStore(redis, { prefix? = 'basalt:webhook', ttlSeconds? = 7 days })` — durable dedupe via SET NX EX |

@@ -248,6 +248,49 @@ describe('the callback route', () => {
   })
 })
 
+describe('FA-076 — the callback and the anonymous endpoint say no more than they must', () => {
+  it('reflects only a well-formed OAuth error code, never arbitrary `?error=` text', async () => {
+    const h = harness()
+    const routes = routesFor(h)
+    const error = await call(byUrl(routes, 'GET', '/drives/:provider/callback'), {
+      params: { provider: 'fake' },
+      query: { error: 'Your account is locked, call +1-555-0100 <b>now</b>' },
+    }).catch((e: unknown) => e as Error)
+    expect(error).toMatchObject({ code: 'DRIVE_AUTHORIZATION_INVALID' })
+    expect((error as Error).message).not.toContain('555')
+    expect((error as Error).message).not.toContain('<b>')
+
+    // A real RFC 6749 code is still named — it is what an operator debugs with.
+    await expect(
+      call(byUrl(routes, 'GET', '/drives/:provider/callback'), {
+        params: { provider: 'fake' },
+        query: { error: 'access_denied' },
+      }),
+    ).rejects.toMatchObject({ message: expect.stringContaining('access_denied') })
+  })
+
+  it('does not list the registered providers to an anonymous caller', async () => {
+    const h = harness()
+    const route = byUrl(
+      routesFor(h, { notifications: { connections: [], onChange: () => undefined } }),
+      'POST',
+      '/drives/:provider/notifications',
+    )
+    const error = await call(route, {
+      method: 'POST',
+      params: { provider: 'nope' },
+      body: Buffer.from('{}'),
+    }).then(
+      (): { code?: string; message: string } => ({ message: '' }),
+      (e: unknown) => e as { code?: string; message: string },
+    )
+    // The same flat refusal any unverifiable delivery gets: which adapters
+    // this deployment runs is not the caller's business.
+    expect(error.code).toBe('DRIVE_NOTIFICATION_INVALID')
+    expect(error.message).not.toContain('fake')
+  })
+})
+
 describe('the notification route', () => {
   async function watched() {
     const h = harness({ provider: { files: [{ externalId: 'f1', name: 'a.txt' }] } })

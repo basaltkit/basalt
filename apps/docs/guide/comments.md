@@ -72,6 +72,21 @@ Inside a tenant context an explicit `tenantId` argument must name that tenant;
 any other value throws `CommentTenantMismatchError` (`403
 COMMENT_TENANT_MISMATCH`). It selects a tenant only outside one (jobs, CLI).
 
+In a **single-tenant** app — no `tenancyPlugin` — calls need no `tenantId`, and
+comments are filed under one internal store key, `SINGLE_TENANT_SCOPE`
+(`'@single'` — outside the tenant-id grammar, so no tenant can ever be handed
+those comments). A tenant id equal to it is refused with
+`CommentTenantReservedError` (`400 COMMENT_TENANT_RESERVED`).
+
+::: warning Upgrading single-tenant data
+Before `@basaltkit/comments` 4.0 the single-tenant key was `'default'` — a valid
+tenant id, so a tenant named `default` read, edited and deleted the
+single-tenant comments. A single-tenant app with persisted comments re-keys them
+once: `UPDATE comments SET "tenantId" = '@single' WHERE "tenantId" = 'default'`
+(`@basaltkit/comments-prisma`; the `@basaltkit/comments-sqlite` column is
+`tenant_id`). Skip it if `default` was ever a real tenant in that database.
+:::
+
 ## Live discussion + mention notifications
 
 Every mutation emits a hook (`comment:created`, `comment:mentioned`,

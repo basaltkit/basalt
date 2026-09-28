@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Container, BasaltError, runWithContext, type RequestContext } from '@basaltkit/core'
 import type { ZodType } from 'zod'
 import { sanitizeErrorDetails, type ErrorDetails } from './error-details.js'
-import { RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
+import { HttpError, RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 import { isSseResponse } from './sse.js'
@@ -194,12 +194,20 @@ export interface ErrorResponse {
       /**
        * Structured payload from an error deliberately constructed with one
        * (`new HttpError(status, code, message, { details })`, or any
-       * `BasaltError` with a numeric `status`). Absent otherwise — an
-       * unexpected exception never grows one.
+       * `BasaltError` with a numeric `status` other than 500). Absent
+       * otherwise — an unexpected exception, or a toolkit 500, never grows one.
        */
       details?: ErrorDetails
     }
   }
+}
+
+/** The client-facing message for an error that keeps its own text for the log. */
+function neutralMessage(status: number): string {
+  if (status === 502) return 'Bad gateway.'
+  if (status === 503) return 'Service unavailable.'
+  if (status === 504) return 'Gateway timeout.'
+  return status >= 500 ? 'Internal server error.' : 'Request failed.'
 }
 
 /**
@@ -218,6 +226,25 @@ export function toErrorResponse(error: unknown): ErrorResponse {
   if (error instanceof BasaltError) {
     const status = (error as { status?: unknown }).status
     if (typeof status === 'number') {
+      // A 500 raised by the toolkit (a misconfigured pipeline, a UserSource
+      // missing a method, a missing policy) is a server bug, and its message
+      // was written for the developer — it names options, internals, the fix.
+      // Only its code reaches the client; the adapters still report the error
+      // itself, message and stack, to the log. Other 5xx statuses (a 503
+      // "tenant still provisioning, retry", a 501 "provider cannot do that")
+      // are designed for the client and pass through, as does an `HttpError`
+      // (thrown deliberately) or an error that sets `expose: true`.
+      const expose = (error as { expose?: unknown }).expose
+      if (status === 500 && !(error instanceof HttpError) && expose !== true) {
+        return { status, body: { error: { code: error.code, message: 'Internal server error.' } } }
+      }
+      // An error that sets `expose: false` keeps its message and details for
+      // the log only, whatever its status: a 502 whose message quotes an
+      // upstream provider's reply or the internal host it refused to reach is
+      // diagnostic for the operator and an oracle for the client.
+      if (expose === false) {
+        return { status, body: { error: { code: error.code, message: neutralMessage(status) } } }
+      }
       // Sanitised, not passed through: `details` reaches the client verbatim,
       // so it must be plain, acyclic, bounded JSON data or nothing at all.
       const details = sanitizeErrorDetails(error.details)

@@ -27,6 +27,8 @@ describe('PrismaUserSource.findByIds', () => {
       const u = await new PrismaUserSource(client).create({ email: `u${i}@acme.test`, passwordHash: `hash-${i}` })
       ids.push(u.id)
     }
+    // create() looks the email up first (case-insensitive uniqueness): count only what the test does.
+    calls.length = 0
     return ids
   }
 

@@ -5,6 +5,7 @@ export {
   buildAiMcpServer,
   createAiMcpServer,
   createAiMcpHttpServer,
+  bearerAuthorizer,
   AI_MCP_VERSION,
   type AiMcpOptions,
   type StartOptions,

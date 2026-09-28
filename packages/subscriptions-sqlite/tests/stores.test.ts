@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { afterAll, describe, expect, it } from 'vitest'
+import { InvalidUsageAmountError } from '@basaltkit/subscriptions'
 import {
   openSubscriptionsDatabase,
   SqliteSubscriptionStore,
@@ -84,6 +85,16 @@ describe('SqliteUsageStore', () => {
     // would exceed → rejected, usage unchanged
     expect(await store.consume('acme', 'seats', 'lifetime', 1, 5)).toEqual({ applied: false, used: 5 })
     expect(await store.get('acme', 'seats', 'lifetime')).toBe(5)
+  })
+
+  // FA-047: a negative amount refunded quota, NaN poisoned the counter.
+  it('rejects non-positive-integer amounts at store level (FA-047)', async () => {
+    const store = new SqliteUsageStore(openSubscriptionsDatabase())
+    for (const bad of [-5, 0, Number.NaN, 1.5]) {
+      await expect(store.consume('acme', 'seats', 'x', bad, 5)).rejects.toBeInstanceOf(InvalidUsageAmountError)
+      await expect(store.increment('acme', 'seats', 'x', bad)).rejects.toBeInstanceOf(InvalidUsageAmountError)
+    }
+    expect(await store.get('acme', 'seats', 'x')).toBe(0)
   })
 
   it('never overshoots the limit under concurrent consume', async () => {

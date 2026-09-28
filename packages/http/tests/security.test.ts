@@ -148,6 +148,48 @@ describe('securityPlugin', () => {
     expect(reply.headers['access-control-allow-methods']).toContain('POST')
   })
 
+  it('answers a preflight from a disallowed origin without any Allow-* header (FA-015)', async () => {
+    const c = new HttpServerCollector()
+    await bootWith(c, [securityPlugin({ cors: { origin: ['https://good.test'] } })])
+    const reply = new FakeReply()
+    const sent = await c.runPre(
+      makeRequest({
+        method: 'OPTIONS',
+        headers: {
+          origin: 'https://evil.test',
+          'access-control-request-method': 'DELETE',
+          'access-control-request-headers': 'x-custom',
+        },
+      }),
+      reply,
+    )
+    expect(sent).toBe(true)
+    expect(reply.statusCode).toBe(204)
+    expect(reply.headers['access-control-allow-origin']).toBeUndefined()
+    expect(reply.headers['access-control-allow-methods']).toBeUndefined()
+    expect(reply.headers['access-control-allow-headers']).toBeUndefined()
+  })
+
+  it('charges preflights to the global rate-limit bucket (FA-015)', async () => {
+    const c = new HttpServerCollector()
+    await bootWith(c, [securityPlugin({ rateLimit: { limit: 1, windowMs: 60_000 }, cors: { origin: true } })])
+    const preflight = () =>
+      makeRequest({
+        method: 'OPTIONS',
+        ip: '1.1.1.1',
+        headers: { origin: 'https://app.test', 'access-control-request-method': 'GET' },
+      })
+    const first = new FakeReply()
+    expect(await c.runPre(preflight(), first)).toBe(true)
+    expect(first.statusCode).toBe(204)
+    const second = new FakeReply()
+    expect(await c.runPre(preflight(), second)).toBe(true)
+    expect(second.statusCode).toBe(429)
+    const real = new FakeReply()
+    expect(await c.runPre(makeRequest({ ip: '1.1.1.1' }), real)).toBe(true)
+    expect(real.statusCode).toBe(429)
+  })
+
   it('restricts CORS to an allow-list', async () => {
     const c = new HttpServerCollector()
     await bootWith(c, [securityPlugin({ cors: { origin: ['https://ok.test'] } })])
@@ -206,6 +248,32 @@ describe('MemoryRateLimitStore bounds its memory (expired buckets never pile up)
     expect(store.size).toBeLessThanOrEqual(100)
     // The newest bucket is kept and keeps counting.
     expect(store.hit('ip-999', 1, 60_000).allowed).toBe(false)
+  })
+
+  it('never evicts a bucket that has used up its limit: a flood of new keys cannot unblock it (FA-014)', () => {
+    let now = 0
+    const store = new MemoryRateLimitStore({ clock: () => now, maxEntries: 2 })
+    for (let i = 0; i < 3; i++) store.hit('victim-of-limit', 3, 60_000)
+    expect(store.hit('victim-of-limit', 3, 60_000).allowed).toBe(false)
+    // Enough distinct keys to push every open window out several times over.
+    for (let i = 0; i < 1_000; i++) store.hit(`flood-${i}`, 3, 60_000)
+    expect(store.hit('victim-of-limit', 3, 60_000).allowed).toBe(false)
+    // Open windows stay capped; only the exhausted bucket rides above the cap.
+    expect(store.size).toBeLessThanOrEqual(3)
+    // …and it is released when its window ends, like any other bucket.
+    now += 60_000
+    expect(store.hit('victim-of-limit', 3, 60_000).allowed).toBe(true)
+    now += 10 * 60_000
+    store.hit('late', 3, 60_000)
+    expect(store.size).toBe(1)
+  })
+
+  it('reset() clears an exhausted bucket', () => {
+    const store = new MemoryRateLimitStore({ clock: () => 0 })
+    store.hit('k', 1, 60_000)
+    expect(store.hit('k', 1, 60_000).allowed).toBe(false)
+    store.reset('k')
+    expect(store.hit('k', 1, 60_000).allowed).toBe(true)
   })
 
   it('still accepts a plain clock function (backwards compatible constructor)', () => {

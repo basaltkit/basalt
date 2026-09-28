@@ -55,6 +55,16 @@ if (!(await hub.subscribe(conn.id, 'notes'))) socket.close()
 socket.on('close', () => hub.unregister(conn.id))
 ```
 
+**Check `Origin` before you accept the upgrade.** Browsers attach cookies to a WebSocket
+handshake from *any* site and the same-origin policy does not apply to it, so a cookie-authenticated
+socket without an `Origin` allow-list can be opened by a malicious page on the victim's behalf
+(cross-site WebSocket hijacking). Refuse the upgrade unless `request.headers.origin` is one of your
+own origins — or authenticate the socket with a token the page has to send explicitly. If clients
+send `subscribe` commands, parse them defensively (`try`/`catch` around `JSON.parse`, check
+`typeof cmd.channel === 'string'`): a throw in an async socket listener is an unhandled rejection,
+which terminates Node by default. The [`@basaltkit/realtime-client` README](../realtime-client/README.md#server-side-websocket)
+has a complete handler.
+
 It's the same with **SSE**, but you provide how to write to the response (framework-neutral):
 
 ```ts
@@ -166,6 +176,25 @@ realtimePlugin({
 
 `emit` does a `PUBLISH`; Redis delivers to **all** subscribed instances (including the origin one), and each hub delivers to its local connections — the same path serves one node or many.
 
+The pub/sub channel is **shared by everything on that Redis that uses the same name**, and messages
+carry only a tenant id — so two apps (or staging and production) that both keep the default
+`'basalt:realtime'` deliver into each other's tenants, and anyone who can `PUBLISH` on the Redis can
+push an event to any tenant. Give each deployment its own `channel`, and set `secret` to sign every
+message with HMAC-SHA256 — unsigned, tampered or foreign-key messages are then dropped:
+
+```ts
+new RedisBackplane({
+  publisher,
+  subscriber,
+  channel: 'myapp:prod:realtime',
+  secret: process.env.REALTIME_BACKPLANE_SECRET!, // or [newKey, oldKey] while rotating
+})
+```
+
+Every instance must share the key(s): the first one signs, all of them verify. A node without a
+`secret` and a node with one can't talk to each other, so roll it out to all instances together
+(pushes between mixed nodes are dropped and logged meanwhile).
+
 ## API reference
 
 ### `realtimePlugin(options?)`
@@ -199,14 +228,19 @@ it — but it must not vanish either.
 |---|---|---|---|
 | `onBridgeError` | A `bridge` rule's broadcast rejected — typically the backplane is down (Redis unreachable). | `console.error` with hook → channel, event | The hook handler is fire-and-forget: the failure is caught, so the domain write that emitted the hook still succeeds. Clients simply miss that push. |
 | `onBridgeSkipped` | A `bridge` rule **without `tenant`** fired but there is no tenant in context (the hook was emitted at boot, from cron, or from a worker without context). | `console.warn` with hook → channel, event — once per rule, not per event | The push is skipped. A function `channel` is evaluated for the report; if it throws, `channel` is `'<dynamic>'`. A rule whose own `tenant` returns `undefined` never lands here: that opt-out is silent. |
-| `onDeliveryError` | One connection's `send()` **threw** during local delivery — a dead or closing socket. | `console.error` with the connection, tenant, channel and event | That connection is **pruned** (`unregister`), and every remaining subscriber still receives the message. One dead socket never stops the fan-out, and never throws into the backplane's message emitter (fatal on a real ioredis subscriber). |
+| `onDeliveryError` | One connection's `send()` **threw** during local delivery — a dead or closing socket. | `console.error` with the connection, tenant, channel and event | That connection is **pruned** (`unregister`) and **closed** — so the client notices and reconnects instead of sitting on a silent socket — and every remaining subscriber still receives the message. One dead socket never stops the fan-out, and never throws into the backplane's message emitter (fatal on a real ioredis subscriber). |
 
 Point all three at your logger in production — a permanently failing bridge means clients are
 silently stale, and a spike in delivery errors means sockets are dying faster than they are
 being unregistered.
 
-Separately, the `RedisBackplane` drops malformed or unparseable messages arriving on the shared
-pub/sub channel and logs them with `console.error`; it never throws into ioredis's `'message'`
+A payload JSON can't encode (a `BigInt`, a cycle) is **not** a delivery error: `publish()` /
+`emit()` rejects with the `TypeError` before anything is sent, on every backplane, and no
+subscriber is touched. (A bridged emit lands in `onBridgeError`.)
+
+Separately, the `RedisBackplane` drops malformed or unparseable messages — and, with `secret`
+set, unsigned or wrongly signed ones — arriving on the shared pub/sub channel and logs them with
+`console.error`; it never throws into ioredis's `'message'`
 emitter, where an escaped exception would be an `uncaughtException`.
 
 ### Errors
@@ -232,9 +266,9 @@ emitter, where an escaped exception would be an `uncaughtException`.
 | `start` | `() => Promise<void>` | Subscribes the backplane so cross-instance messages reach local connections. The plugin calls it at boot. |
 | `register` | `(connection: Connection) => void` | Tracks a live connection. |
 | `unregister` | `(connectionId: string) => void` | Drops the connection and all its subscriptions/presence. |
-| `subscribe` | `(connectionId: string, channel: string) => Promise<boolean>` | Attaches a connection to a channel. **Returns whether it was accepted** — `false` when the connection is unknown, the name is empty or longer than `maxChannelLength`, `maxSubscriptionsPerConnection` is reached, or `authorize` refused. Idempotent (a repeat returns `true`). |
+| `subscribe` | `(connectionId: string, channel: string) => Promise<boolean>` | Attaches a connection to a channel. **Returns whether it was accepted** — `false` when the connection is unknown (or was unregistered or replaced while `authorize` was pending), the channel is not a string, the name is empty or longer than `maxChannelLength`, `maxSubscriptionsPerConnection` is reached, or `authorize` refused. Idempotent (a repeat returns `true`). |
 | `unsubscribe` | `(connectionId: string, channel: string) => void` | Detaches from one channel. |
-| `publish` | `(tenantId, channel, event, data) => Promise<void>` | Publishes to every subscriber across all instances. |
+| `publish` | `(tenantId, channel, event, data) => Promise<void>` | Publishes to every subscriber across all instances. Rejects with a `TypeError` when `data` isn't JSON-serializable. |
 | `presence` | `(tenantId, channel) => string[]` | Distinct user ids on **this node**. |
 | `count` | `(tenantId, channel) => number` | Connection count on **this node**. |
 | `close` | `() => Promise<void>` | Closes every connection and the backplane. |
@@ -253,12 +287,12 @@ unit-testable with fakes. `userId` is what makes a connection visible in `presen
 
 - `websocketConnection(meta, socket)` — from any `ws`-like socket (`send`/`close`).
 - `sseConnection(meta, { write, end })` — SSE; you provide how to write/end.
-- `sseFrame(message)` — formats a message as an SSE frame.
+- `sseFrame(message)` — formats a message as an SSE frame. CR, LF and NUL are stripped from the event name, so an event name can't inject extra fields or frames.
 
 ### Backplanes
 
 - `MemoryBackplane` — single process (default).
-- `RedisBackplane({ publisher, subscriber, channel? })` — Redis pub/sub (`channel` default `'basalt:realtime'`).
+- `RedisBackplane({ publisher, subscriber, channel?, secret? })` — Redis pub/sub (`channel` default `'basalt:realtime'` — give each deployment its own). `secret` (a string, or an array to rotate — first signs, all verify) signs every message with HMAC-SHA256 and drops anything unsigned or wrongly signed; an empty `secret` throws at construction.
 
 ## How it connects to other modules
 

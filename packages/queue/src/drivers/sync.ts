@@ -1,4 +1,5 @@
 import type { AddJobOptions, JobExecutor, QueueDriver } from '../driver.js'
+import { MAX_JOB_ATTEMPTS } from '../job.js'
 
 /** `executed[]` keeps at most this many entries (oldest evicted first). */
 const EXECUTED_HISTORY_LIMIT = 1000
@@ -31,8 +32,12 @@ export class SyncQueueDriver implements QueueDriver {
   }
 
   async add(queue: string, jobName: string, data: unknown, options: AddJobOptions): Promise<void> {
+    // Clamp: at least one run (an `attempts` of 0/NaN used to skip the handler
+    // and reject with `undefined`), at most the shared ceiling (retries here
+    // are inline and immediate, so an unbounded count is a CPU spin).
+    const attempts = Math.min(Math.max(Math.trunc(options.attempts) || 1, 1), MAX_JOB_ATTEMPTS)
     let lastError: unknown
-    for (let attempt = 1; attempt <= options.attempts; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         await this.executor?.(jobName, data)
         this.record({ queue, jobName, attempts: attempt })
@@ -41,7 +46,7 @@ export class SyncQueueDriver implements QueueDriver {
         lastError = error
       }
     }
-    this.record({ queue, jobName, attempts: options.attempts })
+    this.record({ queue, jobName, attempts })
     throw lastError
   }
 

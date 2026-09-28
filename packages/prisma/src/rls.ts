@@ -83,9 +83,12 @@ export function rlsPolicySql(options: RlsPolicyOptions): string {
   }
   const force = options.force ?? true
   const schemaPrefix = options.schema ? `${quote(options.schema, 'schema')}.` : ''
-  // set_config-style read: current_setting('app.tenant_id', true) returns NULL
-  // (not an error) when unset, so an unset session matches no rows — fail closed.
-  const predicate = `${column} = current_setting('${setting}', true)`
+  // current_setting('app.tenant_id', true) returns NULL (not an error) when the
+  // setting was never defined in the session — and '' once a transaction that
+  // set it has ended (a pooled connection's next request). NULLIF turns both
+  // into NULL, so a session with no tenant matches no rows — fail closed, even
+  // for a row whose tenant column is ''.
+  const predicate = `${column} = NULLIF(current_setting('${setting}', true), '')`
 
   return options.tables
     .map((name) => {

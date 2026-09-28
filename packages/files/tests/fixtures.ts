@@ -72,7 +72,7 @@ export class FakeDriver implements StorageDriver {
 
 export const fakeDisk = () => {
   const driver = new FakeDriver()
-  return { driver, disk: new Disk('uploads', driver) }
+  return { driver, disk: new Disk('uploads', driver, { onMissingScope: 'root' }) }
 }
 
 const bytes = (...parts: (string | number[] | Uint8Array)[]): Buffer =>

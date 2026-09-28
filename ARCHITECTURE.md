@@ -445,7 +445,7 @@ tenancyPlugin({
 })
 ```
 
-Resolvers run in order; the first one to resolve wins. A resolution failure → `TENANCY_NOT_RESOLVED` (404 or fallback to the "central app", configurable — the same concept of central routes vs. tenant routes).
+Authoritative resolvers (subdomain, domain, route — inputs the platform controls) run first, and an unknown tenant they name ends resolution; fallback resolvers (header) run only when no authoritative one named a tenant. Within each group, the first one to resolve wins. A resolution failure → `TENANCY_NOT_RESOLVED` (404 or fallback to the "central app", configurable — the same concept of central routes vs. tenant routes).
 
 ### 6.3 Context and automatic integrations
 

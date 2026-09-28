@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MemoryReplayGuard, handleNotification, watchConnection } from '@basaltkit/drives'
+import { MemoryReplayGuard, handleNotification, watchConnection, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { googleDrive } from '../src/index.js'
 import { CLIENT_ID, connect, harness } from './helpers.js'
 
@@ -53,7 +53,7 @@ describe('subscribing', () => {
     const view = await connect(h)
     await watchConnection(h.drives, view.id, { notificationUrl: 'https://app.test/hook' })
 
-    const stored = (await h.store.find('default', view.id))!
+    const stored = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     // `resourceUri` embeds the page token — a URL that grants access to the
     // feed does not belong in a row that gets read for display.
     expect(stored.watch?.raw).toEqual({ resourceId: expect.stringMatching(/^resource-/) })
@@ -154,7 +154,7 @@ describe('resolving a notification to a connection', () => {
     const h = harness()
     const view = await connect(h)
     const watch = await watchConnection(h.drives, view.id, { notificationUrl: 'https://app.test/hook' })
-    const connections = await h.store.list('default')
+    const connections = await h.store.list(SINGLE_TENANT_SCOPE)
 
     const outcome = await handleNotification(h.drives, h.google.notificationFor(watch.id), {
       provider: 'google',
@@ -169,7 +169,7 @@ describe('resolving a notification to a connection', () => {
     const h = harness()
     const view = await connect(h)
     const watch = await watchConnection(h.drives, view.id, { notificationUrl: 'https://app.test/hook' })
-    const connections = await h.store.list('default')
+    const connections = await h.store.list(SINGLE_TENANT_SCOPE)
 
     const forged = h.google.notificationFor(watch.id, { token: 'not-the-secret' })
     const outcome = await handleNotification(h.drives, forged, { provider: 'google', connections })
@@ -186,7 +186,7 @@ describe('resolving a notification to a connection', () => {
     const h = harness()
     const view = await connect(h)
     const watch = await watchConnection(h.drives, view.id, { notificationUrl: 'https://app.test/hook' })
-    const connections = await h.store.list('default')
+    const connections = await h.store.list(SINGLE_TENANT_SCOPE)
 
     const outcome = await handleNotification(h.drives, h.google.notificationFor(watch.id, { state: 'sync' }), {
       provider: 'google',
@@ -201,7 +201,7 @@ describe('resolving a notification to a connection', () => {
     const h = harness()
     const view = await connect(h)
     const watch = await watchConnection(h.drives, view.id, { notificationUrl: 'https://app.test/hook' })
-    const connections = await h.store.list('default')
+    const connections = await h.store.list(SINGLE_TENANT_SCOPE)
     const replayGuard = new MemoryReplayGuard(h.now)
     const notification = h.google.notificationFor(watch.id, { messageNumber: 7 })
 
@@ -213,5 +213,30 @@ describe('resolving a notification to a connection', () => {
     // replay identifiable at all — Google re-delivers on any non-2xx.
     expect(second.shouldSync).toBe(false)
     expect(second.reason).toBe('replay')
+  })
+
+  it('reports the message number as the replay key, so distinct deliveries are not collapsed (FA-075)', async () => {
+    const h = harness()
+    const view = await connect(h)
+    const watch = await watchConnection(h.drives, view.id, { notificationUrl: 'https://app.test/hook' })
+    const connections = await h.store.list(SINGLE_TENANT_SCOPE)
+    const replayGuard = new MemoryReplayGuard(h.now)
+
+    // Google's body is empty: without the adapter naming the message number,
+    // every notification on a channel would look like the same delivery and
+    // a real change arriving inside the window would be dropped as a replay.
+    expect(h.provider.verifyNotification(h.google.notificationFor(watch.id, { messageNumber: 8 })).replayKey).toBe('8')
+    const first = await handleNotification(h.drives, h.google.notificationFor(watch.id, { messageNumber: 8 }), {
+      provider: 'google',
+      connections,
+      replayGuard,
+    })
+    const next = await handleNotification(h.drives, h.google.notificationFor(watch.id, { messageNumber: 9 }), {
+      provider: 'google',
+      connections,
+      replayGuard,
+    })
+    expect(first.shouldSync).toBe(true)
+    expect(next.shouldSync).toBe(true)
   })
 })

@@ -129,6 +129,12 @@ tenant prefix or defeat prefix-based `list()` isolation. Keys that start with
 `StorageInvalidKeyError` (`STORAGE_INVALID_KEY`). Ordinary nested keys like
 `avatars/123/pic.png` are untouched.
 
+Keys must be canonical as well: a `.` or empty segment (`a/./b`, `./a`, `a//b`,
+a trailing `/`, `''`) is refused on every driver. The local driver would open
+the same file as `a/b` while S3/GCS/Azure store distinct objects, so these are
+rejected rather than normalized (a silent rewrite would let two different
+strings address one object). A `list()` prefix may be `''` or end in one `/`.
+
 ### Large files: streaming, server-side copy and stat
 
 `put`/`get` move whole buffers, which is the wrong shape for a 2 GB video or a
@@ -285,15 +291,20 @@ const disk = new Disk('uploads', new LocalStorageDriver({ root: './storage' }))
 
 await runWithContext({ tenant: { id: 'acme' } }, () => disk.put('logo.png', 'acme-logo'))
 await runWithContext({ tenant: { id: 'globex' } }, () => disk.put('logo.png', 'globex-logo'))
-await disk.put('logo.png', 'central-logo') // outside any tenant
+await disk.put('logo.png', 'central-logo') // outside any tenant → StorageTenantRequiredError
 
 // Each tenant reads ITS OWN logo.png:
 //   acme   → tenants/acme/logo.png
 //   globex → tenants/globex/logo.png
-//   no tenant → logo.png
 ```
 
 In normal HTTP requests you don't need `runWithContext` — the framework puts the tenant in the context for you. To disable it, configure the disk with `scope: null`.
+
+**No tenant, no root.** A scoped disk with no tenant in context throws `StorageTenantRequiredError` instead of resolving the key against the bucket root (where `list('')` would enumerate every tenant). That holds for any custom `scope` that resolves nothing and for every hand-built `new Disk()` — it cannot know whether tenancy exists. The one implicit root is a `storagePlugin` disk on the default scope in an app **without** `@basaltkit/tenancy`. Otherwise ask for the root explicitly: `scope: null` (a central disk) or `onMissingScope: 'root'` (tenant-scoped inside a tenant, central outside one).
+
+**Canonical tenant segments.** The default scope only turns canonical ids into a path — lowercase ASCII letters, digits, `-`, `_` and inner `.` (every id `@basaltkit/tenancy`'s default grammar produces). Anything else throws `StorageInvalidScopeError`: on a case- or normalization-insensitive filesystem (macOS APFS, Windows NTFS) `Acme` would open `acme`'s directory on the local driver while S3/GCS/Azure keep them apart, so refusing is what keeps every driver identical. Case-sensitive ids (nanoid, ULID) go through a custom `scope` that maps them to a canonical segment, e.g. `` `tenants/x${Buffer.from(id).toString('hex')}` ``.
+
+**Copies stay in their tenant.** `copy()` scopes the destination with the destination disk's scope. A central destination (`scope: null`) has none, so from a tenant-scoped disk a destination inside `tenants/` throws `StorageCrossTenantCopyError` (403); `backups/…` and the like are fine.
 
 ### Image processing (resize, WebP, thumbnails)
 
@@ -365,7 +376,7 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `scope` | `(() => string \| undefined) \| null` | No | reads `ctx().tenant.id` → `tenants/<id>` | Dynamic path prefix, resolved on each operation. `null` disables it. |
-| `onMissingScope` | `'root' \| 'error'` | No | `'error'` with tenancy + default scope, else `'root'` | What happens with no tenant in context. |
+| `onMissingScope` | `'root' \| 'error'` | No | `'error'` for every scoped disk; `'root'` only for a `storagePlugin` disk on the default scope without tenancy | What happens with no tenant in context. |
 | `maxTemporaryUrlTtl` | `DurationInput` | No | `'7d'` | Longest `temporaryUrl` lifetime. |
 | `maxTemporaryUploadUrlTtl` | `DurationInput` | No | `'1h'` (or `maxTemporaryUrlTtl` if lower) | Longest `temporaryUploadUrl` lifetime. |
 
@@ -495,7 +506,7 @@ host is a silently broken one.
 |---|---|---|---|
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | 500 | `get()` on a path that doesn't exist. |
 | `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | 500 | The `local` driver resolved a path outside its `root` (`../…`). |
-| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | 500 | The key starts with `/` or `\`, has a `..` segment, or contains NUL/control characters. Checked for every driver. |
+| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | 500 | The key starts with `/` or `\`, has a `..`, `.` or empty segment (`a//b`, a trailing `/`, `''`), or contains NUL/control characters. Checked for every driver. |
 | `StorageTooLargeError` | `STORAGE_TOO_LARGE` | 500 | `put()` content exceeds the `maxBytes` you passed. |
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | 500 | `put()` `contentType` is missing from, or absent in, `allowedContentTypes`. |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | 500 | `storage.disk('name')` for a disk that isn't declared. |
@@ -508,10 +519,13 @@ host is a silently broken one.
 | `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | 500 | `stat()` on a driver without the capability. |
 | `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` | **400** | `putStream()` on S3 with neither `contentLength` nor `maxBytes`, and without the optional `@aws-sdk/lib-storage` peer that enables multipart. |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | 500 | An image-pipeline terminal ran with no `imageProcessor` configured. |
+| `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` | **400** | A scoped disk ran with no tenant in context (see *No tenant, no root*). |
+| `StorageInvalidScopeError` | `STORAGE_INVALID_SCOPE` | 500 | The tenant id (or custom scope) is not a safe path prefix, or — default scope — not canonical (uppercase, non-ASCII, trailing `.`). |
+| `StorageCrossTenantCopyError` | `STORAGE_CROSS_TENANT_COPY` | **403** | `copy()` from a tenant-scoped disk into `tenants/…` on a central (`scope: null`) disk. |
 
 All extend `BasaltError` from `@basaltkit/core` and carry the `code` above.
 
-None of them declare an HTTP `status`, so the adapters' shared error mapper
+The ones marked 500 declare no HTTP `status`, so the adapters' shared error mapper
 turns them into a generic **500 `INTERNAL_ERROR`** with the message withheld —
 storage failures are not a client-facing contract. Catch them in your handler
 and translate deliberately (a missing file is usually your 404, a rejected
@@ -528,7 +542,10 @@ built on top of this package.
 ## Common errors and solutions (FAQ)
 
 **`get` throws `STORAGE_FILE_NOT_FOUND` but I just saved the file.**
-You most likely wrote and read in different tenant contexts: with the default scope, the same `logo.png` lives at `tenants/acme/logo.png` for one tenant and at `logo.png` outside any tenant. Check the context or use `scope: null`.
+You most likely wrote and read in different tenant contexts: with the default scope, the same `logo.png` lives at `tenants/acme/logo.png` for one tenant and at `logo.png` on a disk that allows the root outside any tenant. Check the context or use `scope: null`.
+
+**`STORAGE_TENANT_REQUIRED` on a disk I built with `new Disk()`.**
+A hand-built disk with a scope fails closed without a tenant. A disk with no tenants in it is central — say so with `scope: null`; one that serves both sides takes `onMissingScope: 'root'`.
 
 **`STORAGE_INVALID_PATH` when using `../` in the path.**
 This is intentional: the local driver blocks any path that escapes the root folder — it's a security protection against *path traversal*. Always use relative paths within the disk.

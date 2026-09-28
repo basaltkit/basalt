@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { BasaltError, createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { BasaltError, createToken, ctx, definePlugin, isProductionEnvironment, type Container } from '@basaltkit/core'
 import { AUTH, type Auth, type PublicUser, type TokenPair } from '@basaltkit/auth'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
@@ -55,8 +55,23 @@ export interface SamlProvider {
   issuer: string
   /** ACS URL the IdP POSTs the SAMLResponse to. */
   callbackUrl: string
-  /** Attribute to read the email from. Default: `email` / common email claims / an email-shaped NameID. */
+  /**
+   * Attribute to read the email from. When set, ONLY this attribute is read (an
+   * assertion without it is refused — no silent fallback to another claim or the
+   * NameID). Default: `email` / common email claims / an email-shaped NameID.
+   */
   emailAttribute?: string
+  /**
+   * Require the whole `<Response>` to be signed, on top of the assertion (which
+   * is always required to be signed). Default `true`. Some IdPs (AD FS, Entra ID
+   * by default) sign only the assertion — set `false` for those.
+   */
+  wantAuthnResponseSigned?: boolean
+  /**
+   * Clock skew tolerated on `NotBefore` / `NotOnOrAfter`, ms. Default 0 (node-saml's
+   * default); at most 5 minutes.
+   */
+  acceptedClockSkewMs?: number
   /**
    * Email domains this IdP is trusted to assert (exact, case-insensitive match on
    * the part after `@`; list subdomains explicitly). An assertion for any other
@@ -73,6 +88,24 @@ export interface SamlProvider {
    * configured: this IdP may assert **any** email. Only for an IdP you fully control.
    */
   allowAnyEmailDomain?: true
+  /**
+   * XML-DSig `SignatureMethod/@Algorithm` URIs accepted on the response and the
+   * assertion. Replaces the default {@link DEFAULT_SAML_SIGNATURE_ALGORITHMS}
+   * (RSA-SHA256/384/512, ECDSA-SHA256/384/512). Every `SignatureMethod` in the
+   * response must be listed, otherwise it is refused with `AUTH_SAML_RESPONSE_INVALID`.
+   */
+  signatureAlgorithms?: string[]
+  /**
+   * XML-DSig `DigestMethod/@Algorithm` URIs accepted. Replaces the default
+   * {@link DEFAULT_SAML_DIGEST_ALGORITHMS} (SHA-256/384/512).
+   */
+  digestAlgorithms?: string[]
+  /**
+   * Legacy opt-in: also accept SHA-1 (`rsa-sha1` signatures, `sha1` digests) on
+   * top of the default algorithm lists. SHA-1 is collision-broken; enable it only
+   * for an IdP that cannot sign with SHA-256, and plan to turn it off.
+   */
+  allowSha1?: true
 }
 
 export interface SamlOptions {
@@ -106,6 +139,18 @@ export interface SamlOptions {
    * unique DB row…) on multi-replica deployments that opt in to IdP-initiated SSO.
    */
   assertionReplayCache?: SamlAssertionReplayCache
+  /**
+   * Bind every SP-initiated login to the browser that started it (login-CSRF
+   * protection). Default `true`: {@link Saml.authorize} returns a random
+   * `binding` to keep in an HttpOnly cookie ({@link samlRoutes} does) and sends
+   * its hash as the `RelayState`; {@link Saml.consume} refuses a response whose
+   * `RelayState` does not match the binding presented with it — so a
+   * SAMLResponse the attacker obtained for their own account cannot be posted
+   * from a victim's browser. Enforced with `validateInResponseTo: 'always'` (the
+   * default); IdP-initiated SSO (`'ifPresent'` / `'never'`) cannot be bound to a
+   * browser and is login-CSRF-able by nature. `false` opts out.
+   */
+  bindToBrowser?: boolean
 }
 
 /** Single-use store for consumed assertion ids. */
@@ -153,6 +198,10 @@ export interface SamlCacheProvider {
  * security-relevant defaults are assertable without constructing a real client.
  */
 export function samlClientConfig(p: SamlProvider, options: SamlOptions = {}): Record<string, unknown> {
+  const skew = p.acceptedClockSkewMs
+  if (skew !== undefined && (!Number.isSafeInteger(skew) || skew < 0 || skew > MAX_CLOCK_SKEW_MS)) {
+    throw new SamlProviderConfigError(`provider "${p.name}" has an acceptedClockSkewMs outside 0..${MAX_CLOCK_SKEW_MS}`)
+  }
   return {
     callbackUrl: p.callbackUrl,
     entryPoint: p.entryPoint,
@@ -160,11 +209,159 @@ export function samlClientConfig(p: SamlProvider, options: SamlOptions = {}): Re
     idpCert: p.idpCert,
     // Require the IdP to sign assertions — never trust an unsigned response.
     wantAssertionsSigned: true,
+    // The envelope signature on top (node-saml's default); opt-out for IdPs that sign only the assertion.
+    wantAuthnResponseSigned: p.wantAuthnResponseSigned ?? true,
+    ...(skew !== undefined ? { acceptedClockSkewMs: skew } : {}),
+    // Algorithms for what this SP signs (AuthnRequests, when a signing key is set);
+    // node-saml defaults to SHA-1. Verification-side algorithms: see SamlProvider.signatureAlgorithms.
+    signatureAlgorithm: 'sha256',
+    digestAlgorithm: 'sha256',
     // Reject replays of a captured assertion (see ValidateInResponseToMode).
     validateInResponseTo: options.validateInResponseTo ?? 'always',
     ...(options.cacheProvider ? { cacheProvider: options.cacheProvider } : {}),
   }
 }
+
+const XMLDSIG = 'http://www.w3.org/2000/09/xmldsig#'
+const XMLDSIG_MORE = 'http://www.w3.org/2001/04/xmldsig-more#'
+const XMLENC = 'http://www.w3.org/2001/04/xmlenc#'
+
+/** `SignatureMethod` algorithms accepted by default: RSA and ECDSA over SHA-256/384/512. */
+export const DEFAULT_SAML_SIGNATURE_ALGORITHMS: readonly string[] = Object.freeze([
+  `${XMLDSIG_MORE}rsa-sha256`,
+  `${XMLDSIG_MORE}rsa-sha384`,
+  `${XMLDSIG_MORE}rsa-sha512`,
+  `${XMLDSIG_MORE}ecdsa-sha256`,
+  `${XMLDSIG_MORE}ecdsa-sha384`,
+  `${XMLDSIG_MORE}ecdsa-sha512`,
+])
+
+/** `DigestMethod` algorithms accepted by default: SHA-256/384/512. */
+export const DEFAULT_SAML_DIGEST_ALGORITHMS: readonly string[] = Object.freeze([
+  `${XMLENC}sha256`,
+  `${XMLDSIG_MORE}sha384`,
+  `${XMLENC}sha512`,
+])
+
+/** Added by {@link SamlProvider.allowSha1}. */
+const SHA1_SIGNATURE_ALGORITHMS = [`${XMLDSIG}rsa-sha1`, `${XMLDSIG_MORE}ecdsa-sha1`]
+const SHA1_DIGEST_ALGORITHMS = [`${XMLDSIG}sha1`]
+
+/** The XML-DSig algorithms a provider's responses may use. */
+export interface SamlAlgorithmPolicy {
+  signatureAlgorithms: ReadonlySet<string>
+  digestAlgorithms: ReadonlySet<string>
+}
+
+/**
+ * The effective {@link SamlAlgorithmPolicy} of a provider. Throws
+ * {@link SamlProviderConfigError} on an empty or non-string algorithm list.
+ */
+export function samlAlgorithmPolicy(p: SamlProvider): SamlAlgorithmPolicy {
+  const list = (value: unknown, field: string, fallback: readonly string[], sha1: string[]): Set<string> => {
+    if (value === undefined) return new Set(p.allowSha1 === true ? [...fallback, ...sha1] : fallback)
+    if (!Array.isArray(value) || value.length === 0 || !value.every((a) => typeof a === 'string' && a.length > 0)) {
+      throw new SamlProviderConfigError(`provider "${p.name}" has an invalid ${field} list`)
+    }
+    return new Set(p.allowSha1 === true ? [...(value as string[]), ...sha1] : (value as string[]))
+  }
+  return {
+    signatureAlgorithms: list(p.signatureAlgorithms, 'signatureAlgorithms', DEFAULT_SAML_SIGNATURE_ALGORITHMS, SHA1_SIGNATURE_ALGORITHMS),
+    digestAlgorithms: list(p.digestAlgorithms, 'digestAlgorithms', DEFAULT_SAML_DIGEST_ALGORITHMS, SHA1_DIGEST_ALGORITHMS),
+  }
+}
+
+/** The DOM surface of `@xmldom/xmldom` read by {@link assertSamlResponseAlgorithms}. */
+interface XmlAttr {
+  localName?: string | null
+  name: string
+  value: string
+}
+interface XmlElement {
+  localName?: string | null
+  tagName: string
+  attributes: { length: number; [i: number]: XmlAttr }
+}
+interface XmlDocument {
+  documentElement?: XmlElement | null
+  doctype?: unknown
+  getElementsByTagName(name: string): { length: number; [i: number]: XmlElement }
+}
+type XmlDomParser = new (options: {
+  locator: object
+  errorHandler: { warning?: (msg: string) => void; error: (msg: string) => void; fatalError: (msg: string) => void }
+}) => { parseFromString(xml: string, mime: string): XmlDocument }
+
+let domParser: XmlDomParser | undefined
+/**
+ * The same `@xmldom/xmldom` DOMParser node-saml parses the response with, resolved
+ * through node-saml (its hard dependency) so both see the identical tree.
+ */
+function loadDomParser(): XmlDomParser {
+  if (!domParser) {
+    const require = createRequire(import.meta.url)
+    const fromNodeSaml = createRequire(require.resolve('@node-saml/node-saml'))
+    domParser = (fromNodeSaml('@xmldom/xmldom') as { DOMParser: XmlDomParser }).DOMParser
+  }
+  return domParser
+}
+
+const localNameOf = (node: { localName?: string | null; name?: string; tagName?: string }): string => {
+  if (node.localName) return node.localName
+  const qname = node.tagName ?? node.name ?? ''
+  return qname.slice(qname.indexOf(':') + 1)
+}
+
+/**
+ * Refuses a base64 `SAMLResponse` that uses an XML-DSig algorithm outside
+ * `policy`, or that carries a DOCTYPE / entity declarations. Every
+ * `SignatureMethod` and `DigestMethod` element — in any namespace or prefix, at
+ * any depth (response envelope and assertion signatures alike) — must carry
+ * `Algorithm` attributes that are all in the allowlist. Elements are matched by
+ * local name and attributes by local name, as xml-crypto does, so no spelling
+ * that the verifier would honour escapes the check. Throws
+ * {@link SamlResponseInvalidError}.
+ */
+export function assertSamlResponseAlgorithms(samlResponse: string, policy: SamlAlgorithmPolicy): void {
+  // Decoded exactly as node-saml does.
+  const xml = Buffer.from(samlResponse, 'base64').toString('utf8')
+  if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new SamlResponseInvalidError('the response carries a DOCTYPE')
+  let doc: XmlDocument
+  try {
+    const fail = (msg: string): never => {
+      throw new Error(msg)
+    }
+    doc = new (loadDomParser())({ locator: {}, errorHandler: { error: fail, fatalError: fail } }).parseFromString(
+      xml,
+      'text/xml',
+    )
+  } catch {
+    throw new SamlResponseInvalidError('the response is not well-formed XML')
+  }
+  if (!doc.documentElement) throw new SamlResponseInvalidError('the response is not well-formed XML')
+  if (doc.doctype) throw new SamlResponseInvalidError('the response carries a DOCTYPE')
+  const elements = doc.getElementsByTagName('*')
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i]!
+    const name = localNameOf(el)
+    const allowed =
+      name === 'SignatureMethod' ? policy.signatureAlgorithms : name === 'DigestMethod' ? policy.digestAlgorithms : undefined
+    if (!allowed) continue
+    let seen = 0
+    for (let j = 0; j < el.attributes.length; j++) {
+      const attr = el.attributes[j]!
+      if (localNameOf(attr) !== 'Algorithm') continue
+      seen++
+      if (!allowed.has(attr.value)) {
+        throw new SamlResponseInvalidError(`the ${name} algorithm is not allowed`)
+      }
+    }
+    if (seen === 0) throw new SamlResponseInvalidError(`a ${name} has no Algorithm`)
+  }
+}
+
+/** Upper bound on {@link SamlProvider.acceptedClockSkewMs}. */
+const MAX_CLOCK_SKEW_MS = 5 * 60_000
 
 /** First @node-saml/node-saml release without CVE-2025-54369 / CVE-2025-54419 (signature bypass). */
 const MIN_NODE_SAML = [5, 1, 0] as const
@@ -214,8 +411,11 @@ const EMAIL_CLAIMS = [
 /** Extracts the user's email from a validated assertion. */
 export function extractEmail(profile: SamlProfile, attribute?: string): string | undefined {
   if (attribute) {
+    // An explicitly configured attribute is the only source: falling back to
+    // another claim (or a NameID the user may be able to shape) would log in
+    // an identity the app never agreed to trust.
     const v = profile[attribute]
-    if (typeof v === 'string' && v) return v
+    return typeof v === 'string' && v.includes('@') ? v : undefined
   }
   for (const key of EMAIL_CLAIMS) {
     const v = profile[key]
@@ -288,6 +488,18 @@ function assertionExpiry(profile: SamlProfile): number | undefined {
   return Number.isFinite(t) ? t : undefined
 }
 
+const sha256 = (value: string): string => createHash('sha256').update(value).digest('base64url')
+const safeEqual = (a: string, b: string): boolean => {
+  const x = Buffer.from(a)
+  const y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+
+/** The `RelayState` sent to the IdP for a browser `binding` (its SHA-256, so the cookie value never leaves the SP). */
+export function samlRelayStateFor(binding: string): string {
+  return sha256(binding)
+}
+
 /**
  * SAML 2.0 SP-initiated SSO. Signature verification, canonicalization and the
  * SAML protocol are delegated to `@node-saml/node-saml`; this only wires the
@@ -298,6 +510,7 @@ export class Saml {
   private readonly providers = new Map<string, SamlProvider>()
   private readonly clients = new Map<string, SamlClient>()
   private readonly allowedDomains = new Map<string, Set<string>>()
+  private readonly algorithms = new Map<string, SamlAlgorithmPolicy>()
   private readonly replay: SamlAssertionReplayCache
 
   constructor(
@@ -314,6 +527,7 @@ export class Saml {
       // A duplicate name would silently pair one entry's IdP with another's allowlist.
       if (seen.has(p.name)) throw new SamlProviderConfigError(`provider "${p.name}" is configured more than once`)
       seen.add(p.name)
+      this.algorithms.set(p.name, samlAlgorithmPolicy(p))
       const domains = normalizeAllowedDomains(p)
       if (domains) this.allowedDomains.set(p.name, domains)
       else if (providers.length > 1 && p.allowAnyEmailDomain !== true) {
@@ -342,21 +556,69 @@ export class Saml {
     return { provider, client }
   }
 
-  /** The IdP redirect URL to start login (SP-initiated). */
+  /** Whether {@link consume} requires the browser binding (see {@link SamlOptions.bindToBrowser}). */
+  get bindsToBrowser(): boolean {
+    return this.options.bindToBrowser !== false && (this.options.validateInResponseTo ?? 'always') === 'always'
+  }
+
+  /**
+   * Starts an SP-initiated login bound to the browser: returns the IdP redirect
+   * URL and the `binding` to keep in an HttpOnly cookie until the ACS POST
+   * (pass it back to {@link consume}).
+   */
+  async authorize(name: string): Promise<{ url: string; binding: string }> {
+    const binding = randomBytes(32).toString('base64url')
+    return { url: await this.loginUrl(name, samlRelayStateFor(binding)), binding }
+  }
+
+  /**
+   * The IdP redirect URL with a caller-chosen `RelayState`. Low level: when
+   * {@link bindsToBrowser} is on, the response is only accepted if `relayState`
+   * is `samlRelayStateFor(binding)` for the binding given to {@link consume} —
+   * prefer {@link authorize}.
+   */
   loginUrl(name: string, relayState = ''): Promise<string> {
     return this.lookup(name).client.getAuthorizeUrlAsync(relayState, this.options.host, {})
   }
 
-  /** Validates a posted SAMLResponse and logs the user in by email. */
+  /**
+   * Validates a posted SAMLResponse and logs the user in by email. With
+   * {@link bindsToBrowser} on (the default), `options.binding` must be the one
+   * {@link authorize} returned to this browser.
+   */
   async consume(
     name: string,
     body: { SAMLResponse: string; RelayState?: string },
+    options: { binding?: string | undefined } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean }> {
     const { provider, client } = this.lookup(name)
-    const { profile } = await client.validatePostResponseAsync({
-      SAMLResponse: body.SAMLResponse,
-      ...(body.RelayState ? { RelayState: body.RelayState } : {}),
-    })
+    if (this.bindsToBrowser) {
+      const { binding } = options
+      if (
+        typeof binding !== 'string' ||
+        binding.length < 32 ||
+        typeof body.RelayState !== 'string' ||
+        !safeEqual(samlRelayStateFor(binding), body.RelayState)
+      ) {
+        throw new SamlResponseInvalidError('the response is not bound to the browser that started the login')
+      }
+    }
+    // node-saml 5 verifies with any algorithm xml-crypto knows (SHA-1 included) and
+    // has no verification-side option, so the allowlist is enforced before it runs.
+    assertSamlResponseAlgorithms(body.SAMLResponse, this.algorithms.get(provider.name)!)
+    let result: { profile: SamlProfile | null; loggedOut: boolean }
+    try {
+      result = await client.validatePostResponseAsync({
+        SAMLResponse: body.SAMLResponse,
+        ...(body.RelayState ? { RelayState: body.RelayState } : {}),
+      })
+    } catch {
+      // node-saml throws plain Errors for every invalid input (bad signature,
+      // malformed XML, unknown InResponseTo, encrypted assertion without a key…):
+      // all of them are the client's fault, never a 500.
+      throw new SamlResponseInvalidError()
+    }
+    const { profile } = result
     if (!profile) throw new SamlResponseInvalidError()
     const email = extractEmail(profile, provider.emailAttribute)
     if (!email) throw new SamlResponseInvalidError('no email in the assertion')
@@ -427,6 +689,41 @@ export interface SamlRoutesOptions {
    * `#access_token=…&refresh_token=…`. Omitted → JSON `{ user, accessToken, refreshToken }`.
    */
   successRedirect?: string
+  /**
+   * The HttpOnly cookie binding a login to the browser that started it (see
+   * {@link SamlOptions.bindToBrowser}). The IdP returns with a cross-site POST,
+   * so the cookie is `SameSite=None`, which browsers only keep with `Secure`:
+   * `secure` defaults to true unless `NODE_ENV` is explicitly `development` or
+   * `test`, and a secure cookie is named `__Host-basalt_saml`. Browsers treat
+   * `http://localhost` as secure, so `secure: true` also works there; a
+   * non-secure cookie carries no `SameSite` attribute and relies on the
+   * browser's default.
+   */
+  bindingCookie?: { secure?: boolean; maxAgeSeconds?: number }
+  /**
+   * `meta.rateLimit` on the login and ACS routes (enforced by the http
+   * `securityPlugin`'s rate limiter). Default 10 requests per minute per ip and
+   * route. `false` removes it.
+   */
+  rateLimit?: { limit: number; windowMs: number } | false
+}
+
+/** SAML caps RelayState at 80 bytes; allow headroom for IdP-initiated targets. */
+const MAX_RELAY_STATE = 1024
+
+const readCookie = (header: unknown, name: string): string | undefined => {
+  if (typeof header !== 'string') return undefined
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=')
+    if (key === name && rest.length > 0) {
+      try {
+        return decodeURIComponent(rest.join('='))
+      } catch {
+        return undefined
+      }
+    }
+  }
+  return undefined
 }
 
 /**
@@ -437,27 +734,45 @@ export interface SamlRoutesOptions {
  */
 export function samlRoutes(options: SamlRoutesOptions = {}): BasaltRoute[] {
   const saml = () => (ctx().container as Container).get(SAML_SSO)
+  const secure = options.bindingCookie?.secure ?? isProductionEnvironment()
+  const cookieName = secure ? '__Host-basalt_saml' : 'basalt_saml'
+  const maxAge = options.bindingCookie?.maxAgeSeconds ?? 15 * 60
+  const cookie = (value: string, age: number): string =>
+    `${cookieName}=${encodeURIComponent(value)}; Path=/; HttpOnly; Max-Age=${age}${secure ? '; SameSite=None; Secure' : ''}`
+  const limit = options.rateLimit === false ? {} : { rateLimit: options.rateLimit ?? { limit: 10, windowMs: 60_000 } }
   return [
     route({
       method: 'GET',
       url: '/auth/saml/:provider/login',
+      meta: { ...limit },
       params: z.object({ provider: z.string() }),
-      query: z.object({ RelayState: z.string().optional() }),
+      query: z.object({ RelayState: z.string().max(MAX_RELAY_STATE).optional() }),
       async handler({ params, query, reply }) {
-        const url = await saml().loginUrl(params.provider, query.RelayState ?? '')
-        return reply.code(302).header('location', url).send()
+        const service = saml()
+        if (!service.bindsToBrowser) {
+          const url = await service.loginUrl(params.provider, query.RelayState ?? '')
+          return reply.code(302).header('location', url).send()
+        }
+        // Bound login: the RelayState slot carries the binding hash.
+        const { url, binding } = await service.authorize(params.provider)
+        return reply.code(302).header('set-cookie', cookie(binding, maxAge)).header('location', url).send()
       },
     }),
     route({
       method: 'POST',
       url: '/auth/saml/:provider/acs',
+      meta: { ...limit },
       params: z.object({ provider: z.string() }),
-      body: z.object({ SAMLResponse: z.string(), RelayState: z.string().optional() }),
-      async handler({ params, body, reply }) {
-        const { user, tokens } = await saml().consume(params.provider, {
-          SAMLResponse: body.SAMLResponse,
-          ...(body.RelayState ? { RelayState: body.RelayState } : {}),
-        })
+      body: z.object({ SAMLResponse: z.string(), RelayState: z.string().max(MAX_RELAY_STATE).optional() }),
+      async handler({ params, body, request, reply }) {
+        const service = saml()
+        // Single-use: the binding cookie is cleared whatever the outcome.
+        if (service.bindsToBrowser) reply.header('set-cookie', cookie('', 0))
+        const { user, tokens } = await service.consume(
+          params.provider,
+          { SAMLResponse: body.SAMLResponse, ...(body.RelayState ? { RelayState: body.RelayState } : {}) },
+          { binding: readCookie(request.headers.cookie, cookieName) },
+        )
         if (options.successRedirect) {
           const url = new URL(options.successRedirect)
           url.hash = new URLSearchParams({

@@ -5,8 +5,11 @@ import {
   DriveProviderUnknownError,
   DriveTenantMismatchError,
   DriveTenantRequiredError,
+  DriveTenantReservedError,
 } from '../src/errors.js'
-import { connect, harness } from './helpers.js'
+import { SINGLE_TENANT_SCOPE } from '../src/drives.js'
+import { DriveSecretBox } from '../src/secret-box.js'
+import { TEST_KEYS, connect, harness } from './helpers.js'
 
 describe('connections', () => {
   it('stores a connection and returns a view with no credentials in it', async () => {
@@ -182,5 +185,57 @@ describe('connections', () => {
       await expect(h.drives.disconnect(acme.id, { tenantId: 'globex' })).rejects.toThrow(DriveConnectionNotFoundError)
       expect(await h.store.find('acme', acme.id)).not.toBeNull()
     })
+  })
+})
+
+// Regression for the 2026-09 framework audit (FA-030).
+describe('FA-030 · the single-tenant store key cannot be a tenant id', () => {
+  const asDefault = <T>(fn: () => Promise<T>) => runWithContext({ tenant: { id: 'default' } } as never, fn)
+
+  it('is a sentinel outside the tenant grammar, not "default"', () => {
+    expect(SINGLE_TENANT_SCOPE).not.toBe('default')
+    expect(SINGLE_TENANT_SCOPE).not.toMatch(/^[a-z0-9][a-z0-9_-]{0,62}$/)
+  })
+
+  it('a tenant named "default" no longer sees, uses or disconnects the single-tenant connections', async () => {
+    const h = harness()
+    const view = await connect(h)
+    expect(await asDefault(() => h.drives.list())).toEqual([])
+    await expect(asDefault(() => h.drives.get(view.id))).rejects.toThrow(DriveConnectionNotFoundError)
+    await expect(h.drives.get(view.id, 'default')).rejects.toThrow(DriveConnectionNotFoundError)
+    await expect(asDefault(() => h.drives.disconnect(view.id))).rejects.toThrow(DriveConnectionNotFoundError)
+    expect((await h.drives.get(view.id)).id).toBe(view.id)
+  })
+
+  it('refuses the sentinel itself as a tenant id, from the context or an argument', async () => {
+    const h = harness()
+    const view = await connect(h)
+    await expect(
+      runWithContext({ tenant: { id: SINGLE_TENANT_SCOPE } } as never, () => h.drives.list()),
+    ).rejects.toBeInstanceOf(DriveTenantReservedError)
+    await expect(h.drives.get(view.id, SINGLE_TENANT_SCOPE)).rejects.toMatchObject({
+      code: 'DRIVE_TENANT_RESERVED',
+      status: 400,
+    })
+    await expect(connect(h, { tenantId: SINGLE_TENANT_SCOPE })).rejects.toBeInstanceOf(DriveTenantReservedError)
+    expect(await h.drives.list()).toHaveLength(1)
+  })
+
+  it('the documented migration re-keys and re-seals a legacy "default" row into a usable one', async () => {
+    const h = harness({ provider: { files: [{ externalId: 'f1', name: 'a.txt', content: 'x' }] } })
+    // A 0.2 single-tenant row has exactly this shape: keyed and sealed under 'default'.
+    const legacy = await connect(h, { tenantId: 'default' })
+    expect(await h.drives.list()).toEqual([])
+
+    const box = new DriveSecretBox(TEST_KEYS)
+    const row = (await h.store.find('default', legacy.id))!
+    const context = { connectionId: row.id, provider: row.provider }
+    const plain = box.open(row.secret, { ...context, tenantId: 'default' })
+    const secret = box.seal(plain, { ...context, tenantId: SINGLE_TENANT_SCOPE })
+    await h.store.delete('default', row.id)
+    await h.store.create({ ...row, tenantId: SINGLE_TENANT_SCOPE, secret })
+
+    expect((await h.drives.list()).map((c) => c.id)).toEqual([legacy.id])
+    expect((await h.drives.listItems(legacy.id)).items).toHaveLength(1)
   })
 })

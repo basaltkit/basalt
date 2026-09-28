@@ -77,16 +77,45 @@ export function extractSchemaBlocks(schema: string): SchemaBlock[] {
   return blocks
 }
 
-/** Locate installed `@basaltkit/<domain>-prisma` reference schemas, resolved from the app root. */
-function discoverSchemas(domains: string[]): { pkg: string; domain: string; schema: string }[] {
+/** The `provider` of the schema's `datasource` block, if it names one literally. */
+export function datasourceProvider(schema: string): string | undefined {
+  const block = /^\s*datasource\s+\w+\s*\{([^}]*)\}/m.exec(schema)
+  return block ? /\bprovider\s*=\s*"([^"]+)"/.exec(block[1] as string)?.[1] : undefined
+}
+
+interface DiscoveredSchema {
+  pkg: string
+  domain: string
+  schema: string
+  /** True when a MySQL app got the generic schema: the package ships no MySQL variant. */
+  generic: boolean
+}
+
+/**
+ * Locate installed `@basaltkit/<domain>-prisma` reference schemas, resolved from
+ * the app root. A MySQL app gets the package's `schema.mysql.prisma` when it
+ * ships one: a bare `String` is VARCHAR(191) on MySQL, and outside strict mode a
+ * longer value is truncated silently, so the MySQL variant widens the free-text
+ * columns.
+ */
+function discoverSchemas(domains: string[], provider?: string): DiscoveredSchema[] {
   // Resolve from the user's project (cwd), not this package — pnpm isolates deps.
   const requireFromApp = createRequire(pathToFileURL(join(process.cwd(), 'noop.js')))
-  const found: { pkg: string; domain: string; schema: string }[] = []
+  const found: DiscoveredSchema[] = []
   for (const domain of domains) {
     const pkg = `@basaltkit/${domain}-prisma`
+    if (provider === 'mysql') {
+      try {
+        const schemaPath = requireFromApp.resolve(`${pkg}/schema.mysql.prisma`)
+        found.push({ pkg, domain, schema: readFileSync(schemaPath, 'utf8'), generic: false })
+        continue
+      } catch {
+        // no MySQL variant (or not installed) — fall through to the generic one
+      }
+    }
     try {
       const schemaPath = requireFromApp.resolve(`${pkg}/schema.prisma`)
-      found.push({ pkg, domain, schema: readFileSync(schemaPath, 'utf8') })
+      found.push({ pkg, domain, schema: readFileSync(schemaPath, 'utf8'), generic: provider === 'mysql' })
     } catch {
       // not installed — skip
     }
@@ -143,7 +172,8 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
           return null
         }
         const present = new Set(extractSchemaBlocks(userSchema).map((b) => b.name))
-        const packages = discoverSchemas(domains)
+        const provider = datasourceProvider(userSchema)
+        const packages = discoverSchemas(domains, provider)
         if (packages.length === 0) return 0
 
         const nonInteractive = flags['yes'] === true || flags['all'] === true
@@ -151,7 +181,8 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
         let added = 0
         const label = nome ? `[${nome}] ` : ''
 
-        for (const { pkg, schema } of packages) {
+        const mysqlPackages: string[] = []
+        for (const { pkg, schema, generic } of packages) {
           const missing = extractSchemaBlocks(schema).filter((b) => !present.has(b.name))
           if (missing.length === 0) continue
           const names = missing.map((b) => b.name).join(', ')
@@ -166,6 +197,21 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
           missing.forEach((b) => present.add(b.name))
           added += missing.length
           io.log(`  ${label}+ ${pkg}: ${names}`)
+          if (provider === 'mysql') {
+            if (generic) {
+              io.log(
+                `    ${label}! ${pkg} ships no MySQL variant: its String columns are VARCHAR(191) — ` +
+                  'upgrade it (every current @basaltkit/*-prisma ships schema.mysql.prisma) or widen ' +
+                  'free-text columns with @db.Text before migrating.',
+              )
+            } else mysqlPackages.push(pkg)
+          }
+        }
+        if (mysqlPackages.length > 0) {
+          io.log(
+            `  ${label}MySQL: used the schema.mysql.prisma variants. Also pass \`{ columnLimits: 'mysql' }\` ` +
+              `to the stores of ${mysqlPackages.join(', ')} so an over-long value is refused, not truncated.`,
+          )
         }
 
         if (added === 0) return 0

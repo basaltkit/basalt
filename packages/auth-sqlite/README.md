@@ -7,8 +7,8 @@
 # @basaltkit/auth-sqlite
 
 Durable, **SQLite-backed** implementations of every [`@basaltkit/auth`](https://github.com/basaltkit/basalt/tree/main/packages/auth)
-store — users, sessions, refresh tokens, one-time tokens, API keys and MFA
-state — built on Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html).
+store — users, sessions, refresh tokens, one-time tokens, API keys, MFA
+state, OAuth/OIDC account links and WebAuthn passkeys — built on Node's built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html).
 **Zero external dependencies.**
 
 API keys may have an optional expiration date. Existing databases are migrated
@@ -47,8 +47,10 @@ const app = await createApp({
       refreshTokens: s.refreshTokens,
       tokens: s.tokens,   // email verification + password reset
       mfa: s.mfa,
+      accountLinks: s.accountLinks, // OAuth/OIDC: provider subject → account
     }),
     apiKeysPlugin({ store: s.apiKeys, users: s.users }),
+    webauthnPlugin({ config, verifier, credentials: s.passkeys }),
   ],
 }).boot()
 ```
@@ -67,6 +69,30 @@ read), keeps the order of `ids`, omits ids with no row, and **chunks** the list
 at 500 ids per statement so it stays inside SQLite's per-statement variable cap
 (`SQLITE_MAX_VARIABLE_NUMBER` — 999 on older builds). Tune it with
 `new SqliteUserSource(db, { idChunkSize: 1000 })`.
+
+### Emails are case-insensitive
+
+`findByEmail` matches regardless of case, and `create` refuses an email that
+exists in any letter case with `EmailTakenError` (409) — checked inside the
+`INSERT` itself, so two concurrent sign-ups of `Ana@x` and `ana@x` cannot both
+land. A `NOCASE` unique index backs it on new databases; a legacy database that
+already holds case-variant duplicates cannot take that index, but `create`
+still refuses new variants, and a lookup of a duplicated email throws
+`AccountEmailAmbiguousError` (`AUTH_EMAIL_AMBIGUOUS`) instead of silently
+resolving to the oldest row.
+
+`normalizeAuthUserEmails(db, { dryRun? })` is the one-off cleanup: it lowercases
+every mixed-case email with no twin, returns `{ normalized, conflicts }` (the
+twins, for you to merge by hand) and, once there are none, builds the index.
+
+### Account links and passkeys
+
+`s.accountLinks` (`auth_account_links`, primary key `(provider, subject)`) binds
+OAuth/OIDC logins to the provider's subject — see `authPlugin({ accountLinks })`.
+`s.passkeys` (`auth_passkeys`) is a durable `PasskeyStore`; its
+`compareAndSetCounter` is one conditional `UPDATE … WHERE id = ? AND counter = ?`,
+so two concurrent assertions of a cloned authenticator cannot both pass. Both
+tables are created by `migrate()` on existing databases too.
 
 ## Pick individual stores
 
@@ -89,6 +115,9 @@ const sessions = new SqliteSessionStore(db)
 | `SqliteAuthTokenStore` | `AuthTokenStore` | `auth_tokens` |
 | `SqliteApiKeyStore` | `ApiKeyStore` | `auth_api_keys` |
 | `SqliteMfaStore` | `MfaStore` | `auth_mfa` |
+| `SqliteTokenVersionStore` | `TokenVersionStore` | `auth_token_versions` |
+| `SqliteAccountLinkStore` | `AccountLinkStore` | `auth_account_links` |
+| `SqlitePasskeyStore` | `PasskeyStore` | `auth_passkeys` |
 
 ## Bring your own database handle
 

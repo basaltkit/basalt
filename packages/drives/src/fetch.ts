@@ -39,7 +39,14 @@ import { DriveContentTooLargeError, DriveHostNotAllowedError, DriveRateLimitedEr
  *    `content-encoding` response is not inflated here. The cap therefore
  *    applies to real bytes on the wire, which is the only number a bomb cannot
  *    lie about.
- * 6. **Timeout** — on the whole exchange, not just the connect.
+ * 6. **Timeouts** — two of them, because one number cannot bound both a
+ *    stalled socket and a slow-but-steady one:
+ *    - `timeoutMs` is an **inactivity** timeout on the socket *and* a hard
+ *      wall-clock bound on each hop's wait for response headers, so a server
+ *      that trickles its headers a byte at a time cannot hold a worker;
+ *    - `deadlineMs` (off by default) bounds the **whole exchange**, body
+ *      included. It is opt-in because a legitimate 100 MiB download on a slow
+ *      link takes minutes, and only the app knows how many it can wait.
  */
 
 /** A network call that has passed every check above. */
@@ -67,6 +74,8 @@ export interface GuardedRequestInit {
   maxBytes?: number
   /** Overrides the default timeout for this call. */
   timeoutMs?: number
+  /** Overrides the default whole-exchange deadline for this call. See {@link DriveFetchOptions.deadlineMs}. */
+  deadlineMs?: number
 }
 
 export interface GuardedResponse {
@@ -91,8 +100,21 @@ export interface DriveFetchOptions {
   provider: string
   /** Default byte cap. Default 100 MiB. */
   maxBytes?: number
-  /** Default whole-exchange timeout. Default 30 s. */
+  /**
+   * Socket **inactivity** timeout, and the wall-clock bound on each hop's wait
+   * for response headers. Default 30 s.
+   *
+   * Not a bound on the whole exchange: a body that keeps delivering a byte
+   * every few seconds never trips it. That is {@link deadlineMs}.
+   */
   timeoutMs?: number
+  /**
+   * Wall-clock bound on the **whole exchange** — every redirect hop, the
+   * headers and the entire body. Off by default: a large download on a slow
+   * link is legitimate, and only the app knows how long it can wait. Set it
+   * when a worker must never be pinned by a provider (or a CDN) that trickles.
+   */
+  deadlineMs?: number
   /** Redirect hops allowed. Default 3. */
   maxRedirects?: number
   /** Escape hatch for a self-hosted provider on a private network. Off by default. */
@@ -260,6 +282,85 @@ export function createDriveFetch(options: DriveFetchOptions): GuardedFetch {
   return async function guardedFetch(rawUrl: string, init: GuardedRequestInit = {}): Promise<GuardedResponse> {
     const maxBytes = init.maxBytes ?? defaultMaxBytes
     const timeoutMs = init.timeoutMs ?? defaultTimeout
+    const deadlineMs = init.deadlineMs ?? options.deadlineMs
+    // One controller for the whole exchange: the caller's signal, the per-hop
+    // header timer and the deadline all end the request through it.
+    const exchange = new AbortController()
+    const abortFromCaller = (): void => exchange.abort(init.signal?.reason)
+    if (init.signal?.aborted) exchange.abort(init.signal.reason)
+    else init.signal?.addEventListener('abort', abortFromCaller, { once: true })
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    /** Set once the body is handed back, so the deadline can end it too. */
+    let delivered: Readable | undefined
+    const settle = (): void => {
+      if (deadline !== undefined) clearTimeout(deadline)
+      init.signal?.removeEventListener('abort', abortFromCaller)
+    }
+    if (deadlineMs !== undefined) {
+      deadline = setTimeout(() => {
+        const error = new Error('drive request exceeded its deadline')
+        exchange.abort(error)
+        delivered?.destroy(error)
+      }, deadlineMs)
+      deadline.unref?.()
+    }
+    try {
+      const response = await exchangeOnce(rawUrl, init, maxBytes, timeoutMs, exchange)
+      delivered = response.body
+      delivered.once('close', settle)
+      return response
+    } catch (error) {
+      settle()
+      throw error
+    }
+  }
+
+  /** Races one hop's transport call against the header timer. */
+  async function hopWithin(
+    call: (signal: AbortSignal) => Promise<Awaited<ReturnType<Transport>>>,
+    timeoutMs: number,
+    exchange: AbortController,
+  ): Promise<Awaited<ReturnType<Transport>>> {
+    const hop = new AbortController()
+    const forward = (): void => hop.abort(exchange.signal.reason)
+    if (exchange.signal.aborted) hop.abort(exchange.signal.reason)
+    else exchange.signal.addEventListener('abort', forward, { once: true })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error('drive request timed out')
+        hop.abort(error)
+        reject(error)
+      }, timeoutMs)
+      // Also rejects for a transport that ignores its signal: the race below
+      // must end either way.
+      hop.signal.addEventListener('abort', () => reject(hop.signal.reason ?? new Error('drive request aborted')), {
+        once: true,
+      })
+    })
+    expired.catch(() => undefined)
+    const pending = call(hop.signal)
+    try {
+      // On success the forwarding stays in place: the caller's signal and the
+      // deadline must still be able to end a body that is streaming.
+      return await Promise.race([pending, expired])
+    } catch (error) {
+      exchange.signal.removeEventListener('abort', forward)
+      // A response that arrives after we gave up is abandoned, not leaked.
+      pending.then((late) => late.body.destroy(), () => undefined)
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async function exchangeOnce(
+    rawUrl: string,
+    init: GuardedRequestInit,
+    maxBytes: number,
+    timeoutMs: number,
+    exchange: AbortController,
+  ): Promise<GuardedResponse> {
     let target = rawUrl
     let method = init.method ?? 'GET'
     let body = init.body
@@ -292,21 +393,29 @@ export function createDriveFetch(options: DriveFetchOptions): GuardedFetch {
         throw new DriveHostNotAllowedError(url.hostname, options.provider, 'the address failed validation')
       }
 
-      const response = await transport(
-        validated.url,
-        {
-          method,
-          headers: {
-            // Deliberately no accept-encoding: see note 5 at the top. A body we
-            // never inflate cannot be a decompression bomb.
-            accept: 'application/json',
-            ...headers,
-          },
-          ...(body !== undefined ? { body } : {}),
-          ...(init.signal ? { signal: init.signal } : {}),
-          timeoutMs,
-        },
-        validated.pinned,
+      const hopBody = body
+      const hopMethod = method
+      const hopHeaders = headers
+      const response = await hopWithin(
+        (signal) =>
+          transport(
+            validated.url,
+            {
+              method: hopMethod,
+              headers: {
+                // Deliberately no accept-encoding: see note 5 at the top. A body
+                // we never inflate cannot be a decompression bomb.
+                accept: 'application/json',
+                ...hopHeaders,
+              },
+              ...(hopBody !== undefined ? { body: hopBody } : {}),
+              signal,
+              timeoutMs,
+            },
+            validated.pinned,
+          ),
+        timeoutMs,
+        exchange,
       )
 
       if (response.status >= 300 && response.status < 400 && response.headers['location'] !== undefined) {

@@ -6,6 +6,39 @@ import type {
   OutboxPendingFilter,
   OutboxStore,
 } from '@basaltkit/events'
+import {
+  assertColumnLengths,
+  clipToColumn,
+  type ColumnLimits,
+  MYSQL_MEDIUMTEXT,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/events-prisma'
+
+/** The `OutboxEntry` columns the store writes as strings. */
+export type OutboxColumn = 'id' | 'event' | 'payload' | 'tenantId' | 'lastError' | 'lockedBy'
+
+export type EventsColumnLimits = ColumnLimits<{ OutboxEntry: OutboxColumn }>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Spread it to override one column after widening it.
+ */
+export const eventsMysqlColumnLimits: EventsColumnLimits = {
+  OutboxEntry: {
+    id: V,
+    event: V,
+    payload: MYSQL_MEDIUMTEXT,
+    tenantId: V,
+    lastError: MYSQL_TEXT,
+    lockedBy: V,
+  },
+}
 
 /**
  * Prisma-backed implementation of the `@basaltkit/events` `OutboxStore` (the
@@ -79,6 +112,19 @@ export interface PrismaOutboxStoreOptions {
    * whenever more than one process runs the relay.
    */
   claim?: boolean
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a cut
+   * `payload` is no longer valid JSON, and the relay fails on it forever.
+   * `'mysql'` uses the limits of the bundled `schema.mysql.prisma`; pass an
+   * object for a schema of your own. Default: unchecked (PostgreSQL and SQLite
+   * store any length).
+   *
+   * `lastError` is the one exception: it is diagnostic, and refusing it would
+   * stop `markFailed` from counting the attempt, so an over-long error is
+   * shortened on purpose (marked `…[truncated]`) rather than refused.
+   */
+  columnLimits?: 'mysql' | EventsColumnLimits
 }
 
 /** The transaction client the store writes through — Prisma's interactive-transaction `tx`. */
@@ -96,12 +142,14 @@ export class PrismaOutboxStore implements OutboxStore {
    */
   readonly claim?: (ids: string[], options: OutboxClaimOptions) => Promise<string[]>
   private readonly claiming: boolean
+  private readonly limits: EventsColumnLimits | undefined
 
   constructor(
     private readonly client: PrismaEventsClient,
     options: PrismaOutboxStoreOptions = {},
   ) {
     this.claiming = options.claim === true
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, eventsMysqlColumnLimits)
     if (this.claiming) this.claim = (ids, claimOptions) => this.claimRows(ids, claimOptions)
   }
 
@@ -130,6 +178,9 @@ export class PrismaOutboxStore implements OutboxStore {
       tenantId: input.tenantId ?? null,
       createdAt: at(input.createdAt),
     }
+    // Before the write, and so before the caller's transaction commits: a
+    // refused event rolls back with the state change it belongs to.
+    assertColumnLengths(PKG, this.limits, 'OutboxEntry', { id, ...base })
     const release = this.claiming ? { lockedUntil: null, lockedBy: null } : {}
     const delegate = options.tx ? options.tx.outboxEntry : this.client.outboxEntry
     await delegate.upsert({
@@ -180,6 +231,7 @@ export class PrismaOutboxStore implements OutboxStore {
    */
   private async claimRows(ids: string[], options: OutboxClaimOptions): Promise<string[]> {
     if (ids.length === 0) return []
+    assertColumnLengths(PKG, this.limits, 'OutboxEntry', { lockedBy: options.token })
     await this.client.outboxEntry.updateMany({
       where: { id: { in: ids }, publishedAt: null, ...claimable(options.now) },
       data: { lockedUntil: at(options.until), lockedBy: options.token },
@@ -205,7 +257,11 @@ export class PrismaOutboxStore implements OutboxStore {
       : {}
     await this.client.outboxEntry.updateMany({
       where: { id },
-      data: { attempts: { increment: 1 }, lastError: error, ...release },
+      data: {
+        attempts: { increment: 1 },
+        lastError: clipToColumn(error, this.limits?.OutboxEntry?.lastError),
+        ...release,
+      },
     })
   }
 
@@ -242,6 +298,7 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  *
  * ```ts
  * const outbox = prismaOutboxStore(prisma, { claim: true }) // claim: safe with N replicas
+ * // on MySQL add columnLimits: 'mysql' (see schema.mysql.prisma)
  * outboxPlugin({ store: outbox.store, dispatch, captureEvents: ['order.*'], intervalMs: 1000 })
  * ```
  */

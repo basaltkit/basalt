@@ -1,0 +1,34 @@
+// Reference schema for @basaltkit/activity-prisma — MySQL variant.
+//
+// Same model as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently — a cut description, or `properties` that is no
+// longer valid JSON. Free-text columns are widened below; the keys stay
+// VARCHAR(191) so they can be indexed. Pair it with
+// `prismaActivityStore(prisma, { columnLimits: 'mysql' })`, which refuses a
+// value that would still not fit instead of letting it be cut.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model ActivityRecord {
+  id          String   @id
+  log         String
+  description String   @db.Text
+  subjectType String?
+  subjectId   String?
+  causerId    String?
+  tenantId    String?
+  properties  String?  @db.MediumText
+  at          DateTime
+
+  @@index([tenantId, at])
+  @@index([subjectType, subjectId])
+  @@map("activity_records")
+}

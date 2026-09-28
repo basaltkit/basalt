@@ -302,6 +302,7 @@ describe('oidcProvider branches', () => {
 
 describe('discoverOidcProvider branches', () => {
   const meta = {
+    issuer: 'https://idp',
     authorization_endpoint: 'https://idp/authorize',
     token_endpoint: 'https://idp/token',
     userinfo_endpoint: 'https://idp/userinfo',

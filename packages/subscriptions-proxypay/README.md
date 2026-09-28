@@ -25,7 +25,7 @@ const payments = new ProxyPayGateway({
   apiKey: process.env.PROXYPAY_API_KEY!,   // Authorization: Token <key>
   entity: process.env.PROXYPAY_ENTITY!,    // your Multicaixa Entity (Entidade)
   sandbox: process.env.NODE_ENV !== 'production',
-  // webhookSecret defaults to apiKey (what ProxyPay signs with); override or set '' to disable.
+  // webhookSecret defaults to apiKey (what ProxyPay signs with); override it if you use a custom secret.
 })
 
 // Create a payment — reserves a reference and returns what to show the customer.
@@ -75,5 +75,6 @@ ProxyPay has no card-on-file recurring charge. Model recurring by creating **one
 
 - Amounts are AOA in the major unit (`5000` = 5.000,00 Kz), sent to ProxyPay as a two-decimal-rounded number.
 - The **fetch client is injectable** (`options.fetch`) — the global `fetch` is used by default. No hard HTTP dependency.
-- **Webhook auth**: ProxyPay signs the callback with your API key (HMAC-SHA256 of the raw body, hex, in the `x-signature` header), so `webhookSecret` defaults to `apiKey` and verification is on by default. Override `webhookSecret` if you configured a custom secret, or set it to `''` to disable (e.g. if you secure the callback with HTTP Basic auth on the URL instead).
+- **Webhook auth**: ProxyPay signs the callback with your API key (HMAC-SHA256 of the raw body, hex, in the `x-signature` header), so `webhookSecret` defaults to `apiKey` and verification is on by default. Override `webhookSecret` if you configured a custom secret. Verification cannot be disabled: an empty or whitespace-only secret makes `verifyWebhook` throw `WebhookSecretMissingError` (fail closed). A signed but malformed body (not JSON, non-numeric `amount`) throws `WebhookInvalidError` (400).
+- `PaymentRequest.metadata` is sent in `custom_fields`, but it can never override `billable_id` or `reference` — the fields the webhook is reconciled against.
 - Verify the exact `/reference_ids` response shape and webhook signature scheme against **your ProxyPay sandbox** — the driver handles the common shapes but every account's setup should be confirmed against real credentials.

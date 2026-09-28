@@ -8,6 +8,9 @@ import {
   httpFetcher,
   sendWith,
   errorDetailsParitySuite,
+  corsPreflightParitySuite,
+  wireParitySuite,
+  metaValidatorParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
   streamParitySuite,
@@ -43,6 +46,9 @@ rawBodyParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
 streamParitySuite('fastify', driver)
+corsPreflightParitySuite('fastify', driver)
+wireParitySuite('fastify', driver)
+metaValidatorParitySuite('fastify', driver)
 
 describe('fastify: multipart on routes that are not upload() routes', () => {
   it('still answers 415 (the pass-through parser only serves upload() routes)', async () => {

@@ -18,7 +18,7 @@ You need this module when you have to be able to answer questions like "who logg
 
 The tedious part of auditing is remembering to record everywhere. This module solves that by hooking into what the application already emits: the `@basaltkit/core` lifecycle **hooks** (e.g. `auth:login`, `billing:subscribed`) and the `@basaltkit/events` **domain events** (e.g. `order.created`). You choose what gets recorded using wildcard patterns — by default, all `auth`, `billing`, `tenancy`, and `permission` activity (hooks) and **all** events.
 
-Each entry is frozen (`Object.freeze`) — code can't tamper with the in-memory history, even by accident. To query, use `audit.trail()` with filters on event (with wildcards), tenant, actor, and date.
+Each entry is frozen, payload included (a deep-frozen copy taken after redaction — your own object is never frozen) — code can't tamper with the in-memory history, even by accident. To query, use `audit.trail()` with filters on event (with wildcards), tenant, actor, and date.
 
 ## Installation
 
@@ -128,13 +128,20 @@ when it can't resolve a tenant depends on whether the app is multi-tenant at all
 |---|---|
 | Tenant in `ctx()` | **Forced** to that tenant. A caller-supplied `tenantId` is overridden, so forwarding client input can never widen the scope. |
 | No context tenant, explicit `trail({ tenantId })` | Honoured — a system job or CLI pinning one tenant deliberately. |
-| No context tenant, no `tenantId`, **no `tenancyPlugin`** | Returns the trail. A single-tenant app has no tenant dimension, so there is nothing to cross. |
+| No context tenant, no `tenantId`, **no `tenancyPlugin`** | Returns the trail. A single-tenant app has no tenant dimension, so there is nothing to cross. A hand-built `new Audit(store)` assumes this too — pass `() => true` as its third argument (`tenancyActive`) in a multi-tenant app. |
 | No context tenant, no `tenantId`, **`tenancyPlugin` registered** | **Throws.** Returning every tenant's records must be deliberate — use `systemTrail()`. |
 
 `systemTrail(query)` is the **system-only** escape hatch: it reads across all
 tenants, bypassing the auto-scoping above. Use it from trusted platform/admin
 tooling only, and never pass client-controlled input into it — that re-opens
 exactly the cross-tenant exposure `trail()` closes.
+
+Every filter is type-checked before any store sees it (`assertAuditQuery`):
+`event`, `tenantId` and `actorId` must be strings, `since` a finite number,
+`limit` a non-negative safe integer. A query-string parser such as `qs` turns
+`?tenantId[not]=x` into `{ not: 'x' }`, which an ORM would read as an operator
+("every tenant but x"); `trail()`, `systemTrail()` and the bundled stores throw a
+`TypeError` instead.
 
 ```ts
 // Single-tenant app (no tenancyPlugin): this is the normal read.
@@ -168,7 +175,18 @@ const all = await audit.verifyAll()   // system-only: every chain → { ok, chai
 
 `verify` recomputes each hash and checks the `seq` continuity and the `prevHash` links, so it detects an **edited** row (`hash-mismatch`), a **deleted** row (`sequence-gap`), **reordered** rows and a **forged** row that does not link (`prev-hash-mismatch`, `sequence-duplicate`). `from`/`to` are sequence numbers (inclusive); a window is anchored on the entry at `from - 1` (`missing-predecessor` if it is gone). Tenant scoping works like `trail()`: inside a tenant context the context tenant is forced; outside one, `tenantId` picks the chain and omitting it verifies the system chain.
 
-Rows written **before** integrity was enabled have no hash: `verify` counts them as `unchained` — they are never reported as broken.
+**Rows outside the chain.** `trail()` serves every row of the table, so `verify` checks the rows that are *not* in the chain too — a row inserted straight into the database (by someone without the HMAC key) would otherwise read as history while `verify` stayed green:
+
+- Rows written **before** the chain began have no hash and are **legacy**: counted in `unchained`, never reported as broken. "Before" means `at` no later than the chain's first entry — once a tenant's chain exists, `Audit` never writes an unchained row for it again.
+- Any other row of the tenant outside its chain — a seq-less row written after the chain began, or a row with a `seq` but a missing (`chain IS NULL`) or foreign chain name — is listed in `unverified` (ids, at most 100) and the result is `ok: false` with `reason: 'unchained-entry'`.
+- `legacyUntil` moves the cut-off: `verify({ legacyUntil: 0 })` accepts no legacy row at all — use it when the trail was chained from day one (a writer who backdates `at` can otherwise still pass as legacy), or pass the timestamp you switched integrity on (e.g. after a rolling deploy in which old replicas kept writing unchained rows for a while).
+- `trail({ chainedOnly: true })` reads only rows that belong to their tenant's chain — the read to use for evidence. It does not prove them intact; `verify` does.
+
+**Anchoring.** Deleting the tail of a chain leaves no gap. Record `head` somewhere the database role cannot reach and pass it back: `verify({ expectedHead: { seq, hash } })` fails with `'truncated'` when that entry is gone and `'head-mismatch'` when its hash differs. `verifyAll({ expectedHeads: { '@system': …, 't:acme': … } })` does the same per chain (keys are `auditChainKey(tenantId)`) — including a chain deleted wholesale, which would otherwise just be missing from the list.
+
+`verifyAll` is system-only, but inside a tenant context it is scoped like `verify`: it verifies and reports that tenant's chain only. A chain name the store lists that maps to no tenant chain (a forged `chain` value) is reported as `'unknown-chain'`.
+
+`verifyAll` also visits tenants that have rows but **no chain at all** — otherwise a row forged under a tenant that never had a chain would go unchecked. For such a tenant the legacy cut-off defaults to the moment integrity began for the whole store (the earliest first entry of any chain): once `Audit` chains, it never writes an unchained row for any tenant again, so a later one is reported as `'unchained-entry'`. An explicit `legacyUntil` applies to these tenants too. The tenant list comes from the store's optional `auditTenants()`; a store without it is scanned through `query({})`.
 
 **Concurrency.** Appends to one chain are serialized in-process (a per-chain mutex). Across replicas, the store is the guarantee: the SQLite and Prisma stores have a unique `(chain, seq)` constraint, so two replicas racing for the same `seq` cannot fork the chain — the loser gets `AuditChainConflictError`, re-reads the head and retries (with jittered backoff, up to 10 attempts). A custom store that implements the chain methods must do the same.
 
@@ -195,7 +213,11 @@ basalt audit:verify                  # the system chain
 basalt audit:verify --tenant=acme    # one tenant
 basalt audit:verify --tenant=acme --from=100 --to=200
 basalt audit:verify --all            # every chain; exits 1 if any is broken
+basalt audit:verify --tenant=acme --expected-head=1284:<hash>   # against an anchor
+basalt audit:verify --all --legacy-until=0                     # no legacy rows accepted
 ```
+
+`--all` is a boolean flag: `--all`, `--all=true|1|yes` verify every chain, `--all=false|0|no` a single one, and any other value is an error (earlier versions read `--all=true` as "not all" and exited 0 after checking only the system chain). `--all` cannot be combined with `--tenant`, `--from`, `--to` or `--expected-head`, and `--tenant` without a value is an error rather than the system chain.
 
 Outside the plugin, `createAuditVerifyCommand(() => audit)` returns the same command definition — register it with `cliPlugin([...])` or call its `handle` from a scheduled job.
 
@@ -222,8 +244,8 @@ import type { AuditEntry, AuditQuery, AuditStore } from '@basaltkit/audit'
 import { auditPlugin } from '@basaltkit/audit'
 
 // Hash-chain support (optional): also implement chainHead, readChain,
-// countUnchained and chainTenants, and reject a duplicate (chain, seq) with
-// AuditChainConflictError — see "interface AuditStore" below.
+// countUnchained and chainTenants (and ideally readUnchained), and reject a
+// duplicate (chain, seq) with AuditChainConflictError — see "interface AuditStore" below.
 class SqlAuditStore implements AuditStore {
   async append(entry: AuditEntry): Promise<void> {
     // INSERT into the audit_entries table…
@@ -261,8 +283,8 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. Returns the entry (with `seq`/`hash` when chained). |
 | `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Query, most recent first, tenant-scoped (see above). |
 | `systemTrail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | System-only cross-tenant read. |
-| `verify` | `(options?: { tenantId?, from?, to? }) => Promise<AuditVerifyResult>` | Verifies one hash chain: `{ ok, tenantId, checked, unchained, firstBrokenAt?, entryId?, reason?, head? }`. Tenant-scoped like `trail()`. |
-| `verifyAll` | `() => Promise<{ ok, chains: AuditVerifyResult[] }>` | System-only: verifies every chain (system chain first). |
+| `verify` | `(options?: { tenantId?, from?, to?, expectedHead?, legacyUntil? }) => Promise<AuditVerifyResult>` | Verifies one hash chain and the tenant's rows outside it: `{ ok, tenantId, checked, unchained, unverified, firstBrokenAt?, entryId?, reason?, head? }`. `reason` is one of `hash-mismatch`, `prev-hash-mismatch`, `sequence-gap`, `sequence-duplicate`, `missing-predecessor`, `unchained-entry`, `truncated`, `head-mismatch`. Tenant-scoped like `trail()`. |
+| `verifyAll` | `(options?: { expectedHeads?, legacyUntil? }) => Promise<{ ok, chains: AuditVerifyResult[] }>` | System-only: verifies every chain (system chain first); a forged chain name fails with `unknown-chain`. Inside a tenant context, only that tenant's chain. |
 | `capture` | `(source: 'hook' \| 'event', event, payload) => Promise<void>` | **Advanced/internal**: used by the plugin's listeners. |
 
 ### `interface AuditEntry` (all fields `readonly`)
@@ -292,6 +314,9 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `actorId` | `string` | No | all | Filters by actor. |
 | `since` | `number` | No | since forever | Only entries with `at >= since`. |
 | `limit` | `number` | No | no limit | Maximum number of results. Must be a non-negative safe integer — `trail()`, `systemTrail()` and the bundled stores throw a `TypeError` otherwise (`assertAuditLimit`), so coerce and validate a query-string value before forwarding it. The SQL-backed stores push it into the database as a bound parameter, so a limited query never loads the whole trail. |
+| `chainedOnly` | `boolean` | No | `false` | Only rows in their tenant's hash chain (excludes legacy rows and rows written behind `Audit`'s back). |
+
+`event`, `tenantId` and `actorId` must be strings and `since` a finite number: `assertAuditQuery(query)` (used by `trail()`, `systemTrail()` and the bundled stores) throws a `TypeError` for anything else — an operator object such as `{ not: 'x' }` never reaches a driver.
 
 ### `interface AuditStore`
 
@@ -306,6 +331,8 @@ Optional, required for `integrity: 'hash-chain'` (implemented by `MemoryAuditSto
 - `readChain(tenantId, { fromSeq, toSeq?, limit }): Promise<AuditEntry[]>` — chained entries in ascending `seq`.
 - `countUnchained(tenantId): Promise<number>` — rows of that tenant without a chain (written before integrity).
 - `chainTenants(): Promise<Array<string | undefined>>` — tenants that have a chain.
+- `auditTenants?(): Promise<Array<string | undefined>>` — optional: every tenant with at least one row, chained or not (`SELECT DISTINCT tenant_id`). `verifyAll` uses it to reach tenants without a chain; without it, it scans `query({})`, which reads the whole trail.
+- `readUnchained?(tenantId, { since, limit }): Promise<AuditEntry[]>` — optional: the tenant's rows outside its chain with `at >= since`, plus any that carries a `seq` or chain name whatever its `at`, oldest first. Without it `verify` scans `query()` for seq-less rows instead.
 - `append` must reject an entry whose `(auditChainKey(tenantId), seq)` already exists with `AuditChainConflictError` — a unique constraint in SQL. `auditChainKey` maps a tenant to a never-NULL key (`'t:<id>'`, or `'@system'`), because SQL unique indexes treat NULLs as distinct.
 
 Hash-chain helpers are exported for stores and tooling: `computeAuditHash(entry, key?)`, `canonicalAuditEntry(entry)`, `AUDIT_CHAIN_GENESIS`, `auditChainKey` / `parseAuditChainKey`, `AuditChainConflictError` (code `AUDIT_CHAIN_CONFLICT`) and `createAuditVerifyCommand`.
@@ -321,7 +348,11 @@ In-memory implementation of `AuditStore` (freezes each entry; filters and revers
 
 ### Redaction
 
-Payloads are scrubbed before they are persisted. `redactSensitive` masks values under secret-looking keys (`password`, `token`, `api_key`, `authorization`, …) as `'[redacted]'`; the opt-in `createPiiMinimizingRedactor({ key })` (or `redactSensitiveAndPii`) additionally replaces email/phone-shaped values, and values under common PII keys, with a `pii_<hmac>` pseudonym: HMAC-SHA256 under your key, truncated to 128 bits.
+Payloads are scrubbed before they are persisted. `redactSensitive` masks values under secret-looking keys as `'[redacted]'`; the opt-in `createPiiMinimizingRedactor({ key })` (or `redactSensitiveAndPii`) additionally replaces email/phone-shaped values, and values under common PII keys, with a `pii_<hmac>` pseudonym: HMAC-SHA256 under your key, truncated to 128 bits.
+
+Secret keys are matched on the key's words (camelCase, `_`, `-` and `.` split), exported as `isSensitiveKey(key)`: anything containing `password`/`passwd`/`passphrase`/`passcode`, `secret`, `token`, `credential`, `authorization`, `cookie`, `apiKey`, `privateKey`, `accessKey`, `secretKey`, `signingKey`, `encryptionKey`, `connectionString`, `databaseUrl` or `passport`; a word `pwd`, `pass`, `jwt`, `auth`, `otp`, `totp`, `mfa`, `dsn`, `bearer` or `sid`; and `session`/`sessionId`/`sessionKey`. Words that merely contain those letters — `compass`, `bypass`, `author`, `sessionCount` — are kept. A `__proto__`, `constructor` or `prototype` key is kept as an own property with the value `'[redacted]'`, so a mass-assignment attempt stays visible in the trail instead of vanishing.
+
+A **phone-shaped** value is one in international form: a leading `+` and 8–15 digits, optionally separated by spaces, dots, dashes or parentheses (`+351 912 345 678`, `+1 (555) 123-4567`). A bare digit string is not treated as a phone — it is as likely an order id or an amount — so keep national-format numbers under a PII key (`phone`, `msisdn`, …).
 
 ```ts
 auditPlugin({ redact: createPiiMinimizingRedactor({ key: process.env.AUDIT_PII_KEY! }) })
@@ -371,6 +402,9 @@ No — the contract is append-only and entries are frozen. This is a feature, no
 
 **`verify()` reports `unchained` rows.**
 They were written before `integrity` was enabled and carry no hash. They are not broken — just not verifiable. New entries are chained from `seq` 1.
+
+**`verify()` fails with `unchained-entry`.**
+A row of that tenant sits outside its chain although it was written after the chain began — inserted into the table by something other than `Audit` (check `unverified` for the ids). If it is a known, benign source — replicas still running without `integrity` during a rolling deploy — pass `legacyUntil` with the time integrity was fully on; otherwise treat it as tampering.
 
 **`AuditChainConflictError` reached my code.**
 Ten attempts in a row lost the race for the next `seq` — very heavy contention on one tenant's chain across replicas. The entry was not written; retry the operation.

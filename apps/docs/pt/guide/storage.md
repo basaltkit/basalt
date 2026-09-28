@@ -36,19 +36,38 @@ Cada `Disk` prefixa paths com `tenants/<id>` de `ctx().tenant` — por isso o me
 código mantém os ficheiros de cada tenant isolados. Passa `scope: null` num disco
 para desligar isso.
 
-**Falha fechado sem tenant.** Com `@basaltkit/tenancy` registado, um disco com o
-scope predefinido recusa correr sem tenant no contexto e lança
-`StorageTenantRequiredError` (`400 STORAGE_TENANT_REQUIRED`). Sem isso, um pedido
-que simplesmente omitisse o tenant resolveria a chave do chamador contra a raiz do
-bucket, onde `tenants/<outro-tenant>/…` está acessível pelo nome. Um disco
-deliberadamente central (backups, branding da plataforma) declara-o
-explicitamente: `scope: null`, ou `onMissingScope: 'root'` para um disco que tem
-scope de tenant dentro de um tenant e é central fora dele. Apps sem tenancy não
-são afetadas.
+**Falha fechado sem tenant.** Um disco com scope recusa correr sem tenant no
+contexto e lança `StorageTenantRequiredError` (`400 STORAGE_TENANT_REQUIRED`). Sem
+isso, um pedido que simplesmente omitisse o tenant resolveria a chave do chamador
+contra a raiz do bucket, onde `tenants/<outro-tenant>/…` está acessível pelo nome
+e `list('')` enumera todos os tenants. Vale para o scope predefinido com
+`@basaltkit/tenancy` registado, para **qualquer `scope` próprio** que não resolva
+nada, e para um `new Disk()` construído à mão — que não tem como saber se existe
+tenancy. Um disco deliberadamente central (backups, branding da plataforma)
+declara-o explicitamente: `scope: null`, ou `onMissingScope: 'root'` para um disco
+que tem scope de tenant dentro de um tenant e é central fora dele. A única raiz
+implícita é um disco do `storagePlugin` com o scope predefinido numa app **sem**
+tenancy — apps single-tenant configuradas pelo plugin não são afetadas.
 
-Um id de tenant que não seja um único segmento de path seguro (`..`, `a/b`,
-caracteres de controlo) é recusado com `StorageInvalidScopeError` em vez de ser
-juntado ao path.
+Um id de tenant que não seja um único segmento de path **canónico** é recusado
+com `StorageInvalidScopeError` em vez de ser juntado ao path: o scope predefinido
+aceita letras ASCII minúsculas, dígitos, `-`, `_` e `.` interior — todos os ids
+que a gramática predefinida do `@basaltkit/tenancy` produz. `..`, `a/b` e
+caracteres de controlo escapariam da árvore do tenant; `Acme` (ou um `é`
+decomposto) abriria, num sistema de ficheiros insensível a maiúsculas ou a
+normalização (APFS no macOS, NTFS no Windows), a **mesma** diretoria que `acme` no
+driver local, enquanto S3/GCS/Azure os mantêm separados. Recusar ids não canónicos
+mantém todos os drivers idênticos. Apps cujos ids de tenant distinguem maiúsculas
+(nanoid, ULID) mapeiam-nos para um segmento canónico com um `scope` próprio — por
+exemplo:
+
+```ts
+const tenantSegment = () => {
+  const id = tryCtx()?.tenant?.id
+  return id ? `tenants/x${Buffer.from(id).toString('hex')}` : undefined
+}
+storagePlugin({ disks: { uploads: { driver: 'local', root: './storage', scope: tenantSegment } } })
+```
 
 ## put / get / exists / delete / list
 
@@ -78,6 +97,16 @@ As object keys são validadas em todas as operações e em **todos** os drivers:
 uma key com barra inicial, um segmento `..` ou caracteres de controlo é rejeitada
 com `StorageInvalidKeyError` — por isso uma key fornecida pelo utilizador nunca
 pode escapar ao seu prefixo nem colidir com a de outro tenant.
+
+As keys também têm de ser **canónicas**: um segmento `.` ou vazio (`a/./b`,
+`./a`, `a//b`, uma `/` final, `''`) também é rejeitado. O driver local resolve-os
+para o mesmo ficheiro que `a/b`, enquanto S3, GCS e Azure os guardam como
+objetos distintos — a mesma key nomearia um ficheiro num backend e três noutro.
+O Basalt recusa em vez de normalizar: reescrever uma key em silêncio deixaria
+duas strings que a tua app compara (uma allow-list, uma deduplicação, um trilho
+de auditoria) apontar para o mesmo objeto. Constrói as keys com
+`[a, b].join('/')` a partir de partes não vazias. Um prefixo de `list()` pode ser
+`''` (a raiz do disco) ou terminar numa `/` (`list('avatars/')`).
 
 Os uploads são ilimitados por omissão **nesta camada** (o pipeline de nível
 superior [`@basaltkit/files`](/pt/guide/files) limita os uploads a 25 MiB mesmo
@@ -120,6 +149,8 @@ await pipeline(await disk.getStream('imports/2026.csv'), createWriteStream('/tmp
 // Cópia sem os bytes saírem do backend.
 await disk.copy('drafts/a.pdf', 'final/a.pdf')
 await disk.copy('drafts/a.pdf', 'a.pdf', { disk: storage.disk('cold') })
+// A partir de um disco com scope de tenant, um destino central (scope: null) não
+// pode estar dentro de tenants/ — seria a árvore de algum tenant: StorageCrossTenantCopyError.
 
 // Metadados sem download.
 const { size, contentType, etag, lastModified } = await disk.stat('final/a.pdf')
@@ -419,7 +450,7 @@ Sem processador, o terminal do pipeline lança
 | --- | --- | --- | --- |
 | `driver` | `'local' \| 's3' \| StorageDriver` | — (obrigatório) | `'local'` precisa de `root`; `'s3'` recebe as opções S3; uma instância liga GCS/Azure/custom |
 | `scope` | `(() => string \| undefined) \| null` | `tenants/<ctx().tenant.id>` | Prefixo de path dinâmico resolvido em **todas** as operações — isolamento automático por tenant. `null` desativa-o |
-| `onMissingScope` | `'root' \| 'error'` | `'error'` com tenancy registado e o `scope` predefinido; `'root'` caso contrário | O que uma operação faz sem tenant no contexto: `'error'` lança `StorageTenantRequiredError`, `'root'` usa a chave contra a raiz do disco. Um valor explícito ganha sempre |
+| `onMissingScope` | `'root' \| 'error'` | `'error'` para todo o disco com scope; `'root'` só para um disco do `storagePlugin` com o `scope` predefinido numa app sem tenancy | O que uma operação faz sem tenant no contexto: `'error'` lança `StorageTenantRequiredError`, `'root'` usa a chave contra a raiz do disco. Um valor explícito ganha sempre |
 | `maxTemporaryUrlTtl` | `DurationInput` | `'7d'` | Duração máxima que `temporaryUrl` aceita; acima disso lança `TemporaryUrlTtlTooLongError` |
 | `maxTemporaryUploadUrlTtl` | `DurationInput` | `'1h'` (ou `maxTemporaryUrlTtl` se for menor) | Duração máxima que `temporaryUploadUrl` aceita; acima disso lança `TemporaryUrlTtlTooLongError` |
 
@@ -498,7 +529,7 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | Classe | Código | Quando |
 | --- | --- | --- |
 | `StorageFileNotFoundError` | `STORAGE_FILE_NOT_FOUND` | `get` num ficheiro que não existe |
-| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | A key começa por `/`/`\\`, contém um segmento `..` ou caracteres de controlo — o ponto único da fachada rejeita-a em **todas** as operações, para todos os drivers, antes de o prefixo de tenant ser aplicado |
+| `StorageInvalidKeyError` | `STORAGE_INVALID_KEY` | A key começa por `/`/`\\`, contém um segmento `..`, `.` ou vazio (`a//b`, uma `/` final, `''`) ou caracteres de controlo — o ponto único da fachada rejeita-a em **todas** as operações, para todos os drivers, antes de o prefixo de tenant ser aplicado |
 | `StorageInvalidPathError` | `STORAGE_INVALID_PATH` | Um path escapa à root do disco — a segunda linha de defesa própria do driver local |
 | `StorageTooLargeError` | `STORAGE_TOO_LARGE` | `put` (ou `temporaryUploadUrl`) com `maxBytes` definido e um payload / tamanho declarado maior |
 | `StorageContentTypeError` | `STORAGE_CONTENT_TYPE` | `put` (ou `temporaryUploadUrl`) com `allowedContentTypes` definido e um content type em falta/fora da lista |
@@ -507,8 +538,9 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | `TemporaryUrlTtlTooLongError` | `STORAGE_TEMPORARY_URL_TTL` (400) | `temporaryUrl` com duração ≤ 0 ou acima de `maxTemporaryUrlTtl` (7 dias por omissão); `temporaryUploadUrl` acima de `maxTemporaryUploadUrlTtl` (1 hora por omissão) |
 | `TemporaryUploadUrlUnsupportedError` | `STORAGE_UPLOAD_URL_UNSUPPORTED` | `temporaryUploadUrl` num driver sem suporte (p.ex. `local`), ou uma opção que o backend não consegue ligar (`checksumSha256` em GCS/Azure) |
 | `StorageUploadUrlInvalidError` | `STORAGE_UPLOAD_URL_INVALID` (400) | `temporaryUploadUrl` com `contentType` em falta/malformado, `contentLength` não inteiro, `checksumSha256` malformado, ou `maxBytes` sem `contentLength` |
-| `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` (400) | Um disco com scope de tenant correu sem tenant no contexto com tenancy registado — resolve um tenant, ou dá a um disco central `scope: null` / `onMissingScope: 'root'` |
-| `StorageInvalidScopeError` | `STORAGE_INVALID_SCOPE` | O id do tenant (ou um `scope` próprio) não é um prefixo de path seguro (`..`, uma `/` dentro do id, caracteres de controlo) |
+| `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` (400) | Um disco com scope correu sem tenant no contexto (o scope predefinido com tenancy, qualquer `scope` próprio, qualquer `new Disk()` construído à mão) — resolve um tenant, ou dá a um disco central `scope: null` / `onMissingScope: 'root'` |
+| `StorageInvalidScopeError` | `STORAGE_INVALID_SCOPE` | O id do tenant (ou um `scope` próprio) não é um prefixo de path seguro (`..`, uma `/` dentro do id, caracteres de controlo) — ou, com o scope predefinido, não é canónico (maiúsculas, não-ASCII, um `.` final) |
+| `StorageCrossTenantCopyError` | `STORAGE_CROSS_TENANT_COPY` (403) | `copy()` de um disco com scope de tenant para um disco central (`scope: null`) com destino dentro de `tenants/` |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | Terminal de `disk.image(…)` sem `imageProcessor` configurado |
 | `PutStreamUnsupportedError` | `STORAGE_PUT_STREAM_UNSUPPORTED` | `putStream` num driver sem a capacidade — verifica `disk.supports('putStream')` primeiro |
 | `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | `getStream` num driver sem a capacidade |

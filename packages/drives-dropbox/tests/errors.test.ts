@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isRetryable } from '@basaltkit/drives'
+import { isRetryable, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { errorSummary, retryAfterFromBody, toDropboxError } from '../src/errors.js'
 import { connect, harness } from './helpers.js'
 
@@ -138,13 +138,13 @@ describe('a cursor Dropbox invalidated', () => {
     const view = await connect(h)
     const { syncConnection } = await import('@basaltkit/drives')
     await syncConnection(h.drives, view.id, { enqueue: async () => {} })
-    expect((await h.store.find('default', view.id))!.cursor).toBeTruthy()
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor).toBeTruthy()
 
     h.dropbox.queue(409, JSON.stringify({ error_summary: 'reset/...', error: { '.tag': 'reset' } }))
     const result = await syncConnection(h.drives, view.id, { enqueue: async () => {} })
 
     expect(result.reset).toBe(true)
-    expect((await h.store.find('default', view.id))!.cursor).toBeUndefined()
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor).toBeUndefined()
 
     const tasks: { externalId: string }[] = []
     await syncConnection(h.drives, view.id, {

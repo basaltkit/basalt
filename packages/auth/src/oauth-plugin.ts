@@ -1,8 +1,8 @@
-import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
+import { createToken, ctx, definePlugin, isProductionEnvironment, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { AUTH } from './plugin.js'
-import { ACCOUNT_META } from './routes.js'
+import { ACCOUNT_META, DEFAULT_AUTH_RATE_LIMIT } from './routes.js'
 import { OAuth, type OAuthOptions, type OAuthProvider, stripTrailingSlashes } from './oauth.js'
 
 export const OAUTH = createToken<OAuth>('auth.oauth')
@@ -41,10 +41,18 @@ export interface OAuthRoutesOptions {
   successRedirect?: string
   /**
    * The HttpOnly cookie that binds a login to the browser that started it.
-   * `secure` defaults to production-only; when secure, the cookie is named
+   * `secure` defaults to true unless `NODE_ENV` is explicitly `development`
+   * or `test` (an unset NODE_ENV counts as production); when secure, the cookie is named
    * `__Host-basalt_oauth` (host-only, so a sibling subdomain cannot plant it).
    */
   bindingCookie?: { secure?: boolean; maxAgeSeconds?: number }
+  /**
+   * `meta.rateLimit` on both routes (enforced by the http `securityPlugin`'s
+   * rate limiter). Default 10 requests per minute per ip and route — each
+   * callback costs a token-endpoint and a profile round-trip to the provider.
+   * `false` removes it.
+   */
+  rateLimit?: { limit: number; windowMs: number } | false
 }
 
 const readCookie = (header: unknown, name: string): string | undefined => {
@@ -71,10 +79,11 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
   const oauth = () => (ctx().container as Container).get(OAUTH)
   const base = stripTrailingSlashes(options.callbackBaseUrl)
   const redirectUri = (provider: string): string => `${base}/auth/oauth/${provider}/callback`
-  const secure = options.bindingCookie?.secure ?? process.env['NODE_ENV'] === 'production'
+  const secure = options.bindingCookie?.secure ?? isProductionEnvironment()
   const cookieName = secure ? '__Host-basalt_oauth' : 'basalt_oauth'
   const maxAge = options.bindingCookie?.maxAgeSeconds ?? 15 * 60
   // SameSite=Lax: the provider redirects back with a top-level GET, which Lax allows.
+  const limit = options.rateLimit === false ? {} : { rateLimit: options.rateLimit ?? { ...DEFAULT_AUTH_RATE_LIMIT } }
   const cookie = (value: string, age: number): string =>
     `${cookieName}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${secure ? '; Secure' : ''}`
 
@@ -82,7 +91,7 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/auth/oauth/:provider',
-      meta: { ...ACCOUNT_META },
+      meta: { ...ACCOUNT_META, ...limit },
       params: z.object({ provider: z.string() }),
       async handler({ params, reply }) {
         const { url, binding } = oauth().authorize(params.provider, redirectUri(params.provider))
@@ -92,7 +101,7 @@ export function oauthRoutes(options: OAuthRoutesOptions): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/auth/oauth/:provider/callback',
-      meta: { ...ACCOUNT_META },
+      meta: { ...ACCOUNT_META, ...limit },
       params: z.object({ provider: z.string() }),
       query: z.object({ code: z.string().max(4096), state: z.string().max(4096) }),
       async handler({ params, query, request, reply }) {

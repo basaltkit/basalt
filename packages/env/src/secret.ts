@@ -1,3 +1,4 @@
+import { isProductionEnvironment } from '@basaltkit/core'
 import { z } from 'zod'
 
 /** Values that clearly aren't real secrets — rejected in production. */
@@ -9,10 +10,7 @@ const INSECURE = /change.?me|changeme|placeholder|example|secret|password|defaul
  * of `production`, … are all treated as production, so a deploy that forgets
  * NODE_ENV can never fall back to a public, hardcoded `devDefault`.
  */
-const isDevEnvironment = (): boolean => {
-  const nodeEnv = process.env['NODE_ENV']
-  return nodeEnv === 'development' || nodeEnv === 'test'
-}
+const isDevEnvironment = (): boolean => !isProductionEnvironment()
 
 export interface SecretOptions {
   /** Minimum length. Default 16. */

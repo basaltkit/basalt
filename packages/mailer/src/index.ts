@@ -178,7 +178,8 @@ export interface MailerPluginOptions extends MailerOptions {
   sink?: (line: string) => void
   /**
    * 'log' driver only: include the full message body in the log line. Default:
-   * true outside production, false in production (bodies carry reset links and
+   * true only with NODE_ENV=development/test, false anywhere else incl. an
+   * unset NODE_ENV (bodies carry reset links and
    * tokens that must not be retained by log aggregators).
    */
   logBody?: boolean

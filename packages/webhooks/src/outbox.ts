@@ -8,7 +8,7 @@ import {
   type OutboxEntry,
   type OutboxStore,
 } from '@basaltkit/events'
-import { WEBHOOKS, type WebhookManager } from './index.js'
+import { WEBHOOKS, type DeliveryResult, type WebhookManager } from './index.js'
 
 /**
  * Durable, at-least-once **integration events over the app's own webhooks.**
@@ -17,27 +17,86 @@ import { WEBHOOKS, type WebhookManager } from './index.js'
  * fire-and-forget — a failed delivery or a crash between "committed" and
  * "delivered" loses the event. This bridge instead records each event in a
  * transactional {@link Outbox} first, then a relay publishes it to webhook
- * subscribers with retries. Subscribers must be idempotent (standard webhook
- * practice) since a partial failure re-delivers the whole entry.
+ * subscribers with retries. Every re-delivery of an entry to an endpoint
+ * carries the same signed `id` (derived from the entry id and the endpoint id),
+ * so subscribers dedupe on it; endpoints that already accepted an entry are
+ * skipped on its retries while the process lives (at-least-once across
+ * restarts — hence the stable id).
  */
+
+/** Options for {@link webhookOutboxDispatch}. */
+export interface WebhookOutboxDispatchOptions {
+  /**
+   * Called when an entry finished with only PERMANENT failures left (SSRF-blocked
+   * URL, redirect, non-retryable `4xx`, refused signing secret): the entry is
+   * NOT retried for them. Default: console.warn. Must never throw.
+   */
+  onPermanentFailure?: (entry: OutboxEntry, failures: DeliveryResult[]) => void
+  /**
+   * Entries whose per-endpoint progress is remembered between retries (default
+   * 10_000). Oldest are forgotten first; a forgotten entry just re-delivers to
+   * every endpoint with the same stable ids.
+   */
+  maxTrackedEntries?: number
+}
 
 /**
  * An {@link OutboxDispatch} that publishes an entry to the current webhook
- * subscribers. Throws if any endpoint delivery fails, so the outbox retries.
- * An entry recorded without a tenant reaches only tenant-agnostic endpoints.
+ * subscribers. Throws only if a delivery failed TRANSIENTLY (network, timeout,
+ * `5xx`, `408`/`429`), so the outbox retries; a retry skips endpoints that
+ * already accepted the entry and re-sends the same delivery `id` to the rest.
+ * Permanent failures are reported via `onPermanentFailure` and never re-queue
+ * the entry (re-dispatching them would only duplicate deliveries to healthy
+ * endpoints). An entry recorded without a tenant reaches only tenant-agnostic
+ * endpoints.
  *
  * Each entry is dispatched in a fresh, tenant-less context scoped by the
  * entry's OWN tenant: a relay flushed from inside a tenant's request must not
  * let that request's ambient tenant (which `dispatch` gives precedence to)
  * re-route other tenants' entries to the caller's endpoints.
  */
-export function webhookOutboxDispatch(webhooks: WebhookManager): OutboxDispatch {
+export function webhookOutboxDispatch(webhooks: WebhookManager, options: WebhookOutboxDispatchOptions = {}): OutboxDispatch {
+  const maxTracked = options.maxTrackedEntries ?? 10_000
+  const onPermanentFailure =
+    options.onPermanentFailure ??
+    ((entry: OutboxEntry, failures: DeliveryResult[]) =>
+      console.warn(
+        `[basalt:webhook-outbox] "${entry.event}" (${entry.id}) permanently failed for endpoint(s) ` +
+          failures.map((f) => `${f.endpointId} (${f.error ?? `HTTP ${f.status}`})`).join(', ') +
+          '; not retrying them',
+      ))
+  // entry id → endpoint ids that already accepted it (insertion-ordered for eviction).
+  const delivered = new Map<string, Set<string>>()
+
   return async (entry: OutboxEntry) => {
-    const results = await runWithContext({}, () => webhooks.dispatch(entry.event, entry.payload, entry.tenantId))
+    const done = delivered.get(entry.id) ?? new Set<string>()
+    const results = await runWithContext({}, () =>
+      webhooks.dispatch(entry.event, entry.payload, {
+        ...(entry.tenantId != null ? { tenantId: entry.tenantId } : {}),
+        idempotencyKey: entry.id,
+        skipEndpointIds: done,
+      }),
+    )
+    for (const r of results) if (r.ok) done.add(r.endpointId)
     const failed = results.filter((r) => !r.ok)
-    if (failed.length > 0) {
-      throw new Error(`${failed.length}/${results.length} webhook deliveries failed for "${entry.event}"`)
+    // A missing flag (custom deliverer/manager) is treated as retryable: the
+    // pre-existing, conservative behaviour.
+    const transient = failed.filter((r) => r.retryable !== false)
+    const permanent = failed.filter((r) => r.retryable === false)
+    if (permanent.length > 0) {
+      try {
+        onPermanentFailure(entry, permanent)
+      } catch {
+        // a reporting hook must never change the delivery outcome
+      }
     }
+    if (transient.length > 0) {
+      delivered.delete(entry.id) // re-insert at the end (most recent)
+      delivered.set(entry.id, done)
+      while (delivered.size > maxTracked) delivered.delete(delivered.keys().next().value!)
+      throw new Error(`${transient.length}/${results.length} webhook deliveries failed transiently for "${entry.event}"`)
+    }
+    delivered.delete(entry.id)
   }
 }
 
@@ -75,6 +134,8 @@ export interface WebhookOutboxOptions {
    * Default: console.error. Must never throw.
    */
   onFlushError?: (error: unknown) => void
+  /** See {@link WebhookOutboxDispatchOptions.onPermanentFailure}. Default: console.warn. */
+  onPermanentFailure?: WebhookOutboxDispatchOptions['onPermanentFailure']
 }
 
 /**
@@ -107,7 +168,10 @@ export function webhookOutboxPlugin(options: WebhookOutboxOptions = {}) {
     boot({ container }) {
       const webhooks = container.get(WEBHOOKS)
       const bus = container.get(EVENTS)
-      dispatch = webhookOutboxDispatch(webhooks)
+      dispatch = webhookOutboxDispatch(
+        webhooks,
+        options.onPermanentFailure ? { onPermanentFailure: options.onPermanentFailure } : {},
+      )
 
       for (const pattern of patterns) {
         bus.on(pattern, (payload, meta) => {

@@ -57,7 +57,59 @@ await createApp({
 - **Input schema**: built automatically from the route's `params` + `query` +
   `body` Zod schemas (merged into one flat object).
 - **Same pipeline**: a `tools/call` runs enrichers, guards and validation, then
-  the handler — request headers (tenant, authorization) propagate into the call.
+  the handler. The tool request inherits an allowlist of the caller's headers
+  (`DEFAULT_FORWARDED_HEADERS`: `authorization`, `cookie`, `x-api-key`,
+  `x-tenant-id`, `host`, `accept-language`, `user-agent`; extend with
+  `mcpPlugin({ forwardHeaders })`), the client `ip`, `routePattern` (the route
+  template) and the concrete `url` built from the arguments. Other headers
+  (`x-request-id`, `if-none-match`, forwarding/hop-by-hop) are dropped.
+- **Status honoured**: a handler replying `reply.code(>= 400)` yields `isError: true`.
+- **Cancellation**: `notifications/cancelled` answers the call as cancelled at
+  once; a handler can stop early by checking `toolSignal(request)?.aborted`.
+
+### Browser safety and endpoint auth
+
+`POST /mcp` answers **403** to a request whose `Origin` is neither same-origin nor
+in `mcpRoutes({ allowedOrigins })` (`'*'` disables the check), and **415** unless
+the body is `application/json` — a cross-site page can never drive a tool with a
+visitor's cookies. Non-browser clients send no `Origin` and are unaffected.
+`initialize`/`tools/list` are anonymous by default (tool *calls* still run each
+route's guards); `mcpRoutes({ auth: true })` puts `meta.auth` on the endpoint
+itself (`meta` adds any other guard key). JSON-RPC batches are accepted.
+
+### Sessions and cancellation
+
+`/mcp` speaks Streamable-HTTP sessions by default: a successful `initialize`
+answers with an `Mcp-Session-Id` header, every later POST must carry it (**400**
+without it; **404** for an unknown, expired or foreign session — the client
+re-initializes), and `DELETE /mcp` with it ends the session. All POSTs of a
+session share one cancellation scope, so a `notifications/cancelled` sent while a
+call runs cancels it; another session never can. A session is bound to the
+caller that opened it (`ctx().user` + tenant; anonymous: a keyed fingerprint
+of `Authorization`), expires after 30 min idle, and at most 1000 live at
+once (LRU eviction): `mcpRoutes({ sessions: { ttlMs, maxSessions } })`. Sessions
+are in-process memory — behind replicas use sticky sessions, or
+`mcpRoutes({ sessions: false })` to run stateless. `HttpClientTransport` carries
+the header for you and ends the session on `close()`. Browser clients on another
+origin need `Mcp-Session-Id` in CORS `exposeHeaders`.
+
+### What `tools/list` shows
+
+`mcpRoutes({ listVisibleOnly })` (default `true`) hides the tools the caller
+statically cannot use, using **only side-effect-free checks** — no guard runs for a
+listing (no rate-limit consumption, no audit or denial records):
+
+- `meta.auth` tools are hidden from callers without `ctx().user` (when a guard —
+  `authPlugin` — claims `auth`);
+- any key whose plugin registers an `http:route-visibility` check —
+  `teamsPlugin` hides `meta.teamRole` tools from callers without that role in the
+  current tenant; `permissionsPlugin` hides `meta.can` tools whose permission(s)
+  the caller does not hold (RBAC, in the current scope — the guard's own question).
+
+Not filtered (listed, refused on call): `mfa`, `scopes`, `subscribed`/`feature`,
+audiences, rate limits, handler-level checks (e.g. a policy the handler runs on a
+resource). Visibility is never authorization —
+`tools/call` still runs every guard. stdio listings are not filtered.
 
 ### stdio
 
@@ -69,6 +121,10 @@ import { serveMcpStdio } from '@basaltkit/mcp'
 const app = await buildApp().boot() // includes mcpPlugin
 serveMcpStdio(app) // newline-delimited JSON-RPC on stdin/stdout
 ```
+
+At most `maxConcurrentRequests` (default 16) requests run at once on the
+connection; one more is answered with a `-32000` (`SERVER_BUSY`) error.
+Notifications (cancels) are never refused.
 
 ## Client — consume external MCP servers
 
@@ -90,6 +146,11 @@ A spawned stdio server inherits only a non-secret allowlist of host variables
 (`DEFAULT_INHERITED_ENV`: `PATH`, `HOME`, locale, temp dirs) plus `env` — never
 `APP_SECRET`, `DATABASE_URL` or provider keys. Use `inheritEnv: ['NAME']` to
 forward named variables, or `inheritEnv: true` to opt in to the full environment.
+
+If the command can't be spawned (`ENOENT`) or the server exits, the calls in flight
+reject with an error instead of crashing your process, and the next call spawns it
+afresh. A request the server never answers rejects after `timeoutMs` (default
+60 000 ms).
 
 Or register named servers with a plugin — `mcpClientPlugin` connects them at boot
 and exposes them via the `MCP_CLIENTS` registry:
@@ -122,6 +183,6 @@ server + client round-trips.
 
 `mcpRoutes({ rateLimit: { limit, windowMs } })` stamps `meta.rateLimit` on the
 endpoint so `securityPlugin` enforces a dedicated budget. A tool route's own
-`meta.rateLimit` applies to its direct HTTP registration only — not when it is
-invoked as a tool through `/mcp` — so this budget is the throttle for tool
-traffic.
+`meta.rateLimit` also applies when it is invoked as a tool through `/mcp`
+(enforced as a route guard), keyed by the `/mcp` caller's ip, which the tool
+request inherits.

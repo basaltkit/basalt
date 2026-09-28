@@ -133,7 +133,7 @@ fall back to `download()` there (which is what `fileRoutes()` does).
 
 ## Checking the real type (`validate.sniff`)
 
-By default `allowedTypes` trusts the client-declared `contentType` — an HTML page sent as `application/pdf` passes. `validate: { sniff: true }` reads the magic bytes instead (built-in table, no dependency: PDF, PNG, JPEG, GIF, WebP, TIFF, ZIP, docx/xlsx/pptx, and HTML/SVG/XML text and PE/ELF/Mach-O executables to catch disguises). A mismatch is `415 FILE_TYPE_MISMATCH`; the allowlist judges the detected type; the record stores the detected type and keeps the claim in `metadata.declaredType`. Pass a function `(bytes) => string | null` for your own detector. Off by default — **consider enabling it** whenever users upload files other users open.
+By default `allowedTypes` trusts the client-declared `contentType` — an HTML page sent as `application/pdf` passes. `validate: { sniff: true }` reads the magic bytes instead (built-in table, no dependency: PDF, PNG, JPEG, GIF, WebP, TIFF, ZIP, docx/xlsx/pptx, and HTML/SVG/XML text and PE/ELF/Mach-O executables to catch disguises). A mismatch is `415 FILE_TYPE_MISMATCH`; the allowlist judges the detected type; the record stores the detected type and keeps the claim in `metadata.declaredType`. An upload declared `application/octet-stream` is promoted to the detected type only when that is inert (PDF, raster images, audio, video, ZIP/Office — `isInertType`); HTML, SVG, XML, scripts and executables sent as octet-stream are refused, never relabelled — storing one takes declaring it, and the allowlist judges that declaration. Pass a function `(bytes) => string | null` for your own detector. Off by default — **consider enabling it** whenever users upload files other users open.
 
 ## Quarantine until scanned (`requireScan`)
 
@@ -212,7 +212,9 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 | `markScanned(id, result, tenantId?)` | Marks as scanned; emits `file:scanned`. |
 | `sniffContentType(bytes)` (export) | The built-in signature sniffer: MIME type or `null`. |
 
-Without an explicit `tenantId`, it uses `ctx().tenant.id`. Inside a tenant context an explicit `tenantId` must equal it, otherwise `FileTenantMismatchError` (403) — the argument can never widen a call to another tenant. With no tenant resolvable it throws `FileTenantRequiredError` **only when `@basaltkit/tenancy` is registered** — an app without tenancy has no tenant dimension to cross, and its records are keyed by `SINGLE_TENANT_SCOPE`. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
+Without an explicit `tenantId`, it uses `ctx().tenant.id`. Inside a tenant context an explicit `tenantId` must equal it, otherwise `FileTenantMismatchError` (403) — the argument can never widen a call to another tenant. With no tenant resolvable it throws `FileTenantRequiredError` **only when `@basaltkit/tenancy` is registered** — an app without tenancy has no tenant dimension to cross, and its records are keyed by `SINGLE_TENANT_SCOPE` (`'@single'`, a sentinel outside the tenant-id grammar; a tenant carrying it is refused with `FileTenantReservedError`). In such an app pass a `storagePlugin` disk name, or a `Disk` built with `scope: null` — a hand-built disk on the default scope refuses to run without a tenant.
+
+> **Upgrading from 4.x (single-tenant data):** the key used to be `'default'`, a valid tenant id — a tenant named `default` could read and orphan the single-tenant files. Re-key persisted rows once: `UPDATE files SET "tenantId" = '@single' WHERE "tenantId" = 'default'` (and `file_versions` too with `@basaltkit/files-versions`). Skip it if `default` was ever a real tenant in that database. Storage access runs in the resolved tenant's context, so files stay isolated even from a background job.
 
 ### Failure modes
 
@@ -226,6 +228,8 @@ Without an explicit `tenantId`, it uses `ctx().tenant.id`. Inside a tenant conte
 | `StorageQuotaExceededError` | `FILE_QUOTA_EXCEEDED` | 402 | The tenant's total stored bytes plus this upload would pass `maxTotalBytes`. |
 | `FileNotFoundError` | `FILE_NOT_FOUND` | 404 | `download` / `temporaryUrl` / `markScanned` for an id absent from this tenant's metadata store. |
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | No `tenantId` argument and no `ctx().tenant` — every operation is tenant-scoped and fails closed rather than querying unscoped. |
+| `FileTenantMismatchError` | `FILE_TENANT_MISMATCH` | 403 | An explicit `tenantId` differs from the context tenant. |
+| `FileTenantReservedError` | `FILE_TENANT_RESERVED` | 400 | The tenant id equals `SINGLE_TENANT_SCOPE`, the single-tenant store key. |
 
 All extend `BasaltError` and declare a `status`, so the adapters map them to the
 HTTP code above with the real error `code` in the body. Errors thrown by the

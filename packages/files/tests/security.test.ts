@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { Container, runWithContext } from '@basaltkit/core'
 import { Disk, type StorageDriver } from '@basaltkit/storage'
+import { FakeDriver as StreamingDriver } from './fixtures.js'
 import {
   FILES,
   FileTenantMismatchError,
+  FileTenantReservedError,
+  FileTypeMismatchError,
   Files,
+  SINGLE_TENANT_SCOPE,
   MemoryFileStore,
   StorageQuotaExceededError,
   fileRoutes,
@@ -62,7 +66,8 @@ const png = Buffer.from('fake-png-bytes')
 
 function setup(routeOptions?: FileRoutesOptions) {
   const driver = new FakeDriver()
-  const files = new Files({ disk: new Disk('uploads', driver) })
+  // Single-tenant: a central disk, stated as such.
+  const files = new Files({ disk: new Disk('uploads', driver, { scope: null }) })
   const container = new Container()
   container.singleton(FILES, () => files)
   const routes = fileRoutes(routeOptions)
@@ -248,5 +253,116 @@ describe('MemoryFileStore keys cannot collide across tenants', () => {
     await store.create(record)
     expect(await store.find('a', 'b uuid-1')).toBeNull()
     expect(await store.find('a b', 'uuid-1')).not.toBeNull()
+  })
+})
+
+// Regressions for the 2026-09 framework audit (FA-030, FA-031, FA-032).
+describe('FA-030 · the single-tenant store key cannot be a tenant id', () => {
+  it('is a sentinel outside the tenant grammar, not "default"', () => {
+    expect(SINGLE_TENANT_SCOPE).not.toBe('default')
+    expect(SINGLE_TENANT_SCOPE).not.toMatch(/^[a-z0-9][a-z0-9_-]{0,62}$/)
+  })
+
+  it('a tenant named "default" no longer reads the single-tenant files', async () => {
+    const files = new Files({ disk: new Disk('d', new FakeDriver(), { scope: null }) })
+    const rec = await files.upload(Buffer.from('x'), { name: 'a.txt', contentType: 'text/plain' })
+    expect(await runWithContext({ tenant: { id: 'default' } } as never, () => files.get(rec.id))).toBeNull()
+    expect(await files.get(rec.id, 'default')).toBeNull()
+    expect(await runWithContext({ tenant: { id: 'default' } } as never, () => files.list())).toEqual([])
+    expect((await files.get(rec.id))?.id).toBe(rec.id)
+  })
+
+  it('refuses the sentinel itself as a tenant id, from the context or an argument', async () => {
+    const files = new Files({ disk: new Disk('d', new FakeDriver(), { scope: null }) })
+    const rec = await files.upload(Buffer.from('x'), { name: 'a.txt', contentType: 'text/plain' })
+    await expect(
+      runWithContext({ tenant: { id: SINGLE_TENANT_SCOPE } } as never, () => files.get(rec.id)),
+    ).rejects.toBeInstanceOf(FileTenantReservedError)
+    await expect(files.delete(rec.id, SINGLE_TENANT_SCOPE)).rejects.toMatchObject({ code: 'FILE_TENANT_RESERVED', status: 400 })
+    expect((await files.get(rec.id))?.id).toBe(rec.id)
+  })
+})
+
+describe('FA-031 · a failed metadata insert leaves no orphan object', () => {
+  const failingStore = () => {
+    const store = new MemoryFileStore()
+    store.create = async () => {
+      throw new Error('db down')
+    }
+    return store
+  }
+
+  it('buffered upload: the written bytes are deleted when store.create throws', async () => {
+    const driver = new FakeDriver()
+    const files = new Files({ disk: new Disk('d', driver), store: failingStore() })
+    await expect(
+      files.upload(Buffer.alloc(5), { name: 'a.bin', contentType: 'application/octet-stream', tenantId: 'acme' }),
+    ).rejects.toThrow(/db down/)
+    expect([...driver.files.keys()]).toEqual([])
+  })
+
+  it('streamed upload: same guarantee', async () => {
+    const driver = new StreamingDriver()
+    const files = new Files({ disk: new Disk('d', driver), store: failingStore() })
+    async function* body() {
+      yield Buffer.alloc(5)
+    }
+    await expect(
+      files.upload(body(), { name: 'a.bin', contentType: 'application/octet-stream', tenantId: 'acme' }),
+    ).rejects.toThrow(/db down/)
+    expect([...driver.files.keys()]).toEqual([])
+  })
+
+  it('the original error still surfaces when the cleanup itself fails', async () => {
+    const driver = new FakeDriver()
+    driver.delete = async () => {
+      throw new Error('disk down too')
+    }
+    const files = new Files({ disk: new Disk('d', driver), store: failingStore() })
+    await expect(files.upload(Buffer.alloc(5), { name: 'a', contentType: 'text/plain', tenantId: 'acme' })).rejects.toThrow(/db down/)
+  })
+})
+
+describe('FA-032 · sniffing never promotes octet-stream to an active type', () => {
+  const sniffing = () => new Files({ disk: new Disk('d', new FakeDriver(), { scope: null }), validate: { sniff: true } })
+  const active: Record<string, Buffer> = {
+    html: Buffer.from('<!DOCTYPE html><html><script>alert(1)</script></html>'),
+    svg: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'),
+    xml: Buffer.from('<?xml version="1.0"?><root/>'),
+    script: Buffer.from('#!/bin/sh\nrm -rf /\n'),
+    elf: Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]),
+  }
+
+  for (const [kind, bytes] of Object.entries(active)) {
+    it(`${kind} bytes declared as application/octet-stream are refused, not relabelled`, async () => {
+      const files = sniffing()
+      await expect(files.upload(bytes, { name: 'a.bin', contentType: 'application/octet-stream' })).rejects.toBeInstanceOf(
+        FileTypeMismatchError,
+      )
+      await expect(files.upload(bytes, { name: 'a.bin', contentType: '' })).rejects.toBeInstanceOf(FileTypeMismatchError)
+      expect(await files.list()).toEqual([])
+    })
+  }
+
+  it('an explicit declaration of the active type is still judged by the allowlist', async () => {
+    const files = new Files({
+      disk: new Disk('d', new FakeDriver(), { scope: null }),
+      validate: { sniff: true, allowedTypes: ['text/html'] },
+    })
+    const rec = await files.upload(active['html']!, { name: 'a.html', contentType: 'text/html' })
+    expect(rec.contentType).toBe('text/html')
+  })
+
+  it('inert formats are still promoted from octet-stream', async () => {
+    const files = sniffing()
+    const pdf = await files.upload(Buffer.from('%PDF-1.7\n'), { name: 'a', contentType: 'application/octet-stream' })
+    expect(pdf.contentType).toBe('application/pdf')
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0])
+    expect((await files.upload(png, { name: 'b', contentType: 'application/octet-stream' })).contentType).toBe('image/png')
+    const custom = new Files({
+      disk: new Disk('d', new FakeDriver(), { scope: null }),
+      validate: { sniff: () => 'video/mp4' },
+    })
+    expect((await custom.upload(Buffer.alloc(4), { name: 'c', contentType: 'application/octet-stream' })).contentType).toBe('video/mp4')
   })
 })

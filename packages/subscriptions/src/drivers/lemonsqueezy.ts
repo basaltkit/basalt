@@ -3,6 +3,7 @@ import { BasaltError } from '@basaltkit/core'
 import type { BillingPeriod } from '../plans.js'
 import {
   attestedPlan,
+  CheckoutRequiredError,
   requireWebhookSecret,
   WebhookInvalidError,
   type BillingGateway,
@@ -25,7 +26,16 @@ export class LemonSqueezyRequestError extends BasaltError {
 /** Loosely-typed Lemon Squeezy webhook envelope — we only touch a few fields. */
 interface LemonEvent {
   meta?: { event_name?: string; custom_data?: Record<string, string> | null }
-  data?: { id?: string; attributes?: { subscription_id?: string | number; [key: string]: unknown } }
+  data?: {
+    id?: string
+    type?: string
+    attributes?: {
+      subscription_id?: string | number
+      created_at?: string
+      updated_at?: string
+      [key: string]: unknown
+    }
+  }
 }
 
 /** Lemon Squeezy `meta.event_name` → Basalt domain webhook type. Others ignored. */
@@ -52,6 +62,17 @@ export interface LemonSqueezyGatewayOptions {
    * `meta.custom_data.billableId` — which the checkout call sets.
    */
   resolveBillableId?: (event: unknown) => string | undefined
+  /**
+   * Optional replay window in seconds. Lemon Squeezy's `X-Signature` covers the
+   * body only — there is no signed timestamp — so a captured delivery stays
+   * valid forever and only the webhook dedupe store stops a replay. When set,
+   * an event whose `data.attributes.updated_at` (or `created_at`) is older than
+   * this, or missing, is rejected with `WebhookInvalidError`. Leave it unset if
+   * you re-send old events from the Lemon Squeezy dashboard. Default: off.
+   */
+  maxEventAgeSeconds?: number
+  /** Clock in ms (tests), for `maxEventAgeSeconds`. Default: Date.now. */
+  now?: () => number
   /** Injected fetch (tests). Default: global fetch. */
   fetch?: typeof fetch
   /** API base, for tests/mocks. Default: https://api.lemonsqueezy.com/v1 */
@@ -63,27 +84,35 @@ const JSON_API = 'application/vnd.api+json'
 /**
  * Lemon Squeezy billing gateway targeting the REST API directly (JSON:API) — no
  * SDK. Lemon Squeezy is a merchant-of-record and checkout-first, so
- * `createSubscription`/`createCheckoutSession` create a **checkout**; the durable
- * subscription id arrives on a `subscription_*` webhook via `gatewayRef`. Webhook
+ * `createCheckoutSession` creates a **checkout**; the durable subscription id
+ * arrives on a `subscription_*` webhook via `gatewayRef`. `createSubscription`
+ * throws {@link CheckoutRequiredError} (use `Subscriptions.checkout()`). Webhook
  * signatures use the `X-Signature` scheme (HMAC-SHA256 hex over the raw body).
  */
 export class LemonSqueezyBillingGateway implements BillingGateway {
   readonly name = 'lemonsqueezy'
+  readonly signatureHeader = 'x-signature'
   private readonly fetch: typeof fetch
+  private readonly now: () => number
   private readonly apiBase: string
   private readonly resolveBillableId: (event: unknown) => string | undefined
 
   constructor(private readonly options: LemonSqueezyGatewayOptions) {
     this.fetch = options.fetch ?? globalThis.fetch
+    this.now = options.now ?? Date.now
     this.apiBase = options.apiBase ?? 'https://api.lemonsqueezy.com/v1'
     this.resolveBillableId =
       options.resolveBillableId ??
       ((event) => (event as LemonEvent | undefined)?.meta?.custom_data?.['billableId'])
   }
 
-  async createSubscription(input: CreateSubscriptionInput): Promise<{ gatewayRef: string }> {
-    const checkout = await this.checkout(input.billableId, input.plan, input.period)
-    return { gatewayRef: String(checkout.id) }
+  /**
+   * Always throws {@link CheckoutRequiredError}: a checkout id is not a
+   * subscription (returning it as the ref activated the plan unpaid and left a
+   * ref `cancel`/`swap` could not address).
+   */
+  async createSubscription(_input: CreateSubscriptionInput): Promise<{ gatewayRef: string }> {
+    throw new CheckoutRequiredError('Lemon Squeezy')
   }
 
   async createCheckoutSession(input: CheckoutInput): Promise<{ url: string; id: string }> {
@@ -125,6 +154,13 @@ export class LemonSqueezyBillingGateway implements BillingGateway {
     return { url: String(found.attributes?.urls?.customer_portal) }
   }
 
+  async resumeSubscription(gatewayRef: string): Promise<void> {
+    // A cancelled subscription in its grace period is resumed by un-cancelling it.
+    await this.request('PATCH', `/subscriptions/${gatewayRef}`, {
+      data: { type: 'subscriptions', id: gatewayRef, attributes: { cancelled: false } },
+    })
+  }
+
   async swapSubscription(gatewayRef: string, input: SwapInput): Promise<void> {
     const behavior = input.prorationBehavior ?? 'create_prorations'
     await this.request('PATCH', `/subscriptions/${gatewayRef}`, {
@@ -158,8 +194,16 @@ export class LemonSqueezyBillingGateway implements BillingGateway {
       throw new WebhookInvalidError()
     }
 
+    if (this.options.maxEventAgeSeconds !== undefined) {
+      const stamp = event.data?.attributes?.updated_at ?? event.data?.attributes?.created_at
+      const at = typeof stamp === 'string' ? Date.parse(stamp) : Number.NaN
+      if (!Number.isFinite(at) || this.now() - at > this.options.maxEventAgeSeconds * 1000) {
+        throw new WebhookInvalidError()
+      }
+    }
+
     const name = event.meta?.event_name
-    const type = name ? EVENT_MAP[name] : undefined
+    const type = name && Object.hasOwn(EVENT_MAP, name) ? EVENT_MAP[name] : undefined
     if (!type) return null
     const billableId = this.resolveBillableId(event)
     if (!billableId) return null
@@ -167,9 +211,16 @@ export class LemonSqueezyBillingGateway implements BillingGateway {
     // subscription events carry it in data.id.
     const rawRef = event.data?.attributes?.subscription_id ?? event.data?.id
     const gatewayRef = rawRef !== undefined ? String(rawRef) : undefined
-    // Lemon Squeezy webhooks have no event id of their own — use the subscription
-    // ref + event name as a stable idempotency key.
-    const id = `${name}:${gatewayRef ?? billableId}`
+    // Lemon Squeezy webhooks have no event id of their own. The key must be
+    // stable across re-deliveries of ONE event yet distinct between events:
+    // `data.id` is the subscription-invoice id on payment events (new on every
+    // renewal) and the subscription id on subscription events, and `updated_at`
+    // separates repeated events on the same object (a second cancel after a
+    // resume, another failed retry). Keying on the subscription alone dropped
+    // every renewal after the first as a "duplicate".
+    const objectId = event.data?.id !== undefined ? String(event.data.id) : (gatewayRef ?? billableId)
+    const version = event.data?.attributes?.updated_at ?? event.data?.attributes?.created_at ?? ''
+    const id = `${name}:${event.data?.type ?? ''}:${objectId}:${version}`
     // The plan/period we stamped into the checkout's custom data (signed
     // payload). Lemon custom data is immutable after checkout, so a later
     // variant change (swap or the customer portal) leaves it stale: it is

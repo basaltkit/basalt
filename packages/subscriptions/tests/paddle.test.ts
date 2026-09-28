@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { PaddleBillingGateway, PaddleRequestError, WebhookInvalidError } from '../src/index.js'
+import { CheckoutRequiredError, PaddleBillingGateway, PaddleRequestError, WebhookInvalidError } from '../src/index.js'
 
 const WEBHOOK_SECRET = 'ntfset_test'
 const NOW_MS = 1_700_000_000_000
@@ -47,21 +47,23 @@ function makeGateway(fetchMock: typeof fetch) {
 }
 
 describe('PaddleBillingGateway — API calls', () => {
-  it('createSubscription creates a transaction with the price, customer and custom_data', async () => {
+  // FA-054 (S-6): a transaction id is not a subscription. createSubscription
+  // used to return `txn_…` as the gatewayRef — the plan went active unpaid and
+  // cancel()/swap() later addressed `/subscriptions/txn_…`, which does not exist.
+  it('createSubscription refuses (checkout-first) and makes no API call', async () => {
     const { calls, fetchMock } = harness(() => data({ id: 'txn_1' }))
-    const res = await makeGateway(fetchMock).createSubscription({
-      billableId: 'acme',
-      plan: 'pro',
-      period: 'monthly',
-      price: 2900,
-    })
-    expect(res).toEqual({ gatewayRef: 'txn_1' })
-    expect(calls[0]!.url).toBe('https://api.paddle.com/transactions')
-    expect(calls[0]!.headers.authorization).toBe('Bearer pdl_test')
-    const body = JSON.parse(calls[0]!.body!)
-    expect(body.items).toEqual([{ price_id: 'pri_pro_monthly', quantity: 1 }])
-    expect(body.customer_id).toBe('ctm_acme')
-    expect(body.custom_data).toEqual({ billableId: 'acme', plan: 'pro', period: 'monthly' })
+    await expect(
+      makeGateway(fetchMock).createSubscription({ billableId: 'acme', plan: 'pro', period: 'monthly', price: 2900 }),
+    ).rejects.toBeInstanceOf(CheckoutRequiredError)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('resumeSubscription removes the scheduled cancellation', async () => {
+    const { calls, fetchMock } = harness(() => data({}))
+    await makeGateway(fetchMock).resumeSubscription('sub_1')
+    expect(calls[0]!.method).toBe('PATCH')
+    expect(calls[0]!.url).toBe('https://api.paddle.com/subscriptions/sub_1')
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ scheduled_change: null })
   })
 
   it('cancelSubscription maps atPeriodEnd → effective_from', async () => {
@@ -111,7 +113,13 @@ describe('PaddleBillingGateway — API calls', () => {
       () => new Response(JSON.stringify({ error: { detail: 'bad price' } }), { status: 400 }),
     )
     await expect(
-      makeGateway(fetchMock).createSubscription({ billableId: 'a', plan: 'p', period: 'monthly', price: 1 }),
+      makeGateway(fetchMock).createCheckoutSession({
+        billableId: 'a',
+        plan: 'p',
+        period: 'monthly',
+        successUrl: 'https://app/ok',
+        cancelUrl: 'https://app/no',
+      }),
     ).rejects.toBeInstanceOf(PaddleRequestError)
   })
 })
@@ -156,5 +164,24 @@ describe('PaddleBillingGateway — verifyWebhook', () => {
     expect(() => gw.verifyWebhook(raw, paddleSignature(raw, 'wrong-secret'))).toThrow(WebhookInvalidError)
     const stale = paddleSignature(raw, WEBHOOK_SECRET, Math.floor(NOW_MS / 1000) - 10_000)
     expect(() => gw.verifyWebhook(raw, stale)).toThrow(WebhookInvalidError)
+  })
+})
+
+describe('PaddleBillingGateway — secret rotation (FA-071 S-10)', () => {
+  it('accepts a delivery whose matching h1 is not the last one', () => {
+    const gw = makeGateway((async () => new Response('{}')) as typeof fetch)
+    const raw = JSON.stringify({
+      event_id: 'evt_rot',
+      event_type: 'subscription.canceled',
+      data: { id: 'sub_1', custom_data: { billableId: 'acme' } },
+    })
+    const ts = Math.floor(NOW_MS / 1000)
+    const h1 = (secret: string) => createHmac('sha256', secret).update(`${ts}:${raw}`).digest('hex')
+    expect(gw.verifyWebhook(raw, `ts=${ts};h1=${h1(WEBHOOK_SECRET)};h1=${h1('ntfset_new')}`)).toMatchObject({
+      id: 'evt_rot',
+      gatewayRef: 'sub_1',
+    })
+    expect(() => gw.verifyWebhook(raw, `ts=${ts};h1=${h1('x')};h1=${h1('y')}`)).toThrow(WebhookInvalidError)
+    expect(gw.signatureHeader).toBe('paddle-signature')
   })
 })

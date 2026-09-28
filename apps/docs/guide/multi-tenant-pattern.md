@@ -121,6 +121,10 @@ Three decisions hide in that block.
 tenant without DNS. It also lets any client pick any tenant, so it never runs
 outside `NODE_ENV === 'test'`. "Not production" is not the same condition:
 staging runs with other values and inherits the door.
+Even where it runs, it cannot override the host: the subdomain and domain
+resolvers are authoritative, so `nosuch.example.com` answers 404 instead of
+asking the header, and the header is only consulted when the host names no
+tenant at all.
 
 **One reserved list.** `www`, `app`, `api`, `admin`, `central`, `platform`,
 `mail`, `static`, `docs`, `status` — whatever names your apex, your API host and
@@ -354,9 +358,16 @@ by design, linked by an id in the tenant record, not the same row.
 ## Rule 9 — Outside a request, the tenant is explicit
 
 ```ts
-await tenancy.run(tenantId, () => reindex())          // one tenant
-await tenancy.forEach((tenant) => sendReminders())     // every tenant, in context
+await tenancy.run(tenantId, () => search.reindex('matters'))  // one tenant
+await tenancy.forEach((tenant) => sendReminders())             // every tenant, in context
 ```
+
+Anything tenant-scoped done in a loop must *only touch that tenant*. A
+search rebuild inside `tenancy.run` clears and rewrites that tenant's documents
+and leaves the rest; rebuilding every tenant at once is the explicit
+`search.reindex('matters', { all: true })`, outside any tenant context. With
+tenancy registered, a bare `reindex()` outside a tenant context is refused rather
+than guessed.
 
 Jobs carry `tenantId` in their payload and restore it with `tenancy.run` before
 touching `db()`; the queue integration does this for you. Scripts and CLI

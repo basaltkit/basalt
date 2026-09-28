@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
 import {
+  canonicalInviteEmail,
   MemoryInvitationStore,
   MemoryMembershipStore,
   type Invitation,
@@ -49,6 +50,22 @@ export class TeamRoleNotGrantableError extends BasaltError {
   readonly status = 403
   constructor(role: TeamRole) {
     super('TEAM_ROLE_NOT_GRANTABLE', `The role "${role}" cannot be granted by a team member.`)
+  }
+}
+
+/**
+ * A role requirement (e.g. `meta.teamRole`) names a role that is neither ranked
+ * (`roleRank`) nor listed in `grantableRoles` — almost always a typo (`'Admin'`,
+ * `'adimn'`) or an empty value. A server misconfiguration, so it fails closed
+ * with a 500 instead of ranking the unknown role 0 and admitting every member.
+ */
+export class UnknownTeamRoleError extends BasaltError {
+  readonly status = 500
+  constructor(role: unknown) {
+    super(
+      'TEAM_ROLE_UNKNOWN',
+      `The required team role ${JSON.stringify(role) ?? String(role)} is not a known role — add it to roleRank or grantableRoles, or fix the typo.`,
+    )
   }
 }
 
@@ -105,7 +122,8 @@ export interface TeamsOptions {
    * Extra, unranked role names an acting user may grant (e.g. `['viewer']`).
    * By default an acting user can only grant roles present in `roleRank`, so
    * a free-form role string can't smuggle in a custom permission role. Roles
-   * listed here have rank 0 unless also ranked. Trusted server-side calls
+   * listed here are unranked unless also in `roleRank`: `can()` and
+   * `meta.teamRole` match them exactly. Trusted server-side calls
    * (no `actingUserId`) are never restricted.
    */
   grantableRoles?: readonly TeamRole[]
@@ -167,6 +185,15 @@ export class Teams {
 
   private isRanked(role: TeamRole): boolean {
     return Object.hasOwn(this.roleRank, role) && typeof this.roleRank[role] === 'number'
+  }
+
+  /**
+   * True for a role this service knows: ranked in `roleRank` or listed in
+   * `grantableRoles`. The `meta.teamRole` guard refuses anything else with
+   * {@link UnknownTeamRoleError}, so a typo can never rank 0 and admit everyone.
+   */
+  isKnownRole(role: unknown): role is TeamRole {
+    return typeof role === 'string' && role !== '' && (this.isRanked(role) || this.grantableRoles.has(role))
   }
 
   /**
@@ -243,14 +270,21 @@ export class Teams {
   }): Promise<{ invitation: PublicInvitation; token: string }> {
     const role = input.role ?? 'member'
     if (input.actingUserId !== undefined) await this.assertCanGrant(input.tenantId, input.actingUserId, role)
-    const existing = await this.invitations.findPending(input.tenantId, input.email)
-    if (existing) await this.invitations.revoke(existing.id, this.now())
+    // One pending invite per ADDRESS: `Bob@x` and `bob@x` are the same mailbox,
+    // so the new invite must supersede every pending one for it — including
+    // mixed-case rows written before emails were canonicalised, and any
+    // duplicates such rows left behind. Filtered here (not via the store's
+    // `findPending`) so the rule holds on every store implementation.
+    const email = canonicalInviteEmail(input.email)
+    for (const pending of await this.invitations.listPending(input.tenantId)) {
+      if (canonicalInviteEmail(pending.email) === email) await this.invitations.revoke(pending.id, this.now())
+    }
 
     const token = randomBytes(24).toString('base64url')
     const invitation: Invitation = {
       id: randomUUID(),
       tenantId: input.tenantId,
-      email: input.email,
+      email,
       role,
       // Persist only the hash — a leak of the invitations table can't be replayed
       // to accept an invite (the raw token lives only in the emailed link).
@@ -282,7 +316,7 @@ export class Teams {
     // must not enroll a different account. Same error as an invalid token so a
     // wrong recipient can't tell a real token from a fake one. Pass the caller's
     // *verified* email. Omit only for trusted server-side flows.
-    if (acceptingEmail !== undefined && acceptingEmail.toLowerCase() !== invitation.email.toLowerCase()) {
+    if (acceptingEmail !== undefined && canonicalInviteEmail(acceptingEmail) !== canonicalInviteEmail(invitation.email)) {
       throw new TeamInviteInvalidError()
     }
     // Compare-and-set: only the caller that flips the invitation from pending to
@@ -395,10 +429,21 @@ export class Teams {
     return (await this.memberships.find(tenantId, userId))?.role ?? null
   }
 
-  /** True when the user holds `required` or a higher-ranked role in the team. */
+  /**
+   * True when the user holds `required` or a higher-ranked role in the team.
+   *
+   * Only a **ranked** `required` role has a hierarchy, and only a ranked member
+   * role can climb it. A `required` role outside `roleRank` (a custom role from
+   * `grantableRoles`, or a typo such as `'Admin'`) is matched **exactly** — it
+   * never ranks 0 and admits every member. An empty or non-string `required`
+   * is always `false`.
+   */
   async can(tenantId: string, userId: string, required: TeamRole): Promise<boolean> {
+    if (typeof required !== 'string' || required === '') return false
     const role = await this.roleOf(tenantId, userId)
-    return role !== null && this.rankOf(role) >= this.rankOf(required)
+    if (role === null) return false
+    if (!this.isRanked(required)) return role === required
+    return this.isRanked(role) && this.rankOf(role) >= this.rankOf(required)
   }
 
   async changeRole(

@@ -75,9 +75,15 @@ export interface DriveConnectionAccount {
   name?: string | undefined
 }
 
-/** Persisted push-subscription state. `secret` is the value the provider echoes back. */
+/** Persisted push-subscription state. */
 export interface DriveConnectionWatch {
   id: string
+  /**
+   * A SHA-256 digest (`sha256:…`) of the secret the provider echoes back —
+   * never the secret itself, which is only ever compared. A row written before
+   * `@basaltkit/drives` 0.3 may still hold the plain secret; it keeps matching
+   * until the subscription is renewed.
+   */
   secret: string
   expiresAt?: number | undefined
   raw?: Record<string, unknown> | undefined

@@ -59,6 +59,34 @@ const c = prismaCommentsStore(prisma)   // pass your client directly, no cast
 createApp({ plugins: [commentsPlugin({ store: c.store })] })
 ```
 
+## MySQL
+
+The reference schema above is written for PostgreSQL (and works on SQLite),
+where a bare `String` is `TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**,
+and a server outside strict mode truncates a longer value silently — the write
+succeeds, and the value read back is not the one written. A long comment is saved cut short while the author is told it was saved. MySQL also has no scalar lists, so the MySQL variant stores `mentions` as `Json` — the store reads and writes the same array either way. `update()` (an edited body) is checked too.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/comments-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it when
+  your datasource is `mysql`): the free-text columns are widened with native
+  types, the keys stay `VARCHAR(191)` so they can be indexed.
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaCommentsStore(prisma, { columnLimits: 'mysql' })
+  ```
+
+  `'mysql'` is `commentsMysqlColumnLimits` — the capacities of `schema.mysql.prisma`. A number is
+  a limit in characters (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes
+  (the `TEXT` family). Widened a column yourself? Spread the preset and raise it:
+  `{ Comment: { ...commentsMysqlColumnLimits.Comment, resourceType: 500 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
+
 ## Notes
 
 - **Resolve/reopen** is faithful: a patch key present with `undefined` clears the

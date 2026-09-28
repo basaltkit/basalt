@@ -70,6 +70,11 @@ const invitations = new SqliteInvitationStore(db)
 - **`add()` upserts** a membership (matches the in-memory `Map.set` semantics).
 - **Pending** invitations are those with no `accepted_at` and no `revoked_at`;
   expiry is the caller's concern, exactly as in the in-memory store.
+- **Emails**: `findPending` compares the canonical address (trimmed,
+  lower-cased) on both sides, so a mixed-case row written before
+  `@basaltkit/teams` 4.0 is still found. `@basaltkit/teams` 4.0+ stores new
+  invitations in canonical form and supersedes every pending invite for the
+  same address itself — no data migration needed.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contracts.
 - The `token` column holds the **SHA-256 hash** of the invitation token, never
   the raw value — `@basaltkit/teams` hashes before it reaches the store.

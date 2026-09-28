@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildAiMcpServer } from '../src/index.js'
+import { PassThrough } from 'node:stream'
+import { buildAiMcpServer, createAiMcpServer } from '../src/index.js'
 import { assertConfined, resolveWriteRoot, within, WorkspaceEscapeError } from '../src/safety.js'
 
 const PLAN = {
@@ -30,10 +31,13 @@ function makeProject(): string {
   return root
 }
 
+/** A client that confirms every elicitation — the default for the apply tests below. */
+const confirming = { elicit: async () => true }
+
 const call = (
   server: ReturnType<typeof buildAiMcpServer>,
   args: Record<string, unknown>,
-  callCtx?: Record<string, unknown>,
+  callCtx: Record<string, unknown> = confirming,
 ) =>
   server.handleMessage(
     { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'basalt_make', arguments: args } },
@@ -134,6 +138,47 @@ describe('basalt_make — safety (temp-dir sandbox)', () => {
     expect(isError(res)).toBe(true)
     expect(text(res)).toMatch(/cancel|not confirmed/i)
     expect(existsSync(join(root, 'src', 'modules', 'widget'))).toBe(false)
+  })
+
+  it('FAILS CLOSED: an apply with no elicit available is refused — nothing is written', async () => {
+    const server = buildAiMcpServer({ cwd: root })
+    const res = await call(server, { plan: PLAN, mode: 'apply' }, {})
+    expect(isError(res)).toBe(true)
+    expect(text(res)).toMatch(/without confirmation/i)
+    expect(existsSync(join(root, 'src', 'modules', 'widget'))).toBe(false)
+  })
+
+  it('allowUnconfirmedApply is the explicit opt-out for clients that cannot elicit', async () => {
+    const server = buildAiMcpServer({ cwd: root, allowUnconfirmedApply: true })
+    const res = await call(server, { plan: PLAN, mode: 'apply' }, {})
+    expect(isError(res)).toBe(false)
+    expect(existsSync(join(root, 'src', 'modules', 'widget', 'widget.schema.ts'))).toBe(true)
+  })
+
+  it('over stdio, a client announcing elicitation is asked via elicitation/create before the apply', async () => {
+    const input = new PassThrough()
+    const out: any[] = []
+    const handle = createAiMcpServer({
+      cwd: root,
+      input,
+      output: { write: (c: string) => { for (const l of c.split('\n')) if (l.trim()) out.push(JSON.parse(l)) } },
+    })
+    const send = (m: unknown) => input.write(`${JSON.stringify(m)}\n`)
+    const until = async (pred: () => boolean) => { for (let i = 0; i < 200 && !pred(); i++) await new Promise((r) => setTimeout(r, 10)) }
+    try {
+      send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: { elicitation: {} }, clientInfo: { name: 't', version: '1' } } })
+      send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'basalt_make', arguments: { plan: PLAN, mode: 'apply' } } })
+      await until(() => out.some((m) => m.method === 'elicitation/create'))
+      const ask = out.find((m) => m.method === 'elicitation/create')
+      expect(ask.params.message).toMatch(/Proceed\?/)
+      expect(existsSync(join(root, 'src', 'modules', 'widget'))).toBe(false) // nothing before the answer
+      send({ jsonrpc: '2.0', id: ask.id, result: { action: 'accept', content: { confirm: true } } })
+      await until(() => out.some((m) => m.id === 2))
+      expect(out.find((m) => m.id === 2).result.isError ?? false).toBe(false)
+      expect(existsSync(join(root, 'src', 'modules', 'widget', 'widget.schema.ts'))).toBe(true)
+    } finally {
+      handle.close()
+    }
   })
 
   it('rejects a workspaceRoot that escapes the launch directory — before any write', async () => {

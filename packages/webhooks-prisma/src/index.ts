@@ -1,5 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { matchesEvent, type WebhookEndpoint, type WebhookStore } from '@basaltkit/webhooks'
+import { matchesEvent, WebhookEndpointIdInUseError, type WebhookEndpoint, type WebhookStore } from '@basaltkit/webhooks'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/webhooks-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/webhooks` `WebhookStore` (the
@@ -30,7 +41,8 @@ interface PWebhookEndpoint {
 export interface PrismaWebhooksClient {
   webhookEndpoint: {
     findMany(a: any): Promise<PWebhookEndpoint[]>
-    upsert(a: any): Promise<PWebhookEndpoint>
+    create(a: any): Promise<PWebhookEndpoint>
+    updateMany(a: any): Promise<{ count: number }>
     deleteMany(a: any): Promise<{ count: number }>
   }
 }
@@ -45,8 +57,49 @@ const toEndpoint = (r: PWebhookEndpoint): WebhookEndpoint => ({
   ...(r.active !== null ? { active: r.active } : {}),
 })
 
+/**
+ * The endpoint id is held by a different scope (another tenant, or a global
+ * endpoint when adding a tenant one, or vice versa) — including an id that
+ * differs only in letter case on a case-insensitive database collation.
+ * Re-exported from `@basaltkit/webhooks`: the same class the memory store and
+ * `WebhookManager.register()` throw, so one `instanceof` check covers every store.
+ */
+export { WebhookEndpointIdInUseError }
+
+/** The `WebhookEndpoint` columns the store writes as strings. */
+export type WebhookEndpointColumn = 'id' | 'url' | 'events' | 'tenantId' | 'secret'
+
+export type WebhooksColumnLimits = ColumnLimits<{ WebhookEndpoint: WebhookEndpointColumn }>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Spread it to override one column after widening it.
+ */
+export const webhooksMysqlColumnLimits: WebhooksColumnLimits = {
+  WebhookEndpoint: { id: V, url: MYSQL_TEXT, events: MYSQL_TEXT, tenantId: V, secret: MYSQL_TEXT },
+}
+
+export interface PrismaWebhookStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a cut
+   * URL delivers to another address and a cut secret signs with another key.
+   * `'mysql'` uses the limits of the bundled `schema.mysql.prisma`; pass an
+   * object for a schema of your own. Default: unchecked (PostgreSQL and SQLite
+   * store any length).
+   */
+  columnLimits?: 'mysql' | WebhooksColumnLimits
+}
+
 export class PrismaWebhookStore implements WebhookStore {
-  constructor(private readonly client: PrismaWebhooksClient) {}
+  private readonly limits: WebhooksColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaWebhooksClient,
+    options: PrismaWebhookStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, webhooksMysqlColumnLimits)
+  }
 
   async forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]> {
     // Narrow in SQL to active endpoints for this tenant (or tenant-agnostic ones);
@@ -71,9 +124,26 @@ export class PrismaWebhookStore implements WebhookStore {
       secret: record.secret ?? null,
       active: record.active === undefined ? null : record.active,
     }
-    // upsert mirrors MemoryWebhookStore: re-adding the same id replaces it.
-    await this.client.webhookEndpoint.upsert({ where: { id }, create: { id, ...data }, update: data })
-    return record
+    assertColumnLengths(PKG, this.limits, 'WebhookEndpoint', { id, ...data })
+    // Re-adding an id replaces the endpoint — but only within its own scope
+    // (tenant, or global). The write is keyed by (id, tenantId), never by id
+    // alone: under MySQL's case-insensitive collation 'ABC' matches 'abc', and
+    // an upsert by id let one tenant rewrite another's url and secret. An
+    // id held by another scope makes the insert hit the primary key instead.
+    const scope = { id, tenantId: data.tenantId }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { count } = await this.client.webhookEndpoint.updateMany({ where: scope, data })
+      if (count > 0) return record
+      try {
+        await this.client.webhookEndpoint.create({ data: { id, ...data } })
+        return record
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code !== 'P2002') throw error
+        // A concurrent add of the same id in the same scope won the insert:
+        // the next update finds it. Any other owner keeps it, and we refuse.
+      }
+    }
+    throw new WebhookEndpointIdInUseError(id)
   }
 
   async remove(id: string, tenantId?: string): Promise<void> {
@@ -96,7 +166,7 @@ export interface PrismaWebhooksStores {
 }
 
 // Fail fast with an actionable message when the Prisma client lacks the model
-// this package needs (the alternative is a cryptic "reading 'upsert' of undefined").
+// this package needs (the alternative is a cryptic "reading 'updateMany' of undefined").
 function ensureModel(client: unknown, delegate: string, pkg: string): void {
   let value: unknown
   try {
@@ -117,11 +187,14 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
  * `webhooksPlugin`:
  *
  * ```ts
- * const webhooks = prismaWebhookStore(prisma)
+ * const webhooks = prismaWebhookStore(prisma) // on MySQL: prismaWebhookStore(prisma, { columnLimits: 'mysql' })
  * webhooksPlugin({ store: webhooks.store, secret: process.env.WEBHOOK_SECRET })
  * ```
  */
-export function prismaWebhookStore(client: PrismaWebhooksClient): PrismaWebhooksStores {
-  ensureModel(client, 'webhookEndpoint', '@basaltkit/webhooks-prisma')
-  return { store: new PrismaWebhookStore(client) }
+export function prismaWebhookStore(
+  client: PrismaWebhooksClient,
+  options: PrismaWebhookStoreOptions = {},
+): PrismaWebhooksStores {
+  ensureModel(client, 'webhookEndpoint', PKG)
+  return { store: new PrismaWebhookStore(client, options) }
 }

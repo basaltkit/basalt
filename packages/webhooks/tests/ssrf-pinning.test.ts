@@ -53,10 +53,10 @@ describe('resolveAndValidate', () => {
   it('refuses an IPv6 loopback/ULA resolution', async () => {
     await expect(
       resolveAndValidate('https://hook.example', { lookup: async () => [{ address: '::1', family: 6 }] }),
-    ).rejects.toThrow(/private address/)
+    ).rejects.toThrow(/private or reserved address/)
     await expect(
       resolveAndValidate('https://hook.example', { lookup: async () => [{ address: 'fd00::1', family: 6 }] }),
-    ).rejects.toThrow(/private address/)
+    ).rejects.toThrow(/private or reserved address/)
   })
 
   it('pins an IP-literal host to itself, and refuses a private literal', async () => {
@@ -142,7 +142,7 @@ describe('WebhookDeliverer — rebind is defeated by pinning', () => {
       const result = await deliverer.deliver({ id: 'x', url: 'https://rebind.example/hook', events: ['*'] }, 'e', {})
       expect(result.ok).toBe(false)
       expect(result.attempts).toBe(0)
-      expect(result.error).toMatch(/private address/)
+      expect(result.error).toMatch(/does not resolve to an allowed public address/)
     }
     expect(fetchImpl).not.toHaveBeenCalled()
   })

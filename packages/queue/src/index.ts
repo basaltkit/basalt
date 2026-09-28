@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, isProductionEnvironment, type Container } from '@basaltkit/core'
 import {
   DEFAULT_LIST_LIMIT,
   DEFAULT_LIST_STATES,
@@ -7,10 +7,11 @@ import {
 } from './driver.js'
 import { SyncQueueDriver } from './drivers/sync.js'
 import type { JobDefinition, JobRetention } from './job.js'
-import { QueueManager, type UnsupportedPolicy } from './manager.js'
+import { QueueManager, type QueueSigningKey, type UnsupportedPolicy } from './manager.js'
 
 export {
   defineJob,
+  MAX_JOB_ATTEMPTS,
   JobValidationError,
   JobNotRegisteredError,
   type JobDefinition,
@@ -23,8 +24,14 @@ export {
   QueueManager,
   UnknownJobError,
   UnsupportedJobOptionError,
+  DuplicateJobError,
+  JobSignatureError,
+  JobContextError,
+  MIN_SIGNING_KEY_BYTES,
+  isDefaultTenantId,
   type UnsupportedPolicy,
   type QueueManagerOptions,
+  type QueueSigningKey,
 } from './manager.js'
 export { queuedOn, type QueuedListenerOptions } from './bridge.js'
 export { SyncQueueDriver } from './drivers/sync.js'
@@ -89,6 +96,54 @@ export interface QueuePluginOptions {
    * and retries) — set e.g. `{ age: '14d' }` so failures don't grow unbounded.
    */
   removeOnFail?: JobRetention
+  /**
+   * HMAC key(s) that sign every job envelope; the worker rejects unsigned or
+   * tampered jobs. Without it, anyone who can write to the broker can enqueue
+   * jobs and choose their tenant/user. See `QueueManagerOptions.signingKey`.
+   */
+  signingKey?: QueueSigningKey | readonly QueueSigningKey[]
+  /**
+   * Tenant-id grammar accepted from a job's context. Default: tenancy's
+   * default grammar. Pass the same function you gave `tenancyPlugin`.
+   */
+  validateTenantId?: (id: string) => boolean
+}
+
+/**
+ * The option keys that belong to {@link queuePlugin} itself. Driver plugins
+ * (`bullmqQueuePlugin`, …) split their options with this list, so a new core
+ * option reaches the queue instead of being handed to the driver by mistake.
+ */
+export const QUEUE_PLUGIN_OPTION_KEYS = [
+  'jobs',
+  'workers',
+  'onUnsupported',
+  'removeOnComplete',
+  'removeOnFail',
+  'signingKey',
+  'validateTenantId',
+] as const satisfies readonly (keyof QueuePluginOptions)[]
+
+/**
+ * Splits a driver plugin's options into the core `queuePlugin` options and
+ * the rest (the driver's own). Undefined values are dropped.
+ */
+export function splitQueuePluginOptions<T extends Omit<QueuePluginOptions, 'driver'>>(
+  options: T,
+): { core: Omit<QueuePluginOptions, 'driver'>; driver: Omit<T, (typeof QUEUE_PLUGIN_OPTION_KEYS)[number]> } {
+  const core: Record<string, unknown> = {}
+  const driver: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(options)) {
+    if ((QUEUE_PLUGIN_OPTION_KEYS as readonly string[]).includes(key)) {
+      if (value !== undefined) core[key] = value
+    } else {
+      driver[key] = value
+    }
+  }
+  return {
+    core: core as Omit<QueuePluginOptions, 'driver'>,
+    driver: driver as Omit<T, (typeof QUEUE_PLUGIN_OPTION_KEYS)[number]>,
+  }
 }
 
 export function queuePlugin(options: QueuePluginOptions = {}) {
@@ -100,7 +155,7 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
         let driver = options.driver
         if (!driver) {
           driver = new SyncQueueDriver()
-          if (process.env['NODE_ENV'] === 'production') {
+          if (isProductionEnvironment()) {
             // The silent default without a driver is the inline sync driver:
             // at-most-once, no background retries, handler errors propagate
             // into the dispatching request. Deliberate sync use in production
@@ -118,6 +173,8 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
           ...(options.onUnsupported !== undefined ? { onUnsupported: options.onUnsupported } : {}),
           ...(options.removeOnComplete !== undefined ? { removeOnComplete: options.removeOnComplete } : {}),
           ...(options.removeOnFail !== undefined ? { removeOnFail: options.removeOnFail } : {}),
+          ...(options.signingKey !== undefined ? { signingKey: options.signingKey } : {}),
+          ...(options.validateTenantId !== undefined ? { validateTenantId: options.validateTenantId } : {}),
         })
         for (const job of options.jobs ?? []) manager.register(job)
         return manager
@@ -150,6 +207,21 @@ function parseStates(raw: string | boolean | undefined): JobState[] | undefined 
     )
   }
   return states as JobState[]
+}
+
+/**
+ * Parses a `--limit` flag: a positive integer, or `undefined` when absent.
+ * Throws otherwise — `--limit 0` used to reach BullMQ as `getFailed(0, -1)`,
+ * which means "to the end", so `queue:retry --limit 0` re-enqueued EVERY
+ * failed job; `--limit abc` became `NaN`.
+ */
+function parseLimit(raw: string | boolean | undefined): number | undefined {
+  if (raw === undefined || raw === false) return undefined
+  const value = typeof raw === 'string' ? Number(raw) : Number.NaN
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`--limit must be a positive integer (got "${String(raw)}").`)
+  }
+  return value
 }
 
 /** Compact age for the CLI table ('3s', '12m', '4h', '2d') — friendlier than an epoch. */
@@ -229,7 +301,7 @@ function registerQueueCommands(container: Container): void {
       flags: Record<string, string | boolean>
     }) {
       const queue = typeof flags['queue'] === 'string' ? flags['queue'] : 'default'
-      const limit = typeof flags['limit'] === 'string' ? Number(flags['limit']) : undefined
+      const limit = parseLimit(flags['limit'])
       const retried = await manager().retryFailed(queue, limit !== undefined ? { limit } : {})
       if (retried === undefined) {
         io.log(unsupported)
@@ -252,7 +324,7 @@ function registerQueueCommands(container: Container): void {
     }) {
       const queue = typeof flags['queue'] === 'string' ? flags['queue'] : 'default'
       const states = parseStates(flags['states'])
-      const limit = typeof flags['limit'] === 'string' ? Number(flags['limit']) : undefined
+      const limit = parseLimit(flags['limit'])
       const jobs = await manager().list(queue, {
         ...(states !== undefined ? { states } : {}),
         ...(limit !== undefined ? { limit } : {}),

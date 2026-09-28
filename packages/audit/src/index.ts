@@ -3,6 +3,7 @@ import { createToken, definePlugin, ensureMetadata, tryCtx, type RequestContext 
 import { EVENTS } from '@basaltkit/events'
 import {
   AUDIT_CHAIN_GENESIS,
+  AUDIT_SYSTEM_CHAIN,
   AuditChainConflictError,
   assertIntegrityKey,
   auditChainKey,
@@ -54,6 +55,40 @@ export interface AuditQuery {
   actorId?: string
   since?: number
   limit?: number
+  /**
+   * Only rows that belong to their tenant's hash chain (they carry a `seq` under
+   * the chain their `tenantId` maps to). Excludes rows written without the chain —
+   * legacy rows, and rows inserted into the database behind `Audit`'s back. It
+   * does not prove the returned rows are intact: that is {@link Audit.verify}.
+   */
+  chainedOnly?: boolean
+}
+
+/**
+ * Throws unless every filter of an {@link AuditQuery} has its declared type.
+ *
+ * Handlers routinely forward a parsed query string, and a parser such as `qs`
+ * turns `?tenantId[not]=x` into `{ not: 'x' }` — which an ORM driver would read
+ * as an operator ("every tenant but x"). {@link Audit} validates every read, and
+ * the bundled drivers validate again so a store called directly is equally safe.
+ */
+export function assertAuditQuery(query: unknown): asserts query is AuditQuery {
+  if (query === null || typeof query !== 'object' || Array.isArray(query)) {
+    throw new TypeError('AuditQuery must be an object')
+  }
+  const q = query as Record<string, unknown>
+  for (const field of ['event', 'tenantId', 'actorId'] as const) {
+    if (q[field] !== undefined && typeof q[field] !== 'string') {
+      throw new TypeError(`AuditQuery.${field} must be a string`)
+    }
+  }
+  if (q['since'] !== undefined && (typeof q['since'] !== 'number' || !Number.isFinite(q['since']))) {
+    throw new TypeError('AuditQuery.since must be a finite number (epoch milliseconds)')
+  }
+  if (q['chainedOnly'] !== undefined && typeof q['chainedOnly'] !== 'boolean') {
+    throw new TypeError('AuditQuery.chainedOnly must be a boolean')
+  }
+  assertAuditLimit(q['limit'])
 }
 
 /**
@@ -75,6 +110,13 @@ export function assertAuditLimit(limit: unknown): asserts limit is number | unde
 export interface AuditChainHead {
   seq: number
   hash: string
+}
+
+/** Rows outside a chain to read for verification — see {@link AuditStore.readUnchained}. */
+export interface AuditUnchainedRange {
+  /** Rows with `at >= since` (a row that claims a chain position is returned whatever its `at`). */
+  since: number
+  limit: number
 }
 
 /** A window of a hash chain, inclusive on both ends, read in ascending `seq` order. */
@@ -104,6 +146,49 @@ export interface AuditStore {
   countUnchained?(tenantId: string | undefined): Promise<number>
   /** Tenants that have a chain (`undefined` = the system chain). */
   chainTenants?(): Promise<Array<string | undefined>>
+  /**
+   * Every tenant that has at least one row, chained or not (`undefined` = rows
+   * without a tenant). Optional: {@link Audit.verifyAll} uses it to reach
+   * tenants whose rows were all written outside a chain — without it, it falls
+   * back to scanning `query({})`, which reads the whole trail. Implement it with
+   * a `SELECT DISTINCT tenant_id` in a durable store.
+   */
+  auditTenants?(): Promise<Array<string | undefined>>
+  /**
+   * Rows attributed to the tenant (`undefined` = no tenant) that are NOT part of
+   * its chain — no `seq`, or a `chain` other than `auditChainKey(tenantId)` —
+   * with `at >= range.since`, plus every such row that carries a `seq` or a
+   * chain name whatever its `at` (a legacy row has neither). Oldest first, at
+   * most `range.limit`. Optional: without it {@link Audit.verify} falls back to
+   * scanning `query()`.
+   */
+  readUnchained?(tenantId: string | undefined, range: AuditUnchainedRange): Promise<AuditEntry[]>
+}
+
+/**
+ * Deep-frozen copy of a payload: history handed out by `record()` / `trail()`
+ * must not be editable through a nested reference (that would silently change
+ * what the trail says and break the chain). `structuredClone` first so the
+ * caller's own object is never frozen; a payload it cannot clone (a function
+ * inside) falls back to the JSON form a durable store would persist anyway.
+ */
+function frozenPayload(payload: unknown): unknown {
+  if (payload === null || typeof payload !== 'object') return payload
+  let copy: unknown
+  try {
+    copy = structuredClone(payload)
+  } catch {
+    const json = JSON.stringify(payload)
+    copy = json === undefined ? undefined : (JSON.parse(json) as unknown)
+  }
+  return deepFreeze(copy)
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value
+  Object.freeze(value)
+  for (const key of Reflect.ownKeys(value)) deepFreeze((value as Record<PropertyKey, unknown>)[key])
+  return value
 }
 
 export class MemoryAuditStore implements AuditStore {
@@ -117,7 +202,7 @@ export class MemoryAuditStore implements AuditStore {
       if (this.chainSlots.has(slot)) throw new AuditChainConflictError(entry.tenantId, entry.seq)
       this.chainSlots.add(slot)
     }
-    this.entries.push(Object.freeze({ ...entry }))
+    this.entries.push(Object.freeze({ ...entry, payload: frozenPayload(entry.payload) }))
   }
 
   async chainHead(tenantId: string | undefined): Promise<AuditChainHead | undefined> {
@@ -145,10 +230,25 @@ export class MemoryAuditStore implements AuditStore {
     return [...keys].map(parseAuditChainKey)
   }
 
+  async auditTenants(): Promise<Array<string | undefined>> {
+    return [...new Set(this.entries.map((e) => e.tenantId))]
+  }
+
+  async readUnchained(tenantId: string | undefined, range: AuditUnchainedRange): Promise<AuditEntry[]> {
+    assertAuditLimit(range.limit)
+    // In memory a row's chain IS its tenant's: every row with a `seq` is read by
+    // readChain(), so only seq-less rows are outside it.
+    return this.entries
+      .filter((e) => e.seq === undefined && e.tenantId === tenantId && e.at >= range.since)
+      .sort((a, b) => a.at - b.at)
+      .slice(0, range.limit)
+  }
+
   async query(query: AuditQuery): Promise<AuditEntry[]> {
-    assertAuditLimit(query.limit)
+    assertAuditQuery(query)
     let results = this.entries.filter(
       (entry) =>
+        (query.chainedOnly !== true || entry.seq !== undefined) &&
         (query.event === undefined || patternMatches(query.event, entry.event)) &&
         (query.tenantId === undefined || entry.tenantId === query.tenantId) &&
         (query.actorId === undefined || entry.actorId === query.actorId) &&
@@ -181,6 +281,8 @@ export function patternMatches(pattern: string, name: string): boolean {
 const MAX_REDACT_DEPTH = 6
 /** Stand-in for a subtree deeper than {@link MAX_REDACT_DEPTH}. */
 const TRUNCATED = '[truncated]'
+/** Stand-in for a masked value. */
+const REDACTED = '[redacted]'
 
 /**
  * The event filter a driver may push into SQL as an equality. A pattern with a
@@ -199,8 +301,52 @@ export function exactEventMatch(pattern: string | undefined): string | undefined
  */
 export const AUDIT_SCAN_PAGE = 500
 
-/** Object keys whose values are masked before an entry is persisted. */
-const SENSITIVE_KEY = /pass(word|wd)?|secret|token|authorization|api[-_]?key|credential|cookie|session|otp|mfa/i
+/**
+ * Substrings that make a key sensitive wherever they appear in its normalized
+ * form (lower-cased, separators removed): specific enough not to hit ordinary
+ * words — `pass` is NOT here (it would hit `compass`, `bypass`), `session` is
+ * handled separately (it would hit `sessionCount`).
+ */
+const SENSITIVE_FRAGMENT =
+  /password|passwd|passphrase|passcode|passport|secret|token|credential|authorization|cookie|apikey|privatekey|accesskey|secretkey|signingkey|encryptionkey|connectionstring|databaseurl/
+/** Whole words (a key segment after camelCase / `_` / `-` / `.` splitting) that make a key sensitive. */
+const SENSITIVE_WORDS = new Set(['pwd', 'pass', 'jwt', 'auth', 'otp', 'totp', 'mfa', 'dsn', 'bearer', 'sid'])
+/** `session`, `userSession`, `sessionId`, `session_key` — but not `sessionCount`. */
+const SESSION_KEY = /session(s|id|key|cookie)?$/
+/**
+ * Keys that walk into the prototype machinery when assigned with `obj[k] = v`.
+ * They are kept as OWN properties with a masked value, so a mass-assignment
+ * attempt stays visible in the trail instead of vanishing (or turning into the
+ * copy's prototype).
+ */
+const PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** Splits `privateKey`, `private_key`, `X-Private-Key` into lower-case words. */
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 0)
+}
+
+/**
+ * Whether a payload key names a secret. Segment-aware rather than a bare
+ * substring test: `pwd`, `privateKey`, `jwt`, `auth`, `accessKey` are masked;
+ * `compass`, `bypass`, `sessionCount`, `author` are not.
+ */
+export function isSensitiveKey(key: string): boolean {
+  if (key.length > 256) return true // absurd keys are not worth the risk of a miss
+  const words = keyWords(key)
+  const joined = words.join('')
+  return SENSITIVE_FRAGMENT.test(joined) || SESSION_KEY.test(joined) || words.some((w) => SENSITIVE_WORDS.has(w))
+}
+
+/** Sets `out[key] = value` as an own data property, even for `__proto__`. */
+function setOwn(out: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true })
+}
 
 /** Recursively masks sensitive fields so secrets/PII never reach the trail. */
 export function redactSensitive(value: unknown, depth = 0): unknown {
@@ -212,7 +358,7 @@ export function redactSensitive(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return value.map((v) => redactSensitive(v, depth + 1))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
-    out[k] = SENSITIVE_KEY.test(k) ? '[redacted]' : redactSensitive(v, depth + 1)
+    setOwn(out, k, PROTO_KEYS.has(k) || isSensitiveKey(k) ? REDACTED : redactSensitive(v, depth + 1))
   }
   return out
 }
@@ -231,6 +377,21 @@ const PII_KEY = /e[-_]?mail|phone|msisdn|ssn|nif|taxid|passport/i
 const IP_KEY = /^(ip|ip[-_]?addr(ess)?|client[-_]?ip|remote[-_]?addr(ess)?|x[-_]?forwarded[-_]?for)$/i
 /** A value that looks like an email address. */
 const EMAIL_VALUE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+/**
+ * A value that looks like a phone number in international form: a leading `+`,
+ * then digits with optional spaces, dots, dashes or parentheses (`+351 912 345 678`,
+ * `+1 (555) 123-4567`, `+15551234567`). The `+` is required — a bare digit
+ * string is as likely an order id, an amount or a date — and the digit count
+ * must fit E.164 (8 to 15). National formats are only caught under a PII key.
+ */
+const PHONE_VALUE = /^\+\(?\d[\d\s().-]*$/
+const MAX_PHONE_LENGTH = 32
+
+function isPhoneShaped(value: string): boolean {
+  if (value.length > MAX_PHONE_LENGTH || !PHONE_VALUE.test(value)) return false
+  const digits = value.replace(/\D/g, '').length
+  return digits >= 8 && digits <= 15
+}
 
 /** A pseudonymisation key: a secret of at least 128 bits (16 bytes). */
 export type PseudonymizationKey = string | Uint8Array
@@ -303,15 +464,15 @@ export function redactSensitiveAndPii(value: unknown, depth = 0, options: PiiRed
   // so only test plausibly-email-length strings — arbitrary logged values never
   // reach the regex, avoiding ReDoS on attacker-influenceable input.
   if (typeof value === 'string')
-    return value.length <= 320 && EMAIL_VALUE.test(value) ? pseudonymize(value, options.key) : value
+    return (value.length <= 320 && EMAIL_VALUE.test(value)) || isPhoneShaped(value) ? pseudonymize(value, options.key) : value
   if (typeof value !== 'object') return value
   if (depth > MAX_REDACT_DEPTH) return TRUNCATED
   if (Array.isArray(value)) return value.map((v) => redactSensitiveAndPii(v, depth + 1, options))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
-    if (SENSITIVE_KEY.test(k)) out[k] = '[redacted]'
-    else if (PII_KEY.test(k) || IP_KEY.test(k)) out[k] = pseudonymizeAll(v, depth + 1, options)
-    else out[k] = redactSensitiveAndPii(v, depth + 1, options)
+    if (PROTO_KEYS.has(k) || isSensitiveKey(k)) setOwn(out, k, REDACTED)
+    else if (PII_KEY.test(k) || IP_KEY.test(k)) setOwn(out, k, pseudonymizeAll(v, depth + 1, options))
+    else setOwn(out, k, redactSensitiveAndPii(v, depth + 1, options))
   }
   return out
 }
@@ -330,7 +491,7 @@ function pseudonymizeAll(value: unknown, depth: number, options: PiiRedactionOpt
   if (Array.isArray(value)) return value.map((v) => pseudonymizeAll(v, depth + 1, options))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value)) {
-    out[k] = SENSITIVE_KEY.test(k) ? '[redacted]' : pseudonymizeAll(v, depth + 1, options)
+    setOwn(out, k, PROTO_KEYS.has(k) || isSensitiveKey(k) ? REDACTED : pseudonymizeAll(v, depth + 1, options))
   }
   return out
 }
@@ -398,6 +559,21 @@ export interface AuditVerifyOptions {
   from?: number
   /** Last `seq` to check (inclusive, default: the head). */
   to?: number
+  /**
+   * A head recorded earlier OUTSIDE the database (see `head` in the result). The
+   * chain must still contain that entry with that hash: a chain truncated below
+   * it fails with `'truncated'`, a different hash at that `seq` with
+   * `'head-mismatch'`. Without an anchor, deleting the tail leaves no gap.
+   */
+  expectedHead?: AuditChainHead
+  /**
+   * Rows outside the chain with `at <= legacyUntil` are legacy (written before
+   * integrity was enabled) and only counted in `unchained`; later ones fail the
+   * verification (`'unchained-entry'`). Default: the `at` of the chain's first
+   * entry (and, with no chain yet, every row is legacy). Pass `0` for a trail
+   * that was chained from the start: then no row outside the chain is accepted.
+   */
+  legacyUntil?: number
 }
 
 export type AuditVerifyFailure =
@@ -406,6 +582,14 @@ export type AuditVerifyFailure =
   | 'sequence-gap'
   | 'sequence-duplicate'
   | 'missing-predecessor'
+  /** A row of the tenant sits outside its chain although it was written after the chain began. */
+  | 'unchained-entry'
+  /** `expectedHead` is no longer in the chain: the tail was deleted. */
+  | 'truncated'
+  /** The entry at `expectedHead.seq` has a different hash than the anchor. */
+  | 'head-mismatch'
+  /** `verifyAll()`: a chain name the store lists but no tenant chain maps back to (a forged `chain` value). */
+  | 'unknown-chain'
 
 export interface AuditVerifyResult {
   ok: boolean
@@ -413,8 +597,19 @@ export interface AuditVerifyResult {
   tenantId: string | undefined
   /** Chained entries that verified before the first failure (all of them when `ok`). */
   checked: number
-  /** Rows of this tenant written without a chain (before integrity was enabled): not verifiable, not broken. */
+  /**
+   * Rows of this tenant written without a chain. Legacy ones (see
+   * `legacyUntil`) are not verifiable but not broken; the others are listed in
+   * `unverified` and fail the verification.
+   */
   unchained: number
+  /**
+   * Ids of rows attributed to this tenant that are outside its chain and are NOT
+   * legacy — written after the chain began (or claiming a chain position they do
+   * not have). `trail()` serves them like any other row, so their presence makes
+   * the result `ok: false`. At most 100 are listed.
+   */
+  unverified: string[]
   /** `seq` of the first entry that failed. */
   firstBrokenAt?: number
   /** Id of the offending row, when there is one. */
@@ -422,6 +617,23 @@ export interface AuditVerifyResult {
   reason?: AuditVerifyFailure
   /** Last verified entry — record it outside the database to detect later truncation of the tail. */
   head?: AuditChainHead
+}
+
+export interface AuditVerifyAllOptions {
+  /**
+   * Heads recorded earlier outside the database, keyed by `auditChainKey(tenantId)`
+   * (`'@system'`, `'t:<id>'`). Each named chain is verified against its anchor —
+   * even one the store no longer lists, so a chain deleted wholesale is reported
+   * as `'truncated'` instead of silently disappearing.
+   */
+  expectedHeads?: Record<string, AuditChainHead>
+  /**
+   * Applied to every chain — see {@link AuditVerifyOptions.legacyUntil}. A
+   * tenant that has rows but no chain at all defaults to the moment integrity
+   * began for the whole store (the earliest first entry of any chain): once
+   * `Audit` chains, it never writes an unchained row for any tenant again.
+   */
+  legacyUntil?: number
 }
 
 export interface AuditVerifyAllResult {
@@ -435,6 +647,10 @@ const MAX_USER_AGENT = 512
 const MAX_IP = 64
 /** Attempts to append after a `(chain, seq)` conflict before giving up. */
 const MAX_CHAIN_ATTEMPTS = 10
+/** Unverified row ids reported by `verify()`. */
+const MAX_UNVERIFIED = 100
+/** Largest timestamp a `Date` can hold (ECMAScript time value bound). */
+const MAX_TIMESTAMP = 8.64e15
 
 const defaultRequestContext: AuditRequestContextResolver = (context) => context?.client
 
@@ -516,22 +732,25 @@ export class Audit {
    */
   async trail(query: AuditQuery = {}): Promise<AuditEntry[]> {
     // Validate before any store sees it: a limit forwarded straight from a
-    // request (a string, a float, a SQL fragment) must never reach a driver.
-    assertAuditLimit(query.limit)
+    // request (a string, a float, a SQL fragment) or an operator object
+    // (`?tenantId[not]=x`) must never reach a driver.
+    assertAuditQuery(query)
     const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
     if (ctxTenantId !== undefined) {
       // Force the scope: spread the context tenant LAST so a differing
       // caller-supplied `tenantId` cannot override it.
-      return this.store.query({ ...query, tenantId: ctxTenantId })
+      return this.read({ ...query, tenantId: ctxTenantId })
     }
     if (query.tenantId !== undefined) {
       // No context, but the caller explicitly pinned a single tenant.
-      return this.store.query(query)
+      return this.read(query)
     }
     if (!this.tenancyActive()) {
       // Single-tenant app: no tenant dimension, so an unscoped read is correct
       // and is the everyday call. Nothing to widen — every entry is "ours".
-      return this.store.query(query)
+      // A hand-built `new Audit(store)` assumes this; pass `() => true` as
+      // `tenancyActive` when building one for a multi-tenant app.
+      return this.read(query)
     }
     // Multi-tenant app with no tenant to scope to and no explicit tenant
     // pinned: refuse to silently return every tenant's records. Cross-tenant /
@@ -552,8 +771,14 @@ export class Audit {
    * cross-tenant data-exposure that {@link trail} closes.
    */
   async systemTrail(query: AuditQuery = {}): Promise<AuditEntry[]> {
-    assertAuditLimit(query.limit)
-    return this.store.query(query)
+    assertAuditQuery(query)
+    return this.read(query)
+  }
+
+  /** `chainedOnly` is re-applied here: a custom store may not know the filter. */
+  private async read(query: AuditQuery): Promise<AuditEntry[]> {
+    const rows = await this.store.query(query)
+    return query.chainedOnly === true ? rows.filter((e) => e.seq !== undefined) : rows
   }
 
   /**
@@ -562,40 +787,107 @@ export class Audit {
    * inside a tenant context the context tenant is forced; otherwise `tenantId`
    * picks the chain, and omitting it verifies the system chain.
    *
-   * Rows written before integrity was enabled carry no hash: they are counted as
-   * `unchained`, never reported as broken. Truncating the tail of a chain leaves
-   * no gap — compare `head` against a value recorded elsewhere to catch that.
+   * Rows of the tenant outside the chain are checked too: those written before
+   * the chain began (see `legacyUntil`) are counted as `unchained`; any other is
+   * listed in `unverified` and makes the result `ok: false` — `trail()` would
+   * serve it as history. Truncating the tail of a chain leaves no gap: pass the
+   * `head` recorded elsewhere as `expectedHead` to catch that.
    */
   async verify(options: AuditVerifyOptions = {}): Promise<AuditVerifyResult> {
+    if (options.tenantId !== undefined && typeof options.tenantId !== 'string') {
+      throw new TypeError('verify: `tenantId` must be a string')
+    }
     const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    return this.verifyChain(ctxTenantId ?? options.tenantId, options.from, options.to)
+    return this.verifyChain(ctxTenantId ?? options.tenantId, options)
   }
 
   /**
    * SYSTEM-ONLY: verifies every chain in the store (each tenant plus the system
    * chain). Like {@link systemTrail}, for trusted tooling (`basalt audit:verify --all`).
+   *
+   * Inside a tenant context it is scoped like {@link verify}: only that tenant's
+   * chain is verified (and reported), so tenant-facing code cannot enumerate
+   * other tenants' ids and heads through it.
    */
-  async verifyAll(): Promise<AuditVerifyAllResult> {
+  async verifyAll(options: AuditVerifyAllOptions = {}): Promise<AuditVerifyAllResult> {
     const store = this.chainStore()
-    // The system chain first, then tenants in a stable order.
-    const named = new Set((await store.chainTenants()).filter((t): t is string => t !== undefined))
-    const tenants = [undefined, ...[...named].sort()]
+    const anchors = options.expectedHeads ?? {}
+    const legacy = options.legacyUntil !== undefined ? { legacyUntil: options.legacyUntil } : {}
+    const anchorOf = (tenantId: string | undefined) => {
+      const head = Object.hasOwn(anchors, auditChainKey(tenantId)) ? anchors[auditChainKey(tenantId)] : undefined
+      return head !== undefined ? { expectedHead: head } : {}
+    }
+    const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    if (ctxTenantId !== undefined) {
+      const chain = await this.verifyChain(ctxTenantId, { ...legacy, ...anchorOf(ctxTenantId) })
+      return { ok: chain.ok, chains: [chain] }
+    }
+    // The system chain first, then tenants in a stable order. A chain named
+    // only by an anchor (deleted from the store) is verified too.
+    const listed = await store.chainTenants()
+    const named = new Set(listed.filter((t): t is string => t !== undefined))
+    for (const key of Object.keys(anchors)) {
+      if (key !== AUDIT_SYSTEM_CHAIN && !(key.startsWith('t:') && key.length > 2)) {
+        throw new TypeError(`verifyAll: expectedHeads key "${key}" is not a chain key ('@system' or 't:<tenantId>')`)
+      }
+      const tenantId = parseAuditChainKey(key)
+      if (tenantId !== undefined) named.add(tenantId)
+    }
+    // Tenants with rows but no chain: every row of theirs sits outside a chain,
+    // so a forged insert under a tenant that never had one would otherwise go
+    // unvisited. Their legacy cut-off defaults to when integrity began.
+    const chainless = new Set<string>()
+    for (const tenantId of await this.tenantsWithRows(store)) {
+      if (typeof tenantId === 'string' && tenantId !== '' && !named.has(tenantId)) chainless.add(tenantId)
+    }
+    const integritySince = chainless.size > 0 && options.legacyUntil === undefined ? await this.integritySince(store, listed) : undefined
+    const tenants = [undefined, ...[...new Set([...named, ...chainless])].sort()]
     const chains: AuditVerifyResult[] = []
-    for (const tenantId of tenants) chains.push(await this.verifyChain(tenantId))
+    for (const tenantId of tenants) {
+      const cutoff =
+        tenantId !== undefined && chainless.has(tenantId) && integritySince !== undefined ? { legacyUntil: integritySince } : legacy
+      const result = await this.verifyChain(tenantId, { ...cutoff, ...anchorOf(tenantId) })
+      // The store lists a chain that holds no entry for this tenant: its rows
+      // carry a `chain` value no tenant maps to (a forged or corrupted name).
+      const ghost =
+        result.ok && result.checked === 0 && listed.some((t) => t === tenantId) && tenantId !== undefined
+      chains.push(ghost ? { ...result, ok: false, reason: 'unknown-chain' } : result)
+    }
     return { ok: chains.every((c) => c.ok), chains }
   }
 
-  private async verifyChain(tenantId: string | undefined, from?: number, to?: number): Promise<AuditVerifyResult> {
+  private async verifyChain(tenantId: string | undefined, options: AuditVerifyOptions): Promise<AuditVerifyResult> {
     const store = this.chainStore()
+    const { from, to, expectedHead, legacyUntil } = options
     const fromSeq = from ?? 1
     if (!Number.isSafeInteger(fromSeq) || fromSeq < 1) throw new TypeError('verify: `from` must be a positive integer')
     if (to !== undefined && (!Number.isSafeInteger(to) || to < fromSeq)) {
       throw new TypeError('verify: `to` must be an integer >= `from`')
     }
+    if (expectedHead !== undefined) {
+      if (
+        expectedHead === null ||
+        typeof expectedHead !== 'object' ||
+        !Number.isSafeInteger(expectedHead.seq) ||
+        expectedHead.seq < 1 ||
+        typeof expectedHead.hash !== 'string'
+      ) {
+        throw new TypeError('verify: `expectedHead` must be { seq: positive integer, hash: string }')
+      }
+      if (expectedHead.seq < fromSeq || (to !== undefined && expectedHead.seq > to)) {
+        throw new TypeError('verify: `expectedHead.seq` must lie within `from`..`to`')
+      }
+    }
+    if (legacyUntil !== undefined && (typeof legacyUntil !== 'number' || Number.isNaN(legacyUntil))) {
+      throw new TypeError('verify: `legacyUntil` must be a number (epoch milliseconds)')
+    }
+
     const unchained = await store.countUnchained(tenantId)
+    const unverified = await this.unverifiedRows(store, tenantId, legacyUntil)
     const result = (fields: Partial<AuditVerifyResult> & Pick<AuditVerifyResult, 'ok' | 'checked'>): AuditVerifyResult => ({
       tenantId,
       unchained,
+      unverified,
       ...fields,
     })
 
@@ -617,6 +909,9 @@ export class Audit {
         if (entry.seq !== expected) return broken(entry.seq! < expected ? 'sequence-duplicate' : 'sequence-gap')
         if (entry.prevHash !== prevHash) return broken('prev-hash-mismatch')
         if (entry.tenantId !== tenantId || entry.hash !== computeAuditHash(entry, this.chainKey)) return broken('hash-mismatch')
+        if (expectedHead !== undefined && entry.seq === expectedHead.seq && entry.hash !== expectedHead.hash) {
+          return broken('head-mismatch')
+        }
         prevHash = entry.hash
         head = { seq: entry.seq, hash: entry.hash }
         checked++
@@ -624,7 +919,63 @@ export class Audit {
       }
       if (page.length < AUDIT_SCAN_PAGE) break
     }
+    if (expectedHead !== undefined && (head === undefined || head.seq < expectedHead.seq)) {
+      return result({ ok: false, checked, firstBrokenAt: (head?.seq ?? fromSeq - 1) + 1, reason: 'truncated', ...(head ? { head } : {}) })
+    }
+    if (unverified.length > 0) {
+      return result({ ok: false, checked, entryId: unverified[0]!, reason: 'unchained-entry', ...(head ? { head } : {}) })
+    }
     return result({ ok: true, checked, ...(head ? { head } : {}) })
+  }
+
+  /** Every tenant with at least one row — `auditTenants()`, or a scan of `query({})`. */
+  private async tenantsWithRows(store: ChainStore): Promise<Array<string | undefined>> {
+    if (typeof store.auditTenants === 'function') return store.auditTenants()
+    const rows = await store.query({})
+    return [...new Set(rows.map((e) => e.tenantId))]
+  }
+
+  /**
+   * When integrity began for the store: the earliest `at` among the first
+   * entries of every chain. `undefined` when there is no chain at all (then
+   * every row is legacy, as in {@link verify}).
+   */
+  private async integritySince(store: ChainStore, chains: Array<string | undefined>): Promise<number | undefined> {
+    let since: number | undefined
+    for (const tenantId of new Set<string | undefined>([undefined, ...chains])) {
+      const [first] = await store.readChain(tenantId, { fromSeq: 1, limit: 1 })
+      if (first !== undefined && (since === undefined || first.at < since)) since = first.at
+    }
+    return since
+  }
+
+  /**
+   * Ids of the tenant's rows outside its chain that are not legacy. The cut-off
+   * is `legacyUntil`, defaulting to the `at` of the chain's first entry: once a
+   * chain exists, `Audit` never writes an unchained row for that tenant again,
+   * so a later one was inserted behind its back. (A writer who backdates `at`
+   * can still pass as legacy — pass `legacyUntil: 0` for a trail chained from
+   * the start, and prefer `trail({ chainedOnly: true })` for evidence.)
+   */
+  private async unverifiedRows(store: ChainStore, tenantId: string | undefined, legacyUntil: number | undefined): Promise<string[]> {
+    let cutoff = legacyUntil
+    if (cutoff === undefined) {
+      const [first] = await store.readChain(tenantId, { fromSeq: 1, limit: 1 })
+      cutoff = first === undefined ? Number.POSITIVE_INFINITY : first.at
+    }
+    // Rows strictly after the cut-off; clamped to a valid Date so every driver can bind it.
+    const since = Math.min(Math.max(Math.floor(cutoff) + 1, -MAX_TIMESTAMP), MAX_TIMESTAMP)
+    let rows: AuditEntry[]
+    if (store.readUnchained !== undefined) {
+      rows = await store.readUnchained(tenantId, { since, limit: MAX_UNVERIFIED })
+    } else {
+      // A custom store without readUnchained: scan the tenant's rows through
+      // query(). Rows that claim a chain position are read by readChain(), so
+      // only seq-less rows are outside the chain here.
+      const candidates = await store.query({ ...(tenantId !== undefined ? { tenantId } : {}), since })
+      rows = candidates.filter((e) => e.seq === undefined && e.tenantId === tenantId)
+    }
+    return rows.slice(0, MAX_UNVERIFIED).map((e) => e.id)
   }
 
   private chainStore(): ChainStore {
@@ -681,7 +1032,7 @@ export class Audit {
       id: randomUUID(),
       source,
       event,
-      payload: this.redact(payload, event),
+      payload: frozenPayload(this.redact(payload, event)),
       actorId: user?.id,
       tenantId: tenant?.id,
       requestId: context?.requestId,
@@ -870,7 +1221,10 @@ export interface AuditVerifyCommandContext {
 
 const describeResult = (r: AuditVerifyResult): string => {
   const chain = r.tenantId === undefined ? '(system)' : r.tenantId
-  const unchained = r.unchained > 0 ? `, ${r.unchained} unchained legacy row(s)` : ''
+  const unchained = r.unchained > 0 ? `, ${r.unchained} unchained row(s)` : ''
+  if (!r.ok && r.reason === 'unchained-entry') {
+    return `${chain}: BROKEN — ${r.unverified.length} row(s) outside the chain written after it began (e.g. entry ${String(r.entryId)}); ${r.checked} chained entr${r.checked === 1 ? 'y' : 'ies'} verified`
+  }
   return r.ok
     ? `${chain}: ok — ${r.checked} entr${r.checked === 1 ? 'y' : 'ies'} verified${r.head ? `, head #${r.head.seq} ${r.head.hash}` : ''}${unchained}`
     : `${chain}: BROKEN at seq ${String(r.firstBrokenAt)} (${String(r.reason)})${r.entryId ? ` entry ${r.entryId}` : ''} — ${r.checked} verified before it${unchained}`
@@ -883,9 +1237,22 @@ const describeResult = (r: AuditVerifyResult): string => {
  *
  * `basalt audit:verify [--tenant=<id>] [--from=<seq>] [--to=<seq>]` verifies one
  * chain (the system chain without `--tenant`); `--all` verifies every chain.
- * Exits 1 when any chain is broken.
+ * `--expected-head=<seq>:<hash>` checks one chain against an anchor recorded
+ * elsewhere (detects truncation); `--legacy-until=<ms>` sets the legacy cut-off
+ * for rows outside the chain (`0` = none are legacy). Exits 1 when any chain is broken.
  */
 export function createAuditVerifyCommand(getAudit: () => Audit) {
+  // A CLI parser hands `--all` over as `true`, but `--all=true` as the string
+  // 'true' — and `flags.all === true` used to read that as "not --all" and
+  // verify only the system chain (exit 0). Anything unrecognised is an error.
+  const bool = (value: string | boolean | undefined, name: string): boolean => {
+    if (value === undefined || value === false) return false
+    if (value === true) return true
+    const v = value.trim().toLowerCase()
+    if (v === '' || v === 'true' || v === '1' || v === 'yes') return true
+    if (v === 'false' || v === '0' || v === 'no') return false
+    throw new TypeError(`--${name} must be a boolean (true/false), got "${value}"`)
+  }
   const int = (value: string | boolean, name: string): number => {
     const n = Number(value)
     if (!Number.isSafeInteger(n) || n < 1) throw new TypeError(`--${name} must be a positive integer`)
@@ -893,17 +1260,45 @@ export function createAuditVerifyCommand(getAudit: () => Audit) {
   }
   return {
     name: 'audit:verify',
-    description: 'Verify the audit trail hash chain (--tenant=<id> | --all, --from/--to=<seq>)',
+    description:
+      'Verify the audit trail hash chain (--tenant=<id> | --all, --from/--to=<seq>, --expected-head=<seq>:<hash>, --legacy-until=<ms>)',
     async handle({ flags, io }: AuditVerifyCommandContext): Promise<number> {
+      const all = bool(flags['all'], 'all')
+      if (flags['tenant'] !== undefined && (typeof flags['tenant'] !== 'string' || flags['tenant'] === '')) {
+        // `--tenant` with no value used to fall through to the system chain.
+        throw new TypeError('--tenant needs a tenant id (--tenant=<id>)')
+      }
+      if (all) {
+        const single = ['tenant', 'from', 'to', 'expected-head'].filter((f) => flags[f] !== undefined)
+        if (single.length > 0) {
+          throw new TypeError(`--all cannot be combined with ${single.map((f) => `--${f}`).join(', ')} (they select one chain)`)
+        }
+      }
       const audit = getAudit()
+      let legacyUntil: number | undefined
+      if (flags['legacy-until'] !== undefined) {
+        legacyUntil = Number(flags['legacy-until'])
+        if (!Number.isSafeInteger(legacyUntil) || legacyUntil < 0) {
+          throw new TypeError('--legacy-until must be a non-negative integer (epoch milliseconds)')
+        }
+      }
+      let expectedHead: AuditChainHead | undefined
+      if (flags['expected-head'] !== undefined) {
+        const match = /^(\d+):([0-9a-f]{64})$/.exec(String(flags['expected-head']))
+        if (!match) throw new TypeError('--expected-head must be <seq>:<64-hex-hash>')
+        expectedHead = { seq: int(match[1]!, 'expected-head'), hash: match[2]! }
+      }
+      const legacy = legacyUntil !== undefined ? { legacyUntil } : {}
       const results =
-        flags['all'] === true
-          ? (await audit.verifyAll()).chains
+        all
+          ? (await audit.verifyAll(legacy)).chains
           : [
               await audit.verify({
                 ...(typeof flags['tenant'] === 'string' ? { tenantId: flags['tenant'] } : {}),
                 ...(flags['from'] !== undefined ? { from: int(flags['from'], 'from') } : {}),
                 ...(flags['to'] !== undefined ? { to: int(flags['to'], 'to') } : {}),
+                ...(expectedHead !== undefined ? { expectedHead } : {}),
+                ...legacy,
               }),
             ]
       for (const r of results) (r.ok ? io.log : io.error)(describeResult(r))

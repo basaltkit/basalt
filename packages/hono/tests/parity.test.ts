@@ -5,6 +5,9 @@ import { z } from 'zod'
 import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
+  corsPreflightParitySuite,
+  wireParitySuite,
+  metaValidatorParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
   sendWith,
@@ -63,6 +66,9 @@ rawBodyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
 streamParitySuite('hono', driver)
+corsPreflightParitySuite('hono', driver)
+wireParitySuite('hono', driver)
+metaValidatorParitySuite('hono', driver)
 fileRoutesParitySuite('hono', driver)
 
 describe('hono: multipart on routes that are not upload() routes', () => {

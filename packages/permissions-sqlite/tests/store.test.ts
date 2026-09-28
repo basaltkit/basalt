@@ -64,3 +64,23 @@ describe('sqliteAccessStore + durability', () => {
     second.db.close()
   })
 })
+
+// FA-070 / I5: a multi-permission grant ran one autocommitted INSERT per
+// permission, so a failure part-way left the earlier ones granted.
+describe('grants are all-or-nothing (FA-070/I5)', () => {
+  it('grantToRole: a failing permission rolls back the ones before it', async () => {
+    const store = new SqliteAccessStore(openPermissionsDatabase())
+    await expect(
+      store.grantToRole('editor', ['posts.read', Symbol('bad') as unknown as string], 'acme'),
+    ).rejects.toThrow()
+    expect(await store.getRolePermissions('editor', 'acme')).toEqual([])
+    await store.grantToRole('editor', ['posts.read', 'posts.write'], 'acme')
+    expect((await store.getRolePermissions('editor', 'acme')).sort()).toEqual(['posts.read', 'posts.write'])
+  })
+
+  it('grantToUser: same', async () => {
+    const store = new SqliteAccessStore(openPermissionsDatabase())
+    await expect(store.grantToUser('u1', ['a', Symbol('bad') as unknown as string], 'acme')).rejects.toThrow()
+    expect(await store.getUserPermissions('u1', 'acme')).toEqual([])
+  })
+})

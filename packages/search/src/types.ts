@@ -74,6 +74,21 @@ export interface SearchDriver {
   bulk(indexName: string, documents: SearchDocument[]): Promise<void>
   remove(indexName: string, tenantId: string, id: string): Promise<void>
   search(indexName: string, query: SearchQuery): Promise<SearchResult>
-  /** Drops every document in the index (used by tests). */
+  /**
+   * Drops every document in the index — every tenant's. Used by a whole-index
+   * `reindex({ all: true })` and by tests.
+   */
   clear(indexName: string): Promise<void>
+  /**
+   * Drops every document of ONE tenant in the index and leaves every other
+   * tenant's documents untouched. Used by a tenant-scoped `reindex()`.
+   *
+   * Optional so a custom driver written against the older contract still
+   * compiles — but `Search` refuses a scoped rebuild on a driver without it
+   * (`SearchDriverCapabilityError`) instead of falling back to {@link clear},
+   * which would wipe every other tenant. Implementations must delete by the
+   * stored `tenantId` (delete-by-query / `WHERE tenant_id = …`), never by
+   * listing ids through `search`, which is paged and can miss rows.
+   */
+  clearTenant?(indexName: string, tenantId: string): Promise<void>
 }

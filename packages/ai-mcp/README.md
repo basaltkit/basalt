@@ -78,8 +78,11 @@ The only tool that can touch your disk is safe by construction, in this order:
    are what the later gates are checked against.
 5. **Overwrites need `force: true`.** Clashes are refused with the file list.
 6. **`prisma db push` needs `migrate: true`.**
-7. **Elicitation.** When the client supports it, an `apply` is confirmed with a one-line
-   summary of what will be written before anything happens.
+7. **Confirmation, fail closed.** An `apply` is confirmed through MCP elicitation with a
+   one-line summary of what will be written before anything happens (over stdio, when the
+   client announces the `elicitation` capability). When the client cannot be asked — no
+   elicitation support, or the HTTP transport — the `apply` is **refused**, unless the
+   server was started with `--allow-unconfirmed-apply` (`allowUnconfirmedApply: true`).
 
 Refusals come back as a normal failed tool result (`isError: true`) with an actionable
 message — never as a protocol error, and never as a silent no-op.
@@ -151,7 +154,11 @@ Any client that speaks MCP over stdio: run `basalt-ai-mcp` (from a dev install) 
 |---|---|---|
 | `--cwd=<path>` | `process.cwd()` | The workspace root the tools and resources default to. |
 | `--http[=<port>]` | off (stdio) | Serve over the opt-in local HTTP transport instead of stdio. Bare `--http` picks an ephemeral port; the chosen URL is printed on stdout. |
-| `--host=<host>` | `127.0.0.1` | Bind address for `--http`. Loopback by default — this is a dev surface. |
+| `--host=<host>` | `127.0.0.1` | Bind address for `--http`. Loopback by default — this is a dev surface. A non-loopback bind is refused without `--token`. |
+| `--token=<secret>` | `BASALT_AI_MCP_TOKEN` | `--http` only: every request must send `Authorization: Bearer <secret>` (else `401`). The Host/Origin guard is not authentication. |
+| `--allowed-hosts=<a,b>` | loopback names | `--http` only: extra `Host` hostnames accepted when bound off loopback. |
+| `--sessions` | off (stateless) | `--http` only: `Mcp-Session-Id` sessions — `initialize` issues one, later requests must send it (`400` without, `404` unknown/expired/foreign), and a `notifications/cancelled` POSTed separately cancels the call it names. Bound to the bearer token. |
+| `--allow-unconfirmed-apply` | off | Let `basalt_make` apply when the client cannot confirm via elicitation (refused by default). |
 
 stdio is the default and the recommended local path; it is also the only transport that
 delivers live progress notifications.
@@ -199,12 +206,17 @@ const res = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/l
 | `env` | `Record<string, string \| undefined>` | `process.env` | Where provider config is read from. Pass a fixture in tests. |
 | `createReader` | `(root: string) => ProjectReader` | `nodeReader` (filesystem) | Inject an in-memory reader to test without touching disk. |
 | `createProvider` | `() => AIProvider` | built from `env` | Inject a mock provider — no network, no keys. |
+| `allowUnconfirmedApply` | `boolean` | `false` | Let `basalt_make` apply without an elicitation confirmation. Default: refuse (fail closed). |
 
 `StartOptions` adds `input` / `output` (stdio stream injection, defaulting to
 `process.stdin` / `process.stdout`). `HttpStartOptions` adds every `ServeHttpOptions`
 field from `@basaltkit/mcp-core` — `port`, `host`, `path`, `allowedHosts`,
-`allowedOrigins`, `allowRequest` — including its loopback-only, anti-DNS-rebinding and
-anti-CSRF defaults.
+`allowedOrigins`, `allowRequest`, `authorize`, `maxBodyBytes`, `sessions`, `principal` — including its loopback-only,
+anti-DNS-rebinding and anti-CSRF defaults, plus `token` (a constant-time bearer check,
+also exported as `bearerAuthorizer(token)`). `sessions` (`true` or `{ ttlMs, maxSessions }`)
+stays **off by default** so header-less clients keep working; turn it on to let a separate
+POST cancel a long `basalt_make`/`basalt_plan`. `principal` decides who owns a session
+(default: a hash of the `Authorization` header).
 
 ## Failure modes
 
@@ -224,6 +236,8 @@ Symptoms:
 - **`Refused: workspaceRoot '…' escapes the launch directory`** — relaunch the server with
   `--cwd` pointing at the project you actually want to write to.
 - **`Apply cancelled — not confirmed.`** — the client's elicitation prompt was declined.
+- **`Refusing to apply without confirmation — …`** — the client cannot elicit (or you are on
+  `--http`); review the preview and apply it yourself, or start with `--allow-unconfirmed-apply`.
 - **Progress never appears** — you're on `--http`; that transport has no server→client
   channel. Use stdio.
 

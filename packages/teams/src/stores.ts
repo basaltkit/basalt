@@ -1,6 +1,17 @@
 /** A user's role name within a team (tenant). Free-form; ranked by the service. */
 export type TeamRole = string
 
+/**
+ * The canonical form of an invitation address: trimmed and lower-cased — the
+ * same folding `@basaltkit/auth` applies to account emails, so "one pending
+ * invite per email" and the accept-time binding agree with sign-in. Deliberately
+ * NOT Unicode-compatibility (NFKC) folded: that would map distinct mailboxes
+ * (e.g. full-width letters) onto one address and let an invite bind to an
+ * account it was not sent to. Store implementations comparing emails should
+ * compare this form on both sides (legacy rows may hold mixed case).
+ */
+export const canonicalInviteEmail = (email: string): string => email.trim().toLowerCase()
+
 /** A user's membership of one team (tenant). */
 export interface Membership {
   tenantId: string
@@ -70,21 +81,28 @@ export interface MembershipStore {
   remove(tenantId: string, userId: string): Promise<void>
 }
 
+/**
+ * In-process membership store (dev/tests). Records are copied on the way in
+ * and out, so a caller mutating a returned object can't rewrite the store.
+ */
 export class MemoryMembershipStore implements MembershipStore {
   private readonly records = new Map<string, Membership>()
   private key(tenantId: string, userId: string): string {
-    return `${tenantId}::${userId}`
+    // Unambiguous: a delimiter-joined key would let tenant 'a::b' + user 'c'
+    // collide with tenant 'a' + user 'b::c'.
+    return JSON.stringify([tenantId, userId])
   }
 
   async add(membership: Membership): Promise<void> {
-    this.records.set(this.key(membership.tenantId, membership.userId), membership)
+    this.records.set(this.key(membership.tenantId, membership.userId), { ...membership })
   }
   async find(tenantId: string, userId: string): Promise<Membership | null> {
-    return this.records.get(this.key(tenantId, userId)) ?? null
+    const m = this.records.get(this.key(tenantId, userId))
+    return m ? { ...m } : null
   }
   async list(tenantId: string): Promise<Membership[]> {
     const out: Membership[] = []
-    for (const m of this.records.values()) if (m.tenantId === tenantId) out.push(m)
+    for (const m of this.records.values()) if (m.tenantId === tenantId) out.push({ ...m })
     return out
   }
   async setRole(tenantId: string, userId: string, role: TeamRole): Promise<void> {
@@ -102,6 +120,12 @@ export interface InvitationStore {
   findById(id: string): Promise<Invitation | null>
   /** Pending (not accepted, not revoked, not expired-at read time is caller's job). */
   listPending(tenantId: string): Promise<Invitation[]>
+  /**
+   * A pending invitation for this address. Compare {@link canonicalInviteEmail}
+   * forms on both sides — rows written before 4.0 may hold mixed case.
+   * (`Teams` itself supersedes invitations via `listPending`, so it also
+   * catches legacy duplicates on stores that don't.)
+   */
   findPending(tenantId: string, email: string): Promise<Invitation | null>
   /**
    * Atomically marks a PENDING invitation (not accepted, not revoked) accepted —
@@ -114,6 +138,7 @@ export interface InvitationStore {
   revoke(id: string, at: number): Promise<void>
 }
 
+/** In-process invitation store (dev/tests). Copies on the way in and out, like {@link MemoryMembershipStore}. */
 export class MemoryInvitationStore implements InvitationStore {
   private readonly records = new Map<string, Invitation>()
 
@@ -122,23 +147,25 @@ export class MemoryInvitationStore implements InvitationStore {
   }
 
   async create(invitation: Invitation): Promise<void> {
-    this.records.set(invitation.id, invitation)
+    this.records.set(invitation.id, { ...invitation })
   }
   async findByToken(token: string): Promise<Invitation | null> {
-    for (const i of this.records.values()) if (i.token === token) return i
+    for (const i of this.records.values()) if (i.token === token) return { ...i }
     return null
   }
   async findById(id: string): Promise<Invitation | null> {
-    return this.records.get(id) ?? null
+    const i = this.records.get(id)
+    return i ? { ...i } : null
   }
   async listPending(tenantId: string): Promise<Invitation[]> {
     const out: Invitation[] = []
-    for (const i of this.records.values()) if (i.tenantId === tenantId && this.pending(i)) out.push(i)
+    for (const i of this.records.values()) if (i.tenantId === tenantId && this.pending(i)) out.push({ ...i })
     return out
   }
   async findPending(tenantId: string, email: string): Promise<Invitation | null> {
+    const wanted = canonicalInviteEmail(email)
     for (const i of this.records.values()) {
-      if (i.tenantId === tenantId && i.email === email && this.pending(i)) return i
+      if (i.tenantId === tenantId && canonicalInviteEmail(i.email) === wanted && this.pending(i)) return { ...i }
     }
     return null
   }

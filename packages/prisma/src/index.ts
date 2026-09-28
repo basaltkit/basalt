@@ -25,7 +25,12 @@ export {
   type TenantTransactionOptions,
   type TenantTransactionClient,
 } from './extension.js'
-export { TenantClientPool, type TenantClientPoolOptions } from './pool.js'
+export {
+  TenantClientPool,
+  TenantPoolExhaustedError,
+  type TenantClientPoolOptions,
+  type TenantClientLease,
+} from './pool.js'
 export {
   assertMigrated,
   redactCredentials,
@@ -225,6 +230,18 @@ export interface PrismaPluginOptions<TClient = unknown> {
   /** Max simultaneously open per-tenant clients. Default: 10 */
   max?: number
   /**
+   * Per-tenant pool: how long (ms) a client handed to a request stays "in use"
+   * and cannot be evicted. Keep it above your longest request. Default: 30_000.
+   * See `TenantClientPoolOptions.idleMs`.
+   */
+  idleMs?: number
+  /**
+   * Per-tenant pool: how long (ms) a request for a new tenant waits for a slot
+   * when all `max` clients are in use, before failing with
+   * `TenantPoolExhaustedError` (503). Default: 10_000.
+   */
+  acquireTimeoutMs?: number
+  /**
    * Fail the boot unless the shared `client`'s database is migrated: checks
    * that `_prisma_migrations` exists (and, with `{ tables }`, those tables
    * too). Catches booting against the wrong database — e.g. a shell that
@@ -264,6 +281,10 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
             create: createTenantClient,
             ...(options.destroy ? { destroy: options.destroy } : {}),
             ...(options.max !== undefined ? { max: options.max } : {}),
+            ...(options.idleMs !== undefined ? { idleMs: options.idleMs } : {}),
+            ...(options.acquireTimeoutMs !== undefined
+              ? { acquireTimeoutMs: options.acquireTimeoutMs }
+              : {}),
           })
         : undefined
 
@@ -299,7 +320,11 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         const context = tryCtx()
         if (!context) return
         const client = await clientFor(tenant.id)
+        // tenancy.run() copies the surrounding context, so `db` may still be
+        // the OUTER tenant's client. With no client for this tenant, drop it:
+        // db() then fails closed instead of writing into the other database.
         if (client !== undefined) context.db = client
+        else delete context.db
       })
     },
     async boot() {

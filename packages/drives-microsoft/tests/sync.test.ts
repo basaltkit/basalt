@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { syncConnection, type DriveImportTask, type DriveRemoval } from '@basaltkit/drives'
+import { syncConnection, type DriveImportTask, type DriveRemoval, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { connect, harness } from './helpers.js'
 
 const FILES = [
@@ -45,7 +45,7 @@ describe('the change feed', () => {
     const first = collector()
     await syncConnection(h.drives, view.id, { enqueue: first.enqueue })
 
-    const stored = (await h.store.find('default', view.id))!.cursor!
+    const stored = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor!
     // `@odata.deltaLink` is a complete URL; the connection row holds a wrapper.
     expect(stored).not.toContain('https://')
     expect(stored).toMatch(/^basalt\.msgraph\.delta:/)
@@ -72,7 +72,7 @@ describe('the change feed', () => {
     // this adapter never needs the contract's path-only removal shape — and the
     // id is what makes `targetId` resolvable for an app.
     expect(sink.removals).toEqual([
-      { tenantId: 'default', connectionId: view.id, externalId: '01AAA' },
+      { tenantId: SINGLE_TENANT_SCOPE, connectionId: view.id, externalId: '01AAA' },
     ])
   })
 
@@ -94,7 +94,7 @@ describe('the change feed', () => {
     const h = harness({ server: { files: FILES, pageSize: 10 } })
     const view = await connect(h)
     await syncConnection(h.drives, view.id, { enqueue: collector().enqueue })
-    expect((await h.store.find('default', view.id))!.cursor).toBeDefined()
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor).toBeDefined()
 
     // Graph invalidates a delta token that has aged out. The cursor is
     // PERSISTED, so mapping this to anything else would fail every future sync
@@ -106,7 +106,7 @@ describe('the change feed', () => {
 
     expect(result.reset).toBe(true)
     expect(result.truncated).toBe(true)
-    expect((await h.store.find('default', view.id))!.cursor).toBeUndefined()
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor).toBeUndefined()
 
     // The next run re-primes from the beginning and the ledger absorbs the
     // repetition: a reset costs metadata reads, not re-downloads.
@@ -145,7 +145,7 @@ function sessionOf(h: ReturnType<typeof harness>, connectionId: string) {
   return {
     accessToken: 'access-1',
     connectionId,
-    tenantId: 'default',
+    tenantId: SINGLE_TENANT_SCOPE,
     fetch: async () => {
       throw new Error('the cursor must be refused before any fetch')
     },

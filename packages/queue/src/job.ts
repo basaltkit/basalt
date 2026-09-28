@@ -24,6 +24,13 @@ export class JobNotRegisteredError extends BasaltError {
   }
 }
 
+/**
+ * Ceiling on retries for drivers that enforce one themselves: the RabbitMQ,
+ * SQS and Kafka drivers clamp the attempts they read back from a message to
+ * this value, and the sync driver (which retries inline) clamps to it too.
+ */
+export const MAX_JOB_ATTEMPTS = 50
+
 export interface DispatchOptions {
   delay?: DurationInput
   priority?: number
@@ -84,13 +91,22 @@ export function defineJob<T = unknown>(config: {
   removeOnFail?: JobRetention
   handle(payload: T): void | Promise<void>
 }): JobDefinition<T> {
+  const attempts = config.attempts ?? 1
+  // 0, a negative or a fractional count is a bug, not a policy: the sync
+  // driver used to skip the handler entirely and reject with `undefined`.
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new BasaltError(
+      'QUEUE_INVALID_ATTEMPTS',
+      `Job "${config.name}": attempts must be a positive integer (got ${String(attempts)}).`,
+    )
+  }
   let dispatcher: JobDispatcher | undefined
 
   const job: JobDefinition<T> = {
     name: config.name,
     schema: config.schema,
     queue: config.queue ?? 'default',
-    attempts: config.attempts ?? 1,
+    attempts,
     backoff: config.backoff,
     removeOnComplete: config.removeOnComplete,
     removeOnFail: config.removeOnFail,

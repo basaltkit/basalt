@@ -289,6 +289,25 @@ parseDuration(1500)   // 1500 (numbers pass through directly)
 
 Accepted units: `ms`, `s`, `m`, `h`, `d`.
 
+### Production or not: `isProductionEnvironment()`
+
+The one, fail-closed `NODE_ENV` policy every Basalt package uses to pick a
+security default (`Secure` cookies, the JWT secret length floor, mail-body
+redaction, the queue's sync-driver warning, `secret()` in `@basaltkit/env`):
+
+```ts
+import { isProductionEnvironment } from '@basaltkit/core'
+
+isProductionEnvironment()               // reads process.env.NODE_ENV
+isProductionEnvironment('development')  // false
+isProductionEnvironment('test')         // false
+isProductionEnvironment('staging')      // true — so is unset, '' or a typo
+```
+
+Only an **explicit** `development` or `test` is non-production. A deploy that
+forgets `NODE_ENV` gets the strict defaults, never the development ones. Vitest
+sets `NODE_ENV=test` when it is unset, so test suites need no configuration.
+
 ### Metrics (Prometheus format)
 
 Counters, gauges, and histograms that export as text in [Prometheus](https://prometheus.io) format (a popular monitoring system) — enough for a `/metrics` endpoint.
@@ -435,6 +454,10 @@ become an `AggregateError`. Nothing is ever swallowed silently.
 ### `parseDuration(input)`
 
 `DurationInput` = `number | string`. Converts to milliseconds; throws `BasaltError` (`DURATION_INVALID`) if invalid.
+
+### `isProductionEnvironment(nodeEnv?)`
+
+`(nodeEnv: string | undefined = process.env.NODE_ENV) => boolean`. `false` only for `'development'` and `'test'`; `true` for anything else, including unset (and on a runtime without `process`).
 
 ### Errors
 

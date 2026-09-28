@@ -39,7 +39,7 @@ describe('resolvers', () => {
 })
 
 describe('Tenancy', () => {
-  it('resolve: first resolver that loads an existing tenant wins', async () => {
+  it('resolve: an unknown header id falls through to an authoritative subdomain', async () => {
     const tenancy = new Tenancy(source(), [
       headerResolver(),
       subdomainResolver({ base: 'basalt.app' }),

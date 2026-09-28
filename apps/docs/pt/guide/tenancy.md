@@ -15,8 +15,8 @@ Quatro peças, pela ordem em que correm:
 
 | Peça | Corre | Responsabilidade |
 | --- | --- | --- |
-| `TenantResolver` | por pedido, pela ordem em que os listas | Mapeia o pedido para um `TenantRef` — `{ id }` ou `{ domain }` |
-| `TenantSource` | assim que um resolver produz uma referência | Carrega o registo do tenant (`find` / `findByDomain`). Uma referência que não carrega nada cai para o resolver **seguinte** |
+| `TenantResolver` | por pedido — primeiro os autoritativos (subdomínio, domínio, rota), depois os de recurso (header), cada grupo pela ordem da lista | Mapeia o pedido para um `TenantRef` — `{ id }` ou `{ domain }` |
+| `TenantSource` | assim que um resolver produz uma referência | Carrega o registo do tenant (`find` / `findByDomain`). Uma referência desconhecida de um resolver **autoritativo** termina a resolução sem tenant; de um resolver de recurso passa ao seguinte |
 | `ctx().tenant` | no resto do pedido | O registo aberto resolvido — `undefined` quando nada correspondeu |
 | `tenancy:switched` | em cada entrada num tenant | Permite à cache, ao storage e ao db client reanexar a sua instância por tenant |
 | `tenancy:created` | `{ tenant }` — emitido quando um tenant novo é criado **e provisionado**, portanto um listener pode assumir que o storage dele existe. Não dispara se o `onProvision` lançar |
@@ -76,10 +76,23 @@ curl http://localhost:3000/whoami
 
 ## Resolvers
 
-Um **resolver** mapeia um pedido recebido para uma referência de tenant. Passas uma lista;
-correm por ordem e vence o primeiro cuja referência carrega um tenant **existente** a
-partir da source. Uma referência a um id desconhecido cai para o resolver seguinte, para
-que os possas empilhar em segurança.
+Um **resolver** mapeia um pedido recebido para uma referência de tenant. Passas uma lista,
+e há dois tipos de resolver:
+
+- **Autoritativos** — `subdomainResolver`, `domainResolver`, `routeResolver` e qualquer
+  resolver personalizado envolvido em `authoritative(fn)`. Leem algo que a plataforma
+  controla, por isso correm sempre **primeiro**, seja qual for a ordem da lista; vence a
+  primeira referência que carrega um tenant existente. Se um resolver autoritativo nomeia
+  um tenant que **não** existe, o pedido resolve para **nenhum tenant** — nunca cai para
+  um resolver controlado pelo cliente.
+- **De recurso** — `headerResolver` e resolvers personalizados não marcados. Correm, pela
+  ordem da lista, só quando nenhum resolver autoritativo nomeou nada (o apex nu, `www`,
+  `localhost`).
+
+Assim, `nosuch.basalt.app` com `x-tenant-id: globex` **não** é `globex`, e um header nunca
+se sobrepõe a `acme.basalt.app`. Uma referência cujo id falha a gramática de ids de tenant
+(ver abaixo), ou cujo domínio não é um hostname válido, conta como não encontrada e nunca
+chega à source.
 
 ```ts
 import {
@@ -94,11 +107,15 @@ tenancyPlugin({
     .add({ id: 'acme', name: 'Acme Inc' })
     .add({ id: 'globex', name: 'Globex' }),
   resolvers: [
-    headerResolver(),                          // x-tenant-id: acme
-    subdomainResolver({ base: 'basalt.app' }), // acme.basalt.app
+    subdomainResolver({ base: 'basalt.app' }), // acme.basalt.app — autoritativo
+    headerResolver(),                          // x-tenant-id: acme — só no apex nu
   ],
 })
 ```
+
+Preferes um erro a uma regra de precedência quando os resolvers discordam? Passa
+`onConflict: 'error'`: todos os resolvers correm, e dois que carregam tenants
+**diferentes** respondem `400 TENANCY_CONFLICT` (ao custo de um lookup por resolver).
 
 ### Os quatro resolvers incorporados
 
@@ -141,15 +158,17 @@ o utilizador autenticado pertence ao tenant resolvido.
 Um resolver é apenas uma função `(request) => TenantRef | null` (async permitido),
 onde `request` é a forma neutra `{ headers?, params?, url? }` e um
 `TenantRef` é `{ id }` ou `{ domain }`. Escreve o teu quando os incorporados não
-servirem — p. ex. derivar o tenant de uma claim de JWT já presente no pedido:
+servirem — p. ex. derivar o tenant de uma claim que o teu gateway assinou e pôs no
+pedido. Um resolver não marcado é **de recurso**; envolve-o em `authoritative()` só
+quando os clientes não conseguem forjar o que ele lê:
 
 ```ts
-import type { TenantResolver } from '@basaltkit/tenancy'
+import { authoritative } from '@basaltkit/tenancy'
 
-const claimResolver: TenantResolver = (request) => {
-  const org = request.headers?.['x-org-claim']
+const claimResolver = authoritative((request) => {
+  const org = request.headers?.['x-org-claim'] // posto pelo gateway, removido dos pedidos do cliente
   return typeof org === 'string' ? { id: org } : null
-}
+})
 
 tenancyPlugin({ source, resolvers: [claimResolver, subdomainResolver({ base: 'basalt.app' })] })
 ```
@@ -205,6 +224,26 @@ const source: TenantSource = {
   findByDomain: findByVerifiedDomain(domains, (id) => /* carrega o tenant */ this.find(id)),
 }
 ```
+
+Um claim não verificado não bloqueia o dono real para sempre. Passado `claimTtlMs`
+(72 h por omissão) o `add()` de outro tenant fica com o domínio; com `challengeSecret`
+definido o dono nem precisa de esperar — publica o registo devolvido por
+`domains.challenge(tenantId, domain)` e o `add()` dele vence de imediato, já
+verificado. Define `reservedDomains` com o apex da tua plataforma para que ninguém o
+possa reclamar, nem a qualquer subdomínio dele:
+
+```ts
+const domains = new CustomDomains({
+  store,
+  reservedDomains: ['basalt.app'],        // DOMAIN_RESERVED para basalt.app e *.basalt.app
+  challengeSecret: env.DOMAIN_CHALLENGE_SECRET, // o mesmo valor em todas as instâncias
+})
+```
+
+Os domínios obedecem à gramática de hostname do RFC 1123: o `normalizeDomain()`
+rejeita userinfo (`acme.basalt.app@evil.com`), caminhos, escapes `%`, não-ASCII e
+literais IP com `400 DOMAIN_INVALID` em vez de os reescrever. Regista um domínio
+internacionalizado na forma `xn--` (`domainToASCII()` de `node:url`).
 
 O `verify()` faz um lookup `TXT` real via `node:dns` (injetável nos testes). Fornece um
 `DomainStore` durável (com a forma de `MemoryDomainStore`) para persistir os domínios.
@@ -769,8 +808,8 @@ cada operação — ver a parte de RLS do [guia de Segurança](/pt/guide/securit
 **Schema por tenant** — uma base de dados, um schema PostgreSQL por tenant. Cada
 tenant recebe um client cujo URL de ligação transporta `?schema=tenant_<id>`, para que
 o Prisma defina o `search_path` no momento da ligação (fiável, ao contrário da troca de
-`search_path` por pedido num pool partilhado). Os clients são mantidos num pool LRU
-limitado:
+`search_path` por pedido num pool partilhado). Os clients são mantidos num pool
+limitado (só clients inactivos são despejados; ver [o pool de clientes por tenant](./database-per-tenant#o-pool-de-clientes-por-tenant)):
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -854,7 +893,8 @@ de cada tenant; passa `migrate` para o sobrepor.
 | Opção | Tipo | Predefinição | Propósito |
 | --- | --- | --- | --- |
 | `source` | `TenantSource` | — (obrigatório) | De onde são carregados os registos dos tenants — `MemoryTenantSource` em dev, `tenancy-sqlite`/`tenancy-prisma` (ou a tua própria tabela) em produção |
-| `resolvers` | `TenantResolver[]` | — (obrigatório) | Tentados por ordem; vence a primeira referência que carrega um tenant existente, para poderes pôr um resolver de header atrás de um de subdomínio |
+| `resolvers` | `TenantResolver[]` | — (obrigatório) | Primeiro os autoritativos (subdomínio, domínio, rota, `authoritative(fn)`) — um tenant desconhecido que nomeiem resolve para nenhum; os de recurso (header) só quando nenhum autoritativo nomeou nada. Em cada grupo vence a primeira referência que carrega um tenant |
+| `onConflict` | `'precedence' \| 'error'` | `'precedence'` | `'error'` corre todos os resolvers e responde `400 TENANCY_CONFLICT` quando dois carregam tenants diferentes |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | `false` | Rejeita um pedido que não resolveu nenhum tenant com `404 TENANCY_NOT_RESOLVED`, em vez de o correr sem tenant. `{ except }` isenta caminhos (health checks, landing pages) e continua a proteger o resto |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:migrate`, corrido dentro do contexto de cada tenant |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:seed`, corrido dentro do contexto de cada tenant |
@@ -862,22 +902,23 @@ de cada tenant; passa `migrate` para o sobrepor.
 | `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — o `create()` espera, por isso o tenant está utilizável quando ele retorna. `'deferred'` — o `create()` retorna já com estado `provisioning` e o resolver responde 503 até correr `tenancy.provision(id)` |
 | `canonicalDomain` | `(tenant) => string \| undefined` | — | O endereço em que um tenant novo é alcançável, acrescentado a `tenant.domains` pelo `tenancy.create()` antes de o registo ser persistido. Sem isto a tabela de domínios fica vazia e ninguém é dono do endereço |
-| `validateTenantId` | `(id: string) => boolean` | `isValidTenantId` | A gramática de ids que o `tenancy.create()` impõe (`/^[a-z0-9][a-z0-9_-]{0,62}$/`, menos `global`); um id rejeitado lança `InvalidTenantIdError` antes de algo ser escrito |
+| `validateTenantId` | `(id: string) => boolean` | `isValidTenantId` | A gramática de ids que o `tenancy.create()` e o `tenancy.run()` impõem (`/^[a-z0-9][a-z0-9_-]{0,62}$/`, menos `global`); um id rejeitado lança `InvalidTenantIdError` antes de algo ser escrito, e uma referência de resolver com um desses ids resolve para nenhum tenant |
 
 As fábricas de resolvers incorporadas:
 
 | Fábrica | Opção | Tipo | Predefinição | Propósito |
 | --- | --- | --- | --- | --- |
-| `subdomainResolver({ base })` | `base` | `string` | — (obrigatório) | O domínio de topo sob o qual vivem os teus tenants. `acme.basalt.app` → `{ id: 'acme' }`; `www`, o domínio base nu e subdomínios aninhados (`a.b.basalt.app`) são ignorados |
-| `domainResolver()` | — | — | — | O `Host` inteiro → `{ domain }`, resolvido através de `source.findByDomain`. Para domínios do cliente; exige esse método |
-| `headerResolver({ header })` | `header` | `string` | `'x-tenant-id'` | Lê um header do pedido → `{ id: <value> }`. Muda-o quando o teu gateway já injeta outro header |
-| `routeResolver({ param })` | `param` | `string` | `'tenant'` | Lê um parâmetro de rota → `{ id: params.tenant }`. Para tenancy por caminho (`/t/:tenant/…`) |
+| `subdomainResolver({ base })` | `base` | `string` | — (obrigatório) | O domínio de topo sob o qual vivem os teus tenants. `acme.basalt.app` → `{ id: 'acme' }`; `www`, o domínio base nu e subdomínios aninhados (`a.b.basalt.app`) são ignorados. Autoritativo |
+| `domainResolver()` | — | — | — | O `Host` inteiro → `{ domain }`, resolvido através de `source.findByDomain`. Para domínios do cliente; exige esse método. Autoritativo |
+| `headerResolver({ header })` | `header` | `string` | `'x-tenant-id'` | Lê um header do pedido → `{ id: <value> }`. Muda-o quando o teu gateway já injeta outro header. De recurso (controlado pelo cliente) |
+| `routeResolver({ param })` | `param` | `string` | `'tenant'` | Lê um parâmetro de rota → `{ id: params.tenant }`. Para tenancy por caminho (`/t/:tenant/…`). Autoritativo |
 
-Cada fábrica devolve um `TenantResolver` simples — `(request) => TenantRef | null`
-— por isso um resolver personalizado encaixa no mesmo array. O valor de `Host` é
-canonicalizado (minúsculas, porta e pontos finais removidos, codificação IDNA) antes
-da correspondência, pelo que `Victim.com:443`, `victim.com.` e um homógrafo unicode
-dão todos a mesma chave.
+Cada fábrica devolve um `TenantResolver` simples — `(request) => TenantRef | null`,
+com uma flag `authoritative` opcional — por isso um resolver personalizado encaixa no
+mesmo array. O valor de `Host` é canonicalizado (minúsculas, porta e pontos finais
+removidos) antes da correspondência, pelo que `Victim.com:443` e `victim.com.` dão a
+mesma chave; um `Host` fora da gramática de hostname (userinfo, caminho, `%`,
+não-ASCII, literal IP) não corresponde a nada.
 
 `new CustomDomains(options)`:
 
@@ -887,6 +928,9 @@ dão todos a mesma chave.
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 | `token` | `() => string` | 24 bytes aleatórios, base64url | Gerador do token de verificação (testes) |
 | `resolveTxt` | `(host) => Promise<string[][]>` | `resolveTxt` de `node:dns/promises` | Consulta DNS usada pelo `verify()`; substitui-a nos testes |
+| `claimTtlMs` | `number` | 72 h | Quanto tempo um claim **não verificado** segura um domínio antes de o `add()` de outro tenant o poder tomar. Domínios verificados nunca expiram (um obsoleto só cede a um registo de `challenge()` — vê `reverify()`) |
+| `reservedDomains` | `string[]` | `[]` | Os domínios da própria plataforma; cada um e todos os seus subdomínios são recusados com `DOMAIN_RESERVED` |
+| `challengeSecret` | `string` | — | Ativa `challenge(tenantId, domain)`: publicar esse registo TXT deixa o `add()` do dono tomar de imediato um claim não verificado ocupado. O mesmo valor em todas as instâncias |
 
 O `domains.verify(tenantId, domain, { force })` faz curto-circuito num domínio já
 verificado a não ser que `force` esteja definido. Corre-o com `force: true` de forma
@@ -894,20 +938,49 @@ agendada: um domínio cujo DNS foi mais tarde removido ou reapontado é
 **des**-verificado numa re-verificação falhada e deixa de resolver — a defesa contra
 a tomada de domínios pendentes.
 
+Para um job agendado, prefere os helpers de sistema, que não precisam do id do tenant:
+
+```ts
+schedule.call('reverify-domains', async () => {
+  const { revoked, errors } = await domains.reverifyAll()
+  if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
+}).hourly()
+```
+
+O `domains.reverify(domain)` re-verifica o tenant que detém o domínio, seja ele
+qual for, e devolve `{ domain, tenantId, status }`: `valid`, `revoked` (o registo
+desapareceu de forma definitiva — NXDOMAIN, sem TXT, ou sem o valor esperado —
+por isso o claim é des-verificado), `dns-error` (um timeout ou SERVFAIL: fica
+verificado, para que uma falha de DNS nunca des-verifique todos os domínios de uma
+vez), `unverified`, ou `changed` (o registo mudou de mãos entretanto; fica como
+está). O `reverifyAll()` corre-o sobre `DomainStore.listVerified()` — ou sobre os
+`{ domains }` que passares, para uma store sem esse método — e devolve
+`{ checked, revoked, errors, results }`.
+
+Um **claim verificado obsoleto** também cede diretamente ao novo dono: quando um
+domínio expira e outra pessoa o compra, o novo dono publica o registo de
+`challenge(tenantId, domain)` (com `challengeSecret` definido) e chama `add()`. Se
+essa mesma consulta já não mostrar o registo do titular, o domínio passa para o
+novo dono, verificado; enquanto o registo do titular continuar publicado — ou a
+consulta falhar — o claim mantém-se e o `add()` lança `DOMAIN_TAKEN`.
+
 ## Modos de falha & resolução de problemas
 
 | Erro | Código | HTTP | Quando |
 | --- | --- | --- | --- |
 | `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `tenantScoped()` / `requireTenantId()` / `requireTenant()` correram sem tenant no contexto (e, no `requireTenantId`, sem fallback explícito) |
-| `InvalidTenantIdError` | `TENANT_ID_INVALID` | 400 | `tenancy.create()` (ou `MemoryTenantSource.create()/save()`) com um id fora da gramática de ids de tenant ou um id reservado. Nada é escrito |
+| `InvalidTenantIdError` | `TENANT_ID_INVALID` | 400 | `tenancy.create()`, `tenancy.run()`, `provision(id)`, `destroy(id)` (ou `MemoryTenantSource.create()/save()`) com um id fora da gramática de ids de tenant ou um id reservado. Nada é escrito |
+| `TenantResolutionConflictError` | `TENANCY_CONFLICT` | 400 | `onConflict: 'error'` e dois resolvers carregaram tenants diferentes (p. ex. um `x-tenant-id` que contradiz o `Host`) |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` e nenhum resolver produziu uma referência que carregasse um tenant |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, ou `forEach()` sobre um `TenantSource` sem `list()` |
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | Um pedido resolveu para um tenant com estado `provisioning` ou `failed`. 503, e não 404: o tenant existe e o cliente pode voltar a tentar |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` numa source que não implementa nem `create()` nem `save()` — por exemplo uma baseada num ficheiro de configuração estático |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (ou o `create()` de uma source) para um id que já existe. Nada é escrito. Um tenant `failed`/`provisioning` retoma-se com `tenancy.provision(id)`; uma atualização intencional é `source.save()` |
-| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` para um domínio que outro tenant já registou |
+| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` para um domínio que outro tenant registou — verificado (e com o registo TXT ainda publicado, ou sem um registo de `challenge()` teu), ou não verificado e mais recente que `claimTtlMs` |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` para um domínio que não está registado |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | Um tenant agiu sobre um domínio pertencente a um tenant **diferente** |
+| `DomainReservedError` | `DOMAIN_RESERVED` | 403 | `domains.add()` para um domínio em `reservedDomains` ou um subdomínio dele |
+| `InvalidDomainError` | `DOMAIN_INVALID` | 400 | Um domínio que não é um hostname (userinfo, caminho, `%`, não-ASCII, literal IP) |
 | `MissingCacheScopeError` | `CACHE_SCOPE_MISSING` | 500 | Uma leitura/escrita de cache correu sem tenant com a tenancy ativa — vê [Caching](/pt/guide/caching) |
 | `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 | O `tenantMembershipPlugin` não encontrou filiação do utilizador no tenant resolvido — vê [Teams](/pt/guide/teams) |
 
@@ -920,15 +993,17 @@ a tomada de domínios pendentes.
   `meta: { tenant: false }` na rota em vez de aliviar o `required` para a app
   toda — vê [o padrão multi-tenant](/pt/guide/multi-tenant-pattern#regra-5-—-tres-tipos-de-rota-declarados-no-meta).
 - **`TENANCY_NOT_RESOLVED` embora o header/subdomínio pareça correto** — a
-  referência resolveu mas o registo não carregou. Um id desconhecido cai
-  *silenciosamente* para o resolver seguinte, por isso é quase sempre um tenant em
-  falta na source (ou, com o `domainResolver`, um domínio que nunca foi
-  **verificado**). Confirma com `basalt tenant:list`.
+  referência resolveu mas o registo não carregou. Um subdomínio ou domínio
+  desconhecido termina a resolução — o header **não** é consultado nesse caso — por
+  isso é quase sempre um tenant em falta na source (ou, com o `domainResolver`, um
+  domínio que nunca foi **verificado**), ou um header enviado para o subdomínio de
+  outro tenant. Confirma com `basalt tenant:list`.
 - **`403 TEAM_NOT_A_MEMBER` logo após trocar de tenant** — é o esperado, e é o
   objetivo: o tenant resolveu, a verificação de filiação recusou-o a seguir. A
   resolução de tenant é identificação, nunca autorização — vê [Teams](/pt/guide/teams).
 - **Um domínio custom deixou de resolver sozinho** — uma re-verificação agendada
-  `verify(…, { force: true })` falhou e des-verificou-o. Volta a publicar o registo
+  `reverify()` / `reverifyAll()` (ou `verify(…, { force: true })`) falhou e
+  des-verificou-o. Volta a publicar o registo
   TXT `_basalt-verify.<domain>`.
 
 ## Eventos

@@ -31,7 +31,7 @@
  * very same `current_setting(…)` the policy reads, and takes **no tenant
  * parameter** that a caller could point at somebody else.
  *
- *     -- unset setting → current_setting(...) IS NULL → no rows. Fail closed.
+ *     -- unset setting → NULLIF(current_setting(...), '') IS NULL → no rows. Fail closed.
  *
  * Unlike a cross-tenant scan, this function is *not* an isolation bypass: it is
  * tenant-scoped by construction, so it may return tenant data (the document,
@@ -277,7 +277,7 @@ export function rlsSearchFunctionSql(options: RlsSearchFunctionSqlOptions): stri
   // once. Notably absent: a tenant parameter.
   const signature = `${fn}(text, text, jsonb, integer, integer)`
   // Byte for byte the predicate `rlsPolicySql` puts in the policy.
-  const tenantPredicate = `t.${tenantColumn} = current_setting('${setting}', true)`
+  const tenantPredicate = `t.${tenantColumn} = NULLIF(current_setting('${setting}', true), '')`
   const partition =
     options.partitionColumn === undefined
       ? '(p_partition IS NULL)'

@@ -127,6 +127,33 @@ model AuthMfa {
   @@map("auth_mfa")
 }
 
+model AuthAccountLink {
+  id        String   @id
+  provider  String
+  subject   String
+  userId    String
+  email     String
+  createdAt DateTime
+
+  @@index([userId])
+  @@map("auth_account_links")
+}
+
+model AuthPasskey {
+  id           String    @id
+  credentialId String
+  userId       String
+  publicKey    String
+  counter      BigInt
+  transports   String?
+  deviceName   String?
+  createdAt    DateTime
+  lastUsedAt   DateTime?
+
+  @@index([userId])
+  @@map("auth_passkeys")
+}
+
 
 model TeamMembership {
   tenantId  String

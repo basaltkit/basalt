@@ -92,6 +92,32 @@ describe('StdioClientTransport', () => {
   })
 })
 
+describe('StdioClientTransport failure handling', () => {
+  it('rejects instead of crashing the host when the command does not exist (ENOENT)', async () => {
+    const transport = new StdioClientTransport({ command: '/nonexistent/basalt-mcp-server' })
+    await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'initialize' })).rejects.toThrow(/failed|exited|not accepting/)
+    await transport.close()
+  })
+
+  it('rejects calls in flight when the server exits', async () => {
+    const transport = new StdioClientTransport({ command: process.execPath, args: ['-e', 'process.exit(3)'] })
+    await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'initialize' })).rejects.toThrow(/exited|not accepting/)
+  })
+
+  it('rejects a call the server never answers after timeoutMs', async () => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ['-e', 'process.stdin.resume()'],
+      timeoutMs: 50,
+    })
+    try {
+      await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'initialize' })).rejects.toThrow(/did not answer within 50 ms/)
+    } finally {
+      await transport.close()
+    }
+  })
+})
+
 // A stdio server whose only tool reports the environment it was spawned with.
 const ENV_SERVER = `
 process.stdin.setEncoding('utf8'); let buf='';

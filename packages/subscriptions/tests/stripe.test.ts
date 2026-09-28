@@ -184,3 +184,33 @@ describe('Stripe driver end to end with Subscriptions', () => {
     expect((await subscriptions.get('acme'))?.status).toBe('canceled')
   })
 })
+
+describe('StripeBillingGateway — secret rotation & resume (FA-071 S-10, FA-054 S-7)', () => {
+  const raw = JSON.stringify({
+    id: 'evt_rot',
+    type: 'invoice.paid',
+    data: { object: { subscription: 'sub_1', metadata: { billableId: 'acme' } } },
+  })
+  const t = Math.floor(NOW_MS / 1000)
+  const v1 = (secret: string) => createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex')
+
+  it('accepts a delivery whose matching v1 is not the last one (Stripe sends one per active secret)', () => {
+    const gateway = makeGateway((async () => jsonResponse({})) as typeof fetch)
+    const header = `t=${t},v1=${v1(WEBHOOK_SECRET)},v1=${v1('whsec_new_secret')}`
+    expect(gateway.verifyWebhook(raw, header)).toMatchObject({ id: 'evt_rot', billableId: 'acme' })
+    // and still rejects when none matches
+    expect(() => gateway.verifyWebhook(raw, `t=${t},v1=${v1('a')},v1=${v1('b')}`)).toThrow(WebhookInvalidError)
+  })
+
+  it('resumeSubscription clears cancel_at_period_end', async () => {
+    const { calls, fetchMock } = harness(() => jsonResponse({}))
+    await makeGateway(fetchMock).resumeSubscription('sub_1')
+    expect(calls[0]!.method).toBe('POST')
+    expect(calls[0]!.url).toBe('https://api.stripe.test/v1/subscriptions/sub_1')
+    expect(calls[0]!.body).toBe('cancel_at_period_end=false')
+  })
+
+  it('declares stripe-signature as its signature header', () => {
+    expect(makeGateway((async () => jsonResponse({})) as typeof fetch).signatureHeader).toBe('stripe-signature')
+  })
+})

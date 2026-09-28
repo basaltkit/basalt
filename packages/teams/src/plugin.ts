@@ -1,6 +1,12 @@
 import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
-import type { RouteGuard } from '@basaltkit/http'
-import { InsufficientTeamRoleError, NotATeamMemberError, Teams, type TeamsOptions } from './teams.js'
+import type { RouteGuard, RouteMetaValidator, RouteVisibilityCheck } from '@basaltkit/http'
+import {
+  InsufficientTeamRoleError,
+  NotATeamMemberError,
+  Teams,
+  UnknownTeamRoleError,
+  type TeamsOptions,
+} from './teams.js'
 import type { Membership, PublicInvitation, TeamRole } from './stores.js'
 
 declare module '@basaltkit/core' {
@@ -30,15 +36,21 @@ export function teamsPlugin(options: TeamsPluginOptions = {}) {
       const metadata = ensureMetadata(container)
 
       const guard: RouteGuard = async ({ route, context, container: c }) => {
-        const required = route.meta?.['teamRole'] as TeamRole | undefined
-        if (!required) return
+        const required: unknown = route.meta?.['teamRole']
+        // Same opt-off rule as the adapters' boot check: only `undefined` and
+        // `false` mean "no requirement". Anything else was declared — and the
+        // boot check counts it as protected — so an empty string, a typo
+        // (`'Admin'`) or a non-string is a misconfiguration: fail closed.
+        if (required === undefined || required === false) return
+        const teams = c.get(TEAMS)
+        if (!teams.isKnownRole(required)) throw new UnknownTeamRoleError(required)
 
         const ctxLike = context as { tenant?: { id: string }; user?: { id: string } }
         const tenantId = ctxLike.tenant?.id
         const userId = ctxLike.user?.id
         if (!tenantId || !userId) throw new NotATeamMemberError()
 
-        if (!(await c.get(TEAMS).can(tenantId, userId, required))) {
+        if (!(await teams.can(tenantId, userId, required))) {
           throw new InsufficientTeamRoleError(required)
         }
       }
@@ -46,6 +58,38 @@ export function teamsPlugin(options: TeamsPluginOptions = {}) {
       // Claim `meta.teamRole` for the adapters' boot check (routes declaring
       // it without this plugin fail loud at boot instead of serving unchecked).
       metadata.add('http:guarded-meta', 'teamRole')
+
+      // Boot-time twin of the guard's first check: a typo'd role fails the
+      // boot (every adapter runs `http:meta-validators` over its routes)
+      // instead of waiting for the first request to answer TEAM_ROLE_UNKNOWN.
+      // The guard keeps its own check — `runRoute()` callers without an
+      // adapter, and routes mounted outside the adapter's list, still fail closed.
+      const validator: RouteMetaValidator = ({ route, container: c }) => {
+        const required: unknown = route.meta?.['teamRole']
+        if (required === undefined || required === false) return
+        if (c.get(TEAMS).isKnownRole(required)) return
+        return (
+          `meta.teamRole ${JSON.stringify(required) ?? String(required)} is not a known team role ` +
+          `(rank it in teamsPlugin({ roleRank }) or list it in grantableRoles)`
+        )
+      }
+      metadata.add('http:meta-validators', validator)
+
+      // Side-effect-free twin of the guard for listings (`tools/list` of
+      // @basaltkit/mcp): hide a teamRole route from a caller who cannot hold
+      // the role here. A membership read, nothing else — no hooks, no writes.
+      const visibility: RouteVisibilityCheck = async ({ route, context, container: c }) => {
+        const required: unknown = route.meta?.['teamRole']
+        if (required === undefined || required === false) return true
+        const teams = c.get(TEAMS)
+        if (!teams.isKnownRole(required)) return false
+        const ctxLike = context as { tenant?: { id?: unknown }; user?: { id?: unknown } }
+        const tenantId = ctxLike.tenant?.id
+        const userId = ctxLike.user?.id
+        if (typeof tenantId !== 'string' || typeof userId !== 'string' || !tenantId || !userId) return false
+        return teams.can(tenantId, userId, required)
+      }
+      metadata.add('http:route-visibility', visibility)
     },
   })
 }
@@ -139,7 +183,12 @@ export function tenantMembershipPlugin(options: TenantMembershipPluginOptions = 
         // record exist?", not "does the role outrank 'member'?" — otherwise a
         // genuine member with a custom role missing from roleRank (rank 0)
         // would be rejected. Rank semantics apply only with an explicit `role`.
-        if (required !== undefined) return teams.can(tenantId, userId, required)
+        if (required !== undefined) {
+          // A typo'd `role` must not silently degrade into an exact-match check
+          // nobody passes (or, before 4.0, a rank-0 check everybody passed).
+          if (!teams.isKnownRole(required)) throw new UnknownTeamRoleError(required)
+          return teams.can(tenantId, userId, required)
+        }
         return (await teams.roleOf(tenantId, userId)) !== null
       }
 
@@ -184,6 +233,13 @@ export function tenantMembershipPlugin(options: TenantMembershipPluginOptions = 
         if (!ok) throw new NotATeamMemberError()
       }
       metadata.add('http:guards', guard)
+    },
+    boot({ container }) {
+      // A typo'd `role` fails the boot, not the first tenant-scoped request.
+      // (The guard keeps checking too — it is what enforces it at runtime.)
+      if (required !== undefined && container.has(TEAMS) && !container.get(TEAMS).isKnownRole(required)) {
+        throw new UnknownTeamRoleError(required)
+      }
     },
   })
 }

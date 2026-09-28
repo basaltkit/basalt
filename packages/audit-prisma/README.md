@@ -68,8 +68,12 @@ ALTER TABLE "audit_entries"
 CREATE UNIQUE INDEX "audit_entries_chain_seq_key" ON "audit_entries"("chain", "seq");
 ```
 
-Existing rows keep NULLs: `audit.verify()` reports them as *unchained*, not
-broken. With schema-per-tenant, migrate every tenant schema (`basalt tenant:migrate`).
+Existing rows keep NULLs: `audit.verify()` reports them as *unchained*
+(legacy), not broken. A row outside the chain that is **not** legacy — a `seq`
+with a NULL or foreign `chain`, or a seq-less row written after the chain began —
+is reported in `unverified` and fails the verification. `verifyAll()` also
+visits tenants that have rows but no chain, found with one `SELECT DISTINCT
+"tenantId"` (`auditTenants()`) rather than a read of the whole trail. With schema-per-tenant, migrate every tenant schema (`basalt tenant:migrate`).
 
 ### Harden the table
 
@@ -101,13 +105,46 @@ const a = prismaAuditStore(prisma)   // pass your client directly, no cast
 createApp({ plugins: [auditPlugin({ store: a.store })] })
 ```
 
+## MySQL
+
+The reference schema above is written for PostgreSQL (and works on SQLite),
+where a bare `String` is `TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**,
+and a server outside strict mode truncates a longer value silently — the write
+succeeds, and the value read back is not the one written. For an audit trail that is worse than lost data: a truncated payload or hash **breaks the hash chain**, and `audit.verify()` fails on that row forever. With the guard the append is refused before the insert, and the chain stays as it was.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/audit-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it when
+  your datasource is `mysql`): the free-text columns are widened with native
+  types, the keys stay `VARCHAR(191)` so they can be indexed.
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaAuditStore(prisma, { columnLimits: 'mysql' })
+  ```
+
+  `'mysql'` is `auditMysqlColumnLimits` — the capacities of `schema.mysql.prisma`. A number is
+  a limit in characters (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes
+  (the `TEXT` family). Widened a column yourself? Spread the preset and raise it:
+  `{ AuditEntry: { ...auditMysqlColumnLimits.AuditEntry, event: 500 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
+
 ## Notes
 
 - **Append-only by contract** — no update or delete (enforce it in the database too — see above).
 - `PrismaAuditClient` also accepts an optional `count` delegate (every generated client has it), used by `verify()` to count unchained legacy rows.
 - Queries return **newest-first** with the same filters as the in-memory store
-  (`tenantId`, `actorId`, `since`, and the event wildcard `auth:**`). `limit`
+  (`tenantId`, `actorId`, `since`, `chainedOnly`, and the event wildcard `auth:**`). `limit`
   always counts only pattern-matched rows.
+- **Filters are type-checked before Prisma sees them** (`assertAuditQuery`), even
+  when the store is called directly. `tenantId`, `actorId` and `event` go into
+  `where` as values, so an object such as `{ not: 'x' }` — what `qs` makes of
+  `?tenantId[not]=x` — would be read by Prisma as an operator; it throws a
+  `TypeError` instead, as does a `limit` that is not a non-negative safe integer.
 - The `payload` is stored as JSON text and round-trips unchanged.
 - For **database-per-tenant**, route the store through the active tenant's client
   — see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).

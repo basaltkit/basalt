@@ -1,4 +1,5 @@
 import { BasaltError } from '@basaltkit/core'
+import { assertFilterValue } from '../search.js'
 import type { IndexDefinition, SearchDocument, SearchDriver, SearchQuery, SearchResult } from '../types.js'
 
 export class MeilisearchError extends BasaltError {
@@ -100,6 +101,19 @@ export class MeilisearchDriver implements SearchDriver {
     await this.request('DELETE', `/indexes/${indexName}/documents`)
   }
 
+  /**
+   * Delete-by-filter (`POST /indexes/{uid}/documents/delete`, Meilisearch ≥ 1.2)
+   * on the `tenantId` attribute `register` declares filterable — the same
+   * predicate every search is scoped by, so the rows removed are exactly the
+   * rows that tenant could find. Like every write it is an enqueued task;
+   * Meilisearch runs one index's tasks in order, so the rebuild's writes that
+   * follow land after the deletion.
+   */
+  async clearTenant(indexName: string, tenantId: string): Promise<void> {
+    assertValidIndexName(indexName)
+    await this.request('POST', `/indexes/${indexName}/documents/delete`, { filter: `tenantId = ${quote(tenantId)}` })
+  }
+
   async search(indexName: string, query: SearchQuery): Promise<SearchResult> {
     assertValidIndexName(indexName)
     const result = (await this.request('POST', `/indexes/${indexName}/search`, {
@@ -126,6 +140,11 @@ export class MeilisearchDriver implements SearchDriver {
     const parts = [`tenantId = ${quote(tenantId)}`]
     for (const [field, value] of Object.entries(filters ?? {})) {
       if (!SAFE_FILTER_FIELD.test(field)) throw new SearchFilterFieldError(field)
+      // Values are spliced into the filter DSL as JSON literals, which is only
+      // sound for scalars: an object or a nested array became DSL the engine
+      // rejects (or reads its own way). `Search` checks this too; the driver
+      // repeats it because it can be used on its own.
+      assertFilterValue(field, value)
       parts.push(Array.isArray(value) ? `${field} IN [${value.map(quote).join(', ')}]` : `${field} = ${quote(value)}`)
     }
     return parts.join(' AND ')

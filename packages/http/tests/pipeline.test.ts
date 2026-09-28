@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { Container, tryCtx } from '@basaltkit/core'
-import { HttpError, route, runRoute, toErrorResponse, type HttpReply, type HttpRequest } from '../src/index.js'
+import { BasaltError, Container, tryCtx } from '@basaltkit/core'
+import { GuardsWithoutContainerError, HttpError, route, runRoute, toErrorResponse, type HttpReply, type HttpRequest } from '../src/index.js'
 
 class CaptureReply implements HttpReply {
   private _status = 200
@@ -115,6 +115,71 @@ describe('toErrorResponse', () => {
     expect(toErrorResponse(new Error('boom'))).toEqual({
       status: 500,
       body: { error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' } },
+    })
+  })
+
+  it('never serialises the internal message of a toolkit 500 (FA-041)', () => {
+    const guards = toErrorResponse(new GuardsWithoutContainerError('GET /x', 2))
+    expect(guards).toEqual({
+      status: 500,
+      body: { error: { code: 'HTTP_GUARDS_UNRUNNABLE', message: 'Internal server error.' } },
+    })
+
+    class SecretKeyUnknownError extends BasaltError {
+      readonly status = 500
+      constructor() {
+        super('SECRET_KEY_UNKNOWN', 'sealed with key "k-2019", not in the ring', { details: { keyId: 'k-2019' } })
+      }
+    }
+    expect(toErrorResponse(new SecretKeyUnknownError())).toEqual({
+      status: 500,
+      body: { error: { code: 'SECRET_KEY_UNKNOWN', message: 'Internal server error.' } },
+    })
+  })
+
+  it('keeps the message of a 500 that opts in with expose: true', () => {
+    class PublicFailure extends BasaltError {
+      readonly status = 500
+      readonly expose = true
+      constructor() {
+        super('EXPORT_FAILED', 'The export could not be generated.')
+      }
+    }
+    expect(toErrorResponse(new PublicFailure()).body.error.message).toBe('The export could not be generated.')
+  })
+
+  it('hides message and details of any error that sets expose: false, keeping status and code', () => {
+    class UpstreamRefused extends BasaltError {
+      readonly status = 502
+      readonly expose = false
+      constructor() {
+        super('UPSTREAM_REFUSED', 'Provider tried to reach host "db.internal".', { details: { host: 'db.internal' } })
+      }
+    }
+    expect(toErrorResponse(new UpstreamRefused())).toEqual({
+      status: 502,
+      body: { error: { code: 'UPSTREAM_REFUSED', message: 'Bad gateway.' } },
+    })
+  })
+
+  it('keeps client-facing 5xx other than 500 as they are (e.g. a 503 "retry later")', () => {
+    class NotReadyError extends BasaltError {
+      readonly status = 503
+      constructor() {
+        super('TENANT_NOT_READY', 'Tenant "acme" is still being provisioned — retry shortly.')
+      }
+    }
+    expect(toErrorResponse(new NotReadyError())).toEqual({
+      status: 503,
+      body: { error: { code: 'TENANT_NOT_READY', message: 'Tenant "acme" is still being provisioned — retry shortly.' } },
+    })
+  })
+
+  it('keeps the message of an HttpError thrown deliberately with a 500 or 503', () => {
+    expect(toErrorResponse(new HttpError(500, 'EXPORT_FAILED', 'The export failed.')).body.error.message).toBe('The export failed.')
+    expect(toErrorResponse(new HttpError(503, 'MAINTENANCE', 'Back at 10:00 UTC.'))).toEqual({
+      status: 503,
+      body: { error: { code: 'MAINTENANCE', message: 'Back at 10:00 UTC.' } },
     })
   })
 })

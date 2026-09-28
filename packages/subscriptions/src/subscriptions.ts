@@ -10,6 +10,7 @@ import {
   type Plans,
 } from './plans.js'
 import {
+  assertUsageAmount,
   MemorySubscriptionStore,
   MemoryUsageStore,
   MemoryWebhookStore,
@@ -43,6 +44,24 @@ export class QuotaExceededError extends BasaltError {
   }
 }
 
+/**
+ * A plan change would grant a paid plan without anything being charged: the
+ * subscription is not backed by a gateway subscription, so there is nothing to
+ * swap (and prorate) at the gateway. Start a `checkout()` for the paid plan
+ * instead — or, when payment really is collected elsewhere (manual invoicing,
+ * reference payments, a sales-led deal), say so with `swap(..., { allowUnpaid: true })`.
+ */
+export class PaymentRequiredError extends BasaltError {
+  readonly status = 402
+  constructor(plan: string) {
+    super(
+      'BILLING_PAYMENT_REQUIRED',
+      `Switching to the paid plan "${plan}" requires a payment: this subscription has no gateway ` +
+        'subscription to charge. Use checkout(), or pass { allowUnpaid: true } when payment is collected elsewhere.',
+    )
+  }
+}
+
 /** A billing action needs a gateway (or gateway capability) that isn't configured. */
 export class GatewayUnsupportedError extends BasaltError {
   readonly status = 501
@@ -61,10 +80,15 @@ export interface SubscriptionsOptions {
   /** Plan applied to billables without a subscription (e.g. 'free'). */
   fallbackPlan?: string
   hooks?: HookBus
+  /** Clock in epoch ms (tests, simulations). Default: `Date.now`. */
+  now?: () => number
 }
 
-/** Monthly bucket for meters — resets every calendar month. */
-const currentMeterPeriod = (): string => new Date().toISOString().slice(0, 7)
+/** Monthly bucket for meters — resets every calendar month (UTC). */
+const meterPeriod = (now: number): string => new Date(now).toISOString().slice(0, 7)
+
+const trialDaysOf = (trial: PlanDefinition['trial']): number | undefined =>
+  trial ? Math.max(1, Math.ceil(parseDuration(trial) / 86_400_000)) : undefined
 
 export class Subscriptions {
   private readonly plans: Plans
@@ -74,6 +98,7 @@ export class Subscriptions {
   private readonly fallbackPlan: string | undefined
   private readonly hooks: HookBus | undefined
   private readonly webhooks: WebhookStore
+  private readonly now: () => number
 
   constructor(options: SubscriptionsOptions) {
     this.plans = options.plans
@@ -83,12 +108,15 @@ export class Subscriptions {
     this.webhooks = options.webhooks ?? new MemoryWebhookStore()
     this.fallbackPlan = options.fallbackPlan
     this.hooks = options.hooks
+    this.now = options.now ?? (() => Date.now())
     if (options.fallbackPlan) this.plan(options.fallbackPlan) // fail fast on typos
   }
 
   plan(name: string): PlanDefinition {
-    const plan = this.plans[name]
-    if (!plan) throw new UnknownPlanError(name)
+    // Own keys only: `plans['constructor']` / `plans['__proto__']` resolve
+    // through the prototype and must not count as a plan.
+    const plan = Object.hasOwn(this.plans, name) ? this.plans[name] : undefined
+    if (!plan || typeof plan !== 'object') throw new UnknownPlanError(name)
     return plan
   }
 
@@ -106,16 +134,14 @@ export class Subscriptions {
       plan: planName,
       period,
       status: plan.trial ? 'trialing' : 'active',
-      ...(plan.trial ? { trialEndsAt: Date.now() + parseDuration(plan.trial) } : {}),
+      ...(plan.trial ? { trialEndsAt: this.now() + parseDuration(plan.trial) } : {}),
     }
     // Paid plans go through the gateway — with a trial period when the plan
     // has one, so the gateway runs the trial and drives the trial-end charge
     // via webhook (invoice.paid → active, invoice.payment_failed → past_due).
     // Free plans never touch the gateway.
     if (this.gateway && typeof price === 'number' && price > 0) {
-      const trialDays = plan.trial
-        ? Math.max(1, Math.ceil(parseDuration(plan.trial) / 86_400_000))
-        : undefined
+      const trialDays = trialDaysOf(plan.trial)
       const { gatewayRef } = await this.gateway.createSubscription({
         billableId,
         plan: planName,
@@ -144,9 +170,7 @@ export class Subscriptions {
     const plan = this.plan(planName)
     if (!this.gateway?.createCheckoutSession) throw new GatewayUnsupportedError('checkout')
     const period = options.period ?? 'monthly'
-    const trialDays = plan.trial
-      ? Math.max(1, Math.ceil(parseDuration(plan.trial) / 86_400_000))
-      : undefined
+    const trialDays = trialDaysOf(plan.trial)
 
     const session = await this.gateway.createCheckoutSession({
       billableId,
@@ -198,7 +222,7 @@ export class Subscriptions {
     return (
       record?.status === 'trialing' &&
       record.trialEndsAt !== undefined &&
-      record.trialEndsAt > Date.now()
+      record.trialEndsAt > this.now()
     )
   }
 
@@ -208,23 +232,35 @@ export class Subscriptions {
    * customer is credited/charged the mid-cycle difference (pass
    * `{ prorate: false }` to switch at the next renewal with no immediate
    * settlement).
+   *
+   * Fails closed when nothing would be charged: a subscription without a
+   * gateway subscription (a local/free one) cannot be swapped onto a paid (or
+   * `'custom'`) plan — that throws {@link PaymentRequiredError}; start a
+   * `checkout()` instead. Pass `{ allowUnpaid: true }` only when payment is
+   * collected outside the gateway (manual invoicing, reference payments,
+   * sales-led deals). A gateway-backed subscription whose gateway cannot swap
+   * throws {@link GatewayUnsupportedError} rather than changing only the local
+   * plan while the gateway keeps charging the old price.
    */
   async swap(
     billableId: string,
     planName: string,
-    options: { prorate?: boolean } = {},
+    options: { prorate?: boolean; allowUnpaid?: boolean } = {},
   ): Promise<SubscriptionRecord> {
     const record = await this.store.get(billableId)
     if (!record || !this.isActive(record)) throw new NotSubscribedError()
-    this.plan(planName)
+    const target = this.plan(planName)
     const from = record.plan
 
-    if (record.gatewayRef && this.gateway?.swapSubscription) {
+    if (record.gatewayRef) {
+      if (!this.gateway?.swapSubscription) throw new GatewayUnsupportedError('swap')
       await this.gateway.swapSubscription(record.gatewayRef, {
         plan: planName,
         period: record.period,
         prorationBehavior: options.prorate === false ? 'none' : 'create_prorations',
       })
+    } else if (planPrice(target, record.period) !== 0 && options.allowUnpaid !== true) {
+      throw new PaymentRequiredError(planName)
     }
 
     // Re-read after the gateway round-trip and apply the change to the CURRENT
@@ -256,19 +292,33 @@ export class Subscriptions {
       current.cancelAtPeriodEnd = true
     } else {
       current.status = 'canceled'
-      current.canceledAt = Date.now()
+      current.canceledAt = this.now()
     }
     await this.store.save(current)
     await this.hooks?.emit('billing:canceled', { subscription: current })
     return current
   }
 
+  /**
+   * Undoes a `cancel({ atPeriodEnd: true })`. For a gateway-backed subscription
+   * the scheduled cancellation is withdrawn at the gateway too — otherwise the
+   * gateway still ends the subscription at the period end and its
+   * `subscription.canceled` webhook would cancel the "resumed" one locally.
+   * Throws {@link GatewayUnsupportedError} when the gateway cannot resume.
+   */
   async resume(billableId: string): Promise<SubscriptionRecord> {
     const record = await this.store.get(billableId)
     if (!record || record.status === 'canceled') throw new NotSubscribedError()
-    record.cancelAtPeriodEnd = false
-    await this.store.save(record)
-    return record
+    if (record.cancelAtPeriodEnd === true && record.gatewayRef) {
+      if (!this.gateway?.resumeSubscription) throw new GatewayUnsupportedError('resume')
+      await this.gateway.resumeSubscription(record.gatewayRef)
+    }
+    // Apply to the state as it is NOW (re-read after the gateway round-trip).
+    const current = (await this.store.get(billableId)) ?? record
+    if (current.status === 'canceled') throw new NotSubscribedError()
+    current.cancelAtPeriodEnd = false
+    await this.store.save(current)
+    return current
   }
 
   /** Feature checks and consumption, Soulbscription-style. */
@@ -278,17 +328,20 @@ export class Subscriptions {
       if (record && this.isActive(record)) return this.plan(record.plan)
       return this.fallbackPlan ? this.plan(this.fallbackPlan) : null
     }
+    // Own keys only — `features['constructor']` is not a feature.
+    const valueOf = (plan: PlanDefinition, feature: string) =>
+      Object.hasOwn(plan.features, feature) ? plan.features[feature] : undefined
     const periodKey = (plan: PlanDefinition, feature: string): string =>
-      isMeter(plan.features[feature]) ? currentMeterPeriod() : 'lifetime'
+      isMeter(valueOf(plan, feature)) ? meterPeriod(this.now()) : 'lifetime'
 
     return {
       can: async (feature: string): Promise<boolean> => {
         const plan = await resolve()
-        return plan !== null && featureLimit(plan.features[feature]) > 0
+        return plan !== null && featureLimit(valueOf(plan, feature)) > 0
       },
       limit: async (feature: string): Promise<number> => {
         const plan = await resolve()
-        return plan ? featureLimit(plan.features[feature]) : 0
+        return plan ? featureLimit(valueOf(plan, feature)) : 0
       },
       usage: async (feature: string): Promise<number> => {
         const plan = await resolve()
@@ -298,15 +351,18 @@ export class Subscriptions {
       remaining: async (feature: string): Promise<number> => {
         const plan = await resolve()
         if (!plan) return 0
-        const limit = featureLimit(plan.features[feature])
+        const limit = featureLimit(valueOf(plan, feature))
         if (limit === Number.POSITIVE_INFINITY) return limit
         const used = await this.usage.get(billableId, feature, periodKey(plan, feature))
         return Math.max(0, limit - used)
       },
       consume: async (feature: string, amount = 1): Promise<number> => {
+        // A positive integer only: a negative amount refunds quota and NaN
+        // disables it for good (`NaN + 1 > limit` is always false).
+        assertUsageAmount(amount)
         const plan = await resolve()
         if (!plan) throw new FeatureUnavailableError(feature)
-        const limit = featureLimit(plan.features[feature])
+        const limit = featureLimit(valueOf(plan, feature))
         if (limit === 0) throw new FeatureUnavailableError(feature)
 
         const key = periodKey(plan, feature)
@@ -337,7 +393,29 @@ export class Subscriptions {
 
     try {
       const record = await this.store.get(event.billableId)
-      if (record) {
+      // An event about a DIFFERENT gateway subscription than the one on file (an
+      // old, replaced subscription ending, or its final invoice failing) must not
+      // touch the current one: a `subscription.canceled`/`payment.failed` is only
+      // applied to the subscription it names. Events without a ref (custom
+      // drivers) keep applying to the record.
+      const foreign =
+        record !== null &&
+        record.gatewayRef !== undefined &&
+        event.gatewayRef !== undefined &&
+        event.gatewayRef !== record.gatewayRef
+      // A cancel naming a gateway subscription we never tracked, on a record
+      // that is not waiting for one (local/free, not an in-flight checkout), is
+      // not about this record either.
+      const untracked =
+        record !== null &&
+        record.gatewayRef === undefined &&
+        event.gatewayRef !== undefined &&
+        record.status !== 'incomplete' &&
+        record.pendingPlan === undefined
+      const ignore =
+        (event.type === 'subscription.canceled' && (foreign || untracked)) ||
+        (event.type === 'payment.failed' && foreign)
+      if (record && !ignore) {
         // Is this event about a DIFFERENT gateway subscription than the one on
         // file? Computed BEFORE the ref is learned, so a first-ever ref counts
         // as new. Only such an event may complete a pending plan change — a
@@ -350,7 +428,7 @@ export class Subscriptions {
         if (event.gatewayRef && !record.gatewayRef) record.gatewayRef = event.gatewayRef
         if (event.type === 'subscription.canceled') {
           record.status = 'canceled'
-          record.canceledAt = Date.now()
+          record.canceledAt = this.now()
           // Remember WHICH subscription ended: later events for it (a final
           // invoice delivered after the deletion) are then recognised as stale.
           if (event.gatewayRef) record.gatewayRef = event.gatewayRef
@@ -451,10 +529,14 @@ export class Subscriptions {
       if (
         record.status === 'trialing' &&
         record.trialEndsAt !== undefined &&
-        record.trialEndsAt <= Date.now() &&
+        record.trialEndsAt <= this.now() &&
         record.gatewayRef === undefined
       ) {
-        const price = planPrice(this.plan(record.plan), record.period)
+        // A plan since removed from the catalogue has no known price: settle
+        // it as past_due (fail closed) instead of aborting the whole sweep and
+        // leaving every later expired trial untouched.
+        const plan = Object.hasOwn(this.plans, record.plan) ? this.plans[record.plan] : undefined
+        const price = plan ? planPrice(plan, record.period) : 'custom'
         record.status = typeof price === 'number' && price === 0 ? 'active' : 'past_due'
         await this.store.save(record)
         expired.push(record)
@@ -469,7 +551,7 @@ export class Subscriptions {
     return (
       record.status === 'trialing' &&
       record.trialEndsAt !== undefined &&
-      record.trialEndsAt > Date.now()
+      record.trialEndsAt > this.now()
     )
   }
 }

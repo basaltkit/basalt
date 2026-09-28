@@ -63,8 +63,8 @@ it is not unprotected, it simply has one layer instead of two.
 
 ## The per-tenant client pool
 
-Give `prismaPlugin` a factory and it maintains a bounded LRU pool of clients,
-one per tenant, building them on demand:
+Give `prismaPlugin` a factory and it maintains a bounded pool of clients, one
+per tenant, building them on demand:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
@@ -74,7 +74,23 @@ import { prismaPlugin } from '@basaltkit/prisma'
 prismaPlugin({
   forTenant: (tenantId) => new PrismaClient({ datasourceUrl: urlFor(tenantId) }),
   destroy: (client) => client.$disconnect(),
-  max: 20, // most-recently-used clients kept open
+  max: 20, // at most 20 tenant clients open at once — never exceeded
+  idleMs: 30_000, // a client handed to a request counts as in use this long
+  acquireTimeoutMs: 10_000, // how long a new tenant waits for a free slot
+})
+```
+
+The pool only ever closes an **idle** client (least-recently-used first). A
+client handed to a request counts as in use for `idleMs` — keep it above your
+longest request — so it is never disconnected under a running query. When all
+`max` clients are in use, a request for a new tenant waits up to
+`acquireTimeoutMs` and then fails with `TenantPoolExhaustedError` (503): size
+`max` for the tenants active *at the same time*. Work that can outlive
+`idleMs` holds the client with a lease instead:
+
+```ts
+await app.container.get(DB_POOL).use(tenantId, async (client) => {
+  // never evicted until this callback settles
 })
 ```
 
@@ -96,7 +112,9 @@ prismaPlugin({
 
 In both cases the plugin attaches the right client to the request context — on
 HTTP requests (from the resolved tenant) and inside `tenancy.run()` (workers,
-jobs). You read it with `db()`:
+jobs). A `tenancy.run()` into a tenant the plugin has no client for clears the
+`db` it inherited from the outer tenant, so `db()` fails instead of writing into
+the wrong database. You read it with `db()`:
 
 ```ts
 import { db } from '@basaltkit/prisma'

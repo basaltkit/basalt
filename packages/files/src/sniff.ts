@@ -208,15 +208,33 @@ export function normalizeContentType(contentType: string): string {
 const OOXML = new Set([DOCX, XLSX, PPTX])
 
 /**
+ * Whether `detected` is a passive format a browser displays or downloads but
+ * never executes: the signature formats (PDF, raster images, ZIP/OOXML), any
+ * other raster `image/*`, `audio/*` and `video/*`. HTML, SVG, XML, scripts and
+ * executables are not — they run code in the page or on the machine.
+ */
+export function isInertType(detected: string): boolean {
+  const type = normalizeContentType(detected)
+  if (SIGNATURE_TYPES.has(type)) return true
+  if (type === 'image/svg+xml') return false
+  return /^(image|audio|video)\/[a-z0-9!#$&^_.+-]+$/.test(type) && !type.endsWith('+xml')
+}
+
+/**
  * Whether bytes detected as `detected` may be stored under the client's
- * `declared` type. Identity (after normalisation) always is; so is a client that
- * declared nothing specific (`application/octet-stream`), and a ZIP-based
- * office document declared as a plain ZIP. Everything else is a disguise.
+ * `declared` type. Identity (after normalisation) always is; so is a ZIP-based
+ * office document declared as a plain ZIP. A client that declared nothing
+ * specific (`application/octet-stream`, or no type) is promoted to what the
+ * bytes are only when that is an inert format ({@link isInertType}): an HTML
+ * page, an SVG or an executable sent as "some bytes" is refused, never
+ * relabelled into a type a browser would render or run. Storing one of those
+ * takes declaring it — and the allowlist then judges that declared type.
+ * Everything else is a disguise.
  */
 export function isCompatibleType(declared: string, detected: string): boolean {
   const d = normalizeContentType(declared)
   if (d === detected) return true
-  if (d === 'application/octet-stream' || d === '') return true
+  if (d === 'application/octet-stream' || d === '') return isInertType(detected)
   if (d === 'application/zip' && OOXML.has(detected)) return true
   return false
 }

@@ -73,3 +73,24 @@ export class ReservedScopeError extends BasaltError {
     )
   }
 }
+
+/**
+ * A grant write (`assignRole`, `grantToUser`, `grantTemporarily`, `delegate`…)
+ * was made with no explicit `scope`, in a multi-tenant app, while no tenant is
+ * in the context. Defaulting to the global scope there would turn a tenant
+ * administration call — say, on a request whose tenant failed to resolve — into
+ * a platform-wide grant, so the write fails closed. Pass the scope explicitly
+ * (a tenant id, or `GLOBAL_SCOPE` when a global grant is really meant), run it
+ * inside the tenant's context, or build the Gate with `allowGlobalWrites: true`.
+ */
+export class ScopeRequiredError extends BasaltError {
+  readonly status = 400
+  constructor(operation: string) {
+    super(
+      'PERMISSION_SCOPE_REQUIRED',
+      `gate.${operation}() was called with no scope and no tenant in the context, in an app with tenancy active. ` +
+        `Refusing to write a platform-wide grant by default: pass the scope explicitly (a tenant id, or ` +
+        `GLOBAL_SCOPE for a global grant), run the write inside the tenant's context, or set allowGlobalWrites: true.`,
+    )
+  }
+}

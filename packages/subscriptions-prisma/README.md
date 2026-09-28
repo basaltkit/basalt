@@ -119,7 +119,8 @@ The metered `consume()` uses a conditional `updateMany` (`value <= limit -
 amount`) that the database's row lock serializes, so a plan quota is **never
 overshot under concurrency**. Webhook idempotency is an atomic
 `createMany({ skipDuplicates: true })` claim, so a redelivered event is processed
-once across restarts and instances.
+once across restarts and instances. `consume()`/`increment()` reject an amount that is
+not a positive integer with `InvalidUsageAmountError` (a negative amount would refund quota).
 
 | Export | Contract | Model |
 | --- | --- | --- |
@@ -151,12 +152,42 @@ concurrent create neither throws nor clobbers. `setStatus` upserts, and falls ba
 `update` when it loses a create race (`P2002`) — a webhook that beats the local record
 still settles.
 
+## MySQL
+
+The reference schema above is written for PostgreSQL (and works on SQLite),
+where a bare `String` is `TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**,
+and a server outside strict mode truncates a longer value silently — the write
+succeeds, and the value read back is not the one written. Two long webhook event ids cut to the same prefix make the second look already processed — that event is dropped — and a cut gateway `raw` payload is no longer valid JSON.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/subscriptions-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it when
+  your datasource is `mysql`): the free-text columns are widened with native
+  types, the keys stay `VARCHAR(191)` so they can be indexed.
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaSubscriptionsStores(prisma, { columnLimits: 'mysql' })
+  prismaPaymentStores(prisma, { columnLimits: 'mysql' })
+  ```
+
+  `'mysql'` is `subscriptionsMysqlColumnLimits` — the capacities of `schema.mysql.prisma`. A number is
+  a limit in characters (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes
+  (the `TEXT` family). Widened a column yourself? Spread the preset and raise it:
+  `{ Payment: { ...subscriptionsMysqlColumnLimits.Payment, reference: 500 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
+
 ## API reference
 
 | Export | Signature | Purpose |
 | --- | --- | --- |
-| `prismaSubscriptionsStores` | `(client: PrismaSubscriptionsClient) => { store, usage, webhooks }` | Named to drop straight into `subscriptionsPlugin`. |
-| `prismaPaymentStores` | `(client: PrismaPaymentsClient) => { payments, recurring }` | For `PaymentLedger` / `RecurringReferenceBilling`. |
+| `prismaSubscriptionsStores` | `(client: PrismaSubscriptionsClient, options?) => { store, usage, webhooks }` | Named to drop straight into `subscriptionsPlugin`. |
+| `prismaPaymentStores` | `(client: PrismaPaymentsClient, options?) => { payments, recurring }` | For `PaymentLedger` / `RecurringReferenceBilling`. |
+| `subscriptionsMysqlColumnLimits` / `ColumnLengthError` | const / class | `options.columnLimits` (`'mysql'` or your own) refuses a value longer than its MySQL column — see [MySQL](#mysql). |
 
 Both validate up front that the client actually has the delegates they need, and throw an
 actionable `Error` naming the model and how to add it — instead of a cryptic
@@ -176,12 +207,13 @@ Prisma's generated method generics can't be reproduced by a hand-written interfa
 
 ## Failure modes
 
-This package defines no error classes of its own; domain errors come from
+Besides `ColumnLengthError` (the opt-in MySQL guard), this package defines no error classes of its own; domain errors come from
 `@basaltkit/subscriptions` (`BILLING_QUOTA_EXCEEDED`, …) and database errors from Prisma.
 
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
 | `Error` (plain) | — | — | The Prisma client has no `subscription` / `payment` / `recurringSubscription` model. The message names the model and points at `basalt prisma:sync` or the bundled schema. |
+| `ColumnLengthError` | `COLUMN_LENGTH_EXCEEDED` | 422 | With `columnLimits`, a value is longer than its MySQL column. Thrown before the write — see [MySQL](#mysql). |
 | `PrismaClientKnownRequestError` | `P2002` | — | A unique-constraint race. The payment stores catch it and retry as an update; elsewhere it surfaces. |
 
 Symptoms:

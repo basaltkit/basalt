@@ -14,7 +14,18 @@ export {
   SINGLE_TENANT_SCOPE,
   TenantRequiredError,
   SearchTenantMismatchError,
+  SearchTenantReservedError,
+  SearchPaginationError,
+  SearchFilterNotFilterableError,
+  SearchFilterValueError,
+  SearchReindexScopeError,
+  SearchDriverCapabilityError,
+  DEFAULT_MAX_LIMIT,
+  DEFAULT_MAX_OFFSET,
+  DEFAULT_MAX_SCAN,
+  type ReindexOptions,
   type SearchOptions,
+  type SearchServiceOptions,
 } from './search.js'
 export {
   MeilisearchDriver,

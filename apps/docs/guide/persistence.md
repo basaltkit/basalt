@@ -108,7 +108,9 @@ installed `@basaltkit/*-prisma` package and merges the models they need into you
 pnpm basalt prisma:sync --push        # add missing models + create the tables
 ```
 
-It's idempotent and never touches your own models. And if you wire a `*-prisma`
+It's idempotent and never touches your own models. When your `datasource` is
+`mysql` it copies each package's `schema.mysql.prisma` variant instead — see
+[MySQL](#mysql). And if you wire a `*-prisma`
 store before its models exist, the store now fails fast with a clear message
 naming the missing model and pointing you here — no more cryptic
 `reading 'create' of undefined`.
@@ -226,7 +228,15 @@ system chain. `audit.verify({ tenantId, from?, to? })` — or `basalt audit:veri
 [--tenant=<id> | --all]` — detects edited, deleted, reordered and forged rows. Both
 stores put a **unique constraint on `(chain, seq)`**, so replicas appending at the
 same time retry instead of forking a chain. Rows written before `integrity` was
-enabled are reported as *unchained*, not broken.
+enabled are reported as *unchained*, not broken; any other row outside the chain
+(written after it began, or with a `seq` under a missing or foreign chain name)
+fails the verification and is listed in `unverified` — use
+`trail({ chainedOnly: true })` for an evidence read. Deleting the tail leaves no
+gap: pass a head recorded elsewhere as `verify({ expectedHead })` (or
+`--expected-head=<seq>:<hash>`) to detect truncation. `--all` also checks
+tenants that have rows but no chain (their rows written after integrity began
+fail as `unchained-entry`); `--all=true` is read as `--all`, and an unrecognised
+value is an error.
 
 `requestContext: true` adds an HTTP enricher (fastify, express and hono alike) and
 stores the client `ip` and `userAgent`. The IP is PII: with
@@ -453,6 +463,70 @@ exact) reuses `matchesEvent`, so `forEvent` behaves identically to the memory
 store — the delivery/retry logic is unchanged, only the subscription list is now
 durable.
 
+## MySQL
+
+The `*-prisma` reference schemas are written for PostgreSQL, and a bare
+`String` means `TEXT` there — and on SQLite. **On MySQL Prisma maps it to
+`VARCHAR(191)`**, and a MySQL server outside strict mode truncates a longer
+value with only a warning: the write succeeds and the value read back is not
+the one written. A webhook URL then delivers somewhere else, a file `path` no
+longer names the stored object, a JSON payload stops parsing, and a truncated
+audit payload or hash **breaks the hash chain** for good.
+
+Three things close it:
+
+1. **Use the MySQL schema variant.** Each package ships
+   `schema.mysql.prisma` next to `schema.prisma`: the same models, with the
+   free-text columns widened (`@db.Text`, `@db.MediumText` for JSON payloads,
+   `@db.VarChar(255)` for a DNS name or a content type) and the keys left at
+   `VARCHAR(191)` so they can still be indexed. `basalt prisma:sync` picks it
+   automatically when your `datasource` says `provider = "mysql"`, and warns
+   about a package that has none. MySQL has no `String[]`, so the variants of
+   `@basaltkit/comments-prisma` (`mentions`) and `@basaltkit/auth-prisma`
+   (`scopes`, `recoveryCodes`) store those lists as `Json`.
+2. **Turn on the guard.** Pass `{ columnLimits: 'mysql' }` to the factory, and
+   the store measures every string against its column before writing — in
+   characters for `VARCHAR(n)`, in UTF-8 bytes for the `TEXT` family — and
+   throws `ColumnLengthError` (`COLUMN_LENGTH_EXCEEDED`, status 422) instead of
+   letting the database cut it. Nothing is written; for the audit trail the
+   chain stays verifiable.
+3. **Run MySQL in strict mode** (`sql_mode` with `STRICT_TRANS_TABLES`, the
+   default since 5.7), so the server itself refuses what no guard covers — a
+   model of your own, a raw query.
+
+```ts
+const audit = prismaAuditStore(prisma, { columnLimits: 'mysql' })
+const webhooks = prismaWebhookStore(prisma, { columnLimits: 'mysql' })
+const files = prismaFilesStore(prisma, { columnLimits: 'mysql' })
+```
+
+`'mysql'` is the preset matching the shipped `schema.mysql.prisma`; each package
+exports it (`auditMysqlColumnLimits`, `webhooksMysqlColumnLimits`, …). If you
+widen a column yourself, spread the preset and raise that one limit — a number
+is a limit in characters, `{ bytes: n }` in bytes:
+
+```ts
+import { auditMysqlColumnLimits, prismaAuditStore } from '@basaltkit/audit-prisma'
+
+prismaAuditStore(prisma, {
+  columnLimits: { AuditEntry: { ...auditMysqlColumnLimits.AuditEntry, event: 500 } }, // event @db.VarChar(500)
+})
+```
+
+Leave `columnLimits` unset on PostgreSQL and SQLite: nothing is checked, and
+nothing changes. The option is on `activity-`, `audit-`, `auth-` (every store),
+`comments-`, `events-`, `files-` (both stores), `notifications-`,
+`permissions-`, `subscriptions-` (both factories), `teams-` (both stores),
+`tenancy-` and `webhooks-prisma` — every `*-prisma` package now ships a MySQL
+variant. In `teams-prisma` it widens the invitation `email` to `VARCHAR(254)`,
+the longest valid address; the permission and team keys stay `VARCHAR(191)`.
+In `auth-prisma` the user `email` is `VARCHAR(254)`; the password hash, sealed
+TOTP secret, OIDC subject and passkey key material are `TEXT`; and
+`scopes`/`recoveryCodes` are `Json` (MySQL has no scalar lists). One column is
+shortened rather than refused: the outbox's `lastError`, which is diagnostic —
+refusing it would stop `markFailed` from counting the attempt — is cut to fit
+and marked `…[truncated]`.
+
 ## Redis-backed stores
 
 Several packages already ship Redis implementations for the state that benefits
@@ -499,7 +573,7 @@ families have one signature each:
 | Family | Signature | Returns |
 | --- | --- | --- |
 | `sqlite*` | `(dbOrLocation: DatabaseSync \| string = ':memory:')` | `{ db, …stores }` — the raw `node:sqlite` handle plus one store per contract |
-| `prisma*` | `(client: PrismaClient)` | `{ …stores }` — no handle; you already own the client |
+| `prisma*` | `(client: PrismaClient, options?)` | `{ …stores }` — no handle; you already own the client. `options.columnLimits` guards MySQL column widths ([MySQL](#mysql)) |
 
 Passing a **path** opens (or creates) the file and applies the schema; passing
 an existing `DatabaseSync` migrates that handle instead, which is how several
@@ -528,7 +602,8 @@ want to control opening and migration yourself, and every individual store class
 
 The only backends with behavioural options of their own are the outbox's: the
 relay's tables are in **Relay semantics** above, and `prismaOutboxStore` takes
-`{ claim: true }` (see **Several relays**). Everything else is
+`{ claim: true }` (see **Several relays**) — plus the MySQL `columnLimits`
+guard every `prisma*` factory takes ([MySQL](#mysql)). Everything else is
 configured on the plugin that consumes it — see [Auth](/guide/auth),
 [Teams](/guide/teams), [Billing](/guide/billing), [Tenancy](/guide/tenancy) and
 [Webhooks](/guide/webhooks).
@@ -539,6 +614,7 @@ configured on the plugin that consumes it — see [Auth](/guide/auth),
 | --- | --- | --- |
 | `Error: @basaltkit/<pkg>-prisma: the Prisma client has no <model> model.` | — | A `prisma*` factory ran against a client whose schema lacks the models. Run `basalt prisma:sync --push`, then `prisma generate`. Lazy/proxy clients (database-per-tenant) skip the check and fail at first use instead |
 | `Error: @basaltkit/tenancy-prisma: domain "…" is already owned by tenant "…".` | — | `save()` tried to claim a custom domain another tenant owns. Domains are globally unique so routing stays unambiguous; the whole save is rejected before any write. The SQLite source enforces the same rule with a PRIMARY KEY constraint, inside a transaction that rolls back |
+| `ColumnLengthError: @basaltkit/<pkg>-prisma: <Model>.<column> is N characters, over its column limit of M.` | `COLUMN_LENGTH_EXCEEDED` | A store configured with `columnLimits` refused a value its MySQL column cannot hold. Nothing was written. Widen the column and raise the limit, or shorten the value — see [MySQL](#mysql) |
 | `AggregateError` from `bus.emit(...)` | — | A `captureEvents` outbox write failed. The capture is awaited on purpose — the emitter must see the failure rather than believe a lost event was recorded |
 | `EventValidationError` | `EVENT_INVALID` | The event's schema rejected the payload before any listener (including the outbox capture) ran |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | `OUTBOX` (or any store token) resolved without the plugin that registers it |
@@ -572,5 +648,8 @@ configured on the plugin that consumes it — see [Auth](/guide/auth),
 - For a compliance-grade **audit trail**, enable `integrity: 'hash-chain'`, revoke
   `UPDATE`/`DELETE` on `audit_entries`, and schedule `basalt audit:verify --all`
   ([above](#verifiable-audit-trail)).
+- On **MySQL**, copy the `schema.mysql.prisma` variants, pass
+  `{ columnLimits: 'mysql' }` to every `prisma*` factory, and keep the server in
+  strict mode ([above](#mysql)) — otherwise long values are silently truncated.
 
 See [Going to Production](/guide/production) for the full checklist.

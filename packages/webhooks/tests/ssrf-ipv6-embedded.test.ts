@@ -52,7 +52,7 @@ describe('SSRF guard — IPv6 forms that embed a private IPv4 are refused', () =
   it('refuses a hostname whose AAAA record is an IPv4-mapped loopback in hex form', async () => {
     await expect(
       resolveAndValidate('https://hook.example', { lookup: async () => [{ address: '::ffff:7f00:1', family: 6 }] }),
-    ).rejects.toThrow(/private address/)
+    ).rejects.toThrow(/private or reserved address/)
   })
 
   it('the deliverer never connects to an IPv4-mapped metadata literal', async () => {

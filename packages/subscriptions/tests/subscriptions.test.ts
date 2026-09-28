@@ -63,7 +63,9 @@ describe('Subscriptions lifecycle', () => {
     const subscriptions = setup()
     await subscriptions.subscribe('acme', 'pro')
 
-    const swapped = await subscriptions.swap('acme', 'scale')
+    // 'scale' is sales-led ('custom'): no gateway charges it, so the swap must
+    // be explicitly vouched for (FA-046).
+    const swapped = await subscriptions.swap('acme', 'scale', { allowUnpaid: true })
     expect(swapped.plan).toBe('scale')
 
     const atEnd = await subscriptions.cancel('acme')

@@ -1,10 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import type { Connection, RealtimeMessage } from './hub.js'
 
-/** Formats a message as a Server-Sent Events frame. */
+/**
+ * Formats a message as a Server-Sent Events frame. CR, LF and NUL are stripped
+ * from the event name: SSE splits fields on every line terminator, so an event
+ * name carrying one would end the `event:` field early and let its remainder
+ * forge extra fields or whole frames (FA-065). `data` needs no such care — JSON
+ * escapes every line terminator.
+ */
 export function sseFrame(message: RealtimeMessage): string {
   const data = JSON.stringify({ channel: message.channel, data: message.data })
-  return `event: ${message.event}\ndata: ${data}\n\n`
+  const event = String(message.event).replace(/[\r\n\u0000]/g, '')
+  return `event: ${event}\ndata: ${data}\n\n`
 }
 
 export interface ConnectionMeta {

@@ -15,6 +15,8 @@ export {
   MemorySubscriptionStore,
   MemoryUsageStore,
   MemoryWebhookStore,
+  InvalidUsageAmountError,
+  assertUsageAmount,
   type SubscriptionRecord,
   type SubscriptionStatus,
   type SubscriptionStore,
@@ -36,6 +38,7 @@ export {
   FakeBillingGateway,
   WebhookInvalidError,
   WebhookSecretMissingError,
+  CheckoutRequiredError,
   requireWebhookSecret,
   attestedPlan,
   attestedPlanForPrice,
@@ -114,6 +117,7 @@ export {
   FeatureUnavailableError,
   QuotaExceededError,
   GatewayUnsupportedError,
+  PaymentRequiredError,
   type SubscriptionsOptions,
 } from './subscriptions.js'
 export {
@@ -135,6 +139,7 @@ export {
   MemoryInvoiceStore,
   InvoiceNotFoundError,
   InvoiceStateError,
+  InvoiceInputError,
   planLine,
   overageLine,
   renderInvoiceText,

@@ -1,4 +1,10 @@
 import type { FileVersion, FileVersionStore } from '@basaltkit/files-versions'
+import { assertColumnLengths, resolveColumnLimits } from './column-limits.js'
+import { type FilesColumnLimits, filesMysqlColumnLimits, type PrismaFilesStoreOptions } from './mysql-limits.js'
+
+export { ColumnLengthError } from './column-limits.js'
+
+const PKG = '@basaltkit/files-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/files-versions`
@@ -43,7 +49,15 @@ const toVersion = (r: PFileVersion): FileVersion => {
 }
 
 export class PrismaFileVersionStore implements FileVersionStore {
-  constructor(private readonly client: PrismaFileVersionsClient) {}
+  private readonly limits: FilesColumnLimits | undefined
+
+  /** `options.columnLimits` as for `prismaFilesStore` — the `FileVersion` entry applies here. */
+  constructor(
+    private readonly client: PrismaFileVersionsClient,
+    options: PrismaFilesStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, filesMysqlColumnLimits)
+  }
 
   /**
    * Reads the highest version and inserts the next one.
@@ -61,6 +75,7 @@ export class PrismaFileVersionStore implements FileVersionStore {
     fileId: string,
     meta: { note?: string; by?: string } = {},
   ): Promise<FileVersion> {
+    assertColumnLengths(PKG, this.limits, 'FileVersion', { tenantId, groupId, fileId, note: meta.note, by: meta.by })
     const anterior = await this.client.fileVersion.findFirst({
       where: { tenantId, groupId },
       orderBy: { version: 'desc' },
@@ -108,8 +123,11 @@ export class PrismaFileVersionStore implements FileVersionStore {
  * fileVersionsPlugin({ store: prismaFileVersionsStore(prisma).store })
  * ```
  */
-export function prismaFileVersionsStore(client: PrismaFileVersionsClient): {
+export function prismaFileVersionsStore(
+  client: PrismaFileVersionsClient,
+  options: PrismaFilesStoreOptions = {},
+): {
   store: PrismaFileVersionStore
 } {
-  return { store: new PrismaFileVersionStore(client) }
+  return { store: new PrismaFileVersionStore(client, options) }
 }

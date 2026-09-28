@@ -1,0 +1,128 @@
+// Reference schema for @basaltkit/auth-prisma — MySQL variant.
+//
+// Same models as schema.prisma, sized for MySQL: a bare `String` becomes
+// VARCHAR(191) there, and outside strict mode MySQL truncates a longer value
+// silently — a cut password hash never verifies again, a cut sealed TOTP
+// secret no longer opens, a cut passkey public key no longer checks a
+// signature. Free-text columns are widened below; the keys stay VARCHAR(191)
+// so they can be indexed (every indexed column is short by design: hashed
+// tokens, session ids and row keys are 64 hex characters). MySQL has no
+// scalar lists, so `scopes` and `recoveryCodes` are `Json` (a JSON array of
+// strings) — the stores read either form. Pair it with
+// `prismaAuthStores(prisma, { columnLimits: 'mysql' })`, which refuses a value
+// that would still not fit instead of letting it be cut.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AuthUser {
+  id            String  @id
+  email         String  @unique @db.VarChar(254)
+  passwordHash  String  @db.Text
+  emailVerified Boolean @default(false)
+
+  @@map("auth_users")
+}
+
+model AuthSession {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model AuthRefreshToken {
+  token     String    @id
+  familyId  String
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([familyId])
+  @@index([userId])
+  @@map("auth_refresh_tokens")
+}
+
+model AuthToken {
+  token     String    @id
+  userId    String
+  purpose   String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([userId, purpose])
+  @@map("auth_tokens")
+}
+
+model AuthApiKey {
+  id         String    @id
+  name       String    @db.Text
+  prefix     String
+  hash       String    @unique
+  tenantId   String?
+  userId     String?
+  scopes     Json
+  createdAt  DateTime
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("auth_api_keys")
+}
+
+model AuthMfa {
+  userId        String  @id
+  secret        String  @db.Text
+  enabled       Boolean @default(false)
+  recoveryCodes Json
+  lastUsedStep  Int?
+
+  @@map("auth_mfa")
+}
+
+model AuthTokenVersion {
+  userId  String @id
+  version Int    @default(0)
+
+  @@map("auth_token_versions")
+}
+
+model AuthAccountLink {
+  // SHA-256 (hex) of provider + NUL + subject — the natural key hashed so the
+  // primary key stays short (an OIDC `sub` may be 255 characters).
+  id        String   @id
+  provider  String
+  subject   String   @db.Text
+  userId    String
+  email     String   @db.Text
+  createdAt DateTime
+
+  @@index([userId])
+  @@map("auth_account_links")
+}
+
+model AuthPasskey {
+  // SHA-256 (hex) of the credential id (credential ids reach 1 023 bytes).
+  id           String    @id
+  credentialId String    @db.Text
+  userId       String
+  publicKey    String    @db.Text
+  counter      BigInt
+  transports   String?   @db.Text
+  deviceName   String?   @db.Text
+  createdAt    DateTime
+  lastUsedAt   DateTime?
+
+  @@index([userId])
+  @@map("auth_passkeys")
+}

@@ -73,7 +73,7 @@ queuePlugin({ driver: new BullmqQueueDriver({ connection: process.env.REDIS_URL!
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
-| `connection` | `string \| ConnectionOptions` | Yes | — | Redis URL (`redis://…` / `rediss://…`, TLS inferred) or ioredis options. |
+| `connection` | `string \| ConnectionOptions` | Yes | — | Redis URL (`redis://…` / `rediss://…`, TLS inferred) or ioredis options. Percent-encoded credentials in the URL (`p%40ss` for `p@ss`) are decoded before they reach Redis. |
 | `onError` | `(error, { queue, source: 'worker' \| 'queue' }) => void` | No | `console.error` with context | See [Failure hooks](#failure-hooks). |
 | `onJobFailed` | `({ queue, job, jobId?, error }) => void` | No | `console.error` with context | See [Failure hooks](#failure-hooks). |
 
@@ -105,7 +105,7 @@ BullMQ's `Worker` and `Queue` are EventEmitters, and an emitted `'error'` with n
 | Hook | Fires when | Default |
 |---|---|---|
 | `onError` | Infrastructure fault — Redis down, a connection dropped. `source` tells you whether it came from a worker or a producer-side queue. | `console.error` with context, prefix `[basalt:queue]` |
-| `onJobFailed` | A job exhausted its retries and is permanently failed. | `console.error` with context |
+| `onJobFailed` | A job exhausted its retries (or threw BullMQ's `UnrecoverableError`) and is permanently failed. Fires **once per job** — BullMQ emits `'failed'` after every attempt, and the driver skips the attempts it is about to retry. | `console.error` with context |
 
 Both default to observable-and-never-fatal rather than silent. Without `onJobFailed`, a permanently failed job is only visible by polling `queue:stats`.
 
