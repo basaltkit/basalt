@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { fail, RPC_ERRORS } from './protocol.js'
 import { isInitializeRequest, MCP_SESSION_HEADER, McpSessions, type McpSessionOptions } from './sessions.js'
@@ -222,10 +222,13 @@ export function serveHttp(server: StdioServerLike, options: ServeHttpOptions = {
     reject(res, 413, RPC_ERRORS.INVALID_REQUEST, `Request body exceeds ${maxBodyBytes} bytes`)
   }
 
+  // Sessions are in-memory: a per-process key makes the fingerprint useless
+  // for guessing credentials offline, unlike a bare hash.
+  const principalKey = randomBytes(32)
   const principalOf = async (req: IncomingMessage): Promise<string> => {
     if (options.principal) return (await options.principal(req)) ?? ''
     const auth = headerOf(req, 'authorization')
-    return auth === undefined ? '' : createHash('sha256').update(auth).digest('base64url')
+    return auth === undefined ? '' : createHmac('sha256', principalKey).update(auth).digest('base64url')
   }
 
   const authorized = async (req: IncomingMessage): Promise<boolean> => {
