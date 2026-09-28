@@ -1,5 +1,41 @@
 # @basaltkit/http
 
+## 2.6.0
+
+### Minor Changes
+
+- b69ea05: Boot-time route-meta validation and side-effect-free route visibility (framework audit FA-044 / FA-035 residuals).
+  
+  - **Route-meta validators.** Plugins can register a `RouteMetaValidator` in the new `META_VALIDATORS_BUCKET` (`'http:meta-validators'`) to check the *values* their meta keys carry. Every adapter (Fastify, Express, Hono — identically, covered by the shared parity suite) runs them over its full route list at boot, right after the guarded-meta check, and refuses to boot with the new `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`, listing every `route: problem`). A validator that throws counts as a problem. `allowUnguardedMeta` never waives them. `assertRoutesGuarded(routes, container)` now runs them too, and `assertRouteMetaValid(routes, container)` runs them alone — for code driving `runRoute()` without an adapter. Passing a plain `Set` of claimed keys keeps the old behaviour (no validators).
+  - **Route visibility.** New `ROUTE_VISIBILITY_BUCKET` (`'http:route-visibility'`) + `RouteVisibilityCheck` contract: a pure, side-effect-free companion of a guard ("could this caller possibly pass?") for surfaces that list routes. `isRouteVisible(route, context, container)` hides a `meta.auth` route from a caller without `context.user` (only when a guard claimed `auth`) and applies every registered check (a throwing check hides the route). Visibility is never authorization.
+  - The adapters now pass the container to `assertRoutesGuarded` instead of a `Set`.
+- e53db52: Adapter parity helpers and fixes (framework audit FA-080, FA-H25).
+  
+  - `metricsPlugin`: the `http_requests_in_flight` gauge counts per request. A
+    pre-hook that answered before the metrics hook ran (a 429, a CORS preflight)
+    still ran the after-hook, and the gauge went negative.
+  - `assertRoutesGuarded(routes, container, allow?)` now also takes a booted
+    app's container, reading the claimed keys from it — the same boot check the
+    adapters make, for code that calls `runRoute()` without an adapter.
+  - New `isJsonMediaType()`, `mediaTypeOf()` and `DEFAULT_BODY_LIMIT` (1 MiB): the
+    one rule every adapter uses to recognise a JSON body (`application/json` or
+    `+json`, never a substring match) and the shared default body limit.
+  - `rawBodyRouteMatcher(routes, { caseInsensitive })` for routers that match
+    paths regardless of case.
+  - Docs: the `RateLimitKey` docstring no longer claims there is never a shared
+    bucket — with no resolvable IP every request shares `unknown` (fail closed).
+
+### Patch Changes
+
+- e54b7b1: Security and correctness fixes from the framework audit.
+  
+  - **Rate-limit buckets that used up their limit are never evicted (FA-014).** `MemoryRateLimitStore` evicted the oldest windows once `maxEntries` was reached — including a client that was currently limited, so a flood of fresh keys (cheap with IPv6) reset it early. Exhausted buckets are now held apart and kept until their window ends; only open windows are evicted, still in amortised O(1).
+  - **CORS preflights go through the rate limiter and disclose nothing to disallowed origins (FA-015).** `securityPlugin` answered `OPTIONS` preflights before the rate limiter, so they were never counted; they now count against the global bucket (past it, `429`). A preflight from an origin the `cors` config does not allow still gets `204`, but without `Access-Control-Allow-Methods`, `-Allow-Headers` (which echoed the requested headers) or `-Max-Age`.
+  - **A toolkit 500 no longer serialises its internal message (FA-041).** `toErrorResponse` sent the message of any `BasaltError` with a numeric `status` — for internal 500s such as `GuardsWithoutContainerError` or `UserUpdateUnsupportedError` that text names options and internals. A `BasaltError` with `status` 500 now answers its `code` with `Internal server error.` and no `details`; the adapters still report the real error to the log. `HttpError`, errors that set `expose = true`, and other 5xx statuses (a 503 "retry shortly", a 501 "not supported") are client-facing by design and unchanged.
+  - **`expose = false` hides an error's message at any status.** A `BasaltError` that sets `expose = false` answers only its `code` and a neutral message (`Bad gateway.` for a 502, `Service unavailable.` for a 503, …) without `details`, and keeps the real text for the log. Used by `OAuthExchangeError` and `DriveHostNotAllowedError`, whose 502 messages quoted an upstream reply or an internal host.
+- Updated dependencies [e54b7b1]
+  - @basaltkit/core@1.5.0
+
 ## 2.5.0
 
 ### Minor Changes

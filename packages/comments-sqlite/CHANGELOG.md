@@ -1,5 +1,12 @@
 # @basaltkit/comments-sqlite
 
+## 1.0.5
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+  - @basaltkit/comments@4.0.0
+
 ## 1.0.4
 
 ### Patch Changes

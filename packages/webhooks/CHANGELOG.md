@@ -1,5 +1,33 @@
 # @basaltkit/webhooks
 
+## 3.0.0
+
+### Major Changes
+
+- b69ea05: Framework audit residuals (FA-070 D8 and the SSRF/registration follow-ups).
+  
+  - **`MemoryWebhookStore.add()` refuses an id held by another scope**, like the SQLite and Prisma stores: re-adding an id replaces it only within the same tenant (or global), and a cross-scope id throws the new `WebhookEndpointIdInUseError` (`WEBHOOK_ENDPOINT_ID_IN_USE`, 409). The check and write are atomic, so two concurrent `register()` calls with the same id from two tenants no longer let the second overwrite the first. `WebhookManager.register()` throws the same error from its pre-check (it used to be a plain `Error`).
+  - **`register()` validates the endpoint before storing it.** A `url` that is not an absolute URL, a scheme outside the deliverer's allowlist (`ssrf.allowedSchemes`, default `http:`/`https:` — new `WebhookDeliverer.allowedSchemes` getter), a `secret` shorter than `MIN_WEBHOOK_SECRET_LENGTH` (16), or an empty/invalid `events` list throws the new `WebhookEndpointInvalidError` (`WEBHOOK_ENDPOINT_INVALID`, 400). These endpoints used to be stored and then fail on every delivery. Host reachability is still checked at delivery time.
+  - **SSRF guard blocks more special-purpose ranges:** the documentation networks `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, the deprecated 6to4 relay anycast `192.88.99.0/24`, and the IPv6 documentation prefix `3fff::/20` (RFC 9637) — including when embedded in IPv4-mapped, NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses. (`198.18.0.0/15`, `240.0.0.0/4`, `100.64.0.0/10` and `2001:db8::/32` were already blocked.)
+  
+  **Why major:** `register()` now throws for endpoints it used to accept (bad URL, short secret, empty events), and `MemoryWebhookStore.add()` throws where it used to overwrite another tenant's endpoint. Migration: validate endpoint input before calling `register()` (or map `WEBHOOK_ENDPOINT_INVALID` to a 400); custom stores should refuse cross-scope ids in `add()` the same way.
+- e54b7b1: Security and correctness fixes from the framework audit (FA-021..FA-027).
+  
+  - **`null` means absent (FA-021).** A SQL row with `secret: null` crashed `deliver()` with a `TypeError`, and `tenantId: null` was treated as tenant-bound (refused with "tenant endpoint has no own secret"). Both are now treated exactly like a missing field. `dispatch()` is also resilient: an endpoint whose delivery throws becomes a failed result (`error: 'internal delivery error'`, logged server-side) instead of rejecting the whole dispatch.
+  - **`unregister()` re-verifies ownership (FA-022).** With a tenant (ambient or explicit), the manager only calls `store.remove` when the endpoint is in that tenant's own `list()` (re-filtered), so a store whose `remove` ignores the tenant can no longer be used for a cross-tenant delete. The README example store now takes and honours `tenantId`.
+  - **Outbox: stable delivery ids, no re-dispatch of permanent failures (FA-023).** Deliveries made through `webhookOutboxDispatch` carry an `id` derived from the outbox entry id and the endpoint id (`deriveDeliveryId`), identical across outbox retries and restarts. An entry is re-queued only for retryable failures (network, timeout, `5xx`, `408`/`429`); a retry skips endpoints that already accepted it. Permanent failures (SSRF-blocked, redirect, other `4xx`, refused secret) go to the new `onPermanentFailure` hook (default `console.warn`). New: `DeliveryResult.retryable`, `dispatch(…, { idempotencyKey, skipEndpointIds })`, `deliver(…, { deliveryId })`.
+  - **`verifySignature()` rejects an invalid tolerance (FA-024).** A `toleranceSeconds` that is not a finite number ≥ 0 (e.g. `NaN` from an unset env var) or a non-finite `nowSeconds` now throws a `RangeError` instead of accepting a signature of any age.
+  - **Custom `fetchImpl` and DNS pinning (FA-025).** New `pinnedFetch` — a `fetch`-compatible client over the pinned transport that honours `init[PINNED_ADDRESS]` — for wrappers that must keep rebind protection; declare such a client with `fetchImplPinsAddress: true`. Any other custom `fetchImpl` (with the SSRF guard on) emits a one-time `BASALT_WEBHOOKS_UNPINNED_FETCH` process warning and has its host re-validated before every retry. The README no longer claims the default is global `fetch`.
+  - **No internal-DNS oracle (FA-026).** A URL blocked on a DNS verdict reports one generic error (`host does not resolve to an allowed public address`) with no resolved address, identical for "private" and "unresolvable"; the address is kept on `WebhookUrlBlockedError.resolvedAddress` for server-side logs only.
+  - **Each retry is signed with its own timestamp (FA-027)**, so a retry after a long backoff still passes the receiver's replay tolerance. The signed body is unchanged across attempts.
+  
+  **Why major:** no export or option was removed, but behaviour that existing code can observe changed (all of it on broken or unsafe paths): `verifySignature` now throws only for a tolerance that silently disabled replay protection; the outbox stops re-queuing failures that could never succeed (they previously ended dead-lettered after re-delivering duplicates to healthy endpoints — hook `onPermanentFailure` to alert on them); the DNS-blocked `error` string is intentionally less specific. A custom `WebhookManager` stand-in used with `webhookOutboxDispatch` now receives an options object (`{ tenantId, idempotencyKey, skipEndpointIds }`) as the third `dispatch` argument, which the real manager already accepted.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+  - @basaltkit/core@1.5.0
+
 ## 2.0.0
 
 ### Major Changes

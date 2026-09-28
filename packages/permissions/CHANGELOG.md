@@ -1,5 +1,42 @@
 # @basaltkit/permissions
 
+## 3.0.0
+
+### Major Changes
+
+- b69ea05: Framework audit residuals: empty permission segments and malformed store writes.
+  
+  - **An empty segment never matches.** `permissionMatches('projects:*', 'projects:')` and `permissionMatches('', '')` used to return `true` (the wildcard matched the empty action; equal strings short-circuited). A permission with an empty `:` segment — `''`, `'projects:'`, `':read'`, `'a::b'` — now matches nothing, not even itself, and `'*'` does not cover it. New `hasEmptySegment(permission)` (also on the browser-safe `@basaltkit/permissions/match` entry).
+  - **The Gate refuses such permissions.** `can()`, `grantToRole`/`grantToUser`/`grantTemporarily`/`delegate` and `roleCatalog` throw a `TypeError` for a permission with an empty segment, as they already did for whitespace. `MemoryAccessStore.assignRole`/`grantToRole` also refuse an empty or non-string role name.
+  - **`SqliteAccessStore` / `PrismaAccessStore` validate direct writes.** `assignRole`, `removeRole`, `grantToRole` and `grantToUser` throw a `TypeError` for an empty or non-string user id, role name or scope, or a permission list that is not an array of non-empty strings — before anything is written. `''`, `null` and `undefined` used to be persisted and shared one "nobody" key.
+  
+  **Why major:** input that used to be accepted now throws. Migration: find stored grants with an empty segment (`SELECT … WHERE permission LIKE '%:' OR permission LIKE ':%' OR permission LIKE '%::%' OR permission = ''`) — they never granted anything meaningful and can be deleted; seed scripts that write to the store directly must pass real ids and role names.
+- e54b7b1: Security fixes from the framework audit (FA-002..FA-006, FA-H14).
+  
+  - **Policy lookup no longer walks `Object.prototype` (FA-002).** `project:constructor` / `project:toString` used to resolve to `Object` / `Object.prototype.toString` and authorize anyone; `project:hasOwnProperty` crashed with a `TypeError`. Checks are now snapshotted into a prototype-free lookup of their own entries (in `definePolicy` and `gate.register`), a check authorizes only when it returns exactly `true`, and `can()` refuses a permission that is not a non-empty string without whitespace.
+  - **Only an exact `resource:action` selects a policy check (FA-003).** `project:update:billing` was decided by the `update` check; it is now a missing policy (`MissingPolicyError`, or RBAC with `onMissingPolicy: 'rbac'`).
+  - **A missing user id is not a user (FA-004).** `can`/`authorize`/`hasRole` with no user, or one without a non-empty string `id`, throw `AuthRequiredGuardError` (401) instead of a `TypeError` or a check against the shared `undefined`/`null` bucket; writes (`assignRole`, `grantToUser`, …, and `MemoryAccessStore`) refuse such ids with a `TypeError`; the `meta.can` guard treats `context.user = {}` as unauthenticated.
+  - **The Gate re-verifies what `TemporaryGrantStore` / `DelegationStore` return (FA-005)** — user, scope and a finite `expiresAt > now` on the Gate's clock — so a lax durable store cannot make temporary grants permanent. `grantTemporarily()` / `delegate()` refuse a non-finite (`Infinity`) or past `expiresAt`.
+  - **`grantTemporarily()` requires `ttlMs` or `expiresAt` (FA-H14).** Without either it used to write an already-expired grant silently; it now throws a `TypeError`.
+  - **Scope-less writes outside a tenant fail closed in multi-tenant apps (FA-006).** With tenancy active (`permissionsPlugin` reads `tenancyPlugin`'s `tenancy:active` marker; `new Gate` takes `tenancyActive`), `assignRole`/`removeRole`/`grantToRole`/`grantToUser`/`grantTemporarily`/`delegate` with no `scope` and no tenant in the context throw the new `ScopeRequiredError` (`PERMISSION_SCOPE_REQUIRED`, 400) instead of writing a platform-wide `@global` grant. Single-tenant apps and Gates with a custom `scope` option are unaffected.
+  
+  **Why major:** these fixes change defaults callers may rely on. In a multi-tenant app, code that wrote global grants implicitly outside a request (seed scripts, CLI tasks, central endpoints) now throws — pass `GLOBAL_SCOPE` explicitly, or set `allowGlobalWrites: true` to restore the old fallback. `grantTemporarily()` without a deadline, three-segment permissions checked against a policy, and `can()` with a malformed user or permission now throw instead of answering.
+
+### Minor Changes
+
+- b69ea05: `permissionsPlugin` registers an `http:route-visibility` check for `meta.can` (framework audit FA-035 residual), so listings such as `@basaltkit/mcp`'s `tools/list` hide routes whose permission(s) the caller lacks.
+  
+  The check asks the guard's own question — `gate.can(user, permission)` for every entry (all-of), in the current scope, `superAdmin` short-circuiting — through a path with no side effects: `can()` without a resource only reads grants and never emits `permission:denied`, so listings stay out of the audit trail. No user or an unenforceable `meta.can` hides the route (the guard would refuse it). Policies never decide `meta.can` (the guard passes no resource), so a resource-level `authorize()` inside a handler is invisible to listings: such a route stays listed and is refused on the call. Visibility is never authorization — every call still runs the guard. Keep a `superAdmin` callback pure; listings consult it too.
+
+### Patch Changes
+
+- Updated dependencies [e54b7b1]
+- Updated dependencies [e54b7b1]
+- Updated dependencies [b69ea05]
+- Updated dependencies [e53db52]
+  - @basaltkit/core@1.5.0
+  - @basaltkit/http@2.6.0
+
 ## 2.1.0
 
 ### Minor Changes

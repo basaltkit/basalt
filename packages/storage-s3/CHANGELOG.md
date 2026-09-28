@@ -1,5 +1,13 @@
 # @basaltkit/storage-s3
 
+## 1.3.1
+
+### Patch Changes
+
+- Updated dependencies [b69ea05]
+- Updated dependencies [e54b7b1]
+  - @basaltkit/storage@4.0.0
+
 ## 1.3.0
 
 ### Minor Changes
