@@ -3,6 +3,7 @@ import { BasaltError } from '@basaltkit/core'
 import type { BillingPeriod } from '../plans.js'
 import {
   attestedPlanForPrice,
+  CheckoutRequiredError,
   requireWebhookSecret,
   WebhookInvalidError,
   type BillingGateway,
@@ -78,12 +79,15 @@ export interface PaddleGatewayOptions {
  * HTTP goes through an injectable fetch; webhook signatures are verified with
  * node:crypto using Paddle's `Paddle-Signature` scheme (`ts=…;h1=…`).
  *
- * Paddle is checkout-first: `createSubscription` and `createCheckoutSession`
- * both create a **transaction** (the subscription materializes once the customer
- * pays, and its id arrives on a `subscription.*` webhook via `gatewayRef`).
+ * Paddle is checkout-first: `createCheckoutSession` creates a **transaction**
+ * (the subscription materializes once the customer pays, and its id arrives on
+ * the webhooks via `gatewayRef`). There is no server-side "create a paid
+ * subscription", so `createSubscription` throws {@link CheckoutRequiredError} —
+ * use `Subscriptions.checkout()`.
  */
 export class PaddleBillingGateway implements BillingGateway {
   readonly name = 'paddle'
+  readonly signatureHeader = 'paddle-signature'
   private readonly fetch: typeof fetch
   private readonly now: () => number
   private readonly tolerance: number
@@ -100,15 +104,14 @@ export class PaddleBillingGateway implements BillingGateway {
       ((event) => (event as PaddleEvent | undefined)?.data?.custom_data?.['billableId'])
   }
 
-  async createSubscription(input: CreateSubscriptionInput): Promise<{ gatewayRef: string }> {
-    const customer = await this.options.customerId(input.billableId)
-    const created = await this.request('POST', '/transactions', {
-      items: [{ price_id: this.options.priceId(input.plan, input.period), quantity: 1 }],
-      customer_id: customer,
-      collection_mode: 'automatic',
-      custom_data: { billableId: input.billableId, plan: input.plan, period: input.period },
-    })
-    return { gatewayRef: String((created as { id?: string }).id) }
+  /**
+   * Always throws {@link CheckoutRequiredError}. Creating a transaction here and
+   * returning its `txn_…` id as the subscription ref activated the plan before
+   * anything was paid, and left a ref that `cancel`/`swap` could not address
+   * (`/subscriptions/txn_…` does not exist).
+   */
+  async createSubscription(_input: CreateSubscriptionInput): Promise<{ gatewayRef: string }> {
+    throw new CheckoutRequiredError('Paddle')
   }
 
   async cancelSubscription(gatewayRef: string, options: { atPeriodEnd: boolean }): Promise<void> {
@@ -139,6 +142,11 @@ export class PaddleBillingGateway implements BillingGateway {
     return { url: String(created.urls?.general?.overview) }
   }
 
+  async resumeSubscription(gatewayRef: string): Promise<void> {
+    // Removing the scheduled change withdraws a `next_billing_period` cancel.
+    await this.request('PATCH', `/subscriptions/${gatewayRef}`, { scheduled_change: null })
+  }
+
   async swapSubscription(gatewayRef: string, input: SwapInput): Promise<void> {
     await this.request('PATCH', `/subscriptions/${gatewayRef}`, {
       items: [{ price_id: this.options.priceId(input.plan, input.period), quantity: 1 }],
@@ -152,22 +160,29 @@ export class PaddleBillingGateway implements BillingGateway {
     const secret = requireWebhookSecret('PaddleBillingGateway', this.options.webhookSecret)
     if (!signature) throw new WebhookInvalidError()
 
-    // Paddle-Signature: `ts=1700000000;h1=<hex hmac>`
-    const parts = Object.fromEntries(
-      signature.split(';').map((pair) => {
-        const index = pair.indexOf('=')
-        return [pair.slice(0, index).trim(), pair.slice(index + 1)]
-      }),
-    ) as { ts?: string; h1?: string }
-    const timestamp = Number(parts.ts)
-    if (!Number.isFinite(timestamp) || !parts.h1) throw new WebhookInvalidError()
+    // Paddle-Signature: `ts=1700000000;h1=<hex hmac>[;h1=…]` — during a secret
+    // rotation Paddle sends one `h1` per active secret; any of them may match.
+    let ts: string | undefined
+    const candidates: string[] = []
+    for (const pair of signature.split(';')) {
+      const index = pair.indexOf('=')
+      if (index < 0) continue
+      const key = pair.slice(0, index).trim()
+      const value = pair.slice(index + 1).trim()
+      if (key === 'ts') ts = value
+      else if (key === 'h1' && value !== '') candidates.push(value)
+    }
+    const timestamp = Number(ts)
+    if (ts === undefined || ts === '' || !Number.isFinite(timestamp) || candidates.length === 0) {
+      throw new WebhookInvalidError()
+    }
 
-    const expected = createHmac('sha256', secret)
-      .update(`${parts.ts}:${rawBody}`)
-      .digest('hex')
-    const a = Buffer.from(expected)
-    const b = Buffer.from(parts.h1)
-    if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
+    const expected = Buffer.from(createHmac('sha256', secret).update(`${ts}:${rawBody}`).digest('hex'))
+    const matches = candidates.some((candidate) => {
+      const received = Buffer.from(candidate)
+      return received.length === expected.length && timingSafeEqual(received, expected)
+    })
+    if (!matches) throw new WebhookInvalidError()
 
     if (Math.abs(this.now() / 1000 - timestamp) > this.tolerance) throw new WebhookInvalidError()
 
@@ -178,7 +193,8 @@ export class PaddleBillingGateway implements BillingGateway {
       throw new WebhookInvalidError()
     }
 
-    const type = event.event_type ? EVENT_MAP[event.event_type] : undefined
+    const type =
+      event.event_type && Object.hasOwn(EVENT_MAP, event.event_type) ? EVENT_MAP[event.event_type] : undefined
     if (!type || !event.event_id) return null
     const billableId = this.resolveBillableId(event)
     if (!billableId) return null

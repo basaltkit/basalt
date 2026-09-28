@@ -79,6 +79,8 @@ export interface FakeGoogleOptions {
   redirectHost?: string
   /** Serve bytes straight from the API host instead of redirecting. */
   directDownload?: boolean
+  /** The real id behind Drive's `root` alias (My Drive), when a test needs one. */
+  myDriveId?: string
 }
 
 /** One recorded request, so a test can assert on what actually went on the wire. */
@@ -327,7 +329,8 @@ export class FakeGoogle {
   }
 
   private metadata(id: string): TransportReply {
-    const entry = this.files.get(id)
+    // `root` is an alias Drive resolves to the caller's My Drive folder.
+    const entry = this.files.get(id === 'root' && this.options.myDriveId !== undefined ? this.options.myDriveId : id)
     if (!entry) return googleError(404, 'notFound', 'File not found.')
     return json(200, resource(entry))
   }

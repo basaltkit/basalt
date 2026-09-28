@@ -101,6 +101,7 @@ browse, and `q.dead` to inspect exhausted jobs.
 | `maxPriority` | `number` | `10` | Maximum priority level declared as `x-max-priority` on the main queue. Raise it only if you actually use more levels — RabbitMQ allocates a sub-queue per level. |
 | `drainTimeoutMs` | `number` | `10_000` | How long `close()` waits for in-flight handlers to finish so their acks land on a live channel. Anything unfinished stays **unacked** and the broker redelivers it. Raise it if your handlers are long-running. |
 | `onError` | `(error: unknown, info: { source: 'connection' \| 'channel' }) => void` | `console.error` with the source | The single fault channel for this driver — see below. |
+| `reconnectDelayMs` | `number` | `1000` | First wait before re-subscribing workers after the channel/connection closed under the driver; doubles on each consecutive failure, capped at 30 s. |
 | `connect` | `(url: string) => Promise<AmqpConnection>` | `amqplib` | Injectable connector; tests pass a fake so no broker is needed. |
 
 Implements the `QueueDriver` contract from `@basaltkit/queue` (`add`, `startWorker`, `setExecutor`, `close`, `capabilities`). It does **not** implement the optional `stats` / `retryFailed`, so `basalt queue:stats` and `basalt queue:retry` report the operation as unsupported.
@@ -114,10 +115,16 @@ amqplib surfaces broker faults as EventEmitter `'error'` events, and an unlisten
 | `source` | Raised when |
 |---|---|
 | `'connection'` | The amqplib connection emitted `'error'`, **or** a worker failed to connect/assert/consume at boot. Without this the app would report healthy with zero workers and the rejection would kill the process. |
-| `'channel'` | The channel emitted `'error'`, **or** a retry/dead-letter re-publish went unconfirmed / the `ack` itself threw. Nothing was acked in that case, so the broker still owns the job and redelivers it. |
+| `'channel'` | The channel emitted `'error'`, **or** a retry/dead-letter re-publish went unconfirmed / the `ack` itself threw (nothing was acked in that case, so the broker still owns the job and redelivers it), **or** the channel/connection closed and the driver is reconnecting. |
 
 There is no `onJobFailed` here: a job that exhausts `attempts` is routed to `q.dead`, which *is*
 the report. Watch that queue's depth.
+
+**Channel loss is recovered.** When the channel or its connection closes (broker restart,
+network cut, a channel-level protocol error), the driver drops the dead channel, the next
+`add()` opens a fresh one, and every started worker is re-subscribed with exponential backoff
+(`reconnectDelayMs`, up to 30 s) until the broker is back. A failed connect is never cached.
+Messages that were unacked on the dead channel are redelivered by the broker.
 
 ### Exported errors
 
@@ -128,9 +135,11 @@ option-compatibility errors (`UnsupportedJobOptionError`, `QUEUE_UNSUPPORTED_OPT
 ### Hard limits
 
 Attempt and backoff values travel in message headers, which a broker client other than yours
-could forge, so the consumer clamps what it reads: at most **50** attempts and a backoff TTL of
-at most **24 h** (the exponent is capped at 16). A crafted message cannot turn the retry loop
-into an amplification attack.
+could forge, so the consumer clamps what it reads: the current attempt to an integer in
+**1..50** (a negative `x-basalt-attempt` used to buy unlimited retries), at most **50**
+attempts, and a backoff TTL between **0** and **24 h** (the exponent is capped at 16; a negative
+backoff used to become an `expiration` the broker rejects by closing the channel). A crafted
+message cannot turn the retry loop into an amplification attack.
 
 ## Important caveat
 

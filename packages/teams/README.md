@@ -89,9 +89,10 @@ await teams.addMember('acme', 'ada-id', 'owner')
 
 ### Invitations
 
-- `invite({ tenantId, email, role?, invitedBy?, actingUserId? })` creates (or replaces) the invitation — **one pending invitation per email per team**; a new one revokes the previous. Default role: `'member'`. Validity: `inviteTtl` (default `'7d'`).
+- `invite({ tenantId, email, role?, invitedBy?, actingUserId? })` creates (or replaces) the invitation — **one pending invitation per email per team**; a new one revokes the previous. The address is stored in canonical form (`canonicalInviteEmail`: trimmed and lower-cased, the same folding `@basaltkit/auth` applies), so `Bob@x.test` and `bob@x.test` are one invitee — a later `member` invite supersedes an earlier `admin` one whatever the case, including mixed-case rows written before 4.0. No Unicode-compatibility (NFKC) folding: it would merge distinct mailboxes. Default role: `'member'`. Validity: `inviteTtl` (default `'7d'`).
 - Returns `{ invitation, token }` — `invitation` is `PublicInvitation` (without the token) and `token` is used to build the link. The `team:invited` hook receives the same pair.
 - Only the **SHA-256 hash** of the token is persisted; the raw value exists solely in the emailed link. A leak of the invitations table can't be replayed to accept an invite.
+- The `team:invited` hook carries the **raw** token — it is the delivery channel for the link. `@basaltkit/audit`'s default redactor masks `token` keys; redact it yourself in any other catch-all hook listener.
 - `accept(token, userId, acceptingEmail?)` consumes the token (single use) and enrolls the user with the invitation's role. Unknown, used, revoked, or expired token → `TeamInviteInvalidError` (400).
 - Pass the caller's **verified** email as `acceptingEmail` and acceptance is bound to the invited address, so a forwarded or leaked link can't enroll a different account. A mismatch throws the *same* `TEAM_INVITE_INVALID` as a bad token, so a wrong recipient can't distinguish a real token from a fake one. `teamRoutes()` passes `ctx().user.email` for you; omit it only in trusted server-side flows.
 - `POST /team/invites/accept` also requires `ctx().user.emailVerified === true` (`403 TEAM_EMAIL_NOT_VERIFIED`) and refuses callers with no email. Opt out only with `teamRoutes({ requireVerifiedEmail: false })`. Acceptance is a compare-and-set in every bundled store, so a token enrolls at most one account even under concurrency.
@@ -122,6 +123,11 @@ await teams.changeRole('acme', 'owner-1', 'member', { actingUserId: 'admin-1' })
 Omit `actingUserId` for trusted server-side seeding (creating a tenant's first
 owner). `teamRoutes()` always passes the caller's id, so the HTTP surface is
 guarded by default. A non-member actor gets `NotATeamMemberError`.
+
+"At least as high" is deliberate: peers can manage peers — an admin can re-role
+or remove another admin, and an owner another owner (the last-owner rule still
+applies). If your product needs "only strictly higher ranks manage a role", give
+that tier its own rank.
 
 ### Members and roles
 
@@ -210,7 +216,7 @@ rows.
 
 ### Custom role hierarchy
 
-Roles are free-form strings; the hierarchy is a name → rank map (roles outside the map have rank 0):
+Roles are free-form strings; the hierarchy is a name → rank map. Only **ranked** roles have a hierarchy: `can()` / `meta.teamRole` with a ranked role admits holders of that rank or higher (and never a holder of an unranked role), while a role outside the map (e.g. one from `grantableRoles`) is matched **exactly** — it never ranks 0 and admits everyone:
 
 ```ts
 import { Teams } from '@basaltkit/teams'
@@ -236,6 +242,13 @@ const myRoute = route({
 ```
 
 No tenant or no user in context → `NotATeamMemberError` (403).
+
+The required role must be a **known** role — ranked in `roleRank` or listed in
+`grantableRoles`. A typo (`'Admin'`, `'adimn'`), an empty string or a non-string
+value fails closed with `UnknownTeamRoleError` (`TEAM_ROLE_UNKNOWN`, 500) on every
+request to that route; before 4.0 such a role ranked 0 and admitted every member.
+Only `undefined` and `false` mean "no requirement" (the same rule the adapters'
+boot check uses).
 
 `teamsPlugin` also claims `'teamRole'` in the `http:guarded-meta` bucket, so a
 route declaring `meta.teamRole` in an app that never registered `teamsPlugin`
@@ -301,7 +314,8 @@ this role outrank `member`?"*. That matters because `rankOf()` returns **0** for
 any role absent from `roleRank` — with rank semantics, a genuine member holding
 a custom role like `billing-contact` would be rejected. Set `role: 'member'`
 only when you deliberately want rank enforcement and every role you use is in
-`roleRank`.
+`roleRank`. An unknown `role` (not ranked, not in `grantableRoles`) fails closed
+with `TEAM_ROLE_UNKNOWN` (500).
 
 #### Cache staleness
 
@@ -328,10 +342,11 @@ member can also be denied for up to `ttlMs`.
 | `invitation(id)` | `Promise<PublicInvitation \| null>` | One invitation (without the token). |
 | `revokeInvite(id)` | `Promise<void>` | Cancels a pending invitation. |
 | `roleOf(tenantId, userId)` | `Promise<TeamRole \| null>` | User's role (or null). |
-| `can(tenantId, userId, required)` | `Promise<boolean>` | Has the required role or higher? |
+| `can(tenantId, userId, required)` | `Promise<boolean>` | Has the required ranked role or higher? An unranked `required` is matched exactly; `''` / non-string → `false`. |
+| `isKnownRole(role)` | `boolean` | Ranked in `roleRank` or listed in `grantableRoles`. |
 | `changeRole(tenantId, userId, role, opts?)` | `Promise<Membership>` | Changes the role; protects the last owner. `opts.actingUserId` enforces the escalation guard. |
 | `removeMember(tenantId, userId)` | `Promise<void>` | Removes; protects the last owner. |
-| `rankOf(role)` | `number` | Rank of the role (0 if unknown). |
+| `rankOf(role)` | `number` | Rank of the role (0 if unknown — never use it alone as an authorization check; use `can()`). |
 
 ### Ready-made routes — `teamRoutes()`
 
@@ -362,7 +377,8 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 | `Membership` | `{ tenantId, userId, role, createdAt }`. |
 | `Invitation` / `PublicInvitation` | Invitation with/without the `token` field. |
 | `MembershipStore` / `InvitationStore` | Interfaces for you to implement over your DB. |
-| `MemoryMembershipStore` / `MemoryInvitationStore` | In-memory implementations (dev/testing). |
+| `MemoryMembershipStore` / `MemoryInvitationStore` | In-memory implementations (dev/testing). Records are copied in and out — mutating a returned object never rewrites the store. |
+| `canonicalInviteEmail(email)` | The canonical invitation address (trimmed, lower-cased). Custom `InvitationStore`s should compare this form on both sides in `findPending`. |
 | `MemberUser` | `{ id, email, emailVerified? }` — the safe user shape a team listing exposes. |
 | `MemberUserSource` | `{ findById(id), findByIds?(ids) }` — the user directory `users` expects; `@basaltkit/auth`'s `UserSource` satisfies it structurally, so neither package imports the other. |
 | `TeamMemberWithUser` | `Membership & { user: MemberUser }`. |
@@ -379,6 +395,7 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 | `NotATeamMemberError` | `TEAM_NOT_A_MEMBER` | 403 | `tenantMembershipPlugin` found no membership; a `meta.teamRole` route ran with no user **or** no tenant in context; or an `actingUserId` isn't a member of the team. |
 | `InsufficientTeamRoleError` | `TEAM_ROLE_REQUIRED` | 403 | The role's rank is below what's required — including an actor trying to grant, or re-role someone, above their own rank. |
 | `LastOwnerError` | `TEAM_LAST_OWNER` | 400 | The change would leave the team with no `owner`. |
+| `UnknownTeamRoleError` | `TEAM_ROLE_UNKNOWN` | 500 | `meta.teamRole` (or `tenantMembershipPlugin({ role })`) names a role that is neither ranked nor in `grantableRoles` — a typo, `''` or a non-string. Server misconfiguration; fails closed. |
 | `TeamUserSourceMissingError` | `TEAM_USER_SOURCE_MISSING` | 500 | `membersWithUsers` / `roleRecipients` (or `teamRoutes({ memberContacts: true })`) ran without a `users` directory on the service. |
 | `NoTenantError` | `TEAM_NO_TENANT` | 400 | A `teamRoutes()` endpoint ran with no `ctx().tenant` (or, on accept, no `ctx().user`). Not exported — matched by code. |
 | `InviteNotFoundError` | `TEAM_INVITE_NOT_FOUND` | 404 | `DELETE /team/invites/:id` for an id that doesn't exist or belongs to another tenant. Not exported — matched by code. |
@@ -391,8 +408,12 @@ the real error code in the body.
   membership cache's `ttlMs` bounds cross-replica staleness in both directions;
   the decision refreshes within `ttlMs`.
 - **A custom role keeps getting `TEAM_ROLE_REQUIRED`** — roles outside
-  `roleRank` have rank 0. Add the role to the map, or (for the membership
-  guard) rely on the default existence semantics instead of `role:`.
+  `roleRank` have no rank: they never satisfy a ranked requirement, and an
+  unranked requirement is matched exactly. Add the role to the map, or (for the
+  membership guard) rely on the default existence semantics instead of `role:`.
+- **`500 TEAM_ROLE_UNKNOWN` on a route** — its `meta.teamRole` isn't in
+  `roleRank` or `grantableRoles`. Usually a typo (`'Admin'`); roles are
+  case-sensitive.
 - **403 on a central route (tenant creation, platform admin)** — mark it
   `meta: { central: true }`, or exempt the calling identity with `exempt`. Your
   own profile/account routes take `meta: { account: true }` instead (the

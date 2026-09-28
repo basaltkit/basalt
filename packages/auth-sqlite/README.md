@@ -68,6 +68,16 @@ at 500 ids per statement so it stays inside SQLite's per-statement variable cap
 (`SQLITE_MAX_VARIABLE_NUMBER` — 999 on older builds). Tune it with
 `new SqliteUserSource(db, { idChunkSize: 1000 })`.
 
+### Emails are case-insensitive
+
+`findByEmail` matches regardless of case, and `create` refuses an email that
+exists in any letter case with `EmailTakenError` (409) — checked inside the
+`INSERT` itself, so two concurrent sign-ups of `Ana@x` and `ana@x` cannot both
+land. A `NOCASE` unique index backs it on new databases; a legacy database that
+already holds case-variant duplicates cannot take that index, but `create`
+still refuses new variants. Merge the old duplicates by hand and the next
+`migrate()` builds the index.
+
 ## Pick individual stores
 
 Every store is exported on its own and takes a `DatabaseSync`, so you can mix

@@ -41,6 +41,8 @@ model WebhookEndpoint {
 
 Then `prisma generate` and go.
 
+> **MySQL:** Prisma maps `String` to `VARCHAR(191)` there (to `text` on PostgreSQL). Endpoint URLs and event lists can be longer: annotate `url` and `events` with `@db.Text` in your schema, or long values are rejected (`P2000`) — or truncated, with a non-strict `sql_mode`. The reference schema stays provider-neutral so it can be copied into any datasource.
+
 ## Usage
 
 Pass your generated client directly — no cast:
@@ -56,11 +58,11 @@ const webhooks = prismaWebhookStore(prisma)
 webhooksPlugin({ store: webhooks.store, secret: process.env.WEBHOOK_SECRET })
 ```
 
-Wire the store before its model exists and it **fails fast** with a message naming the missing model and pointing you at `basalt prisma:sync` — no cryptic `reading 'upsert' of undefined`.
+Wire the store before its model exists and it **fails fast** with a message naming the missing model and pointing you at `basalt prisma:sync` — no cryptic `reading 'updateMany' of undefined`.
 
 ## API
 
-`PrismaWebhookStore` implements the full `WebhookStore` contract — `add` (auto `id`; re-adding an id replaces it), `forEvent(event, tenantId?)` (active, tenant-scoped, event-pattern matched; fail-closed — with no tenant only tenant-agnostic endpoints are returned), `list(tenantId?)`, `remove`. Event patterns are stored as a JSON array; matching (`*`, `prefix.*`, exact) reuses `matchesEvent` from `@basaltkit/webhooks`, identical to the memory store.
+`PrismaWebhookStore` implements the full `WebhookStore` contract — `add` (auto `id`; re-adding an id replaces it **within its own scope** — an id held by another tenant, or by a global endpoint, is refused with `WebhookEndpointIdInUseError` (409), also when it differs only in letter case on a case-insensitive MySQL collation; the write is keyed by `(id, tenantId)`, never by `id` alone), `forEvent(event, tenantId?)` (active, tenant-scoped, event-pattern matched; fail-closed — with no tenant only tenant-agnostic endpoints are returned), `list(tenantId?)`, `remove`. Event patterns are stored as a JSON array; matching (`*`, `prefix.*`, exact) reuses `matchesEvent` from `@basaltkit/webhooks`, identical to the memory store.
 
 ## Which backend?
 

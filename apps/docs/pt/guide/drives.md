@@ -14,6 +14,40 @@ verificação de notificações recebidas.
 
 [[toc]]
 
+## Migrar da 0.2.x
+
+::: warning Endurecimento de segurança que muda comportamento
+Nenhuma assinatura mudou, mas várias coisas que eram aceites passam a ser
+recusadas. Lê isto antes de atualizar o `@basaltkit/drives` para 0.3 e os três
+adaptadores para 1.0:
+
+- **Os cursores de `listItems()` são assinados.** O cursor devolvido passa a
+  ser `bkl1.<cursor do adaptador>.<mac>`, ligado ao tenant e à ligação com uma
+  chave derivada do `secret`. Devolvê-lo sem alterações funciona como antes; um
+  cursor emitido antes da atualização, para outra ligação, ou com um `secret`
+  rodado é recusado com `DRIVE_ACCESS_DENIED` — volta a listar do início. Os
+  cursores de sincronização guardados na ligação não são afetados.
+- **Um `rootId` confina agora todas as chamadas**, não só a listagem por
+  omissão: um `folderId`, `getItem()`, `download()` e um destino de upload fora
+  da raiz são recusados com `DRIVE_ACCESS_DENIED` (o `getItem()` responde
+  `null`). As ligações Google e as Microsoft com raiz numa pasta pagam uma
+  pequena leitura de metadados por nível de pasta; ver as *Limitações* de cada
+  fornecedor.
+- **Os segredos de watch são guardados como digest** (`sha256:…`). As linhas
+  existentes continuam a corresponder; não há nada a migrar. Nunca envies o
+  `connection.watch.secret` a um fornecedor — já não é o segredo.
+- **O replay guard deixou de ler `x-goog-message-number` de todos os
+  fornecedores.** Um adaptador que tenha uma chave por entrega melhor do que o
+  corpo em bruto reporta-a em `DriveNotificationResult.replayKey` (o adaptador
+  Google fá-lo).
+- **O `timeoutMs` é um timeout de inatividade** que também limita cada espera
+  pelos cabeçalhos da resposta. Para um limite rígido sobre um download inteiro,
+  define `deadlineMs`.
+- O callback OAuth só ecoa um código `?error=` bem formado, e a rota anónima de
+  notificações responde a um fornecedor desconhecido com
+  `DRIVE_NOTIFICATION_INVALID` em vez de listar os registados.
+:::
+
 ## Migrar da 0.1.x
 
 ::: warning Três formas mudaram
@@ -369,6 +403,12 @@ dentro do seu próprio tecto.
   `exportOnly: true`; o `files/export` não está ligado.
 - Sem `externalUrl`: os metadados do Dropbox não trazem link web, e fabricar um
   significaria criar uma partilha.
+- **O confinamento à raiz** compara `path_lower`. Um handle em forma de caminho
+  é verificado lexicalmente, sem pedido; um handle (ou raiz) `id:`/`ns:` custa
+  um `get_metadata`; um download é verificado contra o `Dropbox-API-Result`
+  antes de o corpo ser lido. Segmentos `.`/`..` são recusados logo, e uma pasta
+  cuja forma minúscula o Dropbox dobre de maneira diferente do JavaScript é
+  recusada em vez de adivinhada.
 
 ## Ligar o Google Drive
 
@@ -511,6 +551,12 @@ registar em logs. Esse URL é, ele próprio, uma credencial para o ficheiro.
   enquanto a aplicação está em "testing"). O Google envia a mesma string nos
   três casos, por isso a ligação é marcada como `invalid` e pede-se ao tenant
   que volte a ligar — que é a única acção disponível em qualquer um deles.
+- **O confinamento à raiz percorre os `parents`.** Numa ligação com `rootId`,
+  um `folderId`, `getItem()`, `download()` e um destino de upload custam cada um
+  uma leitura de metadados por nível de pasta entre o item e a raiz (limitado
+  por `ancestryMaxDepth` e `ancestryMaxLookups`). O alias `root` é primeiro
+  resolvido para o id real do My Drive. Uma ligação sem confinamento não paga
+  nada.
 
 ## Ligar o OneDrive / SharePoint
 
@@ -619,6 +665,12 @@ apontam para o Graph — antes de o fetch guardado os revalidar a sério. Um URL
 fornecido pelo provider que a framework depois vai buscar é exatamente o caso
 para o qual o guard existe.
 
+Essa verificação sozinha não chega: quem chama poderia escrever um cursor para
+*outra* drive no próprio `graph.microsoft.com`, e ele seria pedido com o token
+bearer desta ligação. Por isso o cursor que o `listItems()` entrega é ainda
+embrulhado num MAC ligado ao tenant e à ligação, e um cursor que o motor não
+emitiu nunca chega ao adaptador.
+
 **O URL de download é uma credencial bearer.** O
 `@microsoft.graph.downloadUrl` é pré-assinado e vive num host de CDN, e o
 `/content` redireciona para o mesmo sítio. Por isso as listagens tiram-no com
@@ -675,6 +727,11 @@ URL, por isso também aqui o `outcome.connections` é uma lista.
   sempre.
 - **Itens partilhados de outras drives** estão de resto fora de âmbito: uma
   ligação está confinada a uma drive. Liga antes a drive dona.
+- **Uma raiz numa pasta (`item:{id}`) é imposta percorrendo o
+  `parentReference.id`**: um `folderId`, `getItem()`, `download()` e um destino
+  de upload custam cada um uma pequena leitura por nível até à raiz
+  (`ancestryMaxDepth`, por omissão 32). Uma ligação com raiz numa drive inteira
+  não paga nada — todas as chamadas já são construídas sobre essa drive.
 
 ## Importar
 
@@ -891,6 +948,7 @@ diferentes. Declará-los é como um adaptador diz ao motor que fornecedor é:
 | `deltaIncludesExisting` | o cursor do `startDelta` repete o que já existe (Dropbox, Microsoft Graph). O valor por omissão `false` faz o motor correr primeiro uma listagem, por isso um adaptador que se esqueça custa leituras de metadados a mais em vez de perder os ficheiros de um tenant. |
 | `retryAfterFromBody` | o fornecedor põe a pista de rate-limit noutro sítio que não o `Retry-After` (Dropbox). |
 | `DriveNotificationResult.accountIds` | as notificações identificam a ligação por uma conta do fornecedor em vez de um segredo escolhido por ti (Dropbox). |
+| `DriveNotificationResult.replayKey` | o fornecedor tem um identificador por entrega melhor do que o corpo em bruto (o `X-Goog-Message-Number` do Google, cujas notificações não têm corpo). Sem ele, o replay guard usa um digest do corpo. |
 | o `path` de uma remoção | as eliminações são reportadas por caminho porque o fornecedor não dá id para elas (Dropbox). |
 | `DriveItem.exportOnly` | o fornecedor tem itens sem bytes para descarregar (os Docs nativos do Google, os documentos Paper do Dropbox). O `importItem` salta-os na estratégia `copy` com `reason: 'no-content'` em vez de fazer esse job falhar em todas as execuções para sempre. |
 
@@ -1031,6 +1089,12 @@ aplicação vá perguntar ao fornecedor, com as credenciais dela, pelo tenant de
 O alcance de um ataque destes é uma sincronização desperdiçada — e é isso, e não
 a força do segredo, que torna os dois mais fracos aceitáveis.
 
+O `replayGuard` opcional identifica uma entrega pelo que o **adaptador** reporta
+como `replayKey` (o número de mensagem do Google), ou então por um digest do
+corpo em bruto — nunca por um cabeçalho que o motor apanhe por conta própria, o
+que deixaria passar um corpo Dropbox ou Graph repetido com um número novo e não
+assinado.
+
 A lista de ligações candidatas é fornecida por **ti** e a framework nunca a
 percorre entre tenants, por isso quem chama sem autenticação não consegue sequer
 endereçar a ligação de outro tenant. No Dropbox essa procura é necessariamente
@@ -1053,7 +1117,22 @@ varredura de tabela da framework.
 - **Limites de bytes impostos durante o stream**, e sem descompressão
   transparente — por isso o limite aplica-se a bytes reais no fio, que é o único
   número sobre o qual uma bomba de descompressão não pode mentir.
-- **Timeouts sobre a troca inteira**, não apenas sobre a ligação.
+- **Dois timeouts.** O `timeoutMs` (30 s) é um timeout de inatividade do socket
+  e um limite rígido para cada espera pelos cabeçalhos da resposta; o
+  `deadlineMs`, opcional, limita a troca inteira, corpo incluído — desligado por
+  omissão, porque um download grande numa ligação lenta é legítimo.
+- **Os cursores de listagem são assinados.** O `listItems()` embrulha o cursor
+  do adaptador num MAC ligado ao tenant e à ligação, por isso quem chama não o
+  pode escrever — um `nextLink` do Graph é um URL pedido com o token da ligação,
+  e um cursor de percurso do Google nomeia pastas.
+- **Um `rootId` é imposto**, em listagens, itens, downloads e destinos de
+  upload, nos três adaptadores.
+- **As corridas de refresh falham em segurança.** Um worker que recebe
+  `invalid_grant` por um refresh token que outro worker acabou de rodar só
+  invalida a ligação por compare-and-set, e um vencedor que se encontre
+  invalidado por esse perdedor restaura a ligação com o token vivo que tem.
+- **Os segredos de watch são guardados como digest SHA-256**, e o envelope de
+  credenciais recusa uma tag GCM truncada.
 - **Credenciais cifradas com AES-256-GCM**, ligadas por AAD ao seu
   `(tenant, ligação, fornecedor)` — um blob movido para outra linha falha a
   decifração em vez de entregar credenciais.

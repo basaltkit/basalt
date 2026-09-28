@@ -1,3 +1,4 @@
+import { assertUsageAmount } from '@basaltkit/subscriptions'
 import type {
   BillingPeriod,
   NewPayment,
@@ -163,6 +164,8 @@ export class PrismaUsageStore implements UsageStore {
   }
 
   async increment(billableId: string, feature: string, periodKey: string, amount: number): Promise<number> {
+    // Positive integers only (a negative amount refunds quota, NaN poisons the counter).
+    assertUsageAmount(amount)
     // Seed with a concurrency-safe createMany (skipDuplicates) rather than an
     // upsert — two concurrent upserts of the same new row both miss and race to
     // INSERT, failing with P2002 on a real database.
@@ -185,6 +188,7 @@ export class PrismaUsageStore implements UsageStore {
     amount: number,
     limit: number,
   ): Promise<UsageConsumeResult> {
+    assertUsageAmount(amount)
     // Ensure the counter row exists (idempotent and concurrency-safe via
     // skipDuplicates — a plain upsert races to INSERT and fails with P2002 under
     // concurrent first-touch), then increment only while the guard holds. The

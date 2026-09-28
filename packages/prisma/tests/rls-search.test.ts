@@ -44,7 +44,7 @@ describe('rlsSearchFunctionSql', () => {
   })
 
   it('scopes with the same predicate rlsPolicySql puts in the policy', () => {
-    const predicate = `= current_setting('app.tenant_id', true)`
+    const predicate = `= NULLIF(current_setting('app.tenant_id', true), '')`
     expect(sql()).toContain(`WHERE t."tenant_id" ${predicate}`)
     expect(rlsPolicySql({ tables: ['basalt_search'] })).toContain(`"tenant_id" ${predicate}`)
   })

@@ -130,7 +130,7 @@ export interface PrismaAuthClient {
     findUnique(a: any): Promise<PApiKey | null>
     findMany(a: any): Promise<PApiKey[]>
     create(a: any): Promise<PApiKey>
-    update(a: any): Promise<PApiKey>
+    updateMany(a: any): Promise<{ count: number }>
   }
   authMfa: {
     findUnique(a: any): Promise<PMfa | null>
@@ -541,7 +541,9 @@ export class PrismaApiKeyStore implements ApiKeyStore {
 
   async touch(id: string, at_: number): Promise<void> {
     try {
-      await this.client.authApiKey.update({ where: { id }, data: { lastUsedAt: at(at_) } })
+      // updateMany, not update: a key deleted meanwhile is a no-op (as in the
+      // other stores), not a P2025 thrown out of verify().
+      await this.client.authApiKey.updateMany({ where: { id }, data: { lastUsedAt: at(at_) } })
     } catch (err) {
       throw apiKeyError(err)
     }
@@ -549,7 +551,7 @@ export class PrismaApiKeyStore implements ApiKeyStore {
 
   async revoke(id: string, at_: number): Promise<void> {
     try {
-      await this.client.authApiKey.update({ where: { id }, data: { revokedAt: at(at_) } })
+      await this.client.authApiKey.updateMany({ where: { id }, data: { revokedAt: at(at_) } })
     } catch (err) {
       throw apiKeyError(err)
     }

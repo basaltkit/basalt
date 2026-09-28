@@ -109,6 +109,16 @@ export function rawBodyOptionsOf(schema: unknown): ResolvedRawBodyOptions | unde
 /** True when a route's `body` is a {@link rawBody} declaration — adapters skip their own body parsing for it. */
 export const isRawBody = (schema: unknown): boolean => rawBodyOptionsOf(schema) !== undefined
 
+export interface RawBodyRouteMatcherOptions {
+  /**
+   * Match paths regardless of case — for a router that does (Express, unless
+   * `case sensitive routing` is on). The matcher must agree with the router:
+   * a request it misses there still reaches the `rawBody()` route, but only
+   * after the app-wide parser has read (and capped) the body before the guards.
+   */
+  caseInsensitive?: boolean
+}
+
 /**
  * A predicate telling whether an inbound `method` + path belongs to one of
  * these routes' {@link rawBody} declarations.
@@ -121,10 +131,16 @@ export const isRawBody = (schema: unknown): boolean => rawBodyOptionsOf(schema) 
  * under-matches rather than over-matches — the adapter then falls back to its
  * own capture instead of silently leaving a JSON route unparsed.
  */
-export function rawBodyRouteMatcher(routes: readonly BasaltRoute[]): (method: string, path: string) => boolean {
+export function rawBodyRouteMatcher(
+  routes: readonly BasaltRoute[],
+  options: RawBodyRouteMatcherOptions = {},
+): (method: string, path: string) => boolean {
   const patterns = routes
     .filter((definition) => isRawBody(definition.body))
-    .map((definition) => ({ method: definition.method.toUpperCase(), test: patternToRegExp(definition.url) }))
+    .map((definition) => ({
+      method: definition.method.toUpperCase(),
+      test: patternToRegExp(definition.url, options.caseInsensitive === true),
+    }))
   if (patterns.length === 0) return () => false
   return (method, path) => {
     const wanted = method.toUpperCase()
@@ -139,7 +155,7 @@ const pathOnly = (url: string): string => {
   return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path
 }
 
-function patternToRegExp(url: string): RegExp {
+function patternToRegExp(url: string, caseInsensitive: boolean): RegExp {
   const segments = pathOnly(url).split('/')
   const source = segments
     .map((segment, index) => {
@@ -149,7 +165,7 @@ function patternToRegExp(url: string): RegExp {
       return segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     })
     .join('/')
-  return new RegExp(`^${source}$`)
+  return new RegExp(`^${source}$`, caseInsensitive ? 'i' : '')
 }
 
 const tooLarge = (): HttpError =>

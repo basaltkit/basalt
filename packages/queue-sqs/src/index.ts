@@ -4,7 +4,7 @@ import type {
   JobExecutor,
   QueueDriver,
 } from '@basaltkit/queue'
-import { queuePlugin, type QueuePluginOptions } from '@basaltkit/queue'
+import { queuePlugin, splitQueuePluginOptions, type QueuePluginOptions } from '@basaltkit/queue'
 
 /** SQS caps per-message delay at 15 minutes. */
 export const SQS_MAX_DELAY_SECONDS = 900
@@ -33,6 +33,9 @@ export interface SqsApi {
   deleteMessage(input: { queueUrl: string; receiptHandle: string }): Promise<void>
 }
 
+/** Which SQS call failed, for {@link SqsDriverOptions.onError}. */
+export type SqsErrorStage = 'receive' | 'delete' | 'reroute'
+
 /** Thrown when a requested delay exceeds SQS's 15-minute maximum. */
 export class SqsDelayTooLongError extends Error {
   constructor(seconds: number) {
@@ -52,6 +55,17 @@ const HEADER = {
 /** Hard ceiling on retries, so a crafted message can't request unbounded ones. */
 const MAX_ATTEMPTS = 50
 
+/**
+ * The attempt number a message carries, as an integer in `[1, MAX_ATTEMPTS]`.
+ * The attribute is untrusted: a negative value used to satisfy
+ * `attempt < attempts` for a million rounds, bypassing the retry ceiling.
+ */
+function readAttempt(raw: string | undefined): number {
+  const value = Number(raw ?? 1)
+  if (!Number.isFinite(value) || value < 1) return 1
+  return Math.min(Math.trunc(value), MAX_ATTEMPTS)
+}
+
 export interface SqsDriverOptions {
   /** Resolves a queue name to its SQS queue URL. */
   queueUrl: (queue: string) => string
@@ -63,11 +77,13 @@ export interface SqsDriverOptions {
   /** Visibility timeout while a message is being processed, seconds. Default 30. */
   visibilityTimeout?: number
   /**
-   * A receive call failed (network/credentials/queue gone). Without this the
-   * poller used to retry silently and immediately — a hot spin with zero log
-   * output on a persistent fault. Default: console.error with context.
+   * An SQS call failed: a receive (network/credentials/queue gone — without
+   * this the poller used to retry silently and immediately, a hot spin with
+   * zero log output), a delete after a job completed, or a retry/dead-letter
+   * re-send. `stage` says which. Never fatal: the poller keeps running.
+   * Default: console.error with context.
    */
-  onError?: (error: unknown, info: { queue: string }) => void
+  onError?: (error: unknown, info: { queue: string; stage?: SqsErrorStage }) => void
   /** Pause between consecutive failed receives, ms. Default 1000. */
   errorPauseMs?: number
   /** Injectable SQS API — defaults to the AWS SDK. Tests pass a fake. */
@@ -101,7 +117,7 @@ export class SqsQueueDriver implements QueueDriver {
   private readonly deadSuffix: string
   private readonly waitTimeSeconds: number
   private readonly visibilityTimeout: number
-  private readonly onError: (error: unknown, info: { queue: string }) => void
+  private readonly onError: (error: unknown, info: { queue: string; stage?: SqsErrorStage }) => void
   private readonly errorPauseMs: number
 
   constructor(private readonly options: SqsDriverOptions) {
@@ -110,7 +126,8 @@ export class SqsQueueDriver implements QueueDriver {
     this.visibilityTimeout = options.visibilityTimeout ?? 30
     this.onError =
       options.onError ??
-      ((error, info) => console.error(`[basalt:queue] sqs receive error (queue "${info.queue}"):`, error))
+      ((error, info) =>
+        console.error(`[basalt:queue] sqs ${info.stage ?? 'receive'} error (queue "${info.queue}"):`, error))
     this.errorPauseMs = options.errorPauseMs ?? 1000
   }
 
@@ -141,7 +158,11 @@ export class SqsQueueDriver implements QueueDriver {
   startWorker(queue: string, options: { concurrency?: number } = {}): void {
     this.running = true
     const workers = Math.max(1, options.concurrency ?? 1)
-    for (let i = 0; i < workers; i++) this.pollers.push(this.poll(queue))
+    for (let i = 0; i < workers; i++) {
+      // A poller that fails before its loop (SDK import, a throwing queueUrl
+      // resolver) must be reported, never left as an unhandled rejection.
+      this.pollers.push(this.poll(queue).catch((error: unknown) => this.onError(error, { queue })))
+    }
   }
 
   async close(): Promise<void> {
@@ -167,14 +188,19 @@ export class SqsQueueDriver implements QueueDriver {
         if (!this.running) break
         // Surface the fault and back off — a persistent error must not become
         // a silent, CPU-burning hot spin against the SQS endpoint.
-        this.onError(error, { queue })
+        this.onError(error, { queue, stage: 'receive' })
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, this.errorPauseMs)
           timer.unref?.()
         })
         continue
       }
-      for (const message of messages) await this.handle(queue, message)
+      for (const message of messages) {
+        // handle() reports its own faults; this guard only keeps an unexpected
+        // throw from ending the poll loop (a rejected poller was an unhandled
+        // rejection — process-fatal by Node's default).
+        await this.handle(queue, message).catch((error: unknown) => this.onError(error, { queue }))
+      }
     }
   }
 
@@ -183,15 +209,33 @@ export class SqsQueueDriver implements QueueDriver {
     const jobName = attributes[HEADER.job] ?? ''
     const api = await this.api()
     const queueUrl = this.options.queueUrl(queue)
+    const remove = async (): Promise<void> => {
+      try {
+        await api.deleteMessage({ queueUrl, receiptHandle: message.receiptHandle })
+      } catch (error) {
+        // The message becomes visible again after the visibility timeout and
+        // SQS redelivers it (at-least-once). Do NOT treat this as a job
+        // failure: that used to re-send a retry copy of a job that SUCCEEDED.
+        this.onError(error, { queue, stage: 'delete' })
+      }
+    }
 
+    let failed = false
     try {
       await this.executor?.(jobName, JSON.parse(message.body))
-      await api.deleteMessage({ queueUrl, receiptHandle: message.receiptHandle })
     } catch {
-      const attempt = Number(attributes[HEADER.attempt] ?? 1)
-      // Clamp the max-attempts read from the (untrusted) message to a hard
-      // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
-      const attempts = Math.min(Number(attributes[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
+      failed = true
+    }
+    if (!failed) {
+      await remove()
+      return
+    }
+
+    const attempt = readAttempt(attributes[HEADER.attempt])
+    // Clamp the max-attempts read from the (untrusted) message to a hard
+    // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
+    const attempts = Math.min(Number(attributes[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
+    try {
       if (attempt < attempts) {
         await api.sendMessage({
           queueUrl,
@@ -206,15 +250,22 @@ export class SqsQueueDriver implements QueueDriver {
           attributes,
         })
       }
-      // Re-routed, so remove the original from the source queue.
-      await api.deleteMessage({ queueUrl, receiptHandle: message.receiptHandle })
+    } catch (error) {
+      // Not re-routed: keep the original (no delete) so SQS redelivers it
+      // after the visibility timeout — the job is retried, not lost.
+      this.onError(error, { queue, stage: 'reroute' })
+      return
     }
+    // Re-routed, so remove the original from the source queue.
+    await remove()
   }
 
   private backoffDelay(attributes: Record<string, string>, attempt: number): number {
-    const base = Number(attributes[HEADER.backoffMs] ?? 0)
+    const raw = Number(attributes[HEADER.backoffMs] ?? 0)
+    const base = Number.isFinite(raw) && raw > 0 ? raw : 0
     if (!base) return 0
-    return attributes[HEADER.backoffType] === 'exponential' ? base * 2 ** (attempt - 1) : base
+    // Clamp the exponent; toDelaySeconds then clamps to SQS's 15-minute cap.
+    return attributes[HEADER.backoffType] === 'exponential' ? base * 2 ** Math.min(attempt - 1, 16) : base
   }
 
   /** ms → whole seconds. Throws on an over-limit user delay; clamps a backoff. */
@@ -318,15 +369,8 @@ export interface SqsQueuePluginOptions
  * only reads defaults, and every connection is opened lazily on first use.
  */
 export function sqsQueuePlugin(options: SqsQueuePluginOptions) {
-  // Split by the CORE's keys, not the driver's: a new driver option then flows
-  // through untouched, and only a change to QueuePluginOptions needs an edit here.
-  const { jobs, workers, onUnsupported, removeOnComplete, removeOnFail, ...driver } = options
-  return queuePlugin({
-    ...(jobs !== undefined ? { jobs } : {}),
-    ...(workers !== undefined ? { workers } : {}),
-    ...(onUnsupported !== undefined ? { onUnsupported } : {}),
-    ...(removeOnComplete !== undefined ? { removeOnComplete } : {}),
-    ...(removeOnFail !== undefined ? { removeOnFail } : {}),
-    driver: new SqsQueueDriver(driver),
-  })
+  // Split by the CORE's key list: a new core option (e.g. `signingKey`) reaches
+  // queuePlugin, and every other key flows to the driver untouched.
+  const { core, driver } = splitQueuePluginOptions(options)
+  return queuePlugin({ ...core, driver: new SqsQueueDriver(driver) })
 }

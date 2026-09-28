@@ -335,7 +335,9 @@ the race protection.
 
 Passwords are hashed with **scrypt** (memory-hard, zero dependencies); an
 argon2id driver can be swapped in via the `PasswordHasher` contract
-(`hasher: new MyArgon2Hasher()`).
+(`hasher: new MyArgon2Hasher()`). The cost is read from each stored hash, so it is
+capped: a hash declaring more than N=2^20, r=32, p=16 (or 512 MiB) never verifies,
+and a tampered row cannot pin the CPU on every login attempt.
 
 ## Guarding routes and reading the user
 
@@ -590,9 +592,18 @@ const { userId } = await passkeys.finishAuthentication(sessionKey, browserRespon
 ```
 
 `finishAuthentication` looks the credential up by id, verifies it, checks the
-signature counter **increased** (a clone throws `PasskeyClonedError`), and stores
-the new counter. Use `passkeys.list(userId)` / `passkeys.remove(id)` for a
-"manage devices" screen.
+signature counter **increased** (a clone throws `PasskeyClonedError`; a
+non-integer counter is refused), and stores the new counter. When
+`startAuthentication(sessionKey, userId)` names a user — step-up or
+re-authentication — only **that user's** passkey satisfies the challenge (another
+account's throws `WEBAUTHN_SUBJECT_MISMATCH`).
+
+Use `passkeys.list(userId)` / `passkeys.remove(userId, credentialId)` for a
+"manage devices" screen. `remove` only deletes a passkey owned by `userId` — an
+unknown or foreign id throws `PASSKEY_NOT_FOUND` — so pass the authenticated
+user's id, never one from the request. The default `userVerification: 'preferred'`
+lets an authenticator without PIN/biometric sign (possession only): set
+`'required'` when a passkey is the only factor.
 
 ::: warning Security
 The challenge is bound to the user you pass to `startRegistration`;
@@ -684,6 +695,36 @@ const okta = await discoverOidcProvider({ name: 'okta', issuer: 'https://acme.ok
 oauthPlugin({ secret: env.APP_SECRET, providers: [okta] })
 ```
 
+Discovery checks that the document's `issuer` equals the one you configured and
+that every endpoint is `https:` (plain `http:` only to a loopback host).
+
+**Restrict each IdP to its email domains.** A customer's IdP admin decides which
+emails it asserts as verified, and a verified email links to the existing account
+holding it — so without a restriction Acme's IdP could assert `ceo@globex.com` and
+log into Globex's CEO account. Give every enterprise provider its
+`allowedEmailDomains`; a login for any other domain fails with
+`AUTH_OAUTH_EXCHANGE_FAILED` before an account is looked up:
+
+```ts
+const acme = await discoverOidcProvider({ name: 'acme', issuer, clientId, clientSecret, allowedEmailDomains: ['acme.com'] })
+const globex = oidcProvider({ name: 'globex', /* … */ allowedEmailDomains: ['globex.com'] })
+oauthPlugin({ secret: env.APP_SECRET, providers: [googleProvider(keys), acme, globex] })
+```
+
+With **more than one provider**, every `oidcProvider` / `discoverOidcProvider`
+entry must declare `allowedEmailDomains` or `allowAnyEmailDomain: true` (only for
+an IdP you fully control), or the service refuses to start with
+`AUTH_OAUTH_PROVIDER_CONFIG`. Google and GitHub only assert emails they verified
+themselves and are not affected; a custom `OAuthProvider` opts in with
+`enterprise: true`. Accounts are linked by **email**, not by the provider's
+`subject` — the allowlist is what scopes each IdP.
+
+Provider replies are validated: a profile without a string `sub`/`email` (or an
+email that is not a single-`@` address) fails the login; an `openid` flow must
+return an `id_token` whose `nonce`, `aud` (your client id), `exp` and — when the
+provider declares an `issuer` — `iss` match; every provider call has a deadline
+(`timeoutMs`, default 10 s).
+
 For legacy **SAML 2.0** IdPs (ADFS, Shibboleth, or an IdP configured for SAML),
 use the companion **`@basaltkit/auth-saml`** package — SP-initiated SSO built on the
 vetted `@node-saml/node-saml` XML-DSig library, plugging into the same
@@ -695,6 +736,19 @@ import { samlPlugin, samlRoutes } from '@basaltkit/auth-saml'
 samlPlugin({ providers: [{ name: 'okta', entryPoint, idpCert, issuer, callbackUrl }] })
 // routes: GET /auth/saml/:provider/login · POST …/acs · GET …/metadata
 ```
+
+Every login is **bound to the browser that started it** (login-CSRF protection):
+`samlRoutes` sets an HttpOnly `__Host-basalt_saml` cookie at login and sends its
+SHA-256 as the `RelayState`, and the ACS refuses a response whose `RelayState`
+does not match the cookie posted with it — so an attacker cannot obtain a valid
+`SAMLResponse` for their own account and auto-POST it from a victim's browser. The
+IdP returns with a cross-site POST, so the cookie is `SameSite=None; Secure`
+(`samlRoutes({ bindingCookie: { secure } })`; browsers treat `http://localhost` as
+secure). Custom routes use `saml.authorize(name)` → `{ url, binding }` and
+`saml.consume(name, body, { binding })`; `bindToBrowser: false` opts out, and
+IdP-initiated SSO (below) cannot be bound. Any error node-saml throws (malformed
+XML, bad signature, encrypted assertion…) is a `400 AUTH_SAML_RESPONSE_INVALID`,
+never a 500.
 
 Assertions must be signed (`wantAssertionsSigned`) **and** bound to a login this
 app started: `validateInResponseTo` defaults to `'always'`, so every response must
@@ -722,7 +776,8 @@ samlPlugin({
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute`, `allowedEmailDomains` (required with several IdPs), `allowAnyEmailDomain` |
+| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute` (then the only source — no fallback), `allowedEmailDomains` (required with several IdPs), `allowAnyEmailDomain`, `wantAuthnResponseSigned` (default `true`; `false` for IdPs that sign only the assertion, e.g. AD FS / Entra ID), `acceptedClockSkewMs` (default 0, max 5 min) |
+| `bindToBrowser` | `boolean` | `true` | Bind each SP-initiated login to the browser that started it (login CSRF) |
 | `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'always'` | Replay protection — bind the response to an AuthnRequest this SP issued; `'ifPresent'` opts in to IdP-initiated SSO |
 | `cacheProvider` | `SamlCacheProvider` | node-saml's in-process cache | Where outstanding AuthnRequest ids live — **required on multi-replica deployments** |
 | `assertionReplayCache` | `SamlAssertionReplayCache` | in-process | Single-use store for consumed assertion ids (`consume(key, ttlMs) → boolean`) — share it across replicas if you opt in to IdP-initiated SSO |
@@ -933,7 +988,7 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `store` | `ApiKeyStore` | in-memory | Where key hashes live — durable in production, or keys die on redeploy |
-| `header` | `string` | `'x-api-key'` | Alternative header to `Authorization: Bearer mk_…` |
+| `header` | `string` | `'x-api-key'` | Alternative header to `Authorization: Bearer mk_…`. Two **different** keys (one in each) → `400 AUTH_APIKEY_AMBIGUOUS`, never one silently winning |
 | `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
 | `allowTenantlessKeys` | `boolean` | `false` | Let keys issued without a tenant act on tenant-scoped requests (trusted platform keys only) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Let a key without `*` reach `meta.auth`/`can`/`teamRole`/`audience` routes that declare no `meta.scopes` |
@@ -950,7 +1005,7 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `config.rpName` | `string` | — (required) | Human-readable name shown in the OS prompt |
 | `config.origin` | `string \| string[]` | — (required) | Expected origin(s), e.g. `'https://example.com'` |
 | `config.challengeTtlMs` | `number` | `300_000` (5m) | How long a challenge stays usable |
-| `config.userVerification` | `'required' \| 'preferred' \| 'discouraged'` | `'preferred'` | Whether the authenticator must verify the user (PIN/biometric) |
+| `config.userVerification` | `'required' \| 'preferred' \| 'discouraged'` | `'preferred'` | Whether the authenticator must verify the user (PIN/biometric) — `'required'` for passwordless login |
 | `config.timeoutMs` | `number` | `60_000` | Ceremony timeout advertised to the browser |
 | `config.pubKeyCredParams` | `PublicKeyParam[]` | ES256 + RS256 | Override the accepted signature algorithms |
 
@@ -964,9 +1019,11 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `fetch` | `typeof fetch` | global `fetch` | Injected HTTP client (tests) |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 | `mfa` | `'required' \| 'skip'` | `'required'` | An existing account with MFA enabled is refused (`AUTH_MFA_REQUIRED`); `'skip'` only for an IdP that enforces its own MFA |
+| `timeoutMs` | `number` | `10_000` | Deadline for every request to a provider (token endpoint, userinfo) |
 | `callbackBaseUrl` (routes) | `string` | — (required) | Public base URL of your app; the redirect URI is `${callbackBaseUrl}/auth/oauth/:provider/callback` and must be registered with each provider |
 | `successRedirect` (routes) | `string` | — (JSON response) | Bounce the browser here with `#access_token=…&refresh_token=…` instead of returning JSON — the SPA flow |
 | `bindingCookie` (routes) | `{ secure?, maxAgeSeconds? }` | secure unless `NODE_ENV` is `development`/`test`, 15 min | The HttpOnly cookie binding the flow to the browser (`__Host-basalt_oauth` when secure) |
+| `rateLimit` (routes) | `{ limit, windowMs } \| false` | 10 / min per ip and route | `meta.rateLimit` on both routes (enforced by the http `securityPlugin`) |
 
 Register `oauthPlugin` **after** `authPlugin`: the service resolves `AUTH` to log
 users in.
@@ -995,20 +1052,22 @@ users in.
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | A key used outside the tenant it was issued in (or a tenantless key on a tenant-scoped request) |
 | `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | A key used on a session-only route (`meta.apiKey: false`: key management, MFA) |
+| `ApiKeyAmbiguousError` | `AUTH_APIKEY_AMBIGUOUS` | 400 | Two different keys on one request (`Authorization: Bearer mk_…` and the key header) |
 | `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` for a key outside the caller's tenant/user scope — a 404, never a 403, so key ids can't be probed |
 | `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: the database's `auth_api_keys` is missing a column (usually `expiresAt`, added in 1.5.0) — migrate it, in every tenant schema with schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | The passkey challenge expired or was already used (they are single-use) |
 | `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | The verifier rejected the browser's response |
-| `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for |
-| `PasskeyNotFoundError` | `PASSKEY_NOT_FOUND` | 404 | No stored credential matches the presented id |
+| `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for, or an authentication started for a user was answered with another user's passkey |
+| `PasskeyNotFoundError` | `PASSKEY_NOT_FOUND` | 404 | No stored credential matches the presented id, or `remove(userId, id)` named a passkey `userId` does not own |
 | `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | The signature counter did not increase — the authenticator may be cloned |
 | `PasskeyExistsError` | `PASSKEY_EXISTS` | 409 | That credential is already registered |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | `:provider` isn't in the `providers` array |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, older than `stateTtlMs`, already used, or arrived without the browser's binding cookie |
 | `SocialLinkRefusedError` | `AUTH_SOCIAL_LINK_REFUSED` | 403 | A social login matched an existing account by an email the provider did not verify |
-| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange or the profile fetch failed. The provider's reply stays in the log; the client gets `Bad gateway.` |
-| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The assertion failed validation — bad signature, expired, missing/unknown `InResponseTo`, already used, or an email outside the provider's `allowedEmailDomains` |
-| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, or `@node-saml/node-saml` < 5.1.0 |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange, the profile fetch failed or timed out, the profile lacks a usable `sub`/`email`, the email is outside the provider's `allowedEmailDomains`, or the `id_token` is missing or for another nonce/audience/issuer or expired. The provider's reply stays in the log; the client gets `Bad gateway.` |
+| `OAuthProviderConfigError` | `AUTH_OAUTH_PROVIDER_CONFIG` | boot | Several providers with an enterprise (OIDC) IdP lacking `allowedEmailDomains`, an invalid domain entry, or a duplicate provider name |
+| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The response is not bound to this browser, or the assertion failed validation — malformed, bad signature, expired, missing/unknown `InResponseTo`, already used, encrypted (unsupported), or an email outside the provider's `allowedEmailDomains` |
+| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, an `acceptedClockSkewMs` outside 0..5 min, or `@node-saml/node-saml` < 5.1.0 |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.auth` and `authPlugin` isn't registered |
 
 - **Every request is anonymous even with a valid `Authorization` header** — check

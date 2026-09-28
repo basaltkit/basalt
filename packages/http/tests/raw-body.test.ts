@@ -280,6 +280,14 @@ describe('rawBodyRouteMatcher', () => {
     expect(none('POST', '/a')).toBe(false)
   })
 
+  it('is case-sensitive by default and case-insensitive on request, like the router it serves', () => {
+    expect(matches('POST', '/Billing/Webhook')).toBe(false)
+    const loose = rawBodyRouteMatcher(routes, { caseInsensitive: true })
+    expect(loose('POST', '/Billing/Webhook')).toBe(true)
+    expect(loose('POST', '/DRIVES/dropbox/NOTIFICATIONS')).toBe(true)
+    expect(loose('POST', '/billing/checkout')).toBe(false)
+  })
+
   it('reads a trailing wildcard as "the rest of the path"', () => {
     const wild = rawBodyRouteMatcher([
       route({ method: 'POST', url: '/hooks/*', body: rawBody(), handler: () => null }),

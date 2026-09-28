@@ -1,3 +1,4 @@
+import { ensureMetadata, type Container } from '@basaltkit/core'
 import type { BasaltRoute } from './route.js'
 
 /**
@@ -60,19 +61,35 @@ export class UnguardedRouteMetaError extends Error {
   }
 }
 
+const isContainer = (value: ReadonlySet<string> | Container): value is Container =>
+  typeof (value as { createScope?: unknown }).createScope === 'function'
+
 /**
  * Fails loud (at boot) when a route declares one of {@link GUARDED_META_KEYS}
  * and no registered guard claimed that key via {@link GUARDED_META_BUCKET}.
  * `allow` waives the check: `true` for everything (edge-auth deployments),
  * or an array of specific keys. A value of `false`/`undefined` on the route's
  * meta is an explicit opt-off, not a protection request — never flagged.
+ *
+ * Every adapter plugin calls this at boot. Code that drives `runRoute()`
+ * itself — no adapter, e.g. a bespoke listener — gets no such check for free:
+ * pass the booted app's container as `claimed` and the keys its plugins
+ * claimed are read from it, the same check the adapters make:
+ *
+ * ```ts
+ * const app = await createApp({ plugins: [authPlugin(…), permissionsPlugin(…)] }).boot()
+ * assertRoutesGuarded(routes, app.container) // throws UnguardedRouteMetaError
+ * ```
  */
 export function assertRoutesGuarded(
   routes: readonly BasaltRoute[],
-  claimed: ReadonlySet<string>,
+  claimed: ReadonlySet<string> | Container,
   allow?: boolean | readonly string[],
 ): void {
   if (allow === true) return
+  // Duck-typed rather than `instanceof`: a second copy of @basaltkit/core in
+  // node_modules would otherwise make a real container look like a set.
+  if (isContainer(claimed)) claimed = new Set(ensureMetadata(claimed).get<string>(GUARDED_META_BUCKET))
   const waived = new Set(Array.isArray(allow) ? allow : [])
   const offenders: { route: string; key: string }[] = []
   for (const route of routes) {

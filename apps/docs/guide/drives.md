@@ -12,6 +12,37 @@ rate-limit backoff, and inbound notification verification.
 
 [[toc]]
 
+## Upgrading from 0.2.x
+
+::: warning Security hardening that changes behaviour
+No signature changed, but several things that used to be accepted are now
+refused. Read these before upgrading `@basaltkit/drives` to 0.3 and the three
+adapters to 1.0:
+
+- **`listItems()` cursors are signed.** The cursor it returns is now
+  `bkl1.<adapter cursor>.<mac>`, bound to the tenant and the connection under
+  a key derived from `secret`. Pass it back unchanged and nothing differs; a
+  cursor issued before the upgrade, for another connection, or under a rotated
+  `secret` is refused with `DRIVE_ACCESS_DENIED` — list from the start again.
+  Sync cursors stored on the connection are not affected.
+- **A `rootId` now confines every call**, not just the default listing: a
+  `folderId`, `getItem()`, `download()` and an upload target outside the root
+  are refused with `DRIVE_ACCESS_DENIED` (`getItem()` answers `null`). Google
+  and folder-rooted Microsoft connections pay one small metadata read per
+  folder level; see each provider's *Limitations*.
+- **Watch secrets are stored as a digest** (`sha256:…`). Existing rows keep
+  matching; nothing to migrate. Never send `connection.watch.secret` to a
+  provider — it is no longer the secret.
+- **The replay guard no longer reads `x-goog-message-number` from every
+  provider.** An adapter that has a better per-delivery key than the raw body
+  reports it as `DriveNotificationResult.replayKey` (the Google adapter does).
+- **`timeoutMs` is an inactivity timeout** that also bounds each wait for
+  response headers. For a hard bound on a whole download, set `deadlineMs`.
+- The OAuth callback echoes only a well-formed `?error=` code, and the
+  anonymous notification route answers an unknown provider with
+  `DRIVE_NOTIFICATION_INVALID` instead of listing the registered ones.
+:::
+
 ## Upgrading from 0.1.x
 
 ::: warning Three shapes changed
@@ -357,6 +388,12 @@ own ceiling.
   `files/export` is not wired.
 - No `externalUrl`: Dropbox metadata carries no web link, and manufacturing one
   would mean creating a share.
+- **Root confinement** compares `path_lower`. A path handle is checked
+  lexically, with no request; an `id:`/`ns:` handle (or root) costs one
+  `get_metadata`; a download is checked against `Dropbox-API-Result` before its
+  body is read. `.`/`..` segments are refused outright, and a folder whose
+  lowercase form Dropbox folds differently from JavaScript is refused rather
+  than guessed about.
 
 ## Connecting Google Drive
 
@@ -494,6 +531,11 @@ for the file.
   "testing"). Google sends the same string for all three, so the connection is
   marked `invalid` and the tenant is asked to reconnect — which is the only
   available action in any of the three cases.
+- **Root confinement walks `parents`.** For a connection with a `rootId`, a
+  `folderId`, `getItem()`, `download()` and an upload target each cost one
+  metadata read per folder level between the item and the root (bounded by
+  `ancestryMaxDepth` and `ancestryMaxLookups`). The `root` alias is resolved to
+  My Drive's real id first. An unconfined connection pays nothing.
 
 ## Connecting OneDrive / SharePoint
 
@@ -600,6 +642,12 @@ checking they still point at Graph — before the guarded fetch re-validates the
 for real. A provider-supplied URL that the framework then fetches is exactly the
 case the guard exists for.
 
+That check alone is not enough: a caller could author a cursor for *another*
+drive on `graph.microsoft.com` itself, and it would be fetched with this
+connection's bearer token. So the cursor `listItems()` hands out is additionally
+wrapped in a MAC bound to the tenant and the connection, and a cursor the engine
+did not issue never reaches the adapter.
+
 **The download URL is a bearer credential.** `@microsoft.graph.downloadUrl` is
 pre-signed and lives on a CDN host, and `/content` redirects to the same place.
 So listings `$select` it away (it is never in `DriveItem.raw`, a sink or a log),
@@ -655,6 +703,11 @@ One delivery can batch entries for several subscriptions that share a URL, so
   re-enqueues for ever.
 - **Cross-drive shared items** are otherwise out of scope: a connection is
   confined to one drive. Connect the owning drive instead.
+- **A folder root (`item:{id}`) is enforced by walking `parentReference.id`**:
+  a `folderId`, `getItem()`, `download()` and an upload target each cost one
+  small read per level up to the root (`ancestryMaxDepth`, default 32). A
+  connection rooted at a whole drive pays nothing — every call is already built
+  on that drive.
 
 ## Importing
 
@@ -862,6 +915,7 @@ is how an adapter tells the engine which vendor it is:
 | `deltaIncludesExisting` | the cursor from `startDelta` replays what already exists (Dropbox, Microsoft Graph). The default `false` makes the engine run a listing pass first, so an adapter that forgets costs extra metadata reads instead of losing a tenant's files. |
 | `retryAfterFromBody` | the vendor puts its rate-limit hint somewhere other than `Retry-After` (Dropbox). |
 | `DriveNotificationResult.accountIds` | notifications identify a connection by a provider account rather than by a secret you chose (Dropbox). |
+| `DriveNotificationResult.replayKey` | the vendor has a per-delivery identifier better than the raw body (Google's `X-Goog-Message-Number`, whose notifications have no body). Without it the replay guard keys on a digest of the body. |
 | a removal's `path` | deletions are reported by path because the vendor gives no id for them (Dropbox). |
 | `DriveItem.exportOnly` | the vendor has items with no downloadable bytes (Google's native Docs, Dropbox's Paper docs). `importItem` skips them under `copy` with `reason: 'no-content'` rather than failing that job on every run for ever. |
 
@@ -998,6 +1052,11 @@ provider, with its own credentials, for its own tenant. The blast radius of a
 spoof is a wasted sync — and that, rather than the strength of the secret, is
 what makes the weaker two acceptable.
 
+The optional `replayGuard` keys a delivery by what the **adapter** reports as
+`replayKey` (Google's message number), or else by a digest of the raw body — never
+by a header the engine picks up on its own, which would let a replayed Dropbox
+or Graph body through with a fresh, unsigned number.
+
 The `connections` candidate list is supplied by **you** and never scanned across
 tenants by the framework, so an unauthenticated caller cannot address another
 tenant's connection at all. For Dropbox that lookup is necessarily by account id
@@ -1018,7 +1077,22 @@ and still your query rather than a framework table scan.
 - **Byte caps enforced mid-stream**, and no transparent decompression — so the
   cap applies to real bytes on the wire, which a decompression bomb cannot lie
   about.
-- **Whole-exchange timeouts**, not connect-only.
+- **Two timeouts.** `timeoutMs` (30 s) is a socket inactivity timeout and a
+  hard bound on each wait for response headers; the opt-in `deadlineMs` bounds
+  the whole exchange, body included — off by default, because a large download
+  on a slow link is legitimate.
+- **Listing cursors are signed.** `listItems()` wraps the adapter's cursor in a
+  MAC bound to the tenant and the connection, so a caller cannot author one —
+  a Graph `nextLink` is a URL fetched with the connection's token, and a Google
+  walk cursor names folders.
+- **A `rootId` is enforced**, for listings, items, downloads and upload targets,
+  on all three adapters.
+- **Refresh races fail safe.** A worker told `invalid_grant` for a refresh token
+  another worker just rotated only invalidates the connection by
+  compare-and-set, and a winner that finds itself invalidated by such a loser
+  restores the connection with the live token it holds.
+- **Watch secrets are stored as a SHA-256 digest**, and the credential
+  envelope refuses a truncated GCM tag.
 - **Credentials encrypted with AES-256-GCM**, bound by AAD to their
   `(tenant, connection, provider)` — a blob moved to another row fails to
   decrypt rather than handing over credentials.

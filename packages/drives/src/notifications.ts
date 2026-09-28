@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import type { Drives } from './drives.js'
 import { DriveNotificationInvalidError, DriveUnsupportedError } from './errors.js'
 import type { DriveNotificationInput, DriveNotificationResult, DriveWatch } from './provider.js'
@@ -228,7 +228,13 @@ export async function handleNotification(
     // One key for the whole notification, not one per connection: a Dropbox
     // notification naming two accounts is one delivery, and collapsing it per
     // connection would let a replay through whenever the fan-out differed.
-    const key = `${provider.name}:${matched.map((c) => `${c.tenantId}/${c.id}`).sort().join(',')}:${verified.watchId ?? ''}:${input.headers['x-goog-message-number'] ?? hashBody(input.body)}`
+    //
+    // What tells one delivery from another is the adapter's call, never a
+    // header read here: an unsigned `x-goog-message-number` accepted from any
+    // provider let a replayed Dropbox or Graph body through with a fresh
+    // number (FA-075). See `DriveNotificationResult.replayKey`.
+    const distinct = verified.replayKey !== undefined ? `k:${verified.replayKey}` : `b:${hashBody(input.body)}`
+    const key = `${provider.name}:${matched.map((c) => `${c.tenantId}/${c.id}`).sort().join(',')}:${verified.watchId ?? ''}:${distinct}`
     if (!(await options.replayGuard.firstSeen(key, options.replayTtlMs ?? 5 * 60_000))) {
       return { connections: matched, shouldSync: false, reason: 'replay' }
     }
@@ -259,7 +265,7 @@ function matches(candidate: DriveConnection, verified: DriveNotificationResult):
     const watch = candidate.watch
     return (
       watch !== undefined &&
-      secrets.some((secret) => safeEqual(watch.secret, secret)) &&
+      secrets.some((secret) => watchSecretMatches(watch.secret, secret)) &&
       // A batch names several subscriptions, so `watchId` is only reported
       // when every entry agreed on one; when it is absent the secret alone
       // decides, which is what it authenticates.
@@ -269,6 +275,34 @@ function matches(candidate: DriveConnection, verified: DriveNotificationResult):
   const accountId = candidate.account?.id
   if (accountId === undefined || accountId === '') return false
   return (verified.accountIds ?? []).some((id) => safeEqual(id, accountId))
+}
+
+/** Marks a stored watch secret as a digest rather than the secret itself. */
+const WATCH_DIGEST_PREFIX = 'sha256:'
+
+/**
+ * What is persisted for a subscription secret: a SHA-256 digest, never the
+ * secret itself.
+ *
+ * The secret is a bearer credential for the notification endpoint, and unlike
+ * the OAuth tokens it was stored in clear — a copy of the connections table
+ * was enough to forge deliveries for every watched connection. The engine only
+ * ever needs to *compare* it, so a digest is all it keeps. An unsalted hash is
+ * sufficient because the input is 32 random bytes, not a password.
+ */
+export function watchSecretDigest(secret: string): string {
+  return `${WATCH_DIGEST_PREFIX}${createHash('sha256').update(secret, 'utf8').digest('base64url')}`
+}
+
+/**
+ * Constant-time check of a presented secret against what the row holds — a
+ * digest for any subscription registered since FA-076, the secret itself for a
+ * row written before, which keeps working until that subscription is renewed.
+ */
+function watchSecretMatches(stored: string, presented: string): boolean {
+  return stored.startsWith(WATCH_DIGEST_PREFIX)
+    ? safeEqual(stored, watchSecretDigest(presented))
+    : safeEqual(stored, presented)
 }
 
 const hashBody = (body: Buffer): string => createHmac('sha256', 'drive-notification').update(body).digest('base64url')
@@ -325,7 +359,9 @@ export async function watchConnection(
   await drives.internals.store.update(connection.tenantId, connection.id, {
     watch: {
       id: watch.id,
-      secret,
+      // Only the digest: the secret went to the provider and is never needed
+      // here again except to compare against. See `watchSecretDigest`.
+      secret: watchSecretDigest(secret),
       ...(watch.expiresAt !== undefined ? { expiresAt: watch.expiresAt } : {}),
       ...(watch.raw !== undefined ? { raw: watch.raw } : {}),
     },

@@ -156,8 +156,10 @@ export class DriveCredentials {
     const current = this.unseal(connection)
     if (current.refreshToken === undefined) {
       // Nothing to refresh with and the access token is past its expiry. This is
-      // terminal, not transient: retrying cannot produce a refresh token.
-      await this.invalidate(connection, 'the access token expired and no refresh token was stored.')
+      // terminal, not transient: retrying cannot produce a refresh token —
+      // unless another writer stored one meanwhile, which `condemn` checks.
+      const adopted = await this.condemn(connection, undefined, 'the access token expired and no refresh token was stored.')
+      if (adopted) return adopted
       throw new DriveCredentialsInvalidError(connection.id, 'no refresh token is stored.')
     }
 
@@ -181,16 +183,11 @@ export class DriveCredentials {
         // same connection a moment ago has already retired the token we just
         // tried to spend. The provider's answer is identical to a revoked
         // grant, yet the connection is perfectly healthy: the winner stored
-        // usable credentials. So before condemning it, look.
-        const latest = await this.options.store.find(connection.tenantId, connection.id)
-        if (latest && latest.status === 'active' && latest.revision !== connection.revision) {
-          const latestTokens = this.unseal(latest)
-          if (!this.expired(latestTokens)) return { accessToken: latestTokens.accessToken, connection: latest }
-        }
-        // Nobody refreshed behind our back: the grant really is gone. Stop
-        // using this connection rather than hammering the provider from every
-        // queued job until someone notices.
-        await this.invalidate(connection, 'the provider rejected the stored refresh token.')
+        // (or is about to store) usable credentials. `condemn` only marks the
+        // row invalid if it still holds the very token that was rejected, and
+        // does so with a compare-and-set, so it can never overwrite a winner.
+        const adopted = await this.condemn(connection, current.refreshToken, 'the provider rejected the stored refresh token.')
+        if (adopted) return adopted
       }
       throw error
     }
@@ -224,6 +221,26 @@ export class DriveCredentials {
       // refresh-token rotation the token we just spent may already be retired,
       // and clobbering the winner's row would break the connection outright.
       const latest = await this.options.store.find(connection.tenantId, connection.id)
+      if (latest && latest.status === 'invalid' && this.unseal(latest).refreshToken === current.refreshToken) {
+        // The other writer was a LOSER, not a winner: it presented the refresh
+        // token we had just spent, was told `invalid_grant`, and — seeing no
+        // newer credentials yet — marked the connection invalid. Its evidence
+        // was about the token we retired; the grant is alive, and the fresh
+        // tokens in our hands are the only live refresh token in existence.
+        // Dropping them here would log the tenant out for good, so restore the
+        // connection — still by compare-and-set, against the row we just read,
+        // so a disconnect or a re-consent in the meantime is never undone.
+        const restored = await this.options.store.update(
+          connection.tenantId,
+          connection.id,
+          { secret: sealed, status: 'active', ...(merged.scopes !== undefined ? { scopes: merged.scopes } : {}) },
+          latest.revision,
+        )
+        if (restored) {
+          await this.options.onRefreshed?.({ connection: restored, rotated })
+          return { accessToken: merged.accessToken, connection: restored }
+        }
+      }
       if (!latest || latest.status !== 'active') {
         throw new DriveCredentialsInvalidError(connection.id, 'the connection was invalidated during a refresh.')
       }
@@ -250,8 +267,56 @@ export class DriveCredentials {
     return { accessToken: merged.accessToken, connection: updated }
   }
 
-  private async invalidate(connection: DriveConnection, reason: string): Promise<void> {
-    const updated = await this.options.store.update(connection.tenantId, connection.id, { status: 'invalid' })
-    await this.options.onInvalidated?.({ connection: updated ?? connection, reason })
+  /**
+   * Marks a connection `invalid` — but only if it still holds the refresh token
+   * the provider just rejected, and only by compare-and-set.
+   *
+   * An unconditional write here was the race behind FA-074: a worker that got
+   * `invalid_grant` for a token a concurrent winner had already rotated away
+   * re-read the row, saw nothing new *yet*, and wrote `status: 'invalid'` on
+   * top of whatever the winner stored a moment later. So instead:
+   *
+   * - the row is re-read, and if it now holds **different** credentials the
+   *   rejection was about a token that is no longer the connection's — those
+   *   credentials are adopted when still valid, and nothing is condemned;
+   * - otherwise the invalidation is written with `expectedRevision`, and a lost
+   *   compare-and-set sends us round again to look at what the other writer
+   *   stored.
+   *
+   * Returns credentials to use when another writer's turned out to be good,
+   * `undefined` when the caller should throw.
+   */
+  private async condemn(
+    connection: DriveConnection,
+    rejected: string | undefined,
+    reason: string,
+  ): Promise<ActiveCredentials | undefined> {
+    let latest = await this.options.store.find(connection.tenantId, connection.id)
+    for (let attempt = 1; ; attempt++) {
+      // Gone, already invalid, or disconnected: nothing to condemn.
+      if (!latest || latest.status !== 'active') return undefined
+      const tokens = this.unseal(latest)
+      if (tokens.refreshToken !== rejected) {
+        // Somebody stored newer credentials. Use them if they are still good;
+        // if not, the next call refreshes with *them*. Either way, the
+        // rejection we saw says nothing about this connection any more.
+        return this.expired(tokens) ? undefined : { accessToken: tokens.accessToken, connection: latest }
+      }
+      const updated = await this.options.store.update(
+        connection.tenantId,
+        connection.id,
+        { status: 'invalid' },
+        latest.revision,
+      )
+      if (updated) {
+        await this.options.onInvalidated?.({ connection: updated, reason })
+        return undefined
+      }
+      // Lost the compare-and-set: somebody wrote between our read and our
+      // write. Bounded, for the same livelock reason as the refresh loop — and
+      // on giving up we leave the row alone rather than condemn it blind.
+      if (attempt >= DriveCredentials.MAX_CAS_ATTEMPTS) return undefined
+      latest = await this.options.store.find(connection.tenantId, connection.id)
+    }
   }
 }

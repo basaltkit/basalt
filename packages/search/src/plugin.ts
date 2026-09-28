@@ -55,6 +55,11 @@ export interface SearchPluginOptions {
    * never blocks unrelated work — including CLI commands that don't use search.
    */
   failOnRegisterError?: boolean
+  /**
+   * Largest `limit` one search may ask for; above it `search()` throws
+   * `SearchPaginationError` (400). Default 1000.
+   */
+  maxLimit?: number
 }
 
 export function searchPlugin(options: SearchPluginOptions = {}) {
@@ -71,7 +76,13 @@ export function searchPlugin(options: SearchPluginOptions = {}) {
         SEARCH,
         () =>
           new Search(
-            { driver, rules: (options.sync ?? []) as never },
+            {
+              driver,
+              rules: (options.sync ?? []) as never,
+              // Declared indexes restrict `filters` to their filterable fields.
+              indexes: options.indexes ?? [],
+              ...(options.maxLimit !== undefined ? { maxLimit: options.maxLimit } : {}),
+            },
             () => metadata.get('tenancy:active').length > 0,
           ),
       )

@@ -4,7 +4,7 @@ import type {
   JobExecutor,
   QueueDriver,
 } from '@basaltkit/queue'
-import { queuePlugin, type QueuePluginOptions } from '@basaltkit/queue'
+import { queuePlugin, splitQueuePluginOptions, type QueuePluginOptions } from '@basaltkit/queue'
 
 /** The subset of a kafkajs client this driver uses. */
 export interface KafkaClient {
@@ -44,6 +44,17 @@ const HEADER = {
 
 /** Hard ceiling on retries, so a crafted message can't request unbounded ones. */
 const MAX_ATTEMPTS = 50
+
+/**
+ * The attempt number a message carries, as an integer in `[1, MAX_ATTEMPTS]`.
+ * The header is untrusted: a negative value used to satisfy
+ * `attempt < attempts` for a million rounds, bypassing the retry ceiling.
+ */
+function readAttempt(raw: string | undefined): number {
+  const value = Number(raw ?? 1)
+  if (!Number.isFinite(value) || value < 1) return 1
+  return Math.min(Math.trunc(value), MAX_ATTEMPTS)
+}
 
 export interface KafkaDriverOptions {
   brokers: string[]
@@ -181,7 +192,7 @@ export class KafkaQueueDriver implements QueueDriver {
     try {
       await this.executor?.(jobName, JSON.parse(value))
     } catch {
-      const attempt = Number(headers[HEADER.attempt] ?? 1)
+      const attempt = readAttempt(headers[HEADER.attempt])
       // Clamp the max-attempts read from the (untrusted) message to a hard
       // ceiling so a crafted `attempts` can't drive a retry-amplification loop.
       const attempts = Math.min(Number(headers[HEADER.attempts] ?? 1) || 1, MAX_ATTEMPTS)
@@ -273,15 +284,8 @@ export interface KafkaQueuePluginOptions
  * only reads defaults, and every connection is opened lazily on first use.
  */
 export function kafkaQueuePlugin(options: KafkaQueuePluginOptions) {
-  // Split by the CORE's keys, not the driver's: a new driver option then flows
-  // through untouched, and only a change to QueuePluginOptions needs an edit here.
-  const { jobs, workers, onUnsupported, removeOnComplete, removeOnFail, ...driver } = options
-  return queuePlugin({
-    ...(jobs !== undefined ? { jobs } : {}),
-    ...(workers !== undefined ? { workers } : {}),
-    ...(onUnsupported !== undefined ? { onUnsupported } : {}),
-    ...(removeOnComplete !== undefined ? { removeOnComplete } : {}),
-    ...(removeOnFail !== undefined ? { removeOnFail } : {}),
-    driver: new KafkaQueueDriver(driver),
-  })
+  // Split by the CORE's key list: a new core option (e.g. `signingKey`) reaches
+  // queuePlugin, and every other key flows to the driver untouched.
+  const { core, driver } = splitQueuePluginOptions(options)
+  return queuePlugin({ ...core, driver: new KafkaQueueDriver(driver) })
 }

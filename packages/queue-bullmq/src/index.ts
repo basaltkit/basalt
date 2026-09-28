@@ -13,6 +13,7 @@ import {
   MAX_LIST_LIMIT,
   queuePlugin,
   readJobEnvelope,
+  splitQueuePluginOptions,
   type AddJobOptions,
   type JobExecutor,
   type JobState,
@@ -108,14 +109,18 @@ export class BullmqQueueDriver implements QueueDriver {
     // Without these listeners an emitted 'error' crashes the process (Node
     // EventEmitter semantics) and exhausted jobs fail invisibly (Q-2).
     worker.on('error', (error) => this.onError(error, { queue, source: 'worker' }))
-    worker.on('failed', (job, error) =>
+    worker.on('failed', (job, error) => {
+      // BullMQ emits 'failed' on EVERY failed attempt, including the ones it
+      // is about to retry. onJobFailed promises "exhausted its retries", so an
+      // attempt that still has retries left is not reported.
+      if (job && willRetry(job, error)) return
       this.onJobFailed({
         queue,
         job: job?.name ?? '(unknown)',
         ...(job?.id !== undefined ? { jobId: String(job.id) } : {}),
         error,
-      }),
-    )
+      })
+    })
     this.workers.push(worker)
   }
 
@@ -132,7 +137,11 @@ export class BullmqQueueDriver implements QueueDriver {
 
   async retryFailed(queue: string, options: { limit?: number } = {}): Promise<number> {
     const limit = options.limit ?? 1000
-    const failed = await this.queue(queue).getFailed(0, limit - 1)
+    // `getFailed(0, -1)` means "to the end" in BullMQ: a limit of 0 used to
+    // re-enqueue EVERY failed job. A non-positive or non-numeric limit
+    // retries nothing.
+    if (!Number.isFinite(limit) || limit < 1) return 0
+    const failed = await this.queue(queue).getFailed(0, Math.trunc(limit) - 1)
     let retried = 0
     for (const job of failed) {
       await job.retry()
@@ -203,13 +212,31 @@ function toSummary(job: Job, state: JobState): JobSummary {
   }
 }
 
+/**
+ * Whether BullMQ will run this failed job again: attempts left, and not an
+ * `UnrecoverableError` (which BullMQ never retries). A job without
+ * `attemptsMade` is treated as final — better one report too many than none.
+ */
+function willRetry(job: Job, error: unknown): boolean {
+  // BullMQ increments attemptsMade BEFORE emitting 'failed'.
+  const made = job.attemptsMade
+  if (typeof made !== 'number') return false
+  if ((error as { name?: unknown } | undefined)?.name === 'UnrecoverableError') return false
+  return made < (job.opts?.attempts ?? 1)
+}
+
+/**
+ * `redis://user:p%40ss@host:6379/2` → ioredis options. `URL` keeps the
+ * userinfo percent-ENCODED, so a password containing `@`, `:` or `/` (which
+ * must be encoded in a URL) used to reach Redis still encoded — and fail AUTH.
+ */
 function parseRedisUrl(url: string): ConnectionOptions {
   const parsed = new URL(url)
   return {
     host: parsed.hostname,
     port: parsed.port ? Number(parsed.port) : 6379,
-    ...(parsed.username ? { username: parsed.username } : {}),
-    ...(parsed.password ? { password: parsed.password } : {}),
+    ...(parsed.username ? { username: decodeURIComponent(parsed.username) } : {}),
+    ...(parsed.password ? { password: decodeURIComponent(parsed.password) } : {}),
     ...(parsed.pathname && parsed.pathname !== '/' ? { db: Number(parsed.pathname.slice(1)) } : {}),
     ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
     // required by BullMQ for workers
@@ -249,15 +276,8 @@ export interface BullmqQueuePluginOptions
  * of at the first dispatch.
  */
 export function bullmqQueuePlugin(options: BullmqQueuePluginOptions) {
-  // Split by the CORE's keys, not the driver's: a new driver option then flows
-  // through untouched, and only a change to QueuePluginOptions needs an edit here.
-  const { jobs, workers, onUnsupported, removeOnComplete, removeOnFail, ...driver } = options
-  return queuePlugin({
-    ...(jobs !== undefined ? { jobs } : {}),
-    ...(workers !== undefined ? { workers } : {}),
-    ...(onUnsupported !== undefined ? { onUnsupported } : {}),
-    ...(removeOnComplete !== undefined ? { removeOnComplete } : {}),
-    ...(removeOnFail !== undefined ? { removeOnFail } : {}),
-    driver: new BullmqQueueDriver(driver),
-  })
+  // Split by the CORE's key list: a new core option (e.g. `signingKey`) reaches
+  // queuePlugin, and every other key flows to the driver untouched.
+  const { core, driver } = splitQueuePluginOptions(options)
+  return queuePlugin({ ...core, driver: new BullmqQueueDriver(driver) })
 }

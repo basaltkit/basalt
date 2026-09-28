@@ -214,4 +214,29 @@ describe('resolving a notification to a connection', () => {
     expect(second.shouldSync).toBe(false)
     expect(second.reason).toBe('replay')
   })
+
+  it('reports the message number as the replay key, so distinct deliveries are not collapsed (FA-075)', async () => {
+    const h = harness()
+    const view = await connect(h)
+    const watch = await watchConnection(h.drives, view.id, { notificationUrl: 'https://app.test/hook' })
+    const connections = await h.store.list(SINGLE_TENANT_SCOPE)
+    const replayGuard = new MemoryReplayGuard(h.now)
+
+    // Google's body is empty: without the adapter naming the message number,
+    // every notification on a channel would look like the same delivery and
+    // a real change arriving inside the window would be dropped as a replay.
+    expect(h.provider.verifyNotification(h.google.notificationFor(watch.id, { messageNumber: 8 })).replayKey).toBe('8')
+    const first = await handleNotification(h.drives, h.google.notificationFor(watch.id, { messageNumber: 8 }), {
+      provider: 'google',
+      connections,
+      replayGuard,
+    })
+    const next = await handleNotification(h.drives, h.google.notificationFor(watch.id, { messageNumber: 9 }), {
+      provider: 'google',
+      connections,
+      replayGuard,
+    })
+    expect(first.shouldSync).toBe(true)
+    expect(next.shouldSync).toBe(true)
+  })
 })

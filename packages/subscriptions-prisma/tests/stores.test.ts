@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { InvalidUsageAmountError } from '@basaltkit/subscriptions'
 import {
   PrismaSubscriptionStore,
   type PrismaSubscriptionsClient,
@@ -154,6 +155,16 @@ describe('PrismaUsageStore', () => {
     expect(await store.consume('acme', 'seats', 'lifetime', 2, 5)).toEqual({ applied: true, used: 5 })
     expect(await store.consume('acme', 'seats', 'lifetime', 1, 5)).toEqual({ applied: false, used: 5 })
     expect(await store.get('acme', 'seats', 'lifetime')).toBe(5)
+  })
+
+  // FA-047: a negative amount refunded quota, NaN poisoned the counter.
+  it('rejects non-positive-integer amounts at store level (FA-047)', async () => {
+    const store = new PrismaUsageStore(client)
+    for (const bad of [-5, 0, Number.NaN, 1.5]) {
+      await expect(store.consume('acme', 'seats', 'x', bad, 5)).rejects.toBeInstanceOf(InvalidUsageAmountError)
+      await expect(store.increment('acme', 'seats', 'x', bad)).rejects.toBeInstanceOf(InvalidUsageAmountError)
+    }
+    expect(await store.get('acme', 'seats', 'x')).toBe(0)
   })
 
   it('never overshoots the limit under concurrent consume', async () => {

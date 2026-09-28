@@ -30,7 +30,8 @@ interface PWebhookEndpoint {
 export interface PrismaWebhooksClient {
   webhookEndpoint: {
     findMany(a: any): Promise<PWebhookEndpoint[]>
-    upsert(a: any): Promise<PWebhookEndpoint>
+    create(a: any): Promise<PWebhookEndpoint>
+    updateMany(a: any): Promise<{ count: number }>
     deleteMany(a: any): Promise<{ count: number }>
   }
 }
@@ -44,6 +45,20 @@ const toEndpoint = (r: PWebhookEndpoint): WebhookEndpoint => ({
   ...(r.secret !== null ? { secret: r.secret } : {}),
   ...(r.active !== null ? { active: r.active } : {}),
 })
+
+/**
+ * The endpoint id is held by a different scope (another tenant, or a global
+ * endpoint when adding a tenant one, or vice versa) — including an id that
+ * differs only in letter case on a case-insensitive database collation.
+ */
+export class WebhookEndpointIdInUseError extends Error {
+  readonly code = 'WEBHOOK_ENDPOINT_ID_IN_USE'
+  readonly status = 409
+  constructor(id: string) {
+    super(`@basaltkit/webhooks-prisma: endpoint id "${id}" is already in use by another scope.`)
+    this.name = 'WebhookEndpointIdInUseError'
+  }
+}
 
 export class PrismaWebhookStore implements WebhookStore {
   constructor(private readonly client: PrismaWebhooksClient) {}
@@ -71,9 +86,25 @@ export class PrismaWebhookStore implements WebhookStore {
       secret: record.secret ?? null,
       active: record.active === undefined ? null : record.active,
     }
-    // upsert mirrors MemoryWebhookStore: re-adding the same id replaces it.
-    await this.client.webhookEndpoint.upsert({ where: { id }, create: { id, ...data }, update: data })
-    return record
+    // Re-adding an id replaces the endpoint — but only within its own scope
+    // (tenant, or global). The write is keyed by (id, tenantId), never by id
+    // alone: under MySQL's case-insensitive collation 'ABC' matches 'abc', and
+    // an upsert by id let one tenant rewrite another's url and secret. An
+    // id held by another scope makes the insert hit the primary key instead.
+    const scope = { id, tenantId: data.tenantId }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { count } = await this.client.webhookEndpoint.updateMany({ where: scope, data })
+      if (count > 0) return record
+      try {
+        await this.client.webhookEndpoint.create({ data: { id, ...data } })
+        return record
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code !== 'P2002') throw error
+        // A concurrent add of the same id in the same scope won the insert:
+        // the next update finds it. Any other owner keeps it, and we refuse.
+      }
+    }
+    throw new WebhookEndpointIdInUseError(id)
   }
 
   async remove(id: string, tenantId?: string): Promise<void> {
@@ -96,7 +127,7 @@ export interface PrismaWebhooksStores {
 }
 
 // Fail fast with an actionable message when the Prisma client lacks the model
-// this package needs (the alternative is a cryptic "reading 'upsert' of undefined").
+// this package needs (the alternative is a cryptic "reading 'updateMany' of undefined").
 function ensureModel(client: unknown, delegate: string, pkg: string): void {
   let value: unknown
   try {

@@ -314,7 +314,13 @@ servidor só-de-dev mantém o runtime do framework fora do seu grafo. Respostas:
 
 Os headers HTTP recebidos são reencaminhados às ferramentas como `ctx.headers` (e o
 endereço do par como `ctx.remoteAddress`), por isso uma ferramenta pode ler metadados por chamada (um id de tenant, um bearer
-token) da mesma forma que leria os `headers` estáticos do stdio.
+token) da mesma forma que leria os `headers` estáticos do stdio. Um header enviado uma
+vez é uma string; um header enviado mais de uma vez é um `string[]` com todos os valores
+(o `req.headers` do Node juntá-los-ia com `, `, ou guardaria só o primeiro
+`authorization`) — por isso uma ferramenta pode recusar um duplicado ambíguo com
+`Array.isArray(ctx.headers[name])`. Um `host` IPv6 funciona com ou sem parênteses rectos
+(`'::1'`, `handle.url` → `http://[::1]:port/mcp`), e o `serveHttp` rejeita com o erro do
+`listen()` (`EADDRINUSE`) quando o endereço não pode ser ligado.
 
 ::: warning O transporte HTTP é guardado ao loopback por predefinição
 Liga-se a `127.0.0.1` e, antes de qualquer despacho, exige que o hostname do `Host`

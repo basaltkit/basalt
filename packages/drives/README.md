@@ -257,7 +257,7 @@ object.
 | `get(id, tenantId?)` | One connection, or `DRIVE_CONNECTION_NOT_FOUND` |
 | `disconnect(id, options?)` | Revokes at the provider (default), unsubscribes, deletes the row |
 | `forgetImports(id, tenantId?)` | Drops the dedup ledger so a later sync re-imports |
-| `listItems(id, options?)` | One page of a folder |
+| `listItems(id, options?)` | One page of a folder. The returned `cursor` is MAC-bound to the tenant and connection; a cursor this engine did not issue is refused with `DRIVE_ACCESS_DENIED` |
 | `getItem(id, externalId, options?)` | One item's metadata |
 | `download(id, item, options?)` | The bytes, as a stream. Consume or destroy it |
 | `upload(id, input, options?)` | Writes a file back, when the adapter supports it |
@@ -339,6 +339,8 @@ two that matter.
 | **Upload size** | single-request only: **4 MB** on Microsoft, **5 MB** on Google, **150 MB** on Dropbox. Larger files are refused with `DRIVE_CONTENT_TOO_LARGE` — up front when `DriveUploadInput.size` is supplied, mid-stream otherwise. Resumable sessions are not implemented. |
 | **Checksums** | comparable **within one provider**, and on Microsoft only within one account type (`quickXorHash` on Business/SharePoint vs `sha1`/`sha256` on personal). Google-native Docs have none at all. Compare `algorithm` before `value`; to compare across providers, hash the bytes you imported. |
 | **Notification "verified"** | a real HMAC over the raw body on Dropbox; a secret *we* chose, echoed back, on Google and Microsoft — those two vendors sign nothing. What makes the weaker one safe is that no vendor sends the changed data, so a forgery costs a wasted sync and nothing else. |
+| **Root confinement** | a connection's `rootId` confines `listItems({ folderId })`, `getItem`, `download` and upload targets on all three adapters. It costs metadata reads on Google (per folder level) and on a Microsoft `item:` root; Dropbox checks paths. |
+| **Timeouts** | `timeoutMs` (30 s) is socket inactivity plus a hard bound on each wait for response headers. It does not bound a body that keeps trickling — set `deadlineMs` for a whole-exchange bound (off by default). |
 | **First sync** | bounded by `maxItems`/`maxPages` per run. For an adapter whose feed starts at "now" (Google), the engine enumerates first and **resumes** across runs until the walk finishes, then switches to the feed. |
 
 ### Error codes
@@ -371,6 +373,7 @@ them is how an adapter tells the engine which vendor it is:
 | `deltaIncludesExisting` | the cursor from `startDelta` replays what already exists (Dropbox, Graph). Default `false` makes the engine run a listing pass first, so an adapter that forgets costs extra reads instead of losing a tenant's files (Google's `getStartPageToken` really is "from now"). |
 | `retryAfterFromBody` | the vendor puts its rate-limit hint somewhere other than `Retry-After` (Dropbox). |
 | `DriveNotificationResult.accountIds` | notifications identify a connection by account rather than by a secret you chose (Dropbox). |
+| `DriveNotificationResult.replayKey` | the vendor has a per-delivery id better than the raw body (Google's message number). Otherwise the replay guard keys on a body digest — never on a header the engine picks up itself. |
 | `DriveChange` removal `path` | deletions are reported by path because the vendor gives no id for them (Dropbox). |
 
 Throw `DriveCursorResetError` when the vendor invalidates a stored cursor —
@@ -431,8 +434,11 @@ In short: `https:` only by default; a per-provider host allowlist checked before
 DNS and after every redirect; private/loopback/link-local/metadata addresses
 refused with the socket pinned against DNS rebinding; manual redirects
 re-validated per hop; byte caps enforced mid-stream; no transparent
-decompression; whole-exchange timeouts; constant-time notification-secret
-comparison; and no token in any log, error, hook payload or audit entry.
+decompression; an inactivity timeout that also bounds header waits, plus an
+opt-in whole-exchange `deadlineMs`; engine-signed listing cursors; `rootId`
+confinement in every adapter; compare-and-set invalidation on refresh races;
+watch secrets stored only as a SHA-256 digest; a pinned 16-byte GCM tag;
+constant-time notification-secret comparison; and no token in any log, error, hook payload or audit entry.
 
 A provider **download URL is itself a bearer credential** — Graph's
 `@microsoft.graph.downloadUrl`, Google's signed `googleusercontent.com`

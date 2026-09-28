@@ -185,6 +185,10 @@ plus the explicit `env` reaches it, so `APP_SECRET`, `DATABASE_URL` and provider
 keys stay in your process. Pass `inheritEnv: ['GITHUB_TOKEN']` to forward named
 variables, or `inheritEnv: true` to deliberately forward everything.
 
+If the command can't be spawned (`ENOENT`) or the server exits, calls in flight
+reject instead of crashing your process, and the next call spawns it afresh. A
+request the server never answers rejects after `timeoutMs` (default 60 000 ms).
+
 ### Register servers with a plugin
 
 `mcpClientPlugin` wires named external servers into the container — it connects

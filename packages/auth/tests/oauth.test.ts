@@ -192,6 +192,7 @@ describe('OIDC provider (enterprise SSO)', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          issuer: 'https://acme.okta.com',
           authorization_endpoint: 'https://acme.okta.com/authorize',
           token_endpoint: 'https://acme.okta.com/token',
           userinfo_endpoint: 'https://acme.okta.com/userinfo',

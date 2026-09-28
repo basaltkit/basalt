@@ -1,15 +1,19 @@
 /**
  * Shared adapter parity matrix for `upload()` bodies (BK-006), keyed per-route
  * rate limits (BK-008), structured error details (BK-021), streaming
- * responses (BK-019), `rawBody()` bodies (BK-029) and CORS preflights (FA-015). Not a test file on its own: each adapter package
+ * responses (BK-019), `rawBody()` bodies (BK-029), CORS preflights (FA-015) and
+ * wire-level behaviour (FA-077…FA-080). Not a test file on its own: each adapter package
  * (fastify, express, hono) runs it against its own driver, so the three are
  * held to the exact same assertions.
  */
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { ctx, definePlugin, ensureMetadata, type BasaltPlugin } from '@basaltkit/core'
+import { ctx, definePlugin, ensureMetadata, MetricsRegistry, type BasaltPlugin } from '@basaltkit/core'
 import {
+  HTTP_SERVER,
   HttpError,
+  metricsPlugin,
+  sse,
   MAX_ERROR_DETAILS_BYTES,
   rawBody,
   route,
@@ -819,3 +823,278 @@ export function httpFetcher(base: string): Fetcher {
   }
 }
 
+
+/** Reads the in-flight gauge straight from the registry (no /metrics request in flight). */
+const inFlightOf = (registry: MetricsRegistry): number => {
+  const line = registry
+    .render()
+    .split('\n')
+    .find((entry) => entry.startsWith('http_requests_in_flight '))
+  return Number(line?.split(' ')[1])
+}
+
+/** Polls until `read()` returns `want` (after-hooks may settle just after the client got the response). */
+async function eventually(read: () => number, want: number, timeoutMs = 1_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs
+  let value = read()
+  while (value !== want && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    value = read()
+  }
+  return value
+}
+
+/**
+ * Wire-level parity (FA-077…FA-080): what reaches the client for the same
+ * route must not depend on the adapter — the Content-Type of a string, the
+ * headers on an event stream, how a body is recognised as JSON and what a
+ * malformed one answers, the shape of a repeated query key, the default body
+ * limit, and the neutral envelope for errors raised outside a route.
+ */
+export function wireParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: wire parity (FA-077…FA-080)`, () => {
+    const reports: HttpErrorReport[] = []
+    const onError: HttpErrorReporter = (entry) => {
+      reports.push(entry)
+    }
+    afterEach(() => driver.close())
+
+    const routes = [
+      route({
+        method: 'GET',
+        url: '/echo',
+        query: z.object({ q: z.string() }),
+        handler: ({ query }) => `hello ${query.q}`,
+      }),
+      route({
+        method: 'GET',
+        url: '/page',
+        handler: ({ reply }) => reply.header('content-type', 'text/html; charset=utf-8').send('<p>ok</p>'),
+      }),
+      route({
+        method: 'POST',
+        url: '/json',
+        body: z.object({ a: z.number() }),
+        handler: ({ body }) => body,
+      }),
+      route({ method: 'POST', url: '/any', handler: ({ request }) => ({ body: request.body ?? null }) }),
+      route({ method: 'GET', url: '/query', handler: ({ request }) => request.query }),
+      route({ method: 'GET', url: '/url', handler: ({ request }) => ({ url: request.url }) }),
+      route({
+        method: 'GET',
+        url: '/events',
+        handler: () =>
+          sse(async (events) => {
+            events.send({ data: { n: 1 } })
+          }),
+      }),
+      route({
+        method: 'POST',
+        url: '/events',
+        handler: () =>
+          sse(async (events) => {
+            events.send({ data: 'a' })
+            await new Promise((resolve) => setTimeout(resolve, 30))
+            events.send({ data: 'b' })
+          }),
+      }),
+    ]
+
+    it('serves a string as text/plain; charset=utf-8 — never as HTML (FA-077)', async () => {
+      const send = await driver.boot(routes, [])
+      const res = await send({ method: 'GET', url: `/echo?q=${encodeURIComponent('<script>alert(1)</script>')}` })
+      expect(res.status).toBe(200)
+      expect(res.headers['content-type']).toBe('text/plain; charset=utf-8')
+      expect(res.bytes.toString('utf8')).toBe('hello <script>alert(1)</script>')
+    })
+
+    it('keeps a Content-Type the handler set itself', async () => {
+      const send = await driver.boot(routes, [])
+      const res = await send({ method: 'GET', url: '/page' })
+      expect(res.headers['content-type']).toBe('text/html; charset=utf-8')
+      expect(res.bytes.toString('utf8')).toBe('<p>ok</p>')
+    })
+
+    it('keeps the CORS, security, rate-limit and request-id headers on an event stream (FA-078)', async () => {
+      const send = await driver.boot(routes, [
+        securityPlugin({ rateLimit: { limit: 10, windowMs: 60_000 }, cors: { origin: true } }),
+      ])
+      const res = await send({ method: 'GET', url: '/events', headers: { origin: 'https://app.test' } })
+      expect(res.status).toBe(200)
+      expect(res.headers['content-type']).toBe('text/event-stream; charset=utf-8')
+      expect(res.headers['access-control-allow-origin']).toBe('https://app.test')
+      expect(res.headers['x-ratelimit-limit']).toBe('10')
+      expect(res.headers['x-content-type-options']).toBe('nosniff')
+      expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/)
+      expect(res.bytes.toString('utf8')).toBe('data: {"n":1}\n\n')
+    })
+
+    it('keeps a POST event stream open after its request body was read (FA-080)', async () => {
+      const send = await driver.boot(routes, [])
+      const res = await send({
+        method: 'POST',
+        url: '/events',
+        headers: { 'content-type': 'application/json' },
+        body: Buffer.from('{"since":1}'),
+      })
+      expect(res.bytes.toString('utf8')).toBe('data: a\n\ndata: b\n\n')
+    })
+
+    it('parses JSON only for an application/json or +json media type (FA-079)', async () => {
+      const send = await driver.boot(routes, [])
+      const body = Buffer.from('{"a":1}')
+      const json = (type: string) => send({ method: 'POST', url: '/json', headers: { 'content-type': type }, body })
+      expect((await json('application/json')).json).toEqual({ a: 1 })
+      expect((await json('Application/JSON; charset=utf-8')).json).toEqual({ a: 1 })
+      expect((await json('application/merge-patch+json')).json).toEqual({ a: 1 })
+      // CORS-safelisted (no preflight) — must never be treated as JSON.
+      for (const type of ['text/plain; application/json', 'text/plain;charset=application/json', 'application/jsonx']) {
+        const res = await send({ method: 'POST', url: '/any', headers: { 'content-type': type }, body })
+        expect(res.json, type).not.toEqual({ body: { a: 1 } })
+        const validated = await json(type)
+        expect([400, 415], type).toContain(validated.status)
+      }
+    })
+
+    it('answers 400 BAD_REQUEST to malformed JSON, never an undefined body (FA-079)', async () => {
+      const send = await driver.boot(routes, [], { onError })
+      for (const url of ['/json', '/any']) {
+        const res = await send({
+          method: 'POST',
+          url,
+          headers: { 'content-type': 'application/json' },
+          body: Buffer.from('{"a":'),
+        })
+        expect(res.status, url).toBe(400)
+        expect(res.json, url).toEqual({ error: { code: 'BAD_REQUEST', message: 'Malformed request body.' } })
+      }
+    })
+
+    it('treats an empty JSON body as no body', async () => {
+      const send = await driver.boot(routes, [])
+      const res = await send({ method: 'POST', url: '/any', headers: { 'content-type': 'application/json' }, body: Buffer.alloc(0) })
+      expect(res.status).toBe(200)
+      expect(res.json).toEqual({ body: null })
+    })
+
+    it('hands a repeated query key over as an array (FA-080)', async () => {
+      const send = await driver.boot(routes, [])
+      const res = await send({ method: 'GET', url: '/query?a=1&a=2&b=3&c[d]=4' })
+      expect(res.json).toEqual({ a: ['1', '2'], b: '3', 'c[d]': '4' })
+    })
+
+    it('routes case-sensitively and without a trailing-slash alias (FA-080)', async () => {
+      const send = await driver.boot(routes, [])
+      expect((await send({ method: 'GET', url: '/url' })).status).toBe(200)
+      expect((await send({ method: 'GET', url: '/URL' })).status).toBe(404)
+      expect((await send({ method: 'GET', url: '/url/' })).status).toBe(404)
+    })
+
+    it('reports request.url as path + query string, never an absolute URL', async () => {
+      const send = await driver.boot(routes, [])
+      expect((await send({ method: 'GET', url: '/url?x=1&y=%20' })).json).toEqual({ url: '/url?x=1&y=%20' })
+    })
+
+    it('reports a failing after-hook and leaves the response alone', async () => {
+      reports.length = 0
+      const failingAfter = definePlugin({
+        name: 'test:failing-after',
+        boot({ container }) {
+          container.get(HTTP_SERVER).after(() => {
+            throw new Error('after-hook broke')
+          })
+        },
+      })
+      const send = await driver.boot(routes, [failingAfter], { onError })
+      const res = await send({ method: 'GET', url: '/url' })
+      expect(res.status).toBe(200)
+      expect(res.json).toEqual({ url: '/url' })
+      const deadline = Date.now() + 1_000
+      while (reports.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(reports.map((entry) => entry.code)).toEqual(['AFTER_HOOK_FAILED'])
+    })
+
+    it('accepts a 512 KiB JSON body and refuses a 2 MiB one with 413 by default (FA-080)', async () => {
+      const send = await driver.boot(routes, [])
+      const of = (bytes: number) => Buffer.from(JSON.stringify({ pad: 'x'.repeat(bytes) }))
+      const ok = await send({ method: 'POST', url: '/any', headers: { 'content-type': 'application/json' }, body: of(512 * 1024) })
+      expect(ok.status).toBe(200)
+      // An adapter may answer 413 and close the socket while the client is
+      // still writing the body; under load the client then fails with EPIPE /
+      // ECONNRESET before it reads the answer. Either way the body was refused.
+      const big = await send({ method: 'POST', url: '/any', headers: { 'content-type': 'application/json' }, body: of(2 * 1024 * 1024) }).catch(
+        (error: unknown) => {
+          const code = (error as { cause?: { code?: string } }).cause?.code
+          if (code === 'EPIPE' || code === 'ECONNRESET') return null
+          throw error
+        },
+      )
+      if (big) {
+        expect(big.status).toBe(413)
+        expect((big.json as { error: { code: string } }).error.code).toBe('PAYLOAD_TOO_LARGE')
+      }
+    })
+
+    const failing = (thrown: () => unknown) =>
+      definePlugin({
+        name: 'test:failing-edge',
+        boot({ container }) {
+          const server = container.get(HTTP_SERVER)
+          server.use(({ request }) => {
+            if (request.url.startsWith('/explode')) throw thrown()
+          })
+          server.addRoute('GET', '/extra', () => {
+            throw thrown()
+          })
+        },
+      })
+
+    it('answers a failing pre-hook or edge route with the neutral JSON 500, and reports it (FA-078)', async () => {
+      reports.length = 0
+      const send = await driver.boot(routes, [failing(() => new Error('boom at /srv/app.ts'))], { onError })
+      for (const url of ['/explode', '/extra']) {
+        const res = await send({ method: 'GET', url })
+        expect(res.status, url).toBe(500)
+        expect(res.json, url).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' } })
+      }
+      expect(reports.map((entry) => entry.status)).toEqual([500, 500])
+    })
+
+    it('keeps a 500 for an SDK error that merely carries a status and a type (FA-080)', async () => {
+      // Shaped like a payment SDK's error: `type` and `statusCode`, no `expose`.
+      const sdk = () => Object.assign(new Error('Invalid API key'), { type: 'invalid_request_error', status: 401, statusCode: 401 })
+      const send = await driver.boot(routes, [failing(sdk)], { onError })
+      const res = await send({ method: 'GET', url: '/explode' })
+      expect(res.status).toBe(500)
+      expect((res.json as { error: { code: string } }).error.code).toBe('INTERNAL_ERROR')
+    })
+
+    it('keeps the in-flight gauge at zero after short-circuited and finished requests (FA-080)', async () => {
+      const registry = new MetricsRegistry()
+      const send = await driver.boot(routes, [
+        securityPlugin({ rateLimit: { limit: 1, windowMs: 60_000 }, headers: false }),
+        metricsPlugin({ registry }),
+      ])
+      expect((await send({ method: 'GET', url: '/echo?q=1' })).status).toBe(200)
+      expect((await send({ method: 'GET', url: '/echo?q=1' })).status).toBe(429)
+      expect((await send({ method: 'GET', url: '/echo?q=1' })).status).toBe(429)
+      expect(await eventually(() => inFlightOf(registry), 0)).toBe(0)
+    })
+
+    it('releases the in-flight gauge when the client disconnects mid-stream (FA-080)', async () => {
+      const registry = new MetricsRegistry()
+      const hanging = route({
+        method: 'GET',
+        url: '/hang',
+        handler: () => sse((events) => new Promise<void>((resolve) => events.onClose(resolve))),
+      })
+      const send = await driver.boot([hanging], [metricsPlugin({ registry })])
+      const abort = new AbortController()
+      const res = await send.raw({ method: 'GET', url: '/hang', signal: abort.signal })
+      expect(res.status).toBe(200)
+      abort.abort()
+      await res.body?.cancel().catch(() => {})
+      expect(await eventually(() => inFlightOf(registry), 0)).toBe(0)
+    })
+  })
+}

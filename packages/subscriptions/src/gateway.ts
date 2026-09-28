@@ -35,6 +35,25 @@ export function requireWebhookSecret(gateway: string, secret: string | undefined
 }
 
 /**
+ * Thrown by checkout-first gateways (Paddle, Lemon Squeezy) from
+ * `createSubscription`: they cannot create a paid subscription server-side —
+ * the customer has to pay on the hosted checkout first, and the subscription id
+ * only exists once they have. Returning the checkout/transaction id as if it
+ * were a subscription used to activate the plan unpaid and store a ref that
+ * `cancel()`/`swap()` could never address. Use `Subscriptions.checkout()`.
+ */
+export class CheckoutRequiredError extends BasaltError {
+  readonly status = 501
+  constructor(gateway: string) {
+    super(
+      'BILLING_CHECKOUT_REQUIRED',
+      `${gateway} is checkout-first: a subscription only exists after the customer pays on the hosted checkout. ` +
+        'Use Subscriptions.checkout() instead of subscribe() for paid plans.',
+    )
+  }
+}
+
+/**
  * Reads the plan/period a driver stamped into the gateway's signed metadata when
  * it created the checkout/subscription — for `WebhookEvent.plan`/`period`.
  */
@@ -159,6 +178,13 @@ export interface SwapInput {
  */
 export interface BillingGateway {
   readonly name: string
+  /**
+   * Request header(s) carrying this gateway's webhook signature, lower-case
+   * (e.g. `'stripe-signature'`, `'paddle-signature'`, `'x-signature'`).
+   * `billingWebhookRoute` reads the first one present. Omitted: the route falls
+   * back to `stripe-signature` / `x-billing-signature`.
+   */
+  readonly signatureHeader?: string | readonly string[]
   createSubscription(input: CreateSubscriptionInput): Promise<{ gatewayRef: string }>
   cancelSubscription(gatewayRef: string, options: { atPeriodEnd: boolean }): Promise<void>
   /**
@@ -174,6 +200,12 @@ export interface BillingGateway {
   createPortalSession?(input: PortalInput): Promise<{ url: string }>
   /** Changes the plan on an existing subscription, applying proration. */
   swapSubscription?(gatewayRef: string, input: SwapInput): Promise<void>
+  /**
+   * Withdraws a cancellation scheduled with `cancelSubscription(ref, { atPeriodEnd: true })`,
+   * so the gateway keeps renewing. Required by `Subscriptions.resume()` for a
+   * gateway-backed subscription.
+   */
+  resumeSubscription?(gatewayRef: string): Promise<void>
 }
 
 /** Controllable in-process gateway — the test/dev driver. */
@@ -184,6 +216,7 @@ export class FakeBillingGateway implements BillingGateway {
   readonly checkouts: CheckoutInput[] = []
   readonly portals: PortalInput[] = []
   readonly swaps: { gatewayRef: string; input: SwapInput }[] = []
+  readonly resumed: string[] = []
   private counter = 0
 
   async createSubscription(input: CreateSubscriptionInput): Promise<{ gatewayRef: string }> {
@@ -208,6 +241,10 @@ export class FakeBillingGateway implements BillingGateway {
 
   async swapSubscription(gatewayRef: string, input: SwapInput): Promise<void> {
     this.swaps.push({ gatewayRef, input })
+  }
+
+  async resumeSubscription(gatewayRef: string): Promise<void> {
+    this.resumed.push(gatewayRef)
   }
 
   verifyWebhook(rawBody: string, signature: string | undefined): WebhookEvent {

@@ -142,11 +142,11 @@ export function makeFakeClient(): PrismaAuthClient {
         apiKeys.set(row.id, row)
         return row
       },
-      async update({ where, data }) {
+      async updateMany({ where, data }) {
         const row = apiKeys.get(where.id)
-        if (!row) throw new Error('not found')
+        if (!row) return { count: 0 }
         Object.assign(row, data)
-        return row
+        return { count: 1 }
       },
     },
     authMfa: {

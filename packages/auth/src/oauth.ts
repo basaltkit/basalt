@@ -37,6 +37,14 @@ export class OAuthExchangeError extends BasaltError {
   }
 }
 
+/** Thrown when the OAuth provider configuration is unsafe (see {@link OAuthProvider.allowedEmailDomains}). */
+export class OAuthProviderConfigError extends BasaltError {
+  readonly status = 500
+  constructor(detail: string) {
+    super('AUTH_OAUTH_PROVIDER_CONFIG', `Unsafe OAuth configuration: ${detail}.`)
+  }
+}
+
 /** The normalized profile a provider returns after a successful login. */
 export interface OAuthProfile {
   /** Stable id at the provider (the `sub` / user id). */
@@ -55,12 +63,57 @@ export interface OAuthProvider {
   scopes: string[]
   /** Fetches and normalizes the user profile from an access token. */
   fetchProfile(accessToken: string, doFetch: typeof fetch): Promise<OAuthProfile>
+  /**
+   * Expected `iss` of the `id_token` (OpenID Connect). When set, an `id_token`
+   * issued by anyone else is refused.
+   */
+  issuer?: string | string[]
+  /**
+   * Email domains this provider is trusted to assert (exact, case-insensitive
+   * match on the part after `@`; list subdomains explicitly). A login for any
+   * other domain is refused with `AUTH_OAUTH_EXCHANGE_FAILED` before any account
+   * is looked up.
+   */
+  allowedEmailDomains?: string[]
+  /**
+   * Explicit opt-out of {@link allowedEmailDomains} for an {@link enterprise}
+   * provider when several providers are configured: this IdP may assert **any**
+   * email. Only for an IdP you fully control.
+   */
+  allowAnyEmailDomain?: true
+  /**
+   * The provider is an enterprise IdP administered by someone else — typically a
+   * customer's Okta / Entra / Keycloak ({@link oidcProvider} sets it). Its admin
+   * decides which emails it asserts as verified, so when more than one provider
+   * is configured it must declare {@link allowedEmailDomains} (or
+   * {@link allowAnyEmailDomain}) or the {@link OAuth} service refuses to start.
+   */
+  enterprise?: boolean
 }
 
 interface ProviderKeys {
   clientId: string
   clientSecret: string
   scopes?: string[]
+}
+
+/** Default deadline for a request to a provider, ms. */
+const DEFAULT_TIMEOUT_MS = 10_000
+
+/** A provider claim that must be a non-empty string; otherwise the login fails closed. */
+function claim(value: unknown, what: string): string {
+  if (typeof value === 'string' && value.length > 0) return value
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value)
+  throw new OAuthExchangeError(`provider returned no ${what}`)
+}
+
+/** Parses a provider response body as JSON, turning an HTML/garbage reply into an exchange error. */
+async function readJson<T>(res: Response, what: string): Promise<T> {
+  try {
+    return (await res.json()) as T
+  } catch {
+    throw new OAuthExchangeError(`${what} did not return JSON`)
+  }
 }
 
 /** Google (OpenID Connect). Default scopes: `openid email profile`. */
@@ -72,15 +125,16 @@ export function googleProvider(keys: ProviderKeys): OAuthProvider {
     clientId: keys.clientId,
     clientSecret: keys.clientSecret,
     scopes: keys.scopes ?? ['openid', 'email', 'profile'],
+    issuer: ['https://accounts.google.com', 'accounts.google.com'],
     async fetchProfile(accessToken, doFetch) {
       const res = await doFetch('https://openidconnect.googleapis.com/v1/userinfo', {
         headers: { authorization: `Bearer ${accessToken}` },
       })
       if (!res.ok) throw new OAuthExchangeError(`google userinfo HTTP ${res.status}`)
-      const p = (await res.json()) as { sub?: string; email?: string; email_verified?: boolean; name?: string }
+      const p = await readJson<{ sub?: unknown; email?: unknown; email_verified?: boolean; name?: string }>(res, 'google userinfo')
       return {
-        subject: String(p.sub),
-        email: String(p.email),
+        subject: claim(p.sub, 'subject'),
+        email: claim(p.email, 'email'),
         emailVerified: p.email_verified === true,
         ...(p.name ? { name: p.name } : {}),
       }
@@ -101,22 +155,24 @@ export function githubProvider(keys: ProviderKeys): OAuthProvider {
       const headers = { authorization: `Bearer ${accessToken}`, accept: 'application/vnd.github+json' }
       const userRes = await doFetch('https://api.github.com/user', { headers })
       if (!userRes.ok) throw new OAuthExchangeError(`github user HTTP ${userRes.status}`)
-      const user = (await userRes.json()) as { id?: number; login?: string; name?: string; email?: string | null }
+      const user = await readJson<{ id?: unknown; login?: string; name?: string; email?: string | null }>(userRes, 'github user')
+      const subject = claim(user.id, 'subject')
 
       // GitHub often hides the email on /user; the primary verified one comes from /user/emails.
       let email = user.email ?? undefined
       let emailVerified = false
       const emailsRes = await doFetch('https://api.github.com/user/emails', { headers })
       if (emailsRes.ok) {
-        const emails = (await emailsRes.json()) as { email: string; primary: boolean; verified: boolean }[]
-        const primary = emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified)
+        const emails = await readJson<{ email: string; primary: boolean; verified: boolean }[]>(emailsRes, 'github emails')
+        const list = Array.isArray(emails) ? emails : []
+        const primary = list.find((e) => e.primary && e.verified) ?? list.find((e) => e.verified)
         if (primary) {
           email = primary.email
           emailVerified = true
         }
       }
-      if (!email) throw new OAuthExchangeError('github returned no usable email')
-      return { subject: String(user.id), email, emailVerified, ...(user.name ? { name: user.name } : {}) }
+      if (typeof email !== 'string' || !email) throw new OAuthExchangeError('github returned no usable email')
+      return { subject, email, emailVerified, ...(user.name ? { name: user.name } : {}) }
     },
   }
 }
@@ -127,6 +183,12 @@ interface OidcConfig extends ProviderKeys {
   authorizeUrl: string
   tokenUrl: string
   userInfoUrl: string
+  /** The IdP issuer; when set, the `id_token`'s `iss` must match it. */
+  issuer?: string
+  /** See {@link OAuthProvider.allowedEmailDomains}. */
+  allowedEmailDomains?: string[]
+  /** See {@link OAuthProvider.allowAnyEmailDomain}. */
+  allowAnyEmailDomain?: true
 }
 
 /**
@@ -135,6 +197,11 @@ interface OidcConfig extends ProviderKeys {
  * three endpoints from the IdP's `.well-known/openid-configuration`, or use
  * {@link discoverOidcProvider} to fetch them for you. Maps the standard OIDC
  * `userinfo` claims (`sub`, `email`, `email_verified`, `name`).
+ *
+ * The IdP's admin decides which emails it asserts as verified: restrict each
+ * customer's IdP to that customer's domains with `allowedEmailDomains` —
+ * required as soon as more than one provider is configured (see
+ * {@link OAuthProvider.enterprise}).
  */
 export function oidcProvider(config: OidcConfig): OAuthProvider {
   return {
@@ -144,13 +211,17 @@ export function oidcProvider(config: OidcConfig): OAuthProvider {
     clientId: config.clientId,
     clientSecret: config.clientSecret,
     scopes: config.scopes ?? ['openid', 'email', 'profile'],
+    enterprise: true,
+    ...(config.issuer !== undefined ? { issuer: config.issuer } : {}),
+    ...(config.allowedEmailDomains !== undefined ? { allowedEmailDomains: config.allowedEmailDomains } : {}),
+    ...(config.allowAnyEmailDomain === true ? { allowAnyEmailDomain: true as const } : {}),
     async fetchProfile(accessToken, doFetch) {
       const res = await doFetch(config.userInfoUrl, { headers: { authorization: `Bearer ${accessToken}` } })
       if (!res.ok) throw new OAuthExchangeError(`oidc userinfo HTTP ${res.status}`)
-      const p = (await res.json()) as { sub?: string; email?: string; email_verified?: boolean; name?: string }
+      const p = await readJson<{ sub?: unknown; email?: unknown; email_verified?: boolean; name?: string }>(res, 'oidc userinfo')
       return {
-        subject: String(p.sub),
-        email: String(p.email),
+        subject: claim(p.sub, 'subject'),
+        email: claim(p.email, 'email'),
         emailVerified: p.email_verified === true,
         ...(p.name ? { name: p.name } : {}),
       }
@@ -158,9 +229,26 @@ export function oidcProvider(config: OidcConfig): OAuthProvider {
   }
 }
 
+/** `https:` — or plain `http:` to a loopback host (a local IdP in development). */
+function isSecureEndpoint(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+  if (url.protocol === 'https:') return true
+  return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+}
+
 /**
  * Builds an {@link oidcProvider} by fetching the IdP's OIDC discovery document
  * (`${issuer}/.well-known/openid-configuration`). Await it at startup.
+ *
+ * Per OpenID Connect Discovery §4.3 the document's `issuer` must equal the
+ * configured one (trailing slashes aside), and every endpoint must be `https:`
+ * (plain `http:` only to a loopback host), or discovery fails.
  */
 export async function discoverOidcProvider(config: {
   name?: string
@@ -169,28 +257,53 @@ export async function discoverOidcProvider(config: {
   clientId: string
   clientSecret: string
   scopes?: string[]
+  /** See {@link OAuthProvider.allowedEmailDomains}. */
+  allowedEmailDomains?: string[]
+  /** See {@link OAuthProvider.allowAnyEmailDomain}. */
+  allowAnyEmailDomain?: true
   fetch?: typeof fetch
+  /** Timeout for the discovery request, ms. Default 10 s. */
+  timeoutMs?: number
 }): Promise<OAuthProvider> {
   const doFetch = config.fetch ?? globalThis.fetch
   const url = `${stripTrailingSlashes(config.issuer)}/.well-known/openid-configuration`
-  const res = await doFetch(url)
-  if (!res.ok) throw new OAuthExchangeError(`OIDC discovery HTTP ${res.status} for ${url}`)
-  const meta = (await res.json()) as {
-    authorization_endpoint?: string
-    token_endpoint?: string
-    userinfo_endpoint?: string
+  let res: Response
+  try {
+    res = await doFetch(url, { signal: AbortSignal.timeout(config.timeoutMs ?? DEFAULT_TIMEOUT_MS) })
+  } catch {
+    throw new OAuthExchangeError(`OIDC discovery request failed for ${url}`)
   }
+  if (!res.ok) throw new OAuthExchangeError(`OIDC discovery HTTP ${res.status} for ${url}`)
+  const meta = await readJson<{
+    issuer?: unknown
+    authorization_endpoint?: unknown
+    token_endpoint?: unknown
+    userinfo_endpoint?: unknown
+  }>(res, 'OIDC discovery')
   if (!meta.authorization_endpoint || !meta.token_endpoint || !meta.userinfo_endpoint) {
     throw new OAuthExchangeError('OIDC discovery document is missing required endpoints')
+  }
+  if (typeof meta.issuer !== 'string' || stripTrailingSlashes(meta.issuer) !== stripTrailingSlashes(config.issuer)) {
+    throw new OAuthExchangeError(`OIDC discovery document is for another issuer (${String(meta.issuer)})`)
+  }
+  if (
+    !isSecureEndpoint(meta.authorization_endpoint) ||
+    !isSecureEndpoint(meta.token_endpoint) ||
+    !isSecureEndpoint(meta.userinfo_endpoint)
+  ) {
+    throw new OAuthExchangeError('OIDC discovery document lists a non-https endpoint')
   }
   return oidcProvider({
     ...(config.name ? { name: config.name } : {}),
     authorizeUrl: meta.authorization_endpoint,
     tokenUrl: meta.token_endpoint,
     userInfoUrl: meta.userinfo_endpoint,
+    issuer: meta.issuer,
     clientId: config.clientId,
     clientSecret: config.clientSecret,
     ...(config.scopes ? { scopes: config.scopes } : {}),
+    ...(config.allowedEmailDomains !== undefined ? { allowedEmailDomains: config.allowedEmailDomains } : {}),
+    ...(config.allowAnyEmailDomain === true ? { allowAnyEmailDomain: true as const } : {}),
   })
 }
 
@@ -210,6 +323,38 @@ export interface OAuthOptions {
    * only for an IdP that enforces MFA.
    */
   mfa?: 'required' | 'skip'
+  /**
+   * Timeout for every request to a provider (token endpoint, userinfo, …), ms.
+   * Default 10 s; a provider that hangs fails the login with
+   * `AUTH_OAUTH_EXCHANGE_FAILED` instead of holding the request open.
+   */
+  timeoutMs?: number
+}
+
+const DOMAIN_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/
+
+function normalizeAllowedDomains(p: OAuthProvider): Set<string> | undefined {
+  if (p.allowedEmailDomains === undefined) return undefined
+  if (!Array.isArray(p.allowedEmailDomains) || p.allowedEmailDomains.length === 0) {
+    throw new OAuthProviderConfigError(`provider "${p.name}" has an empty allowedEmailDomains list`)
+  }
+  const out = new Set<string>()
+  for (const d of p.allowedEmailDomains) {
+    const n = typeof d === 'string' ? d.toLowerCase() : ''
+    if (!DOMAIN_RE.test(n)) {
+      throw new OAuthProviderConfigError(`provider "${p.name}" has an invalid allowedEmailDomains entry ${JSON.stringify(d)}`)
+    }
+    out.add(n)
+  }
+  return out
+}
+
+/** The domain of a single-`@`, whitespace/control-free email, lowercased; otherwise `undefined`. */
+function emailDomain(email: string): string | undefined {
+  if (/[\s\p{Cc}\p{Cf}]/u.test(email)) return undefined
+  const at = email.indexOf('@')
+  if (at <= 0 || at !== email.lastIndexOf('@') || at === email.length - 1) return undefined
+  return email.slice(at + 1).toLowerCase()
 }
 
 interface StatePayload {
@@ -246,6 +391,7 @@ const MAX_CONSUMED_STATES = 100_000
  */
 export class OAuth {
   private readonly providers: Map<string, OAuthProvider>
+  private readonly allowedDomains = new Map<string, Set<string>>()
   private readonly doFetch: typeof fetch
   private readonly now: () => number
   private readonly stateTtl: number
@@ -255,8 +401,26 @@ export class OAuth {
     providers: OAuthProvider[],
     private readonly options: OAuthOptions,
   ) {
+    const seen = new Set<string>()
+    for (const p of providers) {
+      // A duplicate name would silently pair one entry's IdP with another's allowlist.
+      if (seen.has(p.name)) throw new OAuthProviderConfigError(`provider "${p.name}" is configured more than once`)
+      seen.add(p.name)
+      const domains = normalizeAllowedDomains(p)
+      if (domains) this.allowedDomains.set(p.name, domains)
+      else if (p.enterprise === true && providers.length > 1 && p.allowAnyEmailDomain !== true) {
+        throw new OAuthProviderConfigError(
+          `provider "${p.name}" is an enterprise IdP with no allowedEmailDomains; with several providers each ` +
+            "customer's IdP must be restricted to its own email domains (or set allowAnyEmailDomain: true for an IdP you fully control)",
+        )
+      }
+    }
     this.providers = new Map(providers.map((p) => [p.name, p]))
-    this.doFetch = options.fetch ?? globalThis.fetch
+    const base = options.fetch ?? globalThis.fetch
+    const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    // Every provider call gets a deadline unless the caller passed its own signal.
+    this.doFetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+      base(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeout) })) as typeof fetch
     this.now = options.now ?? Date.now
     this.stateTtl = options.stateTtlMs ?? 10 * 60_000
   }
@@ -324,10 +488,26 @@ export class OAuth {
     this.consumeState(payload)
     const p = this.provider(name)
     const { accessToken, idToken } = await this.exchangeCode(p, input.code, input.redirectUri, this.derive('pkce', input.binding))
-    if (p.scopes.includes('openid') && idToken !== undefined) this.checkNonce(idToken, this.derive('nonce', input.binding))
-    const profile = await p.fetchProfile(accessToken, this.doFetch)
-    if (!profile.email) throw new OAuthExchangeError('provider returned no email')
-    return this.auth.socialLogin(profile.email, {
+    if (p.scopes.includes('openid')) {
+      // OIDC Core §3.1.3.3: the token response of an `openid` flow carries an id_token.
+      if (idToken === undefined) throw new OAuthExchangeError('the token response has no id_token')
+      this.checkIdToken(p, idToken, this.derive('nonce', input.binding))
+    }
+    let profile: OAuthProfile
+    try {
+      profile = await p.fetchProfile(accessToken, this.doFetch)
+    } catch (err) {
+      if (err instanceof BasaltError) throw err
+      throw new OAuthExchangeError(`${name} profile request failed`)
+    }
+    const email = typeof profile.email === 'string' ? profile.email : ''
+    const domain = emailDomain(email)
+    if (!domain) throw new OAuthExchangeError('provider returned no usable email')
+    const allowed = this.allowedDomains.get(p.name)
+    if (allowed && !allowed.has(domain)) {
+      throw new OAuthExchangeError(`provider "${p.name}" is not trusted for the email domain "${domain}"`)
+    }
+    return this.auth.socialLogin(email, {
       emailVerified: profile.emailVerified === true,
       ...(this.options.mfa ? { mfa: this.options.mfa } : {}),
     })
@@ -353,16 +533,33 @@ export class OAuth {
     this.consumed.set(payload.n, payload.e)
   }
 
-  /** The id_token (received directly from the token endpoint over TLS) must echo our nonce. */
-  private checkNonce(idToken: string, expected: string): void {
-    let claims: { nonce?: unknown }
+  /**
+   * The id_token is received directly from the token endpoint over TLS, so its
+   * signature is not re-verified (OIDC Core §3.1.3.7 item 6), but its claims
+   * must still be for THIS flow: our nonce, our client as audience, not
+   * expired, and — when the provider declares one — the expected issuer.
+   */
+  private checkIdToken(p: OAuthProvider, idToken: string, expectedNonce: string): void {
+    let claims: { nonce?: unknown; aud?: unknown; exp?: unknown; iss?: unknown }
     try {
-      claims = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as { nonce?: unknown }
+      claims = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as typeof claims
     } catch {
       throw new OAuthExchangeError('malformed id_token')
     }
-    if (typeof claims.nonce !== 'string' || !safeEqual(claims.nonce, expected)) {
+    if (claims === null || typeof claims !== 'object') throw new OAuthExchangeError('malformed id_token')
+    if (typeof claims.nonce !== 'string' || !safeEqual(claims.nonce, expectedNonce)) {
       throw new OAuthExchangeError('id_token nonce mismatch')
+    }
+    const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud]
+    if (!audiences.includes(p.clientId)) throw new OAuthExchangeError('id_token audience mismatch')
+    if (typeof claims.exp !== 'number' || claims.exp * 1000 <= this.now()) {
+      throw new OAuthExchangeError('id_token expired')
+    }
+    if (p.issuer !== undefined) {
+      const issuers = Array.isArray(p.issuer) ? p.issuer : [p.issuer]
+      if (typeof claims.iss !== 'string' || !issuers.some((i) => stripTrailingSlashes(i) === stripTrailingSlashes(claims.iss as string))) {
+        throw new OAuthExchangeError('id_token issuer mismatch')
+      }
     }
   }
 
@@ -372,24 +569,34 @@ export class OAuth {
     redirectUri: string,
     codeVerifier: string,
   ): Promise<{ accessToken: string; idToken?: string }> {
-    const res = await this.doFetch(p.tokenUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        client_id: p.clientId,
-        client_secret: p.clientSecret,
-        code_verifier: codeVerifier,
-      }).toString(),
-    })
+    let res: Response
+    try {
+      res = await this.doFetch(p.tokenUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+          client_id: p.clientId,
+          client_secret: p.clientSecret,
+          code_verifier: codeVerifier,
+        }).toString(),
+      })
+    } catch {
+      throw new OAuthExchangeError(`${p.name} token endpoint request failed`)
+    }
     const text = await res.text()
-    const json = text
-      ? (JSON.parse(text) as { access_token?: string; id_token?: string; error_description?: string; error?: string })
-      : {}
-    if (!res.ok || !json.access_token) {
-      throw new OAuthExchangeError(json.error_description ?? json.error ?? `token endpoint HTTP ${res.status}`)
+    let json: { access_token?: unknown; id_token?: unknown; error_description?: unknown; error?: unknown } = {}
+    try {
+      json = text ? (JSON.parse(text) as typeof json) : {}
+    } catch {
+      throw new OAuthExchangeError(`token endpoint HTTP ${res.status} did not return JSON`)
+    }
+    if (json === null || typeof json !== 'object') json = {}
+    if (!res.ok || typeof json.access_token !== 'string' || !json.access_token) {
+      const reason = typeof json.error_description === 'string' ? json.error_description : typeof json.error === 'string' ? json.error : undefined
+      throw new OAuthExchangeError(reason ?? `token endpoint HTTP ${res.status}`)
     }
     return { accessToken: json.access_token, ...(typeof json.id_token === 'string' ? { idToken: json.id_token } : {}) }
   }

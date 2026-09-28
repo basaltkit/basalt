@@ -190,6 +190,11 @@ sem segredos (`PATH`, `HOME`, locale, diretórios temporários —
 `inheritEnv: ['GITHUB_TOKEN']` para passar variáveis com nome, ou
 `inheritEnv: true` para passar tudo de propósito.
 
+Se o comando não puder ser lançado (`ENOENT`) ou o servidor terminar, as
+chamadas em curso são rejeitadas em vez de derrubar o teu processo, e a chamada
+seguinte volta a lançá-lo. Um pedido a que o servidor nunca responde é rejeitado
+ao fim de `timeoutMs` (por omissão 60 000 ms).
+
 ### Registar servidores com um plugin
 
 O `mcpClientPlugin` liga servidores externos nomeados ao container — conecta-os no

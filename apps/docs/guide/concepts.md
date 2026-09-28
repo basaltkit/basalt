@@ -325,6 +325,10 @@ and what a new one must do):
    hooks on `app:booted`, and serve the neutral 404.
 3. `shutdown`: close the server.
 
+Code that drives `runRoute()` itself, with no adapter, runs the same boot check
+with the booted container: `assertRoutesGuarded(routes, app.container)` throws
+`UnguardedRouteMetaError` for a route whose security meta no plugin enforces.
+
 Features target the neutral contract, never one adapter — a CI boundary test
 enforces that runtime feature packages don't import an adapter.
 

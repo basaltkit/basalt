@@ -232,7 +232,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 ```
 
-O `expressPlugin` adiciona `express.json()` por ti. Para integrar numa app
+O `expressPlugin` adiciona `express.json()` (1 MiB, `bodyLimit`) por ti. Para integrar numa app
 Express existente, passa-a: `expressPlugin({ app: myExistingApp, routes })`.
 
 ## Exemplo completo — Hono
@@ -521,6 +521,50 @@ limite truncá-lo-ia. Limita-o no servidor:
 `meta: { etag: true }` é ignorado para um corpo em stream — não há payload para fazer
 hash, e fazer hash do marcador responderia `304` para um corpo que nunca foi enviado.
 
+## Comportamento na rede — idêntico nos três
+
+A mesma rota responde os mesmos bytes, seja qual for o adaptador que a serve. Uma
+suite de paridade partilhada (`wireParitySuite` nos testes do `@basaltkit/http`)
+obriga Fastify, Express e Hono a cumprir cada um destes pontos:
+
+| Comportamento | Nos três adaptadores |
+|---|---|
+| Um handler devolve uma string | `text/plain; charset=utf-8` — nunca `text/html`. Para servir HTML, define-o: `reply.header('content-type', 'text/html; charset=utf-8').send(html)` |
+| Que corpos são JSON | `application/json` ou um tipo `+json` (`application/merge-patch+json`), ignorando parâmetros e maiúsculas. `text/plain; application/json` **não** é JSON — é CORS-safelisted, por isso uma página de outro site pode enviá-lo sem preflight |
+| JSON malformado | `400 { "error": { "code": "BAD_REQUEST", "message": "Malformed request body." } }` |
+| Corpo JSON vazio | `request.body` é `undefined` (sem corpo) |
+| Limite de corpo por omissão | 1 MiB (`DEFAULT_BODY_LIMIT`) → `413 PAYLOAD_TOO_LARGE`; `bodyLimit` no Express/Hono, `fastify: { bodyLimit }` no Fastify |
+| Chave de query repetida | `?a=1&a=2` → `{ a: ['1', '2'] }`; `?c[d]=1` → `{ 'c[d]': '1' }` (sem objectos aninhados) |
+| `request.url` | caminho + query string (`/items?x=1`), nunca um URL absoluto |
+| Routing | sensível a maiúsculas, sem alias de barra final: `/Items` e `/items/` não chegam a `/items` (na app que o `expressPlugin` cria; uma app Express tua mantém as suas definições) |
+| Stream `sse()` | mantém os headers de CORS, segurança, rate limit e `x-request-id` definidos antes dele; os headers saem logo, antes do primeiro evento |
+| Um erro fora de uma rota (pre-hook, rota de edge, corpo) | envelope JSON neutro, reportado via `onError` — o `errorHandler` do Express, o `app.onError` do Hono (`errorHandler: false` para sair) |
+| Um erro de SDK externo com `status`/`type` | `500 INTERNAL_ERROR`. Só erros lançados de propósito (`HttpError`) ou marcados `expose: true` escolhem o seu status |
+| After-hooks (métricas, tracing) | correm uma vez por pedido — também num stream `sse()` e numa resposta que o cliente abandonou; um que falhe é reportado como `AFTER_HOOK_FAILED` e nunca altera a resposta |
+
+Diferenças conhecidas que ficam, todas deliberadas ou inofensivas:
+
+- **Outros tipos de corpo.** Um corpo que não é JSON nem formulário chega ao
+  handler como string no Hono e no Fastify para `text/plain`; o Fastify responde
+  `415` a outros tipos; o Express deixa `request.body` undefined. Declara um
+  schema de `body` e envia JSON — ou usa `rawBody()` para o resto.
+- **Segmentos de ponto.** O Hono (via o `URL` web) resolve `/a/../admin` para
+  `/admin`; o Fastify e o Express encaminham o caminho tal como veio e respondem
+  `404`. Os pre-hooks e as rotas de cada adaptador vêem o mesmo caminho, por isso
+  uma verificação de caminho não pode ser contornada — mas não dependas de
+  nenhum dos comportamentos.
+- **`x-request-id`** é definido pelo pipeline da rota: está em todas as
+  respostas que uma rota produziu e falta num `404` de um caminho desconhecido ou
+  na resposta própria de um pre-hook (um `429`, um preflight), nos três.
+- **`request.ip` atrás de um proxy.** Cada adaptador reporta o endereço do
+  socket por omissão. Atrás de um proxy de confiança, activa-o explicitamente —
+  Fastify `fastify: { trustProxy }`, Express `app.set('trust proxy', …)` numa app
+  que passes, Hono `getClientIp` — senão todos os clientes partilham o IP do
+  proxy (e um só bucket de rate limit).
+- **`/metrics` e `/openapi.json` são públicos**: as rotas de edge saltam
+  enrichers e guards. Mantém-nas fora do listener público, ou põe um pre-hook à
+  frente.
+
 ## Como funciona
 
 - **`@basaltkit/http`** define os neutros `HttpRequest` / `HttpReply` e o pipeline
@@ -553,9 +597,9 @@ nativos da sua framework.
 | `notFound` | `boolean` | `true` (corpo 404 neutro) | todos | Passa `false` para sair do `404 { error: { code: 'NOT_FOUND' } }` partilhado e manter o default da framework. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passado ao construtor `Fastify()` (logger, trustProxy, …). |
 | `app` | instância nativa | criada por ti ou pelo plugin | express, hono | Traz o teu próprio `express()` / `new Hono()` e o Basalt monta-se nele. |
-| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejeita bodies grandes demais com 413 (`PAYLOAD_TOO_LARGE`) — o Hono/edge não tem limite por omissão. Aplicado aos bytes efectivamente lidos: um body chunked/em stream sem `Content-Length` é contado durante a leitura e cortado no limite. Uma rota `upload()` é limitada pelo seu próprio `maxBytes` (em stream, nunca em buffer). |
+| `bodyLimit` | `number` (bytes) | 1 MiB | express, hono | Rejeita bodies grandes demais com 413 (`PAYLOAD_TOO_LARGE`) — o mesmo default do próprio Fastify. No Express é o limite dos parsers JSON/formulário (o body-parser sozinho parava nos 100 KiB). No Hono — que não tem limite por omissão — é aplicado aos bytes efectivamente lidos: um body chunked/em stream sem `Content-Length` é contado durante a leitura e cortado no limite. Uma rota `upload()` é limitada pelo seu próprio `maxBytes` (em stream, nunca em buffer). |
 | `getClientIp` | `(c: Context) => string \| undefined` | endereço do socket (`@hono/node-server`, Bun) | hono | Define `request.ip`, a chave do rate limiting por cliente e do throttle de login por IP. Num runtime edge ou atrás de um proxy de confiança, fornece-o (ex.: `(c) => c.req.header('cf-connecting-ip')` na Cloudflare). Quando nenhum IP é resolvido, é emitido um aviso único e os rate limits partilham um só bucket. Nunca leias `X-Forwarded-For` a não ser que um proxy teu o reescreva. |
-| `errorHandler` | `boolean` | `true` | express | Middleware final `(err, req, res, next)` que transforma erros do body-parser e dos pre-hooks no envelope JSON neutro (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, caso contrário `500 INTERNAL_ERROR`) em vez da página HTML do Express com stack trace. Passa `false` só se montares o teu próprio error handler depois do boot. |
+| `errorHandler` | `boolean` | `true` | express, hono | Hono: um `app.onError` que responde a erros levantados fora de uma rota (pre-hook, rota de edge, corpo) com o envelope JSON neutro e os reporta, em vez de um 500 em texto (uma `HTTPException` do teu próprio middleware mantém a sua resposta). Express: middleware final `(err, req, res, next)` que transforma erros do body-parser e dos pre-hooks no envelope JSON neutro (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, caso contrário `500 INTERNAL_ERROR`) em vez da página HTML do Express com stack trace. Passa `false` só se montares o teu próprio error handler depois do boot. |
 
 ## Modos de falha
 
@@ -565,8 +609,9 @@ nativos da sua framework.
 | `500 HTTP_GUARDS_UNRUNNABLE` | o pipeline da rota tem guards mas não tem container, por isso nenhum deles pôde correr | passa `container` ao pipeline — todos os adapters do kit passam; só pipelines feitos à mão chegam aqui |
 | `400 HTTP_VALIDATION` | o body/query/params falhou o schema Zod da rota | a resposta lista a parte e as issues por campo |
 | `404 { code: 'NOT_FOUND' }` numa rota que definiste | a rota não foi registada nesta instância do adapter | confirma que está em `routes: [...]` do plugin do adapter que arrancou |
-| `413 PAYLOAD_TOO_LARGE` | o body excedeu o `bodyLimit` (hono) ou o limite do body-parser (express, 100 KB por omissão) | sobe o limite deliberadamente |
-| `400 BAD_REQUEST` (express) | o body não pôde ser interpretado (JSON malformado, codificação corrompida) | envia um body válido |
+| `413 PAYLOAD_TOO_LARGE` | o body excedeu o limite de corpo (1 MiB por omissão nos três) | sobe o `bodyLimit` (`fastify: { bodyLimit }` no Fastify) deliberadamente |
+| `400 BAD_REQUEST` | o body não pôde ser interpretado (JSON malformado; no Express também uma codificação corrompida) | envia um body válido |
+| `400 HTTP_VALIDATION` para um corpo JSON que enviaste | o `Content-Type` não é `application/json` nem `+json` (ex.: `text/plain`) | envia um media type JSON |
 | `400 MALFORMED_MULTIPART` / `TOO_MANY_FILES`, `413`, `415` numa rota `upload()` | o upload excedeu um limite ou violou o enquadramento multipart | vê [Uploads](#uploads) |
 | Aviso `[basalt:hono] Could not resolve the client IP` | este runtime não expõe o endereço do socket ao adaptador | passa `honoPlugin({ getClientIp })` |
 

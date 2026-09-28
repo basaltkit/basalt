@@ -74,7 +74,11 @@ the searchable fields with `track_total_hits` for an exact total; filters become
 ## Notes
 
 - **Document ids are `<encodeURIComponent(tenantId)>:<encodeURIComponent(id)>`**,
-  built once and used identically by `index()`, `bulk()` and `remove()`. Encoding
+  built once and used identically by `index()`, `bulk()` and `remove()`: the
+  bulk body carries it verbatim, and the `/_doc/<id>` path percent-encodes it once
+  more because Elasticsearch decodes path segments (until 2.0 the path did not,
+  so `remove()` of a bulk-indexed id with a URL-special character deleted
+  nothing). Encoding
   the segments keeps tenant `a:b` + id `c` distinct from tenant `a` + id `b:c`
   (which previously overwrote one tenant's document with another's). UUID/slug
   ids are unaffected.

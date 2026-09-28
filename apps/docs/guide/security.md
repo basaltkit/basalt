@@ -109,8 +109,10 @@ route({
 The key is resolved in the route guard, after the enrichers ran, so auth and
 tenancy have already set `ctx().user` / `ctx().tenant`. When the id is missing
 (an anonymous caller, no tenant resolved, or the function returns nothing), the
-bucket **falls back to the client IP**. It never falls back to one shared bucket,
-and anonymous buckets never mix with signed-in ones. Keyed buckets use the same
+bucket **falls back to the client IP**, and anonymous buckets never mix with
+signed-in ones. When the adapter could not resolve an IP either (`request.ip`
+undefined — Hono on a runtime without `getClientIp`), every such request shares
+one bucket: fail closed, rather than a bucket per spoofable header. Keyed buckets use the same
 store (`MemoryRateLimitStore`, or Redis across instances). A keyed route still
 counts against the global per-IP limit on every adapter, because the pre-routing
 hook cannot know the user yet.
@@ -495,6 +497,12 @@ await tenantTransaction(db, async (tx) => {
   every policy; table owners skip them unless the table has `FORCE ROW LEVEL
   SECURITY` (`rlsPolicySql` adds it by default). Run the app as a plain login
   role and keep migrations/admin work on a separate one.
+- **No tenant means no rows — even on a reused connection.** The policy
+  compares against `NULLIF(current_setting('app.tenant_id', true), '')`: once a
+  pooled session has set the tenant in any transaction, Postgres returns `''`
+  (not `NULL`) for it afterwards, and a bare comparison would match rows whose
+  tenant column is `''`. Policies generated before `@basaltkit/prisma` 3.0 lack
+  the `NULLIF` — re-run `rlsPolicySql` (idempotent) in a new migration.
 - **Costs.** Each tenant-scoped operation becomes a short batch transaction
   (`BEGIN`, `set_config`, the query, `COMMIT`) — a few extra statements on the
   same connection (≈ +2 ms p50 in the app team's measurements). The setting is
@@ -554,7 +562,7 @@ new PostgresSearchDriver({ client: pool, searchFunction: 'basalt_search_scoped' 
 ```text
 -- as the application role, through the function
 ->  Bitmap Heap Scan on basalt_search t
-      Filter: ((idx = 'notes') AND (tenant_id = current_setting('app.tenant_id', true)))
+      Filter: ((idx = 'notes') AND (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')))
       ->  Bitmap Index Scan on basalt_search_tsv_idx
 Execution Time: 1.850 ms
 ```

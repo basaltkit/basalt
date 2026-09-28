@@ -69,8 +69,8 @@ export interface RealtimeHubOptions {
   maxChannelLength?: number
   /**
    * A local delivery failed — the connection's `send` threw (dead/closing
-   * socket). The connection is pruned and the remaining recipients still get
-   * the message; the failure lands here. Default: console.error with context.
+   * socket). The connection is pruned and closed, and the remaining recipients
+   * still get the message; the failure lands here. Default: console.error with context.
    * (Same pattern as the plugin's `onBridgeError`.)
    */
   onDeliveryError?: (
@@ -122,22 +122,38 @@ export class RealtimeHub {
 
   /**
    * Attaches a connection to a channel. Returns whether the subscription was
-   * accepted — `false` when the connection is unknown, the channel name is
+   * accepted — `false` when the connection is unknown (or was unregistered or
+   * replaced while `authorize` was pending), the channel is not a string or is
    * empty/too long, the per-connection cap is reached, or the `authorize` gate
    * refused it. Adapters SHOULD check the result and signal/close on refusal.
    */
   async subscribe(connectionId: string, channel: string): Promise<boolean> {
+    // Channel names usually come straight from a client command (`JSON.parse`
+    // of a socket frame), so the type is not guaranteed: an array or object
+    // would slip past the length check and be keyed by identity.
+    if (typeof channel !== 'string') return false
     const connection = this.connections.get(connectionId)
     if (!connection) return false
-    const subs = this.subscriptions.get(connectionId)!
-    if (subs.has(channel)) return true // idempotent
+    if (this.subscriptions.get(connectionId)!.has(channel)) return true // idempotent
 
     const maxLen = this.options.maxChannelLength ?? 256
     if (channel.length === 0 || channel.length > maxLen) return false
     const cap = this.options.maxSubscriptionsPerConnection ?? 1000
-    if (subs.size >= cap) return false
+    if (this.subscriptions.get(connectionId)!.size >= cap) return false
     // Server-side authorization: refuse a channel this connection may not join.
     if (this.options.authorize && !(await this.options.authorize(connection, channel))) return false
+
+    // Re-check after the await (FA-065): while the gate was deciding, the
+    // connection may have closed (unregister) or been replaced by another
+    // connection reusing its id — attaching now would leave a ghost entry, or
+    // hand the replacement a channel authorized for someone else. Concurrent
+    // subscribes also all passed the cap check above before any of them
+    // attached, so the cap is enforced again here.
+    if (this.connections.get(connectionId) !== connection) return false
+    const subs = this.subscriptions.get(connectionId)
+    if (!subs) return false
+    if (subs.has(channel)) return true
+    if (subs.size >= cap) return false
 
     subs.add(channel)
     const k = key(connection.tenantId, channel)
@@ -155,6 +171,11 @@ export class RealtimeHub {
 
   /** Publishes to every subscriber of (tenant, channel), across all instances. */
   async publish(tenantId: string, channel: string, event: string, data: unknown): Promise<void> {
+    // Fail the emit, not the recipients (FA-065): a payload JSON can't encode
+    // (BigInt, a cycle) would otherwise throw inside every connection's `send`
+    // and get each of them pruned as "dead". Rejecting here also matches the
+    // Redis backplane, which has always rejected at `JSON.stringify`.
+    JSON.stringify(data)
     await this.backplane.publish({ tenantId, channel, event, data })
   }
 
@@ -205,7 +226,18 @@ export class RealtimeHub {
         report(error, { connectionId: id, tenantId: message.tenantId, channel: message.channel, event: message.event })
       }
     }
-    for (const id of dead) this.unregister(id)
+    for (const id of dead) {
+      const connection = this.connections.get(id)
+      this.unregister(id)
+      // Close what was pruned: a socket that is merely unregistered stays open,
+      // so the client believes it is subscribed, never reconnects, and never
+      // hears anything again.
+      try {
+        connection?.close()
+      } catch {
+        // already gone — nothing left to release
+      }
+    }
   }
 
   async close(): Promise<void> {

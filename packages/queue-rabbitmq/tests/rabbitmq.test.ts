@@ -155,14 +155,14 @@ describe('crash-safety (Q-2): amqplib error emitters are listened to', () => {
   it('attaches error listeners on connection and channel, wired to onError', async () => {
     const connListeners: ((e: unknown) => void)[] = []
     const chanListeners: ((e: unknown) => void)[] = []
-    const channel = new FakeChannel() as FakeChannel & { on?: (e: 'error', l: (err: unknown) => void) => void }
-    channel.on = (_e, l) => void chanListeners.push(l)
+    const channel = new FakeChannel() as FakeChannel & { on?: (e: 'error' | 'close', l: (err?: unknown) => void) => void }
+    channel.on = (e, l) => void (e === 'error' && chanListeners.push(l))
     const errors: unknown[] = []
     const driver = new RabbitmqQueueDriver({
       url: 'amqp://test',
       onError: (error, info) => void errors.push({ error, info }),
       connect: async () => ({
-        on: (_e: 'error', l: (err: unknown) => void) => void connListeners.push(l),
+        on: (e: 'error' | 'close', l: (err?: unknown) => void) => void (e === 'error' && connListeners.push(l)),
         createChannel: async () => channel,
         close: async () => {},
       }),
@@ -296,3 +296,109 @@ describe('publisher confirms + graceful shutdown (Q-7)', () => {
     expect(ch.sent).toHaveLength(0) // no publish storm onto the dead channel
   })
 })
+
+describe('FA-064: untrusted retry headers and channel loss', () => {
+  const failing = async (ch: FakeChannel) => {
+    const driver = driverWith(ch)
+    driver.setExecutor(async () => {
+      throw new Error('boom')
+    })
+    driver.startWorker('q')
+    await ch.ready
+    return driver
+  }
+
+  it('a negative x-basalt-attempt cannot buy extra retries — it is read as attempt 1', async () => {
+    const ch = new FakeChannel()
+    await failing(ch)
+    ch.deliver({ 'x-basalt-job': 'j', 'x-basalt-attempt': -1_000_000, 'x-basalt-attempts': 3 }, {})
+    await tick()
+    const retry = ch.sent.find((s) => s.queue === 'q.delay')!
+    // Pre-fix: attempt -999999 — a million retries past the 50 ceiling.
+    expect(header(retry, 'x-basalt-attempt')).toBe(2)
+  })
+
+  it('an attempt above the ceiling is clamped, so the job dead-letters', async () => {
+    const ch = new FakeChannel()
+    await failing(ch)
+    ch.deliver({ 'x-basalt-job': 'j', 'x-basalt-attempt': 1e9, 'x-basalt-attempts': 1e9 }, {})
+    await tick()
+    expect(ch.sent.map((s) => s.queue)).toEqual(['q.dead'])
+  })
+
+  it('a negative backoff never becomes a negative expiration (which closes the channel)', async () => {
+    const ch = new FakeChannel()
+    await failing(ch)
+    ch.deliver(
+      { 'x-basalt-job': 'j', 'x-basalt-attempt': 1, 'x-basalt-attempts': 3, 'x-basalt-backoff-ms': -5000, 'x-basalt-backoff-type': 'fixed' },
+      {},
+    )
+    await tick()
+    expect(ch.sent.find((s) => s.queue === 'q.delay')!.options?.['expiration']).toBe('0')
+  })
+
+  it('reconnects after the channel closes: workers are re-subscribed and add() uses a fresh channel', async () => {
+    class ClosableChannel extends FakeChannel {
+      readonly closeListeners: (() => void)[] = []
+      on(event: 'error' | 'close', listener: (error?: unknown) => void): void {
+        if (event === 'close') this.closeListeners.push(() => listener())
+      }
+    }
+    const channels: ClosableChannel[] = []
+    const errors: unknown[] = []
+    const driver = new RabbitmqQueueDriver({
+      url: 'amqp://test',
+      reconnectDelayMs: 1,
+      onError: (e) => void errors.push(e),
+      connect: async () => ({
+        createChannel: async () => {
+          const channel = new ClosableChannel()
+          channels.push(channel)
+          return channel
+        },
+        close: async () => {},
+      }),
+    })
+    const seen: string[] = []
+    driver.setExecutor(async (name) => void seen.push(name))
+    driver.startWorker('q')
+    await until(() => channels.length === 1)
+    await channels[0]!.ready
+
+    // The broker drops the channel (restart, network cut, protocol error).
+    for (const fire of channels[0]!.closeListeners) fire()
+    await until(() => channels.length === 2)
+    await channels[1]!.ready
+    expect(errors.length).toBeGreaterThan(0) // the loss is visible
+
+    channels[1]!.deliver({ 'x-basalt-job': 'after-reconnect', 'x-basalt-attempt': 1, 'x-basalt-attempts': 1 }, {})
+    await tick()
+    expect(seen).toEqual(['after-reconnect'])
+    expect(channels[1]!.acked).toBe(1)
+
+    await driver.add('q', 'job', {}, { attempts: 1 })
+    expect(channels[0]!.sent).toHaveLength(0)
+    expect(channels[1]!.sent).toHaveLength(1)
+    await driver.close()
+  })
+
+  it('a failed connect is not cached — the next add() retries it', async () => {
+    let attempts = 0
+    const ch = new FakeChannel()
+    const driver = new RabbitmqQueueDriver({
+      url: 'amqp://test',
+      connect: async () => {
+        attempts++
+        if (attempts === 1) throw new Error('ECONNREFUSED')
+        return { createChannel: async () => ch, close: async () => {} }
+      },
+    })
+    await expect(driver.add('q', 'j', {}, { attempts: 1 })).rejects.toThrow('ECONNREFUSED')
+    await driver.add('q', 'j', {}, { attempts: 1 })
+    expect(ch.sent).toHaveLength(1)
+  })
+})
+
+const until = async (predicate: () => boolean) => {
+  for (let i = 0; i < 200 && !predicate(); i++) await new Promise((r) => setTimeout(r, 5))
+}

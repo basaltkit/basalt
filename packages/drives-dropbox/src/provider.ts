@@ -1,4 +1,5 @@
 import {
+  DriveAccessDeniedError,
   DriveAuthorizationInvalidError,
   DriveContentTooLargeError,
   DriveCredentialsInvalidError,
@@ -277,6 +278,12 @@ export class DropboxDrive implements DriveProvider {
   // ------------------------------------------------------------- operations
 
   async list(session: DriveSession, options: DriveListOptions): Promise<DrivePage<DriveItem>> {
+    // A folder other than the root must be inside it (FA-073). A continuation
+    // cursor reached the caller through the engine's MAC and continues a
+    // listing that was already checked, so only a first page is.
+    if (options.folderId !== undefined && options.cursor === undefined) {
+      await this.assertInRoot(session, options.folderId)
+    }
     const result = await this.listFolder(session, {
       ...(options.cursor !== undefined ? { cursor: options.cursor } : {}),
       ...(options.cursor === undefined
@@ -315,7 +322,12 @@ export class DropboxDrive implements DriveProvider {
       if (error instanceof DriveItemNotFoundError) return null
       throw error
     }
-    return toDriveItem((await response.json()) as DropboxEntry)
+    const entry = (await response.json()) as DropboxEntry
+    // Outside the connection's root is, for this connection, not there — the
+    // same `null` a deleted file gets (FA-073).
+    const root = await this.rootPath(session)
+    if (root !== undefined && !inside(entry.path_lower, root)) return null
+    return toDriveItem(entry)
   }
 
   /**
@@ -351,6 +363,15 @@ export class DropboxDrive implements DriveProvider {
       })
     }
     const meta = parseApiResult(response.headers['dropbox-api-result'])
+    // The item is caller-supplied. Dropbox states where it really lives in
+    // `Dropbox-API-Result`, which arrives with the headers — so an item outside
+    // the root is refused before a single byte of its body is read, and without
+    // a separate metadata round trip on the import hot path (FA-073).
+    const root = await this.rootPath(session)
+    if (root !== undefined && !inside(meta?.path_lower, root)) {
+      response.destroy()
+      throw outsideRoot(this.name)
+    }
     const size = meta?.size ?? item.size
     return {
       stream: response.body,
@@ -376,6 +397,14 @@ export class DropboxDrive implements DriveProvider {
     if (input.size !== undefined && input.size > this.uploadMaxBytes) {
       input.content.destroy()
       throw new DriveContentTooLargeError(this.uploadMaxBytes)
+    }
+    if (input.folderId !== undefined) {
+      try {
+        await this.assertInRoot(session, input.folderId)
+      } catch (error) {
+        input.content.destroy()
+        throw error
+      }
     }
     const folder = dropboxPath(input.folderId ?? session.rootId)
     const path = `${folder}/${sanitizeName(input.name)}`
@@ -482,6 +511,67 @@ export class DropboxDrive implements DriveProvider {
 
   // ----------------------------------------------------------------- guts
 
+  /**
+   * The connection root's `path_lower`, or `undefined` for an unconfined
+   * connection.
+   *
+   * A path root is compared lexically (no request); an `id:`/`ns:` root is
+   * resolved with `get_metadata`, because only Dropbox knows where an id
+   * lives. A root that cannot be resolved confines to nothing rather than to
+   * everything.
+   */
+  private async rootPath(session: DriveSession): Promise<string | undefined> {
+    const handle = dropboxPath(session.rootId)
+    if (handle === '') return undefined
+    const path = await this.pathOf(session, handle)
+    if (path === undefined) throw outsideRoot(this.name)
+    return path
+  }
+
+  /**
+   * Where a handle points, as a lowercase path — `undefined` when that cannot
+   * be established (it does not exist, it lives in a namespace outside the
+   * user's tree, or it spells `.`/`..`).
+   *
+   * Lexical for a path: `path_lower` is Dropbox's own lowercasing, and a
+   * locale-sensitive letter it folds differently from `toLowerCase` can only
+   * make a check fail, never pass one it should not.
+   */
+  private async pathOf(session: DriveSession, handle: string): Promise<string | undefined> {
+    const normalized = dropboxPath(handle)
+    if (normalized === '') return ''
+    if (normalized.startsWith('/')) {
+      const segments = normalized.split('/').slice(1)
+      if (segments.some((segment) => segment === '.' || segment === '..')) return undefined
+      return normalized.replace(/\/+$/, '').toLowerCase()
+    }
+    const response = await this.rpc(session, `https://${API_HOST}/2/files/get_metadata`, { path: normalized })
+    if (!response.ok) {
+      const error = toDropboxError(response.status, await response.text(), {
+        provider: this.name,
+        connectionId: session.connectionId,
+      })
+      if (error instanceof DriveItemNotFoundError || error instanceof DriveAccessDeniedError) return undefined
+      throw error
+    }
+    return ((await response.json()) as DropboxEntry).path_lower
+  }
+
+  /**
+   * Refuses a handle that is not the root or inside it (FA-073).
+   *
+   * `DriveSession.rootId` promised confinement and phase 2 kept it only for
+   * the default listing: a `folderId`, an item and an upload target went to
+   * the API as given, and a Dropbox token reaches the user's whole tree.
+   */
+  private async assertInRoot(session: DriveSession, handle: string): Promise<void> {
+    const root = await this.rootPath(session)
+    if (root === undefined) return
+    const path = await this.pathOf(session, handle)
+    if (!inside(path, root)) throw outsideRoot(this.name)
+  }
+
+
   private async listFolder(
     session: DriveSession,
     input: { cursor?: string; path?: string; limit?: number; includeDeleted?: boolean },
@@ -580,6 +670,21 @@ export class DropboxDrive implements DriveProvider {
  */
 export function dropboxDrive(options: DropboxDriveOptions): DropboxDrive {
   return new DropboxDrive(options)
+}
+
+/**
+ * Whether `path` is `root` or below it. On a segment boundary: `/finance-old`
+ * is not inside `/finance`. The account root (`''`) contains everything.
+ */
+function inside(path: string | undefined, root: string): boolean {
+  if (path === undefined) return false
+  if (root === '') return true
+  return path === root || path.startsWith(`${root}/`)
+}
+
+/** The refusal for a handle outside the connection's root. Echoes nothing the caller sent. */
+function outsideRoot(provider: string): Error {
+  return new DriveAccessDeniedError(provider, 'the item is outside the folder this connection is confined to')
 }
 
 /** `Dropbox-API-Result` carries the file's metadata alongside the bytes. */

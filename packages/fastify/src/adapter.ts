@@ -2,6 +2,7 @@ import type { Readable } from 'node:stream'
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
   NOT_FOUND_RESPONSE,
+  HttpError,
   HttpServerCollector,
   HTTP_SERVER,
   runRoute,
@@ -50,6 +51,9 @@ declare module '@basaltkit/core' {
 }
 
 export const FASTIFY = createToken<FastifyInstance>('fastify')
+
+/** A `+json` media type (Fastify tests a RegExp parser against the bare media type). */
+const JSON_SUFFIX_TYPE = /^application\/[a-z0-9!#$&^_.+-]+\+json$/
 
 /**
  * The neutral reply over a `FastifyReply`.
@@ -147,19 +151,19 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
         // `content-type: application/json` with an empty body, which surfaced as a
         // 500. Treat an empty body as "no body" (undefined); keep strict parsing
         // (and a 400) for actual malformed JSON.
-        instance.addContentTypeParser(
-          'application/json',
-          { parseAs: 'string' },
-          (_request: FastifyRequest, body: string, done: (err: Error | null, value?: unknown) => void) => {
-            if (body.trim() === '') return done(null, undefined)
-            try {
-              done(null, JSON.parse(body))
-            } catch (error) {
-              (error as FastifyError).statusCode = 400
-              done(error as Error)
-            }
-          },
-        )
+        const parseJson = (_request: FastifyRequest, body: string, done: (err: Error | null, value?: unknown) => void) => {
+          if (body.trim() === '') return done(null, undefined)
+          try {
+            done(null, JSON.parse(body))
+          } catch (cause) {
+            // The same 400 body Express and Hono answer with.
+            done(new HttpError(400, 'BAD_REQUEST', 'Malformed request body.', { cause }))
+          }
+        }
+        instance.addContentTypeParser('application/json', { parseAs: 'string' }, parseJson)
+        // Structured-syntax `+json` types (application/merge-patch+json,
+        // application/vnd.api+json) are JSON on every adapter.
+        instance.addContentTypeParser(JSON_SUFFIX_TYPE, { parseAs: 'string' }, parseJson)
         // HTML forms and the SAML ACS binding post application/x-www-form-urlencoded;
         // parse it into an object so form routes work like JSON routes (Fastify has
         // no default parser for it).
@@ -190,7 +194,7 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       registerRoutes(instance, routes, container, enrichers, guards, options.onError)
       // Mount edge-plugin hooks/routes once every plugin has registered them.
       hooks.on('app:booted', () => {
-        mountCollector(instance, collector)
+        mountCollector(instance, collector, options.onError)
         if (options.notFound !== false) {
           try {
             instance.setNotFoundHandler((_request, reply) => {
@@ -355,7 +359,15 @@ function wrapHandler(
 
       if (isSseResponse(result)) {
         reply.hijack()
-        reply.raw.writeHead(200, SSE_HEADERS)
+        // A hijacked reply bypasses Fastify's own header handling: whatever the
+        // pre-hooks and the pipeline set on `reply` (CORS, security headers,
+        // rate-limit counters, x-request-id) must be carried over by hand, or
+        // a cross-origin EventSource fails its CORS check.
+        const headers = { ...reply.getHeaders(), ...SSE_HEADERS } as Record<string, number | string | string[] | undefined>
+        reply.raw.writeHead(200, headers)
+        // Headers go out now, not with the first event: a stream that starts
+        // quiet must still open (EventSource `open`) — as it does on Hono.
+        reply.raw.flushHeaders()
         await driveSse(sseProducerOf(result), {
           write: (frame) => void reply.raw.write(frame),
           end: () => reply.raw.end(),
@@ -436,7 +448,34 @@ function prepareStream(
 }
 
 /** Applies edge-plugin hooks and routes (from the collector) to the Fastify instance. */
-function mountCollector(instance: FastifyInstance, collector: HttpServerCollector): void {
+function mountCollector(instance: FastifyInstance, collector: HttpServerCollector, onError?: HttpErrorReporter): void {
+  // After-hooks follow the Node response, not Fastify's `onResponse`: that
+  // hook never runs for a hijacked reply (every `sse()` stream) nor for one
+  // the client abandoned, so metrics' in-flight gauge and tracing spans never
+  // saw those requests end. Attached first, before any pre-hook can answer
+  // and stop the `onRequest` chain. 'close' follows 'finish', so run once.
+  if (collector.afterHooks.length > 0) {
+    instance.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+      let done = false
+      const after = () => {
+        if (done) return
+        done = true
+        // The response is already gone: a failing after-hook is reported,
+        // never left as an unhandled rejection.
+        collector
+          .runAfter(toNeutralRequest(request), reply as unknown as HttpReply, reply.raw.statusCode, reply.elapsedTime)
+          .catch((error: unknown) => {
+            try {
+              report(onError, error, 500, 'AFTER_HOOK_FAILED', request)
+            } catch {
+              /* a broken reporter must not crash the process */
+            }
+          })
+      }
+      reply.raw.on('finish', after)
+      reply.raw.on('close', after)
+    })
+  }
   for (const hook of collector.preHooks) {
     instance.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
       // `raw` stays the Node response, as it was when hooks got the FastifyReply.
@@ -444,16 +483,6 @@ function mountCollector(instance: FastifyInstance, collector: HttpServerCollecto
       await hook({ request: toNeutralRequest(request), reply: neutralReply })
       if (neutralReply.sent) return reply
       return undefined
-    })
-  }
-  for (const hook of collector.afterHooks) {
-    instance.addHook('onResponse', async (request: FastifyRequest, reply: FastifyReply) => {
-      await hook({
-        request: toNeutralRequest(request),
-        reply: reply as unknown as HttpReply,
-        statusCode: reply.statusCode,
-        durationMs: reply.elapsedTime,
-      })
     })
   }
   for (const { method, url, handler } of collector.extraRoutes) {

@@ -312,7 +312,13 @@ runtime out of its graph. Responses:
 
 Incoming HTTP headers are forwarded to tools as `ctx.headers` (and the peer
 address as `ctx.remoteAddress`), so a tool can read per-call metadata (a tenant
-id, a bearer token) the same way it would over stdio's static `headers`.
+id, a bearer token) the same way it would over stdio's static `headers`. A header
+sent once is a string; a header sent more than once is a `string[]` of every value
+(Node's `req.headers` would join them with `, `, or keep only the first
+`authorization`) — so a tool can refuse an ambiguous duplicate with
+`Array.isArray(ctx.headers[name])`. An IPv6 `host` works bare or bracketed
+(`'::1'`, `handle.url` → `http://[::1]:port/mcp`), and `serveHttp` rejects with the
+`listen()` error (`EADDRINUSE`) when the address cannot be bound.
 
 ::: warning The HTTP transport is loopback-guarded by default
 It binds `127.0.0.1`, and before any dispatch it requires the `Host` hostname to be

@@ -6,6 +6,7 @@ import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
   corsPreflightParitySuite,
+  wireParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
   sendWith,
@@ -65,6 +66,7 @@ rateLimitKeyParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
 streamParitySuite('hono', driver)
 corsPreflightParitySuite('hono', driver)
+wireParitySuite('hono', driver)
 fileRoutesParitySuite('hono', driver)
 
 describe('hono: multipart on routes that are not upload() routes', () => {

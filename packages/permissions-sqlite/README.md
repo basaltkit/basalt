@@ -52,7 +52,9 @@ re-assigning a role or re-granting a permission is a harmless no-op:
 | `perm_user_permissions` | `(scope, user_id, permission)` — direct user grants |
 | `perm_role_permissions` | `(scope, role, permission)` |
 
-Everything is scoped, so `t1` and `t2` never see each other's grants.
+Everything is scoped, so `t1` and `t2` never see each other's grants. A
+multi-permission grant (`grantToRole`, `grantToUser`) is written in one
+savepoint: all of it, or — when any row fails — none of it.
 
 ## Exports
 

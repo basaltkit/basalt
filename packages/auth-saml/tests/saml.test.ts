@@ -39,7 +39,8 @@ function fakeClient(overrides: Partial<SamlClient> = {}): SamlClient {
   }
 }
 
-const makeSaml = (auth: Auth, client: SamlClient) => new Saml(auth, [provider], { createClient: () => client })
+// Browser binding is covered by its own suite; these unit tests exercise the assertion path.
+const makeSaml = (auth: Auth, client: SamlClient) => new Saml(auth, [provider], { bindToBrowser: false, createClient: () => client })
 
 describe('Saml', () => {
   it('loginUrl delegates to the client (SP-initiated redirect)', async () => {
@@ -137,12 +138,13 @@ describe('F15b · SAML provider trust boundary (an IdP may only assert its own e
   it("rejects an assertion from one customer's IdP for another customer's email", async () => {
     const auth = makeAuth()
     const victim = await auth.register('ceo@acme.com', 'password123')
-    const saml = new Saml(auth, [acme, globex], { createClient: () => asserting('ceo@acme.com') })
+    const saml = new Saml(auth, [acme, globex], { bindToBrowser: false, createClient: () => asserting('ceo@acme.com') })
     await expect(saml.consume('globex', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
     // Case variants and a custom email attribute go through the same check.
-    const upper = new Saml(auth, [acme, globex], { createClient: () => asserting('CEO@Acme.Com') })
+    const upper = new Saml(auth, [acme, globex], { bindToBrowser: false, createClient: () => asserting('CEO@Acme.Com') })
     await expect(upper.consume('globex', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
     const viaAttr = new Saml(auth, [acme, { ...globex, emailAttribute: 'mail' }], {
+      bindToBrowser: false,
       createClient: () =>
         fakeClient({
           async validatePostResponseAsync() {
@@ -157,7 +159,7 @@ describe('F15b · SAML provider trust boundary (an IdP may only assert its own e
   })
 
   it('compares the domain case-insensitively and rejects look-alike / multi-@ emails', async () => {
-    const saml = (email: string) => new Saml(makeAuth(), [acme, globex], { createClient: () => asserting(email) })
+    const saml = (email: string) => new Saml(makeAuth(), [acme, globex], { bindToBrowser: false, createClient: () => asserting(email) })
     await expect(saml('CEO@ACME.COM').consume('acme', { SAMLResponse: 'x' })).resolves.toBeTruthy()
     for (const email of [
       'ceo@acme.com@globex.com',
@@ -178,20 +180,20 @@ describe('F15b · SAML provider trust boundary (an IdP may only assert its own e
 
   it('refuses to boot with several providers unless each has an allowlist or an explicit opt-out', () => {
     const open = { ...provider, name: 'open' }
-    expect(() => new Saml(makeAuth(), [acme, open], { createClient: () => fakeClient() })).toThrow(
+    expect(() => new Saml(makeAuth(), [acme, open], { bindToBrowser: false, createClient: () => fakeClient() })).toThrow(
       SamlProviderConfigError,
     )
     expect(
-      () => new Saml(makeAuth(), [acme, { ...open, allowAnyEmailDomain: true }], { createClient: () => fakeClient() }),
+      () => new Saml(makeAuth(), [acme, { ...open, allowAnyEmailDomain: true }], { bindToBrowser: false, createClient: () => fakeClient() }),
     ).not.toThrow()
     // A single IdP (the app's own) needs no allowlist.
-    expect(() => new Saml(makeAuth(), [open], { createClient: () => fakeClient() })).not.toThrow()
+    expect(() => new Saml(makeAuth(), [open], { bindToBrowser: false, createClient: () => fakeClient() })).not.toThrow()
   })
 
   it('rejects malformed allowlist entries at boot', () => {
     for (const bad of [[], [''], ['@acme.com'], ['*.acme.com'], ['acme .com']]) {
       expect(
-        () => new Saml(makeAuth(), [{ ...acme, allowedEmailDomains: bad }], { createClient: () => fakeClient() }),
+        () => new Saml(makeAuth(), [{ ...acme, allowedEmailDomains: bad }], { bindToBrowser: false, createClient: () => fakeClient() }),
         JSON.stringify(bad),
       ).toThrow(SamlProviderConfigError)
     }
@@ -225,7 +227,7 @@ describe('F15b · duplicate provider names', () => {
             { ...provider, allowedEmailDomains: ['acme.com'] },
             { ...provider, allowAnyEmailDomain: true },
           ],
-          { createClient: () => fakeClient() },
+          { bindToBrowser: false, createClient: () => fakeClient() },
         ),
     ).toThrow(SamlProviderConfigError)
   })
@@ -282,8 +284,8 @@ describe('F66 · SAML unsolicited assertions and replay', () => {
         return true
       },
     }
-    const a = new Saml(makeAuth(), [provider], { assertionReplayCache, createClient: () => assertionWithId('_r1') })
-    const b = new Saml(makeAuth(), [provider], { assertionReplayCache, createClient: () => assertionWithId('_r1') })
+    const a = new Saml(makeAuth(), [provider], { assertionReplayCache, bindToBrowser: false, createClient: () => assertionWithId('_r1') })
+    const b = new Saml(makeAuth(), [provider], { assertionReplayCache, bindToBrowser: false, createClient: () => assertionWithId('_r1') })
     await expect(a.consume('okta', { SAMLResponse: 'x' })).resolves.toBeTruthy()
     await expect(b.consume('okta', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
   })

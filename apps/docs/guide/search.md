@@ -17,7 +17,9 @@ name that tenant, and any other value throws `SearchTenantMismatchError`
 (`403 SEARCH_TENANT_MISMATCH`) — so forwarding a client's `?tenantId=` can never
 widen a query or plant a document in another tenant. Outside a tenant context
 (jobs, CLI) the explicit value selects the tenant. `reindex()` is a system
-operation over every tenant and keeps the tenant each sync rule maps. A tenant id
+operation over every tenant and keeps the tenant each sync rule maps — it never
+takes one from the context it runs in, so a rule whose `document` omits
+`tenantId` is refused (`TenantRequiredError`) whenever a tenant could exist. A tenant id
 equal to `SINGLE_TENANT_SCOPE` — from the context, an argument, a document or a
 `reindex()` row — is refused with `SearchTenantReservedError`
 (`400 SEARCH_TENANT_RESERVED`).
@@ -245,9 +247,26 @@ both paths. A second mapping written by hand is the drift this prevents: let it
 disagree and the same search returns different things depending on whether a
 record predates the last rebuild.
 
-The index is cleared first — a rebuild that appends leaves documents for records
-that no longer exist — and an index whose rules have no `backfill` raises,
-rather than reporting a rebuild that did nothing.
+Every row is mapped and validated **before** the index is cleared, so a rebuild
+that would fail leaves the old index in place instead of an empty one. That takes
+two walks over `backfill` (memory stays bounded by one page); rows that change
+between the walks can still fail the second one — rerun `reindex()` then. The
+index is then cleared, not appended to — a rebuild that appends leaves documents
+for records that no longer exist — and an index whose rules have no `backfill`
+raises, rather than reporting a rebuild that did nothing.
+
+In a multi-tenant app `document` must return `tenantId`. A rebuild covers every
+tenant, so the tenant cannot come from the context: a row without one throws
+`TenantRequiredError` whenever `@basaltkit/tenancy` is registered or the rebuild
+runs inside a tenant context. Only a single-tenant app with no context tenant
+files tenant-less rows under `SINGLE_TENANT_SCOPE`.
+
+::: warning One rebuild, every tenant
+`reindex()` clears the **whole** index, so its `backfill` must yield every
+tenant's records. Do not call it once per tenant (for example inside
+`tenancy.run(id, …)` with a database-per-tenant `backfill`): each call would
+wipe the other tenants' documents and write back only one tenant's.
+:::
 
 ## Production with Meilisearch
 
@@ -329,7 +348,10 @@ filterable fields as `keyword`; `search` uses `multi_match` with an exact
 segment percent-encoded**, so a `:` inside a tenant id or document id can't make
 tenant `a:b` + id `c` collide with tenant `a` + id `b:c` — and **every search
 carries a mandatory `tenantId` filter**, the same isolation guarantee as every
-other driver. Plain UUID/slug ids are unchanged by the encoding.
+other driver. Plain UUID/slug ids are unchanged by the encoding. The bulk body
+carries that id verbatim and the `/_doc/<id>` path encodes it once more (ES
+decodes path segments), so `index()`, `bulk()` and `remove()` always address the
+same document.
 
 ::: warning Auth: password vs API key
 `username` + `password` use HTTP **Basic auth**. `apiKey` sends the header
@@ -398,12 +420,27 @@ await search.search('notes', 'report', {
 })
 ```
 
+Both usually come from a query string, so `search()` checks them before any
+driver runs and throws a `400` rather than forwarding them:
+
+- `limit`/`offset` must be non-negative integers, and `limit` at most `maxLimit`
+  (default `1000`, set with `searchPlugin({ maxLimit })`) —
+  `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`).
+- On an index listed in `searchPlugin({ indexes })`, a filter may only name a
+  `filterable` field (or `tenantId`) — `SearchFilterNotFilterableError`
+  (`SEARCH_FILTER_NOT_FILTERABLE`). Otherwise any stored field becomes an oracle
+  for values the index never meant to expose.
+- A filter value must be a string, a finite number, a boolean, or a flat array
+  of those — `SearchFilterValueError` (`SEARCH_INVALID_FILTER_VALUE`).
+  `null`/`undefined` are refused, not dropped: `{ ownerId: user?.id }` with no
+  user must not quietly become "every owner".
+
 ## Reference
 
 | API | Purpose |
 | --- | --- |
 | `defineIndex({ name, fields, filterable? })` | Declare an index. |
-| `searchPlugin({ driver?, indexes?, sync? })` | Register the service, indexes and sync rules. |
+| `searchPlugin({ driver?, indexes?, sync?, maxLimit? })` | Register the service, indexes and sync rules. |
 | `SEARCH` | DI token → the `Search` service. |
 | `search.index/bulk/remove/search` | Index, bulk-index, remove, query. |
 | `MemorySearchDriver` · `MeilisearchDriver` | Built-in dev/test and production backends. |

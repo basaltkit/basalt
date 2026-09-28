@@ -110,6 +110,11 @@ A spawned stdio server inherits only a non-secret allowlist of host variables
 `APP_SECRET`, `DATABASE_URL` or provider keys. Use `inheritEnv: ['NAME']` to
 forward named variables, or `inheritEnv: true` to opt in to the full environment.
 
+If the command can't be spawned (`ENOENT`) or the server exits, the calls in flight
+reject with an error instead of crashing your process, and the next call spawns it
+afresh. A request the server never answers rejects after `timeoutMs` (default
+60 000 ms).
+
 Or register named servers with a plugin — `mcpClientPlugin` connects them at boot
 and exposes them via the `MCP_CLIENTS` registry:
 

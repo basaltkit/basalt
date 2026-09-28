@@ -6,6 +6,7 @@ import {
   sendWith,
   errorDetailsParitySuite,
   corsPreflightParitySuite,
+  wireParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
   streamParitySuite,
@@ -45,4 +46,5 @@ rateLimitKeyParitySuite('express', driver)
 errorDetailsParitySuite('express', driver)
 streamParitySuite('express', driver)
 corsPreflightParitySuite('express', driver)
+wireParitySuite('express', driver)
 fileRoutesParitySuite('express', driver)

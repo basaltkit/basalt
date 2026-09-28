@@ -16,7 +16,7 @@ This module supports the three classic isolation strategies and handles the tedi
 
 1. **Shared database** — all tenants in the same database, each row with a `tenantId` column. The `tenancyExtension()` extension intercepts **every** query and injects the current tenant's filter (or refuses the query when it cannot scope it): application code cannot forget the `where: { tenantId }` or override it. Pair it with composite foreign keys and RLS for database-level isolation (see *Limits* below).
 2. **Schema per tenant** (PostgreSQL) — one database, but each tenant has its own *schema* (a "compartment" with its own tables). The module derives safe schema names, builds connection URLs with the right schema, and creates schemas when needed.
-3. **Database per tenant** — maximum isolation: each tenant has its own database. The module manages an **LRU pool** of Prisma clients (keeps only the N most recent ones open, closes the rest) so connections don't explode.
+3. **Database per tenant** — maximum isolation: each tenant has its own database. The module manages a **bounded pool** of Prisma clients (at most N open; idle ones are closed least-recently-used first, clients in use never are) so connections don't explode.
 
 In any mode, `prismaPlugin` puts the right client into each request's context — application code just writes `db<PrismaClient>().project.findMany()` without knowing (or needing to know) which strategy is behind it. There are also tools for **migrations** (applying database structure changes) tenant by tenant, including a ready-to-use CLI command.
 
@@ -117,7 +117,7 @@ export const adminPrisma = new PrismaClient().$extends(
 
 Note on `findUnique`/`update`/`delete`: since Prisma 5, the unique `where` accepts extra fields as additional filters — the module injects `tenantId` there, so a row from another tenant simply "isn't found".
 
-**Limits — add database-level isolation.** The extension works on query arguments, so it cannot know which scalar columns are foreign keys: `data: { projectId: '<another tenant's id>' }` is not checked, and an `include`/`select` of a relation follows whatever foreign key is stored. Make foreign keys composite (`@relation(fields: [tenantId, projectId], references: [tenantId, id])` with `@@unique([tenantId, id])` on the target) so the database refuses cross-tenant links, and enable RLS (`rlsPolicySql`) as defense in depth. Relation-write detection is by shape (an object whose keys are all nested-write operations), so a `Json` column whose value looks exactly like `{ create: … }` would be treated as a relation write.
+**Limits — add database-level isolation.** The extension works on query arguments, so it cannot know which scalar columns are foreign keys: `data: { projectId: '<another tenant's id>' }` is not checked, and an `include`/`select` of a relation follows whatever foreign key is stored. Make foreign keys composite (`@relation(fields: [tenantId, projectId], references: [tenantId, id])` with `@@unique([tenantId, id])` on the target) so the database refuses cross-tenant links, and enable RLS (`rlsPolicySql`) as defense in depth. Relation-write detection is by shape (an object whose keys are all nested-write operations), so a `Json` column whose value looks exactly like `{ create: … }` would be treated as a relation write. Arguments are read the way Prisma reads them — by their enumerable keys — so a class instance (a DTO) passed as `data`, `where` or inside a relation write is scoped and checked exactly like a plain object.
 
 #### Postgres Row-Level Security (`rls: true`)
 
@@ -189,7 +189,7 @@ rlsSearchFunctionSql({
 SELECT * FROM basalt_search_scoped('zarbalux', 'notes', NULL, 20, 0);
 -- its body, planned as the owner runs it:
 ->  Bitmap Heap Scan on basalt_search t                   (actual rows=3)
-      Filter: ((idx = 'notes') AND (tenant_id = current_setting('app.tenant_id', true)))
+      Filter: ((idx = 'notes') AND (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')))
       ->  Bitmap Index Scan on basalt_search_tsv_idx      (actual rows=203)
 Execution Time: 1.850 ms          -- warm: ~0.6 ms
 ```
@@ -312,13 +312,24 @@ const app = await createApp({
       forTenant: (tenantId) =>
         new PrismaClient({ datasourceUrl: databaseUrlFor(tenantId) }),
       destroy: (client) => client.$disconnect(),
-      max: 10, // only the 10 most recently active tenants keep an open client
+      max: 10, // at most 10 tenant clients open at once
     }),
   ],
 }).boot()
 ```
 
-The pool is **LRU** (*least recently used*): when the limit is exceeded, the tenant client that's gone longest without use is closed (via `destroy`, which defaults to `client.$disconnect()`). Active tenants always reuse the same client, and concurrent first requests for a cold tenant share a single client creation — a burst of requests cannot open duplicate clients.
+The pool never holds more than `max` clients, and it only ever closes an **idle** one (least-recently-used first, via `destroy`, which defaults to `client.$disconnect()`). A client handed to a request counts as in use for `idleMs` (default 30 s) — keep that above your longest request. When a new tenant arrives and all `max` clients are in use, the request waits up to `acquireTimeoutMs` (default 10 s) for one to go idle, then fails with `TenantPoolExhaustedError` (503). Size `max` for the number of tenants active *at the same time*. Active tenants always reuse the same client, and concurrent first requests for a cold tenant share a single client creation — a burst of requests cannot open duplicate clients.
+
+Work that can outlive `idleMs` (a report, a migration, a long job) should hold the client with a lease instead — it is never evicted while leased:
+
+```ts
+const pool = app.container.get(DB_POOL)
+await pool.use(tenantId, async (client) => {
+  // … `client` stays open until this callback settles
+})
+```
+
+> Before 3.0 the pool evicted by recency alone: a client still serving a request could be disconnected under it, and then reconnected outside the pool where nothing bounded or closed it.
 
 You can combine `client` (for the central, tenant-less context) with `forTenant`/`schemaPerTenant` (for requests with a tenant) in the same plugin. That is what lets one app serve both worlds:
 
@@ -346,7 +357,7 @@ import type { PrismaClient } from '@prisma/client'
 const projects = await db<PrismaClient>().project.findMany()
 ```
 
-Works inside an HTTP request or `tenancy.run()`/workers (the plugin listens to the `tenancy:switched` hook). Outside any context it throws `DbUnavailableError`. The `<PrismaClient>` generic is just for TypeScript — pass your client's type (including the extended type, if you use `$extends`).
+Works inside an HTTP request or `tenancy.run()`/workers (the plugin listens to the `tenancy:switched` hook). Outside any context it throws `DbUnavailableError`. So does a `tenancy.run()` into a tenant the plugin has no client for (e.g. `resolveClient` returned `undefined`): the context it inherited from the outer tenant has its `db` cleared, so writes can never land in the outer tenant's database. The `<PrismaClient>` generic is just for TypeScript — pass your client's type (including the extended type, if you use `$extends`).
 
 ### Multi-tenant migrations (`migrateTenants`)
 
@@ -409,7 +420,9 @@ Registers the client(s) in the container (`DB`, `DB_POOL`), attaches the client 
 | `forTenant` | `(tenantId: string) => TClient \| Promise<TClient>` | No* | — | Database-per-tenant mode: client factory. |
 | `schemaPerTenant` | `{ url: string; createClient: (url: string) => TClient \| Promise<TClient>; prefix?: string }` | No* | `prefix: 'tenant_'` | Schema-per-tenant mode: base URL + factory from the URL with `?schema=`. |
 | `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | `client.$disconnect()` when present | Called when a client leaves the pool. |
-| `max` | `number` | No | `10` | Max per-tenant clients open at once. |
+| `max` | `number` | No | `10` | Max per-tenant clients open at once — never exceeded. |
+| `idleMs` | `number` | No | `30_000` | How long a client handed to a request counts as in use (cannot be evicted). Keep it above your longest request. |
+| `acquireTimeoutMs` | `number` | No | `10_000` | How long a request for a new tenant waits for a free slot when all `max` clients are in use, before `TenantPoolExhaustedError` (503). |
 | `assertMigrated` | `boolean \| { tables?: string[] }` | No | off | At boot, check that the shared `client`'s database has `_prisma_migrations` (and the listed tables, case-sensitive) and fail with `DatabaseNotMigratedError` naming the database and host (never credentials). Catches a wrong `DATABASE_URL` at startup instead of a P2021 on the first request. Needs `client`. |
 
 \* Use at least one of the three: `client`, `forTenant`, or `schemaPerTenant` (`forTenant` takes priority over `schemaPerTenant`).
@@ -498,20 +511,26 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 
 ### `class TenantClientPool<TClient>` (Advanced)
 
-`new TenantClientPool(options: TenantClientPoolOptions<TClient>)` — LRU pool of per-tenant clients.
+`new TenantClientPool(options: TenantClientPoolOptions<TClient>)` — bounded pool of per-tenant clients; evicts only idle clients, least-recently-used first.
 
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `create` | `(tenantId: string) => TClient \| Promise<TClient>` | Yes | — | Creates a tenant's client. |
 | `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | `client.$disconnect()` when present | Called on eviction. |
-| `max` | `number` | No | `10` | Max clients open (minimum 1). |
+| `max` | `number` | No | `10` | Max clients open (minimum 1); never exceeded. |
+| `idleMs` | `number` | No | `30_000` | How long a client returned by `get()` counts as in use. `0` makes it evictable right away. |
+| `acquireTimeoutMs` | `number` | No | `10_000` | How long `get()`/`acquire()` wait for a slot when every client is in use, then throw `TenantPoolExhaustedError`. |
 
 | Member | Signature | Description |
 |---|---|---|
-| `get` | `get(tenantId: string): Promise<TClient>` | Returns/creates the tenant's client; promotes it to most-recently-used; evicts the oldest above `max`. |
+| `get` | `get(tenantId: string): Promise<TClient>` | Returns/creates the tenant's client and marks it in use for `idleMs`. When the pool is full, evicts the least-recently-used **idle** client, or waits for one (`acquireTimeoutMs`). |
+| `acquire` | `acquire(tenantId: string): Promise<TenantClientLease<TClient>>` | Same, but leased: `{ client, release() }`; never evicted until `release()` (idempotent). |
+| `use` | `use<T>(tenantId: string, fn: (client: TClient) => T \| Promise<T>): Promise<T>` | Runs `fn` with the client leased for exactly its duration. |
 | `has` | `has(tenantId: string): boolean` | Does the tenant have a client in the pool? |
 | `size` | `get size(): number` | Number of open clients. |
 | `destroyAll` | `destroyAll(): Promise<void>` | Closes all clients. |
+
+`TenantPoolExhaustedError` (code `PRISMA_POOL_EXHAUSTED`, status 503) — no slot freed within `acquireTimeoutMs`.
 
 ### Schema utilities
 

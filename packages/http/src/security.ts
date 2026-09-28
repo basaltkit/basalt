@@ -173,8 +173,14 @@ export const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
  *
  * Resolved after enrichers ran, so auth/tenancy have set `ctx()`. When the id
  * is missing (anonymous caller, no tenant resolved, the function returns
- * nothing) the bucket falls back to the client IP — never to one shared
- * bucket, and never mixed with identified callers' buckets.
+ * nothing) the bucket falls back to the client IP, never mixed with identified
+ * callers' buckets (those are namespaced `user:`/`tenant:`/`key:`).
+ *
+ * The IP itself can be missing too: when the adapter could not resolve
+ * `request.ip` (Hono on a runtime without `getClientIp`, a hand-built
+ * pipeline), every such request shares ONE bucket, `unknown` — deliberately
+ * fail-closed, since the alternative would be a bucket per spoofable header.
+ * Resolve the address in the adapter to get per-client buckets back.
  */
 export type RateLimitKey =
   | 'ip'

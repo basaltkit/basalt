@@ -149,6 +149,17 @@ describe('PrismaApiKeyStore', () => {
   })
 })
 
+// FA-070 / I4: touch/revoke used `update`, which throws P2025 when the row is
+// gone (a key deleted between verify's lookup and its touch) — a 500 where the
+// SQLite and memory stores are a no-op.
+describe('PrismaApiKeyStore · touch/revoke of a missing key are no-ops (FA-070/I4)', () => {
+  it('resolves instead of throwing P2025', async () => {
+    const store = new PrismaApiKeyStore(makeFakeClient())
+    await expect(store.touch('gone', 1)).resolves.toBeUndefined()
+    await expect(store.revoke('gone', 1)).resolves.toBeUndefined()
+  })
+})
+
 describe('PrismaMfaStore', () => {
   it('gets, upserts and deletes', async () => {
     const store = new PrismaMfaStore(client)
@@ -263,7 +274,7 @@ describe('PrismaApiKeyStore · un-migrated auth_api_keys (auth-prisma 1.5.0 adde
       throw error
     }
     return new PrismaApiKeyStore({
-      authApiKey: { findUnique: reject, findMany: reject, create: reject, update: reject },
+      authApiKey: { findUnique: reject, findMany: reject, create: reject, updateMany: reject },
     } as unknown as PrismaAuthClient)
   }
 

@@ -198,3 +198,31 @@ describe('infrastructure-fault observability (onError — sibling pattern of rab
     expect(String(errors[0]![0])).toContain('kafka')
   })
 })
+
+describe('FA-064: untrusted retry headers', () => {
+  it('a negative x-basalt-attempt cannot buy extra retries — it is read as attempt 1', async () => {
+    const kafka = new FakeKafka()
+    const driver = driverWith(kafka)
+    driver.setExecutor(async () => {
+      throw new Error('boom')
+    })
+    driver.startWorker('q')
+    await kafka.cons.ready
+    await kafka.cons.deliver('q', { 'x-basalt-job': 'j', 'x-basalt-attempt': '-1000000', 'x-basalt-attempts': '3' }, {})
+    const retry = kafka.prod.sent.find((s) => s.topic === 'q.retry')!
+    // Pre-fix: re-produced as attempt -999999 — a million retries past the ceiling.
+    expect(retry.messages[0]!.headers?.['x-basalt-attempt']).toBe('2')
+  })
+
+  it('a garbage attempt header is read as attempt 1, never NaN', async () => {
+    const kafka = new FakeKafka()
+    const driver = driverWith(kafka)
+    driver.setExecutor(async () => {
+      throw new Error('boom')
+    })
+    driver.startWorker('q')
+    await kafka.cons.ready
+    await kafka.cons.deliver('q', { 'x-basalt-job': 'j', 'x-basalt-attempt': 'abc', 'x-basalt-attempts': '3' }, {})
+    expect(kafka.prod.sent[0]!.messages[0]!.headers?.['x-basalt-attempt']).toBe('2')
+  })
+})

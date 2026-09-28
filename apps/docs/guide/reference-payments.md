@@ -142,7 +142,7 @@ const payments = new ProxyPayGateway({
   apiKey: process.env.PROXYPAY_API_KEY!, // Authorization: Token <key>
   entity: process.env.PROXYPAY_ENTITY!,  // your Multicaixa Entity
   sandbox: process.env.NODE_ENV !== 'production',
-  // webhookSecret defaults to the API key (what ProxyPay signs with); '' disables.
+  // webhookSecret defaults to the API key (what ProxyPay signs with); it can't be disabled.
 })
 
 const inst = await payments.createPayment({
@@ -159,7 +159,9 @@ ProxyPay **requires an expiry** and a numeric reference. The driver handles
 both: it always sends `end_datetime` (from `expiresAt` or the `expiryDays`
 option, default 30), and it reserves a numeric reference unless you pass a
 numeric `reference` of your own. A non-numeric `reference` (e.g. an order id) is
-kept in `custom_fields` while ProxyPay assigns the numeric one.
+kept in `custom_fields` while ProxyPay assigns the numeric one. Your `metadata`
+rides in `custom_fields` too, but can never override `billable_id` or
+`reference` — those are what the webhook is reconciled against.
 
 ### ProxyPay options
 
@@ -169,7 +171,7 @@ kept in `custom_fields` while ProxyPay assigns the numeric one.
 | `entity` | — | Your Multicaixa Entity (Entidade) |
 | `sandbox` | `false` | Use the sandbox host |
 | `baseUrl` | prod/sandbox | Override the host entirely |
-| `webhookSecret` | `apiKey` | HMAC secret; `''` to disable verification |
+| `webhookSecret` | `apiKey` | HMAC secret. Always verified: an empty/whitespace secret throws `WebhookSecretMissingError` |
 | `callbackUrl` | — | Echoed as `custom_fields.callback_url` per reference |
 | `expiryDays` | `30` | Fallback expiry when `expiresAt` is omitted |
 | `fetch` | global `fetch` | Injectable HTTP client |
@@ -246,6 +248,14 @@ const rec = await ledger.get(reference) // { id, status, amount, createdAt, upda
 `apply` claims `event.id` in a `WebhookStore` before doing anything. A repeated
 callback returns `{ fresh: false }` and changes nothing. If persistence throws,
 the claim is **released** so the gateway's retry can reprocess.
+
+The ledger is also a state machine: `pending → paid | failed`, `failed → paid`
+(a retry that succeeds), and **`paid` is terminal**. An event for an
+already-paid payment — a late `payment.failed`, or a second `payment.succeeded`
+under a new event id — changes nothing, does not run `onFresh`, and returns
+`{ fresh: false }`, so a payment is never un-paid and its side effects never run
+twice. A `payment.failed` never overwrites the requested amount, so the
+underpayment check stays armed for the retry.
 
 ### Atomic domain side effects
 
@@ -401,6 +411,10 @@ payments pass through it harmlessly (recorded, no subscription touched).
 | `handleEvent(event)` | Apply once; extend `paidThrough` on success, `past_due` on failure |
 | `due(now?)` | Subscriptions needing their next reference (within `leadDays`) |
 | `get` / `cancel` | Read / cancel a subscription |
+
+Periods are added in UTC and clamped to the end of the month (`addInterval`): a
+subscription paid through Jan 31 renews to Feb 28/29, not Mar 2/3. Pass
+`now: () => number` to inject the clock (tests, simulations).
 
 ::: tip Scheduling
 Run `due()` → `issueNext()` from a cron job, a repeatable [queue](/guide/queues)

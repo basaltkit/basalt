@@ -135,7 +135,7 @@ describe('SqsQueueDriver', () => {
 describe('receive-error visibility (Q-8 pin)', () => {
   it('a failing receive surfaces through onError and backs off instead of hot-spinning silently', async () => {
     let calls = 0
-    const errors: { queue: string }[] = []
+    const errors: { queue: string; stage?: string }[] = []
     const api = {
       async sendMessage() {},
       async receiveMessages(): Promise<never[]> {
@@ -154,8 +154,103 @@ describe('receive-error visibility (Q-8 pin)', () => {
     await new Promise((r) => setTimeout(r, 30))
     await driver.close()
     expect(errors.length).toBeGreaterThan(0)
-    expect(errors[0]).toEqual({ queue: 'orders' })
+    expect(errors[0]).toEqual({ queue: 'orders', stage: 'receive' })
     // ~30ms / 5ms pause → a handful of attempts, not thousands of hot spins
     expect(calls).toBeLessThan(20)
+  })
+})
+
+describe('FA-064: untrusted attributes, delete failures, poller survival', () => {
+  it('a negative x-basalt-attempt cannot buy extra retries — it is read as attempt 1', async () => {
+    const sqs = new FakeSqs()
+    const driver = makeDriver(sqs)
+    driver.setExecutor(async () => {
+      throw new Error('boom')
+    })
+    await callHandle(driver, 'q', message({ 'x-basalt-job': 'j', 'x-basalt-attempt': '-1000000', 'x-basalt-attempts': '3' }, {}))
+    // Pre-fix: re-sent as attempt -999999 — a million retries past the ceiling.
+    expect(sqs.sent[0]!.attributes?.['x-basalt-attempt']).toBe('2')
+  })
+
+  it('a delete that fails after the job SUCCEEDED does not re-run it as a failure', async () => {
+    const sqs = new FakeSqs()
+    sqs.deleteMessage = async () => {
+      throw new Error('ThrottlingException')
+    }
+    const errors: { stage?: string }[] = []
+    const driver = new SqsQueueDriver({
+      queueUrl: (q) => `https://sqs.test/${q}`,
+      api: sqs,
+      onError: (_e, info) => void errors.push(info),
+    })
+    let runs = 0
+    driver.setExecutor(async () => {
+      runs++
+    })
+    await callHandle(driver, 'q', message({ 'x-basalt-job': 'j', 'x-basalt-attempt': '1', 'x-basalt-attempts': '3' }, {}))
+    expect(runs).toBe(1)
+    // Pre-fix: the delete error was caught as a job failure → a retry copy was sent.
+    expect(sqs.sent).toHaveLength(0)
+    expect(errors).toEqual([{ queue: 'q', stage: 'delete' }])
+  })
+
+  it('a failed re-route keeps the original (no delete) and is reported, not thrown', async () => {
+    const sqs = new FakeSqs()
+    sqs.sendMessage = async () => {
+      throw new Error('send failed')
+    }
+    const errors: { stage?: string }[] = []
+    const driver = new SqsQueueDriver({
+      queueUrl: (q) => `https://sqs.test/${q}`,
+      api: sqs,
+      onError: (_e, info) => void errors.push(info),
+    })
+    driver.setExecutor(async () => {
+      throw new Error('boom')
+    })
+    await expect(
+      callHandle(driver, 'q', message({ 'x-basalt-job': 'j', 'x-basalt-attempt': '1', 'x-basalt-attempts': '3' }, {})),
+    ).resolves.toBeUndefined()
+    expect(sqs.deleted).toEqual([]) // redelivered after the visibility timeout
+    expect(errors).toEqual([{ queue: 'q', stage: 'reroute' }])
+  })
+
+  it('the poller survives a failing message and keeps processing the next batch', async () => {
+    const sqs = new FakeSqs()
+    let deletes = 0
+    sqs.deleteMessage = async (input) => {
+      deletes++
+      if (deletes === 1) throw new Error('delete failed')
+      sqs.deleted.push(input.receiptHandle)
+    }
+    sqs.enqueue([message({ 'x-basalt-job': 'j', 'x-basalt-attempt': '1', 'x-basalt-attempts': '1' }, {}, 'r1')])
+    sqs.enqueue([message({ 'x-basalt-job': 'j', 'x-basalt-attempt': '1', 'x-basalt-attempts': '1' }, {}, 'r2')])
+    const driver = new SqsQueueDriver({
+      queueUrl: (q) => `https://sqs.test/${q}`,
+      api: sqs,
+      waitTimeSeconds: 0,
+      onError: () => {},
+    })
+    driver.setExecutor(async () => {})
+    driver.startWorker('q')
+    await until(() => sqs.deleted.includes('r2'))
+    expect(sqs.deleted).toEqual(['r2'])
+    sqs.unblock()
+    await driver.close()
+  })
+
+  it('a poller that fails before its loop is reported, never an unhandled rejection', async () => {
+    const errors: unknown[] = []
+    const driver = new SqsQueueDriver({
+      queueUrl: () => {
+        throw new Error('no URL for this queue')
+      },
+      api: new FakeSqs(),
+      onError: (e) => void errors.push(e),
+    })
+    driver.startWorker('q')
+    await until(() => errors.length > 0)
+    expect(errors).toHaveLength(1)
+    await driver.close()
   })
 })

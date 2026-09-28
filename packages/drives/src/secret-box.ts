@@ -78,8 +78,18 @@ const toKeyMaterial = (key: string | Uint8Array): Buffer =>
  * may contain a NUL, which keeps the encoding unambiguous (`a|b` + `c` must not
  * collide with `a` + `b|c`).
  */
-const aad = (keyId: string, context: DriveSecretContext): Buffer =>
-  Buffer.from([VERSION, keyId, context.tenantId, context.connectionId, context.provider].join('\0'), 'utf8')
+const aad = (keyId: string, context: DriveSecretContext): Buffer => {
+  // The separator is only unambiguous if it cannot occur inside a field, so
+  // that is checked rather than assumed: ids come from a store and a tenancy
+  // resolver this package does not control.
+  for (const field of [context.tenantId, context.connectionId, context.provider]) {
+    if (field.includes('\0')) throw new DriveSecretMalformedError('the credential context contains a NUL character.')
+  }
+  return Buffer.from([VERSION, keyId, context.tenantId, context.connectionId, context.provider].join('\0'), 'utf8')
+}
+
+/** GCM's full tag. Anything shorter is refused: see {@link DriveSecretBox.open}. */
+const TAG_BYTES = 16
 
 /**
  * Seals and opens credential blobs against a key ring.
@@ -126,7 +136,7 @@ export class DriveSecretBox {
   seal(plaintext: string, context: DriveSecretContext): string {
     const key = this.keys.get(this.activeId)!
     const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', key, iv)
+    const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES })
     cipher.setAAD(aad(this.activeId, context))
     const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
     const tag = cipher.getAuthTag()
@@ -147,11 +157,20 @@ export class DriveSecretBox {
     const [, keyId, ivB64, tagB64, ctB64] = parts as [string, string, string, string, string]
     const key = this.keys.get(keyId)
     if (!key) throw new DriveSecretKeyUnknownError(keyId)
+    const additional = aad(keyId, context)
+    const tag = Buffer.from(tagB64, 'base64url')
     let plaintext: Buffer
     try {
-      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'))
-      decipher.setAAD(aad(keyId, context))
-      decipher.setAuthTag(Buffer.from(tagB64, 'base64url'))
+      // GCM accepts a tag as short as 4 bytes unless it is told otherwise, and
+      // every byte shaved off halves the work of forging one. We only ever
+      // write 16, so 16 is all that is read — pinned twice, because the length
+      // check is the part that does not depend on the OpenSSL build.
+      if (tag.length !== TAG_BYTES) throw new Error('truncated tag')
+      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'), {
+        authTagLength: TAG_BYTES,
+      })
+      decipher.setAAD(additional)
+      decipher.setAuthTag(tag)
       plaintext = Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64url')), decipher.final()])
     } catch {
       // One message for every failure mode: a wrong key, a tampered tag and a

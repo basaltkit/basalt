@@ -27,6 +27,7 @@ import type {
   UserPatch,
   UserSource,
 } from '@basaltkit/auth'
+import { EmailTakenError } from '@basaltkit/auth'
 
 /**
  * A durable, SQLite-backed implementation of every `@basaltkit/auth` store, built
@@ -132,8 +133,9 @@ export function migrate(db: DatabaseSync): void {
 
   // Emails are case-insensitive identities: enforce it for new rows. A legacy
   // database that already holds case-variant duplicates cannot take the index;
-  // it keeps working (lookups are case-insensitive either way) until they are
-  // merged by hand.
+  // it keeps working — lookups are case-insensitive, and SqliteUserSource.create
+  // refuses a new case variant in its INSERT itself — until they are merged by
+  // hand (then the next migrate() builds the index).
   try {
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_email_nocase ON auth_users (email COLLATE NOCASE)')
   } catch {
@@ -232,9 +234,19 @@ export class SqliteUserSource implements UserSource {
 
   async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
     const user: AuthUser = { id: randomUUID(), email: data.email, passwordHash: data.passwordHash, emailVerified: false }
-    this.db
-      .prepare('INSERT INTO auth_users (id, email, password_hash, email_verified) VALUES (?, ?, ?, 0)')
-      .run(user.id, user.email, user.passwordHash)
+    // Case-insensitive uniqueness in the statement itself, not only in the
+    // NOCASE index: a legacy database holding case-variant duplicates cannot
+    // take that index (see migrate()), and must still refuse a new variant —
+    // also the one a concurrent registration inserts after the caller's
+    // findByEmail() check.
+    const inserted = this.db
+      .prepare(
+        `INSERT INTO auth_users (id, email, password_hash, email_verified)
+         SELECT ?, ?, ?, 0
+         WHERE NOT EXISTS (SELECT 1 FROM auth_users WHERE email = ? COLLATE NOCASE)`,
+      )
+      .run(user.id, user.email, user.passwordHash, user.email.trim())
+    if (Number(inserted.changes) === 0) throw new EmailTakenError()
     return user
   }
 

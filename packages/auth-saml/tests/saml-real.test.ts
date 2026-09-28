@@ -66,10 +66,12 @@ function signedResponse(opts: {
   return Buffer.from(signedResponse).toString('base64')
 }
 
-async function requestId(saml: Saml, name: string): Promise<string> {
-  const url = new URL(await saml.loginUrl(name))
+/** Starts a browser-bound login: the AuthnRequest id, the cookie binding and the RelayState the IdP echoes. */
+async function start(saml: Saml, name: string): Promise<{ irt: string; binding: string; relayState: string }> {
+  const { url: raw, binding } = await saml.authorize(name)
+  const url = new URL(raw)
   const xml = inflateRawSync(Buffer.from(url.searchParams.get('SAMLRequest')!, 'base64')).toString()
-  return /ID="([^"]+)"/.exec(xml)![1]!
+  return { irt: /ID="([^"]+)"/.exec(xml)![1]!, binding, relayState: url.searchParams.get('RelayState')! }
 }
 
 describe('auth-saml over the real node-saml client', () => {
@@ -82,30 +84,41 @@ describe('auth-saml over the real node-saml client', () => {
 
   it('logs in a solicited, correctly signed assertion from the right IdP', async () => {
     const { saml, victim } = await setup()
-    const irt = await requestId(saml, 'acme')
-    const r = await saml.consume('acme', { SAMLResponse: signedResponse({ provider: 'acme', email: 'ceo@acme.com', inResponseTo: irt, id: '_ok1' }) })
+    const { irt, binding, relayState } = await start(saml, 'acme')
+    const r = await saml.consume(
+      'acme',
+      { SAMLResponse: signedResponse({ provider: 'acme', email: 'ceo@acme.com', inResponseTo: irt, id: '_ok1' }), RelayState: relayState },
+      { binding },
+    )
     expect(r.user.id).toBe(victim.id)
   })
 
   it("rejects a validly signed assertion from another customer's IdP for the victim's email", async () => {
     const { saml } = await setup()
-    const irt = await requestId(saml, 'globex')
+    const { irt, binding, relayState } = await start(saml, 'globex')
     const res = signedResponse({ provider: 'globex', email: 'ceo@acme.com', inResponseTo: irt, id: '_x1' })
-    await expect(saml.consume('globex', { SAMLResponse: res })).rejects.toBeInstanceOf(SamlResponseInvalidError)
+    await expect(saml.consume('globex', { SAMLResponse: res, RelayState: relayState }, { binding })).rejects.toBeInstanceOf(
+      SamlResponseInvalidError,
+    )
   })
 
   it('rejects an unsolicited (no InResponseTo) response by default', async () => {
     const { saml } = await setup()
+    const { binding, relayState } = await start(saml, 'acme')
     const res = signedResponse({ provider: 'acme', email: 'ceo@acme.com', id: '_u1' })
-    await expect(saml.consume('acme', { SAMLResponse: res })).rejects.toThrow()
+    await expect(saml.consume('acme', { SAMLResponse: res, RelayState: relayState }, { binding })).rejects.toBeInstanceOf(
+      SamlResponseInvalidError,
+    )
   })
 
   it('rejects a replay of a consumed response', async () => {
     const { saml } = await setup()
-    const irt = await requestId(saml, 'acme')
+    const { irt, binding, relayState } = await start(saml, 'acme')
     const res = signedResponse({ provider: 'acme', email: 'ceo@acme.com', inResponseTo: irt, id: '_rp1' })
-    await expect(saml.consume('acme', { SAMLResponse: res })).resolves.toBeTruthy()
-    await expect(saml.consume('acme', { SAMLResponse: res })).rejects.toThrow()
+    await expect(saml.consume('acme', { SAMLResponse: res, RelayState: relayState }, { binding })).resolves.toBeTruthy()
+    await expect(saml.consume('acme', { SAMLResponse: res, RelayState: relayState }, { binding })).rejects.toBeInstanceOf(
+      SamlResponseInvalidError,
+    )
   })
 
   it('with the IdP-initiated opt-in, an unsolicited assertion is still single-use', async () => {

@@ -105,7 +105,9 @@ domínio (`db().model.findMany()`) é idêntico nas três:
 | Base de dados por tenant | `prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }) })` |
 | Schema por tenant | `prismaPlugin({ schemaPerTenant: { url, createClient } })` |
 
-Um `TenantClientPool` LRU integrado mantém a contagem de ligações limitada, e
+Um `TenantClientPool` integrado mantém a contagem de ligações limitada (nunca acima
+de `max`, e nunca despeja um cliente ainda em uso — dimensiona `max` para os tenants
+activos ao mesmo tempo, ou tenants novos recebem um 503 `TenantPoolExhaustedError`), e
 `migrateTenants()` corre migrações em todos os tenants. Gera um recurso apoiado
 em Prisma com `basalt make:resource Invoice --prisma`.
 

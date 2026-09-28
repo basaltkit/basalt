@@ -134,11 +134,35 @@ function presentKeys(value: QueryArgs): string[] {
   return Object.keys(value).filter((key) => value[key] !== undefined && !isPrismaSkip(value[key]))
 }
 
-/** A value shaped like a relation write: every key is a nested-write operation. */
-function isRelationWrite(value: unknown): value is QueryArgs {
-  if (!isPlainObject(value)) return false
-  const keys = presentKeys(value)
-  return keys.length > 0 && keys.every((key) => NESTED_WRITE_KEYS.has(key))
+/**
+ * The argument object as Prisma will read it, or `undefined` for a value that
+ * is not an argument object (a scalar, array, Date, Buffer, Decimal,
+ * `Prisma.skip`, …).
+ *
+ * Prisma serialises ANY object argument by walking its enumerable keys
+ * (`for…in`) — a class instance (a DTO) included. Recognising only plain
+ * objects would let a DTO in `data` or in a nested where skip the tenant
+ * checks while Prisma still runs it, so a class instance is read here the
+ * same way Prisma reads it: its enumerable keys, own and inherited.
+ */
+function asRecord(value: unknown): QueryArgs | undefined {
+  if (isPlainObject(value)) return value
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  // Values Prisma serialises as themselves, not by their keys.
+  if (value instanceof Date || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return undefined
+  if (isPrismaSkip(value)) return undefined
+  if (typeof (value as { toJSON?: unknown }).toJSON === 'function') return undefined
+  const out: QueryArgs = {}
+  for (const key in value) out[key] = (value as QueryArgs)[key]
+  return out
+}
+
+/** The relation-write object, when every key of `value` is a nested-write operation. */
+function relationWriteOf(value: unknown): QueryArgs | undefined {
+  const record = asRecord(value)
+  if (!record) return undefined
+  const keys = presentKeys(record)
+  return keys.length > 0 && keys.every((key) => NESTED_WRITE_KEYS.has(key)) ? record : undefined
 }
 
 /** Applies `fn` to one value or to each element of an array. */
@@ -159,34 +183,39 @@ class Scoper {
   ) {}
 
   /** Adds the tenant filter to a where object (non-objects are left as-is). */
-  where = (where: unknown): unknown =>
-    isPlainObject(where) ? { ...where, [this.field]: this.tenantId } : where
+  where = (where: unknown): unknown => {
+    const record = asRecord(where)
+    return record ? { ...record, [this.field]: this.tenantId } : where
+  }
 
   /** Create data: nested writes scoped, tenant field forced (spread order). */
   createData = (data: unknown): unknown => {
-    const input = isPlainObject(data) ? data : {}
+    const input = asRecord(data) ?? {}
     return { ...this.relations(input), [this.field]: this.tenantId }
   }
 
   /** Update data: the tenant field may not change, nested writes are scoped. */
   updateData = (data: unknown): unknown => {
-    if (!isPlainObject(data)) return data
-    this.assertTenantField(data)
-    return this.relations(data)
+    const record = asRecord(data)
+    if (!record) return data
+    this.assertTenantField(record)
+    return this.relations(record)
   }
 
   private assertTenantField(data: QueryArgs): void {
     if (!(this.field in data)) return
     const value = data[this.field]
     if (value === undefined || isPrismaSkip(value) || value === this.tenantId) return
-    if (isPlainObject(value) && Object.keys(value).length === 1 && value['set'] === this.tenantId) return
+    const wrapper = asRecord(value)
+    if (wrapper && Object.keys(wrapper).length === 1 && wrapper['set'] === this.tenantId) return
     throw new CrossTenantWriteError(this.field)
   }
 
   private relations(data: QueryArgs): QueryArgs {
     const out: QueryArgs = {}
     for (const [key, value] of Object.entries(data)) {
-      out[key] = key !== this.field && isRelationWrite(value) ? this.relationWrite(value) : value
+      const relation = key !== this.field ? relationWriteOf(value) : undefined
+      out[key] = relation ? this.relationWrite(relation) : value
     }
     return out
   }
@@ -199,40 +228,42 @@ class Scoper {
           out[op] = each(value, this.createData)
           break
         case 'createMany':
-          out[op] = isPlainObject(value)
-            ? { ...value, data: each(value['data'], this.createData) }
-            : value
+          out[op] = ((record) =>
+            record ? { ...record, data: each(record['data'], this.createData) } : value)(asRecord(value))
           break
         case 'connectOrCreate':
-          out[op] = each(value, (item) =>
-            isPlainObject(item)
+          out[op] = each(value, (raw) => {
+            const item = asRecord(raw)
+            return item
               ? { ...item, where: this.where(item['where']), create: this.createData(item['create']) }
-              : item,
-          )
+              : raw
+          })
           break
         case 'upsert':
           // to-many upserts carry a where-unique; to-one upserts accept an
           // optional where filter, which is added so a foreign related row
           // (reached through a foreign-key scalar) is not updated
-          out[op] = each(value, (item) =>
-            isPlainObject(item)
+          out[op] = each(value, (raw) => {
+            const item = asRecord(raw)
+            return item
               ? {
                   ...item,
                   where: this.where(item['where'] ?? {}),
                   create: this.createData(item['create']),
                   update: this.updateData(item['update']),
                 }
-              : item,
-          )
+              : raw
+          })
           break
         case 'update':
-          out[op] = each(value, (item) => {
-            if (!isPlainObject(item)) return item
+          out[op] = each(value, (raw) => {
+            const item = asRecord(raw)
+            if (!item) return raw
             // `{ where, data }` (to-many, or to-one with a filter) or, for a
             // to-one relation, the update data itself — rewritten to the
             // `{ where, data }` form so the related row must be this tenant's.
             const wrapped =
-              isPlainObject(item['data']) &&
+              asRecord(item['data']) !== undefined &&
               presentKeys(item).every((key) => key === 'where' || key === 'data')
             const data = wrapped ? item['data'] : item
             const where = wrapped ? (item['where'] ?? {}) : {}
@@ -240,11 +271,12 @@ class Scoper {
           })
           break
         case 'updateMany':
-          out[op] = each(value, (item) =>
-            isPlainObject(item)
+          out[op] = each(value, (raw) => {
+            const item = asRecord(raw)
+            return item
               ? { ...item, where: this.where(item['where'] ?? {}), data: this.updateData(item['data']) }
-              : item,
-          )
+              : raw
+          })
           break
         case 'delete':
           // to-one `delete: true` becomes a tenant filter (a foreign related
@@ -301,7 +333,7 @@ export function applyTenantScope(
     const rows = Array.isArray(data) ? data : data === undefined ? [] : [data]
     return {
       ...input,
-      data: rows.map((row) => ({ ...(row as QueryArgs), [field]: tenantId })),
+      data: rows.map((row) => ({ ...(asRecord(row) ?? (row as QueryArgs)), [field]: tenantId })),
     }
   }
 
@@ -319,7 +351,7 @@ export function applyTenantScope(
 }
 
 function scopeWhere(input: QueryArgs, tenantId: string, field: string): QueryArgs {
-  const where = (input['where'] as QueryArgs | undefined) ?? {}
+  const where = asRecord(input['where']) ?? {}
   return { ...input, where: { ...where, [field]: tenantId } }
 }
 
