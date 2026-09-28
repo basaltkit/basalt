@@ -10,6 +10,8 @@ export {
   type McpToolResult,
 } from './protocol.js'
 
+export { MCP_SESSION_HEADER, type McpSessionOptions } from '@basaltkit/mcp-core'
+
 export {
   collectTools,
   defaultToolName,

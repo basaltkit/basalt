@@ -14,6 +14,9 @@ export {
   MemoryApiKeyStore,
   MemoryMfaStore,
   MemoryTokenVersionStore,
+  MemoryAccountLinkStore,
+  type AccountLink,
+  type AccountLinkStore,
   type TokenVersionStore,
   type AuthUser,
   type PublicUser,
@@ -70,6 +73,8 @@ export {
   MfaNotEnrolledError,
   MfaAlreadyEnabledError,
   SocialLinkRefusedError,
+  AccountLinkConflictError,
+  AccountEmailAmbiguousError,
   canonicalEmail,
   type AuthOptions,
   type SessionCookieOptions,
@@ -87,6 +92,15 @@ export {
   type VerifyTotpOptions,
   type OtpauthUriInput,
 } from './totp.js'
+export {
+  SecretBox,
+  SecretBoxKeyError,
+  SecretUnreadableError,
+  type SecretBoxKey,
+  type SecretBoxOptions,
+  type SecretBoxLegacyOptions,
+  type SecretContext,
+} from './secret-box.js'
 export { authPlugin, AUTH, CsrfRejectedError, type AuthPluginOptions, type CsrfOptions } from './plugin.js'
 export {
   ApiKeys,
@@ -157,6 +171,7 @@ export {
   WebAuthnVerificationError,
   PasskeyNotFoundError,
   PasskeyClonedError,
+  PasskeyStoreOutdatedError,
   PasskeyExistsError,
   WebAuthnSubjectMismatchError,
   type PasskeyCredential,

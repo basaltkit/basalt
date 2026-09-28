@@ -17,10 +17,11 @@ de nomear esse tenant, e qualquer outro valor lança `SearchTenantMismatchError`
 (`403 SEARCH_TENANT_MISMATCH`) — por isso reencaminhar o `?tenantId=` de um
 cliente nunca alarga uma query nem planta um documento noutro tenant. Fora de um
 contexto de tenant (jobs, CLI) o valor explícito escolhe o tenant. O `reindex()`
-é uma operação de sistema sobre todos os tenants e mantém o tenant que cada
-regra de sincronização mapeia — nunca o tira do contexto em que corre, por isso
-uma regra cujo `document` omite o `tenantId` é recusada (`TenantRequiredError`)
-sempre que possa existir um tenant. Um id de tenant igual a `SINGLE_TENANT_SCOPE` —
+segue a mesma regra para *o que reconstrói* — dentro de um contexto de tenant, só
+esse tenant — mas mantém o tenant que cada regra de sincronização mapeia para
+*cada linha*: nunca o tira do contexto, por isso uma regra cujo `document` omite
+o `tenantId` é recusada (`TenantRequiredError`) sempre que possa existir um
+tenant. Um id de tenant igual a `SINGLE_TENANT_SCOPE` —
 vindo do contexto, de um argumento, de um documento ou de uma linha do
 `reindex()` — é recusado com `SearchTenantReservedError`
 (`400 SEARCH_TENANT_RESERVED`).
@@ -217,7 +218,7 @@ página dois continua onde a um acabou.
 | Opção | O que faz |
 | --- | --- |
 | `authorize` | Devolve os resultados que quem chama pode ver, pela ordem dada. Não pode reordenar — a relevância é decisão do driver |
-| `maxScan` | Quantas linhas do driver uma pesquisa pode percorrer antes de desistir. Por omissão: 20 páginas, mínimo 200 |
+| `maxScan` | Quantas linhas do driver uma pesquisa pode percorrer antes de desistir. Por omissão: 20 páginas, mínimo 200, com o tecto de `searchPlugin({ maxScan })` (por omissão `10000`); um valor por chamada acima dele lança `SearchPaginationError` |
 | `totalExact` *(no resultado)* | Se o `total` é toda a verdade. O total de um driver conta linhas que quem chama pode não ver, e mostrá-lo poria «42 resultados» por cima de três linhas |
 
 Quem não usa o gancho fica na mesma: uma chamada ao driver, o mesmo comportamento.
@@ -245,7 +246,8 @@ syncRule({
   },
 })
 
-await search.reindex('matters')
+await search.reindex('matters', { all: true })       // todos os tenants, a partir de um job ou da CLI
+await tenancy.forEach(() => search.reindex('matters')) // um tenant de cada vez
 ```
 
 O `backfill` produz **payloads do hook**, não linhas, portanto uma só função
@@ -258,25 +260,44 @@ Cada linha é mapeada e validada **antes** de o índice ser limpo, por isso uma
 reconstrução que ia falhar deixa o índice antigo no lugar em vez de um índice
 vazio. Isso custa duas passagens pelo `backfill` (a memória fica limitada a uma
 página); linhas que mudem entre as passagens ainda podem falhar a segunda —
-nesse caso volta a correr o `reindex()`. Depois o índice é limpo, e não
+nesse caso volta a correr o `reindex()`. Depois o âmbito é limpo, e não
 acrescentado — uma reconstrução que acrescenta deixa documentos de registos que
 já não existem — e um índice cujas regras não tenham `backfill` lança, em vez de
 reportar uma reconstrução que não fez nada.
 
-Numa app multi-tenant o `document` tem de devolver o `tenantId`. Uma
-reconstrução cobre todos os tenants, por isso o tenant não pode vir do contexto:
-uma linha sem ele lança `TenantRequiredError` sempre que o `@basaltkit/tenancy`
-está registado ou a reconstrução corre dentro de um contexto de tenant. Só uma
-app single-tenant sem tenant no contexto arquiva linhas sem tenant em
-`SINGLE_TENANT_SCOPE`.
+### O que uma reconstrução limpa
 
-::: warning Uma reconstrução, todos os tenants
-O `reindex()` limpa o índice **inteiro**, por isso o seu `backfill` tem de
-devolver os registos de todos os tenants. Não o chames uma vez por tenant (por
-exemplo dentro de `tenancy.run(id, …)` com um `backfill` de base de dados por
-tenant): cada chamada apagaria os documentos dos outros tenants e voltaria a
-escrever só os de um.
-:::
+Uma reconstrução limpa antes de escrever, por isso o seu alcance nunca é
+adivinhado:
+
+| Onde / como | Limpa | Escreve |
+| --- | --- | --- |
+| Dentro de um contexto de tenant (pedido, `tenancy.run`, `tenancy.forEach`), ou `{ tenantId }` | Só os documentos desse tenant | As linhas mapeadas para esse tenant; as dos outros tenants são ignoradas |
+| `{ all: true }`, fora de um contexto de tenant | O índice inteiro | Todas as linhas — o `backfill` tem de devolver os registos de todos os tenants |
+| Sem opção, sem contexto de tenant, tenancy registado | Recusado — `SearchReindexScopeError` (`400 SEARCH_REINDEX_SCOPE`) | — |
+| Sem opção, app single-tenant | O índice inteiro | Todas as linhas |
+
+Reconstruir um tenant de cada vez é portanto seguro, e é o caminho com um
+`backfill` de base de dados por tenant: dentro de `tenancy.run(id, …)` (ou
+`tenancy.forEach`) o `db()` do backfill é a base de dados desse tenant, e os
+documentos dos outros tenants ficam onde estão. `{ all: true }` dentro de um
+contexto de tenant, e um `tenantId` que nomeie outro tenant que não o do
+contexto, são recusados (`SearchReindexScopeError`, `SearchTenantMismatchError`).
+
+Uma reconstrução com âmbito limpa através do `clearTenant(index, tenantId)` do
+driver, que todos os drivers incluídos implementam (delete-by-filter no
+Meilisearch, `DELETE … WHERE tenant_id` no Postgres, `_delete_by_query` no
+Elasticsearch). Um driver próprio sem ele recebe `SearchDriverCapabilityError`
+(`501 SEARCH_DRIVER_UNSUPPORTED`) antes de qualquer leitura ou limpeza — nunca
+um recurso ao `clear()`, que apagaria todos os tenants.
+
+Numa app multi-tenant o `document` tem de devolver o `tenantId`, com ou sem
+âmbito: o tenant de uma linha nunca vem do contexto, porque um backfill sobre
+uma tabela partilhada arquivaria as linhas de todos os tenants nele. Uma linha
+sem ele lança `TenantRequiredError` sempre que o `@basaltkit/tenancy` está
+registado, a reconstrução corre dentro de um contexto de tenant, ou tem âmbito.
+Só uma app single-tenant sem tenant no contexto arquiva linhas sem tenant em
+`SINGLE_TENANT_SCOPE`.
 
 ## Produção com Meilisearch
 
@@ -435,9 +456,12 @@ await search.search('notes', 'report', {
 Ambos costumam vir de uma query string, por isso o `search()` valida-os antes de
 correr qualquer driver e lança um `400` em vez de os reencaminhar:
 
-- `limit`/`offset` têm de ser inteiros não negativos, e o `limit` no máximo
-  `maxLimit` (por omissão `1000`, configurável com `searchPlugin({ maxLimit })`)
-  — `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`).
+- `limit`/`offset` têm de ser inteiros não negativos, o `limit` no máximo
+  `maxLimit` (por omissão `1000`) e o `offset` no máximo `maxOffset` (por omissão
+  `10000` — a janela que o Elasticsearch impõe de qualquer forma; para lá dela,
+  estreita com um filtro) — ambos configuráveis com
+  `searchPlugin({ maxLimit, maxOffset })` — `SearchPaginationError`
+  (`SEARCH_INVALID_PAGINATION`).
 - Num índice listado em `searchPlugin({ indexes })`, um filtro só pode nomear um
   campo `filterable` (ou `tenantId`) — `SearchFilterNotFilterableError`
   (`SEARCH_FILTER_NOT_FILTERABLE`). Caso contrário qualquer campo guardado vira
@@ -452,9 +476,10 @@ correr qualquer driver e lança um `400` em vez de os reencaminhar:
 | API | Objetivo |
 | --- | --- |
 | `defineIndex({ name, fields, filterable? })` | Declarar um índice. |
-| `searchPlugin({ driver?, indexes?, sync?, maxLimit? })` | Registar o serviço, índices e regras de sync. |
+| `searchPlugin({ driver?, indexes?, sync?, maxLimit?, maxOffset?, maxScan? })` | Registar o serviço, índices e regras de sync. |
 | `SEARCH` | Token de DI → o serviço `Search`. |
 | `search.index/bulk/remove/search` | Indexar, indexar em bloco, remover, consultar. |
+| `search.reindex(index, { tenantId?, all? })` | Reconstruir a partir do `backfill` das regras — um tenant (o do contexto, ou `tenantId`) ou, com `all`, todos os tenants. |
 | `MemorySearchDriver` · `MeilisearchDriver` | Backends incluídos de dev/teste e de produção. |
 | `PostgresSearchDriver` (`@basaltkit/search-postgres`) | Backend full-text do Postgres — sem serviço de pesquisa separado. |
 | `ElasticsearchDriver` (`@basaltkit/search-elasticsearch`) | Backend Elasticsearch / OpenSearch para relevância em grande escala. |

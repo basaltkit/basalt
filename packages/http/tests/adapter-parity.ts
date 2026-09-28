@@ -12,6 +12,8 @@ import { ctx, definePlugin, ensureMetadata, MetricsRegistry, type BasaltPlugin }
 import {
   HTTP_SERVER,
   HttpError,
+  InvalidRouteMetaError,
+  META_VALIDATORS_BUCKET,
   metricsPlugin,
   sse,
   MAX_ERROR_DETAILS_BYTES,
@@ -25,6 +27,7 @@ import {
   type HttpErrorReporter,
   type RequestEnricher,
   type RouteGuard,
+  type RouteMetaValidator,
 } from '@basaltkit/http'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -797,6 +800,67 @@ export function corsPreflightParitySuite(adapter: string, driver: ParityDriver):
   })
 }
 
+
+/**
+ * Boot-time route-meta validation (FA-044 residual): every adapter runs the
+ * validators plugins register in `http:meta-validators` over its full route
+ * list and refuses to boot on a problem — before any traffic.
+ */
+export function metaValidatorParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: route-meta validators run at boot (FA-044 residual)`, () => {
+    afterEach(() => driver.close())
+    const seen: string[] = []
+    const shapes = definePlugin({
+      name: 'test:shape-validator',
+      register({ container }) {
+        const validator: RouteMetaValidator = ({ route: r }) => {
+          seen.push(`${r.method} ${r.url}`)
+          const shape = r.meta?.['shape']
+          if (shape === undefined || shape === 'circle' || shape === 'square') return
+          return `meta.shape ${JSON.stringify(shape)} is not a known shape`
+        }
+        ensureMetadata(container).add(META_VALIDATORS_BUCKET, validator)
+      },
+    })
+    const ok = route({ method: 'GET', url: '/ok', meta: { shape: 'circle' }, handler: () => ({ ok: true }) })
+
+    it('refuses to boot, naming every offending route, when a validator reports a problem', async () => {
+      const bad = [
+        ok,
+        route({ method: 'GET', url: '/tri', meta: { shape: 'triangle' }, handler: () => 'x' }),
+        route({ method: 'POST', url: '/hex', meta: { shape: 6 }, handler: () => 'x' }),
+      ]
+      const boot = driver.boot(bad, [shapes])
+      await expect(boot).rejects.toBeInstanceOf(InvalidRouteMetaError)
+      await boot.catch((error: InvalidRouteMetaError) => {
+        expect(error.code).toBe('HTTP_INVALID_ROUTE_META')
+        expect(error.problems).toEqual([
+          { route: 'GET /tri', problem: 'meta.shape "triangle" is not a known shape' },
+          { route: 'POST /hex', problem: 'meta.shape 6 is not a known shape' },
+        ])
+      })
+    })
+
+    it('a throwing validator is a problem too', async () => {
+      const throwing = definePlugin({
+        name: 'test:throwing-validator',
+        register({ container }) {
+          ensureMetadata(container).add(META_VALIDATORS_BUCKET, (() => {
+            throw new Error('boom')
+          }) satisfies RouteMetaValidator)
+        },
+      })
+      await expect(driver.boot([ok], [throwing])).rejects.toThrow(/GET \/ok: boom/)
+    })
+
+    it('boots and serves when every route passes, having validated the full list', async () => {
+      seen.length = 0
+      const send = await driver.boot([ok, route({ method: 'GET', url: '/plain', handler: () => 'p' })], [shapes])
+      expect(seen).toEqual(['GET /ok', 'GET /plain'])
+      expect((await send({ method: 'GET', url: '/ok' })).json).toEqual({ ok: true })
+    })
+  })
+}
 
 /** Sends requests over real HTTP with fetch (Fastify/Express listen on a port). */
 export function httpFetcher(base: string): Fetcher {

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@basaltkit/core'
-import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
+import { FASTIFY, fastifyPlugin, registerRoutes } from '@basaltkit/fastify'
 import { AUTH, MemoryUserSource, authPlugin, authRoutes } from '@basaltkit/auth'
-import { route } from '@basaltkit/http'
+import { InvalidRouteMetaError, isRouteVisible, route, type RequestEnricher, type RouteGuard } from '@basaltkit/http'
+import { ensureMetadata } from '@basaltkit/core'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
 import {
   MemoryInvitationStore,
@@ -18,8 +19,19 @@ import {
 
 const secret = 'test-secret-value-123456'
 
-async function makeApp(teamRole: unknown, membership?: TenantMembershipPluginOptions) {
+/**
+ * `mount: 'outside'` registers `/guarded` straight on Fastify after boot —
+ * outside the adapter's route list, so the boot-time meta validation never
+ * sees it. That is how the RUNTIME fail-closed check is exercised for values
+ * the boot check (FA-044 residual) now refuses up front.
+ */
+async function makeApp(
+  teamRole: unknown,
+  membership?: TenantMembershipPluginOptions,
+  mount: 'adapter' | 'outside' = 'adapter',
+) {
   const source = new MemoryTenantSource().add({ id: 'acme' })
+  const guarded = route({ method: 'GET', url: '/guarded', meta: { auth: true, teamRole: teamRole as string }, handler: () => ({ ok: true }) })
   const app = await createApp({
     plugins: [
       tenancyPlugin({ source, resolvers: [headerResolver()] }),
@@ -29,13 +41,24 @@ async function makeApp(teamRole: unknown, membership?: TenantMembershipPluginOpt
       fastifyPlugin({
         routes: [
           ...authRoutes(),
-          route({ method: 'GET', url: '/guarded', meta: { auth: true, teamRole: teamRole as string }, handler: () => ({ ok: true }) }),
+          ...(mount === 'adapter' ? [guarded] : []),
           route({ method: 'GET', url: '/open', meta: { auth: true }, handler: () => ({ ok: true }) }),
         ],
       }),
     ],
   }).boot()
   const server = app.container.get(FASTIFY)
+  if (mount === 'outside') {
+    const metadata = ensureMetadata(app.container)
+    registerRoutes(
+      server,
+      [guarded],
+      app.container,
+      metadata.get<RequestEnricher>('http:enrichers'),
+      metadata.get<RouteGuard>('http:guards'),
+      () => {},
+    )
+  }
   const teams = app.container.get(TEAMS)
   const auth = app.container.get(AUTH)
   const login = async (email: string) => {
@@ -79,7 +102,7 @@ describe('FA-044: an unknown / typo role never admits', () => {
   })
 
   it('meta.teamRole with a typo fails closed (500 TEAM_ROLE_UNKNOWN), never lets a member through', async () => {
-    const { app, server, teams, login } = await makeApp('Admin')
+    const { app, server, teams, login } = await makeApp('Admin', undefined, 'outside')
     const bob = await login('bob@corp.test')
     await teams.addMember('acme', bob.id, 'member')
     const res = await server.inject({ method: 'GET', url: '/guarded', headers: bob.headers })
@@ -89,7 +112,7 @@ describe('FA-044: an unknown / typo role never admits', () => {
   })
 
   it('meta.teamRole: "" (T-2) is a declared requirement, not an opt-off', async () => {
-    const { app, server, teams, login } = await makeApp('')
+    const { app, server, teams, login } = await makeApp('', undefined, 'outside')
     const bob = await login('bob@corp.test')
     await teams.addMember('acme', bob.id, 'member')
     const res = await server.inject({ method: 'GET', url: '/guarded', headers: bob.headers })
@@ -99,7 +122,7 @@ describe('FA-044: an unknown / typo role never admits', () => {
   })
 
   it('a non-string meta.teamRole fails closed too; `false` stays an explicit opt-off', async () => {
-    const bad = await makeApp(2)
+    const bad = await makeApp(2, undefined, 'outside')
     const u = await bad.login('u@corp.test')
     await bad.teams.addMember('acme', u.id, 'member')
     expect((await bad.server.inject({ method: 'GET', url: '/guarded', headers: u.headers })).statusCode).toBe(500)
@@ -130,14 +153,36 @@ describe('FA-044: an unknown / typo role never admits', () => {
     await viewer.app.shutdown()
   })
 
-  it('tenantMembershipPlugin({ role }) with a typo fails closed', async () => {
-    const { app, server, teams, login } = await makeApp(false, { role: 'Member' })
-    const bob = await login('bob@corp.test')
-    await teams.addMember('acme', bob.id, 'member')
-    const res = await server.inject({ method: 'GET', url: '/open', headers: bob.headers })
-    expect(res.statusCode).toBe(500)
-    expect(code(res)).toBe('TEAM_ROLE_UNKNOWN')
-    await app.shutdown()
+  it('tenantMembershipPlugin({ role }) with a typo fails the boot', async () => {
+    await expect(makeApp(false, { role: 'Member' })).rejects.toMatchObject({ code: 'TEAM_ROLE_UNKNOWN' })
+  })
+})
+
+describe('FA-044 residual: an unknown meta.teamRole fails the BOOT', () => {
+  it.each([['Admin'], ['adimn'], [''], [2], [null]])('meta.teamRole %j refuses to boot, naming the route', async (value) => {
+    const boot = makeApp(value)
+    await expect(boot).rejects.toBeInstanceOf(InvalidRouteMetaError)
+    await expect(boot).rejects.toThrow(/GET \/guarded: meta\.teamRole .* is not a known team role/)
+  })
+
+  it('known roles (ranked or grantable) and the `false` opt-off boot fine', async () => {
+    for (const value of ['admin', 'viewer', false, undefined]) {
+      const { app } = await makeApp(value)
+      await app.shutdown()
+    }
+  })
+
+  it('allowUnguardedMeta never waives the value check', async () => {
+    const boot = createApp({
+      plugins: [
+        teamsPlugin(),
+        fastifyPlugin({
+          allowUnguardedMeta: true,
+          routes: [route({ method: 'GET', url: '/x', meta: { teamRole: 'Owner' }, handler: () => 'x' })],
+        }),
+      ],
+    }).boot()
+    await expect(boot).rejects.toThrow(InvalidRouteMetaError)
   })
 })
 
@@ -203,5 +248,28 @@ describe('FA-071 (T-6, T-7): memory stores', () => {
     expect(found?.role).toBe('member')
     if (found) found.revokedAt = 5
     expect(await s.listPending('acme')).toHaveLength(1)
+  })
+})
+
+describe('FA-035 residual: teamsPlugin registers a pure visibility check for meta.teamRole', () => {
+  it('hides a teamRole route from callers below the role, without touching hooks', async () => {
+    const app = await createApp({ plugins: [teamsPlugin({ grantableRoles: ['viewer'] })] }).boot()
+    const teams = app.container.get(TEAMS)
+    await teams.addMember('acme', 'm', 'member')
+    await teams.addMember('acme', 'a', 'admin')
+    const emitted: string[] = []
+    for (const hook of ['team:joined', 'team:role_changed', 'team:member_removed'] as const) app.hooks.on(hook, () => void emitted.push(hook))
+    const adminOnly = route({ method: 'GET', url: '/x', meta: { teamRole: 'admin' }, handler: () => 'x' })
+    const typo = route({ method: 'GET', url: '/y', meta: { teamRole: 'Admin' }, handler: () => 'y' })
+    const open = route({ method: 'GET', url: '/z', handler: () => 'z' })
+    const as = (user: string, tenant = 'acme') => ({ user: { id: user }, tenant: { id: tenant } })
+    expect(await isRouteVisible(adminOnly, as('a'), app.container)).toBe(true)
+    expect(await isRouteVisible(adminOnly, as('m'), app.container)).toBe(false)
+    expect(await isRouteVisible(adminOnly, as('a', 'globex'), app.container)).toBe(false)
+    expect(await isRouteVisible(adminOnly, {}, app.container)).toBe(false)
+    expect(await isRouteVisible(typo, as('a'), app.container)).toBe(false)
+    expect(await isRouteVisible(open, {}, app.container)).toBe(true)
+    expect(emitted).toEqual([])
+    await app.shutdown()
   })
 })

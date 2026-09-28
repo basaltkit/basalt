@@ -199,16 +199,18 @@ WebAuthn (e os stores de MFA) com uma implementação **durável**, não o defau
 
 Um domínio custom verificado que depois expira ou repointa o DNS é um risco de takeover.
 Re-verifica num agendamento com [`@basaltkit/scheduler`](/pt/guide/scheduler) — o
-`verify(tenantId, domain, { force })` re-verifica o registo TXT e **revoga** o domínio se
-já não corresponder:
+`reverifyAll()` re-verifica o registo TXT de cada domínio verificado e **revoga** os
+que já não o têm de forma definitiva (um timeout de DNS deixa-os verificados):
 
 ```ts
 schedule.call('reverify-domains', async () => {
-  for (const { tenantId, domain } of await listVerifiedDomains()) {
-    await customDomains.verify(tenantId, domain, { force: true })
-  }
+  const { revoked } = await customDomains.reverifyAll()
+  if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
 }).daily().at('04:00')
 ```
+
+O novo dono de um domínio expirado também pode tomar um claim verificado obsoleto
+publicando o seu registo de `challenge()` — vê [Tenancy](/pt/guide/tenancy#dominios-custom-verificados).
 
 ## Segredos fail-closed — `secret()`
 
@@ -331,15 +333,19 @@ HS256 curta é forjável offline) — usa `secret({ minLength: 32 })`.
 
 O TOTP tem proteção anti-replay de origem (o time-step de um código é registado,
 por isso um código intercetado é de uso único). Para sobreviver também a uma fuga
-da base de dados, cifra os segredos guardados com uma chave da app — ficam como
-envelopes AES-256-GCM e só são decifrados ao verificar um código:
+da base de dados, cifra os segredos guardados com uma chave da app (pelo menos 32
+bytes) — ficam como envelopes AES-256-GCM (chave derivada por HKDF com id de chave,
+ligados ao utilizador) e só são decifrados ao verificar um código:
 
 ```ts
 authPlugin({ users, secret: env.APP_SECRET, mfaEncryptionKey: env.MFA_KEY })
 ```
 
-Os registos em plaintext existentes continuam a funcionar e são cifrados na
-próxima escrita.
+Um valor guardado que não seja um destes envelopes é recusado, por isso uma escrita
+na tabela não consegue rebaixar um segredo para um em texto simples que quem escreve
+conhece. A rotação de chaves e a migração de linhas em texto simples ou `v1:` (uma
+adesão `legacy` explícita mais `auth.reencryptMfaSecret(userId)`) estão em
+[Cifrar os segredos TOTP em repouso](/pt/guide/auth#mfa-encryption).
 
 ## Responsabilidade partilhada — reforçar a tua integração
 
@@ -380,6 +386,34 @@ explicitamente com a opção do adapter `allowUnguardedMeta: true` (ou
 `['auth', …]` para chaves específicas). Um plugin de guard próprio que aplique
 uma destas chaves deve reclamá-la:
 `ensureMetadata(container).add('http:guarded-meta', 'auth')`.
+
+Reclamar uma chave prova que *alguém* a aplica; não diz nada sobre o **valor**.
+Para isso, um plugin regista um validador de meta de rota em
+`http:meta-validators` (`META_VALIDATORS_BUCKET`): todos os adapters correm-nos
+sobre a lista completa de rotas no arranque, logo a seguir à verificação de
+meta guardada, e recusam arrancar com `InvalidRouteMetaError`
+(`HTTP_INVALID_ROUTE_META`) listando cada `rota: problema`. O `teamsPlugin`
+usa-o para que `meta.teamRole: 'Admin'` (um erro de escrita) faça falhar o
+arranque em vez de responder 500 no primeiro pedido. O `allowUnguardedMeta`
+nunca dispensa os validadores.
+
+```ts
+const validator: RouteMetaValidator = ({ route, container }) =>
+  typeof route.meta?.['shape'] === 'string' || route.meta?.['shape'] === undefined
+    ? undefined
+    : `meta.shape must be a string` // ou string[] para vários problemas; lançar também conta
+ensureMetadata(container).add(META_VALIDATORS_BUCKET, validator)
+```
+
+Corres o `runRoute()` sem adapter? `assertRoutesGuarded(routes, app.container)`
+corre as duas verificações; `assertRouteMetaValid(routes, app.container)` corre
+só os validadores.
+
+Um guard pode também publicar uma **verificação de visibilidade pura** em
+`http:route-visibility` (`RouteVisibilityCheck`, avaliada por `isRouteVisible`)
+— "este chamador poderia passar?" sem efeitos secundários (sem rate limit, sem
+auditoria, sem hooks), usada por superfícies de listagem como o `tools/list` do
+MCP. Visibilidade nunca é autorização: o guard corre sempre em cada chamada.
 
 ### 2. Nunca confies num tenant vindo do cliente — verifica a membership
 

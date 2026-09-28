@@ -7,8 +7,9 @@
 # @basaltkit/auth-prisma
 
 **Prisma-backed** implementations of every [`@basaltkit/auth`](https://github.com/basaltkit/basalt/tree/main/packages/auth)
-store — users, sessions, refresh tokens, one-time tokens, API keys and MFA
-state — for production databases (PostgreSQL, MySQL, …).
+store — users, sessions, refresh tokens, one-time tokens, API keys, MFA
+state, OAuth/OIDC account links and WebAuthn passkeys — for production databases
+(PostgreSQL, MySQL, …).
 
 You bring a generated `PrismaClient` whose schema includes the `Auth*` models;
 the stores only touch those delegates, so they layer onto your existing client
@@ -39,13 +40,51 @@ model AuthRefreshToken   { token String @id  familyId String  userId String  exp
 model AuthToken          { token String @id  userId String  purpose String  expiresAt DateTime  usedAt DateTime?  @@index([userId, purpose]) @@map("auth_tokens") }
 model AuthApiKey         { id String @id  name String  prefix String  hash String @unique  tenantId String?  userId String?  scopes String[]  createdAt DateTime  expiresAt DateTime?  lastUsedAt DateTime?  revokedAt DateTime?  @@map("auth_api_keys") }
 model AuthMfa            { userId String @id  secret String  enabled Boolean @default(false)  recoveryCodes String[]  lastUsedStep Int?  @@map("auth_mfa") }
+model AuthTokenVersion   { userId String @id  version Int @default(0)  @@map("auth_token_versions") }
+model AuthAccountLink    { id String @id  provider String  subject String  userId String  email String  createdAt DateTime  @@index([userId]) @@map("auth_account_links") }
+model AuthPasskey        { id String @id  credentialId String  userId String  publicKey String  counter BigInt  transports String?  deviceName String?  createdAt DateTime  lastUsedAt DateTime?  @@index([userId]) @@map("auth_passkeys") }
 ```
 
 Then `prisma migrate dev` (or `prisma db push`) and `prisma generate`.
 
 > `scopes` and `recoveryCodes` use PostgreSQL scalar lists (`String[]`). On a
-> database without scalar-list support (e.g. SQLite), model them as `Json` and
-> adapt — or just use `@basaltkit/auth-sqlite`.
+> database without scalar-list support, model them as `Json` (the stores read
+> either form) — as the MySQL variant does — or, for SQLite, just use
+> `@basaltkit/auth-sqlite`.
+>
+> **MySQL:** use `schema.mysql.prisma` instead — see [MySQL](#mysql).
+
+## Upgrading to 2.0
+
+- **New models `AuthAccountLink` and `AuthPasskey`.** Copy them from the
+  reference schema (or `basalt prisma:sync`) and migrate —
+  `prisma migrate dev --name auth_account_links_passkeys`, in every tenant schema
+  with schema-per-tenant. They back `s.accountLinks` (OAuth/OIDC logins bound to
+  the provider's subject) and `s.passkeys` (a durable `PasskeyStore` with an
+  atomic `compareAndSetCounter`). The delegates are optional in
+  `PrismaAuthClient`: a client generated without them still compiles, and those
+  two stores throw `AuthModelMissingError` (`AUTH_PRISMA_MODEL_MISSING`) at first
+  use.
+- **Legacy mixed-case emails.** On PostgreSQL `findByEmail` matches
+  case-insensitively and **refuses ambiguity**: when two rows differ only in
+  letter case it throws `AccountEmailAmbiguousError` (`AUTH_EMAIL_AMBIGUOUS`)
+  instead of returning one, and `create` refuses a case variant of an existing
+  row with `EmailTakenError`. Run the one-off helper after upgrading:
+
+  ```ts
+  import { normalizeAuthUserEmails } from '@basaltkit/auth-prisma'
+
+  const report = await normalizeAuthUserEmails(prisma, { dryRun: true }) // preview
+  // { normalized: [{ id, from, to }], conflicts: [{ email, ids }] }
+  await normalizeAuthUserEmails(prisma) // lowercases the lone mixed-case rows
+  ```
+
+  `conflicts` are left for you to merge (which account is the real one is a
+  human decision). MySQL's case-insensitive collation already rules out such
+  twins; there the exact lookup is used and the insensitive probe is not retried.
+- `PrismaAuthClient.authUser` no longer needs `findFirst` (a real client is
+  unaffected; a hand-written stub needs `findMany` to honour `where.email` with
+  `mode: 'insensitive'`, `orderBy` and `take`).
 
 ## Upgrading to 1.5
 
@@ -95,14 +134,17 @@ const app = await createApp({
       refreshTokens: s.refreshTokens,
       tokens: s.tokens,   // email verification + password reset
       mfa: s.mfa,
+      accountLinks: s.accountLinks, // OAuth/OIDC: provider subject → account
     }),
     apiKeysPlugin({ store: s.apiKeys, users: s.users }),
+    webauthnPlugin({ config, verifier, credentials: s.passkeys }),
   ],
 }).boot()
 ```
 
 Every store is also exported on its own (`PrismaUserSource`, `PrismaSessionStore`,
-…) and takes the client in its constructor, so you can mix backends.
+…) and takes the client (and optional `{ columnLimits }`, see [MySQL](#mysql))
+in its constructor, so you can mix backends.
 
 | Export | Contract | Model |
 | --- | --- | --- |
@@ -112,6 +154,9 @@ Every store is also exported on its own (`PrismaUserSource`, `PrismaSessionStore
 | `PrismaAuthTokenStore` | `AuthTokenStore` | `AuthToken` |
 | `PrismaApiKeyStore` | `ApiKeyStore` | `AuthApiKey` |
 | `PrismaMfaStore` | `MfaStore` | `AuthMfa` |
+| `PrismaTokenVersionStore` | `TokenVersionStore` | `AuthTokenVersion` |
+| `PrismaAccountLinkStore` | `AccountLinkStore` | `AuthAccountLink` |
+| `PrismaPasskeyStore` | `PasskeyStore` | `AuthPasskey` |
 
 ### Bulk contact lookup (`findByIds`)
 
@@ -126,6 +171,45 @@ Every store is also exported on its own (`PrismaUserSource`, `PrismaSessionStore
   driver's parameter limit. Tune it with
   `new PrismaUserSource(prisma, { idChunkSize: 1000 })`.
 - The result keeps the order of `ids`; ids with no row are omitted.
+
+## MySQL
+
+The reference schema above is written for PostgreSQL, where a bare `String` is
+`TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**, and a server outside
+strict mode truncates a longer value silently — the write succeeds, and the
+value read back is not the one written. A cut password hash never verifies
+again, a cut sealed TOTP secret no longer opens, a cut passkey public key no
+longer checks a signature.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/auth-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it
+  when your datasource is `mysql`). It widens `AuthUser.email` to
+  `VARCHAR(254)` and makes `passwordHash`, the API key `name`, the MFA
+  `secret`, the account link `subject`/`email` and the passkey
+  `credentialId`/`publicKey`/`transports`/`deviceName` `TEXT`; `scopes` and
+  `recoveryCodes` become `Json` (MySQL has no scalar lists). The keys stay
+  `VARCHAR(191)` so they can be indexed — every indexed column is short by
+  design (hashed tokens and session ids; the `id` of `AuthAccountLink` and
+  `AuthPasskey` is a SHA-256 of the natural key, since an OIDC `sub` runs to
+  255 characters and a credential id to 1 023 bytes).
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaAuthStores(prisma, { columnLimits: 'mysql' })
+  ```
+
+  Each store class takes the same option (`new PrismaUserSource(prisma, {
+  columnLimits: 'mysql' })`). `'mysql'` is `authMysqlColumnLimits` — the
+  capacities of `schema.mysql.prisma`. A number is a limit in characters
+  (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes (the `TEXT` family).
+  Widened a column yourself? Spread the preset and raise it:
+  `{ AuthUser: { ...authMysqlColumnLimits.AuthUser, id: 255 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
 
 ## Multi-tenant?
 

@@ -13,7 +13,7 @@
 
 **Why major — migration:**
 
-1. A sync rule whose `document` omits `tenantId` in a multi-tenant app now makes `reindex()` throw (it used to put every row in the calling tenant, or clear and throw). Return `tenantId` from `document`. `reindex()` still clears the **whole** index: never call it once per tenant.
+1. A sync rule whose `document` omits `tenantId` in a multi-tenant app now makes `reindex()` throw (it used to put every row in the calling tenant, or clear and throw). Return `tenantId` from `document`. (Rebuilding one tenant at a time is now safe — see `search-reindex-tenant-scope`.)
 2. `search()` with a `limit` over 1000 throws — pass `searchPlugin({ maxLimit })` if you page larger.
 3. Filters on a field not in the index's `filterable` throw — declare the field `filterable` (Meilisearch already required this).
 4. Filters with `null`/`undefined`/object values throw — omit the key when there is nothing to filter by.

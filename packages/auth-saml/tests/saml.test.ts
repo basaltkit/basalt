@@ -22,6 +22,9 @@ const provider: SamlProvider = {
   callbackUrl: 'https://app/acs',
 }
 
+/** A well-formed, signature-less response: the stubbed client stands in for node-saml's verification. */
+const STUB = Buffer.from('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>').toString('base64')
+
 const makeAuth = () => new Auth({ users: new MemoryUserSource(), secret: SECRET })
 
 function fakeClient(overrides: Partial<SamlClient> = {}): SamlClient {
@@ -50,7 +53,7 @@ describe('Saml', () => {
 
   it('consume validates the assertion and logs the user in by email', async () => {
     const auth = makeAuth()
-    const r = await makeSaml(auth, fakeClient()).consume('okta', { SAMLResponse: 'b64' })
+    const r = await makeSaml(auth, fakeClient()).consume('okta', { SAMLResponse: STUB })
     expect(r.created).toBe(true)
     expect(r.user.email).toBe('saml@corp.com')
     expect((await auth.verifyAccessToken(r.tokens.accessToken)).sub).toBeTruthy()
@@ -59,20 +62,20 @@ describe('Saml', () => {
   it('does not create a duplicate for an existing user', async () => {
     const auth = makeAuth()
     await auth.register('saml@corp.com', 'password123')
-    const r = await makeSaml(auth, fakeClient()).consume('okta', { SAMLResponse: 'b64' })
+    const r = await makeSaml(auth, fakeClient()).consume('okta', { SAMLResponse: STUB })
     expect(r.created).toBe(false)
   })
 
   it('rejects an unvalidated (null profile) assertion', async () => {
     const client = fakeClient({ async validatePostResponseAsync() { return { profile: null, loggedOut: false } } })
-    await expect(makeSaml(makeAuth(), client).consume('okta', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(
+    await expect(makeSaml(makeAuth(), client).consume('okta', { SAMLResponse: STUB })).rejects.toBeInstanceOf(
       SamlResponseInvalidError,
     )
   })
 
   it('rejects an assertion with no email', async () => {
     const client = fakeClient({ async validatePostResponseAsync() { return { profile: { nameID: 'u1' }, loggedOut: false } } })
-    await expect(makeSaml(makeAuth(), client).consume('okta', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(
+    await expect(makeSaml(makeAuth(), client).consume('okta', { SAMLResponse: STUB })).rejects.toBeInstanceOf(
       SamlResponseInvalidError,
     )
   })
@@ -139,10 +142,10 @@ describe('F15b · SAML provider trust boundary (an IdP may only assert its own e
     const auth = makeAuth()
     const victim = await auth.register('ceo@acme.com', 'password123')
     const saml = new Saml(auth, [acme, globex], { bindToBrowser: false, createClient: () => asserting('ceo@acme.com') })
-    await expect(saml.consume('globex', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
+    await expect(saml.consume('globex', { SAMLResponse: STUB })).rejects.toBeInstanceOf(SamlResponseInvalidError)
     // Case variants and a custom email attribute go through the same check.
     const upper = new Saml(auth, [acme, globex], { bindToBrowser: false, createClient: () => asserting('CEO@Acme.Com') })
-    await expect(upper.consume('globex', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
+    await expect(upper.consume('globex', { SAMLResponse: STUB })).rejects.toBeInstanceOf(SamlResponseInvalidError)
     const viaAttr = new Saml(auth, [acme, { ...globex, emailAttribute: 'mail' }], {
       bindToBrowser: false,
       createClient: () =>
@@ -152,15 +155,15 @@ describe('F15b · SAML provider trust boundary (an IdP may only assert its own e
           },
         }),
     })
-    await expect(viaAttr.consume('globex', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
+    await expect(viaAttr.consume('globex', { SAMLResponse: STUB })).rejects.toBeInstanceOf(SamlResponseInvalidError)
     // The legitimate IdP still logs the same user in.
-    const ok = await saml.consume('acme', { SAMLResponse: 'x' })
+    const ok = await saml.consume('acme', { SAMLResponse: STUB })
     expect(ok.user.id).toBe(victim.id)
   })
 
   it('compares the domain case-insensitively and rejects look-alike / multi-@ emails', async () => {
     const saml = (email: string) => new Saml(makeAuth(), [acme, globex], { bindToBrowser: false, createClient: () => asserting(email) })
-    await expect(saml('CEO@ACME.COM').consume('acme', { SAMLResponse: 'x' })).resolves.toBeTruthy()
+    await expect(saml('CEO@ACME.COM').consume('acme', { SAMLResponse: STUB })).resolves.toBeTruthy()
     for (const email of [
       'ceo@acme.com@globex.com',
       'ceo@globex.com@acme.com',
@@ -172,7 +175,7 @@ describe('F15b · SAML provider trust boundary (an IdP may only assert its own e
       'ceo\u0000@acme.com',
       'no-at-sign',
     ]) {
-      await expect(saml(email).consume('acme', { SAMLResponse: 'x' }), email).rejects.toBeInstanceOf(
+      await expect(saml(email).consume('acme', { SAMLResponse: STUB }), email).rejects.toBeInstanceOf(
         SamlResponseInvalidError,
       )
     }
@@ -266,13 +269,13 @@ describe('F66 · SAML unsolicited assertions and replay', () => {
       validateInResponseTo: 'ifPresent',
       createClient: () => assertionWithId('_a1'),
     })
-    await expect(saml.consume('okta', { SAMLResponse: 'x' })).resolves.toBeTruthy()
-    await expect(saml.consume('okta', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
+    await expect(saml.consume('okta', { SAMLResponse: STUB })).resolves.toBeTruthy()
+    await expect(saml.consume('okta', { SAMLResponse: STUB })).rejects.toBeInstanceOf(SamlResponseInvalidError)
   })
 
   it('without InResponseTo binding, an assertion with no identifier is refused', async () => {
     const saml = new Saml(makeAuth(), [provider], { validateInResponseTo: 'never', createClient: () => fakeClient() })
-    await expect(saml.consume('okta', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
+    await expect(saml.consume('okta', { SAMLResponse: STUB })).rejects.toBeInstanceOf(SamlResponseInvalidError)
   })
 
   it('uses a pluggable replay cache (shared across replicas)', async () => {
@@ -286,7 +289,7 @@ describe('F66 · SAML unsolicited assertions and replay', () => {
     }
     const a = new Saml(makeAuth(), [provider], { assertionReplayCache, bindToBrowser: false, createClient: () => assertionWithId('_r1') })
     const b = new Saml(makeAuth(), [provider], { assertionReplayCache, bindToBrowser: false, createClient: () => assertionWithId('_r1') })
-    await expect(a.consume('okta', { SAMLResponse: 'x' })).resolves.toBeTruthy()
-    await expect(b.consume('okta', { SAMLResponse: 'x' })).rejects.toBeInstanceOf(SamlResponseInvalidError)
+    await expect(a.consume('okta', { SAMLResponse: STUB })).resolves.toBeTruthy()
+    await expect(b.consume('okta', { SAMLResponse: STUB })).rejects.toBeInstanceOf(SamlResponseInvalidError)
   })
 })

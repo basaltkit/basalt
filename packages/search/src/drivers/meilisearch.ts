@@ -101,6 +101,19 @@ export class MeilisearchDriver implements SearchDriver {
     await this.request('DELETE', `/indexes/${indexName}/documents`)
   }
 
+  /**
+   * Delete-by-filter (`POST /indexes/{uid}/documents/delete`, Meilisearch ≥ 1.2)
+   * on the `tenantId` attribute `register` declares filterable — the same
+   * predicate every search is scoped by, so the rows removed are exactly the
+   * rows that tenant could find. Like every write it is an enqueued task;
+   * Meilisearch runs one index's tasks in order, so the rebuild's writes that
+   * follow land after the deletion.
+   */
+  async clearTenant(indexName: string, tenantId: string): Promise<void> {
+    assertValidIndexName(indexName)
+    await this.request('POST', `/indexes/${indexName}/documents/delete`, { filter: `tenantId = ${quote(tenantId)}` })
+  }
+
   async search(indexName: string, query: SearchQuery): Promise<SearchResult> {
     assertValidIndexName(indexName)
     const result = (await this.request('POST', `/indexes/${indexName}/search`, {

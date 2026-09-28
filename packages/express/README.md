@@ -323,7 +323,7 @@ In this mode each handler already handles its own errors (the wrapper responds w
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
-| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. Never waives the route-meta validators plugins register (`InvalidRouteMetaError`). |
 | `bodyLimit` | `number` | No | `1048576` (1 MiB) | Largest JSON/form body parsed; larger answers `413 PAYLOAD_TOO_LARGE`. Same default as Fastify and Hono (body-parser alone: 100 KiB). |
 | `app` | `Express` | No | new `express()` (case-sensitive, strict routing, `simple` query parser) | Bring your own Express app; either way, `express.json()` and `express.urlencoded({ extended: false })` are added. |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes, mounted last. Set `false` to keep Express's HTML default or your own catch-all. |
@@ -340,6 +340,7 @@ Behavior: registers the Express app under the `EXPRESS` token and an `HttpServer
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A plugin's route-meta validator (`http:meta-validators`) refused a value — e.g. `teamsPlugin` and an unknown `meta.teamRole`. Not waivable. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `BAD_REQUEST` | 400 | The body could not be parsed (malformed JSON, corrupt encoding). |
 | — | `PAYLOAD_TOO_LARGE` | 413 | The body exceeded `bodyLimit` (1 MiB by default). |

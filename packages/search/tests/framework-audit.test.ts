@@ -42,7 +42,7 @@ describe('FA-050 · reindex() never guesses a tenant, and validates before it cl
     const search = new Search({ driver, rules: [rule([{ id: 'a', title: 'alpha' }])] as never }, () => true)
     await inTenant('acme', () => search.index('docs', { id: 'keep', title: 'keep me' }))
 
-    await expect(search.reindex('docs')).rejects.toBeInstanceOf(TenantRequiredError)
+    await expect(search.reindex('docs', { all: true })).rejects.toBeInstanceOf(TenantRequiredError)
     // Old code cleared first and threw second: the index was empty here.
     expect((await driver.search('docs', { tenantId: 'acme', q: 'keep' })).total).toBe(1)
   })
@@ -82,7 +82,10 @@ describe('FA-050 · reindex() never guesses a tenant, and validates before it cl
       },
       () => true,
     )
-    expect(await inTenant('acme', () => multi.reindex('docs'))).toBe(2)
+    expect(await multi.reindex('docs', { all: true })).toBe(2)
+    expect((await driver.search('docs', { tenantId: 'globex', q: 'beta' })).total).toBe(1)
+    // From inside a tenant the rebuild is that tenant's: acme's row, globex's kept.
+    expect(await inTenant('acme', () => multi.reindex('docs'))).toBe(1)
     expect((await driver.search('docs', { tenantId: 'globex', q: 'beta' })).total).toBe(1)
 
     const single = new Search({ driver: new MemorySearchDriver(), rules: [rule([{ id: 'a', title: 'alpha' }])] as never })

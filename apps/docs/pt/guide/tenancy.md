@@ -928,7 +928,7 @@ não-ASCII, literal IP) não corresponde a nada.
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 | `token` | `() => string` | 24 bytes aleatórios, base64url | Gerador do token de verificação (testes) |
 | `resolveTxt` | `(host) => Promise<string[][]>` | `resolveTxt` de `node:dns/promises` | Consulta DNS usada pelo `verify()`; substitui-a nos testes |
-| `claimTtlMs` | `number` | 72 h | Quanto tempo um claim **não verificado** segura um domínio antes de o `add()` de outro tenant o poder tomar. Domínios verificados nunca expiram |
+| `claimTtlMs` | `number` | 72 h | Quanto tempo um claim **não verificado** segura um domínio antes de o `add()` de outro tenant o poder tomar. Domínios verificados nunca expiram (um obsoleto só cede a um registo de `challenge()` — vê `reverify()`) |
 | `reservedDomains` | `string[]` | `[]` | Os domínios da própria plataforma; cada um e todos os seus subdomínios são recusados com `DOMAIN_RESERVED` |
 | `challengeSecret` | `string` | — | Ativa `challenge(tenantId, domain)`: publicar esse registo TXT deixa o `add()` do dono tomar de imediato um claim não verificado ocupado. O mesmo valor em todas as instâncias |
 
@@ -937,6 +937,32 @@ verificado a não ser que `force` esteja definido. Corre-o com `force: true` de 
 agendada: um domínio cujo DNS foi mais tarde removido ou reapontado é
 **des**-verificado numa re-verificação falhada e deixa de resolver — a defesa contra
 a tomada de domínios pendentes.
+
+Para um job agendado, prefere os helpers de sistema, que não precisam do id do tenant:
+
+```ts
+schedule.call('reverify-domains', async () => {
+  const { revoked, errors } = await domains.reverifyAll()
+  if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
+}).hourly()
+```
+
+O `domains.reverify(domain)` re-verifica o tenant que detém o domínio, seja ele
+qual for, e devolve `{ domain, tenantId, status }`: `valid`, `revoked` (o registo
+desapareceu de forma definitiva — NXDOMAIN, sem TXT, ou sem o valor esperado —
+por isso o claim é des-verificado), `dns-error` (um timeout ou SERVFAIL: fica
+verificado, para que uma falha de DNS nunca des-verifique todos os domínios de uma
+vez), `unverified`, ou `changed` (o registo mudou de mãos entretanto; fica como
+está). O `reverifyAll()` corre-o sobre `DomainStore.listVerified()` — ou sobre os
+`{ domains }` que passares, para uma store sem esse método — e devolve
+`{ checked, revoked, errors, results }`.
+
+Um **claim verificado obsoleto** também cede diretamente ao novo dono: quando um
+domínio expira e outra pessoa o compra, o novo dono publica o registo de
+`challenge(tenantId, domain)` (com `challengeSecret` definido) e chama `add()`. Se
+essa mesma consulta já não mostrar o registo do titular, o domínio passa para o
+novo dono, verificado; enquanto o registo do titular continuar publicado — ou a
+consulta falhar — o claim mantém-se e o `add()` lança `DOMAIN_TAKEN`.
 
 ## Modos de falha & resolução de problemas
 
@@ -950,7 +976,7 @@ a tomada de domínios pendentes.
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | Um pedido resolveu para um tenant com estado `provisioning` ou `failed`. 503, e não 404: o tenant existe e o cliente pode voltar a tentar |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` numa source que não implementa nem `create()` nem `save()` — por exemplo uma baseada num ficheiro de configuração estático |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (ou o `create()` de uma source) para um id que já existe. Nada é escrito. Um tenant `failed`/`provisioning` retoma-se com `tenancy.provision(id)`; uma atualização intencional é `source.save()` |
-| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` para um domínio que outro tenant registou — verificado, ou não verificado e mais recente que `claimTtlMs` |
+| `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` para um domínio que outro tenant registou — verificado (e com o registo TXT ainda publicado, ou sem um registo de `challenge()` teu), ou não verificado e mais recente que `claimTtlMs` |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` para um domínio que não está registado |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | Um tenant agiu sobre um domínio pertencente a um tenant **diferente** |
 | `DomainReservedError` | `DOMAIN_RESERVED` | 403 | `domains.add()` para um domínio em `reservedDomains` ou um subdomínio dele |
@@ -976,7 +1002,8 @@ a tomada de domínios pendentes.
   objetivo: o tenant resolveu, a verificação de filiação recusou-o a seguir. A
   resolução de tenant é identificação, nunca autorização — vê [Teams](/pt/guide/teams).
 - **Um domínio custom deixou de resolver sozinho** — uma re-verificação agendada
-  `verify(…, { force: true })` falhou e des-verificou-o. Volta a publicar o registo
+  `reverify()` / `reverifyAll()` (ou `verify(…, { force: true })`) falhou e
+  des-verificou-o. Volta a publicar o registo
   TXT `_basalt-verify.<domain>`.
 
 ## Eventos

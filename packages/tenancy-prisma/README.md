@@ -75,13 +75,15 @@ A tenant is an **open record** (`{ id, ...anything }`), stored in a `Json` colum
 
 ## Options reference
 
-`prismaTenantSource(client)` takes the client only — there are no options.
-Resolvers, `required`, `onMigrate` and `onSeed` belong to `tenancyPlugin`.
+`prismaTenantSource(client, options?)` takes one option, `columnLimits`
+(`'mysql'` or your own limits — see [MySQL](#mysql)); unset, nothing is
+checked. Resolvers, `required`, `onMigrate` and `onSeed` belong to `tenancyPlugin`.
 
 | Export | Kind | Purpose |
 | --- | --- | --- |
-| `prismaTenantSource(client)` | function | Validates the client and returns a `PrismaTenantSource`. |
-| `PrismaTenantSource` | class | The `TenantSource` implementation plus `save` and `remove`. `new PrismaTenantSource(client)`. |
+| `prismaTenantSource(client, options?)` | function | Validates the client and returns a `PrismaTenantSource`. |
+| `tenancyMysqlColumnLimits` / `ColumnLengthError` | const / class | The MySQL preset and the error the guard throws. |
+| `PrismaTenantSource` | class | The `TenantSource` implementation plus `save` and `remove`. `new PrismaTenantSource(client, options?)`. |
 | `PrismaTenancyClient` | interface | The two delegates the source touches — `tenant` (`findUnique`, `findMany`, `create`, `upsert`, `deleteMany`), `tenantDomain` — plus `$transaction(fn)`. A generated `PrismaClient` satisfies it. |
 
 | Method | Description |
@@ -93,6 +95,34 @@ Resolvers, `required`, `onMigrate` and `onSeed` belong to `tenancyPlugin`.
 | `list()` | Every tenant, ordered by `id`. |
 | `remove(id)` | Delete a tenant; its domains cascade. Returns whether one existed. |
 
+## MySQL
+
+The reference schema above is written for PostgreSQL (and works on SQLite),
+where a bare `String` is `TEXT`. **On MySQL Prisma makes it `VARCHAR(191)`**,
+and a server outside strict mode truncates a longer value silently — the write
+succeeds, and the value read back is not the one written. Two long domains cut to the same prefix collide, and a cut domain resolves nobody. The MySQL variant makes `domain` `VARCHAR(255)` (a DNS name reaches 253); the tenant record itself is `Json`, which MySQL stores whole. The check runs before the transaction, so a refused tenant writes nothing.
+
+- Copy **`schema.mysql.prisma`** instead (exported as
+  `@basaltkit/tenancy-prisma/schema.mysql.prisma`; `basalt prisma:sync` picks it when
+  your datasource is `mysql`): the free-text columns are widened with native
+  types, the keys stay `VARCHAR(191)` so they can be indexed.
+- Turn on the guard, so a value that still would not fit is **refused**
+  (`ColumnLengthError`, code `COLUMN_LENGTH_EXCEEDED`, status 422, nothing
+  written) instead of cut:
+
+  ```ts
+  prismaTenantSource(prisma, { columnLimits: 'mysql' })
+  ```
+
+  `'mysql'` is `tenancyMysqlColumnLimits` — the capacities of `schema.mysql.prisma`. A number is
+  a limit in characters (`VARCHAR(n)`), `{ bytes: n }` a limit in UTF-8 bytes
+  (the `TEXT` family). Widened a column yourself? Spread the preset and raise it:
+  `{ TenantDomain: { ...tenancyMysqlColumnLimits.TenantDomain, tenantId: 255 } }`.
+- Keep MySQL in strict mode (`STRICT_TRANS_TABLES`) as well.
+
+Unset (the default), nothing is checked — PostgreSQL and SQLite are unaffected.
+See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.dev/guide/persistence#mysql).
+
 ## Errors
 
 This package defines no `BasaltError` subclasses and no error codes of its own —
@@ -102,6 +132,7 @@ and plain `Error`s for the two other conditions it owns:
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
 | `Error` | — | boot / first use | The client has no `tenant` model. `prismaTenantSource()` fails fast naming the missing model and pointing at `basalt prisma:sync`, instead of a cryptic "reading 'upsert' of undefined". A lazy/proxy client (database-per-tenant) skips the check and is validated on first query. |
+| `ColumnLengthError` | `COLUMN_LENGTH_EXCEEDED` | 422 | With `columnLimits`, a tenant id or domain is longer than its column. Checked before the transaction: nothing is written. |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `create()` for an id that already exists (Prisma `P2002` on the tenant insert). The existing record is left as it was. |
 | `Error` | — | 500 | `save()` or `create()` was given a domain already owned by a **different** tenant. Checked inside the write's transaction, so a rejected write writes nothing — including when the other tenant claimed the domain concurrently. |
 

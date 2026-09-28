@@ -35,7 +35,10 @@ function fakeClient() {
           const [[field, dir]] = Object.entries(order) as [[keyof Row, 'asc' | 'desc']]
           out = [...out].sort((a, b) => cmp(a[field] ?? -Infinity, b[field] ?? -Infinity) * (dir === 'asc' ? 1 : -1))
         }
-        if (args.distinct?.includes('chain')) out = out.filter((r, i) => out.findIndex((o) => o.chain === r.chain) === i)
+        for (const col of args.distinct ?? []) {
+          const key = col as keyof Row
+          out = out.filter((r, i) => out.findIndex((o) => o[key] === r[key]) === i)
+        }
         out = out.slice(args.skip ?? 0)
         return args.take === undefined ? out : out.slice(0, args.take)
       },

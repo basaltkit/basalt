@@ -1,10 +1,11 @@
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
-import { deriveDeliveryId, generateWebhookSecret, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
-import { matchesEvent, MemoryWebhookStore, type WebhookEndpoint, type WebhookStore } from './store.js'
+import { deriveDeliveryId, generateWebhookSecret, MIN_WEBHOOK_SECRET_LENGTH, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
+import { matchesEvent, MemoryWebhookStore, WebhookEndpointIdInUseError, type WebhookEndpoint, type WebhookStore } from './store.js'
 
 export {
   MemoryWebhookStore,
+  WebhookEndpointIdInUseError,
   matchesEvent,
   type WebhookStore,
   type WebhookEndpoint,
@@ -59,6 +60,47 @@ export class WebhookTenantRequiredError extends Error {
         'Pass a tenantId, or { system: true } for a deliberate system-wide operation.',
     )
     this.name = 'WebhookTenantRequiredError'
+  }
+}
+
+/**
+ * Thrown by {@link WebhookManager.register} for an endpoint that could never be
+ * delivered to: a URL that is not an absolute URL with an allowed scheme, a
+ * signing secret shorter than `MIN_WEBHOOK_SECRET_LENGTH`, or an empty event
+ * list. Registration fails instead of storing an endpoint whose every delivery
+ * would be refused later. (Whether the host is public is still decided at
+ * delivery time, where DNS is resolved and the connection pinned.)
+ */
+export class WebhookEndpointInvalidError extends Error {
+  readonly code = 'WEBHOOK_ENDPOINT_INVALID'
+  readonly status = 400
+  constructor(reason: string) {
+    super(`webhooks.register(): ${reason}.`)
+    this.name = 'WebhookEndpointInvalidError'
+  }
+}
+
+const DEFAULT_SCHEMES: readonly string[] = ['https:', 'http:']
+
+function assertRegistrable(endpoint: Omit<WebhookEndpoint, 'id'>, schemes: readonly string[]): void {
+  const { url, secret, events } = endpoint as { url: unknown; secret?: unknown; events: unknown }
+  if (typeof url !== 'string' || url.length === 0) throw new WebhookEndpointInvalidError('url must be a non-empty string')
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new WebhookEndpointInvalidError('url is not a valid absolute URL')
+  }
+  if (!schemes.includes(parsed.protocol)) {
+    throw new WebhookEndpointInvalidError(`url scheme "${parsed.protocol}" is not allowed (allowed: ${schemes.join(', ')})`)
+  }
+  if (secret != null && (typeof secret !== 'string' || secret.length < MIN_WEBHOOK_SECRET_LENGTH)) {
+    throw new WebhookEndpointInvalidError(
+      `secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters (omit it to have one generated)`,
+    )
+  }
+  if (!Array.isArray(events) || events.length === 0 || !events.every((e) => typeof e === 'string' && e.length > 0)) {
+    throw new WebhookEndpointInvalidError('events must be a non-empty array of non-empty event patterns')
   }
 }
 
@@ -119,7 +161,7 @@ export class WebhookManager {
     if (tenantId !== undefined && (await this.store.list(tenantId)).some((e) => e.id === id && e.tenantId === tenantId)) return
     const existing = (await this.store.list()).find((e) => e.id === id)
     if (existing && (existing.tenantId ?? undefined) !== tenantId) {
-      throw new Error(`webhooks.register(): endpoint id "${id}" is already in use by another scope.`)
+      throw new WebhookEndpointIdInUseError(id)
     }
   }
 
@@ -133,6 +175,12 @@ export class WebhookManager {
    * `tenantId` can't override it). With tenancy active and no tenant at all,
    * pass an explicit `tenantId`, or `{ system: true }` to deliberately create a
    * global endpoint that receives every tenant's events.
+   *
+   * The endpoint is validated before anything is stored: an unparseable URL, a
+   * scheme outside the deliverer's allowlist, a secret shorter than
+   * `MIN_WEBHOOK_SECRET_LENGTH` or an empty `events` list throws
+   * {@link WebhookEndpointInvalidError}; an `id` held by another scope throws
+   * {@link WebhookEndpointIdInUseError}.
    */
   async register(
     endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string },
@@ -140,6 +188,7 @@ export class WebhookManager {
   ): Promise<WebhookEndpoint> {
     const tenantId = currentTenantId() ?? asTenantId(endpoint.tenantId)
     this.requireScope('register', tenantId, options.system)
+    assertRegistrable(endpoint, (this.deliverer as { allowedSchemes?: readonly string[] }).allowedSchemes ?? DEFAULT_SCHEMES)
     const { tenantId: _ignored, ...rest } = endpoint
     // A caller-supplied id upserts in every store: never let it replace an
     // endpoint that belongs to a different tenant (or a global one, when scoped).

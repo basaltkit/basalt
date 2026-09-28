@@ -171,6 +171,8 @@ class DbWebhookStore implements WebhookStore {
 webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 ```
 
+`add()` must refuse an `id` that another scope already holds (another tenant, or a global endpoint vs a tenant one) — throw `WebhookEndpointIdInUseError` — and replace only within the same scope. Do it in the write itself (`UPDATE … WHERE id = ? AND tenant_id IS ?`, then `INSERT`): the manager's own pre-check cannot close the race between two concurrent registrations.
+
 `remove(id, tenantId)` must only delete an endpoint that tenant owns (the manager also re-checks ownership through `list(tenantId)` before calling it). Rows may carry `null` for an absent `secret` / `tenantId` — the deliverer treats `null` as absent.
 
 `forEvent` must **fail closed**: with a `tenantId`, return that tenant's endpoints plus tenant-agnostic ones; with no tenant (`undefined`, `null` or `''`), return tenant-agnostic endpoints **only** — never every tenant's. A deliberate `dispatch(event, data, { allTenants: true })` reads endpoints through `list()` instead, and the manager re-filters every result, so a store that gets this wrong still can't widen delivery.
@@ -183,7 +185,7 @@ webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 
 | Method | Signature | Description |
 |---|---|---|
-| `register` | `(endpoint: Omit<WebhookEndpoint,'id'> & { id?: string }) => Promise<WebhookEndpoint>` | Creates a subscription (id generated if omitted) |
+| `register` | `(endpoint: Omit<WebhookEndpoint,'id'> & { id?: string }, options?: { system?: boolean }) => Promise<WebhookEndpoint>` | Creates a subscription (id generated if omitted). Validates first: an unparseable URL, a scheme the deliverer refuses, a `secret` under 16 chars or empty `events` throw `WebhookEndpointInvalidError` (400); an `id` held by another scope throws `WebhookEndpointIdInUseError` (409) |
 | `unregister` | `(id: string, options?: { tenantId?: string; system?: boolean }) => Promise<void>` | Removes a subscription — a no-op unless the (ambient or given) tenant owns it |
 | `list` | `(tenantId?: string) => Promise<WebhookEndpoint[]>` | Lists subscriptions, optionally by tenant |
 | `dispatch` | `(event: string, data: unknown, scope?: string \| { tenantId?, allTenants?, idempotencyKey?, skipEndpointIds? }) => Promise<DeliveryResult[]>` | Delivers to all endpoints subscribed to the event; `idempotencyKey` derives stable delivery ids |
@@ -255,7 +257,9 @@ Rewriting the URL host to the validated IP is not an option for plain `fetch`: i
 | Export | Type | Description |
 |---|---|---|
 | `WEBHOOKS` | token | Key for `WebhookManager` in the container |
-| `MemoryWebhookStore` | class | In-memory store (dev/tests) |
+| `MemoryWebhookStore` | class | In-memory store (dev/tests); `add()` refuses an id held by another scope |
+| `WebhookEndpointInvalidError` | class | `WEBHOOK_ENDPOINT_INVALID` (400) — `register()` refused an undeliverable endpoint |
+| `WebhookEndpointIdInUseError` | class | `WEBHOOK_ENDPOINT_ID_IN_USE` (409) — the id belongs to another scope |
 | `WebhookStore` | type (Advanced) | Contract for persistent stores |
 | `pinnedFetch` | function | `fetch`-compatible client over the pinned transport (honours `PINNED_ADDRESS`) |
 | `deriveDeliveryId` | function | `(idempotencyKey, endpointId) => string` — the stable delivery id used by the outbox |

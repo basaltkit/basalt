@@ -88,6 +88,24 @@ export interface SamlProvider {
    * configured: this IdP may assert **any** email. Only for an IdP you fully control.
    */
   allowAnyEmailDomain?: true
+  /**
+   * XML-DSig `SignatureMethod/@Algorithm` URIs accepted on the response and the
+   * assertion. Replaces the default {@link DEFAULT_SAML_SIGNATURE_ALGORITHMS}
+   * (RSA-SHA256/384/512, ECDSA-SHA256/384/512). Every `SignatureMethod` in the
+   * response must be listed, otherwise it is refused with `AUTH_SAML_RESPONSE_INVALID`.
+   */
+  signatureAlgorithms?: string[]
+  /**
+   * XML-DSig `DigestMethod/@Algorithm` URIs accepted. Replaces the default
+   * {@link DEFAULT_SAML_DIGEST_ALGORITHMS} (SHA-256/384/512).
+   */
+  digestAlgorithms?: string[]
+  /**
+   * Legacy opt-in: also accept SHA-1 (`rsa-sha1` signatures, `sha1` digests) on
+   * top of the default algorithm lists. SHA-1 is collision-broken; enable it only
+   * for an IdP that cannot sign with SHA-256, and plan to turn it off.
+   */
+  allowSha1?: true
 }
 
 export interface SamlOptions {
@@ -194,9 +212,151 @@ export function samlClientConfig(p: SamlProvider, options: SamlOptions = {}): Re
     // The envelope signature on top (node-saml's default); opt-out for IdPs that sign only the assertion.
     wantAuthnResponseSigned: p.wantAuthnResponseSigned ?? true,
     ...(skew !== undefined ? { acceptedClockSkewMs: skew } : {}),
+    // Algorithms for what this SP signs (AuthnRequests, when a signing key is set);
+    // node-saml defaults to SHA-1. Verification-side algorithms: see SamlProvider.signatureAlgorithms.
+    signatureAlgorithm: 'sha256',
+    digestAlgorithm: 'sha256',
     // Reject replays of a captured assertion (see ValidateInResponseToMode).
     validateInResponseTo: options.validateInResponseTo ?? 'always',
     ...(options.cacheProvider ? { cacheProvider: options.cacheProvider } : {}),
+  }
+}
+
+const XMLDSIG = 'http://www.w3.org/2000/09/xmldsig#'
+const XMLDSIG_MORE = 'http://www.w3.org/2001/04/xmldsig-more#'
+const XMLENC = 'http://www.w3.org/2001/04/xmlenc#'
+
+/** `SignatureMethod` algorithms accepted by default: RSA and ECDSA over SHA-256/384/512. */
+export const DEFAULT_SAML_SIGNATURE_ALGORITHMS: readonly string[] = Object.freeze([
+  `${XMLDSIG_MORE}rsa-sha256`,
+  `${XMLDSIG_MORE}rsa-sha384`,
+  `${XMLDSIG_MORE}rsa-sha512`,
+  `${XMLDSIG_MORE}ecdsa-sha256`,
+  `${XMLDSIG_MORE}ecdsa-sha384`,
+  `${XMLDSIG_MORE}ecdsa-sha512`,
+])
+
+/** `DigestMethod` algorithms accepted by default: SHA-256/384/512. */
+export const DEFAULT_SAML_DIGEST_ALGORITHMS: readonly string[] = Object.freeze([
+  `${XMLENC}sha256`,
+  `${XMLDSIG_MORE}sha384`,
+  `${XMLENC}sha512`,
+])
+
+/** Added by {@link SamlProvider.allowSha1}. */
+const SHA1_SIGNATURE_ALGORITHMS = [`${XMLDSIG}rsa-sha1`, `${XMLDSIG_MORE}ecdsa-sha1`]
+const SHA1_DIGEST_ALGORITHMS = [`${XMLDSIG}sha1`]
+
+/** The XML-DSig algorithms a provider's responses may use. */
+export interface SamlAlgorithmPolicy {
+  signatureAlgorithms: ReadonlySet<string>
+  digestAlgorithms: ReadonlySet<string>
+}
+
+/**
+ * The effective {@link SamlAlgorithmPolicy} of a provider. Throws
+ * {@link SamlProviderConfigError} on an empty or non-string algorithm list.
+ */
+export function samlAlgorithmPolicy(p: SamlProvider): SamlAlgorithmPolicy {
+  const list = (value: unknown, field: string, fallback: readonly string[], sha1: string[]): Set<string> => {
+    if (value === undefined) return new Set(p.allowSha1 === true ? [...fallback, ...sha1] : fallback)
+    if (!Array.isArray(value) || value.length === 0 || !value.every((a) => typeof a === 'string' && a.length > 0)) {
+      throw new SamlProviderConfigError(`provider "${p.name}" has an invalid ${field} list`)
+    }
+    return new Set(p.allowSha1 === true ? [...(value as string[]), ...sha1] : (value as string[]))
+  }
+  return {
+    signatureAlgorithms: list(p.signatureAlgorithms, 'signatureAlgorithms', DEFAULT_SAML_SIGNATURE_ALGORITHMS, SHA1_SIGNATURE_ALGORITHMS),
+    digestAlgorithms: list(p.digestAlgorithms, 'digestAlgorithms', DEFAULT_SAML_DIGEST_ALGORITHMS, SHA1_DIGEST_ALGORITHMS),
+  }
+}
+
+/** The DOM surface of `@xmldom/xmldom` read by {@link assertSamlResponseAlgorithms}. */
+interface XmlAttr {
+  localName?: string | null
+  name: string
+  value: string
+}
+interface XmlElement {
+  localName?: string | null
+  tagName: string
+  attributes: { length: number; [i: number]: XmlAttr }
+}
+interface XmlDocument {
+  documentElement?: XmlElement | null
+  doctype?: unknown
+  getElementsByTagName(name: string): { length: number; [i: number]: XmlElement }
+}
+type XmlDomParser = new (options: {
+  locator: object
+  errorHandler: { warning?: (msg: string) => void; error: (msg: string) => void; fatalError: (msg: string) => void }
+}) => { parseFromString(xml: string, mime: string): XmlDocument }
+
+let domParser: XmlDomParser | undefined
+/**
+ * The same `@xmldom/xmldom` DOMParser node-saml parses the response with, resolved
+ * through node-saml (its hard dependency) so both see the identical tree.
+ */
+function loadDomParser(): XmlDomParser {
+  if (!domParser) {
+    const require = createRequire(import.meta.url)
+    const fromNodeSaml = createRequire(require.resolve('@node-saml/node-saml'))
+    domParser = (fromNodeSaml('@xmldom/xmldom') as { DOMParser: XmlDomParser }).DOMParser
+  }
+  return domParser
+}
+
+const localNameOf = (node: { localName?: string | null; name?: string; tagName?: string }): string => {
+  if (node.localName) return node.localName
+  const qname = node.tagName ?? node.name ?? ''
+  return qname.slice(qname.indexOf(':') + 1)
+}
+
+/**
+ * Refuses a base64 `SAMLResponse` that uses an XML-DSig algorithm outside
+ * `policy`, or that carries a DOCTYPE / entity declarations. Every
+ * `SignatureMethod` and `DigestMethod` element — in any namespace or prefix, at
+ * any depth (response envelope and assertion signatures alike) — must carry
+ * `Algorithm` attributes that are all in the allowlist. Elements are matched by
+ * local name and attributes by local name, as xml-crypto does, so no spelling
+ * that the verifier would honour escapes the check. Throws
+ * {@link SamlResponseInvalidError}.
+ */
+export function assertSamlResponseAlgorithms(samlResponse: string, policy: SamlAlgorithmPolicy): void {
+  // Decoded exactly as node-saml does.
+  const xml = Buffer.from(samlResponse, 'base64').toString('utf8')
+  if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new SamlResponseInvalidError('the response carries a DOCTYPE')
+  let doc: XmlDocument
+  try {
+    const fail = (msg: string): never => {
+      throw new Error(msg)
+    }
+    doc = new (loadDomParser())({ locator: {}, errorHandler: { error: fail, fatalError: fail } }).parseFromString(
+      xml,
+      'text/xml',
+    )
+  } catch {
+    throw new SamlResponseInvalidError('the response is not well-formed XML')
+  }
+  if (!doc.documentElement) throw new SamlResponseInvalidError('the response is not well-formed XML')
+  if (doc.doctype) throw new SamlResponseInvalidError('the response carries a DOCTYPE')
+  const elements = doc.getElementsByTagName('*')
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i]!
+    const name = localNameOf(el)
+    const allowed =
+      name === 'SignatureMethod' ? policy.signatureAlgorithms : name === 'DigestMethod' ? policy.digestAlgorithms : undefined
+    if (!allowed) continue
+    let seen = 0
+    for (let j = 0; j < el.attributes.length; j++) {
+      const attr = el.attributes[j]!
+      if (localNameOf(attr) !== 'Algorithm') continue
+      seen++
+      if (!allowed.has(attr.value)) {
+        throw new SamlResponseInvalidError(`the ${name} algorithm is not allowed`)
+      }
+    }
+    if (seen === 0) throw new SamlResponseInvalidError(`a ${name} has no Algorithm`)
   }
 }
 
@@ -350,6 +510,7 @@ export class Saml {
   private readonly providers = new Map<string, SamlProvider>()
   private readonly clients = new Map<string, SamlClient>()
   private readonly allowedDomains = new Map<string, Set<string>>()
+  private readonly algorithms = new Map<string, SamlAlgorithmPolicy>()
   private readonly replay: SamlAssertionReplayCache
 
   constructor(
@@ -366,6 +527,7 @@ export class Saml {
       // A duplicate name would silently pair one entry's IdP with another's allowlist.
       if (seen.has(p.name)) throw new SamlProviderConfigError(`provider "${p.name}" is configured more than once`)
       seen.add(p.name)
+      this.algorithms.set(p.name, samlAlgorithmPolicy(p))
       const domains = normalizeAllowedDomains(p)
       if (domains) this.allowedDomains.set(p.name, domains)
       else if (providers.length > 1 && p.allowAnyEmailDomain !== true) {
@@ -441,6 +603,9 @@ export class Saml {
         throw new SamlResponseInvalidError('the response is not bound to the browser that started the login')
       }
     }
+    // node-saml 5 verifies with any algorithm xml-crypto knows (SHA-1 included) and
+    // has no verification-side option, so the allowlist is enforced before it runs.
+    assertSamlResponseAlgorithms(body.SAMLResponse, this.algorithms.get(provider.name)!)
     let result: { profile: SamlProfile | null; loggedOut: boolean }
     try {
       result = await client.validatePostResponseAsync({

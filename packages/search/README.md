@@ -113,12 +113,25 @@ syncRule({
   },
 })
 
-await search.reindex('notes')   // → number of documents written
+await search.reindex('notes', { all: true })                    // every tenant → documents written
+await tenancy.run('acme', () => search.reindex('notes'))        // only acme; the others are untouched
+await search.reindex('notes', { tenantId: 'acme' })             // only acme, from a job/CLI
 ```
 
 `backfill` yields **hook payloads**, not rows, so the same `document` function maps both. A second mapping written by hand is the drift this prevents: let it disagree and the same search returns different things depending on whether a record predates the last rebuild. Every row is mapped and validated **before** the index is cleared (two walks over `backfill`, memory bounded by one page), so a rebuild that would fail leaves the old index in place instead of an empty one; rows that change between the walks can still fail the second — rerun then. The index is then cleared, not appended to — a rebuild that appends leaves documents for records that no longer exist — and an index whose rules have no `backfill` raises, rather than reporting a rebuild that did nothing.
 
-A rebuild covers every tenant, so it never takes the tenant from the context it runs in: in a multi-tenant app `document` must return `tenantId`, and a row without one throws `TenantRequiredError` whenever `@basaltkit/tenancy` is registered or a tenant context is active. Only a single-tenant app with no context tenant files tenant-less rows under `SINGLE_TENANT_SCOPE`. `reindex()` clears the **whole** index, so `backfill` must yield every tenant's records — never call it once per tenant (e.g. inside `tenancy.run`), or each call wipes the others.
+**Scope.** A rebuild clears before it writes, so what it clears is never guessed:
+
+| Where / how | Clears | Writes |
+|---|---|---|
+| Inside a tenant context (request, `tenancy.run`, `tenancy.forEach`) — or `{ tenantId }` | that tenant's documents only (`driver.clearTenant`) | the backfill rows mapped to that tenant; other tenants' rows are skipped |
+| `{ all: true }`, outside a tenant context | the whole index (`driver.clear`) | every row — `backfill` must yield every tenant's records |
+| No option, no tenant context, `@basaltkit/tenancy` registered | — refused: `SearchReindexScopeError` (`SEARCH_REINDEX_SCOPE`, 400) | — |
+| No option, single-tenant app | the whole index | every row |
+
+So one call per tenant is safe — the pattern for a database-per-tenant `backfill` is `tenancy.forEach(() => search.reindex('notes'))` (or `tenancy.run(id, …)`), since `db()` inside the backfill is then that tenant's database. `{ all: true }` inside a tenant context and a `tenantId` other than the context tenant are refused (`SearchReindexScopeError`, `SearchTenantMismatchError`). A scoped rebuild needs the driver's `clearTenant`; a custom driver without it gets `SearchDriverCapabilityError` (`SEARCH_DRIVER_UNSUPPORTED`, 501) before anything is read or cleared — never a fallback to `clear()`, which would wipe every tenant.
+
+The tenant always comes from the rule's own `document`, never from the context the rebuild runs in (a backfill over a shared table would file every tenant's rows under it): in a multi-tenant app `document` must return `tenantId`, and a row without one throws `TenantRequiredError` whenever `@basaltkit/tenancy` is registered, a tenant context is active, or the rebuild is scoped. Only a single-tenant app with no context tenant files tenant-less rows under `SINGLE_TENANT_SCOPE`.
 
 ## How relevance works (in-memory driver)
 
@@ -135,7 +148,7 @@ searchPlugin({
 })
 ```
 
-The driver talks directly to Meilisearch's REST API (no SDK). Each document gets a composite primary key (`_pk`), so ids never collide across tenants; and **every search is filtered by `tenantId`**, guaranteeing isolation. `defineIndex(...).filterable` is automatically declared as a filterable attribute in Meilisearch.
+The driver talks directly to Meilisearch's REST API (no SDK). Each document gets a composite primary key (`_pk`), so ids never collide across tenants; and **every search is filtered by `tenantId`**, guaranteeing isolation. `defineIndex(...).filterable` is automatically declared as a filterable attribute in Meilisearch. A tenant-scoped `reindex()` deletes by filter (`tenantId = …`), which needs Meilisearch ≥ 1.2.
 
 ## Production with Postgres or Elasticsearch
 
@@ -170,6 +183,8 @@ Both keep the same guarantee as the built-in drivers: **every query is constrain
 | `indexes` | `IndexDefinition[]` | `[]` | Indexes to register on startup. A listed index only accepts `filters` on its `filterable` fields. |
 | `sync` | `SyncRule[]` | `[]` | Hook → index rules (use `syncRule(...)`). |
 | `maxLimit` | `number` | `1000` | Largest `limit` one `search()` may ask for; above it throws `SearchPaginationError`. |
+| `maxOffset` | `number` | `10000` | Largest `offset` one `search()` may ask for; above it throws `SearchPaginationError`. |
+| `maxScan` | `number` | `10000` | Ceiling on the driver rows one authorized search (`authorize`) may scan; a per-call `maxScan` may lower it, not raise it. |
 
 Registers the `SEARCH` token (`Search`).
 
@@ -181,11 +196,11 @@ Registers the `SEARCH` token (`Search`).
 | `bulk(indexName, documents)` | Indexes several. |
 | `remove(indexName, id, tenantId?)` | Removes a document (tenant from context if omitted). |
 | `search(indexName, q, options?)` | Searches. `options`: `tenantId?`, `filters?`, `limit?`, `offset?`, `authorize?`, `maxScan?`. Validated first — see below. |
-| `reindex(indexName)` | Rebuilds the index from its rules' `backfill`, through their own `document`. Validates every row, then clears and writes; returns how many documents were written. Throws if no rule declares the index, none has a `backfill`, or a row has no `tenantId` where a tenant could exist. |
+| `reindex(indexName, options?)` | Rebuilds the index from its rules' `backfill`, through their own `document`. `options`: `tenantId?` (one tenant) or `all?` (every tenant); inside a tenant context it is scoped to that tenant. Validates every row, then clears the scope and writes; returns how many documents were written. Throws if the scope is ambiguous, the driver cannot clear one tenant, no rule declares the index, none has a `backfill`, or a row has no `tenantId` where a tenant could exist. |
 
 `search()` validates its input before any driver runs (each a `400`):
 
-- `limit`/`offset` must be non-negative integers and `limit` ≤ `maxLimit` (default `1000`, `searchPlugin({ maxLimit })`) — `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`).
+- `limit`/`offset` must be non-negative integers, `limit` ≤ `maxLimit` (default `1000`) and `offset` ≤ `maxOffset` (default `10000`, the same window Elasticsearch enforces); a per-call `maxScan` must be a positive integer ≤ the `maxScan` ceiling (default `10000`) — `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`). All three are `searchPlugin` options. Past the offset window, narrow with a filter instead of paging deeper.
 - On an index listed in `searchPlugin({ indexes })` (or `new Search({ indexes })`), a filter may only name a `filterable` field or `tenantId` — `SearchFilterNotFilterableError` (`SEARCH_FILTER_NOT_FILTERABLE`). Indexes not listed keep passing any field to the driver.
 - A filter value must be a string, a finite number, a boolean, or a flat array of those; `null`/`undefined` are refused rather than dropped (dropping would widen the result) — `SearchFilterValueError` (`SEARCH_INVALID_FILTER_VALUE`). `MeilisearchDriver` repeats this check, since it splices values into its filter DSL.
 
@@ -206,7 +221,7 @@ Declares an index: `fields` are searchable (full-text), `filterable` are usable 
 | `PostgresSearchDriver({ client, table?, language? })` | `@basaltkit/search-postgres` | Production on Postgres full-text (`tsvector`/`ts_rank`, GIN index) — no extra infrastructure. |
 | `ElasticsearchDriver({ node, apiKey? \| username?+password?, indexPrefix?, fetch? })` | `@basaltkit/search-elasticsearch` | Production on Elasticsearch 8.x / OpenSearch 2.x (`multi_match` relevance). |
 
-Any object implementing the `SearchDriver` interface plugs in the same way.
+Any object implementing the `SearchDriver` interface plugs in the same way. All four built-in drivers implement the optional `clearTenant(index, tenantId)` (delete every document of one tenant — Meilisearch delete-by-filter, Postgres `DELETE … WHERE tenant_id`, Elasticsearch `_delete_by_query` on a `tenantId` term); a custom driver needs it only for a tenant-scoped `reindex()`, which refuses to run without it.
 
 ## How it connects to other modules
 

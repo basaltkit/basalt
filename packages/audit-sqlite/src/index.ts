@@ -197,6 +197,18 @@ export class SqliteAuditStore implements AuditStore {
     return rows.map((r) => parseAuditChainKey(r.chain))
   }
 
+  /**
+   * Every tenant with at least one row, chained or not (`undefined` = rows
+   * without a tenant) — one `SELECT DISTINCT` over the tenant index, so
+   * `verifyAll()` reaches chainless tenants without reading the whole trail.
+   */
+  async auditTenants(): Promise<Array<string | undefined>> {
+    const rows = this.db.prepare('SELECT DISTINCT tenant_id FROM audit_entries').all() as unknown as Array<{
+      tenant_id: string | null
+    }>
+    return rows.map((r) => r.tenant_id ?? undefined)
+  }
+
   async query(query: AuditQuery): Promise<AuditEntry[]> {
     // Validated here too, not only in Audit.trail(): the store is public API.
     assertAuditQuery(query)

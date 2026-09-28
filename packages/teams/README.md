@@ -245,10 +245,20 @@ No tenant or no user in context → `NotATeamMemberError` (403).
 
 The required role must be a **known** role — ranked in `roleRank` or listed in
 `grantableRoles`. A typo (`'Admin'`, `'adimn'`), an empty string or a non-string
-value fails closed with `UnknownTeamRoleError` (`TEAM_ROLE_UNKNOWN`, 500) on every
-request to that route; before 4.0 such a role ranked 0 and admitted every member.
-Only `undefined` and `false` mean "no requirement" (the same rule the adapters'
-boot check uses).
+value **fails the boot**: `teamsPlugin` registers a route-meta validator
+(`http:meta-validators`) that every adapter runs before serving, so the app refuses
+to start with `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`) naming the route
+and the value (`allowUnguardedMeta` does not waive it). A route that escapes the
+boot check (mounted outside the adapter's list, or driven through `runRoute()`)
+still fails closed with `UnknownTeamRoleError` (`TEAM_ROLE_UNKNOWN`, 500) on every
+request; before 4.0 such a role ranked 0 and admitted every member. Only
+`undefined` and `false` mean "no requirement" (the same rule the adapters' boot
+check uses).
+
+`teamsPlugin` also registers a pure visibility check (`http:route-visibility`):
+listings such as `@basaltkit/mcp`'s `tools/list` hide a `meta.teamRole` route from
+callers who do not hold the role in the current tenant (one membership read — no
+hooks, no writes).
 
 `teamsPlugin` also claims `'teamRole'` in the `http:guarded-meta` bucket, so a
 route declaring `meta.teamRole` in an app that never registered `teamsPlugin`
@@ -314,8 +324,9 @@ this role outrank `member`?"*. That matters because `rankOf()` returns **0** for
 any role absent from `roleRank` — with rank semantics, a genuine member holding
 a custom role like `billing-contact` would be rejected. Set `role: 'member'`
 only when you deliberately want rank enforcement and every role you use is in
-`roleRank`. An unknown `role` (not ranked, not in `grantableRoles`) fails closed
-with `TEAM_ROLE_UNKNOWN` (500).
+`roleRank`. An unknown `role` (not ranked, not in `grantableRoles`) throws
+`UnknownTeamRoleError` at boot (when `teamsPlugin` is registered) and fails closed
+with `TEAM_ROLE_UNKNOWN` (500) at request time otherwise.
 
 #### Cache staleness
 
@@ -411,9 +422,12 @@ the real error code in the body.
   `roleRank` have no rank: they never satisfy a ranked requirement, and an
   unranked requirement is matched exactly. Add the role to the map, or (for the
   membership guard) rely on the default existence semantics instead of `role:`.
+- **Boot fails with `InvalidRouteMetaError` (`meta.teamRole "Admin" is not a known
+  team role`)** — fix the value, or rank the role / list it in `grantableRoles`.
+  Roles are case-sensitive.
 - **`500 TEAM_ROLE_UNKNOWN` on a route** — its `meta.teamRole` isn't in
-  `roleRank` or `grantableRoles`. Usually a typo (`'Admin'`); roles are
-  case-sensitive.
+  `roleRank` or `grantableRoles` and the route was mounted outside the adapter's
+  route list (so the boot check never saw it). Usually a typo (`'Admin'`).
 - **403 on a central route (tenant creation, platform admin)** — mark it
   `meta: { central: true }`, or exempt the calling identity with `exempt`. Your
   own profile/account routes take `meta: { account: true }` instead (the

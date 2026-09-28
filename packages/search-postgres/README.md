@@ -35,7 +35,7 @@ searchPlugin({
 })
 ```
 
-`register` (called by `searchPlugin` at boot) creates the `basalt_search` table and the GIN index. `index`/`search`/`remove`/`clear` work like any other `@basaltkit/search` driver.
+`register` (called by `searchPlugin` at boot) creates the `basalt_search` table and the GIN index. `index`/`search`/`remove`/`clear`/`clearTenant` work like any other `@basaltkit/search` driver — `clearTenant` (`DELETE … WHERE idx = $1 AND tenant_id = $2`) is what lets `search.reindex()` rebuild one tenant without touching the others.
 
 ## How it works
 

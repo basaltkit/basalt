@@ -51,9 +51,11 @@ declare module '@basaltkit/core' {
     /**
      * A provider-verified social login took over an account whose email had
      * never been verified; its previous password, sessions, refresh tokens and
-     * MFA were revoked.
+     * MFA and account links were revoked.
      */
     'auth:social_account_adopted': { user: PublicUser }
+    /** A provider account (its stable subject) was linked to this account on its first social login. */
+    'auth:account_linked': { user: PublicUser; provider: string }
   }
 }
 

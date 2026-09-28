@@ -79,8 +79,9 @@ describe.each(['fastify', 'express', 'hono'] as const)('MCP over HTTP on the %s 
       expect(foreign.status).toBe(403)
       const simple = await fetch(live.url, { method: 'POST', headers: { 'content-type': 'text/plain;charset=application/json' }, body })
       expect(simple.status).toBe(415)
-      const sameOrigin = await fetch(live.url, { method: 'POST', headers: { 'content-type': 'application/json', origin: new URL(live.url).origin }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }) })
+      const sameOrigin = await fetch(live.url, { method: 'POST', headers: { 'content-type': 'application/json', origin: new URL(live.url).origin }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'initialize', params: {} }) })
       expect(sameOrigin.status).toBe(200)
+      expect(sameOrigin.headers.get('mcp-session-id')).toMatch(/^[A-Za-z0-9_-]{32}$/)
     } finally {
       await live.close()
     }

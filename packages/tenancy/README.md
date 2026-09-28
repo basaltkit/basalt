@@ -335,8 +335,19 @@ real owner does not have to wait — it publishes the record from
 verified TXT wins). Set `reservedDomains` to your platform apex so no tenant can
 claim it or a subdomain of it.
 `verify(tenantId, domain, { force: true })` re-checks an already-verified domain
-and **un-verifies** it if the record is gone — run it on a schedule to defend
-against dangling-domain takeover.
+and **un-verifies** it if the record is gone. For a scheduled job, use the
+system-level `reverify(domain)` / `reverifyAll({ domains? })` instead: they need
+no tenant id, un-verify only when DNS definitively says the record is gone
+(NXDOMAIN, no TXT, no matching value — a timeout or SERVFAIL is reported as
+`dns-error` and changes nothing), and un-verify conditionally (a claim that
+changed hands meanwhile is left alone). `reverifyAll()` reads
+`DomainStore.listVerified()`, or takes `{ domains }`.
+
+A stale verified claim also yields to the new owner of a lapsed domain: with
+`challengeSecret` set, the new owner publishes its `challenge()` record and calls
+`add()`; when that lookup no longer shows the incumbent's record, the domain is
+handed over, verified. While the incumbent's record is still published (or the
+lookup fails), `add()` throws `DomainTakenError`.
 
 `CustomDomainsOptions`:
 
@@ -346,12 +357,13 @@ against dangling-domain takeover.
 | `now` | `() => number` | `Date.now` | Injectable clock. |
 | `token` | `() => string` | 24 random bytes, base64url | Verification-token generator. |
 | `resolveTxt` | `(hostname) => Promise<string[][]>` | `node:dns/promises` `resolveTxt` | Injectable DNS lookup (tests, or a custom resolver). |
-| `claimTtlMs` | `number` | `72 * 60 * 60 * 1000` | How long an **unverified** claim holds a domain before another tenant can take it. Verified domains never expire. |
+| `claimTtlMs` | `number` | `72 * 60 * 60 * 1000` | How long an **unverified** claim holds a domain before another tenant can take it. Verified domains never expire (a stale one yields only to a `challenge()` record). |
 | `reservedDomains` | `string[]` | `[]` | Your platform's own domains; each and every subdomain of it is refused with `DomainReservedError`. |
 | `challengeSecret` | `string` | — | Enables `challenge()`: the owner proves DNS control and takes over a squatted unverified claim at once. Same value on every instance. |
 
 A durable `DomainStore` should also implement `replace(expected, next)` as a
-conditional update, so handing an expired claim over is atomic.
+conditional update, so handing an expired claim over (and un-verifying one in
+`reverify()`) is atomic, and `listVerified()` for `reverifyAll()`.
 
 ### Failure modes & troubleshooting
 
@@ -379,8 +391,9 @@ conditional update, so handing an expired claim over is atomic.
   header named an unknown (or grammar-invalid) id, or an authoritative resolver
   already named a tenant from the `Host`: a header is only consulted when the
   subdomain/domain/route resolvers named nothing.
-- **A verified custom domain stopped resolving** — a `force` re-check found the
-  TXT record missing and un-verified it. Re-publish the record and verify again.
+- **A verified custom domain stopped resolving** — a `reverify()` /
+  `reverifyAll()` (or `force`) re-check found the TXT record missing and
+  un-verified it. Re-publish the record and verify again.
 
 ### Hooks & events
 

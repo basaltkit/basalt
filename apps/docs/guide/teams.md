@@ -179,10 +179,21 @@ route({
 ```
 
 The required role must be **known** — in `roleRank` or `grantableRoles`. A typo
-(`'Admin'`, `'adimn'`), an empty string or a non-string fails closed with
-`500 TEAM_ROLE_UNKNOWN` on every request to that route (before `@basaltkit/teams`
-4.0 it ranked 0 and admitted every member). Only `undefined` and `false` mean
-"no requirement". The same applies to `tenantMembershipPlugin({ role })`.
+(`'Admin'`, `'adimn'`), an empty string or a non-string **fails the boot**:
+`teamsPlugin` registers a route-meta validator that every adapter runs over its
+routes before serving, so the app refuses to start with `InvalidRouteMetaError`
+(`HTTP_INVALID_ROUTE_META`) naming the route and the value — `allowUnguardedMeta`
+does not waive it. A route that escapes the boot check (mounted outside the
+adapter's list, or run through `runRoute()` directly) still fails closed with
+`500 TEAM_ROLE_UNKNOWN` on every request (before `@basaltkit/teams` 4.0 it ranked
+0 and admitted every member). Only `undefined` and `false` mean "no
+requirement". The same applies to `tenantMembershipPlugin({ role })`, which
+throws `UnknownTeamRoleError` at boot.
+
+`teamsPlugin` also registers a pure visibility check (`http:route-visibility`),
+so listings such as `@basaltkit/mcp`'s `tools/list` hide a `meta.teamRole` route
+from callers who do not hold the role in the current tenant — see
+[MCP](/guide/mcp#what-tools-list-shows).
 
 `teamsPlugin` claims the `teamRole` key in the adapters' boot-time guarded-meta
 check — declaring `meta.teamRole` on a route **without** registering the plugin
@@ -501,8 +512,12 @@ catalogue into every tenant — see
   `roleRank` have no rank: they never satisfy a ranked requirement. Add the role
   to the map, or (for the membership guard) rely on the default existence
   semantics instead of `role:`.
+- **Boot fails with `InvalidRouteMetaError` … `meta.teamRole "Admin" is not a
+  known team role`** — fix the value, or rank the role in `roleRank` / list it
+  in `grantableRoles` (roles are case-sensitive).
 - **`500 TEAM_ROLE_UNKNOWN` on a route** — its `meta.teamRole` isn't in
-  `roleRank` or `grantableRoles`; usually a typo (roles are case-sensitive).
+  `roleRank` or `grantableRoles` and the route escaped the boot check (mounted
+  outside the adapter's route list); usually a typo.
 - **`403` on a central route (login, sign-up, tenant creation)** — mark it
   `meta: { central: true }`, or exempt the calling identity with `exempt`.
 

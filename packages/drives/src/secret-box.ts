@@ -5,31 +5,14 @@ import { DriveSecretKeyInvalidError, DriveSecretKeyUnknownError, DriveSecretMalf
  * Authenticated encryption (AES-256-GCM) for the OAuth tokens this package
  * stores at rest.
  *
- * ## Why this is not `@basaltkit/auth`'s secret box
+ * ## Relation to `@basaltkit/auth`'s `SecretBox`
  *
- * `@basaltkit/auth` has an AES-256-GCM helper for TOTP secrets
- * (`packages/auth/src/secret-box.ts`). It could not be reused, for two reasons
- * — one mechanical, one substantive:
- *
- * 1. **It is private.** It is not re-exported from `@basaltkit/auth`'s
- *    `index.ts` and there is no package subpath for it, so it is unreachable
- *    from another package without editing `@basaltkit/auth`.
- * 2. **Its threat model is weaker than a refresh token needs.** It binds no
- *    associated data, so a ciphertext is portable between rows — copy tenant
- *    A's blob into tenant B's row and B holds A's credentials. It has one key
- *    and no key id, so rotating means re-encrypting every row in a flag day.
- *    And `decryptSecret` returns any value lacking the `v1:` prefix unchanged,
- *    which is a deliberate legacy-plaintext path for TOTP migration but is
- *    fail-**open** for a credential: whoever can write the column can choose
- *    the plaintext.
- *
- * This box fixes all three: **AAD binding**, a **key ring with ids**, and
- * **no plaintext path** — an unrecognised value is corruption, never a secret.
- *
- * RFC 0002 proposes promoting this into a lower layer so `@basaltkit/auth` and
- * this package share one implementation; until that lands, this is the single
- * accepted duplication in the design, and it is deliberately the *stronger* of
- * the two so the merge direction is obvious.
+ * `@basaltkit/auth` now ships a `SecretBox` for TOTP secrets built on the same
+ * model — HKDF-derived keys, a key ring with ids, AAD binding to the owning
+ * record, and no plaintext path unless a legacy migration is opted into. The
+ * two are still separate implementations because neither package may depend
+ * on the other; RFC 0002 proposes promoting one into a lower layer so both
+ * share it.
  *
  * ## Envelope
  *

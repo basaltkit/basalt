@@ -157,6 +157,7 @@ Any client that speaks MCP over stdio: run `basalt-ai-mcp` (from a dev install) 
 | `--host=<host>` | `127.0.0.1` | Bind address for `--http`. Loopback by default — this is a dev surface. A non-loopback bind is refused without `--token`. |
 | `--token=<secret>` | `BASALT_AI_MCP_TOKEN` | `--http` only: every request must send `Authorization: Bearer <secret>` (else `401`). The Host/Origin guard is not authentication. |
 | `--allowed-hosts=<a,b>` | loopback names | `--http` only: extra `Host` hostnames accepted when bound off loopback. |
+| `--sessions` | off (stateless) | `--http` only: `Mcp-Session-Id` sessions — `initialize` issues one, later requests must send it (`400` without, `404` unknown/expired/foreign), and a `notifications/cancelled` POSTed separately cancels the call it names. Bound to the bearer token. |
 | `--allow-unconfirmed-apply` | off | Let `basalt_make` apply when the client cannot confirm via elicitation (refused by default). |
 
 stdio is the default and the recommended local path; it is also the only transport that
@@ -210,9 +211,12 @@ const res = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/l
 `StartOptions` adds `input` / `output` (stdio stream injection, defaulting to
 `process.stdin` / `process.stdout`). `HttpStartOptions` adds every `ServeHttpOptions`
 field from `@basaltkit/mcp-core` — `port`, `host`, `path`, `allowedHosts`,
-`allowedOrigins`, `allowRequest`, `authorize`, `maxBodyBytes` — including its loopback-only,
+`allowedOrigins`, `allowRequest`, `authorize`, `maxBodyBytes`, `sessions`, `principal` — including its loopback-only,
 anti-DNS-rebinding and anti-CSRF defaults, plus `token` (a constant-time bearer check,
-also exported as `bearerAuthorizer(token)`).
+also exported as `bearerAuthorizer(token)`). `sessions` (`true` or `{ ttlMs, maxSessions }`)
+stays **off by default** so header-less clients keep working; turn it on to let a separate
+POST cancel a long `basalt_make`/`basalt_plan`. `principal` decides who owns a session
+(default: a hash of the `Authorization` header).
 
 ## Failure modes
 

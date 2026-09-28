@@ -11,35 +11,40 @@ import {
 const SECRET = 'x'.repeat(32)
 
 describe('TOTP secret encryption at rest (M-3)', () => {
+  const KEY = 'an-app-held-mfa-key-of-32-bytes!!'
+
   it('stores the secret as an encrypted envelope but still verifies codes', async () => {
     const mfa = new MemoryMfaStore()
     const auth = new Auth({
       users: new MemoryUserSource(),
       secret: SECRET,
       mfa,
-      mfaEncryptionKey: 'an-app-held-mfa-key',
+      mfaEncryptionKey: KEY,
     })
     const user = await auth.register('a@b.c', 'password123')
     const { secret } = await auth.enrollMfa(user.id)
 
     const stored = (await mfa.get(user.id))!.secret
-    expect(stored.startsWith('v1:')).toBe(true) // ciphertext envelope
+    expect(stored.startsWith('bka2.default.')).toBe(true) // versioned envelope with key id
     expect(stored).not.toContain(secret) // plaintext secret is not on disk
 
     // Decryption on the verify path still works end-to-end.
     await expect(auth.activateMfa(user.id, totp(secret))).resolves.toBeDefined()
   })
 
-  it('reads back legacy plaintext secrets (gradual migration)', async () => {
+  it('reads back legacy plaintext secrets only with the explicit legacy opt-in', async () => {
     const mfa = new MemoryMfaStore()
-    const key = 'an-app-held-mfa-key'
     // Simulate a pre-encryption record: plaintext secret already on disk.
     const plain = new Auth({ users: new MemoryUserSource(), secret: SECRET, mfa })
     const user = await plain.register('a@b.c', 'password123')
     const { secret } = await plain.enrollMfa(user.id)
 
-    // A key-configured Auth still verifies the legacy plaintext record.
-    const encAuth = new Auth({ users: plain.users, secret: SECRET, mfa, mfaEncryptionKey: key })
+    const encAuth = new Auth({
+      users: plain.users,
+      secret: SECRET,
+      mfa,
+      mfaEncryption: { keys: [{ id: 'k1', key: KEY }], legacy: { plaintext: true } },
+    })
     await expect(encAuth.activateMfa(user.id, totp(secret))).resolves.toBeDefined()
   })
 })

@@ -258,6 +258,33 @@ assertRoutesGuarded(routes, app.container)            // throws UnguardedRouteMe
 assertRoutesGuarded(routes, app.container, ['auth'])  // same waiver as allowUnguardedMeta
 ```
 
+**Route-meta validators.** Claiming a key proves a guard enforces it; a
+**validator** checks the value. A plugin registers a `RouteMetaValidator` in
+`META_VALIDATORS_BUCKET` (`'http:meta-validators'`) — `({ route, container }) =>
+problem | problem[] | undefined` (throwing counts as a problem). Every adapter runs
+them over its full route list at boot, after the guarded-meta check, and refuses
+to start with `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`, `problems[]`).
+`allowUnguardedMeta` never waives them. `assertRoutesGuarded(routes, container)`
+runs them too; `assertRouteMetaValid(routes, container)` runs them alone. (Passing
+a plain `Set` of claimed keys runs no validators.) `teamsPlugin` uses this to fail
+the boot on an unknown `meta.teamRole`.
+
+```ts
+ensureMetadata(container).add(META_VALIDATORS_BUCKET, (({ route }) =>
+  route.meta?.['teamRole'] === 'Admin' ? 'unknown role "Admin"' : undefined) satisfies RouteMetaValidator)
+```
+
+**Route visibility.** A guard may publish a pure companion in
+`ROUTE_VISIBILITY_BUCKET` (`'http:route-visibility'`): a `RouteVisibilityCheck`
+`({ route, context, container }) => boolean | undefined` answering "could this
+caller possibly pass?" — with **no side effects** (no rate-limit consumption, no
+audit/denial records, no hooks; plain reads are fine). `isRouteVisible(route,
+context, container)` combines them (a throwing check hides the route) with one
+built-in rule: a `meta.auth` route is hidden from a caller without
+`context.user`, when a guard claimed `auth`. Listing surfaces use it —
+`@basaltkit/mcp`'s `tools/list`. Visibility is never authorization: guards still
+run on every call.
+
 ### Route `meta` the framework reads
 
 `meta` is free-form, but these keys have framework meaning:
@@ -767,6 +794,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. The response carries `part` and `issues[]`. |
 | `HttpError(status, code, message, options?)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. `options` is `{ details?, cause? }` — `details` is serialized as `error.details` (see [Structured error details](#structured-error-details)). |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A route-meta validator (`META_VALIDATORS_BUCKET`) refused one or more routes; `problems[]` lists each `{ route, problem }`. Thrown by the adapter at boot; never waived by `allowUnguardedMeta`. |
 | — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
 | — (no class) | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. `Retry-After` is set. |
 | `HttpError` | `PAYLOAD_TOO_LARGE` | 413 | An `upload()` body passed `maxBytes`, `maxFileBytes` or `maxFieldBytes`, or a `rawBody()` body passed its `maxBytes`. |

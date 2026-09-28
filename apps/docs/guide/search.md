@@ -16,10 +16,11 @@ to `search()`, `remove()`, or on a document given to `index()`/`bulk()` must
 name that tenant, and any other value throws `SearchTenantMismatchError`
 (`403 SEARCH_TENANT_MISMATCH`) — so forwarding a client's `?tenantId=` can never
 widen a query or plant a document in another tenant. Outside a tenant context
-(jobs, CLI) the explicit value selects the tenant. `reindex()` is a system
-operation over every tenant and keeps the tenant each sync rule maps — it never
-takes one from the context it runs in, so a rule whose `document` omits
-`tenantId` is refused (`TenantRequiredError`) whenever a tenant could exist. A tenant id
+(jobs, CLI) the explicit value selects the tenant. `reindex()` follows the same
+rule for *what it rebuilds* — inside a tenant context only that tenant — but
+keeps the tenant each sync rule maps for *each row*: it never takes one from the
+context, so a rule whose `document` omits `tenantId` is refused
+(`TenantRequiredError`) whenever a tenant could exist. A tenant id
 equal to `SINGLE_TENANT_SCOPE` — from the context, an argument, a document or a
 `reindex()` row — is refused with `SearchTenantReservedError`
 (`400 SEARCH_TENANT_RESERVED`).
@@ -212,7 +213,7 @@ page one ended.
 | Option | What it does |
 | --- | --- |
 | `authorize` | Returns the hits the caller may see, in the order given. Must not reorder — relevance is the driver's to decide |
-| `maxScan` | How many driver rows a search may scan before giving up. Default: 20 pages, floor 200 |
+| `maxScan` | How many driver rows a search may scan before giving up. Default: 20 pages, floor 200, capped by `searchPlugin({ maxScan })` (default `10000`); a larger per-call value throws `SearchPaginationError` |
 | `totalExact` *(on the result)* | Whether `total` is the whole truth. A driver's total counts rows the caller may not see, and rendering it would put "42 results" above three rows |
 
 Callers without the hook are untouched: one driver call, same behaviour.
@@ -239,7 +240,8 @@ syncRule({
   },
 })
 
-await search.reindex('matters')
+await search.reindex('matters', { all: true })       // every tenant, from a job or the CLI
+await tenancy.forEach(() => search.reindex('matters')) // one tenant at a time
 ```
 
 `backfill` yields **hook payloads**, not rows, so one `document` function serves
@@ -251,22 +253,41 @@ Every row is mapped and validated **before** the index is cleared, so a rebuild
 that would fail leaves the old index in place instead of an empty one. That takes
 two walks over `backfill` (memory stays bounded by one page); rows that change
 between the walks can still fail the second one — rerun `reindex()` then. The
-index is then cleared, not appended to — a rebuild that appends leaves documents
+scope is then cleared, not appended to — a rebuild that appends leaves documents
 for records that no longer exist — and an index whose rules have no `backfill`
 raises, rather than reporting a rebuild that did nothing.
 
-In a multi-tenant app `document` must return `tenantId`. A rebuild covers every
-tenant, so the tenant cannot come from the context: a row without one throws
-`TenantRequiredError` whenever `@basaltkit/tenancy` is registered or the rebuild
-runs inside a tenant context. Only a single-tenant app with no context tenant
-files tenant-less rows under `SINGLE_TENANT_SCOPE`.
+### What a rebuild clears
 
-::: warning One rebuild, every tenant
-`reindex()` clears the **whole** index, so its `backfill` must yield every
-tenant's records. Do not call it once per tenant (for example inside
-`tenancy.run(id, …)` with a database-per-tenant `backfill`): each call would
-wipe the other tenants' documents and write back only one tenant's.
-:::
+A rebuild clears before it writes, so its reach is never guessed:
+
+| Where / how | Clears | Writes |
+| --- | --- | --- |
+| Inside a tenant context (request, `tenancy.run`, `tenancy.forEach`), or `{ tenantId }` | That tenant's documents only | The rows mapped to that tenant; other tenants' rows are skipped |
+| `{ all: true }`, outside a tenant context | The whole index | Every row — `backfill` must yield every tenant's records |
+| No option, no tenant context, tenancy registered | Refused — `SearchReindexScopeError` (`400 SEARCH_REINDEX_SCOPE`) | — |
+| No option, single-tenant app | The whole index | Every row |
+
+So rebuilding one tenant at a time is safe, and it is the way to go with a
+database-per-tenant `backfill`: inside `tenancy.run(id, …)` (or
+`tenancy.forEach`) the backfill's `db()` is that tenant's database, and the other
+tenants' documents stay where they are. `{ all: true }` inside a tenant context,
+and a `tenantId` naming another tenant than the context's, are refused
+(`SearchReindexScopeError`, `SearchTenantMismatchError`).
+
+A scoped rebuild clears through the driver's `clearTenant(index, tenantId)`,
+which every built-in driver implements (Meilisearch delete-by-filter, Postgres
+`DELETE … WHERE tenant_id`, Elasticsearch `_delete_by_query`). A custom driver
+without it gets `SearchDriverCapabilityError` (`501 SEARCH_DRIVER_UNSUPPORTED`)
+before anything is read or cleared — never a fallback to `clear()`, which would
+wipe every tenant.
+
+In a multi-tenant app `document` must return `tenantId`, scoped rebuild or not:
+the tenant of a row never comes from the context, because a backfill over a
+shared table would file every tenant's rows under it. A row without one throws
+`TenantRequiredError` whenever `@basaltkit/tenancy` is registered, the rebuild
+runs inside a tenant context, or it is scoped. Only a single-tenant app with no
+context tenant files tenant-less rows under `SINGLE_TENANT_SCOPE`.
 
 ## Production with Meilisearch
 
@@ -423,9 +444,11 @@ await search.search('notes', 'report', {
 Both usually come from a query string, so `search()` checks them before any
 driver runs and throws a `400` rather than forwarding them:
 
-- `limit`/`offset` must be non-negative integers, and `limit` at most `maxLimit`
-  (default `1000`, set with `searchPlugin({ maxLimit })`) —
-  `SearchPaginationError` (`SEARCH_INVALID_PAGINATION`).
+- `limit`/`offset` must be non-negative integers, `limit` at most `maxLimit`
+  (default `1000`) and `offset` at most `maxOffset` (default `10000` — the window
+  Elasticsearch enforces anyway; past it, narrow with a filter) — both set on
+  `searchPlugin({ maxLimit, maxOffset })` — `SearchPaginationError`
+  (`SEARCH_INVALID_PAGINATION`).
 - On an index listed in `searchPlugin({ indexes })`, a filter may only name a
   `filterable` field (or `tenantId`) — `SearchFilterNotFilterableError`
   (`SEARCH_FILTER_NOT_FILTERABLE`). Otherwise any stored field becomes an oracle
@@ -440,9 +463,10 @@ driver runs and throws a `400` rather than forwarding them:
 | API | Purpose |
 | --- | --- |
 | `defineIndex({ name, fields, filterable? })` | Declare an index. |
-| `searchPlugin({ driver?, indexes?, sync?, maxLimit? })` | Register the service, indexes and sync rules. |
+| `searchPlugin({ driver?, indexes?, sync?, maxLimit?, maxOffset?, maxScan? })` | Register the service, indexes and sync rules. |
 | `SEARCH` | DI token → the `Search` service. |
 | `search.index/bulk/remove/search` | Index, bulk-index, remove, query. |
+| `search.reindex(index, { tenantId?, all? })` | Rebuild from the rules' `backfill` — one tenant (the context's, or `tenantId`) or, with `all`, every tenant. |
 | `MemorySearchDriver` · `MeilisearchDriver` | Built-in dev/test and production backends. |
 | `PostgresSearchDriver` (`@basaltkit/search-postgres`) | Postgres full-text backend — no separate search service. |
 | `ElasticsearchDriver` (`@basaltkit/search-elasticsearch`) | Elasticsearch / OpenSearch backend for large-scale relevance. |

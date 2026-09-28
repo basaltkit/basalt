@@ -1,0 +1,32 @@
+// Reference schema for @basaltkit/notifications-prisma — MySQL variant.
+//
+// Same model as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently — a cut title or body, or `data` that is no longer
+// valid JSON. Free-text columns are widened below; the keys stay VARCHAR(191)
+// so they can be indexed. Pair it with
+// `prismaInAppStore(prisma, { columnLimits: 'mysql' })`, which refuses a value
+// that would still not fit instead of letting it be cut.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model InAppNotification {
+  id           String    @id
+  recipientId  String
+  notification String
+  title        String    @db.Text
+  body         String?   @db.Text
+  data         String?   @db.MediumText
+  readAt       DateTime?
+  at           DateTime
+
+  @@index([recipientId, at])
+  @@map("in_app_notifications")
+}

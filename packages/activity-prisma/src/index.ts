@@ -1,4 +1,16 @@
 import type { ActivityQuery, ActivityRecord, ActivityStore } from '@basaltkit/activity'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_MEDIUMTEXT,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/activity-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/activity` `ActivityStore` for
@@ -42,23 +54,72 @@ const toRecord = (r: PActivity): ActivityRecord => ({
   at: r.at.getTime(),
 })
 
+/** The `ActivityRecord` columns the store writes as strings. */
+export type ActivityColumn =
+  | 'id'
+  | 'log'
+  | 'description'
+  | 'subjectType'
+  | 'subjectId'
+  | 'causerId'
+  | 'tenantId'
+  | 'properties'
+
+export type ActivityColumnLimits = ColumnLimits<{ ActivityRecord: ActivityColumn }>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Spread it to override one column after widening it.
+ */
+export const activityMysqlColumnLimits: ActivityColumnLimits = {
+  ActivityRecord: {
+    id: V,
+    log: V,
+    description: MYSQL_TEXT,
+    subjectType: V,
+    subjectId: V,
+    causerId: V,
+    tenantId: V,
+    properties: MYSQL_MEDIUMTEXT,
+  },
+}
+
+export interface PrismaActivityStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a cut
+   * `properties` is no longer valid JSON and the feed cannot be read back.
+   * `'mysql'` uses the limits of the bundled `schema.mysql.prisma`; pass an
+   * object for a schema of your own. Default: unchecked (PostgreSQL and SQLite
+   * store any length).
+   */
+  columnLimits?: 'mysql' | ActivityColumnLimits
+}
+
 export class PrismaActivityStore implements ActivityStore {
-  constructor(private readonly client: PrismaActivityClient) {}
+  private readonly limits: ActivityColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaActivityClient,
+    options: PrismaActivityStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, activityMysqlColumnLimits)
+  }
 
   async append(record: ActivityRecord): Promise<void> {
-    await this.client.activityRecord.create({
-      data: {
-        id: record.id,
-        log: record.log,
-        description: record.description,
-        subjectType: record.subjectType ?? null,
-        subjectId: record.subjectId ?? null,
-        causerId: record.causerId ?? null,
-        tenantId: record.tenantId ?? null,
-        properties: record.properties === undefined ? null : JSON.stringify(record.properties),
-        at: at(record.at),
-      },
-    })
+    const data = {
+      id: record.id,
+      log: record.log,
+      description: record.description,
+      subjectType: record.subjectType ?? null,
+      subjectId: record.subjectId ?? null,
+      causerId: record.causerId ?? null,
+      tenantId: record.tenantId ?? null,
+      properties: record.properties === undefined ? null : JSON.stringify(record.properties),
+      at: at(record.at),
+    }
+    assertColumnLengths(PKG, this.limits, 'ActivityRecord', data)
+    await this.client.activityRecord.create({ data })
   }
 
   async query(query: ActivityQuery): Promise<ActivityRecord[]> {
@@ -87,7 +148,7 @@ export interface PrismaActivityStores {
  * `activityPlugin`:
  *
  * ```ts
- * const a = prismaActivityStore(prisma)
+ * const a = prismaActivityStore(prisma) // on MySQL: prismaActivityStore(prisma, { columnLimits: 'mysql' })
  * activityPlugin({ store: a.store })
  * ```
  */
@@ -108,7 +169,10 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaActivityStore(client: PrismaActivityClient): PrismaActivityStores {
-  ensureModel(client, 'activityRecord', '@basaltkit/activity-prisma')
-  return { store: new PrismaActivityStore(client) }
+export function prismaActivityStore(
+  client: PrismaActivityClient,
+  options: PrismaActivityStoreOptions = {},
+): PrismaActivityStores {
+  ensureModel(client, 'activityRecord', PKG)
+  return { store: new PrismaActivityStore(client, options) }
 }

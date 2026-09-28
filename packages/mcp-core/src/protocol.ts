@@ -40,6 +40,12 @@ export const RPC_ERRORS = {
   METHOD_NOT_FOUND: -32601,
   INVALID_PARAMS: -32602,
   INTERNAL_ERROR: -32603,
+  /**
+   * Implementation-defined (the -32000…-32099 server range): the transport
+   * refused the request because too many are already in flight on this
+   * connection. Retry once an earlier request has been answered.
+   */
+  SERVER_BUSY: -32000,
 } as const
 
 /** A single piece of tool output — text is the universally-supported kind. */

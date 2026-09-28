@@ -24,6 +24,7 @@ export {
   type ProgressUpdate,
   type ToolInvokeContext,
   type McpToolDef,
+  type ToolDescriptor,
   type ResourceReadContext,
   type McpResourceContents,
   type McpResourceDef,
@@ -40,6 +41,7 @@ export { dispatchPayload } from './dispatch.js'
 export {
   serveStdio,
   DEFAULT_MAX_LINE_LENGTH,
+  DEFAULT_MAX_CONCURRENT_REQUESTS,
   type StdioServerLike,
   type ServeStdioOptions,
   type StdioHandle,
@@ -47,3 +49,14 @@ export {
 
 // Optional HTTP transport (opt-in; stdio stays primary).
 export { serveHttp, DEFAULT_MAX_BODY_BYTES, type ServeHttpOptions, type HttpHandle } from './http.js'
+
+// Streamable-HTTP session table (`Mcp-Session-Id`), shared with @basaltkit/mcp's `/mcp` route.
+export {
+  McpSessions,
+  isInitializeRequest,
+  MCP_SESSION_HEADER,
+  DEFAULT_SESSION_TTL_MS,
+  DEFAULT_MAX_SESSIONS,
+  type McpSession,
+  type McpSessionOptions,
+} from './sessions.js'

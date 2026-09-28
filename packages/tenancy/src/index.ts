@@ -912,4 +912,7 @@ export {
   type DomainStore,
   type DnsVerification,
   type CustomDomainsOptions,
+  type DomainReverification,
+  type DomainReverifyStatus,
+  type DomainReverifySummary,
 } from './custom-domains.js'

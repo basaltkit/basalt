@@ -30,8 +30,33 @@ export interface PasskeyStore {
   add(credential: PasskeyCredential): Promise<void>
   get(credentialId: string): Promise<PasskeyCredential | null>
   forUser(userId: string): Promise<PasskeyCredential[]>
-  updateCounter(credentialId: string, counter: number, lastUsedAt: number): Promise<void>
+  /**
+   * Compare-and-set of the signature counter: stores `next` (and `lastUsedAt`)
+   * only if the stored counter still equals `expected`, and returns whether
+   * THIS call wrote it. Clone detection depends on it — with a read-then-write,
+   * a cloned authenticator used concurrently with the genuine one presents the
+   * same next counter twice and both assertions pass. Implement it as one
+   * conditional UPDATE (`… WHERE id = ? AND counter = ?`).
+   */
+  compareAndSetCounter(credentialId: string, expected: number, next: number, lastUsedAt: number): Promise<boolean>
+  /**
+   * @deprecated Unconditional write, no longer called by {@link WebAuthnService}
+   * (it uses {@link PasskeyStore.compareAndSetCounter}).
+   */
+  updateCounter?(credentialId: string, counter: number, lastUsedAt: number): Promise<void>
   remove(credentialId: string): Promise<void>
+}
+
+/** A passkey store without {@link PasskeyStore.compareAndSetCounter} (written against the pre-CAS contract). */
+export class PasskeyStoreOutdatedError extends BasaltError {
+  readonly status = 500
+  readonly expose = false
+  constructor() {
+    super(
+      'PASSKEY_STORE_OUTDATED',
+      'The PasskeyStore has no compareAndSetCounter(): clone detection cannot be enforced atomically. Implement it (one conditional UPDATE).',
+    )
+  }
 }
 
 export class MemoryPasskeyStore implements PasskeyStore {
@@ -46,6 +71,15 @@ export class MemoryPasskeyStore implements PasskeyStore {
   async forUser(userId: string): Promise<PasskeyCredential[]> {
     return [...this.byId.values()].filter((c) => c.userId === userId).map((c) => ({ ...c }))
   }
+  // Synchronous compare-and-set: no await between the read and the write.
+  async compareAndSetCounter(credentialId: string, expected: number, next: number, lastUsedAt: number): Promise<boolean> {
+    const found = this.byId.get(credentialId)
+    if (!found || found.counter !== expected) return false
+    found.counter = next
+    found.lastUsedAt = lastUsedAt
+    return true
+  }
+  /** @deprecated See {@link PasskeyStore.updateCounter}. */
   async updateCounter(credentialId: string, counter: number, lastUsedAt: number): Promise<void> {
     const found = this.byId.get(credentialId)
     if (found) {
@@ -277,6 +311,9 @@ export class WebAuthnService {
 
   constructor(options: WebAuthnServiceOptions) {
     this.config = options.config
+    // Fail at wiring time, not at the first login: without the compare-and-set
+    // a cloned authenticator could race the genuine one past clone detection.
+    if (typeof options.credentials?.compareAndSetCounter !== 'function') throw new PasskeyStoreOutdatedError()
     this.credentials = options.credentials
     this.challenges = options.challenges
     this.verifier = options.verifier
@@ -399,8 +436,9 @@ export class WebAuthnService {
 
   /**
    * Verify an authentication response. Looks the credential up by its id, checks
-   * the signature counter increased (clone detection), persists the new counter,
-   * and returns whose passkey authenticated. Throws on any failure.
+   * the signature counter increased (clone detection), persists the new counter
+   * with a compare-and-set (so two concurrent assertions cannot both pass), and
+   * returns whose passkey authenticated. Throws on any failure.
    */
   async finishAuthentication(
     sessionKey: string,
@@ -444,7 +482,12 @@ export class WebAuthnService {
     if (credential.counter > 0 && result.newCounter <= credential.counter) {
       throw new PasskeyClonedError()
     }
-    await this.credentials.updateCounter(credential.id, result.newCounter, this.now())
+    // Atomic: the counter must still be the one this assertion was checked
+    // against. A concurrent assertion (a clone used at the same time) that
+    // already moved it makes this one fail as a clone.
+    if (!(await this.credentials.compareAndSetCounter(credential.id, credential.counter, result.newCounter, this.now()))) {
+      throw new PasskeyClonedError()
+    }
     return { userId: credential.userId, credentialId: credential.id }
   }
 

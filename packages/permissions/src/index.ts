@@ -6,7 +6,7 @@ import {
   type Delegation,
   type DelegationStore,
 } from './delegation.js'
-import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/http'
+import { route, type BasaltRoute, type RouteGuard, type RouteVisibilityCheck } from '@basaltkit/http'
 import {
   AuthRequiredGuardError,
   InvalidCanMetaError,
@@ -171,10 +171,19 @@ function describeValue(value: unknown): string {
 // carries, and a sign the string was built from unchecked input.
 const INVALID_PERMISSION = /[\s\p{Cc}]/u
 
+/**
+ * A permission the Gate accepts: a non-empty string without whitespace or
+ * control characters, and no empty `:` segment (`'projects:'`, `':read'`,
+ * `'a::b'`) — those never match anything, so checking or granting one is a bug.
+ */
+function isValidPermission(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !INVALID_PERMISSION.test(value) && !hasEmptySegment(value)
+}
+
 function assertPermission(value: unknown, operation: string): asserts value is string {
-  if (typeof value !== 'string' || value.length === 0 || INVALID_PERMISSION.test(value)) {
+  if (!isValidPermission(value)) {
     throw new TypeError(
-      `${operation}: a permission must be a non-empty string without whitespace or control characters`,
+      `${operation}: a permission must be a non-empty string without whitespace, control characters or empty ":" segments`,
     )
   }
 }
@@ -215,6 +224,7 @@ export class MemoryAccessStore implements AccessStore {
 
   async assignRole(userId: string, role: string, scope: string): Promise<void> {
     assertUserId(userId, 'assignRole')
+    assertRole(role, 'assignRole')
     const key = this.key(userId, scope)
     const roles = this.userRoles.get(key) ?? new Set()
     roles.add(role)
@@ -226,6 +236,7 @@ export class MemoryAccessStore implements AccessStore {
   }
 
   async grantToRole(role: string, permissions: string[], scope: string): Promise<void> {
+    assertRole(role, 'grantToRole')
     const key = this.key(role, scope)
     const set = this.rolePermissions.get(key) ?? new Set()
     for (const permission of permissions) set.add(permission)
@@ -247,8 +258,8 @@ export class MemoryAccessStore implements AccessStore {
 // `export … from` re-exports the name without binding it locally, and the two
 // call sites below would fail at runtime with "permissionMatches is not
 // defined" — which is exactly what happened.
-export { permissionMatches, permitted } from './match.js'
-import { permissionMatches } from './match.js'
+export { hasEmptySegment, permissionMatches, permitted } from './match.js'
+import { hasEmptySegment, permissionMatches } from './match.js'
 
 export interface PolicyUser {
   id: string
@@ -307,7 +318,11 @@ function snapshotChecks<TResource>(
 
 export interface GateOptions {
   store: AccessStore
-  /** Short-circuits every check — Laravel's Gate::before. */
+  /**
+   * Short-circuits every check — Laravel's Gate::before. Also consulted when a
+   * listing (`tools/list`) asks which `meta.can` routes a caller could pass, so
+   * keep it free of side effects.
+   */
   superAdmin?: (user: PolicyUser) => boolean | Promise<boolean>
   /** Current scope. Default: ctx().tenant.id, falling back to GLOBAL_SCOPE. */
   scope?: () => string
@@ -398,8 +413,10 @@ function snapshotRoleCatalog(
     if (role.length === 0) throw new TypeError('roleCatalog: role names must be non-empty strings')
     if (!Array.isArray(permissions)) throw new TypeError(`roleCatalog.${role} must be an array of permissions`)
     for (const permission of permissions as unknown[]) {
-      if (typeof permission !== 'string' || permission.length === 0) {
-        throw new TypeError(`roleCatalog.${role} must contain only non-empty permission strings`)
+      if (!isValidPermission(permission)) {
+        throw new TypeError(
+          `roleCatalog.${role} must contain only well-formed permissions (non-empty, no whitespace, no empty ":" segments)`,
+        )
       }
     }
     snapshot.set(role, Object.freeze([...permissions]))
@@ -493,6 +510,11 @@ export class Gate {
    * Permission check. With a resource, a matching policy ('resource:action')
    * decides; otherwise the granted permission strings (with wildcards) do.
    * Grants are looked up in the current scope AND the global scope.
+   *
+   * Side-effect free: store and grant reads plus the `superAdmin` callback
+   * (keep it pure), never a hook, a denial record or a write — `authorize()`
+   * is what emits `permission:denied`. The plugin's `http:route-visibility`
+   * check relies on this to answer listings without auditing them.
    */
   async can(user: PolicyUser, permission: string, resource?: unknown): Promise<boolean> {
     // No usable id is no user: `undefined` and `null` ids share one store key,
@@ -913,6 +935,23 @@ export type PermissionsPluginOptions = GateOptions & {
   audiences?: Record<string, AudienceRule>
 }
 
+/**
+ * The permissions a `meta.can` value requires: a non-empty string is one, a
+ * non-empty array of non-empty strings is all of them. Anything else is `null`
+ * — unenforceable, so the guard fails closed on it.
+ */
+function canMetaPermissions(required: unknown): string[] | null {
+  if (typeof required === 'string') return required.length > 0 ? [required] : null
+  if (
+    Array.isArray(required) &&
+    required.length > 0 &&
+    required.every((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+  ) {
+    return required
+  }
+  return null
+}
+
 export function permissionsPlugin(options: PermissionsPluginOptions) {
   return definePlugin({
     name: 'basalt:permissions',
@@ -930,14 +969,7 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
       const guard: RouteGuard = async ({ route, context, container: c }) => {
         const required = route.meta?.['can']
         if (required === undefined) return
-        const permissions =
-          typeof required === 'string' && required.length > 0
-            ? [required]
-            : Array.isArray(required) &&
-                required.length > 0 &&
-                required.every((entry): entry is string => typeof entry === 'string' && entry.length > 0)
-              ? required
-              : null
+        const permissions = canMetaPermissions(required)
         if (permissions === null) {
           throw new InvalidCanMetaError(`${route.method} ${route.url}`, required)
         }
@@ -998,9 +1030,34 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
         }
       }
 
+      // Side-effect-free twin of the `can` guard for listings (`tools/list` of
+      // @basaltkit/mcp): hide a `meta.can` route from a caller who statically
+      // lacks the permission. `gate.can()` WITHOUT a resource is a pure read —
+      // store lookups and the `superAdmin` callback, never a hook, a denial
+      // record or a write (`authorize()`/`denied()` are what emit). And it is
+      // the guard's exact question: the guard never passes a resource either,
+      // so no policy decides `meta.can`. Resource-level (ABAC) checks a handler
+      // runs itself (`authorize(user, perm, resource)`) are invisible here —
+      // such a tool stays listed and its handler still refuses.
+      const visibility: RouteVisibilityCheck = async ({ route, context, container: c }) => {
+        const required = route.meta?.['can']
+        if (required === undefined) return true
+        const permissions = canMetaPermissions(required)
+        // Malformed meta: the guard throws on every call, so nobody can pass.
+        if (permissions === null) return false
+        const user: unknown = context['user']
+        if (!isPolicyUser(user)) return false
+        const gate = c.get(GATE)
+        for (const permission of permissions) {
+          if (!(await gate.can(user, permission))) return false
+        }
+        return true
+      }
+
       const metadata = ensureMetadata(container)
       metadata.add('http:guards', guard)
       metadata.add('http:guards', audienceGuard)
+      metadata.add('http:route-visibility', visibility)
       // Claim `meta.can` for the adapters' boot check (routes declaring it
       // without this plugin fail loud at boot instead of serving unchecked).
       metadata.add('http:guarded-meta', 'can')

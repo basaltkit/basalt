@@ -1,0 +1,39 @@
+// Reference schema for @basaltkit/tenancy-prisma — MySQL variant.
+//
+// Same models as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently. `domain` is widened to 255 (a DNS name reaches 253;
+// still indexable as a key). The tenant record itself is `Json`, which MySQL
+// stores whole. Pair it with `prismaTenantSource(prisma, { columnLimits:
+// 'mysql' })`, which refuses a value that would still not fit.
+//
+// Copy these models into your app's schema.prisma (or run `basalt prisma:sync`),
+// run `prisma migrate dev`, and pass the generated client to `prismaTenantSource()`.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Tenant {
+  id      String         @id
+  // The open tenant record ({ id, ...anything }) as JSON — attach whatever
+  // per-tenant fields you like; they round-trip unchanged.
+  data    Json
+  domains TenantDomain[]
+
+  @@map("tenants")
+}
+
+model TenantDomain {
+  domain   String @id @db.VarChar(255)
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("tenant_domains")
+}

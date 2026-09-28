@@ -51,6 +51,13 @@ export interface McpToolDef {
   inputSchema: Record<string, unknown>
   outputSchema?: Record<string, unknown>
   invoke(args: Record<string, unknown>, ctx: ToolInvokeContext): Promise<McpToolResult>
+  /**
+   * Optional listing filter: return `false` to leave the tool out of this
+   * caller's `tools/list`. It must be side-effect free (it runs on every
+   * listing) and it is NOT authorization — `tools/call` never consults it, so
+   * `invoke` must still enforce access itself. A throwing hook hides the tool.
+   */
+  visible?(ctx: CallContext): boolean | Promise<boolean>
 }
 
 // --- Resources --------------------------------------------------------------
@@ -131,6 +138,20 @@ export interface CallContext {
   session?: unknown
   /** The transport peer's address (e.g. the HTTP client ip), forwarded to tools. */
   remoteAddress?: string
+  /**
+   * Opaque description of the caller as the transport resolved it (e.g. the
+   * authenticated request context), for tools' `visible` hooks. The core never
+   * reads it.
+   */
+  caller?: unknown
+}
+
+/** A tool as `tools/list` describes it. */
+export interface ToolDescriptor {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  outputSchema?: Record<string, unknown>
 }
 
 export interface McpServerOptions {
@@ -174,6 +195,8 @@ export class McpServer {
   private readonly tools: Map<string, McpToolDef>
   private readonly resources: Map<string, McpResourceDef>
   private readonly prompts: Map<string, McpPromptDef>
+  /** True when some tool filters its own listing (`visible`). */
+  private readonly hasVisibility: boolean
   /**
    * In-flight tool calls keyed by session, then request id — the target of
    * `notifications/cancelled`. Scoped per session so a cancel from one client
@@ -184,13 +207,40 @@ export class McpServer {
   constructor(options: McpServerOptions = {}) {
     this.serverInfo = options.serverInfo ?? DEFAULT_SERVER_INFO
     this.tools = new Map((options.tools ?? []).map((t) => [t.name, t]))
+    this.hasVisibility = [...this.tools.values()].some((t) => t.visible !== undefined)
     this.resources = new Map((options.resources ?? []).map((r) => [r.uri, r]))
     this.prompts = new Map((options.prompts ?? []).map((p) => [p.name, p]))
   }
 
-  /** Tool descriptors, as returned by `tools/list`. */
-  listTools() {
-    return [...this.tools.values()].map(({ name, description, inputSchema, outputSchema }) => ({
+  /**
+   * Tool descriptors, as returned by `tools/list`. Without a context, every
+   * tool; with one, only the tools whose `visible` hook (if any) admits it —
+   * then the result is a promise.
+   */
+  listTools(): ToolDescriptor[]
+  listTools(ctx: CallContext): Promise<ToolDescriptor[]>
+  listTools(ctx?: CallContext): ToolDescriptor[] | Promise<ToolDescriptor[]> {
+    if (ctx === undefined) return this.describe([...this.tools.values()])
+    return this.visibleTools(ctx).then((tools) => this.describe(tools))
+  }
+
+  private async visibleTools(ctx: CallContext): Promise<McpToolDef[]> {
+    const tools = [...this.tools.values()]
+    const shown = await Promise.all(
+      tools.map(async (tool) => {
+        if (!tool.visible) return true
+        try {
+          return (await tool.visible(ctx)) !== false
+        } catch {
+          return false
+        }
+      }),
+    )
+    return tools.filter((_tool, index) => shown[index])
+  }
+
+  private describe(tools: McpToolDef[]): ToolDescriptor[] {
+    return tools.map(({ name, description, inputSchema, outputSchema }) => ({
       name,
       description,
       inputSchema,
@@ -253,7 +303,8 @@ export class McpServer {
         case 'ping':
           return ok(id, {})
         case 'tools/list':
-          return ok(id, { tools: this.listTools() })
+          // Without `visible` hooks, stay synchronous (no extra ticks).
+          return ok(id, { tools: this.hasVisibility ? await this.listTools(ctx) : this.listTools() })
         case 'tools/call':
           return await this.dispatchToolCall(id, message, ctx)
         case 'resources/list':

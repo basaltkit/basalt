@@ -175,3 +175,16 @@ describe('prismaWebhookStore', () => {
     )
   })
 })
+
+describe('WebhookEndpointIdInUseError is the @basaltkit/webhooks class', () => {
+  it('re-exported, and what add() throws is an instance of the core class', async () => {
+    const core = await import('@basaltkit/webhooks')
+    const { WebhookEndpointIdInUseError } = await import('../src/index.js')
+    expect(WebhookEndpointIdInUseError).toBe(core.WebhookEndpointIdInUseError)
+    const store = new PrismaWebhookStore(makeFakeClient())
+    await store.add({ id: 'x', url: 'https://globex.test', events: ['*'], tenantId: 'globex' })
+    const err = await store.add({ id: 'x', url: 'https://evil.test', events: ['*'], tenantId: 'acme' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(core.WebhookEndpointIdInUseError)
+    expect(err).toMatchObject({ code: 'WEBHOOK_ENDPOINT_ID_IN_USE', status: 409, name: 'WebhookEndpointIdInUseError' })
+  })
+})

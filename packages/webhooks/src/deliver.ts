@@ -224,6 +224,14 @@ export class WebhookDeliverer {
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000))
   }
 
+  /**
+   * URL schemes this deliverer will send to (`ssrf.allowedSchemes`, default
+   * `https:` and `http:`). `WebhookManager.register()` refuses other schemes.
+   */
+  get allowedSchemes(): readonly string[] {
+    return (this.options.ssrf === false ? undefined : this.options.ssrf?.allowedSchemes) ?? ['https:', 'http:']
+  }
+
   /** True when a default (plugin-wide) signing secret is configured. */
   get hasDefaultSecret(): boolean {
     return this.options.secret !== undefined

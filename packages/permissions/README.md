@@ -96,6 +96,7 @@ A permission is a string; by convention `resource:action`. Matching is done with
 - `projects:delete` covers exactly `projects:delete`;
 - `projects:*` covers `projects:delete`, `projects:read`, … (but **not** `projects:sub:deep` — the number of segments must match);
 - `*` covers everything.
+- a permission with an empty segment (`''`, `projects:`, `:read`, `a::b`) matches nothing — not even itself, and no wildcard covers it. The Gate refuses one with a `TypeError` in `can()`, grants and `roleCatalog`; `hasEmptySegment(permission)` checks it.
 
 ### Roles
 
@@ -426,6 +427,16 @@ bucket, so a route declaring either in an app that never registered
 `permissionsPlugin` fails loud **at boot** with `UnguardedRouteMetaError`
 (`HTTP_UNGUARDED_ROUTE_META`) rather than serving unchecked. See `@basaltkit/http` for the
 `allowUnguardedMeta` escape hatch.
+
+It also registers a **side-effect-free visibility check** for `meta.can` in
+`http:route-visibility`, so listings such as `@basaltkit/mcp`'s `tools/list`
+hide routes whose permission(s) the caller lacks. It runs `gate.can(user,
+permission)` per entry — grant reads only, never a `permission:denied` hook, so
+listings stay out of the audit trail (`superAdmin` runs too: keep it pure). No
+user or a malformed `meta.can` hides the route. Policies never decide
+`meta.can` (the guard passes no resource), so a resource-level `authorize()`
+inside a handler is invisible to listings: that tool stays listed and is
+refused on the call. Visibility is never authorization.
 
 ### Failure modes & troubleshooting
 

@@ -1,6 +1,7 @@
 import type { Container } from '@basaltkit/core'
 import { ensureMetadata } from '@basaltkit/core'
 import {
+  isRouteVisible,
   runRoute,
   toErrorResponse,
   zodToJsonSchema,
@@ -95,6 +96,13 @@ export interface McpTool {
   description: string
   inputSchema: Record<string, unknown>
   invoke(args: Record<string, unknown>, ctx?: ToolCallContext): Promise<McpToolResult>
+  /**
+   * Whether a caller with this request context (`ctx()` of the listing
+   * request: `user`, `tenant`, …) should see the tool in `tools/list`. Pure —
+   * see `isRouteVisible` in `@basaltkit/http` for exactly what it checks.
+   * Never authorization: `invoke` runs the route's guards regardless.
+   */
+  visible(context: Record<string, unknown>): Promise<boolean>
 }
 
 /** `meta.mcp` opt-in: `true`, or an object overriding the name/description. */
@@ -346,6 +354,7 @@ export function collectTools(
       description: override.description ?? `${route.method} ${route.url}`,
       inputSchema: buildInputSchema(route),
       invoke: makeInvoke(route, container, allow),
+      visible: (context) => isRouteVisible(route, context, container),
     })
   }
   return tools

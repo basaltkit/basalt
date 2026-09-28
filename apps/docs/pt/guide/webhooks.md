@@ -90,6 +90,19 @@ tenant, ou para qualquer endpoint quando não há `secret` por predefinição. O
 `hasSecret: boolean`, por isso uma rota de gestão não os consegue divulgar. Para
 rodar, regista um novo endpoint (ou passa um novo `secret`) e remove o antigo.
 
+O `register()` valida o endpoint **antes de o guardar**, para que uma subscrição
+que nunca poderia ser entregue seja recusada logo, em vez de falhar em cada
+evento: o `url` tem de ser um URL absoluto com um esquema que o deliverer aceite
+(`http:`/`https:`, ou o teu `ssrf.allowedSchemes`), um `secret` que passes tem de
+ter pelo menos 16 caracteres, e `events` tem de ser uma lista não vazia de
+padrões não vazios — caso contrário lança `WebhookEndpointInvalidError`
+(`WEBHOOK_ENDPOINT_INVALID`, 400). Se o host é público continua a ser decidido na
+entrega, onde o DNS é resolvido e a ligação fixada. Um `id` fornecido pelo
+chamador que outro âmbito (outro tenant, ou global vs tenant) já detém lança
+`WebhookEndpointIdInUseError` (`WEBHOOK_ENDPOINT_ID_IN_USE`, 409); cada store
+incluída impõe isto na sua própria escrita, por isso dois registos concorrentes
+do mesmo id não se sobrepõem.
+
 O scoping é **anti-alargamento**: dentro de um pedido com tenant no contexto,
 `register`, `list`, `unregister` e `dispatch` ficam forçados a esse tenant — um
 `tenantId` passado pelo chamador (que pode transportar input do cliente) nunca
@@ -436,7 +449,10 @@ tratado como input hostil. Antes da primeira tentativa o deliverer resolve o
 hostname **uma vez** e recusa a entrega se o esquema não for `http:`/`https:`, ou
 se *algum* endereço resolvido for loopback, privado (`10/8`, `172.16/12`,
 `192.168/16`), link-local (incluindo o endereço de metadados de cloud
-`169.254.169.254`), CGNAT, ULA IPv6, ou de outra forma reservado. O IPv6 é
+`169.254.169.254`), CGNAT, ULA IPv6, documentação (`192.0.2/24`,
+`198.51.100/24`, `203.0.113/24`, `2001:db8::/32`, `3fff::/20`), benchmarking
+(`198.18/15`), o anycast de relay 6to4 descontinuado (`192.88.99/24`), multicast,
+ou de outra forma reservado (`240/4`). O IPv6 é
 avaliado sobre o endereço já interpretado, por isso todas as grafias contam: um
 literal IPv6 que embute um endereço IPv4 — IPv4-mapped (`[::ffff:127.0.0.1]`,
 que o parsing de URL reescreve para `[::ffff:7f00:1]`), IPv4-compatible, NAT64
@@ -725,6 +741,8 @@ A maioria dos problemas de entrega **não são exceções** — voltam no
 | --- | --- | --- | --- |
 | `WebhookUrlBlockedError` | — (só `name`) | — | Lançado por `assertDeliverableUrl` / `resolveAndValidate`; dentro de `deliver()` é apanhado e transformado no resultado falhado acima |
 | `WebhookTenantRequiredError` | `WEBHOOKS_TENANT_REQUIRED` | — | `register` / `list` / `unregister` com tenancy ativa e sem tenant (contexto ou explícito) e sem `{ system: true }` |
+| `WebhookEndpointInvalidError` | `WEBHOOK_ENDPOINT_INVALID` | 400 | `register()` com um URL que não é interpretável ou usa um esquema que o deliverer recusa, um `secret` com menos de 16 caracteres, ou uma lista `events` vazia — nada é guardado |
+| `WebhookEndpointIdInUseError` | `WEBHOOK_ENDPOINT_ID_IN_USE` | 409 | `register()` / `MemoryWebhookStore.add()` com um `id` que outro âmbito já detém (as stores SQL lançam o seu próprio erro com o mesmo código) |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `container.get(WEBHOOKS)` sem o `webhooksPlugin` registado |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | arranque | As tuas rotas de gestão de endpoints declaram `meta.auth` / `meta.teamRole` sem o plugin que as impõe |
 

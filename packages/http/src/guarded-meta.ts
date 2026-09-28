@@ -80,16 +80,30 @@ const isContainer = (value: ReadonlySet<string> | Container): value is Container
  * const app = await createApp({ plugins: [authPlugin(…), permissionsPlugin(…)] }).boot()
  * assertRoutesGuarded(routes, app.container) // throws UnguardedRouteMetaError
  * ```
+ *
+ * Given a container, it also runs every route-meta validator plugins
+ * registered in {@link META_VALIDATORS_BUCKET} (see
+ * {@link assertRouteMetaValid}) — `allow` never waives those: a waiver says
+ * "an outer edge enforces this key", not "a typo in its value is fine".
  */
 export function assertRoutesGuarded(
   routes: readonly BasaltRoute[],
   claimed: ReadonlySet<string> | Container,
   allow?: boolean | readonly string[],
 ): void {
-  if (allow === true) return
   // Duck-typed rather than `instanceof`: a second copy of @basaltkit/core in
   // node_modules would otherwise make a real container look like a set.
-  if (isContainer(claimed)) claimed = new Set(ensureMetadata(claimed).get<string>(GUARDED_META_BUCKET))
+  const container = isContainer(claimed) ? claimed : undefined
+  if (container) claimed = new Set(ensureMetadata(container).get<string>(GUARDED_META_BUCKET))
+  if (allow !== true) assertClaimed(routes, claimed as ReadonlySet<string>, allow)
+  if (container) assertRouteMetaValid(routes, container)
+}
+
+function assertClaimed(
+  routes: readonly BasaltRoute[],
+  claimed: ReadonlySet<string>,
+  allow: false | readonly string[] | undefined,
+): void {
   const waived = new Set(Array.isArray(allow) ? allow : [])
   const offenders: { route: string; key: string }[] = []
   for (const route of routes) {
@@ -103,4 +117,62 @@ export function assertRoutesGuarded(
     }
   }
   if (offenders.length > 0) throw new UnguardedRouteMetaError(offenders)
+}
+
+/**
+ * Metadata bucket where plugins register {@link RouteMetaValidator}s — boot-time
+ * checks of the VALUES their route-meta keys carry (e.g. teamsPlugin refuses a
+ * `meta.teamRole` naming no known role). String-keyed — no package coupling.
+ */
+export const META_VALIDATORS_BUCKET = 'http:meta-validators'
+
+/**
+ * A boot-time check of one route's meta, run by every adapter over its full
+ * route list before it serves traffic. Return a problem description (or
+ * several) to refuse the boot, nothing when the route is fine. Throwing counts
+ * as a problem too (its message is reported). Must be synchronous and pure:
+ * it runs once per route at boot, with the booted container.
+ */
+export type RouteMetaValidator = (input: {
+  route: BasaltRoute
+  container: Container
+}) => string | readonly string[] | undefined | void
+
+/** Boot-time error: a route-meta validator refused one or more routes. */
+export class InvalidRouteMetaError extends Error {
+  readonly code = 'HTTP_INVALID_ROUTE_META'
+  readonly problems: readonly { route: string; problem: string }[]
+  constructor(problems: { route: string; problem: string }[]) {
+    const lines = problems.map(({ route, problem }) => `  - ${route}: ${problem}`).join('\n')
+    super(`Refusing to boot: ${problems.length} route meta problem(s):\n${lines}`)
+    this.name = 'InvalidRouteMetaError'
+    this.problems = problems
+  }
+}
+
+/**
+ * Runs every {@link RouteMetaValidator} registered in
+ * {@link META_VALIDATORS_BUCKET} over `routes` and throws one
+ * {@link InvalidRouteMetaError} listing every problem found. The adapters run
+ * it at boot (through {@link assertRoutesGuarded}); call it yourself when you
+ * drive `runRoute()` without an adapter.
+ */
+export function assertRouteMetaValid(routes: readonly BasaltRoute[], container: Container): void {
+  const validators = ensureMetadata(container).get<RouteMetaValidator>(META_VALIDATORS_BUCKET)
+  if (validators.length === 0) return
+  const problems: { route: string; problem: string }[] = []
+  for (const route of routes) {
+    const name = `${route.method} ${route.url}`
+    for (const validate of validators) {
+      let result: string | readonly string[] | undefined | void
+      try {
+        result = validate({ route, container })
+      } catch (error) {
+        result = error instanceof Error ? error.message : String(error)
+      }
+      if (result === undefined) continue
+      for (const problem of typeof result === 'string' ? [result] : result) problems.push({ route: name, problem })
+    }
+  }
+  if (problems.length > 0) throw new InvalidRouteMetaError(problems)
 }

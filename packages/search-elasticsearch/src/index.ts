@@ -219,13 +219,35 @@ export class ElasticsearchDriver implements SearchDriver {
   }
 
   async clear(indexName: string): Promise<void> {
+    await this.deleteByQuery(indexName, { match_all: {} })
+  }
+
+  /**
+   * `_delete_by_query` on the same `term: { tenantId }` every search is scoped
+   * by, so the documents removed are exactly the ones that tenant could find.
+   */
+  async clearTenant(indexName: string, tenantId: string): Promise<void> {
+    await this.deleteByQuery(indexName, { term: { tenantId } })
+  }
+
+  /**
+   * `_delete_by_query` answers 200 even when it did not finish: version
+   * conflicts and shard failures are listed in `failures` and the remaining
+   * documents stay. A rebuild that carried on would write over a half-cleared
+   * index, so a non-empty `failures` is an error. A missing index (404) has
+   * nothing to delete.
+   */
+  private async deleteByQuery(indexName: string, query: Record<string, unknown>): Promise<void> {
+    let res: Record<string, unknown>
     try {
-      await this.request('POST', `/${this.idx(indexName)}/_delete_by_query?refresh=true`, {
-        query: { match_all: {} },
-      })
+      res = await this.request('POST', `/${this.idx(indexName)}/_delete_by_query?refresh=true`, { query })
     } catch (error) {
       if (error instanceof ElasticsearchError && error.httpStatus === 404) return
       throw error
+    }
+    const failures = res['failures']
+    if (Array.isArray(failures) && failures.length > 0) {
+      throw new ElasticsearchError(200, `_delete_by_query reported ${failures.length} failure(s): ${JSON.stringify(failures[0])}`)
     }
   }
 

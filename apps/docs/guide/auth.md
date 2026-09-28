@@ -99,6 +99,7 @@ const app = await createApp({
       refreshTokens: s.refreshTokens,
       tokens: s.tokens, // email verification + password reset
       mfa: s.mfa,
+      accountLinks: s.accountLinks, // OAuth/OIDC provider subject → account
     }),
     apiKeysPlugin({ store: s.apiKeys, users: s.users }),
     fastifyPlugin({ routes: authRoutes() }),
@@ -109,7 +110,14 @@ const app = await createApp({
 `sqliteAuthStores()` also accepts a `DatabaseSync` you already opened, so auth can
 share one connection with the rest of your app. Individual stores
 (`SqliteUserSource`, `SqliteSessionStore`, …) are exported too if you want to mix
-backends.
+backends. `s.passkeys` is a durable `PasskeyStore` for `webauthnPlugin({ credentials })`.
+
+A database created before emails were canonicalised may hold rows that differ
+only in letter case; a lookup of such an email throws `AUTH_EMAIL_AMBIGUOUS`
+instead of picking one. `normalizeAuthUserEmails(s.db)` lowercases the lone
+mixed-case rows, reports the twins for you to merge (`{ normalized, conflicts }`,
+`dryRun: true` to preview) and, once none are left, builds the case-insensitive
+unique index.
 
 ### Prisma — `@basaltkit/auth-prisma`
 
@@ -132,9 +140,33 @@ authPlugin({
   refreshTokens: s.refreshTokens,
   tokens: s.tokens,
   mfa: s.mfa,
+  accountLinks: s.accountLinks, // needs the AuthAccountLink model
 })
 apiKeysPlugin({ store: s.apiKeys, users: s.users })
+webauthnPlugin({ config, verifier, credentials: s.passkeys }) // needs the AuthPasskey model
 ```
+
+::: warning Upgrading to auth-prisma 2.0
+2.0 adds two models: `AuthAccountLink` (`auth_account_links`, the OAuth/OIDC
+account links) and `AuthPasskey` (`auth_passkeys`, WebAuthn credentials). Copy
+them from `@basaltkit/auth-prisma/schema.prisma` (or run `basalt prisma:sync`),
+then `prisma migrate dev --name auth_account_links_passkeys` — with
+schema-per-tenant, in every tenant schema. A client generated without them still
+compiles; `s.accountLinks` / `s.passkeys` throw `AUTH_PRISMA_MODEL_MISSING` at
+first use. Their primary keys are SHA-256 hashes, so every indexed column fits
+MySQL's `VARCHAR(191)`; on MySQL copy them from
+`@basaltkit/auth-prisma/schema.mysql.prisma` instead, where the long unindexed
+columns (`subject`, `credentialId`, `publicKey`) are `@db.Text`, and pass
+`prismaAuthStores(prisma, { columnLimits: 'mysql' })` — see
+[MySQL](./persistence#mysql).
+
+Email lookups are case-insensitive on PostgreSQL and **refuse ambiguity**: two
+legacy rows differing only in case make `findByEmail` throw
+`AUTH_EMAIL_AMBIGUOUS`, and `create` refuses a case variant of an existing row
+(`AUTH_EMAIL_TAKEN`). Run `normalizeAuthUserEmails(prisma)` once after
+upgrading: it lowercases the lone mixed-case rows and returns the twins
+(`{ normalized, conflicts }`, `dryRun: true` to preview) for you to merge.
+:::
 
 ::: warning Upgrading to auth-prisma 1.5
 1.5.0 added a nullable `expiresAt` column to `AuthApiKey` (`auth_api_keys`) for
@@ -483,6 +515,41 @@ implementation is dependency-free and verified against the RFC 6238 test vectors
 without a code; disable it with a code first. The MFA routes are session-only
 (`meta.apiKey: false`): an API key can never enroll or disable MFA.
 
+### Encrypting TOTP secrets at rest {#mfa-encryption}
+
+With `mfaEncryption`, TOTP secrets are stored as `bka2.<keyId>.…` envelopes:
+AES-256-GCM under a key derived with HKDF-SHA256, **bound to the user** (a secret
+copied into another user's row does not decrypt there). `keys` is a ring — the
+first key seals new secrets, the others stay readable — so rotating is adding a
+key at the front and re-encrypting at leisure:
+
+```ts
+authPlugin({
+  users, secret: env.APP_SECRET,
+  mfaEncryption: { keys: [{ id: '2026-09', key: env.MFA_KEY }, { id: '2025-01', key: env.MFA_KEY_OLD }] },
+})
+for (const userId of usersWithMfa) await auth.reencryptMfaSecret(userId) // 'resealed' | 'current' | 'none'
+```
+
+A stored value that is not such an envelope is **refused** (`AUTH_SECRET_UNREADABLE`):
+someone with write access to the table cannot swap an encrypted secret for a
+plaintext one they know. Keys must be at least 32 bytes; `mfaEncryptionKey: key`
+is shorthand for a one-key ring with id `default`.
+
+**Migrating from the `v1:` format or plaintext rows** (before `@basaltkit/auth`
+4.0): read them through an explicit, temporary opt-in, re-encrypt every row, then
+remove it:
+
+```ts
+mfaEncryption: {
+  keys: [{ id: '2026-09', key: env.MFA_KEY }],
+  legacy: { v1Keys: [env.OLD_MFA_ENCRYPTION_KEY], plaintext: true }, // migration window only
+}
+```
+
+`SecretBox` (the same envelope, with your own `purpose`/`subject`) is exported
+for other secrets you keep at rest.
+
 ### Requiring MFA by policy {#requiring-mfa-by-policy}
 
 `requireMfa` makes a second factor mandatory — for everyone, or per user /
@@ -610,7 +677,16 @@ The challenge is bound to the user you pass to `startRegistration`;
 `finishRegistration` throws `WEBAUTHN_SUBJECT_MISMATCH` if the `userId` differs, so
 a passkey can never be bound to someone else's account — always take `userId` from
 the authenticated session, never from request input. In production, swap the
-default in-memory `PasskeyStore` / `WebAuthnChallengeStore` for durable ones.
+default in-memory `PasskeyStore` / `WebAuthnChallengeStore` for durable ones
+(`s.passkeys` from `auth-sqlite` / `auth-prisma`).
+
+Clone detection is atomic: the new signature counter is written with
+`PasskeyStore.compareAndSetCounter(id, expected, next, lastUsedAt)`, a conditional
+update that succeeds only if the stored counter is still the one the assertion was
+checked against. Two concurrent assertions presenting the same counter (a cloned
+authenticator used alongside the genuine one) cannot both pass — the loser gets
+`PASSKEY_CLONED`. A custom store must implement it; one without it is refused at
+construction (`PASSKEY_STORE_OUTDATED`).
 :::
 
 ## Social login (OAuth)
@@ -658,19 +734,35 @@ Two routes per provider are added:
 
 New accounts are created **passwordless** (they authenticate via the provider
 until a password is set); a provider-verified email flips `emailVerified`.
-`Auth.socialLogin(email, { emailVerified })` is the underlying primitive if you
-wire a custom provider (or call `oauth.authorize()` / `oauth.callback({ …, binding })`
-yourself).
+`Auth.socialLogin(email, { emailVerified, identity: { provider, subject } })` is
+the underlying primitive if you wire a custom provider (or call
+`oauth.authorize()` / `oauth.callback({ …, binding })` yourself).
 
-::: warning Accounts are matched by email — only when the provider verified it
-Logging into an **existing** account requires the provider to vouch for the
+**Accounts are linked by the provider's subject.** The first login of a provider
+account records an account link — provider name + its stable `subject` (`sub`) →
+local account — in the `accountLinks` store (`authPlugin({ accountLinks })`;
+`auth-sqlite` / `auth-prisma` ship one, the default is in-memory). From then on:
+
+- the link decides, not the email: if the user changes their email at the IdP,
+  they still reach the same account;
+- a **different** subject of the same provider asserting that account's email is
+  refused with `AccountLinkConflictError` (`409 AUTH_ACCOUNT_LINK_CONFLICT`) —
+  a second IdP account cannot take the first one's place. For an IdP that
+  re-issues subjects (a directory migration), opt in with
+  `oauthPlugin({ …, subjectConflict: 'link' })`.
+
+Emits `auth:account_linked` when a link is recorded.
+
+::: warning A first login links to an existing account only through a verified email
+Linking a provider account to an **existing** account requires the provider to vouch for the
 email (`emailVerified: true`); otherwise `socialLogin` throws
 `SocialLinkRefusedError` (`403 AUTH_SOCIAL_LINK_REFUSED`) and the user must sign
 in with their password. GitHub's driver treats the fallback `/user` email as
 unverified. When the existing account had never verified its own email (someone
 may have registered the address first), its password, sessions, refresh tokens
 and MFA are revoked before the verified owner is let in
-(`auth:social_account_adopted`).
+(`auth:social_account_adopted`) — together with any account links that registrant
+had made.
 
 An existing account with **MFA enabled** is not logged in by the provider alone:
 `socialLogin` throws `MfaRequiredError` unless you pass `mfaCode`. If your IdP
@@ -716,8 +808,9 @@ entry must declare `allowedEmailDomains` or `allowAnyEmailDomain: true` (only fo
 an IdP you fully control), or the service refuses to start with
 `AUTH_OAUTH_PROVIDER_CONFIG`. Google and GitHub only assert emails they verified
 themselves and are not affected; a custom `OAuthProvider` opts in with
-`enterprise: true`. Accounts are linked by **email**, not by the provider's
-`subject` — the allowlist is what scopes each IdP.
+`enterprise: true`. The **first** login of an IdP account links it by its verified
+email — the allowlist is what scopes which accounts each IdP can link; after that
+the provider's `subject` decides (see above).
 
 Provider replies are validated: a profile without a string `sub`/`email` (or an
 email that is not a single-`@` address) fails the login; an `openid` flow must
@@ -758,6 +851,13 @@ Unsolicited (IdP-initiated) responses are refused unless you opt in with
 in a single-use `assertionReplayCache`, so a captured `SAMLResponse` cannot be
 re-posted before its `NotOnOrAfter`.
 
+**Only strong signature algorithms are accepted.** Every `SignatureMethod` and
+`DigestMethod` in the response — the envelope and the nested assertion signature —
+must be RSA/ECDSA-SHA256/384/512 over SHA-256/384/512 digests; anything else
+(SHA-1 included) or a DOCTYPE is a `400 AUTH_SAML_RESPONSE_INVALID`. Set
+`allowSha1: true` on a legacy IdP that cannot sign with SHA-256, or replace the
+lists per provider with `signatureAlgorithms` / `digestAlgorithms` (algorithm URIs).
+
 **Each IdP may only assert its own email domains.** In B2B SaaS every customer's
 IdP admin controls what their IdP signs, so give each provider an
 `allowedEmailDomains` list — an assertion for any other domain is rejected. With
@@ -776,7 +876,7 @@ samlPlugin({
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute` (then the only source — no fallback), `allowedEmailDomains` (required with several IdPs), `allowAnyEmailDomain`, `wantAuthnResponseSigned` (default `true`; `false` for IdPs that sign only the assertion, e.g. AD FS / Entra ID), `acceptedClockSkewMs` (default 0, max 5 min) |
+| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute` (then the only source — no fallback), `allowedEmailDomains` (required with several IdPs), `allowAnyEmailDomain`, `wantAuthnResponseSigned` (default `true`; `false` for IdPs that sign only the assertion, e.g. AD FS / Entra ID), `acceptedClockSkewMs` (default 0, max 5 min), `signatureAlgorithms` / `digestAlgorithms` (accepted XML-DSig algorithm URIs; default RSA/ECDSA-SHA256/384/512, SHA-256/384/512), `allowSha1` (legacy opt-in) |
 | `bindToBrowser` | `boolean` | `true` | Bind each SP-initiated login to the browser that started it (login CSRF) |
 | `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'always'` | Replay protection — bind the response to an AuthnRequest this SP issued; `'ifPresent'` opts in to IdP-initiated SSO |
 | `cacheProvider` | `SamlCacheProvider` | node-saml's in-process cache | Where outstanding AuthnRequest ids live — **required on multi-replica deployments** |
@@ -966,7 +1066,9 @@ the plugin supplies:
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
 | `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
 | `tokenVersions` | `TokenVersionStore` | — (off) | Opt-in access-token **revocation**: tokens carry a `tv` claim that `resetPassword`/`revokeAllTokens` bump, killing outstanding tokens before their TTL. Costs one store read per authenticated request |
-| `mfaEncryptionKey` | `string \| Buffer` | — (plaintext) | Encrypts TOTP secrets at rest with AES-256-GCM (`v1:` envelopes), so a database leak can't recover a live second factor. Existing plaintext rows keep working and are encrypted on next write |
+| `accountLinks` | `AccountLinkStore` | in-memory | OAuth/OIDC account links (provider + subject → account) — durable in production, or links are forgotten on restart |
+| `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (plaintext) | Encrypts TOTP secrets at rest (AES-256-GCM, HKDF keys with ids, bound to the user); non-envelope values are refused unless `legacy` opts in. See [Encrypting TOTP secrets at rest](#mfa-encryption) |
+| `mfaEncryptionKey` | `string \| Buffer` | — (plaintext) | Shorthand for `mfaEncryption: { keys: [{ id: 'default', key }] }` (≥ 32 bytes). Does not read the old `v1:` envelopes — migrate with `mfaEncryption.legacy` |
 | `mfaIssuer` | `string` | `'Basalt'` | Issuer name shown in the authenticator app |
 
 `new LoginThrottle(options)`:
@@ -999,7 +1101,7 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `verifier` | `WebAuthnVerifier` | — (required) | The crypto boundary you implement over `@simplewebauthn/server`, so the framework carries no WebAuthn dependency |
-| `credentials` | `PasskeyStore` | `new MemoryPasskeyStore()` | Registered passkeys — swap for a durable store |
+| `credentials` | `PasskeyStore` | `new MemoryPasskeyStore()` | Registered passkeys — swap for a durable store (`s.passkeys`). Must implement `compareAndSetCounter` |
 | `challenges` | `WebAuthnChallengeStore` | `new MemoryWebAuthnChallengeStore()` | Single-use ceremony challenges |
 | `config.rpId` | `string` | — (required) | Relying Party ID — your registrable domain, e.g. `'example.com'` |
 | `config.rpName` | `string` | — (required) | Human-readable name shown in the OS prompt |
@@ -1020,6 +1122,7 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 | `mfa` | `'required' \| 'skip'` | `'required'` | An existing account with MFA enabled is refused (`AUTH_MFA_REQUIRED`); `'skip'` only for an IdP that enforces its own MFA |
 | `timeoutMs` | `number` | `10_000` | Deadline for every request to a provider (token endpoint, userinfo) |
+| `subjectConflict` | `'refuse' \| 'link'` | `'refuse'` | A different subject of a provider asserting the email of an account already linked to that provider: refused (`AUTH_ACCOUNT_LINK_CONFLICT`), or also linked (`'link'`, only for an IdP that re-issues subjects) |
 | `callbackBaseUrl` (routes) | `string` | — (required) | Public base URL of your app; the redirect URI is `${callbackBaseUrl}/auth/oauth/:provider/callback` and must be registered with each provider |
 | `successRedirect` (routes) | `string` | — (JSON response) | Bounce the browser here with `#access_token=…&refresh_token=…` instead of returning JSON — the SPA flow |
 | `bindingCookie` (routes) | `{ secure?, maxAgeSeconds? }` | secure unless `NODE_ENV` is `development`/`test`, 15 min | The HttpOnly cookie binding the flow to the browser (`__Host-basalt_oauth` when secure) |
@@ -1059,15 +1162,21 @@ users in.
 | `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | The verifier rejected the browser's response |
 | `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for, or an authentication started for a user was answered with another user's passkey |
 | `PasskeyNotFoundError` | `PASSKEY_NOT_FOUND` | 404 | No stored credential matches the presented id, or `remove(userId, id)` named a passkey `userId` does not own |
-| `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | The signature counter did not increase — the authenticator may be cloned |
+| `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | The signature counter did not increase, or a concurrent assertion moved it first — the authenticator may be cloned |
+| `PasskeyStoreOutdatedError` | `PASSKEY_STORE_OUTDATED` | boot | The `PasskeyStore` has no `compareAndSetCounter()` |
 | `PasskeyExistsError` | `PASSKEY_EXISTS` | 409 | That credential is already registered |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | `:provider` isn't in the `providers` array |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, older than `stateTtlMs`, already used, or arrived without the browser's binding cookie |
 | `SocialLinkRefusedError` | `AUTH_SOCIAL_LINK_REFUSED` | 403 | A social login matched an existing account by an email the provider did not verify |
+| `AccountLinkConflictError` | `AUTH_ACCOUNT_LINK_CONFLICT` | 409 | The account is linked to a different subject of that provider (or the subject was just linked to another account) |
+| `AccountEmailAmbiguousError` | `AUTH_EMAIL_AMBIGUOUS` | 500 | The user store holds several rows whose email differs only in case — merge them (`normalizeAuthUserEmails()` lists them) |
+| `SecretUnreadableError` | `AUTH_SECRET_UNREADABLE` | 500 | A stored TOTP secret is not an envelope sealed for that user with a key in the ring (plaintext / `v1:` without the `legacy` opt-in, tampering, a removed key) |
+| `SecretBoxKeyError` | `AUTH_SECRET_BOX_KEY_INVALID` | boot | `mfaEncryption` key shorter than 32 bytes, an invalid or duplicate key id, or both `mfaEncryption` and `mfaEncryptionKey` set |
+| `AuthModelMissingError` | `AUTH_PRISMA_MODEL_MISSING` | 500 | `@basaltkit/auth-prisma`: the client was generated without `AuthAccountLink` / `AuthPasskey` |
 | `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange, the profile fetch failed or timed out, the profile lacks a usable `sub`/`email`, the email is outside the provider's `allowedEmailDomains`, or the `id_token` is missing or for another nonce/audience/issuer or expired. The provider's reply stays in the log; the client gets `Bad gateway.` |
 | `OAuthProviderConfigError` | `AUTH_OAUTH_PROVIDER_CONFIG` | boot | Several providers with an enterprise (OIDC) IdP lacking `allowedEmailDomains`, an invalid domain entry, or a duplicate provider name |
-| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The response is not bound to this browser, or the assertion failed validation — malformed, bad signature, expired, missing/unknown `InResponseTo`, already used, encrypted (unsupported), or an email outside the provider's `allowedEmailDomains` |
-| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, an `acceptedClockSkewMs` outside 0..5 min, or `@node-saml/node-saml` < 5.1.0 |
+| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The response is not bound to this browser, or the assertion failed validation — malformed, bad signature, expired, missing/unknown `InResponseTo`, already used, encrypted (unsupported), a signature/digest algorithm outside the allowlist (SHA-1 by default), a DOCTYPE, or an email outside the provider's `allowedEmailDomains` |
+| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, an empty/invalid `signatureAlgorithms` / `digestAlgorithms` list, an `acceptedClockSkewMs` outside 0..5 min, or `@node-saml/node-saml` < 5.1.0 |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.auth` and `authPlugin` isn't registered |
 
 - **Every request is anonymous even with a valid `Authorization` header** — check
@@ -1107,7 +1216,8 @@ users in.
 | `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; never the key |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
-| `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials were revoked |
+| `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |
+| `auth:account_linked` | `{ user, provider }` | A provider account was linked to this account on its first social login — security notification |
 
 They are consumed for free by audit and notifications (see
 [Packages](/reference/packages)). For the full end-to-end wiring — email

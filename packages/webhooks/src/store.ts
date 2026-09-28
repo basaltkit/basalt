@@ -30,6 +30,22 @@ function storeTenantId(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
+/**
+ * The endpoint id is held by a different scope (another tenant, or a global
+ * endpoint when adding a tenant one, or vice versa). Thrown by
+ * {@link MemoryWebhookStore.add} and by `WebhookManager.register()`; the SQL
+ * stores (`@basaltkit/webhooks-sqlite`, `@basaltkit/webhooks-prisma`) throw
+ * and re-export this same class, so `instanceof` holds across all of them.
+ */
+export class WebhookEndpointIdInUseError extends Error {
+  readonly code = 'WEBHOOK_ENDPOINT_ID_IN_USE'
+  readonly status = 409
+  constructor(id: string) {
+    super(`@basaltkit/webhooks: endpoint id "${id}" is already in use by another scope.`)
+    this.name = 'WebhookEndpointIdInUseError'
+  }
+}
+
 /** Where webhook subscriptions live. Default in-memory; back it with a DB in production. */
 export interface WebhookStore {
   /**
@@ -39,6 +55,13 @@ export interface WebhookStore {
    * tenant's. A deliberate system-wide read goes through `list()` instead.
    */
   forEvent(event: string, tenantId?: string): Promise<WebhookEndpoint[]>
+  /**
+   * Adds an endpoint. Re-adding an existing id replaces it only within its own
+   * scope (same tenant, or global); an id held by another scope must be
+   * refused (the bundled stores throw `WebhookEndpointIdInUseError`). The check
+   * belongs in the store's write — the manager's own check-before-write cannot
+   * close the race between two concurrent registrations.
+   */
   add(endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string }): Promise<WebhookEndpoint>
   /** Removes an endpoint. When `tenantId` is given, only if it owns the endpoint. */
   remove(id: string, tenantId?: string): Promise<void>
@@ -61,6 +84,13 @@ export class MemoryWebhookStore implements WebhookStore {
   async add(endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string }): Promise<WebhookEndpoint> {
     const id = endpoint.id ?? randomUUID()
     const record: WebhookEndpoint = { ...endpoint, id }
+    // Check and write with no await in between, so this is atomic on the event
+    // loop: a concurrent add of the same id from another scope can neither slip
+    // in between nor overwrite (the SQL stores key their write by (id, tenant)).
+    const existing = this.endpoints.get(id)
+    if (existing && storeTenantId(existing.tenantId) !== storeTenantId(record.tenantId)) {
+      throw new WebhookEndpointIdInUseError(id)
+    }
     this.endpoints.set(id, record)
     return record
   }

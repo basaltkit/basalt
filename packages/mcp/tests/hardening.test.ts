@@ -34,7 +34,8 @@ async function boot(routes: BasaltRoute[], routeOptions: McpRoutesOptions = {}, 
     plugins: [
       identity,
       mcpPlugin({ routes, ...(forwardHeaders ? { forwardHeaders } : {}) }),
-      fastifyPlugin({ routes: [...routes, ...mcpRoutes(routeOptions)] }),
+      // Stateless unless a test opts in: these suites predate sessions.
+      fastifyPlugin({ routes: [...routes, ...mcpRoutes({ sessions: false, ...routeOptions })] }),
     ],
   }).boot()
   return { app, mcp: app.container.get(MCP), fastify: app.container.get(FASTIFY) }

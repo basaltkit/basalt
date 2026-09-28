@@ -368,9 +368,16 @@ conta por desenho, ligada por um id no registo do tenant, não a mesma linha.
 ## Regra 9 — Fora de um pedido, o tenant é explícito
 
 ```ts
-await tenancy.run(tenantId, () => reindex())          // um tenant
-await tenancy.forEach((tenant) => sendReminders())     // todos os tenants, em contexto
+await tenancy.run(tenantId, () => search.reindex('matters'))  // um tenant
+await tenancy.forEach((tenant) => sendReminders())             // todos os tenants, em contexto
 ```
+
+Tudo o que tem âmbito de tenant e corre num ciclo só pode *tocar nesse tenant*.
+Uma reconstrução da pesquisa dentro de `tenancy.run` limpa e reescreve os
+documentos desse tenant e deixa os restantes; reconstruir todos os tenants de uma
+vez é o explícito `search.reindex('matters', { all: true })`, fora de qualquer
+contexto de tenant. Com o tenancy registado, um `reindex()` sem opções fora de um
+contexto de tenant é recusado em vez de adivinhado.
 
 Os jobs levam `tenantId` no payload e repõem-no com `tenancy.run` antes de tocar
 no `db()`; a integração com a queue faz isso por ti. Scripts e comandos da CLI

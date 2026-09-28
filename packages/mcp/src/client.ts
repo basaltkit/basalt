@@ -13,25 +13,54 @@ export interface McpClientTransport {
   close(): Promise<void>
 }
 
-/** Talk to a remote MCP server over HTTP (the Streamable-HTTP JSON path). */
+/**
+ * Talk to a remote MCP server over HTTP (the Streamable-HTTP JSON path). It
+ * keeps the `Mcp-Session-Id` the server issues on `initialize` and sends it on
+ * every later request; `close()` ends the session (`DELETE`). A 404 for the
+ * session (expired, evicted) drops it — `connect()` again to open a new one.
+ */
 export class HttpClientTransport implements McpClientTransport {
+  private session: string | undefined
+
   constructor(
     private readonly url: string,
     private readonly options: { headers?: Record<string, string> } = {},
   ) {}
 
+  /** The current session id, when the server issued one. */
+  get sessionId(): string | undefined {
+    return this.session
+  }
+
   async send(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    const initialize = message.method === 'initialize'
     const response = await fetch(this.url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json', ...this.options.headers },
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        ...this.options.headers,
+        ...(this.session !== undefined && !initialize ? { 'mcp-session-id': this.session } : {}),
+      },
       body: JSON.stringify(message),
     })
+    if (initialize) this.session = response.headers.get('mcp-session-id') ?? undefined
+    else if (response.status === 404 && this.session !== undefined) this.session = undefined
     if (response.status === 202) return null
     const text = await response.text()
     return text ? (JSON.parse(text) as JsonRpcResponse) : null
   }
 
-  async close(): Promise<void> {}
+  async close(): Promise<void> {
+    const session = this.session
+    if (session === undefined) return
+    this.session = undefined
+    try {
+      await fetch(this.url, { method: 'DELETE', headers: { ...this.options.headers, 'mcp-session-id': session } })
+    } catch {
+      // Best effort: the session expires on its own.
+    }
+  }
 }
 
 export interface StdioTransportOptions {

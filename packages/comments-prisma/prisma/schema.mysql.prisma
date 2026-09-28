@@ -1,0 +1,39 @@
+// Reference schema for @basaltkit/comments-prisma — MySQL variant.
+//
+// Same model as schema.prisma, with two MySQL differences:
+// - `mentions` is `Json` (a JSON array of user ids): MySQL has no scalar lists,
+//   so `String[]` does not exist there. The store writes and reads the same
+//   array either way.
+// - Native types sized for MySQL: a bare `String` becomes VARCHAR(191), and
+//   outside strict mode MySQL truncates a longer value silently. `body` is
+//   widened; the keys stay VARCHAR(191) so they can be indexed.
+// Pair it with `prismaCommentsStore(prisma, { columnLimits: 'mysql' })`, which
+// refuses a value that would still not fit instead of letting it be cut.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Comment {
+  tenantId     String
+  id           String
+  resourceType String
+  resourceId   String
+  parentId     String?
+  authorId     String
+  body         String    @db.Text
+  mentions     Json
+  resolvedAt   DateTime?
+  resolvedBy   String?
+  editedAt     DateTime?
+  createdAt    DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId, resourceType, resourceId])
+  @@map("comments")
+}

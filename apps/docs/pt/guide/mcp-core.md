@@ -121,8 +121,15 @@ interface McpToolDef {
   inputSchema: Record<string, unknown>   // JSON Schema
   outputSchema?: Record<string, unknown> // opcional; anunciado no tools/list
   invoke(args: Record<string, unknown>, ctx: ToolInvokeContext): Promise<McpToolResult>
+  visible?(ctx: CallContext): boolean | Promise<boolean> // filtro opcional da listagem
 }
 ```
+
+O `visible` deixa uma tool retirar-se do `tools/list` de um chamador (recebe o
+`CallContext` do transporte, incluindo o `caller` opaco). Tem de ser livre de
+efeitos secundários — corre em cada listagem — e **não** é autorização: o
+`tools/call` nunca o consulta, por isso o `invoke` continua a impor o acesso. Um
+hook que lance uma exceção esconde a tool.
 
 Devolve um `McpToolResult`: `{ content: [{ type: 'text', text }], structuredContent?, isError? }`.
 Segundo a especificação, o `structuredContent` tem de ser um objeto JSON (um
@@ -188,8 +195,10 @@ A canalização está ligada ao despachante, por isso não tocas no fio:
   `AbortController` por pedido, registado sob `(sessão, id)`. Um
   `notifications/cancelled` com o `requestId` correspondente **da mesma sessão**
   aborta o `ctx.signal` — um cliente nunca consegue cancelar a chamada de outro. A
-  sessão é o `CallContext.session`: cada stream stdio e cada pedido HTTP é a sua
-  própria; um embedding sem sessão partilha um único âmbito. Um segundo pedido em
+  sessão é o `CallContext.session`: cada stream stdio é a sua própria; em HTTP é
+  a sessão `Mcp-Session-Id` quando `serveHttp({ sessions })` está ligado (por isso
+  um cancelamento enviado noutro `POST` chega à chamada), senão cada pedido; um
+  embedding sem sessão partilha um único âmbito. Um segundo pedido em
   curso que reutilize um id na mesma sessão é recusado (`-32600`). Um `ctx.signal`
   externo passado pelo transporte é ligado ao mesmo controller, por isso um signal
   já abortado aborta a chamada imediatamente (o `serveHttp` aborta quando o cliente
@@ -268,6 +277,7 @@ const handle = serveStdio(server, {
   // input?: NodeJS.ReadableStream (predefinição process.stdin)
   // output?: { write(chunk: string): unknown } (predefinição process.stdout)
   // maxLineLength?: number (predefinição 4 MiB de caracteres)
+  // maxConcurrentRequests?: number (predefinição 16)
 })
 handle.close() // desliga o listener do stdin
 ```
@@ -278,7 +288,11 @@ recebem resposta, e uma linha impossível de interpretar responde com um erro de
 parse JSON-RPC (`-32700`, id `null`). O stream de bytes é descodificado com um
 `StringDecoder`, por isso um carácter multibyte partido entre chunks sobrevive; uma
 linha maior do que `maxLineLength` é descartada sem ser guardada em buffer e
-respondida com `-32600`. O transporte fornece também o `notify`, para que as
+respondida com `-32600`. No máximo `maxConcurrentRequests` pedidos (mensagens com
+`id`) correm em simultâneo por ligação; mais um é respondido de imediato com
+`-32000` (`RPC_ERRORS.SERVER_BUSY`) — dentro da resposta do batch, num batch —
+enquanto as notificações (incluindo `notifications/cancelled`) nunca são contadas
+nem recusadas. O transporte fornece também o `notify`, para que as
 notificações (progresso) e os pedidos (`elicitation/create`) servidor→cliente saiam
 pelo mesmo stream, e as respostas do cliente são encaminhadas de volta.
 
@@ -306,10 +320,11 @@ servidor só-de-dev mantém o runtime do framework fora do seu grafo. Respostas:
 | --- | --- |
 | `200` | Uma resposta JSON-RPC normal |
 | `202` (corpo vazio) | A mensagem era uma notificação — por especificação não tem resposta |
-| `400` | O corpo não era JSON válido (`-32700 Parse error`) |
+| `400` | O corpo não era JSON válido (`-32700 Parse error`) — ou, com `sessions` ligado, um pedido que não é `initialize` sem `Mcp-Session-Id` |
 | `401` | O `authorize` devolveu `false` |
 | `403` | O guard de pedidos rejeitou o `Host`/`Origin` — verificado **antes** do encaminhamento |
-| `404` | Método errado ou fora do caminho (`-32601 Not found: <method> <url>`) |
+| `404` | Método errado ou fora do caminho (`-32601 Not found: <method> <url>`) — ou, com `sessions` ligado, uma sessão desconhecida, expirada ou alheia |
+| `204` | Um `DELETE` com um `Mcp-Session-Id` vivo (sessões ligadas) terminou a sessão |
 | `413` | O corpo excede `maxBodyBytes` (predefinição 1 MiB) — nunca é guardado em buffer |
 
 Os headers HTTP recebidos são reencaminhados às ferramentas como `ctx.headers` (e o
@@ -321,6 +336,24 @@ vez é uma string; um header enviado mais de uma vez é um `string[]` com todos 
 `Array.isArray(ctx.headers[name])`. Um `host` IPv6 funciona com ou sem parênteses rectos
 (`'::1'`, `handle.url` → `http://[::1]:port/mcp`), e o `serveHttp` rejeita com o erro do
 `listen()` (`EADDRINUSE`) quando o endereço não pode ser ligado.
+
+#### Sessões (opt-in) {#http-sessions}
+
+`serveHttp(server, { sessions: true })` (ou `{ ttlMs, maxSessions }`) liga as
+sessões Streamable-HTTP: um `initialize` bem-sucedido responde com um header
+`Mcp-Session-Id`, todos os pedidos seguintes têm de o levar, e um `DELETE` com
+ele termina a sessão. Todos os pedidos de uma sessão partilham um âmbito de
+cancelamento, por isso um `notifications/cancelled` enviado por `POST` enquanto
+uma chamada corre cancela-a — uma sessão diferente, mesmo que adivinhe o id do
+pedido, nunca consegue. Cada sessão fica ligada a um principal — `principal(req)`
+se o passares, senão um hash do header `Authorization` — e um pedido que
+apresente outro principal é tratado como uma sessão desconhecida (404). As
+sessões expiram após `ttlMs` inativas (predefinição 30 min) e há no máximo
+`maxSessions` vivas (predefinição 1000; a usada há mais tempo é despejada). A
+tabela é exportada como `McpSessions` para outros transportes (a rota `/mcp` de
+runtime do `@basaltkit/mcp` usa-a). A predefinição continua sem estado (cada
+pedido a sua própria sessão) para que os clientes sem header de uma ponte de dev
+existente continuem a funcionar.
 
 ::: warning O transporte HTTP é guardado ao loopback por predefinição
 Liga-se a `127.0.0.1` e, antes de qualquer despacho, exige que o hostname do `Host`
@@ -395,6 +428,7 @@ a mesma validação, tenancy e auth que o HTTP.
 | `description` | `string` | sim | Como o modelo decide chamá-la — a string com mais alavancagem no ficheiro |
 | `inputSchema` | `Record<string, unknown>` | sim | JSON Schema dos argumentos; não é imposto pelo despachante, valida dentro do `invoke` |
 | `outputSchema` | `Record<string, unknown>` | não | Anunciado no `tools/list` para o cliente poder tipar o resultado |
+| `visible` | `(ctx: CallContext) => boolean \| Promise<boolean>` | não | Filtro de listagem sem efeitos secundários: `false` deixa a tool fora do `tools/list` deste chamador. Nunca consultado pelo `tools/call` |
 | `invoke` | `(args, ctx) => Promise<McpToolResult>` | sim | O trabalho. Devolve `isError: true` para falhas esperadas; lança só para bugs |
 
 ### `McpResourceDef` / `McpPromptDef`
@@ -417,6 +451,7 @@ a mesma validação, tenancy e auth que o HTTP.
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Injeta um stream em testes |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Injeta um destino em testes |
 | `maxLineLength` | `number` | `4194304` (4 MiB de caracteres) | Uma linha maior é descartada (respondida com `-32600`) em vez de fazer crescer o buffer |
+| `maxConcurrentRequests` | `number` | `16` (`DEFAULT_MAX_CONCURRENT_REQUESTS`) | Pedidos em curso em simultâneo por ligação; mais um recebe `-32000` (`SERVER_BUSY`). As notificações nunca são recusadas |
 
 Devolve um `StdioHandle`; o `close()` desliga o listener de `data` (não termina o
 stream).
@@ -433,6 +468,8 @@ stream).
 | `allowRequest` | `(origin: string \| undefined, host: string \| undefined, req: IncomingMessage) => boolean` | — | Substituição total — **substitui** as verificações de loopback/`allowedHosts`/`allowedOrigins`. Devolver `true` sempre desativa o guard |
 | `authorize` | `(req: IncomingMessage) => boolean \| Promise<boolean>` | — | Autentica um pedido que passou o guard; `false` responde `401`. Obrigatório (ou `allowRequest`) para ligar a um `host` fora do loopback |
 | `maxBodyBytes` | `number` | `1048576` (1 MiB) | Corpos maiores recebem `413` e não são guardados em buffer |
+| `sessions` | `boolean \| { ttlMs?: number; maxSessions?: number }` | `false` (sem estado) | Sessões `Mcp-Session-Id` — vê [Sessões](#http-sessions) |
+| `principal` | `(req: IncomingMessage) => string \| undefined \| Promise<…>` | hash do `Authorization` | A quem uma sessão fica ligada |
 
 Devolve `Promise<HttpHandle>` — `{ port, url, close() }`.
 
@@ -447,7 +484,8 @@ Só constróis isto tu quando embutes o `handleMessage` no teu próprio transpor
 | `elicit` | `(prompt: string) => Promise<boolean>` | stdio (quando o cliente anunciou `elicitation`), ou tu | Pedir confirmação ao cliente; aparece como `ctx.elicit` |
 | `notify` | `(message: JsonRpcRequest) => void` | stdio | Empurra notificações servidor→cliente. Sem ele, o progresso por `progressToken` é descartado |
 | `signal` | `AbortSignal` | HTTP (cliente desligou-se), ou tu | Um abort externo ligado ao controller por pedido |
-| `session` | `unknown` (comparado por identidade) | stdio (um por stream), HTTP (um por pedido) | Delimita os ids em curso: o `notifications/cancelled` só chega a chamadas da mesma sessão. Omitido ⇒ um único âmbito partilhado |
+| `session` | `unknown` (comparado por identidade) | stdio (um por stream), HTTP (a sessão `Mcp-Session-Id`, ou um por pedido sem estado) | Delimita os ids em curso: o `notifications/cancelled` só chega a chamadas da mesma sessão. Omitido ⇒ um único âmbito partilhado |
+| `caller` | `unknown` | tu / a rota `/mcp` de runtime (o contexto do pedido) | Entregue aos hooks `visible` das tools; o core nunca o lê |
 | `remoteAddress` | `string` | HTTP (endereço do socket) | Reencaminhado para `ctx.remoteAddress` |
 
 ## Modos de falha & resolução de problemas
@@ -461,6 +499,9 @@ Só constróis isto tu quando embutes o `handleMessage` no teu próprio transpor
 | `Request body exceeds <n> bytes` | `-32600` (HTTP `413`) | `serveHttp` | Corpo acima de `maxBodyBytes` |
 | `Message exceeds the maximum line length (<n>)` | `-32600` | stdio | Linha acima de `maxLineLength`; a linha é descartada |
 | `Request id <id> is already in flight` | `-32600` | `dispatchToolCall` | A mesma sessão reutilizou um id ainda em curso |
+| `Too many requests in flight (max <n>); retry later` | `-32000` | stdio | Mais de `maxConcurrentRequests` pedidos a correr na ligação |
+| `Bad Request: Mcp-Session-Id header required …` | `-32600` (HTTP `400`) | `serveHttp` (sessões ligadas) | Um pedido que não é `initialize` sem o header |
+| `Session not found …` | `-32600` (HTTP `404`) | `serveHttp` (sessões ligadas) | Sessão desconhecida, expirada, despejada ou alheia — volta a inicializar |
 | `serveHttp: refusing to bind non-loopback host …` | (promise rejeitada) | `serveHttp` | `host` fora do loopback sem `authorize`/`allowRequest` |
 | `Method not found: <method>` | `-32601` | `handleMessage` | Um método desconhecido — **ou** `resources/*` / `prompts/*` num servidor que não registou nenhum |
 | `Not found: <method> <url>` | `-32601` (HTTP `404`) | `serveHttp` | Não-`POST`, ou um caminho diferente do `options.path` |
@@ -477,8 +518,10 @@ Só constróis isto tu quando embutes o `handleMessage` no teu próprio transpor
   transporte. Em HTTP não há `notify`, por isso o progresso nunca é entregue; usa
   stdio, ou passa um `progress` explícito num `CallContext` quando fizeres embedding.
 - **O cancelamento não faz nada** — o `notifications/cancelled` só aborta chamadas
-  registadas sob um id de pedido não-nulo **na mesma sessão** (em HTTP cada pedido é
-  a sua própria sessão — desliga a ligação em vez disso), e o teu `invoke` tem mesmo
+  registadas sob um id de pedido não-nulo **na mesma sessão** (em HTTP, liga
+  `serveHttp({ sessions: true })` e envia o cancelamento com o mesmo
+  `Mcp-Session-Id`; sem estado, cada pedido é a sua própria sessão — desliga a
+  ligação em vez disso), e o teu `invoke` tem mesmo
   de observar o `ctx.signal`. Um ciclo síncrono apertado nunca vai reparar nele.
 - **O meu `tools/call` sem `id` nunca corre** — por desenho: um método de pedido
   enviado como notificação não é executado (o resultado nunca poderia ser entregue).

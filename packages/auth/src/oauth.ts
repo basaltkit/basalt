@@ -329,6 +329,15 @@ export interface OAuthOptions {
    * `AUTH_OAUTH_EXCHANGE_FAILED` instead of holding the request open.
    */
   timeoutMs?: number
+  /**
+   * An account already linked to one subject of a provider, and a login from a
+   * **different** subject of that provider asserting the same email: `'refuse'`
+   * (default, `AUTH_ACCOUNT_LINK_CONFLICT`) or `'link'` the new subject too.
+   * Choose `'link'` only for an IdP that re-issues subjects (a directory
+   * migration) — otherwise it lets a second IdP account take the first one's
+   * place by email.
+   */
+  subjectConflict?: 'refuse' | 'link'
 }
 
 const DOMAIN_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/
@@ -507,9 +516,15 @@ export class OAuth {
     if (allowed && !allowed.has(domain)) {
       throw new OAuthExchangeError(`provider "${p.name}" is not trusted for the email domain "${domain}"`)
     }
+    // The provider's stable subject decides which account this is once linked;
+    // the email only matters for the first login (see Auth.socialLogin).
+    const subject = typeof profile.subject === 'string' ? profile.subject : ''
+    if (!subject) throw new OAuthExchangeError('provider returned no subject')
     return this.auth.socialLogin(email, {
       emailVerified: profile.emailVerified === true,
+      identity: { provider: p.name, subject },
       ...(this.options.mfa ? { mfa: this.options.mfa } : {}),
+      ...(this.options.subjectConflict ? { subjectConflict: this.options.subjectConflict } : {}),
     })
   }
 

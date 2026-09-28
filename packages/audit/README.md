@@ -186,6 +186,8 @@ const all = await audit.verifyAll()   // system-only: every chain → { ok, chai
 
 `verifyAll` is system-only, but inside a tenant context it is scoped like `verify`: it verifies and reports that tenant's chain only. A chain name the store lists that maps to no tenant chain (a forged `chain` value) is reported as `'unknown-chain'`.
 
+`verifyAll` also visits tenants that have rows but **no chain at all** — otherwise a row forged under a tenant that never had a chain would go unchecked. For such a tenant the legacy cut-off defaults to the moment integrity began for the whole store (the earliest first entry of any chain): once `Audit` chains, it never writes an unchained row for any tenant again, so a later one is reported as `'unchained-entry'`. An explicit `legacyUntil` applies to these tenants too. The tenant list comes from the store's optional `auditTenants()`; a store without it is scanned through `query({})`.
+
 **Concurrency.** Appends to one chain are serialized in-process (a per-chain mutex). Across replicas, the store is the guarantee: the SQLite and Prisma stores have a unique `(chain, seq)` constraint, so two replicas racing for the same `seq` cannot fork the chain — the loser gets `AuditChainConflictError`, re-reads the head and retries (with jittered backoff, up to 10 attempts). A custom store that implements the chain methods must do the same.
 
 **What a hash chain does and does not prove.** A plain SHA-256 chain can be recomputed by anyone who can write to the database — it catches accidental and naive tampering, not a determined DBA who rewrites every hash after the edit. Two mitigations, both cheap:
@@ -214,6 +216,8 @@ basalt audit:verify --all            # every chain; exits 1 if any is broken
 basalt audit:verify --tenant=acme --expected-head=1284:<hash>   # against an anchor
 basalt audit:verify --all --legacy-until=0                     # no legacy rows accepted
 ```
+
+`--all` is a boolean flag: `--all`, `--all=true|1|yes` verify every chain, `--all=false|0|no` a single one, and any other value is an error (earlier versions read `--all=true` as "not all" and exited 0 after checking only the system chain). `--all` cannot be combined with `--tenant`, `--from`, `--to` or `--expected-head`, and `--tenant` without a value is an error rather than the system chain.
 
 Outside the plugin, `createAuditVerifyCommand(() => audit)` returns the same command definition — register it with `cliPlugin([...])` or call its `handle` from a scheduled job.
 
@@ -327,6 +331,7 @@ Optional, required for `integrity: 'hash-chain'` (implemented by `MemoryAuditSto
 - `readChain(tenantId, { fromSeq, toSeq?, limit }): Promise<AuditEntry[]>` — chained entries in ascending `seq`.
 - `countUnchained(tenantId): Promise<number>` — rows of that tenant without a chain (written before integrity).
 - `chainTenants(): Promise<Array<string | undefined>>` — tenants that have a chain.
+- `auditTenants?(): Promise<Array<string | undefined>>` — optional: every tenant with at least one row, chained or not (`SELECT DISTINCT tenant_id`). `verifyAll` uses it to reach tenants without a chain; without it, it scans `query({})`, which reads the whole trail.
 - `readUnchained?(tenantId, { since, limit }): Promise<AuditEntry[]>` — optional: the tenant's rows outside its chain with `at >= since`, plus any that carries a `seq` or chain name whatever its `at`, oldest first. Without it `verify` scans `query()` for seq-less rows instead.
 - `append` must reject an entry whose `(auditChainKey(tenantId), seq)` already exists with `AuditChainConflictError` — a unique constraint in SQL. `auditChainKey` maps a tenant to a never-NULL key (`'t:<id>'`, or `'@system'`), because SQL unique indexes treat NULLs as distinct.
 

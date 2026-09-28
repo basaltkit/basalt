@@ -110,7 +110,9 @@ Não copies os modelos à mão — corre **`basalt prisma:sync`**. Descobre todo
 pnpm basalt prisma:sync --push        # adiciona modelos em falta + cria as tabelas
 ```
 
-É idempotente e nunca toca nos teus próprios modelos. E se ligares um store `*-prisma`
+É idempotente e nunca toca nos teus próprios modelos. Quando o teu `datasource` é
+`mysql`, copia em vez disso a variante `schema.mysql.prisma` de cada pacote — vê
+[MySQL](#mysql). E se ligares um store `*-prisma`
 antes de os seus modelos existirem, o store agora falha rápido com uma mensagem clara
 nomeando o modelo em falta e apontando-te para aqui — acabaram-se os crípticos
 `reading 'create' of undefined`.
@@ -238,6 +240,9 @@ ou alheio) falha a verificação e aparece em `unverified` — usa
 `trail({ chainedOnly: true })` para uma leitura com valor de prova. Apagar a cauda
 não deixa lacuna: passa uma head registada noutro sítio como
 `verify({ expectedHead })` (ou `--expected-head=<seq>:<hash>`) para detetar truncatura.
+O `--all` também verifica tenants que têm linhas mas nenhuma cadeia (as linhas
+escritas depois de a integridade começar falham como `unchained-entry`); o
+`--all=true` é lido como `--all`, e um valor não reconhecido é um erro.
 
 `requestContext: true` adiciona um enricher HTTP (igual em fastify, express e hono)
 e guarda o `ip` e o `userAgent` do cliente. O IP é dado pessoal: com
@@ -471,6 +476,73 @@ Cada endpoint (URL, padrões de evento, tenant opcional, secret por endpoint e f
 idêntica ao store de memória — a lógica de entrega/retry é inalterada, apenas a lista de
 subscrições é agora durável.
 
+## MySQL
+
+Os schemas de referência dos `*-prisma` estão escritos para PostgreSQL, e aí —
+tal como em SQLite — um `String` simples é `TEXT`. **Em MySQL o Prisma
+mapeia-o para `VARCHAR(191)`**, e um servidor MySQL fora do modo strict trunca
+um valor mais longo com apenas um aviso: a escrita tem sucesso e o valor lido
+de volta não é o que foi escrito. Um URL de webhook passa a entregar noutro
+sítio, o `path` de um ficheiro deixa de nomear o objeto guardado, um payload
+JSON deixa de fazer parse, e um payload ou hash de auditoria truncado **parte a
+cadeia de hashes** para sempre.
+
+Três coisas fecham o problema:
+
+1. **Usa a variante MySQL do schema.** Cada pacote traz
+   `schema.mysql.prisma` ao lado do `schema.prisma`: os mesmos modelos, com as
+   colunas de texto livre alargadas (`@db.Text`, `@db.MediumText` para payloads
+   JSON, `@db.VarChar(255)` para um nome DNS ou um content type) e as chaves
+   deixadas em `VARCHAR(191)` para continuarem indexáveis. O `basalt prisma:sync`
+   escolhe-a automaticamente quando o teu `datasource` diz `provider = "mysql"`,
+   e avisa quando um pacote não tem nenhuma. O MySQL não tem `String[]`, por
+   isso as variantes do `@basaltkit/comments-prisma` (`mentions`) e do
+   `@basaltkit/auth-prisma` (`scopes`, `recoveryCodes`) guardam essas listas
+   como `Json`.
+2. **Liga a guarda.** Passa `{ columnLimits: 'mysql' }` à factory e o store
+   mede cada string contra a sua coluna antes de escrever — em caracteres para
+   `VARCHAR(n)`, em bytes UTF-8 para a família `TEXT` — e lança
+   `ColumnLengthError` (`COLUMN_LENGTH_EXCEEDED`, status 422) em vez de deixar a
+   base de dados cortá-la. Nada é escrito; no trilho de auditoria a cadeia
+   continua verificável.
+3. **Corre o MySQL em modo strict** (`sql_mode` com `STRICT_TRANS_TABLES`, a
+   predefinição desde a 5.7), para o próprio servidor recusar o que nenhuma
+   guarda cobre — um modelo teu, uma query raw.
+
+```ts
+const audit = prismaAuditStore(prisma, { columnLimits: 'mysql' })
+const webhooks = prismaWebhookStore(prisma, { columnLimits: 'mysql' })
+const files = prismaFilesStore(prisma, { columnLimits: 'mysql' })
+```
+
+`'mysql'` é o preset que corresponde ao `schema.mysql.prisma` distribuído; cada
+pacote exporta-o (`auditMysqlColumnLimits`, `webhooksMysqlColumnLimits`, …). Se
+alargares tu uma coluna, espalha o preset e sobe esse limite — um número é um
+limite em caracteres, `{ bytes: n }` em bytes:
+
+```ts
+import { auditMysqlColumnLimits, prismaAuditStore } from '@basaltkit/audit-prisma'
+
+prismaAuditStore(prisma, {
+  columnLimits: { AuditEntry: { ...auditMysqlColumnLimits.AuditEntry, event: 500 } }, // event @db.VarChar(500)
+})
+```
+
+Deixa `columnLimits` por definir em PostgreSQL e SQLite: nada é verificado e
+nada muda. A opção existe no `activity-`, `audit-`, `auth-` (todos os stores),
+`comments-`, `events-`, `files-` (os dois stores), `notifications-`,
+`permissions-`, `subscriptions-` (as duas factories), `teams-` (os dois
+stores), `tenancy-` e `webhooks-prisma` — todos os pacotes `*-prisma` trazem
+agora variante MySQL. No `teams-prisma` ela alarga o `email` do convite para
+`VARCHAR(254)`, o endereço válido mais longo; as chaves de permissões e de
+equipas ficam em `VARCHAR(191)`. No `auth-prisma` o `email` do utilizador é
+`VARCHAR(254)`; o hash da password, o segredo TOTP selado, o subject OIDC e o
+material de chave das passkeys são `TEXT`; e `scopes`/`recoveryCodes` são
+`Json` (o MySQL não tem listas escalares). Uma coluna é encurtada em vez de
+recusada: o `lastError` do outbox, que é diagnóstico — recusá-lo impediria o
+`markFailed` de contar a tentativa — é cortado para caber e marcado
+`…[truncated]`.
+
 ## Stores suportados por Redis
 
 Vários pacotes já trazem implementações Redis para o estado que mais beneficia de ser
@@ -517,7 +589,7 @@ assinatura cada:
 | Família | Assinatura | Devolve |
 | --- | --- | --- |
 | `sqlite*` | `(dbOrLocation: DatabaseSync \| string = ':memory:')` | `{ db, …stores }` — o handle `node:sqlite` em bruto mais um store por contrato |
-| `prisma*` | `(client: PrismaClient)` | `{ …stores }` — sem handle; o cliente já é teu |
+| `prisma*` | `(client: PrismaClient, options?)` | `{ …stores }` — sem handle; o cliente já é teu. `options.columnLimits` protege as larguras de coluna em MySQL ([MySQL](#mysql)) |
 
 Passar um **caminho** abre (ou cria) o ficheiro e aplica o schema; passar um
 `DatabaseSync` existente migra esse handle, que é como vários domínios partilham
@@ -546,7 +618,9 @@ controlar tu a abertura e a migração, e cada classe de store individual
 
 Os únicos backends com opções de comportamento próprias são os do outbox: as
 tabelas do relay estão em **Semântica do relay**, acima, e o `prismaOutboxStore`
-aceita `{ claim: true }` (vê **Vários relays**). Todo o resto é configurado no
+aceita `{ claim: true }` (vê **Vários relays**) — mais a guarda `columnLimits`
+para MySQL que todas as factories `prisma*` aceitam ([MySQL](#mysql)). Todo o
+resto é configurado no
 plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
 [Billing](/pt/guide/billing), [Tenancy](/pt/guide/tenancy) e
 [Webhooks](/pt/guide/webhooks).
@@ -557,6 +631,7 @@ plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
 | --- | --- | --- |
 | `Error: @basaltkit/<pkg>-prisma: the Prisma client has no <model> model.` | — | Uma factory `prisma*` correu contra um cliente cujo schema não tem os modelos. Corre `basalt prisma:sync --push` e depois `prisma generate`. Clientes lazy/proxy (base de dados por tenant) saltam a verificação e falham na primeira utilização |
 | `Error: @basaltkit/tenancy-prisma: domain "…" is already owned by tenant "…".` | — | O `save()` tentou reivindicar um domínio personalizado que pertence a outro tenant. Os domínios são globalmente únicos para o encaminhamento ser inequívoco; o save inteiro é rejeitado antes de qualquer escrita. A source SQLite impõe a mesma regra com uma constraint PRIMARY KEY, dentro de uma transação que faz rollback |
+| `ColumnLengthError: @basaltkit/<pkg>-prisma: <Model>.<column> is N characters, over its column limit of M.` | `COLUMN_LENGTH_EXCEEDED` | Um store configurado com `columnLimits` recusou um valor que a sua coluna MySQL não comporta. Nada foi escrito. Alarga a coluna e sobe o limite, ou encurta o valor — vê [MySQL](#mysql) |
 | `AggregateError` vindo de `bus.emit(...)` | — | Uma escrita de captura do outbox falhou. A captura é aguardada de propósito — o emissor tem de ver a falha em vez de acreditar que um evento perdido foi registado |
 | `EventValidationError` | `EVENT_INVALID` | O schema do evento rejeitou o payload antes de qualquer listener (incluindo a captura do outbox) correr |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | O `OUTBOX` (ou qualquer token de store) foi resolvido sem o plugin que o regista |
@@ -594,5 +669,9 @@ plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
 - Para um **trilho de auditoria** com valor de conformidade, ativa `integrity: 'hash-chain'`,
   revoga `UPDATE`/`DELETE` em `audit_entries` e agenda `basalt audit:verify --all`
   ([acima](#trilho-de-auditoria-verificavel)).
+- Em **MySQL**, copia as variantes `schema.mysql.prisma`, passa
+  `{ columnLimits: 'mysql' }` a todas as factories `prisma*` e mantém o servidor
+  em modo strict ([acima](#mysql)) — caso contrário valores longos são
+  truncados em silêncio.
 
 Vê [Going to Production](/pt/guide/production) para a checklist completa.
