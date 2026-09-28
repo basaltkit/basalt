@@ -17,6 +17,13 @@ export interface SessionOptions {
    * in tests with a mock provider — no network, no keys.
    */
   createProvider?: () => AIProvider
+  /**
+   * Let `basalt_make` apply WITHOUT a confirmation when the client cannot be
+   * asked (no elicitation support — e.g. over HTTP, or a stdio client that did
+   * not announce the capability). Default `false`: such an apply is refused
+   * (fail closed). The bin's `--allow-unconfirmed-apply` flag sets it.
+   */
+  allowUnconfirmedApply?: boolean
 }
 
 /** Resolved per-server session: workspace root, env, and how to read/plan. */
@@ -26,6 +33,8 @@ export interface Session {
   reader(root: string): ProjectReader
   /** Build the AI provider on demand — only the provider-backed tools call this. */
   provider(): AIProvider
+  /** Whether an `apply` may proceed when the client cannot confirm it. */
+  readonly allowUnconfirmedApply: boolean
 }
 
 export function createSession(options: SessionOptions = {}): Session {
@@ -38,6 +47,7 @@ export function createSession(options: SessionOptions = {}): Session {
     env,
     reader: (root) => createReader(root),
     provider,
+    allowUnconfirmedApply: options.allowUnconfirmedApply === true,
   }
 }
 

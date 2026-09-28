@@ -104,7 +104,8 @@ With no `driver`, the plugin uses the **sync** driver:
 tests. Know its semantics before relying on it: it is **at-most-once** (a job
 that exhausts its inline retries is lost), handler errors **reject the
 `dispatch()` call** (your request fails instead of a background retry), and it
-is not meant for production — a production deploy that falls back to it without
+is not meant for production — a production deploy (any `NODE_ENV` but an
+explicit `development`/`test`, unset included) that falls back to it without
 a `driver` logs a warning at boot (pass `driver: new SyncQueueDriver()` to opt in
 deliberately). A worker's `queue` **must match** a job's `queue`, or
 the job lands in the backend but nothing consumes it.

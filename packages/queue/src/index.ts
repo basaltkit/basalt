@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata, type Container } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, isProductionEnvironment, type Container } from '@basaltkit/core'
 import {
   DEFAULT_LIST_LIMIT,
   DEFAULT_LIST_STATES,
@@ -100,7 +100,7 @@ export function queuePlugin(options: QueuePluginOptions = {}) {
         let driver = options.driver
         if (!driver) {
           driver = new SyncQueueDriver()
-          if (process.env['NODE_ENV'] === 'production') {
+          if (isProductionEnvironment()) {
             // The silent default without a driver is the inline sync driver:
             // at-most-once, no background retries, handler errors propagate
             // into the dispatching request. Deliberate sync use in production

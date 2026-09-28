@@ -309,6 +309,28 @@ describe('filesSink', () => {
   })
 })
 
+describe('filesSink · single-tenant connections (FA-030)', () => {
+  it('uploads with no tenantId, so Files files it under its own single-tenant key', async () => {
+    const seen: Record<string, unknown>[] = []
+    const files = {
+      upload: async (content: AsyncIterable<Uint8Array | string>, input: Record<string, unknown>) => {
+        for await (const _chunk of content) {
+          /* drain */
+        }
+        seen.push(input)
+        return { id: 'f' }
+      },
+    }
+    const h = harness({ provider: { files: [{ externalId: 'f1', name: 'a.txt', content: 'x' }] } })
+    const view = await connect(h)
+    const item = (await h.drives.listItems(view.id)).items[0]!
+    await importItem(h.drives, view.id, item, filesSink(files))
+    expect(seen).toHaveLength(1)
+    // Neither the sentinel (which Files refuses) nor 'default' (a real tenant id).
+    expect(seen[0]).not.toHaveProperty('tenantId')
+  })
+})
+
 describe('download streaming', () => {
   it('hands back a stream rather than a buffer', async () => {
     const h = harness({ provider: { files: [{ externalId: 'f1', name: 'a.txt', content: 'streamed' }] } })

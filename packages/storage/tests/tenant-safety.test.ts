@@ -2,12 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createApp, definePlugin, ensureMetadata, runWithContext } from '@basaltkit/core'
+import { createApp, definePlugin, ensureMetadata, runWithContext, tryCtx } from '@basaltkit/core'
 import {
   Disk,
   LocalStorageDriver,
   STORAGE,
   storagePlugin,
+  StorageCrossTenantCopyError,
   StorageInvalidScopeError,
   StorageTenantRequiredError,
   TemporaryUrlTtlTooLongError,
@@ -65,7 +66,7 @@ describe('security: the tenant scope segment cannot escape tenants/<id>', () => 
   it('refuses tenant ids containing "/", "..", "\\\\", or control characters', async () => {
     const disk = new Disk('uploads', new LocalStorageDriver({ root }))
     await as('globex', () => disk.put('files/secret.txt', 'GLOBEX SECRET'))
-    await disk.put('central.txt', 'CENTRAL') // no tenant, standalone disk
+    await new Disk('central', new LocalStorageDriver({ root }), { scope: null }).put('central.txt', 'CENTRAL')
 
     for (const id of ['..', '.', 'globex/files', 'globex\\files', 'a\u0000', 'a\n', '../globex']) {
       await expect(as(id, () => disk.get('secret.txt')), JSON.stringify(id)).rejects.toBeInstanceOf(StorageInvalidScopeError)
@@ -178,5 +179,106 @@ describe('security: temporary URL lifetimes are capped', () => {
     await expect(app.container.get(STORAGE).disk('s').temporaryUrl('r.pdf', '2h')).rejects.toBeInstanceOf(
       TemporaryUrlTtlTooLongError,
     )
+  })
+})
+
+// Regressions for the 2026-09 framework audit (FA-028, FA-029, FA-033).
+describe('security: the default tenant segment is canonical (FA-028)', () => {
+  it('"Acme" never reaches "acme"\'s tree — refused on every platform, like every driver', async () => {
+    const disk = new Disk('uploads', new LocalStorageDriver({ root }))
+    await as('acme', () => disk.put('x.txt', 'secret'))
+    // On APFS/NTFS 'tenants/Acme' used to open 'tenants/acme'; S3 kept them apart.
+    for (const id of ['Acme', 'ACME', 'acme\u0301', 'caf\u00e9', 'acme.', ' acme', 'ac me']) {
+      await expect(as(id, () => disk.get('x.txt')), JSON.stringify(id)).rejects.toBeInstanceOf(StorageInvalidScopeError)
+      await expect(as(id, () => disk.put('y.txt', 'poison')), JSON.stringify(id)).rejects.toBeInstanceOf(StorageInvalidScopeError)
+    }
+    expect((await as('acme', () => disk.get('x.txt'))).toString()).toBe('secret')
+    expect(await new Disk('c', new LocalStorageDriver({ root }), { scope: null }).list('')).toEqual(['tenants/acme/x.txt'])
+  })
+
+  it('accepts the tenancy default grammar and dotted ids', async () => {
+    const disk = new Disk('uploads', new LocalStorageDriver({ root }))
+    for (const id of ['acme', 'a', '0', 'acme-corp_2', '0f8fad5b-d9cb-469f-a165-70867728950e', 'acme.eu']) {
+      await as(id, () => disk.put('x.txt', id))
+      expect((await as(id, () => disk.get('x.txt'))).toString()).toBe(id)
+    }
+  })
+
+  it('a custom scope is the escape hatch for non-canonical ids', async () => {
+    // Case-preserving ids (nanoid, ULID) map to a canonical, collision-free segment.
+    const tenantHex = () => {
+      const id = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+      return id ? `tenants/x${Buffer.from(id).toString('hex')}` : undefined
+    }
+    const disk = new Disk('uploads', new LocalStorageDriver({ root }), { scope: tenantHex })
+    await as('Acme', () => disk.put('x.txt', 'upper'))
+    await as('acme', () => disk.put('x.txt', 'lower'))
+    expect((await as('Acme', () => disk.get('x.txt'))).toString()).toBe('upper')
+    expect((await as('acme', () => disk.get('x.txt'))).toString()).toBe('lower')
+  })
+})
+
+describe('security: a scoped disk without a scope fails closed unless told otherwise (FA-029)', () => {
+  it('a custom scope resolving nothing refuses instead of using the bucket root', async () => {
+    const central = new Disk('c', new LocalStorageDriver({ root }), { scope: null })
+    await central.put('tenants/globex/a', 'g')
+    const disk = new Disk('d', new LocalStorageDriver({ root }), { scope: () => undefined }, () => true)
+    await expect(disk.list('')).rejects.toBeInstanceOf(StorageTenantRequiredError)
+    await expect(disk.get('tenants/globex/a')).rejects.toBeInstanceOf(StorageTenantRequiredError)
+    // even when the host says tenancy is not registered: a custom scope has no root fallback
+    const single = new Disk('d', new LocalStorageDriver({ root }), { scope: () => undefined }, () => false)
+    await expect(single.list('')).rejects.toBeInstanceOf(StorageTenantRequiredError)
+  })
+
+  it('a hand-built default-scope disk with no tenant in context refuses too', async () => {
+    const central = new Disk('c', new LocalStorageDriver({ root }), { scope: null })
+    await central.put('tenants/globex/a', 'g')
+    const disk = new Disk('d', new LocalStorageDriver({ root }))
+    await expect(disk.get('tenants/globex/a')).rejects.toMatchObject({ code: 'STORAGE_TENANT_REQUIRED', status: 400 })
+    await expect(disk.list('tenants')).rejects.toBeInstanceOf(StorageTenantRequiredError)
+  })
+
+  it("'root' only when asked for: onMissingScope:'root' or scope:null", async () => {
+    const central = new Disk('c', new LocalStorageDriver({ root }), { scope: null })
+    await central.put('tenants/globex/a', 'g')
+    const mixed = new Disk('d', new LocalStorageDriver({ root }), { onMissingScope: 'root' })
+    expect((await mixed.get('tenants/globex/a')).toString()).toBe('g')
+    const custom = new Disk('d', new LocalStorageDriver({ root }), { scope: () => undefined, onMissingScope: 'root' })
+    expect(await custom.list('')).toEqual(['tenants/globex/a'])
+  })
+})
+
+describe('security: copy() cannot write into another tenant through a central disk (FA-033)', () => {
+  it("refuses a central destination inside tenants/ from a tenant-scoped disk", async () => {
+    const driver = new LocalStorageDriver({ root })
+    const scoped = new Disk('d', driver)
+    const central = new Disk('c', driver, { scope: null })
+    await as('acme', () => scoped.put('a', '1'))
+    for (const to of ['tenants/globex/pwn', 'Tenants/globex/pwn', './tenants/globex/pwn', 'tenants\\globex\\pwn', 'tenants/acme/own']) {
+      await expect(as('acme', () => scoped.copy('a', to, { disk: central })), to).rejects.toBeInstanceOf(StorageCrossTenantCopyError)
+    }
+    await expect(as('acme', () => scoped.copy('a', 'tenants/globex/pwn', { disk: central }))).rejects.toMatchObject({
+      code: 'STORAGE_CROSS_TENANT_COPY',
+      status: 403,
+    })
+    expect(await central.exists('tenants/globex/pwn')).toBe(false)
+    expect(await central.list('tenants/globex')).toEqual([])
+  })
+
+  it('still copies to a central disk outside tenants/, and between scoped disks', async () => {
+    const driver = new LocalStorageDriver({ root })
+    const scoped = new Disk('d', driver)
+    const central = new Disk('c', driver, { scope: null })
+    await as('acme', () => scoped.put('a', '1'))
+    await as('acme', () => scoped.copy('a', 'backups/acme/a', { disk: central }))
+    expect((await central.get('backups/acme/a')).toString()).toBe('1')
+    // a key merely starting with the letters "tenants" is not the tree
+    await as('acme', () => scoped.copy('a', 'tenants-export/a', { disk: central }))
+    expect(await central.exists('tenants-export/a')).toBe(true)
+    await as('acme', () => scoped.copy('a', 'tenants/globex/pwn'))
+    expect(await central.exists('tenants/acme/tenants/globex/pwn')).toBe(true)
+    // central → central is the operator's own business
+    await central.copy('backups/acme/a', 'tenants/globex/restored')
+    expect(await central.exists('tenants/globex/restored')).toBe(true)
   })
 })

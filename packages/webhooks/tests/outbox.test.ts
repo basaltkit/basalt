@@ -10,7 +10,8 @@ function fakeWebhooks() {
   const calls: Array<{ event: string; data: unknown; tenantId: string | undefined }> = []
   let results: DeliveryResult[] = [{ endpointId: 'e1', ok: true, attempts: 1 }]
   const manager = {
-    async dispatch(event: string, data: unknown, tenantId?: string) {
+    async dispatch(event: string, data: unknown, scope?: string | { tenantId?: string }) {
+      const tenantId = typeof scope === 'string' ? scope : scope?.tenantId
       calls.push({ event, data, tenantId })
       return results
     },

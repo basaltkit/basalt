@@ -96,7 +96,10 @@ O scoping é **anti-alargamento**: dentro de um pedido com tenant no contexto,
 consegue alargar ou trocar o âmbito. O argumento explícito e o comportamento
 system-wide acima aplicam-se apenas onde não há tenant ambiente (jobs, CLI, apps
 single-tenant). `unregister` é um no-op — não um erro — para um endpoint que
-pertence a outro tenant.
+pertence a outro tenant. O manager volta a verificar a propriedade ele próprio (o
+endpoint tem de aparecer no `list()` desse tenant) antes de chamar
+`store.remove`, por isso nem um store cujo `remove` ignore o argumento `tenantId`
+pode ser usado para apagar um endpoint de outro tenant.
 
 **Fail-closed quando a tenancy está ativa.** Quando o `tenancyPlugin` está
 registado (o seu marcador `'tenancy:active'`), uma chamada de gestão sem tenant
@@ -153,8 +156,11 @@ O manager volta a aplicar o filtro de tenant ao que o store devolve, por isso um
 store personalizado que ignore o argumento `tenantId` não consegue alargar a
 entrega.
 
-Cada resultado é `{ endpointId, ok, status?, attempts, error? }` — persiste-o
-para um registo de auditoria. As entregas correm em paralelo e o `dispatch` só
+Cada resultado é `{ endpointId, ok, status?, attempts, error?, retryable? }` —
+persiste-o para um registo de auditoria. `retryable` (nas falhas) diz se tentar
+mais tarde pode resultar. Uma entrega que lança inesperadamente (por exemplo, uma
+linha malformada do store) torna-se um resultado falhado com
+`error: 'internal delivery error'` em vez de rejeitar o `dispatch` inteiro. As entregas correm em paralelo e o `dispatch` só
 resolve quando todas terminam, por isso um endpoint que gasta todo o orçamento de
 retries atrasa a chamada inteira: faz `dispatch` a partir de um job ou do outbox,
 não inline num handler de pedido.
@@ -172,7 +178,12 @@ x-basalt-signature: t=1712345678,v1=<hmac-sha256(t.body)>
 
 O `id` (também em `x-basalt-delivery`) é único por entrega e estável entre os
 retries dessa entrega — faz dedup por ele para tornar inofensivo um replay dentro
-da janela de tolerância. O `endpointId` identifica a subscrição para a qual foi
+da janela de tolerância. Através do outbox é derivado do id da entrada do outbox e
+do id do endpoint, por isso mantém-se também entre retries do outbox e reinícios;
+`dispatch(event, data, { idempotencyKey })` dá a mesma garantia aos teus próprios
+jobs. Cada tentativa é assinada com o seu **próprio** timestamp `t`, para que um
+retry depois de um backoff longo continue dentro da tolerância do recetor; o corpo
+(com o seu `id` e `sentAt`) é idêntico em todas as tentativas. O `endpointId` identifica a subscrição para a qual foi
 assinado. Ambos estão dentro do corpo assinado, por isso nenhum pode ser alterado
 sem partir a assinatura.
 
@@ -247,10 +258,16 @@ createApp({
 })
 ```
 
-O `webhookOutboxDispatch` só trata uma entrada como entregue quando **todos** os
-endpoints subscritos a aceitaram; uma falha lança, por isso a entrada inteira é
-repetida contra todos eles. Os subscritores têm portanto de ser **idempotentes** —
-o payload leva o nome do evento e os dados para dedup. Uma entrada gravada sem
+O `webhookOutboxDispatch` só volta a pôr uma entrada na fila por uma falha
+**transitória** (erro de rede, timeout, `5xx`, `408`/`429`). O retry salta os
+endpoints que já aceitaram a entrada e reenvia o **mesmo** `id` de entrega aos
+restantes — derivado do id da entrada e do id do endpoint, por isso mantém-se
+também entre reinícios. Falhas permanentes (URL bloqueado pela guarda SSRF,
+redirecionamento, outros `4xx`, secret de assinatura recusado) são reportadas via
+`onPermanentFailure` (por omissão `console.warn`) e nunca voltam a pôr a entrada
+na fila: repetir não as corrige e só voltaria a entregar a endpoints saudáveis. A
+entrega continua **at-least-once** (a lista do que já foi entregue vive em
+memória), por isso os subscritores fazem dedup pelo `id`. Uma entrada gravada sem
 tenant no contexto chega só a endpoints sem tenant, tal como o `dispatch`.
 
 O endpoint em falha ou pendurado de um tenant não consegue parar todos os
@@ -361,12 +378,15 @@ falha. Captura o corpo raw (ex. `express.raw()` no Express) antes do parse.
 :::
 
 `signPayload(body, secret, timestampSeconds)` produz o mesmo header se precisares
-de assinar manualmente. `verifySignature` devolve `false` — nunca lança — para um
+de assinar manualmente. `verifySignature` devolve `false` para um
 header malformado, um `v1` em falta, um timestamp fora da tolerância, um digest
 diferente, ou um secret vazio/não definido ou com menos de 16 caracteres (assim um
 recetor cuja env var `WEBHOOK_SECRET` falte falha fechado em vez de aceitar um
 HMAC calculado com uma chave vazia). Um recetor pode tratá-lo como um único
-booleano.
+booleano. A única exceção é um erro de configuração: um `toleranceSeconds` que
+não seja um número finito ≥ 0 (ex. `Number(process.env.UNSET)` → `NaN`) ou um
+`nowSeconds` não finito lança um `RangeError`, porque de outra forma tornaria
+todos os timestamps "frescos" e desligaria em silêncio a proteção anti-replay.
 
 Cada endpoint de tenant tem o seu próprio secret: um recetor verifica com **o
 secret que o `register()` devolveu para o seu endpoint**, não com o default da
@@ -385,7 +405,8 @@ rejeitado.
   exponencial — `500ms`, `1s`, `2s`, … até `maxRetries` (default `3`, ou seja
   quatro tentativas no total).
 - Erros de cliente (`4xx`) **não** são repetidos — um URL errado ou auth errada
-  não se corrigem sozinhos no retry. O resultado leva `error: 'HTTP 404'`.
+  não se corrigem sozinhos no retry. O resultado leva `error: 'HTTP 404'`. `408` e
+  `429` continuam marcados `retryable: true`, para que o outbox os tente mais tarde.
 - Os redirecionamentos são **recusados, não seguidos**: um `3xx` termina a
   entrega com `error: 'redirect refused'`. Segui-lo permitiria que um URL público
   e conforme desviasse o pedido para um endereço interno.
@@ -429,8 +450,42 @@ continuam a levar o hostname original, por isso vhosts e validação de certific
 não são afetados.
 
 Um URL bloqueado é um erro permanente de configuração, não transitório: o
-resultado é `{ ok: false, attempts: 0, error: 'Refusing to deliver webhook to …' }`
-e nada é repetido.
+resultado é `{ ok: false, attempts: 0, retryable: false, error: 'Refusing to deliver webhook…' }`
+e nada é repetido. Quando o veredito vem do DNS (o host não resolve, ou resolve
+para um endereço privado) o `error` é uma única mensagem genérica —
+`host does not resolve to an allowed public address` — sem endereço e sem forma
+de distinguir os dois casos: quem regista endpoints poderia de outra forma mapear
+o teu DNS interno. O endereço resolvido fica em
+`WebhookUrlBlockedError.resolvedAddress` para logs do lado do servidor quando
+chamas `resolveAndValidate` tu próprio.
+
+::: warning Um `fetchImpl` próprio não fixa o endereço sozinho
+O transporte por omissão **não** é o `fetch` global: é um cliente embutido que
+liga ao IP validado. Um `fetchImpl` próprio (proxy, instrumentação) recebe esse IP
+no objeto init sob `PINNED_ADDRESS`, mas o `fetch` simples ignora-o e volta a
+resolver o hostname — reabrindo a janela de rebinding. Mantém a fixação delegando
+no `pinnedFetch` exportado, e declara-o:
+
+```ts
+import { pinnedFetch } from '@basaltkit/webhooks'
+
+webhooksPlugin({
+  secret,
+  fetchImpl: async (url, init) => {
+    const started = Date.now()
+    try { return await pinnedFetch(url, init) } finally { metrics.observe(Date.now() - started) }
+  },
+  fetchImplPinsAddress: true,
+})
+```
+
+Sem `fetchImplPinsAddress`, um `fetchImpl` próprio emite um aviso de processo
+único (`BASALT_WEBHOOKS_UNPINNED_FETCH`) e o deliverer volta a resolver e a
+validar o host antes de cada retry. Isso estreita a janela mas não a fecha — um
+cliente sem fixação resolve por si no momento da ligação. Reescrever o URL para o
+IP não é feito por ti: o `fetch` simples não consegue definir o SNI de TLS à
+parte, por isso a validação do certificado partiria em endpoints `https`.
+:::
 
 ```ts
 // Instalação self-hosted que tem mesmo de entregar a um host interno:
@@ -578,7 +633,10 @@ que torna o âmbito anti-alargamento seguro. Chamado **sem** `tenantId` (ou com
 tenant — nunca os de todos os tenants. Um dispatch deliberado com `allTenants` lê
 os endpoints através de `list()`, e o manager volta a filtrar todos os
 resultados, por isso um store que erre nisto continua sem conseguir alargar a
-entrega.
+entrega. O manager também verifica a propriedade antes de chamar `remove`. Uma
+linha SQL com `secret` / `tenantId` a `NULL` pode vir como `null`: o deliverer e o
+manager tratam `null` exatamente como um campo ausente (um endpoint sem tenant,
+assinado com o secret por omissão).
 
 ## Referência de opções
 
@@ -600,7 +658,8 @@ Tudo exceto `store`, `deliverer` e `events` é reencaminhado para o
 | `backoffMs` | `number` | `500` | Espera base, duplicada por tentativa (500 ms, 1 s, 2 s, …) |
 | `timeoutMs` | `number` | `10_000` | Timeout por tentativa; um abort conta como falha transitória |
 | `ssrf` | `SsrfGuardOptions \| false` | ligado | A guarda do URL de entrega (abaixo). `false` desliga-a por completo |
-| `fetchImpl` | `typeof fetch` | transporte fixado embutido | Cliente HTTP injetado; recebe o endereço validado no objeto init sob o símbolo exportado `PINNED_ADDRESS` |
+| `fetchImpl` | `typeof fetch` | transporte fixado embutido (não o `fetch` global) | Cliente HTTP injetado; recebe o endereço validado no objeto init sob o símbolo exportado `PINNED_ADDRESS`. O `fetch` simples ignora-o — delega no `pinnedFetch` para manter a fixação (ver a guarda SSRF) |
+| `fetchImplPinsAddress` | `boolean` | `false` | Declara que o teu `fetchImpl` respeita `PINNED_ADDRESS` (ex. embrulha o `pinnedFetch`): silencia o aviso de ligação sem fixação e salta a revalidação antes de cada retry |
 | `sleep` | `(ms) => Promise<void>` | `setTimeout` | Sleep de backoff injetável (testes) |
 | `now` | `() => number` | `Date.now()/1000` | Relógio injetável em **segundos**, usado no timestamp da assinatura |
 
@@ -625,6 +684,7 @@ Tudo exceto `store`, `deliverer` e `events` é reencaminhado para o
 | `tenantConcurrency` | `number` | `ceil(concurrency / 2)` | Máximo de entregas em curso de um tenant ao mesmo tempo, entre flushes |
 | `dispatchTimeoutMs` | `number \| false` | `10_000` | Espera máxima por entrada antes de o flush avançar; a entrega continua destacada e o resultado é registado na mesma |
 | `onFlushError` | `(error) => void` | `console.error` | Um flush do timer/shutdown falhou ao nível do store. Nunca pode lançar |
+| `onPermanentFailure` | `(entry, failures) => void` | `console.warn` | A entrega de uma entrada falhou de forma permanente para alguns endpoints; não são repetidos. Nunca pode lançar |
 
 Não há `onDead` aqui — usa o `outboxPlugin` de `@basaltkit/events` quando
 precisares dele, como mostrado acima. O plugin
@@ -636,14 +696,16 @@ shutdown (best-effort).
 | Export | Assinatura | Porquê |
 | --- | --- | --- |
 | `signPayload` | `(body, secret, timestampSeconds) => string` | Constrói `t=…,v1=…` — assina um payload à mão |
-| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; `true` se qualquer `v1` bater; `false` para um secret com menos de 16 caracteres; nunca lança |
+| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; `true` se qualquer `v1` bater; `false` para um secret com menos de 16 caracteres; só lança `RangeError` para uma tolerância/relógio inválidos |
 | `generateWebhookSecret` | `() => string` | Um secret `whsec_…` novo (32 bytes aleatórios) |
 | `MIN_WEBHOOK_SECRET_LENGTH` | `16` | Comprimento mínimo do secret, aplicado nos dois lados |
 | `assertDeliverableUrl` | `(url, options?) => Promise<void>` | Rejeita um URL inseguro para SSRF no momento do registo; lança `WebhookUrlBlockedError` |
 | `resolveAndValidate` | `(url, options?) => Promise<ValidatedTarget>` | A mesma verificação, devolvendo os endereços resolvidos e o que fixar |
 | `isPrivateIp` | `(ip) => boolean` | O próprio predicado de gamas; tudo o que não seja um IP público literal é `true` |
 | `matchesEvent` | `(patterns, event) => boolean` | O comparador de padrões, para o `forEvent` de um store próprio |
-| `webhookOutboxDispatch` | `(webhooks) => OutboxDispatch` | Adapta um `WebhookManager` a um dispatch de outbox; lança se algum endpoint falhar |
+| `webhookOutboxDispatch` | `(webhooks, options?) => OutboxDispatch` | Adapta um `WebhookManager` a um dispatch de outbox; só lança em falhas transitórias, com ids de entrega estáveis |
+| `pinnedFetch` | `(url, init) => Promise<Response>` | Cliente compatível com `fetch` sobre o transporte fixado — o delegado de um `fetchImpl` próprio |
+| `deriveDeliveryId` | `(idempotencyKey, endpointId) => string` | O `id` de entrega determinístico usado pelo outbox / `idempotencyKey` |
 
 ## Modos de falha e resolução de problemas
 
@@ -652,11 +714,12 @@ A maioria dos problemas de entrega **não são exceções** — voltam no
 
 | Resultado | `error` | `attempts` | Quando |
 | --- | --- | --- | --- |
-| Recusa SSRF | `Refusing to deliver webhook to <url>: <reason>` | `0` | Esquema inválido, ou o host é/resolve para um endereço privado, loopback, link-local, CGNAT, ULA ou reservado |
+| Recusa SSRF | `Refusing to deliver webhook to <url>: <reason>` (URL/esquema inválido, IP privado literal) ou `Refusing to deliver webhook: host does not resolve to an allowed public address.` (veredito do DNS) | `0` | Esquema inválido, ou o host é/resolve para um endereço privado, loopback, link-local, CGNAT, ULA ou reservado — ou não resolve |
 | Sem secret utilizável | `no signing secret; refusing unsigned delivery` / `tenant endpoint has no own secret; …` / `endpoint signing secret is too short …` | `0` | Nada com que assinar, um endpoint de tenant só com o secret partilhado, ou um secret com menos de 16 caracteres |
-| Erro de cliente | `HTTP 4xx` | `1` | O recetor rejeitou — nunca repetido |
+| Erro de cliente | `HTTP 4xx` | `1` | O recetor rejeitou — nunca repetido inline (`408`/`429` são `retryable` para o outbox) |
 | Redirecionamento | `redirect refused` | `1` | O endpoint respondeu `3xx`; segui-lo derrotaria a verificação SSRF |
 | Transitório | última mensagem de rede/timeout | `maxRetries + 1` | `5xx`, erro de ligação ou timeout por tentativa, repetido com backoff, e ainda a falhar |
+| Interno | `internal delivery error` | `0` | O `deliver()` lançou inesperadamente; registado do lado do servidor, os outros endpoints não são afetados |
 
 | Erro | Código | HTTP | Quando |
 | --- | --- | --- | --- |

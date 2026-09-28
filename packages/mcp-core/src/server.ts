@@ -27,14 +27,17 @@ export interface ProgressUpdate {
 /**
  * Per-invocation context handed to a tool. `signal` aborts on client
  * cancellation; `progress` streams updates back to the client; `elicit` asks the
- * client a yes/no question (when the client supports elicitation); `headers`
- * carries opaque per-call transport metadata (e.g. HTTP headers) forwarded verbatim.
+ * client a yes/no question (only present when the transport wired it up — over
+ * stdio, when the client announced the `elicitation` capability); `headers`
+ * carries opaque per-call transport metadata (e.g. HTTP headers) forwarded
+ * verbatim; `remoteAddress` is the transport peer's address, when known.
  */
 export interface ToolInvokeContext {
   signal: AbortSignal
   progress?: (update: ProgressUpdate) => void
   elicit?: (prompt: string) => Promise<boolean>
   headers?: Record<string, string | string[] | undefined>
+  remoteAddress?: string
 }
 
 /**
@@ -115,6 +118,19 @@ export interface CallContext {
   elicit?: (prompt: string) => Promise<boolean>
   notify?: (message: JsonRpcRequest) => void
   signal?: AbortSignal
+  /**
+   * Identifies the client connection (session) a message belongs to — any
+   * value compared by identity (an object per connection is typical). Request
+   * ids are only unique per session, so in-flight calls are registered under
+   * `(session, id)` and `notifications/cancelled` only reaches calls of the
+   * SAME session: one client can never cancel another's request. The bundled
+   * transports always set it (one per stdio stream, one per HTTP request).
+   * Omit it only for a single-client embedding — every session-less message
+   * shares one scope.
+   */
+  session?: unknown
+  /** The transport peer's address (e.g. the HTTP client ip), forwarded to tools. */
+  remoteAddress?: string
 }
 
 export interface McpServerOptions {
@@ -125,6 +141,16 @@ export interface McpServerOptions {
 }
 
 const DEFAULT_SERVER_INFO: McpServerInfo = { name: 'basalt-mcp-core', version: '0.1.0' }
+
+/** The shared scope of every message that carries no `CallContext.session`. */
+const DEFAULT_SESSION = Symbol('basalt-mcp-default-session')
+
+/** A JSON-RPC response (no `method`, carries `result` or `error`) — never answered. */
+function isResponseMessage(message: unknown): boolean {
+  if (message === null || typeof message !== 'object') return false
+  const m = message as Record<string, unknown>
+  return m['method'] === undefined && ('result' in m || 'error' in m)
+}
 
 /** Link an external abort signal into a per-request controller. */
 function linkSignal(external: AbortSignal | undefined, controller: AbortController): void {
@@ -148,8 +174,12 @@ export class McpServer {
   private readonly tools: Map<string, McpToolDef>
   private readonly resources: Map<string, McpResourceDef>
   private readonly prompts: Map<string, McpPromptDef>
-  /** In-flight tool calls keyed by request id — the target of `notifications/cancelled`. */
-  private readonly inflight = new Map<JsonRpcId, AbortController>()
+  /**
+   * In-flight tool calls keyed by session, then request id — the target of
+   * `notifications/cancelled`. Scoped per session so a cancel from one client
+   * can never abort another client's call that happens to share its id.
+   */
+  private readonly inflight = new Map<unknown, Map<JsonRpcId, AbortController>>()
 
   constructor(options: McpServerOptions = {}) {
     this.serverInfo = options.serverInfo ?? DEFAULT_SERVER_INFO
@@ -189,11 +219,17 @@ export class McpServer {
     message: JsonRpcRequest,
     ctx: CallContext = {},
   ): Promise<JsonRpcResponse | null> {
+    // A response (e.g. a client's answer to a server-initiated request) is never answered.
+    if (isResponseMessage(message)) return null
     if (message?.jsonrpc !== '2.0' || typeof message.method !== 'string') {
       return fail(message?.id ?? null, RPC_ERRORS.INVALID_REQUEST, 'Invalid JSON-RPC request')
     }
     const notification = isNotification(message)
     const id = message.id ?? null
+    // JSON-RPC 2.0: a notification is never answered. A request method sent in
+    // notification form (no `id`) is not executed either — it would run a tool
+    // (with side effects) whose outcome the caller has explicitly declined to see.
+    if (notification && !message.method.startsWith('notifications/')) return null
 
     try {
       switch (message.method) {
@@ -210,7 +246,7 @@ export class McpServer {
         case 'notifications/cancelled': {
           const params = (message.params ?? {}) as { requestId?: JsonRpcId }
           if (params.requestId !== undefined && params.requestId !== null) {
-            this.inflight.get(params.requestId)?.abort()
+            this.inflight.get(sessionOf(ctx))?.get(params.requestId)?.abort()
           }
           return null
         }
@@ -278,8 +314,22 @@ export class McpServer {
     const args = (params.arguments ?? {}) as Record<string, unknown>
     const controller = new AbortController()
     linkSignal(ctx.signal, controller)
-    // Per-request cancellation: register so `notifications/cancelled` can abort it.
-    if (id !== null) this.inflight.set(id, controller)
+    // Per-request cancellation: register under (session, id) so
+    // `notifications/cancelled` from the same session — and only it — can abort it.
+    const session = sessionOf(ctx)
+    let scope = this.inflight.get(session)
+    if (id !== null && scope?.has(id)) {
+      // Ids must be unique among a session's in-flight requests; accepting a
+      // duplicate would make the earlier call uncancellable.
+      return fail(id, RPC_ERRORS.INVALID_REQUEST, `Request id ${JSON.stringify(id)} is already in flight`)
+    }
+    if (id !== null) {
+      if (!scope) {
+        scope = new Map()
+        this.inflight.set(session, scope)
+      }
+      scope.set(id, controller)
+    }
     try {
       const result = await tool.invoke(
         args,
@@ -287,7 +337,10 @@ export class McpServer {
       )
       return ok(id, result)
     } finally {
-      if (id !== null) this.inflight.delete(id)
+      if (id !== null && scope) {
+        scope.delete(id)
+        if (scope.size === 0) this.inflight.delete(session)
+      }
     }
   }
 
@@ -358,6 +411,7 @@ export class McpServer {
   ): ToolInvokeContext {
     const invoke: ToolInvokeContext = { signal: controller.signal }
     if (ctx.headers) invoke.headers = ctx.headers
+    if (ctx.remoteAddress !== undefined) invoke.remoteAddress = ctx.remoteAddress
     if (ctx.elicit) invoke.elicit = ctx.elicit
     // Prefer an explicit progress callback; otherwise synthesize one from the
     // client's progressToken + the transport's notify (full emission lands in M2,
@@ -366,6 +420,10 @@ export class McpServer {
     if (progress) invoke.progress = progress
     return invoke
   }
+}
+
+function sessionOf(ctx: CallContext): unknown {
+  return ctx.session ?? DEFAULT_SESSION
 }
 
 function progressFromToken(

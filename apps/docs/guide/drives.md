@@ -902,6 +902,39 @@ Isolation is enforced in the **data layer**, not only in routes:
 - An ambient tenant in the context always wins. An explicit `tenantId` is
   honoured only when it agrees — so a route that forwards `?tenantId=` from the
   client gets `DRIVE_TENANT_MISMATCH`, not another tenant's data.
+- In a **single-tenant** app — no `tenancyPlugin` — connections and the ledger
+  are keyed by `SINGLE_TENANT_SCOPE` (`'@single'` — outside the tenant-id
+  grammar, so no tenant can ever be handed them). A tenant id equal to it is
+  refused with `DRIVE_TENANT_RESERVED` (400). It surfaces as
+  `connection.tenantId`, but it is a store key, not a tenant id: in a
+  single-tenant app leave `tenantId` out of calls (a reconciler's
+  `watchConnection`, a job's `importItem`) instead of passing it back.
+  `filesSink` already does.
+
+::: warning Upgrading single-tenant data
+Before `@basaltkit/drives` 0.3 the single-tenant key was `'default'` — a valid
+tenant id, so a tenant named `default` could list, use and disconnect the
+single-tenant connections. Each `secret` is sealed with its `tenantId` as
+associated data, so re-keying a connection means re-sealing it:
+
+```ts
+import { DriveSecretBox, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
+
+const box = new DriveSecretBox(keys) // the same key ring `Drives` uses
+for (const row of await db.driveConnection.findMany({ where: { tenantId: 'default' } })) {
+  const context = { connectionId: row.id, provider: row.provider }
+  const plain = box.open(row.secret, { ...context, tenantId: 'default' })
+  const secret = box.seal(plain, { ...context, tenantId: SINGLE_TENANT_SCOPE })
+  await db.driveConnection.update({ where: { id: row.id }, data: { tenantId: SINGLE_TENANT_SCOPE, secret } })
+}
+// The import ledger is plain data:
+//   UPDATE <ledger table> SET "tenantId" = '@single' WHERE "tenantId" = 'default'
+```
+
+Skip it if `default` was ever a real tenant in that database. An authorization
+started before the upgrade fails its callback once (its `state` names the old
+key); the user connects again.
+:::
 
 A connection belonging to another tenant reports **404, never 403**: telling a
 caller "it exists but is not yours" turns connection ids into an oracle.

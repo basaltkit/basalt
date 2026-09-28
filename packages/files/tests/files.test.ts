@@ -41,7 +41,8 @@ class FakeDriver implements StorageDriver {
 
 function setup(options: Partial<ConstructorParameters<typeof Files>[0]> = {}) {
   const driver = new FakeDriver()
-  const disk = new Disk('uploads', driver)
+  // 'root' without a tenant: these tests exercise both single-tenant and tenant paths.
+  const disk = new Disk('uploads', driver, { onMissingScope: 'root' })
   const hooks = new HookBus()
   const files = new Files({ disk, hooks, ...options })
   return { driver, files, hooks }

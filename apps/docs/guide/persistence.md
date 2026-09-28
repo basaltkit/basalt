@@ -226,7 +226,12 @@ system chain. `audit.verify({ tenantId, from?, to? })` — or `basalt audit:veri
 [--tenant=<id> | --all]` — detects edited, deleted, reordered and forged rows. Both
 stores put a **unique constraint on `(chain, seq)`**, so replicas appending at the
 same time retry instead of forking a chain. Rows written before `integrity` was
-enabled are reported as *unchained*, not broken.
+enabled are reported as *unchained*, not broken; any other row outside the chain
+(written after it began, or with a `seq` under a missing or foreign chain name)
+fails the verification and is listed in `unverified` — use
+`trail({ chainedOnly: true })` for an evidence read. Deleting the tail leaves no
+gap: pass a head recorded elsewhere as `verify({ expectedHead })` (or
+`--expected-head=<seq>:<hash>`) to detect truncation.
 
 `requestContext: true` adds an HTTP enricher (fastify, express and hono alike) and
 stores the client `ip` and `userAgent`. The IP is PII: with

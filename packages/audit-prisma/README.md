@@ -68,8 +68,10 @@ ALTER TABLE "audit_entries"
 CREATE UNIQUE INDEX "audit_entries_chain_seq_key" ON "audit_entries"("chain", "seq");
 ```
 
-Existing rows keep NULLs: `audit.verify()` reports them as *unchained*, not
-broken. With schema-per-tenant, migrate every tenant schema (`basalt tenant:migrate`).
+Existing rows keep NULLs: `audit.verify()` reports them as *unchained*
+(legacy), not broken. A row outside the chain that is **not** legacy — a `seq`
+with a NULL or foreign `chain`, or a seq-less row written after the chain began —
+is reported in `unverified` and fails the verification. With schema-per-tenant, migrate every tenant schema (`basalt tenant:migrate`).
 
 ### Harden the table
 
@@ -106,8 +108,13 @@ createApp({ plugins: [auditPlugin({ store: a.store })] })
 - **Append-only by contract** — no update or delete (enforce it in the database too — see above).
 - `PrismaAuditClient` also accepts an optional `count` delegate (every generated client has it), used by `verify()` to count unchained legacy rows.
 - Queries return **newest-first** with the same filters as the in-memory store
-  (`tenantId`, `actorId`, `since`, and the event wildcard `auth:**`). `limit`
+  (`tenantId`, `actorId`, `since`, `chainedOnly`, and the event wildcard `auth:**`). `limit`
   always counts only pattern-matched rows.
+- **Filters are type-checked before Prisma sees them** (`assertAuditQuery`), even
+  when the store is called directly. `tenantId`, `actorId` and `event` go into
+  `where` as values, so an object such as `{ not: 'x' }` — what `qs` makes of
+  `?tenantId[not]=x` — would be read by Prisma as an operator; it throws a
+  `TypeError` instead, as does a `limit` that is not a non-negative safe integer.
 - The `payload` is stored as JSON text and round-trips unchanged.
 - For **database-per-tenant**, route the store through the active tenant's client
   — see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).

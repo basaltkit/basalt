@@ -68,7 +68,18 @@ await createApp({
 - **O input schema** é gerado a partir dos schemas Zod `params` + `query` + `body`
   da rota, fundidos num único objeto plano.
 - **Mesmo pipeline** — uma `tools/call` corre enrichers, guards e validação antes
-  do handler; os headers do pedido (tenant, authorization) propagam para a chamada.
+  do handler. O pedido da tool herda uma **allowlist** dos headers do chamador
+  (`authorization`, `cookie`, `x-api-key`, `x-tenant-id`, `host`,
+  `accept-language`, `user-agent` — alarga-a com `mcpPlugin({ forwardHeaders })`),
+  o **ip** do cliente (`request.ip`), o `request.routePattern` (o template da rota
+  da tool) e o `request.url` concreto (`/projects/p%201?q=x`, não
+  `/projects/:id`). Tudo o resto — `x-request-id`, `if-none-match`, headers de
+  forwarding e hop-by-hop — é descartado.
+- **O status conta** — um handler que responde `reply.code(403)` (qualquer status
+  ≥ 400) produz um resultado de tool com `isError: true`.
+- **Cancelamento** — `notifications/cancelled` responde de imediato à chamada como
+  cancelada; um handler longo pode parar mais cedo verificando
+  `toolSignal(request)?.aborted`.
 
 ::: warning Os guards aplicam-se — e têm de ser aplicáveis
 Uma rota com `meta.auth` (ou `meta.can` / `meta.teamRole`) mantém esse guard
@@ -218,16 +229,24 @@ As ligações são lazy-safe: `callTool` / `listTools` conectam a pedido, por is
 O transporte HTTP é um `route()` neutro, verificado nos três adaptadores — a mesma
 superfície de tools independentemente do servidor por baixo.
 
+Está endurecido para browsers: um pedido cujo `Origin` não seja da mesma origem
+nem esteja em `mcpRoutes({ allowedOrigins })` recebe **403**, e o corpo tem de ser
+enviado como `application/json` (**415** caso contrário), por isso uma página de
+outro site nunca consegue acionar uma tool com os cookies de um visitante.
+Clientes que não são browsers não enviam `Origin` e não são afetados. Por
+omissão, `initialize` e `tools/list` são anónimos (as *chamadas* de tools correm
+na mesma os guards de cada rota); `mcpRoutes({ auth: true })` exige um chamador
+autenticado para o próprio endpoint. Batches JSON-RPC são aceites. Cada `POST` é
+a sua própria sessão MCP, por isso um `notifications/cancelled` enviado num pedido
+posterior não chega a um anterior.
 
 Num deployment exposto, dá ao `/mcp` o seu próprio orçamento de rate limit:
 `mcpRoutes({ rateLimit: { limit: 30, windowMs: 60_000 } })` aplica
 `meta.rateLimit` à rota, e o `securityPlugin` impõe-no num bucket dedicado.
 O `meta.rateLimit` próprio de uma rota-ferramenta é imposto por um guard de
-rota, por isso aplica-se também às chamadas de tools através do `/mcp`. Uma
-chamada de tool não traz endereço de cliente, pelo que, a não ser que dês uma
-`key` ao `securityPlugin({ rateLimit: { key } })`, todos os chamadores partilham
-o balde dessa rota (falha fechada). (Auth e guards correm de forma idêntica em
-ambos os caminhos.)
+rota, por isso aplica-se também às chamadas de tools através do `/mcp`, com a
+chave no ip de quem chama o `/mcp`, que o pedido da tool herda. (Auth e guards
+correm de forma idêntica em ambos os caminhos.)
 
 ## Referência de opções
 
@@ -240,6 +259,7 @@ As tabelas abaixo são as opções públicas completas dos quatro pontos de entr
 | `routes` | `BasaltRoute[]` | — (obrigatório) | As rotas analisadas à procura de `meta.mcp` — tipicamente o mesmo array que passas ao adaptador |
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | O que o `initialize` reporta aos clientes |
 | `filter` | `(route: BasaltRoute) => boolean` | expõe todas as rotas com opt-in | Um portão ao nível do deployment por cima do `meta.mcp` (ex.: esconder rotas de admin num ambiente) |
+| `forwardHeaders` | `string[]` | nenhum | Headers extra que uma chamada de tool herda, além de `DEFAULT_FORWARDED_HEADERS` (ex.: um header de tenant próprio); todos os outros são descartados |
 
 ### `mcpRoutes(options)`
 
@@ -247,6 +267,9 @@ As tabelas abaixo são as opções públicas completas dos quatro pontos de entr
 | --- | --- | --- | --- |
 | `path` | `string` | `'/mcp'` | Onde o endpoint POST de JSON-RPC é montado |
 | `rateLimit` | `{ limit: number; windowMs: number }` | nenhum | Aplica `meta.rateLimit` ao `/mcp` (imposto pelo `securityPlugin` num bucket dedicado) — o orçamento de todo o tráfego de tools; o `meta.rateLimit` próprio de uma rota-ferramenta aplica-se por cima |
+| `allowedOrigins` | `string[] \| '*'` | só a mesma origem | Origens de browser autorizadas a chamar o `/mcp`; um `Origin` estranho recebe 403. Pedidos sem `Origin` não são afetados. `'*'` desliga a verificação |
+| `auth` | `boolean` | `false` | Aplica `meta.auth` ao `/mcp` (imposto pelo `authPlugin`) para que até `initialize`/`tools/list` exijam um chamador autenticado |
+| `meta` | `Record<string, unknown>` | nenhum | `meta` extra para a rota `/mcp` (ex.: `{ can: 'mcp:use' }`) |
 
 ### `serveMcpStdio(app, options)`
 
@@ -278,7 +301,10 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | `isError: true` com um corpo `UNAUTHORIZED`/`FORBIDDEN` | A rota da tool está guardada e a chamada não levou credenciais (ou levou más) | Envia headers `Authorization`/tenant com o `POST /mcp`, ou `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Nome de tool não registado — rota sem `meta.mcp`, excluída pelo `filter`, ou renomeada | Verifica o `tools/list`; lembra os overrides via `meta.mcp.name` |
 | JSON-RPC `-32601` `Method not found` | O cliente chamou um método MCP que o servidor não implementa | Só existem `initialize`, `ping`, `tools/list`, `tools/call` (mais resources/prompts quando registados) |
-| Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se através do `/mcp`, e as chamadas de tools não trazem ip de cliente, por isso todos os chamadores partilham um balde | Passa uma `key` ao `securityPlugin({ rateLimit })`, ou aumenta o orçamento da rota |
+| Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se também através do `/mcp` (por ip do chamador) | Aumenta o orçamento da rota, ou passa uma `key` ao `securityPlugin({ rateLimit })` |
+| `403` `MCP_ORIGIN_FORBIDDEN` do `POST /mcp` | Um browser enviou um pedido de outra origem | Acrescenta a origem da página a `mcpRoutes({ allowedOrigins })` |
+| `415` do `POST /mcp` | O corpo não foi enviado como `Content-Type: application/json` | Envia `application/json` (os clientes MCP fazem-no) |
+| Uma tool lê um header que chega `undefined` | O header não está na allowlist de headers encaminhados | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | O Claude Desktop mostra um servidor morto/quebrado | Algo imprimiu no stdout — ele é o canal JSON-RPC | `logLevel: 'silent'`, remove `console.log`; vê a checklist de stdio acima |
 | Resposta `202` do `POST /mcp` com corpo vazio | A mensagem era uma *notificação* JSON-RPC — por spec não recebe resposta | Comportamento esperado, não é um erro |
 

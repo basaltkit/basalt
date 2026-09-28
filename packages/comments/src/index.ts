@@ -3,6 +3,7 @@ export {
   CommentNotFoundError,
   CommentTenantRequiredError,
   CommentTenantMismatchError,
+  CommentTenantReservedError,
   CommentParentNotFoundError,
   CommentTooLongError,
   CommentMentionLimitError,

@@ -23,11 +23,32 @@ export class SearchTenantMismatchError extends BasaltError {
 }
 
 /**
+ * A tenant id equal to {@link SINGLE_TENANT_SCOPE}. That string is the scope of
+ * a single-tenant app's documents, so a tenant carrying it would find, plant
+ * and remove them. The default tenancy grammar can never produce it; a custom
+ * one that does must pick another id.
+ */
+export class SearchTenantReservedError extends BasaltError {
+  readonly status = 400
+  constructor() {
+    super('SEARCH_TENANT_RESERVED', `"${SINGLE_TENANT_SCOPE}" is reserved for single-tenant documents and cannot be a tenant id.`)
+  }
+}
+
+/**
  * The scope every document lands in when the app has no tenancy at all. The
  * driver contract is tenant-keyed, so a single-tenant app still needs one
  * stable key — it just shouldn't have to invent (and remember) it.
+ *
+ * A sentinel no tenant id can equal: `@` is outside `@basaltkit/tenancy`'s
+ * grammar, and a context, explicit or document tenant carrying it is refused
+ * with {@link SearchTenantReservedError}. It used to be `'default'` — a
+ * perfectly valid tenant id, so a tenant named `default` found (and could
+ * remove or overwrite) the single-tenant documents. Documents indexed under
+ * `'default'` by a single-tenant app must be re-keyed or reindexed once (see
+ * the changelog for the migration).
  */
-export const SINGLE_TENANT_SCOPE = 'default'
+export const SINGLE_TENANT_SCOPE = '@single'
 
 /** Page size assumed when a caller with an `authorize` hook gives no `limit`. */
 const DEFAULT_LIMIT = 10
@@ -245,12 +266,12 @@ export class Search {
     // client input (`?tenantId=`) search, plant or remove another tenant's
     // documents.
     const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (explicit && trustExplicit) return explicit
+    if (explicit && trustExplicit) return assertNotReserved(explicit)
     if (ambient) {
       if (explicit !== undefined && explicit !== ambient) throw new SearchTenantMismatchError()
-      return ambient
+      return assertNotReserved(ambient)
     }
-    if (explicit) return explicit
+    if (explicit) return assertNotReserved(explicit)
     if (this.tenancyActive()) throw new TenantRequiredError()
     return SINGLE_TENANT_SCOPE
   }
@@ -259,4 +280,9 @@ export class Search {
   private resolveDocument(document: SearchInput, trustExplicit = false): SearchDocument {
     return { ...document, tenantId: this.tenant(document.tenantId, trustExplicit) }
   }
+}
+
+function assertNotReserved(tenantId: string): string {
+  if (tenantId === SINGLE_TENANT_SCOPE) throw new SearchTenantReservedError()
+  return tenantId
 }

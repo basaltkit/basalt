@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDriveFetch } from '@basaltkit/drives'
+import { createDriveFetch, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { microsoftDrive } from '../src/index.js'
 import { CLIENT_ID, REDIRECT_URI, connect, harness, type Harness } from './helpers.js'
 
@@ -99,7 +99,7 @@ describe('refresh-token rotation (the thing Microsoft does and Dropbox does not)
   it('persists the rotated refresh token, and the next refresh uses the new one', async () => {
     const h = harness()
     const view = await connect(h)
-    const before = (await h.store.find('default', view.id))!
+    const before = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     const firstIssued = h.graph.issuedRefreshTokens.at(-1)!
 
     // An hour on: the engine refreshes proactively, before the token expires.
@@ -112,7 +112,7 @@ describe('refresh-token rotation (the thing Microsoft does and Dropbox does not)
     const rotated = h.graph.issuedRefreshTokens.at(-1)!
     expect(rotated).not.toBe(firstIssued)
 
-    const after = (await h.store.find('default', view.id))!
+    const after = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     expect(after.secret).not.toBe(before.secret)
     expect(after.revision).toBeGreaterThan(before.revision)
 
@@ -129,12 +129,12 @@ describe('refresh-token rotation (the thing Microsoft does and Dropbox does not)
     const view = await connect(h)
     // A second worker's view of the row, taken before anybody refreshed. Its
     // sealed refresh token is the one the winner is about to retire.
-    const stale = (await h.store.find('default', view.id))!
+    const stale = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
 
     h.advance(60 * 60_000)
     // Worker A refreshes and rotates. Worker B's copy is now worthless.
     await h.drives.listItems(view.id)
-    const winner = (await h.store.find('default', view.id))!
+    const winner = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     expect(winner.revision).toBeGreaterThan(stale.revision)
 
     // Worker B now runs an operation against its stale connection. Entra ID
@@ -145,7 +145,7 @@ describe('refresh-token rotation (the thing Microsoft does and Dropbox does not)
     const page = await h.drives.run(stale, (session, provider) => provider.list(session, {}))
 
     expect(page.items).toBeDefined()
-    expect((await h.store.find('default', view.id))!.status).toBe('active')
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.status).toBe('active')
     await expect(h.drives.listItems(view.id)).resolves.toBeDefined()
   })
 
@@ -156,13 +156,13 @@ describe('refresh-token rotation (the thing Microsoft does and Dropbox does not)
     h.advance(60 * 60_000)
 
     await expect(h.drives.listItems(view.id)).rejects.toMatchObject({ code: 'DRIVE_CREDENTIALS_INVALID' })
-    expect((await h.store.find('default', view.id))!.status).toBe('invalid')
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.status).toBe('invalid')
   })
 
   it('refreshes with the scopes the connection consented to, not the adapter defaults', async () => {
     const h = harness({ server: { grantedScopes: 'offline_access Files.Read.All Sites.Read.All' } })
     const view = await connect(h, { scopes: ['offline_access', 'Files.Read.All', 'Sites.Read.All'] })
-    expect((await h.store.find('default', view.id))!.scopes).toContain('Sites.Read.All')
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.scopes).toContain('Sites.Read.All')
 
     h.advance(60 * 60_000)
     await h.drives.listItems(view.id)
@@ -205,7 +205,7 @@ describe('revocation, which Microsoft does not have', () => {
     await h.drives.disconnect(view.id)
 
     // The row and its sealed credentials are gone…
-    expect(await h.store.find('default', view.id)).toBeNull()
+    expect(await h.store.find(SINGLE_TENANT_SCOPE, view.id)).toBeNull()
     // …and nothing that looks like a revoke ever went on the wire, because
     // there is no endpoint to call. `disconnect` therefore emits
     // `revoked: false`, which is what an operator needs in order to know the
@@ -218,7 +218,7 @@ describe('credential hygiene', () => {
   it('never lets a token reach a hook payload or a serialised connection', async () => {
     const h = harness()
     const view = await connect(h)
-    const stored = (await h.store.find('default', view.id))!
+    const stored = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     const serialised = JSON.stringify(view)
 
     expect(serialised).not.toContain('refresh-')

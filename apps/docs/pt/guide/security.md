@@ -64,7 +64,9 @@ limitada: os baldes expirados são varridos à medida que chega tráfego, e são
 mantidos no máximo `maxEntries` (por omissão 100 000) baldes — acima disso as
 janelas mais antigas são despejadas primeiro, para que uma avalanche de endereços
 de cliente distintos não faça crescer o processo sem limite
-(`new MemoryRateLimitStore({ maxEntries })` para o dimensionar). Para múltiplas
+(`new MemoryRateLimitStore({ maxEntries })` para o dimensionar). Um balde que
+esgotou o seu limite nunca é despejado: uma avalanche de endereços novos não
+liberta mais cedo um cliente limitado — fica retido até a sua janela terminar. Para múltiplas
 instâncias, implementa a interface `RateLimitStore` sobre Redis — o mesmo padrão
 de driver usado por `@basaltkit/cache`.
 
@@ -118,7 +120,11 @@ não conhece o utilizador.
 ### CORS
 
 `origin` aceita `true` (refletir), uma string, um array de allow-list, ou um
-predicado. Os pedidos de preflight `OPTIONS` são respondidos automaticamente.
+predicado. Os pedidos de preflight `OPTIONS` são respondidos automaticamente
+(`204`). Contam para o rate limit global como qualquer outro pedido, e os
+cabeçalhos `Access-Control-Allow-Methods` / `-Allow-Headers` / `-Max-Age` só são
+enviados a uma origem permitida — uma origem não permitida recebe um `204` simples,
+que não revela nada.
 
 ::: warning Credenciais exigem uma allow-list explícita
 Refletir uma `Origin` arbitrária **com** `credentials: true` entregaria respostas
@@ -278,6 +284,8 @@ idempotencyPlugin() // protege POST por omissão
 ```
 
 - Repetir com a mesma chave → a resposta em cache, com `Idempotent-Replayed: true`.
+  Vale para qualquer forma de handler — um que devolve o payload é repetido
+  exactamente como um que chama `reply.send()`.
 - Uma repetição enquanto a primeira ainda está em curso → `409 IDEMPOTENCY_CONFLICT`.
 - Respostas `5xx` **não** são colocadas em cache, por isso falhas genuínas
   continuam repetíveis.
@@ -313,7 +321,8 @@ authPlugin({ users, secret: env.APP_SECRET, tokenVersions: new PrismaTokenVersio
 
 Desligado por omissão (a verificação passa a custar uma leitura ao store por
 pedido). O próprio segredo de assinatura é protegido: o `Auth` recusa arrancar
-com segredo vazio e, em produção, rejeita um com menos de 32 chars (uma chave
+com segredo vazio e, em produção (tudo excepto um `NODE_ENV=development`/`test` explícito, incluindo
+não definido), rejeita um com menos de 32 chars (uma chave
 HS256 curta é forjável offline) — usa `secret({ minLength: 32 })`.
 
 ## Cifrar segredos TOTP em repouso

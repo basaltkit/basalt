@@ -335,7 +335,7 @@ disconnects the driver on shutdown. `MailerPluginOptions` extends `MailerOptions
 | `ses` | `SesDriverOptions` | — | Required with `driver: 'ses'`. `{ region, accessKeyId, secretAccessKey, sessionToken?, endpoint?, fetch?, now? }`. |
 | `mailgun` | `MailgunDriverOptions` | — | Required with `driver: 'mailgun'`. `{ apiKey, domain, region?, baseUrl?, fetch? }`; `region` defaults to `'us'`. |
 | `sink` | `(line: string) => void` | `console.log` | Where the `log` driver writes its lines. |
-| `logBody` | `boolean` | `true` outside production, `false` when `NODE_ENV === 'production'` | `log` driver only — whether the message body is written to the log. See below. |
+| `logBody` | `boolean` | `true` when `NODE_ENV` is explicitly `development` or `test`, `false` anywhere else — an unset `NODE_ENV` counts as production | `log` driver only — whether the message body is written to the log. See below. |
 | `previews` | `MailPreview[]` | — | Mails exposed by the `basalt mail:preview` command. Declaring any registers the command; declaring none leaves it unregistered. |
 
 #### `logBody` — what gets redacted
@@ -343,7 +343,9 @@ disconnects the driver on shutdown. `MailerPluginOptions` extends `MailerOptions
 The `log` driver is what you get with no `driver` at all, so a deploy that
 forgot to configure mail would otherwise stream password-reset links, magic
 links and tokens straight into a log aggregator, where they are retained and
-broadly readable. So in production the body is withheld by default.
+broadly readable. So in production the body is withheld by default — and
+"production" is fail-closed: anything but an explicit `NODE_ENV=development` or
+`test`, so a deploy that forgets `NODE_ENV` redacts too.
 
 The **envelope line is always logged**, in both modes:
 
@@ -356,8 +358,8 @@ is only the line beneath it — the body:
 
 | `logBody` | Body line |
 |---|---|
-| `true` (default outside production) | `message.text`, falling back to `message.html`, falling back to `(empty body)` |
-| `false` (default in production) | `(body redacted in production — pass 'logBody: true' to log it, or configure a real driver)` |
+| `true` (default with `NODE_ENV=development`/`test`) | `message.text`, falling back to `message.html`, falling back to `(empty body)` |
+| `false` (default anywhere else, `NODE_ENV` unset included) | `(body redacted in production — pass 'logBody: true' to log it, or configure a real driver)` |
 
 Set `logBody: true` to opt back in deliberately; set `logBody: false` in
 development to stop bodies reaching your terminal. Note it redacts the *body

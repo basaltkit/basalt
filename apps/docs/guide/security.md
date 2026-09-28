@@ -62,7 +62,9 @@ The default store is in-memory (`MemoryRateLimitStore`). Its memory is bounded:
 expired buckets are swept as traffic arrives, and at most `maxEntries` (default
 100 000) buckets are kept — past that the oldest windows are evicted first, so a
 flood of distinct client addresses cannot grow the process without limit
-(`new MemoryRateLimitStore({ maxEntries })` to size it). For multiple instances
+(`new MemoryRateLimitStore({ maxEntries })` to size it). A bucket that has used
+up its limit is never evicted: a flood of new addresses cannot free a limited
+client early — it is held until its window ends. For multiple instances
 implement the `RateLimitStore` interface over Redis — the same driver pattern
 used by `@basaltkit/cache`.
 
@@ -116,7 +118,10 @@ hook cannot know the user yet.
 ### CORS
 
 `origin` accepts `true` (reflect), a string, an allow-list array, or a
-predicate. Preflight `OPTIONS` requests are answered automatically.
+predicate. Preflight `OPTIONS` requests are answered automatically (`204`). They
+count against the global rate limit like any other request, and the
+`Access-Control-Allow-Methods` / `-Allow-Headers` / `-Max-Age` headers go only to
+an allowed origin — a disallowed one gets a bare `204` that discloses nothing.
 
 ::: warning Credentials require an explicit allow-list
 Reflecting an arbitrary `Origin` back **with** `credentials: true` would hand
@@ -274,6 +279,8 @@ idempotencyPlugin() // guards POST by default
 ```
 
 - Repeat with the same key → the cached response, with `Idempotent-Replayed: true`.
+  This holds for every handler shape — one that returns its payload is replayed
+  exactly like one that calls `reply.send()`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - `5xx` responses are **not** cached, so genuine failures stay retryable.
 - Keys are scoped by **caller credentials + tenant + method + route**, hashed
@@ -306,7 +313,8 @@ authPlugin({ users, secret: env.APP_SECRET, tokenVersions: new PrismaTokenVersio
 
 Off by default (verification then costs one store read per request). The signing
 secret itself is guarded too: `Auth` refuses to start with an empty secret, and
-in production rejects one shorter than 32 chars (a short HS256 key is
+in production (anything but an explicit `NODE_ENV=development`/`test`, unset
+included) rejects one shorter than 32 chars (a short HS256 key is
 offline-forgeable) — use `secret({ minLength: 32 })`.
 
 ## Encrypting TOTP secrets at rest

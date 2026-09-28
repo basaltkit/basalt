@@ -120,6 +120,16 @@ throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
 ```
 
 Unintentional errors (any `throw new Error(...)`) become a generic `500` with the `INTERNAL_ERROR` code — the internal message never reaches the client.
+The same holds for a toolkit error with `status` 500 (a `BasaltError` such as
+`GuardsWithoutContainerError`): the client gets its `code` and `Internal server error.`,
+never the developer-facing text or `details`; the adapter's error reporter still logs the
+real error. An `HttpError` keeps its message (it is thrown on purpose, for the client), as
+does a `BasaltError` that sets `expose = true`. Other 5xx statuses — a 503 "retry
+shortly", a 501 "not supported" — are client-facing by design and pass through unchanged.
+The opposite opt-in is `expose = false`: whatever its status, such an error answers only
+its `code` and a neutral message (`Bad gateway.` for a 502), and keeps its message and
+`details` for the log. `OAuthExchangeError` (it quotes the provider's reply) and
+`DriveHostNotAllowedError` (it names the host it refused) use it.
 
 ### Structured error details
 
@@ -544,6 +554,8 @@ When the limit is exceeded, the client receives `429` with the `RATE_LIMITED` co
 The default storage is in memory (`MemoryRateLimitStore`) — per process, and bounded:
 expired buckets are swept as traffic arrives and at most `maxEntries` (default `100_000`)
 are kept, evicting the oldest window first (`new MemoryRateLimitStore({ maxEntries })`).
+A bucket that has used up its limit is never evicted — a flood of new client addresses
+cannot free a limited client early; it is held until its window ends.
 For a cluster, use the bundled `RedisRateLimitStore`, or implement `RateLimitStore` yourself and pass it in `rateLimit.store`:
 
 ```ts
@@ -735,7 +747,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | `HttpError` | `UNSUPPORTED_MEDIA_TYPE` | 415 | An `upload()` route got a non-multipart body, or a file outside `allowedTypes`. |
 | `HttpError` | `MALFORMED_MULTIPART` | 400 | Bad boundary, truncated body, malformed/oversized part headers, or a nested multipart part. |
 | `HttpError` | `RAW_BODY_UNAVAILABLE` | 500 | A `rawBody()` route ran on an adapter that could not supply the bytes — another body parser consumed them first. A deliberate refusal, never a reconstruction. See [Raw request bodies](#raw-request-bodies--rawbody). |
-| — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. |
+| — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. A `BasaltError` other than `HttpError` with `status` 500 (and no `expose = true`) keeps its code but gets this message too. |
 
 `HttpError` and `RequestValidationError` extend `BasaltError`, so `error.code` is stable
 and safe to branch on. `ValidationIssue` is `{ path: string; message: string }`.
@@ -802,7 +814,10 @@ readonly field — it is a boot failure, never an HTTP response.
 | `maxAge` | `number` | `600` | Preflight cache seconds. |
 
 A preflight (`OPTIONS` + `Access-Control-Request-Method`) is answered `204` by the plugin
-and never reaches your route.
+and never reaches your route. It counts against the global rate limit like any other
+request (past it the preflight gets `429`), and the `Access-Control-Allow-Methods`,
+`-Allow-Headers` and `-Max-Age` headers are sent only to an allowed origin — a disallowed
+one gets a bare `204`.
 
 `RateLimitOptions`:
 

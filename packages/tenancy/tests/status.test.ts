@@ -6,6 +6,7 @@ import {
   TENANCY,
   headerResolver,
   isTenantReady,
+  TenantNotReadyError,
   tenancyPlugin,
   type Tenant,
 } from '../src/index.js'
@@ -67,8 +68,9 @@ describe('tenant status', () => {
     const response = await call('acme')
     expect(response.statusCode).toBe(503)
     expect(response.json().error.code).toBe('TENANT_NOT_READY')
-    // 503 and not 404: the tenant exists, and the client may retry.
-    expect(response.json().error.message).toMatch(/still being provisioned/)
+    // 503 and not 404: the tenant exists, and the client may retry. (The HTTP
+    // layer replaces a toolkit 5xx message with a fixed one, so assert the code.)
+    expect(new TenantNotReadyError('acme', 'provisioning').message).toMatch(/still being provisioned/)
 
     await app.shutdown()
   })
@@ -104,7 +106,8 @@ describe('tenant status', () => {
     expect((await source.find('acme'))?.['status']).toBe('failed')
     const response = await call('acme')
     expect(response.statusCode).toBe(503)
-    expect(response.json().error.message).toMatch(/failed to provision/)
+    expect(response.json().error.code).toBe('TENANT_NOT_READY')
+    expect(new TenantNotReadyError('acme', 'failed').message).toMatch(/failed to provision/)
 
     await app.shutdown()
   })

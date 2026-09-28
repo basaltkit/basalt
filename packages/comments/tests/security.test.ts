@@ -4,6 +4,8 @@ import {
   COMMENTS,
   CommentMentionLimitError,
   CommentTenantMismatchError,
+  CommentTenantReservedError,
+  SINGLE_TENANT_SCOPE,
   CommentTooLongError,
   Comments,
   MemoryCommentStore,
@@ -209,5 +211,38 @@ describe('MemoryCommentStore keys cannot collide across tenants', () => {
     await store.create(comment)
     expect(await store.find('a', 'b uuid-1')).toBeNull()
     expect(await store.find('a b', 'uuid-1')).not.toBeNull()
+  })
+})
+
+// Regression for the 2026-09 framework audit (FA-030).
+describe('FA-030 · the single-tenant store key cannot be a tenant id', () => {
+  it('is a sentinel outside the tenant grammar, not "default"', () => {
+    expect(SINGLE_TENANT_SCOPE).not.toBe('default')
+    expect(SINGLE_TENANT_SCOPE).not.toMatch(/^[a-z0-9][a-z0-9_-]{0,62}$/)
+  })
+
+  it('a tenant named "default" no longer reads or edits the single-tenant comments', async () => {
+    const comments = new Comments()
+    const c = await comments.on('note', '1').add({ authorId: 'u1', body: 'private' })
+    const asDefault = <T>(fn: () => Promise<T>) => runWithContext({ tenant: { id: 'default' } } as never, async () => fn())
+    expect(await asDefault(() => comments.on('note', '1').list())).toEqual([])
+    expect(await asDefault(() => comments.get(c.id))).toBeNull()
+    expect(await comments.get(c.id, 'default')).toBeNull()
+    await expect(asDefault(() => comments.edit(c.id, 'hijacked'))).rejects.toThrow()
+    expect((await comments.get(c.id))?.body).toBe('private')
+  })
+
+  it('refuses the sentinel itself as a tenant id, from the context or an argument', async () => {
+    const comments = new Comments()
+    const c = await comments.on('note', '1').add({ authorId: 'u1', body: 'private' })
+    await expect(
+      runWithContext({ tenant: { id: SINGLE_TENANT_SCOPE } } as never, async () => comments.get(c.id)),
+    ).rejects.toBeInstanceOf(CommentTenantReservedError)
+    expect(() => comments.on('note', '1', SINGLE_TENANT_SCOPE)).toThrow(CommentTenantReservedError)
+    await expect(Promise.resolve().then(() => comments.remove(c.id, SINGLE_TENANT_SCOPE))).rejects.toMatchObject({
+      code: 'COMMENT_TENANT_RESERVED',
+      status: 400,
+    })
+    expect((await comments.get(c.id))?.id).toBe(c.id)
   })
 })

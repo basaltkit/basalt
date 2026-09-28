@@ -7,7 +7,13 @@ import {
   type DelegationStore,
 } from './delegation.js'
 import { route, type BasaltRoute, type RouteGuard } from '@basaltkit/http'
-import { AuthRequiredGuardError, InvalidCanMetaError, MissingPolicyError, ReservedScopeError } from './errors.js'
+import {
+  AuthRequiredGuardError,
+  InvalidCanMetaError,
+  MissingPolicyError,
+  ReservedScopeError,
+  ScopeRequiredError,
+} from './errors.js'
 
 export {
   AuthRequiredGuardError,
@@ -15,6 +21,7 @@ export {
   MissingPolicyError,
   PermissionDeniedError,
   ReservedScopeError,
+  ScopeRequiredError,
 } from './errors.js'
 import { PermissionDeniedError } from './errors.js'
 
@@ -134,6 +141,55 @@ export interface AccessStore {
   grantToUser(userId: string, permissions: string[], scope: string): Promise<void>
 }
 
+/**
+ * A user id the Gate can key grants by: a non-empty string. `undefined` and
+ * `null` both serialize to the same store key, so a grant written for a
+ * missing id would be honoured for every other caller with a missing id.
+ */
+function isUserId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function assertUserId(value: unknown, operation: string): asserts value is string {
+  if (!isUserId(value)) {
+    throw new TypeError(`${operation}: userId must be a non-empty string, received ${describeValue(value)}`)
+  }
+}
+
+/** A user object the Gate can check: a non-empty string `id`. Anything else is unauthenticated. */
+function isPolicyUser(value: unknown): value is PolicyUser {
+  return typeof value === 'object' && value !== null && isUserId((value as { id?: unknown }).id)
+}
+
+function describeValue(value: unknown): string {
+  if (value === null) return 'null'
+  if (typeof value === 'string') return 'an empty string'
+  return typeof value
+}
+
+// Whitespace and control characters: nothing a permission name legitimately
+// carries, and a sign the string was built from unchecked input.
+const INVALID_PERMISSION = /[\s\p{Cc}]/u
+
+function assertPermission(value: unknown, operation: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0 || INVALID_PERMISSION.test(value)) {
+    throw new TypeError(
+      `${operation}: a permission must be a non-empty string without whitespace or control characters`,
+    )
+  }
+}
+
+function assertPermissions(value: unknown, operation: string): asserts value is string[] {
+  if (!Array.isArray(value)) throw new TypeError(`${operation}: permissions must be an array of strings`)
+  for (const permission of value as unknown[]) assertPermission(permission, operation)
+}
+
+function assertScope(value: unknown, operation: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${operation}: scope must be a non-empty string`)
+  }
+}
+
 export class MemoryAccessStore implements AccessStore {
   private readonly userRoles = new Map<string, Set<string>>()
   private readonly userPermissions = new Map<string, Set<string>>()
@@ -158,6 +214,7 @@ export class MemoryAccessStore implements AccessStore {
   }
 
   async assignRole(userId: string, role: string, scope: string): Promise<void> {
+    assertUserId(userId, 'assignRole')
     const key = this.key(userId, scope)
     const roles = this.userRoles.get(key) ?? new Set()
     roles.add(role)
@@ -176,6 +233,7 @@ export class MemoryAccessStore implements AccessStore {
   }
 
   async grantToUser(userId: string, permissions: string[], scope: string): Promise<void> {
+    assertUserId(userId, 'grantToUser')
     const key = this.key(userId, scope)
     const set = this.userPermissions.get(key) ?? new Set()
     for (const permission of permissions) set.add(permission)
@@ -218,7 +276,33 @@ export function definePolicy<TResource>(
   resource: string,
   checks: Record<string, PolicyCheck<TResource>>,
 ): Policy<TResource> {
-  return { resource, checks }
+  return { resource, checks: snapshotChecks(resource, checks) }
+}
+
+/**
+ * The checks as a prototype-free lookup of their OWN entries. A plain object
+ * literal inherits `constructor`, `toString`, `hasOwnProperty`…: looked up by
+ * an action name taken from the permission string, `checks['constructor']` is
+ * `Object` — a function returning a truthy value — and would authorize anyone.
+ */
+function snapshotChecks<TResource>(
+  resource: unknown,
+  checks: unknown,
+): Record<string, PolicyCheck<TResource>> {
+  if (typeof resource !== 'string' || resource.length === 0 || resource.includes(':')) {
+    throw new TypeError('definePolicy: resource must be a non-empty string without ":"')
+  }
+  if (typeof checks !== 'object' || checks === null) {
+    throw new TypeError(`definePolicy(${resource}): checks must be an object of action → check`)
+  }
+  const snapshot = Object.create(null) as Record<string, PolicyCheck<TResource>>
+  for (const [action, check] of Object.entries(checks)) {
+    if (typeof check !== 'function') {
+      throw new TypeError(`definePolicy(${resource}): check "${action}" must be a function`)
+    }
+    snapshot[action] = check as PolicyCheck<TResource>
+  }
+  return snapshot
 }
 
 export interface GateOptions {
@@ -285,6 +369,22 @@ export interface GateOptions {
    * tenant.
    */
   inheritGlobalRolePermissions?: boolean | readonly string[]
+  /**
+   * Let a write with no explicit `scope` land in {@link GLOBAL_SCOPE} when no
+   * tenant is in the context, even though tenancy is active. Default `false`:
+   * in a multi-tenant app such a write throws {@link ScopeRequiredError}
+   * instead — an unresolved tenant must not turn a tenant-admin call into a
+   * platform-wide grant. Passing `GLOBAL_SCOPE` explicitly always works.
+   * Single-tenant apps (no tenancy) are unaffected either way.
+   */
+  allowGlobalWrites?: boolean
+  /**
+   * Whether the app is multi-tenant. `permissionsPlugin` wires this to the
+   * `'tenancy:active'` marker `tenancyPlugin` registers; a Gate built by hand
+   * defaults to `false` (single-tenant). Only decides whether a scope-less
+   * write outside a tenant fails closed (see `allowGlobalWrites`).
+   */
+  tenancyActive?: () => boolean
 }
 
 /** Validates and deep-copies a role catalogue into a prototype-free lookup. */
@@ -344,7 +444,9 @@ export class Gate {
   }
 
   register(policy: Policy<never>): this {
-    this.policies.set(policy.resource, policy)
+    // Snapshotted here too: a Policy is a public shape, and one built by hand
+    // (not through definePolicy) must not bring its prototype into the lookup.
+    this.policies.set(policy.resource, { resource: policy.resource, checks: snapshotChecks(policy.resource, policy.checks) })
     return this
   }
 
@@ -372,7 +474,7 @@ export class Gate {
   async actor(): Promise<PolicyUser | null> {
     const context = tryCtx()
     const user = context?.['user'] as { id: string } | undefined
-    if (!user?.id) return null
+    if (!isPolicyUser(user)) return null
 
     const scope = this.scope()
     // Keyed by user AND scope: caching by user alone would carry one tenant's
@@ -393,13 +495,16 @@ export class Gate {
    * Grants are looked up in the current scope AND the global scope.
    */
   async can(user: PolicyUser, permission: string, resource?: unknown): Promise<boolean> {
+    // No usable id is no user: `undefined` and `null` ids share one store key,
+    // so answering for them would honour whatever was granted to "nobody".
+    if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
+    assertPermission(permission, 'can')
     if (await this.options.superAdmin?.(user)) return true
 
     if (resource !== undefined) {
-      const [resourceName, action] = permission.split(':')
-      const policy = resourceName ? this.policies.get(resourceName) : undefined
-      const check = action ? policy?.checks[action] : undefined
-      if (check) return check(user, resource as never)
+      const check = this.policyCheck(permission)
+      // Strictly `true`: a check returning a truthy non-boolean is a bug, not a grant.
+      if (check) return (await check(user, resource as never)) === true
       // A resource was passed, so ABAC was intended. Falling through to RBAC here
       // silently drops the ownership check — fail closed unless opted out.
       if ((this.options.onMissingPolicy ?? 'error') === 'error') {
@@ -412,6 +517,45 @@ export class Gate {
     return false
   }
 
+  /**
+   * The policy check for exactly `resource:action`. Own entries only (see
+   * {@link snapshotChecks}), and only for two segments: `project:update:billing`
+   * is a different permission from `project:update`, so the `update` check must
+   * not decide it — that is a missing policy, not a match.
+   */
+  private policyCheck(permission: string): PolicyCheck<never> | undefined {
+    const segments = permission.split(':')
+    if (segments.length !== 2) return undefined
+    const [resourceName, action] = segments as [string, string]
+    const policy = this.policies.get(resourceName)
+    if (!policy || !Object.hasOwn(policy.checks, action)) return undefined
+    const check = policy.checks[action]
+    return typeof check === 'function' ? check : undefined
+  }
+
+  /**
+   * The scope a write lands in. An explicit scope always wins (including
+   * `GLOBAL_SCOPE`), as does a custom `scope` option. Otherwise the current
+   * tenant — and when there is none in a multi-tenant app, the write fails
+   * closed rather than defaulting to the platform-wide bucket.
+   */
+  private writeScope(explicit: string | undefined, operation: string): string {
+    if (explicit !== undefined) {
+      assertScope(explicit, operation)
+      return explicit
+    }
+    if (this.options.scope) return this.options.scope()
+    const scope = currentScope()
+    if (scope === GLOBAL_SCOPE && !this.options.allowGlobalWrites && this.tenancyActive()) {
+      throw new ScopeRequiredError(operation)
+    }
+    return scope
+  }
+
+  private tenancyActive(): boolean {
+    return this.options.tenancyActive?.() === true
+  }
+
   private scopes(): string[] {
     const scopes = [this.scope(), GLOBAL_SCOPE]
     if (this.options.readLegacyGlobalScope) scopes.push(LEGACY_GLOBAL_SCOPE)
@@ -420,6 +564,7 @@ export class Gate {
 
   /** The union of the user's roles over every scope a check consults. */
   async effectiveRoles(userId: string): Promise<string[]> {
+    assertUserId(userId, 'effectiveRoles')
     const roles = new Set<string>()
     for (const scope of this.scopes()) {
       for (const role of await this.options.store.getUserRoles(userId, scope)) roles.add(role)
@@ -437,6 +582,7 @@ export class Gate {
    * no tenant role, and a tenant role that no rule names still un-confines.
    */
   async audienceRoles(userId: string): Promise<string[]> {
+    assertUserId(userId, 'audienceRoles')
     const [current, ...fallback] = this.scopes()
     const own = await this.options.store.getUserRoles(userId, current!)
     if (own.length > 0) return [...new Set(own)]
@@ -461,25 +607,37 @@ export class Gate {
   }
 
   /** Gives `userId` a role in `scope` (default: the current scope) and emits `permission:role_assigned`. */
-  async assignRole(userId: string, role: string, scope: string = this.scope()): Promise<void> {
+  async assignRole(userId: string, role: string, scope?: string): Promise<void> {
+    assertUserId(userId, 'assignRole')
+    assertRole(role, 'assignRole')
+    scope = this.writeScope(scope, 'assignRole')
     await this.options.store.assignRole(userId, role, scope)
     await this.emit('permission:role_assigned', { userId, role, scope })
   }
 
   /** Takes a role away and emits `permission:role_removed`. */
-  async removeRole(userId: string, role: string, scope: string = this.scope()): Promise<void> {
+  async removeRole(userId: string, role: string, scope?: string): Promise<void> {
+    assertUserId(userId, 'removeRole')
+    assertRole(role, 'removeRole')
+    scope = this.writeScope(scope, 'removeRole')
     await this.options.store.removeRole(userId, role, scope)
     await this.emit('permission:role_removed', { userId, role, scope })
   }
 
   /** Grants permissions to a role and emits `permission:granted`. */
-  async grantToRole(role: string, permissions: string[], scope: string = this.scope()): Promise<void> {
+  async grantToRole(role: string, permissions: string[], scope?: string): Promise<void> {
+    assertRole(role, 'grantToRole')
+    assertPermissions(permissions, 'grantToRole')
+    scope = this.writeScope(scope, 'grantToRole')
     await this.options.store.grantToRole(role, permissions, scope)
     await this.emit('permission:granted', { role, permissions, scope })
   }
 
   /** Grants permissions directly to a user and emits `permission:granted`. */
-  async grantToUser(userId: string, permissions: string[], scope: string = this.scope()): Promise<void> {
+  async grantToUser(userId: string, permissions: string[], scope?: string): Promise<void> {
+    assertUserId(userId, 'grantToUser')
+    assertPermissions(permissions, 'grantToUser')
+    scope = this.writeScope(scope, 'grantToUser')
     await this.options.store.grantToUser(userId, permissions, scope)
     await this.emit('permission:granted', { userId, permissions, scope })
   }
@@ -511,7 +669,12 @@ export class Gate {
         for (const perm of await this.rolePermissions(role, scope)) granted.add(perm)
       }
       if (this.options.temporaryGrants) {
-        for (const grant of await this.options.temporaryGrants.activeFor(userId, scope, this.now())) {
+        const now = this.now()
+        for (const grant of await this.options.temporaryGrants.activeFor(userId, scope, now)) {
+          // Re-verified here, not trusted: a durable store that forgets its
+          // `expires_at > ?` (or its user/scope filter) would otherwise turn
+          // every time-boxed grant into a standing one.
+          if (!isLiveGrant(grant, userId, scope, now)) continue
           for (const perm of grant.permissions) granted.add(perm)
         }
       }
@@ -528,6 +691,7 @@ export class Gate {
     const now = this.now()
     for (const scope of this.scopes()) {
       for (const d of await this.options.delegations.activeTo(userId, scope, now)) {
+        if (!isLiveDelegation(d, userId, scope, now)) continue
         if (d.permissions.some((pattern) => permissionMatches(pattern, permission))) {
           if (await this.canDirect(d.fromUserId, permission)) return true
         }
@@ -543,12 +707,29 @@ export class Gate {
     options: { expiresAt?: number; ttlMs?: number; scope?: string; grantedBy?: string; reason?: string } = {},
   ): Promise<TemporaryGrant> {
     if (!this.options.temporaryGrants) throw new Error('Gate has no temporaryGrants store configured')
+    assertUserId(userId, 'grantTemporarily')
+    assertPermissions(permissions, 'grantTemporarily')
+    const now = this.now()
+    // A deadline is the whole point of the method: with neither option the
+    // grant used to expire the instant it was written — a silent no-op.
+    let expiresAt: number
+    if (options.expiresAt !== undefined) {
+      expiresAt = options.expiresAt
+    } else if (options.ttlMs !== undefined) {
+      if (typeof options.ttlMs !== 'number' || !Number.isFinite(options.ttlMs) || options.ttlMs <= 0) {
+        throw new TypeError('grantTemporarily: ttlMs must be a positive finite number of milliseconds')
+      }
+      expiresAt = now + options.ttlMs
+    } else {
+      throw new TypeError('grantTemporarily: pass ttlMs or expiresAt — a temporary grant needs a deadline')
+    }
+    assertDeadline(expiresAt, now, 'grantTemporarily')
     const grant: TemporaryGrant = {
       id: newDelegationId(),
       userId,
       permissions,
-      scope: options.scope ?? this.scope(),
-      expiresAt: options.expiresAt ?? this.now() + (options.ttlMs ?? 0),
+      scope: this.writeScope(options.scope, 'grantTemporarily'),
+      expiresAt,
       ...(options.grantedBy !== undefined ? { grantedBy: options.grantedBy } : {}),
       ...(options.reason !== undefined ? { reason: options.reason } : {}),
     }
@@ -571,13 +752,18 @@ export class Gate {
     expiresAt?: number
   }): Promise<Delegation> {
     if (!this.options.delegations) throw new Error('Gate has no delegations store configured')
+    assertUserId(input.from, 'delegate (from)')
+    assertUserId(input.to, 'delegate (to)')
+    assertPermissions(input.permissions, 'delegate')
+    const now = this.now()
+    if (input.expiresAt !== undefined) assertDeadline(input.expiresAt, now, 'delegate')
     const delegation: Delegation = {
       id: newDelegationId(),
       fromUserId: input.from,
       toUserId: input.to,
       permissions: input.permissions,
-      scope: input.scope ?? this.scope(),
-      createdAt: this.now(),
+      scope: this.writeScope(input.scope, 'delegate'),
+      createdAt: now,
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
     }
     await this.options.delegations.add(delegation)
@@ -593,18 +779,53 @@ export class Gate {
 
   /** Like can(), but throws PERMISSION_DENIED (403). */
   async authorize(user: PolicyUser, permission: string, resource?: unknown): Promise<void> {
+    if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
     if (!(await this.can(user, permission, resource))) {
       throw await this.denied(user.id, permission)
     }
   }
 
   async hasRole(user: PolicyUser, role: string): Promise<boolean> {
+    if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
     if (await this.options.superAdmin?.(user)) return true
     for (const scope of this.scopes()) {
       if ((await this.options.store.getUserRoles(user.id, scope)).includes(role)) return true
     }
     return false
   }
+}
+
+function assertRole(value: unknown, operation: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${operation}: role must be a non-empty string`)
+  }
+}
+
+/** A finite epoch-ms deadline in the future. `Infinity` is a standing grant, not a temporary one. */
+function assertDeadline(value: unknown, now: number, operation: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${operation}: expiresAt must be a finite epoch-ms timestamp`)
+  }
+  if (value <= now) throw new TypeError(`${operation}: expiresAt must be in the future`)
+}
+
+function isLiveGrant(grant: TemporaryGrant, userId: string, scope: string, now: number): boolean {
+  return (
+    grant.userId === userId &&
+    grant.scope === scope &&
+    typeof grant.expiresAt === 'number' &&
+    Number.isFinite(grant.expiresAt) &&
+    grant.expiresAt > now &&
+    Array.isArray(grant.permissions)
+  )
+}
+
+function isLiveDelegation(d: Delegation, userId: string, scope: string, now: number): boolean {
+  if (d.toUserId !== userId || d.scope !== scope || !isUserId(d.fromUserId) || !Array.isArray(d.permissions)) return false
+  // Open-ended: absent (or NULL from a SQL row). Anything else must be a real, future deadline.
+  const expiresAt: unknown = d.expiresAt
+  if (expiresAt === undefined || expiresAt === null) return true
+  return typeof expiresAt === 'number' && Number.isFinite(expiresAt) && expiresAt > now
 }
 
 /**
@@ -639,7 +860,7 @@ export function accessRoutes(
       async handler() {
         const context = tryCtx()
         const user = context?.['user'] as { id: string } | undefined
-        if (!user?.id) return { roles: [], permissions: [] }
+        if (!isPolicyUser(user)) return { roles: [], permissions: [] }
 
         // From the option, or from the Gate the plugin registered. There is no
         // token for the store itself, and adding one here would be a second way
@@ -696,7 +917,10 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
   return definePlugin({
     name: 'basalt:permissions',
     register({ container, hooks }) {
-      container.singleton(GATE, () => new Gate({ ...options, hooks: options.hooks ?? hooks }))
+      // 'tenancy:active' is tenancyPlugin's marker — a signal, not an import.
+      // Read lazily, so it is seen whichever plugin registers first.
+      const tenancyActive = options.tenancyActive ?? (() => ensureMetadata(container).get('tenancy:active').length > 0)
+      container.singleton(GATE, () => new Gate({ ...options, hooks: options.hooks ?? hooks, tenancyActive }))
 
       // Guard: routes declaring meta.can require the permission(s). A string
       // requires that permission; an array requires ALL of them (all-of). Any
@@ -717,8 +941,9 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
         if (permissions === null) {
           throw new InvalidCanMetaError(`${route.method} ${route.url}`, required)
         }
-        const user = context.user as PolicyUser | undefined
-        if (!user) throw new AuthRequiredGuardError()
+        // A user object without a usable id is not an authenticated caller.
+        const user: unknown = context.user
+        if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
         const gate = c.get(GATE)
         for (const permission of permissions) await gate.authorize(user, permission)
       }

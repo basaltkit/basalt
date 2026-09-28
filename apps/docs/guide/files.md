@@ -33,9 +33,21 @@ with no ambient request.
 
 In a **single-tenant** app — no `tenancyPlugin` — there is no tenant dimension,
 so nothing to fail closed about: `upload`/`list`/`get`/`download`/`delete` work
-with no `tenantId`, records are filed under one internal `'default'` scope, and
-storage paths stay unprefixed, exactly as if you used `@basaltkit/storage`
-directly. See [Beyond SaaS](/guide/beyond-saas).
+with no `tenantId`, records are filed under one internal store key,
+`SINGLE_TENANT_SCOPE` (`'@single'` — outside the tenant-id grammar, so no tenant
+can ever be handed those records), and storage paths stay unprefixed, exactly as
+if you used `@basaltkit/storage` directly. Name a `storagePlugin` disk there, or
+pass a `Disk` built with `scope: null`: a hand-built disk on the default scope
+refuses to run without a tenant. See [Beyond SaaS](/guide/beyond-saas).
+
+::: warning Upgrading single-tenant data
+Before `@basaltkit/files` 5.0 the single-tenant key was `'default'` — a valid
+tenant id, so a tenant named `default` read (and, on delete, orphaned) the
+single-tenant files. A single-tenant app with persisted records re-keys them
+once: `UPDATE files SET "tenantId" = '@single' WHERE "tenantId" = 'default'`
+(and the same on `file_versions` with `@basaltkit/files-versions`). Skip it if
+`default` was ever a real tenant in that database.
+:::
 
 ## Quickstart
 
@@ -231,8 +243,12 @@ executables (PE/`MZ`, ELF, Mach-O, `#!` scripts). With it on:
 - `allowedTypes` judges the **detected** type, the record's `contentType` is the
   detected type, and the client's claim is kept in `metadata.declaredType`;
 - content the sniffer has no signature for (plain text, CSV, …) keeps its
-  declared type. `application/octet-stream` is accepted as "unknown" and stored
-  as whatever the bytes are.
+  declared type. `application/octet-stream` (or no type) is accepted as
+  "unknown" and stored as what the bytes are **only when that is an inert
+  format** — PDF, a raster image, audio, video, ZIP/Office. HTML, SVG, XML,
+  scripts and executables sent as "some bytes" are refused with
+  `FileTypeMismatchError`, never relabelled into a type a browser renders or
+  runs; storing one takes declaring it, and `allowedTypes` then judges that.
 
 ```ts
 filesPlugin({

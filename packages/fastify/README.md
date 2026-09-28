@@ -255,6 +255,8 @@ curl -X POST http://localhost:3000/charge \
 ```
 
 Rules:
+- It covers every handler shape: one that returns its payload (`return { charged }`) is
+  replayed exactly like one that sends it (`return reply.code(201).send(...)`).
 - A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - Responses `>= 500` are **not** stored — genuine failures can still be retried.
 - Keys are scoped by **caller credentials + tenant + method + route + key**, and the store

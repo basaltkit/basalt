@@ -4,8 +4,9 @@
 construction** — every query is forced to the caller's tenant, so results never
 leak between tenants. In an app with no `tenancyPlugin` there is no tenant to
 scope to: `tenantId` becomes optional on both `index()` and `search()`, and both
-resolve to one internal `'default'` scope, so they always agree
-(see [Beyond SaaS](/guide/beyond-saas)). It ships an in-memory driver for dev/test and a
+resolve to one internal scope, `SINGLE_TENANT_SCOPE` (`'@single'` — outside the
+tenant-id grammar, so no tenant can ever be handed those documents), so they
+always agree (see [Beyond SaaS](/guide/beyond-saas)). It ships an in-memory driver for dev/test and a
 Meilisearch driver for production, behind one API; the separate
 [Postgres](#already-on-postgres) and [Elasticsearch / OpenSearch](#elasticsearch-opensearch)
 driver packages plug into the same seam.
@@ -16,7 +17,21 @@ name that tenant, and any other value throws `SearchTenantMismatchError`
 (`403 SEARCH_TENANT_MISMATCH`) — so forwarding a client's `?tenantId=` can never
 widen a query or plant a document in another tenant. Outside a tenant context
 (jobs, CLI) the explicit value selects the tenant. `reindex()` is a system
-operation over every tenant and keeps the tenant each sync rule maps.
+operation over every tenant and keeps the tenant each sync rule maps. A tenant id
+equal to `SINGLE_TENANT_SCOPE` — from the context, an argument, a document or a
+`reindex()` row — is refused with `SearchTenantReservedError`
+(`400 SEARCH_TENANT_RESERVED`).
+
+::: warning Upgrading single-tenant indexes
+Before `@basaltkit/search` 2.0 the single-tenant scope was `'default'` — a valid
+tenant id, so a tenant named `default` found, overwrote and removed the
+single-tenant documents. The index is derived data: rebuild it once
+(`search.reindex(name)` for rules with a `backfill`, or re-run your indexing).
+With `@basaltkit/search-postgres` you can re-key in place instead:
+`UPDATE basalt_search SET tenant_id = '@single', document = jsonb_set(document, '{tenantId}', '"@single"') WHERE tenant_id = 'default'`.
+Meilisearch and Elasticsearch derive the primary key from the tenant, so there
+only a rebuild works. Skip it if `default` was ever a real tenant.
+:::
 
 [[toc]]
 

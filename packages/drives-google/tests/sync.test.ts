@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { syncConnection, type DriveImportTask, type DriveRemoval } from '@basaltkit/drives'
+import { syncConnection, type DriveImportTask, type DriveRemoval, SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { FOLDER_MIME } from './google-server.js'
 import { connect, harness } from './helpers.js'
 
@@ -37,7 +37,7 @@ describe('the first sync — the one `deltaIncludesExisting: false` exists for',
     expect(result.mode).toBe('listing')
     expect(first.ids()).toEqual(['deep', 'elsewhere', 'top'])
     // The primed token was persisted, so the next run is incremental.
-    expect((await h.store.find('default', view.id))!.cursor).toBeTruthy()
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor).toBeTruthy()
 
     h.google.put({ id: 'new', name: 'new.pdf', content: 'new', parents: ['root-folder'] })
     const second = collector()
@@ -229,7 +229,7 @@ describe('a dead page token', () => {
     const h = harness({ server: { files: TREE, pageSize: 50 } })
     const view = await connect(h)
     await syncConnection(h.drives, view.id, { enqueue: collector().enqueue })
-    expect((await h.store.find('default', view.id))!.cursor).toBeTruthy()
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor).toBeTruthy()
 
     // Google has no distinct code for an expired token — it is simply an
     // invalid value — so only a call that actually carried a cursor may read a
@@ -241,7 +241,7 @@ describe('a dead page token', () => {
     expect(result.truncated).toBe(true)
     // The cursor is PERSISTED: anything but dropping it makes every future sync
     // of this connection fail the same way, with no retry policy able to help.
-    expect((await h.store.find('default', view.id))!.cursor).toBeUndefined()
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.cursor).toBeUndefined()
 
     const after = collector()
     const rerun = await syncConnection(h.drives, view.id, { enqueue: after.enqueue })

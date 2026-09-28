@@ -83,7 +83,14 @@ superfície JSON-RPC do MCP:
 | `resources/list` · `resources/read` | Só quando há recursos registados — caso contrário `METHOD_NOT_FOUND` |
 | `prompts/list` · `prompts/get` | Só quando há prompts registados — caso contrário `METHOD_NOT_FOUND` |
 | `notifications/initialized` | Aceite, sem resposta |
-| `notifications/cancelled` | Aborta a chamada em curso cujo `params.requestId` corresponda; sem resposta |
+| `notifications/cancelled` | Aborta a chamada em curso **da mesma sessão** cujo `params.requestId` corresponda; sem resposta |
+
+Um método de pedido enviado como notificação (sem `id`, ex.: um `tools/call` sem
+id) **não é executado nem respondido** — o JSON-RPC nunca responde a uma
+notificação. Uma *resposta* JSON-RPC enviada ao servidor é ignorada. Os batches
+(arrays) são despachados por `dispatchPayload(server, payload, ctx)`, que todos os
+transportes incluídos usam: uma resposta por pedido, `null` para um batch só de
+notificações, `-32600` para um batch vazio ou um `initialize` dentro de um batch.
 
 As capacidades são anunciadas **apenas quando existem**: um servidor só com
 ferramentas reporta `{ tools: { listChanged: false } }`; regista recursos ou prompts
@@ -140,10 +147,11 @@ interface ToolInvokeContext {
   progress?: (u: { progress?: number; total?: number; message?: string }) => void
   elicit?: (prompt: string) => Promise<boolean>    // pedir confirmação ao cliente
   headers?: Record<string, string | string[] | undefined>  // metadados de transporte por chamada
+  remoteAddress?: string                           // o par do transporte, quando conhecido
 }
 ```
 
-O `signal` está sempre presente. O `progress`, o `elicit` e os `headers` só estão
+O `signal` está sempre presente. O `progress`, o `elicit`, os `headers` e o `remoteAddress` só estão
 presentes quando o transporte ou o cliente os forneceram — chama-os sempre de forma
 opcional (`ctx.progress?.(…)`), nunca assumas.
 
@@ -158,9 +166,10 @@ const build: McpToolDef = {
       ctx.progress?.({ progress: i + 1, total: 3, message: `step ${i + 1}` })
       await step(i)
     }
-    // Confirmação interativa opcional, quando o cliente suporta elicitation:
-    if (ctx.elicit && !(await ctx.elicit('Write the output?'))) {
-      return { content: [{ type: 'text', text: 'skipped' }], isError: true }
+    // Confirmação: quando não é possível perguntar ao cliente, FALHA FECHADO —
+    // nunca trates a ausência de `elicit` como consentimento.
+    if (!ctx.elicit || !(await ctx.elicit('Write the output?'))) {
+      return { content: [{ type: 'text', text: 'not confirmed' }], isError: true }
     }
     return { content: [{ type: 'text', text: 'done' }] }
   },
@@ -176,10 +185,20 @@ A canalização está ligada ao despachante, por isso não tocas no fio:
   `notifications/progress` com esse token. Se faltar qualquer uma das metades, o
   `ctx.progress` é simplesmente `undefined` — daí a chamada opcional.
 - **Cancelamento** — cada `tools/call` em curso com um id não-nulo recebe um
-  `AbortController` por pedido, registado sob esse id. Um `notifications/cancelled`
-  com o `requestId` correspondente aborta o `ctx.signal`. Um `ctx.signal` externo
-  passado pelo transporte é ligado ao mesmo controller, por isso um signal já
-  abortado aborta a chamada imediatamente.
+  `AbortController` por pedido, registado sob `(sessão, id)`. Um
+  `notifications/cancelled` com o `requestId` correspondente **da mesma sessão**
+  aborta o `ctx.signal` — um cliente nunca consegue cancelar a chamada de outro. A
+  sessão é o `CallContext.session`: cada stream stdio e cada pedido HTTP é a sua
+  própria; um embedding sem sessão partilha um único âmbito. Um segundo pedido em
+  curso que reutilize um id na mesma sessão é recusado (`-32600`). Um `ctx.signal`
+  externo passado pelo transporte é ligado ao mesmo controller, por isso um signal
+  já abortado aborta a chamada imediatamente (o `serveHttp` aborta quando o cliente
+  se desliga).
+- **Elicitation** — em stdio, quando o `initialize` do cliente anunciou a
+  capacidade `elicitation`, o `ctx.elicit(prompt)` envia um pedido
+  `elicitation/create` (um único booleano obrigatório `confirm`) e resolve `true`
+  só quando o utilizador aceitou com `confirm: true`. Sem a capacidade, o
+  `ctx.elicit` não existe.
 
 As notificações servidor→cliente ao vivo (progresso) exigem um transporte duplex — o
 **stdio** entrega-as; o transporte HTTP mínimo é só pedido/resposta.
@@ -248,15 +267,20 @@ const handle = serveStdio(server, {
   // headers?: aplicados a todas as chamadas (o stdio não tem headers por pedido)
   // input?: NodeJS.ReadableStream (predefinição process.stdin)
   // output?: { write(chunk: string): unknown } (predefinição process.stdout)
+  // maxLineLength?: number (predefinição 4 MiB de caracteres)
 })
 handle.close() // desliga o listener do stdin
 ```
 
-JSON-RPC delimitado por newline: uma mensagem por linha, uma resposta por linha. As
-linhas em branco são ignoradas, as notificações não recebem resposta, e uma linha
-impossível de interpretar responde com um erro de parse JSON-RPC (`-32700`, id
-`null`). O transporte fornece também o `notify`, para que as notificações
-servidor→cliente (progresso) saiam pelo mesmo stream.
+JSON-RPC delimitado por newline: uma mensagem por linha, uma resposta por linha
+(um array para um batch). As linhas em branco são ignoradas, as notificações não
+recebem resposta, e uma linha impossível de interpretar responde com um erro de
+parse JSON-RPC (`-32700`, id `null`). O stream de bytes é descodificado com um
+`StringDecoder`, por isso um carácter multibyte partido entre chunks sobrevive; uma
+linha maior do que `maxLineLength` é descartada sem ser guardada em buffer e
+respondida com `-32600`. O transporte fornece também o `notify`, para que as
+notificações (progresso) e os pedidos (`elicitation/create`) servidor→cliente saiam
+pelo mesmo stream, e as respostas do cliente são encaminhadas de volta.
 
 ::: danger O stdout é o protocolo
 Em stdio, tudo o que o teu processo imprimir no stdout é interpretado como JSON-RPC.
@@ -283,11 +307,13 @@ servidor só-de-dev mantém o runtime do framework fora do seu grafo. Respostas:
 | `200` | Uma resposta JSON-RPC normal |
 | `202` (corpo vazio) | A mensagem era uma notificação — por especificação não tem resposta |
 | `400` | O corpo não era JSON válido (`-32700 Parse error`) |
+| `401` | O `authorize` devolveu `false` |
 | `403` | O guard de pedidos rejeitou o `Host`/`Origin` — verificado **antes** do encaminhamento |
 | `404` | Método errado ou fora do caminho (`-32601 Not found: <method> <url>`) |
+| `413` | O corpo excede `maxBodyBytes` (predefinição 1 MiB) — nunca é guardado em buffer |
 
-Os headers HTTP recebidos são reencaminhados às ferramentas como `ctx.headers`, por
-isso uma ferramenta pode ler metadados por chamada (um id de tenant, um bearer
+Os headers HTTP recebidos são reencaminhados às ferramentas como `ctx.headers` (e o
+endereço do par como `ctx.remoteAddress`), por isso uma ferramenta pode ler metadados por chamada (um id de tenant, um bearer
 token) da mesma forma que leria os `headers` estáticos do stdio.
 
 ::: warning O transporte HTTP é guardado ao loopback por predefinição
@@ -296,8 +322,13 @@ seja um nome de loopback (anti-DNS-rebinding) e — *quando existe um header
 `Origin`* — que essa origem seja de loopback (anti-CSRF; os browsers enviam sempre
 `Origin` num POST cross-site, por isso a sua ausência significa um cliente
 não-browser e é permitida). Alarga-o deliberadamente com `allowedHosts` /
-`allowedOrigins`, ou substitui a verificação toda com `allowRequest`. Não há aqui
-nenhuma camada de autenticação — este transporte é uma superfície de dev/CI, não um
+`allowedOrigins`, ou substitui a verificação toda com `allowRequest`.
+
+Esse guard trava **browsers**; **não é autenticação** — o header `Host` é o que o
+cliente quiser enviar, e qualquer cliente que não seja um browser pode enviar
+`Host: 127.0.0.1`. Por isso, ligar a um `host` fora do loopback (ex.: `0.0.0.0`) é
+**recusado**, a não ser que passes também `authorize` (ex.: uma verificação de
+bearer token) ou `allowRequest`. Este transporte é uma superfície de dev/CI, não um
 endpoint público.
 :::
 
@@ -379,6 +410,7 @@ a mesma validação, tenancy e auth que o HTTP.
 | `headers` | `Record<string, string>` | `{}` | Metadados estáticos por chamada — o stdio não tem headers por pedido, por isso é assim que um cliente local transporta um token ou tenant |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Injeta um stream em testes |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Injeta um destino em testes |
+| `maxLineLength` | `number` | `4194304` (4 MiB de caracteres) | Uma linha maior é descartada (respondida com `-32600`) em vez de fazer crescer o buffer |
 
 Devolve um `StdioHandle`; o `close()` desliga o listener de `data` (não termina o
 stream).
@@ -392,7 +424,9 @@ stream).
 | `path` | `string` | `'/mcp'` | O endpoint JSON-RPC. Qualquer outra coisa responde `404` |
 | `allowedHosts` | `string[]` | só nomes de loopback | Hostnames `Host` extra a aceitar quando ligas deliberadamente fora do loopback. Sem distinguir maiúsculas, porta ignorada |
 | `allowedOrigins` | `string[]` | só origens de loopback | Valores `Origin` extra (esquema + host + porta completos) |
-| `allowRequest` | `(origin: string \| undefined, host: string \| undefined) => boolean` | — | Substituição total — **substitui** as verificações de loopback/`allowedHosts`/`allowedOrigins`. Devolver `true` sempre desativa o guard |
+| `allowRequest` | `(origin: string \| undefined, host: string \| undefined, req: IncomingMessage) => boolean` | — | Substituição total — **substitui** as verificações de loopback/`allowedHosts`/`allowedOrigins`. Devolver `true` sempre desativa o guard |
+| `authorize` | `(req: IncomingMessage) => boolean \| Promise<boolean>` | — | Autentica um pedido que passou o guard; `false` responde `401`. Obrigatório (ou `allowRequest`) para ligar a um `host` fora do loopback |
+| `maxBodyBytes` | `number` | `1048576` (1 MiB) | Corpos maiores recebem `413` e não são guardados em buffer |
 
 Devolve `Promise<HttpHandle>` — `{ port, url, close() }`.
 
@@ -404,9 +438,11 @@ Só constróis isto tu quando embutes o `handleMessage` no teu próprio transpor
 | --- | --- | --- | --- |
 | `headers` | `Record<string, string \| string[] \| undefined>` | stdio (`options.headers`), HTTP (headers do pedido) | Reencaminhado tal e qual para o `ctx.headers` nas ferramentas |
 | `progress` | `(u: ProgressUpdate) => void` | tu | Um destino de progresso explícito; tem precedência sobre o par `progressToken` + `notify` |
-| `elicit` | `(prompt: string) => Promise<boolean>` | tu | Pedir confirmação ao cliente; aparece como `ctx.elicit` |
+| `elicit` | `(prompt: string) => Promise<boolean>` | stdio (quando o cliente anunciou `elicitation`), ou tu | Pedir confirmação ao cliente; aparece como `ctx.elicit` |
 | `notify` | `(message: JsonRpcRequest) => void` | stdio | Empurra notificações servidor→cliente. Sem ele, o progresso por `progressToken` é descartado |
-| `signal` | `AbortSignal` | tu | Um abort externo ligado ao controller por pedido |
+| `signal` | `AbortSignal` | HTTP (cliente desligou-se), ou tu | Um abort externo ligado ao controller por pedido |
+| `session` | `unknown` (comparado por identidade) | stdio (um por stream), HTTP (um por pedido) | Delimita os ids em curso: o `notifications/cancelled` só chega a chamadas da mesma sessão. Omitido ⇒ um único âmbito partilhado |
+| `remoteAddress` | `string` | HTTP (endereço do socket) | Reencaminhado para `ctx.remoteAddress` |
 
 ## Modos de falha & resolução de problemas
 
@@ -415,6 +451,11 @@ Só constróis isto tu quando embutes o `handleMessage` no teu próprio transpor
 | `Parse error` | `-32700` | linha de stdio, corpo HTTP | A mensagem não era JSON válido. O HTTP responde `400`; o stdio responde com id `null` |
 | `Invalid JSON-RPC request` | `-32600` | `handleMessage` | `jsonrpc !== '2.0'` ou o `method` não é uma string |
 | `Forbidden: host/origin not allowed` | `-32600` (HTTP `403`) | guard do `serveHttp` | `Host` ou `Origin` estranho; rejeitado antes de qualquer despacho |
+| `Unauthorized` | `-32600` (HTTP `401`) | `authorize` do `serveHttp` | O `authorize` devolveu `false` (ou lançou) |
+| `Request body exceeds <n> bytes` | `-32600` (HTTP `413`) | `serveHttp` | Corpo acima de `maxBodyBytes` |
+| `Message exceeds the maximum line length (<n>)` | `-32600` | stdio | Linha acima de `maxLineLength`; a linha é descartada |
+| `Request id <id> is already in flight` | `-32600` | `dispatchToolCall` | A mesma sessão reutilizou um id ainda em curso |
+| `serveHttp: refusing to bind non-loopback host …` | (promise rejeitada) | `serveHttp` | `host` fora do loopback sem `authorize`/`allowRequest` |
 | `Method not found: <method>` | `-32601` | `handleMessage` | Um método desconhecido — **ou** `resources/*` / `prompts/*` num servidor que não registou nenhum |
 | `Not found: <method> <url>` | `-32601` (HTTP `404`) | `serveHttp` | Não-`POST`, ou um caminho diferente do `options.path` |
 | ``tools/call requires a string `name` `` | `-32602` | `dispatchToolCall` | O `params.name` está em falta ou não é uma string |
@@ -430,8 +471,11 @@ Só constróis isto tu quando embutes o `handleMessage` no teu próprio transpor
   transporte. Em HTTP não há `notify`, por isso o progresso nunca é entregue; usa
   stdio, ou passa um `progress` explícito num `CallContext` quando fizeres embedding.
 - **O cancelamento não faz nada** — o `notifications/cancelled` só aborta chamadas
-  registadas sob um id de pedido não-nulo, e o teu `invoke` tem mesmo de observar o
-  `ctx.signal`. Um ciclo síncrono apertado nunca vai reparar nele.
+  registadas sob um id de pedido não-nulo **na mesma sessão** (em HTTP cada pedido é
+  a sua própria sessão — desliga a ligação em vez disso), e o teu `invoke` tem mesmo
+  de observar o `ctx.signal`. Um ciclo síncrono apertado nunca vai reparar nele.
+- **O meu `tools/call` sem `id` nunca corre** — por desenho: um método de pedido
+  enviado como notificação não é executado (o resultado nunca poderia ser entregue).
 - **O `resources/list` devolve `-32601` apesar de eu ter registado um recurso** — o
   método é ativado pelos recursos passados ao **construtor**; não há um `register()`
   pós-construção. Constrói o servidor com a lista completa.

@@ -1,6 +1,7 @@
 import { Audit, AUDIT_CHAIN_GENESIS, AuditChainConflictError, type AuditEntry, computeAuditHash } from '@basaltkit/audit'
 import { describe, expect, it } from 'vitest'
 import { PrismaAuditStore, type PrismaAuditClient } from '../src/index.js'
+import { matches, type Where } from './prisma-where.js'
 
 interface Row {
   id: string; source: string; event: string; payload: string | null
@@ -9,19 +10,10 @@ interface Row {
   ip?: string | null; userAgent?: string | null
 }
 
-type Where = { chain?: string | { not: null }; seq?: { gte?: number; lte?: number; not?: null } | null; tenantId?: string | null }
-
 /** An in-memory stand-in for a generated client with the 1.2 `AuditEntry` model (incl. `@@unique([chain, seq])`). */
 function fakeClient(opts: { legacySchema?: boolean } = {}) {
   const rows: Row[] = []
-  const match = (r: Row, where: Where = {}) =>
-    (where.chain === undefined ||
-      (typeof where.chain === 'string' ? r.chain === where.chain : r.chain != null)) &&
-    (where.tenantId === undefined || (r.tenantId ?? null) === where.tenantId) &&
-    (where.seq === undefined ||
-      (where.seq === null
-        ? r.seq == null
-        : r.seq != null && (where.seq.gte === undefined || r.seq >= where.seq.gte) && (where.seq.lte === undefined || r.seq <= where.seq.lte)))
+  const match = (r: Row, where?: Where) => matches(r, where)
   const client: PrismaAuditClient & { rows: Row[]; creates: Array<Record<string, unknown>> } = {
     rows,
     creates: [],

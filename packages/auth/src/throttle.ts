@@ -35,8 +35,12 @@ export interface ThrottleStore {
   /**
    * Atomically counts one attempt and returns the new state. The first hit of
    * a key opens a fixed window of `windowMs`; later hits do not extend it.
+   *
+   * `limit` is the caller's budget: once `count >= limit` the key is locked.
+   * A bounded store uses it to keep locked keys over unlocked ones when it has
+   * to evict; stores without eviction may ignore it.
    */
-  hit(key: string, windowMs: number): ThrottleWindow | Promise<ThrottleWindow>
+  hit(key: string, windowMs: number, limit?: number): ThrottleWindow | Promise<ThrottleWindow>
   /** The current state without counting; null when the key has no live window. */
   peek(key: string): ThrottleWindow | null | Promise<ThrottleWindow | null>
   /** Gives one attempt back (a successful attempt must not consume budget). */
@@ -48,8 +52,12 @@ export interface ThrottleStore {
 export interface MemoryThrottleStoreOptions {
   /**
    * Upper bound on tracked keys. When full, expired entries are swept and then
-   * the oldest ones are evicted, so failed logins with unique identifiers
-   * cannot grow the heap without limit. Default 100 000.
+   * the oldest UNLOCKED ones are evicted, so failed logins with unique
+   * identifiers cannot grow the heap without limit — and cannot flush a locked
+   * account out of the store to unlock it. Only when every tracked key is
+   * locked is the oldest lock evicted (the memory bound is absolute); reaching
+   * that state takes `maxEntries × limit` failures within one window.
+   * Default 100 000.
    */
   maxEntries?: number
   /** Injectable clock for tests. */
@@ -59,7 +67,11 @@ export interface MemoryThrottleStoreOptions {
 interface Entry {
   count: number
   resetAt: number
+  /** The caller's budget (see {@link ThrottleStore.hit}); locked once `count >= limit`. */
+  limit?: number
 }
+
+const isLocked = (entry: Entry): boolean => entry.limit !== undefined && entry.count >= entry.limit
 
 /** In-process {@link ThrottleStore} (the default): synchronous and bounded. */
 export class MemoryThrottleStore implements ThrottleStore {
@@ -96,7 +108,14 @@ export class MemoryThrottleStore implements ThrottleStore {
   private store(key: string, entry: Entry, now: number): void {
     if (!this.entries.has(key) && this.entries.size >= this.maxEntries) {
       for (const [k, e] of this.entries) if (now >= e.resetAt) this.entries.delete(k)
-      // Still full: evict the oldest entries (Map iterates in insertion order).
+      // Still full: evict the oldest UNLOCKED entries (Map iterates in
+      // insertion order). Evicting a locked one would lift the lockout, so a
+      // flood of junk identifiers could buy an attacker a fresh budget.
+      for (const [k, e] of this.entries) {
+        if (this.entries.size < this.maxEntries) break
+        if (!isLocked(e)) this.entries.delete(k)
+      }
+      // Every entry is locked: the memory bound wins, the oldest lock goes.
       for (const k of this.entries.keys()) {
         if (this.entries.size < this.maxEntries) break
         this.entries.delete(k)
@@ -105,10 +124,11 @@ export class MemoryThrottleStore implements ThrottleStore {
     this.entries.set(key, entry)
   }
 
-  hit(key: string, windowMs: number): ThrottleWindow {
+  hit(key: string, windowMs: number, limit?: number): ThrottleWindow {
     const now = this.clock()
-    const entry = this.live(key, now) ?? { count: 0, resetAt: now + windowMs }
+    const entry: Entry = this.live(key, now) ?? { count: 0, resetAt: now + windowMs }
     entry.count += 1
+    if (limit !== undefined) entry.limit = limit
     this.store(key, entry, now)
     return { count: entry.count, retryAfterMs: entry.resetAt - now }
   }
@@ -220,7 +240,7 @@ export class LoginThrottle {
   }
 
   recordFailure(key: string): Awaitable<void> {
-    return chain(this.store.hit(this.key(key), this.windowMs), () => undefined)
+    return chain(this.store.hit(this.key(key), this.windowMs, this.maxAttempts), () => undefined)
   }
 
   /**
@@ -229,7 +249,7 @@ export class LoginThrottle {
    * simply keeps the reservation.
    */
   reserve(key: string): Awaitable<void> {
-    return chain(this.store.hit(this.key(key), this.windowMs), (window) => {
+    return chain(this.store.hit(this.key(key), this.windowMs, this.maxAttempts), (window) => {
       if (window.count > this.maxAttempts) throw new AccountLockedError(window.retryAfterMs)
     })
   }

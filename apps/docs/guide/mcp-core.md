@@ -83,7 +83,14 @@ JSON-RPC surface:
 | `resources/list` · `resources/read` | Only when resources are registered — otherwise `METHOD_NOT_FOUND` |
 | `prompts/list` · `prompts/get` | Only when prompts are registered — otherwise `METHOD_NOT_FOUND` |
 | `notifications/initialized` | Accepted, no reply |
-| `notifications/cancelled` | Aborts the in-flight call whose `params.requestId` matches; no reply |
+| `notifications/cancelled` | Aborts the in-flight call **of the same session** whose `params.requestId` matches; no reply |
+
+A request method sent as a notification (no `id`, e.g. a `tools/call` without
+one) is **neither executed nor answered** — JSON-RPC never answers a
+notification. A JSON-RPC *response* sent to the server is ignored. Batches
+(arrays) are dispatched by `dispatchPayload(server, payload, ctx)`, which every
+bundled transport uses: one response per request, `null` for an all-notification
+batch, `-32600` for an empty batch or a batched `initialize`.
 
 Capabilities are advertised **only when present**: a tools-only server reports
 `{ tools: { listChanged: false } }`; register resources or prompts and the
@@ -140,10 +147,11 @@ interface ToolInvokeContext {
   progress?: (u: { progress?: number; total?: number; message?: string }) => void
   elicit?: (prompt: string) => Promise<boolean>    // ask the client to confirm
   headers?: Record<string, string | string[] | undefined>  // per-call transport metadata
+  remoteAddress?: string                           // the transport peer, when known
 }
 ```
 
-`signal` is always present. `progress`, `elicit` and `headers` are present only
+`signal` is always present. `progress`, `elicit`, `headers` and `remoteAddress` are present only
 when the transport or the client supplied them — always call them optionally
 (`ctx.progress?.(…)`), never assume.
 
@@ -158,9 +166,10 @@ const build: McpToolDef = {
       ctx.progress?.({ progress: i + 1, total: 3, message: `step ${i + 1}` })
       await step(i)
     }
-    // Optional interactive confirmation, when the client supports elicitation:
-    if (ctx.elicit && !(await ctx.elicit('Write the output?'))) {
-      return { content: [{ type: 'text', text: 'skipped' }], isError: true }
+    // Confirmation: when the client cannot be asked, FAIL CLOSED — never
+    // treat a missing `elicit` as consent.
+    if (!ctx.elicit || !(await ctx.elicit('Write the output?'))) {
+      return { content: [{ type: 'text', text: 'not confirmed' }], isError: true }
     }
     return { content: [{ type: 'text', text: 'done' }] }
   },
@@ -176,10 +185,20 @@ The plumbing is wired into the dispatcher, so you don't touch the wire:
   `notifications/progress` with that token. Miss either half and `ctx.progress` is
   simply `undefined` — hence the optional call.
 - **Cancellation** — each in-flight `tools/call` with a non-null id gets a
-  per-request `AbortController`, registered under that id. A
-  `notifications/cancelled` with the matching `requestId` aborts `ctx.signal`. An
-  external `ctx.signal` passed by the transport is linked into the same controller,
-  so an already-aborted signal aborts the call immediately.
+  per-request `AbortController`, registered under `(session, id)`. A
+  `notifications/cancelled` with the matching `requestId` **from the same
+  session** aborts `ctx.signal` — one client can never cancel another's call.
+  The session is `CallContext.session`: each stdio stream and each HTTP request
+  is its own; a session-less embedding shares one scope. A second in-flight
+  request reusing an id in the same session is refused (`-32600`). An external
+  `ctx.signal` passed by the transport is linked into the same controller, so an
+  already-aborted signal aborts the call immediately (`serveHttp` aborts when the
+  client disconnects).
+- **Elicitation** — over stdio, when the client's `initialize` announced the
+  `elicitation` capability, `ctx.elicit(prompt)` sends an `elicitation/create`
+  request (a single required `confirm` boolean) and resolves `true` only when the
+  user accepted with `confirm: true`. Without the capability `ctx.elicit` is
+  absent.
 
 Live server→client notifications (progress) require a duplex transport — **stdio**
 delivers them; the minimal HTTP transport is request/response only.
@@ -247,14 +266,19 @@ const handle = serveStdio(server, {
   // headers?: applied to every call (stdio has no per-request headers)
   // input?: NodeJS.ReadableStream (default process.stdin)
   // output?: { write(chunk: string): unknown } (default process.stdout)
+  // maxLineLength?: number (default 4 MiB of characters)
 })
 handle.close() // detach the stdin listener
 ```
 
-Newline-delimited JSON-RPC: one message per line, one response per line. Blank
-lines are skipped, notifications get no reply, and an unparseable line answers with
-a JSON-RPC parse error (`-32700`, id `null`). The transport also supplies `notify`,
-so server→client notifications (progress) go out on the same stream.
+Newline-delimited JSON-RPC: one message per line, one response per line (an
+array for a batch). Blank lines are skipped, notifications get no reply, and an
+unparseable line answers with a JSON-RPC parse error (`-32700`, id `null`). The
+byte stream is decoded with a `StringDecoder`, so a multibyte character split
+across chunks survives; a line longer than `maxLineLength` is dropped without
+being buffered and answered with `-32600`. The transport also supplies `notify`,
+so server→client notifications (progress) and requests (`elicitation/create`) go
+out on the same stream, and the client's responses are routed back.
 
 ::: danger stdout is the protocol
 On stdio, anything your process prints to stdout is interpreted as JSON-RPC. One
@@ -281,12 +305,14 @@ runtime out of its graph. Responses:
 | `200` | A normal JSON-RPC response |
 | `202` (empty body) | The message was a notification — by spec it gets no reply |
 | `400` | The body wasn't valid JSON (`-32700 Parse error`) |
+| `401` | `authorize` returned `false` |
 | `403` | The request guard rejected the `Host`/`Origin` — checked **before** routing |
 | `404` | Wrong method or off-path (`-32601 Not found: <method> <url>`) |
+| `413` | The body exceeds `maxBodyBytes` (default 1 MiB) — it is never buffered |
 
-Incoming HTTP headers are forwarded to tools as `ctx.headers`, so a tool can read
-per-call metadata (a tenant id, a bearer token) the same way it would over stdio's
-static `headers`.
+Incoming HTTP headers are forwarded to tools as `ctx.headers` (and the peer
+address as `ctx.remoteAddress`), so a tool can read per-call metadata (a tenant
+id, a bearer token) the same way it would over stdio's static `headers`.
 
 ::: warning The HTTP transport is loopback-guarded by default
 It binds `127.0.0.1`, and before any dispatch it requires the `Host` hostname to be
@@ -294,8 +320,13 @@ a loopback name (anti-DNS-rebinding) and — *when an `Origin` header is present
 that origin to be a loopback origin (anti-CSRF; browsers always send `Origin` on a
 cross-site POST, so its absence means a non-browser client and is allowed). Widen
 it deliberately with `allowedHosts` / `allowedOrigins`, or replace the whole check
-with `allowRequest`. There is no authentication layer here — this transport is a
-dev/CI surface, not a public endpoint.
+with `allowRequest`.
+
+That guard stops **browsers**; it is **not authentication** — the `Host` header
+is whatever the client sends, and any non-browser client can send
+`Host: 127.0.0.1`. So binding a non-loopback `host` (e.g. `0.0.0.0`) is
+**refused** unless you also pass `authorize` (e.g. a bearer-token check) or
+`allowRequest`. This transport is a dev/CI surface, not a public endpoint.
 :::
 
 ## Protocol details
@@ -376,6 +407,7 @@ and auth as HTTP.
 | `headers` | `Record<string, string>` | `{}` | Static per-call metadata — stdio has no per-request headers, so this is how a local client carries a token or tenant |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Inject a stream in tests |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Inject a sink in tests |
+| `maxLineLength` | `number` | `4194304` (4 MiB of characters) | A longer line is dropped (answered `-32600`) instead of growing the buffer |
 
 Returns a `StdioHandle`; `close()` detaches the `data` listener (it does not end
 the stream).
@@ -389,7 +421,9 @@ the stream).
 | `path` | `string` | `'/mcp'` | The JSON-RPC endpoint. Anything else answers `404` |
 | `allowedHosts` | `string[]` | loopback names only | Extra `Host` hostnames to accept when you deliberately bind off loopback. Case-insensitive, port ignored |
 | `allowedOrigins` | `string[]` | loopback origins only | Extra `Origin` values (full scheme + host + port) |
-| `allowRequest` | `(origin: string \| undefined, host: string \| undefined) => boolean` | — | Full override — **replaces** the loopback/`allowedHosts`/`allowedOrigins` checks. Returning `true` unconditionally disables the guard |
+| `allowRequest` | `(origin: string \| undefined, host: string \| undefined, req: IncomingMessage) => boolean` | — | Full override — **replaces** the loopback/`allowedHosts`/`allowedOrigins` checks. Returning `true` unconditionally disables the guard |
+| `authorize` | `(req: IncomingMessage) => boolean \| Promise<boolean>` | — | Authenticates a request that passed the guard; `false` answers `401`. Required (or `allowRequest`) to bind a non-loopback `host` |
+| `maxBodyBytes` | `number` | `1048576` (1 MiB) | Larger bodies get `413` and are not buffered |
 
 Returns `Promise<HttpHandle>` — `{ port, url, close() }`.
 
@@ -401,9 +435,11 @@ You only build this yourself when embedding `handleMessage` in your own transpor
 | --- | --- | --- | --- |
 | `headers` | `Record<string, string \| string[] \| undefined>` | stdio (`options.headers`), HTTP (request headers) | Forwarded verbatim to `ctx.headers` in tools |
 | `progress` | `(u: ProgressUpdate) => void` | you | An explicit progress sink; takes precedence over the `progressToken` + `notify` pairing |
-| `elicit` | `(prompt: string) => Promise<boolean>` | you | Ask the client to confirm; surfaces as `ctx.elicit` |
+| `elicit` | `(prompt: string) => Promise<boolean>` | stdio (when the client announced `elicitation`), or you | Ask the client to confirm; surfaces as `ctx.elicit` |
 | `notify` | `(message: JsonRpcRequest) => void` | stdio | Push server→client notifications. Without it, `progressToken` progress is dropped |
-| `signal` | `AbortSignal` | you | An external abort linked into the per-request controller |
+| `signal` | `AbortSignal` | HTTP (client disconnect), or you | An external abort linked into the per-request controller |
+| `session` | `unknown` (compared by identity) | stdio (one per stream), HTTP (one per request) | Scopes in-flight ids: `notifications/cancelled` only reaches calls of the same session. Omitted ⇒ one shared scope |
+| `remoteAddress` | `string` | HTTP (socket address) | Forwarded to `ctx.remoteAddress` |
 
 ## Failure modes & troubleshooting
 
@@ -412,6 +448,11 @@ You only build this yourself when embedding `handleMessage` in your own transpor
 | `Parse error` | `-32700` | stdio line, HTTP body | The message wasn't valid JSON. HTTP answers `400`; stdio replies with id `null` |
 | `Invalid JSON-RPC request` | `-32600` | `handleMessage` | `jsonrpc !== '2.0'` or `method` isn't a string |
 | `Forbidden: host/origin not allowed` | `-32600` (HTTP `403`) | `serveHttp` guard | Foreign `Host` or `Origin`; rejected before any dispatch |
+| `Unauthorized` | `-32600` (HTTP `401`) | `serveHttp` `authorize` | `authorize` returned `false` (or threw) |
+| `Request body exceeds <n> bytes` | `-32600` (HTTP `413`) | `serveHttp` | Body over `maxBodyBytes` |
+| `Message exceeds the maximum line length (<n>)` | `-32600` | stdio | Line over `maxLineLength`; the line is dropped |
+| `Request id <id> is already in flight` | `-32600` | `dispatchToolCall` | The same session reused an id still running |
+| `serveHttp: refusing to bind non-loopback host …` | (rejected promise) | `serveHttp` | Non-loopback `host` without `authorize`/`allowRequest` |
 | `Method not found: <method>` | `-32601` | `handleMessage` | An unknown method — **or** `resources/*` / `prompts/*` on a server that registered none |
 | `Not found: <method> <url>` | `-32601` (HTTP `404`) | `serveHttp` | Non-`POST`, or a path other than `options.path` |
 | ``tools/call requires a string `name` `` | `-32602` | `dispatchToolCall` | `params.name` missing or not a string |
@@ -427,8 +468,11 @@ You only build this yourself when embedding `handleMessage` in your own transpor
   so progress is never delivered; use stdio, or pass an explicit `progress` in a
   `CallContext` when embedding.
 - **Cancellation does nothing** — `notifications/cancelled` only aborts calls
-  registered under a non-null request id, and your `invoke` must actually observe
-  `ctx.signal`. A tight synchronous loop will never notice it.
+  registered under a non-null request id **in the same session** (over HTTP each
+  request is its own session — disconnect instead), and your `invoke` must
+  actually observe `ctx.signal`. A tight synchronous loop will never notice it.
+- **My `tools/call` without an `id` never runs** — by design: a request method
+  sent as a notification is not executed (its result could never be delivered).
 - **`resources/list` returns `-32601` even though I registered a resource** — the
   method is enabled by the resources passed to the **constructor**; there is no
   post-construction `register()`. Build the server with the full list.

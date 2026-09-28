@@ -117,6 +117,17 @@ fall-through — for apps that pass resources opportunistically — set
 `onMissingPolicy: 'rbac'`.
 :::
 
+The match is exact. Only the policy's **own** actions count — `project:constructor`
+or `project:toString` never reach `Object.prototype`, they are missing
+policies — and only a two-segment `resource:action` selects a check:
+`project:update:billing` is a different permission from `project:update`, so
+the `update` check does not decide it. A check authorizes only when it returns
+`true` (a truthy non-boolean denies). `can()` refuses a permission that is not
+a non-empty string without whitespace (`TypeError`), and a user with no
+non-empty string `id` is unauthenticated: `can`/`authorize`/`hasRole` throw
+`AuthRequiredGuardError` (401) rather than evaluating — or crashing on — an
+anonymous caller.
+
 ## Protect routes
 
 Register `permissionsPlugin` and declare the permission a route needs with `meta.can` —
@@ -290,6 +301,27 @@ UPDATE perm_role_permissions SET scope = '@global' WHERE scope = 'global';
 while it is on, a tenant with id `'global'` writes global grants again, so
 reserve that id before enabling it.
 
+### Writes need a tenant (or an explicit scope)
+
+`gate.assignRole()`, `removeRole()`, `grantToRole()`, `grantToUser()`,
+`grantTemporarily()` and `delegate()` take an optional `scope`. Without one they
+write to the current tenant. In a multi-tenant app — `tenancyPlugin` registered
+— a scope-less write with **no tenant in the context** throws
+`ScopeRequiredError` (`PERMISSION_SCOPE_REQUIRED`, 400) instead of falling back
+to `GLOBAL_SCOPE`: a tenant-admin endpoint hit on a request whose tenant did not
+resolve must not write a platform-wide grant.
+
+```ts
+await gate.assignRole(userId, 'admin')               // inside a tenant: that tenant
+await gate.assignRole(userId, 'admin', GLOBAL_SCOPE) // a global grant: say so
+```
+
+Single-tenant apps (no tenancy plugin) are unaffected: scope-less writes still
+land in `GLOBAL_SCOPE`. A custom `scope` option decides for itself, and
+`allowGlobalWrites: true` restores the old fallback wholesale. A Gate built by
+hand (`new Gate(...)`) learns that tenancy is active from the `tenancyActive`
+option; `permissionsPlugin` wires it from `tenancyPlugin`'s marker.
+
 ## Temporary grants and delegation
 
 Two time-boxed mechanisms sit on top of the standing grants. Both are **opt-in**
@@ -321,6 +353,11 @@ const grant = await gate.grantTemporarily('user-bob', ['deploys:approve'], {
 // after expiry the grant is inert; revoke earlier via the store: store.revoke(grant.id)
 ```
 
+A temporary grant needs a deadline: `grantTemporarily()` throws a `TypeError`
+without `ttlMs` or `expiresAt` (it used to write an already-expired grant), and
+refuses a deadline that is not a finite time in the future — `Infinity` is a
+standing grant, so use `grantToUser()` for that.
+
 **Delegation** lets one user act with a subset of *another user's* authority:
 
 ```ts
@@ -337,6 +374,11 @@ Delegated authority is bounded **at check time** by what the delegator can
 now* (revoke Ada's access and Bob's delegated access dies with it), and
 delegations don't chain (Bob can't re-delegate Ada's authority; a check through
 a delegation ignores the delegator's own incoming delegations).
+
+The Gate does not trust its stores on any of this: whatever `activeFor()` /
+`activeTo()` return is re-checked against the user, the scope and the Gate's
+own clock (`now`), so a durable store that forgets its `expires_at > ?` filter
+cannot turn a time-boxed grant into a standing one.
 
 ## Options reference
 
@@ -356,6 +398,8 @@ a delegation ignores the delegator's own incoming delegations).
 | `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | A tenant-held role also resolves its permissions from its `GLOBAL_SCOPE` definition (only in that tenant); a list limits it to those role names |
 | `readLegacyGlobalScope` | `boolean` | `false` | Also read rows under the pre-1.5 global scope `'global'` as global. Transition aid — see [The global scope can't be a tenant](#the-global-scope-can-t-be-a-tenant) |
 | `hooks` | `HookBus` | the app's bus (plugin) | Where `permission:*` hooks are emitted |
+| `allowGlobalWrites` | `boolean` | `false` | Let a scope-less write outside a tenant fall back to `GLOBAL_SCOPE` even when tenancy is active. See [Writes need a tenant](#writes-need-a-tenant-or-an-explicit-scope) |
+| `tenancyActive` | `() => boolean` | the `tenancy:active` marker (plugin); `false` (`new Gate`) | Whether the app is multi-tenant — decides whether scope-less writes outside a tenant fail closed |
 
 The plugin registers the Gate under the `GATE` token, adds the `meta.can` guard,
 and claims the `can` key in the adapters' boot-time guarded-meta check.
@@ -379,7 +423,8 @@ than the store: writes straight on the `AccessStore` leave no trail.
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | The check failed — nothing grants the permission in the current or global scope |
-| `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route was hit with no authenticated user in context |
+| `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route was hit with no authenticated user in context (or a user without a non-empty string `id`); also `can`/`authorize`/`hasRole` given such a user |
+| `ScopeRequiredError` | `PERMISSION_SCOPE_REQUIRED` | 400 | A grant write with no `scope`, no tenant in the context, and tenancy active — pass the scope (or `GLOBAL_SCOPE`) explicitly |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` has an unenforceable shape (`true`, a number, an empty/mixed array) — fails closed on every request |
 | `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` | 403 | The request's tenant id is a reserved scope (`'@global'` or `'global'`), or the tenant has no usable id |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | `can`/`authorize` got a resource but no policy check matches `resource:action` — the ABAC rule you intended would be skipped |

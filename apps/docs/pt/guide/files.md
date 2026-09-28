@@ -33,9 +33,23 @@ job em background sem pedido ambiente.
 
 Numa app **single-tenant** — sem `tenancyPlugin` — não existe dimensão de tenant,
 logo não há nada a fechar: `upload`/`list`/`get`/`download`/`delete` funcionam sem
-`tenantId`, os registos ficam num único âmbito interno `'default'`, e os caminhos
-de armazenamento ficam sem prefixo, tal como se usasses o `@basaltkit/storage`
-diretamente. Vê [Para além do SaaS](/pt/guide/beyond-saas).
+`tenantId`, os registos ficam numa única chave interna, `SINGLE_TENANT_SCOPE`
+(`'@single'` — fora da gramática de ids de tenant, logo nenhum tenant pode receber
+esses registos), e os caminhos de armazenamento ficam sem prefixo, tal como se
+usasses o `@basaltkit/storage` diretamente. Indica aí um disco do
+`storagePlugin`, ou passa um `Disk` construído com `scope: null`: um disco
+construído à mão com o scope predefinido recusa correr sem tenant. Vê
+[Para além do SaaS](/pt/guide/beyond-saas).
+
+::: warning Atualizar dados single-tenant
+Antes do `@basaltkit/files` 5.0 a chave single-tenant era `'default'` — um id de
+tenant válido, logo um tenant chamado `default` lia (e, ao apagar, deixava órfãos)
+os ficheiros single-tenant. Uma app single-tenant com registos persistidos
+muda-lhes a chave uma vez:
+`UPDATE files SET "tenantId" = '@single' WHERE "tenantId" = 'default'` (e o mesmo
+em `file_versions` com `@basaltkit/files-versions`). Salta este passo se `default`
+alguma vez foi um tenant real nessa base de dados.
+:::
 
 ## Arranque rápido
 
@@ -238,8 +252,13 @@ e XML, e executáveis (PE/`MZ`, ELF, Mach-O, scripts `#!`). Com ele ligado:
 - `allowedTypes` julga o tipo **detetado**, o `contentType` do registo é o tipo
   detetado, e a alegação do cliente fica em `metadata.declaredType`;
 - conteúdo para o qual o sniffer não tem assinatura (texto simples, CSV, …)
-  mantém o tipo declarado. `application/octet-stream` é aceite como
-  "desconhecido" e guardado como aquilo que os bytes forem.
+  mantém o tipo declarado. `application/octet-stream` (ou nenhum tipo) é aceite
+  como "desconhecido" e guardado como aquilo que os bytes forem **só quando isso
+  é um formato inerte** — PDF, uma imagem raster, áudio, vídeo, ZIP/Office. HTML,
+  SVG, XML, scripts e executáveis enviados como "uns bytes" são recusados com
+  `FileTypeMismatchError`, nunca rerotulados para um tipo que o browser
+  renderiza ou executa; guardar um desses exige declará-lo, e o `allowedTypes`
+  julga então essa declaração.
 
 ```ts
 filesPlugin({

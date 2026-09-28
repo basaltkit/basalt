@@ -10,6 +10,7 @@ export {
   FileNotFoundError,
   FileTenantRequiredError,
   FileTenantMismatchError,
+  FileTenantReservedError,
   SINGLE_TENANT_SCOPE,
   fileScope,
   resolveFileTenant,
@@ -21,6 +22,7 @@ export {
 export {
   sniffContentType,
   normalizeContentType,
+  isInertType,
   SNIFF_WINDOW,
   type ContentSniffer,
 } from './sniff.js'

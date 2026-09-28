@@ -160,9 +160,11 @@ export class ImageProcessingUnavailableError extends BasaltError {
 }
 
 /**
- * A tenant-scoped disk ran without a tenant in context while tenancy is
- * active. Fails closed: the alternative is resolving the caller's key against
- * the bucket root, where every tenant's `tenants/<id>/` tree lives. 400, the
+ * A tenant-scoped disk ran without a tenant in context. Fails closed: the
+ * alternative is resolving the caller's key against the bucket root, where
+ * every tenant's `tenants/<id>/` tree lives. Raised by any disk with a scope
+ * unless it opted into `onMissingScope: 'root'` — or it is a `storagePlugin`
+ * disk on the default scope in an app without `@basaltkit/tenancy`. 400, the
  * same contract as `TenantRequiredError`.
  */
 export class StorageTenantRequiredError extends BasaltError {
@@ -178,16 +180,37 @@ export class StorageTenantRequiredError extends BasaltError {
 
 /**
  * The resolved scope prefix is not a safe path prefix — for the default scope,
- * a tenant id that is not a single path segment (`..`, `a/b`, control
- * characters). Refused so a tenant id can never address another tenant's tree
- * or the bucket root.
+ * a tenant id that is not one canonical path segment (`..`, `a/b`, control
+ * characters, `Acme`, `ÄCME`). Refused so a tenant id can never address
+ * another tenant's tree or the bucket root — including on a case- or
+ * normalization-insensitive filesystem (APFS, NTFS), where `Acme` and `acme`
+ * would otherwise open the same directory while S3 keeps them apart.
  */
 export class StorageInvalidScopeError extends BasaltError {
   constructor() {
     super(
       'STORAGE_INVALID_SCOPE',
       'Invalid storage scope: the tenant id (or custom scope) is not a safe path prefix. ' +
-        'Scope segments may not be empty, ".", "..", contain "/" or "\\", or include control characters.',
+        'Scope segments may not be empty, ".", "..", contain "/" or "\\", or include control characters; ' +
+        'with the default scope the tenant id must also be canonical — lowercase ASCII letters, digits, ' +
+        '"-", "_" and inner "." only. Map other ids to a canonical segment with a custom scope.',
+    )
+  }
+}
+
+/**
+ * A copy running on a tenant-scoped disk named a central (`scope: null`)
+ * destination inside the `tenants/` tree. The destination disk has no scope to
+ * contain the key, so it would land in whichever tenant's tree the key names.
+ * 403: the caller asked to write where its tenant may not.
+ */
+export class StorageCrossTenantCopyError extends BasaltError {
+  readonly status = 403
+  constructor(disk: string, key: string) {
+    super(
+      'STORAGE_CROSS_TENANT_COPY',
+      `Refusing to copy into "${key}" on central disk "${disk}" from a tenant-scoped disk: ` +
+        'the tenants/ tree belongs to the tenants. Copy to a tenant-scoped disk, or outside tenants/.',
     )
   }
 }
