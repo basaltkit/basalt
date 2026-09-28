@@ -1,9 +1,347 @@
-# Novidades no Basalt 1.11
+# Novidades no Basalt 1.12
 
-> *"Basalt 1.11" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.12" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são publicados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
 > pacote que o traz.*
+
+::: warning Trinta e dois pacotes publicam um major
+`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 3
+(`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
+`storage` 4, `files` 5, `comments` 4, `search` 2, `search-elasticsearch` 2,
+`audit` 2 (`audit-prisma` / `-sqlite` 2), `webhooks` 3 (`webhooks-prisma` /
+`-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
+`teams` 4, `queue` 3, `prisma` 3, `mcp` 4, `express` 2 e `hono` 2 — e os três
+adapters de drives chegam à 1.0. Três pacotes 0.x partem num minor:
+`drives` 0.3, `mcp-core` 0.4 e `ai-mcp` 0.2. A maioria resolve-se com uma opção
+ou uma chamada renomeada; quatro precisam de um passo de dados (uma re-chavagem,
+uma re-cifragem, dois modelos de auth novos, políticas RLS regeneradas). Ver
+[Atualização](#atualizacao).
+:::
+
+O Basalt 1.12 é a versão que **cumpre o que promete**. Cada pacote faz
+promessas — no README, nos tipos, no nome de uma opção — e o 1.11 tinha
+garantido que o comportamento seguro era a predefinição. O que ninguém tinha
+verificado de forma sistemática era se a predefinição fazia o que a promessa
+dizia. Por isso uma auditoria independente, em duas passagens, leu o código de
+cada pacote ao lado da sua documentação e transformou cada discrepância que
+encontrou num teste a falhar contra o build publicado.
+
+Encontrou oitenta. Dez foram classificadas como altas, e nenhuma parecia um bug
+de segurança vista de fora — cada uma era uma frase que o framework dizia sobre
+si próprio. O README prometia que o `audit.verify()` detectava uma linha forjada,
+e uma linha inserida directamente na tabela passava. O `idempotencyPlugin`
+estava documentado para handlers `route()`, e um handler que *devolvia* o payload
+— a forma que todos os exemplos usam — corria outra vez em cada retry. Uma
+política para `project:constructor` resolvia através de `Object.prototype` e
+autorizava qualquer pessoa. `meta.teamRole: 'Admin'`, um erro de escrita de
+`'admin'`, tinha rank zero e admitia todos os membros. O `swap()` passava uma
+subscrição gratuita para um plano pago sem a cobrar. O `@basaltkit/env` dizia que
+um `NODE_ENV` por definir era produção e o `@basaltkit/auth` dizia que era
+desenvolvimento.
+
+As oitenta estão fechadas. Cada defeito real foi reproduzido com um teste a
+falhar antes de ser corrigido, e esse teste vive agora na suite do próprio
+pacote; uma hipótese que não se reproduziu fica documentada, não "corrigida". O
+tema é a distância entre o comportamento declarado e o real, e atravessa todos
+os itens abaixo: uma chave single-tenant que não pode ser o nome de um tenant,
+um resolver que um header não consegue contrariar, três adapters que enviam os
+mesmos bytes para a mesma rota, um endpoint MCP que sabe com que sessão está a
+falar.
+
+## Destaques
+
+### Promessas que o código passa a cumprir
+- **O trilho de auditoria detecta o que o README dizia que detectava.** O
+  `verify()` passa a ler também as linhas de um tenant fora da sua cadeia: uma
+  linha escrita depois de a cadeia começar sem lugar nela falha com
+  `unchained-entry` e fica listada em `unverified`; `verify({ expectedHead })`
+  ancora a cabeça, para que uma cauda apagada seja `truncated` e não silêncio.
+  Os payloads são congelados em profundidade, o redactor reconhece chaves
+  secretas pelas suas palavras (`privateKey`, `client_secret`, `dsn`…) e
+  pseudonimiza números de telefone internacionais como documentado, e os filtros
+  dos stores são validados — `?tenantId[not]=x` já não chega a um `where` do
+  Prisma. *(`@basaltkit/audit` 2.0, `audit-prisma` / `audit-sqlite` 2.0)*
+- **O `idempotencyPlugin` repete handlers que devolvem um valor.** Só os handlers
+  que chamavam `reply.send()` eles próprios estavam cobertos; todas as outras
+  rotas corriam em cada retry da mesma `Idempotency-Key` e reportavam um 500
+  espúrio. *(`@basaltkit/fastify` 2.5)*
+- **Uma verificação de permissão responde só à pergunta que lhe fizeram.** A
+  procura de políticas já não percorre o protótipo, uma verificação só autoriza
+  quando devolve exactamente `true`, só um `resource:action` exacto escolhe a
+  verificação de uma política, um id de utilizador em falta é um 401 e não um
+  bucket partilhado, e uma permissão com um segmento vazio (`'projects:'`) não
+  corresponde a nada. Com tenancy activa, uma escrita sem tenant e sem scope lança
+  `PERMISSION_SCOPE_REQUIRED` em vez de atribuir em silêncio para toda a
+  plataforma. *(`@basaltkit/permissions` 3.0)*
+- **Um role mal escrito falha o arranque.** Um `meta.teamRole` desconhecido tinha
+  rank zero e admitia toda a gente; agora faz todos os adapters recusarem
+  arrancar com `InvalidRouteMetaError`, nomeando a rota. Um role sem rank
+  corresponde só a si próprio, e "um convite pendente por e-mail" deixa de
+  distinguir maiúsculas. *(`@basaltkit/teams` 4.0)*
+- **Uma só regra de `NODE_ENV` em todo o lado.** O `isProductionEnvironment()` é
+  a única política, e falha fechado: só um `development` ou `test` explícito não
+  é produção. O `auth` aplica sob ela o mínimo de 32 caracteres do segredo e os
+  cookies `Secure`, o `mailer` deixa de registar o corpo dos e-mails, e o `queue`
+  avisa sobre um driver sync implícito. *(`@basaltkit/core` 1.5, `auth` 4.0,
+  `mailer` 2.1, `queue` 3.0)*
+- **A chave single-tenant não pode ser um tenant.** O `SINGLE_TENANT_SCOPE` era
+  `'default'` — um id de tenant válido, por isso um pedido que nomeasse o tenant
+  `default` chegava aos registos de uma app single-tenant. Passa a ser
+  `'@single'` em files, comments, search e drives, e um tenant igual a ela é
+  recusado. *(`@basaltkit/files` 5.0, `comments` 4.0, `search` 2.0, `drives` 0.3)*
+- **As chaves de storage nomeiam um só objecto em todos os drivers.** Um segmento
+  de tenant tem de ser canónico (`Acme` e `acme` partilhavam uma directoria num
+  disco que não distingue maiúsculas), todos os discos com scope falham fechado
+  sem tenant (um `new Disk()` construído à mão recuava para a raiz do bucket), as
+  chaves com segmentos `.` ou vazios são recusadas, e uma cópia a partir de um
+  disco de tenant não pode aterrar na árvore de outro tenant.
+  *(`@basaltkit/storage` 4.0)*
+- **As entregas de webhooks mantêm a sua identidade.** As entregas da outbox têm
+  um id estável entre retries, as falhas permanentes deixam de ser reenviadas a
+  endpoints saudáveis (`onPermanentFailure`), cada retry é assinado com o seu
+  próprio timestamp, e o `register()` valida o endpoint — URL, esquema, um segredo
+  com pelo menos 16 caracteres, eventos — em vez de guardar um que falha em todas
+  as entregas. *(`@basaltkit/webhooks` 3.0)*
+
+### Quem pergunta, e em nome de quem
+- **É o Host que decide o tenant, não um header.** `subdomainResolver`,
+  `domainResolver` e `routeResolver` são autoritativos: correm antes de qualquer
+  fallback, e um nome que não existe resolve para nenhum tenant em vez de passar a
+  decisão ao `x-tenant-id`. A gramática de id de tenant aplica-se à resolução e ao
+  `run()`, o `normalizeDomain()` valida em vez de fazer parse de URL
+  (`acme.basalt.app@evil.com` passava a `evil.com`), os pedidos de domínio não
+  verificados expiram, e o `CustomDomains.reverify()` deixa um domínio caducado
+  mudar de dono. *(`@basaltkit/tenancy` 3.0)*
+- **Um login social fica ligado ao subject do provider.** As ligações de conta
+  (provider + subject → utilizador) substituem a correspondência só por e-mail;
+  uma segunda conta no mesmo IdP a reclamar um e-mail já ligado recebe
+  `409 AUTH_ACCOUNT_LINK_CONFLICT`. Os providers OIDC podem ficar restritos aos
+  seus domínios de e-mail — obrigatório quando há mais de um provider configurado
+  — e o `aud`, o `exp` e o `iss` do `id_token` são verificados.
+  *(`@basaltkit/auth` 4.0)*
+- **As passkeys e os segredos TOTP aguentam concorrência e adulteração.** O
+  contador WebAuthn é escrito por compare-and-set, por isso um autenticador
+  clonado em corrida com o genuíno perde; o `remove()` verifica o dono; o desafio
+  fica ligado ao utilizador. Os segredos TOTP são selados com AES-256-GCM sob um
+  anel de chaves HKDF, com o id do utilizador como dados associados, e um valor
+  que não seja um envelope é recusado em vez de lido como texto simples.
+  *(`@basaltkit/auth` 4.0, `auth-prisma` / `auth-sqlite` 2.0)*
+- **As respostas SAML pertencem ao browser que as pediu, assinadas com SHA-2.**
+  As `samlRoutes()` ligam cada login a um cookie HttpOnly (CSRF de login), os
+  erros do node-saml são um 400, e as assinaturas e digests SHA-1 são recusados
+  por omissão. *(`@basaltkit/auth-saml` 3.0)*
+- **Um job corre como quem o despachou, e como mais ninguém.** O worker
+  reconstrói o contexto a partir de uma allowlist — ids de pedido, um tenant
+  validado, o `userId` restaurado como `user: { id }` para as entradas de
+  auditoria nomearem um actor — em vez de espalhar o que quer que o broker
+  tivesse. Os envelopes podem ser assinados com HMAC (`signingKey`), e uma segunda
+  definição com um nome de job já usado lança. O backplane Redis do realtime pode
+  ser assinado também, e o `subscribe()` volta a verificar a ligação depois do seu
+  gate assíncrono. *(`@basaltkit/queue` 3.0, `queue-bullmq` 1.1,
+  `queue-rabbitmq` 1.4, `queue-sqs` 1.3, `realtime` 1.5)*
+
+### Dinheiro, índices e linhas
+- **A facturação cobra antes de conceder.** O `swap()` para um plano pago a partir
+  de uma subscrição sem gateway por trás lança `402 BILLING_PAYMENT_REQUIRED`; as
+  quantidades de uso têm de ser inteiros positivos em todos os stores; um webhook
+  de uma subscrição de gateway substituída já não cancela a activa; as renovações
+  do Lemon Squeezy deixam de ser descartadas como duplicadas; as assinaturas do
+  Paddle e do Lemon Squeezy são lidas dos seus próprios headers, e ambos passam
+  pelo `checkout()`. Cupões, facturas e o ledger de pagamentos validam o que
+  recebem. *(`@basaltkit/subscriptions` 5.0, `subscriptions-prisma` / `-sqlite` 3.0)*
+- **Uma reconstrução só limpa o que consegue voltar a encher.** O `reindex()`
+  nunca arquiva uma linha sem tenant sob o tenant que chama, valida todas as
+  linhas antes de limpar seja o que for, e dentro de um tenant reconstrói só esse
+  tenant — uma reconstrução do índice inteiro diz `{ all: true }`. A paginação e
+  os filtros são limitados e validados. Os documentos do Elasticsearch com
+  caracteres especiais de URL no id voltam a ser endereçados por um só `_id`.
+  *(`@basaltkit/search` 2.0, `search-elasticsearch` 2.0, `search-postgres` 1.2)*
+- **O pool de tenants nunca desliga um cliente em uso.** O `TenantClientPool` só
+  despeja clientes inactivos e, quando todos estão ocupados, espera e depois
+  responde `503 PRISMA_POOL_EXHAUSTED` — o tecto nunca é ultrapassado. As
+  políticas RLS comparam com `NULLIF(current_setting(…), '')`, uma troca de
+  tenant sem cliente falha fechado, e os DTOs de classe são delimitados como
+  objectos simples. *(`@basaltkit/prisma` 3.0)*
+- **O MySQL deixa de truncar em silêncio.** Cada pacote `*-prisma` traz um
+  `schema.mysql.prisma` com as colunas de texto livre alargadas, o
+  `basalt prisma:sync` copia-o para uma datasource MySQL, e um
+  `columnLimits: 'mysql'` opcional recusa um valor demasiado longo com
+  `COLUMN_LENGTH_EXCEEDED` em vez de escrever um hash cortado. Os saves de
+  tenancy são atómicos, e os endpoints de webhook têm chave por tenant.
+  *(`@basaltkit/prisma` 3.0, `tenancy-prisma` 2.0, `webhooks-prisma` 2.0, e os
+  restantes stores `*-prisma`)*
+
+### Três adapters, um só protocolo
+- **A mesma rota envia os mesmos bytes em Fastify, Express e Hono.** Uma string é
+  `text/plain` nos três (o Express servia-a como `text/html` — um XSS refletido
+  só nesse adapter); JSON é `application/json` ou `+json` pelo media type exacto;
+  um corpo malformado é um 400; uma chave de query repetida é um array; o limite
+  do corpo é 1 MiB; o `sse()` mantém os headers de CORS e de segurança definidos
+  antes dele; os after-hooks correm para respostas abandonadas. Uma suite de
+  paridade partilhada garante-o. *(`@basaltkit/http` 2.6, `fastify` 2.5,
+  `express` 2.0, `hono` 2.0)*
+- **A meta das rotas é validada no arranque.** Os plugins registam validadores
+  para os valores que as suas chaves de meta levam (`http:meta-validators`), e
+  verificações de visibilidade sem efeitos secundários (`http:route-visibility`)
+  deixam uma listagem esconder o que quem chama nunca conseguiria passar. O
+  `expose = false` mantém a resposta de um upstream fora de um 502.
+  *(`@basaltkit/http` 2.6)*
+
+### MCP através da rede
+- **O `/mcp` conhece quem chama e a sua sessão.** Um `Origin` estranho recebe 403,
+  um corpo que não é JSON recebe 415, uma chamada de tool recebe uma allowlist de
+  headers em vez de todos, e um 4xx do handler é um resultado `isError`. O
+  `initialize` emite um `Mcp-Session-Id` ligado a quem chama, por isso um
+  cancelamento num POST posterior chega à chamada que nomeia e a nenhuma outra; o
+  `tools/list` esconde o que quem chama não poderia usar. *(`@basaltkit/mcp` 4.0)*
+- **O núcleo MCP recusa ficar acessível por acidente.** O `serveHttp` não se liga
+  fora do loopback sem `authorize`, limita o corpo dos pedidos, nunca responde a
+  uma notificação, suporta batches JSON-RPC e elicitação real no stdio — por isso
+  o `basalt_make` do `ai-mcp` recusa um `apply` que não consegue confirmar em vez
+  de escrever em silêncio. *(`@basaltkit/mcp-core` 0.4, `ai-mcp` 0.2)*
+- **As drives externas ficam dentro da sua raiz.** Os cursores de listagem são
+  assinados para o seu tenant e ligação (um cursor do Graph é um URL obtido com o
+  token da ligação), um `rootId` confina todas as chamadas, e os três adapters
+  chegam à 1.0. *(`@basaltkit/drives` 0.3, `drives-dropbox` / `drives-google` /
+  `drives-microsoft` 1.0)*
+
+### Docs
+- Todos os guias que as correcções tocaram foram atualizados, em inglês e em
+  português: [o comportamento na rede nos três
+  adapters](/pt/guide/adapters#comportamento-na-rede-—-identico-nos-tres),
+  [sessões e cancelamento no MCP](/pt/guide/mcp#sessions-and-cancellation) e
+  [o que o `tools/list` mostra](/pt/guide/mcp#what-tools-list-shows), [a fronteira
+  de confiança num worker de
+  queue](/pt/guide/queues#o-contexto-no-worker-—-e-a-fronteira-de-confianca),
+  [escritas de permissões que precisam de um
+  tenant](/pt/guide/authorization#as-escritas-precisam-de-um-tenant-ou-de-um-scope-explicito),
+  [persistência em MySQL](/pt/guide/persistence#mysql), [reconstruir um índice de
+  pesquisa](/pt/guide/search#reconstruir-um-indice), [cifrar os segredos TOTP em
+  repouso](/pt/guide/auth#mfa-encryption) e [migrar as drives da
+  0.2.x](/pt/guide/drives#migrar-da-0-2-x).
+
+## Atualização
+
+Os pacotes são independentes — sobe só o que usas. Cada changeset traz as notas
+de migração completas no `CHANGELOG.md` do pacote; abaixo estão as mudanças com
+maior probabilidade de chegar a uma aplicação.
+
+### Predefinições que passam a recusar
+
+| Pacote | O que recusa | Opt-out / correcção |
+| --- | --- | --- |
+| `auth` 4 | um `NODE_ENV` por definir com um segredo abaixo de 32 caracteres (`AUTH_WEAK_SECRET`); os cookies de sessão passam a `Secure`; vários providers OAuth em que um OIDC não declara domínios de e-mail; uma segunda conta do IdP a reclamar um e-mail já ligado (`409`); duas API keys diferentes no mesmo pedido (`400`) | `NODE_ENV=development` localmente, `sessionCookie: { secure: false }`; `allowedEmailDomains` ou `allowAnyEmailDomain: true`; `oauthPlugin({ subjectConflict: 'link' })`; enviar uma só chave |
+| `mailer` 2.1 | o corpo dos e-mails no log com `NODE_ENV` por definir | `NODE_ENV=development` ou `logBody: true` |
+| `tenancy` 3 | um header a sobrepor-se a um resolver de Host; um subdomínio desconhecido a cair para o header; ids fora da gramática na resolução e no `run()`; não-hostnames no `normalizeDomain()` | `authoritative(fn)` para um resolver custom de confiança; alargar `validateTenantId`; IDNs na forma `xn--` |
+| `permissions` 3 | escritas sem scope fora de um tenant com tenancy activa; permissões com um segmento vazio; permissões de três segmentos contra uma política; `grantTemporarily()` sem prazo | passar `GLOBAL_SCOPE` explicitamente ou `allowGlobalWrites: true`; `ttlMs` / `expiresAt` |
+| `storage` 4 | um `Disk` construído à mão ou um scope custom sem tenant; ids de tenant não canónicos no scope por omissão; chaves como `a//b`, `./a`, uma `/` final; uma cópia de um disco com scope para um central dentro de `tenants/` | `scope: null` ou `onMissingScope: 'root'`; um `scope` custom que mapeie os ids; construir chaves com `parts.join('/')` |
+| `files` 5 | HTML, SVG, XML ou executáveis enviados como `application/octet-stream` | declarar o tipo e deixar o `allowedTypes` julgá-lo |
+| `webhooks` 3 | `register()` com um URL inválido, um segredo abaixo de 16 caracteres ou sem eventos (`WEBHOOK_ENDPOINT_INVALID`); um id de outro tenant (`409`) | validar o input antes; ligar o `onPermanentFailure` para alertar sobre falhas que a outbox deixa de repetir |
+| `mcp` 4 | um `Origin` estranho (`403`); um corpo que não é JSON (`415`); um POST posterior sem o seu `Mcp-Session-Id` (`400` / `404`) | `mcpRoutes({ allowedOrigins })`; `mcpRoutes({ sessions: false })`; acrescentar `Mcp-Session-Id` ao `exposeHeaders` do CORS para clientes de browser |
+| `mcp-core` 0.4 / `ai-mcp` 0.2 | `serveHttp` fora do loopback sem `authorize`; corpos acima de 1 MiB; um `apply` que não pode ser confirmado | `authorize` / `allowRequest`, `maxBodyBytes`; `--token`; `--allow-unconfirmed-apply` |
+| `auth-saml` 3 | assinaturas e digests SHA-1; uma resposta não ligada ao browser que iniciou o login; um `emailAttribute` configurado que não vem na asserção | `allowSha1: true` por provider; `bindToBrowser: false`; corrigir o nome do atributo |
+| `teams` 4 | um `meta.teamRole` ou `tenantMembershipPlugin({ role })` desconhecido — a app não arranca | corrigir o role, ou dar-lhe rank em `roleRank` |
+| `queue` 3 | dois jobs diferentes com o mesmo nome; `attempts: 0`; contexto de job com um tenant fora da gramática | renomear, ou `queuedOn(…, { name })`; `attempts` ≥ 1; passar o mesmo `validateTenantId` ao plugin de queue |
+| `subscriptions` 5 | `swap()` para um plano pago sem subscrição no gateway (`402`); `subscribe()` a um plano pago no Paddle ou Lemon Squeezy (`501`); uso que não seja inteiro positivo | `swap(id, plan, { allowUnpaid: true })`; `checkout()` |
+| `search` 2 | um `reindex()` simples fora de um tenant com tenancy registada; `limit` acima de 1000, `offset` acima de 10000; filtros em campos não declarados ou com valores `null` | `reindex(name, { all: true })`; `searchPlugin({ maxLimit, maxOffset })`; declarar o campo `filterable` |
+| `prisma` 3 | um tenant novo quando todos os clientes do pool estão em uso — `503` depois do `acquireTimeoutMs` | dimensionar `max` para os tenants activos em simultâneo; manter `idleMs` acima do pedido mais longo, ou `pool.use(tenantId, fn)` |
+| `audit` 2 | `verify()` / `verifyAll()` falham para linhas fora da cadeia escritas depois de ela começar | `legacyUntil` para uma origem conhecida e benigna, como um deploy gradual |
+
+### Passos de dados
+
+**A sentinela `'@single'`.** Uma app single-tenant com registos persistidos
+re-chaveia-os uma vez, ou passam a ler-se como inexistentes. Salta este passo se
+`default` já foi um tenant real nessa base de dados — essas linhas pertencem-lhe.
+
+```sql
+UPDATE files         SET "tenantId" = '@single' WHERE "tenantId" = 'default';
+UPDATE file_versions SET "tenantId" = '@single' WHERE "tenantId" = 'default'; -- com files-versions
+UPDATE comments      SET "tenantId" = '@single' WHERE "tenantId" = 'default'; -- comments-prisma
+UPDATE comments      SET tenant_id  = '@single' WHERE tenant_id  = 'default'; -- comments-sqlite
+```
+
+O índice de pesquisa é derivado: reconstrói-o (`search.reindex(name)`), ou com o
+`search-postgres` re-chaveia no sítio. As ligações de drives não se re-chaveiam
+com SQL — cada segredo é selado com o seu tenant como dados associados — por isso
+volta a selá-las com o `DriveSecretBox` como mostra o changelog do
+`@basaltkit/drives`, e depois move o ledger de importação.
+
+**Segredos MFA.** As chaves têm de ter pelo menos 32 bytes, e as linhas seladas
+antes da 1.12 são recusadas. Atualiza com um opt-in temporário, re-cifra, e
+depois remove-o:
+
+```ts
+authPlugin({
+  mfaEncryption: {
+    keys: [{ id: '2026-09', key: NEW_KEY_32_BYTES }],
+    legacy: { v1Keys: [OLD_MFA_ENCRYPTION_KEY], plaintext: true },
+  },
+})
+for (const userId of usersWithMfa) await auth.reencryptMfaSecret(userId)
+// depois retira o `legacy`
+```
+
+**Dois modelos de auth novos.** O `@basaltkit/auth-prisma` acrescenta
+`AuthAccountLink` e `AuthPasskey` — `basalt prisma:sync`, depois uma migração (em
+cada schema de tenant com schema-per-tenant; as apps MySQL tiram-nos do
+`schema.mysql.prisma`). Depois corre `normalizeAuthUserEmails(prisma, { dryRun: true })`,
+de novo sem `dryRun`, e junta os `conflicts` reportados — até lá esses e-mails
+lançam `AUTH_EMAIL_AMBIGUOUS`. O `@basaltkit/auth-sqlite` cria as tabelas no
+`migrate()`. Configura um store durável de `accountLinks`: os utilizadores
+existentes ficam ligados no próximo login pelo e-mail verificado.
+
+**Políticas RLS.** O `rlsPolicySql` e o `rlsSearchFunctionSql` passam a comparar
+com `NULLIF(current_setting(…, true), '')`. Volta a correr o SQL gerado — ambos
+são idempotentes — numa migração nova.
+
+**Os mais pequenos.** As subscrições Paddle e Lemon Squeezy criadas pelo
+`subscribe()` guardam um id de checkout como `gatewayRef`: limpa-o ou define o id
+`sub_…` real. Os documentos do Elasticsearch indexados um a um com caracteres
+especiais de URL no tenant ou no id precisam de um
+`reindex(name, { all: true })`. As atribuições guardadas com um segmento de
+permissão vazio nunca concederam nada e podem ser apagadas.
+
+### O Express e o Hono mudam o que o cliente recebe
+
+No **Express**: devolve HTML com um `content-type` explícito; envia JSON com um
+media type JSON; um corpo JSON vazio passa a ser `undefined`, por isso define-lhe
+um valor por omissão no schema (`z.object({…}).default({})`); o routing distingue
+maiúsculas e é estrito, e o parser de query é o `simple` — passa a tua própria
+`app` se dependias do comportamento antigo. No **Hono**: lê uma chave de query
+repetida como `string | string[]`; o `request.url` é o caminho e a query string,
+por isso constrói um URL absoluto com `new URL(request.url, base)`; um corpo JSON
+malformado é um 400 antes do handler; passa `errorHandler: false` se instalas o
+teu próprio `onError`.
+
+### Stores, drivers e gateways custom implementam mais
+
+Um `PasskeyStore` custom tem de implementar `compareAndSetCounter` (o serviço
+recusa arrancar sem ele). Um `BillingGateway` custom implementa
+`resumeSubscription` ou o `resume()` lança, e o
+`CouponStore.incrementRedemptions` recebe um `limit` e pode devolver `null`.
+Opcionais, mas valem a pena: `SearchDriver.clearTenant` (reconstruções por
+tenant), `AuditStore.auditTenants`, `DomainStore.replace` / `listVerified`, e
+`replayKey` num adapter de drive custom. Os clientes Prisma escritos à mão e os
+fakes de teste precisam de `$transaction` (`tenancy-prisma`) e de `create` /
+`updateMany` (`webhooks-prisma`, `auth-prisma`); um `PrismaClient` gerado já os
+tem.
+
+### Os limites de coluna do MySQL são opt-in
+
+Nada muda em PostgreSQL nem em SQLite, nem em MySQL até o pedires. Para o adoptar,
+deixa o `basalt prisma:sync` copiar as variantes `schema.mysql.prisma`, migra, e
+passa `columnLimits: 'mysql'` às factories dos stores. O
+[guia de MySQL](/pt/guide/persistence#mysql) tem os detalhes.
+
+---
+
+## Anteriormente — Basalt 1.11
+
+> *A versão que **falha fechado**: bugs de composição de uma segunda auditoria de
+> segurança, catorze majors que tornam o comportamento seguro a predefinição,
+> streaming em todos os adapters, um trilho de auditoria verificável, e dois pacotes
+> novos — backup e drives.*
 
 ::: warning Catorze pacotes publicam um major
 Esta vaga muda predefinições de segurança. `auth` 3, `auth-saml` 2, `env` 3,
@@ -11,7 +349,7 @@ Esta vaga muda predefinições de segurança. `auth` 3, `auth-saml` 2, `env` 3,
 `audit-viewer` 3, `webhooks` 2, `subscriptions` 4, `teams` 3 e `mcp` 3 partem
 cada um algo que funcionava *porque* funcionava sem ninguém ter pedido. A regra
 para todos: uma app a funcionar parte sem alteração de código, configuração ou
-dados. Ver [Atualização](#atualizacao) — a maioria das edições é uma opção, duas
+dados. Ver [Atualizar para 1.11](#atualizar-para-1-11) — a maioria das edições é uma opção, duas
 precisam de migração de dados.
 :::
 
@@ -36,8 +374,6 @@ na raiz do bucket; uma query raw dentro de um tenant recusa em vez de ver tudo;
 um `NODE_ENV` por definir conta como produção em vez de desenvolvimento. Nada
 nesta lista é uma capacidade nova. Cada uma é uma capacidade que era opt-in a
 tornar-se aquilo de que é preciso fazer opt *out*.
-
-## Destaques
 
 ### Bugs de composição que a auditoria encontrou
 - **As API keys ficam ligadas ao seu tenant.** Uma chave emitida dentro de um
@@ -179,12 +515,12 @@ tornar-se aquilo de que é preciso fazer opt *out*.
   o troubleshooting de tenancy e o cookbook foram corrigidos onde a contradiziam.
 - Guias de [backups](/pt/guide/backup) e [drives externos](/pt/guide/drives).
 
-## Atualização
+### Atualizar para 1.11
 
 Os pacotes são independentes — sobe só o que usas. Cada major abaixo tem um
 opt-out explícito ao lado; prefere corrigir a app.
 
-### Predefinições que passam a recusar
+#### Predefinições que passam a recusar
 
 | Pacote | O que recusa | Opt-out / correcção |
 | --- | --- | --- |
@@ -201,7 +537,7 @@ opt-out explícito ao lado; prefere corrigir a app.
 | `auth-saml` 2 | asserções de outros domínios; respostas iniciadas pelo IdP; node-saml < 5.1 | `allowedEmailDomains`, `validateInResponseTo: 'ifPresent'` |
 | `mcp` 3 | `process.env` completo para servidores lançados | allow-list `env` no cliente |
 
-### Duas migrações de dados
+#### Duas migrações de dados
 
 **Permissões.** As atribuições escritas sob o scope global anterior à 2.0
 deixam de ser lidas. Renomeia-as uma vez:
@@ -221,7 +557,7 @@ passa a `tenant_acme_co__<hash>`). Os tenants com ids não canónicos têm um
 schema com o nome antigo e têm de ser renomeados uma vez — o README do
 `@basaltkit/prisma` tem a instrução. Os ids canónicos não são afectados.
 
-### Colunas que se acrescentam, nunca se exigem
+#### Colunas que se acrescentam, nunca se exigem
 
 O `@basaltkit/audit-prisma` 1.2 acrescenta `ip`, `userAgent`, `chain`, `seq`,
 `prevHash`, `hash` (todas nullable) e um único `(chain, seq)`; só se escrevem
@@ -230,7 +566,7 @@ quando `integrity` ou `requestContext` está ligado. O `@basaltkit/events-prisma
 (`claim: true`). Corre `basalt prisma:sync` e uma migração; os stores SQLite
 acrescentam as colunas sozinhos.
 
-### `GLOBAL_SCOPE` é uma constante, não uma string
+#### `GLOBAL_SCOPE` é uma constante, não uma string
 
 Se algum código escreve `'global'` — um script de seed, um comando da CLI, um
 teste — passa a atribuir para um scope que ninguém lê. Importa `GLOBAL_SCOPE`
@@ -238,7 +574,7 @@ de `@basaltkit/permissions`. O
 [padrão multi-tenant](/pt/guide/multi-tenant-pattern#regra-7-—-um-sistema-de-permissoes-com-scope-por-plano)
 tem a forma.
 
-### `sharp` e `nodemailer`
+#### `sharp` e `nodemailer`
 
 O `@basaltkit/image-sharp` 1.1.4 exige um `sharp` corrigido (vulnerabilidades
 do libheif); o `@basaltkit/mailer-smtp` 1.0.1 aceita nodemailer 9 e 10.
