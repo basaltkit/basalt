@@ -1,8 +1,328 @@
-# What's new in Basalt 1.11
+# What's new in Basalt 1.12
 
-> *"Basalt 1.11" is the umbrella label for this wave of work; the `@basaltkit/*`
+> *"Basalt 1.12" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
+
+::: warning Thirty-two packages publish a major
+`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 3
+(`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
+`storage` 4, `files` 5, `comments` 4, `search` 2, `search-elasticsearch` 2,
+`audit` 2 (`audit-prisma` / `-sqlite` 2), `webhooks` 3 (`webhooks-prisma` /
+`-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
+`teams` 4, `queue` 3, `prisma` 3, `mcp` 4, `express` 2 and `hono` 2 — and the
+three drive adapters reach 1.0. Three 0.x packages break in a minor:
+`drives` 0.3, `mcp-core` 0.4 and `ai-mcp` 0.2. Most of these are one option or
+one renamed call; four need a data step (a re-key, a re-encryption, two new
+auth models, regenerated RLS policies). See [Upgrading](#upgrading).
+:::
+
+Basalt 1.12 is the release that **keeps its word**. Every package makes
+promises — in its README, in its types, in the name of an option — and 1.11 had
+made sure the secure behaviour was the default. What nobody had checked
+systematically was whether the default did what the promise said. So an
+independent audit, in two passes, read each package's source next to its
+documentation and turned every mismatch it found into a failing test against
+the published build.
+
+It found eighty. Ten were rated high, and none of them looked like a security
+bug from the outside — each was a sentence the framework said about itself. The
+README promised `audit.verify()` would detect a forged row, and a row inserted
+straight into the table passed. `idempotencyPlugin` was documented for `route()`
+handlers, and a handler that *returned* its payload — the shape every example
+uses — ran again on every retry. A policy for `project:constructor` resolved
+through `Object.prototype` and authorized anyone. `meta.teamRole: 'Admin'`, a
+typo for `'admin'`, ranked zero and admitted every member. `swap()` moved a free
+subscription onto a paid plan without charging it. `@basaltkit/env` said an
+unset `NODE_ENV` was production and `@basaltkit/auth` said it was development.
+
+All eighty are closed. Each real defect was reproduced with a failing test
+before it was fixed, and that test now lives in the package's own suite; a
+hypothesis that did not reproduce is documented, not "fixed". The
+theme is the gap between declared and actual behaviour, and it runs through
+every item below: a single-tenant key that could not be a tenant's name, a
+resolver that could not be overruled by a header, three adapters that send the
+same bytes for the same route, an MCP endpoint that knows which session it is
+talking to.
+
+## Highlights
+
+### Promises the code now keeps
+- **The audit trail detects what the README said it detects.** `verify()` now
+  also reads a tenant's rows outside its chain: a row written after the chain
+  began without a place in it fails with `unchained-entry` and is listed in
+  `unverified`; `verify({ expectedHead })` anchors the head so a deleted tail is
+  `truncated`, not silent. Payloads are deep-frozen, the redactor matches secret
+  keys on their words (`privateKey`, `client_secret`, `dsn`…) and pseudonymises
+  international phone numbers as documented, and store filters are validated —
+  `?tenantId[not]=x` can no longer reach a Prisma `where`. *(`@basaltkit/audit`
+  2.0, `audit-prisma` / `audit-sqlite` 2.0)*
+- **`idempotencyPlugin` replays handlers that return a value.** Only handlers
+  that called `reply.send()` themselves were covered; every other route ran on
+  every retry of the same `Idempotency-Key` and reported a spurious 500.
+  *(`@basaltkit/fastify` 2.5)*
+- **A permission check answers only the question it was asked.** Policy lookups
+  no longer walk the prototype, a check authorizes only when it returns exactly
+  `true`, only an exact `resource:action` selects a policy check, a missing user
+  id is a 401 rather than a shared bucket, and a permission with an empty segment
+  (`'projects:'`) matches nothing. With tenancy active, a write with no tenant
+  and no scope throws `PERMISSION_SCOPE_REQUIRED` instead of quietly granting
+  platform-wide. *(`@basaltkit/permissions` 3.0)*
+- **A typo'd role fails the boot.** An unknown `meta.teamRole` used to rank zero
+  and admit everyone; now it makes every adapter refuse to start with
+  `InvalidRouteMetaError`, naming the route. An unranked role is matched exactly,
+  and "one pending invitation per e-mail" is case-insensitive. *(`@basaltkit/teams`
+  4.0)*
+- **One `NODE_ENV` rule everywhere.** `isProductionEnvironment()` is the single
+  fail-closed policy: only an explicit `development` or `test` is not
+  production. `auth` applies its 32-character secret floor and `Secure` cookies
+  under it, `mailer` stops logging mail bodies, and `queue` warns about an
+  implicit sync driver. *(`@basaltkit/core` 1.5, `auth` 4.0, `mailer` 2.1,
+  `queue` 3.0)*
+- **The single-tenant key cannot be a tenant.** `SINGLE_TENANT_SCOPE` was
+  `'default'` — a valid tenant id, so a request naming the tenant `default`
+  reached a single-tenant app's records. It is `'@single'` in files, comments,
+  search and drives, and a tenant equal to it is refused. *(`@basaltkit/files`
+  5.0, `comments` 4.0, `search` 2.0, `drives` 0.3)*
+- **Storage keys name one object on every driver.** A tenant segment must be
+  canonical (`Acme` and `acme` shared a directory on a case-insensitive disk),
+  every scoped disk fails closed without a tenant (a hand-built `new Disk()`
+  used to fall back to the bucket root), keys with `.` or empty segments are
+  refused, and a copy from a tenant disk cannot land in another tenant's tree.
+  *(`@basaltkit/storage` 4.0)*
+- **Webhook deliveries keep their identity.** Outbox deliveries carry a stable
+  id across retries, permanent failures stop being re-dispatched to healthy
+  endpoints (`onPermanentFailure`), each retry is signed with its own timestamp,
+  and `register()` validates the endpoint — URL, scheme, a secret of at least 16
+  characters, events — instead of storing one that fails on every delivery.
+  *(`@basaltkit/webhooks` 3.0)*
+
+### Who is asking, and on whose behalf
+- **The Host decides the tenant, not a header.** `subdomainResolver`,
+  `domainResolver` and `routeResolver` are authoritative: they run before any
+  fallback, and a name that does not exist resolves to no tenant instead of
+  deferring to `x-tenant-id`. The tenant-id grammar applies to resolution and
+  `run()`, `normalizeDomain()` validates instead of URL-parsing
+  (`acme.basalt.app@evil.com` became `evil.com`), unverified domain claims
+  expire, and `CustomDomains.reverify()` lets a lapsed domain change hands.
+  *(`@basaltkit/tenancy` 3.0)*
+- **A social login is bound to the provider's subject.** Account links
+  (provider + subject → user) replace matching by e-mail alone; a second account
+  at the same IdP claiming a linked e-mail gets `409 AUTH_ACCOUNT_LINK_CONFLICT`.
+  OIDC providers can be restricted to their e-mail domains — required once more
+  than one provider is configured — and `id_token` `aud`, `exp` and `iss` are
+  checked. *(`@basaltkit/auth` 4.0)*
+- **Passkeys and TOTP secrets hold under concurrency and tampering.** The
+  WebAuthn counter is written by compare-and-set, so a cloned authenticator
+  racing the genuine one loses; `remove()` checks the owner; the challenge is
+  bound to the user. TOTP secrets are sealed with AES-256-GCM under an
+  HKDF key ring with the user id as associated data, and a value that is not an
+  envelope is refused rather than read as plaintext. *(`@basaltkit/auth` 4.0,
+  `auth-prisma` / `auth-sqlite` 2.0)*
+- **SAML responses belong to the browser that asked, signed with SHA-2.**
+  `samlRoutes()` bind each login to an HttpOnly cookie (login CSRF), node-saml
+  errors are a 400, and SHA-1 signatures and digests are refused by default.
+  *(`@basaltkit/auth-saml` 3.0)*
+- **A job runs as its dispatcher, and nothing else.** The worker rebuilds the
+  context from an allowlist — request ids, a validated tenant, `userId` restored
+  as `user: { id }` so audit entries name an actor — instead of spreading
+  whatever the broker held. Envelopes can be HMAC-signed (`signingKey`), and a
+  second definition under a taken job name throws. The Redis realtime backplane
+  can be signed too, and `subscribe()` re-checks the connection after its async
+  gate. *(`@basaltkit/queue` 3.0, `queue-bullmq` 1.1, `queue-rabbitmq` 1.4,
+  `queue-sqs` 1.3, `realtime` 1.5)*
+
+### Money, indexes and rows
+- **Billing charges before it grants.** `swap()` onto a paid plan from a
+  subscription with no gateway behind it throws `402 BILLING_PAYMENT_REQUIRED`;
+  usage amounts must be positive integers in every store; a webhook for a
+  replaced gateway subscription no longer cancels the active one; Lemon Squeezy
+  renewals are no longer dropped as duplicates; Paddle and Lemon Squeezy
+  signatures are read from their own headers, and both go through `checkout()`.
+  Coupons, invoices and the payment ledger validate their inputs.
+  *(`@basaltkit/subscriptions` 5.0, `subscriptions-prisma` / `-sqlite` 3.0)*
+- **A rebuild clears only what it can refill.** `reindex()` never files a
+  tenant-less row under the calling tenant, validates every row before it
+  clears anything, and inside a tenant rebuilds only that tenant — a
+  whole-index rebuild says `{ all: true }`. Paging and filters are bounded and
+  validated. Elasticsearch documents with URL-special characters in their id are
+  addressed by one `_id` again. *(`@basaltkit/search` 2.0, `search-elasticsearch`
+  2.0, `search-postgres` 1.2)*
+- **The tenant pool never disconnects a client in use.** `TenantClientPool`
+  evicts only idle clients and, when every client is busy, waits and then answers
+  `503 PRISMA_POOL_EXHAUSTED` — the cap is never exceeded. RLS policies compare
+  against `NULLIF(current_setting(…), '')`, a switched tenant without a client
+  fails closed, and class DTOs are scoped like plain objects. *(`@basaltkit/prisma`
+  3.0)*
+- **MySQL stops truncating silently.** Every `*-prisma` package ships a
+  `schema.mysql.prisma` with the free-text columns widened, `basalt prisma:sync`
+  copies it for a MySQL datasource, and an opt-in `columnLimits: 'mysql'` refuses
+  an over-long value with `COLUMN_LENGTH_EXCEEDED` instead of writing a cut hash.
+  Tenancy saves are atomic, and webhook endpoints are keyed by tenant.
+  *(`@basaltkit/prisma` 3.0, `tenancy-prisma` 2.0, `webhooks-prisma` 2.0, and the
+  other `*-prisma` stores)*
+
+### Three adapters, one wire
+- **The same route sends the same bytes on Fastify, Express and Hono.** A string
+  is `text/plain` on all three (Express served it as `text/html` — a reflected
+  XSS on that adapter only); JSON is `application/json` or `+json` by exact
+  media type; a malformed body is a 400; a repeated query key is an array; the
+  body limit is 1 MiB; `sse()` keeps the CORS and security headers set before
+  it; after-hooks run for abandoned responses. A shared parity suite holds it.
+  *(`@basaltkit/http` 2.6, `fastify` 2.5, `express` 2.0, `hono` 2.0)*
+- **Route meta is validated at boot.** Plugins register validators for the
+  values their meta keys carry (`http:meta-validators`), and side-effect-free
+  visibility checks (`http:route-visibility`) let a listing hide what a caller
+  could never pass. `expose = false` keeps an upstream reply out of a 502.
+  *(`@basaltkit/http` 2.6)*
+
+### MCP over a network
+- **`/mcp` knows its caller and its session.** A foreign `Origin` gets 403, a
+  body that is not JSON gets 415, a tool call receives an allowlist of headers
+  instead of all of them, and a 4xx from the handler is an `isError` result.
+  `initialize` issues an `Mcp-Session-Id` bound to the caller, so a cancellation
+  in a later POST reaches the call it names and no other; `tools/list` hides what
+  the caller could not use. *(`@basaltkit/mcp` 4.0)*
+- **The MCP core refuses to be reachable by accident.** `serveHttp` will not
+  bind off loopback without `authorize`, caps request bodies, never answers a
+  notification, supports JSON-RPC batches and real stdio elicitation — so
+  `basalt_make` in `ai-mcp` refuses an `apply` it cannot confirm instead of
+  writing silently. *(`@basaltkit/mcp-core` 0.4, `ai-mcp` 0.2)*
+- **External drives stay inside their root.** Listing cursors are signed to
+  their tenant and connection (a Graph cursor is a URL fetched with the
+  connection's token), a `rootId` confines every call, and the three adapters
+  reach 1.0. *(`@basaltkit/drives` 0.3, `drives-dropbox` / `drives-google` /
+  `drives-microsoft` 1.0)*
+
+### Docs
+- Every guide the fixes touched was updated, in English and Portuguese: [wire
+  behaviour on the three adapters](/guide/adapters#wire-behaviour-—-identical-on-all-three),
+  [MCP sessions and cancellation](/guide/mcp#sessions-and-cancellation) and
+  [what `tools/list` shows](/guide/mcp#what-tools-list-shows), [the trust
+  boundary in a queue worker](/guide/queues#context-in-the-worker-—-and-the-trust-boundary),
+  [permission writes that need a tenant](/guide/authorization#writes-need-a-tenant-or-an-explicit-scope),
+  [MySQL persistence](/guide/persistence#mysql), [rebuilding a search
+  index](/guide/search#rebuilding-an-index), [encrypting TOTP secrets at
+  rest](/guide/auth#mfa-encryption) and [upgrading drives from
+  0.2.x](/guide/drives#upgrading-from-0-2-x).
+
+## Upgrading
+
+Packages are independent — bump only what you use. Each changeset carries its
+full migration notes in the package's `CHANGELOG.md`; below are the changes most
+likely to reach an application.
+
+### Defaults that now refuse
+
+| Package | What refuses | Opt-out / fix |
+| --- | --- | --- |
+| `auth` 4 | an unset `NODE_ENV` with a secret under 32 characters (`AUTH_WEAK_SECRET`); session cookies are `Secure`; several OAuth providers where an OIDC one declares no e-mail domains; a second IdP account claiming a linked e-mail (`409`); two different API keys on one request (`400`) | `NODE_ENV=development` locally, `sessionCookie: { secure: false }`; `allowedEmailDomains` or `allowAnyEmailDomain: true`; `oauthPlugin({ subjectConflict: 'link' })`; send one key |
+| `mailer` 2.1 | mail bodies in the log with `NODE_ENV` unset | `NODE_ENV=development` or `logBody: true` |
+| `tenancy` 3 | a header overriding a Host resolver; an unknown subdomain falling through to the header; ids outside the grammar in resolution and `run()`; non-hostnames in `normalizeDomain()` | `authoritative(fn)` for a trusted custom resolver; widen `validateTenantId`; IDNs in `xn--` form |
+| `permissions` 3 | scope-less writes outside a tenant when tenancy is active; permissions with an empty segment; three-segment permissions against a policy; `grantTemporarily()` without a deadline | pass `GLOBAL_SCOPE` explicitly or `allowGlobalWrites: true`; `ttlMs` / `expiresAt` |
+| `storage` 4 | a hand-built `Disk` or custom scope with no tenant; non-canonical tenant ids in the default scope; keys like `a//b`, `./a`, a trailing `/`; a scoped → central copy into `tenants/` | `scope: null` or `onMissingScope: 'root'`; a custom `scope` that maps ids; build keys with `parts.join('/')` |
+| `files` 5 | HTML, SVG, XML or executables uploaded as `application/octet-stream` | declare the type and let `allowedTypes` judge it |
+| `webhooks` 3 | `register()` with a bad URL, a secret under 16 characters or no events (`WEBHOOK_ENDPOINT_INVALID`); an id held by another tenant (`409`) | validate input first; hook `onPermanentFailure` to alert on failures the outbox no longer retries |
+| `mcp` 4 | a foreign `Origin` (`403`); a non-JSON body (`415`); a later POST without its `Mcp-Session-Id` (`400` / `404`) | `mcpRoutes({ allowedOrigins })`; `mcpRoutes({ sessions: false })`; add `Mcp-Session-Id` to CORS `exposeHeaders` for browser clients |
+| `mcp-core` 0.4 / `ai-mcp` 0.2 | `serveHttp` off loopback without `authorize`; bodies over 1 MiB; an `apply` that cannot be confirmed | `authorize` / `allowRequest`, `maxBodyBytes`; `--token`; `--allow-unconfirmed-apply` |
+| `auth-saml` 3 | SHA-1 signatures and digests; a response not bound to the browser that started the login; a configured `emailAttribute` that is missing | `allowSha1: true` per provider; `bindToBrowser: false`; fix the attribute name |
+| `teams` 4 | an unknown `meta.teamRole` or `tenantMembershipPlugin({ role })` — the app does not boot | fix the role, or rank it in `roleRank` |
+| `queue` 3 | two different jobs under one name; `attempts: 0`; job context with a tenant outside the grammar | rename, or `queuedOn(…, { name })`; `attempts` ≥ 1; pass the same `validateTenantId` to the queue plugin |
+| `subscriptions` 5 | `swap()` onto a paid plan with no gateway subscription (`402`); `subscribe()` to a paid plan on Paddle or Lemon Squeezy (`501`); non-positive-integer usage | `swap(id, plan, { allowUnpaid: true })`; `checkout()` |
+| `search` 2 | a bare `reindex()` outside a tenant when tenancy is registered; `limit` over 1000, `offset` over 10000; filters on undeclared fields or with `null` values | `reindex(name, { all: true })`; `searchPlugin({ maxLimit, maxOffset })`; declare the field `filterable` |
+| `prisma` 3 | a new tenant while every pooled client is in use — `503` after `acquireTimeoutMs` | size `max` for concurrently active tenants; keep `idleMs` above the longest request, or `pool.use(tenantId, fn)` |
+| `audit` 2 | `verify()` / `verifyAll()` fail for rows outside the chain written after it began | `legacyUntil` for a known, benign source such as a rolling deploy |
+
+### Data steps
+
+**The `'@single'` sentinel.** A single-tenant app with persisted records re-keys
+them once, or they read as missing. Skip it if `default` was ever a real tenant
+in that database — those rows belong to it.
+
+```sql
+UPDATE files         SET "tenantId" = '@single' WHERE "tenantId" = 'default';
+UPDATE file_versions SET "tenantId" = '@single' WHERE "tenantId" = 'default'; -- with files-versions
+UPDATE comments      SET "tenantId" = '@single' WHERE "tenantId" = 'default'; -- comments-prisma
+UPDATE comments      SET tenant_id  = '@single' WHERE tenant_id  = 'default'; -- comments-sqlite
+```
+
+The search index is derived data: rebuild it (`search.reindex(name)`), or with
+`search-postgres` re-key in place. Drive connections cannot be re-keyed with SQL
+— each secret is sealed with its tenant as associated data — so re-seal them with
+`DriveSecretBox` as the `@basaltkit/drives` changelog shows, then move the import
+ledger.
+
+**MFA secrets.** Keys must be at least 32 bytes, and rows sealed before 1.12 are
+refused. Upgrade with a temporary opt-in, re-encrypt, then remove it:
+
+```ts
+authPlugin({
+  mfaEncryption: {
+    keys: [{ id: '2026-09', key: NEW_KEY_32_BYTES }],
+    legacy: { v1Keys: [OLD_MFA_ENCRYPTION_KEY], plaintext: true },
+  },
+})
+for (const userId of usersWithMfa) await auth.reencryptMfaSecret(userId)
+// then drop `legacy`
+```
+
+**Two new auth models.** `@basaltkit/auth-prisma` adds `AuthAccountLink` and
+`AuthPasskey` — `basalt prisma:sync`, then a migration (in every tenant schema
+with schema-per-tenant; MySQL apps take them from `schema.mysql.prisma`). Then
+run `normalizeAuthUserEmails(prisma, { dryRun: true })`, again without `dryRun`,
+and merge any reported `conflicts` — until then those e-mails throw
+`AUTH_EMAIL_AMBIGUOUS`. `@basaltkit/auth-sqlite` creates the tables in
+`migrate()`. Configure a durable `accountLinks` store: existing users are linked
+on their next login by verified e-mail.
+
+**RLS policies.** `rlsPolicySql` and `rlsSearchFunctionSql` now compare against
+`NULLIF(current_setting(…, true), '')`. Re-run the generated SQL — both are
+idempotent — in a new migration.
+
+**Smaller ones.** Paddle and Lemon Squeezy subscriptions created through
+`subscribe()` carry a checkout id as `gatewayRef`: clear it or set the real
+`sub_…` id. Elasticsearch documents indexed one at a time with URL-special
+characters in their tenant or id need one `reindex(name, { all: true })`. Stored
+grants with an empty permission segment never granted anything and can be
+deleted.
+
+### Express and Hono change what a client receives
+
+On **Express**: return HTML with an explicit `content-type`; send JSON with a
+JSON media type; an empty JSON body is now `undefined`, so default it in the
+schema (`z.object({…}).default({})`); routing is case-sensitive and strict and
+the query parser is `simple` — pass your own `app` if you relied on the old
+behaviour. On **Hono**: read a repeated query key as `string | string[]`;
+`request.url` is the path and query string, so build an absolute URL with
+`new URL(request.url, base)`; a malformed JSON body is a 400 before the handler;
+pass `errorHandler: false` if you install your own `onError`.
+
+### Custom stores, drivers and gateways implement more
+
+A custom `PasskeyStore` must implement `compareAndSetCounter` (the service
+refuses to start without it). A custom `BillingGateway` implements
+`resumeSubscription` or `resume()` throws, and `CouponStore.incrementRedemptions`
+takes a `limit` and may return `null`. Optional, but worth it:
+`SearchDriver.clearTenant` (tenant-scoped rebuilds), `AuditStore.auditTenants`,
+`DomainStore.replace` / `listVerified`, and `replayKey` from a custom drive
+adapter. Hand-written Prisma clients and test fakes need `$transaction`
+(`tenancy-prisma`) and `create` / `updateMany` (`webhooks-prisma`,
+`auth-prisma`); a generated `PrismaClient` already has them.
+
+### MySQL column limits are opt-in
+
+Nothing changes on PostgreSQL or SQLite, or on MySQL until you ask. To adopt it,
+let `basalt prisma:sync` copy the `schema.mysql.prisma` variants, migrate, and
+pass `columnLimits: 'mysql'` to the store factories. The
+[MySQL guide](/guide/persistence#mysql) has the details.
+
+---
+
+## Previously — Basalt 1.11
+
+> *The release that **fails closed**: composition bugs from a second security
+> audit, fourteen majors that make secure behaviour the default, streaming on every
+> adapter, a verifiable audit trail, and two new packages — backup and drives.*
 
 ::: warning Fourteen packages publish a major
 This wave changes secure defaults. `auth` 3, `auth-saml` 2, `env` 3,
@@ -10,7 +330,7 @@ This wave changes secure defaults. `auth` 3, `auth-saml` 2, `env` 3,
 `audit-viewer` 3, `webhooks` 2, `subscriptions` 4, `teams` 3 and `mcp` 3 each
 break something that used to work *because* it used to work without being asked.
 The rule for every one of them: a working app breaks without a code, config or
-data change. See [Upgrading](#upgrading) — most edits are one option, two need a
+data change. See [Upgrading to 1.11](#upgrading-to-1-11) — most edits are one option, two need a
 data migration.
 :::
 
@@ -35,8 +355,6 @@ root; a raw query inside a tenant refuses instead of seeing everything; an
 unset `NODE_ENV` counts as production instead of development. Nothing in this
 list is a new capability. Every one of them is a capability that used to be
 opt-in becoming the thing you have to opt *out* of.
-
-## Highlights
 
 ### Composition bugs the audit found
 - **API keys are bound to their tenant.** A key issued inside a tenant is
@@ -175,12 +493,12 @@ opt-in becoming the thing you have to opt *out* of.
   and the cookbook were corrected where they contradicted it.
 - Guides for [backups](/guide/backup) and [external drives](/guide/drives).
 
-## Upgrading
+### Upgrading to 1.11
 
 Packages are independent — bump only what you use. Every major below has an
 explicit opt-out named next to it; prefer fixing the app.
 
-### Defaults that now refuse
+#### Defaults that now refuse
 
 | Package | What refuses | Opt-out / fix |
 | --- | --- | --- |
@@ -197,7 +515,7 @@ explicit opt-out named next to it; prefer fixing the app.
 | `auth-saml` 2 | assertions for other domains; IdP-initiated responses; node-saml < 5.1 | `allowedEmailDomains`, `validateInResponseTo: 'ifPresent'` |
 | `mcp` 3 | full `process.env` to spawned servers | `env` allow-list on the client |
 
-### Two data migrations
+#### Two data migrations
 
 **Permissions.** Grants written under the pre-2.0 global scope are no longer
 read. Rename them once:
@@ -217,7 +535,7 @@ canonical (`acme`, `acme_co` keep their names; `Acme Co` becomes
 the old name and must be renamed once — the `@basaltkit/prisma` README has the
 statement. Canonical ids are unaffected.
 
-### Columns that are added, never required
+#### Columns that are added, never required
 
 `@basaltkit/audit-prisma` 1.2 adds nullable `ip`, `userAgent`, `chain`, `seq`,
 `prevHash`, `hash` and a unique `(chain, seq)`; they are written only when
@@ -226,14 +544,14 @@ statement. Canonical ids are unaffected.
 Run `basalt prisma:sync` and a migration; the SQLite stores add the columns
 themselves.
 
-### `GLOBAL_SCOPE` is a constant, not a string
+#### `GLOBAL_SCOPE` is a constant, not a string
 
 If any code spells `'global'` — a seed script, a CLI command, a test — it now
 grants into a scope nobody reads. Import `GLOBAL_SCOPE` from
 `@basaltkit/permissions`. The [multi-tenant pattern](/guide/multi-tenant-pattern#rule-7-—-one-permissions-system-scoped-by-plane)
 has the shape.
 
-### `sharp` and `nodemailer`
+#### `sharp` and `nodemailer`
 
 `@basaltkit/image-sharp` 1.1.4 requires a patched `sharp` (libheif
 vulnerabilities); `@basaltkit/mailer-smtp` 1.0.1 accepts nodemailer 9 and 10.
