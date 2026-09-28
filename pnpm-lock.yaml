@@ -1134,8 +1134,8 @@ importers:
         specifier: workspace:^
         version: link:../auth
       '@basaltkit/auth-prisma':
-        specifier: ^1.5.1
-        version: 1.5.1(@basaltkit/auth@packages+auth)
+        specifier: workspace:^
+        version: link:../auth-prisma
       '@basaltkit/cli':
         specifier: workspace:^
         version: link:../cli
@@ -1170,20 +1170,20 @@ importers:
         specifier: workspace:^
         version: link:../subscriptions
       '@basaltkit/subscriptions-prisma':
-        specifier: ^2.2.3
-        version: 2.2.3(@basaltkit/subscriptions@packages+subscriptions)
+        specifier: workspace:^
+        version: link:../subscriptions-prisma
       '@basaltkit/teams':
         specifier: workspace:^
         version: link:../teams
       '@basaltkit/teams-prisma':
-        specifier: ^1.0.3
-        version: 1.0.3(@basaltkit/teams@packages+teams)
+        specifier: workspace:^
+        version: link:../teams-prisma
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
       '@basaltkit/tenancy-prisma':
-        specifier: ^1.2.0
-        version: 1.2.0(@basaltkit/tenancy@packages+tenancy)
+        specifier: workspace:^
+        version: link:../tenancy-prisma
       '@basaltkit/testing':
         specifier: workspace:^
         version: link:../testing
@@ -3098,34 +3098,6 @@ packages:
   '@babel/types@7.29.8':
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
-
-  '@basaltkit/auth-prisma@1.5.1':
-    resolution: {integrity: sha512-z8KubEHmix0m/vN1eUvAzYEDehYWRqFxcx5Ymi+xGWPFDOOnaoYKNNqA8VUnCVu7LguBySZavPUQVtIbJOdpMQ==}
-    engines: {node: '>=22.5.0'}
-    peerDependencies:
-      '@basaltkit/auth': ^2.2.0
-
-  '@basaltkit/core@1.3.1':
-    resolution: {integrity: sha512-9zFMzURK+3a62o62mwo/fFCx/OipPKNkIMs8lIl1TvkarULNC9akUp0eV9Fq9q9mJQ9+JELV5Dbkg0wf5JXjoA==}
-    engines: {node: '>=22.5.0'}
-
-  '@basaltkit/subscriptions-prisma@2.2.3':
-    resolution: {integrity: sha512-5Dod66DkEJTtkVL7089vlQeYwyPZM55ie4ONUdTnO1KDZbdxQfQJ6JViPULt/4vz9LdpzHufubGJJfQvC6cdtg==}
-    engines: {node: '>=22.5.0'}
-    peerDependencies:
-      '@basaltkit/subscriptions': ^3.0.0
-
-  '@basaltkit/teams-prisma@1.0.3':
-    resolution: {integrity: sha512-o9ihsRSImu5XsgUOs/NKDCitOOWclBwf0Ivd9NMDsSW8YeS9h4XLTInn3zLcHJuWrqxV/vy+BjmIV1TZMfPUTQ==}
-    engines: {node: '>=22.5.0'}
-    peerDependencies:
-      '@basaltkit/teams': ^2.0.0
-
-  '@basaltkit/tenancy-prisma@1.2.0':
-    resolution: {integrity: sha512-jytQBWf9kJlVeTk2Pd+/ty7J2vLjCJI0vbbgUbkoCgm3DiumzlwU8AgFbgDmZojkHZmOUTqv/I3sRKopGnlWKA==}
-    engines: {node: '>=22.5.0'}
-    peerDependencies:
-      '@basaltkit/tenancy': ^1.11.0
 
   '@bcoe/v8-coverage@1.0.2':
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
@@ -8127,25 +8099,6 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
-
-  '@basaltkit/auth-prisma@1.5.1(@basaltkit/auth@packages+auth)':
-    dependencies:
-      '@basaltkit/auth': link:packages/auth
-      '@basaltkit/core': 1.3.1
-
-  '@basaltkit/core@1.3.1': {}
-
-  '@basaltkit/subscriptions-prisma@2.2.3(@basaltkit/subscriptions@packages+subscriptions)':
-    dependencies:
-      '@basaltkit/subscriptions': link:packages/subscriptions
-
-  '@basaltkit/teams-prisma@1.0.3(@basaltkit/teams@packages+teams)':
-    dependencies:
-      '@basaltkit/teams': link:packages/teams
-
-  '@basaltkit/tenancy-prisma@1.2.0(@basaltkit/tenancy@packages+tenancy)':
-    dependencies:
-      '@basaltkit/tenancy': link:packages/tenancy
 
   '@bcoe/v8-coverage@1.0.2': {}
 
