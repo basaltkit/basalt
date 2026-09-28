@@ -1,4 +1,9 @@
 import type { AccessStore } from '@basaltkit/permissions'
+import { assertColumnLengths, type ColumnLimits, MYSQL_VARCHAR_DEFAULT as V, resolveColumnLimits } from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/permissions-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/permissions` `AccessStore` for
@@ -35,8 +40,64 @@ export interface PrismaPermissionsClient {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+/**
+ * Direct writes validate what they persist: an empty or non-string user id,
+ * role name or scope is refused with a `TypeError` instead of being written.
+ * `''`, `null` and `undefined` would otherwise collapse into one shared
+ * "nobody" key whose grants are honoured for every caller with a missing id.
+ * (The Gate validates too; these guards cover code that writes to the store
+ * directly — seed scripts, admin tools, migrations.)
+ */
+function assertKey(value: unknown, what: string, operation: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${operation}: ${what} must be a non-empty string`)
+  }
+}
+
+function assertPermissionList(value: unknown, operation: string): asserts value is string[] {
+  if (!Array.isArray(value) || !value.every((p) => typeof p === 'string' && p.length > 0)) {
+    throw new TypeError(`${operation}: permissions must be an array of non-empty strings`)
+  }
+}
+
+export type PermissionsColumnLimits = ColumnLimits<{
+  PermUserRole: 'scope' | 'userId' | 'role'
+  PermUserPermission: 'scope' | 'userId' | 'permission'
+  PermRolePermission: 'scope' | 'role' | 'permission'
+}>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Every column is part of a composite primary key, so all
+ * stay VARCHAR(191). Spread it to override one column after widening it.
+ */
+export const permissionsMysqlColumnLimits: PermissionsColumnLimits = {
+  PermUserRole: { scope: V, userId: V, role: V },
+  PermUserPermission: { scope: V, userId: V, permission: V },
+  PermRolePermission: { scope: V, role: V, permission: V },
+}
+
+export interface PrismaAccessStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode two
+   * long permission names cut to the same prefix collapse into one grant.
+   * `'mysql'` uses the limits of the bundled `schema.mysql.prisma`; pass an
+   * object for a schema of your own. Default: unchecked (PostgreSQL and
+   * SQLite store any length).
+   */
+  columnLimits?: 'mysql' | PermissionsColumnLimits
+}
+
 export class PrismaAccessStore implements AccessStore {
-  constructor(private readonly client: PrismaPermissionsClient) {}
+  private readonly limits: PermissionsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaPermissionsClient,
+    options: PrismaAccessStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, permissionsMysqlColumnLimits)
+  }
 
   async getUserRoles(userId: string, scope: string): Promise<string[]> {
     const rows = await this.client.permUserRole.findMany({ where: { scope, userId } })
@@ -54,14 +115,28 @@ export class PrismaAccessStore implements AccessStore {
   }
 
   async assignRole(userId: string, role: string, scope: string): Promise<void> {
+    assertKey(userId, 'userId', 'assignRole')
+    assertKey(role, 'role', 'assignRole')
+    assertKey(scope, 'scope', 'assignRole')
+    assertColumnLengths(PKG, this.limits, 'PermUserRole', { scope, userId, role })
     await this.client.permUserRole.createMany({ data: [{ scope, userId, role }], skipDuplicates: true })
   }
 
   async removeRole(userId: string, role: string, scope: string): Promise<void> {
+    assertKey(userId, 'userId', 'removeRole')
+    assertKey(role, 'role', 'removeRole')
+    assertKey(scope, 'scope', 'removeRole')
     await this.client.permUserRole.deleteMany({ where: { scope, userId, role } })
   }
 
   async grantToRole(role: string, permissions: string[], scope: string): Promise<void> {
+    assertKey(role, 'role', 'grantToRole')
+    assertPermissionList(permissions, 'grantToRole')
+    assertKey(scope, 'scope', 'grantToRole')
+    // Every row is checked before the batch is written, so a refused grant writes none of it.
+    for (const permission of permissions) {
+      assertColumnLengths(PKG, this.limits, 'PermRolePermission', { scope, role, permission })
+    }
     await this.client.permRolePermission.createMany({
       data: permissions.map((permission) => ({ scope, role, permission })),
       skipDuplicates: true,
@@ -69,6 +144,12 @@ export class PrismaAccessStore implements AccessStore {
   }
 
   async grantToUser(userId: string, permissions: string[], scope: string): Promise<void> {
+    assertKey(userId, 'userId', 'grantToUser')
+    assertPermissionList(permissions, 'grantToUser')
+    assertKey(scope, 'scope', 'grantToUser')
+    for (const permission of permissions) {
+      assertColumnLengths(PKG, this.limits, 'PermUserPermission', { scope, userId, permission })
+    }
     await this.client.permUserPermission.createMany({
       data: permissions.map((permission) => ({ scope, userId, permission })),
       skipDuplicates: true,
@@ -85,7 +166,7 @@ export interface PrismaPermissionsStores {
  * `permissionsPlugin`:
  *
  * ```ts
- * const p = prismaAccessStore(prisma)
+ * const p = prismaAccessStore(prisma) // on MySQL: prismaAccessStore(prisma, { columnLimits: 'mysql' })
  * permissionsPlugin({ store: p.store })
  * ```
  */
@@ -106,7 +187,10 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaAccessStore(client: PrismaPermissionsClient): PrismaPermissionsStores {
-  ensureModel(client, 'permUserRole', '@basaltkit/permissions-prisma')
-  return { store: new PrismaAccessStore(client) }
+export function prismaAccessStore(
+  client: PrismaPermissionsClient,
+  options: PrismaAccessStoreOptions = {},
+): PrismaPermissionsStores {
+  ensureModel(client, 'permUserRole', PKG)
+  return { store: new PrismaAccessStore(client, options) }
 }

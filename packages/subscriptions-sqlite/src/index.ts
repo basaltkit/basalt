@@ -4,6 +4,7 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
+import { assertUsageAmount } from '@basaltkit/subscriptions'
 import type {
   BillingPeriod,
   NewPayment,
@@ -230,6 +231,8 @@ export class SqliteUsageStore implements UsageStore {
   }
 
   async increment(billableId: string, feature: string, periodKey: string, amount: number): Promise<number> {
+    // Positive integers only (a negative amount refunds quota, NaN poisons the counter).
+    assertUsageAmount(amount)
     const row = this.db
       .prepare(
         `INSERT INTO usage_counters (billable_id, feature, period_key, value) VALUES (?, ?, ?, ?)
@@ -247,6 +250,7 @@ export class SqliteUsageStore implements UsageStore {
     amount: number,
     limit: number,
   ): Promise<UsageConsumeResult> {
+    assertUsageAmount(amount)
     // BEGIN IMMEDIATE takes the write lock up front, so the read-check-write is
     // atomic across connections — no concurrent caller can overshoot the limit.
     this.db.exec('BEGIN IMMEDIATE')

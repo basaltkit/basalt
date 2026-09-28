@@ -68,6 +68,7 @@ export interface StripeGatewayOptions {
  */
 export class StripeBillingGateway implements BillingGateway {
   readonly name = 'stripe'
+  readonly signatureHeader = 'stripe-signature'
   private readonly fetch: typeof fetch
   private readonly now: () => number
   private readonly tolerance: number
@@ -142,6 +143,12 @@ export class StripeBillingGateway implements BillingGateway {
     return { url: String((created as { url?: string }).url) }
   }
 
+  async resumeSubscription(gatewayRef: string): Promise<void> {
+    await this.request('POST', `/v1/subscriptions/${gatewayRef}`, {
+      cancel_at_period_end: 'false',
+    })
+  }
+
   async swapSubscription(gatewayRef: string, input: SwapInput): Promise<void> {
     // Stripe updates a subscription by its item id, so fetch the current item first.
     const sub = (await this.request('GET', `/v1/subscriptions/${gatewayRef}`)) as {
@@ -166,22 +173,32 @@ export class StripeBillingGateway implements BillingGateway {
     const secret = requireWebhookSecret('StripeBillingGateway', this.options.webhookSecret)
     if (!signature) throw new WebhookInvalidError()
 
-    const parts = Object.fromEntries(
-      signature.split(',').map((pair) => {
-        const index = pair.indexOf('=')
-        return [pair.slice(0, index), pair.slice(index + 1)]
-      }),
-    ) as { t?: string; v1?: string }
-    const timestamp = Number(parts.t)
-    if (!Number.isFinite(timestamp) || !parts.v1) throw new WebhookInvalidError()
+    // `t=…,v1=…[,v1=…]` — while a signing secret is being rolled, Stripe sends
+    // one `v1` per active secret, so every one of them is a candidate (keeping
+    // only the last rejected genuine deliveries signed with the other secret).
+    let t: string | undefined
+    const candidates: string[] = []
+    for (const pair of signature.split(',')) {
+      const index = pair.indexOf('=')
+      if (index < 0) continue
+      const key = pair.slice(0, index).trim()
+      const value = pair.slice(index + 1).trim()
+      if (key === 't') t = value
+      else if (key === 'v1' && value !== '') candidates.push(value)
+    }
+    const timestamp = Number(t)
+    if (t === undefined || t === '' || !Number.isFinite(timestamp) || candidates.length === 0) {
+      throw new WebhookInvalidError()
+    }
 
-    const expected = createHmac('sha256', secret)
-      .update(`${timestamp}.${rawBody}`)
-      .digest('hex')
-    const received = parts.v1
-    const a = Buffer.from(expected)
-    const b = Buffer.from(received)
-    if (a.length !== b.length || !timingSafeEqual(a, b)) throw new WebhookInvalidError()
+    const expected = Buffer.from(
+      createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex'),
+    )
+    const matches = candidates.some((candidate) => {
+      const received = Buffer.from(candidate)
+      return received.length === expected.length && timingSafeEqual(received, expected)
+    })
+    if (!matches) throw new WebhookInvalidError()
 
     if (Math.abs(this.now() / 1000 - timestamp) > this.tolerance) throw new WebhookInvalidError()
 
@@ -192,7 +209,7 @@ export class StripeBillingGateway implements BillingGateway {
       throw new WebhookInvalidError()
     }
 
-    const type = event.type ? EVENT_MAP[event.type] : undefined
+    const type = event.type && Object.hasOwn(EVENT_MAP, event.type) ? EVENT_MAP[event.type] : undefined
     if (!type || !event.id) return null
     const billableId = this.resolveBillableId(event)
     if (!billableId) return null

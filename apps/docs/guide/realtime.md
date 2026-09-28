@@ -58,19 +58,31 @@ const fastify = app.container.get(FASTIFY)
 const hub = app.container.get(REALTIME_HUB)
 await fastify.register(fastifyWebsocket)
 
+const ALLOWED_ORIGINS = new Set(['https://app.example.com'])
+
 fastify.get('/realtime', { websocket: true }, (socket, request) => {
+  // refuse foreign pages first — see "Cross-site WebSocket hijacking" below
+  if (!ALLOWED_ORIGINS.has(String(request.headers.origin))) return socket.close()
   // authenticate the connection (JWT in query, cookie, header…) → tenant + user
   const { tenantId, userId } = authenticate(request)
   const conn = websocketConnection({ tenantId, userId }, socket)
   hub.register(conn)
 
   socket.on('message', async (raw) => {
-    const cmd = JSON.parse(raw.toString()) as { type: 'subscribe' | 'unsubscribe'; channel: string }
+    // every frame is client-controlled; a throw here is an unhandled rejection (fatal on Node)
+    let cmd: { type?: unknown; channel?: unknown }
+    try {
+      cmd = JSON.parse(raw.toString())
+    } catch {
+      return socket.close()
+    }
+    if (typeof cmd?.channel !== 'string') return socket.close()
     if (cmd.type === 'subscribe') {
       const ok = await hub.subscribe(conn.id, cmd.channel) // false = refused
       if (!ok) socket.send(JSON.stringify({ error: 'subscribe_refused', channel: cmd.channel }))
+    } else if (cmd.type === 'unsubscribe') {
+      hub.unsubscribe(conn.id, cmd.channel)
     }
-    if (cmd.type === 'unsubscribe') hub.unsubscribe(conn.id, cmd.channel)
   })
   socket.on('close', () => hub.unregister(conn.id))
 })
@@ -116,11 +128,13 @@ without one is delivered to normally but never appears in `presence()`.
 
 On the wire, a WebSocket connection receives `JSON.stringify({ channel, event, data })`;
 an SSE connection receives an `event: <event>` frame whose `data:` is
-`{ channel, data }`. `@basaltkit/realtime-client` normalises both back to the
+`{ channel, data }` (CR, LF and NUL are stripped from the event name, so an
+event name can never inject extra SSE fields or frames). `@basaltkit/realtime-client` normalises both back to the
 same handler signature.
 
 ::: warning `unregister` is yours to call
-The hub prunes a connection automatically only when its `send` **throws**. A
+The hub prunes a connection automatically only when its `send` **throws** — and
+then also calls its `close()`, so the client sees the drop and reconnects. A
 socket that closes cleanly is still registered until you call
 `hub.unregister(conn.id)` — always wire it to your transport's close event, or
 subscriptions and presence leak for the lifetime of the process.
@@ -130,7 +144,8 @@ subscriptions and presence leak for the lifetime of the process.
 
 `hub.subscribe(connectionId, channel)` is `async` and returns a **boolean**:
 `false` means the subscription was refused. It is refused when the connection id
-is unknown, when the channel name is empty or longer than `maxChannelLength`
+is unknown — or was unregistered or replaced while `authorize` was still
+deciding — when the channel is not a string, when it is empty or longer than `maxChannelLength`
 (default 256), when the connection already holds
 `maxSubscriptionsPerConnection` channels (default 1000), or when the `authorize`
 gate returned `false`. Re-subscribing to a channel you already hold is
@@ -159,8 +174,21 @@ returns instead of assuming success.
 :::
 
 The two caps are DoS bounds, not business rules: they stop one socket from
-allocating unbounded subscription entries with generated channel names. See
+allocating unbounded subscription entries with generated channel names. Both
+the cap and the connection are checked again after `authorize` resolves, so a
+burst of concurrent `subscribe` commands can't overshoot the cap, and a socket
+that closed mid-gate never leaves a ghost subscription behind. See
 [Security](/guide/security) for the request-edge equivalents.
+
+::: danger Cross-site WebSocket hijacking
+Browsers attach cookies to a WebSocket handshake from **any** site, and the
+same-origin policy does not apply to WebSockets. If your socket authenticates
+by cookie, a malicious page can open it as the logged-in user and read every
+event pushed to them — `authorize` can't tell the difference, because it *is*
+that user. Check the `Origin` header against an allow-list before accepting
+the upgrade (as the quickstart does), or authenticate with a token the page has
+to send explicitly instead of an ambient cookie.
+:::
 
 ## Simple SSE from a route
 
@@ -346,11 +374,35 @@ An emit `PUBLISH`es to one Redis channel; every instance receives it via
 `SUBSCRIBE` (**including the origin**) and delivers to its local connections.
 Provide **two** clients: a connection in subscribe mode can't publish.
 
+The Redis channel is shared by **everything on that Redis using the same
+name**, and a message names its tenant only by id. Two apps — or staging and
+production — that both keep the default `'basalt:realtime'` deliver into each
+other's tenants, and anyone able to `PUBLISH` on that Redis can push an event
+to any tenant. Give every deployment its own `channel`, and set `secret` to
+sign messages with HMAC-SHA256:
+
+```ts
+new RedisBackplane({
+  publisher,
+  subscriber,
+  channel: 'myapp:prod:realtime',
+  secret: process.env.REALTIME_BACKPLANE_SECRET!, // [newKey, oldKey] while rotating
+})
+```
+
+With `secret`, unsigned, tampered or foreign-key messages are dropped and
+logged. The first key signs and every key verifies, so rotation is: deploy
+`[new, old]` everywhere, then `new` alone. All instances must agree — a node
+with a secret and one without drop each other's pushes.
+
 Two robustness properties are built in, because an exception escaping ioredis's
 `'message'` emitter is an `uncaughtException` and would kill the process:
 unparseable payloads and payloads missing `tenantId`/`channel`/`event` are
 **dropped and logged** rather than thrown, and a single dead socket during local
-delivery is pruned while the remaining recipients still receive the message.
+delivery is pruned (and closed) while the remaining recipients still receive the
+message. A payload JSON can't encode (a `BigInt`, a cycle) never gets that far:
+`emit()` rejects with the `TypeError` on every backplane, before anything is
+sent.
 
 ::: warning Close your Redis clients yourself
 `app.shutdown()` closes every connection and calls the backplane's optional
@@ -445,7 +497,8 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | --- | --- | --- | --- |
 | `publisher` | `RedisRealtimeClient` | — | Client used for `PUBLISH` (must not be in subscribe mode) |
 | `subscriber` | `RedisRealtimeClient` | — | Client used for `SUBSCRIBE` |
-| `channel` | `string` | `'basalt:realtime'` | Redis channel the instances share; change it to isolate environments on one Redis |
+| `channel` | `string` | `'basalt:realtime'` | Redis channel the instances share; give each app/environment on one Redis its own |
+| `secret` | `string \| string[]` | unsigned | HMAC-SHA256 key(s): the first signs, all verify; unsigned or wrongly signed messages are dropped. Empty throws at construction |
 
 `sse(producer, options)` (from `@basaltkit/http`):
 
@@ -474,9 +527,10 @@ rather than propagated. These are the signals to watch:
 | --- | --- | --- | --- |
 | Bridged broadcast rejected | `onBridgeError(error, { hook, channel, event })` | `console.error`, event dropped | The backplane is down/unreachable while a bridge rule fires |
 | Bridged event had no tenant | `onBridgeSkipped({ hook, channel, event, reason: 'no-tenant' })` | `console.warn` once per rule, event dropped | A rule without `tenant` fired outside a tenant-scoped context (boot, cron, a worker without context) |
-| Local write to a socket threw | `onDeliveryError(error, { connectionId, tenantId, channel, event })` | `console.error`, connection **unregistered**, other recipients still served | A socket died between the last write and this one |
-| Subscription refused | `hub.subscribe()` resolves `false` | nothing — silent unless you check | Unknown connection id, empty/over-long channel, per-connection cap hit, or `authorize` returned `false` |
-| Malformed backplane payload | `console.error` from the Redis driver | message dropped | Something else `PUBLISH`ed to the same Redis channel, or a version mismatch |
+| Local write to a socket threw | `onDeliveryError(error, { connectionId, tenantId, channel, event })` | `console.error`, connection **unregistered and closed**, other recipients still served | A socket died between the last write and this one |
+| Payload not JSON-serializable | `emit()` / `hub.publish()` rejects with `TypeError` (bridged: `onBridgeError`) | nothing sent, no subscriber touched | `data` holds a `BigInt`, a cycle, or similar |
+| Subscription refused | `hub.subscribe()` resolves `false` | nothing — silent unless you check | Unknown connection id (or it closed/was replaced during `authorize`), non-string/empty/over-long channel, per-connection cap hit, or `authorize` returned `false` |
+| Malformed backplane payload | `console.error` from the Redis driver | message dropped | Something else `PUBLISH`ed to the same Redis channel, a version mismatch, or — with `secret` — a missing/invalid signature or instances with different keys |
 | `UnknownTokenError` (`DI_UNKNOWN_TOKEN`) | thrown at resolve time | boot/request fails | `REALTIME` / `REALTIME_HUB` resolved without `realtimePlugin` registered |
 | `Error: No WebSocket implementation; pass WebSocketImpl.` | thrown by `createRealtimeClient` | client construction fails | Running outside a browser with no `WebSocketImpl`/`EventSourceImpl` injected |
 

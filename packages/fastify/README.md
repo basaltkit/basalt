@@ -82,7 +82,9 @@ Beyond mounting routes, `fastifyPlugin` sets three defaults that plain Fastify d
 - **An `application/json` parser that treats an empty body as no body.** Fastify's default
   throws on an empty body, so a `POST` with `content-type: application/json` and no
   payload (exactly what an `@basaltkit/sdk` call with no arguments sends) surfaced as a
-  500. Genuinely malformed JSON still gets a `400`.
+  500. Genuinely malformed JSON still gets a `400 BAD_REQUEST` ("Malformed request body.",
+  the same body Express and Hono answer). The same parser serves structured `+json` types
+  (`application/merge-patch+json`, `application/vnd.api+json`), as on every adapter.
 - **An `application/x-www-form-urlencoded` parser.** Fastify ships none; HTML forms and the
   SAML ACS binding need it.
 - **A pass-through `multipart/form-data` parser, but only when a route uses `upload()`.**
@@ -220,7 +222,12 @@ Same handler code as on Express and Hono.
 
 A handler returning `sse(producer)` from `@basaltkit/http` is streamed over the raw Node
 response (`reply.hijack()` + `SSE_HEADERS`), with client disconnects relayed to
-`stream.onClose()`. Same handler code as on Express and Hono.
+`stream.onClose()`. The headers already set on the reply — CORS, security headers,
+rate-limit counters, `x-request-id` — are carried onto the hijacked response and flushed at
+once, so a cross-origin `EventSource` opens even before the first event. Edge after-hooks
+(metrics, tracing) follow the Node response (`finish`/`close`), so they also see hijacked
+`sse()` replies and abandoned responses, which Fastify's `onResponse` skips. Same handler
+code as on Express and Hono.
 
 ### Idempotency — `idempotencyPlugin()` (Fastify-only)
 
@@ -255,6 +262,8 @@ curl -X POST http://localhost:3000/charge \
 ```
 
 Rules:
+- It covers every handler shape: one that returns its payload (`return { charged }`) is
+  replayed exactly like one that sends it (`return reply.code(201).send(...)`).
 - A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - Responses `>= 500` are **not** stored — genuine failures can still be retried.
 - Keys are scoped by **caller credentials + tenant + method + route + key**, and the store
@@ -352,7 +361,7 @@ fastifyPlugin({
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()`) to register. |
-| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. Never waives the route-meta validators plugins register (`InvalidRouteMetaError`). |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes. Set `false` to register your own `setNotFoundHandler` after `app:booted` — Fastify allows only one. |
 | `fastify` | `FastifyServerOptions` | No | `{}` | Options passed to the `Fastify()` constructor (logger, `trustProxy`, …). Set `trustProxy` behind a proxy so `request.ip` — and therefore the rate-limit key — is the real client. |
 
@@ -393,6 +402,7 @@ Dependency injection token (`Token<FastifyInstance>`): `app.container.get(FASTIF
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A plugin's route-meta validator (`http:meta-validators`) refused a value — e.g. `teamsPlugin` and an unknown `meta.teamRole`. Not waivable. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `IDEMPOTENCY_CONFLICT` | 409 | A request with the same `Idempotency-Key` is still in flight. |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |

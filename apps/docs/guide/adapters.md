@@ -229,7 +229,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 ```
 
-`expressPlugin` adds `express.json()` for you. To integrate into an existing
+`expressPlugin` adds `express.json()` (1 MiB, `bodyLimit`) for you. To integrate into an existing
 Express app, pass it in: `expressPlugin({ app: myExistingApp, routes })`.
 
 ## Complete example — Hono
@@ -508,6 +508,48 @@ the server: `fastifyPlugin({ fastify: { requestTimeout, connectionTimeout } })`,
 `meta: { etag: true }` is skipped for a streamed body — there is no payload to hash, and
 hashing the marker would answer `304` for a body that was never sent.
 
+## Wire behaviour — identical on all three
+
+The same route answers the same bytes, whichever adapter serves it. A shared
+parity suite (`wireParitySuite` in `@basaltkit/http`'s tests) holds Fastify,
+Express and Hono to each of these:
+
+| Behaviour | All three adapters |
+|---|---|
+| A handler returns a string | `text/plain; charset=utf-8` — never `text/html`. To serve HTML, set it: `reply.header('content-type', 'text/html; charset=utf-8').send(html)` |
+| Which bodies are JSON | `application/json` or a `+json` type (`application/merge-patch+json`), parameters and case ignored. `text/plain; application/json` is **not** JSON — it is CORS-safelisted, so a cross-site page can send it without a preflight |
+| Malformed JSON | `400 { "error": { "code": "BAD_REQUEST", "message": "Malformed request body." } }` |
+| Empty JSON body | `request.body` is `undefined` (no body) |
+| Default body limit | 1 MiB (`DEFAULT_BODY_LIMIT`) → `413 PAYLOAD_TOO_LARGE`; `bodyLimit` on Express/Hono, `fastify: { bodyLimit }` on Fastify |
+| Repeated query key | `?a=1&a=2` → `{ a: ['1', '2'] }`; `?c[d]=1` → `{ 'c[d]': '1' }` (no nested objects) |
+| `request.url` | path + query string (`/items?x=1`), never an absolute URL |
+| Routing | case-sensitive, no trailing-slash alias: `/Items` and `/items/` do not reach `/items` (on the app `expressPlugin` creates; an Express app you bring keeps its own settings) |
+| `sse()` stream | keeps the CORS, security, rate-limit and `x-request-id` headers set before it; headers are sent at once, before the first event |
+| An error outside a route (pre-hook, edge route, body) | neutral JSON envelope, reported through `onError` — Express's `errorHandler`, Hono's `app.onError` (`errorHandler: false` to opt out) |
+| An upstream SDK error carrying `status`/`type` | `500 INTERNAL_ERROR`. Only errors thrown on purpose (`HttpError`) or marked `expose: true` choose their status |
+| After-hooks (metrics, tracing) | run once per request — also for an `sse()` stream and a response the client abandoned; a failing one is reported as `AFTER_HOOK_FAILED` and never changes the response |
+
+Known differences that remain, all deliberate or harmless:
+
+- **Other body types.** A body that is neither JSON nor a form reaches the
+  handler as a string on Hono and on Fastify for `text/plain`; Fastify answers
+  `415` to other types; Express leaves `request.body` undefined. Declare a
+  `body` schema and send JSON — or take `rawBody()` for anything else.
+- **Dot segments.** Hono (through the web `URL`) resolves `/a/../admin` to
+  `/admin`; Fastify and Express route the path as sent and answer `404`. Each
+  adapter's pre-hooks and routes see the same path, so a path check cannot be
+  walked around — but do not rely on either behaviour.
+- **`x-request-id`** is set by the route pipeline, so it is on every response
+  a route produced and absent from a `404` for an unknown path or a pre-hook's
+  own answer (a `429`, a preflight), on all three.
+- **`request.ip` behind a proxy.** Each adapter reports the socket address by
+  default. Behind a proxy you trust, enable it explicitly — Fastify
+  `fastify: { trustProxy }`, Express `app.set('trust proxy', …)` on an app you
+  pass in, Hono `getClientIp` — or every client shares the proxy's IP (and one
+  rate-limit bucket).
+- **`/metrics` and `/openapi.json` are public**: edge routes skip enrichers and
+  guards. Keep them off the public listener, or put a pre-hook in front.
+
 ## How it works
 
 - **`@basaltkit/http`** defines the neutral `HttpRequest` / `HttpReply` and the
@@ -535,24 +577,26 @@ native extras.
 | Option | Type | Default | Adapters | Why |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | `[]` | all | The neutral routes to mount. |
-| `allowUnguardedMeta` | `boolean \| string[]` | fail loud at boot | all | Waives the boot check that every route declaring a guarded security key (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). Only for deployments where protection genuinely happens at an outer edge. |
+| `allowUnguardedMeta` | `boolean \| string[]` | fail loud at boot | all | Waives the boot check that every route declaring a guarded security key (`meta.auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). Only for deployments where protection genuinely happens at an outer edge. Never waives the route-meta validators (`InvalidRouteMetaError`). |
 | `notFound` | `boolean` | `true` (neutral 404 body) | all | Pass `false` to opt out of the shared `404 { error: { code: 'NOT_FOUND' } }` and keep the framework default. |
 | `fastify` | `FastifyServerOptions` | `{}` | fastify | Passed to the `Fastify()` constructor (logger, trustProxy, …). |
 | `app` | native instance | created for you | express, hono | Bring your own `express()` / `new Hono()` and Basalt mounts onto it. |
-| `bodyLimit` | `number` (bytes) | 1 MiB | hono | Rejects oversized bodies with 413 (`PAYLOAD_TOO_LARGE`) — Hono/edge has no default cap. Enforced on the bytes actually read: a chunked/streamed body without `Content-Length` is counted while buffering and cut off at the limit. An `upload()` route is bounded by its own `maxBytes` instead (streamed, never buffered). |
+| `bodyLimit` | `number` (bytes) | 1 MiB | express, hono | Rejects oversized bodies with 413 (`PAYLOAD_TOO_LARGE`) — the same default as Fastify's own. On Express it is the JSON/form parsers' limit (body-parser alone would stop at 100 KiB). On Hono — which has no default cap — it is enforced on the bytes actually read: a chunked/streamed body without `Content-Length` is counted while buffering and cut off at the limit. An `upload()` route is bounded by its own `maxBytes` instead (streamed, never buffered). |
 | `getClientIp` | `(c: Context) => string \| undefined` | socket address (`@hono/node-server`, Bun) | hono | Sets `request.ip`, the key for per-client rate limiting and the IP login throttle. On an edge runtime or behind a trusted proxy, supply it (e.g. `(c) => c.req.header('cf-connecting-ip')` on Cloudflare). When no IP resolves, a one-time warning is printed and rate limits share one bucket. Never read `X-Forwarded-For` unless a proxy you control overwrites it. |
-| `errorHandler` | `boolean` | `true` | express | Final `(err, req, res, next)` middleware that turns body-parser and pre-hook errors into the neutral JSON envelope (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, otherwise `500 INTERNAL_ERROR`) instead of Express's HTML page with a stack trace. Pass `false` only if you mount your own error handler after boot. |
+| `errorHandler` | `boolean` | `true` | express, hono | Hono: an `app.onError` that answers errors raised outside a route (pre-hook, edge route, body) with the neutral JSON envelope and reports them, instead of a plain-text 500 (an `HTTPException` from your own middleware keeps its response). Express: a final `(err, req, res, next)` middleware that turns body-parser and pre-hook errors into the neutral JSON envelope (`400 BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, otherwise `500 INTERNAL_ERROR`) instead of Express's HTML page with a stack trace. Pass `false` only if you mount your own error handler after boot. |
 
 ## Failure modes
 
 | You see | It means | Do |
 |---|---|---|
 | `UnguardedRouteMetaError` at boot | a route declares security meta no registered guard enforces | register the enforcing plugin, or `allowUnguardedMeta` (see [Security](/guide/security)) |
+| `InvalidRouteMetaError` at boot | a plugin's route-meta validator refused a value (e.g. an unknown `meta.teamRole`) | fix the value; `allowUnguardedMeta` does not waive it (see [Security](/guide/security)) |
 | `500 HTTP_GUARDS_UNRUNNABLE` | the route pipeline carries guards but no container, so none of them could run | pass `container` to the pipeline — every shipped adapter does; only hand-built pipelines can hit this |
 | `400 HTTP_VALIDATION` | body/query/params failed the route's Zod schema | the response lists the part and per-field issues |
 | `404 { code: 'NOT_FOUND' }` on a route you defined | the route wasn't registered on this adapter instance | check it is in `routes: [...]` of the adapter plugin that booted |
-| `413 PAYLOAD_TOO_LARGE` | body exceeded `bodyLimit` (hono) or the body-parser limit (express, 100 KB by default) | raise the limit deliberately |
-| `400 BAD_REQUEST` (express) | the body could not be parsed (malformed JSON, corrupt encoding) | send a valid body |
+| `413 PAYLOAD_TOO_LARGE` | body exceeded the body limit (1 MiB by default on all three) | raise `bodyLimit` (`fastify: { bodyLimit }` on Fastify) deliberately |
+| `400 BAD_REQUEST` | the body could not be parsed (malformed JSON; on Express also a corrupt encoding) | send a valid body |
+| `400 HTTP_VALIDATION` for a JSON body you did send | its `Content-Type` is not `application/json` or `+json` (e.g. `text/plain`) | send a JSON media type |
 | `400 MALFORMED_MULTIPART` / `TOO_MANY_FILES`, `413`, `415` on an `upload()` route | the upload broke a limit or the multipart framing | see [Uploads](#uploads) |
 | `[basalt:hono] Could not resolve the client IP` warning | this runtime exposes no socket address to the adapter | pass `honoPlugin({ getClientIp })` |
 

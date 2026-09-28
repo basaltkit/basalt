@@ -13,25 +13,54 @@ export interface McpClientTransport {
   close(): Promise<void>
 }
 
-/** Talk to a remote MCP server over HTTP (the Streamable-HTTP JSON path). */
+/**
+ * Talk to a remote MCP server over HTTP (the Streamable-HTTP JSON path). It
+ * keeps the `Mcp-Session-Id` the server issues on `initialize` and sends it on
+ * every later request; `close()` ends the session (`DELETE`). A 404 for the
+ * session (expired, evicted) drops it — `connect()` again to open a new one.
+ */
 export class HttpClientTransport implements McpClientTransport {
+  private session: string | undefined
+
   constructor(
     private readonly url: string,
     private readonly options: { headers?: Record<string, string> } = {},
   ) {}
 
+  /** The current session id, when the server issued one. */
+  get sessionId(): string | undefined {
+    return this.session
+  }
+
   async send(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    const initialize = message.method === 'initialize'
     const response = await fetch(this.url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json', ...this.options.headers },
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        ...this.options.headers,
+        ...(this.session !== undefined && !initialize ? { 'mcp-session-id': this.session } : {}),
+      },
       body: JSON.stringify(message),
     })
+    if (initialize) this.session = response.headers.get('mcp-session-id') ?? undefined
+    else if (response.status === 404 && this.session !== undefined) this.session = undefined
     if (response.status === 202) return null
     const text = await response.text()
     return text ? (JSON.parse(text) as JsonRpcResponse) : null
   }
 
-  async close(): Promise<void> {}
+  async close(): Promise<void> {
+    const session = this.session
+    if (session === undefined) return
+    this.session = undefined
+    try {
+      await fetch(this.url, { method: 'DELETE', headers: { ...this.options.headers, 'mcp-session-id': session } })
+    } catch {
+      // Best effort: the session expires on its own.
+    }
+  }
 }
 
 export interface StdioTransportOptions {
@@ -48,6 +77,12 @@ export interface StdioTransportOptions {
    * `true` to explicitly opt in to the full `process.env`.
    */
   inheritEnv?: boolean | string[]
+  /**
+   * How long a request waits for the server's answer before it rejects.
+   * Default: 60 000 ms. A server that never answers (hung, or not an MCP
+   * server at all) would otherwise leave the call pending forever.
+   */
+  timeoutMs?: number
 }
 
 /**
@@ -116,7 +151,7 @@ export class StdioClientTransport implements McpClientTransport {
   private buffer = ''
   private readonly pending = new Map<
     string | number,
-    { resolve: (r: JsonRpcResponse) => void; reject: (e: Error) => void }
+    { resolve: (r: JsonRpcResponse) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >()
 
   constructor(private readonly options: StdioTransportOptions) {}
@@ -130,8 +165,33 @@ export class StdioClientTransport implements McpClientTransport {
     })
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => this.onData(chunk))
+    // A command that doesn't exist (ENOENT) or can't be spawned emits 'error'
+    // on the child — unhandled, that crashes the host process at boot. Fail
+    // the calls in flight instead and let the next send() spawn afresh.
+    child.on('error', (error: Error) =>
+      this.fail(child, new Error(`MCP stdio server "${this.options.command}" failed: ${error.message}`)),
+    )
+    child.on('exit', (code, signal) =>
+      this.fail(child, new Error(`MCP stdio server "${this.options.command}" exited (${signal ?? `code ${code}`}).`)),
+    )
+    // Writing to a child that already died raises EPIPE on stdin.
+    child.stdin.on('error', (error: Error) =>
+      this.fail(child, new Error(`MCP stdio server "${this.options.command}" is not accepting input: ${error.message}`)),
+    )
     this.child = child
     return child
+  }
+
+  /** Rejects every call in flight and forgets `child` if it is still current. */
+  private fail(child: ChildProcessByStdio<Writable, Readable, null>, error: Error): void {
+    if (this.child !== child) return
+    this.child = undefined
+    this.buffer = ''
+    for (const [id, waiter] of this.pending) {
+      clearTimeout(waiter.timer)
+      this.pending.delete(id)
+      waiter.reject(error)
+    }
   }
 
   private onData(chunk: string): void {
@@ -150,6 +210,7 @@ export class StdioClientTransport implements McpClientTransport {
       if (message.id === null || message.id === undefined) continue
       const waiter = this.pending.get(message.id)
       if (waiter) {
+        clearTimeout(waiter.timer)
         this.pending.delete(message.id)
         waiter.resolve(message)
       }
@@ -158,18 +219,29 @@ export class StdioClientTransport implements McpClientTransport {
 
   async send(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
     const child = this.start()
+    const isRequest = message.id !== null && message.id !== undefined
+    const answer = isRequest
+      ? new Promise<JsonRpcResponse>((resolve, reject) => {
+          const id = message.id as string | number
+          const timeoutMs = this.options.timeoutMs ?? 60_000
+          const timer = setTimeout(() => {
+            this.pending.delete(id)
+            reject(new Error(`MCP stdio server "${this.options.command}" did not answer within ${timeoutMs} ms.`))
+          }, timeoutMs)
+          timer.unref?.()
+          this.pending.set(id, { resolve, reject, timer })
+        })
+      : null
     child.stdin.write(`${JSON.stringify(message)}\n`)
-    if (message.id === null || message.id === undefined) return null
-    const id = message.id
-    return new Promise<JsonRpcResponse>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
-    })
+    return answer
   }
 
   async close(): Promise<void> {
-    this.child?.stdin.end()
-    this.child?.kill()
-    this.child = undefined
+    const child = this.child
+    if (!child) return
+    this.fail(child, new Error(`MCP stdio server "${this.options.command}" was closed.`))
+    child.stdin.end()
+    child.kill()
   }
 }
 

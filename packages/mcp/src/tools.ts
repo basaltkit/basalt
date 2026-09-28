@@ -1,6 +1,7 @@
 import type { Container } from '@basaltkit/core'
 import { ensureMetadata } from '@basaltkit/core'
 import {
+  isRouteVisible,
   runRoute,
   toErrorResponse,
   zodToJsonSchema,
@@ -13,9 +14,80 @@ import {
 import type { ZodType } from 'zod'
 import type { McpToolResult } from './protocol.js'
 
-/** Per-call context: headers propagate tenancy/auth into the neutral pipeline. */
+/**
+ * Per-call context. `headers` propagate tenancy/auth into the neutral pipeline
+ * — filtered through the forwarded-header allowlist (see
+ * {@link DEFAULT_FORWARDED_HEADERS}); `ip` becomes the tool request's
+ * `request.ip` (rate limits, login throttles, audit); `signal` aborts the call
+ * (read it in a handler with {@link toolSignal}).
+ */
 export interface ToolCallContext {
   headers?: Record<string, string | string[] | undefined>
+  ip?: string
+  signal?: AbortSignal
+}
+
+/**
+ * Request headers a tool call inherits from its caller. Credentials and the
+ * tenant travel (so a tool honours the same auth/tenancy as a direct request),
+ * `cookie` included because session-cookie auth is a supported way to call
+ * `/mcp` (the route's Origin/Content-Type checks keep it CSRF-safe). Everything
+ * else is dropped — `x-request-id`/`x-correlation-id` (the tool mints its own),
+ * conditional headers (`if-none-match` would turn a tool result into a 304),
+ * `content-length`/`content-type` (describe the JSON-RPC envelope, not the
+ * tool's input), hop-by-hop and forwarding headers (the client ip travels as
+ * `ip`). Extend it with `mcpPlugin({ forwardHeaders })`.
+ */
+export const DEFAULT_FORWARDED_HEADERS: readonly string[] = [
+  'authorization',
+  'cookie',
+  'x-api-key',
+  'x-tenant-id',
+  'host',
+  'accept-language',
+  'user-agent',
+]
+
+const signals = new WeakMap<HttpRequest, AbortSignal>()
+
+/**
+ * The abort signal of the MCP tool call a handler is running for, or
+ * `undefined` for a plain HTTP request. It fires on `notifications/cancelled`
+ * (from the same client session) — a long handler can check it and stop early.
+ * The tool call itself answers "cancelled" as soon as it fires either way.
+ */
+export function toolSignal(request: HttpRequest): AbortSignal | undefined {
+  return signals.get(request)
+}
+
+function filterHeaders(
+  headers: Record<string, string | string[] | undefined> | undefined,
+  allow: ReadonlySet<string>,
+): Record<string, string | string[] | undefined> {
+  const out: Record<string, string | string[] | undefined> = {}
+  if (!headers) return out
+  for (const [name, value] of Object.entries(headers)) {
+    const key = name.toLowerCase()
+    if (value !== undefined && allow.has(key)) out[key] = value
+  }
+  return out
+}
+
+/** `/items/:id` + `{ id: 'a b' }` + `{ q: 'x' }` → `/items/a%20b?q=x` — the URL a direct request would have. */
+function concreteUrl(pattern: string, params: Record<string, string>, query: unknown): string {
+  const path = pattern.replace(/:([A-Za-z0-9_]+)/g, (whole, name: string) =>
+    name in params ? encodeURIComponent(params[name]!) : whole,
+  )
+  if (!query || typeof query !== 'object') return path
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (item === undefined || item === null || typeof item === 'object') continue
+      search.append(key, String(item))
+    }
+  }
+  const qs = search.toString()
+  return qs ? `${path}?${qs}` : path
 }
 
 /** A route exposed to MCP. `invoke` runs it through the exact same request pipeline as HTTP. */
@@ -24,6 +96,13 @@ export interface McpTool {
   description: string
   inputSchema: Record<string, unknown>
   invoke(args: Record<string, unknown>, ctx?: ToolCallContext): Promise<McpToolResult>
+  /**
+   * Whether a caller with this request context (`ctx()` of the listing
+   * request: `user`, `tenant`, …) should see the tool in `tools/list`. Pure —
+   * see `isRouteVisible` in `@basaltkit/http` for exactly what it checks.
+   * Never authorization: `invoke` runs the route's guards regardless.
+   */
+  visible(context: Record<string, unknown>): Promise<boolean>
 }
 
 /** `meta.mcp` opt-in: `true`, or an object overriding the name/description. */
@@ -181,28 +260,60 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 }
 
+const ABORTED = Symbol('aborted')
+
+const cancelled = (): McpToolResult => ({
+  content: [{ type: 'text', text: JSON.stringify({ code: 'CANCELLED', message: 'Tool call cancelled' }) }],
+  isError: true,
+})
+
 /** Build the invoker that runs a route through the shared neutral pipeline. */
-function makeInvoke(route: BasaltRoute, container: Container) {
+function makeInvoke(route: BasaltRoute, container: Container, allow: ReadonlySet<string>) {
   const metadata = ensureMetadata(container)
   return async (args: Record<string, unknown>, callCtx?: ToolCallContext): Promise<McpToolResult> => {
+    const signal = callCtx?.signal
+    if (signal?.aborted) return cancelled()
     const { params, query, body } = splitArgs(route, args ?? {})
     const request: HttpRequest = {
       method: route.method,
-      url: route.url,
-      headers: callCtx?.headers ?? {},
+      url: concreteUrl(route.url, params, query),
+      routePattern: route.url,
+      headers: filterHeaders(callCtx?.headers, allow),
       params,
       query,
       body,
+      ...(callCtx?.ip !== undefined ? { ip: callCtx.ip } : {}),
       raw: null,
     }
+    if (signal) signals.set(request, signal)
     const reply = new CapturingReply()
     try {
-      const returned = await runRoute(route, request, reply, {
+      const run = runRoute(route, request, reply, {
         container,
         enrichers: metadata.get<RequestEnricher>('http:enrichers'),
         guards: metadata.get<RouteGuard>('http:guards'),
       })
+      // The pipeline cannot be interrupted from outside, but the CALL can: on
+      // abort, answer "cancelled" now; the handler sees `toolSignal(request)`.
+      let onAbort: (() => void) | undefined
+      const aborted = signal
+        ? new Promise<typeof ABORTED>((resolve) => {
+            onAbort = () => resolve(ABORTED)
+            signal.addEventListener('abort', onAbort, { once: true })
+          })
+        : undefined
+      let returned: unknown
+      try {
+        returned = aborted ? await Promise.race([run, aborted]) : await run
+      } finally {
+        if (onAbort) signal!.removeEventListener('abort', onAbort)
+      }
+      if (returned === ABORTED) {
+        run.catch(() => {}) // the abandoned handler may still reject later
+        return cancelled()
+      }
       const value = reply.sent ? reply.payload : returned
+      const failed = reply.statusCode >= 400
       // MCP requires `structuredContent` to be a JSON object (a record) — never
       // an array or primitive. Arrays/primitives ride in the text content only,
       // which still carries the full JSON. Otherwise clients reject the result
@@ -211,6 +322,8 @@ function makeInvoke(route: BasaltRoute, container: Container) {
       return {
         content: [{ type: 'text', text: asText(value) }],
         ...(isRecord ? { structuredContent: value } : {}),
+        // A handler that replied an error status (`reply.code(403)`) failed.
+        ...(failed ? { isError: true } : {}),
       }
     } catch (error) {
       const { body: errorBody } = toErrorResponse(error)
@@ -227,8 +340,9 @@ function makeInvoke(route: BasaltRoute, container: Container) {
 export function collectTools(
   routes: BasaltRoute[],
   container: Container,
-  options: { filter?: (route: BasaltRoute) => boolean } = {},
+  options: { filter?: (route: BasaltRoute) => boolean; forwardHeaders?: string[] } = {},
 ): McpTool[] {
+  const allow = new Set([...DEFAULT_FORWARDED_HEADERS, ...(options.forwardHeaders ?? [])].map((h) => h.toLowerCase()))
   const tools: McpTool[] = []
   for (const route of routes) {
     const meta = mcpMeta(route)
@@ -239,7 +353,8 @@ export function collectTools(
       name: override.name ?? defaultToolName(route),
       description: override.description ?? `${route.method} ${route.url}`,
       inputSchema: buildInputSchema(route),
-      invoke: makeInvoke(route, container),
+      invoke: makeInvoke(route, container, allow),
+      visible: (context) => isRouteVisible(route, context, container),
     })
   }
   return tools

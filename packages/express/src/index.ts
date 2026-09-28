@@ -18,7 +18,6 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
-  GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
   isRawBody,
@@ -29,19 +28,21 @@ import {
   openStreamPump,
   destroyStreamSource,
   type StreamPayload,
+  DEFAULT_BODY_LIMIT,
+  isJsonMediaType,
+  mediaTypeOf,
 } from '@basaltkit/http'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 
 export const EXPRESS = createToken<Express>('express')
 
-/** The request's declared media type, lower-cased and without parameters. */
-function mediaType(req: IncomingMessage): string {
-  const header = req.headers['content-type']
-  const value = Array.isArray(header) ? header[0] : header
-  if (value === undefined) return ''
-  const cut = value.indexOf(';')
-  return (cut < 0 ? value : value.slice(0, cut)).trim().toLowerCase()
-}
+/**
+ * Requests whose JSON body was empty. body-parser turns an empty JSON body
+ * into `{}`; Fastify and Hono hand over `undefined` ("no body"), and so does
+ * this adapter — a bodiless POST that still sends `content-type:
+ * application/json` must not validate as an empty object on one adapter only.
+ */
+const EMPTY_JSON = new WeakSet<object>()
 
 function toNeutralRequest(req: Request): HttpRequest {
   return {
@@ -50,7 +51,7 @@ function toNeutralRequest(req: Request): HttpRequest {
     headers: req.headers,
     params: req.params as Record<string, string>,
     query: req.query,
-    body: req.body,
+    body: EMPTY_JSON.has(req) ? undefined : req.body,
     ...(req.ip ? { ip: req.ip } : {}),
     ...(req.route?.path ? { routePattern: String(req.route.path) } : {}),
     raw: req,
@@ -84,13 +85,38 @@ class ExpressReply implements HttpReply {
     this._sent = true
     this.res.status(this._status)
     if (payload === undefined || payload === null) this.res.end()
-    else if (typeof payload === 'string') this.res.send(payload)
-    else this.res.json(payload)
+    else if (typeof payload === 'string') {
+      // Express's `res.send(string)` defaults to text/html — a handler echoing
+      // its input would be a reflected XSS on this adapter alone. A string is
+      // text, as on Fastify and Hono, unless the handler said otherwise.
+      if (!this.res.getHeader('content-type')) this.res.setHeader('content-type', 'text/plain; charset=utf-8')
+      this.res.send(payload)
+    } else this.res.json(payload)
     return this
   }
 }
 
 type Register = (path: string, handler: (req: Request, res: Response, next: NextFunction) => unknown) => void
+
+/**
+ * The `type` tags body-parser puts on the errors it raises. Only these mark an
+ * error as body-parser's own: any other library may set a string `type` too —
+ * a payment SDK's `{ type: 'invalid_request_error', statusCode: 401 }` is a
+ * failed upstream call, a server error, and must not become "400 Malformed
+ * request body" on this adapter while Fastify and Hono answer 500.
+ */
+const BODY_PARSER_ERRORS = new Set([
+  'charset.unsupported',
+  'encoding.unsupported',
+  'entity.parse.failed',
+  'entity.too.large',
+  'entity.verify.failed',
+  'parameters.too.many',
+  'request.aborted',
+  'request.size.invalid',
+  'stream.encoding.set',
+  'stream.not.readable',
+])
 
 /**
  * Maps an error raised outside the route pipeline (body-parser, a pre-hook,
@@ -102,12 +128,8 @@ function toMiddlewareErrorResponse(error: unknown): ReturnType<typeof toErrorRes
   const status =
     (error as { status?: unknown; statusCode?: unknown } | null)?.status ??
     (error as { statusCode?: unknown } | null)?.statusCode
-  // body-parser raises http-errors: a string `type` and/or `expose: true`.
-  const { type, expose } = (error ?? {}) as {
-    type?: unknown
-    expose?: unknown
-  }
-  const fromBodyParser = typeof type === 'string' || expose === true
+  const { type } = (error ?? {}) as { type?: unknown }
+  const fromBodyParser = typeof type === 'string' && BODY_PARSER_ERRORS.has(type)
   // The router raises a 400 URIError for a path parameter that is not valid
   // percent-encoding (`/items/%E0%A4%A`): a client error, not a server bug.
   const fromRouter = error instanceof URIError
@@ -241,6 +263,9 @@ function basaltHandler(
       })
       if (isSseResponse(result)) {
         res.writeHead(200, SSE_HEADERS)
+        // Headers go out now, not with the first event: a stream that starts
+        // quiet must still open (EventSource `open`) — as it does on Hono.
+        res.flushHeaders()
         await driveSse(sseProducerOf(result), {
           write: (frame) => void res.write(frame),
           end: () => res.end(),
@@ -357,10 +382,20 @@ export interface ExpressPluginOptions {
    * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
    * `true` to waive everything (e.g. authentication handled at an outer
    * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   * It never waives the route-meta validators plugins register
+   * (`META_VALIDATORS_BUCKET`, e.g. teamsPlugin refusing an unknown
+   * `meta.teamRole`) — those also run at boot and fail it.
    */
   allowUnguardedMeta?: boolean | string[]
   /** Bring your own Express app; otherwise one is created with `express.json()`. */
   app?: Express
+  /**
+   * Maximum size, in bytes, of a JSON or form body the adapter parses; a
+   * larger one is answered 413. Default: 1 MiB (`DEFAULT_BODY_LIMIT`), the
+   * same as Fastify and Hono — body-parser's own default is 100 KiB.
+   * `upload()` and `rawBody()` routes carry their own limits.
+   */
+  bodyLimit?: number
   /**
    * Serve the neutral JSON body (`NOT_FOUND_RESPONSE` from @basaltkit/http)
    * for unmatched routes, identical across all adapters, instead of Express's
@@ -395,31 +430,55 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
     name: 'basalt:express',
     register({ container }) {
       container.singleton(EXPRESS, () => {
+        const created = options.app === undefined
         const app = options.app ?? express()
+        // `?a=1&a=2` → `{ a: ['1', '2'] }` and `?c[d]=4` → `{ 'c[d]': '4' }`,
+        // as on Fastify and Hono. Express 5's default already; Express 4
+        // defaults to `qs` (nested objects), so it is pinned on the app this
+        // plugin creates. An app you bring keeps its own setting.
+        if (created) app.set('query parser', 'simple')
+        // Routing matches Fastify and Hono: `/Admin` and `/admin/` are not
+        // `/admin`. Express defaults to both being the same route — which a
+        // path-based pre-hook (`url.startsWith('/admin')`) would not see.
+        if (created) {
+          app.set('case sensitive routing', true)
+          app.set('strict routing', true)
+        }
         const routes = options.routes ?? []
-        // Only when a rawBody() route exists: otherwise the parsers stay
-        // exactly as they were, with no per-request matching and no buffer
-        // held alive past parsing.
+        const limit = options.bodyLimit ?? DEFAULT_BODY_LIMIT
+        // Only when a rawBody() route exists: otherwise nothing is kept past
+        // parsing and no path is matched per request.
         const raw = routes.some((definition) => isRawBody(definition.body))
-        const isRawBodyPath = rawBodyRouteMatcher(routes)
-        const parses = (type: string) => (req: IncomingMessage): boolean =>
-          mediaType(req) === type && !isRawBodyPath(req.method ?? 'GET', req.url ?? '/')
+        // Express routes case-insensitively unless told otherwise; the matcher
+        // must agree, or `/HOOK` reaches the rawBody() route pre-parsed.
+        const isRawBodyPath = rawBodyRouteMatcher(routes, {
+          caseInsensitive: app.get('case sensitive routing') !== true,
+        })
+        const skip = (req: IncomingMessage): boolean => raw && isRawBodyPath(req.method ?? 'GET', req.url ?? '/')
+        const verify = (req: IncomingMessage, res: unknown, buf: Buffer): void => {
+          if (raw) captureRawBody(req, res, buf)
+        }
         app.use(
-          express.json(
-            raw ? { type: parses('application/json'), verify: captureRawBody } : {},
-          ),
+          express.json({
+            limit,
+            // Exactly `application/json` or a `+json` type, parameters ignored —
+            // the same rule on every adapter. `text/plain; application/json`
+            // (CORS-safelisted, no preflight) is not JSON.
+            type: (req) => isJsonMediaType(req.headers['content-type']) && !skip(req),
+            verify: (req, res, buf) => {
+              if (buf.length === 0) EMPTY_JSON.add(req)
+              verify(req, res, buf)
+            },
+          }),
         )
         // HTML forms and the SAML ACS binding post application/x-www-form-urlencoded.
         app.use(
-          express.urlencoded(
-            raw
-              ? {
-                  extended: false,
-                  type: parses('application/x-www-form-urlencoded'),
-                  verify: captureRawBody,
-                }
-              : { extended: false },
-          ),
+          express.urlencoded({
+            extended: false,
+            limit,
+            type: (req) => mediaTypeOf(req.headers['content-type']) === 'application/x-www-form-urlencoded' && !skip(req),
+            verify,
+          }),
         )
         return app
       })
@@ -432,12 +491,9 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
       // Fail loud BEFORE traffic if a route declares security meta (auth/can/
-      // teamRole) that no registered guard enforces — it would serve open.
-      assertRoutesGuarded(
-        routes,
-        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
-        options.allowUnguardedMeta,
-      )
+      // teamRole) that no registered guard enforces — it would serve open —
+      // or meta a plugin's validator refuses (e.g. an unknown teamRole).
+      assertRoutesGuarded(routes, container, options.allowUnguardedMeta)
       const router = app as unknown as Record<string, Register>
 
       // Mount everything once edge plugins have registered their hooks/routes,
@@ -446,9 +502,30 @@ export function expressPlugin(options: ExpressPluginOptions = {}) {
         if (collector.afterHooks.length) {
           app.use((req: Request, res: Response, next: NextFunction) => {
             const start = Date.now()
-            res.on('finish', () => {
-              void collector.runAfter(toNeutralRequest(req), new ExpressReply(res), res.statusCode, Date.now() - start)
-            })
+            // 'finish' alone never fires for a response the client abandoned
+            // (a closed tab mid-stream): the after-hooks — metrics' in-flight
+            // gauge, a tracing span — would never see that request end.
+            // 'close' follows 'finish' on a completed response, so run once.
+            let done = false
+            const after = () => {
+              if (done) return
+              done = true
+              // The response is already gone: a failing after-hook is reported,
+              // never left as an unhandled rejection.
+              collector
+                .runAfter(toNeutralRequest(req), new ExpressReply(res), res.statusCode, Date.now() - start)
+                .catch((error: unknown) =>
+                  reportSafely(options.onError, {
+                    error,
+                    status: 500,
+                    code: 'AFTER_HOOK_FAILED',
+                    method: req.method,
+                    url: req.originalUrl,
+                  }),
+                )
+            }
+            res.on('finish', after)
+            res.on('close', after)
             next()
           })
         }

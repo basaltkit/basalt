@@ -1,10 +1,11 @@
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
-import { generateWebhookSecret, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
-import { matchesEvent, MemoryWebhookStore, type WebhookEndpoint, type WebhookStore } from './store.js'
+import { deriveDeliveryId, generateWebhookSecret, MIN_WEBHOOK_SECRET_LENGTH, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
+import { matchesEvent, MemoryWebhookStore, WebhookEndpointIdInUseError, type WebhookEndpoint, type WebhookStore } from './store.js'
 
 export {
   MemoryWebhookStore,
+  WebhookEndpointIdInUseError,
   matchesEvent,
   type WebhookStore,
   type WebhookEndpoint,
@@ -16,7 +17,10 @@ export {
   generateWebhookSecret,
   MIN_WEBHOOK_SECRET_LENGTH,
   PINNED_ADDRESS,
+  pinnedFetch,
+  deriveDeliveryId,
   type DeliveryResult,
+  type DeliverOptions,
   type WebhookDelivererOptions,
 } from './deliver.js'
 export {
@@ -59,10 +63,51 @@ export class WebhookTenantRequiredError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link WebhookManager.register} for an endpoint that could never be
+ * delivered to: a URL that is not an absolute URL with an allowed scheme, a
+ * signing secret shorter than `MIN_WEBHOOK_SECRET_LENGTH`, or an empty event
+ * list. Registration fails instead of storing an endpoint whose every delivery
+ * would be refused later. (Whether the host is public is still decided at
+ * delivery time, where DNS is resolved and the connection pinned.)
+ */
+export class WebhookEndpointInvalidError extends Error {
+  readonly code = 'WEBHOOK_ENDPOINT_INVALID'
+  readonly status = 400
+  constructor(reason: string) {
+    super(`webhooks.register(): ${reason}.`)
+    this.name = 'WebhookEndpointInvalidError'
+  }
+}
+
+const DEFAULT_SCHEMES: readonly string[] = ['https:', 'http:']
+
+function assertRegistrable(endpoint: Omit<WebhookEndpoint, 'id'>, schemes: readonly string[]): void {
+  const { url, secret, events } = endpoint as { url: unknown; secret?: unknown; events: unknown }
+  if (typeof url !== 'string' || url.length === 0) throw new WebhookEndpointInvalidError('url must be a non-empty string')
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new WebhookEndpointInvalidError('url is not a valid absolute URL')
+  }
+  if (!schemes.includes(parsed.protocol)) {
+    throw new WebhookEndpointInvalidError(`url scheme "${parsed.protocol}" is not allowed (allowed: ${schemes.join(', ')})`)
+  }
+  if (secret != null && (typeof secret !== 'string' || secret.length < MIN_WEBHOOK_SECRET_LENGTH)) {
+    throw new WebhookEndpointInvalidError(
+      `secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters (omit it to have one generated)`,
+    )
+  }
+  if (!Array.isArray(events) || events.length === 0 || !events.every((e) => typeof e === 'string' && e.length > 0)) {
+    throw new WebhookEndpointInvalidError('events must be a non-empty array of non-empty event patterns')
+  }
+}
+
 /** An endpoint as returned by {@link WebhookManager.list}: the signing secret is never included. */
 export type WebhookEndpointView = Omit<WebhookEndpoint, 'secret'> & { hasSecret: boolean }
 
-const redact = ({ secret, ...rest }: WebhookEndpoint): WebhookEndpointView => ({ ...rest, hasSecret: secret !== undefined })
+const redact = ({ secret, ...rest }: WebhookEndpoint): WebhookEndpointView => ({ ...rest, hasSecret: secret != null })
 
 export interface WebhookManagerOptions {
   /**
@@ -84,6 +129,15 @@ export interface WebhookDispatchOptions {
    * reaches only tenant-agnostic endpoints.
    */
   allTenants?: boolean
+  /**
+   * Idempotency key of this logical dispatch (e.g. an outbox entry id). When
+   * set, each endpoint's delivery id is derived from it and the endpoint id
+   * ({@link deriveDeliveryId}), so re-dispatching the same key re-sends the SAME
+   * `id` the receiver dedupes on. Default: a fresh id per delivery.
+   */
+  idempotencyKey?: string
+  /** Endpoint ids to skip (e.g. already delivered for this idempotency key). */
+  skipEndpointIds?: Iterable<string>
 }
 
 /** Register/list subscriptions and dispatch events to matching endpoints. */
@@ -107,7 +161,7 @@ export class WebhookManager {
     if (tenantId !== undefined && (await this.store.list(tenantId)).some((e) => e.id === id && e.tenantId === tenantId)) return
     const existing = (await this.store.list()).find((e) => e.id === id)
     if (existing && (existing.tenantId ?? undefined) !== tenantId) {
-      throw new Error(`webhooks.register(): endpoint id "${id}" is already in use by another scope.`)
+      throw new WebhookEndpointIdInUseError(id)
     }
   }
 
@@ -121,6 +175,12 @@ export class WebhookManager {
    * `tenantId` can't override it). With tenancy active and no tenant at all,
    * pass an explicit `tenantId`, or `{ system: true }` to deliberately create a
    * global endpoint that receives every tenant's events.
+   *
+   * The endpoint is validated before anything is stored: an unparseable URL, a
+   * scheme outside the deliverer's allowlist, a secret shorter than
+   * `MIN_WEBHOOK_SECRET_LENGTH` or an empty `events` list throws
+   * {@link WebhookEndpointInvalidError}; an `id` held by another scope throws
+   * {@link WebhookEndpointIdInUseError}.
    */
   async register(
     endpoint: Omit<WebhookEndpoint, 'id'> & { id?: string },
@@ -128,6 +188,7 @@ export class WebhookManager {
   ): Promise<WebhookEndpoint> {
     const tenantId = currentTenantId() ?? asTenantId(endpoint.tenantId)
     this.requireScope('register', tenantId, options.system)
+    assertRegistrable(endpoint, (this.deliverer as { allowedSchemes?: readonly string[] }).allowedSchemes ?? DEFAULT_SCHEMES)
     const { tenantId: _ignored, ...rest } = endpoint
     // A caller-supplied id upserts in every store: never let it replace an
     // endpoint that belongs to a different tenant (or a global one, when scoped).
@@ -149,6 +210,15 @@ export class WebhookManager {
   async unregister(id: string, options: { tenantId?: string; system?: boolean } = {}): Promise<void> {
     const tenantId = currentTenantId() ?? asTenantId(options.tenantId)
     this.requireScope('unregister', tenantId, options.system)
+    if (tenantId !== undefined) {
+      // Re-verify ownership here instead of trusting the store to honour its
+      // `tenantId` argument (a store that implements `remove(id)` only would let
+      // one tenant delete another's endpoint). The result is re-filtered, so a
+      // store whose `list` ignores the tenant can't widen it either. Fail closed:
+      // not provably ours → no-op.
+      const owned = (await this.store.list(tenantId)).some((e) => e.id === id && e.tenantId === tenantId)
+      if (!owned) return
+    }
     return this.store.remove(id, tenantId)
   }
 
@@ -192,7 +262,22 @@ export class WebhookManager {
     } else {
       endpoints = (await this.store.forEvent(event)).filter((e) => e.tenantId == null)
     }
-    return Promise.all(endpoints.map((endpoint) => this.deliverer.deliver(endpoint, event, data)))
+    const skip = new Set(options.skipEndpointIds ?? [])
+    const key = options.idempotencyKey
+    // One endpoint's failure — even an unexpected throw (a malformed store row,
+    // a resolver bug) — must never reject the whole dispatch and starve the rest.
+    return Promise.all(
+      endpoints
+        .filter((endpoint) => !skip.has(endpoint.id))
+        .map(async (endpoint): Promise<DeliveryResult> => {
+          try {
+            return await this.deliverer.deliver(endpoint, event, data, key !== undefined ? { deliveryId: deriveDeliveryId(key, endpoint.id) } : {})
+          } catch (error) {
+            console.error(`[basalt:webhooks] delivery to endpoint "${endpoint.id}" threw:`, error)
+            return { endpointId: endpoint.id, ok: false, attempts: 0, error: 'internal delivery error', retryable: true }
+          }
+        }),
+    )
   }
 }
 
@@ -249,4 +334,5 @@ export {
   webhookOutboxDispatch,
   webhookOutboxPlugin,
   type WebhookOutboxOptions,
+  type WebhookOutboxDispatchOptions,
 } from './outbox.js'

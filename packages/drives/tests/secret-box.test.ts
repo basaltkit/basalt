@@ -138,3 +138,24 @@ describe('randomToken', () => {
     for (const token of tokens) expect(token).toMatch(/^[A-Za-z0-9_-]+$/)
   })
 })
+
+describe('FA-076 — envelope hardening', () => {
+  const box = new DriveSecretBox([{ id: 'k1', key: 'k'.repeat(32) }])
+  const context = { tenantId: 'acme', connectionId: 'c1', provider: 'fake' }
+
+  it('refuses an envelope whose GCM tag was truncated', () => {
+    const sealed = box.seal('refresh-token', context)
+    const parts = sealed.split('.')
+    // A 4-byte tag is a 1-in-4-billion forgery per try instead of 1-in-2^128;
+    // GCM will verify one happily unless told the tag length to expect.
+    const tag = Buffer.from(parts[3]!, 'base64url').subarray(0, 4).toString('base64url')
+    const truncated = [parts[0], parts[1], parts[2], tag, parts[4]].join('.')
+    expect(() => box.open(truncated, context)).toThrow(DriveSecretMalformedError)
+  })
+
+  it('refuses a context field containing NUL, which would make the AAD ambiguous', () => {
+    expect(() => box.seal('x', { ...context, tenantId: 'a\u0000b' })).toThrow()
+    const sealed = box.seal('x', context)
+    expect(() => box.open(sealed, { ...context, connectionId: 'c1\u0000' })).toThrow(DriveSecretMalformedError)
+  })
+})

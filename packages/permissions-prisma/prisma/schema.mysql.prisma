@@ -1,0 +1,46 @@
+// Reference schema for @basaltkit/permissions-prisma — MySQL variant.
+//
+// Same models as schema.prisma, sized for MySQL: a bare `String` becomes
+// VARCHAR(191) there, and outside strict mode MySQL truncates a longer value
+// silently — two role or permission names cut to the same prefix become one
+// grant. Every column here is part of a composite primary key, so all stay
+// VARCHAR(191): three of them (573 utf8mb4 characters, 2 292 bytes) fit
+// InnoDB's 3 072-byte index-key limit. Pair it with
+// `prismaAccessStore(prisma, { columnLimits: 'mysql' })`, which refuses a value
+// that would not fit instead of letting it be cut.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model PermUserRole {
+  scope  String
+  userId String
+  role   String
+
+  @@id([scope, userId, role])
+  @@map("perm_user_roles")
+}
+
+model PermUserPermission {
+  scope      String
+  userId     String
+  permission String
+
+  @@id([scope, userId, permission])
+  @@map("perm_user_permissions")
+}
+
+model PermRolePermission {
+  scope      String
+  role       String
+  permission String
+
+  @@id([scope, role, permission])
+  @@map("perm_role_permissions")
+}

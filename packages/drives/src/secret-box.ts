@@ -5,31 +5,14 @@ import { DriveSecretKeyInvalidError, DriveSecretKeyUnknownError, DriveSecretMalf
  * Authenticated encryption (AES-256-GCM) for the OAuth tokens this package
  * stores at rest.
  *
- * ## Why this is not `@basaltkit/auth`'s secret box
+ * ## Relation to `@basaltkit/auth`'s `SecretBox`
  *
- * `@basaltkit/auth` has an AES-256-GCM helper for TOTP secrets
- * (`packages/auth/src/secret-box.ts`). It could not be reused, for two reasons
- * — one mechanical, one substantive:
- *
- * 1. **It is private.** It is not re-exported from `@basaltkit/auth`'s
- *    `index.ts` and there is no package subpath for it, so it is unreachable
- *    from another package without editing `@basaltkit/auth`.
- * 2. **Its threat model is weaker than a refresh token needs.** It binds no
- *    associated data, so a ciphertext is portable between rows — copy tenant
- *    A's blob into tenant B's row and B holds A's credentials. It has one key
- *    and no key id, so rotating means re-encrypting every row in a flag day.
- *    And `decryptSecret` returns any value lacking the `v1:` prefix unchanged,
- *    which is a deliberate legacy-plaintext path for TOTP migration but is
- *    fail-**open** for a credential: whoever can write the column can choose
- *    the plaintext.
- *
- * This box fixes all three: **AAD binding**, a **key ring with ids**, and
- * **no plaintext path** — an unrecognised value is corruption, never a secret.
- *
- * RFC 0002 proposes promoting this into a lower layer so `@basaltkit/auth` and
- * this package share one implementation; until that lands, this is the single
- * accepted duplication in the design, and it is deliberately the *stronger* of
- * the two so the merge direction is obvious.
+ * `@basaltkit/auth` now ships a `SecretBox` for TOTP secrets built on the same
+ * model — HKDF-derived keys, a key ring with ids, AAD binding to the owning
+ * record, and no plaintext path unless a legacy migration is opted into. The
+ * two are still separate implementations because neither package may depend
+ * on the other; RFC 0002 proposes promoting one into a lower layer so both
+ * share it.
  *
  * ## Envelope
  *
@@ -78,8 +61,18 @@ const toKeyMaterial = (key: string | Uint8Array): Buffer =>
  * may contain a NUL, which keeps the encoding unambiguous (`a|b` + `c` must not
  * collide with `a` + `b|c`).
  */
-const aad = (keyId: string, context: DriveSecretContext): Buffer =>
-  Buffer.from([VERSION, keyId, context.tenantId, context.connectionId, context.provider].join('\0'), 'utf8')
+const aad = (keyId: string, context: DriveSecretContext): Buffer => {
+  // The separator is only unambiguous if it cannot occur inside a field, so
+  // that is checked rather than assumed: ids come from a store and a tenancy
+  // resolver this package does not control.
+  for (const field of [context.tenantId, context.connectionId, context.provider]) {
+    if (field.includes('\0')) throw new DriveSecretMalformedError('the credential context contains a NUL character.')
+  }
+  return Buffer.from([VERSION, keyId, context.tenantId, context.connectionId, context.provider].join('\0'), 'utf8')
+}
+
+/** GCM's full tag. Anything shorter is refused: see {@link DriveSecretBox.open}. */
+const TAG_BYTES = 16
 
 /**
  * Seals and opens credential blobs against a key ring.
@@ -126,7 +119,7 @@ export class DriveSecretBox {
   seal(plaintext: string, context: DriveSecretContext): string {
     const key = this.keys.get(this.activeId)!
     const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', key, iv)
+    const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES })
     cipher.setAAD(aad(this.activeId, context))
     const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
     const tag = cipher.getAuthTag()
@@ -147,11 +140,20 @@ export class DriveSecretBox {
     const [, keyId, ivB64, tagB64, ctB64] = parts as [string, string, string, string, string]
     const key = this.keys.get(keyId)
     if (!key) throw new DriveSecretKeyUnknownError(keyId)
+    const additional = aad(keyId, context)
+    const tag = Buffer.from(tagB64, 'base64url')
     let plaintext: Buffer
     try {
-      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'))
-      decipher.setAAD(aad(keyId, context))
-      decipher.setAuthTag(Buffer.from(tagB64, 'base64url'))
+      // GCM accepts a tag as short as 4 bytes unless it is told otherwise, and
+      // every byte shaved off halves the work of forging one. We only ever
+      // write 16, so 16 is all that is read — pinned twice, because the length
+      // check is the part that does not depend on the OpenSSL build.
+      if (tag.length !== TAG_BYTES) throw new Error('truncated tag')
+      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'), {
+        authTagLength: TAG_BYTES,
+      })
+      decipher.setAAD(additional)
+      decipher.setAuthTag(tag)
       plaintext = Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64url')), decipher.final()])
     } catch {
       // One message for every failure mode: a wrong key, a tampered tag and a

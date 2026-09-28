@@ -51,15 +51,18 @@ auditPlugin({ store: a.store, integrity: 'hash-chain', requestContext: true })
 
 - **Hash chain** — `seq`, `prev_hash`, `hash` and a `chain` key (`'t:<tenantId>'` or `'@system'`) are stored per row, with a **unique index on `(chain, seq)`**: two processes appending to the same file cannot fork a chain — the loser gets `AuditChainConflictError` and `Audit` retries on the new head. `audit.verify()` / `basalt audit:verify` read the chain back in `seq` order.
 - **Request context** — `ip` and `user_agent` columns.
-- **Automatic migration** — `migrate()` (run by `openAuditDatabase()` / `sqliteAuditStore()`) adds the new columns and the index to an existing database with `ALTER TABLE`. Rows written before keep NULLs and are reported by `verify()` as *unchained*, never as broken.
+- **Automatic migration** — `migrate()` (run by `openAuditDatabase()` / `sqliteAuditStore()`) adds the new columns and the index to an existing database with `ALTER TABLE`. Rows written before keep NULLs and are reported by `verify()` as *unchained* (legacy), never as broken.
+- **Rows outside the chain** — `readUnchained()` finds every row of a tenant that is not in its chain: a row with `chain IS NULL` but a `seq`, or a `chain` name that is not the tenant's, is always reported by `verify()` (`unverified`, `ok: false`); a seq-less row only when it was written after the chain began. `trail({ chainedOnly: true })` leaves them out, and `verifyAll()` reports a chain name that maps to no tenant as `unknown-chain`. `verifyAll()` also visits tenants whose rows are all outside a chain, found with one `SELECT DISTINCT tenant_id` (`auditTenants()`) rather than a read of the whole trail.
 - SQLite has no roles to `REVOKE UPDATE, DELETE` from: protect the database file with filesystem permissions (only the app user can write it) and back it up; for a keyed chain see `integrity: { mode: 'hash-chain', key }` in the [`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#verifiable-trail-hash-chain).
 
 ## Notes
 
 - **Append-only by contract** — one `audit_entries` table, no update or delete.
 - Queries return **newest-first** with the same filters as the in-memory store:
-  `tenantId`, `actorId`, `since`, and the **event wildcard** (`auth:**`).
-  `limit` always counts only pattern-matched rows.
+  `tenantId`, `actorId`, `since`, `chainedOnly`, and the **event wildcard** (`auth:**`).
+  `limit` always counts only pattern-matched rows. Every filter is type-checked
+  (`assertAuditQuery`) even when the store is called directly: a non-string
+  `tenantId`/`actorId`/`event` or a non-integer `limit` throws a `TypeError`.
 - The `payload` is stored as JSON text and round-trips unchanged.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contract.
 - **Query pushdown.** Every exact filter — tenant, actor, `since`, and an event name with **no** wildcard — plus the `limit` go into the database (`take` / `LIMIT`). Only a wildcard pattern still needs matching in code, and then rows are read in bounded 500-row pages that stop as soon as the limit is satisfied, so a `limit: 50` query never materialises the whole trail. A pattern containing `.` is deliberately not pushed down: `patternMatches` treats `.` and `:` as interchangeable separators, so an equality would miss `a:b` for `a.b`.

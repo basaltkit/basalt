@@ -25,13 +25,18 @@ export interface RateLimitStore {
 export interface MemoryRateLimitStoreOptions {
   clock?: () => number
   /**
-   * Most buckets kept at once (default 100 000). Past it, expired buckets are
-   * swept and, if the store is still full, the oldest windows are evicted first
-   * — so a flood of distinct client addresses (IPv6 makes them cheap) costs
-   * bounded memory instead of growing the process until it dies. Evicting a
-   * live window resets that client's count, so size it well above your real
-   * distinct-client count per window; use `RedisRateLimitStore` across
-   * instances.
+   * Most open buckets kept at once (default 100 000). Past it, expired buckets
+   * are swept and, if the store is still full, the oldest windows are evicted
+   * first — so a flood of distinct client addresses (IPv6 makes them cheap)
+   * costs bounded memory instead of growing the process until it dies.
+   * Evicting a live window resets that client's count, so size it well above
+   * your real distinct-client count per window; use `RedisRateLimitStore`
+   * across instances.
+   *
+   * A bucket that has used up its limit is never evicted: it is held until its
+   * window ends, so a flood of fresh keys cannot free a limited client early.
+   * Those buckets are the only ones allowed past the cap — each cost its client
+   * a full limit of requests, and each goes when its window does.
    */
   maxEntries?: number
   /** How often, at most, a hit sweeps every expired bucket (default 60 000 ms). */
@@ -45,6 +50,9 @@ export class MemoryRateLimitStore implements RateLimitStore {
   // Insertion order == window start order (a new window re-inserts its key),
   // which makes the first entry the oldest window: FIFO eviction for free.
   private readonly windows = new Map<string, { count: number; resetAt: number }>()
+  // Buckets that reached their limit. Kept apart so eviction — which only ever
+  // walks `windows` — can never reset a limited client, and stays O(1).
+  private readonly exhausted = new Map<string, { count: number; resetAt: number }>()
   private readonly clock: () => number
   private readonly maxEntries: number
   private readonly sweepIntervalMs: number
@@ -59,7 +67,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
   /** Buckets currently held (live or not yet swept). */
   get size(): number {
-    return this.windows.size
+    return this.windows.size + this.exhausted.size
   }
 
   hit(key: string, limit: number, windowMs: number): RateLimitResult {
@@ -68,14 +76,17 @@ export class MemoryRateLimitStore implements RateLimitStore {
       this.sweep(now)
       this.nextSweepAt = now + this.sweepIntervalMs
     }
-    let window = this.windows.get(key)
+    let window = this.exhausted.get(key) ?? this.windows.get(key)
     if (!window || now >= window.resetAt) {
-      if (window) this.windows.delete(key)
-      else if (this.windows.size >= this.maxEntries) this.makeRoom(now)
+      if (window) {
+        this.windows.delete(key)
+        this.exhausted.delete(key)
+      } else if (this.windows.size >= this.maxEntries) this.makeRoom(now)
       window = { count: 0, resetAt: now + windowMs }
       this.windows.set(key, window)
     }
     window.count += 1
+    if (window.count >= limit && this.windows.delete(key)) this.exhausted.set(key, window)
     return {
       allowed: window.count <= limit,
       limit,
@@ -86,16 +97,19 @@ export class MemoryRateLimitStore implements RateLimitStore {
   }
   reset(key: string): void {
     this.windows.delete(key)
+    this.exhausted.delete(key)
   }
 
   private sweep(now: number): void {
     for (const [key, window] of this.windows) if (now >= window.resetAt) this.windows.delete(key)
+    for (const [key, window] of this.exhausted) if (now >= window.resetAt) this.exhausted.delete(key)
   }
 
   // Evicts from the FRONT only (oldest windows first), so admitting a new key
   // into a full store is amortised O(1). A full sweep here would rescan every
   // bucket for each new client once the store is full — a flood of distinct
   // addresses would turn the memory bound into a CPU denial of service.
+  // Exhausted buckets live in their own map and are never candidates.
   private makeRoom(now: number): void {
     for (const [key, window] of this.windows) {
       if (this.windows.size < this.maxEntries && now < window.resetAt) break
@@ -159,8 +173,14 @@ export const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
  *
  * Resolved after enrichers ran, so auth/tenancy have set `ctx()`. When the id
  * is missing (anonymous caller, no tenant resolved, the function returns
- * nothing) the bucket falls back to the client IP — never to one shared
- * bucket, and never mixed with identified callers' buckets.
+ * nothing) the bucket falls back to the client IP, never mixed with identified
+ * callers' buckets (those are namespaced `user:`/`tenant:`/`key:`).
+ *
+ * The IP itself can be missing too: when the adapter could not resolve
+ * `request.ip` (Hono on a runtime without `getClientIp`, a hand-built
+ * pipeline), every such request shares ONE bucket, `unknown` — deliberately
+ * fail-closed, since the alternative would be a bucket per spoofable header.
+ * Resolve the address in the adapter to get per-client buckets back.
  */
 export type RateLimitKey =
   | 'ip'
@@ -290,13 +310,31 @@ function applyRateLimitHeaders(reply: HttpReply, result: RateLimitResult): void 
 
 const RATE_LIMITED = { code: 'RATE_LIMITED', message: 'Too many requests — slow down.' } as const
 
-function applyCors(request: HttpRequest, reply: HttpReply, options: CorsOptions): void {
+/** Sets the CORS response headers; returns whether the request's origin is allowed. */
+function applyCors(request: HttpRequest, reply: HttpReply, options: CorsOptions): boolean {
   const origin = resolveOrigin(options, headerOf(request, 'origin'))
-  if (origin === null) return
+  if (origin === null) return false
   reply.header('Access-Control-Allow-Origin', origin)
   if (origin !== '*') reply.header('Vary', 'Origin')
   if (options.credentials) reply.header('Access-Control-Allow-Credentials', 'true')
   if (options.exposedHeaders?.length) reply.header('Access-Control-Expose-Headers', options.exposedHeaders.join(', '))
+  return true
+}
+
+/**
+ * Answers a CORS preflight. The `Allow-*` headers go only to an allowed
+ * origin: for any other the preflight is still answered (204, so the browser
+ * reports a CORS failure rather than an HTTP one) but discloses nothing — not
+ * the methods the API takes, and not the request headers echoed back.
+ */
+function answerPreflight(request: HttpRequest, reply: HttpReply, options: CorsOptions, allowed: boolean): void {
+  if (allowed) {
+    reply.header('Access-Control-Allow-Methods', (options.methods ?? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']).join(', '))
+    const requested = headerOf(request, 'access-control-request-headers')
+    reply.header('Access-Control-Allow-Headers', options.allowedHeaders?.join(', ') ?? requested ?? '*')
+    reply.header('Access-Control-Max-Age', String(options.maxAge ?? 600))
+  }
+  reply.code(204).send()
 }
 
 /**
@@ -360,17 +398,12 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
       container.get(HTTP_SERVER).use(async ({ request, reply }) => {
         if (headers) applyHeaders(reply, headers)
 
-        if (cors) {
-          applyCors(request, reply, cors)
-          if (request.method === 'OPTIONS' && headerOf(request, 'access-control-request-method')) {
-            reply.header('Access-Control-Allow-Methods', (cors.methods ?? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']).join(', '))
-            const requested = headerOf(request, 'access-control-request-headers')
-            reply.header('Access-Control-Allow-Headers', cors.allowedHeaders?.join(', ') ?? requested ?? '*')
-            reply.header('Access-Control-Max-Age', String(cors.maxAge ?? 600))
-            reply.code(204).send()
-            return
-          }
-        }
+        const originAllowed = cors ? applyCors(request, reply, cors) : false
+        // A preflight is answered here, never routed — but only AFTER the rate
+        // limiter: it used to short-circuit first, so preflights were free and
+        // uncounted however many a client sent.
+        const preflight =
+          cors !== undefined && request.method === 'OPTIONS' && Boolean(headerOf(request, 'access-control-request-method'))
 
         if (rateLimit && store && !rateLimit.skip?.(request)) {
           // A route with its own `meta.rateLimit` gets a dedicated bucket. When
@@ -380,7 +413,9 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
           // bucket and the guard charges the dedicated, stricter one.
           // A user/tenant-keyed route cannot be charged here (no ctx() yet):
           // it counts against the global bucket and the guard charges its own.
-          const override = request.routePattern ? perRoute.get(routeKey(request.method, request.routePattern)) : undefined
+          // A preflight always counts against the global bucket.
+          const override =
+            !preflight && request.routePattern ? perRoute.get(routeKey(request.method, request.routePattern)) : undefined
           if (override && request.routePattern && !needsContext(override)) {
             const result = await store.hit(`${clientKey(request)}::${request.routePattern}`, override.limit, override.windowMs)
             if (isObject(request.raw)) charged.add(request.raw)
@@ -390,8 +425,13 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
           }
           const result = await store.hit(clientKey(request), rateLimit.limit, rateLimit.windowMs)
           applyRateLimitHeaders(reply, result)
-          if (!result.allowed) reply.code(429).send({ error: { ...RATE_LIMITED } })
+          if (!result.allowed) {
+            reply.code(429).send({ error: { ...RATE_LIMITED } })
+            return
+          }
         }
+
+        if (preflight && cors) answerPreflight(request, reply, cors, originAllowed)
       })
     },
   })

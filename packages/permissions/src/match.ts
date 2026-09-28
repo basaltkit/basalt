@@ -19,13 +19,28 @@
  * point of it.
  */
 
-/** `'projects:*'` grants `'projects:delete'`; `'*'` grants everything. */
+/**
+ * `'projects:*'` grants `'projects:delete'`; `'*'` grants everything.
+ *
+ * A permission with an empty segment (`''`, `'projects:'`, `':read'`,
+ * `'a::b'`) is malformed and never matches anything — not even itself, and
+ * not a wildcard: `'projects:*'` does not grant `'projects:'`, and `'*'` does
+ * not grant `''`.
+ */
 export function permissionMatches(granted: string, requested: string): boolean {
-  if (granted === requested || granted === '*') return true
-  const grantedParts = granted.split(':')
+  if (typeof granted !== 'string' || typeof requested !== 'string') return false
   const requestedParts = requested.split(':')
+  if (requestedParts.includes('')) return false
+  if (granted === '*') return true
+  const grantedParts = granted.split(':')
+  if (grantedParts.includes('')) return false
   if (grantedParts.length !== requestedParts.length) return false
   return grantedParts.every((part, index) => part === '*' || part === requestedParts[index])
+}
+
+/** True when `permission` has no empty segment (`''`, `'a:'`, `':b'`, `'a::b'` do). */
+export function hasEmptySegment(permission: string): boolean {
+  return permission.split(':').includes('')
 }
 
 /** True when any granted permission covers `requested`. */

@@ -109,7 +109,9 @@ Unexpected errors respond with `500` and `{ error: { code: 'INTERNAL_ERROR', ...
 
 ### Request body: what the adapter interprets
 
-The adapter reads the body based on `Content-Type`: `application/json` → JSON object; forms (`form`) → Hono's `parseBody()`; other text → string; empty or invalid body → `undefined` (Zod validation handles the rest). `GET`/`HEAD` requests never have a body.
+The adapter reads the body based on the `Content-Type` **media type**, the same rule as Fastify and Express: `application/json` or a `+json` type (parameters and case ignored) → JSON; `application/x-www-form-urlencoded` → Hono's `parseBody()`; anything else → the text as a string. `text/plain; application/json` is **not** JSON — it is CORS-safelisted, so a cross-site page could send it without a preflight. Malformed JSON answers `400 BAD_REQUEST` ("Malformed request body."); an empty body is `undefined`. `GET`/`HEAD` requests never have a body.
+
+The rest of the neutral request matches the other adapters too: `request.url` is the path and query string (`/items?x=1`, not the absolute URL), and a repeated query key is an array (`?a=1&a=2` → `{ a: ['1', '2'] }`).
 
 A `multipart/form-data` body is only read inside the route handler: pre-hooks and after-hooks never see it. On an `upload()` route (`body: upload({ … })` from `@basaltkit/http`), the raw `ReadableStream` goes, unbuffered, to the neutral streaming parser after enrichers and guards ran. The route's own `maxBytes` applies there, not `bodyLimit`. On any other route, a multipart body is still bounded by `bodyLimit` and parsed with `parseBody()`. A `rawBody()` route is treated the same way — nothing reads or buffers its body before the handler. See the [`@basaltkit/http` README](../http/README.md#file-uploads--upload).
 
@@ -198,7 +200,9 @@ no body. Same handler code as on Fastify and Express.
 
 A handler returning `sse(producer)` from `@basaltkit/http` becomes a `Response` backed by a
 web `ReadableStream`, so it streams on Node, Bun, Deno and edge alike. Client aborts
-(`request.signal`) are relayed to `stream.onClose()`. Same handler code as on Fastify and
+(`request.signal`) are relayed to `stream.onClose()`. The headers set before it — CORS,
+security headers, rate-limit counters, `x-request-id` — are kept on the stream, so a
+cross-origin `EventSource` passes its CORS check. Same handler code as on Fastify and
 Express.
 
 ### Enrichers and guards (authentication, tenancy, …)
@@ -314,14 +318,15 @@ In this mode errors are still standardized (each handler wraps `toErrorResponse`
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
-| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. Never waives the route-meta validators plugins register (`InvalidRouteMetaError`). |
 | `app` | `Hono` | No | `new Hono()` | Bring your own Hono app; otherwise a new one is created. |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes. A later `hono.notFound(…)` of your own still wins; `false` opts out entirely. |
 | `bodyLimit` | `number` | No | `DEFAULT_BODY_LIMIT` = `1_048_576` (1 MiB) | Maximum request body in bytes, enforced on the bytes read. A request whose `Content-Length` exceeds it is rejected `413 PAYLOAD_TOO_LARGE` before the body is read; a chunked/streamed body is cut off at the limit — Hono/edge has no default cap of its own. An `upload()` route is bounded by its own `maxBytes` instead (streamed, never buffered). |
 | `getClientIp` | `(c: Context) => string \| undefined` | No | `defaultClientIp` (socket address on `@hono/node-server` / Bun) | Resolves `request.ip` for rate limiting and the IP login throttle. |
 | `onError` | `HttpErrorReporter` | No | `console.error`/`console.warn` | Where failed requests are reported. |
+| `errorHandler` | `boolean` | No | `true` | Install an `app.onError` that answers errors raised outside a route handler (a failing pre-hook or edge route, an unreadable body) with the neutral JSON envelope and reports them through `onError`, instead of Hono's plain-text 500. An `HTTPException` thrown by your own Hono middleware keeps its response. Pass `false` if you install your own `onError` (Hono keeps only the last one). |
 
-Behavior: registers the Hono app on the `HONO` token and an `HttpServerCollector` on the `HTTP_SERVER` token. On the `app:booted` event it mounts, in order: *after-hooks* middleware (metrics/tracing, measuring duration), *pre-hooks* middleware (security/CORS/rate limit; if one of these responds, the route doesn't run), the Basalt routes, and the extra edge plugin routes (`/livez`, `/metrics`, `/openapi.json`, …). Publishes the routes to the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
+Behavior: registers the Hono app on the `HONO` token and an `HttpServerCollector` on the `HTTP_SERVER` token. On the `app:booted` event it mounts, in order: *after-hooks* middleware (metrics/tracing, measuring duration; a failing hook is reported as `AFTER_HOOK_FAILED` and never replaces the response), *pre-hooks* middleware (security/CORS/rate limit; if one of these responds, the route doesn't run), the Basalt routes, and the extra edge plugin routes (`/livez`, `/metrics`, `/openapi.json`, …). Publishes the routes to the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
 > Note: this plugin has no `shutdown` step of its own — Basalt never starts a listener for you, so stopping the server (`serve` from `@hono/node-server`, etc.) is your responsibility.
 
@@ -337,7 +342,9 @@ reason about it or reuse it.
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A plugin's route-meta validator (`http:meta-validators`) refused a value — e.g. `teamsPlugin` and an unknown `meta.teamRole`. Not waivable. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
+| — | `BAD_REQUEST` | 400 | A JSON body could not be parsed. |
 | — | `PAYLOAD_TOO_LARGE` | 413 | The body (declared or actually read) exceeds `bodyLimit`. Same `{ error: { code, message } }` envelope as every other error. |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
 | — | `INTERNAL_ERROR` | 500 | Any other thrown error. The real message never reaches the client. |

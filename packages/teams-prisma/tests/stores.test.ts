@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { Teams } from '@basaltkit/teams'
 import {
   PrismaInvitationStore,
   PrismaMembershipStore,
@@ -180,5 +181,24 @@ describe('prismaTeamsStores', () => {
     const t = prismaTeamsStores(client)
     expect(t.memberships).toBeInstanceOf(PrismaMembershipStore)
     expect(t.invitations).toBeInstanceOf(PrismaInvitationStore)
+  })
+})
+
+describe('FA-045: one pending invite per email is case-insensitive', () => {
+  it('findPending matches the canonical address, including legacy mixed-case rows', async () => {
+    const store = new PrismaInvitationStore(client)
+    await store.create({ id: 'legacy', tenantId: 'acme', email: 'Bob@X.test', role: 'admin', token: 'h1', expiresAt: 100 })
+    expect((await store.findPending('acme', 'bob@x.test'))?.id).toBe('legacy')
+    expect((await store.findPending('acme', ' BOB@x.TEST '))?.id).toBe('legacy')
+    expect(await store.findPending('other', 'bob@x.test')).toBeNull()
+  })
+
+  it('with Teams on top, a member invite to bob@ supersedes an admin invite to Bob@', async () => {
+    const stores = prismaTeamsStores(client)
+    const teams = new Teams({ memberships: stores.memberships, invitations: stores.invitations })
+    await teams.invite({ tenantId: 'acme', email: 'Bob@X.test', role: 'admin' })
+    await teams.invite({ tenantId: 'acme', email: 'bob@x.test', role: 'member' })
+    const pending = await teams.pendingInvites('acme')
+    expect(pending.map((i) => `${i.email}:${i.role}`)).toEqual(['bob@x.test:member'])
   })
 })

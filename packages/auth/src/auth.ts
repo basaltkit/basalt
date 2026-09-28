@@ -1,15 +1,17 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { BasaltError, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
+import { BasaltError, isProductionEnvironment, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle, type ThrottleStore } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
 import { generateTotpSecret, matchTotpStep, otpauthUri } from './totp.js'
-import { decryptSecret, deriveKey, encryptSecret } from './secret-box.js'
+import { SecretBox, SecretBoxKeyError, type SecretBoxKey, type SecretBoxLegacyOptions } from './secret-box.js'
 import {
+  MemoryAccountLinkStore,
   MemoryAuthTokenStore,
   MemoryMfaStore,
   MemoryRefreshTokenStore,
   MemorySessionStore,
+  type AccountLinkStore,
   type AuthTokenPurpose,
   type AuthTokenStore,
   type AuthUser,
@@ -151,6 +153,45 @@ export class SocialLinkRefusedError extends BasaltError {
 }
 
 /**
+ * A social / SSO login's provider account conflicts with an existing link: the
+ * local account is already linked to a different subject of the same provider
+ * (another IdP account asserting the same email), or the subject was bound to
+ * another account concurrently.
+ */
+export class AccountLinkConflictError extends BasaltError {
+  readonly status = 409
+  constructor() {
+    super(
+      'AUTH_ACCOUNT_LINK_CONFLICT',
+      'This account is linked to a different identity at this provider. Sign in with that identity or with your password.',
+    )
+  }
+}
+
+/**
+ * A user store holds more than one account whose email differs only in letter
+ * case (rows written before emails were canonicalised), so an email lookup
+ * cannot tell which account is meant. Stores throw it instead of guessing:
+ * resolve the duplicates (e.g. `normalizeAuthUserEmails()` of
+ * `@basaltkit/auth-prisma` / `@basaltkit/auth-sqlite` reports them), then the
+ * lookup works again. Not exposed to the client.
+ */
+export class AccountEmailAmbiguousError extends BasaltError {
+  readonly status = 500
+  readonly expose = false
+  constructor(email: string) {
+    super(
+      'AUTH_EMAIL_AMBIGUOUS',
+      `More than one account matches the email "${email}" in different letter cases; merge or rename the duplicates.`,
+    )
+  }
+}
+
+/** A provider name / subject usable as a link key part: non-empty, bounded, no NUL. */
+const isLinkPart = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= 1024 && !value.includes('\0')
+
+/**
  * Canonical form of an email identity: trimmed and lowercased. Every lookup,
  * create and throttle key goes through it, so `Bob@acme.test` and
  * `bob@acme.test` are one account.
@@ -188,7 +229,10 @@ export interface SessionCookieOptions {
   httpOnly?: boolean
   /** SameSite policy. Default: `Lax`. */
   sameSite?: 'Strict' | 'Lax' | 'None'
-  /** Whether to require HTTPS. Defaults to production-only. */
+  /**
+   * Whether to require HTTPS. Defaults to true unless `NODE_ENV` is explicitly
+   * `development` or `test` (an unset NODE_ENV counts as production).
+   */
   secure?: boolean
 }
 
@@ -246,6 +290,13 @@ export interface AuthOptions {
   /** Store for MFA (TOTP) enrollment state. Default: in-memory. */
   mfa?: MfaStore
   /**
+   * Store binding provider subjects to accounts ({@link Auth.socialLogin}).
+   * Default: in-memory — use a durable one (`@basaltkit/auth-prisma`,
+   * `@basaltkit/auth-sqlite`) with OAuth, or links are forgotten on restart and
+   * logins fall back to the email match.
+   */
+  accountLinks?: AccountLinkStore
+  /**
    * Enables access-token revocation. When set, access tokens carry a version
    * (`tv`) and `resetPassword`/`revokeAllTokens` bump it — invalidating every
    * token issued before the bump, even before its TTL expires. Opt-in; access
@@ -253,10 +304,22 @@ export interface AuthOptions {
    */
   tokenVersions?: TokenVersionStore
   /**
-   * Key for encrypting TOTP secrets at rest (AES-256-GCM). When set, secrets are
-   * stored as `v1:` envelopes so a database leak can't recover a live second
-   * factor; existing plaintext records keep working and are encrypted on next
-   * write. Any length — derived to 32 bytes. Omit to store secrets in plaintext.
+   * Encrypts TOTP secrets at rest (AES-256-GCM, HKDF-derived keys, each
+   * ciphertext bound to its user). `keys` is a ring: the first key seals new
+   * secrets, the others stay readable (rotation). A stored value that is not an
+   * envelope sealed for that user is refused — a database write cannot swap in
+   * a plaintext secret the writer knows. `legacy` reads `v1:` envelopes and/or
+   * plaintext during a migration only; move rows over with
+   * {@link Auth.reencryptMfaSecret}, then remove it.
+   *
+   * Omit (and omit {@link mfaEncryptionKey}) to store secrets in plaintext.
+   */
+  mfaEncryption?: { keys: SecretBoxKey[]; legacy?: SecretBoxLegacyOptions }
+  /**
+   * Shorthand for `mfaEncryption: { keys: [{ id: 'default', key }] }` (at least
+   * 32 bytes). It does **not** read the old `v1:` envelopes or plaintext: to
+   * migrate from a pre-4.0 `mfaEncryptionKey`, use `mfaEncryption` with
+   * `legacy: { v1Keys: [oldKey] }`.
    */
   mfaEncryptionKey?: string | Buffer
   /** Issuer name shown in authenticator apps. Default 'Basalt'. */
@@ -287,8 +350,9 @@ export class Auth {
   private readonly verificationTtl: DurationInput
   private readonly resetTtl: DurationInput
   private readonly mfa: MfaStore
+  private readonly accountLinks: AccountLinkStore
   private readonly mfaIssuer: string
-  private readonly mfaKey: Buffer | undefined
+  private readonly mfaBox: SecretBox | undefined
   private readonly tokenVersions: TokenVersionStore | undefined
   private readonly enumerationSafeRegister: boolean
 
@@ -296,9 +360,10 @@ export class Auth {
     this.users = options.users
     this.secret = options.secret
     // Fail closed on a weak signing key. Always reject an empty secret; in
-    // production require >= 32 chars (a short HS256 key is offline-forgeable).
+    // production (anything but an explicit NODE_ENV=development/test, unset
+    // included) require >= 32 chars (a short HS256 key is offline-forgeable).
     if (!this.secret) throw new WeakJwtSecretError('missing')
-    if (process.env['NODE_ENV'] === 'production' && this.secret.length < 32) {
+    if (isProductionEnvironment() && this.secret.length < 32) {
       throw new WeakJwtSecretError('too short')
     }
     this.hasher = options.hasher ?? new ScryptPasswordHasher()
@@ -312,7 +377,7 @@ export class Auth {
       path: options.sessionCookie?.path ?? '/',
       httpOnly: options.sessionCookie?.httpOnly ?? true,
       sameSite: options.sessionCookie?.sameSite ?? 'Lax',
-      secure: options.sessionCookie?.secure ?? process.env['NODE_ENV'] === 'production',
+      secure: options.sessionCookie?.secure ?? isProductionEnvironment(),
     }
     this.hooks = options.hooks
     const shared = options.throttleStore ? { store: options.throttleStore } : {}
@@ -334,8 +399,16 @@ export class Auth {
     this.verificationTtl = options.verificationTtl ?? '24h'
     this.resetTtl = options.resetTtl ?? '1h'
     this.mfa = options.mfa ?? new MemoryMfaStore()
+    this.accountLinks = options.accountLinks ?? new MemoryAccountLinkStore()
     this.mfaIssuer = options.mfaIssuer ?? 'Basalt'
-    this.mfaKey = options.mfaEncryptionKey ? deriveKey(options.mfaEncryptionKey) : undefined
+    if (options.mfaEncryption && options.mfaEncryptionKey) {
+      throw new SecretBoxKeyError('set either mfaEncryption or mfaEncryptionKey, not both.')
+    }
+    this.mfaBox = options.mfaEncryption
+      ? new SecretBox(options.mfaEncryption)
+      : options.mfaEncryptionKey
+        ? new SecretBox({ keys: [{ id: 'default', key: options.mfaEncryptionKey }] })
+        : undefined
     this.tokenVersions = options.tokenVersions
     this.enumerationSafeRegister = options.enumerationSafeRegister ?? true
   }
@@ -352,29 +425,70 @@ export class Auth {
   }
 
   /**
-   * Logs in an externally-authenticated user (e.g. from an OAuth provider),
-   * matched by email — find-or-create. A new account is created **passwordless**
-   * (a random, unusable password hash), so password login won't work for it
-   * until a password is set. A provider-verified email flips `emailVerified`.
-   * Returns the tokens and whether the account was just created.
+   * Logs in an externally-authenticated user (e.g. from an OAuth provider) —
+   * find-or-create. A new account is created **passwordless** (a random,
+   * unusable password hash), so password login won't work for it until a
+   * password is set. A provider-verified email flips `emailVerified`. Returns
+   * the tokens and whether the account was just created.
+   *
+   * With an `identity` (the provider name and its stable `subject`, which
+   * {@link OAuth} always passes) the account is matched by that link first
+   * (see {@link AccountLinkStore}): a linked provider account reaches its local
+   * account whatever email it asserts today. Without a link, the account is
+   * matched by email and the link is recorded — for an existing account only
+   * under the rules below. Once an account is linked to a provider, a
+   * **different** subject of that provider asserting the same email is refused
+   * ({@link AccountLinkConflictError}) unless `subjectConflict: 'link'`.
    *
    * Linking to an EXISTING account is refused ({@link SocialLinkRefusedError})
    * unless `emailVerified` is `true` — an unverified provider email proves
    * nothing about who owns the address. When the existing account had never
    * verified its email, whoever registered it first is not trusted either: its
-   * password, sessions, refresh tokens and MFA are revoked before it is adopted
-   * (`auth:social_account_adopted`). An account with MFA enabled requires
-   * `mfaCode` ({@link MfaRequiredError}) unless `mfa: 'skip'` is passed
-   * explicitly (only for an IdP that enforces its own second factor).
+   * password, sessions, refresh tokens, MFA and account links are revoked
+   * before it is adopted (`auth:social_account_adopted`). An account with MFA
+   * enabled requires `mfaCode` ({@link MfaRequiredError}) unless `mfa: 'skip'`
+   * is passed explicitly (only for an IdP that enforces its own second factor).
    */
   async socialLogin(
     rawEmail: string,
-    options: { emailVerified?: boolean; mfaCode?: string; mfa?: 'required' | 'skip' } = {},
+    options: {
+      emailVerified?: boolean
+      mfaCode?: string
+      mfa?: 'required' | 'skip'
+      /** The provider account behind this login; matched before the email. */
+      identity?: { provider: string; subject: string }
+      /**
+       * An account already linked to another subject of the same provider:
+       * `'refuse'` (default) or `'link'` this subject as well. Only for an IdP
+       * that legitimately re-issues subjects (a directory migration).
+       */
+      subjectConflict?: 'refuse' | 'link'
+    } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean; amr: string[] }> {
     const email = canonicalEmail(rawEmail)
+    const identity = options.identity
+    if (identity !== undefined) {
+      if (!isLinkPart(identity.provider) || !isLinkPart(identity.subject)) throw new SocialLinkRefusedError()
+    }
+    const amr = ['fed']
+
+    // 1. A known provider account: the link decides, not the email.
+    if (identity) {
+      const link = await this.accountLinks.find(identity.provider, identity.subject)
+      if (link) {
+        const linked = await this.users.findById(link.userId)
+        if (linked) {
+          await this.requireMfaForSocial(linked, options, amr)
+          return this.finishSocialLogin(linked, false, amr)
+        }
+        // The account is gone: the stale link must not block a fresh start.
+        await this.accountLinks.remove(identity.provider, identity.subject)
+      }
+    }
+
+    // 2. First login of this provider account: match by email.
     let user = await this.users.findByEmail(email)
     let created = false
-    const amr = ['fed']
     if (!user) {
       user = await this.users.create({
         email,
@@ -387,20 +501,52 @@ export class Auth {
       }
     } else {
       if (options.emailVerified !== true) throw new SocialLinkRefusedError()
+      if (identity && options.subjectConflict !== 'link' && user.emailVerified) {
+        const others = (await this.accountLinks.forUser(user.id)).filter(
+          (l) => l.provider === identity.provider && l.subject !== identity.subject,
+        )
+        if (others.length > 0) throw new AccountLinkConflictError()
+      }
       if (!user.emailVerified) {
         user = await this.adoptUnverifiedAccount(user)
-      } else if (options.mfa !== 'skip' && (await this.isMfaEnabled(user.id))) {
-        if (!options.mfaCode) throw new MfaRequiredError()
-        const key = user.email
-        await this.throttle?.reserve(key)
-        if (!(await this.verifyMfaCode(user.id, options.mfaCode))) {
-          await this.hooks?.emit('auth:mfa_failed', { userId: user.id })
-          throw new MfaInvalidCodeError()
-        }
-        await this.throttle?.reset(key)
-        amr.push('mfa')
+      } else {
+        await this.requireMfaForSocial(user, options, amr)
       }
     }
+    if (identity) await this.linkIdentity(identity, user, email)
+    return this.finishSocialLogin(user, created, amr)
+  }
+
+  /** Records the link; a concurrent first login that bound the subject elsewhere wins. */
+  private async linkIdentity(identity: { provider: string; subject: string }, user: AuthUser, email: string): Promise<void> {
+    const inserted = await this.accountLinks.create({ ...identity, userId: user.id, email, createdAt: Date.now() })
+    if (inserted) {
+      await this.hooks?.emit('auth:account_linked', { user: publicUser(user), provider: identity.provider })
+      return
+    }
+    const existing = await this.accountLinks.find(identity.provider, identity.subject)
+    if (existing?.userId !== user.id) throw new AccountLinkConflictError()
+  }
+
+  /** MFA gate of a social login into an existing account (see {@link socialLogin}). */
+  private async requireMfaForSocial(user: AuthUser, options: { mfaCode?: string; mfa?: 'required' | 'skip' }, amr: string[]): Promise<void> {
+    if (options.mfa === 'skip' || !(await this.isMfaEnabled(user.id))) return
+    if (!options.mfaCode) throw new MfaRequiredError()
+    const key = user.email
+    await this.throttle?.reserve(key)
+    if (!(await this.verifyMfaCode(user.id, options.mfaCode))) {
+      await this.hooks?.emit('auth:mfa_failed', { userId: user.id })
+      throw new MfaInvalidCodeError()
+    }
+    await this.throttle?.reset(key)
+    amr.push('mfa')
+  }
+
+  private async finishSocialLogin(
+    user: AuthUser,
+    created: boolean,
+    amr: string[],
+  ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean; amr: string[] }> {
     const tokens = await this.issueTokens(user.id, undefined, amr)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
     return { user: publicUser(user), tokens, created, amr }
@@ -422,6 +568,8 @@ export class Auth {
     await this.sessions.deleteAllForUser?.(user.id)
     await this.tokenVersions?.increment(user.id)
     await this.mfa.delete(user.id)
+    // A provider account linked by whoever registered it is a login credential too.
+    await this.accountLinks.deleteAllForUser(user.id)
     await this.hooks?.emit('auth:social_account_adopted', { user: publicUser(adopted) })
     return adopted
   }
@@ -672,7 +820,15 @@ export class Auth {
     for (const part of cookieHeader.split(';')) {
       const [name, ...rest] = part.trim().split('=')
       if (name === this.sessionCookie.name && rest.length > 0) {
-        return decodeURIComponent(rest.join('='))
+        // An unreadable cookie (malformed percent-encoding, e.g. tossed by a
+        // sibling subdomain) is no credential: the request is anonymous. It
+        // must never throw — the enricher runs on every route, public ones
+        // included, so a URIError here would 500 the whole site.
+        try {
+          return decodeURIComponent(rest.join('='))
+        } catch {
+          return null
+        }
       }
     }
     return null
@@ -791,21 +947,43 @@ export class Auth {
     return { enabled: record?.enabled ?? false, pending: record !== null && !record.enabled }
   }
 
+  /** Encrypt a TOTP secret for storage, bound to its user (no-op when no key is configured). */
+  private encryptMfaSecret(userId: string, secret: string): string {
+    return this.mfaBox ? this.mfaBox.seal(secret, { purpose: 'totp', subject: userId }) : secret
+  }
+
+  /**
+   * Decrypt a stored TOTP secret. With encryption configured, only an envelope
+   * sealed for this user opens; plaintext and `v1:` values need the explicit
+   * legacy opt-in (otherwise `AUTH_SECRET_UNREADABLE`, failing closed).
+   */
+  private decryptMfaSecret(userId: string, stored: string): string {
+    return this.mfaBox ? this.mfaBox.open(stored, { purpose: 'totp', subject: userId }) : stored
+  }
+
+  /**
+   * Re-encrypts one user's stored TOTP secret under the active key of
+   * `mfaEncryption` — for key rotation, and to migrate `v1:` envelopes or
+   * plaintext secrets (reading those needs the matching `legacy` opt-in).
+   * Returns `'resealed'` when the row was rewritten, `'current'` when it was
+   * already sealed with the active key, `'none'` when the user has no MFA
+   * record. Run it over every user id with an MFA row, then drop `legacy`.
+   */
+  async reencryptMfaSecret(userId: string): Promise<'resealed' | 'current' | 'none'> {
+    if (!this.mfaBox) throw new SecretBoxKeyError('reencryptMfaSecret needs mfaEncryption (or mfaEncryptionKey).')
+    const record = await this.mfa.get(userId)
+    if (!record) return 'none'
+    const resealed = this.mfaBox.reseal(record.secret, { purpose: 'totp', subject: userId })
+    if (resealed === null) return 'current'
+    await this.mfa.set(userId, { ...record, secret: resealed })
+    return 'resealed'
+  }
+
   /**
    * Begins MFA enrollment: generates a fresh secret (not yet active) and
    * returns it plus an `otpauth://` URI to render as a QR code. Call
    * {@link activateMfa} with a code from the app to switch it on.
    */
-  /** Encrypt a TOTP secret for storage (no-op when no key is configured). */
-  private encryptMfaSecret(secret: string): string {
-    return this.mfaKey ? encryptSecret(secret, this.mfaKey) : secret
-  }
-
-  /** Decrypt a stored TOTP secret (passes plaintext/legacy values through). */
-  private decryptMfaSecret(stored: string): string {
-    return this.mfaKey ? decryptSecret(stored, this.mfaKey) : stored
-  }
-
   async enrollMfa(userId: string): Promise<{ secret: string; otpauthUri: string }> {
     const user = await this.users.findById(userId)
     if (!user) throw new AuthRequiredError()
@@ -813,7 +991,7 @@ export class Auth {
     // exactly what disableMfa() refuses to do.
     if ((await this.mfa.get(userId))?.enabled) throw new MfaAlreadyEnabledError()
     const secret = generateTotpSecret()
-    await this.mfa.set(userId, { secret: this.encryptMfaSecret(secret), enabled: false, recoveryCodes: [] })
+    await this.mfa.set(userId, { secret: this.encryptMfaSecret(userId, secret), enabled: false, recoveryCodes: [] })
     return {
       secret,
       otpauthUri: otpauthUri({ secret, account: user.email, issuer: this.mfaIssuer }),
@@ -827,7 +1005,7 @@ export class Auth {
   async activateMfa(userId: string, code: string): Promise<{ recoveryCodes: string[] }> {
     const record = await this.mfa.get(userId)
     if (!record || record.enabled) throw new MfaNotEnrolledError()
-    const step = matchTotpStep(this.decryptMfaSecret(record.secret), code)
+    const step = matchTotpStep(this.decryptMfaSecret(userId, record.secret), code)
     if (step === null) throw new MfaInvalidCodeError()
 
     const recoveryCodes = Array.from({ length: 10 }, () => this.generateRecoveryCode())
@@ -857,7 +1035,7 @@ export class Auth {
   async verifyMfaCode(userId: string, code: string): Promise<boolean> {
     const record = await this.mfa.get(userId)
     if (!record || !record.enabled) return false
-    const step = matchTotpStep(this.decryptMfaSecret(record.secret), code)
+    const step = matchTotpStep(this.decryptMfaSecret(userId, record.secret), code)
     if (step !== null) {
       // Anti-replay: a code from a step already used cannot be reused within
       // its ~90s window (an intercepted code is single-use).

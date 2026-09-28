@@ -52,7 +52,9 @@ re-assigning a role or re-granting a permission is a harmless no-op:
 | `perm_user_permissions` | `(scope, user_id, permission)` — direct user grants |
 | `perm_role_permissions` | `(scope, role, permission)` |
 
-Everything is scoped, so `t1` and `t2` never see each other's grants.
+Everything is scoped, so `t1` and `t2` never see each other's grants. A
+multi-permission grant (`grantToRole`, `grantToUser`) is written in one
+savepoint: all of it, or — when any row fails — none of it.
 
 ## Exports
 
@@ -75,6 +77,13 @@ This package defines no `BasaltError` subclasses and no error codes. `node:sqlit
 throws its own errors (locked database, disk I/O) unchanged. The authorization
 errors a client sees — `PERMISSION_DENIED`, `AUTH_REQUIRED`,
 `PERMISSION_META_INVALID` — come from `@basaltkit/permissions`.
+
+Direct writes (`assignRole`, `removeRole`, `grantToRole`, `grantToUser`) throw a
+`TypeError` for an empty or non-string user id, role name or scope, and for a
+permission list that is not an array of non-empty strings — nothing is written.
+`''`, `null` and `undefined` would otherwise share one "nobody" row whose grants
+apply to every caller with a missing id. Seed scripts that write through the
+store directly get the same guarantee as writes through the `Gate`.
 
 The one failure worth naming: on Node 22.x, importing this package without
 `--experimental-sqlite` fails at load with an unknown-builtin error for

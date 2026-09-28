@@ -373,6 +373,25 @@ export interface DriveNotificationResult {
    * connection.
    */
   accountIds?: readonly string[] | undefined
+  /**
+   * What makes this delivery distinct from another one, for the engine's
+   * replay guard — when the vendor has something better than the body.
+   *
+   * Absent, the engine keys a delivery by a digest of its **raw body**, which
+   * is right for Dropbox (the body is exactly what the signature covers) and
+   * for Graph (a replay repeats the body byte for byte). Google is the
+   * exception: its notifications have an **empty** body and the only thing
+   * telling two apart is `X-Goog-Message-Number`, so the Google adapter reports
+   * that here.
+   *
+   * The key is only ever read from a result the adapter returned, never from a
+   * header the engine picks up on its own. Phase 2 read
+   * `x-goog-message-number` for **every** provider, which let anyone replaying
+   * a signed Dropbox body (or a Graph one) add a fresh number and walk past the
+   * guard. A key is worth only what authenticates it: on Google, whoever holds
+   * the channel token can mint any number anyway, so nothing is lost there.
+   */
+  replayKey?: string | undefined
 }
 
 /**

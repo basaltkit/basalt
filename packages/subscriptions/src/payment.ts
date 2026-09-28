@@ -187,7 +187,11 @@ export class MemoryPaymentStore implements PaymentStore {
 
 /** Result of applying a `PaymentEvent` to the ledger. */
 export interface PaymentApplyResult {
-  /** false = this event id was already processed (deduped) — you did nothing. */
+  /**
+   * false = nothing was applied: this event id was already processed (deduped),
+   * or the payment is already `paid` (a later event cannot change a settled
+   * payment — see {@link PaymentLedger.apply}). You did nothing.
+   */
   fresh: boolean
   record?: PaymentRecord
 }
@@ -303,6 +307,13 @@ export class PaymentLedger {
    * updated — use it for domain side effects (activate a subscription, mark a
    * booking paid) that must apply exactly once with the payment. If it throws,
    * the claim is released so the whole thing reprocesses on the gateway's retry.
+   *
+   * State machine: `pending → paid | failed`, `failed → paid | failed` (a retry
+   * that succeeds), and `paid` is terminal. An event for an already-paid payment
+   * — a late `payment.failed`, or a second `payment.succeeded` under a new event
+   * id — changes nothing, does not run `onFresh` and returns `fresh: false`, so
+   * a payment is never un-paid nor its side effects (activating a period) run
+   * twice.
    */
   async apply(
     event: PaymentEvent,
@@ -313,6 +324,10 @@ export class PaymentLedger {
     let record: PaymentRecord | undefined
     try {
       const status: PaymentRecordStatus = event.type === 'payment.succeeded' ? 'paid' : 'failed'
+      const current = await this.store.get(event.paymentId)
+      // `paid` is terminal: keep the claim (the event is handled — by doing
+      // nothing) and report it as not fresh.
+      if (current?.status === 'paid') return { fresh: false, record: current }
       if (status === 'paid') {
         // Defense in depth: a confirmed payment must settle the amount that was
         // requested. If the webhook reports a different amount for a payment we
@@ -320,13 +335,16 @@ export class PaymentLedger {
         // forged / mis-routed callback settling an invoice for less. Throwing
         // here hits the catch below, which releases the claim so the mismatch
         // surfaces on every retry instead of settling into a paid state.
-        const existing = await this.store.get(event.paymentId)
-        if (existing && existing.amount > 0 && event.amount !== existing.amount) {
-          throw new PaymentAmountMismatchError(event.paymentId, existing.amount, event.amount)
+        if (current && current.amount > 0 && event.amount !== current.amount) {
+          throw new PaymentAmountMismatchError(event.paymentId, current.amount, event.amount)
         }
       }
+      // A failure never rewrites the requested amount: a `payment.failed` that
+      // reports 0 would otherwise erase it and disarm the amount check above
+      // for the retry that follows.
+      const keepAmount = status === 'failed' && current !== undefined
       await this.store.setStatus(event.paymentId, status, {
-        amount: event.amount,
+        ...(keepAmount ? {} : { amount: event.amount }),
         ...(event.raw !== undefined ? { raw: event.raw } : {}),
       })
       record = await this.store.get(event.paymentId)

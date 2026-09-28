@@ -10,9 +10,13 @@ export {
   type McpToolResult,
 } from './protocol.js'
 
+export { MCP_SESSION_HEADER, type McpSessionOptions } from '@basaltkit/mcp-core'
+
 export {
   collectTools,
   defaultToolName,
+  toolSignal,
+  DEFAULT_FORWARDED_HEADERS,
   type McpTool,
   type ToolCallContext,
 } from './tools.js'
@@ -26,6 +30,7 @@ export {
   type McpServerOptions,
   type McpPluginOptions,
   type McpRoutesOptions,
+  type McpCallContext,
 } from './server.js'
 
 export {

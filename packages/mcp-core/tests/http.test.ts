@@ -10,31 +10,37 @@ const echo: McpToolDef = {
   },
 }
 
-async function rpc(url: string, message: unknown): Promise<any> {
+async function rpc(url: string, message: unknown, session?: string): Promise<any> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(session ? { 'mcp-session-id': session } : {}) },
     body: JSON.stringify(message),
   })
-  return { status: res.status, body: res.status === 202 ? null : await res.json() }
+  return {
+    status: res.status,
+    session: res.headers.get('mcp-session-id') ?? undefined,
+    body: res.status === 202 ? null : await res.json(),
+  }
 }
 
 describe('serveHttp', () => {
   it('handles initialize -> tools/list -> tools/call over POST JSON-RPC', async () => {
     const server = new McpServer({ tools: [echo], serverInfo: { name: 'http-demo', version: '1.0.0' } })
-    const handle = await serveHttp(server, { port: 0 })
+    const handle = await serveHttp(server, { port: 0, sessions: true })
     try {
       const init = await rpc(handle.url, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })
       expect(init.status).toBe(200)
       expect(init.body.result.serverInfo).toEqual({ name: 'http-demo', version: '1.0.0' })
+      const session = init.session as string
+      expect(session).toMatch(/^[A-Za-z0-9_-]{32}$/)
 
-      const list = await rpc(handle.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
+      const list = await rpc(handle.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, session)
       expect(list.body.result.tools.map((t: { name: string }) => t.name)).toEqual(['echo'])
 
-      const call = await rpc(handle.url, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'echo', arguments: { a: 1 } } })
+      const call = await rpc(handle.url, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'echo', arguments: { a: 1 } } }, session)
       expect(call.body.result.structuredContent).toEqual({ a: 1 })
 
-      const notif = await rpc(handle.url, { jsonrpc: '2.0', method: 'notifications/initialized' })
+      const notif = await rpc(handle.url, { jsonrpc: '2.0', method: 'notifications/initialized' }, session)
       expect(notif.status).toBe(202)
     } finally {
       await handle.close()
@@ -55,7 +61,7 @@ describe('serveHttp', () => {
   })
 })
 
-import { request as httpRequest } from 'node:http'
+import { request as httpRequest, type OutgoingHttpHeaders } from 'node:http'
 
 /** POST to the handle with fully-controlled Host/Origin headers (fetch can't set a foreign Host). */
 function rawPost(
@@ -142,6 +148,77 @@ describe('serveHttp — DNS-rebinding + CSRF guard', () => {
       expect(bad.status).toBe(403)
     } finally {
       await handle.close()
+    }
+  })
+})
+
+describe('serveHttp — transport details (FA-H23, Melhorias 8)', () => {
+  it('hands a tool every value of a repeated header, instead of one comma-joined (or first-wins) string', async () => {
+    let seen: Record<string, string | string[] | undefined> | undefined
+    const capture: McpToolDef = {
+      name: 'capture',
+      description: 'Capture the headers',
+      inputSchema: { type: 'object' },
+      async invoke(_args, ctx) {
+        seen = ctx.headers
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+    }
+    const handle = await serveHttp(new McpServer({ tools: [capture] }), { port: 0 })
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port: handle.port,
+            path: '/mcp',
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-tenant': ['acme', 'globex'],
+              authorization: ['Bearer one', 'Bearer two'],
+              'x-single': 'only',
+            } as unknown as OutgoingHttpHeaders, // node:http sends an array as repeated lines
+          },
+          (res) => {
+            res.resume()
+            res.on('end', () => resolve(res.statusCode ?? 0))
+          },
+        )
+        req.on('error', reject)
+        req.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'capture', arguments: {} } }))
+      })
+      expect(status).toBe(200)
+      expect(seen?.['x-tenant']).toEqual(['acme', 'globex'])
+      expect(seen?.['authorization']).toEqual(['Bearer one', 'Bearer two'])
+      expect(seen?.['x-single']).toBe('only')
+    } finally {
+      await handle.close()
+    }
+  })
+
+  it('builds a valid URL for an IPv6 bind (host: "::1")', async () => {
+    const handle = await serveHttp(new McpServer({ tools: [echo] }), { port: 0, host: '::1' }).catch((error: NodeJS.ErrnoException) => {
+      // No IPv6 loopback on this machine: nothing to check here.
+      if (error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT') return undefined
+      throw error
+    })
+    if (!handle) return
+    try {
+      expect(handle.url).toBe(`http://[::1]:${handle.port}/mcp`)
+      const init = await rpc(handle.url, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })
+      expect(init.status).toBe(200)
+    } finally {
+      await handle.close()
+    }
+  })
+
+  it('rejects instead of hanging when the port cannot be bound', async () => {
+    const first = await serveHttp(new McpServer({ tools: [echo] }), { port: 0 })
+    try {
+      await expect(serveHttp(new McpServer({ tools: [echo] }), { port: first.port })).rejects.toMatchObject({ code: 'EADDRINUSE' })
+    } finally {
+      await first.close()
     }
   })
 })

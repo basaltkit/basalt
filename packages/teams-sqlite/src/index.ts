@@ -23,6 +23,9 @@ import type {
  */
 
 type Bindable = null | number | bigint | string | Uint8Array
+// Same folding as `canonicalInviteEmail` in @basaltkit/teams (kept local so this
+// store works against any 3.x/4.x teams peer).
+const canonicalEmail = (email: string): string => email.trim().toLowerCase()
 const orNull = <T extends Bindable>(v: T | undefined): T | null => (v === undefined ? null : v)
 
 /** Open (or create) a teams database and apply the schema. `:memory:` for tests. */
@@ -191,12 +194,17 @@ export class SqliteInvitationStore implements InvitationStore {
     return rows.map(toInvitation)
   }
 
+  /**
+   * Matches the canonical (trimmed, lower-cased) address on both sides, so a
+   * mixed-case row written before `@basaltkit/teams` 4.0 canonicalised emails
+   * is still found. Compared in JS (SQLite's `lower()` only folds ASCII).
+   */
   async findPending(tenantId: string, email: string): Promise<Invitation | null> {
-    const row = this.db
-      .prepare(
-        'SELECT * FROM team_invitations WHERE tenant_id = ? AND email = ? AND accepted_at IS NULL AND revoked_at IS NULL',
-      )
-      .get(tenantId, email) as InvitationRow | undefined
+    const wanted = canonicalEmail(email)
+    const rows = this.db
+      .prepare('SELECT * FROM team_invitations WHERE tenant_id = ? AND accepted_at IS NULL AND revoked_at IS NULL')
+      .all(tenantId) as unknown as InvitationRow[]
+    const row = rows.find((r) => canonicalEmail(r.email) === wanted)
     return row ? toInvitation(row) : null
   }
 

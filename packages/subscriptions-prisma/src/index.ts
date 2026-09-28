@@ -1,3 +1,69 @@
+import { assertUsageAmount } from '@basaltkit/subscriptions'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_MEDIUMTEXT,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/subscriptions-prisma'
+
+/** The string columns each model's store writes. */
+export type SubscriptionsColumnLimits = ColumnLimits<{
+  Subscription: 'billableId' | 'plan' | 'period' | 'status' | 'gatewayRef' | 'pendingPlan' | 'pendingPeriod'
+  UsageCounter: 'billableId' | 'feature' | 'periodKey'
+  WebhookEvent: 'id'
+  Payment: 'id' | 'status' | 'billableId' | 'reference' | 'raw'
+  RecurringSubscription: 'billableId' | 'plan' | 'interval' | 'status' | 'pendingPaymentId' | 'customer'
+}>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects, for `prismaSubscriptionsStores` and `prismaPaymentStores`.
+ * Spread it to override one column after widening it.
+ */
+export const subscriptionsMysqlColumnLimits: SubscriptionsColumnLimits = {
+  Subscription: {
+    billableId: V,
+    plan: V,
+    period: V,
+    status: V,
+    gatewayRef: V,
+    pendingPlan: V,
+    pendingPeriod: V,
+  },
+  UsageCounter: { billableId: V, feature: V, periodKey: V },
+  WebhookEvent: { id: V },
+  Payment: { id: V, status: V, billableId: V, reference: V, raw: MYSQL_MEDIUMTEXT },
+  RecurringSubscription: {
+    billableId: V,
+    plan: V,
+    interval: V,
+    status: V,
+    pendingPaymentId: V,
+    customer: MYSQL_TEXT,
+  },
+}
+
+export interface PrismaSubscriptionsStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode two
+   * long webhook event ids cut to the same prefix make the second look
+   * already processed, and a cut `raw` is no longer valid JSON. `'mysql'`
+   * uses the limits of the bundled `schema.mysql.prisma`; pass an object for a
+   * schema of your own. Default: unchecked (PostgreSQL and SQLite store any
+   * length).
+   */
+  columnLimits?: 'mysql' | SubscriptionsColumnLimits
+}
+
+const limitsOf = (options: PrismaSubscriptionsStoreOptions): SubscriptionsColumnLimits | undefined =>
+  resolveColumnLimits(PKG, options.columnLimits, subscriptionsMysqlColumnLimits)
 import type {
   BillingPeriod,
   NewPayment,
@@ -109,7 +175,14 @@ const subscriptionData = (record: SubscriptionRecord): Record<string, unknown> =
 })
 
 export class PrismaSubscriptionStore implements SubscriptionStore {
-  constructor(private readonly client: PrismaSubscriptionsClient) {}
+  private readonly limits: SubscriptionsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaSubscriptionsClient,
+    options: PrismaSubscriptionsStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async get(billableId: string): Promise<SubscriptionRecord | null> {
     const r = await this.client.subscription.findUnique({ where: { billableId } })
@@ -118,6 +191,7 @@ export class PrismaSubscriptionStore implements SubscriptionStore {
 
   async save(record: SubscriptionRecord): Promise<void> {
     const data = subscriptionData(record)
+    assertColumnLengths(PKG, this.limits, 'Subscription', { billableId: record.billableId, ...data })
     await this.client.subscription.upsert({
       where: { billableId: record.billableId },
       create: { billableId: record.billableId, ...data },
@@ -134,9 +208,19 @@ export class PrismaSubscriptionStore implements SubscriptionStore {
 // --- webhook idempotency ----------------------------------------------------
 
 export class PrismaWebhookStore implements WebhookStore {
-  constructor(private readonly client: PrismaSubscriptionsClient) {}
+  private readonly limits: SubscriptionsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaSubscriptionsClient,
+    options: PrismaSubscriptionsStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async markProcessed(id: string): Promise<boolean> {
+    // A cut id would collide with another event's prefix and report it as
+    // already processed — the second event silently dropped.
+    assertColumnLengths(PKG, this.limits, 'WebhookEvent', { id })
     // Atomic claim: insert the id, skipping (not throwing on) a duplicate.
     // count === 1 means we just claimed it; 0 means it was already processed.
     const { count } = await this.client.webhookEvent.createMany({ data: [{ id }], skipDuplicates: true })
@@ -155,7 +239,14 @@ const usageWhere = (billableId: string, feature: string, periodKey: string): obj
 })
 
 export class PrismaUsageStore implements UsageStore {
-  constructor(private readonly client: PrismaSubscriptionsClient) {}
+  private readonly limits: SubscriptionsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaSubscriptionsClient,
+    options: PrismaSubscriptionsStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async get(billableId: string, feature: string, periodKey: string): Promise<number> {
     const r = await this.client.usageCounter.findUnique({ where: usageWhere(billableId, feature, periodKey) })
@@ -163,6 +254,9 @@ export class PrismaUsageStore implements UsageStore {
   }
 
   async increment(billableId: string, feature: string, periodKey: string, amount: number): Promise<number> {
+    // Positive integers only (a negative amount refunds quota, NaN poisons the counter).
+    assertUsageAmount(amount)
+    assertColumnLengths(PKG, this.limits, 'UsageCounter', { billableId, feature, periodKey })
     // Seed with a concurrency-safe createMany (skipDuplicates) rather than an
     // upsert — two concurrent upserts of the same new row both miss and race to
     // INSERT, failing with P2002 on a real database.
@@ -185,6 +279,8 @@ export class PrismaUsageStore implements UsageStore {
     amount: number,
     limit: number,
   ): Promise<UsageConsumeResult> {
+    assertUsageAmount(amount)
+    assertColumnLengths(PKG, this.limits, 'UsageCounter', { billableId, feature, periodKey })
     // Ensure the counter row exists (idempotent and concurrency-safe via
     // skipDuplicates — a plain upsert races to INSERT and fails with P2002 under
     // concurrent first-touch), then increment only while the guard holds. The
@@ -237,12 +333,15 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaSubscriptionsStores(client: PrismaSubscriptionsClient): PrismaSubscriptionsStores {
-  ensureModel(client, 'subscription', '@basaltkit/subscriptions-prisma')
+export function prismaSubscriptionsStores(
+  client: PrismaSubscriptionsClient,
+  options: PrismaSubscriptionsStoreOptions = {},
+): PrismaSubscriptionsStores {
+  ensureModel(client, 'subscription', PKG)
   return {
-    store: new PrismaSubscriptionStore(client),
-    usage: new PrismaUsageStore(client),
-    webhooks: new PrismaWebhookStore(client),
+    store: new PrismaSubscriptionStore(client, options),
+    usage: new PrismaUsageStore(client, options),
+    webhooks: new PrismaWebhookStore(client, options),
   }
 }
 
@@ -302,24 +401,28 @@ function isUniqueViolation(error: unknown): boolean {
 const toBig = (n: number): bigint => BigInt(Math.round(n))
 
 export class PrismaPaymentStore implements PaymentStore {
-  constructor(private readonly client: PrismaPaymentsClient) {}
+  private readonly limits: SubscriptionsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaPaymentsClient,
+    options: PrismaSubscriptionsStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async create(payment: NewPayment): Promise<void> {
+    const row = {
+      id: payment.id,
+      status: 'pending',
+      amount: toBig(payment.amount),
+      billableId: payment.billableId ?? null,
+      reference: payment.reference ?? null,
+      raw: payment.raw !== undefined ? JSON.stringify(payment.raw) : null,
+    }
+    assertColumnLengths(PKG, this.limits, 'Payment', row)
     // Atomic idempotent insert: `skipDuplicates` no-ops if the id already exists,
     // so a concurrent create doesn't throw or clobber.
-    await this.client.payment.createMany({
-      data: [
-        {
-          id: payment.id,
-          status: 'pending',
-          amount: toBig(payment.amount),
-          billableId: payment.billableId ?? null,
-          reference: payment.reference ?? null,
-          raw: payment.raw !== undefined ? JSON.stringify(payment.raw) : null,
-        },
-      ],
-      skipDuplicates: true,
-    })
+    await this.client.payment.createMany({ data: [row], skipDuplicates: true })
   }
 
   async setStatus(
@@ -336,6 +439,7 @@ export class PrismaPaymentStore implements PaymentStore {
       amount: toBig(patch.amount ?? 0),
       raw: patch.raw != null ? JSON.stringify(patch.raw) : null,
     }
+    assertColumnLengths(PKG, this.limits, 'Payment', create)
     try {
       await this.client.payment.upsert({ where: { id }, create, update })
     } catch (error) {
@@ -379,7 +483,14 @@ const toRecurring = (r: PRecurring): RecurringSubscription => {
 }
 
 export class PrismaRecurringStore implements RecurringStore {
-  constructor(private readonly client: PrismaPaymentsClient) {}
+  private readonly limits: SubscriptionsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaPaymentsClient,
+    options: PrismaSubscriptionsStoreOptions = {},
+  ) {
+    this.limits = limitsOf(options)
+  }
 
   async save(sub: RecurringSubscription): Promise<void> {
     const data = {
@@ -392,6 +503,7 @@ export class PrismaRecurringStore implements RecurringStore {
       customer: sub.customer ? JSON.stringify(sub.customer) : null,
       updatedAt: at(sub.updatedAt),
     }
+    assertColumnLengths(PKG, this.limits, 'RecurringSubscription', { billableId: sub.billableId, ...data })
     try {
       await this.client.recurringSubscription.upsert({
         where: { billableId: sub.billableId },
@@ -429,8 +541,14 @@ export interface PrismaPaymentStores {
  * const billing = new RecurringReferenceBilling({ gateway, ledger, store: p.recurring })
  * ```
  */
-export function prismaPaymentStores(client: PrismaPaymentsClient): PrismaPaymentStores {
-  ensureModel(client, 'payment', '@basaltkit/subscriptions-prisma')
-  ensureModel(client, 'recurringSubscription', '@basaltkit/subscriptions-prisma')
-  return { payments: new PrismaPaymentStore(client), recurring: new PrismaRecurringStore(client) }
+export function prismaPaymentStores(
+  client: PrismaPaymentsClient,
+  options: PrismaSubscriptionsStoreOptions = {},
+): PrismaPaymentStores {
+  ensureModel(client, 'payment', PKG)
+  ensureModel(client, 'recurringSubscription', PKG)
+  return {
+    payments: new PrismaPaymentStore(client, options),
+    recurring: new PrismaRecurringStore(client, options),
+  }
 }

@@ -192,6 +192,18 @@ export class TenancyNotResolvedError extends BasaltError {
   }
 }
 
+/**
+ * Two resolvers named different tenants for the same request and the plugin
+ * runs with `onConflict: 'error'`. 400: the request contradicts itself (e.g. an
+ * `x-tenant-id` header that disagrees with the Host).
+ */
+export class TenantResolutionConflictError extends BasaltError {
+  readonly status = 400
+  constructor(ids: string[]) {
+    super('TENANCY_CONFLICT', `Resolvers disagree on the tenant (${ids.map((id) => JSON.stringify(id)).join(', ')}).`)
+  }
+}
+
 export class TenantNotFoundError extends BasaltError {
   constructor(id: string) {
     super('TENANT_NOT_FOUND', `Tenant "${id}" does not exist in the tenant source.`)

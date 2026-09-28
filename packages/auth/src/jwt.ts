@@ -29,6 +29,9 @@ export interface JwtClaims {
   [claim: string]: unknown
 }
 
+/** One unpadded base64url segment — nothing outside the alphabet, no `=`. */
+const SEGMENT = /^[A-Za-z0-9_-]+$/
+
 const encode = (value: unknown): string =>
   Buffer.from(JSON.stringify(value)).toString('base64url')
 
@@ -58,10 +61,22 @@ export function verifyJwt(token: string, secret: string): JwtClaims {
   const parts = token.split('.')
   if (parts.length !== 3) throw new TokenInvalidError()
   const [head, body, signature] = parts as [string, string, string]
+  // Node's base64url decoder silently skips characters outside the alphabet
+  // and ignores the unused low bits of the last character, so without these
+  // checks `token + '!!!'` (or a tweaked final char) would still verify —
+  // token strings would be malleable, defeating denylists or idempotency keyed
+  // on the exact token. Only the canonical encoding is accepted.
+  if (!SEGMENT.test(head) || !SEGMENT.test(body) || !SEGMENT.test(signature)) {
+    throw new TokenInvalidError()
+  }
 
   const expected = createHmac('sha256', secret).update(`${head}.${body}`).digest()
   const received = Buffer.from(signature, 'base64url')
-  if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+  if (
+    received.toString('base64url') !== signature ||
+    expected.length !== received.length ||
+    !timingSafeEqual(expected, received)
+  ) {
     throw new TokenInvalidError()
   }
 

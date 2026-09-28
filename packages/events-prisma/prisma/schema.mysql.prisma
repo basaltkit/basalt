@@ -1,0 +1,45 @@
+// Reference schema for @basaltkit/events-prisma — MySQL variant.
+//
+// Same model as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently — a cut payload is no longer valid JSON. Free-text
+// columns are widened below; the keys stay VARCHAR(191) so they can be
+// indexed. Pair it with `prismaOutboxStore(prisma, { columnLimits: 'mysql' })`,
+// which refuses a value that would still not fit instead of letting it be cut.
+//
+// Copy this model into your app's schema.prisma (or run `basalt prisma:sync`),
+// run `prisma migrate dev`, and pass the generated client to `prismaOutboxStore()`.
+//
+// Keeping the outbox in the SAME database as your business tables is what makes
+// the transactional-outbox pattern work: enqueue the event in the same
+// transaction as the state change (`outbox.enqueue(event, payload, { tx })`
+// inside `prisma.$transaction(async (tx) => …)`), and the two can never disagree.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model OutboxEntry {
+  id          String    @id
+  event       String
+  // JSON-serialized payload (text, null when the payload was undefined).
+  payload     String?   @db.MediumText
+  tenantId    String?
+  createdAt   DateTime
+  attempts    Int       @default(0)
+  publishedAt DateTime?
+  lastError   String?   @db.Text
+  // Relay claim (prismaOutboxStore(prisma, { claim: true })): the lease expiry
+  // and the token of the relay holding the row. Lets several replicas relay
+  // without double-dispatching; also carries the cross-replica retry backoff.
+  lockedUntil DateTime?
+  lockedBy    String?
+
+  @@index([publishedAt, createdAt])
+  @@map("outbox")
+}

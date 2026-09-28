@@ -167,3 +167,12 @@ describe('F-27 · PrismaFileStore', () => {
     expect(await store.totalSize('empty-tenant')).toBe(0)
   })
 })
+
+// FA-070 / I4: every other *-prisma factory fails fast when the client lacks
+// its model; this one returned a store that crashed on first use with
+// "Cannot read properties of undefined (reading 'create')".
+describe('prismaFilesStore fails fast without the File model (FA-070/I4)', () => {
+  it('names the missing model', () => {
+    expect(() => prismaFilesStore({} as unknown as PrismaFilesClient)).toThrow(/has no `file` model/)
+  })
+})

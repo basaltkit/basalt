@@ -89,13 +89,29 @@ item is a `WebhookEndpointView` with `hasSecret: boolean` instead, so a
 management route can't leak them. To rotate, register a new endpoint (or pass a
 new `secret`) and unregister the old one.
 
+`register()` validates the endpoint **before storing it**, so a subscription
+that could never be delivered to is refused up front instead of failing on
+every event: the `url` must parse as an absolute URL with a scheme the
+deliverer allows (`http:`/`https:`, or your `ssrf.allowedSchemes`), a `secret`
+you pass must be at least 16 characters, and `events` must be a non-empty list
+of non-empty patterns — otherwise it throws `WebhookEndpointInvalidError`
+(`WEBHOOK_ENDPOINT_INVALID`, 400). Whether the host is public is still decided
+at delivery, where DNS is resolved and the connection pinned. A caller-supplied
+`id` that another scope (another tenant, or global vs tenant) already holds
+throws `WebhookEndpointIdInUseError` (`WEBHOOK_ENDPOINT_ID_IN_USE`, 409); every
+bundled store enforces this in its own write, so two concurrent registrations of
+the same id can't overwrite each other.
+
 Scoping is **anti-widening**: inside a request with a tenant in context,
 `register`, `list`, `unregister` and `dispatch` are forced to that tenant — a
 caller-supplied `tenantId` (which may carry client input) can never widen or
 switch the scope. The explicit argument and the system-wide behavior above apply
 only where there is no ambient tenant (jobs, CLI, single-tenant apps).
 `unregister` is a no-op — not an error — for an endpoint owned by another
-tenant.
+tenant. The manager re-verifies ownership itself (the endpoint must appear in
+that tenant's own `list()`) before calling `store.remove`, so even a store whose
+`remove` ignores the `tenantId` argument can't be used for a cross-tenant
+delete.
 
 **Fail-closed when tenancy is active.** When `tenancyPlugin` is registered (its
 `'tenancy:active'` marker), a management call with no tenant at all — no tenant
@@ -151,8 +167,11 @@ await hooks.dispatch('maintenance.scheduled', { at }, { allTenants: true })
 The manager re-applies the tenant filter to whatever the store returns, so a
 custom store that ignores the `tenantId` argument can't widen delivery.
 
-Each result is `{ endpointId, ok, status?, attempts, error? }` — persist it for
-an audit trail. Deliveries run in parallel and `dispatch` resolves only when all
+Each result is `{ endpointId, ok, status?, attempts, error?, retryable? }` —
+persist it for an audit trail. `retryable` (on failures) says whether trying
+again later can help. A delivery that throws unexpectedly (say, a malformed store
+row) becomes a failed result with `error: 'internal delivery error'` instead of
+rejecting the whole `dispatch`. Deliveries run in parallel and `dispatch` resolves only when all
 of them have settled, so an endpoint that eats the full retry budget delays the
 whole call: `dispatch` from a job or the outbox rather than inline in a request
 handler.
@@ -170,7 +189,12 @@ x-basalt-signature: t=1712345678,v1=<hmac-sha256(t.body)>
 
 `id` (also in `x-basalt-delivery`) is unique per delivery and stable across that
 delivery's retries — dedupe on it to make a replay within the tolerance window
-harmless. `endpointId` names the subscription it was signed for. Both are inside
+harmless. Through the outbox it is derived from the outbox entry id and the
+endpoint id, so it also stays the same across outbox retries and restarts;
+`dispatch(event, data, { idempotencyKey })` gives your own jobs the same
+guarantee. Every attempt is signed with its **own** timestamp `t`, so a retry
+after a long backoff still falls inside the receiver's tolerance; the body (with
+its `id` and `sentAt`) is identical on every attempt. `endpointId` names the subscription it was signed for. Both are inside
 the signed body, so neither can be altered without breaking the signature.
 
 ## Auto-dispatch from domain events
@@ -242,10 +266,15 @@ createApp({
 })
 ```
 
-`webhookOutboxDispatch` treats an entry as delivered only when **every**
-subscribed endpoint accepted it; one failure throws, so the whole entry is
-retried against all of them. Subscribers must therefore be **idempotent** — the
-payload carries the event name and data for dedup. An entry recorded with no
+`webhookOutboxDispatch` re-queues an entry only for a **transient** failure
+(network error, timeout, `5xx`, `408`/`429`). The retry skips endpoints that
+already accepted the entry and re-sends the **same** delivery `id` to the rest —
+derived from the entry id and the endpoint id, so it holds across restarts too.
+Permanent failures (SSRF-blocked URL, redirect, other `4xx`, refused signing
+secret) are reported through `onPermanentFailure` (default `console.warn`) and
+never re-queue the entry: retrying can't fix them and would only re-deliver to
+healthy endpoints. Delivery stays **at-least-once** (the skip list lives in
+memory), so subscribers dedupe on `id`. An entry recorded with no
 tenant in context reaches only tenant-agnostic endpoints, like `dispatch`.
 
 One tenant's failing or hanging endpoint can't stall everyone else, however many
@@ -353,12 +382,15 @@ raw body (e.g. Express `express.raw()`) before parsing.
 :::
 
 `signPayload(body, secret, timestampSeconds)` produces the same header if you
-need to sign manually. `verifySignature` returns `false` — never throws — for a
+need to sign manually. `verifySignature` returns `false` for a
 malformed header, a missing `v1`, a timestamp outside the tolerance, a
 mismatched digest, or an empty/unset or shorter-than-16-character secret (so a
 receiver whose `WEBHOOK_SECRET` env var is missing fails closed instead of
 accepting an HMAC computed with an empty key). A receiver can treat it as a
-single boolean.
+single boolean. The one exception is a configuration bug: a `toleranceSeconds`
+that is not a finite number ≥ 0 (e.g. `Number(process.env.UNSET)` → `NaN`) or a
+non-finite `nowSeconds` throws a `RangeError`, because it would otherwise make
+every timestamp "fresh" and silently disable replay protection.
 
 Each tenant endpoint has its own secret: a receiver verifies with **the secret
 `register()` returned for its endpoint**, not with the app-wide default.
@@ -375,7 +407,8 @@ Unknown schemes (e.g. `v0=`) are ignored; a duplicate `t` is rejected.
   backoff — `500ms`, `1s`, `2s`, … up to `maxRetries` (default `3`, so four
   attempts in total).
 - Client errors (`4xx`) are **not** retried — a wrong URL or auth won't fix
-  itself on retry. The result carries `error: 'HTTP 404'`.
+  itself on retry. The result carries `error: 'HTTP 404'`. `408` and `429` are
+  still marked `retryable: true`, so the outbox tries them again later.
 - Redirects are **refused, not followed**: a `3xx` ends the delivery with
   `error: 'redirect refused'`. Following one would let a compliant public URL
   bounce the request to an internal address.
@@ -405,7 +438,9 @@ hostile input. Before the first attempt the deliverer resolves the hostname
 **once** and refuses the delivery if the scheme isn't `http:`/`https:`, or if
 *any* resolved address is loopback, private (`10/8`, `172.16/12`, `192.168/16`),
 link-local (including the `169.254.169.254` cloud-metadata address), CGNAT,
-IPv6 ULA, or otherwise reserved. IPv6 is judged over the parsed address, so
+IPv6 ULA, documentation (`192.0.2/24`, `198.51.100/24`, `203.0.113/24`,
+`2001:db8::/32`, `3fff::/20`), benchmarking (`198.18/15`), the deprecated 6to4
+relay anycast (`192.88.99/24`), multicast, or otherwise reserved (`240/4`). IPv6 is judged over the parsed address, so
 every spelling counts: an IPv6 literal that embeds an IPv4 address —
 IPv4-mapped (`[::ffff:127.0.0.1]`, which URL parsing rewrites to
 `[::ffff:7f00:1]`), IPv4-compatible, NAT64 (`64:ff9b::/96`) or 6to4
@@ -418,8 +453,41 @@ connect time (DNS rebinding). The `Host` header and TLS SNI still carry the
 original hostname, so vhosts and certificate validation are unaffected.
 
 A blocked URL is a permanent configuration error, not a transient one: the
-result is `{ ok: false, attempts: 0, error: 'Refusing to deliver webhook to …' }`
-and nothing is retried.
+result is `{ ok: false, attempts: 0, retryable: false, error: 'Refusing to deliver webhook…' }`
+and nothing is retried. When the verdict comes from DNS (the host does not
+resolve, or resolves to a private address) the `error` is one generic message —
+`host does not resolve to an allowed public address` — with no address and no
+way to tell the two apart: whoever registers endpoints could otherwise map your
+internal DNS. The resolved address is kept on `WebhookUrlBlockedError.resolvedAddress`
+for server-side logs when you call `resolveAndValidate` yourself.
+
+::: warning A custom `fetchImpl` does not pin by itself
+The default transport is **not** global `fetch`: it is a built-in client that
+connects to the validated IP. A custom `fetchImpl` (proxy, instrumentation)
+receives that IP on its init object under `PINNED_ADDRESS`, but plain `fetch`
+ignores it and resolves the hostname again — reopening the rebind window. Keep
+pinning by delegating to the exported `pinnedFetch`, then declare it:
+
+```ts
+import { pinnedFetch } from '@basaltkit/webhooks'
+
+webhooksPlugin({
+  secret,
+  fetchImpl: async (url, init) => {
+    const started = Date.now()
+    try { return await pinnedFetch(url, init) } finally { metrics.observe(Date.now() - started) }
+  },
+  fetchImplPinsAddress: true,
+})
+```
+
+Without `fetchImplPinsAddress`, a custom `fetchImpl` triggers a one-time
+process warning (`BASALT_WEBHOOKS_UNPINNED_FETCH`) and the deliverer re-resolves
+and re-validates the host before every retry. That narrows the window but can't
+close it — an unpinned client resolves on its own at connect time. Rewriting the
+URL to the IP is not done for you: plain `fetch` can't set TLS SNI separately, so
+certificate validation would break for `https` endpoints.
+:::
 
 ```ts
 // Self-hosted setup that must deliver to an internal host:
@@ -564,8 +632,10 @@ everything), and it skips `active: false`. Called with **no** `tenantId` (or
 never every tenant's. A deliberate `allTenants` dispatch reads the endpoints
 through `list()` instead, and the manager re-filters every result, so a store
 that gets this wrong still can't widen delivery. `remove(id, tenantId)` must be a
-silent no-op when the endpoint belongs to someone else — that is what makes the
-anti-widening scope safe.
+silent no-op when the endpoint belongs to someone else (the manager also checks
+ownership before calling it). A SQL row's `NULL` `secret` / `tenantId` may come
+back as `null`: the deliverer and manager treat `null` exactly like an absent
+field (a tenant-agnostic endpoint, signed with the default secret).
 
 ## Options reference
 
@@ -586,7 +656,8 @@ Everything except `store`, `deliverer` and `events` is forwarded to the
 | `backoffMs` | `number` | `500` | Base wait, doubled per attempt (500 ms, 1 s, 2 s, …) |
 | `timeoutMs` | `number` | `10_000` | Per-attempt timeout; an abort counts as a transient failure |
 | `ssrf` | `SsrfGuardOptions \| false` | on | The delivery-URL guard (below). `false` disables it entirely |
-| `fetchImpl` | `typeof fetch` | built-in pinned transport | Injected HTTP client; it receives the validated address on the init object under the exported `PINNED_ADDRESS` symbol |
+| `fetchImpl` | `typeof fetch` | built-in pinned transport (not global `fetch`) | Injected HTTP client; it receives the validated address on the init object under the exported `PINNED_ADDRESS` symbol. Plain `fetch` ignores it — delegate to `pinnedFetch` to keep pinning (see the SSRF guard) |
+| `fetchImplPinsAddress` | `boolean` | `false` | Declares that your `fetchImpl` honours `PINNED_ADDRESS` (e.g. wraps `pinnedFetch`): silences the unpinned warning and skips the per-retry re-validation |
 | `sleep` | `(ms) => Promise<void>` | `setTimeout` | Injectable backoff sleep (tests) |
 | `now` | `() => number` | `Date.now()/1000` | Injectable clock in **seconds**, used for the signature timestamp |
 
@@ -611,6 +682,7 @@ Everything except `store`, `deliverer` and `events` is forwarded to the
 | `tenantConcurrency` | `number` | `ceil(concurrency / 2)` | Most deliveries one tenant may have in flight at once, across flushes |
 | `dispatchTimeoutMs` | `number \| false` | `10_000` | Max wait per entry before the flush moves on; the delivery continues detached and its outcome is still recorded |
 | `onFlushError` | `(error) => void` | `console.error` | A timer/shutdown flush failed at the store level. Must never throw |
+| `onPermanentFailure` | `(entry, failures) => void` | `console.warn` | An entry's delivery failed permanently for some endpoints; they are not retried. Must never throw |
 
 No `onDead` here — use `outboxPlugin` from `@basaltkit/events` when you need
 it, as shown above. The plugin depends on both `basalt:webhooks`
@@ -621,14 +693,16 @@ and `basalt:events`, and drains the outbox once on shutdown (best-effort).
 | Export | Signature | Purpose |
 | --- | --- | --- |
 | `signPayload` | `(body, secret, timestampSeconds) => string` | Builds `t=…,v1=…` — sign a payload by hand |
-| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Constant-time verify in a receiver; `true` if any `v1` matches; `false` for a secret under 16 chars; never throws |
+| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Constant-time verify in a receiver; `true` if any `v1` matches; `false` for a secret under 16 chars; throws `RangeError` only for an invalid tolerance/clock |
 | `generateWebhookSecret` | `() => string` | A fresh `whsec_…` secret (32 random bytes) |
 | `MIN_WEBHOOK_SECRET_LENGTH` | `16` | Minimum secret length enforced on both ends |
 | `assertDeliverableUrl` | `(url, options?) => Promise<void>` | Reject an SSRF-unsafe URL at registration time; throws `WebhookUrlBlockedError` |
 | `resolveAndValidate` | `(url, options?) => Promise<ValidatedTarget>` | The same check, returning the resolved addresses and the one to pin |
 | `isPrivateIp` | `(ip) => boolean` | The range predicate itself; anything that isn't a public IP literal is `true` |
 | `matchesEvent` | `(patterns, event) => boolean` | The pattern matcher, for a custom store's `forEvent` |
-| `webhookOutboxDispatch` | `(webhooks) => OutboxDispatch` | Adapts a `WebhookManager` into an outbox dispatch; throws if any endpoint fails |
+| `webhookOutboxDispatch` | `(webhooks, options?) => OutboxDispatch` | Adapts a `WebhookManager` into an outbox dispatch; throws only on transient failures, with stable delivery ids |
+| `pinnedFetch` | `(url, init) => Promise<Response>` | `fetch`-compatible client over the pinned transport — the delegate for a custom `fetchImpl` |
+| `deriveDeliveryId` | `(idempotencyKey, endpointId) => string` | The deterministic delivery `id` used by the outbox / `idempotencyKey` |
 
 ## Failure modes & troubleshooting
 
@@ -637,16 +711,19 @@ Most delivery problems are **not exceptions** — they come back on the
 
 | Outcome | `error` | `attempts` | When |
 | --- | --- | --- | --- |
-| SSRF refusal | `Refusing to deliver webhook to <url>: <reason>` | `0` | Bad scheme, or the host is/resolves to a private, loopback, link-local, CGNAT, ULA or reserved address |
+| SSRF refusal | `Refusing to deliver webhook to <url>: <reason>` (bad URL/scheme, private IP literal) or `Refusing to deliver webhook: host does not resolve to an allowed public address.` (DNS verdict) | `0` | Bad scheme, or the host is/resolves to a private, loopback, link-local, CGNAT, ULA or reserved address — or doesn't resolve |
 | No usable secret | `no signing secret; refusing unsigned delivery` / `tenant endpoint has no own secret; …` / `endpoint signing secret is too short …` | `0` | Nothing to sign with, a tenant endpoint with only the shared secret, or a secret under 16 chars |
-| Client error | `HTTP 4xx` | `1` | The receiver rejected it — never retried |
+| Client error | `HTTP 4xx` | `1` | The receiver rejected it — never retried inline (`408`/`429` are `retryable` for the outbox) |
 | Redirect | `redirect refused` | `1` | The endpoint answered `3xx`; following it would defeat the SSRF check |
 | Transient | last network/timeout message | `maxRetries + 1` | `5xx`, connection error or per-attempt timeout, retried with backoff, still failing |
+| Internal | `internal delivery error` | `0` | `deliver()` threw unexpectedly; logged server-side, the other endpoints are unaffected |
 
 | Error | Code | HTTP | When |
 | --- | --- | --- | --- |
 | `WebhookUrlBlockedError` | — (`name` only) | — | Thrown by `assertDeliverableUrl` / `resolveAndValidate`; inside `deliver()` it is caught and turned into the failed result above |
 | `WebhookTenantRequiredError` | `WEBHOOKS_TENANT_REQUIRED` | — | `register` / `list` / `unregister` with tenancy active and no tenant (context or explicit) without `{ system: true }` |
+| `WebhookEndpointInvalidError` | `WEBHOOK_ENDPOINT_INVALID` | 400 | `register()` with a URL that doesn't parse or uses a scheme the deliverer refuses, a `secret` under 16 characters, or an empty `events` list — nothing is stored |
+| `WebhookEndpointIdInUseError` | `WEBHOOK_ENDPOINT_ID_IN_USE` | 409 | `register()` / `MemoryWebhookStore.add()` with an `id` another scope already holds (the SQL stores throw their own error with the same code) |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | — | `container.get(WEBHOOKS)` without `webhooksPlugin` registered |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Your own endpoint-management routes declare `meta.auth` / `meta.teamRole` without the enforcing plugin |
 

@@ -2,6 +2,7 @@ import type { Readable } from 'node:stream'
 import { Container, createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
 import {
   NOT_FOUND_RESPONSE,
+  HttpError,
   HttpServerCollector,
   HTTP_SERVER,
   runRoute,
@@ -19,7 +20,6 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
-  GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
   isRawBody,
@@ -51,11 +51,29 @@ declare module '@basaltkit/core' {
 
 export const FASTIFY = createToken<FastifyInstance>('fastify')
 
+/** A `+json` media type (Fastify tests a RegExp parser against the bare media type). */
+const JSON_SUFFIX_TYPE = /^application\/[a-z0-9!#$&^_.+-]+\+json$/
+
+/**
+ * The neutral reply over a `FastifyReply`.
+ *
+ * `sent` is tracked here, not read from `reply.sent`: Fastify reports a reply
+ * as sent only once the response has *ended*, and an async `onSend` hook (the
+ * idempotency plugin's, any app's) defers that past the call to `send()`. Code
+ * that trusted `reply.sent` right after sending saw `false`, sent again, and
+ * produced a second write — `ERR_HTTP_HEADERS_SENT` and a response the hooks
+ * processed twice.
+ */
 class FastifyReplyAdapter implements HttpReply {
-  constructor(private readonly reply: FastifyReply) {}
+  private sendCalled = false
+
+  constructor(
+    private readonly reply: FastifyReply,
+    private readonly rawValue: unknown = reply,
+  ) {}
 
   get sent(): boolean {
-    return this.reply.sent
+    return this.sendCalled || this.reply.sent
   }
 
   get statusCode(): number {
@@ -63,7 +81,7 @@ class FastifyReplyAdapter implements HttpReply {
   }
 
   get raw(): unknown {
-    return this.reply
+    return this.rawValue
   }
 
   code(status: number): this {
@@ -76,7 +94,8 @@ class FastifyReplyAdapter implements HttpReply {
     return this
   }
 
-  send(payload: unknown): this {
+  send(payload?: unknown): this {
+    this.sendCalled = true
     this.reply.send(payload)
     return this
   }
@@ -88,6 +107,9 @@ export interface FastifyPluginOptions {
    * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
    * `true` to waive everything (e.g. authentication handled at an outer
    * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   * It never waives the route-meta validators plugins register
+   * (`META_VALIDATORS_BUCKET`, e.g. teamsPlugin refusing an unknown
+   * `meta.teamRole`) — those also run at boot and fail it.
    */
   allowUnguardedMeta?: boolean | string[]
   /** Options forwarded to the Fastify constructor (logger, trustProxy…). */
@@ -131,19 +153,19 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
         // `content-type: application/json` with an empty body, which surfaced as a
         // 500. Treat an empty body as "no body" (undefined); keep strict parsing
         // (and a 400) for actual malformed JSON.
-        instance.addContentTypeParser(
-          'application/json',
-          { parseAs: 'string' },
-          (_request: FastifyRequest, body: string, done: (err: Error | null, value?: unknown) => void) => {
-            if (body.trim() === '') return done(null, undefined)
-            try {
-              done(null, JSON.parse(body))
-            } catch (error) {
-              (error as FastifyError).statusCode = 400
-              done(error as Error)
-            }
-          },
-        )
+        const parseJson = (_request: FastifyRequest, body: string, done: (err: Error | null, value?: unknown) => void) => {
+          if (body.trim() === '') return done(null, undefined)
+          try {
+            done(null, JSON.parse(body))
+          } catch (cause) {
+            // The same 400 body Express and Hono answer with.
+            done(new HttpError(400, 'BAD_REQUEST', 'Malformed request body.', { cause }))
+          }
+        }
+        instance.addContentTypeParser('application/json', { parseAs: 'string' }, parseJson)
+        // Structured-syntax `+json` types (application/merge-patch+json,
+        // application/vnd.api+json) are JSON on every adapter.
+        instance.addContentTypeParser(JSON_SUFFIX_TYPE, { parseAs: 'string' }, parseJson)
         // HTML forms and the SAML ACS binding post application/x-www-form-urlencoded;
         // parse it into an object so form routes work like JSON routes (Fastify has
         // no default parser for it).
@@ -164,17 +186,14 @@ export function fastifyPlugin(options: FastifyPluginOptions = {}) {
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
       // Fail loud BEFORE traffic if a route declares security meta (auth/can/
-      // teamRole) that no registered guard enforces — it would serve open.
-      assertRoutesGuarded(
-        routes,
-        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
-        options.allowUnguardedMeta,
-      )
+      // teamRole) that no registered guard enforces — it would serve open —
+      // or meta a plugin's validator refuses (e.g. an unknown teamRole).
+      assertRoutesGuarded(routes, container, options.allowUnguardedMeta)
       const instance = container.get(FASTIFY)
       registerRoutes(instance, routes, container, enrichers, guards, options.onError)
       // Mount edge-plugin hooks/routes once every plugin has registered them.
       hooks.on('app:booted', () => {
-        mountCollector(instance, collector)
+        mountCollector(instance, collector, options.onError)
         if (options.notFound !== false) {
           try {
             instance.setNotFoundHandler((_request, reply) => {
@@ -339,7 +358,15 @@ function wrapHandler(
 
       if (isSseResponse(result)) {
         reply.hijack()
-        reply.raw.writeHead(200, SSE_HEADERS)
+        // A hijacked reply bypasses Fastify's own header handling: whatever the
+        // pre-hooks and the pipeline set on `reply` (CORS, security headers,
+        // rate-limit counters, x-request-id) must be carried over by hand, or
+        // a cross-origin EventSource fails its CORS check.
+        const headers = { ...reply.getHeaders(), ...SSE_HEADERS } as Record<string, number | string | string[] | undefined>
+        reply.raw.writeHead(200, headers)
+        // Headers go out now, not with the first event: a stream that starts
+        // quiet must still open (EventSource `open`) — as it does on Hono.
+        reply.raw.flushHeaders()
         await driveSse(sseProducerOf(result), {
           write: (frame) => void reply.raw.write(frame),
           end: () => reply.raw.end(),
@@ -351,19 +378,23 @@ function wrapHandler(
       // while a stream is still piping, so sending it inline would let the
       // route's own return value overwrite it with an empty body.
       if (isStreamResponse(result)) return prepareStream(request, reply, streamPayloadOf(result), onError)
-      if (!neutralReply.sent) {
-        neutralReply.send(result)
-      }
+      if (!neutralReply.sent) neutralReply.send(result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
       // This site used to swallow everything, including 500s: an error thrown
       // inside the route pipeline never reached `setErrorHandler` below.
       report(onError, error, status, body.error.code, request)
 
-      if (!reply.sent) {
-        reply.code(status).send(body)
-      }
+      if (!neutralReply.sent) neutralReply.code(status).send(body)
     }
+    // The reply has been sent (by the handler, a guard or just above). Returning
+    // it — Fastify's documented "return reply" — makes the handler's promise
+    // settle when the response finishes. Resolving with `undefined` instead lets
+    // Fastify, which still sees the reply as unsent while an async `onSend` hook
+    // runs, send a second, empty response: the idempotency plugin then released
+    // its reservation (so retries re-ran the handler) and every request
+    // reported a spurious 500.
+    return reply
   }
 }
 
@@ -416,22 +447,41 @@ function prepareStream(
 }
 
 /** Applies edge-plugin hooks and routes (from the collector) to the Fastify instance. */
-function mountCollector(instance: FastifyInstance, collector: HttpServerCollector): void {
-  for (const hook of collector.preHooks) {
+function mountCollector(instance: FastifyInstance, collector: HttpServerCollector, onError?: HttpErrorReporter): void {
+  // After-hooks follow the Node response, not Fastify's `onResponse`: that
+  // hook never runs for a hijacked reply (every `sse()` stream) nor for one
+  // the client abandoned, so metrics' in-flight gauge and tracing spans never
+  // saw those requests end. Attached first, before any pre-hook can answer
+  // and stop the `onRequest` chain. 'close' follows 'finish', so run once.
+  if (collector.afterHooks.length > 0) {
     instance.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-      await hook({ request: toNeutralRequest(request), reply: reply as unknown as HttpReply })
-      if (reply.sent) return reply
-      return undefined
+      let done = false
+      const after = () => {
+        if (done) return
+        done = true
+        // The response is already gone: a failing after-hook is reported,
+        // never left as an unhandled rejection.
+        collector
+          .runAfter(toNeutralRequest(request), reply as unknown as HttpReply, reply.raw.statusCode, reply.elapsedTime)
+          .catch((error: unknown) => {
+            try {
+              report(onError, error, 500, 'AFTER_HOOK_FAILED', request)
+            } catch {
+              /* a broken reporter must not crash the process */
+            }
+          })
+      }
+      reply.raw.on('finish', after)
+      reply.raw.on('close', after)
     })
   }
-  for (const hook of collector.afterHooks) {
-    instance.addHook('onResponse', async (request: FastifyRequest, reply: FastifyReply) => {
-      await hook({
-        request: toNeutralRequest(request),
-        reply: reply as unknown as HttpReply,
-        statusCode: reply.statusCode,
-        durationMs: reply.elapsedTime,
-      })
+  for (const hook of collector.preHooks) {
+    instance.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+      // `raw` stays the Node response, as it was when hooks got the FastifyReply.
+      const neutralReply = new FastifyReplyAdapter(reply, reply.raw)
+      await hook({ request: toNeutralRequest(request), reply: neutralReply })
+      if (neutralReply.sent) return reply
+      return undefined
     })
   }
   for (const { method, url, handler } of collector.extraRoutes) {
@@ -439,8 +489,9 @@ function mountCollector(instance: FastifyInstance, collector: HttpServerCollecto
       method,
       url,
       handler: async (request: FastifyRequest, reply: FastifyReply) => {
-        const result = await handler({ request: toNeutralRequest(request), reply: reply as unknown as HttpReply })
-        return reply.sent ? undefined : result
+        const neutralReply = new FastifyReplyAdapter(reply, reply.raw)
+        const result = await handler({ request: toNeutralRequest(request), reply: neutralReply })
+        return neutralReply.sent ? reply : result
       },
     })
   }

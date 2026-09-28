@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto'
+import type { IncomingMessage } from 'node:http'
 import {
   McpServer,
   serveHttp,
@@ -55,11 +57,36 @@ export function createAiMcpServer(options: StartOptions = {}): StdioHandle {
   return serveStdio(server, stdioOptions)
 }
 
-export interface HttpStartOptions extends AiMcpOptions, ServeHttpOptions {}
+export interface HttpStartOptions extends AiMcpOptions, ServeHttpOptions {
+  /**
+   * Shared secret: every request must carry `Authorization: Bearer <token>`.
+   * Required to bind a non-loopback `host` (unless `authorize`/`allowRequest`
+   * is given) — the Host/Origin guard is not authentication.
+   */
+  token?: string
+}
+
+/** `authorize` hook comparing `Authorization: Bearer <token>` in constant time. */
+export function bearerAuthorizer(token: string): (req: IncomingMessage) => boolean {
+  const expected = Buffer.from(`Bearer ${token}`)
+  return (req) => {
+    const header = req.headers.authorization
+    if (typeof header !== 'string') return false
+    const got = Buffer.from(header)
+    return got.length === expected.length && timingSafeEqual(got, expected)
+  }
+}
 
 /**
  * Build the server and serve it over the optional HTTP transport (opt-in;
  * stdio stays the default). Returns the {@link HttpHandle}.
+ *
+ * `sessions: true` (or `{ ttlMs, maxSessions }`) turns on mcp-core's
+ * Streamable-HTTP sessions: `initialize` issues an `Mcp-Session-Id`, later
+ * requests must carry it, and a `notifications/cancelled` POSTed separately
+ * cancels the call it names (e.g. a long `basalt_make`). Default off. With a
+ * `token`, a session is bound to it (the default `principal` hashes the
+ * `Authorization` header).
  */
 export function createAiMcpHttpServer(options: HttpStartOptions = {}): Promise<HttpHandle> {
   const server = buildAiMcpServer(options)
@@ -70,5 +97,12 @@ export function createAiMcpHttpServer(options: HttpStartOptions = {}): Promise<H
   if (options.allowedHosts !== undefined) httpOptions.allowedHosts = options.allowedHosts
   if (options.allowedOrigins !== undefined) httpOptions.allowedOrigins = options.allowedOrigins
   if (options.allowRequest !== undefined) httpOptions.allowRequest = options.allowRequest
+  if (options.maxBodyBytes !== undefined) httpOptions.maxBodyBytes = options.maxBodyBytes
+  // Opt-in `Mcp-Session-Id` sessions (cross-POST cancellation); stateless by
+  // default, like mcp-core, so header-less clients keep working.
+  if (options.sessions !== undefined) httpOptions.sessions = options.sessions
+  if (options.principal !== undefined) httpOptions.principal = options.principal
+  if (options.authorize !== undefined) httpOptions.authorize = options.authorize
+  else if (options.token) httpOptions.authorize = bearerAuthorizer(options.token)
   return serveHttp(server, httpOptions)
 }

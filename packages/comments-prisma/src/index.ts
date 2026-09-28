@@ -1,4 +1,15 @@
 import type { Comment, CommentPatch, CommentStore } from '@basaltkit/comments'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/comments-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/comments` `CommentStore` for
@@ -51,7 +62,8 @@ const toComment = (r: PComment): Comment => {
     resourceId: r.resourceId,
     authorId: r.authorId,
     body: r.body,
-    mentions: r.mentions,
+    // `String[]` on PostgreSQL, a JSON array on MySQL (schema.mysql.prisma).
+    mentions: Array.isArray(r.mentions) ? r.mentions : [],
     createdAt: ms(r.createdAt),
   }
   if (r.parentId !== null) c.parentId = r.parentId
@@ -61,26 +73,75 @@ const toComment = (r: PComment): Comment => {
   return c
 }
 
+/** The `Comment` columns the store writes as strings. */
+export type CommentColumn =
+  | 'tenantId'
+  | 'id'
+  | 'resourceType'
+  | 'resourceId'
+  | 'parentId'
+  | 'authorId'
+  | 'body'
+  | 'resolvedBy'
+
+export type CommentsColumnLimits = ColumnLimits<{ Comment: CommentColumn }>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Spread it to override one column after widening it.
+ */
+export const commentsMysqlColumnLimits: CommentsColumnLimits = {
+  Comment: {
+    tenantId: V,
+    id: V,
+    resourceType: V,
+    resourceId: V,
+    parentId: V,
+    authorId: V,
+    body: MYSQL_TEXT,
+    resolvedBy: V,
+  },
+}
+
+export interface PrismaCommentStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a long
+   * comment is saved cut short and the author is told it was saved.
+   * `'mysql'` uses the limits of the bundled `schema.mysql.prisma`; pass an
+   * object for a schema of your own. Default: unchecked (PostgreSQL and SQLite
+   * store any length).
+   */
+  columnLimits?: 'mysql' | CommentsColumnLimits
+}
+
 export class PrismaCommentStore implements CommentStore {
-  constructor(private readonly client: PrismaCommentsClient) {}
+  private readonly limits: CommentsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaCommentsClient,
+    options: PrismaCommentStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, commentsMysqlColumnLimits)
+  }
 
   async create(comment: Comment): Promise<void> {
-    await this.client.comment.create({
-      data: {
-        tenantId: comment.tenantId,
-        id: comment.id,
-        resourceType: comment.resourceType,
-        resourceId: comment.resourceId,
-        parentId: comment.parentId ?? null,
-        authorId: comment.authorId,
-        body: comment.body,
-        mentions: comment.mentions,
-        resolvedAt: comment.resolvedAt !== undefined ? at(comment.resolvedAt) : null,
-        resolvedBy: comment.resolvedBy ?? null,
-        editedAt: comment.editedAt !== undefined ? at(comment.editedAt) : null,
-        createdAt: at(comment.createdAt),
-      },
-    })
+    const data = {
+      tenantId: comment.tenantId,
+      id: comment.id,
+      resourceType: comment.resourceType,
+      resourceId: comment.resourceId,
+      parentId: comment.parentId ?? null,
+      authorId: comment.authorId,
+      body: comment.body,
+      mentions: comment.mentions,
+      resolvedAt: comment.resolvedAt !== undefined ? at(comment.resolvedAt) : null,
+      resolvedBy: comment.resolvedBy ?? null,
+      editedAt: comment.editedAt !== undefined ? at(comment.editedAt) : null,
+      createdAt: at(comment.createdAt),
+    }
+    assertColumnLengths(PKG, this.limits, 'Comment', data)
+    await this.client.comment.create({ data })
   }
 
   async find(tenantId: string, id: string): Promise<Comment | null> {
@@ -106,6 +167,7 @@ export class PrismaCommentStore implements CommentStore {
     if ('resolvedAt' in patch) data.resolvedAt = patch.resolvedAt !== undefined ? at(patch.resolvedAt) : null
     if ('resolvedBy' in patch) data.resolvedBy = patch.resolvedBy ?? null
     if (Object.keys(data).length > 0) {
+      assertColumnLengths(PKG, this.limits, 'Comment', data)
       await this.client.comment.updateMany({ where: { tenantId, id }, data })
     }
     return this.find(tenantId, id)
@@ -125,7 +187,7 @@ export interface PrismaCommentsStores {
  * `commentsPlugin`:
  *
  * ```ts
- * const c = prismaCommentsStore(prisma)
+ * const c = prismaCommentsStore(prisma) // on MySQL: prismaCommentsStore(prisma, { columnLimits: 'mysql' })
  * commentsPlugin({ store: c.store })
  * ```
  */
@@ -146,7 +208,10 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaCommentsStore(client: PrismaCommentsClient): PrismaCommentsStores {
-  ensureModel(client, 'comment', '@basaltkit/comments-prisma')
-  return { store: new PrismaCommentStore(client) }
+export function prismaCommentsStore(
+  client: PrismaCommentsClient,
+  options: PrismaCommentStoreOptions = {},
+): PrismaCommentsStores {
+  ensureModel(client, 'comment', PKG)
+  return { store: new PrismaCommentStore(client, options) }
 }

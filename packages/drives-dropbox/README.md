@@ -167,6 +167,12 @@ h.digest()
 
 ## Limitations
 
+- **Root confinement compares `path_lower`.** With a `rootId`, a `folderId`,
+  `getItem()`, `download()` and an upload target outside the root are refused
+  (`DRIVE_ACCESS_DENIED`; `getItem()` answers `null`). A path handle is checked
+  lexically with no request, an `id:`/`ns:` handle or root costs one
+  `get_metadata`, and a download is checked against `Dropbox-API-Result` before
+  its body is read. `.`/`..` segments are refused.
 - **Uploads over 150 MB** need `files/upload_session/{start,append_v2,finish}`,
   which is not implemented. Anything larger is refused up front with
   `DRIVE_CONTENT_TOO_LARGE` rather than after the bytes have been sent.

@@ -72,12 +72,19 @@ por `:` de cada vez**, e o número de segmentos tem de coincidir:
 'projects:*'  covers 'projects:read'        // ✅
 'projects:*'  does NOT cover 'projects:delete:all' // ❌ 2 segments vs 3 — no match
 '*'           covers everything             // ✅ the one exception: a super admin
+'projects:*'  does NOT cover 'projects:'    // ❌ an empty segment never matches
 ```
 
 Assim, uma concessão de dois níveis nunca absorve silenciosamente uma permissão
 mais profunda e específica que adiciones mais tarde — concede `projects:*:*`
 (ou a string exata) se quiseres o nível mais profundo. O `'*'` simples
 corresponde a qualquer permissão, independentemente da profundidade.
+
+Uma permissão com um **segmento vazio** — `''`, `'projects:'`, `':read'`,
+`'projects::read'` — é malformada e não corresponde a nada, nem a si própria, e
+nenhum wildcard a cobre (`hasEmptySegment()` di-lo, a partir da mesma entrada
+`@basaltkit/permissions/match`, segura para o browser). O Gate recusa-a logo:
+`can()`, todas as concessões e o `roleCatalog` lançam `TypeError`.
 
 ## Políticas de recurso
 
@@ -120,6 +127,17 @@ recurso se o que querias era RBAC simples. Para repor o comportamento histórico
 `onMissingPolicy: 'rbac'`.
 :::
 
+A correspondência é exata. Só contam as ações **próprias** da política —
+`project:constructor` ou `project:toString` nunca chegam a `Object.prototype`,
+são políticas em falta — e só um `resource:action` de dois segmentos escolhe um
+check: `project:update:billing` é uma permissão diferente de `project:update`,
+por isso o check `update` não a decide. Um check só autoriza quando devolve
+`true` (um valor truthy que não seja booleano nega). O `can()` recusa uma
+permissão que não seja uma string não vazia sem espaços nem segmentos `:` vazios (`TypeError`), e um
+utilizador sem `id` de texto não vazio não está autenticado: `can`/`authorize`/
+`hasRole` lançam `AuthRequiredGuardError` (401) em vez de avaliar — ou rebentar
+com — um chamador anónimo.
+
 ## Proteger rotas
 
 Regista o `permissionsPlugin` e declara a permissão que uma rota precisa com
@@ -154,6 +172,25 @@ aplicável e **falha fechada**: o guard lança `InvalidCanMetaError`
 (`PERMISSION_META_INVALID`, HTTP 500) em cada pedido em vez de saltar o check
 silenciosamente. E declarar `meta.can` sem registar o `permissionsPlugin` falha
 no **boot** — vê o guia de adapters.
+
+### As listagens escondem o que o chamador não passa
+
+O plugin regista também uma **verificação de visibilidade pura** para o
+`meta.can` em `http:route-visibility`, para que superfícies de listagem — o
+[`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows) — deixem de fora as
+rotas cujas permissões faltam ao chamador. Faz a mesma pergunta que o guard,
+`gate.can(user, permission)` para cada entrada, no scope atual (o `superAdmin`
+passa sempre, como no guard), mas **sem efeitos secundários**: o `can()` só lê
+grants — nunca emite `permission:denied`, por isso uma listagem nunca aparece no
+rasto de auditoria (mantém o `superAdmin` puro; também corre aqui). Sem
+utilizador, ou com um `meta.can` malformado, a rota fica escondida, tal como o
+guard a recusaria.
+
+As policies nunca entram: o guard não passa recurso, por isso nenhuma policy
+decide o `meta.can`. Uma regra de propriedade que um handler corre sobre um
+recurso carregado (`authorize(user, 'projects:update', project)`) é invisível a
+uma listagem — essa tool continua listada quando o RBAC permite e é recusada na
+chamada. Visibilidade nunca é autorização: cada chamada corre sempre o guard.
 
 ## Audiências — a que superfície uma rota pertence
 
@@ -298,6 +335,27 @@ Entretanto, `readLegacyGlobalScope: true` continua a lê-las — uma ajuda de
 transição: enquanto estiver ligada, um tenant com id `'global'` volta a escrever
 concessões globais, por isso reserva esse id antes de a ligar.
 
+### As escritas precisam de um tenant (ou de um scope explícito)
+
+`gate.assignRole()`, `removeRole()`, `grantToRole()`, `grantToUser()`,
+`grantTemporarily()` e `delegate()` aceitam um `scope` opcional. Sem ele,
+escrevem no tenant atual. Numa app multi-tenant — com o `tenancyPlugin`
+registado — uma escrita sem scope e **sem tenant no contexto** lança
+`ScopeRequiredError` (`PERMISSION_SCOPE_REQUIRED`, 400) em vez de cair em
+`GLOBAL_SCOPE`: um endpoint de administração de tenant chamado num pedido cujo
+tenant não foi resolvido não pode escrever uma concessão de toda a plataforma.
+
+```ts
+await gate.assignRole(userId, 'admin')               // inside a tenant: that tenant
+await gate.assignRole(userId, 'admin', GLOBAL_SCOPE) // a global grant: say so
+```
+
+As apps single-tenant (sem plugin de tenancy) não são afetadas: as escritas sem
+scope continuam a ir para `GLOBAL_SCOPE`. Uma opção `scope` personalizada decide
+por si, e `allowGlobalWrites: true` repõe o fallback antigo por inteiro. Um Gate
+construído à mão (`new Gate(...)`) sabe que a tenancy está ativa pela opção
+`tenancyActive`; o `permissionsPlugin` liga-a ao marcador do `tenancyPlugin`.
+
 ## Concessões temporárias e delegação
 
 Dois mecanismos limitados no tempo assentam sobre as concessões permanentes.
@@ -329,6 +387,11 @@ const grant = await gate.grantTemporarily('user-bob', ['deploys:approve'], {
 // after expiry the grant is inert; revoke earlier via the store: store.revoke(grant.id)
 ```
 
+Uma concessão temporária precisa de um prazo: o `grantTemporarily()` lança um
+`TypeError` sem `ttlMs` nem `expiresAt` (antes escrevia uma concessão já
+expirada), e recusa um prazo que não seja um instante finito no futuro —
+`Infinity` é uma concessão permanente, por isso usa `grantToUser()` para isso.
+
 A **delegação** permite a um utilizador agir com um subconjunto da autoridade
 de *outro utilizador*:
 
@@ -348,6 +411,12 @@ com ele), e as delegações não encadeiam (o Bob não pode re-delegar a autorid
 da Ada; um check através de uma delegação ignora as delegações recebidas pelo
 próprio delegante).
 
+O Gate não confia nos stores em nada disto: o que `activeFor()` / `activeTo()`
+devolvem é verificado de novo contra o utilizador, o scope e o relógio do
+próprio Gate (`now`), por isso um store durável que esqueça o filtro
+`expires_at > ?` não consegue transformar uma concessão limitada no tempo numa
+permanente.
+
 ## Referência de opções
 
 O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`:
@@ -366,9 +435,12 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | Um role detido num tenant resolve também as permissões da sua definição em `GLOBAL_SCOPE` (só nesse tenant); uma lista limita-o a esses roles |
 | `readLegacyGlobalScope` | `boolean` | `false` | Ler também as linhas do scope global anterior à 1.5 (`'global'`) como globais. Ajuda de transição — vê [O scope global não pode ser um tenant](#o-scope-global-nao-pode-ser-um-tenant) |
 | `hooks` | `HookBus` | o bus da app (plugin) | Onde os hooks `permission:*` são emitidos |
+| `allowGlobalWrites` | `boolean` | `false` | Deixar uma escrita sem scope fora de um tenant cair em `GLOBAL_SCOPE` mesmo com a tenancy ativa. Vê [As escritas precisam de um tenant](#as-escritas-precisam-de-um-tenant-ou-de-um-scope-explicito) |
+| `tenancyActive` | `() => boolean` | o marcador `tenancy:active` (plugin); `false` (`new Gate`) | Se a app é multi-tenant — decide se as escritas sem scope fora de um tenant falham fechadas |
 
-O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e
-reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
+O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e a
+sua verificação de visibilidade sem efeitos secundários (`http:route-visibility`),
+e reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
 
 ## Hooks — o rasto de auditoria
 
@@ -389,7 +461,8 @@ e não do store: escritas feitas diretamente no `AccessStore` não deixam rasto.
 | Erro | Código | HTTP | Quando |
 | --- | --- | --- | --- |
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | O check falhou — nada concede a permissão no scope atual nem no global |
-| `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | Uma rota com `meta.can` foi chamada sem utilizador autenticado no contexto |
+| `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | Uma rota com `meta.can` foi chamada sem utilizador autenticado no contexto (ou com um utilizador sem `id` de texto não vazio); também `can`/`authorize`/`hasRole` com esse utilizador |
+| `ScopeRequiredError` | `PERMISSION_SCOPE_REQUIRED` | 400 | Uma escrita de concessões sem `scope`, sem tenant no contexto e com a tenancy ativa — passa o scope (ou `GLOBAL_SCOPE`) explicitamente |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | O `meta.can` tem uma forma não aplicável (`true`, um número, um array vazio/misto) — falha fechada em cada pedido |
 | `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` | 403 | O id de tenant do pedido é um scope reservado (`'@global'` ou `'global'`), ou o tenant não tem id utilizável |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | O `can`/`authorize` recebeu um recurso mas nenhum check de política corresponde a `resource:action` — a regra ABAC que pretendias seria saltada |

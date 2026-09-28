@@ -29,6 +29,19 @@ export class CommentTenantMismatchError extends BasaltError {
 }
 
 /**
+ * A tenant id equal to {@link SINGLE_TENANT_SCOPE}. That string is the store
+ * key of a single-tenant app's comments, so a tenant carrying it would read,
+ * edit and delete them. The default tenancy grammar can never produce it; a
+ * custom one that does must pick another id.
+ */
+export class CommentTenantReservedError extends BasaltError {
+  readonly status = 400
+  constructor() {
+    super('COMMENT_TENANT_RESERVED', `"${SINGLE_TENANT_SCOPE}" is reserved for single-tenant comments and cannot be a tenant id.`)
+  }
+}
+
+/**
  * `parentId` does not name a comment of the same thread. A reply may only hang
  * off a comment of the resource it is posted on: linking it to another thread
  * would sidestep that thread's authorization (a caller allowed on an open
@@ -69,8 +82,15 @@ export interface CommentNode extends Comment {
  * Store key every comment is filed under when the app has no tenancy at all.
  * The {@link CommentStore} contract is tenant-keyed, so a single-tenant app
  * still needs one stable key — it just shouldn't have to invent it.
+ *
+ * A sentinel no tenant id can equal: `@` is outside `@basaltkit/tenancy`'s
+ * grammar, and a context or explicit tenant carrying it is refused with
+ * {@link CommentTenantReservedError}. It used to be `'default'` — a perfectly
+ * valid tenant id, so a tenant named `default` read, edited and deleted the
+ * single-tenant comments. Rows written under `'default'` by a single-tenant app
+ * must be re-keyed once (see the changelog for the migration).
  */
-export const SINGLE_TENANT_SCOPE = 'default'
+export const SINGLE_TENANT_SCOPE = '@single'
 
 export interface CommentsOptions {
   store?: CommentStore
@@ -268,10 +288,15 @@ export class Comments {
     const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
     if (ambient) {
       if (explicit !== undefined && explicit !== ambient) throw new CommentTenantMismatchError()
-      return ambient
+      return assertNotReserved(ambient)
     }
-    if (explicit) return explicit
+    if (explicit) return assertNotReserved(explicit)
     if (this.tenancyActive()) throw new CommentTenantRequiredError()
     return SINGLE_TENANT_SCOPE
   }
+}
+
+function assertNotReserved(tenantId: string): string {
+  if (tenantId === SINGLE_TENANT_SCOPE) throw new CommentTenantReservedError()
+  return tenantId
 }

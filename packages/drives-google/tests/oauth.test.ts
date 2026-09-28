@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SINGLE_TENANT_SCOPE } from '@basaltkit/drives'
 import { CLIENT_ID, REDIRECT_URI, connect, harness } from './helpers.js'
 
 describe('Google OAuth', () => {
@@ -67,7 +68,7 @@ describe('Google OAuth', () => {
   it('refreshes proactively and keeps the stored refresh token (Google does not rotate)', async () => {
     const h = harness({ server: { files: [{ id: 'f1', name: 'a.pdf', content: 'a' }] } })
     const view = await connect(h)
-    const before = (await h.store.find('default', view.id))!
+    const before = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
 
     // An hour on: the engine refreshes before the token expires, not after a 401.
     h.advance(60 * 60_000)
@@ -76,7 +77,7 @@ describe('Google OAuth', () => {
     const refresh = h.google.requests.filter((r) => r.url.includes('/token')).at(-1)!
     expect(new URLSearchParams(refresh.body).get('grant_type')).toBe('refresh_token')
     expect(new URLSearchParams(refresh.body).get('refresh_token')).toBe('refresh-1')
-    const after = (await h.store.find('default', view.id))!
+    const after = (await h.store.find(SINGLE_TENANT_SCOPE, view.id))!
     // The credentials were re-sealed, so the row changed…
     expect(after.secret).not.toBe(before.secret)
     // …and the refresh token survived, because the response omitted one.
@@ -94,7 +95,7 @@ describe('Google OAuth', () => {
     h.advance(60 * 60_000)
 
     await expect(h.drives.listItems(view.id)).rejects.toMatchObject({ code: 'DRIVE_CREDENTIALS_INVALID' })
-    expect((await h.store.find('default', view.id))!.status).toBe('invalid')
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.status).toBe('invalid')
   })
 
   it('does not treat OUR misconfiguration as the tenant’s revocation', async () => {
@@ -107,7 +108,7 @@ describe('Google OAuth', () => {
     h.google.queue(400, JSON.stringify({ error: 'invalid_client' }))
 
     await expect(h.drives.listItems(view.id)).rejects.toThrow(/token refresh failed \(invalid_client\)/)
-    expect((await h.store.find('default', view.id))!.status).toBe('active')
+    expect((await h.store.find(SINGLE_TENANT_SCOPE, view.id))!.status).toBe('active')
   })
 
   it('revokes the refresh token, not just the access token, on disconnect', async () => {
@@ -120,7 +121,7 @@ describe('Google OAuth', () => {
     // Revoking the access token alone would leave the grant alive and merely
     // make the remaining access invisible to us.
     expect(new URLSearchParams(revoke.body).get('token')).toBe('refresh-1')
-    expect(await h.store.find('default', view.id)).toBeNull()
+    expect(await h.store.find(SINGLE_TENANT_SCOPE, view.id)).toBeNull()
   })
 
   it('sends the token request through the guarded fetch, like every other call', async () => {

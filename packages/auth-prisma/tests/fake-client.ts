@@ -3,7 +3,23 @@ import type { PrismaAuthClient } from '../src/index.js'
 // A faithful in-memory fake of the Prisma delegate surface the stores use —
 // the same "injectable client" pattern the cloud drivers test with. If a real
 // PrismaClient satisfies `PrismaAuthClient`, so must this.
-export function makeFakeClient(): PrismaAuthClient {
+export interface FakeClientOptions {
+  /**
+   * `'postgresql'` (default): case-sensitive `@unique`, `mode: 'insensitive'`
+   * supported. `'mysql'`: case-insensitive collation, and `mode` rejected with
+   * a `PrismaClientValidationError`, as Prisma does.
+   */
+  provider?: 'postgresql' | 'mysql'
+  /** Leave out the models added in 2.0, like a client generated before it. */
+  withoutNewModels?: boolean
+}
+
+const uniqueViolation = (): Error => Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+
+export function makeFakeClient(options: FakeClientOptions = {}): PrismaAuthClient {
+  const sameEmail = (a: string, b: string): boolean => (options.provider === 'mysql' ? a.toLowerCase() === b.toLowerCase() : a === b)
+  const links = new Map<string, PLinkRow>()
+  const passkeys = new Map<string, PPasskeyRow>()
   const users = new Map<string, PUserRow>()
   const sessions = new Map<string, PSessionRow>()
   const refresh = new Map<string, PRefreshRow>()
@@ -12,35 +28,45 @@ export function makeFakeClient(): PrismaAuthClient {
   const mfa = new Map<string, PMfaRow>()
   const versions = new Map<string, number>()
 
-  return {
+  const calls = { insensitive: 0 }
+  const client: PrismaAuthClient & { calls: typeof calls } = {
+    calls,
     authUser: {
-      async findFirst({ where }) {
-        const wanted = where.email as { equals: string; mode?: string }
-        for (const u of users.values()) {
-          if (wanted.mode === 'insensitive' ? ilike(u.email, wanted.equals) : u.email === wanted.equals) return u
-        }
-        return null
-      },
       async findUnique({ where }) {
         if (where.id !== undefined) return users.get(where.id) ?? null
         if (where.email !== undefined) {
-          for (const u of users.values()) if (u.email === where.email) return u
+          // MySQL compares with a case-insensitive collation.
+          for (const u of users.values()) if (sameEmail(u.email, where.email)) return u
         }
         return null
       },
-      async findMany({ where, select }) {
-        const ids = (where?.id?.in ?? []) as string[]
-        const rows = ids.flatMap((id) => {
-          const u = users.get(id)
-          return u ? [u] : []
-        })
+      async findMany({ where, select, orderBy, take }) {
+        let rows = [...users.values()]
+        if (where?.id?.in !== undefined) {
+          const ids = where.id.in as string[]
+          rows = ids.flatMap((id) => {
+            const u = users.get(id)
+            return u ? [u] : []
+          })
+        }
+        if (where?.id?.gt !== undefined) rows = rows.filter((u) => u.id > where.id.gt)
+        if (where?.email !== undefined) {
+          const wanted = where.email as { equals: string; mode?: string }
+          if (wanted.mode === 'insensitive' && options.provider === 'mysql') {
+            calls.insensitive++
+            throw Object.assign(new Error('Unknown argument `mode`'), { name: 'PrismaClientValidationError' })
+          }
+          rows = rows.filter((u) => (wanted.mode === 'insensitive' ? ilike(u.email, wanted.equals) : u.email === wanted.equals))
+        }
+        if (orderBy?.id === 'asc') rows = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        if (take !== undefined) rows = rows.slice(0, take)
         // Honour `select` the way Prisma does: unlisted columns (the hash
         // included) are simply absent from the objects that come back.
         if (!select) return rows
         return rows.map((u) => Object.fromEntries(Object.entries(u).filter(([k]) => select[k] === true))) as PUserRow[]
       },
       async create({ data }) {
-        if ([...users.values()].some((u) => u.email === data.email)) throw new Error('unique email')
+        if ([...users.values()].some((u) => sameEmail(u.email, data.email))) throw uniqueViolation()
         const row = { ...data }
         users.set(row.id, row)
         return row
@@ -48,6 +74,9 @@ export function makeFakeClient(): PrismaAuthClient {
       async update({ where, data }) {
         const row = users.get(where.id)
         if (!row) throw new Error('not found')
+        if (data.email !== undefined && [...users.values()].some((u) => u.id !== row.id && sameEmail(u.email, data.email))) {
+          throw uniqueViolation()
+        }
         Object.assign(row, data)
         return row
       },
@@ -142,11 +171,11 @@ export function makeFakeClient(): PrismaAuthClient {
         apiKeys.set(row.id, row)
         return row
       },
-      async update({ where, data }) {
+      async updateMany({ where, data }) {
         const row = apiKeys.get(where.id)
-        if (!row) throw new Error('not found')
+        if (!row) return { count: 0 }
         Object.assign(row, data)
-        return row
+        return { count: 1 }
       },
     },
     authMfa: {
@@ -197,7 +226,61 @@ export function makeFakeClient(): PrismaAuthClient {
         return { userId: where.userId, version: v }
       },
     },
+    authAccountLink: {
+      async findUnique({ where }) {
+        const row = links.get(where.id)
+        return row ? { ...row } : null
+      },
+      async findMany({ where }) {
+        return [...links.values()].filter((l) => l.userId === where.userId).map((l) => ({ ...l }))
+      },
+      async create({ data }) {
+        if (links.has(data.id)) throw uniqueViolation()
+        links.set(data.id, { ...data })
+        return { ...data }
+      },
+      async deleteMany({ where }) {
+        let count = 0
+        for (const [k, l] of links) {
+          if (where.id !== undefined && l.id !== where.id) continue
+          if (where.userId !== undefined && l.userId !== where.userId) continue
+          links.delete(k)
+          count++
+        }
+        return { count }
+      },
+    },
+    authPasskey: {
+      async findUnique({ where }) {
+        const row = passkeys.get(where.id)
+        return row ? { ...row } : null
+      },
+      async findMany({ where }) {
+        return [...passkeys.values()].filter((p) => p.userId === where.userId).map((p) => ({ ...p }))
+      },
+      async create({ data }) {
+        if (passkeys.has(data.id)) throw uniqueViolation()
+        passkeys.set(data.id, { ...data })
+        return { ...data }
+      },
+      // Honours the `counter` predicate — the store's compare-and-set relies on it.
+      async updateMany({ where, data }) {
+        const row = passkeys.get(where.id)
+        if (!row) return { count: 0 }
+        if (where.counter !== undefined && BigInt(row.counter) !== BigInt(where.counter)) return { count: 0 }
+        Object.assign(row, data)
+        return { count: 1 }
+      },
+      async deleteMany({ where }) {
+        return { count: passkeys.delete(where.id) ? 1 : 0 }
+      },
+    },
   }
+  if (options.withoutNewModels) {
+    delete client.authAccountLink
+    delete client.authPasskey
+  }
+  return client
 }
 
 // row shapes the fake stores (Prisma-return shape: Date / boolean / null)
@@ -208,6 +291,11 @@ interface PTokenRow { token: string; userId: string; purpose: string; expiresAt:
 interface PApiKeyRow {
   id: string; name: string; prefix: string; hash: string; tenantId: string | null
   userId: string | null; scopes: string[]; createdAt: Date; expiresAt: Date | null; lastUsedAt: Date | null; revokedAt: Date | null
+}
+interface PLinkRow { id: string; provider: string; subject: string; userId: string; email: string; createdAt: Date }
+interface PPasskeyRow {
+  id: string; credentialId: string; userId: string; publicKey: string; counter: bigint
+  transports: string | null; deviceName: string | null; createdAt: Date; lastUsedAt: Date | null
 }
 interface PMfaRow { userId: string; secret: string; enabled: boolean; recoveryCodes: string[]; lastUsedStep: number | null }
 

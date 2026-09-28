@@ -1,10 +1,12 @@
+import { isProductionEnvironment } from '@basaltkit/core'
 import type { MailDriver } from '../driver.js'
 import type { ResolvedMail } from '../message.js'
 
 export interface LogMailDriverOptions {
   /**
-   * Include the full message body in the log line. Default: `true` outside
-   * production, `false` in production — mail bodies routinely carry password
+   * Include the full message body in the log line. Default: `true` only when
+   * `NODE_ENV` is explicitly `development` or `test`, `false` anywhere else
+   * (production, staging, or NODE_ENV unset — fail-closed) — mail bodies routinely carry password
    * reset links, magic links and tokens, which must not end up retained by a
    * log aggregator because a deploy was left on the default driver.
    */
@@ -20,7 +22,7 @@ export class LogMailDriver implements MailDriver {
     private readonly sink: (line: string) => void = console.log,
     options: LogMailDriverOptions = {},
   ) {
-    this.logBody = options.logBody ?? process.env['NODE_ENV'] !== 'production'
+    this.logBody = options.logBody ?? !isProductionEnvironment()
   }
 
   async send(message: ResolvedMail): Promise<void> {

@@ -104,7 +104,9 @@ production, `@basaltkit/prisma` offers three tenancy strategies — the domain c
 | Database per tenant | `prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }) })` |
 | Schema per tenant | `prismaPlugin({ schemaPerTenant: { url, createClient } })` |
 
-A built-in LRU `TenantClientPool` keeps connection counts bounded, and
+A built-in `TenantClientPool` keeps connection counts bounded (never above
+`max`, and it never evicts a client still in use — size `max` for the tenants
+active at once, or new tenants get a 503 `TenantPoolExhaustedError`), and
 `migrateTenants()` runs migrations across every tenant. Generate a
 Prisma-backed resource with `basalt make:resource Invoice --prisma`.
 

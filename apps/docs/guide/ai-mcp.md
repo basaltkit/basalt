@@ -220,9 +220,13 @@ the whole point.
   symlink — is rejected *before any write*. Confinement resolves the nearest
   **existing** ancestor's realpath, so a symlink escape is caught even for a path
   that doesn't exist yet. An agent cannot write outside your project.
-- **Confirmation.** When the client supports MCP elicitation, an `apply` is
-  confirmed interactively with a one-line summary of what will be written; the
-  explicit preview → apply two-call flow is the floor.
+- **Confirmation — fail closed.** An `apply` is confirmed through MCP
+  elicitation with a one-line summary of what will be written. Over stdio this
+  works when the client announces the `elicitation` capability in `initialize`.
+  When the client **cannot** be asked (no elicitation support, or the HTTP
+  transport), the `apply` is **refused** — review the preview and apply it
+  yourself — unless the server was started with `--allow-unconfirmed-apply`
+  (programmatic: `allowUnconfirmedApply: true`).
 
 The recommended loop:
 
@@ -338,9 +342,14 @@ The HTTP transport binds `127.0.0.1` and rejects requests whose `Host` header
 isn't a loopback name (anti-DNS-rebinding) or whose `Origin`, *when present*, isn't
 a loopback origin (anti-CSRF — a browser always sends `Origin` on a cross-site
 POST, so its absence means a non-browser client). A rejected request gets
-`403` and never reaches a tool. If you deliberately bind elsewhere (`--host=0.0.0.0`
-for CI), you must widen the guard programmatically with `allowedHosts` /
-`allowedOrigins` / `allowRequest` — the bin has no flag for it, on purpose.
+`403` and never reaches a tool.
+
+That guard stops browsers; it is **not authentication** (any non-browser client
+can send `Host: 127.0.0.1`). So binding elsewhere (`--host=0.0.0.0` for CI) is
+**refused** unless you also give a token — `--token=<secret>` or
+`BASALT_AI_MCP_TOKEN` — which every request must then send as
+`Authorization: Bearer <secret>`. Add the hostnames clients use with
+`--allowed-hosts=ci.internal,…`. Request bodies are capped at 1 MiB (`413`).
 :::
 
 ## Programmatic use
@@ -367,7 +376,11 @@ project), and `createProvider` (to inject a mock model — no network).
 | --- | --- | --- | --- |
 | `--cwd=<path>` | string | `process.cwd()` | The project root every tool and resource reads. With `.mcp.json`, `--cwd=.` resolves to the directory the client opened |
 | `--http` / `--http=<port>` | boolean / number | stdio (off) | Switch to the HTTP transport. Bare `--http` uses port `0` — an ephemeral port, printed on stdout as `basalt-ai-mcp listening on <url>` |
-| `--host=<host>` | string | `127.0.0.1` | Bind address; only read when `--http` is present. Binding off loopback requires widening the request guard (programmatic only) |
+| `--host=<host>` | string | `127.0.0.1` | Bind address; only read when `--http` is present. Binding off loopback requires `--token` |
+| `--token=<secret>` | string | `BASALT_AI_MCP_TOKEN` | HTTP only: require `Authorization: Bearer <secret>` on every request. Mandatory for a non-loopback `--host` |
+| `--allowed-hosts=<a,b>` | comma list | loopback names only | HTTP only: extra `Host` hostnames to accept when bound off loopback |
+| `--sessions` | boolean | off (stateless) | HTTP only: turn on `Mcp-Session-Id` sessions, so a `notifications/cancelled` POSTed separately cancels a running call (see `sessions` below) |
+| `--allow-unconfirmed-apply` | boolean | off | Let `basalt_make` apply when the client cannot confirm (no elicitation). Off by default: such an apply is refused |
 
 ### `buildAiMcpServer(options)` · `createAiMcpServer(options)`
 
@@ -379,6 +392,7 @@ project), and `createProvider` (to inject a mock model — no network).
 | `env` | `Record<string, string \| undefined>` | `process.env` | Where provider config is read from — inject a fixed env instead of the process's |
 | `createReader` | `(root: string) => ProjectReader` | `nodeReader` | How project files are read. Inject an in-memory reader to test without disk |
 | `createProvider` | `() => AIProvider` | built from `env` | Inject a mock model — no network, no keys |
+| `allowUnconfirmedApply` | `boolean` | `false` | Let `basalt_make` apply without an elicitation confirmation. Default: refuse (fail closed) |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | stdio only: read JSON-RPC from a different stream (tests) |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | stdio only: write JSON-RPC to a different sink (tests) |
 
@@ -397,7 +411,12 @@ listener.
 | `path` | `string` | `'/mcp'` | JSON-RPC endpoint path. No CLI flag; programmatic only |
 | `allowedHosts` | `string[]` | loopback names only | Extra `Host` hostnames to accept when you deliberately bind off loopback. Compared case-insensitively, port ignored |
 | `allowedOrigins` | `string[]` | loopback origins only | Extra `Origin` values to accept (full scheme + host + port) |
-| `allowRequest` | `(origin, host) => boolean` | — | Full override of the guard; **replaces** the loopback/`allowedHosts`/`allowedOrigins` checks |
+| `allowRequest` | `(origin, host, req) => boolean` | — | Full override of the guard; **replaces** the loopback/`allowedHosts`/`allowedOrigins` checks |
+| `token` | `string` | — | Require `Authorization: Bearer <token>` (constant-time compare, via `bearerAuthorizer`). Needed for a non-loopback `host` |
+| `authorize` | `(req) => boolean \| Promise<boolean>` | — | Custom authentication instead of `token`; `false` answers `401` |
+| `maxBodyBytes` | `number` | `1048576` | Larger bodies get `413` |
+| `sessions` | `boolean \| { ttlMs?, maxSessions? }` | `false` | Streamable-HTTP sessions: `initialize` answers with an `Mcp-Session-Id`, every later request must carry it (`400` without, `404` unknown/expired/foreign — re-initialize), `DELETE` ends it, and a separate `notifications/cancelled` cancels the call it names within the same session only. Off by default so header-less clients keep working |
+| `principal` | `(req) => string \| undefined` | hash of `Authorization` | Who owns a session — a request resolving to another principal gets `404` |
 
 ### Tool arguments
 
@@ -430,10 +449,15 @@ produces a protocol error code.
 | `Refused: absolute path not allowed: <p>` · `Refused: path escapes workspace: <p>` · `Refused: path resolves outside workspace via symlink: <p>` | `isError` | `assertConfined` | A target file would land outside the workspace |
 | `Refusing to overwrite N existing file(s) without force:true — …` | `isError` | `basalt_make` | An `apply` hit `preview.clashes`. Review the diffs, then re-run with `force:true` |
 | `Apply cancelled — not confirmed.` | `isError` | `basalt_make` | The client's elicitation prompt was declined |
+| `Refusing to apply without confirmation — …` | `isError` | `basalt_make` | The client cannot elicit (or HTTP transport) and the server was not started with `--allow-unconfirmed-apply` |
 | `Cancelled.` | `isError` | any provider-backed tool | A `notifications/cancelled` aborted the in-flight call |
 | `Unknown tool: <name>` | JSON-RPC `-32602` | `mcp-core` | The client called a tool that isn't one of the five |
 | `Method not found: <method>` | JSON-RPC `-32601` | `mcp-core` | An MCP method outside the implemented set |
 | `Forbidden: host/origin not allowed` | HTTP `403` | `serveHttp` | The HTTP guard rejected a foreign `Host`/`Origin` before dispatch |
+| `Unauthorized` | HTTP `401` | `serveHttp` | `--token` is set and the request's bearer token is missing/wrong |
+| `failed to start HTTP server — serveHttp: refusing to bind non-loopback host …` | startup | bin | `--host` off loopback without `--token` |
+| `Bad Request: Mcp-Session-Id header required …` | HTTP `400` | `serveHttp` | `--sessions` is on and the request carries no session header — `initialize` first |
+| `Session not found (expired or unknown) — initialize again` | HTTP `404` | `serveHttp` | `--sessions` is on and the session id is unknown, expired or opened by another token |
 
 - **The agent can't see my project** — check `--cwd` points at the project root
   (where `package.json` / `prisma/schema.prisma` live). Resources always use the

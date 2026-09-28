@@ -29,7 +29,9 @@ whole family.
 
 For browser applications, `POST /auth/login` also creates a server-side session
 and returns a `Set-Cookie` header. The default `basalt_session` cookie is
-`HttpOnly`, `SameSite=Lax`, scoped to `/`, and marked `Secure` in production.
+`HttpOnly`, `SameSite=Lax`, scoped to `/`, and marked `Secure` in production —
+which, as everywhere in Basalt, means anything but an explicit
+`NODE_ENV=development` or `test` (an unset `NODE_ENV` counts as production).
 Same-origin browser requests then authenticate without exposing the JWT to page
 JavaScript. Keep the access and refresh tokens out of `localStorage`.
 
@@ -97,6 +99,7 @@ const app = await createApp({
       refreshTokens: s.refreshTokens,
       tokens: s.tokens, // email verification + password reset
       mfa: s.mfa,
+      accountLinks: s.accountLinks, // OAuth/OIDC provider subject → account
     }),
     apiKeysPlugin({ store: s.apiKeys, users: s.users }),
     fastifyPlugin({ routes: authRoutes() }),
@@ -107,7 +110,14 @@ const app = await createApp({
 `sqliteAuthStores()` also accepts a `DatabaseSync` you already opened, so auth can
 share one connection with the rest of your app. Individual stores
 (`SqliteUserSource`, `SqliteSessionStore`, …) are exported too if you want to mix
-backends.
+backends. `s.passkeys` is a durable `PasskeyStore` for `webauthnPlugin({ credentials })`.
+
+A database created before emails were canonicalised may hold rows that differ
+only in letter case; a lookup of such an email throws `AUTH_EMAIL_AMBIGUOUS`
+instead of picking one. `normalizeAuthUserEmails(s.db)` lowercases the lone
+mixed-case rows, reports the twins for you to merge (`{ normalized, conflicts }`,
+`dryRun: true` to preview) and, once none are left, builds the case-insensitive
+unique index.
 
 ### Prisma — `@basaltkit/auth-prisma`
 
@@ -130,9 +140,33 @@ authPlugin({
   refreshTokens: s.refreshTokens,
   tokens: s.tokens,
   mfa: s.mfa,
+  accountLinks: s.accountLinks, // needs the AuthAccountLink model
 })
 apiKeysPlugin({ store: s.apiKeys, users: s.users })
+webauthnPlugin({ config, verifier, credentials: s.passkeys }) // needs the AuthPasskey model
 ```
+
+::: warning Upgrading to auth-prisma 2.0
+2.0 adds two models: `AuthAccountLink` (`auth_account_links`, the OAuth/OIDC
+account links) and `AuthPasskey` (`auth_passkeys`, WebAuthn credentials). Copy
+them from `@basaltkit/auth-prisma/schema.prisma` (or run `basalt prisma:sync`),
+then `prisma migrate dev --name auth_account_links_passkeys` — with
+schema-per-tenant, in every tenant schema. A client generated without them still
+compiles; `s.accountLinks` / `s.passkeys` throw `AUTH_PRISMA_MODEL_MISSING` at
+first use. Their primary keys are SHA-256 hashes, so every indexed column fits
+MySQL's `VARCHAR(191)`; on MySQL copy them from
+`@basaltkit/auth-prisma/schema.mysql.prisma` instead, where the long unindexed
+columns (`subject`, `credentialId`, `publicKey`) are `@db.Text`, and pass
+`prismaAuthStores(prisma, { columnLimits: 'mysql' })` — see
+[MySQL](./persistence#mysql).
+
+Email lookups are case-insensitive on PostgreSQL and **refuse ambiguity**: two
+legacy rows differing only in case make `findByEmail` throw
+`AUTH_EMAIL_AMBIGUOUS`, and `create` refuses a case variant of an existing row
+(`AUTH_EMAIL_TAKEN`). Run `normalizeAuthUserEmails(prisma)` once after
+upgrading: it lowercases the lone mixed-case rows and returns the twins
+(`{ normalized, conflicts }`, `dryRun: true` to preview) for you to merge.
+:::
 
 ::: warning Upgrading to auth-prisma 1.5
 1.5.0 added a nullable `expiresAt` column to `AuthApiKey` (`auth_api_keys`) for
@@ -333,7 +367,9 @@ the race protection.
 
 Passwords are hashed with **scrypt** (memory-hard, zero dependencies); an
 argon2id driver can be swapped in via the `PasswordHasher` contract
-(`hasher: new MyArgon2Hasher()`).
+(`hasher: new MyArgon2Hasher()`). The cost is read from each stored hash, so it is
+capped: a hash declaring more than N=2^20, r=32, p=16 (or 512 MiB) never verifies,
+and a tampered row cannot pin the CPU on every login attempt.
 
 ## Guarding routes and reading the user
 
@@ -479,6 +515,41 @@ implementation is dependency-free and verified against the RFC 6238 test vectors
 without a code; disable it with a code first. The MFA routes are session-only
 (`meta.apiKey: false`): an API key can never enroll or disable MFA.
 
+### Encrypting TOTP secrets at rest {#mfa-encryption}
+
+With `mfaEncryption`, TOTP secrets are stored as `bka2.<keyId>.…` envelopes:
+AES-256-GCM under a key derived with HKDF-SHA256, **bound to the user** (a secret
+copied into another user's row does not decrypt there). `keys` is a ring — the
+first key seals new secrets, the others stay readable — so rotating is adding a
+key at the front and re-encrypting at leisure:
+
+```ts
+authPlugin({
+  users, secret: env.APP_SECRET,
+  mfaEncryption: { keys: [{ id: '2026-09', key: env.MFA_KEY }, { id: '2025-01', key: env.MFA_KEY_OLD }] },
+})
+for (const userId of usersWithMfa) await auth.reencryptMfaSecret(userId) // 'resealed' | 'current' | 'none'
+```
+
+A stored value that is not such an envelope is **refused** (`AUTH_SECRET_UNREADABLE`):
+someone with write access to the table cannot swap an encrypted secret for a
+plaintext one they know. Keys must be at least 32 bytes; `mfaEncryptionKey: key`
+is shorthand for a one-key ring with id `default`.
+
+**Migrating from the `v1:` format or plaintext rows** (before `@basaltkit/auth`
+4.0): read them through an explicit, temporary opt-in, re-encrypt every row, then
+remove it:
+
+```ts
+mfaEncryption: {
+  keys: [{ id: '2026-09', key: env.MFA_KEY }],
+  legacy: { v1Keys: [env.OLD_MFA_ENCRYPTION_KEY], plaintext: true }, // migration window only
+}
+```
+
+`SecretBox` (the same envelope, with your own `purpose`/`subject`) is exported
+for other secrets you keep at rest.
+
 ### Requiring MFA by policy {#requiring-mfa-by-policy}
 
 `requireMfa` makes a second factor mandatory — for everyone, or per user /
@@ -588,16 +659,34 @@ const { userId } = await passkeys.finishAuthentication(sessionKey, browserRespon
 ```
 
 `finishAuthentication` looks the credential up by id, verifies it, checks the
-signature counter **increased** (a clone throws `PasskeyClonedError`), and stores
-the new counter. Use `passkeys.list(userId)` / `passkeys.remove(id)` for a
-"manage devices" screen.
+signature counter **increased** (a clone throws `PasskeyClonedError`; a
+non-integer counter is refused), and stores the new counter. When
+`startAuthentication(sessionKey, userId)` names a user — step-up or
+re-authentication — only **that user's** passkey satisfies the challenge (another
+account's throws `WEBAUTHN_SUBJECT_MISMATCH`).
+
+Use `passkeys.list(userId)` / `passkeys.remove(userId, credentialId)` for a
+"manage devices" screen. `remove` only deletes a passkey owned by `userId` — an
+unknown or foreign id throws `PASSKEY_NOT_FOUND` — so pass the authenticated
+user's id, never one from the request. The default `userVerification: 'preferred'`
+lets an authenticator without PIN/biometric sign (possession only): set
+`'required'` when a passkey is the only factor.
 
 ::: warning Security
 The challenge is bound to the user you pass to `startRegistration`;
 `finishRegistration` throws `WEBAUTHN_SUBJECT_MISMATCH` if the `userId` differs, so
 a passkey can never be bound to someone else's account — always take `userId` from
 the authenticated session, never from request input. In production, swap the
-default in-memory `PasskeyStore` / `WebAuthnChallengeStore` for durable ones.
+default in-memory `PasskeyStore` / `WebAuthnChallengeStore` for durable ones
+(`s.passkeys` from `auth-sqlite` / `auth-prisma`).
+
+Clone detection is atomic: the new signature counter is written with
+`PasskeyStore.compareAndSetCounter(id, expected, next, lastUsedAt)`, a conditional
+update that succeeds only if the stored counter is still the one the assertion was
+checked against. Two concurrent assertions presenting the same counter (a cloned
+authenticator used alongside the genuine one) cannot both pass — the loser gets
+`PASSKEY_CLONED`. A custom store must implement it; one without it is refused at
+construction (`PASSKEY_STORE_OUTDATED`).
 :::
 
 ## Social login (OAuth)
@@ -645,19 +734,35 @@ Two routes per provider are added:
 
 New accounts are created **passwordless** (they authenticate via the provider
 until a password is set); a provider-verified email flips `emailVerified`.
-`Auth.socialLogin(email, { emailVerified })` is the underlying primitive if you
-wire a custom provider (or call `oauth.authorize()` / `oauth.callback({ …, binding })`
-yourself).
+`Auth.socialLogin(email, { emailVerified, identity: { provider, subject } })` is
+the underlying primitive if you wire a custom provider (or call
+`oauth.authorize()` / `oauth.callback({ …, binding })` yourself).
 
-::: warning Accounts are matched by email — only when the provider verified it
-Logging into an **existing** account requires the provider to vouch for the
+**Accounts are linked by the provider's subject.** The first login of a provider
+account records an account link — provider name + its stable `subject` (`sub`) →
+local account — in the `accountLinks` store (`authPlugin({ accountLinks })`;
+`auth-sqlite` / `auth-prisma` ship one, the default is in-memory). From then on:
+
+- the link decides, not the email: if the user changes their email at the IdP,
+  they still reach the same account;
+- a **different** subject of the same provider asserting that account's email is
+  refused with `AccountLinkConflictError` (`409 AUTH_ACCOUNT_LINK_CONFLICT`) —
+  a second IdP account cannot take the first one's place. For an IdP that
+  re-issues subjects (a directory migration), opt in with
+  `oauthPlugin({ …, subjectConflict: 'link' })`.
+
+Emits `auth:account_linked` when a link is recorded.
+
+::: warning A first login links to an existing account only through a verified email
+Linking a provider account to an **existing** account requires the provider to vouch for the
 email (`emailVerified: true`); otherwise `socialLogin` throws
 `SocialLinkRefusedError` (`403 AUTH_SOCIAL_LINK_REFUSED`) and the user must sign
 in with their password. GitHub's driver treats the fallback `/user` email as
 unverified. When the existing account had never verified its own email (someone
 may have registered the address first), its password, sessions, refresh tokens
 and MFA are revoked before the verified owner is let in
-(`auth:social_account_adopted`).
+(`auth:social_account_adopted`) — together with any account links that registrant
+had made.
 
 An existing account with **MFA enabled** is not logged in by the provider alone:
 `socialLogin` throws `MfaRequiredError` unless you pass `mfaCode`. If your IdP
@@ -682,6 +787,37 @@ const okta = await discoverOidcProvider({ name: 'okta', issuer: 'https://acme.ok
 oauthPlugin({ secret: env.APP_SECRET, providers: [okta] })
 ```
 
+Discovery checks that the document's `issuer` equals the one you configured and
+that every endpoint is `https:` (plain `http:` only to a loopback host).
+
+**Restrict each IdP to its email domains.** A customer's IdP admin decides which
+emails it asserts as verified, and a verified email links to the existing account
+holding it — so without a restriction Acme's IdP could assert `ceo@globex.com` and
+log into Globex's CEO account. Give every enterprise provider its
+`allowedEmailDomains`; a login for any other domain fails with
+`AUTH_OAUTH_EXCHANGE_FAILED` before an account is looked up:
+
+```ts
+const acme = await discoverOidcProvider({ name: 'acme', issuer, clientId, clientSecret, allowedEmailDomains: ['acme.com'] })
+const globex = oidcProvider({ name: 'globex', /* … */ allowedEmailDomains: ['globex.com'] })
+oauthPlugin({ secret: env.APP_SECRET, providers: [googleProvider(keys), acme, globex] })
+```
+
+With **more than one provider**, every `oidcProvider` / `discoverOidcProvider`
+entry must declare `allowedEmailDomains` or `allowAnyEmailDomain: true` (only for
+an IdP you fully control), or the service refuses to start with
+`AUTH_OAUTH_PROVIDER_CONFIG`. Google and GitHub only assert emails they verified
+themselves and are not affected; a custom `OAuthProvider` opts in with
+`enterprise: true`. The **first** login of an IdP account links it by its verified
+email — the allowlist is what scopes which accounts each IdP can link; after that
+the provider's `subject` decides (see above).
+
+Provider replies are validated: a profile without a string `sub`/`email` (or an
+email that is not a single-`@` address) fails the login; an `openid` flow must
+return an `id_token` whose `nonce`, `aud` (your client id), `exp` and — when the
+provider declares an `issuer` — `iss` match; every provider call has a deadline
+(`timeoutMs`, default 10 s).
+
 For legacy **SAML 2.0** IdPs (ADFS, Shibboleth, or an IdP configured for SAML),
 use the companion **`@basaltkit/auth-saml`** package — SP-initiated SSO built on the
 vetted `@node-saml/node-saml` XML-DSig library, plugging into the same
@@ -694,6 +830,19 @@ samlPlugin({ providers: [{ name: 'okta', entryPoint, idpCert, issuer, callbackUr
 // routes: GET /auth/saml/:provider/login · POST …/acs · GET …/metadata
 ```
 
+Every login is **bound to the browser that started it** (login-CSRF protection):
+`samlRoutes` sets an HttpOnly `__Host-basalt_saml` cookie at login and sends its
+SHA-256 as the `RelayState`, and the ACS refuses a response whose `RelayState`
+does not match the cookie posted with it — so an attacker cannot obtain a valid
+`SAMLResponse` for their own account and auto-POST it from a victim's browser. The
+IdP returns with a cross-site POST, so the cookie is `SameSite=None; Secure`
+(`samlRoutes({ bindingCookie: { secure } })`; browsers treat `http://localhost` as
+secure). Custom routes use `saml.authorize(name)` → `{ url, binding }` and
+`saml.consume(name, body, { binding })`; `bindToBrowser: false` opts out, and
+IdP-initiated SSO (below) cannot be bound. Any error node-saml throws (malformed
+XML, bad signature, encrypted assertion…) is a `400 AUTH_SAML_RESPONSE_INVALID`,
+never a 500.
+
 Assertions must be signed (`wantAssertionsSigned`) **and** bound to a login this
 app started: `validateInResponseTo` defaults to `'always'`, so every response must
 carry an `InResponseTo` matching an outstanding, not-yet-consumed AuthnRequest.
@@ -701,6 +850,13 @@ Unsolicited (IdP-initiated) responses are refused unless you opt in with
 `validateInResponseTo: 'ifPresent'`; each consumed assertion id is then also kept
 in a single-use `assertionReplayCache`, so a captured `SAMLResponse` cannot be
 re-posted before its `NotOnOrAfter`.
+
+**Only strong signature algorithms are accepted.** Every `SignatureMethod` and
+`DigestMethod` in the response — the envelope and the nested assertion signature —
+must be RSA/ECDSA-SHA256/384/512 over SHA-256/384/512 digests; anything else
+(SHA-1 included) or a DOCTYPE is a `400 AUTH_SAML_RESPONSE_INVALID`. Set
+`allowSha1: true` on a legacy IdP that cannot sign with SHA-256, or replace the
+lists per provider with `signatureAlgorithms` / `digestAlgorithms` (algorithm URIs).
 
 **Each IdP may only assert its own email domains.** In B2B SaaS every customer's
 IdP admin controls what their IdP signs, so give each provider an
@@ -720,7 +876,8 @@ samlPlugin({
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute`, `allowedEmailDomains` (required with several IdPs), `allowAnyEmailDomain` |
+| `providers` | `SamlProvider[]` | — (required) | IdPs: `name`, `entryPoint`, `idpCert`, `issuer`, `callbackUrl`, optional `emailAttribute` (then the only source — no fallback), `allowedEmailDomains` (required with several IdPs), `allowAnyEmailDomain`, `wantAuthnResponseSigned` (default `true`; `false` for IdPs that sign only the assertion, e.g. AD FS / Entra ID), `acceptedClockSkewMs` (default 0, max 5 min), `signatureAlgorithms` / `digestAlgorithms` (accepted XML-DSig algorithm URIs; default RSA/ECDSA-SHA256/384/512, SHA-256/384/512), `allowSha1` (legacy opt-in) |
+| `bindToBrowser` | `boolean` | `true` | Bind each SP-initiated login to the browser that started it (login CSRF) |
 | `validateInResponseTo` | `'never' \| 'ifPresent' \| 'always'` | `'always'` | Replay protection — bind the response to an AuthnRequest this SP issued; `'ifPresent'` opts in to IdP-initiated SSO |
 | `cacheProvider` | `SamlCacheProvider` | node-saml's in-process cache | Where outstanding AuthnRequest ids live — **required on multi-replica deployments** |
 | `assertionReplayCache` | `SamlAssertionReplayCache` | in-process | Single-use store for consumed assertion ids (`consume(key, ttlMs) → boolean`) — share it across replicas if you opt in to IdP-initiated SSO |
@@ -889,7 +1046,7 @@ the plugin supplies:
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `users` | `UserSource` | — (required) | Where accounts live. `MemoryUserSource` in dev; `auth-sqlite`/`auth-prisma`, or your own four methods over your tables. The optional fifth, `findByIds`, adds batched contact lookups |
-| `secret` | `string` | — (required) | HS256 signing key for access tokens. Rejected empty, and rejected under 32 chars when `NODE_ENV=production` (`AUTH_WEAK_SECRET`) |
+| `secret` | `string` | — (required) | HS256 signing key for access tokens. Rejected empty, and rejected under 32 chars unless `NODE_ENV` is explicitly `development`/`test` — unset counts as production (`AUTH_WEAK_SECRET`) |
 | `hasher` | `PasswordHasher` | `new ScryptPasswordHasher()` | Password hashing. Swap for an argon2id implementation without touching call sites |
 | `sessions` | `SessionStore` | in-memory | Cookie/`x-session-id` sessions — swap for durability |
 | `refreshTokens` | `RefreshTokenStore` | in-memory | Refresh-token families; in-memory means every redeploy logs everyone out |
@@ -898,7 +1055,7 @@ the plugin supplies:
 | `accessTtl` | `DurationInput` | `'15m'` | Access-token lifetime. Short by design — the refresh token is what carries the session |
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults to production only |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test` |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
@@ -909,7 +1066,9 @@ the plugin supplies:
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
 | `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
 | `tokenVersions` | `TokenVersionStore` | — (off) | Opt-in access-token **revocation**: tokens carry a `tv` claim that `resetPassword`/`revokeAllTokens` bump, killing outstanding tokens before their TTL. Costs one store read per authenticated request |
-| `mfaEncryptionKey` | `string \| Buffer` | — (plaintext) | Encrypts TOTP secrets at rest with AES-256-GCM (`v1:` envelopes), so a database leak can't recover a live second factor. Existing plaintext rows keep working and are encrypted on next write |
+| `accountLinks` | `AccountLinkStore` | in-memory | OAuth/OIDC account links (provider + subject → account) — durable in production, or links are forgotten on restart |
+| `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (plaintext) | Encrypts TOTP secrets at rest (AES-256-GCM, HKDF keys with ids, bound to the user); non-envelope values are refused unless `legacy` opts in. See [Encrypting TOTP secrets at rest](#mfa-encryption) |
+| `mfaEncryptionKey` | `string \| Buffer` | — (plaintext) | Shorthand for `mfaEncryption: { keys: [{ id: 'default', key }] }` (≥ 32 bytes). Does not read the old `v1:` envelopes — migrate with `mfaEncryption.legacy` |
 | `mfaIssuer` | `string` | `'Basalt'` | Issuer name shown in the authenticator app |
 
 `new LoginThrottle(options)`:
@@ -920,7 +1079,7 @@ the plugin supplies:
 | `windowMs` | `number` | `900_000` (15m) | Fixed window opened by the first attempt; a successful login clears the counter |
 | `store` | `ThrottleStore` | a private `MemoryThrottleStore` | Where counters live — `RedisThrottleStore` to share them across replicas |
 | `namespace` | `string` | — | Key prefix separating throttles that share one store |
-| `maxEntries` | `number` | `100_000` | Cap on tracked identifiers (in-memory store); expired entries are swept, then the oldest evicted |
+| `maxEntries` | `number` | `100_000` | Cap on tracked identifiers (in-memory store); expired entries are swept, then the oldest unlocked ones evicted — a locked identifier is kept (it is only evicted when every tracked entry is locked) |
 | `clock` | `() => number` | `Date.now` | Injectable clock for the in-memory store (tests) |
 
 With a synchronous store (the default) every `LoginThrottle` method stays
@@ -931,7 +1090,7 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `store` | `ApiKeyStore` | in-memory | Where key hashes live — durable in production, or keys die on redeploy |
-| `header` | `string` | `'x-api-key'` | Alternative header to `Authorization: Bearer mk_…` |
+| `header` | `string` | `'x-api-key'` | Alternative header to `Authorization: Bearer mk_…`. Two **different** keys (one in each) → `400 AUTH_APIKEY_AMBIGUOUS`, never one silently winning |
 | `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
 | `allowTenantlessKeys` | `boolean` | `false` | Let keys issued without a tenant act on tenant-scoped requests (trusted platform keys only) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Let a key without `*` reach `meta.auth`/`can`/`teamRole`/`audience` routes that declare no `meta.scopes` |
@@ -942,13 +1101,13 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `verifier` | `WebAuthnVerifier` | — (required) | The crypto boundary you implement over `@simplewebauthn/server`, so the framework carries no WebAuthn dependency |
-| `credentials` | `PasskeyStore` | `new MemoryPasskeyStore()` | Registered passkeys — swap for a durable store |
+| `credentials` | `PasskeyStore` | `new MemoryPasskeyStore()` | Registered passkeys — swap for a durable store (`s.passkeys`). Must implement `compareAndSetCounter` |
 | `challenges` | `WebAuthnChallengeStore` | `new MemoryWebAuthnChallengeStore()` | Single-use ceremony challenges |
 | `config.rpId` | `string` | — (required) | Relying Party ID — your registrable domain, e.g. `'example.com'` |
 | `config.rpName` | `string` | — (required) | Human-readable name shown in the OS prompt |
 | `config.origin` | `string \| string[]` | — (required) | Expected origin(s), e.g. `'https://example.com'` |
 | `config.challengeTtlMs` | `number` | `300_000` (5m) | How long a challenge stays usable |
-| `config.userVerification` | `'required' \| 'preferred' \| 'discouraged'` | `'preferred'` | Whether the authenticator must verify the user (PIN/biometric) |
+| `config.userVerification` | `'required' \| 'preferred' \| 'discouraged'` | `'preferred'` | Whether the authenticator must verify the user (PIN/biometric) — `'required'` for passwordless login |
 | `config.timeoutMs` | `number` | `60_000` | Ceremony timeout advertised to the browser |
 | `config.pubKeyCredParams` | `PublicKeyParam[]` | ES256 + RS256 | Override the accepted signature algorithms |
 
@@ -962,9 +1121,12 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `fetch` | `typeof fetch` | global `fetch` | Injected HTTP client (tests) |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 | `mfa` | `'required' \| 'skip'` | `'required'` | An existing account with MFA enabled is refused (`AUTH_MFA_REQUIRED`); `'skip'` only for an IdP that enforces its own MFA |
+| `timeoutMs` | `number` | `10_000` | Deadline for every request to a provider (token endpoint, userinfo) |
+| `subjectConflict` | `'refuse' \| 'link'` | `'refuse'` | A different subject of a provider asserting the email of an account already linked to that provider: refused (`AUTH_ACCOUNT_LINK_CONFLICT`), or also linked (`'link'`, only for an IdP that re-issues subjects) |
 | `callbackBaseUrl` (routes) | `string` | — (required) | Public base URL of your app; the redirect URI is `${callbackBaseUrl}/auth/oauth/:provider/callback` and must be registered with each provider |
 | `successRedirect` (routes) | `string` | — (JSON response) | Bounce the browser here with `#access_token=…&refresh_token=…` instead of returning JSON — the SPA flow |
-| `bindingCookie` (routes) | `{ secure?, maxAgeSeconds? }` | secure in production, 15 min | The HttpOnly cookie binding the flow to the browser (`__Host-basalt_oauth` when secure) |
+| `bindingCookie` (routes) | `{ secure?, maxAgeSeconds? }` | secure unless `NODE_ENV` is `development`/`test`, 15 min | The HttpOnly cookie binding the flow to the browser (`__Host-basalt_oauth` when secure) |
+| `rateLimit` (routes) | `{ limit, windowMs } \| false` | 10 / min per ip and route | `meta.rateLimit` on both routes (enforced by the http `securityPlugin`) |
 
 Register `oauthPlugin` **after** `authPlugin`: the service resolves `AUTH` to log
 users in.
@@ -989,24 +1151,32 @@ users in.
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset |
-| `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars under `NODE_ENV=production` |
+| `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars outside an explicit `NODE_ENV=development`/`test` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | A key used outside the tenant it was issued in (or a tenantless key on a tenant-scoped request) |
 | `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | A key used on a session-only route (`meta.apiKey: false`: key management, MFA) |
+| `ApiKeyAmbiguousError` | `AUTH_APIKEY_AMBIGUOUS` | 400 | Two different keys on one request (`Authorization: Bearer mk_…` and the key header) |
 | `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` for a key outside the caller's tenant/user scope — a 404, never a 403, so key ids can't be probed |
 | `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: the database's `auth_api_keys` is missing a column (usually `expiresAt`, added in 1.5.0) — migrate it, in every tenant schema with schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | The passkey challenge expired or was already used (they are single-use) |
 | `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | The verifier rejected the browser's response |
-| `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for |
-| `PasskeyNotFoundError` | `PASSKEY_NOT_FOUND` | 404 | No stored credential matches the presented id |
-| `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | The signature counter did not increase — the authenticator may be cloned |
+| `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for, or an authentication started for a user was answered with another user's passkey |
+| `PasskeyNotFoundError` | `PASSKEY_NOT_FOUND` | 404 | No stored credential matches the presented id, or `remove(userId, id)` named a passkey `userId` does not own |
+| `PasskeyClonedError` | `PASSKEY_CLONED` | 401 | The signature counter did not increase, or a concurrent assertion moved it first — the authenticator may be cloned |
+| `PasskeyStoreOutdatedError` | `PASSKEY_STORE_OUTDATED` | boot | The `PasskeyStore` has no `compareAndSetCounter()` |
 | `PasskeyExistsError` | `PASSKEY_EXISTS` | 409 | That credential is already registered |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 | `:provider` isn't in the `providers` array |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 | The CSRF `state` is missing, tampered with, older than `stateTtlMs`, already used, or arrived without the browser's binding cookie |
 | `SocialLinkRefusedError` | `AUTH_SOCIAL_LINK_REFUSED` | 403 | A social login matched an existing account by an email the provider did not verify |
-| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange or the profile fetch failed |
-| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The assertion failed validation — bad signature, expired, missing/unknown `InResponseTo`, already used, or an email outside the provider's `allowedEmailDomains` |
-| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, or `@node-saml/node-saml` < 5.1.0 |
+| `AccountLinkConflictError` | `AUTH_ACCOUNT_LINK_CONFLICT` | 409 | The account is linked to a different subject of that provider (or the subject was just linked to another account) |
+| `AccountEmailAmbiguousError` | `AUTH_EMAIL_AMBIGUOUS` | 500 | The user store holds several rows whose email differs only in case — merge them (`normalizeAuthUserEmails()` lists them) |
+| `SecretUnreadableError` | `AUTH_SECRET_UNREADABLE` | 500 | A stored TOTP secret is not an envelope sealed for that user with a key in the ring (plaintext / `v1:` without the `legacy` opt-in, tampering, a removed key) |
+| `SecretBoxKeyError` | `AUTH_SECRET_BOX_KEY_INVALID` | boot | `mfaEncryption` key shorter than 32 bytes, an invalid or duplicate key id, or both `mfaEncryption` and `mfaEncryptionKey` set |
+| `AuthModelMissingError` | `AUTH_PRISMA_MODEL_MISSING` | 500 | `@basaltkit/auth-prisma`: the client was generated without `AuthAccountLink` / `AuthPasskey` |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 | The provider rejected the code exchange, the profile fetch failed or timed out, the profile lacks a usable `sub`/`email`, the email is outside the provider's `allowedEmailDomains`, or the `id_token` is missing or for another nonce/audience/issuer or expired. The provider's reply stays in the log; the client gets `Bad gateway.` |
+| `OAuthProviderConfigError` | `AUTH_OAUTH_PROVIDER_CONFIG` | boot | Several providers with an enterprise (OIDC) IdP lacking `allowedEmailDomains`, an invalid domain entry, or a duplicate provider name |
+| `SamlResponseInvalidError` | `AUTH_SAML_RESPONSE_INVALID` | 400 | The response is not bound to this browser, or the assertion failed validation — malformed, bad signature, expired, missing/unknown `InResponseTo`, already used, encrypted (unsupported), a signature/digest algorithm outside the allowlist (SHA-1 by default), a DOCTYPE, or an email outside the provider's `allowedEmailDomains` |
+| `SamlProviderConfigError` | `AUTH_SAML_PROVIDER_CONFIG` | boot | Several SAML providers without `allowedEmailDomains`, an invalid domain entry, an empty/invalid `signatureAlgorithms` / `digestAlgorithms` list, an `acceptedClockSkewMs` outside 0..5 min, or `@node-saml/node-saml` < 5.1.0 |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.auth` and `authPlugin` isn't registered |
 
 - **Every request is anonymous even with a valid `Authorization` header** — check
@@ -1027,8 +1197,9 @@ users in.
   trip first under shared NAT or a load test. Tune `ipLoginThrottle`, and remember
   both throttles are in-process: with several replicas the effective budget is
   per replica.
-- **`AUTH_WEAK_SECRET` only in production** — the length floor is enforced when
-  `NODE_ENV=production`; a dev-length secret boots locally and fails on deploy.
+- **`AUTH_WEAK_SECRET` only in production** — the length floor is enforced unless
+  `NODE_ENV` is explicitly `development` or `test` (an unset `NODE_ENV` counts as
+  production); a dev-length secret boots locally and fails on deploy.
 
 ## Events
 
@@ -1045,7 +1216,8 @@ users in.
 | `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; never the key |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
-| `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials were revoked |
+| `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |
+| `auth:account_linked` | `{ user, provider }` | A provider account was linked to this account on its first social login — security notification |
 
 They are consumed for free by audit and notifications (see
 [Packages](/reference/packages)). For the full end-to-end wiring — email

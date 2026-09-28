@@ -9,6 +9,8 @@ const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
 import type {
+  AccountLink,
+  AccountLinkStore,
   ApiKeyFilter,
   ApiKeyRecord,
   ApiKeyStore,
@@ -18,6 +20,8 @@ import type {
   AuthUser,
   MfaRecord,
   MfaStore,
+  PasskeyCredential,
+  PasskeyStore,
   PublicUser,
   TokenVersionStore,
   RefreshRecord,
@@ -27,6 +31,7 @@ import type {
   UserPatch,
   UserSource,
 } from '@basaltkit/auth'
+import { AccountEmailAmbiguousError, EmailTakenError } from '@basaltkit/auth'
 
 /**
  * A durable, SQLite-backed implementation of every `@basaltkit/auth` store, built
@@ -122,6 +127,28 @@ export function migrate(db: DatabaseSync): void {
       user_id TEXT PRIMARY KEY,
       version INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS auth_account_links (
+      provider   TEXT NOT NULL,
+      subject    TEXT NOT NULL,
+      user_id    TEXT NOT NULL,
+      email      TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (provider, subject)
+    );
+    CREATE INDEX IF NOT EXISTS idx_account_links_user ON auth_account_links (user_id);
+
+    CREATE TABLE IF NOT EXISTS auth_passkeys (
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL,
+      public_key   TEXT NOT NULL,
+      counter      INTEGER NOT NULL,
+      transports   TEXT,
+      device_name  TEXT,
+      created_at   INTEGER NOT NULL,
+      last_used_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_passkeys_user ON auth_passkeys (user_id);
   `)
 
   try {
@@ -132,8 +159,10 @@ export function migrate(db: DatabaseSync): void {
 
   // Emails are case-insensitive identities: enforce it for new rows. A legacy
   // database that already holds case-variant duplicates cannot take the index;
-  // it keeps working (lookups are case-insensitive either way) until they are
-  // merged by hand.
+  // it keeps working — SqliteUserSource.create refuses a new case variant in
+  // its INSERT itself, and a lookup of a duplicated email throws
+  // AUTH_EMAIL_AMBIGUOUS instead of picking one — until they are merged by hand
+  // (normalizeAuthUserEmails() lists them; the next migrate() builds the index).
   try {
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_email_nocase ON auth_users (email COLLATE NOCASE)')
   } catch {
@@ -192,11 +221,18 @@ export class SqliteUserSource implements UserSource {
     this.idChunkSize = Math.max(1, Math.trunc(options.idChunkSize ?? DEFAULT_ID_CHUNK_SIZE))
   }
 
+  /**
+   * Case-insensitive, and refuses ambiguity: a legacy database holding two
+   * rows that differ only in case throws {@link AccountEmailAmbiguousError}
+   * rather than resolving to whichever was inserted first.
+   */
   async findByEmail(email: string): Promise<AuthUser | null> {
-    const row = this.db
-      .prepare('SELECT * FROM auth_users WHERE email = ? COLLATE NOCASE ORDER BY rowid LIMIT 1')
-      .get(email.trim()) as UserRow | undefined
-    return row ? toUser(row) : null
+    const wanted = email.trim()
+    const rows = this.db
+      .prepare('SELECT * FROM auth_users WHERE email = ? COLLATE NOCASE ORDER BY rowid LIMIT 2')
+      .all(wanted) as unknown as UserRow[]
+    if (rows.length > 1) throw new AccountEmailAmbiguousError(wanted.toLowerCase())
+    return rows[0] ? toUser(rows[0]) : null
   }
 
   async findById(id: string): Promise<AuthUser | null> {
@@ -232,9 +268,19 @@ export class SqliteUserSource implements UserSource {
 
   async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
     const user: AuthUser = { id: randomUUID(), email: data.email, passwordHash: data.passwordHash, emailVerified: false }
-    this.db
-      .prepare('INSERT INTO auth_users (id, email, password_hash, email_verified) VALUES (?, ?, ?, 0)')
-      .run(user.id, user.email, user.passwordHash)
+    // Case-insensitive uniqueness in the statement itself, not only in the
+    // NOCASE index: a legacy database holding case-variant duplicates cannot
+    // take that index (see migrate()), and must still refuse a new variant —
+    // also the one a concurrent registration inserts after the caller's
+    // findByEmail() check.
+    const inserted = this.db
+      .prepare(
+        `INSERT INTO auth_users (id, email, password_hash, email_verified)
+         SELECT ?, ?, ?, 0
+         WHERE NOT EXISTS (SELECT 1 FROM auth_users WHERE email = ? COLLATE NOCASE)`,
+      )
+      .run(user.id, user.email, user.passwordHash, user.email.trim())
+    if (Number(inserted.changes) === 0) throw new EmailTakenError()
     return user
   }
 
@@ -597,6 +643,184 @@ export class SqliteTokenVersionStore implements TokenVersionStore {
   }
 }
 
+// --- legacy mixed-case emails ------------------------------------------------
+
+export interface NormalizeEmailsReport {
+  /** Rows whose email was rewritten to its canonical form (or would be, on a dry run). */
+  normalized: Array<{ id: string; from: string; to: string }>
+  /**
+   * Canonical emails held by more than one row, left untouched: which account
+   * is the real one is a decision for a human. Until they are resolved, lookups
+   * of that email throw `AUTH_EMAIL_AMBIGUOUS` and the case-insensitive unique
+   * index cannot be built.
+   */
+  conflicts: Array<{ email: string; ids: string[] }>
+}
+
+/**
+ * One-off migration for users written before emails were canonicalised
+ * (trimmed, lowercased): rewrites every non-canonical email with no case-variant
+ * twin, reports the twins, and — when none are left — builds the
+ * case-insensitive unique index `migrate()` had to skip. Idempotent; runs in
+ * one transaction. `dryRun: true` only reports.
+ */
+export function normalizeAuthUserEmails(db: DatabaseSync, options: { dryRun?: boolean } = {}): NormalizeEmailsReport {
+  const rows = db.prepare('SELECT id, email FROM auth_users ORDER BY rowid').all() as unknown as Array<{ id: string; email: string }>
+  const groups = new Map<string, Array<{ id: string; email: string }>>()
+  for (const r of rows) {
+    const canonical = r.email.trim().toLowerCase()
+    const group = groups.get(canonical)
+    if (group) group.push(r)
+    else groups.set(canonical, [r])
+  }
+  const report: NormalizeEmailsReport = { normalized: [], conflicts: [] }
+  for (const [canonical, group] of groups) {
+    if (group.length > 1) report.conflicts.push({ email: canonical, ids: group.map((r) => r.id) })
+    else if (group[0]!.email !== canonical) report.normalized.push({ id: group[0]!.id, from: group[0]!.email, to: canonical })
+  }
+  if (options.dryRun || (report.normalized.length === 0 && report.conflicts.length > 0)) return report
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const update = db.prepare('UPDATE auth_users SET email = ? WHERE id = ?')
+    for (const n of report.normalized) update.run(n.to, n.id)
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+  if (report.conflicts.length === 0) {
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_email_nocase ON auth_users (email COLLATE NOCASE)')
+  }
+  return report
+}
+
+// --- federated identities (account links) -------------------------------------
+
+interface AccountLinkRow {
+  provider: string
+  subject: string
+  user_id: string
+  email: string
+  created_at: number
+}
+
+const toLink = (r: AccountLinkRow): AccountLink => ({
+  provider: r.provider,
+  subject: r.subject,
+  userId: r.user_id,
+  email: r.email,
+  createdAt: r.created_at,
+})
+
+export class SqliteAccountLinkStore implements AccountLinkStore {
+  constructor(private readonly db: DatabaseSync) {}
+
+  async find(provider: string, subject: string): Promise<AccountLink | null> {
+    const row = this.db
+      .prepare('SELECT * FROM auth_account_links WHERE provider = ? AND subject = ?')
+      .get(provider, subject) as AccountLinkRow | undefined
+    return row ? toLink(row) : null
+  }
+
+  /** `(provider, subject)` is the primary key, so the insert is the atomic check. */
+  async create(link: AccountLink): Promise<boolean> {
+    const { changes } = this.db
+      .prepare(
+        'INSERT INTO auth_account_links (provider, subject, user_id, email, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+      )
+      .run(link.provider, link.subject, link.userId, link.email, link.createdAt)
+    return Number(changes) > 0
+  }
+
+  async forUser(userId: string): Promise<AccountLink[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM auth_account_links WHERE user_id = ? ORDER BY created_at, rowid')
+      .all(userId) as unknown as AccountLinkRow[]
+    return rows.map(toLink)
+  }
+
+  async remove(provider: string, subject: string): Promise<void> {
+    this.db.prepare('DELETE FROM auth_account_links WHERE provider = ? AND subject = ?').run(provider, subject)
+  }
+
+  async deleteAllForUser(userId: string): Promise<void> {
+    this.db.prepare('DELETE FROM auth_account_links WHERE user_id = ?').run(userId)
+  }
+}
+
+// --- WebAuthn passkeys --------------------------------------------------------
+
+interface PasskeyRow {
+  id: string
+  user_id: string
+  public_key: string
+  counter: number
+  transports: string | null
+  device_name: string | null
+  created_at: number
+  last_used_at: number | null
+}
+
+const toPasskey = (r: PasskeyRow): PasskeyCredential => {
+  const cred: PasskeyCredential = {
+    id: r.id,
+    userId: r.user_id,
+    publicKey: r.public_key,
+    counter: Number(r.counter),
+    createdAt: r.created_at,
+  }
+  if (r.transports !== null) cred.transports = JSON.parse(r.transports) as string[]
+  if (r.device_name !== null) cred.deviceName = r.device_name
+  if (r.last_used_at !== null) cred.lastUsedAt = r.last_used_at
+  return cred
+}
+
+export class SqlitePasskeyStore implements PasskeyStore {
+  constructor(private readonly db: DatabaseSync) {}
+
+  async add(credential: PasskeyCredential): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO auth_passkeys (id, user_id, public_key, counter, transports, device_name, created_at, last_used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        credential.id,
+        credential.userId,
+        credential.publicKey,
+        credential.counter,
+        credential.transports ? JSON.stringify(credential.transports) : null,
+        orNull(credential.deviceName),
+        credential.createdAt,
+        orNull(credential.lastUsedAt),
+      )
+  }
+
+  async get(credentialId: string): Promise<PasskeyCredential | null> {
+    const row = this.db.prepare('SELECT * FROM auth_passkeys WHERE id = ?').get(credentialId) as PasskeyRow | undefined
+    return row ? toPasskey(row) : null
+  }
+
+  async forUser(userId: string): Promise<PasskeyCredential[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM auth_passkeys WHERE user_id = ? ORDER BY created_at, rowid')
+      .all(userId) as unknown as PasskeyRow[]
+    return rows.map(toPasskey)
+  }
+
+  /** One conditional UPDATE: a concurrent assertion that moved the counter makes this one fail. */
+  async compareAndSetCounter(credentialId: string, expected: number, next: number, lastUsedAt: number): Promise<boolean> {
+    const { changes } = this.db
+      .prepare('UPDATE auth_passkeys SET counter = ?, last_used_at = ? WHERE id = ? AND counter = ?')
+      .run(next, lastUsedAt, credentialId, expected)
+    return Number(changes) > 0
+  }
+
+  async remove(credentialId: string): Promise<void> {
+    this.db.prepare('DELETE FROM auth_passkeys WHERE id = ?').run(credentialId)
+  }
+}
+
 // --- convenience ------------------------------------------------------------
 
 export interface SqliteAuthStores {
@@ -608,6 +832,8 @@ export interface SqliteAuthStores {
   apiKeys: SqliteApiKeyStore
   mfa: SqliteMfaStore
   tokenVersions: SqliteTokenVersionStore
+  accountLinks: SqliteAccountLinkStore
+  passkeys: SqlitePasskeyStore
 }
 
 /**
@@ -618,8 +844,9 @@ export interface SqliteAuthStores {
  * ```ts
  * const s = sqliteAuthStores('./data/auth.db')
  * authPlugin({ users: s.users, sessions: s.sessions, refreshTokens: s.refreshTokens,
- *              tokens: s.tokens, mfa: s.mfa, secret })
+ *              tokens: s.tokens, mfa: s.mfa, accountLinks: s.accountLinks, secret })
  * apiKeysPlugin({ store: s.apiKeys, users: s.users })
+ * webauthnPlugin({ config, verifier, credentials: s.passkeys })
  * ```
  */
 export function sqliteAuthStores(dbOrLocation: DatabaseSync | string = ':memory:'): SqliteAuthStores {
@@ -634,5 +861,7 @@ export function sqliteAuthStores(dbOrLocation: DatabaseSync | string = ':memory:
     apiKeys: new SqliteApiKeyStore(db),
     mfa: new SqliteMfaStore(db),
     tokenVersions: new SqliteTokenVersionStore(db),
+    accountLinks: new SqliteAccountLinkStore(db),
+    passkeys: new SqlitePasskeyStore(db),
   }
 }

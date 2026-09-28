@@ -111,7 +111,7 @@ describe('AppyPayGateway.verifyWebhook', () => {
     })
     const event = gw.verifyWebhook(body, sign(body))
     expect(event).toMatchObject({
-      id: 'evt_1',
+      id: 'evt_1:payment.succeeded',
       type: 'payment.succeeded',
       paymentId: 'order_1',
       amount: 500000, // "5000.00" major -> 500000 minor
@@ -141,3 +141,53 @@ describe('AppyPayGateway.verifyWebhook', () => {
     expect(() => noSecret.verifyWebhook(body, 'anything')).toThrow(WebhookSecretMissingError)
   })
 })
+
+describe('AppyPayGateway — audit pass 2 (FA-071 P-1, P-2, P-4)', () => {
+  const secret = 'whsec'
+  const gw = new AppyPayGateway({ ...creds, webhookSecret: secret, fetch: fakeOk })
+  const sign = (body: string) => createHmac('sha256', secret).update(body).digest('hex')
+
+  it('a FAILED then SUCCESS callback sharing one id are two distinct events (the success is not deduped)', () => {
+    const failed = JSON.stringify({ id: 'evt_9', merchantTransactionId: 'o', status: 'FAILED', amount: 10 })
+    const paid = JSON.stringify({ id: 'evt_9', merchantTransactionId: 'o', status: 'SUCCESS', amount: 10 })
+    expect(gw.verifyWebhook(failed, sign(failed))!.id).not.toBe(gw.verifyWebhook(paid, sign(paid))!.id)
+  })
+
+  it('a signed but malformed body is WebhookInvalidError (400), not a SyntaxError (500)', () => {
+    const body = '{not json'
+    expect(() => gw.verifyWebhook(body, sign(body))).toThrow(WebhookInvalidError)
+    const nan = JSON.stringify({ merchantTransactionId: 'o', status: 'SUCCESS', amount: 'abc' })
+    expect(() => gw.verifyWebhook(nan, sign(nan))).toThrow(WebhookInvalidError)
+  })
+
+  it('a whitespace-only secret fails closed', () => {
+    const blank = new AppyPayGateway({ ...creds, webhookSecret: '   ', fetch: fakeOk })
+    const body = JSON.stringify({ status: 'SUCCESS', merchantTransactionId: 'x', amount: 1 })
+    const sig = createHmac('sha256', '   ').update(body).digest('hex')
+    expect(() => blank.verifyWebhook(body, sig)).toThrow(WebhookSecretMissingError)
+  })
+
+  it('refuses a prototype key as the payment method, before any network call', async () => {
+    const { fetch, calls } = fakeFetch({})
+    const g = new AppyPayGateway(opts(fetch))
+    await expect(
+      g.createPayment({ billableId: 'acme', amount: 100, metadata: { appypay_method: 'constructor' } }),
+    ).rejects.toBeInstanceOf(AppyPayRequestError)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('caller metadata cannot override billable_id', async () => {
+    const { fetch, calls } = fakeFetch({
+      [TOKEN_URL]: { status: 200, body: tokenBody },
+      'POST /v1.0/charges': { status: 200, body: JSON.stringify({ id: 'chg' }) },
+    })
+    await new AppyPayGateway(opts(fetch)).createPayment({
+      billableId: 'acme',
+      amount: 100,
+      metadata: { billable_id: 'victim' },
+    })
+    const charge = JSON.parse(calls.find((c) => c.url.endsWith('/v1.0/charges'))!.body!)
+    expect(charge.metadata.billable_id).toBe('acme')
+  })
+})
+

@@ -100,7 +100,10 @@ mantém-se limitada. Um pedido que não correspondeu a nenhuma rota é rotulado
 `unknown` — um único bucket, não uma série por URL 404. O histograma usa o
 conjunto de buckets predefinido (`0,005 … 10` segundos); o
 `http_requests_in_flight` é incrementado num pre-hook e decrementado no
-after-hook, por isso também conta pedidos ainda a ser servidos.
+after-hook, por isso também conta pedidos ainda a ser servidos — incluindo
+streams `sse()` abertos. É contado por pedido: um pedido respondido por um
+pre-hook anterior (um `429`, um preflight de CORS) nunca é descontado, e uma
+resposta que o cliente abandonou é libertada, nos três adaptadores.
 
 Passa `instrumentHttp: false` para manteres o endpoint e largares as séries HTTP
 automáticas, ou `registry` para partilhares um `MetricsRegistry` com código que

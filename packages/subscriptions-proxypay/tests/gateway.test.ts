@@ -160,3 +160,37 @@ describe('ProxyPayGateway.verifyWebhook', () => {
     expect(() => gw.verifyWebhook(payload, undefined)).toThrow(WebhookSecretMissingError)
   })
 })
+
+describe('ProxyPayGateway — audit pass 2 (FA-071 P-1, P-2, P-3)', () => {
+  const sign = (body: string, key: string) => createHmac('sha256', key).update(body).digest('hex')
+
+  it('a whitespace-only secret fails closed', () => {
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', webhookSecret: '  ', fetch: fakeOk })
+    const body = JSON.stringify({ reference_id: '7', amount: 10 })
+    expect(() => gw.verifyWebhook(body, sign(body, '  '))).toThrow(WebhookSecretMissingError)
+  })
+
+  it('a signed but malformed body is WebhookInvalidError (400), not a SyntaxError (500)', () => {
+    const gw = new ProxyPayGateway({ apiKey: 'k', entity: '00123', fetch: fakeOk })
+    const body = '{not json'
+    expect(() => gw.verifyWebhook(body, sign(body, 'k'))).toThrow(WebhookInvalidError)
+    const nan = JSON.stringify({ reference_id: '7', amount: 'abc' })
+    expect(() => gw.verifyWebhook(nan, sign(nan, 'k'))).toThrow(WebhookInvalidError)
+  })
+
+  it('caller metadata cannot override billable_id or reference', async () => {
+    const { fetch, calls } = fakeFetch({
+      'POST /reference_ids': { status: 200, body: '900000001' },
+      'PUT /references/900000001': { status: 204 },
+    })
+    await new ProxyPayGateway(opts(fetch)).createPayment({
+      billableId: 'acme',
+      amount: 100,
+      reference: 'order_1',
+      metadata: { billable_id: 'victim', reference: 'order_x', plan: 'pro' },
+    })
+    const put = calls.find((c) => c.method === 'PUT')!
+    expect(JSON.parse(put.body!).custom_fields).toEqual({ billable_id: 'acme', reference: 'order_1', plan: 'pro' })
+  })
+})
+

@@ -72,6 +72,23 @@ Dentro de um contexto de tenant, um argumento `tenantId` explícito tem de nomea
 esse tenant; qualquer outro valor lança `CommentTenantMismatchError` (`403
 COMMENT_TENANT_MISMATCH`). Só escolhe um tenant fora de um (jobs, CLI).
 
+Numa app **single-tenant** — sem `tenancyPlugin` — as chamadas não precisam de
+`tenantId`, e os comentários ficam numa única chave interna,
+`SINGLE_TENANT_SCOPE` (`'@single'` — fora da gramática de ids de tenant, logo
+nenhum tenant pode receber esses comentários). Um id de tenant igual a ela é
+recusado com `CommentTenantReservedError` (`400 COMMENT_TENANT_RESERVED`).
+
+::: warning Atualizar dados single-tenant
+Antes do `@basaltkit/comments` 4.0 a chave single-tenant era `'default'` — um id
+de tenant válido, logo um tenant chamado `default` lia, editava e apagava os
+comentários single-tenant. Uma app single-tenant com comentários persistidos
+muda-lhes a chave uma vez:
+`UPDATE comments SET "tenantId" = '@single' WHERE "tenantId" = 'default'`
+(`@basaltkit/comments-prisma`; no `@basaltkit/comments-sqlite` a coluna é
+`tenant_id`). Salta este passo se `default` alguma vez foi um tenant real nessa
+base de dados.
+:::
+
 ## Discussão ao vivo + notificações de mention
 
 Cada mutação emite um hook (`comment:created`, `comment:mentioned`,

@@ -89,9 +89,15 @@ describe('S3 temporaryUploadUrl (real presigner, offline)', () => {
     await expect(disk.temporaryUploadUrl('a.png', { expiresIn: '20m', contentType: 'image/png' })).rejects.toMatchObject({
       code: 'STORAGE_TEMPORARY_URL_TTL',
     })
-    const upload = await disk.temporaryUploadUrl('a.png', { expiresIn: '5m', contentType: 'image/png' })
-    expect(upload.key).toBe('a.png')
-    expect(parse(upload.url).parsed.pathname).toBe('/a.png')
+    // A hand-built scoped disk fails closed without a tenant in context.
+    await expect(disk.temporaryUploadUrl('a.png', { expiresIn: '5m', contentType: 'image/png' })).rejects.toMatchObject({
+      code: 'STORAGE_TENANT_REQUIRED',
+    })
+    const scopedConfig = s3Disk({ ...base, maxTemporaryUploadUrlTtl: '10m', scope: () => 'tenants/acme' })
+    const scoped = new Disk('uploads', scopedConfig.driver, scopedConfig)
+    const upload = await scoped.temporaryUploadUrl('a.png', { expiresIn: '5m', contentType: 'image/png' })
+    expect(upload.key).toBe('tenants/acme/a.png')
+    expect(parse(upload.url).parsed.pathname).toBe('/tenants/acme/a.png')
   })
 })
 

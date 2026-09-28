@@ -1,0 +1,31 @@
+// Reference schema for @basaltkit/webhooks-prisma — MySQL variant.
+//
+// Same model as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently — a cut URL delivers somewhere else, a cut secret
+// signs with a different key. Free-text columns are widened below; the keys
+// stay VARCHAR(191) so they can be indexed. Pair it with
+// `prismaWebhookStore(prisma, { columnLimits: 'mysql' })`, which refuses a value
+// that would still not fit instead of letting it be cut.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model WebhookEndpoint {
+  id       String   @id
+  url      String   @db.Text
+  // Event patterns this endpoint receives, as a JSON array (e.g. ["invoice.*"]).
+  events   String   @db.Text
+  tenantId String?
+  secret   String?  @db.Text
+  active   Boolean?
+
+  @@index([tenantId])
+  @@map("webhook_endpoints")
+}

@@ -72,7 +72,7 @@ In the [Google Cloud console](https://console.cloud.google.com/apis/credentials)
 | `watchTtlMs` | `7 days` | Channel TTL to request. Google's own `expiration` wins. |
 | `includeUnscopedRemovals` | `false` | Forward hard deletions that cannot be scoped to `rootId` — see [Deletions](#deletions). |
 | `ancestryMaxDepth` | `32` | Ancestry hops one scope check may walk. |
-| `ancestryMaxLookups` | `500` | Metadata reads one `delta` call may spend on ancestry. |
+| `ancestryMaxLookups` | `500` | Metadata reads one `delta` call (or one confinement check) may spend on ancestry. |
 
 ## What maps to what
 
@@ -273,6 +273,14 @@ stored by `@basaltkit/audit`, and Google's messages quote file names.
 
 ## Limitations
 
+- **Root confinement walks `parents`.** With a `rootId`, a `folderId`,
+  `getItem()`, `download()` and an upload target are checked against the
+  root's subtree — one metadata read per folder level — and refused with
+  `DRIVE_ACCESS_DENIED` (`getItem()` answers `null`) when outside it. The
+  `root` alias is resolved to My Drive's real id first.
+- **Replay keys.** Notifications have no body, so the adapter reports
+  `X-Goog-Message-Number` as `DriveNotificationResult.replayKey`; it is as
+  unsigned as everything else Google sends.
 - **Uploads over 5 MB** need `uploadType=resumable`, which is not implemented;
   larger files are refused up front with `DRIVE_CONTENT_TOO_LARGE`.
 - **Shared drives are not addressed as a corpus.** `supportsAllDrives` and

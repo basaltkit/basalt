@@ -1,11 +1,29 @@
 import { isIP, type LookupFunction } from 'node:net'
 import { lookup as dnsLookup } from 'node:dns/promises'
 
-/** Thrown when a delivery URL points somewhere we refuse to send (SSRF guard). */
+/**
+ * Thrown when a delivery URL points somewhere we refuse to send (SSRF guard).
+ *
+ * The message never contains a DNS-resolved address — echoing it would turn the
+ * guard into an internal-DNS oracle (register `db.internal`, read back its IP).
+ * The offending resolved address is kept on {@link resolvedAddress} for
+ * server-side logging only; never forward it to whoever configured the URL.
+ */
 export class WebhookUrlBlockedError extends Error {
-  constructor(url: string, reason: string) {
+  /** The resolved (private/reserved) address that caused the block, when DNS produced one. Server-side only. */
+  readonly resolvedAddress: string | undefined
+  /**
+   * True when the verdict came from resolving the hostname (did not resolve /
+   * resolves to a private address). Such reasons reveal internal DNS, so the
+   * deliverer reports them outward with one indistinguishable generic message.
+   */
+  readonly dnsDerived: boolean
+
+  constructor(url: string, reason: string, detail: { resolvedAddress?: string; dnsDerived?: boolean } = {}) {
     super(`Refusing to deliver webhook to ${url}: ${reason}.`)
     this.name = 'WebhookUrlBlockedError'
+    this.resolvedAddress = detail.resolvedAddress
+    this.dnsDerived = detail.dnsDerived ?? false
   }
 }
 
@@ -29,6 +47,10 @@ function isPrivateIpv4(ip: string): boolean {
   if (a === 192 && b === 168) return true // private
   if (a === 100 && b >= 64 && b <= 127) return true // CGNAT (100.64.0.0/10)
   if (a === 192 && b === 0 && c === 0) return true // IETF protocol assignments
+  if (a === 192 && b === 0 && c === 2) return true // documentation TEST-NET-1 (192.0.2.0/24)
+  if (a === 198 && b === 51 && c === 100) return true // documentation TEST-NET-2 (198.51.100.0/24)
+  if (a === 203 && b === 0 && c === 113) return true // documentation TEST-NET-3 (203.0.113.0/24)
+  if (a === 192 && b === 88 && c === 99) return true // deprecated 6to4 relay anycast (192.88.99.0/24)
   if (a === 198 && (b === 18 || b === 19)) return true // benchmarking
   if (a >= 224) return true // multicast (224/4) + reserved (240/4) + broadcast
   return false
@@ -96,6 +118,8 @@ function isPrivateIpv6(ip: string): boolean {
   if (b[0] === 0x20 && b[1] === 0x02) return isPrivateIpv4(v4At(b, 2))
   // 2001::/23 IETF protocol assignments (incl. Teredo 2001::/32, ORCHID) and 2001:db8::/32 documentation.
   if (b[0] === 0x20 && b[1] === 0x01 && (b[2]! < 0x02 || (b[2] === 0x0d && b[3] === 0xb8))) return true
+  // 3fff::/20 documentation (RFC 9637).
+  if (b[0] === 0x3f && b[1] === 0xff && (b[2]! & 0xf0) === 0) return true
   // 100::/64 discard-only.
   if (b[0] === 0x01 && b[1] === 0x00 && zeros(b, 2, 8)) return true
   if ((b[0]! & 0xfe) === 0xfc) return true // unique local fc00::/7
@@ -182,13 +206,16 @@ export async function resolveAndValidate(rawUrl: string, options: SsrfGuardOptio
   try {
     resolved = await lookup(host)
   } catch {
-    throw new WebhookUrlBlockedError(rawUrl, `host "${host}" could not be resolved`)
+    throw new WebhookUrlBlockedError(rawUrl, `host "${host}" could not be resolved`, { dnsDerived: true })
   }
-  if (resolved.length === 0) throw new WebhookUrlBlockedError(rawUrl, `host "${host}" did not resolve`)
+  if (resolved.length === 0) throw new WebhookUrlBlockedError(rawUrl, `host "${host}" did not resolve`, { dnsDerived: true })
   const addresses: ValidatedAddress[] = resolved.map((r) => ({ address: r.address, family: r.family ?? familyOf(r.address) }))
   for (const { address } of addresses) {
     if (isPrivateIp(address)) {
-      throw new WebhookUrlBlockedError(rawUrl, `host "${host}" resolves to a private address (${address})`)
+      throw new WebhookUrlBlockedError(rawUrl, `host "${host}" resolves to a private or reserved address`, {
+        resolvedAddress: address,
+        dnsDerived: true,
+      })
     }
   }
   // Every returned address is public; pin the first (IPv4 or IPv6) for connect.

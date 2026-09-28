@@ -142,8 +142,25 @@ handler code as on Fastify and Hono.
 ### Streaming — SSE
 
 A handler returning `sse(producer)` from `@basaltkit/http` is streamed straight onto the
-Express response (`res.writeHead(200, SSE_HEADERS)`), with client disconnects relayed to
-`stream.onClose()`. Same handler code as on Fastify and Hono.
+Express response (`res.writeHead(200, SSE_HEADERS)`, flushed at once so a quiet stream
+still opens), keeping the CORS/security/rate-limit/`x-request-id` headers set before it,
+with client disconnects relayed to `stream.onClose()`. Same handler code as on Fastify and Hono.
+
+### Wire behaviour — the same as Fastify and Hono
+
+- A handler that returns a **string** is served as `text/plain; charset=utf-8` — not
+  Express's `text/html` default (a handler echoing its input would be a reflected XSS).
+  Serve HTML by saying so: `reply.header('content-type', 'text/html; charset=utf-8').send(html)`.
+- JSON is parsed for `application/json` or a `+json` type only (never `text/plain;
+  application/json`); malformed JSON is `400 BAD_REQUEST`; an empty JSON body is `undefined`.
+- Body limit: 1 MiB by default (`bodyLimit`), like the other adapters.
+- On the app the plugin creates, routing is **case-sensitive and strict** (`/Admin`,
+  `/admin/` do not reach `/admin`) and the query parser is `simple` (`?a=1&a=2` →
+  `['1', '2']`). An app you pass in keeps its own settings.
+- `request.ip` is the socket address unless you set `app.set('trust proxy', …)` on an app
+  you pass in — do that only behind a proxy you control.
+- An SDK error that merely carries a `status`/`type` is a `500`, not a `400`: only
+  body-parser's own errors are mapped to `400`/`413`/`415`.
 
 ### Uploads — `upload()`
 
@@ -277,7 +294,8 @@ import { expressPlugin } from '@basaltkit/express'
 const myApp = express()
 // ... your middleware here ...
 expressPlugin({ app: myApp, routes: [] })
-// Note: the plugin still adds express.json().
+// Note: the plugin still adds express.json() and express.urlencoded() (limit: bodyLimit),
+// but leaves this app's routing and query-parser settings alone.
 ```
 
 ### Advanced: `registerRoutes()` without the plugin
@@ -305,12 +323,13 @@ In this mode each handler already handles its own errors (the wrapper responds w
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `routes` | `BasaltRoute[]` | No | `[]` | Routes (created with `route()` from `@basaltkit/http`) to mount. |
-| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. |
-| `app` | `Express` | No | new `express()` | Bring your own Express app; either way, `express.json()` and `express.urlencoded({ extended: false })` are added. |
+| `allowUnguardedMeta` | `boolean \| string[]` | No | fail loud at boot | Waives the boot check that every route declaring security meta (`auth`, `can`, `teamRole`) has a registered guard enforcing it (`UnguardedRouteMetaError` otherwise). `true` waives everything (edge/gateway auth); an array waives specific keys. Never waives the route-meta validators plugins register (`InvalidRouteMetaError`). |
+| `bodyLimit` | `number` | No | `1048576` (1 MiB) | Largest JSON/form body parsed; larger answers `413 PAYLOAD_TOO_LARGE`. Same default as Fastify and Hono (body-parser alone: 100 KiB). |
+| `app` | `Express` | No | new `express()` (case-sensitive, strict routing, `simple` query parser) | Bring your own Express app; either way, `express.json()` and `express.urlencoded({ extended: false })` are added. |
 | `notFound` | `boolean` | No | `true` | Serve `NOT_FOUND_RESPONSE` (the neutral JSON 404) for unmatched routes, mounted last. Set `false` to keep Express's HTML default or your own catch-all. |
 | `errorHandler` | `boolean` | No | `true` | Mount a final `(err, req, res, next)` middleware that answers body-parser and pre-hook errors with the neutral JSON envelope instead of Express's HTML page (which includes the stack trace unless `NODE_ENV=production`). Set `false` only if you mount your own error handler after boot. |
 
-Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, via `res.on('finish')`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Basalt routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
+Behavior: registers the Express app under the `EXPRESS` token and an `HttpServerCollector` under the `HTTP_SERVER` token. On the `app:booted` event it mounts everything in the order Express requires: *after-hooks* middleware (metrics/tracing, run once on `finish` or `close` — so an abandoned response is seen too; a failing hook is reported as `AFTER_HOOK_FAILED`) → *pre-hooks* middleware (security/CORS/rate limit; if one of them responds, the route doesn't run) → Basalt routes → extra routes from edge plugins (`/livez`, `/metrics`, …). Publishes the routes in the `'http:routes'` metadata bucket for OpenAPI/CLI/SDK.
 
 > Note: unlike `fastifyPlugin`, this plugin has no `shutdown` step — Basalt never calls `listen()` for you, so closing the server it returns is your responsibility.
 
@@ -321,9 +340,10 @@ Behavior: registers the Express app under the `EXPRESS` token and an `HttpServer
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. Response carries `part` + `issues[]`. |
 | `HttpError(status, code, message)` | *yours* | *yours* | Thrown deliberately from any layer. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) with no guard enforcing it. Waive with `allowUnguardedMeta`. |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A plugin's route-meta validator (`http:meta-validators`) refused a value — e.g. `teamsPlugin` and an unknown `meta.teamRole`. Not waivable. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `BAD_REQUEST` | 400 | The body could not be parsed (malformed JSON, corrupt encoding). |
-| — | `PAYLOAD_TOO_LARGE` | 413 | The body exceeded the body-parser limit (100 KB by default). |
+| — | `PAYLOAD_TOO_LARGE` | 413 | The body exceeded `bodyLimit` (1 MiB by default). |
 | — | `UNSUPPORTED_MEDIA_TYPE` | 415 | Unsupported body charset or content encoding. |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
 | — | `INTERNAL_ERROR` | 500 | Any other thrown error. The real message never reaches the client. |
@@ -353,7 +373,11 @@ This package only exports `expressPlugin`, `registerRoutes`, `captureRawBody`, `
 
 **"`Cannot find module 'express'`."** Express is a peer dependency: `pnpm add express`.
 
-**"`body` arrives `undefined` in the handler."** The client has to send the `Content-Type: application/json` header; without it `express.json()` won't parse the body.
+**"`body` arrives `undefined` in the handler."** The client has to send `Content-Type: application/json` (or a `+json` type); without it the body is not parsed. An empty JSON body is `undefined` too.
+
+**"My HTML page shows as text."** Strings are `text/plain` unless the handler sets `content-type` — set `text/html; charset=utf-8` explicitly.
+
+**"`/Users` or `/users/` answers 404."** Routing is case-sensitive and strict on the app the plugin creates (as on Fastify and Hono). Bring your own `app` to keep Express's defaults.
 
 **"I tried `import { route } from '@basaltkit/express'` and it failed."** The `route()` function isn't exported from this package — import it from `@basaltkit/http` (it's neutral on purpose: the same route runs on Fastify and Hono).
 

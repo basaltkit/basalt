@@ -16,7 +16,6 @@ import {
   sseProducerOf,
   driveSse,
   SSE_HEADERS,
-  GUARDED_META_BUCKET,
   assertRoutesGuarded,
   isUploadBody,
   isRawBody,
@@ -28,17 +27,24 @@ import {
   webStreamFrom,
   type SseProducer,
   type StreamPayload,
+  DEFAULT_BODY_LIMIT,
+  HttpError,
+  isJsonMediaType,
+  mediaTypeOf,
 } from '@basaltkit/http'
 import { Hono, type Context, type Next } from 'hono'
 
 export const HONO = createToken<Hono<any>>('hono')
 
-/** Default maximum request body size (1 MiB) — override via honoPlugin({ bodyLimit }). */
-export const DEFAULT_BODY_LIMIT = 1_048_576
+/** Default maximum request body size (1 MiB) — override via honoPlugin({ bodyLimit }). Same value on every adapter. */
+export { DEFAULT_BODY_LIMIT }
 
 /** True for a `multipart/form-data` request — its body is never read outside the route handler. */
 const isMultipart = (context: Context): boolean =>
   (context.req.header('content-type') ?? '').trimStart().toLowerCase().startsWith('multipart/form-data')
+
+/** The 400 a malformed JSON body gets — the same code Fastify and Express answer with. */
+const malformedBody = (): HttpError => new HttpError(400, 'BAD_REQUEST', 'Malformed request body.')
 
 /**
  * Parses the request body for the neutral request. A multipart body is parsed
@@ -46,20 +52,64 @@ const isMultipart = (context: Context): boolean =>
  * `upload()` route (bounded by `bodyLimit` first). Pre-hooks and after-hooks
  * never see it, so an `upload()` route's stream is never consumed (or
  * buffered) before the pipeline — enrichers, guards — has run.
+ *
+ * JSON is recognised by its exact media type (`application/json` or a `+json`
+ * type, as on every adapter), never by a substring: `text/plain;
+ * application/json` is CORS-safelisted and must not reach a JSON route without
+ * a preflight. A malformed JSON body throws a 400 when `strict` (the route
+ * handler); the hooks, which never need it, just see no body.
  */
-async function parseBody(context: Context, multipart = false): Promise<unknown> {
+async function parseBody(context: Context, multipart = false, strict = false): Promise<unknown> {
   const method = context.req.method
   if (method === 'GET' || method === 'HEAD') return undefined
   if (!multipart && isMultipart(context)) return undefined
-  const contentType = context.req.header('content-type') ?? ''
+  const contentType = context.req.header('content-type')
+  if (isJsonMediaType(contentType)) {
+    let text: string
+    try {
+      text = await context.req.text()
+    } catch {
+      if (strict) throw malformedBody()
+      return undefined
+    }
+    // An empty body is "no body", as on Fastify and Express.
+    if (text.trim() === '') return undefined
+    try {
+      return JSON.parse(text) as unknown
+    } catch {
+      if (strict) throw malformedBody()
+      return undefined
+    }
+  }
   try {
-    if (contentType.includes('application/json')) return await context.req.json()
-    if (contentType.includes('form')) return await context.req.parseBody()
+    const type = mediaTypeOf(contentType)
+    if (type === 'application/x-www-form-urlencoded' || type === 'multipart/form-data') {
+      return await context.req.parseBody()
+    }
     const text = await context.req.text()
     return text || undefined
   } catch {
     return undefined
   }
+}
+
+/**
+ * The query as Node's `querystring` (Fastify, Express 5) shapes it: a key
+ * given once is a string, a repeated key (`?a=1&a=2`) an array of every value
+ * — Hono's `query()` would keep only the first.
+ */
+function queryOf(context: Context): Record<string, string | string[]> {
+  const query: Record<string, string | string[]> = {}
+  for (const [key, values] of Object.entries(context.req.queries())) {
+    query[key] = values.length === 1 ? values[0]! : values
+  }
+  return query
+}
+
+/** Path and query string, as `HttpRequest.url` is documented (and as Fastify and Express report it). */
+function pathAndQuery(context: Context): string {
+  const url = new URL(context.req.url)
+  return `${url.pathname}${url.search}`
 }
 
 /** Resolves the client address for a request, or `undefined` when unknown. */
@@ -99,11 +149,11 @@ async function toNeutralRequest(
   const ip = getClientIp(context)
   return {
     method: context.req.method,
-    url: context.req.url,
+    url: pathAndQuery(context),
     headers: Object.fromEntries(context.req.raw.headers.entries()),
     params: context.req.param() as Record<string, string>,
-    query: context.req.query(),
-    body: withBody ? await parseBody(context, withBody === 'route') : undefined,
+    query: queryOf(context),
+    body: withBody ? await parseBody(context, withBody === 'route', withBody === 'route') : undefined,
     ...(ip ? { ip } : {}),
     ...(context.req.routePath ? { routePattern: context.req.routePath } : {}),
     raw: context,
@@ -172,7 +222,12 @@ async function enforceBodyLimit(context: Context, bodyLimit: number): Promise<bo
   return true
 }
 
-/** Streams an SSE producer as a Response backed by a ReadableStream (Web streams). */
+/**
+ * Streams an SSE producer as a Response backed by a ReadableStream (Web streams).
+ * Headers set before it — by the pre-hooks (CORS, security headers, rate-limit
+ * counters) and the pipeline (`x-request-id`) — are kept: without them a
+ * cross-origin EventSource fails its CORS check.
+ */
 function sseResponse(context: Context, producer: SseProducer): Response {
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
@@ -190,7 +245,9 @@ function sseResponse(context: Context, producer: SseProducer): Response {
       })
     },
   })
-  const { connection: _connection, ...headers } = SSE_HEADERS
+  const headers = new Headers(context.res?.headers)
+  // `connection` is a hop-by-hop header a web Response may not carry.
+  for (const [name, value] of Object.entries(SSE_HEADERS)) if (name !== 'connection') headers.set(name, value)
   return new Response(stream, { headers })
 }
 
@@ -222,24 +279,31 @@ async function streamResponse(
     // A read that fails because the source was released on abort is the client
     // leaving, not a broken payload — never report that as a server error.
     if (context.req.raw.signal.aborted) return
-    try {
-      const entry = {
-        error,
-        status: 500,
-        code: 'STREAM_FAILED',
-        method: context.req.method,
-        url: context.req.url,
-      }
-      if (onError) onError(entry)
-      else reportHttpError(entry)
-    } catch {
-      /* a broken reporter must not change what the client receives */
-    }
+    report(onError, {
+      error,
+      status: 500,
+      code: 'STREAM_FAILED',
+      method: context.req.method,
+      url: pathAndQuery(context),
+    })
   })
   // The client disconnecting must release the source even when the runtime
   // never cancels the response body (an in-process `fetch`, an edge worker).
   context.req.raw.signal.addEventListener('abort', () => void pump.close(), { once: true })
   return new Response(body, { status: payload.status, headers })
+}
+
+/**
+ * Reports a failed request without ever letting the reporter itself break the
+ * response.
+ */
+function report(onError: HttpErrorReporter | undefined, entry: Parameters<HttpErrorReporter>[0]): void {
+  try {
+    if (onError) onError(entry)
+    else reportHttpError(entry)
+  } catch {
+    /* a broken reporter must not change what the client receives */
+  }
 }
 
 /** Neutral reply that buffers the response; the handler emits a native Response. */
@@ -341,14 +405,9 @@ function handlerFor(
         status,
         code: body.error.code,
         method: context.req.method,
-        url: context.req.url,
+        url: pathAndQuery(context),
       }
-      try {
-        if (onError) onError(entry)
-        else reportHttpError(entry)
-      } catch {
-        /* a broken reporter must not change what the client receives */
-      }
+      report(onError, entry)
       // Built from the context so headers accumulated before the failure
       // (security headers, CORS, x-request-id) are kept on error responses.
       return toResponse(reply.code(status), body)
@@ -383,6 +442,9 @@ export interface HonoPluginOptions {
    * (`auth`, `can`, `teamRole`) has a registered guard enforcing it. Pass
    * `true` to waive everything (e.g. authentication handled at an outer
    * edge/gateway), or an array of specific keys. Default: fail loud at boot.
+   * It never waives the route-meta validators plugins register
+   * (`META_VALIDATORS_BUCKET`, e.g. teamsPlugin refusing an unknown
+   * `meta.teamRole`) — those also run at boot and fail it.
    */
   allowUnguardedMeta?: boolean | string[]
   /** Bring your own Hono app; otherwise a fresh one is created. */
@@ -418,6 +480,14 @@ export interface HonoPluginOptions {
    * `X-Forwarded-For` unless a proxy you control overwrites it.
    */
   getClientIp?: ClientIpResolver
+  /**
+   * Install an `app.onError` that turns errors raised outside a route (a
+   * failing pre-hook or edge route, an unreadable body) into the neutral JSON
+   * envelope and reports them through `onError`, instead of Hono's plain-text
+   * 500. Default: true. Pass false only if you install your own `onError`
+   * (Hono keeps one handler; the last call wins).
+   */
+  errorHandler?: boolean
 }
 
 /**
@@ -440,12 +510,9 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
       const enrichers = metadata.get<RequestEnricher>('http:enrichers')
       const guards = metadata.get<RouteGuard>('http:guards')
       // Fail loud BEFORE traffic if a route declares security meta (auth/can/
-      // teamRole) that no registered guard enforces — it would serve open.
-      assertRoutesGuarded(
-        routes,
-        new Set(metadata.get<string>(GUARDED_META_BUCKET)),
-        options.allowUnguardedMeta,
-      )
+      // teamRole) that no registered guard enforces — it would serve open —
+      // or meta a plugin's validator refuses (e.g. an unknown teamRole).
+      assertRoutesGuarded(routes, container, options.allowUnguardedMeta)
 
       // Mount once edge plugins have registered their hooks/routes.
       const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT
@@ -497,12 +564,24 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
           app.use(async (context: Context, next: Next) => {
             const start = Date.now()
             await next()
-            await collector.runAfter(
-              await hookRequest(context),
-              new HonoReply(context),
-              context.res.status,
-              Date.now() - start,
-            )
+            // The response is already built: a failing after-hook is reported,
+            // never turned into a 500 that replaces it.
+            try {
+              await collector.runAfter(
+                await hookRequest(context),
+                new HonoReply(context),
+                context.res.status,
+                Date.now() - start,
+              )
+            } catch (error) {
+              report(options.onError, {
+                error,
+                status: 500,
+                code: 'AFTER_HOOK_FAILED',
+                method: context.req.method,
+                url: pathAndQuery(context),
+              })
+            }
           })
         }
         app.use(async (context: Context, next: Next) => {
@@ -517,6 +596,28 @@ export function honoPlugin(options: HonoPluginOptions = {}) {
         // Neutral JSON 404 (an app's own later `notFound` call replaces it).
         if (options.notFound !== false) {
           app.notFound((context: Context) => context.json(NOT_FOUND_RESPONSE, 404))
+        }
+        // Errors raised outside a route handler — a failing pre-hook, an edge
+        // route, reading the body — get the neutral JSON envelope and reach
+        // the reporter, as on Fastify and Express. Hono's default is a plain
+        // text 500 nobody logs. An `HTTPException` thrown by the app's own Hono
+        // middleware keeps the response it carries.
+        if (options.errorHandler !== false) {
+          app.onError((error: unknown, context: Context) => {
+            const own = (error as { getResponse?: unknown } | null)?.getResponse
+            if (typeof own === 'function') return (own as () => Response).call(error)
+            const { status, body } = toErrorResponse(error)
+            report(options.onError, {
+              error,
+              status,
+              code: body.error.code,
+              method: context.req.method,
+              url: pathAndQuery(context),
+            })
+            // Built from the context, so headers a pre-hook set before failing
+            // (security headers, CORS) are kept.
+            return toResponse(new HonoReply(context).code(status), body)
+          })
         }
         for (const { method, url, handler } of collector.extraRoutes) {
           app.on(method, url, async (context: Context) => {

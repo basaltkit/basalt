@@ -79,7 +79,11 @@ curl -b cookies.txt http://localhost:3000/auth/me
 ```
 
 The cookie defaults to `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` in
-production. Customize its public attributes when mounting the plugin:
+production — anything but an explicit `NODE_ENV=development` or `test` (an
+unset `NODE_ENV` counts as production, as in `@basaltkit/env`). The same rule
+gates the 32-character minimum on `secret` (`AUTH_WEAK_SECRET`). A cookie whose
+value cannot be decoded (malformed percent-encoding) is ignored: the request is
+simply anonymous. Customize its public attributes when mounting the plugin:
 
 ```ts
 authPlugin({
@@ -190,7 +194,7 @@ All operations are also available programmatically through the `Auth` class:
 ```ts
 import { Auth, MemoryUserSource } from '@basaltkit/auth'
 
-const auth = new Auth({ users: new MemoryUserSource(), secret: 'a-strong-secret' })
+const auth = new Auth({ users: new MemoryUserSource(), secret: process.env.AUTH_SECRET! }) // >= 32 chars in production
 
 const user = await auth.register('ada@example.com', 'secretpassword1')
 const { tokens } = await auth.login('ada@example.com', 'secretpassword1')
@@ -251,6 +255,17 @@ enroll/activate/status. `meta: { mfa: true }` requires MFA on one route
 `['pwd', 'mfa']`, `['fed', …]` for social login), refreshes keep it, the
 session cookie carries it HMAC-signed, and the request exposes it as
 `ctx().amr`. API-key requests are not subject to the policy. Off by default.
+
+**Encrypting secrets at rest.** `authPlugin({ mfaEncryption: { keys: [{ id, key }] } })`
+(or the shorthand `mfaEncryptionKey`) stores TOTP secrets as `bka2.<keyId>.…`
+envelopes: AES-256-GCM, HKDF-SHA256-derived keys (≥ 32 bytes of material), bound
+to the user as associated data. The first key of the ring seals, the others stay
+readable (rotation); `auth.reencryptMfaSecret(userId)` moves a row to the active
+key. A value that is not an envelope sealed for that user is refused
+(`AUTH_SECRET_UNREADABLE`) — a database write cannot swap in a plaintext secret.
+Old `v1:` envelopes and plaintext rows are read only with an explicit
+`legacy: { v1Keys: [oldKey], plaintext: true }`, for the migration window.
+`SecretBox` is exported for other secrets.
 
 ### Passkeys — WebAuthn (`webauthnPlugin`)
 
@@ -339,9 +354,27 @@ const { userId } = await passkeys.finishAuthentication(sessionKey, browserRespon
 > credential id is rejected (`PASSKEY_EXISTS`) rather than overwriting an existing one.
 
 `finishAuthentication` looks the credential up by id, verifies it, checks the
-signature counter **increased** (a non-increasing counter throws `PasskeyClonedError`),
-and persists the new counter. Use `passkeys.list(userId)` / `passkeys.remove(id)`
-for a "manage devices" screen.
+signature counter **increased** (a non-increasing counter throws `PasskeyClonedError`;
+a non-integer counter from the verifier is refused), and persists the new counter
+with `PasskeyStore.compareAndSetCounter(id, expected, next, lastUsedAt)` — a
+conditional update, so two concurrent assertions presenting the same counter (a
+cloned authenticator racing the genuine one) cannot both pass: the loser gets
+`PasskeyClonedError`. A custom store must implement it (`PASSKEY_STORE_OUTDATED`
+at construction otherwise); `@basaltkit/auth-sqlite` and `@basaltkit/auth-prisma`
+ship durable `passkeys` stores.
+When `startAuthentication(sessionKey, userId)` names a user (step-up,
+re-authentication), only **that user's** passkey satisfies the challenge — any
+other account's passkey throws `WEBAUTHN_SUBJECT_MISMATCH`.
+
+Use `passkeys.list(userId)` / `passkeys.remove(userId, credentialId)` for a "manage
+devices" screen. `remove` only deletes a passkey that belongs to `userId` (an unknown
+or foreign id throws `PASSKEY_NOT_FOUND`), so pass the id of the **authenticated**
+user, never one from the request.
+
+> **User verification:** the default `userVerification: 'preferred'` lets an
+> authenticator without a PIN/biometric sign, so the assertion proves possession
+> only. When a passkey is the only factor (passwordless login), set
+> `userVerification: 'required'`.
 
 ### Social login (OAuth)
 
@@ -394,18 +427,58 @@ character-for-character, or the provider rejects it with *"redirect_uri is not
 associated with this application"*.
 
 New accounts are created **passwordless** and a provider-verified email flips
-`emailVerified`. An **existing** account is only logged into when the provider
-verified the email (`SocialLinkRefusedError` otherwise); an existing account that
-had never verified its own email has its password, sessions, refresh tokens and
-MFA revoked before it is adopted; an account with MFA enabled requires the code
-(`MfaRequiredError`) unless `oauthPlugin({ mfa: 'skip' })` is set for an IdP that
-enforces its own MFA. `Auth.socialLogin(email, { emailVerified })` is the
-underlying primitive for custom providers.
+`emailVerified`. Logins are bound to the provider's **subject**: the first login
+of a provider account records an account link (provider + `sub` → account) in the
+`accountLinks` store (`authPlugin({ accountLinks })`, durable ones in
+`auth-sqlite` / `auth-prisma`). Once linked, an email change at the IdP still
+reaches the same account, and a different subject of that provider asserting the
+account's email is refused (`AccountLinkConflictError`, 409) unless
+`oauthPlugin({ subjectConflict: 'link' })`. A first login links an **existing**
+account only when the provider verified the email (`SocialLinkRefusedError`
+otherwise); an existing account that had never verified its own email has its
+password, sessions, refresh tokens, MFA and account links revoked before it is
+adopted; an account with MFA enabled requires the code (`MfaRequiredError`)
+unless `oauthPlugin({ mfa: 'skip' })` is set for an IdP that enforces its own
+MFA. `Auth.socialLogin(email, { emailVerified, identity: { provider, subject } })`
+is the underlying primitive for custom providers.
 
 **Enterprise SSO (OIDC):** any OpenID Connect IdP (Okta, Entra ID, Auth0,
-Keycloak…) plugs in via `oidcProvider({ clientId, clientSecret, authorizationUrl,
-tokenUrl, userinfoUrl })`, or let `discoverOidcProvider(issuerUrl, keys)` read the
-endpoints from the IdP's `.well-known/openid-configuration`.
+Keycloak…) plugs in via `oidcProvider({ name, clientId, clientSecret, authorizeUrl,
+tokenUrl, userInfoUrl, issuer? })`, or let `await discoverOidcProvider({ name, issuer,
+clientId, clientSecret })` read the endpoints from the IdP's
+`.well-known/openid-configuration` (the document's `issuer` must equal yours and every
+endpoint must be `https:` — plain `http:` only to a loopback host).
+
+**Restrict each enterprise IdP to its email domains.** A customer's IdP admin
+decides which emails it asserts as verified; without a restriction, Acme's IdP could
+assert `ceo@globex.com` and log into Globex's CEO account (any verified email links
+to the existing account). Pass `allowedEmailDomains`:
+
+```ts
+oidcProvider({ name: 'acme', /* …endpoints, keys… */ allowedEmailDomains: ['acme.com'] })
+await discoverOidcProvider({ name: 'globex', issuer, clientId, clientSecret, allowedEmailDomains: ['globex.com'] })
+```
+
+A login for any other domain fails with `AUTH_OAUTH_EXCHANGE_FAILED` before an
+account is looked up (exact, case-insensitive match; list subdomains explicitly). With
+**more than one provider configured**, every `oidcProvider` / `discoverOidcProvider`
+entry must declare `allowedEmailDomains` or `allowAnyEmailDomain: true` (only for an
+IdP you fully control) — otherwise `OAuth` refuses to start with
+`AUTH_OAUTH_PROVIDER_CONFIG`. Google and GitHub are not affected (they only assert
+emails they verified themselves); any custom `OAuthProvider` can opt in with
+`enterprise: true` or set `allowedEmailDomains` directly.
+
+Accounts are matched by **email**, not by the provider's `subject`: a verified email
+from any configured provider logs into the account holding it. Keep that in mind
+when you add a provider — the domain allowlist is what scopes it.
+
+**Provider replies are validated:** a profile without a string `sub`/`email` (or an
+email that is not a single-`@` address) fails the login; an `openid` flow must return
+an `id_token` whose `nonce`, `aud` (your client id), `exp` and — when the provider
+declares an `issuer` — `iss` match; a non-JSON token-endpoint reply is an exchange
+error; every provider call has a deadline (`oauthPlugin({ timeoutMs })`, default 10 s).
+`oauthRoutes` carry `meta.rateLimit` (10 per minute per ip and route by default,
+enforced by the http `securityPlugin`; `oauthRoutes({ rateLimit: false })` removes it).
 
 ### API keys
 
@@ -441,7 +514,7 @@ const app = await createApp({
 
 `apiKeysPlugin` claims the `scopes` key in the adapters' boot-time guarded-meta check, so a route declaring `meta.scopes` **without** the plugin registered fails loud at boot (`UnguardedRouteMetaError`) instead of serving unchecked.
 
-The key is presented in the `Authorization: Bearer mk_live_...` or `x-api-key` header. A **scope** is a granular permission on the key (e.g. `reports:read`); `*` means all. After authenticating, `ctx().apiKey` contains `{ id, scopes, tenantId?, userId? }`.
+The key is presented in the `Authorization: Bearer mk_live_...` or `x-api-key` header — one of them: a request carrying two **different** keys (one in each) is refused with 400 `AUTH_APIKEY_AMBIGUOUS` rather than letting one silently win. A **scope** is a granular permission on the key (e.g. `reports:read`); `*` means all. After authenticating, `ctx().apiKey` contains `{ id, scopes, tenantId?, userId? }`.
 
 The guard enforces, on every key-authenticated request: **tenant binding** (a key
 issued in a tenant is refused with `403 AUTH_APIKEY_TENANT_MISMATCH` on any request
@@ -473,6 +546,12 @@ login/MFA, per-IP and email-request throttles with one atomic Redis script per
 attempt. `redis` is any ioredis-compatible client — only `eval` and `del` are
 used, no Redis dependency. Implement `ThrottleStore` for another backend.
 
+The in-memory store is bounded (`maxEntries`, default 100 000): when full it
+sweeps expired entries, then evicts the oldest *unlocked* ones — a flood of junk
+identifiers cannot flush a locked account out of the store and hand the
+attacker a fresh budget. Only when every tracked entry is locked does the oldest
+lock go (the memory bound is absolute).
+
 ### Hooks (events)
 
 The application can react to authentication events: `auth:registered`, `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
@@ -493,7 +572,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `accessTtl` | `DurationInput` | No | `'15m'` | Access token validity. |
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
 | `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
-| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults to production only. |
+| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
 | `throttleStore` | `ThrottleStore` | No | in-memory, per process | Counters of the default login / per-IP / email-request throttles — `RedisThrottleStore` for one budget across replicas. |
 | `requireMfa` | `boolean \| (user, context) => boolean \| Promise<boolean>` | No | off | Plugin only. Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones. |
@@ -501,6 +580,9 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `verificationTtl` | `DurationInput` | No | `'24h'` | Email verification link validity. |
 | `resetTtl` | `DurationInput` | No | `'1h'` | Password reset link validity. |
 | `mfa` | `MfaStore` | No | `MemoryMfaStore` | Per-user MFA state. |
+| `accountLinks` | `AccountLinkStore` | No | `MemoryAccountLinkStore` | OAuth/OIDC account links (provider + subject → user). `create` must be atomic on the pair. |
+| `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy? }` | No | — (plaintext) | Encrypts TOTP secrets at rest with a key ring; see *Encrypting secrets at rest*. |
+| `mfaEncryptionKey` | `string \| Buffer` | No | — | Shorthand for a one-key ring (`id: 'default'`, ≥ 32 bytes). |
 | `mfaIssuer` | `string` | No | `'Basalt'` | Name shown in the authenticator app. |
 | `hooks` | `HookBus` | No | — | Only on the `Auth` class; the plugin injects it. |
 
@@ -519,7 +601,8 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
 | `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
 | `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | MFA state and verification. |
-| `socialLogin(email, { emailVerified?, mfaCode?, mfa? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; links to an existing account only with a provider-verified email and honours its MFA; returns `{ user, tokens }`. |
+| `socialLogin(email, { emailVerified?, mfaCode?, mfa?, identity?, subjectConflict? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; with `identity: { provider, subject }` the account link decides, otherwise it links to an existing account only with a provider-verified email; honours MFA; returns `{ user, tokens }`. |
+| `reencryptMfaSecret(userId)` | Re-seals a stored TOTP secret under the active `mfaEncryption` key (rotation / legacy migration): `'resealed'`, `'current'` or `'none'`. |
 
 ### Ready-made routes
 
@@ -527,7 +610,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 - Every `authRoutes()`, `mfaRoutes()` and `oauthRoutes()` route declares `meta.account: true` (about the caller, not a tenant's data — `@basaltkit/teams`' membership guard lets non-members through) and, except MFA disable, `meta.mfa: false` (reachable under `requireMfa`). `ACCOUNT_META` exports the pair for your own profile routes.
 - `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
-- `oauthRoutes({ callbackBaseUrl, successRedirect? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider.
+- `oauthRoutes({ callbackBaseUrl, successRedirect?, bindingCookie?, rateLimit? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider (rate-limited by default).
 
 ### `apiKeysPlugin(options)` and the `ApiKeys` class
 
@@ -536,7 +619,7 @@ Options (`ApiKeysPluginOptions`):
 | Name | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `store` | `ApiKeyStore` | No | `MemoryApiKeyStore` | Key storage. |
-| `header` | `string` | No | `'x-api-key'` | Alternative header to Bearer. |
+| `header` | `string` | No | `'x-api-key'` | Alternative header to Bearer. Two different keys (Bearer + header) → 400 `AUTH_APIKEY_AMBIGUOUS`. |
 | `users` | `UserSource` | No | — | If given, a key with `userId` also populates `ctx().user`. |
 | `now` | `() => number` | No | `Date.now` | Injectable clock (tests). |
 
@@ -547,7 +630,7 @@ Options (`ApiKeysPluginOptions`):
 | Export | Description |
 |---|---|
 | `signJwt(claims, { secret, expiresIn? })` / `verifyJwt(token, secret)` | Dependency-free HS256 JWT. Advanced. |
-| `ScryptPasswordHasher` / `PasswordHasher` | Password hashing (scrypt, memory-hard). Advanced. |
+| `ScryptPasswordHasher` / `PasswordHasher` | Password hashing (scrypt, memory-hard). Advanced. A stored hash declaring more than N=2^20, r=32, p=16 (or 512 MiB) never verifies, so a tampered row cannot pin the CPU. |
 | `LoginThrottle` (`maxAttempts` def. 5, `windowMs` def. 15 min, `store`, `namespace`, `clock`) | Anti brute-force. |
 | `ThrottleStore` / `MemoryThrottleStore` / `RedisThrottleStore` (`RedisThrottleClient`: `eval` + `del`) | Where throttle counters live; Redis shares them across replicas. |
 | `generateTotpSecret`, `totp`, `verifyTotp`, `otpauthUri`, `base32Encode`, `base32Decode` | TOTP primitives (RFC 6238). Advanced. |
@@ -556,7 +639,8 @@ Options (`ApiKeysPluginOptions`):
 | `AUTH`, `API_KEYS`, `OAUTH` | Injection tokens: `container.get(AUTH)` returns the `Auth` instance; `OAUTH` returns the `OAuth` instance. |
 | `oauthPlugin`, `oauthRoutes` | Social-login plugin (`{ secret, providers }`) and its routes (`{ callbackBaseUrl, successRedirect? }`). |
 | `googleProvider`, `githubProvider`, `oidcProvider`, `discoverOidcProvider` | OAuth 2.0 / OpenID Connect providers. Each takes `{ clientId, clientSecret, scopes? }`. |
-| In-memory stores | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore` — dev/testing. |
+| In-memory stores | `MemoryUserSource`, `MemorySessionStore`, `MemoryRefreshTokenStore`, `MemoryAuthTokenStore`, `MemoryApiKeyStore`, `MemoryMfaStore`, `MemoryAccountLinkStore`, `MemoryPasskeyStore` — dev/testing. |
+| `SecretBox` | The at-rest envelope behind `mfaEncryption` (`seal` / `open` / `reseal` with a `{ purpose, subject }` context), for your own secrets. |
 
 #### Single-use tokens are consumed with a compare-and-swap
 
@@ -583,7 +667,14 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 |
 | `OAuthProviderUnknownError` | `AUTH_OAUTH_UNKNOWN_PROVIDER` | 404 |
 | `OAuthStateInvalidError` | `AUTH_OAUTH_STATE_INVALID` | 400 |
-| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 |
+| `OAuthExchangeError` | `AUTH_OAUTH_EXCHANGE_FAILED` | 502 (message kept for the log; the client gets `Bad gateway.`) |
+| `OAuthProviderConfigError` | `AUTH_OAUTH_PROVIDER_CONFIG` | boot (several providers with an unrestricted enterprise IdP, an invalid domain entry, a duplicate name) |
+| `ApiKeyAmbiguousError` | `AUTH_APIKEY_AMBIGUOUS` | 400 |
+| `PasskeyNotFoundError` / `WebAuthnSubjectMismatchError` | `PASSKEY_NOT_FOUND` / `WEBAUTHN_SUBJECT_MISMATCH` | 404/403 |
+| `PasskeyClonedError` / `PasskeyStoreOutdatedError` | `PASSKEY_CLONED` / `PASSKEY_STORE_OUTDATED` | 401 / boot |
+| `AccountLinkConflictError` | `AUTH_ACCOUNT_LINK_CONFLICT` | 409 |
+| `AccountEmailAmbiguousError` | `AUTH_EMAIL_AMBIGUOUS` | 500 (not exposed; several rows differ only in email case) |
+| `SecretUnreadableError` / `SecretBoxKeyError` | `AUTH_SECRET_UNREADABLE` / `AUTH_SECRET_BOX_KEY_INVALID` | 500 / boot |
 
 ## Common issues and solutions (FAQ)
 

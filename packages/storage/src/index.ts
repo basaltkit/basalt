@@ -27,6 +27,7 @@ import {
   PutStreamUnsupportedError,
   StatUnsupportedError,
   StorageContentTypeError,
+  StorageCrossTenantCopyError,
   StorageInvalidKeyError,
   StorageInvalidScopeError,
   StorageSigningEndpointInvalidError,
@@ -68,6 +69,7 @@ export {
   StatUnsupportedError,
   StorageStreamLengthRequiredError,
   StorageContentTypeError,
+  StorageCrossTenantCopyError,
   StorageFileNotFoundError,
   StorageInvalidKeyError,
   StorageInvalidPathError,
@@ -91,13 +93,25 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
  * pass through — rejecting keys that could produce confusing/duplicate objects
  * or defeat prefix-based `list()` isolation. Conservative: normal nested keys
  * like `avatars/123/pic.png` are untouched.
+ *
+ * Keys must also be canonical: no `.` segment and no empty segment
+ * (`a/./b`, `./a`, `a//b`, a trailing `/`, `''`). The local driver resolves
+ * those to the same file as `a/b`, while S3/GCS/Azure store distinct objects,
+ * so a key could name one file on one driver and three on another. They are
+ * refused rather than normalized: silently rewriting a key would let two
+ * different strings the app compares (allow-lists, dedupe, audit trails)
+ * address the same object. A `list()` prefix may be `''` (the disk root) or end
+ * with a single `/`.
  */
-function assertValidKey(key: string): void {
+function assertValidKey(key: string, kind: 'key' | 'prefix' = 'key'): void {
+  if (typeof key !== 'string') throw new StorageInvalidKeyError(String(key))
+  if (kind === 'prefix' && key === '') return
+  const body = kind === 'prefix' && key.endsWith('/') ? key.slice(0, -1) : key
   if (
     key.startsWith('/') ||
     key.startsWith('\\') ||
     CONTROL_CHARS.test(key) ||
-    key.split(/[/\\]+/).some((segment) => segment === '..')
+    body.split(/[/\\]/).some((segment) => segment === '..' || segment === '.' || segment === '')
   ) {
     throw new StorageInvalidKeyError(key)
   }
@@ -272,9 +286,15 @@ export interface DiskOptions {
    * What an operation does when the scope resolves nothing (no tenant in
    * context): `'root'` uses the caller's key against the disk root — where
    * every tenant's `tenants/<id>/` tree lives; `'error'` throws
-   * {@link StorageTenantRequiredError}. Default: `'error'` when
-   * `@basaltkit/tenancy` is registered (via `storagePlugin`) and the disk uses
-   * the default scope, `'root'` otherwise. An explicit value always wins.
+   * {@link StorageTenantRequiredError}.
+   *
+   * Default: `'error'` for every disk with a scope (the default one or a
+   * custom one). The single exception is a `storagePlugin` disk on the default
+   * scope in an app that did NOT register `@basaltkit/tenancy` — a
+   * single-tenant app, where the root is the only tree there is. A hand-built
+   * `new Disk()` cannot know whether tenancy exists, so it fails closed. An
+   * explicit value always wins; a disk that is central on purpose should say
+   * `scope: null`.
    */
   onMissingScope?: 'root' | 'error'
   /**
@@ -297,14 +317,44 @@ export interface DiskOptions {
 const isUnsafeScopeSegment = (segment: string): boolean =>
   segment === '' || segment === '.' || segment === '..' || CONTROL_CHARS.test(segment)
 
+/**
+ * The only tenant ids the default scope turns into a path segment: lowercase
+ * ASCII letters and digits, with `-`, `_` and inner `.`. It is a superset of
+ * `@basaltkit/tenancy`'s default grammar (`^[a-z0-9][a-z0-9_-]{0,62}$`).
+ *
+ * Canonical on purpose. On a case- or normalization-insensitive filesystem
+ * (APFS, NTFS) `Acme`, `ACME` and `acme` — or a precomposed and a decomposed
+ * `é` — open the SAME directory, while S3/GCS/Azure keep them apart: the local
+ * driver would share a tree between two tenants that the cloud drivers
+ * isolate. Refusing everything that is not already canonical keeps every
+ * driver identical and collision-free; lowercasing instead would merge `Acme`
+ * and `acme` on every driver. A trailing `.` is refused because Windows drops
+ * it (`acme.` is `acme`), and `.`/`..` never match.
+ */
+const CANONICAL_TENANT_SEGMENT = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9_-])?$/
+
 const defaultScope = (): string | undefined => {
   const tenant = tryCtx()?.['tenant'] as { id?: string } | undefined
   if (!tenant?.id) return undefined
-  // The id must be exactly one path segment. 'globex/files' would scope into
-  // globex's tree and '..' would collapse onto the bucket root.
-  if (/[/\\]/.test(tenant.id) || isUnsafeScopeSegment(tenant.id)) throw new StorageInvalidScopeError()
+  // The id must be exactly one canonical path segment. 'globex/files' would
+  // scope into globex's tree, '..' would collapse onto the bucket root, and
+  // 'Globex' would share globex's directory on a case-insensitive filesystem.
+  if (!CANONICAL_TENANT_SEGMENT.test(tenant.id)) throw new StorageInvalidScopeError()
   return `tenants/${tenant.id}`
 }
+
+/**
+ * Whether `key`, written to a central disk, lands in the `tenants/` tree.
+ * Compared case-insensitively and past `.`/empty segments, because the local
+ * driver resolves `./Tenants//globex` to the same directory as `tenants/globex`
+ * on a case-insensitive filesystem.
+ */
+const isInTenantsTree = (key: string): boolean =>
+  key
+    .split(/[/\\]+/)
+    .filter((segment) => segment !== '' && segment !== '.')[0]
+    ?.toLowerCase() === 'tenants'
+
 
 /** Any scope (default or custom) must be a relative, traversal-free prefix. */
 function assertValidScope(scope: string): void {
@@ -333,9 +383,10 @@ export class Disk {
      * wires this to the container's `'tenancy:active'` metadata marker. It is
      * read on every operation, not once at construction, so the fail-closed
      * default does not depend on plugin order (a disk resolved before
-     * tenancy registers). Defaults to `false` (single-tenant).
+     * tenancy registers). Omitted (a hand-built disk), whether tenancy exists
+     * is unknown, and a scoped disk fails closed without a tenant.
      */
-    private readonly tenancyActive: () => boolean = () => false,
+    private readonly tenancyActive?: () => boolean,
   ) {
     this.scope = options.scope === undefined ? defaultScope : options.scope
     this.onMissingScope = options.onMissingScope
@@ -456,7 +507,10 @@ export class Disk {
    *
    * Both keys are validated and tenant-prefixed — the destination against the
    * destination disk's own scope, so a copy can never write outside the tenant
-   * it runs in.
+   * it runs in. A central destination (`scope: null`) has no scope to hold the
+   * key, so from a tenant-scoped disk a destination inside `tenants/` is
+   * refused with {@link StorageCrossTenantCopyError}: it would name some
+   * tenant's tree. Anywhere else on a central disk (`backups/…`) is allowed.
    *
    * Fallbacks, in order: a different driver (or one with no `copy`) is copied
    * with `getStream` → `putStream`, and a driver without those streams with
@@ -468,6 +522,9 @@ export class Disk {
   async copy(from: string, to: string, options: CopyOptions = {}): Promise<void> {
     const target = options.disk ?? this
     const source = this.path(from)
+    if (this.scope !== null && target.scope === null && isInTenantsTree(to)) {
+      throw new StorageCrossTenantCopyError(target.name, to)
+    }
     const destination = target.path(to)
     const contentTypeOption = options.contentType !== undefined ? { contentType: options.contentType } : {}
     if (target.driver === this.driver && this.driver.copy) {
@@ -527,7 +584,7 @@ export class Disk {
   }
 
   async list(prefix = ''): Promise<string[]> {
-    return this.driver.list(this.path(prefix))
+    return this.driver.list(this.path(prefix, 'prefix'))
   }
 
   /**
@@ -580,11 +637,11 @@ export class Disk {
     return { ...upload, key }
   }
 
-  private path(path: string): string {
+  private path(path: string, kind: 'key' | 'prefix' = 'key'): string {
     // Validate the caller key BEFORE scoping, so it can never `..` its way out
     // of the tenant prefix and every driver — not just the local one, which
     // guards only the disk root — gets the same key guarantee (L-3).
-    assertValidKey(path)
+    assertValidKey(path, kind)
     if (this.scope === null) return path // deliberately central disk
     const scope = this.scope()
     if (!scope) {
@@ -599,13 +656,16 @@ export class Disk {
   }
 
   /**
-   * An explicit `onMissingScope` wins. Otherwise a disk on the default tenant
-   * scope fails closed whenever tenancy is registered, and uses the root when
-   * it is not (single-tenant apps, standalone disks).
+   * An explicit `onMissingScope` wins. Otherwise every scoped disk fails
+   * closed — except a default-scope disk whose host told it tenancy is NOT
+   * registered (`storagePlugin` in a single-tenant app), which uses the root.
+   * A custom scope that resolves nothing, or a hand-built disk that cannot
+   * know whether tenancy exists, never falls back to the root on its own.
    */
   private missingScopeMode(): 'root' | 'error' {
     if (this.onMissingScope !== undefined) return this.onMissingScope
-    return this.scope === defaultScope && this.tenancyActive() ? 'error' : 'root'
+    if (this.scope !== defaultScope || this.tenancyActive === undefined) return 'error'
+    return this.tenancyActive() ? 'error' : 'root'
   }
 }
 
@@ -664,7 +724,8 @@ export function storagePlugin(options: StoragePluginOptions) {
         // is registered (its 'tenancy:active' metadata marker), a disk on the
         // default tenant scope refuses to run without a tenant instead of
         // falling back to the bucket root. Same rule as @basaltkit/cache. A
-        // custom `scope`, `scope: null` or an explicit `onMissingScope` wins.
+        // custom `scope` always fails closed; `scope: null` or an explicit
+        // `onMissingScope` wins.
         // Read lazily (per operation), so the marker is seen even when this
         // singleton is resolved before tenancyPlugin has registered.
         const tenancyActive = () => ensureMetadata(container).get('tenancy:active').length > 0

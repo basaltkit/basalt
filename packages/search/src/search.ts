@@ -1,13 +1,64 @@
 import { BasaltError, tryCtx } from '@basaltkit/core'
 import { MemorySearchDriver } from './memory.js'
-import type { SearchDocument, SearchDriver, SearchHit, SearchInput, SearchResult } from './types.js'
+import type { IndexDefinition, SearchDocument, SearchDriver, SearchHit, SearchInput, SearchResult } from './types.js'
 
 /** Search was asked for a tenant it couldn't determine. */
 export class TenantRequiredError extends BasaltError {
   readonly status = 400
-  constructor() {
-    super('SEARCH_TENANT_REQUIRED', 'A tenant is required — pass tenantId or run inside a tenant context.')
+  constructor(message = 'A tenant is required — pass tenantId or run inside a tenant context.') {
+    super('SEARCH_TENANT_REQUIRED', message)
   }
+}
+
+/**
+ * `limit`/`offset` that is not a non-negative integer, or a `limit` above the
+ * configured `maxLimit`. Both usually arrive from a query string, so they are
+ * checked here once rather than left to each engine to reject (or not).
+ */
+export class SearchPaginationError extends BasaltError {
+  readonly status = 400
+  constructor(message: string) {
+    super('SEARCH_INVALID_PAGINATION', message)
+  }
+}
+
+/**
+ * A filter on a field the index did not declare `filterable`. Letting any
+ * stored field be filtered turns search into an oracle for values the index
+ * holds but never meant to expose ("does anyone earn 90000?").
+ */
+export class SearchFilterNotFilterableError extends BasaltError {
+  readonly status = 400
+  constructor(index: string, field: string) {
+    super('SEARCH_FILTER_NOT_FILTERABLE', `Field ${JSON.stringify(field)} is not declared filterable on index ${JSON.stringify(index)}.`)
+  }
+}
+
+/**
+ * A filter value that is not a string, a finite number or a boolean (or a
+ * non-nested array of those). `null`/`undefined` are refused too: dropping the
+ * filter would silently widen the result — `{ ownerId: user?.id }` with no user
+ * would return everyone's rows — and every engine reads them differently.
+ */
+export class SearchFilterValueError extends BasaltError {
+  readonly status = 400
+  constructor(field: string) {
+    super(
+      'SEARCH_INVALID_FILTER_VALUE',
+      `Filter ${JSON.stringify(field)} must be a string, a finite number, a boolean, or an array of those.`,
+    )
+  }
+}
+
+/** Whether a filter value is one every driver compares the same way. */
+export function isFilterScalar(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+}
+
+/** Throw {@link SearchFilterValueError} unless `value` is a scalar or a flat array of scalars. */
+export function assertFilterValue(field: string, value: unknown): void {
+  const ok = Array.isArray(value) ? value.every(isFilterScalar) : isFilterScalar(value)
+  if (!ok) throw new SearchFilterValueError(field)
 }
 
 /**
@@ -23,14 +74,85 @@ export class SearchTenantMismatchError extends BasaltError {
 }
 
 /**
+ * A tenant id equal to {@link SINGLE_TENANT_SCOPE}. That string is the scope of
+ * a single-tenant app's documents, so a tenant carrying it would find, plant
+ * and remove them. The default tenancy grammar can never produce it; a custom
+ * one that does must pick another id.
+ */
+export class SearchTenantReservedError extends BasaltError {
+  readonly status = 400
+  constructor() {
+    super('SEARCH_TENANT_RESERVED', `"${SINGLE_TENANT_SCOPE}" is reserved for single-tenant documents and cannot be a tenant id.`)
+  }
+}
+
+/**
+ * A `reindex()` whose scope is ambiguous or not allowed where it runs: a
+ * whole-index rebuild requested from inside a tenant context, both scopes at
+ * once, or — with `@basaltkit/tenancy` registered — no scope at all outside a
+ * tenant context. A rebuild clears before it writes, so its reach is never
+ * guessed.
+ */
+export class SearchReindexScopeError extends BasaltError {
+  readonly status = 400
+  constructor(message: string) {
+    super('SEARCH_REINDEX_SCOPE', message)
+  }
+}
+
+/**
+ * The driver lacks an optional operation the call needs — today
+ * `clearTenant`, for a tenant-scoped `reindex()`. Thrown before anything is
+ * read or cleared; falling back to `clear()` would wipe every other tenant.
+ */
+export class SearchDriverCapabilityError extends BasaltError {
+  readonly status = 501
+  constructor(operation: string, purpose: string) {
+    super(
+      'SEARCH_DRIVER_UNSUPPORTED',
+      `The search driver does not implement \`${operation}\`, which ${purpose} needs. ` +
+        'Implement it (delete every document of one tenant in one index), or rebuild the whole index ' +
+        'with `reindex(name, { all: true })` from outside a tenant context.',
+    )
+  }
+}
+
+/**
  * The scope every document lands in when the app has no tenancy at all. The
  * driver contract is tenant-keyed, so a single-tenant app still needs one
  * stable key — it just shouldn't have to invent (and remember) it.
+ *
+ * A sentinel no tenant id can equal: `@` is outside `@basaltkit/tenancy`'s
+ * grammar, and a context, explicit or document tenant carrying it is refused
+ * with {@link SearchTenantReservedError}. It used to be `'default'` — a
+ * perfectly valid tenant id, so a tenant named `default` found (and could
+ * remove or overwrite) the single-tenant documents. Documents indexed under
+ * `'default'` by a single-tenant app must be re-keyed or reindexed once (see
+ * the changelog for the migration).
  */
-export const SINGLE_TENANT_SCOPE = 'default'
+export const SINGLE_TENANT_SCOPE = '@single'
 
 /** Page size assumed when a caller with an `authorize` hook gives no `limit`. */
 const DEFAULT_LIMIT = 10
+
+/** Largest `limit` a single search may ask for unless `maxLimit` says otherwise. */
+export const DEFAULT_MAX_LIMIT = 1000
+
+/**
+ * Largest `offset` a single search may ask for unless `maxOffset` says
+ * otherwise. Deep pages are expensive on every engine (each skipped row is
+ * still scored and sorted) and Elasticsearch refuses `from + size` above its
+ * `max_result_window` of 10 000 anyway; past that, page with a filter.
+ */
+export const DEFAULT_MAX_OFFSET = 10_000
+
+/**
+ * Largest number of driver rows one authorized search may scan, unless
+ * `maxScan` (on the service) says otherwise. The per-call `maxScan` may lower
+ * it, never raise it: without a ceiling, a hook that authorizes nothing turns
+ * `offset: 10000` into a walk of the whole index on every request.
+ */
+export const DEFAULT_MAX_SCAN = 10_000
 
 export interface SearchOptions {
   /**
@@ -67,7 +189,9 @@ export interface SearchOptions {
   authorize?: (hits: SearchHit[]) => SearchHit[] | Promise<SearchHit[]>
   /**
    * How many driver rows an authorized search may scan before giving up.
-   * Default: 20 pages' worth, floor 200.
+   * Default: 20 pages' worth, floor 200 — capped by the service's `maxScan`
+   * ceiling (default {@link DEFAULT_MAX_SCAN}); an explicit value above the
+   * ceiling throws {@link SearchPaginationError}.
    *
    * A hook that authorizes almost nothing would otherwise walk the whole index
    * on every keystroke. Reaching the budget is reported as `totalExact: false`
@@ -91,12 +215,61 @@ export interface ReindexableRule {
   backfill?: () => AsyncIterable<never[]>
 }
 
+export interface SearchServiceOptions {
+  driver?: SearchDriver
+  rules?: ReindexableRule[]
+  /**
+   * The index definitions. When an index is listed here, `filters` may only
+   * name its `filterable` fields (and `tenantId`); an index not listed keeps
+   * the old behaviour and passes any field to the driver. `searchPlugin`
+   * forwards its `indexes`.
+   */
+  indexes?: IndexDefinition[]
+  /** Largest `limit` a search may ask for. Default {@link DEFAULT_MAX_LIMIT}. */
+  maxLimit?: number
+  /** Largest `offset` a search may ask for. Default {@link DEFAULT_MAX_OFFSET}. */
+  maxOffset?: number
+  /**
+   * Ceiling on the driver rows one authorized search may scan (the per-call
+   * `maxScan` may only lower it). Default {@link DEFAULT_MAX_SCAN}.
+   */
+  maxScan?: number
+}
+
+/**
+ * Which part of an index `reindex()` rebuilds.
+ *
+ * Inside a tenant context (a request, `tenancy.run`, `tenancy.forEach`) the
+ * rebuild is scoped to that tenant by default — the same rule every other
+ * `Search` call follows — so `tenancy.run(id, () => search.reindex(name))`
+ * over a database-per-tenant `backfill` rebuilds that tenant and leaves the
+ * others alone.
+ */
+export interface ReindexOptions {
+  /**
+   * Rebuild only this tenant's documents: `clearTenant` + the backfill rows
+   * mapped to this tenant (rows of other tenants are skipped). Inside a tenant
+   * context it must name that tenant ({@link SearchTenantMismatchError}).
+   */
+  tenantId?: string
+  /**
+   * Rebuild the whole index, every tenant: `clear` + every backfill row. Only
+   * outside a tenant context ({@link SearchReindexScopeError} inside one), and
+   * the `backfill` must then yield every tenant's records.
+   */
+  all?: boolean
+}
+
 export class Search {
   private readonly driver: SearchDriver
   private readonly rules: ReindexableRule[]
+  private readonly definitions: Map<string, IndexDefinition>
+  private readonly maxLimit: number
+  private readonly maxOffset: number
+  private readonly maxScan: number
 
   constructor(
-    options: { driver?: SearchDriver; rules?: ReindexableRule[] } = {},
+    options: SearchServiceOptions = {},
     /**
      * Whether the host app registered `@basaltkit/tenancy`. `searchPlugin`
      * wires this to the container's `'tenancy:active'` metadata marker — a
@@ -107,6 +280,10 @@ export class Search {
   ) {
     this.driver = options.driver ?? new MemorySearchDriver()
     this.rules = options.rules ?? []
+    this.definitions = new Map((options.indexes ?? []).map((index) => [index.name, index]))
+    this.maxLimit = positiveInteger('maxLimit', options.maxLimit, DEFAULT_MAX_LIMIT)
+    this.maxOffset = positiveInteger('maxOffset', options.maxOffset, DEFAULT_MAX_OFFSET)
+    this.maxScan = positiveInteger('maxScan', options.maxScan, DEFAULT_MAX_SCAN)
   }
 
   index(indexName: string, document: SearchInput): Promise<void> {
@@ -123,6 +300,8 @@ export class Search {
 
   async search(indexName: string, q: string, options: SearchOptions = {}): Promise<SearchResult> {
     const tenantId = this.tenant(options.tenantId)
+    this.validatePagination(options)
+    this.validateFilters(indexName, options.filters)
     const base = {
       tenantId,
       q,
@@ -145,7 +324,7 @@ export class Search {
     // continue where page one ended, and skipping driver rows would skip
     // results the caller never saw.
     const wanted = offset + limit
-    const budget = options.maxScan ?? Math.max(wanted * 20, 200)
+    const budget = options.maxScan ?? Math.min(Math.max(wanted * 20, 200), this.maxScan)
     const batch = Math.max(limit, 10)
 
     const authorized: SearchHit[] = []
@@ -190,9 +369,23 @@ export class Search {
    * That drift is quiet and nasty: the same search returns different things
    * depending on whether a record predates the last rebuild.
    *
+   * **Scope** ({@link ReindexOptions}): inside a tenant context, or with
+   * `{ tenantId }`, only that tenant's documents are cleared and rewritten —
+   * the others are untouched, so one call per tenant is safe. `{ all: true }`
+   * (outside a tenant context) clears and rebuilds the whole index. With
+   * `@basaltkit/tenancy` registered and no tenant context, one of the two is
+   * required; a single-tenant app rebuilds its whole index by default.
+   *
    * Returns how many documents were written.
    */
-  async reindex(indexName: string): Promise<number> {
+  async reindex(indexName: string, options: ReindexOptions = {}): Promise<number> {
+    const scope = this.reindexScope(indexName, options)
+    // Before the backfill is even read: a driver that cannot clear one tenant
+    // must not be asked to rebuild one — `clear()` would take every tenant.
+    if (scope !== ALL_TENANTS && !this.driver.clearTenant) {
+      throw new SearchDriverCapabilityError('clearTenant', `reindex("${indexName}") for one tenant`)
+    }
+
     const declared = this.rules.filter((rule) => rule.index === indexName)
     if (declared.length === 0) {
       throw new Error(
@@ -208,26 +401,148 @@ export class Search {
       )
     }
 
-    // Cleared first: a rebuild that appends leaves documents for records that
-    // no longer exist, which is the state a rebuild exists to end.
-    await this.driver.clear(indexName)
+    // Every row is mapped and validated BEFORE anything is cleared: a rebuild
+    // that fails half-way must leave the old index, not an empty one. This
+    // walks the backfill twice rather than buffering it — memory stays bounded
+    // by a page — and the second walk re-validates, so rows that changed in
+    // between can still fail it (after the clear); rerun `reindex()` then.
+    for (const rule of rebuildable) {
+      for await (const page of rule.backfill!()) this.rebuildDocuments(indexName, rule, page, scope)
+    }
+
+    // Then cleared, not appended to: a rebuild that appends leaves documents for records that
+    // no longer exist, which is the state a rebuild exists to end. Only the scope being
+    // rebuilt is cleared — a per-tenant rebuild that cleared the index wiped every other tenant.
+    if (scope === ALL_TENANTS) await this.driver.clear(indexName)
+    else await this.driver.clearTenant!(indexName, scope)
 
     let written = 0
     for (const rule of rebuildable) {
       for await (const page of rule.backfill!()) {
-        const documents = page
-          .map((payload) => rule.document!(payload))
-          .filter((document): document is SearchInput => document !== null)
-          // A rebuild is a system operation over every tenant: the rule's own
-          // mapping says which tenant each record belongs to, even when the
-          // rebuild is started from inside a tenant's request.
-          .map((document) => this.resolveDocument(document, true))
+        const documents = this.rebuildDocuments(indexName, rule, page, scope)
         if (documents.length === 0) continue
         await this.driver.bulk(indexName, documents)
         written += documents.length
       }
     }
     return written
+  }
+
+  /**
+   * The tenant a rebuild is limited to, or {@link ALL_TENANTS}. Mirrors
+   * {@link tenant}: the context tenant is authoritative, an explicit tenant
+   * only narrows to it, and nothing is guessed where a tenant could exist.
+   */
+  private reindexScope(indexName: string, options: ReindexOptions): string | typeof ALL_TENANTS {
+    const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    if (options.all && options.tenantId !== undefined) {
+      throw new SearchReindexScopeError(`reindex("${indexName}"): pass either \`tenantId\` or \`all\`, not both.`)
+    }
+    if (ambient) {
+      if (options.all) {
+        throw new SearchReindexScopeError(
+          `reindex("${indexName}", { all: true }) clears every tenant's documents and cannot run inside ` +
+            `the context of tenant ${JSON.stringify(ambient)}. Run it outside a tenant context, or drop \`all\` ` +
+            'to rebuild only this tenant.',
+        )
+      }
+      if (options.tenantId !== undefined && options.tenantId !== ambient) throw new SearchTenantMismatchError()
+      return assertNotReserved(ambient)
+    }
+    if (options.tenantId !== undefined) {
+      if (!options.tenantId) throw new TenantRequiredError()
+      return assertNotReserved(options.tenantId)
+    }
+    if (options.all) return ALL_TENANTS
+    if (this.tenancyActive()) {
+      throw new SearchReindexScopeError(
+        `reindex("${indexName}") outside a tenant context must say what it rebuilds: ` +
+          '`{ tenantId }` for one tenant, or `{ all: true }` to clear and rebuild every tenant.',
+      )
+    }
+    // Single-tenant app: the whole index is its only scope.
+    return ALL_TENANTS
+  }
+
+  /**
+   * Maps one backfill page to driver documents.
+   *
+   * The tenant comes from the rule's own mapping — never from the context the
+   * rebuild happens to run in, scoped or not. A row without one is refused
+   * whenever a tenant could exist (tenancy registered, a context tenant
+   * present, or a scoped rebuild): filing it under the caller's tenant is how
+   * `reindex()` from inside `acme` used to hand `acme` every other tenant's
+   * records, and a scoped rebuild over a shared-table backfill would do the
+   * same. Only a single-tenant app with no context tenant files tenant-less
+   * rows under {@link SINGLE_TENANT_SCOPE}.
+   *
+   * A scoped rebuild keeps only the rows mapped to its tenant: the others are
+   * validated like every row, then skipped — never written, since their tenant
+   * was not cleared.
+   */
+  private rebuildDocuments(
+    indexName: string,
+    rule: ReindexableRule,
+    page: never[],
+    scope: string | typeof ALL_TENANTS,
+  ): SearchDocument[] {
+    const tenantKnowable =
+      scope !== ALL_TENANTS || this.tenancyActive() || Boolean((tryCtx()?.['tenant'] as { id?: string } | undefined)?.id)
+    const documents: SearchDocument[] = []
+    for (const payload of page) {
+      const document = rule.document!(payload)
+      if (document === null) continue
+      if (document.tenantId) {
+        const tenantId = assertNotReserved(document.tenantId)
+        if (scope === ALL_TENANTS || tenantId === scope) documents.push({ ...document, tenantId })
+      } else if (tenantKnowable) {
+        throw new TenantRequiredError(
+          `reindex("${indexName}"): the rule mapped record ${JSON.stringify(document.id)} without a tenantId. ` +
+            'A rebuild never takes the tenant from the current context (a backfill over a shared table ' +
+            'would file every tenant\'s rows under it) — return tenantId from the rule\'s `document`.',
+        )
+      } else {
+        documents.push({ ...document, tenantId: SINGLE_TENANT_SCOPE })
+      }
+    }
+    return documents
+  }
+
+  private validatePagination(options: SearchOptions): void {
+    const check = (name: 'limit' | 'offset', value: unknown): void => {
+      if (value === undefined) return
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+        throw new SearchPaginationError(`${name} must be a non-negative integer, got ${JSON.stringify(value)}.`)
+      }
+    }
+    check('limit', options.limit)
+    check('offset', options.offset)
+    if (options.limit !== undefined && options.limit > this.maxLimit) {
+      throw new SearchPaginationError(`limit ${options.limit} exceeds the maximum of ${this.maxLimit}.`)
+    }
+    if (options.offset !== undefined && options.offset > this.maxOffset) {
+      throw new SearchPaginationError(`offset ${options.offset} exceeds the maximum of ${this.maxOffset}.`)
+    }
+    if (options.maxScan !== undefined) {
+      const value: unknown = options.maxScan
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+        throw new SearchPaginationError(`maxScan must be a positive integer, got ${JSON.stringify(value)}.`)
+      }
+      if (value > this.maxScan) {
+        throw new SearchPaginationError(`maxScan ${value} exceeds the maximum of ${this.maxScan}.`)
+      }
+    }
+  }
+
+  private validateFilters(indexName: string, filters: Record<string, unknown> | undefined): void {
+    if (!filters) return
+    const definition = this.definitions.get(indexName)
+    for (const [field, value] of Object.entries(filters)) {
+      if (definition && field !== 'tenantId' && !(definition.filterable ?? []).includes(field)) {
+        throw new SearchFilterNotFilterableError(indexName, field)
+      }
+      assertFilterValue(field, value)
+    }
   }
 
   /**
@@ -238,25 +553,40 @@ export class Search {
    * tenant dimension, so every document shares {@link SINGLE_TENANT_SCOPE} and
    * index/query always agree.
    */
-  private tenant(explicit?: string, trustExplicit = false): string {
+  private tenant(explicit?: string): string {
     // The context tenant wins: an explicit value is only honoured when it
     // agrees with it, or when there is no context tenant (jobs, CLI, scripts).
     // Letting the argument override the context let a caller that forwards
     // client input (`?tenantId=`) search, plant or remove another tenant's
     // documents.
     const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-    if (explicit && trustExplicit) return explicit
     if (ambient) {
       if (explicit !== undefined && explicit !== ambient) throw new SearchTenantMismatchError()
-      return ambient
+      return assertNotReserved(ambient)
     }
-    if (explicit) return explicit
+    if (explicit) return assertNotReserved(explicit)
     if (this.tenancyActive()) throw new TenantRequiredError()
     return SINGLE_TENANT_SCOPE
   }
 
   /** Fills in the document's tenant with the same rule the read path uses. */
-  private resolveDocument(document: SearchInput, trustExplicit = false): SearchDocument {
-    return { ...document, tenantId: this.tenant(document.tenantId, trustExplicit) }
+  private resolveDocument(document: SearchInput): SearchDocument {
+    return { ...document, tenantId: this.tenant(document.tenantId) }
   }
+}
+
+/** `reindex()`'s whole-index scope. A symbol, so no tenant id can equal it. */
+const ALL_TENANTS: unique symbol = Symbol('all tenants')
+
+function positiveInteger(name: string, value: number | undefined, fallback: number): number {
+  const resolved = value ?? fallback
+  if (!Number.isInteger(resolved) || resolved < 1) {
+    throw new Error(`Search: ${name} must be a positive integer, got ${String(value)}.`)
+  }
+  return resolved
+}
+
+function assertNotReserved(tenantId: string): string {
+  if (tenantId === SINGLE_TENANT_SCOPE) throw new SearchTenantReservedError()
+  return tenantId
 }

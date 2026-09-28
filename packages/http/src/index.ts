@@ -74,6 +74,7 @@ export {
 } from './openapi.js'
 
 export { computeEtag, ifNoneMatchSatisfied } from './etag.js'
+export { DEFAULT_BODY_LIMIT, isJsonMediaType, mediaTypeOf } from './media-type.js'
 
 export {
   upload,
@@ -94,6 +95,7 @@ export {
   RawBodySession,
   DEFAULT_RAW_BODY_MAX_BYTES,
   type RawBodyOptions,
+  type RawBodyRouteMatcherOptions,
   type RawBody,
   type ResolvedRawBodyOptions,
 } from './raw-body.js'
@@ -137,7 +139,16 @@ export {
   GUARDED_META_KEYS,
   UnguardedRouteMetaError,
   assertRoutesGuarded,
+  META_VALIDATORS_BUCKET,
+  InvalidRouteMetaError,
+  assertRouteMetaValid,
+  type RouteMetaValidator,
 } from './guarded-meta.js'
+export {
+  ROUTE_VISIBILITY_BUCKET,
+  isRouteVisible,
+  type RouteVisibilityCheck,
+} from './route-visibility.js'
 export { redactUrl, REDACTED } from './redact-url.js'
 export {
   reportHttpError,

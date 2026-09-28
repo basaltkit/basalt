@@ -96,6 +96,7 @@ A permission is a string; by convention `resource:action`. Matching is done with
 - `projects:delete` covers exactly `projects:delete`;
 - `projects:*` covers `projects:delete`, `projects:read`, … (but **not** `projects:sub:deep` — the number of segments must match);
 - `*` covers everything.
+- a permission with an empty segment (`''`, `projects:`, `:read`, `a::b`) matches nothing — not even itself, and no wildcard covers it. The Gate refuses one with a `TypeError` in `can()`, grants and `roleCatalog`; `hasEmptySegment(permission)` checks it.
 
 ### Roles
 
@@ -171,6 +172,8 @@ await gate.can({ id: 'u9' }, 'project:update', { ownerId: 'other-user' }) // fal
 
 Fix it by registering the check, correcting the `resource:action` spelling, or dropping the resource argument if plain RBAC is what you meant. `onMissingPolicy: 'rbac'` restores the historic fall-through. `can()` **without** a resource is untouched pure RBAC.
 
+**The match is exact.** Only the policy's *own* actions count (`project:constructor` / `project:toString` are missing policies, never `Object.prototype`), only a two-segment `resource:action` selects a check (`project:update:billing` is not decided by `update`), and a check authorizes only when it returns `true`. `can()` refuses a permission that is not a non-empty string without whitespace (`TypeError`); a user without a non-empty string `id` makes `can`/`authorize`/`hasRole` throw `AuthRequiredGuardError` (401).
+
 ### Super admin
 
 A function that, when it returns `true` for a user, authorizes everything (equivalent to Laravel's `Gate::before`):
@@ -218,6 +221,12 @@ delegator has, and a delegatee can't re-delegate authority it only holds by
 delegation. Both grant and delegation carry an expiry; back the stores with your
 database in production (the `Memory*` ones are per-process).
 
+A temporary grant **needs a deadline**: `grantTemporarily()` throws without
+`ttlMs` or `expiresAt`, and refuses one that is not a finite time in the future
+(`Infinity` included). The Gate also re-checks whatever the stores return — user,
+scope and expiry against its own clock — so a durable store that forgets its
+`expires_at > ?` filter cannot make a temporary grant permanent.
+
 ### Using the Gate inside handlers
 
 The plugin registers the Gate in the container under the `GATE` token:
@@ -248,6 +257,8 @@ Options (`GateOptions` = `PermissionsPluginOptions`):
 | `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`. `'error'` throws `MissingPolicyError` (fail closed); `'rbac'` falls back to the granted permission strings. |
 | `roleCatalog` | `Record<string, string[]>` | — | Code-defined role → permissions, valid in every scope: a role held in a scope grants its catalogue permissions in that scope only. Union with the store's role grants. Snapshotted at construction; malformed entries throw `TypeError`. See [A role catalogue for per-tenant roles](#a-role-catalogue-for-per-tenant-roles). |
 | `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | A tenant-held role also resolves its permissions from its `GLOBAL_SCOPE` definition (and the legacy one with `readLegacyGlobalScope`), granting only in that tenant. A list limits it to those role names. |
+| `allowGlobalWrites` | `boolean` | `false` | Let a scope-less write outside a tenant fall back to `GLOBAL_SCOPE` even when tenancy is active. See [Writes need a tenant or an explicit scope](#writes-need-a-tenant-or-an-explicit-scope). |
+| `tenancyActive` | `() => boolean` | plugin: the `tenancy:active` marker; `new Gate`: `false` | Whether the app is multi-tenant; decides whether scope-less writes outside a tenant fail closed. |
 | `readLegacyGlobalScope` | `boolean` | `false` | Also treat rows stored under the pre-1.5 global scope `'global'` as global. Transition aid only — see [The global scope is `'@global'`](#the-global-scope-is-global). |
 | `hooks` | `HookBus` | the app's bus (plugin) | Where `permission:*` hooks are emitted. `permissionsPlugin` wires it for you. |
 
@@ -278,6 +289,17 @@ models.) Until you can, `readLegacyGlobalScope: true` keeps reading them — but
 while it is on, a tenant with id `'global'` can write global grants again, so
 reserve that id first.
 
+#### Writes need a tenant or an explicit scope
+
+`assignRole`, `removeRole`, `grantToRole`, `grantToUser`, `grantTemporarily` and
+`delegate` default to the current scope. When tenancy is active (`tenancyPlugin`
+registered — `permissionsPlugin` reads its `tenancy:active` marker; a hand-built
+Gate takes `tenancyActive`) and **no tenant is in the context**, a scope-less
+write throws `ScopeRequiredError` (`PERMISSION_SCOPE_REQUIRED`, 400) instead of
+landing in `GLOBAL_SCOPE`. Pass the scope — `GLOBAL_SCOPE` when a platform-wide
+grant is really meant — or set `allowGlobalWrites: true`. Single-tenant apps are
+unaffected, and so is a Gate with a custom `scope` option.
+
 #### Scope resolution and `TENANT_REQUIRED`
 
 The default scope reads `ctx().tenant?.id` and **falls back to
@@ -304,10 +326,10 @@ user may do, not *which* tenant they belong to.
 | `hasRole(user, role)` | `Promise<boolean>` | Does the user have the role (in the current scope or global)? |
 | `effectiveRoles(userId)` | `Promise<string[]>` | Every role the user holds across the scopes a check consults (current + global). |
 | `audienceRoles(userId)` | `Promise<string[]>` | The roles the audience guard confines on: the current scope's, or the global ones when the current scope has none. |
-| `assignRole` / `removeRole(userId, role, scope?)` | `Promise<void>` | Store write + `permission:role_assigned` / `permission:role_removed` hook. `scope` defaults to the current scope. |
+| `assignRole` / `removeRole(userId, role, scope?)` | `Promise<void>` | Store write + `permission:role_assigned` / `permission:role_removed` hook. `scope` defaults to the current scope (see [Writes need a tenant or an explicit scope](#writes-need-a-tenant-or-an-explicit-scope)). |
 | `grantToRole(role, permissions, scope?)` / `grantToUser(userId, permissions, scope?)` | `Promise<void>` | Store write + `permission:granted` hook. Prefer these over the store's methods so changes reach the audit trail. |
 | `register(policy)` | `this` | Registers a policy after construction. |
-| `grantTemporarily(userId, permissions, options?)` | `Promise<TemporaryGrant>` | Time-boxed extra permissions. `options`: `{ expiresAt?, ttlMs?, scope?, grantedBy?, reason? }` — `expiresAt` wins over `ttlMs`, and with neither the grant expires immediately. Requires a `temporaryGrants` store. |
+| `grantTemporarily(userId, permissions, options?)` | `Promise<TemporaryGrant>` | Time-boxed extra permissions. `options`: `{ expiresAt?, ttlMs?, scope?, grantedBy?, reason? }` — `expiresAt` wins over `ttlMs`; one of them is required, and the deadline must be a finite time in the future (`TypeError` otherwise). Requires a `temporaryGrants` store. |
 | `delegate({ from, to, permissions, scope?, expiresAt? })` | `Promise<Delegation>` | Lets `to` act with a subset of `from`'s authority. `permissions` accepts patterns; `'*'` means everything the delegator can do. Omit `expiresAt` for an open-ended delegation. Requires a `delegations` store. |
 
 ### `AccessStore` interface
@@ -337,6 +359,8 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 | `isReservedScope(id)` | `true` for ids a tenant must not use (`'@global'`, `'global'`). |
 | `currentScope()` | The scope of the current request (tenant id or `GLOBAL_SCOPE`); throws `ReservedScopeError` for a reserved tenant id. |
 | `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` (403). |
+| `ScopeRequiredError` | `PERMISSION_SCOPE_REQUIRED` (400) — a scope-less grant write outside a tenant while tenancy is active. |
+| `definePolicy` snapshot | Checks are copied into a prototype-free lookup of the object's own function entries; a non-function check or a resource containing `:` throws `TypeError`. |
 | `GATE` | DI token for the Gate in the container. |
 | `PolicyUser` | Minimal user type: `{ id: string; [key: string]: unknown }`. |
 | `Policy`, `PolicyCheck` | Policy types. Advanced. |
@@ -404,17 +428,28 @@ bucket, so a route declaring either in an app that never registered
 (`HTTP_UNGUARDED_ROUTE_META`) rather than serving unchecked. See `@basaltkit/http` for the
 `allowUnguardedMeta` escape hatch.
 
+It also registers a **side-effect-free visibility check** for `meta.can` in
+`http:route-visibility`, so listings such as `@basaltkit/mcp`'s `tools/list`
+hide routes whose permission(s) the caller lacks. It runs `gate.can(user,
+permission)` per entry — grant reads only, never a `permission:denied` hook, so
+listings stay out of the audit trail (`superAdmin` runs too: keep it pure). No
+user or a malformed `meta.can` hides the route. Policies never decide
+`meta.can` (the guard passes no resource), so a resource-level `authorize()`
+inside a handler is invisible to listings: that tool stays listed and is
+refused on the call. Visibility is never authorization.
+
 ### Failure modes & troubleshooting
 
 | Error | Code | HTTP | When |
 |---|---|---|---|
-| `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route ran with no `ctx().user`. |
+| `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route ran with no `ctx().user` (or one without a non-empty string `id`); also `can`/`authorize`/`hasRole` given such a user. |
+| `ScopeRequiredError` | `PERMISSION_SCOPE_REQUIRED` | 400 | A grant write with no `scope`, no tenant in the context, and tenancy active. |
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | `gate.authorize()` (or the guard) found the user lacks the permission. Carries the permission in its message. |
 | `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` is not a non-empty string or a non-empty array of non-empty strings. Names the route and describes what it received. |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | `can`/`authorize` was given a resource but no policy check matches `resource:action` — the ABAC rule you intended would be skipped. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` and `permissionsPlugin` isn't registered. Raised by the adapter, from `@basaltkit/http`. |
 
-All four runtime errors declare a `status`, so adapters return the code above
+All the runtime errors declare a `status`, so adapters return the code above
 with the real error code in the body.
 
 - **`PERMISSION_META_INVALID` after refactoring a route** — you most likely
@@ -430,8 +465,9 @@ with the real error code in the body.
 - **A delegated user is denied something the delegator can do** — delegation is
   bounded by the delegator's *direct* permissions and doesn't chain. If the
   delegator only holds it by delegation themselves, it doesn't pass through.
-- **Temporary grant expired instantly** — `grantTemporarily` with neither
-  `ttlMs` nor `expiresAt` sets `expiresAt` to now.
+- **`PERMISSION_SCOPE_REQUIRED` from a seed script or admin endpoint** — a
+  multi-tenant app wrote a grant outside any tenant without saying where. Pass
+  the tenant id, or `GLOBAL_SCOPE` for a platform-wide grant.
 
 ### Hooks & events
 

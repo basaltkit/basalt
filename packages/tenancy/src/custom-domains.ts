@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { resolveTxt as dnsResolveTxt } from 'node:dns/promises'
 import { BasaltError } from '@basaltkit/core'
 
@@ -26,24 +26,66 @@ export interface CustomDomain {
   verifiedAt?: number
 }
 
+/** RFC 1123 label: 1-63 of [a-z0-9-], not starting or ending with '-'. Bounded, no backtracking. */
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const PORT = /^[0-9]{1,5}$/
+const ALL_DIGITS = /^[0-9]+$/
+/** A DNS name is at most 253 characters without its trailing dot. */
+const MAX_HOSTNAME = 253
+
+/**
+ * Canonicalize a domain/Host value, or return `null` when it is not a hostname.
+ *
+ * Lowercases, trims, strips an optional `:port` and trailing dots, then holds
+ * what is left to the RFC 1123 hostname grammar: dot-separated labels of
+ * `[a-z0-9-]`, at most 253 characters, with a last label that is not all
+ * digits. Anything else is **rejected, not rewritten** — userinfo
+ * (`acme.app.com@evil.com`), a path, percent-encoding, full-width or other
+ * non-ASCII characters, IPv4/IPv6 literals. A URL parser would "helpfully" turn
+ * several of those into a *different* host than the one a proxy, WAF or cache
+ * in front of the app routed on.
+ *
+ * Internationalized domains must be given in their ASCII (`xn--`) form, which is
+ * what browsers send in `Host`; convert user input with `domainToASCII()` from
+ * `node:url` before registering it.
+ */
+export function tryNormalizeDomain(input: string): string | null {
+  if (typeof input !== 'string') return null
+  let host = input.trim().toLowerCase()
+  const colon = host.indexOf(':')
+  if (colon !== -1) {
+    // One optional numeric port; a second ':' means an IPv6 literal or garbage.
+    if (!PORT.test(host.slice(colon + 1))) return null
+    host = host.slice(0, colon)
+  }
+  host = stripTrailingDots(host) // FQDN form (`victim.com.`) and `com..` — idempotent
+  if (host.length === 0 || host.length > MAX_HOSTNAME) return null
+  const labels = host.split('.')
+  for (const label of labels) if (!LABEL.test(label)) return null
+  // `127.0.0.1`, `0x7f.1`, `2130706433`: an IP form, never a tenant's domain.
+  if (ALL_DIGITS.test(labels[labels.length - 1]!)) return null
+  return host
+}
+
 /**
  * Canonicalize a domain/Host value: lowercase, trim, strip a trailing dot and any
- * port, and IDNA/punycode-encode unicode. One function used by registration,
- * verification, lookup AND the Host-header resolver, so a domain always keys the
- * same regardless of how it was typed or presented (`Victim.com`, `victim.com.`,
- * `victim.com:443`, unicode homographs).
+ * port. One function used by registration, verification, lookup AND the
+ * Host-header resolver, so a domain always keys the same regardless of how it
+ * was typed or presented (`Victim.com`, `victim.com.`, `victim.com:443`).
+ *
+ * Throws {@link InvalidDomainError} (400) for a value that is not a hostname —
+ * see {@link tryNormalizeDomain} for the grammar. Use `tryNormalizeDomain` where
+ * an invalid value should simply not match (the resolvers do).
  */
 export function normalizeDomain(input: string): string {
-  let host = input.trim().toLowerCase()
-  if (host.startsWith('[')) host = host.slice(1, host.indexOf(']') > 0 ? host.indexOf(']') : undefined) // IPv6
-  else host = host.split(':')[0] ?? host // strip port
-  host = stripTrailingDots(host) // strip ALL trailing dots (FQDN form / `com..`) — idempotent
-  try {
-    // URL applies IDNA (unicode → punycode ASCII); guards against homograph tricks.
-    return new URL(`http://${host}`).hostname
-  } catch {
-    return host
-  }
+  const host = tryNormalizeDomain(input)
+  if (host === null) throw new InvalidDomainError(input)
+  return host
+}
+
+/** Whether `domain` equals `base` or is a subdomain of it (both normalized). */
+function isWithin(domain: string, base: string): boolean {
+  return domain === base || domain.endsWith(`.${base}`)
 }
 
 export interface DomainStore {
@@ -54,6 +96,19 @@ export interface DomainStore {
   markVerified(domain: string, at: number): Promise<void>
   markUnverified(domain: string): Promise<void>
   remove(domain: string): Promise<void>
+  /**
+   * Atomically swap the record for `expected.domain` with `next`, but ONLY if the
+   * stored record is still `expected` (same tenant, token and verified flag).
+   * Returns false when the record changed underneath. Used to hand an expired or
+   * DNS-contested unverified claim to another tenant. Optional: without it the
+   * swap is a remove followed by an add, which a concurrent claim can race.
+   */
+  replace?(expected: CustomDomain, next: CustomDomain): Promise<boolean>
+  /**
+   * Every verified domain, for {@link CustomDomains.reverifyAll}. Optional:
+   * without it, pass the domains to `reverifyAll({ domains })` yourself.
+   */
+  listVerified?(): Promise<CustomDomain[]>
 }
 
 export class MemoryDomainStore implements DomainStore {
@@ -89,6 +144,20 @@ export class MemoryDomainStore implements DomainStore {
   async remove(domain: string): Promise<void> {
     this.domains.delete(domain)
   }
+  async listVerified(): Promise<CustomDomain[]> {
+    return [...this.domains.values()].filter((d) => d.verified).map((d) => ({ ...d }))
+  }
+  async replace(expected: CustomDomain, next: CustomDomain): Promise<boolean> {
+    const current = this.domains.get(expected.domain)
+    if (!current || !sameClaim(current, expected)) return false
+    this.domains.delete(expected.domain)
+    this.domains.set(next.domain, { ...next })
+    return true
+  }
+}
+
+function sameClaim(a: CustomDomain, b: CustomDomain): boolean {
+  return a.tenantId === b.tenantId && a.verificationToken === b.verificationToken && a.verified === b.verified
 }
 
 export class DomainTakenError extends BasaltError {
@@ -102,6 +171,23 @@ export class DomainNotFoundError extends BasaltError {
   readonly status = 404
   constructor(domain: string) {
     super('DOMAIN_NOT_FOUND', `Domain "${domain}" is not registered.`)
+  }
+}
+
+/** A value that is not a hostname (userinfo, path, `%`, non-ASCII, IP literal…). */
+export class InvalidDomainError extends BasaltError {
+  readonly status = 400
+  constructor(domain: unknown) {
+    const shown = typeof domain === 'string' ? JSON.stringify(domain.slice(0, 80)) : typeof domain
+    super('DOMAIN_INVALID', `Invalid domain ${shown}. Expected a hostname such as "app.acme.com".`)
+  }
+}
+
+/** The platform's own domain (or a subdomain of it) cannot be claimed as a custom domain. */
+export class DomainReservedError extends BasaltError {
+  readonly status = 403
+  constructor(domain: string) {
+    super('DOMAIN_RESERVED', `Domain "${domain}" is reserved by the platform and cannot be registered.`)
   }
 }
 
@@ -129,19 +215,85 @@ export interface CustomDomainsOptions {
   token?: () => string
   /** DNS TXT resolver (tests). Default: `node:dns/promises` resolveTxt. */
   resolveTxt?: (hostname: string) => Promise<string[][]>
+  /**
+   * How long an UNVERIFIED claim holds a domain, in milliseconds. Default 72 h.
+   *
+   * A claim costs nothing but a sign-up, so without an expiry any tenant could
+   * register a domain it does not own and block the real owner forever. Once a
+   * claim is older than this and still unverified, another tenant's `add()`
+   * takes the domain over. Verified domains never expire. `Infinity` disables
+   * expiry (not recommended).
+   */
+  claimTtlMs?: number
+  /**
+   * The platform's own domains — e.g. `['basalt.app']`. Each one and every
+   * subdomain of it is refused by `add()` with `DomainReservedError`: tenant
+   * subdomains are assigned by the platform (`subdomainResolver`), never claimed
+   * through custom domains. Default: none — set it to your apex.
+   */
+  reservedDomains?: string[]
+  /**
+   * Secret that derives a tenant's DNS challenge for a domain someone else holds
+   * unverified (`challenge()`), so that **the verified TXT wins**: once the real
+   * owner publishes it, their `add()` takes the domain over immediately instead
+   * of waiting for the squatter's claim to expire. Keep it stable and identical
+   * across instances. Without it, contested domains are freed only by expiry.
+   */
+  challengeSecret?: string
 }
+
+/**
+ * Outcome of re-checking one domain's TXT record ({@link CustomDomains.reverify}):
+ * - `valid` — verified and its record still resolves; unchanged.
+ * - `revoked` — verified, but the record is definitively gone (no such name,
+ *   no TXT, or no matching value); now unverified, so it stops resolving.
+ * - `dns-error` — the lookup failed for another reason (timeout, SERVFAIL…);
+ *   unchanged, so a DNS outage never un-verifies every domain at once.
+ * - `unverified` — the claim is not verified; nothing to re-check.
+ * - `changed` — the record changed hands while DNS was being checked; left alone.
+ */
+export type DomainReverifyStatus = 'valid' | 'revoked' | 'dns-error' | 'unverified' | 'changed'
+
+export interface DomainReverification {
+  domain: string
+  tenantId: string
+  status: DomainReverifyStatus
+}
+
+export interface DomainReverifySummary {
+  /** Verified domains whose record was looked up. */
+  checked: number
+  /** Domains un-verified by this run. */
+  revoked: string[]
+  /** Domains whose lookup failed transiently (left verified — retry on the next run). */
+  errors: string[]
+  results: DomainReverification[]
+}
+
+/** DNS answers that prove the record is absent (as opposed to a failed lookup). */
+const DEFINITIVE_DNS_MISS = new Set(['ENOTFOUND', 'ENODATA'])
+
+/** 72 hours. */
+export const DEFAULT_CLAIM_TTL_MS = 72 * 60 * 60 * 1000
 
 export class CustomDomains {
   private readonly store: DomainStore
   private readonly now: () => number
   private readonly token: () => string
   private readonly resolveTxt: (hostname: string) => Promise<string[][]>
+  private readonly claimTtlMs: number
+  private readonly reserved: string[]
+  private readonly challengeSecret: string | undefined
 
   constructor(options: CustomDomainsOptions = {}) {
     this.store = options.store ?? new MemoryDomainStore()
     this.now = options.now ?? (() => Date.now())
     this.token = options.token ?? (() => randomBytes(24).toString('base64url'))
     this.resolveTxt = options.resolveTxt ?? dnsResolveTxt
+    this.claimTtlMs = options.claimTtlMs ?? DEFAULT_CLAIM_TTL_MS
+    // Normalized at boot: a malformed reserved domain is a config error, not a silent no-op.
+    this.reserved = (options.reservedDomains ?? []).map((d) => normalizeDomain(d))
+    this.challengeSecret = options.challengeSecret
   }
 
   /** The `_basalt-verify.<domain>` TXT host + expected value for a token. */
@@ -158,9 +310,21 @@ export class CustomDomains {
     return record
   }
 
-  /** Register a domain for a tenant (unverified). Returns it plus the DNS record to publish. */
+  /**
+   * Register a domain for a tenant (unverified). Returns it plus the DNS record to publish.
+   *
+   * Refuses a value that is not a hostname (`InvalidDomainError`) and the
+   * platform's own domains (`DomainReservedError`). A domain another tenant
+   * holds is refused with `DomainTakenError` — unless that claim is unverified
+   * and either older than `claimTtlMs`, or the caller has already published its
+   * {@link challenge} TXT record (then the caller gets it, verified). A
+   * verified claim yields only to a published challenge record when the
+   * incumbent's own TXT record is gone (see {@link reverify}).
+   */
   async add(tenantId: string, domain: string): Promise<{ record: CustomDomain; dns: DnsVerification }> {
     const normalized = normalizeDomain(domain)
+    const reserved = this.reserved.find((base) => isWithin(normalized, base))
+    if (reserved) throw new DomainReservedError(normalized)
     const record: CustomDomain = {
       domain: normalized,
       tenantId,
@@ -168,10 +332,150 @@ export class CustomDomains {
       verificationToken: this.token(),
       createdAt: this.now(),
     }
-    // store.add is the atomic uniqueness gate (throws DomainTakenError on conflict);
-    // no check-then-act TOCTOU window here.
-    await this.store.add(record)
-    return { record, dns: this.dns(normalized, record.verificationToken) }
+    try {
+      // store.add is the atomic uniqueness gate (throws DomainTakenError on conflict);
+      // no check-then-act TOCTOU window here.
+      await this.store.add(record)
+      return { record, dns: this.dns(normalized, record.verificationToken) }
+    } catch (error) {
+      if (!(error instanceof DomainTakenError)) throw error
+      const taken = await this.takeOver(tenantId, normalized, record)
+      if (!taken) throw error
+      return { record: taken, dns: this.dns(normalized, taken.verificationToken) }
+    }
+  }
+
+  /**
+   * The DNS record `tenantId` publishes to prove it owns `domain` while another
+   * tenant holds an unverified claim on it. Once it resolves, `add()` hands the
+   * domain over. Requires `challengeSecret`.
+   */
+  challenge(tenantId: string, domain: string): DnsVerification {
+    const normalized = normalizeDomain(domain)
+    return this.dns(normalized, this.challengeToken(tenantId, normalized))
+  }
+
+  private challengeToken(tenantId: string, domain: string): string {
+    if (!this.challengeSecret) {
+      throw new Error('CustomDomains.challenge() requires the `challengeSecret` option.')
+    }
+    return createHmac('sha256', this.challengeSecret).update(`${tenantId}\n${domain}`).digest('base64url')
+  }
+
+  /**
+   * Hand an existing claim to `tenantId` when either
+   * - it is unverified AND expired, or contested by a DNS record proving
+   *   `tenantId` controls the domain; or
+   * - it is verified but stale: `tenantId` proves DNS control with its
+   *   {@link challenge} record AND, in the same lookup, the incumbent's own
+   *   record is gone (a lapsed domain bought by someone else). A failed lookup
+   *   or an incumbent record still present keeps the claim where it is.
+   * Returns the new record, or null when the claim stands.
+   */
+  private async takeOver(tenantId: string, domain: string, fresh: CustomDomain): Promise<CustomDomain | null> {
+    const existing = await this.store.get(domain)
+    if (!existing || existing.tenantId === tenantId) return null
+    let next: CustomDomain | null = null
+    if (this.challengeSecret) {
+      // The verified TXT wins: DNS control is what ownership means here.
+      const token = this.challengeToken(tenantId, domain)
+      const values = await this.lookupTxt(domain)
+      if (values !== 'error' && values.includes(`${TXT_PREFIX}${token}`)) {
+        // A verified incumbent yields only when its own record is gone too.
+        if (existing.verified && values.includes(`${TXT_PREFIX}${existing.verificationToken}`)) return null
+        const at = this.now()
+        next = { domain, tenantId, verified: true, verificationToken: token, createdAt: at, verifiedAt: at }
+      }
+    }
+    if (existing.verified && !next) return null // verified claims never expire
+    if (!next && this.now() - existing.createdAt >= this.claimTtlMs) next = fresh
+    if (!next) return null
+    if (this.store.replace) return (await this.store.replace(existing, next)) ? next : null
+    await this.store.remove(domain)
+    await this.store.add(next) // a concurrent claim may win here; it then throws DomainTakenError
+    return next
+  }
+
+  private async hasTxt(domain: string, token: string): Promise<boolean> {
+    const txts = await this.resolveTxt(`_basalt-verify.${domain}`).catch(() => [] as string[][])
+    return txts.map((chunks) => chunks.join('')).includes(`${TXT_PREFIX}${token}`)
+  }
+
+  /**
+   * The TXT values at `_basalt-verify.<domain>`, `[]` when DNS says there are
+   * none (NXDOMAIN / NODATA), or `'error'` when the lookup itself failed — a
+   * timeout must never be read as "the record is gone".
+   */
+  private async lookupTxt(domain: string): Promise<string[] | 'error'> {
+    try {
+      const txts = await this.resolveTxt(`_basalt-verify.${domain}`)
+      return txts.map((chunks) => chunks.join(''))
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code
+      return typeof code === 'string' && DEFINITIVE_DNS_MISS.has(code) ? [] : 'error'
+    }
+  }
+
+  /**
+   * SYSTEM-ONLY: re-check the TXT record of whichever tenant holds `domain`
+   * and un-verify the claim when the record is definitively gone. Unlike
+   * `verify(tenantId, domain, { force: true })` it needs no tenant id, and a
+   * failed lookup (timeout, SERVFAIL) leaves the claim verified (`dns-error`).
+   * The un-verify is conditional (`DomainStore.replace` when available), so a
+   * claim that changed hands meanwhile is left alone (`changed`).
+   *
+   * Run it — or {@link reverifyAll} — on a schedule: a verified domain whose
+   * owner let it lapse otherwise keeps resolving to them (dangling-domain
+   * takeover), and a new owner can then claim it through `add()`.
+   * Returns `null` for a domain nobody holds.
+   */
+  async reverify(domain: string): Promise<DomainReverification | null> {
+    const normalized = normalizeDomain(domain)
+    const record = await this.store.get(normalized)
+    if (!record) return null
+    const result = (status: DomainReverifyStatus): DomainReverification => ({ domain: normalized, tenantId: record.tenantId, status })
+    if (!record.verified) return result('unverified')
+    const values = await this.lookupTxt(normalized)
+    if (values === 'error') return result('dns-error')
+    if (values.includes(`${TXT_PREFIX}${record.verificationToken}`)) return result('valid')
+    if (this.store.replace) {
+      const { verifiedAt: _verifiedAt, ...rest } = record
+      return result((await this.store.replace(record, { ...rest, verified: false })) ? 'revoked' : 'changed')
+    }
+    await this.store.markUnverified(normalized)
+    return result('revoked')
+  }
+
+  /**
+   * SYSTEM-ONLY: {@link reverify} every verified domain — from
+   * `DomainStore.listVerified()`, or the `domains` you pass (required when the
+   * store does not implement it). Sequential, so a large portfolio does not
+   * burst the resolver. Meant for a scheduled job:
+   *
+   * ```ts
+   * scheduler.every('1h', async () => {
+   *   const { revoked, errors } = await customDomains.reverifyAll()
+   *   if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
+   * })
+   * ```
+   */
+  async reverifyAll(options: { domains?: Iterable<string> } = {}): Promise<DomainReverifySummary> {
+    let domains: Iterable<string>
+    if (options.domains !== undefined) domains = options.domains
+    else if (this.store.listVerified) domains = (await this.store.listVerified()).map((d) => d.domain)
+    else {
+      throw new TypeError('CustomDomains.reverifyAll(): the store has no listVerified(); pass { domains } explicitly.')
+    }
+    const summary: DomainReverifySummary = { checked: 0, revoked: [], errors: [], results: [] }
+    for (const domain of domains) {
+      const result = await this.reverify(domain)
+      if (result === null || result.status === 'unverified') continue
+      summary.results.push(result)
+      if (result.status !== 'changed') summary.checked++
+      if (result.status === 'revoked') summary.revoked.push(result.domain)
+      if (result.status === 'dns-error') summary.errors.push(result.domain)
+    }
+    return summary
   }
 
   /** The DNS record for one of the tenant's OWN domains (to show them again). */
@@ -190,9 +494,7 @@ export class CustomDomains {
   async verify(tenantId: string, domain: string, options: { force?: boolean } = {}): Promise<boolean> {
     const record = await this.owned(tenantId, domain)
     if (record.verified && !options.force) return true
-    const txts = await this.resolveTxt(`_basalt-verify.${record.domain}`).catch(() => [] as string[][])
-    const values = txts.map((chunks) => chunks.join(''))
-    if (values.includes(`${TXT_PREFIX}${record.verificationToken}`)) {
+    if (await this.hasTxt(record.domain, record.verificationToken)) {
       if (!record.verified) await this.store.markVerified(record.domain, this.now())
       return true
     }
@@ -212,7 +514,9 @@ export class CustomDomains {
 
   /** The tenant id a **verified** domain maps to — wire this into `TenantSource.findByDomain`. */
   async tenantOf(domain: string): Promise<string | null> {
-    const record = await this.store.get(normalizeDomain(domain))
+    const normalized = tryNormalizeDomain(domain)
+    if (normalized === null) return null
+    const record = await this.store.get(normalized)
     return record?.verified ? record.tenantId : null
   }
 }

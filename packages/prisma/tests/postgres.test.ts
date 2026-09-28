@@ -238,6 +238,24 @@ describe.skipIf(!Ctor)('PostgreSQL integration (pglite)', () => {
       await db.exec('RESET ROLE')
       expect(Number(rows[0]?.n ?? -1)).toBe(0)
     })
+
+    // FA-070 / I3: once a session has set the GUC in ANY transaction,
+    // current_setting(…, true) returns '' (not NULL) after it ends — so a bare
+    // `tenant_id = current_setting(…)` policy matched rows whose tenant_id is ''.
+    it("fails closed after a tenant transaction ended: rows with tenant_id '' stay hidden", async () => {
+      await db.exec('CREATE TABLE project (id text primary key, tenant_id text, name text)')
+      await db.query("INSERT INTO project VALUES ('a','acme','A'),('e','','orphan')")
+      await db.exec(rlsPolicySql({ tables: ['project'] }))
+      await asAppUser()
+
+      await db.exec('BEGIN')
+      await db.query(setTenantConfigSql(), tenantConfigParams('acme'))
+      await db.exec('COMMIT')
+      // Same session, next "request", no tenant set.
+      const { rows } = await db.query<{ name: string }>('SELECT name FROM project')
+      await db.exec('RESET ROLE')
+      expect(rows.map((r) => r.name)).toEqual([])
+    })
   })
 
   describe('cross-tenant scan — sweeping every tenant under RLS', () => {

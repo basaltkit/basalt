@@ -120,6 +120,25 @@ throw new HttpError(404, 'PROJECT_NOT_FOUND', 'Project not found')
 ```
 
 Unintentional errors (any `throw new Error(...)`) become a generic `500` with the `INTERNAL_ERROR` code — the internal message never reaches the client.
+The same holds for a toolkit error with `status` 500 (a `BasaltError` such as
+`GuardsWithoutContainerError`): the client gets its `code` and `Internal server error.`,
+never the developer-facing text or `details`; the adapter's error reporter still logs the
+real error. An `HttpError` keeps its message (it is thrown on purpose, for the client), as
+does a `BasaltError` that sets `expose = true`. Other 5xx statuses — a 503 "retry
+shortly", a 501 "not supported" — are client-facing by design and pass through unchanged.
+The opposite opt-in is `expose = false`: whatever its status, such an error answers only
+its `code` and a neutral message (`Bad gateway.` for a 502), and keeps its message and
+`details` for the log. `OAuthExchangeError` (it quotes the provider's reply) and
+`DriveHostNotAllowedError` (it names the host it refused) use it.
+
+An error from an external SDK that merely *carries* a `status` or `statusCode` — a
+payment provider's `401 Invalid API key`, an HTTP client's `404` from an upstream — stays
+a **500**, on every adapter: it is a failure of this server, not the caller's fault, and
+its status describes the upstream call, not this request. Only errors that choose their
+status on purpose are honoured: an `HttpError`, a `BasaltError` with a numeric `status`, a
+framework's own client error (a body parser's `400`/`413`), or an error that sets
+`expose: true` (http-errors style). To pass an upstream status through, catch the SDK
+error and throw `new HttpError(…, { cause })`.
 
 ### Structured error details
 
@@ -228,6 +247,43 @@ honoPlugin({ routes, allowUnguardedMeta: ['auth', 'can'] })
 ```
 
 Type: `boolean | string[]`. Default: unset — fail loud.
+
+**Without an adapter.** Code that calls `runRoute()` itself (a bespoke listener, a test
+harness) gets no boot check for free. Pass the booted app's container and the keys its
+plugins claimed are read from it — the same check the adapters make:
+
+```ts
+const app = await createApp({ plugins: [authPlugin(…), permissionsPlugin(…)] }).boot()
+assertRoutesGuarded(routes, app.container)            // throws UnguardedRouteMetaError
+assertRoutesGuarded(routes, app.container, ['auth'])  // same waiver as allowUnguardedMeta
+```
+
+**Route-meta validators.** Claiming a key proves a guard enforces it; a
+**validator** checks the value. A plugin registers a `RouteMetaValidator` in
+`META_VALIDATORS_BUCKET` (`'http:meta-validators'`) — `({ route, container }) =>
+problem | problem[] | undefined` (throwing counts as a problem). Every adapter runs
+them over its full route list at boot, after the guarded-meta check, and refuses
+to start with `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`, `problems[]`).
+`allowUnguardedMeta` never waives them. `assertRoutesGuarded(routes, container)`
+runs them too; `assertRouteMetaValid(routes, container)` runs them alone. (Passing
+a plain `Set` of claimed keys runs no validators.) `teamsPlugin` uses this to fail
+the boot on an unknown `meta.teamRole`.
+
+```ts
+ensureMetadata(container).add(META_VALIDATORS_BUCKET, (({ route }) =>
+  route.meta?.['teamRole'] === 'Admin' ? 'unknown role "Admin"' : undefined) satisfies RouteMetaValidator)
+```
+
+**Route visibility.** A guard may publish a pure companion in
+`ROUTE_VISIBILITY_BUCKET` (`'http:route-visibility'`): a `RouteVisibilityCheck`
+`({ route, context, container }) => boolean | undefined` answering "could this
+caller possibly pass?" — with **no side effects** (no rate-limit consumption, no
+audit/denial records, no hooks; plain reads are fine). `isRouteVisible(route,
+context, container)` combines them (a throwing check hides the route) with one
+built-in rule: a `meta.auth` route is hidden from a caller without
+`context.user`, when a guard claimed `auth`. Listing surfaces use it —
+`@basaltkit/mcp`'s `tools/list`. Visibility is never authorization: guards still
+run on every call.
 
 ### Route `meta` the framework reads
 
@@ -544,6 +600,8 @@ When the limit is exceeded, the client receives `429` with the `RATE_LIMITED` co
 The default storage is in memory (`MemoryRateLimitStore`) — per process, and bounded:
 expired buckets are swept as traffic arrives and at most `maxEntries` (default `100_000`)
 are kept, evicting the oldest window first (`new MemoryRateLimitStore({ maxEntries })`).
+A bucket that has used up its limit is never evicted — a flood of new client addresses
+cannot free a limited client early; it is held until its window ends.
 For a cluster, use the bundled `RedisRateLimitStore`, or implement `RateLimitStore` yourself and pass it in `rateLimit.store`:
 
 ```ts
@@ -651,6 +709,14 @@ const registry = app.container.get(METRICS)
 registry.counter('jobs_processed_total').inc()
 ```
 
+`http_requests_in_flight` is counted per request: a request an earlier pre-hook answered
+(a `429`, a CORS preflight) is never uncounted, and open `sse()` streams and responses the
+client abandoned are released when they end, on every adapter.
+
+`/metrics` (like `/openapi.json` and the health probes) is an **edge route**: enrichers
+and guards do not run on it, so it is public on whatever listener serves the app. Keep it
+off the public listener, or put a pre-hook in front of it.
+
 ### Distributed tracing — `tracingPlugin()`
 
 Records a server *span* per request (a record of "this operation took X ms"), continues a received W3C `traceparent`, returns the `traceparent` header in the response, and exports spans periodically.
@@ -728,6 +794,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. The response carries `part` and `issues[]`. |
 | `HttpError(status, code, message, options?)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. `options` is `{ details?, cause? }` — `details` is serialized as `error.details` (see [Structured error details](#structured-error-details)). |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A route-meta validator (`META_VALIDATORS_BUCKET`) refused one or more routes; `problems[]` lists each `{ route, problem }`. Thrown by the adapter at boot; never waived by `allowUnguardedMeta`. |
 | — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
 | — (no class) | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. `Retry-After` is set. |
 | `HttpError` | `PAYLOAD_TOO_LARGE` | 413 | An `upload()` body passed `maxBytes`, `maxFileBytes` or `maxFieldBytes`, or a `rawBody()` body passed its `maxBytes`. |
@@ -735,7 +802,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | `HttpError` | `UNSUPPORTED_MEDIA_TYPE` | 415 | An `upload()` route got a non-multipart body, or a file outside `allowedTypes`. |
 | `HttpError` | `MALFORMED_MULTIPART` | 400 | Bad boundary, truncated body, malformed/oversized part headers, or a nested multipart part. |
 | `HttpError` | `RAW_BODY_UNAVAILABLE` | 500 | A `rawBody()` route ran on an adapter that could not supply the bytes — another body parser consumed them first. A deliberate refusal, never a reconstruction. See [Raw request bodies](#raw-request-bodies--rawbody). |
-| — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. |
+| — (fallback) | `INTERNAL_ERROR` | 500 | Any error that is not an `HttpError` and not a `BasaltError` with a numeric `status`. The real message is never sent to the client. A `BasaltError` other than `HttpError` with `status` 500 (and no `expose = true`) keeps its code but gets this message too. |
 
 `HttpError` and `RequestValidationError` extend `BasaltError`, so `error.code` is stable
 and safe to branch on. `ValidationIssue` is `{ path: string; message: string }`.
@@ -760,6 +827,11 @@ readonly field — it is a boot failure, never an HTTP response.
 | `RequestEnricher` | `(info: { request, context, container }) => void \| Promise<void>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. |
 | `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |
 | `RoutePipeline` | `{ container?, enrichers?, guards? }`. |
+| `assertRoutesGuarded(routes, claimed, allow?)` | The boot check every adapter runs. `claimed` is a `Set` of claimed keys or a booted `Container` (the keys are read from its `'http:guarded-meta'` bucket). |
+| `isJsonMediaType(contentType)` | `true` for `application/json` or a `+json` type, parameters and case ignored — never a substring match (`text/plain; application/json` is CORS-safelisted, not JSON). The rule every adapter parses bodies by. |
+| `mediaTypeOf(contentType)` | The bare, lower-cased media type of a `Content-Type` header (`''` when absent). |
+| `DEFAULT_BODY_LIMIT` | `1048576` (1 MiB) — the default body limit of every adapter. |
+| `rawBodyRouteMatcher(routes, { caseInsensitive? })` | Tells whether a method + path belongs to a `rawBody()` route, for adapters that parse in middleware. `caseInsensitive` for a router that matches regardless of case. |
 
 ### Neutral server (Advanced — used by adapters and edge plugins)
 
@@ -802,7 +874,10 @@ readonly field — it is a boot failure, never an HTTP response.
 | `maxAge` | `number` | `600` | Preflight cache seconds. |
 
 A preflight (`OPTIONS` + `Access-Control-Request-Method`) is answered `204` by the plugin
-and never reaches your route.
+and never reaches your route. It counts against the global rate limit like any other
+request (past it the preflight gets `429`), and the `Access-Control-Allow-Methods`,
+`-Allow-Headers` and `-Max-Age` headers are sent only to an allowed origin — a disallowed
+one gets a bare `204`.
 
 `RateLimitOptions`:
 
@@ -862,7 +937,9 @@ and never reaches your route.
 
 **"Rate limiting doesn't work with multiple servers."** `MemoryRateLimitStore` lives in each process's memory. Implement `RateLimitStore` on top of Redis and pass it in `rateLimit.store`.
 
-**"My custom error comes out as a generic 500."** Only `HttpError` (or a `BasaltError` with a numeric `status` property) maps to the status you chose; any other error becomes `INTERNAL_ERROR` on purpose, to avoid exposing internal details.
+**"My custom error comes out as a generic 500."** Only `HttpError` (or a `BasaltError` with a numeric `status` property, or an error with `expose: true`) maps to the status you chose; any other error becomes `INTERNAL_ERROR` on purpose, to avoid exposing internal details. That includes an SDK error carrying its upstream `status` — wrap it in an `HttpError` if the client should see it.
+
+**"`http_requests_in_flight` went negative, or never drops back to 0."** Fixed in 2.6: the gauge now counts per request (a request answered by an earlier pre-hook is never uncounted) and every adapter runs the after-hooks for `sse()` streams and abandoned responses.
 
 **"My `details` never reach the client."** The payload is dropped whole when it is not plain JSON data (a class instance, a `Map`, an `Error`), when it is deeper than 8 levels, or when its serialised JSON is over 4 KiB — and it is only ever read from an error that was *constructed* with it. Check it with `sanitizeErrorDetails(yourDetails)`: `undefined` means nothing would be sent. See [Structured error details](#structured-error-details).
 

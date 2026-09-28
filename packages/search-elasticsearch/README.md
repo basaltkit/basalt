@@ -74,10 +74,22 @@ the searchable fields with `track_total_hits` for an exact total; filters become
 ## Notes
 
 - **Document ids are `<encodeURIComponent(tenantId)>:<encodeURIComponent(id)>`**,
-  built once and used identically by `index()`, `bulk()` and `remove()`. Encoding
+  built once and used identically by `index()`, `bulk()` and `remove()`: the
+  bulk body carries it verbatim, and the `/_doc/<id>` path percent-encodes it once
+  more because Elasticsearch decodes path segments (until 2.0 the path did not,
+  so `remove()` of a bulk-indexed id with a URL-special character deleted
+  nothing). Encoding
   the segments keeps tenant `a:b` + id `c` distinct from tenant `a` + id `b:c`
   (which previously overwrote one tenant's document with another's). UUID/slug
   ids are unaffected.
+- **`clear()` and `clearTenant()` use `_delete_by_query`** (`match_all`, or a
+  `term` on `tenantId` — the same predicate every search is scoped by), so
+  `search.reindex()` can rebuild one tenant and leave the rest. A response that
+  lists `failures` (version conflicts, shard errors) throws `ElasticsearchError`
+  instead of letting the rebuild write over a half-cleared index. `clearTenant`
+  relies on `tenantId` being a `keyword`, which `register()` maps.
+- Deep paging is bounded by `@basaltkit/search`'s `maxOffset` (default 10 000),
+  matching the cluster's default `max_result_window`.
 - The **fetch client is injectable** (`options.fetch`) — the global `fetch` is
   used by default. No hard HTTP dependency.
 - Leave `refresh: false` in production and let the cluster's refresh interval

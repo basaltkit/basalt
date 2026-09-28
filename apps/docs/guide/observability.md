@@ -98,7 +98,10 @@ Requests are labelled by the **route template** the adapter reports
 that matched no route is labelled `unknown` — a single bucket, not one series per
 404 URL. The histogram uses the default bucket set
 (`0.005 … 10` seconds); `http_requests_in_flight` is incremented in a pre-hook and
-decremented in the after-hook, so it also counts requests still being served.
+decremented in the after-hook, so it also counts requests still being served —
+open `sse()` streams included. It is counted per request: a request answered by
+an earlier pre-hook (a `429`, a CORS preflight) is never uncounted, and a
+response the client abandoned is released, on all three adapters.
 
 Pass `instrumentHttp: false` to keep the endpoint and drop the automatic HTTP
 series, or `registry` to share one `MetricsRegistry` with code that runs outside

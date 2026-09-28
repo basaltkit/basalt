@@ -1,4 +1,16 @@
 import type { InAppNotification, InAppStore } from '@basaltkit/notifications'
+import {
+  assertColumnLengths,
+  type ColumnLimits,
+  MYSQL_MEDIUMTEXT,
+  MYSQL_TEXT,
+  MYSQL_VARCHAR_DEFAULT as V,
+  resolveColumnLimits,
+} from './column-limits.js'
+
+export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+
+const PKG = '@basaltkit/notifications-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/notifications` `InAppStore` for
@@ -43,22 +55,61 @@ const toNotification = (r: PInApp): InAppNotification => ({
   ...(r.readAt !== null ? { readAt: r.readAt.getTime() } : {}),
 })
 
+/** The `InAppNotification` columns the store writes as strings. */
+export type InAppNotificationColumn = 'id' | 'recipientId' | 'notification' | 'title' | 'body' | 'data'
+
+export type NotificationsColumnLimits = ColumnLimits<{ InAppNotification: InAppNotificationColumn }>
+
+/**
+ * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
+ * 'mysql'` selects. Spread it to override one column after widening it.
+ */
+export const notificationsMysqlColumnLimits: NotificationsColumnLimits = {
+  InAppNotification: {
+    id: V,
+    recipientId: V,
+    notification: V,
+    title: MYSQL_TEXT,
+    body: MYSQL_TEXT,
+    data: MYSQL_MEDIUMTEXT,
+  },
+}
+
+export interface PrismaInAppStoreOptions {
+  /**
+   * Refuse (throw `ColumnLengthError`) a value longer than its column instead
+   * of letting the database truncate it — on MySQL outside strict mode a cut
+   * `data` is no longer valid JSON and the notification cannot be read back.
+   * `'mysql'` uses the limits of the bundled `schema.mysql.prisma`; pass an
+   * object for a schema of your own. Default: unchecked (PostgreSQL and SQLite
+   * store any length).
+   */
+  columnLimits?: 'mysql' | NotificationsColumnLimits
+}
+
 export class PrismaInAppStore implements InAppStore {
-  constructor(private readonly client: PrismaNotificationsClient) {}
+  private readonly limits: NotificationsColumnLimits | undefined
+
+  constructor(
+    private readonly client: PrismaNotificationsClient,
+    options: PrismaInAppStoreOptions = {},
+  ) {
+    this.limits = resolveColumnLimits(PKG, options.columnLimits, notificationsMysqlColumnLimits)
+  }
 
   async append(record: InAppNotification): Promise<void> {
-    await this.client.inAppNotification.create({
-      data: {
-        id: record.id,
-        recipientId: record.recipientId,
-        notification: record.notification,
-        title: record.title,
-        body: record.body ?? null,
-        data: record.data === undefined ? null : JSON.stringify(record.data),
-        readAt: record.readAt !== undefined ? at(record.readAt) : null,
-        at: at(record.at),
-      },
-    })
+    const data = {
+      id: record.id,
+      recipientId: record.recipientId,
+      notification: record.notification,
+      title: record.title,
+      body: record.body ?? null,
+      data: record.data === undefined ? null : JSON.stringify(record.data),
+      readAt: record.readAt !== undefined ? at(record.readAt) : null,
+      at: at(record.at),
+    }
+    assertColumnLengths(PKG, this.limits, 'InAppNotification', data)
+    await this.client.inAppNotification.create({ data })
   }
 
   async list(
@@ -100,7 +151,7 @@ export interface PrismaNotificationsStores {
  * `notificationsPlugin`:
  *
  * ```ts
- * const n = prismaInAppStore(prisma)
+ * const n = prismaInAppStore(prisma) // on MySQL: prismaInAppStore(prisma, { columnLimits: 'mysql' })
  * notificationsPlugin({ inApp: n.store, mailer })
  * ```
  */
@@ -121,7 +172,10 @@ function ensureModel(client: unknown, delegate: string, pkg: string): void {
   }
 }
 
-export function prismaInAppStore(client: PrismaNotificationsClient): PrismaNotificationsStores {
-  ensureModel(client, 'inAppNotification', '@basaltkit/notifications-prisma')
-  return { store: new PrismaInAppStore(client) }
+export function prismaInAppStore(
+  client: PrismaNotificationsClient,
+  options: PrismaInAppStoreOptions = {},
+): PrismaNotificationsStores {
+  ensureModel(client, 'inAppNotification', PKG)
+  return { store: new PrismaInAppStore(client, options) }
 }

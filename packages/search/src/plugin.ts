@@ -55,6 +55,21 @@ export interface SearchPluginOptions {
    * never blocks unrelated work — including CLI commands that don't use search.
    */
   failOnRegisterError?: boolean
+  /**
+   * Largest `limit` one search may ask for; above it `search()` throws
+   * `SearchPaginationError` (400). Default 1000.
+   */
+  maxLimit?: number
+  /**
+   * Largest `offset` one search may ask for; above it `search()` throws
+   * `SearchPaginationError` (400). Default 10000.
+   */
+  maxOffset?: number
+  /**
+   * Ceiling on the driver rows one authorized search (`authorize` hook) may
+   * scan; a per-call `maxScan` may only lower it. Default 10000.
+   */
+  maxScan?: number
 }
 
 export function searchPlugin(options: SearchPluginOptions = {}) {
@@ -71,7 +86,15 @@ export function searchPlugin(options: SearchPluginOptions = {}) {
         SEARCH,
         () =>
           new Search(
-            { driver, rules: (options.sync ?? []) as never },
+            {
+              driver,
+              rules: (options.sync ?? []) as never,
+              // Declared indexes restrict `filters` to their filterable fields.
+              indexes: options.indexes ?? [],
+              ...(options.maxLimit !== undefined ? { maxLimit: options.maxLimit } : {}),
+              ...(options.maxOffset !== undefined ? { maxOffset: options.maxOffset } : {}),
+              ...(options.maxScan !== undefined ? { maxScan: options.maxScan } : {}),
+            },
             () => metadata.get('tenancy:active').length > 0,
           ),
       )

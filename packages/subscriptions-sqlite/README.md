@@ -51,7 +51,9 @@ The metered `consume()` runs inside a `BEGIN IMMEDIATE` transaction and
 increments with a `RETURNING` guard, so a plan quota is **never overshot even
 under concurrent access** — the same guarantee the Redis Lua store gives,
 without Redis. Webhook idempotency is a single atomic `INSERT OR IGNORE`, so a
-redelivered event is processed once, across restarts and instances.
+redelivered event is processed once, across restarts and instances. `consume()`/`increment()`
+reject an amount that is not a positive integer with `InvalidUsageAmountError` (a negative
+amount would refund quota).
 
 ## Payment ledger & recurring billing
 

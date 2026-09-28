@@ -1,0 +1,45 @@
+// Reference schema for @basaltkit/teams-prisma — MySQL variant.
+//
+// Same models as schema.prisma, with native types sized for MySQL: a bare
+// `String` becomes VARCHAR(191) there, and outside strict mode MySQL truncates
+// a longer value silently — a cut invitation email no longer matches the
+// address it was sent to (an address may be 254 characters). `email` is
+// widened below; the keys stay VARCHAR(191) so they can be indexed
+// (tenantId + email is 445 utf8mb4 characters, 1 780 bytes, within InnoDB's
+// 3 072-byte key limit). Pair it with
+// `prismaTeamsStores(prisma, { columnLimits: 'mysql' })`, which refuses a value
+// that would still not fit instead of letting it be cut.
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model TeamMembership {
+  tenantId  String
+  userId    String
+  role      String
+  createdAt DateTime
+
+  @@id([tenantId, userId])
+  @@map("team_memberships")
+}
+
+model TeamInvitation {
+  id         String    @id
+  tenantId   String
+  email      String    @db.VarChar(254)
+  role       String
+  token      String    @unique
+  invitedBy  String?
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId, email])
+  @@map("team_invitations")
+}

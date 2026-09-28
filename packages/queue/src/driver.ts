@@ -112,6 +112,11 @@ export interface JobSummary {
 export interface JobEnvelope {
   payload: unknown
   context?: RequestContext | undefined
+  /**
+   * HMAC signature over the job name, payload and context — present only when
+   * the QueueManager has a `signingKey`. Drivers carry it opaquely.
+   */
+  sig?: string | undefined
 }
 
 /**

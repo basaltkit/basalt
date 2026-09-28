@@ -145,6 +145,10 @@ export class PostgresSearchDriver implements SearchDriver {
     await this.client.query(`DELETE FROM ${this.table} WHERE idx = $1`, [indexName])
   }
 
+  async clearTenant(indexName: string, tenantId: string): Promise<void> {
+    await this.client.query(`DELETE FROM ${this.table} WHERE idx = $1 AND tenant_id = $2`, [indexName, tenantId])
+  }
+
   async search(indexName: string, query: SearchQuery): Promise<SearchResult> {
     const q = (query.q ?? '').trim()
     // Only a *text* query needs the function: `idx = $1 AND tenant_id = $2` is

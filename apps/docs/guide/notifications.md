@@ -144,7 +144,8 @@ back to the log driver, because that would print every outbound mail (reset
 links included) to stdout in a deploy that only typo'd a config value.
 
 ::: warning The log driver redacts bodies in production
-With `NODE_ENV=production`, `LogMailDriver` replaces the body with
+Unless `NODE_ENV` is explicitly `development` or `test` (so also with it unset
+or `staging`), `LogMailDriver` replaces the body with
 `(body redacted in production — …)` — mail bodies routinely carry password-reset
 links, magic links and tokens, which must not be retained by a log aggregator
 just because a deploy was left on the default driver. Dev and test are
@@ -244,7 +245,7 @@ batch low-priority notifications into a periodic summary, collect them into a
 | `replyTo` | `string` | — | Default reply-to |
 | `layout` | `(html, { mail, data }) => string` | none | Shared HTML wrapper applied to every HTML body |
 | `sink` | `(line: string) => void` | `console.log` | Log-driver output target |
-| `logBody` | `boolean` | `true` outside production, `false` in production | Log driver only: include the body in the log line — bodies carry reset links/tokens |
+| `logBody` | `boolean` | `true` with `NODE_ENV=development`/`test`, `false` anywhere else (unset included) | Log driver only: include the body in the log line — bodies carry reset links/tokens |
 | `previews` | `MailPreview[]` | — | Mails exposed by the `basalt mail:preview` dev server |
 
 ## Failure modes & troubleshooting
@@ -261,7 +262,7 @@ batch low-priority notifications into a periodic summary, collect them into a
 | `MailHeaderInjectionError` | `MAIL_HEADER_INJECTION` | CR/LF or malformed address in subject/from/to/cc/bcc/replyTo — blocked before any driver |
 | `MailDeliveryError` | `MAIL_DELIVERY_FAILED` | An API driver (Resend, SES, Mailgun) got a non-success provider response |
 | Boot throws `Unknown mail driver "…"` | — | Typo'd `driver` string — fail-loud by design; valid: `smtp, resend, ses, mailgun, memory, log` |
-| Mail bodies show `(body redacted in production — …)` | — | Log driver + `NODE_ENV=production`; pass `logBody: true` or configure a real driver |
+| Mail bodies show `(body redacted in production — …)` | — | Log driver + `NODE_ENV` not explicitly `development`/`test` (unset counts as production); pass `logBody: true` or configure a real driver |
 
 Pair with [`@basaltkit/i18n`](/guide/i18n) to render outbound content in the
 recipient's locale, and [`@basaltkit/queue`](/guide/queues) to deliver

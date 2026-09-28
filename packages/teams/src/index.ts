@@ -8,12 +8,14 @@ export {
   LastOwnerError,
   TeamRoleNotGrantableError,
   TeamUserSourceMissingError,
+  UnknownTeamRoleError,
   type TeamsOptions,
   type RoleAssigner,
 } from './teams.js'
 export {
   MemoryMembershipStore,
   MemoryInvitationStore,
+  canonicalInviteEmail,
   type TeamRole,
   type Membership,
   type Invitation,

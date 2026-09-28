@@ -69,9 +69,9 @@ response, or `null` for a notification (which by spec gets no reply). Implemente
 |---|---|---|
 | `initialize` | yes | Negotiates the protocol version and reports capabilities + `serverInfo`. |
 | `ping` | yes | Replies `{}`. |
-| `tools/list` · `tools/call` | yes | The core surface. |
+| `tools/list` · `tools/call` | yes | The core surface. `tools/list` omits tools whose optional `visible(ctx)` hook returns `false` (or throws); `tools/call` never consults it. |
 | `notifications/initialized` | yes | Accepted, no reply. |
-| `notifications/cancelled` | yes | Aborts the in-flight call with that `requestId`. |
+| `notifications/cancelled` | yes | Aborts the in-flight call with that `requestId` — **of the same session** only (`CallContext.session`; one per stdio stream; over HTTP the `Mcp-Session-Id` session when `serveHttp({ sessions })` is on, else one per request). |
 | `resources/list` · `resources/read` | only when resources are registered | Otherwise `METHOD_NOT_FOUND`. |
 | `prompts/list` · `prompts/get` | only when prompts are registered | Otherwise `METHOD_NOT_FOUND`. |
 
@@ -93,10 +93,17 @@ Every tool invocation receives a `ToolInvokeContext`:
 
 | Field | Type | Purpose |
 |---|---|---|
-| `signal` | `AbortSignal` | Aborts when the client sends `notifications/cancelled` for this request id, or when the transport's own signal fires. Long tools should pass it down to `fetch`/child processes. |
+| `signal` | `AbortSignal` | Aborts when the client sends `notifications/cancelled` for this request id from the same session, or when the transport's own signal fires (HTTP: client disconnect). Long tools should pass it down to `fetch`/child processes. |
 | `progress` | `(update: ProgressUpdate) => void` (optional) | Streams `notifications/progress` back. Present when the transport supplies a callback, or when the client sent a `_meta.progressToken` **and** the transport can `notify`. |
-| `elicit` | `(prompt: string) => Promise<boolean>` (optional) | Asks the client a yes/no question — present only when the transport wires it up. |
+| `elicit` | `(prompt: string) => Promise<boolean>` (optional) | Asks the client a yes/no question via `elicitation/create`. `serveStdio` wires it when the client announced the `elicitation` capability in `initialize`; it resolves `true` only for an `accept` with `confirm: true`. Absent otherwise — a tool that needs consent must **fail closed** when it is missing. |
 | `headers` | `Record<string, string \| string[] \| undefined>` (optional) | Opaque per-call transport metadata (HTTP headers; the static `headers` on stdio), forwarded verbatim. |
+| `remoteAddress` | `string` (optional) | The transport peer's address (HTTP socket address). |
+
+A request method sent as a notification (no `id`) is neither executed nor answered, and a
+JSON-RPC *response* sent to the server is ignored. Batches (JSON arrays, required by
+protocol revision 2025-03-26) are accepted by every bundled transport via
+`dispatchPayload(server, payload, ctx)`. A second in-flight request reusing an id in the
+same session is refused with `-32600`.
 
 `ProgressUpdate` is `{ progress?, total?, message? }`.
 
@@ -128,6 +135,24 @@ attack surface:
   POST, so no `Origin` means a non-browser client (curl, an MCP HTTP client).
 - Both checks run **before** routing, so a rejected request never reaches a tool.
 - `allowRequest` replaces the whole guard when you need custom logic.
+- **The guard is not authentication.** `Host` is whatever the client sends — any
+  non-browser client can send `Host: 127.0.0.1`. Binding a non-loopback `host` is therefore
+  **refused** unless `authorize` (e.g. a bearer-token check → `401`) or `allowRequest` is set.
+- **Body cap** — bodies over `maxBodyBytes` (default 1 MiB) are answered `413` without
+  being buffered.
+- **Sessions (opt-in)** — `sessions: true` (or `{ ttlMs, maxSessions }`) issues an
+  `Mcp-Session-Id` on a successful `initialize` and requires it afterwards (`400`
+  without, `404` for an unknown, expired or foreign one; `DELETE` ends it). All requests
+  of a session share one cancellation scope, so a `notifications/cancelled` POSTed
+  separately cancels the call — no other session can. A session is bound to
+  `principal(req)` (default: a hash of `Authorization`), expires after 30 min idle and at
+  most 1000 live (LRU eviction). Stateless by default, so header-less clients keep
+  working; the table is exported as `McpSessions`.
+
+stdio caps concurrency too: at most `maxConcurrentRequests` (default 16) requests run at
+once per connection; one more is answered at once with `-32000`
+(`RPC_ERRORS.SERVER_BUSY`). Notifications are never counted nor refused, so a cancel
+always gets through.
 
 ## API reference
 
@@ -142,7 +167,9 @@ attack surface:
 
 Definition shapes:
 
-- `McpToolDef` — `{ name, description, inputSchema, outputSchema?, invoke(args, ctx) }`.
+- `McpToolDef` — `{ name, description, inputSchema, outputSchema?, invoke(args, ctx), visible?(ctx) }`.
+  `visible` is a side-effect-free listing filter (it receives the `CallContext`,
+  including the opaque `caller` a transport supplies) — never authorization.
   Schemas are plain JSON Schema objects; `invoke` returns an `McpToolResult`
   (`{ content, structuredContent?, isError? }`) where `content` is `{ type: 'text', text }[]`.
 - `McpResourceDef` — `{ uri, name, description?, mimeType?, read(ctx) }`; `read` returns
@@ -157,21 +184,36 @@ Definition shapes:
 | `headers` | `Record<string, string>` | `{}` | Static per-call metadata handed to every tool as `ctx.headers` — stdio has no per-request headers. |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Injectable for tests. |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Injectable for tests. |
+| `maxLineLength` | `number` | `4194304` (4 MiB) | Longest accepted line, in characters. A longer one is dropped without buffering and answered `-32600`. |
+| `maxConcurrentRequests` | `number` | `16` (`DEFAULT_MAX_CONCURRENT_REQUESTS`) | Requests in flight at once on the connection; one more gets `-32000` (`SERVER_BUSY`). Notifications are never refused. |
 
-`StdioHandle.close()` detaches the stdin listener (it does not end the process).
+Input is decoded with a `StringDecoder`, so a multibyte character split across chunks is
+reassembled. `StdioHandle.close()` detaches the stdin listener (it does not end the process)
+and resolves any pending elicitation as declined.
 
 ### `serveHttp(server, options?)` → `Promise<HttpHandle>`
 
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `port` | `number` | `0` | `0` picks an ephemeral port — read the real one from the handle. |
-| `host` | `string` | `'127.0.0.1'` | Loopback, because this is a dev-only surface. Change it only deliberately. |
+| `host` | `string` | `'127.0.0.1'` | Loopback, because this is a dev-only surface. Change it only deliberately. An IPv6 address works bare or bracketed (`'::1'` / `'[::1]'`); `handle.url` brackets it (`http://[::1]:8848/mcp`). |
 | `path` | `string` | `'/mcp'` | The JSON-RPC endpoint. Anything else answers `404`. |
 | `allowedHosts` | `string[]` | `[]` | Extra hostnames accepted in `Host`, beyond loopback. Needed when you bind a non-loopback `host` (e.g. `0.0.0.0` in CI). Compared case-insensitively, port ignored. |
 | `allowedOrigins` | `string[]` | `[]` | Extra origins accepted in `Origin`, beyond loopback. Compared case-insensitively against the full origin. |
-| `allowRequest` | `(origin, host) => boolean` | — | Full override of the guard. When set it **replaces** the loopback + `allowedHosts`/`allowedOrigins` checks — you own the security decision. |
+| `allowRequest` | `(origin, host, req) => boolean` | — | Full override of the guard. When set it **replaces** the loopback + `allowedHosts`/`allowedOrigins` checks — you own the security decision. |
+| `authorize` | `(req) => boolean \| Promise<boolean>` | — | Authenticates a request that passed the guard; `false` answers `401`. Required (or `allowRequest`) for a non-loopback `host`. |
+| `maxBodyBytes` | `number` | `1048576` (1 MiB) | Larger bodies get `413` and are not buffered. |
+| `sessions` | `boolean \| { ttlMs?, maxSessions? }` | `false` | `Mcp-Session-Id` sessions (30 min idle, 1000 live by default) — cross-request cancellation, bound to the principal. |
+| `principal` | `(req) => string \| undefined \| Promise<…>` | hash of `Authorization` | Who a session is bound to; another principal presenting the id gets `404`. |
 
-`HttpHandle` is `{ port, url, close(): Promise<void> }`.
+`HttpHandle` is `{ port, url, close(): Promise<void> }`. The promise rejects with the
+`listen()` error (`EADDRINUSE`, `EADDRNOTAVAIL`, …) when the address cannot be bound.
+
+Over HTTP, `ctx.headers` holds the request headers with their multiplicity kept: a header
+sent once is a string, a header sent more than once is a `string[]` of every value, in
+order. Node's own `req.headers` would join most repeats with `, ` and keep only the first
+`authorization`/`host`/`content-type` — a tool that treats a duplicated header as ambiguous
+(and refuses) should check `Array.isArray(ctx.headers[name])`.
 
 ### Protocol helpers
 
@@ -188,7 +230,7 @@ This package throws no error classes of its own. Failures travel as JSON-RPC err
 | Error | Code | HTTP | When |
 |---|---|---|---|
 | Parse error | `PARSE_ERROR` (`-32700`) | 400 (HTTP transport) | The body/line wasn't valid JSON. |
-| Invalid request | `INVALID_REQUEST` (`-32600`) | 200 / 403 | `jsonrpc !== '2.0'` or a non-string `method`. Also the code used for the HTTP transport's `403` host/origin rejection. |
+| Invalid request | `INVALID_REQUEST` (`-32600`) | 200 / 401 / 403 / 413 | `jsonrpc !== '2.0'` or a non-string `method`, an empty batch, a batched `initialize`, a reused in-flight id, an over-long stdio line. Also the code used for the HTTP transport's `401` (authorize), `403` (host/origin) and `413` (body cap). |
 | Method not found | `METHOD_NOT_FOUND` (`-32601`) | 200 / 404 | Unknown method — including `resources/*` or `prompts/*` when none are registered. Also the HTTP transport's `404` for a wrong path or non-`POST`. |
 | Invalid params | `INVALID_PARAMS` (`-32602`) | 200 | `tools/call` without a string `name`, an unknown tool/resource/prompt, or `resources/read`/`prompts/get` without a string `uri`/`name`. |
 | Internal error | `INTERNAL_ERROR` (`-32603`) | 200 | A handler threw. The thrown `Error.message` is passed through — do not put secrets in it. |
@@ -203,10 +245,22 @@ Symptoms:
   is only wired up when at least one exists.
 - **The HTTP transport answers `403` to everything** — a non-loopback `Host` (you bound
   `0.0.0.0`, or a proxy rewrites `Host`). Add it to `allowedHosts`.
+- **`serveHttp` rejects with "refusing to bind non-loopback host"** — give it `authorize`
+  (or `allowRequest`); the Host guard alone does not protect a network-reachable server.
+- **`serveHttp` rejects with `EADDRINUSE`** — the port is taken (another server, or a
+  previous run still alive). Pick another `port`, or `0` for an ephemeral one. Releases
+  before 0.4.0 never settled in this case.
 - **Progress updates never arrive over HTTP** — expected: that transport has no
   server→client channel. Use stdio.
 - **A cancelled call keeps running** — the tool ignored `ctx.signal`; the abort is
-  delivered, but only cooperative code stops.
+  delivered, but only cooperative code stops. Or the cancel came from another session
+  (over HTTP, turn on `serveHttp({ sessions: true })` and send the cancel with the same
+  `Mcp-Session-Id`; stateless, every request is its own session — disconnect instead).
+- **`400 Mcp-Session-Id header required` / `404 Session not found`** — with sessions on,
+  send `initialize` first and echo its header; a 404 means the session expired, was
+  evicted or ended, or another principal presented it — re-initialize.
+- **stdio answers `-32000 Too many requests in flight`** — more than
+  `maxConcurrentRequests` calls running on the connection; wait, or raise the cap.
 
 ## How it connects to other modules
 

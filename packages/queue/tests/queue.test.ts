@@ -249,6 +249,22 @@ describe('sync driver bounds and default-selection warning (Q-6)', () => {
     expect(driver.executed[driver.executed.length - 1]).toMatchObject({ jobName: 'job' })
   })
 
+  it('warns about the sync default when NODE_ENV is unset — unset counts as production (FA-013)', async () => {
+    const prev = process.env.NODE_ENV
+    delete process.env.NODE_ENV
+    const warnings: string[] = []
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation((m: unknown) => void warnings.push(String(m)))
+    try {
+      const app = await createApp({ plugins: [queuePlugin({})] }).boot()
+      app.container.get(QUEUE)
+      expect(warnings.join('\n')).toMatch(/sync .*driver|inline/i)
+      await app.shutdown()
+    } finally {
+      warnSpy.mockRestore()
+      process.env.NODE_ENV = prev
+    }
+  })
+
   it('warns when the sync driver is silently selected as the default in production', async () => {
     const prev = process.env.NODE_ENV
     process.env.NODE_ENV = 'production'

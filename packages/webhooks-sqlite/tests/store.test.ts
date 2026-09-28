@@ -66,6 +66,39 @@ describe('SqliteWebhookStore', () => {
   })
 })
 
+// FA-070 / D8: the manager's "is this id someone else's?" check runs before
+// the write, so two tenants registering the same id at once both pass it — and
+// INSERT OR REPLACE then let the second one overwrite the first's endpoint.
+// The store itself must refuse an id held by another scope.
+describe('add() never writes over another scope (FA-070/D8)', () => {
+  it('an id held by another tenant is refused, and that endpoint is untouched', async () => {
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'x', url: 'https://globex.test', events: ['*'], tenantId: 'globex', secret: 'g' })
+    await expect(store.add({ id: 'x', url: 'https://evil.test', events: ['*'], tenantId: 'acme' })).rejects.toThrow(
+      /already in use/,
+    )
+    expect(await store.list()).toEqual([
+      { id: 'x', url: 'https://globex.test', events: ['*'], tenantId: 'globex', secret: 'g' },
+    ])
+  })
+
+  it('a global id cannot be taken by a tenant, nor a tenant id by a global endpoint', async () => {
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'g', url: 'global', events: ['*'] })
+    await store.add({ id: 't', url: 'tenant', events: ['*'], tenantId: 'acme' })
+    await expect(store.add({ id: 'g', url: 'evil', events: ['*'], tenantId: 'acme' })).rejects.toThrow(/already in use/)
+    await expect(store.add({ id: 't', url: 'evil', events: ['*'] })).rejects.toThrow(/already in use/)
+    expect((await store.list()).map((e) => e.url)).toEqual(['global', 'tenant'])
+  })
+
+  it('the same scope re-adding its id still replaces it', async () => {
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'x', url: 'old', events: ['*'], tenantId: 'acme', secret: 's' })
+    await store.add({ id: 'x', url: 'new', events: ['a.*'], tenantId: 'acme' })
+    expect(await store.list()).toEqual([{ id: 'x', url: 'new', events: ['a.*'], tenantId: 'acme' }])
+  })
+})
+
 describe('sqliteWebhookStore + durability', () => {
   const dir = mkdtempSync(join(tmpdir(), 'basalt-webhooks-'))
   const file = join(dir, 'webhooks.db')
@@ -87,5 +120,18 @@ describe('sqliteWebhookStore + durability', () => {
     expect(w.db).toBe(db)
     await w.store.add({ id: 'a', url: 'u', events: ['*'] })
     expect((await new SqliteWebhookStore(db).list()).length).toBe(1)
+  })
+})
+
+describe('WebhookEndpointIdInUseError is the @basaltkit/webhooks class', () => {
+  it('re-exported, and what add() throws is an instance of the core class', async () => {
+    const core = await import('@basaltkit/webhooks')
+    const { WebhookEndpointIdInUseError } = await import('../src/index.js')
+    expect(WebhookEndpointIdInUseError).toBe(core.WebhookEndpointIdInUseError)
+    const store = new SqliteWebhookStore(openWebhooksDatabase())
+    await store.add({ id: 'x', url: 'https://globex.test', events: ['*'], tenantId: 'globex' })
+    const err = await store.add({ id: 'x', url: 'https://evil.test', events: ['*'], tenantId: 'acme' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(core.WebhookEndpointIdInUseError)
+    expect(err).toMatchObject({ code: 'WEBHOOK_ENDPOINT_ID_IN_USE', status: 409, name: 'WebhookEndpointIdInUseError' })
   })
 })

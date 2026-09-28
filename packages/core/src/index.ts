@@ -63,3 +63,4 @@ export {
   type TracerOptions,
   type OtlpHttpExporterOptions,
 } from './tracing.js'
+export { isProductionEnvironment } from './environment.js'

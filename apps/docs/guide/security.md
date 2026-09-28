@@ -62,7 +62,9 @@ The default store is in-memory (`MemoryRateLimitStore`). Its memory is bounded:
 expired buckets are swept as traffic arrives, and at most `maxEntries` (default
 100 000) buckets are kept — past that the oldest windows are evicted first, so a
 flood of distinct client addresses cannot grow the process without limit
-(`new MemoryRateLimitStore({ maxEntries })` to size it). For multiple instances
+(`new MemoryRateLimitStore({ maxEntries })` to size it). A bucket that has used
+up its limit is never evicted: a flood of new addresses cannot free a limited
+client early — it is held until its window ends. For multiple instances
 implement the `RateLimitStore` interface over Redis — the same driver pattern
 used by `@basaltkit/cache`.
 
@@ -107,8 +109,10 @@ route({
 The key is resolved in the route guard, after the enrichers ran, so auth and
 tenancy have already set `ctx().user` / `ctx().tenant`. When the id is missing
 (an anonymous caller, no tenant resolved, or the function returns nothing), the
-bucket **falls back to the client IP**. It never falls back to one shared bucket,
-and anonymous buckets never mix with signed-in ones. Keyed buckets use the same
+bucket **falls back to the client IP**, and anonymous buckets never mix with
+signed-in ones. When the adapter could not resolve an IP either (`request.ip`
+undefined — Hono on a runtime without `getClientIp`), every such request shares
+one bucket: fail closed, rather than a bucket per spoofable header. Keyed buckets use the same
 store (`MemoryRateLimitStore`, or Redis across instances). A keyed route still
 counts against the global per-IP limit on every adapter, because the pre-routing
 hook cannot know the user yet.
@@ -116,7 +120,10 @@ hook cannot know the user yet.
 ### CORS
 
 `origin` accepts `true` (reflect), a string, an allow-list array, or a
-predicate. Preflight `OPTIONS` requests are answered automatically.
+predicate. Preflight `OPTIONS` requests are answered automatically (`204`). They
+count against the global rate limit like any other request, and the
+`Access-Control-Allow-Methods` / `-Allow-Headers` / `-Max-Age` headers go only to
+an allowed origin — a disallowed one gets a bare `204` that discloses nothing.
 
 ::: warning Credentials require an explicit allow-list
 Reflecting an arbitrary `Origin` back **with** `credentials: true` would hand
@@ -187,16 +194,19 @@ limits, and in production back the WebAuthn `PasskeyStore` / `WebAuthnChallengeS
 ### Custom-domain re-verification
 
 A verified custom domain that later expires or repoints its DNS is a takeover risk.
-Re-verify on a schedule with [`@basaltkit/scheduler`](/guide/scheduler) — `verify(tenantId, domain, { force })`
-re-checks the TXT record and **revokes** the domain if it no longer matches:
+Re-verify on a schedule with [`@basaltkit/scheduler`](/guide/scheduler) — `reverifyAll()`
+re-checks the TXT record of every verified domain and **revokes** those whose
+record is definitively gone (a DNS timeout leaves them verified):
 
 ```ts
 schedule.call('reverify-domains', async () => {
-  for (const { tenantId, domain } of await listVerifiedDomains()) {
-    await customDomains.verify(tenantId, domain, { force: true })
-  }
+  const { revoked } = await customDomains.reverifyAll()
+  if (revoked.length) log.warn({ revoked }, 'custom domains un-verified')
 }).daily().at('04:00')
 ```
+
+A new owner of a lapsed domain can also take a stale verified claim over by
+publishing its `challenge()` record — see [Tenancy](/guide/tenancy#custom-domains-verified).
 
 ## Fail-closed secrets — `secret()`
 
@@ -274,6 +284,8 @@ idempotencyPlugin() // guards POST by default
 ```
 
 - Repeat with the same key → the cached response, with `Idempotent-Replayed: true`.
+  This holds for every handler shape — one that returns its payload is replayed
+  exactly like one that calls `reply.send()`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
 - `5xx` responses are **not** cached, so genuine failures stay retryable.
 - Keys are scoped by **caller credentials + tenant + method + route**, hashed
@@ -306,21 +318,27 @@ authPlugin({ users, secret: env.APP_SECRET, tokenVersions: new PrismaTokenVersio
 
 Off by default (verification then costs one store read per request). The signing
 secret itself is guarded too: `Auth` refuses to start with an empty secret, and
-in production rejects one shorter than 32 chars (a short HS256 key is
+in production (anything but an explicit `NODE_ENV=development`/`test`, unset
+included) rejects one shorter than 32 chars (a short HS256 key is
 offline-forgeable) — use `secret({ minLength: 32 })`.
 
 ## Encrypting TOTP secrets at rest
 
 TOTP is replay-protected out of the box (a code's time-step is recorded, so an
 intercepted code is single-use). To also survive a database leak, encrypt the
-stored secrets with an app-held key — they're kept as AES-256-GCM envelopes and
+stored secrets with an app-held key (at least 32 bytes) — they're kept as
+AES-256-GCM envelopes (HKDF-derived key with a key id, bound to the user) and
 decrypted only when verifying a code:
 
 ```ts
 authPlugin({ users, secret: env.APP_SECRET, mfaEncryptionKey: env.MFA_KEY })
 ```
 
-Existing plaintext enrollments keep working and are encrypted on their next write.
+A stored value that is not such an envelope is refused, so a write to the table
+cannot downgrade a secret to a plaintext one the writer knows. Key rotation and
+migrating plaintext or `v1:` rows (an explicit `legacy` opt-in plus
+`auth.reencryptMfaSecret(userId)`) are covered in
+[Encrypting TOTP secrets at rest](/guide/auth#mfa-encryption).
 
 ## Shared responsibility — hardening your integration
 
@@ -360,6 +378,33 @@ If protection genuinely happens at an outer edge/gateway, opt out explicitly
 with the adapter option `allowUnguardedMeta: true` (or `['auth', …]` for
 specific keys). A custom guard plugin that enforces one of these keys should
 claim it: `ensureMetadata(container).add('http:guarded-meta', 'auth')`.
+
+Claiming a key proves *someone* enforces it; it says nothing about the
+**value**. For that, a plugin registers a route-meta validator in
+`http:meta-validators` (`META_VALIDATORS_BUCKET`): every adapter runs them over
+its full route list at boot, right after the guarded-meta check, and refuses to
+start with `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`) listing every
+`route: problem`. `teamsPlugin` uses it so `meta.teamRole: 'Admin'` (a typo)
+fails the boot instead of answering 500 on the first request.
+`allowUnguardedMeta` never waives validators.
+
+```ts
+const validator: RouteMetaValidator = ({ route, container }) =>
+  typeof route.meta?.['shape'] === 'string' || route.meta?.['shape'] === undefined
+    ? undefined
+    : `meta.shape must be a string` // or string[] for several problems; throwing counts too
+ensureMetadata(container).add(META_VALIDATORS_BUCKET, validator)
+```
+
+Driving `runRoute()` without an adapter? `assertRoutesGuarded(routes,
+app.container)` runs both checks; `assertRouteMetaValid(routes, app.container)`
+runs the validators alone.
+
+A guard may also publish a **pure visibility check** in `http:route-visibility`
+(`RouteVisibilityCheck`, evaluated by `isRouteVisible`) — "could this caller
+possibly pass?" with no side effects (no rate limit, no audit, no hooks), used
+by listing surfaces such as MCP's `tools/list`. Visibility is never
+authorization: the guard still runs on every call.
 
 ### 2. Never trust a client-supplied tenant — verify membership
 
@@ -487,6 +532,12 @@ await tenantTransaction(db, async (tx) => {
   every policy; table owners skip them unless the table has `FORCE ROW LEVEL
   SECURITY` (`rlsPolicySql` adds it by default). Run the app as a plain login
   role and keep migrations/admin work on a separate one.
+- **No tenant means no rows — even on a reused connection.** The policy
+  compares against `NULLIF(current_setting('app.tenant_id', true), '')`: once a
+  pooled session has set the tenant in any transaction, Postgres returns `''`
+  (not `NULL`) for it afterwards, and a bare comparison would match rows whose
+  tenant column is `''`. Policies generated before `@basaltkit/prisma` 3.0 lack
+  the `NULLIF` — re-run `rlsPolicySql` (idempotent) in a new migration.
 - **Costs.** Each tenant-scoped operation becomes a short batch transaction
   (`BEGIN`, `set_config`, the query, `COMMIT`) — a few extra statements on the
   same connection (≈ +2 ms p50 in the app team's measurements). The setting is
@@ -546,7 +597,7 @@ new PostgresSearchDriver({ client: pool, searchFunction: 'basalt_search_scoped' 
 ```text
 -- as the application role, through the function
 ->  Bitmap Heap Scan on basalt_search t
-      Filter: ((idx = 'notes') AND (tenant_id = current_setting('app.tenant_id', true)))
+      Filter: ((idx = 'notes') AND (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')))
       ->  Bitmap Index Scan on basalt_search_tsv_idx
 Execution Time: 1.850 ms
 ```

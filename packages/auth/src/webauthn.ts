@@ -30,8 +30,33 @@ export interface PasskeyStore {
   add(credential: PasskeyCredential): Promise<void>
   get(credentialId: string): Promise<PasskeyCredential | null>
   forUser(userId: string): Promise<PasskeyCredential[]>
-  updateCounter(credentialId: string, counter: number, lastUsedAt: number): Promise<void>
+  /**
+   * Compare-and-set of the signature counter: stores `next` (and `lastUsedAt`)
+   * only if the stored counter still equals `expected`, and returns whether
+   * THIS call wrote it. Clone detection depends on it — with a read-then-write,
+   * a cloned authenticator used concurrently with the genuine one presents the
+   * same next counter twice and both assertions pass. Implement it as one
+   * conditional UPDATE (`… WHERE id = ? AND counter = ?`).
+   */
+  compareAndSetCounter(credentialId: string, expected: number, next: number, lastUsedAt: number): Promise<boolean>
+  /**
+   * @deprecated Unconditional write, no longer called by {@link WebAuthnService}
+   * (it uses {@link PasskeyStore.compareAndSetCounter}).
+   */
+  updateCounter?(credentialId: string, counter: number, lastUsedAt: number): Promise<void>
   remove(credentialId: string): Promise<void>
+}
+
+/** A passkey store without {@link PasskeyStore.compareAndSetCounter} (written against the pre-CAS contract). */
+export class PasskeyStoreOutdatedError extends BasaltError {
+  readonly status = 500
+  readonly expose = false
+  constructor() {
+    super(
+      'PASSKEY_STORE_OUTDATED',
+      'The PasskeyStore has no compareAndSetCounter(): clone detection cannot be enforced atomically. Implement it (one conditional UPDATE).',
+    )
+  }
 }
 
 export class MemoryPasskeyStore implements PasskeyStore {
@@ -46,6 +71,15 @@ export class MemoryPasskeyStore implements PasskeyStore {
   async forUser(userId: string): Promise<PasskeyCredential[]> {
     return [...this.byId.values()].filter((c) => c.userId === userId).map((c) => ({ ...c }))
   }
+  // Synchronous compare-and-set: no await between the read and the write.
+  async compareAndSetCounter(credentialId: string, expected: number, next: number, lastUsedAt: number): Promise<boolean> {
+    const found = this.byId.get(credentialId)
+    if (!found || found.counter !== expected) return false
+    found.counter = next
+    found.lastUsedAt = lastUsedAt
+    return true
+  }
+  /** @deprecated See {@link PasskeyStore.updateCounter}. */
   async updateCounter(credentialId: string, counter: number, lastUsedAt: number): Promise<void> {
     const found = this.byId.get(credentialId)
     if (found) {
@@ -63,7 +97,11 @@ export class MemoryPasskeyStore implements PasskeyStore {
 /** A stored challenge plus the subject (user id) it was issued for, if any. */
 export interface StoredChallenge {
   challenge: string
-  /** The user the registration challenge is bound to — enforced at finish. */
+  /**
+   * The user the challenge is bound to — enforced at finish: a registration
+   * binds the new passkey to this user, an authentication started for a user
+   * only accepts that user's passkeys.
+   */
   userId?: string
 }
 
@@ -82,12 +120,17 @@ export class MemoryWebAuthnChallengeStore implements WebAuthnChallengeStore {
     this.maxEntries = options.maxEntries ?? 10_000
   }
   async save(key: string, value: StoredChallenge, expiresAt: number): Promise<void> {
-    // Purge expired entries so unconsumed challenges cannot accumulate (DoS),
-    // and cap total size with FIFO eviction as a hard backstop.
+    // Purge expired entries so unconsumed challenges cannot accumulate (DoS).
+    // The map is kept in insertion order and every entry is (re)appended on
+    // save, so with a constant TTL the oldest entries expire first: stop at the
+    // first live one instead of scanning the whole store on every save.
     const now = this.now()
     for (const [k, entry] of this.entries) {
-      if (entry.expiresAt <= now) this.entries.delete(k)
+      if (entry.expiresAt > now) break
+      this.entries.delete(k)
     }
+    this.entries.delete(key)
+    // Cap total size with FIFO eviction as a hard backstop.
     while (this.entries.size >= this.maxEntries) {
       const oldest = this.entries.keys().next().value
       if (oldest === undefined) break
@@ -235,7 +278,12 @@ export interface WebAuthnConfig {
   origin: string | string[]
   /** Challenge TTL in ms. Default 5 minutes. */
   challengeTtlMs?: number
-  /** User-verification requirement. Default 'preferred'. */
+  /**
+   * User-verification requirement. Default `'preferred'` (the WebAuthn default):
+   * an authenticator without a PIN/biometric can still sign, so the assertion
+   * proves possession only. Set `'required'` when a passkey is the ONLY factor
+   * (passwordless login) and you need two factors in one gesture.
+   */
   userVerification?: 'required' | 'preferred' | 'discouraged'
   /** Ceremony timeout advertised to the browser, ms. Default 60s. */
   timeoutMs?: number
@@ -263,6 +311,9 @@ export class WebAuthnService {
 
   constructor(options: WebAuthnServiceOptions) {
     this.config = options.config
+    // Fail at wiring time, not at the first login: without the compare-and-set
+    // a cloned authenticator could race the genuine one past clone detection.
+    if (typeof options.credentials?.compareAndSetCounter !== 'function') throw new PasskeyStoreOutdatedError()
     this.credentials = options.credentials
     this.challenges = options.challenges
     this.verifier = options.verifier
@@ -361,9 +412,14 @@ export class WebAuthnService {
     return credential
   }
 
-  /** Authentication options; `userId` narrows allowCredentials, omit it for discoverable login. */
+  /**
+   * Authentication options; omit `userId` for discoverable login. With a
+   * `userId` (step-up, re-authentication) the challenge is bound to that user:
+   * {@link finishAuthentication} then refuses a passkey that belongs to anyone
+   * else, and `allowCredentials` lists only that user's passkeys.
+   */
   async startAuthentication(sessionKey: string, userId?: string): Promise<AuthenticationOptions> {
-    const challenge = await this.issueChallenge('auth', sessionKey)
+    const challenge = await this.issueChallenge('auth', sessionKey, userId)
     const creds = userId ? await this.credentials.forUser(userId) : []
     return {
       challenge,
@@ -380,8 +436,9 @@ export class WebAuthnService {
 
   /**
    * Verify an authentication response. Looks the credential up by its id, checks
-   * the signature counter increased (clone detection), persists the new counter,
-   * and returns whose passkey authenticated. Throws on any failure.
+   * the signature counter increased (clone detection), persists the new counter
+   * with a compare-and-set (so two concurrent assertions cannot both pass), and
+   * returns whose passkey authenticated. Throws on any failure.
    */
   async finishAuthentication(
     sessionKey: string,
@@ -400,6 +457,11 @@ export class WebAuthnService {
 
     const credential = await this.credentials.get(credentialId)
     if (!credential) throw new PasskeyNotFoundError()
+    // A challenge issued for a specific user (step-up) is only satisfied by
+    // that user's passkey — never by another account's valid assertion.
+    if (stored.userId !== undefined && stored.userId !== credential.userId) {
+      throw new WebAuthnSubjectMismatchError()
+    }
 
     const result = await this.verifier.verifyAuthentication({
       response,
@@ -410,13 +472,22 @@ export class WebAuthnService {
       credential: { id: credential.id, publicKey: credential.publicKey, counter: credential.counter },
     })
     if (!result.verified) throw new WebAuthnVerificationError()
+    // The counter is a 32-bit unsigned integer. Anything else (NaN, negative,
+    // fractional) would slip past the comparison below and, once stored,
+    // disable clone detection for the credential for good.
+    if (!Number.isSafeInteger(result.newCounter) || result.newCounter < 0) throw new WebAuthnVerificationError()
 
     // Clone detection: a real authenticator's counter strictly increases. Some
     // report 0 forever — only enforce when the stored counter is non-zero.
     if (credential.counter > 0 && result.newCounter <= credential.counter) {
       throw new PasskeyClonedError()
     }
-    await this.credentials.updateCounter(credential.id, result.newCounter, this.now())
+    // Atomic: the counter must still be the one this assertion was checked
+    // against. A concurrent assertion (a clone used at the same time) that
+    // already moved it makes this one fail as a clone.
+    if (!(await this.credentials.compareAndSetCounter(credential.id, credential.counter, result.newCounter, this.now()))) {
+      throw new PasskeyClonedError()
+    }
     return { userId: credential.userId, credentialId: credential.id }
   }
 
@@ -424,8 +495,18 @@ export class WebAuthnService {
   async list(userId: string): Promise<PasskeyCredential[]> {
     return this.credentials.forUser(userId)
   }
-  /** Remove a passkey (revoke a device). */
-  async remove(credentialId: string): Promise<void> {
+  /**
+   * Remove one of `userId`'s passkeys (revoke a device). The credential must
+   * belong to `userId`: a credential id is not an authorization, so an id that
+   * is unknown or owned by another user throws {@link PasskeyNotFoundError}
+   * (the same error for both, so the call cannot probe other users' devices).
+   */
+  async remove(userId: string, credentialId: string): Promise<void> {
+    if (typeof userId !== 'string' || userId.length === 0 || typeof credentialId !== 'string') {
+      throw new PasskeyNotFoundError()
+    }
+    const credential = await this.credentials.get(credentialId)
+    if (!credential || credential.userId !== userId) throw new PasskeyNotFoundError()
     await this.credentials.remove(credentialId)
   }
 }

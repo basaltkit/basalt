@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID } from 'node:crypto'
 import type { HookBus } from '@basaltkit/core'
 import { tryCtx } from '@basaltkit/core'
 import {
@@ -8,11 +8,13 @@ import {
 } from './authorization.js'
 import { DriveCredentials } from './credentials.js'
 import {
+  DriveAccessDeniedError,
   DriveConnectionNotFoundError,
   DriveCredentialsInvalidError,
   DriveProviderUnknownError,
   DriveTenantMismatchError,
   DriveTenantRequiredError,
+  DriveTenantReservedError,
   DriveUnsupportedError,
 } from './errors.js'
 import { createDriveFetch, type GuardedFetch } from './fetch.js'
@@ -28,7 +30,7 @@ import type {
   DriveUploadInput,
 } from './provider.js'
 import { withRetry, type DriveRetryPolicy } from './retry.js'
-import { DriveSecretBox, randomToken, type DriveEncryptionKey } from './secret-box.js'
+import { DriveSecretBox, randomToken, safeEqual, type DriveEncryptionKey } from './secret-box.js'
 import {
   MemoryDriveConnectionStore,
   MemoryDriveImportLedger,
@@ -39,8 +41,17 @@ import {
   type DriveImportLedger,
 } from './store.js'
 
-/** Single-tenant apps still need a key for the composite store keys. */
-export const SINGLE_TENANT_SCOPE = 'default'
+/**
+ * Single-tenant apps still need a key for the composite store keys.
+ *
+ * A sentinel no tenant id can equal: `@` is outside `@basaltkit/tenancy`'s
+ * grammar, and a context or explicit tenant carrying it is refused with
+ * {@link DriveTenantReservedError}. It used to be `'default'` — a perfectly
+ * valid tenant id, so a tenant named `default` listed, used and disconnected a
+ * single-tenant app's connections. Rows written under `'default'` must be
+ * re-keyed once (see the changelog for the migration).
+ */
+export const SINGLE_TENANT_SCOPE = '@single'
 
 /**
  * What happened when `disconnect` tried to revoke the grant at the provider.
@@ -102,8 +113,18 @@ export interface DrivesOptions {
   hooks?: HookBus
   /** Default byte cap for a single downloaded file. Default 100 MiB (see `DEFAULT_MAX_BYTES`). */
   maxBytes?: number
-  /** Whole-exchange timeout for one provider call. Default 30 s. */
+  /**
+   * Socket inactivity timeout for one provider call, which also bounds each
+   * hop's wait for response headers. Default 30 s. It does **not** bound a
+   * body that keeps trickling — see {@link deadlineMs}.
+   */
   timeoutMs?: number
+  /**
+   * Wall-clock bound on one whole provider exchange, body included. Off by
+   * default, because a large download on a slow link is legitimate; set it
+   * when a worker must never be pinned by a slow-but-steady response.
+   */
+  deadlineMs?: number
   /** Retry policy for transient provider failures. */
   retry?: DriveRetryPolicy
   /** Escape hatch for a self-hosted provider on a private network. Off by default. */
@@ -157,6 +178,8 @@ export class Drives {
   private readonly hooks: HookBus | undefined
   private readonly now: () => number
   private readonly retry: DriveRetryPolicy
+  /** Keys {@link listItems} cursors. Derived from `options.secret`, domain-separated from the OAuth state. */
+  private readonly cursorKey: Buffer
 
   constructor(
     private readonly options: DrivesOptions,
@@ -175,6 +198,7 @@ export class Drives {
     this.now = options.now ?? Date.now
     this.retry = options.retry ?? {}
     this.flow = new DriveAuthorizationFlow(options.secret, { now: this.now })
+    this.cursorKey = createHmac('sha256', options.secret).update(LIST_CURSOR_LABEL).digest()
     this.credentials = new DriveCredentials({
       store: this.store,
       box: this.box,
@@ -219,9 +243,9 @@ export class Drives {
     const ambient = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
     if (ambient) {
       if (explicit !== undefined && explicit !== ambient) throw new DriveTenantMismatchError()
-      return ambient
+      return assertNotReserved(ambient)
     }
-    if (explicit) return explicit
+    if (explicit) return assertNotReserved(explicit)
     if (this.tenancyActive()) throw new DriveTenantRequiredError(operation)
     return SINGLE_TENANT_SCOPE
   }
@@ -232,6 +256,7 @@ export class Drives {
       provider: provider.name,
       ...(this.options.maxBytes !== undefined ? { maxBytes: this.options.maxBytes } : {}),
       ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
+      ...(this.options.deadlineMs !== undefined ? { deadlineMs: this.options.deadlineMs } : {}),
       ...(this.options.allowPrivateHosts ? { allowPrivateHosts: true } : {}),
       ...(this.options.lookup ? { lookup: this.options.lookup } : {}),
       ...(this.options.transport ? { transport: this.options.transport } : {}),
@@ -311,7 +336,9 @@ export class Drives {
       provider: provider.name,
       label: input.label,
       tokens,
-      tenantId,
+      // The single-tenant key is not a tenant id and `connect` refuses it as
+      // one; leaving it out resolves to the same key.
+      ...(tenantId !== SINGLE_TENANT_SCOPE ? { tenantId } : {}),
       ...(input.rootId !== undefined ? { rootId: input.rootId } : {}),
     })
   }
@@ -551,10 +578,67 @@ export class Drives {
     connectionId: string,
     options: DriveListOptions & { tenantId?: string; signal?: AbortSignal } = {},
   ): Promise<DrivePage<DriveItem>> {
-    const { tenantId, signal, ...listOptions } = options
-    return this.withConnection(connectionId, tenantId, 'listItems', (connection) =>
-      this.run(connection, (session, provider) => provider.list(session, listOptions), signal ? { signal } : {}),
-    )
+    const { tenantId, signal, cursor, ...listOptions } = options
+    return this.withConnection(connectionId, tenantId, 'listItems', async (connection) => {
+      // The cursor comes back from a caller, and an adapter's own cursor is
+      // not something a caller may author: Graph's is a whole URL the adapter
+      // then GETs with the connection's bearer token (FA-072), Google's walk
+      // cursor names folders to descend into (FA-073). So the page cursor
+      // handed out here is the adapter's, wrapped in a MAC bound to this
+      // tenant and connection — and only a cursor that verifies is
+      // unwrapped and passed on. Nothing about an adapter's format has to be
+      // trusted for that to hold.
+      const provider = this.provider(connection.provider)
+      const inner = cursor !== undefined ? this.openListCursor(cursor, connection, provider.name) : undefined
+      const page = await this.run(
+        connection,
+        (session, adapter) => adapter.list(session, { ...listOptions, ...(inner !== undefined ? { cursor: inner } : {}) }),
+        signal ? { signal } : {},
+      )
+      return {
+        items: page.items,
+        ...(page.cursor !== undefined ? { cursor: this.sealListCursor(page.cursor, connection) } : {}),
+      }
+    })
+  }
+
+  /** The MAC over everything a list cursor is only valid for. */
+  private listCursorMac(inner: string, connection: DriveConnection): string {
+    // Not the folder: every adapter's cursor already names the listing it
+    // continues, and the MAC is what stops that from being rewritten. Binding
+    // the folder too would refuse the common `listItems(id, { cursor })`
+    // continuation that omits it.
+    return createHmac('sha256', this.cursorKey)
+      .update(JSON.stringify([connection.tenantId, connection.id, connection.provider, inner]))
+      .digest('base64url')
+  }
+
+  private sealListCursor(inner: string, connection: DriveConnection): string {
+    return `${LIST_CURSOR_VERSION}.${Buffer.from(inner, 'utf8').toString('base64url')}.${this.listCursorMac(inner, connection)}`
+  }
+
+  /**
+   * Unwraps a cursor {@link listItems} issued, or refuses it.
+   *
+   * One refusal for every failure — malformed, tampered, issued for another
+   * connection or tenant, or signed under a rotated app secret — and
+   * it never quotes the cursor, which is caller-chosen text. A caller who holds
+   * a stale cursor simply lists from the start again.
+   */
+  private openListCursor(
+    cursor: string,
+    connection: DriveConnection,
+    provider: string,
+  ): string {
+    const refuse = (): DriveAccessDeniedError =>
+      new DriveAccessDeniedError(provider, 'the list cursor was not issued for this connection')
+    const parts = cursor.split('.')
+    if (parts.length !== 3 || parts[0] !== LIST_CURSOR_VERSION || !/^[A-Za-z0-9_-]*$/.test(parts[1] as string)) {
+      throw refuse()
+    }
+    const inner = Buffer.from(parts[1] as string, 'base64url').toString('utf8')
+    if (!safeEqual(parts[2] as string, this.listCursorMac(inner, connection))) throw refuse()
+    return inner
   }
 
   /** Metadata for one item. */
@@ -620,8 +704,18 @@ export class Drives {
   }
 }
 
+/** Envelope version of a {@link Drives.listItems} cursor. */
+const LIST_CURSOR_VERSION = 'bkl1'
+/** HKDF-style label: the app secret also signs OAuth state, and the two must never be interchangeable. */
+const LIST_CURSOR_LABEL = 'basalt:drives:list-cursor:v1'
+
 /** Strips credentials. The only conversion from a record to something returnable. */
 export function toView(connection: DriveConnection): DriveConnectionView {
   const { secret: _secret, watch, ...rest } = connection
   return { ...rest, watching: watch !== undefined }
+}
+
+function assertNotReserved(tenantId: string): string {
+  if (tenantId === SINGLE_TENANT_SCOPE) throw new DriveTenantReservedError(SINGLE_TENANT_SCOPE)
+  return tenantId
 }

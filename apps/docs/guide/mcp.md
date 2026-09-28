@@ -67,7 +67,21 @@ await createApp({
 - **Input schema** is generated from the route's `params` + `query` + `body` Zod
   schemas, merged into one flat object.
 - **Same pipeline** — a `tools/call` runs enrichers, guards and validation before
-  the handler; request headers (tenant, authorization) propagate into the call.
+  the handler. The tool request inherits an **allowlist** of the caller's
+  headers (`authorization`, `cookie`, `x-api-key`, `x-tenant-id`, `host`,
+  `accept-language`, `user-agent` — extend it with `mcpPlugin({ forwardHeaders })`),
+  the client **ip** (`request.ip`), `request.routePattern` (the tool route's
+  template) and the concrete `request.url` (`/projects/p%201?q=x`, not
+  `/projects/:id`). Everything else — `x-request-id`, `if-none-match`,
+  forwarding and hop-by-hop headers — is dropped.
+- **Status is honoured** — a handler that replies `reply.code(403)` (any status
+  ≥ 400) produces a tool result with `isError: true`.
+- **Cancellation** — `notifications/cancelled` answers the call as cancelled at
+  once; a long handler can stop early by checking `toolSignal(request)?.aborted`.
+  Over HTTP the cancel may arrive in a later `POST` of the same
+  [session](#sessions-and-cancellation).
+- **Filtered listing** — `tools/list` over `/mcp` hides the tools the caller
+  statically cannot use; see [What `tools/list` shows](#what-tools-list-shows).
 
 ::: warning Guards apply — and must be enforceable
 A route with `meta.auth` (or `meta.can` / `meta.teamRole`) keeps that guard when
@@ -175,6 +189,10 @@ plus the explicit `env` reaches it, so `APP_SECRET`, `DATABASE_URL` and provider
 keys stay in your process. Pass `inheritEnv: ['GITHUB_TOKEN']` to forward named
 variables, or `inheritEnv: true` to deliberately forward everything.
 
+If the command can't be spawned (`ENOENT`) or the server exits, calls in flight
+reject instead of crashing your process, and the next call spawns it afresh. A
+request the server never answers rejects after `timeoutMs` (default 60 000 ms).
+
 ### Register servers with a plugin
 
 `mcpClientPlugin` wires named external servers into the container — it connects
@@ -214,14 +232,76 @@ Connections are lazy-safe: `callTool` / `listTools` connect on demand, so
 The HTTP transport is a neutral `route()`, verified on all three adapters — the
 same tool surface regardless of the server underneath.
 
+It is hardened for browsers: a request whose `Origin` is neither same-origin
+nor listed in `mcpRoutes({ allowedOrigins })` gets **403**, and the body must be
+sent as `application/json` (**415** otherwise), so a cross-site page can never
+drive a tool with a visitor's cookies. Non-browser clients send no `Origin` and
+are unaffected. By default `initialize` and `tools/list` are anonymous (tool
+*calls* still run each route's guards); `mcpRoutes({ auth: true })` requires an
+authenticated caller for the endpoint itself. JSON-RPC batches are accepted.
+
+### Sessions and cancellation {#sessions-and-cancellation}
+
+`/mcp` speaks Streamable-HTTP sessions by default. A successful `initialize`
+answers with an `Mcp-Session-Id` header; every later `POST` must carry it:
+
+| Request | Answer |
+| --- | --- |
+| `initialize` | `200` + a new `Mcp-Session-Id` (a failed `initialize` opens none) |
+| any other message without the header | **400** — send `initialize` first |
+| an unknown, expired or foreign session id | **404** — the client re-initializes (spec behaviour) |
+| `DELETE /mcp` with the header | `204`, the session ends (404 if it was not live) |
+
+All requests of a session share one cancellation scope, so a
+`notifications/cancelled` `POST`ed while the call runs cancels it — and a
+different session, even one that guesses the request id, never can. A session
+is **bound to the caller that opened it**: the authenticated `ctx().user` (in
+its tenant) or, for an anonymous caller, a keyed fingerprint of its
+`Authorization` header (an API key the auth plugins accepted already resolved a
+user). The same id presented by anyone else is a 404. Sessions
+expire after 30 minutes idle, and at most 1000 live at once (the least recently
+used is evicted — its client just re-initializes):
+`mcpRoutes({ sessions: { ttlMs, maxSessions } })`.
+
+`HttpClientTransport` (and so `McpClient`/`mcpClientPlugin`) handles the header
+for you and ends the session on `close()`.
+
+::: warning Sessions live in process memory
+Behind several replicas, route a session to one replica (sticky sessions on
+`Mcp-Session-Id`), or run stateless with `mcpRoutes({ sessions: false })` —
+each `POST` is then its own session and a cancel only reaches calls of the same
+request. A browser client on another origin must be allowed to read the header:
+add `Mcp-Session-Id` to your CORS `exposeHeaders`.
+:::
+
+### What `tools/list` shows {#what-tools-list-shows}
+
+With `mcpRoutes({ listVisibleOnly })` (default `true`), `tools/list` leaves out
+the tools the caller **statically** cannot use. Only side-effect-free checks
+decide — the route guards never run for a listing, so listing consumes no rate
+limit and writes no audit or denial record:
+
+| Hidden when | Decided by |
+| --- | --- |
+| the route has `meta.auth` and the caller has no `ctx().user` | built in, when a guard claims `auth` (e.g. `authPlugin`); under an edge-auth waiver nothing is hidden |
+| the route has `meta.teamRole` and the caller does not hold that role (or a higher one) in the current tenant | `teamsPlugin`'s visibility check (one membership read) |
+| the route has `meta.can` and the caller lacks one of its permissions (RBAC, current scope; `superAdmin` short-circuits) | `permissionsPlugin`'s visibility check (grant reads — no `permission:denied` record) |
+| any key whose plugin registers a check in `http:route-visibility` | that plugin's `RouteVisibilityCheck` |
+
+**Not filtered** — listed, and refused on call: `mfa`, `scopes`,
+`subscribed`/`feature`, audiences, rate limits and anything a handler checks
+itself (e.g. a policy it runs on a loaded resource with `authorize(user,
+permission, resource)` — there is no resource at listing time). Visibility is never authorization: `tools/call` still runs every
+guard, for listed and unlisted tools alike. `listVisibleOnly: false` lists every
+opted-in tool. stdio listings are never filtered (there is no per-request
+caller).
+
 On an exposed deployment, give `/mcp` its own rate-limit budget:
 `mcpRoutes({ rateLimit: { limit: 30, windowMs: 60_000 } })` stamps
 `meta.rateLimit` on the route, and `securityPlugin` enforces it in a dedicated
 bucket. A tool route's own `meta.rateLimit` is enforced by a route guard, so it
-applies to tool calls through `/mcp` too. A tool call carries no client address,
-so unless you give `securityPlugin({ rateLimit: { key } })` one, every tool
-caller shares that route's bucket (fail closed). (Auth and guards run
-identically on both paths.)
+applies to tool calls through `/mcp` too, keyed by the `/mcp` caller's ip,
+which the tool request inherits. (Auth and guards run identically on both paths.)
 
 
 ## Options reference
@@ -235,6 +315,7 @@ The tables below are the complete public options of the four entry points.
 | `routes` | `BasaltRoute[]` | — (required) | The routes scanned for `meta.mcp` — typically the same array you pass the adapter |
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | What `initialize` reports to clients |
 | `filter` | `(route: BasaltRoute) => boolean` | expose every opted-in route | A deployment-level gate on top of `meta.mcp` (e.g. hide admin routes in one environment) |
+| `forwardHeaders` | `string[]` | none | Extra request headers a tool call inherits, on top of `DEFAULT_FORWARDED_HEADERS` (e.g. a custom tenant header); every other header is dropped |
 
 ### `mcpRoutes(options)`
 
@@ -242,6 +323,11 @@ The tables below are the complete public options of the four entry points.
 | --- | --- | --- | --- |
 | `path` | `string` | `'/mcp'` | Where the JSON-RPC POST endpoint mounts |
 | `rateLimit` | `{ limit: number; windowMs: number }` | none | Stamps `meta.rateLimit` on `/mcp` (enforced by `securityPlugin` in a dedicated bucket) — the budget for all tool traffic; a tool route's own `meta.rateLimit` applies on top |
+| `allowedOrigins` | `string[] \| '*'` | same-origin only | Browser origins allowed to call `/mcp`; a foreign `Origin` gets 403. Requests without `Origin` are unaffected. `'*'` disables the check |
+| `auth` | `boolean` | `false` | Sets `meta.auth` on `/mcp` (enforced by `authPlugin`) so even `initialize`/`tools/list` need an authenticated caller |
+| `meta` | `Record<string, unknown>` | none | Extra `meta` for the `/mcp` route (e.g. `{ can: 'mcp:use' }`) |
+| `listVisibleOnly` | `boolean` | `true` | Hide from `tools/list` the tools the caller statically cannot use — pure checks only (see [What `tools/list` shows](#what-tools-list-shows)) |
+| `sessions` | `false \| { ttlMs?: number; maxSessions?: number }` | on — 30 min idle, 1000 live | `Mcp-Session-Id` sessions: required after `initialize`, bound to the caller, scope cross-`POST` cancellation; also mounts `DELETE <path>`. `false` = stateless |
 
 ### `serveMcpStdio(app, options)`
 
@@ -250,6 +336,8 @@ The tables below are the complete public options of the four entry points.
 | `headers` | `Record<string, string>` | `{}` | Static headers applied to **every** tool call — stdio has no per-request headers, so this is how a local agent carries a service token/tenant |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Inject a stream in tests |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Inject a sink in tests |
+| `maxConcurrentRequests` | `number` | `16` | Requests in flight at once on the connection; one more gets a `-32000` (`SERVER_BUSY`) error. Notifications are never refused |
+| `maxLineLength` | `number` | 4 MiB | Longest accepted message line |
 
 Returns a handle whose `close()` detaches the stdin listener.
 
@@ -273,7 +361,14 @@ Protocol errors use JSON-RPC codes:
 | `isError: true` with an `UNAUTHORIZED`/`FORBIDDEN` body | The tool's route is guarded and the call carried no (or bad) credentials | Send `Authorization`/tenant headers with `POST /mcp`, or `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Tool name not registered — route missing `meta.mcp`, excluded by `filter`, or renamed | Check `tools/list`; remember overrides via `meta.mcp.name` |
 | JSON-RPC `-32601` `Method not found` | The client called an MCP method the server doesn't implement | Only `initialize`, `ping`, `tools/list`, `tools/call` (plus resources/prompts when registered) exist |
-| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp`, and tool calls carry no client ip, so all callers share one bucket | Pass a `key` to `securityPlugin({ rateLimit })`, or raise the route's budget |
+| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp` too (per caller ip) | Raise the route's budget, or pass a `key` to `securityPlugin({ rateLimit })` |
+| `403` `MCP_ORIGIN_FORBIDDEN` from `POST /mcp` | A browser sent a cross-origin request | Add the page's origin to `mcpRoutes({ allowedOrigins })` |
+| `415` from `POST /mcp` | The body was not sent as `Content-Type: application/json` | Send `application/json` (MCP clients do) |
+| `400` `Mcp-Session-Id header required` | A message other than `initialize` arrived without a session | Send `initialize` first and echo its `Mcp-Session-Id` (spec clients do), or `mcpRoutes({ sessions: false })` |
+| `404` `Session not found` | The session expired, was evicted or ended, the process restarted, another replica answered — or a different caller presented it | Re-initialize; behind replicas use sticky sessions |
+| A tool is missing from `tools/list` but callable | The caller statically fails its `meta.auth`/`meta.teamRole`/`meta.can` (listing hides it) | Expected; `mcpRoutes({ listVisibleOnly: false })` lists everything |
+| Over stdio, `-32000` `Too many requests in flight` | More than `maxConcurrentRequests` calls at once on the connection | Wait for answers, or raise `serveMcpStdio(app, { maxConcurrentRequests })` |
+| A tool reads a header that arrives `undefined` | The header is not in the forwarded-header allowlist | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | Claude Desktop shows a broken/dead server | Something printed to stdout — it is the JSON-RPC channel | `logLevel: 'silent'`, remove `console.log`; see the stdio checklist above |
 | `202` response from `POST /mcp` with empty body | The message was a JSON-RPC *notification* — by spec it gets no reply | Expected behaviour, not an error |
 
