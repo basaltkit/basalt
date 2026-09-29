@@ -1,5 +1,12 @@
 # @basaltkit/image-sharp
 
+## 1.1.7
+
+### Patch Changes
+
+- Updated dependencies [b7171e5]
+  - @basaltkit/storage@5.0.0
+
 ## 1.1.6
 
 ### Patch Changes
