@@ -38,6 +38,7 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
       prisma.comment.deleteMany(), prisma.auditEntry.deleteMany(), prisma.activityRecord.deleteMany(),
       prisma.inAppNotification.deleteMany(), prisma.permUserRole.deleteMany(),
       prisma.permUserPermission.deleteMany(), prisma.permRolePermission.deleteMany(),
+      prisma.permTemporaryGrant.deleteMany(), prisma.permDelegation.deleteMany(),
       prisma.tenantDomain.deleteMany(), prisma.tenant.deleteMany(),
       prisma.outboxEntry.deleteMany(), prisma.webhookEndpoint.deleteMany(),
     ])
@@ -102,6 +103,27 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     await p.grantToRole('admin', ['projects:read', 'projects:write'], 't1')
     await p.grantToRole('admin', ['projects:write', 'projects:delete'], 't1')
     expect((await p.getRolePermissions('admin', 't1')).sort()).toEqual(['projects:delete', 'projects:read', 'projects:write'])
+  })
+
+  it('permissions: durable temporary grants and delegations (DateTime deadlines, String[] permissions)', async () => {
+    const { temporaryGrants, delegations } = prismaAccessStore(prisma)
+    const now = Date.now()
+    await temporaryGrants.add({ id: 'tg1', userId: 'u1', permissions: ['reports:read'], scope: 't1', expiresAt: now + 60_000, reason: 'audit' })
+    await temporaryGrants.add({ id: 'tg2', userId: 'u1', permissions: ['old:read'], scope: 't1', expiresAt: now - 1 })
+    await temporaryGrants.add({ id: 'tg3', userId: 'u1', permissions: ['x:y'], scope: 't2', expiresAt: now + 60_000 })
+    expect(await temporaryGrants.activeFor('u1', 't1', now)).toEqual([
+      { id: 'tg1', userId: 'u1', permissions: ['reports:read'], scope: 't1', expiresAt: now + 60_000, reason: 'audit' },
+    ])
+    expect(await temporaryGrants.pruneExpired(now)).toBe(1)
+
+    await delegations.add({ id: 'dg1', fromUserId: 'boss', toUserId: 'dep', permissions: ['p:*'], scope: 't1', createdAt: now })
+    await delegations.add({ id: 'dg2', fromUserId: 'boss', toUserId: 'dep', permissions: ['q:r'], scope: 't1', createdAt: now, expiresAt: now - 1 })
+    expect((await delegations.activeTo('dep', 't1', now)).map((d) => d.id)).toEqual(['dg1'])
+    expect((await delegations.activeFrom('boss', 't1', now))[0]).toEqual({
+      id: 'dg1', fromUserId: 'boss', toUserId: 'dep', permissions: ['p:*'], scope: 't1', createdAt: now,
+    })
+    await delegations.revoke('dg1')
+    expect(await delegations.activeTo('dep', 't1', now)).toEqual([])
   })
 
   it('comments: thread with String[] mentions, resolve then reopen', async () => {

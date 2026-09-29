@@ -396,6 +396,9 @@ This isn't a convention people are asked to remember — it's **tested**:
 - `packages/ai-mcp/test/boundary.test.ts` walks the *transitive import graph*
   from the dev bridge's entry points and fails if it ever reaches
   `@basaltkit/core`, `@basaltkit/http`, `@basaltkit/mcp` or `@basaltkit/cli`.
+- At runtime, `@basaltkit/ai-mcp` refuses to start under `NODE_ENV=production`
+  (unless `--allow-production`), so a deployed process that pulled it in anyway
+  fails loudly instead of exposing code-writing tools.
 
 So the boundary can't rot silently: the moment the AI layer reaches into the
 runtime, CI goes red. Every SaaS built with the ecosystem keeps the same,

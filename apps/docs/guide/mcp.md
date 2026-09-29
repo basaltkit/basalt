@@ -94,6 +94,39 @@ error body as an unauthenticated HTTP request, carried in the tool result with
 the `POST /mcp` request; over stdio, pass static `headers` to `serveMcpStdio`.
 :::
 
+### What the model sees when a tool fails {#what-the-model-sees-when-a-tool-fails}
+
+The MCP client is a language model — and anyone who can read or steer its
+context (a prompt injection, a transcript, a log of the conversation). Treat a
+tool result as a response sent to an untrusted client. When a tool's handler,
+guard or validation throws, the result carries `isError: true` and the same
+`{ code, message, details? }` an HTTP client would get, with these boundaries:
+
+| Channel | Reaches the model? | Notes |
+| --- | --- | --- |
+| `code`, `message` | yes | A toolkit 500 or an `expose: false` error sends a neutral message, exactly as over HTTP |
+| `details` | yes — **redacted** | Sanitised for shape, then passed through `redactErrorDetails` (default `redactSensitiveDetails`: the value of any key naming a secret — `password`, `resetToken`, `apiKey`, `secret`, `sessionId`, … — becomes `'[REDACTED]'`; booleans/`null` kept) |
+| `internalDetails` | **never** | Log-only: handed to `reportError` (default: the console reporter) with the untouched error |
+| stack, cause, unexpected exception text | never | Unexpected errors become `INTERNAL_ERROR` |
+| a body your handler sends itself (`reply.code(4xx).send(body)`) | yes — **verbatim** | That is the route's response contract; nothing is redacted there |
+
+```ts
+mcpPlugin({
+  routes,
+  redactErrorDetails: (details) => ({ failed: details.failed }), // your own allowlist
+  reportError: (report) => logger.warn(report, 'tool call failed'),
+})
+
+// Per route: override (or disable with `false`) for that tool only.
+route({ method: 'POST', url: '/kyc', meta: { mcp: { redactErrorDetails: false } }, handler })
+```
+
+Redaction is defence in depth, not a licence: keep `details` public by
+construction and put operator-only data in `internalDetails`. The HTTP adapters
+do not redact by default (their output is unchanged); use
+`toErrorResponse(error, { redactDetails })` in your own adapter or error
+handler for the same filter.
+
 ## Tool schemas & arguments
 
 **Tool names** come from the route's method and path: `GET /skills` →
@@ -319,6 +352,8 @@ The tables below are the complete public options of the four entry points.
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | What `initialize` reports to clients |
 | `filter` | `(route: BasaltRoute) => boolean` | expose every opted-in route | A deployment-level gate on top of `meta.mcp` (e.g. hide admin routes in one environment) |
 | `forwardHeaders` | `string[]` | none | Extra request headers a tool call inherits, on top of `DEFAULT_FORWARDED_HEADERS` (e.g. a custom tenant header); every other header is dropped |
+| `redactErrorDetails` | `ErrorDetailsRedactor \| false` | `redactSensitiveDetails` | Filters a thrown error's public `details` before they enter a tool result (see [What the model sees](#what-the-model-sees-when-a-tool-fails)); `false` sends them as HTTP would. A route overrides it with `meta.mcp.redactErrorDetails` |
+| `reportError` | `HttpErrorReporter \| false` | console reporter | Receives every error a tool call throws, `internalDetails` included; `false` reports nothing |
 
 ### `mcpRoutes(options)`
 
@@ -373,6 +408,7 @@ Protocol errors use JSON-RPC codes:
 | Over stdio, `-32000` `Too many requests in flight` | More than `maxConcurrentRequests` calls at once on the connection | Wait for answers, or raise `serveMcpStdio(app, { maxConcurrentRequests })` |
 | A tool reads a header that arrives `undefined` | The header is not in the forwarded-header allowlist | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | Claude Desktop shows a broken/dead server | Something printed to stdout — it is the JSON-RPC channel | `logLevel: 'silent'`, remove `console.log`; see the stdio checklist above |
+| `'[REDACTED]'` in a tool error's `details` | The key names a secret and the default `redactErrorDetails` masked it | Rename the key if it is not a secret, move secrets to `internalDetails`, or pass your own `redactErrorDetails` |
 | `202` response from `POST /mcp` with empty body | The message was a JSON-RPC *notification* — by spec it gets no reply | Expected behaviour, not an error |
 
 ## Testing with the MCP Inspector

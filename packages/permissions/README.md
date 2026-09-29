@@ -189,7 +189,15 @@ const gate = new Gate({
 })
 
 await gate.can({ id: 'x', owner: true }, 'any:thing') // true, always
+await gate.hasRole({ id: 'x', owner: true }, 'editor') // false — a bypass, not a role
+await gate.isSuperAdmin({ id: 'x', owner: true })     // true
 ```
+
+The bypass is **authority, not membership**: it short-circuits `can()`,
+`authorize()` and `meta.can`, but `hasRole()` answers only the roles the user
+actually holds (until 4.0 it answered `true` for every role name). Where you used
+`hasRole()` as a permission check, check the permission with `can()` — or ask for
+the bypass explicitly with `isSuperAdmin()`.
 
 ### Temporary grants & delegation
 
@@ -221,13 +229,60 @@ the delegator can *directly* do (their standing grants + active temporary grants
 but not their own delegations). So a delegation never lends more than the
 delegator has, and a delegatee can't re-delegate authority it only holds by
 delegation. Both grant and delegation carry an expiry; back the stores with your
-database in production (the `Memory*` ones are per-process).
+database in production (the `Memory*` ones are per-process) — the durable ones
+ship with `@basaltkit/permissions-prisma` and `@basaltkit/permissions-sqlite`:
+
+```ts
+const p = prismaAccessStore(prisma) // or sqliteAccessStore('./data/permissions.db')
+permissionsPlugin({ store: p.store, temporaryGrants: p.temporaryGrants, delegations: p.delegations })
+```
 
 A temporary grant **needs a deadline**: `grantTemporarily()` throws without
 `ttlMs` or `expiresAt`, and refuses one that is not a finite time in the future
 (`Infinity` included). The Gate also re-checks whatever the stores return — user,
 scope and expiry against its own clock — so a durable store that forgets its
 `expires_at > ?` filter cannot make a temporary grant permanent.
+
+### What may I do?
+
+`accessRoutes()` adds **`GET /me/access`**: the caller's roles and permissions, so a
+frontend hides the controls that would return 403 — and shows the ones that
+open. Register it next to your routes (no `meta.auth`: an anonymous caller gets
+an empty answer, not a 401):
+
+```ts
+fastifyPlugin({ routes: [...accessRoutes(), ...myRoutes] })
+```
+
+The answer is `gate.describeAccess(user)` and covers **every source a check
+honours** — grants in the current tenant *and* the global scope, live temporary
+grants, live delegations (already narrowed to what the delegator holds) and the
+`superAdmin` bypass:
+
+```json
+{
+  "roles": ["editor"],
+  "permissions": ["billing:read", "docs:*", "reports:export"],
+  "superAdmin": false,
+  "grants": [
+    { "permission": "docs:*", "source": "role", "scope": "acme", "role": "editor" },
+    { "permission": "billing:read", "source": "direct", "scope": "@global" },
+    { "permission": "reports:export", "source": "temporary", "scope": "acme", "id": "…", "expiresAt": 1767225600000 }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `roles` | Roles held in the current scope or globally — what `hasRole()` answers `true` for. |
+| `permissions` | Every permission that opens a door, sorted and deduplicated. `permitted(permissions, p)` from `@basaltkit/permissions/match` agrees with `gate.can(user, p)`. A super admin gets `['*', …]`. |
+| `superAdmin` | `true` when the bypass applies. |
+| `grants` | Each permission with its `source` — `'direct'`, `'role'` (+ `role`), `'temporary'` (+ `id`, `expiresAt`), `'delegation'` (+ `id`, `fromUserId`, `expiresAt?` — the earlier of the delegation's deadline and that of the delegator's temporary grant it rests on) or `'super-admin'` — and the `scope` it lives in. Refetch before the earliest `expiresAt`. |
+
+Not a security surface: the server still decides every request. Pass
+`accessRoutes({ store })` to answer from a store other than the Gate's — then
+only standing grants (current + global scope) are reported. `path` renames the
+route.
 
 ### Using the Gate inside handlers
 
@@ -332,7 +387,9 @@ user may do, not *which* tenant they belong to.
 |---|---|---|
 | `can(user, permission, resource?)` | `Promise<boolean>` | Checks; with a resource and an applicable policy, the policy decides. |
 | `authorize(user, permission, resource?)` | `Promise<void>` | Like `can`, but throws `PermissionDeniedError` (403). |
-| `hasRole(user, role)` | `Promise<boolean>` | Does the user have the role (in the current scope or global)? |
+| `hasRole(user, role)` | `Promise<boolean>` | Does the user actually hold the role (in the current scope or global)? Membership only — the `superAdmin` bypass does **not** make it `true`. |
+| `isSuperAdmin(user)` | `Promise<boolean>` | Whether the `superAdmin` callback lets the user bypass every check (`false` without one). |
+| `describeAccess(user)` | `Promise<AccessReport>` | Everything the user may do right now, with provenance — what `GET /me/access` answers (see [What may I do?](#what-may-i-do)). Side-effect free. |
 | `effectiveRoles(userId)` | `Promise<string[]>` | Every role the user holds across the scopes a check consults (current + global). |
 | `audienceRoles(userId)` | `Promise<string[]>` | The roles the audience guard confines on: the current scope's, or the global ones when the current scope has none. |
 | `assignRole` / `removeRole(userId, role, scope?)` | `Promise<void>` | Store write + `permission:role_assigned` / `permission:role_removed` hook. `scope` defaults to the current scope (see [Writes need a tenant or an explicit scope](#writes-need-a-tenant-or-an-explicit-scope)). |
@@ -378,6 +435,8 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 | `Policy`, `PolicyCheck` | Policy types. Advanced. |
 | `TemporaryGrant`, `TemporaryGrantStore`, `MemoryTemporaryGrantStore` | Time-boxed grants: the record, the contract, the in-process implementation. |
 | `Delegation`, `DelegationStore`, `MemoryDelegationStore` | Delegation: the record, the contract, the in-process implementation. |
+| `accessRoutes(options?)` | `GET /me/access` (see [What may I do?](#what-may-i-do)). `options`: `{ path?, store? }`. |
+| `AccessReport`, `AccessGrant` | The `describeAccess()` / `GET /me/access` answer and one provenance entry of it. |
 
 ### Route guard — `meta.audience`
 

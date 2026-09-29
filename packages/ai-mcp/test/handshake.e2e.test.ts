@@ -1,3 +1,4 @@
+import { AI_MCP_VERSION } from '../src/index.js'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { PassThrough } from 'node:stream'
@@ -49,7 +50,7 @@ describe('stdio handshake (piped streams — the transport the bin drives)', () 
     expect(lines).toHaveLength(6)
 
     const init = lines.find((l) => l.id === 1)!.result
-    expect(init.serverInfo).toEqual({ name: 'basalt-ai-mcp', version: '0.1.0' })
+    expect(init.serverInfo).toEqual({ name: 'basalt-ai-mcp', version: AI_MCP_VERSION })
     // capabilities advertise tools, resources AND prompts
     expect(init.capabilities.tools).toBeDefined()
     expect(init.capabilities.resources).toBeDefined()
@@ -108,5 +109,19 @@ describe.skipIf(!existsSync(BIN))('basalt-ai-mcp bin', () => {
       child.stdin.end()
       child.kill()
     }
+  })
+
+  it('refuses to start with NODE_ENV=production (exit 1, message on stderr)', async () => {
+    const { NODE_ENV: _drop, BASALT_AI_MCP_ALLOW_PRODUCTION: _drop2, ...env } = process.env
+    const child = spawn(process.execPath, [BIN, `--cwd=${process.cwd()}`], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...env, NODE_ENV: 'production' },
+    })
+    let stderr = ''
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => (stderr += chunk))
+    const code = await new Promise<number | null>((resolve) => child.on('exit', resolve))
+    expect(code).toBe(1)
+    expect(stderr).toMatch(/dev-only tool and refuses to start with NODE_ENV=production/)
   })
 })

@@ -35,7 +35,7 @@ Register endpoints via the `WEBHOOKS` manager as usual; they now survive a resta
 
 ## The model
 
-One `webhook_endpoints` table holds each subscription: `url`, its `events` patterns (JSON array), optional `tenant_id`, per-endpoint `secret` and `active` flag. `SqliteWebhookStore` implements the full `WebhookStore` contract:
+One `webhook_endpoints` table holds each subscription: `url`, its `events` patterns (JSON array), optional `tenant_id`, per-endpoint `secret` and `active` flag, plus `previous_secret` / `previous_secret_expires_at` (epoch ms) for a `rotateSecret()` grace window. `migrate()` adds these two nullable columns to a table created by an earlier version. `SqliteWebhookStore` implements the full `WebhookStore` contract:
 
 | Method | Description |
 | --- | --- |

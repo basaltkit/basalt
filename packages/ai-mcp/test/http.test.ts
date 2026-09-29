@@ -1,3 +1,4 @@
+import { AI_MCP_VERSION } from '../src/index.js'
 import { memoryReader } from '@basaltkit/ai/analysis'
 import type { AIProvider } from '@basaltkit/ai/workflows'
 import { describe, expect, it } from 'vitest'
@@ -14,7 +15,7 @@ describe('ai-mcp HTTP transport (opt-in)', () => {
     const handle = await createAiMcpHttpServer({ cwd: '/proj', createReader: () => memoryReader(PROJECT_FILES), port: 0 })
     try {
       const init = await rpc(handle.url, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })
-      expect(init.result.serverInfo).toEqual({ name: 'basalt-ai-mcp', version: '0.1.0' })
+      expect(init.result.serverInfo).toEqual({ name: 'basalt-ai-mcp', version: AI_MCP_VERSION })
       expect(init.result.capabilities.tools).toBeDefined()
       expect(init.result.capabilities.resources).toBeDefined()
       expect(init.result.capabilities.prompts).toBeDefined()

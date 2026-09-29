@@ -58,7 +58,12 @@ await gate.can({ id: 'user-bob' }, 'projects:delete') // false
 
 `gate.authorize(user, perm)` is the throwing variant — it raises
 `PermissionDeniedError` (`403 PERMISSION_DENIED`) instead of returning `false`.
-`gate.hasRole(user, role)` answers role membership directly.
+`gate.hasRole(user, role)` answers role membership directly — the roles the user
+actually holds, in the current scope or globally. A `superAdmin` is **not** a
+member of every role (it was before `@basaltkit/permissions` 4.0): the bypass
+short-circuits `can()`/`authorize()`/`meta.can`, and `gate.isSuperAdmin(user)`
+asks for it explicitly. Where `hasRole()` guarded an action, check the
+permission instead.
 
 ### Wildcards match segment by segment
 
@@ -477,6 +482,61 @@ The Gate does not trust its stores on any of this: whatever `activeFor()` /
 own clock (`now`), so a durable store that forgets its `expires_at > ?` filter
 cannot turn a time-boxed grant into a standing one.
 
+In production back both with a database — the `Memory*` stores are per-process,
+so a grant or delegation dies with the process and is invisible to other
+instances. `@basaltkit/permissions-prisma` and `@basaltkit/permissions-sqlite`
+return durable ones next to the access store (see
+[Persistence](/guide/persistence)):
+
+```ts
+const p = prismaAccessStore(prisma) // or sqliteAccessStore('./data/permissions.db')
+permissionsPlugin({ store: p.store, temporaryGrants: p.temporaryGrants, delegations: p.delegations })
+```
+
+## What may I do? — `GET /me/access`
+
+`accessRoutes()` adds `GET /me/access`: the caller's roles and permissions, so
+the interface hides controls that would return `403` — and shows the ones that
+open. It is not a security surface (every request is still decided by the Gate)
+and it has no `meta.auth`: an anonymous caller gets an empty answer, not a `401`.
+
+```ts
+fastifyPlugin({ routes: [...accessRoutes(), ...myRoutes] })
+```
+
+The answer is `gate.describeAccess(user)`, and it covers **every source a check
+honours**: grants in the current tenant *and* in `GLOBAL_SCOPE` (plus the legacy
+global scope when `readLegacyGlobalScope` is on), the role catalogue and
+inherited global definitions, live temporary grants, live delegations — already
+narrowed to what the delegator holds — and the `superAdmin` bypass:
+
+```json
+{
+  "roles": ["editor"],
+  "permissions": ["billing:read", "docs:*", "reports:export"],
+  "superAdmin": false,
+  "grants": [
+    { "permission": "docs:*", "source": "role", "scope": "acme", "role": "editor" },
+    { "permission": "billing:read", "source": "direct", "scope": "@global" },
+    { "permission": "reports:export", "source": "temporary", "scope": "acme", "id": "…", "expiresAt": 1767225600000 }
+  ]
+}
+```
+
+- `roles` — held in the current scope or globally (what `hasRole()` answers `true` for);
+- `permissions` — sorted and deduplicated; `permitted(permissions, p)` from
+  `@basaltkit/permissions/match` gives the same answer as `gate.can(user, p)`.
+  A super admin gets `'*'`;
+- `grants` — each permission's `source` (`'direct'`, `'role'`, `'temporary'`,
+  `'delegation'`, `'super-admin'`), the `scope` it lives in, and `role`, `id`,
+  `fromUserId`, `expiresAt` where they apply. A delegated permission expires at
+  the earlier of the delegation's deadline and that of the delegator's
+  temporary grant it rests on. Refetch before the earliest `expiresAt`.
+
+Before `@basaltkit/permissions` 4.0 the route read only the current tenant's
+standing grants, so a global grant, a temporary grant, a delegation or the
+super-admin bypass opened the door on the server while the menu hid it.
+
 ## Options reference
 
 `permissionsPlugin(options)` takes the same options as `new Gate(options)`:
@@ -484,7 +544,7 @@ cannot turn a time-boxed grant into a standing one.
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `store` | `AccessStore` | — (required) | Where roles/permissions live — your database in production |
-| `superAdmin` | `(user) => boolean \| Promise<boolean>` | — | Short-circuits **every** check to `true` when it returns `true` (Laravel's `Gate::before`) |
+| `superAdmin` | `(user) => boolean \| Promise<boolean>` | — | Short-circuits **every** check to `true` when it returns `true` (Laravel's `Gate::before`). Not a role: `hasRole()` still answers membership; `isSuperAdmin(user)` asks for the bypass |
 | `scope` | `() => string` | `ctx().tenant.id` ?? `GLOBAL_SCOPE` | Current scope; checks consult it plus `GLOBAL_SCOPE` |
 | `policies` | `Policy[]` | `[]` | Resource policies registered up front (same as calling `gate.register`) |
 | `temporaryGrants` | `TemporaryGrantStore` | off | Enables `grantTemporarily()` |

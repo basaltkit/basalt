@@ -841,14 +841,175 @@ export class Gate {
     }
   }
 
+  /**
+   * Whether the user actually holds `role` — in the current scope or globally.
+   * Role membership, not authority: the `superAdmin` bypass does NOT make a
+   * super admin a member of every role (it short-circuits `can()`/`authorize()`
+   * instead). Ask {@link isSuperAdmin} for that, or — better — check the
+   * permission the role stands for with `can()`.
+   */
   async hasRole(user: PolicyUser, role: string): Promise<boolean> {
     if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
-    if (await this.options.superAdmin?.(user)) return true
     for (const scope of this.scopes()) {
       if ((await this.options.store.getUserRoles(user.id, scope)).includes(role)) return true
     }
     return false
   }
+
+  /** Whether the configured `superAdmin` callback lets `user` bypass every check. `false` without one. */
+  async isSuperAdmin(user: PolicyUser): Promise<boolean> {
+    if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
+    return (await this.options.superAdmin?.(user)) === true
+  }
+
+  /**
+   * Everything `user` may do right now, with where each permission comes from
+   * — what `GET /me/access` answers. Covers every source a check consults:
+   * direct and role grants in the current scope AND the global one (plus the
+   * legacy global scope when read), live temporary grants, live delegations
+   * (bounded, like the check, by the delegator's own direct permissions) and
+   * the `superAdmin` bypass (reported as `'*'`).
+   *
+   * Side-effect free, like `can()`. Not a security surface: every request is
+   * still decided by the Gate — this only lets an interface show the doors
+   * that open and hide the ones that don't.
+   */
+  async describeAccess(user: PolicyUser): Promise<AccessReport> {
+    if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
+    const superAdmin = (await this.options.superAdmin?.(user)) === true
+    const grants: AccessGrant[] = superAdmin ? [{ permission: '*', source: 'super-admin' }] : []
+    grants.push(...(await this.directGrants(user.id)))
+
+    if (this.options.delegations) {
+      const now = this.now()
+      for (const scope of this.scopes()) {
+        for (const d of await this.options.delegations.activeTo(user.id, scope, now)) {
+          if (!isLiveDelegation(d, user.id, scope, now)) continue
+          const bound = await this.directGrants(d.fromUserId)
+          for (const pattern of d.permissions) {
+            for (const held of bound) {
+              const permission = permissionMeet(pattern, held.permission)
+              if (permission === undefined) continue
+              const expiresAt = earliest(d.expiresAt ?? undefined, held.source === 'temporary' ? held.expiresAt : undefined)
+              grants.push({
+                permission,
+                source: 'delegation',
+                scope,
+                id: d.id,
+                fromUserId: d.fromUserId,
+                ...(expiresAt !== undefined ? { expiresAt } : {}),
+              })
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      roles: await this.effectiveRoles(user.id),
+      permissions: [...new Set(grants.map((g) => g.permission))].sort(),
+      superAdmin,
+      grants: dedupeGrants(grants),
+    }
+  }
+
+  /**
+   * The grants {@link canDirect} honours for `userId`, with their source:
+   * standing user and role grants plus live temporary grants, over every
+   * scope a check consults. No delegation (delegations don't chain).
+   */
+  private async directGrants(userId: string): Promise<AccessGrant[]> {
+    const grants: AccessGrant[] = []
+    const now = this.now()
+    for (const scope of this.scopes()) {
+      for (const permission of await this.options.store.getUserPermissions(userId, scope)) {
+        grants.push({ permission, source: 'direct', scope })
+      }
+      for (const role of await this.options.store.getUserRoles(userId, scope)) {
+        for (const permission of await this.rolePermissions(role, scope)) {
+          grants.push({ permission, source: 'role', scope, role })
+        }
+      }
+      if (this.options.temporaryGrants) {
+        for (const grant of await this.options.temporaryGrants.activeFor(userId, scope, now)) {
+          if (!isLiveGrant(grant, userId, scope, now)) continue
+          for (const permission of grant.permissions) {
+            grants.push({ permission, source: 'temporary', scope, id: grant.id, expiresAt: grant.expiresAt })
+          }
+        }
+      }
+    }
+    return grants
+  }
+}
+
+/**
+ * One permission in an {@link AccessReport} and where it comes from. `scope`
+ * is where the grant lives — the tenant id or {@link GLOBAL_SCOPE}.
+ */
+export type AccessGrant =
+  | { permission: string; source: 'direct'; scope: string }
+  | { permission: string; source: 'role'; scope: string; role: string }
+  /** A time-boxed grant (`grantTemporarily()`); inert after `expiresAt` (epoch ms). */
+  | { permission: string; source: 'temporary'; scope: string; id: string; expiresAt: number }
+  /**
+   * Lent by `fromUserId` (`delegate()`), already narrowed to what the delegator
+   * holds. `expiresAt` is the earlier of the delegation's deadline and that of
+   * the delegator's temporary grant it rests on; absent when open-ended.
+   */
+  | { permission: string; source: 'delegation'; scope: string; id: string; fromUserId: string; expiresAt?: number }
+  /** The `superAdmin` bypass: every check passes. */
+  | { permission: '*'; source: 'super-admin' }
+
+/** What {@link Gate.describeAccess} (and `GET /me/access`) answers. */
+export interface AccessReport {
+  /** Roles held in the current scope or globally — what `hasRole()` answers `true` for. */
+  roles: string[]
+  /** Every permission that opens a door, deduplicated and sorted — feed it to `permitted()`. */
+  permissions: string[]
+  /** `true` when the `superAdmin` bypass applies (then `permissions` contains `'*'`). */
+  superAdmin: boolean
+  /** Each permission with its provenance and, for time-boxed ones, its expiry. */
+  grants: AccessGrant[]
+}
+
+/**
+ * The permission pattern that matches exactly what both `a` and `b` match, or
+ * `undefined` when nothing does. Segment-wise: `'*'` alone matches anything, a
+ * `'*'` segment yields to the other side's segment, two literals must agree.
+ */
+function permissionMeet(a: string, b: string): string | undefined {
+  if (!isValidPermission(a) || !isValidPermission(b)) return undefined
+  if (a === '*') return b
+  if (b === '*') return a
+  const left = a.split(':')
+  const right = b.split(':')
+  if (left.length !== right.length) return undefined
+  const out: string[] = []
+  for (let i = 0; i < left.length; i++) {
+    const l = left[i]!
+    const r = right[i]!
+    if (l === '*') out.push(r)
+    else if (r === '*' || r === l) out.push(l)
+    else return undefined
+  }
+  return out.join(':')
+}
+
+function earliest(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) return b
+  if (b === undefined) return a
+  return Math.min(a, b)
+}
+
+function dedupeGrants(grants: AccessGrant[]): AccessGrant[] {
+  const seen = new Set<string>()
+  return grants.filter((grant) => {
+    const key = JSON.stringify(grant)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function assertRole(value: unknown, operation: string): asserts value is string {
@@ -893,7 +1054,9 @@ function isLiveDelegation(d: Delegation, userId: string, scope: string, now: num
  *
  * Not a security surface — the server decides on every request regardless. This
  * exists so the interface stops offering doors that return 403, and stops
- * hiding doors that would have opened.
+ * hiding doors that would have opened: the answer is {@link Gate.describeAccess}
+ * — current-scope AND global grants, live temporary grants and delegations
+ * (each marked with its source and expiry), and the `superAdmin` bypass.
  *
  * Pair it with `@basaltkit/permissions/match`, which carries the same wildcard
  * rule and imports nothing, so the browser applies the server's rule instead of
@@ -906,6 +1069,7 @@ function isLiveDelegation(d: Delegation, userId: string, scope: string, now: num
 export function accessRoutes(
   options: { path?: string; store?: AccessStore } = {},
 ): BasaltRoute[] {
+  const empty = (): AccessReport => ({ roles: [], permissions: [], superAdmin: false, grants: [] })
   return [
     route({
       method: 'GET',
@@ -913,35 +1077,26 @@ export function accessRoutes(
       // No `meta.auth`: a public page asks this before anyone logs in. Empty is
       // the honest answer there, and a 401 would make the frontend treat "not
       // logged in" as an error to report.
-      async handler() {
+      async handler(): Promise<AccessReport> {
         const context = tryCtx()
         const user = context?.['user'] as { id: string } | undefined
-        if (!isPolicyUser(user)) return { roles: [], permissions: [] }
+        if (!isPolicyUser(user)) return empty()
 
         // From the option, or from the Gate the plugin registered. There is no
         // token for the store itself, and adding one here would be a second way
         // to reach the same object.
         const container = context?.['container'] as Container | undefined
-        const gate = container?.has(GATE) ? container.get(GATE) : undefined
-        const store = options.store ?? gate?.store
-        if (!store) return { roles: [], permissions: [] }
-        // The Gate's resolution (roleCatalog, inherited global definitions) when
-        // the answer comes from the Gate's own store — otherwise the menu hides
-        // what the server would allow.
-        const rolePermissions =
-          gate && store === gate.store
-            ? (role: string, scope: string) => gate.rolePermissions(role, scope)
-            : (role: string, scope: string) => store.getRolePermissions(role, scope)
-
-        const scope = currentScope()
-        const roles = await store.getUserRoles(user.id, scope)
-
-        // Direct grants plus everything each role carries. The union is what a
-        // frontend needs; assembling it there means reimplementing the model.
-        const diretas = await store.getUserPermissions(user.id, scope)
-        const dosPapeis = await Promise.all(roles.map((r) => rolePermissions(r, scope)))
-
-        return { roles, permissions: [...new Set([...diretas, ...dosPapeis.flat()])].sort() }
+        const registered = container?.has(GATE) ? container.get(GATE) : undefined
+        const store = options.store ?? registered?.store
+        if (!store) return empty()
+        // The registered Gate answers when it reads the same store — so the
+        // report carries everything its checks honour (roleCatalog, inherited
+        // global definitions, temporary grants, delegations, superAdmin).
+        // Otherwise a Gate over the given store reads the standing grants.
+        if (registered && store === registered.store) {
+          return registered.describeAccess((await registered.actor()) ?? user)
+        }
+        return new Gate({ store }).describeAccess(user)
       },
     }),
   ]

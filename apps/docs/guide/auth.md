@@ -505,8 +505,11 @@ await auth.login(email, password)            // → MfaRequiredError (401 AUTH_M
 await auth.login(email, password, '123456')  // → { user, tokens }
 ```
 
-A correct password with a missing code is **not** a failed attempt; a wrong code
-throws `MfaInvalidCodeError` and counts toward the throttle. Both a TOTP code and
+A correct password with a missing code **does** count toward the login throttle
+(per account and per IP): `AUTH_MFA_REQUIRED` reveals the password was right, so it
+is budgeted like a guess (see [Brute-force lockout](#brute-force-lockout)); the
+successful sign-in with the code clears the account counter. A wrong code throws
+`MfaInvalidCodeError` and counts toward the throttle too. Both a TOTP code and
 a recovery code are accepted (recovery codes are consumed on use). The TOTP
 implementation is dependency-free and verified against the RFC 6238 test vectors.
 
@@ -1003,7 +1006,16 @@ Active by default: 5 failed attempts per email within 15 minutes → `AccountLoc
 *reserved* before the password (or MFA code) is verified, so a burst of parallel
 requests cannot run more guesses than the budget. The throttle keeps SHA-256
 digests of the identifiers, never the raw email, and at most `maxEntries`
-(100 000) of them. Tune or disable it:
+(100 000) of them.
+
+**`AUTH_MFA_REQUIRED` is counted too.** On an MFA account that answer only comes
+back for the *right* password, so it is a password oracle — the same one every
+two-step MFA login has. It therefore spends the per-account and per-IP budgets
+exactly like a wrong password, and cannot be used for unthrottled guessing. The
+legitimate flow is unaffected: signing in with the code clears the account
+counter; the first step's IP slot simply expires with the window.
+
+Tune or disable it:
 
 ```ts
 import { authPlugin, LoginThrottle } from '@basaltkit/auth'
@@ -1142,7 +1154,7 @@ users in.
 | `AuthTokenInvalidError` | `AUTH_TOKEN_INVALID` | 400 | A verification or reset **link** token is unknown, already used, or expired |
 | `RefreshInvalidError` | `AUTH_REFRESH_INVALID` | 401 | Refresh token unknown, revoked or expired |
 | `RefreshReusedError` | `AUTH_REFRESH_REUSED` | 401 | A **consumed** refresh token came back — theft indicator; the whole family is revoked |
-| `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correct, MFA enabled, no `mfaCode` supplied. Not counted as a failed attempt |
+| `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correct, MFA enabled, no `mfaCode` supplied. Counted against the login and per-IP budgets like a failure (it reveals the password was right) |
 | `MfaStepUpRequiredError` | `AUTH_MFA_REQUIRED` | 403 | `requireMfa` / `meta.mfa: true`: MFA is on, but this token or session was obtained without a code — sign in again with one |
 | `MfaEnrollmentRequiredError` | `AUTH_MFA_ENROLLMENT_REQUIRED` | 403 | `requireMfa` / `meta.mfa: true`: the account has no MFA — enrol, then sign in again with a code |
 | `MfaInvalidCodeError` | `AUTH_MFA_INVALID` | 401 | Wrong TOTP or recovery code — this **does** count toward the throttle |
@@ -1194,7 +1206,7 @@ users in.
 - **`AUTH_UPDATE_UNSUPPORTED` on verification or reset** — your custom
   `UserSource` omits `update()`. It is optional for login, required for these.
 - **`AUTH_LOCKED` for a user who typed the right password** — the *IP* budget can
-  trip first under shared NAT or a load test. Tune `ipLoginThrottle`, and remember
+  trip first under shared NAT or a load test (each MFA login's first, code-less step spends one IP slot). Tune `ipLoginThrottle`, and remember
   both throttles are in-process: with several replicas the effective budget is
   per replica.
 - **`AUTH_WEAK_SECRET` only in production** — the length floor is enforced unless

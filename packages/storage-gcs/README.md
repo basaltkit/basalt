@@ -70,7 +70,7 @@ All four optional capabilities are implemented:
 
 | Capability | GCS call | Notes |
 |---|---|---|
-| `putStream` | `createWriteStream` | A resumable upload GCS chunks itself, so a body of **unknown length** streams fine — no `contentLength` needed. |
+| `putStream` | `createWriteStream` | A resumable upload GCS chunks itself, in bounded memory, so a body of **unknown length** streams fine — no `contentLength` needed. A declared one is verified by the Disk; the object is finalized only when the body ends cleanly. |
 | `getStream` | `createReadStream` | Returns a Node `Readable`; consume it or `destroy()` it. GCS only discovers a missing object once the download starts, so `STORAGE_FILE_NOT_FOUND` arrives as an `error` **on the stream**, not as a rejected promise. |
 | `copy` | `file.copy()` | GCS rewrites the object server-side; the bytes never reach the process. |
 | `stat` | `getMetadata()` | `{ size, contentType, etag, lastModified }` (GCS reports `size` as a string; it is coerced). |

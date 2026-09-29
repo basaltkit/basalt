@@ -29,7 +29,11 @@ export type StreamSource = Readable | ReadableStream<Uint8Array> | AsyncIterable
 export interface PutStreamOptions extends PutOptions {
   /**
    * Exact body size in bytes when the caller knows it. Backends that cannot
-   * upload a body of unknown length in one request (S3 `PutObject`) require it.
+   * upload a body of unknown length in one request (S3 `PutObject`) stream it
+   * straight through with it. The Disk layer has already checked it is a
+   * non-negative safe integer, and the readable a driver receives errors
+   * (`STORAGE_CONTENT_LENGTH_MISMATCH`) before its end if the body carries more
+   * or fewer bytes — a driver may declare it to its backend as-is.
    */
   contentLength?: number
 }
@@ -59,7 +63,12 @@ export interface StorageDriver {
   get(path: string): Promise<Buffer>
   exists(path: string): Promise<boolean>
   delete(path: string): Promise<boolean>
-  /** Lists file paths under the given prefix. */
+  /**
+   * Lists full object keys starting with `prefix` (the Disk layer passes the
+   * tenant scope in it). A plain string-prefix match is fine: the Disk narrows
+   * the result to directory semantics and strips the scope before callers see
+   * it.
+   */
   list(prefix: string): Promise<string[]>
   /**
    * Optional: uploads a body without ever holding it whole in memory.

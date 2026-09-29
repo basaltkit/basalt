@@ -37,10 +37,12 @@ export {
 export {
   filesPlugin,
   fileRoutes,
+  toPublicFile,
   FILES,
   type FilesPluginOptions,
   type FileRoutesOptions,
   type FileUploadRouteOptions,
   type FileAction,
   type FileRouteUser,
+  type PublicFileRecord,
 } from './plugin.js'

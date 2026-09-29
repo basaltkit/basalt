@@ -191,3 +191,28 @@ describe('GcsStorageDriver streaming (BK-019)', () => {
     await expect(disk.stat('a')).rejects.toMatchObject({ code: 'STORAGE_STAT_UNSUPPORTED' })
   })
 })
+
+describe('GcsStorageDriver behind the Disk contract (audit: files/storage item 7)', () => {
+  // The fake finalizes an object only when its write stream finishes, like a
+  // resumable upload: a body that errors first leaves nothing behind.
+  it('a body that contradicts its declared contentLength is never finalized', async () => {
+    const { disk, client } = make()
+    await expect(
+      disk.putStream('short.bin', Readable.from([Buffer.from('abc')]), { contentType: 'text/plain', contentLength: 10 }),
+    ).rejects.toMatchObject({ code: 'STORAGE_CONTENT_LENGTH_MISMATCH' })
+    await expect(
+      disk.putStream('long.bin', Readable.from([Buffer.from('abc'), Buffer.from('def')]), { contentType: 'text/plain', contentLength: 4 }),
+    ).rejects.toMatchObject({ code: 'STORAGE_CONTENT_LENGTH_MISMATCH' })
+    expect(client.files.size).toBe(0)
+  })
+
+  it('list() keys are scope-relative and go straight back into get()', async () => {
+    const client = new FakeGcsBucket()
+    const disk = new Disk('objects', new GcsStorageDriver({ bucket: 'b', client }), { scope: () => 'tenants/acme' })
+    await disk.put('docs/1.txt', 'one')
+    const keys = await disk.list('docs')
+    expect(keys).toEqual(['docs/1.txt'])
+    expect((await disk.get(keys[0]!)).toString()).toBe('one')
+    expect([...client.files.keys()]).toEqual(['tenants/acme/docs/1.txt'])
+  })
+})

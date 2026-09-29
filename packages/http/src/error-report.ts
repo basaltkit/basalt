@@ -1,3 +1,4 @@
+import { internalDetailsOf } from './error-details.js'
 import { clientErrorOf } from './pipeline.js'
 import { redactUrl } from './redact-url.js'
 
@@ -23,6 +24,10 @@ import { redactUrl } from './redact-url.js'
 
 /** What an adapter knows about a failed request, in neutral terms. */
 export interface HttpErrorReport {
+  /**
+   * The thrown error, untouched — including its log-only `internalDetails`
+   * (read them sanitised with `internalDetailsOf(error)`).
+   */
   error: unknown
   /** Status already resolved by `toErrorResponse`. */
   status: number
@@ -98,6 +103,10 @@ export function reportHttpError(report: HttpErrorReport, sink: HttpLogSink = con
       status: Number(status),
       code,
     }
+    // The internal channel (`HttpErrorOptions.internalDetails`) exists for
+    // exactly this record — it is never part of the response.
+    const internalDetails = internalDetailsOf(error)
+    if (internalDetails) Object.assign(fields, { internalDetails })
     if (status >= 500) {
       // `err` is pino's conventional key for a serialisable error.
       sink.error({ ...fields, err: error }, FAILED)

@@ -308,6 +308,35 @@ model PermRolePermission {
   @@map("perm_role_permissions")
 }
 
+model PermTemporaryGrant {
+  id          String   @id
+  scope       String
+  userId      String
+  permissions String[]
+  expiresAt   DateTime
+  grantedBy   String?
+  reason      String?
+
+  @@index([scope, userId, expiresAt])
+  @@index([expiresAt])
+  @@map("perm_temporary_grants")
+}
+
+model PermDelegation {
+  id          String    @id
+  scope       String
+  fromUserId  String
+  toUserId    String
+  permissions String[]
+  createdAt   DateTime
+  expiresAt   DateTime?
+
+  @@index([scope, toUserId])
+  @@index([scope, fromUserId])
+  @@index([expiresAt])
+  @@map("perm_delegations")
+}
+
 model Tenant {
   id      String         @id
   data    Json

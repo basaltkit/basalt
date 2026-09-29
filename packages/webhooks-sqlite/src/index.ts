@@ -38,10 +38,22 @@ export function migrate(db: DatabaseSync): void {
       events    TEXT NOT NULL,
       tenant_id TEXT,
       secret    TEXT,
-      active    INTEGER
+      active    INTEGER,
+      previous_secret            TEXT,
+      previous_secret_expires_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_webhook_tenant ON webhook_endpoints (tenant_id);
   `)
+  // Secret rotation (`WebhookManager.rotateSecret()`): add the columns to a
+  // table created by an earlier version. Nullable, so existing rows are
+  // endpoints that are not rotating.
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(webhook_endpoints)').all() as unknown as { name: string }[]).map((c) => c.name),
+  )
+  if (!columns.has('previous_secret')) db.exec('ALTER TABLE webhook_endpoints ADD COLUMN previous_secret TEXT')
+  if (!columns.has('previous_secret_expires_at')) {
+    db.exec('ALTER TABLE webhook_endpoints ADD COLUMN previous_secret_expires_at INTEGER')
+  }
 }
 
 interface EndpointRow {
@@ -51,6 +63,9 @@ interface EndpointRow {
   tenant_id: string | null
   secret: string | null
   active: number | null
+  previous_secret: string | null
+  /** Epoch milliseconds. */
+  previous_secret_expires_at: number | null
 }
 
 const toEndpoint = (r: EndpointRow): WebhookEndpoint => ({
@@ -60,6 +75,8 @@ const toEndpoint = (r: EndpointRow): WebhookEndpoint => ({
   ...(r.tenant_id !== null ? { tenantId: r.tenant_id } : {}),
   ...(r.secret !== null ? { secret: r.secret } : {}),
   ...(r.active !== null ? { active: r.active === 1 } : {}),
+  ...(r.previous_secret !== null ? { previousSecret: r.previous_secret } : {}),
+  ...(r.previous_secret_expires_at !== null ? { previousSecretExpiresAt: new Date(Number(r.previous_secret_expires_at)) } : {}),
 })
 
 /**
@@ -100,6 +117,10 @@ export class SqliteWebhookStore implements WebhookStore {
       JSON.stringify(record.events),
       record.secret ?? null,
       record.active === undefined ? null : record.active ? 1 : 0,
+      // A record without rotation state clears it, as the memory store's
+      // whole-record replace does.
+      record.previousSecret ?? null,
+      record.previousSecretExpiresAt instanceof Date ? record.previousSecretExpiresAt.getTime() : null,
     ] as const
     // Re-adding an id replaces the endpoint — but only within its own scope
     // (the same tenant, or global). Not INSERT OR REPLACE: that let a tenant
@@ -107,7 +128,8 @@ export class SqliteWebhookStore implements WebhookStore {
     // the manager's check-before-write cannot close that race on its own.
     const updated = this.db
       .prepare(
-        `UPDATE webhook_endpoints SET url = ?, events = ?, secret = ?, active = ?
+        `UPDATE webhook_endpoints SET url = ?, events = ?, secret = ?, active = ?,
+           previous_secret = ?, previous_secret_expires_at = ?
          WHERE id = ? AND tenant_id IS ?`,
       )
       .run(...values, id, tenantId)
@@ -115,8 +137,9 @@ export class SqliteWebhookStore implements WebhookStore {
     try {
       this.db
         .prepare(
-          `INSERT INTO webhook_endpoints (url, events, secret, active, id, tenant_id)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO webhook_endpoints
+             (url, events, secret, active, previous_secret, previous_secret_expires_at, id, tenant_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(...values, id, tenantId)
     } catch (error) {

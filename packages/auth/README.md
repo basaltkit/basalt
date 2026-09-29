@@ -241,7 +241,7 @@ Flow (all routes require login):
 
 1. `POST /auth/mfa/enroll` → returns `{ secret, otpauthUri }`; show the `otpauthUri` as a QR code.
 2. `POST /auth/mfa/activate` with `{ code }` (code from the app) → activates and returns `{ recoveryCodes }` — 10 single-use recovery codes, **shown only once**.
-3. From then on, `POST /auth/login` requires the extra `mfaCode` field (TOTP code or a recovery code). Correct password without a code → `AUTH_MFA_REQUIRED` error.
+3. From then on, `POST /auth/login` requires the extra `mfaCode` field (TOTP code or a recovery code). Correct password without a code → `AUTH_MFA_REQUIRED` error (counted by the login throttle — see [Brute-force lockout](#brute-force-lockout-loginthrottle)).
 4. `GET /auth/mfa/status` and `POST /auth/mfa/disable` (with `{ code }`) complete the cycle.
 
 **Requiring MFA.** `authPlugin({ requireMfa: true })` — or a policy
@@ -529,6 +529,8 @@ declare `meta.scopes`; opt out with `allowNarrowKeysOnUnscopedRoutes: true`) and
 
 Active by default: 5 failed attempts per email within a 15-minute window → `AUTH_LOCKED` error (HTTP 429). A successful login clears the counter.
 
+**`AUTH_MFA_REQUIRED` counts as an attempt.** On an MFA account, that answer is only given for the *right* password, so it is a password oracle (the standard two-step MFA login has the same property). To keep it from allowing unthrottled guessing, it spends the per-account and per-IP budgets exactly like a wrong password. A user who then signs in with the code clears the account counter; the IP slot of the first step expires with the window, so under a shared NAT with many MFA users, size `ipLoginThrottle` accordingly.
+
 ```ts
 import { authPlugin, LoginThrottle, MemoryUserSource } from '@basaltkit/auth'
 
@@ -709,5 +711,6 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 - **Use the browser session cookie for browser UIs.** It is `HttpOnly` by default; keep JWTs out of `localStorage` and use same-origin requests so the browser sends the cookie automatically.
 - **Don't increase `accessTtl`.** Short access tokens limit the damage from a stolen token; renewal via refresh token already provides convenience for the user.
 - **Show the API key and recovery codes only once** — that's how the module works; don't store them in plain text on your side.
-- **Don't disable `loginThrottle` in production**, and keep the "always 200" responses on the forgot/verify routes (already the default), so as not to reveal which emails have an account.
+- **Don't disable `loginThrottle` / `ipLoginThrottle` in production.** Besides wrong passwords, they bound the `AUTH_MFA_REQUIRED` password oracle on MFA accounts (it is only returned for a correct password and is counted like a failure).
+- **Keep the "always 200" responses** on the forgot/verify routes (already the default), so as not to reveal which emails have an account.
 - **In a cluster (multiple machines)**, use shared stores (database/Redis) instead of the `Memory*` ones, or sessions and lockouts won't be shared across processes.

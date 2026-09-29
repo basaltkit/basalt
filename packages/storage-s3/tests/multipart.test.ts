@@ -147,7 +147,7 @@ describe('S3StorageDriver.putStream multipart (BK-021)', () => {
     expect((sent[0] as PutObjectCommand).input.Body).toBe(body)
   })
 
-  it('keeps the buffered single-request path when maxBytes is set, and still enforces the cap mid-stream', async () => {
+  it('sends a body under one part as a single PutObject when maxBytes is set, and still enforces the cap mid-stream', async () => {
     const sent = mockSend()
     const disk = new Disk('uploads', new S3StorageDriver(base), { scope: null })
     await disk.putStream('small.bin', unknownLength(2 * MiB), { contentType: 'application/octet-stream', maxBytes: 4 * MiB })

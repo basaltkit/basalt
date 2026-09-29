@@ -89,6 +89,21 @@ await disk.list('docs')  // ['docs/read-me.txt', ...] — recursive, sorted
 await disk.list()        // every file in the current scope
 ```
 
+`list` returns keys **relative to the disk's scope** — the keys `put`/`get`
+take — so a listed key goes straight back into `get()`. Inside tenant `acme`,
+the object `tenants/acme/docs/read-me.txt` lists as `docs/read-me.txt`; only a
+central disk (`scope: null`) sees the `tenants/…` prefix, because there it is
+part of the key. A prefix is a directory on every driver: `list('docs')` means
+`list('docs/')` and never matches `docs2/…`, even on object stores whose own
+listing is a plain string match.
+
+::: warning Upgrading from @basaltkit/storage 4.x
+A tenant-scoped disk used to return `tenants/<id>/docs/read-me.txt`, which
+`get()` then prefixed a second time. Remove any code that stripped the prefix by
+hand, and do not rely on `list('invoice')` matching `invoice-2026/…` on a cloud
+driver — list the directory itself. Central disks return what they did.
+:::
+
 `get` on a missing file throws `StorageFileNotFoundError`.
 
 ## Validating keys & uploads
@@ -162,33 +177,40 @@ while the source is destroyed (Node `Readable`) or cancelled (web
 
 | Capability | S3 | Azure | GCS | Local |
 | --- | --- | --- | --- | --- |
-| `putStream` | `PutObject` with `contentLength` or `maxBytes`; multipart without either | `uploadStream` (any length) | `createWriteStream` (any length) | `fs` write stream |
+| `putStream` | `PutObject` with `contentLength`; multipart without it | `uploadStream` (any length) | `createWriteStream` (any length) | `fs` write stream |
 | `getStream` | `GetObject` body | `download()` | `createReadStream` | `fs` read stream |
 | `copy` | `CopyObject` | `syncCopyFromURL` (≤ 256 MiB) | `file.copy()` | `fs.copyFile` |
 | `stat` | `HeadObject` | `getProperties()` | `getMetadata()` | `fs.stat` (size + mtime only) |
 
+`contentLength` is held to its word. A value that is not a non-negative safe
+integer is refused before anything is read
+(`400 STORAGE_CONTENT_LENGTH_INVALID`); a body that carries more or fewer bytes
+fails with `400 STORAGE_CONTENT_LENGTH_MISMATCH` — always **before** its end
+reaches the driver. S3, GCS and Azure commit an upload only when the body ends,
+so nothing is stored, and `local` removes its partial file.
+
 ::: warning S3 and the body length
 `PutObject` cannot send a body of unknown size. `putStream` streams straight
-through when you pass `contentLength`; with only `maxBytes` it buffers up to
-that cap (bounded memory, chosen deliberately). With **neither**, the driver
-uploads the body **multipart** — any size, with only
-`partSizeBytes × queueSize` in memory — provided the optional peer
+through when you pass `contentLength`. Without it, the driver uploads the body
+**multipart** — any size, with only `partSizeBytes × queueSize` (20 MiB by
+default) in memory, **even when `maxBytes` is set**: the cap is enforced
+mid-stream, it never becomes a buffer — provided the optional peer
 `@aws-sdk/lib-storage` is installed:
 
 ```bash
 pnpm add @aws-sdk/lib-storage
 ```
 
-It is loaded lazily, only on that path, so an app that does not install it is
-unaffected — and there `putStream` with neither option still throws
-`StorageStreamLengthRequiredError` (`400 STORAGE_STREAM_LENGTH_REQUIRED`),
-naming the package that would allow it. Tune the upload with the `partSizeBytes`
+It is loaded lazily, only on that path. Without it an unknown length can only
+be one buffered `PutObject`: with `maxBytes`, up to that cap in memory; with
+neither option, `StorageStreamLengthRequiredError`
+(`400 STORAGE_STREAM_LENGTH_REQUIRED`), naming the package that would allow it. Tune the upload with the `partSizeBytes`
 (default 5 MiB, S3's minimum) and `queueSize` (default 4) disk options. A failed
 part — the `maxBytes` cap included — aborts the upload and destroys the source,
 so no orphan parts are left; add an `AbortIncompleteMultipartUpload` lifecycle
 rule to the bucket as the belt-and-braces, since incomplete parts are invisible
 in listings and billed until removed. Azure and GCS chunk unknown-length streams
-natively.
+natively, in bounded memory.
 :::
 
 `copy` falls back when a server-side copy is impossible — a different driver, or
@@ -463,7 +485,7 @@ Everything from `PutOptions` (`maxBytes`, `allowedContentTypes`) plus:
 | Option | Type | Default | Why |
 | --- | --- | --- | --- |
 | `contentType` | `string` | — (required) | A stream has no bytes to fall back on, so the type is declared up front and checked against `allowedContentTypes` before any byte is read |
-| `contentLength` | `number` | none | Exact body size when known. **Required by S3** unless `maxBytes` is set |
+| `contentLength` | `number` | none | Exact body size when known — S3 streams it into one `PutObject`. Validated up front and verified against the body (`STORAGE_CONTENT_LENGTH_INVALID` / `_MISMATCH`, 400) |
 
 ### `CopyOptions` (per `copy`)
 
@@ -540,6 +562,8 @@ The disposition default is honoured by all three signing drivers — S3
 | `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | `getStream` on a driver without the capability |
 | `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | `copy({ requireServerSide: true })` with no server-side copy available (a different driver, or one without `copy`) |
 | `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | `stat` on a driver without the capability |
+| `StorageContentLengthInvalidError` | `STORAGE_CONTENT_LENGTH_INVALID` (400) | `putStream` with a `contentLength` that is negative, fractional, not finite or past `MAX_SAFE_INTEGER` — nothing is read |
+| `StorageContentLengthMismatchError` | `STORAGE_CONTENT_LENGTH_MISMATCH` (400) | The `putStream` body carried more or fewer bytes than its `contentLength` — nothing is committed |
 | `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` (400) | `putStream` on S3 with neither `contentLength` nor `maxBytes`, and without the optional `@aws-sdk/lib-storage` peer that enables multipart |
 | `StorageSigningEndpointInvalidError` | `STORAGE_SIGNING_ENDPOINT_INVALID` (400) | An `endpoint` override that is not an absolute `http(s)` URL, or carries credentials, a query string or a fragment |
 
@@ -565,7 +589,7 @@ export class MyStorageDriver implements StorageDriver {
   async get(path: string): Promise<Buffer> { /* throw StorageFileNotFoundError on miss */ throw 0 }
   async exists(path: string): Promise<boolean> { /* … */ return false }
   async delete(path: string): Promise<boolean> { /* returns whether it existed */ return false }
-  async list(prefix: string): Promise<string[]> { /* keys under the prefix */ return [] }
+  async list(prefix: string): Promise<string[]> { /* full keys starting with prefix — the Disk strips the scope */ return [] }
   async temporaryUrl(path: string, expiresInMs: number): Promise<string> { /* optional */ throw 0 }
   // optional: pre-signed PUT — bind options.contentType (+ length/checksum) and return the headers to send
   async temporaryUploadUrl(path: string, expiresInMs: number, options: TemporaryUploadUrlDriverOptions): Promise<TemporaryUploadUrl> { throw 0 }

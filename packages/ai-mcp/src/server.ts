@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto'
+import { createRequire } from 'node:module'
 import type { IncomingMessage } from 'node:http'
 import {
   McpServer,
@@ -9,6 +10,7 @@ import {
   type ServeStdioOptions,
   type StdioHandle,
 } from '@basaltkit/mcp-core'
+import { assertDevOnly } from './guard.js'
 import { createSession, type SessionOptions } from './session.js'
 import { analyzeTool } from './tools/analyze.js'
 import { doctorTool } from './tools/doctor.js'
@@ -19,7 +21,8 @@ import { projectResources } from './resources/project.js'
 import { knowledgeResources } from './resources/knowledge.js'
 import { workflowPrompts } from './prompts/workflows.js'
 
-export const AI_MCP_VERSION = '0.1.0'
+/** The published package version, read from its own `package.json` so it can't drift. */
+export const AI_MCP_VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version
 const SERVER_INFO = { name: 'basalt-ai-mcp', version: AI_MCP_VERSION }
 
 export type AiMcpOptions = SessionOptions
@@ -28,9 +31,13 @@ export type AiMcpOptions = SessionOptions
  * Build the read-only AI MCP server: the `basalt_analyze` / `basalt_doctor`
  * tools plus the `basalt://project/*` and `basalt://knowledge/*` resources,
  * wired into a generic `@basaltkit/mcp-core` server. Programmatic entry for
- * tests and the bin — never imported by an application's runtime.
+ * tests and the bin — never imported by an application's runtime. Throws
+ * `AiMcpProductionError` when `NODE_ENV` is `production` (unless
+ * `allowProduction`), so every entry point (stdio, HTTP, embedded) is guarded.
  */
 export function buildAiMcpServer(options: AiMcpOptions = {}): McpServer {
+  // Dev-only at runtime too: refuse a production process (see guard.ts).
+  assertDevOnly(options.env ?? process.env, options.allowProduction === true)
   const session = createSession(options)
   return new McpServer({
     tools: [analyzeTool(session), doctorTool(session), planTool(session), reviewTool(session), makeTool(session)],
@@ -88,7 +95,7 @@ export function bearerAuthorizer(token: string): (req: IncomingMessage) => boole
  * `token`, a session is bound to it (the default `principal` hashes the
  * `Authorization` header).
  */
-export function createAiMcpHttpServer(options: HttpStartOptions = {}): Promise<HttpHandle> {
+export async function createAiMcpHttpServer(options: HttpStartOptions = {}): Promise<HttpHandle> {
   const server = buildAiMcpServer(options)
   const httpOptions: ServeHttpOptions = {}
   if (options.port !== undefined) httpOptions.port = options.port

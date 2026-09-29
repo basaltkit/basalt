@@ -399,6 +399,9 @@ Isto não é uma convenção que se peça às pessoas para lembrarem — é **te
 - O `packages/ai-mcp/test/boundary.test.ts` percorre o *grafo de imports transitivo* a
   partir das entradas da ponte de dev e falha se alguma vez chegar ao
   `@basaltkit/core`, `@basaltkit/http`, `@basaltkit/mcp` ou `@basaltkit/cli`.
+- Em runtime, o `@basaltkit/ai-mcp` recusa arrancar com `NODE_ENV=production` (salvo
+  `--allow-production`), por isso um processo em produção que o tenha puxado mesmo
+  assim falha de forma visível em vez de expor ferramentas que escrevem código.
 
 Assim a fronteira não pode apodrecer em silêncio: no momento em que a camada de IA
 tocar no runtime, o CI fica vermelho. Todos os SaaS feitos com o ecossistema mantêm a

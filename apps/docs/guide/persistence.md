@@ -187,7 +187,7 @@ store each, SQLite for a single node and Prisma for a shared database:
 | Audit trail | `AuditStore` (append-only) | `sqliteAuditStore()` | `prismaAuditStore(prisma)` |
 | Activity feed | `ActivityStore` | `sqliteActivityStore()` | `prismaActivityStore(prisma)` |
 | In-app notifications | `InAppStore` | `sqliteInAppStore()` | `prismaInAppStore(prisma)` |
-| Permissions | `AccessStore` | `sqliteAccessStore()` | `prismaAccessStore(prisma)` |
+| Permissions | `AccessStore`, `TemporaryGrantStore`, `DelegationStore` | `sqliteAccessStore()` | `prismaAccessStore(prisma)` |
 
 ```ts
 import { auditPlugin } from '@basaltkit/audit'
@@ -207,7 +207,14 @@ unchanged.
 
 `@basaltkit/permissions` follows the same shape: `permissionsPlugin({ store })`
 takes the durable `AccessStore` (role assignments and grants, scoped), so RBAC
-state survives a restart too. `@basaltkit/flags` needs no backend — feature flags
+state survives a restart too. The same factories also return durable
+`temporaryGrants` and `delegations` stores — pass them to keep time-boxed grants
+(`grantTemporarily()`) and delegations (`delegate()`) across restarts and
+instances: `permissionsPlugin({ store: p.store, temporaryGrants: p.temporaryGrants,
+delegations: p.delegations })`. On Prisma they need the `PermTemporaryGrant` and
+`PermDelegation` models (`basalt prisma:sync`), looked up on first use — an app
+that does not wire them needs neither. Expired rows are inert; delete them with
+`pruneExpired()` from a scheduled job. `@basaltkit/flags` needs no backend — feature flags
 are declared in code and evaluated deterministically, with nothing to persist.
 
 ### Verifiable audit trail
@@ -223,8 +230,14 @@ auditPlugin({
 ```
 
 Each entry is linked to the previous one of its tenant's chain (`seq`, `prevHash`,
-`hash` = SHA-256 over a canonical serialization), with one chain per tenant plus a
-system chain. `audit.verify({ tenantId, from?, to? })` — or `basalt audit:verify
+`hash` = SHA-256, or HMAC-SHA256 under a key, over a canonical serialization), with
+one chain per tenant plus a system chain. The hash names its algorithm and key id
+(`v2:hmac-sha256:<keyId>:<hex>`), so a key can be rotated without breaking
+history: sign with the new `key`/`keyId` and keep the old one in `verifyKeys` —
+`verify` picks each entry's key by its id. Legacy (bare 64-hex) hashes written by
+earlier releases keep verifying under any key held. The hash column needs up to 144
+characters (it fits the MySQL preset's `VARCHAR(191)`).
+`audit.verify({ tenantId, from?, to? })` — or `basalt audit:verify
 [--tenant=<id> | --all]` — detects edited, deleted, reordered and forged rows. Both
 stores put a **unique constraint on `(chain, seq)`**, so replicas appending at the
 same time retry instead of forking a chain. Rows written before `integrity` was
@@ -236,7 +249,10 @@ gap: pass a head recorded elsewhere as `verify({ expectedHead })` (or
 `--expected-head=<seq>:<hash>`) to detect truncation. `--all` also checks
 tenants that have rows but no chain (their rows written after integrity began
 fail as `unchained-entry`); `--all=true` is read as `--all`, and an unrecognised
-value is an error.
+value is an error. An entry signed by a key id the verifier does not hold fails
+as `unknown-key`, and a second row at one `seq` fails as `sequence-duplicate`
+wherever it falls — page boundaries included, for a custom store without the
+unique constraint.
 
 `requestContext: true` adds an HTTP enricher (fastify, express and hono alike) and
 stores the client `ip` and `userAgent`. The IP is PII: with
@@ -590,7 +606,7 @@ un-configured factory is still safe in tests.
 | Audit | `sqliteAuditStore()` | `prismaAuditStore(client)` | `auditPlugin({ store })` |
 | Activity | `sqliteActivityStore()` | `prismaActivityStore(client)` | `activityPlugin({ store })` |
 | Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
-| Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store })` |
+| Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store, temporaryGrants, delegations })` |
 | Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — returns the source itself, not `{ store }` |
 | Events outbox | `sqliteOutboxStore()` | `prismaOutboxStore(client, { claim? })` | `outboxPlugin({ store })` |
 | Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |

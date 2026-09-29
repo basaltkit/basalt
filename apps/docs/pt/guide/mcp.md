@@ -97,6 +97,40 @@ tenant no pedido `POST /mcp`; por stdio, passa `headers` estáticos ao
 `serveMcpStdio`.
 :::
 
+### O que o modelo vê quando uma tool falha {#what-the-model-sees-when-a-tool-fails}
+
+O cliente MCP é um modelo de linguagem — e qualquer pessoa que consiga ler ou
+conduzir o seu contexto (uma prompt injection, uma transcrição, um log da
+conversa). Trata um resultado de tool como uma resposta enviada a um cliente
+não confiável. Quando o handler, um guard ou a validação de uma tool lança, o
+resultado leva `isError: true` e o mesmo `{ code, message, details? }` que um
+cliente HTTP receberia, com estas fronteiras:
+
+| Canal | Chega ao modelo? | Notas |
+| --- | --- | --- |
+| `code`, `message` | sim | Um 500 do toolkit ou um erro `expose: false` envia uma mensagem neutra, tal como em HTTP |
+| `details` | sim — **redigido** | Sanitizado na forma e depois passado por `redactErrorDetails` (por omissão `redactSensitiveDetails`: o valor de qualquer chave que nomeie um segredo — `password`, `resetToken`, `apiKey`, `secret`, `sessionId`, … — passa a `'[REDACTED]'`; booleanos/`null` mantêm-se) |
+| `internalDetails` | **nunca** | Só para o log: entregue a `reportError` (por omissão, o reporter de consola) com o erro intacto |
+| stack, cause, texto de exceções inesperadas | nunca | Erros inesperados passam a `INTERNAL_ERROR` |
+| um corpo que o teu handler envia (`reply.code(4xx).send(body)`) | sim — **tal e qual** | É o contrato de resposta da rota; aí nada é redigido |
+
+```ts
+mcpPlugin({
+  routes,
+  redactErrorDetails: (details) => ({ failed: details.failed }), // a tua própria allowlist
+  reportError: (report) => logger.warn(report, 'tool call failed'),
+})
+
+// Por rota: substitui (ou desliga com `false`) só para essa tool.
+route({ method: 'POST', url: '/kyc', meta: { mcp: { redactErrorDetails: false } }, handler })
+```
+
+A redação é defesa em profundidade, não uma licença: mantém `details` público
+por construção e põe os dados só para o operador em `internalDetails`. Os
+adapters HTTP não redigem por omissão (o output deles não muda); usa
+`toErrorResponse(error, { redactDetails })` no teu próprio adapter ou error
+handler para o mesmo filtro.
+
 ## Schemas e argumentos das tools
 
 **Os nomes das tools** vêm do método e do path da rota: `GET /skills` →
@@ -329,6 +363,8 @@ As tabelas abaixo são as opções públicas completas dos quatro pontos de entr
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | O que o `initialize` reporta aos clientes |
 | `filter` | `(route: BasaltRoute) => boolean` | expõe todas as rotas com opt-in | Um portão ao nível do deployment por cima do `meta.mcp` (ex.: esconder rotas de admin num ambiente) |
 | `forwardHeaders` | `string[]` | nenhum | Headers extra que uma chamada de tool herda, além de `DEFAULT_FORWARDED_HEADERS` (ex.: um header de tenant próprio); todos os outros são descartados |
+| `redactErrorDetails` | `ErrorDetailsRedactor \| false` | `redactSensitiveDetails` | Filtra os `details` públicos de um erro lançado antes de entrarem num resultado de tool (ver [O que o modelo vê](#what-the-model-sees-when-a-tool-fails)); `false` envia-os como o HTTP enviaria. Uma rota substitui-o com `meta.mcp.redactErrorDetails` |
+| `reportError` | `HttpErrorReporter \| false` | reporter de consola | Recebe cada erro que uma chamada de tool lança, `internalDetails` incluído; `false` não reporta nada |
 
 ### `mcpRoutes(options)`
 
@@ -383,6 +419,7 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | Por stdio, `-32000` `Too many requests in flight` | Mais de `maxConcurrentRequests` chamadas em simultâneo na ligação | Espera pelas respostas, ou aumenta `serveMcpStdio(app, { maxConcurrentRequests })` |
 | Uma tool lê um header que chega `undefined` | O header não está na allowlist de headers encaminhados | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | O Claude Desktop mostra um servidor morto/quebrado | Algo imprimiu no stdout — ele é o canal JSON-RPC | `logLevel: 'silent'`, remove `console.log`; vê a checklist de stdio acima |
+| `'[REDACTED]'` nos `details` de um erro de tool | A chave nomeia um segredo e o `redactErrorDetails` por omissão mascarou-a | Renomeia a chave se não for um segredo, move segredos para `internalDetails`, ou passa o teu próprio `redactErrorDetails` |
 | Resposta `202` do `POST /mcp` com corpo vazio | A mensagem era uma *notificação* JSON-RPC — por spec não recebe resposta | Comportamento esperado, não é um erro |
 
 ## Testar com o MCP Inspector

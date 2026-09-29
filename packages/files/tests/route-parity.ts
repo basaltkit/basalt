@@ -97,14 +97,14 @@ export function fileRoutesParitySuite(adapter: string, driver: ParityDriver): vo
         body: chunked(body, 64 * 1024),
       })
       expect(res.status).toBe(201)
-      const [record] = res.json as FileRecord[]
-      expect(record).toMatchObject({
-        name: 'contrato.pdf',
-        contentType: 'application/pdf',
-        size: PDF.length,
-        tenantId: 'acme',
-        uploadedBy: 'alice',
-      })
+      const [answered] = res.json as Record<string, unknown>[]
+      expect(answered).toMatchObject({ name: 'contrato.pdf', contentType: 'application/pdf', size: PDF.length })
+      // The public projection: the storage path, checksum and uploader stay server-side.
+      expect(answered).not.toHaveProperty('path')
+      expect(answered).not.toHaveProperty('checksum')
+      expect(answered).not.toHaveProperty('uploadedBy')
+      const record = (await store.find('acme', answered!['id'] as string))!
+      expect(record).toMatchObject({ tenantId: 'acme', uploadedBy: 'alice' })
       // Stored, byte for byte, and written in pieces rather than buffered whole.
       // (The driver key carries the disk's own prefix on top of `record.path`.)
       const key = [...disk.driver.files.keys()].find((name) => name.endsWith(record!.path))!
@@ -221,8 +221,9 @@ export function fileRoutesParitySuite(adapter: string, driver: ParityDriver): vo
         body: chunked(multipart([{ name: 'doc', filename: 'a.pdf', type: 'application/pdf', data: PDF }]), 64 * 1024),
       })
       expect(res.status).toBe(201)
-      const [record] = res.json as FileRecord[]
-      const key = [...disk.driver.files.keys()].find((name) => name.endsWith(record!.path))!
+      const [answered] = res.json as { id: string }[]
+      const record = (await store.find('acme', answered!.id))!
+      const key = [...disk.driver.files.keys()].find((name) => name.endsWith(record.path))!
       const streamOptions = disk.driver.streamOptions.get(key)
       expect(streamOptions?.contentLength).toBeUndefined()
       // Nothing is invented: the backend gets the configured cap as its bound.

@@ -15,7 +15,7 @@ import {
   type McpToolDef,
   type McpToolResult,
 } from '@basaltkit/mcp-core'
-import { collectTools, type McpTool, type ToolCallContext } from './tools.js'
+import { collectTools, type McpTool, type ToolCallContext, type ToolErrorOptions } from './tools.js'
 import { type JsonRpcRequest, type JsonRpcResponse } from './protocol.js'
 
 export interface McpServerInfo {
@@ -23,7 +23,7 @@ export interface McpServerInfo {
   version: string
 }
 
-export interface McpServerOptions {
+export interface McpServerOptions extends ToolErrorOptions {
   routes: BasaltRoute[]
   container: Container
   serverInfo?: McpServerInfo
@@ -85,6 +85,8 @@ export class McpServer {
     const tools = collectTools(options.routes, options.container, {
       ...(options.filter ? { filter: options.filter } : {}),
       ...(options.forwardHeaders ? { forwardHeaders: options.forwardHeaders } : {}),
+      ...(options.redactErrorDetails !== undefined ? { redactErrorDetails: options.redactErrorDetails } : {}),
+      ...(options.reportError !== undefined ? { reportError: options.reportError } : {}),
     }).map(toToolDef)
     this.core = new CoreServer({ tools, serverInfo: this.serverInfo })
   }
@@ -118,7 +120,7 @@ export class McpServer {
 
 export const MCP = createToken<McpServer>('mcp')
 
-export interface McpPluginOptions {
+export interface McpPluginOptions extends ToolErrorOptions {
   /** The routes to scan for `meta.mcp` — typically the same array you pass the adapter. */
   routes: BasaltRoute[]
   serverInfo?: McpServerInfo
@@ -149,6 +151,8 @@ export function mcpPlugin(options: McpPluginOptions) {
             ...(options.serverInfo ? { serverInfo: options.serverInfo } : {}),
             ...(options.filter ? { filter: options.filter } : {}),
             ...(options.forwardHeaders ? { forwardHeaders: options.forwardHeaders } : {}),
+            ...(options.redactErrorDetails !== undefined ? { redactErrorDetails: options.redactErrorDetails } : {}),
+            ...(options.reportError !== undefined ? { reportError: options.reportError } : {}),
           }),
       )
     },

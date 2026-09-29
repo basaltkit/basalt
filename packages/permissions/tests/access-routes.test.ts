@@ -73,7 +73,7 @@ describe('F-21 · accessRoutes()', () => {
     // would make the frontend treat "not logged in" as an error.
     const { app: a, pedir } = await montar()
 
-    expect(await pedir(undefined, 'acme')).toEqual({ roles: [], permissions: [] })
+    expect(await pedir(undefined, 'acme')).toEqual({ roles: [], permissions: [], superAdmin: false, grants: [] })
 
     await a.shutdown()
   })
