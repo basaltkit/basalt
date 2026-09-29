@@ -276,7 +276,7 @@ Every call resolves its tenant like `@basaltkit/files`: the context tenant wins,
 >   const secret = box.seal(plain, { ...context, tenantId: SINGLE_TENANT_SCOPE })
 >   await db.driveConnection.update({ where: { id: row.id }, data: { tenantId: SINGLE_TENANT_SCOPE, secret } })
 > }
-> // then, for the import ledger:  UPDATE <ledger table> SET "tenantId" = '@single' WHERE "tenantId" = 'default'
+> // then, for the import ledger:  UPDATE your_import_ledger SET "tenantId" = '@single' WHERE "tenantId" = 'default'
 > ```
 >
 > Skip it if `default` was ever a real tenant in that database. An authorization started before the upgrade fails its callback once (its `state` names the old key); the user just connects again.
