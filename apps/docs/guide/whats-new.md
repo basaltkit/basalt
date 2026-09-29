@@ -4,15 +4,19 @@
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
 
-::: warning Thirty-two packages publish a major
-`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 3
+::: warning Thirty-two packages publish a major — six of them twice
+`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 4
 (`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
-`storage` 4, `files` 5, `comments` 4, `search` 2, `search-elasticsearch` 2,
-`audit` 2 (`audit-prisma` / `-sqlite` 2), `webhooks` 3 (`webhooks-prisma` /
+`storage` 5, `files` 6, `comments` 4, `search` 2, `search-elasticsearch` 2,
+`audit` 3 (`audit-prisma` / `-sqlite` 2), `webhooks` 4 (`webhooks-prisma` /
 `-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
-`teams` 4, `queue` 3, `prisma` 3, `mcp` 4, `express` 2 and `hono` 2 — and the
-three drive adapters reach 1.0. Three 0.x packages break in a minor:
-`drives` 0.3, `mcp-core` 0.4 and `ai-mcp` 0.2. Most of these are one option or
+`teams` 4, `queue` 3, `prisma` 3, `mcp` 5, `express` 2 and `hono` 2 — and the
+three drive adapters reach 1.0. Some packages went through two majors in this
+wave: `permissions`, `storage`, `files`, `audit`, `webhooks` and `mcp` first
+shipped the audit's fixes (as 3, 4, 5, 2, 3 and 4) and then, a day later, the
+follow-ups in [Closing the harvest](#closing-the-harvest). Coming from 1.11,
+you take both sets of steps. Three 0.x packages break in a minor: `drives` 0.3,
+`mcp-core` 0.4 and `ai-mcp` 0.3 (by way of 0.2). Most of these are one option or
 one renamed call; four need a data step (a re-key, a re-encryption, two new
 auth models, regenerated RLS policies). See [Upgrading](#upgrading).
 :::
@@ -44,6 +48,13 @@ every item below: a single-tenant key that could not be a tenant's name, a
 resolver that could not be overruled by a header, three adapters that send the
 same bytes for the same route, an MCP endpoint that knows which session it is
 talking to.
+
+The report also ended with a harvest: design gaps and improvements beyond its
+eighty numbered findings. Two more pull requests closed that list after the
+release and ship inside the same wave — policies that run in the route guard,
+error details that are public by construction, audit hashes that name their
+key, webhooks that respect a port policy and a fan-out cap, and more. See
+[Closing the harvest](#closing-the-harvest).
 
 ## Highlights
 
@@ -194,6 +205,69 @@ talking to.
   reach 1.0. *(`@basaltkit/drives` 0.3, `drives-dropbox` / `drives-google` /
   `drives-microsoft` 1.0)*
 
+### Closing the harvest
+The audit's report did not stop at its eighty findings: it closed with a
+harvest of design gaps and improvements. Two pull requests landed after the
+release and finished that list, so they ship inside 1.12 — and six packages
+publish their second major of the wave.
+- **Policies run in the route guard.** A plain `meta.can` was RBAC only: the
+  guard never passed a resource, so a policy registered with `definePolicy`
+  never decided a route. `meta.can` now also takes `{ permission, resource,
+  notFound? }`, alone or in an all-of array: the guard loads the resource with
+  the route's parsed input, calls `gate.authorize(user, permission, resource)`,
+  answers 404 `RESOURCE_NOT_FOUND` for a missing one (or an audited 403 with
+  `notFound: 'deny'`), and the handler reads it back with `canResource()`. A
+  requirement no registered policy decides refuses the boot.
+  *(`@basaltkit/permissions` 4.0)*
+- **`hasRole()` answers membership, and `/me/access` shows every door that
+  opens.** A super admin no longer "holds" every role name ever typed — the
+  bypass is authority, not membership, and `gate.isSuperAdmin()` asks for it
+  explicitly. `GET /me/access` now comes from `gate.describeAccess()`: global
+  grants, temporary grants, delegations and the super-admin bypass, each with its
+  source. Temporary grants and delegations get durable stores, so they survive a
+  restart and are seen by every instance. *(`@basaltkit/permissions` 4.0,
+  `permissions-prisma` / `-sqlite` 2.1)*
+- **Error details are public by construction.** `new HttpError(…, {
+  internalDetails })` is a log-only channel the error reporter receives and no
+  response or tool result ever carries. `@basaltkit/mcp` passes a thrown error's
+  `details` through `redactSensitiveDetails` before they reach the model, and
+  tool-call errors, which used to vanish, are reported. *(`@basaltkit/http` 2.7,
+  `mcp` 5.0)*
+- **Audit hashes name their algorithm and their key.** New entries are
+  `v2:sha256:…` or `v2:hmac-sha256:<keyId>:…`, so the HMAC key can be rotated
+  (`keyId`, `verifyKeys`) without failing every entry the old key signed; v1
+  entries keep verifying. `verify()` also catches a duplicate `seq` at a page
+  boundary. *(`@basaltkit/audit` 3.0, `audit-prisma` / `-sqlite` 2.0.1)*
+- **Webhooks respect a port policy and a fan-out cap.** Deliveries go to `80`,
+  `443` or an unprivileged port outside `DEFAULT_BLOCKED_PORTS` — no longer to
+  an exposed Redis or Postgres. DNS resolution runs inside the per-attempt
+  deadline, a dispatch to more than 100 endpoints per event and scope is
+  refused, at most 16 deliveries run at once, and `rotateSecret()` signs with
+  both secrets for a grace window. *(`@basaltkit/webhooks` 4.0,
+  `webhooks-prisma` / `-sqlite` 2.1)*
+- **Storage hands back the keys it takes, and holds lengths to their word.**
+  `list()` on a tenant disk returns `a/1.txt`, not `tenants/<id>/a/1.txt`, which
+  `get()` then prefixed a second time; the prefix is a directory on every
+  driver. A `contentLength` is validated and counted, and a body that
+  contradicts it is never committed. S3 streams an unknown-length upload by
+  multipart instead of buffering it. *(`@basaltkit/storage` 5.0, `storage-s3`
+  1.4)*
+- **File routes answer a public projection.** `GET /files` and friends returned
+  the raw record — storage path, checksum, `uploadedBy`, the scanner's output.
+  They now send `toPublicFile(record)`, and `fileRoutes({ present })` chooses
+  another shape. *(`@basaltkit/files` 6.0)*
+- **A suspended tenant is a 403, and an unknown status fails closed.** Every
+  status other than `ready` used to be a 503 "still being provisioned" —
+  including `suspended`, so clients retried a locked-out account.
+  *(`@basaltkit/tenancy` 3.1)*
+- **The MFA step is no longer a password oracle.** `AUTH_MFA_REQUIRED` is only
+  returned for a correct password, so it now counts against the login throttles
+  like a wrong one. *(`@basaltkit/auth` 4.1)*
+- **The AI bridge enforces "dev-only".** `ai-mcp` refuses to start under
+  `NODE_ENV=production` without an explicit override, and a tool's
+  `workspaceRoot` must resolve inside the project root. *(`@basaltkit/ai-mcp`
+  0.3)*
+
 ### Docs
 - Every guide the fixes touched was updated, in English and Portuguese: [wire
   behaviour on the three adapters](/guide/adapters#wire-behaviour-—-identical-on-all-three),
@@ -205,6 +279,14 @@ talking to.
   index](/guide/search#rebuilding-an-index), [encrypting TOTP secrets at
   rest](/guide/auth#mfa-encryption) and [upgrading drives from
   0.2.x](/guide/drives#upgrading-from-0-2-x).
+- The harvest added [policies in the
+  guard](/guide/authorization#policies-in-the-guard-resource-requirements),
+  [`GET /me/access`](/guide/authorization#what-may-i-do-—-get-me-access),
+  [what the model sees when a tool
+  fails](/guide/mcp#what-the-model-sees-when-a-tool-fails), and the webhook
+  [port policy](/guide/webhooks#port-policy), [fan-out cap](/guide/webhooks#fan-out-cap)
+  and [secret rotation](/guide/webhooks#rotating-a-signing-secret);
+  `CONTRIBUTING.md` gained a testing checklist.
 
 ## Upgrading
 
@@ -315,6 +397,96 @@ Nothing changes on PostgreSQL or SQLite, or on MySQL until you ask. To adopt it,
 let `basalt prisma:sync` copy the `schema.mysql.prisma` variants, migrate, and
 pass `columnLimits: 'mysql'` to the store factories. The
 [MySQL guide](/guide/persistence#mysql) has the details.
+
+### What the harvest changes
+
+These are the steps for the versions in [Closing the
+harvest](#closing-the-harvest). Coming from 1.11, apply them on top of
+everything above: the rows for `permissions` 3, `storage` 4, `files` 5,
+`audit` 2, `webhooks` 3 and `mcp` 4 still hold for the next major. None of these
+needs a data migration unless you opt into a new store or column.
+
+**`permissions` 4 — `hasRole()` is membership.** `gate.hasRole(user, role)` no
+longer returns `true` for every role to a super admin; `can()`, `authorize()`
+and `meta.can` still honour the bypass. Where `hasRole()` was an authorization
+check, check the permission instead, or ask for the bypass explicitly:
+
+```ts
+if ((await gate.isSuperAdmin(user)) || (await gate.hasRole(user, 'billing-manager'))) { … }
+```
+
+`GET /me/access` keeps `roles` and `permissions` — clients now see more, correct,
+entries: global roles and grants, live temporary grants and delegations, `'*'`
+for a super admin — and adds `superAdmin` and `grants` (each permission with its
+`source`). The durable temporary-grant and delegation stores are opt-in: with
+`permissions-prisma`, wiring them means adding `PermTemporaryGrant` and
+`PermDelegation` (`basalt prisma:sync`) and migrating; `permissions-sqlite`
+creates the tables in `migrate()`.
+
+**`audit` 3 — v2 hashes.** New entries use the v2 format; existing v1 entries
+keep verifying and new entries chain onto them, so there is nothing to migrate.
+But:
+
+- **Do not roll back** to an earlier `@basaltkit/audit` after writing v2
+  entries — it cannot verify them.
+- Code that assumed a 64-hex `hash` (a column, a regex, `--expected-head`) must
+  allow up to 144 characters; the bundled stores and the MySQL preset fit it.
+- Tooling that recomputes hashes: `computeAuditHash()` still computes v1 — use
+  `computeAuditHashV2()` or `checkAuditHash(entry, keysById)`.
+- An exhaustive `switch` over `AuditVerifyFailure` needs an `'unknown-key'` case.
+- To rotate the key: `integrity: { mode: 'hash-chain', key: NEW, keyId:
+  '2026-09', verifyKeys: [OLD] }`.
+
+**`webhooks` 4 — ports, fan-out and concurrency.** An endpoint on a blocked port
+is refused at `register()` and at delivery: allow it with `ssrf: { allowedPorts:
+[…] }` (or `'any'`). A dispatch to more than 100 matching endpoints in one scope
+is refused — raise `maxEndpointsPerDispatch`. At most 16 deliveries run at once
+(`dispatchConcurrency`). To use `rotateSecret()`, Prisma users add
+`previousSecret` / `previousSecretExpiresAt` (`basalt prisma:sync`) and migrate
+first; `webhooks-sqlite` adds the columns in `migrate()`; a custom store must
+persist both fields and clear them when `add()` receives them as `undefined`.
+`@basaltkit/drives` gets the same port policy on every hop.
+
+**`storage` 5 — relative keys and exact lengths.** `Disk.list()` returns keys
+relative to the disk's scope: drop code that stripped `tenants/<id>/` by hand,
+and list a real directory instead of relying on a partial-name prefix match on a
+cloud driver. A `contentLength` that is not a non-negative safe integer is a
+`400 STORAGE_CONTENT_LENGTH_INVALID`; a body that does not match it is a
+`400 STORAGE_CONTENT_LENGTH_MISMATCH` and stores nothing. Custom drivers need no
+change.
+
+**`files` 6 — the routes' shape.** `GET /files`, `GET /files/:id` and
+`POST /files` send `toPublicFile(record)`: no `path`, `checksum`, `tenantId`,
+`uploadedBy` or scan detail. A client that read one of them needs a `present`:
+
+```ts
+fileRoutes({ present: (file) => ({ ...toPublicFile(file), uploadedBy: file.uploadedBy }) })
+```
+
+`files.get()` / `list()` and the `file:*` hooks still return the full record.
+`upload({ contentLength })` is now verified (`413 FILE_TOO_LARGE` up front,
+`400` on a mismatch) — never pass a multipart request's own `Content-Length`.
+
+**`mcp` 5 — redacted details, reported errors.** A value under a secret-named key
+in a thrown error's `details` reaches the model as `'[REDACTED]'`: move
+operator-only data to `internalDetails`, or pass `redactErrorDetails: false` (or
+your own redactor). Tool-call errors now reach `reportError` — the console by
+default; `reportError: false` restores the silence.
+
+**`tenancy` 3.1 — status codes.** A `suspended` tenant answers a non-retryable
+`403 TENANT_SUSPENDED` instead of `503`; a status tenancy does not know (such as
+`active`) is `500 TENANT_STATUS_UNKNOWN`. Store `ready`, or no status, for a
+serving tenant.
+
+**`auth` 4.1 — MFA and the throttle.** A code-less first step on an MFA account
+now spends a login-throttle slot, like a wrong password; size `ipLoginThrottle`
+for large shared-NAT populations.
+
+**`ai-mcp` 0.3 — dev-only, enforced.** It refuses `NODE_ENV=production`
+(`--allow-production`, `allowProduction: true` or
+`BASALT_AI_MCP_ALLOW_PRODUCTION=1` to override), and `basalt_analyze`,
+`basalt_doctor` and `basalt_plan` refuse a `workspaceRoot` outside the project
+root.
 
 ---
 
