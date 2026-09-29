@@ -221,7 +221,7 @@ export class GoogleDrive implements DriveProvider {
    * `accounts.google.com` is **not** on it: the consent URL is handed to a
    * browser and never fetched by the framework, so allowing the host would
    * widen the guard for nothing. `.googleusercontent.com` is on it because the
-   * download redirect genuinely lands there — see {@link CDN_SUFFIX}.
+   * download redirect genuinely lands there — see `CDN_SUFFIX` in this module.
    */
   readonly allowedHosts: readonly string[] = [API_HOST, OAUTH_HOST, CDN_SUFFIX]
   /**

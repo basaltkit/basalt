@@ -8,7 +8,7 @@ export interface Comment {
   parentId?: string
   authorId: string
   body: string
-  /** User ids extracted from @mentions in the body. */
+  /** User ids extracted from `@mentions` in the body. */
   mentions: string[]
   resolvedAt?: number
   resolvedBy?: string

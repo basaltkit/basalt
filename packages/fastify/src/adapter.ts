@@ -42,9 +42,10 @@ import Fastify, {
 // adapts Fastify's request/reply to the neutral shape.
 export type { RequestEnricher, RouteGuard } from '@basaltkit/http'
 
+// Same augmentation as @basaltkit/http's (documented there); repeated so this
+// package type-checks on its own.
 declare module '@basaltkit/core' {
   interface RequestContext {
-    /** Per-request DI scope — `scoped` instances live here. */
     container?: Container
   }
 }

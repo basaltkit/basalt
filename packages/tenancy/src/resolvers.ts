@@ -28,7 +28,7 @@ export type TenantResolver = ((
 }
 
 /**
- * Marks a resolver as authoritative — see {@link TenantResolver.authoritative}.
+ * Marks a resolver as authoritative — see the `authoritative` flag on {@link TenantResolver}.
  * Use it for a custom resolver whose input the platform controls (a claim in a
  * token it signed, a gateway-injected header clients cannot set).
  */

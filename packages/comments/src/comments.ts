@@ -100,7 +100,7 @@ export interface CommentsOptions {
   /** Longest body accepted, in characters. Default {@link DEFAULT_MAX_COMMENT_LENGTH}. */
   maxBodyLength?: number
   /**
-   * Most distinct @mentions one comment may carry — each one emits a
+   * Most distinct `@mentions` one comment may carry — each one emits a
    * `comment:mentioned` hook (a notification). Default {@link DEFAULT_MAX_MENTIONS}.
    */
   maxMentions?: number
@@ -141,7 +141,7 @@ const buildTree = (comments: Comment[]): CommentNode[] => {
 }
 
 /**
- * Per-resource comment threads with @mentions and resolve/reopen, scoped by
+ * Per-resource comment threads with `@mentions` and resolve/reopen, scoped by
  * tenant. Emits hooks (`comment:created`, `comment:mentioned`, …) so live
  * updates (@basaltkit/realtime) and notifications wire up without coupling.
  */
