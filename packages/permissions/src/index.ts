@@ -1132,7 +1132,7 @@ export type PermissionsPluginOptions = GateOptions & {
   resourceNotFound?: CanResourceNotFound
 }
 
-/** See {@link PermissionsPluginOptions.resourceNotFound}. */
+/** See `resourceNotFound` in {@link PermissionsPluginOptions}. */
 export type CanResourceNotFound = 'not-found' | 'deny'
 
 /**

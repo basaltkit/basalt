@@ -153,7 +153,7 @@ export class DropboxDrive implements DriveProvider {
    * host would widen the guard for nothing.
    */
   readonly allowedHosts: readonly string[] = [API_HOST, CONTENT_HOST, NOTIFY_HOST]
-  /** `list_folder` enumerates before it streams changes — see {@link START_CURSOR}. */
+  /** `list_folder` enumerates before it streams changes — see `START_CURSOR` in this module. */
   readonly deltaIncludesExisting = true
   readonly authorization: DriveAuthorization
 
@@ -424,7 +424,7 @@ export class DropboxDrive implements DriveProvider {
     return toDriveItem((await response.json()) as DropboxEntry)
   }
 
-  /** See {@link START_CURSOR}: the feed starts at the folder, not at "now". */
+  /** See `START_CURSOR` in this module: the feed starts at the folder, not at "now". */
   async startDelta(session: DriveSession, options: { folderId?: string | undefined }): Promise<string> {
     return `${START_CURSOR}${dropboxPath(options.folderId ?? session.rootId)}`
   }

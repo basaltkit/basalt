@@ -207,7 +207,7 @@ const toUser = (r: UserRow): AuthUser => ({
 const DEFAULT_ID_CHUNK_SIZE = 500
 
 export interface SqliteUserSourceOptions {
-  /** Ids per `IN (…)` query in `findByIds`. Default {@link DEFAULT_ID_CHUNK_SIZE}. */
+  /** Ids per `IN (…)` query in `findByIds`. Default `DEFAULT_ID_CHUNK_SIZE` (500). */
   idChunkSize?: number
 }
 

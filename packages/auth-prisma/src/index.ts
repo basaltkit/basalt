@@ -292,7 +292,7 @@ const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, '\
 const DEFAULT_ID_CHUNK_SIZE = 500
 
 export interface PrismaUserSourceOptions extends PrismaAuthStoreOptions {
-  /** Ids per `IN (…)` query in `findByIds`. Default {@link DEFAULT_ID_CHUNK_SIZE}. */
+  /** Ids per `IN (…)` query in `findByIds`. Default `DEFAULT_ID_CHUNK_SIZE` (500). */
   idChunkSize?: number
 }
 
