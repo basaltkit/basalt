@@ -5,18 +5,23 @@
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
 > pacote que o traz.*
 
-::: warning Trinta e dois pacotes publicam um major
-`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 3
+::: warning Trinta e dois pacotes publicam um major — seis deles duas vezes
+`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 4
 (`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
-`storage` 4, `files` 5, `comments` 4, `search` 2, `search-elasticsearch` 2,
-`audit` 2 (`audit-prisma` / `-sqlite` 2), `webhooks` 3 (`webhooks-prisma` /
+`storage` 5, `files` 6, `comments` 4, `search` 2, `search-elasticsearch` 2,
+`audit` 3 (`audit-prisma` / `-sqlite` 2), `webhooks` 4 (`webhooks-prisma` /
 `-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
-`teams` 4, `queue` 3, `prisma` 3, `mcp` 4, `express` 2 e `hono` 2 — e os três
-adapters de drives chegam à 1.0. Três pacotes 0.x partem num minor:
-`drives` 0.3, `mcp-core` 0.4 e `ai-mcp` 0.2. A maioria resolve-se com uma opção
-ou uma chamada renomeada; quatro precisam de um passo de dados (uma re-chavagem,
-uma re-cifragem, dois modelos de auth novos, políticas RLS regeneradas). Ver
-[Atualização](#atualizacao).
+`teams` 4, `queue` 3, `prisma` 3, `mcp` 5, `express` 2 e `hono` 2 — e os três
+adapters de drives chegam à 1.0. Alguns pacotes passaram por dois majors nesta
+vaga: `permissions`, `storage`, `files`, `audit`, `webhooks` e `mcp` publicaram
+primeiro as correcções da auditoria (como 3, 4, 5, 2, 3 e 4) e depois, um dia
+mais tarde, os seguimentos de [Fechar a colheita da
+auditoria](#fechar-a-colheita-da-auditoria). Vindo da 1.11, aplicas os dois
+conjuntos de passos. Três pacotes 0.x partem num minor: `drives` 0.3,
+`mcp-core` 0.4 e `ai-mcp` 0.3 (passando pela 0.2). A maioria resolve-se com uma
+opção ou uma chamada renomeada; quatro precisam de um passo de dados (uma
+re-chavagem, uma re-cifragem, dois modelos de auth novos, políticas RLS
+regeneradas). Ver [Atualização](#atualizacao).
 :::
 
 O Basalt 1.12 é a versão que **cumpre o que promete**. Cada pacote faz
@@ -48,6 +53,14 @@ os itens abaixo: uma chave single-tenant que não pode ser o nome de um tenant,
 um resolver que um header não consegue contrariar, três adapters que enviam os
 mesmos bytes para a mesma rota, um endpoint MCP que sabe com que sessão está a
 falar.
+
+O relatório terminava também com uma colheita: lacunas de desenho e melhorias
+para lá das oitenta constatações numeradas. Mais dois pull requests fecharam
+essa lista depois do lançamento e seguem dentro da mesma vaga — políticas que
+correm no guard da rota, detalhes de erro públicos por construção, hashes de
+auditoria que nomeiam a sua chave, webhooks que respeitam uma política de portas
+e um tecto de fan-out, e mais. Ver [Fechar a colheita da
+auditoria](#fechar-a-colheita-da-auditoria).
 
 ## Destaques
 
@@ -206,6 +219,73 @@ falar.
   chegam à 1.0. *(`@basaltkit/drives` 0.3, `drives-dropbox` / `drives-google` /
   `drives-microsoft` 1.0)*
 
+### Fechar a colheita da auditoria
+O relatório da auditoria não parou nas oitenta constatações: fechava com uma
+colheita de lacunas de desenho e melhorias. Dois pull requests aterraram
+depois do lançamento e terminaram essa lista, por isso seguem dentro da 1.12 — e
+seis pacotes publicam o seu segundo major da vaga.
+- **As políticas correm no guard da rota.** Um `meta.can` simples era só RBAC: o
+  guard nunca passava um recurso, por isso uma política registada com
+  `definePolicy` nunca decidia uma rota. O `meta.can` aceita agora também
+  `{ permission, resource, notFound? }`, sozinho ou num array all-of: o guard
+  carrega o recurso com o input já validado da rota, chama
+  `gate.authorize(user, permission, resource)`, responde 404
+  `RESOURCE_NOT_FOUND` quando ele não existe (ou um 403 auditado com
+  `notFound: 'deny'`), e o handler lê-o com `canResource()`. Um requisito que
+  nenhuma política registada decide recusa o arranque.
+  *(`@basaltkit/permissions` 4.0)*
+- **O `hasRole()` responde à pertença, e o `/me/access` mostra todas as portas
+  que abrem.** Um super admin já não "tem" todos os nomes de role alguma vez
+  escritos — o bypass é autoridade, não pertença, e o `gate.isSuperAdmin()`
+  pergunta por ele explicitamente. O `GET /me/access` vem agora do
+  `gate.describeAccess()`: atribuições globais, atribuições temporárias,
+  delegações e o bypass de super admin, cada uma com a sua origem. As
+  atribuições temporárias e as delegações ganham stores duráveis, por isso
+  sobrevivem a um reinício e são vistas por todas as instâncias.
+  *(`@basaltkit/permissions` 4.0, `permissions-prisma` / `-sqlite` 2.1)*
+- **Os detalhes de erro são públicos por construção.** O `new HttpError(…, {
+  internalDetails })` é um canal só para logs que o reporter de erros recebe e
+  que nenhuma resposta nem resultado de tool leva. O `@basaltkit/mcp` passa os
+  `details` de um erro lançado pelo `redactSensitiveDetails` antes de chegarem
+  ao modelo, e os erros das chamadas de tool, que desapareciam, passam a ser
+  reportados. *(`@basaltkit/http` 2.7, `mcp` 5.0)*
+- **Os hashes de auditoria nomeiam o seu algoritmo e a sua chave.** As entradas
+  novas são `v2:sha256:…` ou `v2:hmac-sha256:<keyId>:…`, por isso a chave HMAC
+  pode ser rodada (`keyId`, `verifyKeys`) sem fazer falhar todas as entradas que
+  a chave antiga assinou; as entradas v1 continuam a verificar. O `verify()`
+  apanha também um `seq` duplicado na fronteira de uma página.
+  *(`@basaltkit/audit` 3.0, `audit-prisma` / `-sqlite` 2.0.1)*
+- **Os webhooks respeitam uma política de portas e um tecto de fan-out.** As
+  entregas vão para `80`, `443` ou uma porta não privilegiada fora de
+  `DEFAULT_BLOCKED_PORTS` — já não para um Redis ou um Postgres expostos. A
+  resolução de DNS corre dentro do prazo de cada tentativa, um dispatch para mais
+  de 100 endpoints por evento e scope é recusado, correm no máximo 16 entregas
+  em simultâneo, e o `rotateSecret()` assina com os dois segredos durante uma
+  janela de tolerância. *(`@basaltkit/webhooks` 4.0, `webhooks-prisma` /
+  `-sqlite` 2.1)*
+- **O storage devolve as chaves que recebe, e cobra ao tamanho a sua palavra.**
+  O `list()` num disco de tenant devolve `a/1.txt`, e não
+  `tenants/<id>/a/1.txt`, que o `get()` voltava a prefixar; o prefixo é uma
+  directoria em todos os drivers. Um `contentLength` é validado e contado, e um
+  corpo que o contradiga nunca é gravado. O S3 envia por multipart um upload de
+  tamanho desconhecido em vez de o guardar em memória. *(`@basaltkit/storage`
+  5.0, `storage-s3` 1.4)*
+- **As rotas de ficheiros respondem com uma projecção pública.** O `GET /files`
+  e companhia devolviam o registo em bruto — o caminho no storage, o checksum, o
+  `uploadedBy`, o output do scanner. Agora enviam `toPublicFile(record)`, e o
+  `fileRoutes({ present })` escolhe outra forma. *(`@basaltkit/files` 6.0)*
+- **Um tenant suspenso é um 403, e um estado desconhecido falha fechado.**
+  Qualquer estado que não fosse `ready` era um 503 "ainda em provisionamento" —
+  incluindo `suspended`, por isso os clientes voltavam a tentar numa conta
+  bloqueada. *(`@basaltkit/tenancy` 3.1)*
+- **O passo de MFA deixa de ser um oráculo de passwords.** O
+  `AUTH_MFA_REQUIRED` só é devolvido para uma password correcta, por isso passa
+  a contar para os limites de login como uma errada. *(`@basaltkit/auth` 4.1)*
+- **A ponte de IA impõe o "só em desenvolvimento".** O `ai-mcp` recusa arrancar
+  com `NODE_ENV=production` sem um override explícito, e o `workspaceRoot` de
+  uma tool tem de resolver dentro da raiz do projecto.
+  *(`@basaltkit/ai-mcp` 0.3)*
+
 ### Docs
 - Todos os guias que as correcções tocaram foram atualizados, em inglês e em
   português: [o comportamento na rede nos três
@@ -220,6 +300,15 @@ falar.
   pesquisa](/pt/guide/search#reconstruir-um-indice), [cifrar os segredos TOTP em
   repouso](/pt/guide/auth#mfa-encryption) e [migrar as drives da
   0.2.x](/pt/guide/drives#migrar-da-0-2-x).
+- A colheita acrescentou [políticas no
+  guard](/pt/guide/authorization#politicas-no-guard-requisitos-de-recurso),
+  [o `GET /me/access`](/pt/guide/authorization#o-que-posso-fazer-—-get-me-access),
+  [o que o modelo vê quando uma tool
+  falha](/pt/guide/mcp#what-the-model-sees-when-a-tool-fails), e nos webhooks a
+  [política de portas](/pt/guide/webhooks#politica-de-portas), o [tecto de
+  fan-out](/pt/guide/webhooks#tecto-de-fan-out) e a [rotação de
+  segredos](/pt/guide/webhooks#rodar-um-secret-de-assinatura); o
+  `CONTRIBUTING.md` ganhou uma checklist de testes.
 
 ## Atualização
 
@@ -333,6 +422,106 @@ Nada muda em PostgreSQL nem em SQLite, nem em MySQL até o pedires. Para o adopt
 deixa o `basalt prisma:sync` copiar as variantes `schema.mysql.prisma`, migra, e
 passa `columnLimits: 'mysql'` às factories dos stores. O
 [guia de MySQL](/pt/guide/persistence#mysql) tem os detalhes.
+
+### O que a colheita muda
+
+Estes são os passos para as versões de [Fechar a colheita da
+auditoria](#fechar-a-colheita-da-auditoria). Vindo da 1.11, aplica-os por cima
+de tudo o que está acima: as linhas de `permissions` 3, `storage` 4, `files` 5,
+`audit` 2, `webhooks` 3 e `mcp` 4 continuam a valer para o major seguinte.
+Nenhum destes passos precisa de migração de dados, a menos que adoptes um store
+ou uma coluna novos.
+
+**`permissions` 4 — o `hasRole()` é pertença.** O `gate.hasRole(user, role)` já
+não devolve `true` para todos os roles a um super admin; o `can()`, o
+`authorize()` e o `meta.can` continuam a respeitar o bypass. Onde o `hasRole()`
+servia de verificação de autorização, verifica antes a permissão, ou pede o
+bypass explicitamente:
+
+```ts
+if ((await gate.isSuperAdmin(user)) || (await gate.hasRole(user, 'billing-manager'))) { … }
+```
+
+O `GET /me/access` mantém `roles` e `permissions` — os clientes passam a ver mais
+entradas, e correctas: roles e atribuições globais, atribuições temporárias e
+delegações em vigor, `'*'` para um super admin — e acrescenta `superAdmin` e
+`grants` (cada permissão com a sua `source`). Os stores duráveis de atribuições
+temporárias e delegações são opt-in: com o `permissions-prisma`, ligá-los
+significa acrescentar `PermTemporaryGrant` e `PermDelegation`
+(`basalt prisma:sync`) e migrar; o `permissions-sqlite` cria as tabelas no
+`migrate()`.
+
+**`audit` 3 — hashes v2.** As entradas novas usam o formato v2; as entradas v1
+existentes continuam a verificar e as novas encadeiam-se nelas, por isso não há
+nada a migrar. Mas:
+
+- **Não voltes atrás** para um `@basaltkit/audit` anterior depois de escrever
+  entradas v2 — não as consegue verificar.
+- O código que assumia um `hash` de 64 caracteres hex (uma coluna, uma regex, o
+  `--expected-head`) tem de aceitar até 144 caracteres; os stores incluídos e o
+  preset de MySQL cabem.
+- Ferramentas que recalculam hashes: o `computeAuditHash()` continua a calcular
+  a v1 — usa o `computeAuditHashV2()` ou o `checkAuditHash(entry, keysById)`.
+- Um `switch` exaustivo sobre `AuditVerifyFailure` precisa de um caso
+  `'unknown-key'`.
+- Para rodar a chave: `integrity: { mode: 'hash-chain', key: NEW, keyId:
+  '2026-09', verifyKeys: [OLD] }`.
+
+**`webhooks` 4 — portas, fan-out e concorrência.** Um endpoint numa porta
+bloqueada é recusado no `register()` e na entrega: permite-o com
+`ssrf: { allowedPorts: […] }` (ou `'any'`). Um dispatch para mais de 100
+endpoints correspondentes num scope é recusado — sobe o
+`maxEndpointsPerDispatch`. Correm no máximo 16 entregas em simultâneo
+(`dispatchConcurrency`). Para usar o `rotateSecret()`, quem usa Prisma
+acrescenta `previousSecret` / `previousSecretExpiresAt` (`basalt prisma:sync`) e
+migra primeiro; o `webhooks-sqlite` acrescenta as colunas no `migrate()`; um
+store custom tem de persistir os dois campos e limpá-los quando o `add()` os
+recebe como `undefined`. O `@basaltkit/drives` fica com a mesma política de
+portas em cada salto.
+
+**`storage` 5 — chaves relativas e tamanhos exactos.** O `Disk.list()` devolve
+chaves relativas ao scope do disco: retira o código que cortava `tenants/<id>/`
+à mão, e lista uma directoria real em vez de contar com um prefixo de nome
+parcial num driver de cloud. Um `contentLength` que não seja um inteiro seguro
+não negativo é um `400 STORAGE_CONTENT_LENGTH_INVALID`; um corpo que não
+corresponda a ele é um `400 STORAGE_CONTENT_LENGTH_MISMATCH` e não grava nada.
+Os drivers custom não precisam de mudar.
+
+**`files` 6 — a forma das rotas.** O `GET /files`, o `GET /files/:id` e o
+`POST /files` enviam `toPublicFile(record)`: sem `path`, `checksum`,
+`tenantId`, `uploadedBy` nem o detalhe do scan. Um cliente que lia algum deles
+precisa de um `present`:
+
+```ts
+fileRoutes({ present: (file) => ({ ...toPublicFile(file), uploadedBy: file.uploadedBy }) })
+```
+
+O `files.get()` / `list()` e os hooks `file:*` continuam a devolver o registo
+completo. O `upload({ contentLength })` passa a ser verificado
+(`413 FILE_TOO_LARGE` logo à partida, `400` numa discrepância) — nunca passes o
+`Content-Length` do próprio pedido multipart.
+
+**`mcp` 5 — detalhes redigidos, erros reportados.** Um valor sob uma chave com
+nome de segredo nos `details` de um erro lançado chega ao modelo como
+`'[REDACTED]'`: move os dados só para operadores para `internalDetails`, ou
+passa `redactErrorDetails: false` (ou o teu próprio redactor). Os erros das
+chamadas de tool chegam agora ao `reportError` — a consola por omissão;
+`reportError: false` repõe o silêncio.
+
+**`tenancy` 3.1 — códigos de estado.** Um tenant `suspended` responde um
+`403 TENANT_SUSPENDED` sem retry em vez de `503`; um estado que o tenancy não
+conhece (como `active`) é `500 TENANT_STATUS_UNKNOWN`. Guarda `ready`, ou nenhum
+estado, para um tenant em serviço.
+
+**`auth` 4.1 — MFA e os limites.** Um primeiro passo sem código numa conta com
+MFA gasta agora uma vaga do limite de login, como uma password errada;
+dimensiona o `ipLoginThrottle` para populações grandes atrás de NAT partilhado.
+
+**`ai-mcp` 0.3 — só em desenvolvimento, imposto.** Recusa
+`NODE_ENV=production` (`--allow-production`, `allowProduction: true` ou
+`BASALT_AI_MCP_ALLOW_PRODUCTION=1` para contornar), e o `basalt_analyze`, o
+`basalt_doctor` e o `basalt_plan` recusam um `workspaceRoot` fora da raiz do
+projecto.
 
 ---
 
