@@ -26,10 +26,12 @@ routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 > single-tenant key that cannot be a tenant's name, a Host resolver a header
 > cannot overrule, social logins bound to the provider's subject, the same bytes
 > for the same route on Fastify, Express and Hono, `/mcp` sessions bound to their
-> caller. Before that, 1.11 failed closed — a second security audit's
-> eighty-seven findings, fourteen majors that made secure behaviour the default,
-> streaming on every adapter, a verifiable audit trail, and two new packages,
-> `@basaltkit/backup` and `@basaltkit/drives`. Before that, 1.10 supplied
+> caller. Six of them published a second major when the audit's follow-ups
+> closed too — policies in the route guard, redacted MCP error details,
+> rotatable audit keys, webhook port limits. Before that, 1.11 failed closed — a
+> second security audit's eighty-seven findings, fourteen majors that made
+> secure behaviour the default, streaming on every adapter, a verifiable audit
+> trail, and two new packages, `@basaltkit/backup` and `@basaltkit/drives`. Before that, 1.10 supplied
 > missing halves: a tenant that can be destroyed, an index that can be rebuilt, a
 > durable store for files, revisions for documents, permissions that know who is
 > asking. Before that, 1.9 was written by an application rather than by
