@@ -108,7 +108,8 @@ listing (no rate-limit consumption, no audit or denial records):
 
 Not filtered (listed, refused on call): `mfa`, `scopes`, `subscribed`/`feature`,
 audiences, rate limits, handler-level checks (e.g. a policy the handler runs on a
-resource). Visibility is never authorization —
+resource) and `meta.can` resource requirements decided by a policy (their loader
+never runs on a listing). Visibility is never authorization —
 `tools/call` still runs every guard. stdio listings are not filtered.
 
 ### stdio

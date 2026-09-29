@@ -301,7 +301,10 @@ auditoria ou de recusa:
 **Não filtrado** — listado, e recusado na chamada: `mfa`, `scopes`,
 `subscribed`/`feature`, audiências, rate limits e tudo o que um handler verifique
 por si (ex.: uma policy que corre sobre um recurso carregado com
-`authorize(user, permission, resource)` — numa listagem não há recurso). Visibilidade nunca é autorização: o `tools/call` corre sempre todos os
+`authorize(user, permission, resource)` — numa listagem não há recurso), e um
+[requisito de recurso do `meta.can`](/pt/guide/authorization#politicas-no-guard-requisitos-de-recurso)
+decidido por uma política (o loader nunca corre numa listagem; as permissões
+simples ao lado continuam a filtrar). Visibilidade nunca é autorização: o `tools/call` corre sempre todos os
 guards, para tools listadas ou não. `listVisibleOnly: false` lista todas as
 tools com opt-in. As listagens por stdio nunca são filtradas (não há um chamador
 por pedido).

@@ -291,7 +291,10 @@ limit and writes no audit or denial record:
 **Not filtered** — listed, and refused on call: `mfa`, `scopes`,
 `subscribed`/`feature`, audiences, rate limits and anything a handler checks
 itself (e.g. a policy it runs on a loaded resource with `authorize(user,
-permission, resource)` — there is no resource at listing time). Visibility is never authorization: `tools/call` still runs every
+permission, resource)` — there is no resource at listing time), and a
+[`meta.can` resource requirement](/guide/authorization#policies-in-the-guard-resource-requirements)
+decided by a policy (its loader never runs on a listing; plain permissions beside
+it still filter). Visibility is never authorization: `tools/call` still runs every
 guard, for listed and unlisted tools alike. `listVisibleOnly: false` lists every
 opted-in tool. stdio listings are never filtered (there is no per-request
 caller).
