@@ -108,6 +108,10 @@ When you pass a resource, the Gate splits the permission into
 its check decide. Policies can be registered up front via the `policies` option
 or later with `gate.register(...)`; checks may be async.
 
+To enforce a policy on a route, declare the resource in `meta.can` — see
+[Policies in the guard](#policies-in-the-guard-resource-requirements). The guard
+then loads the resource and runs the policy, so no handler can forget the call.
+
 ::: danger No policy ⇒ the check fails closed
 Passing a resource is an explicit statement that an ABAC rule should decide, so
 if no policy is registered for that resource — or the policy has no check for
@@ -163,7 +167,8 @@ hold all of them**:
 meta: { can: ['reports:read', 'reports:export'] } // 403 unless the user has BOTH
 ```
 
-Any other shape (`can: true`, a number, an empty or mixed array) is
+Any other shape (`can: true`, a number, an empty array, an entry that is
+neither a permission nor a [resource requirement](#policies-in-the-guard-resource-requirements)) is
 unenforceable and **fails closed**: the guard throws `InvalidCanMetaError`
 (`PERMISSION_META_INVALID`, HTTP 500) on every request instead of silently
 skipping the check. And declaring `meta.can` without registering
@@ -181,11 +186,78 @@ listing never lands in the audit trail (keep `superAdmin` pure; it runs here
 too). No user or a malformed `meta.can` hides the route, as the guard would
 refuse it.
 
-Policies never enter it: the guard passes no resource, so no policy decides
-`meta.can`. An ownership rule a handler runs on a loaded resource
-(`authorize(user, 'projects:update', project)`) is invisible to a listing — such
-a tool stays listed when RBAC allows and is refused on the call. Visibility is
-never authorization: every call still runs the guard.
+Policies never enter it — a listing never loads a resource. A
+[resource requirement](#policies-in-the-guard-resource-requirements) decided by a
+policy raises no objection for an authenticated caller (an owner may pass holding
+no grant), and an ownership rule a handler runs itself is invisible too: such a
+tool stays listed and is refused on the call. Visibility is never
+authorization: every call still runs the guard.
+
+### Policies in the guard (resource requirements)
+
+A plain `meta.can: 'projects:update'` is RBAC — the guard passes no resource, so
+a registered policy never runs and `projects:*` updates *every* project. Declare
+the resource and the guard enforces the policy:
+
+```ts
+import { canResource, definePolicy, permissionsPlugin } from '@basaltkit/permissions'
+
+const ProjectPolicy = definePolicy<Project>('projects', {
+  update: (user, project) => project.ownerId === user.id,
+})
+
+app.use(permissionsPlugin({ store, policies: [ProjectPolicy] }))
+
+route({
+  method: 'PATCH', url: '/projects/:id',
+  params: z.object({ id: z.string() }),
+  body: z.object({ name: z.string() }),
+  meta: {
+    can: {
+      permission: 'projects:update',
+      resource: ({ params }) => projects.findById(params.id), // null → 404
+    },
+  },
+  // Loaded and authorized by the guard — read it back, don't load it again.
+  async handler({ body }) {
+    return projects.rename(canResource<Project>(), body.name)
+  },
+})
+```
+
+The guard answers `401` with no user (before any load), checks the plain
+permissions of an array first (a caller refused by RBAC never triggers a load),
+then for each requirement loads the resource and calls
+`gate.authorize(user, permission, resource)`: **the policy decides**, exactly
+as when you call the Gate by hand. The loader receives
+`{ params, query, body, user, tenant, container, request, route }` — `params`,
+`query` and `body` parsed by the route's schemas as the handler gets them
+(invalid input is the usual `400`; keep schema transforms pure, they run for
+the loader and again for the handler). Requirements sharing a loader load once.
+
+| Situation | Answer |
+| --- | --- |
+| Loader returns `null` / `undefined` | `404 RESOURCE_NOT_FOUND` — or, with `notFound: 'deny'` (per requirement) / `resourceNotFound: 'deny'` (plugin), an audited `403 PERMISSION_DENIED`, so ids can't be probed |
+| Loader throws | The error propagates unchanged — never an allow |
+| Policy returns anything but `true` | `403 PERMISSION_DENIED` + `permission:denied` |
+| No policy decides `permission` | Refused at **boot** (below); with `onMissingPolicy: 'rbac'` it boots and the grants decide |
+
+Arrays mix both forms, all-of as before — require the grant **and** the policy
+with `can: ['projects:update', { permission: 'projects:update', resource: load }]`.
+With several requirements, `canResource('projects:publish')` picks one by
+permission.
+
+The plugin validates the resource form at **boot** through the
+`http:meta-validators` bucket, which every adapter runs: a malformed
+requirement (no loader, a bad permission, an unknown key, a bad `notFound`) or
+one whose `resource:action` no registered policy decides refuses to start with
+`InvalidRouteMetaError` (unless `onMissingPolicy: 'rbac'`). Register the
+policies in `permissionsPlugin({ policies })`.
+
+It behaves identically on Fastify, Express and Hono and through MCP tool calls
+— it is a guard of the shared pipeline. Calling the Gate inside the handler
+remains available for what a route can't declare: a second resource, a
+decision on a value the handler computes, background jobs.
 
 ## Audiences — which surface a route belongs to
 
@@ -418,7 +490,8 @@ cannot turn a time-boxed grant into a standing one.
 | `temporaryGrants` | `TemporaryGrantStore` | off | Enables `grantTemporarily()` |
 | `delegations` | `DelegationStore` | off | Enables `delegate()` |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
-| `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`: `'error'` throws `MissingPolicyError` (fail closed), `'rbac'` falls back to the granted permission strings |
+| `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | What `can(user, perm, resource)` does when no policy check matches `resource:action`: `'error'` throws `MissingPolicyError` (fail closed), `'rbac'` falls back to the granted permission strings. Also decides whether a resource requirement without a policy refuses the boot |
+| `resourceNotFound` | `'not-found' \| 'deny'` | `'not-found'` | Plugin only. What a [resource requirement](#policies-in-the-guard-resource-requirements) answers when its loader finds nothing: `404 RESOURCE_NOT_FOUND` or an audited `403 PERMISSION_DENIED` |
 | `roleCatalog` | `Record<string, string[]>` | — | Code-defined role → permissions valid in every scope; a role grants them only in the scope where it is held. See [One role catalogue for every tenant](#one-role-catalogue-for-every-tenant) |
 | `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | A tenant-held role also resolves its permissions from its `GLOBAL_SCOPE` definition (only in that tenant); a list limits it to those role names |
 | `readLegacyGlobalScope` | `boolean` | `false` | Also read rows under the pre-1.5 global scope `'global'` as global. Transition aid — see [The global scope can't be a tenant](#the-global-scope-can-t-be-a-tenant) |
@@ -427,8 +500,9 @@ cannot turn a time-boxed grant into a standing one.
 | `tenancyActive` | `() => boolean` | the `tenancy:active` marker (plugin); `false` (`new Gate`) | Whether the app is multi-tenant — decides whether scope-less writes outside a tenant fail closed |
 
 The plugin registers the Gate under the `GATE` token, adds the `meta.can` guard
-and its side-effect-free visibility check (`http:route-visibility`), and claims
-the `can` key in the adapters' boot-time guarded-meta check.
+and its side-effect-free visibility check (`http:route-visibility`), validates
+resource requirements at boot (`http:meta-validators`), and claims the `can`
+key in the adapters' boot-time guarded-meta check.
 
 ## Hooks — the audit trail
 
@@ -451,7 +525,10 @@ than the store: writes straight on the `AccessStore` leave no trail.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | The check failed — nothing grants the permission in the current or global scope |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | A `meta.can` route was hit with no authenticated user in context (or a user without a non-empty string `id`); also `can`/`authorize`/`hasRole` given such a user |
 | `ScopeRequiredError` | `PERMISSION_SCOPE_REQUIRED` | 400 | A grant write with no `scope`, no tenant in the context, and tenancy active — pass the scope (or `GLOBAL_SCOPE`) explicitly |
-| `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` has an unenforceable shape (`true`, a number, an empty/mixed array) — fails closed on every request |
+| `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | `meta.can` has an unenforceable shape (`true`, a number, an empty array, a malformed entry) — fails closed on every request |
+| `ResourceNotFoundError` | `RESOURCE_NOT_FOUND` | 404 | A resource requirement's loader returned `null`/`undefined` (unless `notFound: 'deny'`) |
+| `CanResourceUnavailableError` | `PERMISSION_RESOURCE_UNAVAILABLE` | 500 | `canResource()` called where the guard loaded no resource (or several, without naming the permission) |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | boot | A resource requirement is malformed, or no policy decides its permission (under `onMissingPolicy: 'error'`) |
 | `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` | 403 | The request's tenant id is a reserved scope (`'@global'` or `'global'`), or the tenant has no usable id |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | `can`/`authorize` got a resource but no policy check matches `resource:action` — the ABAC rule you intended would be skipped |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` (or `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claims that key |
@@ -468,8 +545,10 @@ than the store: writes straight on the `AccessStore` leave no trail.
   check, or — if that call really is plain RBAC — stop passing the resource.
   `onMissingPolicy: 'rbac'` restores the old behaviour wholesale.
 - **A policy check seems ignored** — the policy only runs when a *resource* is
-  passed to `can`/`authorize`; `can(user, 'project:update')` with no resource is
-  pure RBAC by design and never consults a policy.
+  passed to `can`/`authorize`; `can(user, 'project:update')` with no resource —
+  and a plain `meta.can: 'project:update'` — is pure RBAC by design and never
+  consults a policy. Declare the resource on the route
+  ([Policies in the guard](#policies-in-the-guard-resource-requirements)).
 - **`HTTP_UNGUARDED_ROUTE_META` at boot** — register `permissionsPlugin`, or,
   if authorization genuinely happens at an outer edge, opt out explicitly with
   the adapter option `allowUnguardedMeta: true` (or `['can']`). See the

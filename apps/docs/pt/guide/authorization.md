@@ -111,6 +111,10 @@ procura a política registada para esse recurso e deixa o check dela decidir. As
 políticas podem ser registadas à partida via a opção `policies` ou mais tarde
 com `gate.register(...)`; os checks podem ser async.
 
+Para aplicar uma política numa rota, declara o recurso no `meta.can` — vê
+[Políticas no guard](#politicas-no-guard-requisitos-de-recurso). O guard carrega então o recurso e corre a política,
+por isso nenhum handler se pode esquecer da chamada.
+
 ::: danger Sem política ⇒ o check falha fechado
 Passar um recurso é uma declaração explícita de que deve ser uma regra ABAC a
 decidir, por isso se nenhuma política estiver registada para esse recurso — ou
@@ -167,7 +171,8 @@ ter todas**:
 meta: { can: ['reports:read', 'reports:export'] } // 403 a menos que o utilizador tenha AMBAS
 ```
 
-Qualquer outra forma (`can: true`, um número, um array vazio ou misto) não é
+Qualquer outra forma (`can: true`, um número, um array vazio, uma entrada que
+não é nem uma permissão nem um [requisito de recurso](#politicas-no-guard-requisitos-de-recurso)) não é
 aplicável e **falha fechada**: o guard lança `InvalidCanMetaError`
 (`PERMISSION_META_INVALID`, HTTP 500) em cada pedido em vez de saltar o check
 silenciosamente. E declarar `meta.can` sem registar o `permissionsPlugin` falha
@@ -186,11 +191,80 @@ rasto de auditoria (mantém o `superAdmin` puro; também corre aqui). Sem
 utilizador, ou com um `meta.can` malformado, a rota fica escondida, tal como o
 guard a recusaria.
 
-As policies nunca entram: o guard não passa recurso, por isso nenhuma policy
-decide o `meta.can`. Uma regra de propriedade que um handler corre sobre um
-recurso carregado (`authorize(user, 'projects:update', project)`) é invisível a
-uma listagem — essa tool continua listada quando o RBAC permite e é recusada na
-chamada. Visibilidade nunca é autorização: cada chamada corre sempre o guard.
+As policies nunca entram — uma listagem nunca carrega um recurso. Um
+[requisito de recurso](#politicas-no-guard-requisitos-de-recurso) decidido por uma política não levanta
+objeção para um chamador autenticado (um dono pode passar sem grant nenhum), e
+uma regra de propriedade que o próprio handler corre também é invisível: essa
+tool continua listada e é recusada na chamada. Visibilidade nunca é
+autorização: cada chamada corre sempre o guard.
+
+### Políticas no guard (requisitos de recurso)
+
+Um `meta.can: 'projects:update'` simples é RBAC — o guard não passa recurso,
+por isso uma política registada nunca corre e `projects:*` atualiza *todos* os
+projetos. Declara o recurso e o guard aplica a política:
+
+```ts
+import { canResource, definePolicy, permissionsPlugin } from '@basaltkit/permissions'
+
+const ProjectPolicy = definePolicy<Project>('projects', {
+  update: (user, project) => project.ownerId === user.id,
+})
+
+app.use(permissionsPlugin({ store, policies: [ProjectPolicy] }))
+
+route({
+  method: 'PATCH', url: '/projects/:id',
+  params: z.object({ id: z.string() }),
+  body: z.object({ name: z.string() }),
+  meta: {
+    can: {
+      permission: 'projects:update',
+      resource: ({ params }) => projects.findById(params.id), // null → 404
+    },
+  },
+  // Carregado e autorizado pelo guard — lê-o de volta, não o carregues outra vez.
+  async handler({ body }) {
+    return projects.rename(canResource<Project>(), body.name)
+  },
+})
+```
+
+O guard responde `401` sem utilizador (antes de qualquer carregamento), verifica
+primeiro as permissões simples de um array (um chamador recusado pelo RBAC nunca
+provoca um carregamento), e depois, para cada requisito, carrega o recurso e
+chama `gate.authorize(user, permission, resource)`: **a política decide**,
+exatamente como quando chamas o Gate à mão. O loader recebe
+`{ params, query, body, user, tenant, container, request, route }` — `params`,
+`query` e `body` validados pelos schemas da rota tal como o handler os recebe
+(input inválido é o `400` habitual; mantém as transformações dos schemas puras,
+correm para o loader e outra vez para o handler). Requisitos que partilham um
+loader carregam uma só vez.
+
+| Situação | Resposta |
+| --- | --- |
+| O loader devolve `null` / `undefined` | `404 RESOURCE_NOT_FOUND` — ou, com `notFound: 'deny'` (por requisito) / `resourceNotFound: 'deny'` (plugin), um `403 PERMISSION_DENIED` auditado, para que não se possam sondar ids |
+| O loader lança | O erro propaga-se inalterado — nunca um allow |
+| A política devolve algo que não `true` | `403 PERMISSION_DENIED` + `permission:denied` |
+| Nenhuma política decide a `permission` | Recusado no **boot** (abaixo); com `onMissingPolicy: 'rbac'` arranca e decidem os grants |
+
+Os arrays misturam as duas formas, all-of como antes — exige o grant **e** a
+política com `can: ['projects:update', { permission: 'projects:update', resource: load }]`.
+Com vários requisitos, `canResource('projects:publish')` escolhe um pela
+permissão.
+
+O plugin valida a forma com recurso no **boot** através do bucket
+`http:meta-validators`, que todos os adapters correm: um requisito malformado
+(sem loader, uma permissão inválida, uma chave desconhecida, um `notFound`
+inválido) ou um cujo `resource:action` nenhuma política registada decide recusa
+arrancar com `InvalidRouteMetaError` (a menos que `onMissingPolicy: 'rbac'`).
+Regista as políticas em `permissionsPlugin({ policies })`.
+
+Comporta-se de forma idêntica em Fastify, Express e Hono e através de chamadas
+de tools MCP — é um guard do pipeline partilhado. Chamar o Gate dentro do
+handler continua disponível para o que uma rota não consegue declarar: um
+segundo recurso, uma decisão sobre um valor que o handler calcula, jobs em
+background.
 
 ## Audiências — a que superfície uma rota pertence
 
@@ -430,7 +504,8 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | `temporaryGrants` | `TemporaryGrantStore` | desligado | Ativa `grantTemporarily()` |
 | `delegations` | `DelegationStore` | desligado | Ativa `delegate()` |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
-| `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | O que `can(user, perm, resource)` faz quando nenhum check de política corresponde a `resource:action`: `'error'` lança `MissingPolicyError` (falha fechada), `'rbac'` volta às strings de permissão concedidas |
+| `onMissingPolicy` | `'error' \| 'rbac'` | `'error'` | O que `can(user, perm, resource)` faz quando nenhum check de política corresponde a `resource:action`: `'error'` lança `MissingPolicyError` (falha fechada), `'rbac'` volta às strings de permissão concedidas. Decide também se um requisito de recurso sem política recusa o boot |
+| `resourceNotFound` | `'not-found' \| 'deny'` | `'not-found'` | Só no plugin. O que um [requisito de recurso](#politicas-no-guard-requisitos-de-recurso) responde quando o loader não encontra nada: `404 RESOURCE_NOT_FOUND` ou um `403 PERMISSION_DENIED` auditado |
 | `roleCatalog` | `Record<string, string[]>` | — | Role → permissões definido em código, válido em todos os scopes; um role só as concede no scope onde é detido. Vê [Um catálogo de roles para todos os tenants](#um-catalogo-de-roles-para-todos-os-tenants) |
 | `inheritGlobalRolePermissions` | `boolean \| string[]` | `false` | Um role detido num tenant resolve também as permissões da sua definição em `GLOBAL_SCOPE` (só nesse tenant); uma lista limita-o a esses roles |
 | `readLegacyGlobalScope` | `boolean` | `false` | Ler também as linhas do scope global anterior à 1.5 (`'global'`) como globais. Ajuda de transição — vê [O scope global não pode ser um tenant](#o-scope-global-nao-pode-ser-um-tenant) |
@@ -440,7 +515,8 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 
 O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e a
 sua verificação de visibilidade sem efeitos secundários (`http:route-visibility`),
-e reclama a chave `can` no check de guarded-meta que os adapters fazem no boot.
+valida os requisitos de recurso no boot (`http:meta-validators`), e reclama a
+chave `can` no check de guarded-meta que os adapters fazem no boot.
 
 ## Hooks — o rasto de auditoria
 
@@ -463,7 +539,10 @@ e não do store: escritas feitas diretamente no `AccessStore` não deixam rasto.
 | `PermissionDeniedError` | `PERMISSION_DENIED` | 403 | O check falhou — nada concede a permissão no scope atual nem no global |
 | `AuthRequiredGuardError` | `AUTH_REQUIRED` | 401 | Uma rota com `meta.can` foi chamada sem utilizador autenticado no contexto (ou com um utilizador sem `id` de texto não vazio); também `can`/`authorize`/`hasRole` com esse utilizador |
 | `ScopeRequiredError` | `PERMISSION_SCOPE_REQUIRED` | 400 | Uma escrita de concessões sem `scope`, sem tenant no contexto e com a tenancy ativa — passa o scope (ou `GLOBAL_SCOPE`) explicitamente |
-| `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | O `meta.can` tem uma forma não aplicável (`true`, um número, um array vazio/misto) — falha fechada em cada pedido |
+| `InvalidCanMetaError` | `PERMISSION_META_INVALID` | 500 | O `meta.can` tem uma forma não aplicável (`true`, um número, um array vazio, uma entrada malformada) — falha fechada em cada pedido |
+| `ResourceNotFoundError` | `RESOURCE_NOT_FOUND` | 404 | O loader de um requisito de recurso devolveu `null`/`undefined` (a menos que `notFound: 'deny'`) |
+| `CanResourceUnavailableError` | `PERMISSION_RESOURCE_UNAVAILABLE` | 500 | `canResource()` chamado onde o guard não carregou recurso nenhum (ou vários, sem indicar a permissão) |
+| `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | boot | Um requisito de recurso está malformado, ou nenhuma política decide a sua permissão (com `onMissingPolicy: 'error'`) |
 | `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` | 403 | O id de tenant do pedido é um scope reservado (`'@global'` ou `'global'`), ou o tenant não tem id utilizável |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | O `can`/`authorize` recebeu um recurso mas nenhum check de política corresponde a `resource:action` — a regra ABAC que pretendias seria saltada |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Uma rota declara `meta.can` (ou `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) e nenhum guard registado reclama essa chave |
@@ -482,7 +561,9 @@ e não do store: escritas feitas diretamente no `AccessStore` não deixam rasto.
   comportamento antigo por completo.
 - **Um check de política parece ignorado** — a política só corre quando um
   *recurso* é passado a `can`/`authorize`; `can(user, 'project:update')` sem
-  recurso é RBAC puro por design e nunca consulta uma política.
+  recurso — e um `meta.can: 'project:update'` simples — é RBAC puro por design e
+  nunca consulta uma política. Declara o recurso na rota
+  ([Políticas no guard](#politicas-no-guard-requisitos-de-recurso)).
 - **`HTTP_UNGUARDED_ROUTE_META` no boot** — regista o `permissionsPlugin` ou,
   se a autorização acontece genuinamente numa edge exterior, opta por sair
   explicitamente com a opção do adapter `allowUnguardedMeta: true` (ou

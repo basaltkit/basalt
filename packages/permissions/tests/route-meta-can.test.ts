@@ -26,13 +26,13 @@ describe('F-18 · meta.can', () => {
   })
 
   it('rejects a number', () => {
-    // @ts-expect-error `can` is a string or string[]
+    // @ts-expect-error `can` is a permission, a resource requirement, or a list of them
     const meta: RouteMeta = { can: 123 }
     expect(meta).toBeDefined()
   })
 
-  it('rejects an object', () => {
-    // @ts-expect-error `can` is a string or string[]
+  it('rejects an object that is not a resource requirement (no loader)', () => {
+    // @ts-expect-error a requirement needs a `resource` loader
     const meta: RouteMeta = { can: { permission: 'matter:read' } }
     expect(meta).toBeDefined()
   })
