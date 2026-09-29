@@ -6,21 +6,36 @@ import {
   type Delegation,
   type DelegationStore,
 } from './delegation.js'
-import { route, type BasaltRoute, type RouteGuard, type RouteVisibilityCheck } from '@basaltkit/http'
+import {
+  RequestValidationError,
+  rawBodyOptionsOf,
+  route,
+  uploadOptionsOf,
+  type BasaltRoute,
+  type HttpRequest,
+  type RouteGuard,
+  type RouteMetaValidator,
+  type RouteVisibilityCheck,
+  type ValidationIssue,
+} from '@basaltkit/http'
 import {
   AuthRequiredGuardError,
+  CanResourceUnavailableError,
   InvalidCanMetaError,
   MissingPolicyError,
   ReservedScopeError,
+  ResourceNotFoundError,
   ScopeRequiredError,
 } from './errors.js'
 
 export {
   AuthRequiredGuardError,
+  CanResourceUnavailableError,
   InvalidCanMetaError,
   MissingPolicyError,
   PermissionDeniedError,
   ReservedScopeError,
+  ResourceNotFoundError,
   ScopeRequiredError,
 } from './errors.js'
 import { PermissionDeniedError } from './errors.js'
@@ -49,8 +64,17 @@ declare module '@basaltkit/core' {
 
 declare module '@basaltkit/http' {
   interface RouteMeta {
-    /** Permission the caller must hold. Enforced by `permissionsPlugin`. */
-    can?: string | string[]
+    /**
+     * Permission(s) the caller must hold. Enforced by `permissionsPlugin`.
+     *
+     * - `'projects:read'` — an RBAC permission;
+     * - `{ permission: 'projects:update', resource: (input) => load(input.params.id) }`
+     *   — the guard loads the resource and the registered policy decides
+     *   (`gate.authorize(user, permission, resource)`); the handler reads it
+     *   back with {@link canResource};
+     * - an array of either — ALL of them are required.
+     */
+    can?: CanMeta
     /**
      * Which surface this route belongs to — `'portal'`, `'public'`, whatever
      * the application calls them. Enforced by `permissionsPlugin` when
@@ -545,6 +569,16 @@ export class Gate {
    * is a different permission from `project:update`, so the `update` check must
    * not decide it — that is a missing policy, not a match.
    */
+  /**
+   * True when a registered policy check decides exactly `permission`
+   * (`resource:action`) — i.e. when `can(user, permission, resource)` would
+   * consult a policy instead of throwing {@link MissingPolicyError} (or falling
+   * back to RBAC under `onMissingPolicy: 'rbac'`). A pure lookup.
+   */
+  hasPolicy(permission: string): boolean {
+    return isValidPermission(permission) && this.policyCheck(permission) !== undefined
+  }
+
   private policyCheck(permission: string): PolicyCheck<never> | undefined {
     const segments = permission.split(':')
     if (segments.length !== 2) return undefined
@@ -933,23 +967,199 @@ export type PermissionsPluginOptions = GateOptions & {
    * maintains; marking every route they may not is a list somebody forgets.
    */
   audiences?: Record<string, AudienceRule>
+  /**
+   * What the `meta.can` guard answers when a resource requirement's loader
+   * finds nothing (`null`/`undefined`): `'not-found'` (default) throws
+   * {@link ResourceNotFoundError} (404); `'deny'` refuses like a failed check
+   * (403 `PERMISSION_DENIED`, audited), so a caller cannot probe which ids
+   * exist. A requirement's own `notFound` overrides it.
+   */
+  resourceNotFound?: CanResourceNotFound
+}
+
+/** See {@link PermissionsPluginOptions.resourceNotFound}. */
+export type CanResourceNotFound = 'not-found' | 'deny'
+
+/**
+ * What a `meta.can` resource loader receives. `params`, `query` and `body` are
+ * parsed by the route's schemas exactly as the handler will receive them
+ * (`undefined` when the route declares no schema for that part; the body is
+ * `undefined` for `upload()`/`rawBody()` routes, which stream it later).
+ * Typed `any` because the route's schemas are not visible at the meta's type.
+ */
+export interface CanResourceInput {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params: any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query: any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  body: any
+  /** The authenticated caller (the guard answers 401 before any load). */
+  user: PolicyUser
+  /** The request's tenant (`ctx().tenant`), when tenancy resolved one. */
+  tenant: unknown
+  /** The request-scoped container. */
+  container: Container
+  /** The raw request — headers, unparsed input. */
+  request: HttpRequest
+  route: BasaltRoute
 }
 
 /**
- * The permissions a `meta.can` value requires: a non-empty string is one, a
- * non-empty array of non-empty strings is all of them. Anything else is `null`
- * — unenforceable, so the guard fails closed on it.
+ * Loads the resource a `meta.can` requirement is checked against. Return
+ * `null`/`undefined` for "not found" (see {@link CanResourceNotFound}); a throw
+ * propagates as-is.
  */
-function canMetaPermissions(required: unknown): string[] | null {
-  if (typeof required === 'string') return required.length > 0 ? [required] : null
-  if (
-    Array.isArray(required) &&
-    required.length > 0 &&
-    required.every((entry): entry is string => typeof entry === 'string' && entry.length > 0)
-  ) {
-    return required
+export type CanResourceLoader<TResource = unknown> = (
+  input: CanResourceInput,
+) => TResource | null | undefined | Promise<TResource | null | undefined>
+
+/**
+ * A resource-aware `meta.can` entry: the guard loads the resource, then
+ * `gate.authorize(user, permission, resource)` lets the registered policy for
+ * `permission` decide — the same call a handler would make by hand.
+ *
+ * ```ts
+ * meta: { can: { permission: 'projects:update', resource: ({ params }) => projects.find(params.id) } }
+ * ```
+ */
+export interface CanRequirement<TResource = unknown> {
+  permission: string
+  resource: CanResourceLoader<TResource>
+  /** Overrides the plugin's `resourceNotFound` for this requirement. */
+  notFound?: CanResourceNotFound
+}
+
+/**
+ * The value of `meta.can`: a permission, a resource requirement, or a
+ * non-empty array mixing both — every entry is required (all-of).
+ */
+export type CanMeta = string | CanRequirement | readonly (string | CanRequirement)[]
+
+const REQUIREMENT_KEYS: ReadonlySet<string> = new Set(['permission', 'resource', 'notFound'])
+
+/** Why `entry` is not a valid resource requirement, or `undefined` when it is. */
+function requirementProblem(entry: object): string | undefined {
+  if (Array.isArray(entry)) return 'a nested array is not a requirement'
+  const unknownKeys = Object.keys(entry).filter((key) => !REQUIREMENT_KEYS.has(key))
+  if (unknownKeys.length > 0) {
+    return `unknown key(s) ${unknownKeys.map((k) => JSON.stringify(k)).join(', ')} (expected permission, resource, notFound)`
   }
+  const { permission, resource, notFound } = entry as Partial<CanRequirement>
+  if (!isValidPermission(permission)) {
+    return 'permission must be a non-empty string without whitespace, control characters or empty ":" segments'
+  }
+  if (typeof resource !== 'function') return `resource must be a loader function (${permission})`
+  if (notFound !== undefined && notFound !== 'not-found' && notFound !== 'deny') {
+    return `notFound must be 'not-found' or 'deny' (${permission})`
+  }
+  return undefined
+}
+
+const isRequirementLike = (entry: unknown): entry is object => typeof entry === 'object' && entry !== null
+
+/**
+ * The entries a `meta.can` value requires: a non-empty string is one
+ * permission, a valid resource requirement is one requirement, a non-empty
+ * array of those is all of them. Anything else is `null` — unenforceable, so
+ * the guard fails closed on it.
+ */
+function canMetaEntries(required: unknown): (string | CanRequirement)[] | null {
+  if (typeof required === 'string') return required.length > 0 ? [required] : null
+  if (Array.isArray(required)) {
+    if (required.length === 0) return null
+    const entries: (string | CanRequirement)[] = []
+    for (const entry of required as unknown[]) {
+      if (typeof entry === 'string' && entry.length > 0) entries.push(entry)
+      else if (isRequirementLike(entry) && requirementProblem(entry) === undefined) entries.push(entry as CanRequirement)
+      else return null
+    }
+    return entries
+  }
+  if (isRequirementLike(required) && requirementProblem(required) === undefined) return [required as CanRequirement]
   return null
+}
+
+/** True when `required` uses the resource-requirement form anywhere (an object entry). */
+function declaresRequirement(required: unknown): boolean {
+  if (Array.isArray(required)) return (required as unknown[]).some(isRequirementLike)
+  return isRequirementLike(required)
+}
+
+/**
+ * Where the guard leaves the resources it resolved for the handler
+ * ({@link canResource}). A registered symbol: not a string any enricher could
+ * collide with, and still the same key across two copies of this package.
+ */
+const CAN_RESOURCES = Symbol.for('basalt.permissions.canResources')
+
+/**
+ * The resource the `meta.can` guard loaded for this request, so the handler
+ * does not load it a second time:
+ *
+ * ```ts
+ * route({
+ *   method: 'PATCH', url: '/projects/:id', params: z.object({ id: z.string() }),
+ *   meta: { can: { permission: 'projects:update', resource: ({ params }) => projects.find(params.id) } },
+ *   handler: ({ body }) => projects.update(canResource<Project>(), body),
+ * })
+ * ```
+ *
+ * Pass the permission when the route declares several requirements whose
+ * loaders return different resources. Throws
+ * {@link CanResourceUnavailableError} when the guard resolved none — a route
+ * without a resource requirement, or code running outside the request.
+ */
+export function canResource<TResource = unknown>(permission?: string): TResource {
+  const context = tryCtx() as Record<PropertyKey, unknown> | undefined
+  const resolved = context?.[CAN_RESOURCES] as ReadonlyMap<string, unknown> | undefined
+  if (!resolved || resolved.size === 0) {
+    throw new CanResourceUnavailableError('no meta.can resource was resolved for this request')
+  }
+  if (permission !== undefined) {
+    if (!resolved.has(permission)) {
+      throw new CanResourceUnavailableError(`no meta.can resource was resolved for "${permission}"`)
+    }
+    return resolved.get(permission) as TResource
+  }
+  const distinct = [...new Set(resolved.values())]
+  if (distinct.length > 1) {
+    throw new CanResourceUnavailableError(
+      `this route resolved ${distinct.length} different resources — pass the permission (${[...resolved.keys()].join(', ')})`,
+    )
+  }
+  return distinct[0] as TResource
+}
+
+type ParsedPart = 'body' | 'query' | 'params'
+
+/** The pipeline's own parse (same schema, same 400), for the resource loader. */
+function parseForLoader(part: ParsedPart, schema: BasaltRoute['params'], input: unknown): unknown {
+  if (!schema) return undefined
+  const result = schema.safeParse(input)
+  if (result.success) return result.data
+  const issues: ValidationIssue[] = result.error.issues.map((issue) => ({
+    path: issue.path.map(String).join('.'),
+    message: issue.message,
+  }))
+  throw new RequestValidationError(part, issues)
+}
+
+function loaderInput(
+  route: BasaltRoute,
+  request: HttpRequest,
+  user: PolicyUser,
+  context: Record<string, unknown>,
+  container: Container,
+): CanResourceInput {
+  // Guards run before the pipeline validates, so the input is parsed here —
+  // in the pipeline's order, with its schemas — and parsed again for the
+  // handler: keep schema transforms pure. A streamed body is never touched.
+  const streamed = uploadOptionsOf(route.body) !== undefined || rawBodyOptionsOf(route.body) !== undefined
+  const body = streamed ? undefined : parseForLoader('body', route.body, request.body)
+  const query = parseForLoader('query', route.query, request.query)
+  const params = parseForLoader('params', route.params, request.params)
+  return { params, query, body, user, tenant: context['tenant'], container, request, route }
 }
 
 export function permissionsPlugin(options: PermissionsPluginOptions) {
@@ -960,24 +1170,96 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
       // Read lazily, so it is seen whichever plugin registers first.
       const tenancyActive = options.tenancyActive ?? (() => ensureMetadata(container).get('tenancy:active').length > 0)
       container.singleton(GATE, () => new Gate({ ...options, hooks: options.hooks ?? hooks, tenancyActive }))
+      const missingPolicy = options.onMissingPolicy ?? 'error'
+      const defaultNotFound: CanResourceNotFound = options.resourceNotFound ?? 'not-found'
 
-      // Guard: routes declaring meta.can require the permission(s). A string
-      // requires that permission; an array requires ALL of them (all-of). Any
-      // other shape (true, a number, an empty/mixed array) is unenforceable and
-      // fails CLOSED with InvalidCanMetaError instead of silently skipping the
-      // check — the historic `typeof !== 'string' → return` was a fail-open.
-      const guard: RouteGuard = async ({ route, context, container: c }) => {
+      // Guard: routes declaring meta.can require every entry. A string is an
+      // RBAC permission; a resource requirement loads the resource and lets
+      // its policy decide; an array requires ALL of them (all-of). Any other
+      // shape (true, a number, an empty/mixed array, a malformed requirement)
+      // is unenforceable and fails CLOSED with InvalidCanMetaError instead of
+      // silently skipping the check — the historic `typeof !== 'string' →
+      // return` was a fail-open.
+      const guard: RouteGuard = async ({ route, request, context, container: c }) => {
         const required = route.meta?.['can']
         if (required === undefined) return
-        const permissions = canMetaPermissions(required)
-        if (permissions === null) {
+        const entries = canMetaEntries(required)
+        if (entries === null) {
           throw new InvalidCanMetaError(`${route.method} ${route.url}`, required)
         }
         // A user object without a usable id is not an authenticated caller.
         const user: unknown = context.user
         if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
         const gate = c.get(GATE)
-        for (const permission of permissions) await gate.authorize(user, permission)
+        // Plain permissions first: cheap, and a caller refused by RBAC never
+        // makes a loader hit the database.
+        const requirements: CanRequirement[] = []
+        for (const entry of entries) {
+          if (typeof entry === 'string') await gate.authorize(user, entry)
+          else requirements.push(entry)
+        }
+        if (requirements.length === 0) return
+
+        const input = loaderInput(route, request, user, context as Record<string, unknown>, c)
+        // One load per loader: two requirements sharing a loader check the
+        // same resource ('projects:update' and 'projects:publish').
+        const loaded = new Map<CanResourceLoader, unknown>()
+        const resolved = new Map<string, unknown>()
+        for (const requirement of requirements) {
+          let resource: unknown
+          if (loaded.has(requirement.resource)) resource = loaded.get(requirement.resource)
+          else {
+            resource = await requirement.resource(input)
+            loaded.set(requirement.resource, resource)
+          }
+          if (resource === null || resource === undefined) {
+            if ((requirement.notFound ?? defaultNotFound) === 'deny') throw await gate.denied(user.id, requirement.permission)
+            throw new ResourceNotFoundError()
+          }
+          // The policy for `permission` decides (MissingPolicyError without
+          // one, unless onMissingPolicy: 'rbac').
+          await gate.authorize(user, requirement.permission, resource)
+          resolved.set(requirement.permission, resource)
+        }
+        ;(context as Record<PropertyKey, unknown>)[CAN_RESOURCES] = resolved
+      }
+
+      // Boot-time check of the resource form (every adapter runs
+      // `http:meta-validators` over its routes): a malformed requirement, or
+      // one whose permission no policy decides, refuses the boot instead of
+      // answering 500 on the first request. The string forms keep their
+      // runtime fail-closed only — tightening them at boot would break apps
+      // that boot today. The guard still re-checks everything at runtime.
+      const validator: RouteMetaValidator = ({ route, container: c }) => {
+        const required: unknown = route.meta?.['can']
+        if (!declaresRequirement(required)) return
+        const problems: string[] = []
+        const entries = Array.isArray(required) ? (required as unknown[]) : [required]
+        if (entries.length === 0) problems.push('meta.can is an empty array')
+        for (const entry of entries) {
+          if (typeof entry === 'string') {
+            if (entry.length === 0) problems.push('meta.can contains an empty permission string')
+            continue
+          }
+          if (!isRequirementLike(entry)) {
+            problems.push(`meta.can contains an entry of type ${typeof entry} (expected a permission or a requirement)`)
+            continue
+          }
+          const problem = requirementProblem(entry)
+          if (problem !== undefined) {
+            problems.push(`meta.can requirement: ${problem}`)
+            continue
+          }
+          const { permission } = entry as CanRequirement
+          if (missingPolicy === 'error' && !c.get(GATE).hasPolicy(permission)) {
+            problems.push(
+              `meta.can requirement "${permission}" loads a resource but no policy decides it — ` +
+                `register definePolicy('${permission.split(':')[0]}', { ${permission.split(':')[1] ?? '…'}: … }), ` +
+                `fix the resource:action spelling, or set onMissingPolicy: 'rbac'`,
+            )
+          }
+        }
+        return problems.length > 0 ? problems : undefined
       }
       // Guard: a confined role reaches only the surfaces its rule allows.
       //
@@ -1032,23 +1314,33 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
 
       // Side-effect-free twin of the `can` guard for listings (`tools/list` of
       // @basaltkit/mcp): hide a `meta.can` route from a caller who statically
-      // lacks the permission. `gate.can()` WITHOUT a resource is a pure read —
-      // store lookups and the `superAdmin` callback, never a hook, a denial
-      // record or a write (`authorize()`/`denied()` are what emit). And it is
-      // the guard's exact question: the guard never passes a resource either,
-      // so no policy decides `meta.can`. Resource-level (ABAC) checks a handler
-      // runs itself (`authorize(user, perm, resource)`) are invisible here —
-      // such a tool stays listed and its handler still refuses.
+      // lacks a plain permission it requires. `gate.can()` WITHOUT a resource
+      // is a pure read — store lookups and the `superAdmin` callback, never a
+      // hook, a denial record or a write (`authorize()`/`denied()` are what
+      // emit).
+      //
+      // A resource requirement is never loaded here — a listing must not hit
+      // the database or run a policy per route. Its policy decides per
+      // resource (an owner may pass holding no grant at all), so it raises no
+      // objection for an authenticated caller: the tool stays listed and the
+      // guard decides on the call. Pair it with the plain permission
+      // (`['projects:update', { permission: 'projects:update', resource }]`)
+      // to also require — and list by — the RBAC grant. Without a policy
+      // under `onMissingPolicy: 'rbac'` the guard answers from RBAC, and so
+      // does this; without one under `'error'` every call fails, so it hides.
       const visibility: RouteVisibilityCheck = async ({ route, context, container: c }) => {
         const required = route.meta?.['can']
         if (required === undefined) return true
-        const permissions = canMetaPermissions(required)
+        const entries = canMetaEntries(required)
         // Malformed meta: the guard throws on every call, so nobody can pass.
-        if (permissions === null) return false
+        if (entries === null) return false
         const user: unknown = context['user']
         if (!isPolicyUser(user)) return false
         const gate = c.get(GATE)
-        for (const permission of permissions) {
+        for (const entry of entries) {
+          const permission = typeof entry === 'string' ? entry : entry.permission
+          if (typeof entry !== 'string' && gate.hasPolicy(permission)) continue
+          if (typeof entry !== 'string' && missingPolicy === 'error') return false
           if (!(await gate.can(user, permission))) return false
         }
         return true
@@ -1058,6 +1350,7 @@ export function permissionsPlugin(options: PermissionsPluginOptions) {
       metadata.add('http:guards', guard)
       metadata.add('http:guards', audienceGuard)
       metadata.add('http:route-visibility', visibility)
+      metadata.add('http:meta-validators', validator)
       // Claim `meta.can` for the adapters' boot check (routes declaring it
       // without this plugin fail loud at boot instead of serving unchecked).
       metadata.add('http:guarded-meta', 'can')

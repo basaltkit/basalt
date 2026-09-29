@@ -189,7 +189,6 @@ describe('meta.can shapes: string[] (all-of) and fail-closed invalid declaration
   it.each([
     ['can: true', true],
     ['can: 42', 42],
-    ['can: {} (object)', { any: 'thing' }],
     ['can: [] (empty array)', []],
     ['can: mixed array', ['reports:read', 7]],
   ])('%s fails CLOSED (500 PERMISSION_META_INVALID), never silently open', async (_name, meta) => {
@@ -199,5 +198,12 @@ describe('meta.can shapes: string[] (all-of) and fail-closed invalid declaration
     expect(res.statusCode).toBe(500)
     expect(res.json().error.code).toBe('PERMISSION_META_INVALID')
     await app.shutdown()
+  })
+
+  it('can: {} (an object that is not a resource requirement) fails CLOSED at boot — the route never serves', async () => {
+    // Objects are the resource-requirement form (BK-049), validated at boot by
+    // `http:meta-validators`; the guard still refuses it at runtime too (see
+    // can-resource.test.ts, GAP-2d).
+    await expect(bootWith({ any: 'thing' })).rejects.toMatchObject({ code: 'HTTP_INVALID_ROUTE_META' })
   })
 })

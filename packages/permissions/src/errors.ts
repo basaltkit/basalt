@@ -27,13 +27,45 @@ export class InvalidCanMetaError extends BasaltError {
     super(
       'PERMISSION_META_INVALID',
       `Route "${route}" declares meta.can with an unenforceable shape (${describe(received)}). ` +
-        `Use a permission string ('projects:delete') or a non-empty array of strings (all required).`,
+        `Use a permission string ('projects:delete'), a resource requirement ` +
+        `({ permission: 'projects:update', resource: (input) => load(input.params.id) }), ` +
+        `or a non-empty array of those (all required).`,
     )
   }
 }
 
 const describe = (value: unknown): string =>
-  Array.isArray(value) ? 'array with non-string or no entries' : `type ${typeof value}`
+  Array.isArray(value)
+    ? 'array with a malformed entry or no entries'
+    : value !== null && typeof value === 'object'
+      ? 'object without a valid permission string and resource loader'
+      : `type ${typeof value}`
+
+/**
+ * A `meta.can` resource requirement's loader found nothing (returned `null` or
+ * `undefined`). The default answer is a 404: there is nothing to authorize
+ * against. Set `notFound: 'deny'` (on the requirement, or `resourceNotFound`
+ * on the plugin) to answer 403 instead, so a caller cannot tell a missing
+ * resource from one they may not touch.
+ */
+export class ResourceNotFoundError extends BasaltError {
+  readonly status = 404
+  constructor() {
+    super('RESOURCE_NOT_FOUND', 'Resource not found.')
+  }
+}
+
+/**
+ * `canResource()` was called where the `meta.can` guard resolved no resource
+ * (a route without a resource requirement, a different permission, or code
+ * running outside the request). A programming error — fails loud.
+ */
+export class CanResourceUnavailableError extends BasaltError {
+  readonly status = 500
+  constructor(reason: string) {
+    super('PERMISSION_RESOURCE_UNAVAILABLE', `canResource(): ${reason}`)
+  }
+}
 
 /**
  * `can(user, 'doc:update', resource)` was called with a resource, but no policy
