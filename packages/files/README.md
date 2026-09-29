@@ -91,10 +91,23 @@ await files.upload(file.stream, { name: file.filename, contentType: file.content
 ```
 
 On a disk whose driver can stream (`local`, `s3`, `azure`, `gcs` — see
-`disk.supports('putStream')`), the bytes go **straight to the backend**: only
-the 64 KiB sniff window is ever held. Pass `contentLength` when the client
-declared one (`Content-Length`) — S3 needs a known length to stream rather than
-buffer. The buffered path (at most `maxSize` in memory, then `disk.put`) is the
+`disk.supports('putStream')`), the bytes go **straight to the backend**: this
+module holds only the 64 KiB sniff window, and the driver holds what its own
+upload protocol needs — nothing on `local`, one request body on S3 with a
+`contentLength`, the SDK's part/block buffers otherwise (S3 multipart:
+`partSizeBytes × queueSize`, 20 MiB by default; see each driver's README). None
+of them buffers up to `maxSize`. Pass `contentLength` when the client declared
+one (`Content-Length`) — S3 then streams it into a single `PutObject`.
+
+`contentLength` is a declaration, and it is held to it: a value that is not a
+non-negative integer is refused before the body is read (400
+`STORAGE_CONTENT_LENGTH_INVALID`), one past `maxSize` with 413
+`FILE_TOO_LARGE`, and a body that carries more or fewer bytes fails with 400
+`STORAGE_CONTENT_LENGTH_MISMATCH` — before its end reaches the backend, so no
+object is committed and no record is written. The record's `size` is always the
+measured one.
+
+The buffered path (at most `maxSize` in memory, then `disk.put`) is the
 fallback, used for a driver with no `putStream`, an unbounded
 `validate.maxSize` with no declared `contentLength`, or a custom `checkQuota`
 (which is asked to approve a size the stream does not yet have). Either way the
@@ -143,14 +156,38 @@ The other operations have ready-made routes via `fileRoutes()`:
 
 | Route | Description |
 |---|---|
-| `GET /files` | Lists the current tenant's files. |
-| `GET /files/:id` | A file's metadata. |
+| `GET /files` | Lists the current tenant's files (public projection, below). |
+| `GET /files/:id` | A file's metadata (public projection, below). |
 | `GET /files/:id/content` | The bytes, **streamed** (`Content-Disposition: attachment`). Authorized with the `'download'` action; with `requireScan` it answers 423/403 before a single byte. `fileRoutes({ download: false })` leaves it out. |
-| `POST /files` | **Opt-in** (`fileRoutes({ upload: { maxBytes, maxFiles?, allowedTypes? } })`): a streamed multipart upload into storage, `uploadedBy` set to the caller. Returns `201` with the created `FileRecord[]`. |
+| `POST /files` | **Opt-in** (`fileRoutes({ upload: { maxBytes, maxFiles?, allowedTypes? } })`): a streamed multipart upload into storage, `uploadedBy` set to the caller. Returns `201` with the created files, in the public projection. |
 | `POST /files/:id/url` `{ expiresIn? }` | Temporary signed URL. |
 | `DELETE /files/:id` | Deletes bytes + metadata. |
 
 **Owner-only by default:** a user reaches only files whose `uploadedBy` is their own id; anything else answers 404. Choose another policy explicitly with `fileRoutes({ shared: true })` (tenant-wide drive) or `fileRoutes({ authorize: (action, record, user) => boolean })` (`action` is `'read' | 'download' | 'url' | 'delete'`; `'read'` is the record, `'download'` the bytes). `expiresIn` must be positive and at most `maxUrlTtl` (default `'1h'`), otherwise 400; when omitted it defaults to 15 minutes, lowered to `maxUrlTtl` if that is shorter.
+
+**Public projection.** The routes never answer with the raw `FileRecord`. By
+default every record goes through `toPublicFile(record)`:
+`{ id, name, contentType, size, createdAt, scannedAt?, scan?: { clean }, metadata? }`.
+Kept server-side: `path` (the storage key — your bucket layout), `checksum`,
+`tenantId`, `uploadedBy` (a user id — someone else's, on a shared drive) and the
+scanner's `detail` (engine output: signature names, versions, temp paths); the
+verdict stays as `scan.clean`, and `metadata` loses only its internal `scan`
+entry. Choose your own shape with `present`, which runs after authorization,
+as the caller:
+
+```ts
+fileRoutes({
+  shared: true,
+  // "uploaded by" matters on a shared drive — add it back on purpose.
+  present: (file, user) => ({ ...toPublicFile(file), mine: file.uploadedBy === user.id }),
+})
+```
+
+> **Upgrading from 5.x:** these routes used to return the whole record. A
+> client that read `path`, `checksum`, `uploadedBy`, `tenantId` or
+> `metadata.scan.detail` from them must now get it from a `present` you write
+> (or from `files.get(id)` server-side). `files.get()` / `files.list()` and
+> the hooks are unchanged — they still hand you the full record.
 
 `POST /files` has no per-record `authorize` decision to make — there is no record yet — so
 it accepts any authenticated caller and applies `Files`' own rules: the tenant from the
@@ -202,7 +239,7 @@ await files.markScanned(id, { clean: true }, tenantId) // emits file:scanned
 
 | Method | Description |
 |---|---|
-| `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. `content`: `Buffer`/`Uint8Array`, Node `Readable`, `AsyncIterable<Uint8Array>` or web `ReadableStream`. A stream goes straight to the backend when the driver supports `putStream`. `input.contentLength` (optional) is the client-declared size — a hint that lets S3 stream instead of buffer; the real size is always measured. |
+| `upload(content, input)` | Validates, enforces quota, stores, records metadata, emits `file:uploaded`. `content`: `Buffer`/`Uint8Array`, Node `Readable`, `AsyncIterable<Uint8Array>` or web `ReadableStream`. A stream goes straight to the backend when the driver supports `putStream`. `input.contentLength` (optional) is the client-declared size: validated up front and verified against the bytes (400 `STORAGE_CONTENT_LENGTH_INVALID` / `_MISMATCH`, 413 past `maxSize`); the record's size is the measured one. |
 | `download(id, tenantId?, { bypassQuarantine? })` | `{ record, content }`. Gated by `requireScan`; `bypassQuarantine` is for the scanner only. |
 | `downloadStream(id, tenantId?, { bypassQuarantine? })` | `{ record, stream }` — the same contract as `download`, quarantine included, without buffering. The caller must consume or `destroy()` the stream. Needs a driver with `getStream`. |
 | `canStreamDownloads()` | `true` when this disk's driver implements `getStream` (local, S3, Azure, GCS), so callers can take the streaming path and buffer where it does not exist instead of catching `STORAGE_GET_STREAM_UNSUPPORTED`. |
@@ -230,10 +267,14 @@ Without an explicit `tenantId`, it uses `ctx().tenant.id`. Inside a tenant conte
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | No `tenantId` argument and no `ctx().tenant` — every operation is tenant-scoped and fails closed rather than querying unscoped. |
 | `FileTenantMismatchError` | `FILE_TENANT_MISMATCH` | 403 | An explicit `tenantId` differs from the context tenant. |
 | `FileTenantReservedError` | `FILE_TENANT_RESERVED` | 400 | The tenant id equals `SINGLE_TENANT_SCOPE`, the single-tenant store key. |
+| `StorageContentLengthInvalidError` | `STORAGE_CONTENT_LENGTH_INVALID` | 400 | `input.contentLength` is negative, fractional, not finite or past `MAX_SAFE_INTEGER`. Nothing is read. |
+| `StorageContentLengthMismatchError` | `STORAGE_CONTENT_LENGTH_MISMATCH` | 400 | The body carried more or fewer bytes than `input.contentLength`. No object is committed, no record written. |
 
 All extend `BasaltError` and declare a `status`, so the adapters map them to the
 HTTP code above with the real error `code` in the body. Errors thrown by the
-underlying disk (`STORAGE_*`) do **not** — they surface as 500 `INTERNAL_ERROR`.
+underlying disk (`STORAGE_*`) keep their status when they declare one (the
+two `STORAGE_CONTENT_LENGTH_*` above, `STORAGE_STREAM_LENGTH_REQUIRED`, …);
+the rest surface as 500 `INTERNAL_ERROR`.
 
 - **`FILE_NOT_FOUND` for a file that exists in the bucket** — the metadata
   record is gone, not the bytes. `MemoryFileStore` loses everything on restart;

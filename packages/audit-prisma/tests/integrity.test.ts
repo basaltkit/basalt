@@ -172,3 +172,20 @@ describe('PrismaAuditStore.auditTenants()', () => {
     expect(scans).toBe(0)
   })
 })
+
+describe('PrismaAuditStore — keyed chain across a key rotation', () => {
+  it('a v2 hash with the longest key id fits the mysql preset, and a rotated chain verifies', async () => {
+    const client = fakeClient()
+    const keyA = 'a'.repeat(32)
+    const longId = 'k'.repeat(64)
+    const store = new PrismaAuditStore(client, { columnLimits: 'mysql' })
+    await new Audit(store, undefined, undefined, { integrity: { mode: 'hash-chain', key: keyA, keyId: longId } }).record('x')
+    const rotated = new Audit(store, undefined, undefined, {
+      integrity: { mode: 'hash-chain', key: 'b'.repeat(32), keyId: 'b', verifyKeys: [{ id: longId, key: keyA }] },
+    })
+    await rotated.record('y')
+    expect(client.rows[0]!.hash).toMatch(new RegExp(`^v2:hmac-sha256:${longId}:[0-9a-f]{64}$`))
+    expect(client.rows[1]!.hash).toMatch(/^v2:hmac-sha256:b:[0-9a-f]{64}$/)
+    expect(await rotated.verify()).toMatchObject({ ok: true, checked: 2 })
+  })
+})

@@ -140,6 +140,41 @@ export class StorageStreamLengthRequiredError extends BasaltError {
 }
 
 /**
+ * The `contentLength` given to `putStream` is not a byte count: negative,
+ * fractional, not finite, or past `Number.MAX_SAFE_INTEGER`. Refused before a
+ * single byte is read. 400: the caller declared it.
+ */
+export class StorageContentLengthInvalidError extends BasaltError {
+  readonly status = 400
+  constructor(value: unknown) {
+    super('STORAGE_CONTENT_LENGTH_INVALID', `contentLength must be a non-negative safe integer; received ${String(value)}.`)
+  }
+}
+
+/**
+ * A streaming upload's body did not carry the `contentLength` it declared.
+ * Raised mid-stream — the moment the body passes the declared size, or at its
+ * end when it falls short — and always BEFORE the end of the body reaches the
+ * driver, so a backend that commits on end (S3, GCS, Azure) never stores an
+ * object whose size contradicts the declaration. 400: the caller sent the body.
+ */
+export class StorageContentLengthMismatchError extends BasaltError {
+  readonly status = 400
+  constructor(
+    readonly declared: number,
+    readonly received: number,
+    ended: boolean,
+  ) {
+    super(
+      'STORAGE_CONTENT_LENGTH_MISMATCH',
+      ended
+        ? `Upload declared ${declared} bytes but its body ended after ${received}.`
+        : `Upload declared ${declared} bytes but its body carried more (${received} so far).`,
+    )
+  }
+}
+
+/**
  * The options passed to `temporaryUploadUrl` cannot be signed safely: missing
  * or malformed content type, a non-integer length, a malformed checksum, or a
  * `maxBytes` cap without a declared `contentLength`. 400: the caller chose them.

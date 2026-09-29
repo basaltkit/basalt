@@ -91,6 +91,9 @@ GRANT SELECT, INSERT ON "audit_entries" TO app_role;
 Run migrations with a separate owner role. See the
 [`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#verifiable-trail-hash-chain)
 for keyed chains (HMAC), anchoring the head, and `basalt audit:verify`.
+A `hash` (and `prevHash`) is self-describing — `v2:hmac-sha256:<keyId>:<hex>` —
+and holds up to 144 characters, which the `VARCHAR(191)` of
+`schema.mysql.prisma` fits; no migration is needed for key ids or key rotation.
 
 ## 2. Wire the store
 

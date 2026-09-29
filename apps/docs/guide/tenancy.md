@@ -495,14 +495,26 @@ app owns the dispatch, so any scheduler works — a queue, a cron, a manual
 
 | Status | Serves requests | How it gets there |
 | --- | :---: | --- |
-| *(none)* | ✅ | Every tenant created before provisioning existed. **Treated as ready** — anything else would take a production estate offline on upgrade |
+| *(none, or `null`)* | ✅ | Every tenant created before provisioning existed. **Treated as ready** — anything else would take a production estate offline on upgrade |
 | `ready` | ✅ | `onProvision` succeeded |
 | `provisioning` | ❌ 503 | `create()` wrote the record; the work has not finished |
 | `failed` | ❌ 503 | `onProvision` threw. The record is kept, not deleted — it is the evidence the tenant was attempted |
 | `deleting` | ❌ 503 | `destroy()` has started. Marked **before** the storage is touched, so no request reaches a schema being dropped underneath it |
+| `suspended` | ❌ 403 `TENANT_SUSPENDED` | **Your app** wrote it — billing lapsed, abuse. Tenancy never sets it |
+| anything else (`active`, `disabled`, …) | ❌ 500 `TENANT_STATUS_UNKNOWN` | A value tenancy does not recognise. Refused rather than guessed at |
 
 **503, not 404.** The tenant exists; it is simply not serving yet, and 503 is the
 status a client may retry. A 404 would say the opposite.
+
+**A suspension is 403, not 503.** The storage is fine and retrying will not help —
+the account is locked out until the app lifts the suspension. Lock a tenant out
+with `source.save({ ...tenant, status: 'suspended' })`; put it back with `'ready'`.
+
+**An unknown status fails closed.** If your records say `active` for a serving
+tenant, tenancy cannot know that means "the storage is usable", so the request is
+refused with a message naming the value it saw. Store `ready` (or no status)
+instead. `assertTenantServing(tenant)` runs the same check outside HTTP;
+`isTenantReady(tenant)` is its boolean form.
 
 ## Reading the tenant
 
@@ -951,7 +963,9 @@ the lookup fails — the claim stands and `add()` throws `DOMAIN_TAKEN`.
 | `TenantResolutionConflictError` | `TENANCY_CONFLICT` | 400 | `onConflict: 'error'` and two resolvers loaded different tenants (e.g. an `x-tenant-id` that disagrees with the `Host`) |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` and no resolver produced a ref that loaded a tenant |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, or `forEach()` on a `TenantSource` without `list()` |
-| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning` or `failed`. 503, not 404: the tenant exists and the client may retry |
+| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning`, `failed` or `deleting`. 503, not 404: the tenant exists and the client may retry |
+| `TenantSuspendedError` | `TENANT_SUSPENDED` | 403 | A request resolved to a tenant whose status is `suspended`. Retrying will not help |
+| `TenantStatusUnknownError` | `TENANT_STATUS_UNKNOWN` | 500 | A request resolved to a tenant whose status tenancy does not recognise (`active`, a typo). Store `ready` or no status for a serving tenant |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` on a source implementing neither `create()` nor `save()` — e.g. one backed by a static config file |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (or a source's `create()`) for an id that already exists. Nothing is written. A `failed`/`provisioning` tenant is retried with `tenancy.provision(id)`; an intentional update is `source.save()` |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` for a domain another tenant registered — verified (and its TXT record still published, or no `challenge()` record of yours), or unverified and younger than `claimTtlMs` |

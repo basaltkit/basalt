@@ -120,3 +120,129 @@ export function sanitizeErrorDetails(details: unknown): ErrorDetails | undefined
     return undefined
   }
 }
+
+// --- Sensitivity -----------------------------------------------------------
+//
+// The sanitiser above bounds the SHAPE of `details`; it cannot know what the
+// data means. `details` is public by contract, but a contract is only as good
+// as every call site that honours it — one `{ details: { resetToken } }` and a
+// secret walks out through an error body, and through `@basaltkit/mcp` into a
+// model's context window. The redactor below is the second line: it masks the
+// values of keys that name a secret. `@basaltkit/mcp` applies it by default;
+// `toErrorResponse` applies it (or your own) when asked.
+
+/** What a redacted value is replaced with. */
+export const REDACTED_DETAIL = '[REDACTED]'
+
+/**
+ * Substrings that make a key sensitive wherever they appear in its normalized
+ * form (lower-cased, separators removed). Specific enough not to hit ordinary
+ * words: `pass` is NOT here (`compass`, `bypass`), `session` is handled
+ * separately (`sessionCount`). Kept in step with `@basaltkit/audit`'s
+ * `isSensitiveKey` — copied, not imported: http depends on nothing but core.
+ */
+const SENSITIVE_FRAGMENT =
+  /password|passwd|passphrase|passcode|passport|secret|token|credential|authorization|cookie|apikey|privatekey|accesskey|secretkey|signingkey|encryptionkey|connectionstring|databaseurl/
+/** Whole words (a key segment after camelCase / `_` / `-` / `.` splitting) that make a key sensitive. */
+const SENSITIVE_WORDS = new Set(['pwd', 'pass', 'jwt', 'auth', 'otp', 'totp', 'mfa', 'dsn', 'bearer', 'sid'])
+/** `session`, `userSession`, `sessionId`, `session_key` — but not `sessionCount`. */
+const SESSION_KEY = /session(s|id|key|cookie)?$/
+
+/** Splits `privateKey`, `private_key`, `X-Private-Key` into lower-case words. */
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 0)
+}
+
+/**
+ * Whether a `details` key names a secret. Segment-aware rather than a bare
+ * substring test: `password`, `resetToken`, `apiKey`, `privateKey`, `jwt`,
+ * `sessionId` are sensitive; `compass`, `bypass`, `sessionCount`, `author`,
+ * `keyId` are not.
+ */
+export function isSensitiveDetailsKey(key: string): boolean {
+  if (key.length > 256) return true // absurd keys are not worth the risk of a miss
+  const words = keyWords(key)
+  const joined = words.join('')
+  return SENSITIVE_FRAGMENT.test(joined) || SESSION_KEY.test(joined) || words.some((w) => SENSITIVE_WORDS.has(w))
+}
+
+function redactValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactValue)
+  if (isPlainRecord(value)) return redactSensitiveDetails(value)
+  return value
+}
+
+/**
+ * The default details redactor: a copy of `details` with the value of every
+ * sensitive key (see {@link isSensitiveDetailsKey}), at any depth, replaced by
+ * {@link REDACTED_DETAIL}. A boolean or `null` under such a key is kept —
+ * `{ mfaRequired: true }` tells the client what to do and carries no secret.
+ * Expects the plain data {@link sanitizeErrorDetails} produces.
+ */
+export function redactSensitiveDetails(details: ErrorDetails): ErrorDetails {
+  const out: ErrorDetails = {}
+  for (const [key, value] of Object.entries(details)) {
+    if (key === '__proto__') continue
+    out[key] =
+      isSensitiveDetailsKey(key) && value !== null && typeof value !== 'boolean' ? REDACTED_DETAIL : redactValue(value)
+  }
+  return out
+}
+
+/** What a redactor knows about the error whose details it is filtering. */
+export interface ErrorDetailsRedactionInfo {
+  error: unknown
+  status: number
+  code: string
+}
+
+/**
+ * Filters the (already sanitised) public `details` of an error before they
+ * leave: return the payload to send, or `undefined` to send none. Its output
+ * is sanitised again, and a redactor that throws sends no details — it fails
+ * closed.
+ */
+export type ErrorDetailsRedactor = (
+  details: ErrorDetails,
+  info: ErrorDetailsRedactionInfo,
+) => ErrorDetails | undefined
+
+/**
+ * Runs `redact` over sanitised details. Never throws: a failing redactor drops
+ * the payload rather than turning a handled error into a second one.
+ */
+export function applyDetailsRedactor(
+  details: ErrorDetails | undefined,
+  redact: ErrorDetailsRedactor | undefined,
+  info: ErrorDetailsRedactionInfo,
+): ErrorDetails | undefined {
+  if (details === undefined || redact === undefined) return details
+  try {
+    return sanitizeErrorDetails(redact(details, info))
+  } catch {
+    return undefined
+  }
+}
+
+// --- The internal channel --------------------------------------------------
+
+/**
+ * The log-only counterpart of `details`, read from an error's
+ * `internalDetails` property (`new HttpError(…, { internalDetails })`, or any
+ * error that defines one). Sanitised for shape like `details`, so a cyclic or
+ * ORM-laden payload cannot break the reporter, but NEVER serialised into a
+ * response or a tool result — `toErrorResponse` does not read it.
+ */
+export function internalDetailsOf(error: unknown): ErrorDetails | undefined {
+  if (error === null || typeof error !== 'object') return undefined
+  try {
+    return sanitizeErrorDetails((error as { internalDetails?: unknown }).internalDetails)
+  } catch {
+    return undefined
+  }
+}

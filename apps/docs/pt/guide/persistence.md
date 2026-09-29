@@ -191,7 +191,7 @@ store cada, SQLite para um nó único e Prisma para uma base de dados partilhada
 | Audit trail | `AuditStore` (append-only) | `sqliteAuditStore()` | `prismaAuditStore(prisma)` |
 | Activity feed | `ActivityStore` | `sqliteActivityStore()` | `prismaActivityStore(prisma)` |
 | Notificações in-app | `InAppStore` | `sqliteInAppStore()` | `prismaInAppStore(prisma)` |
-| Permissions | `AccessStore` | `sqliteAccessStore()` | `prismaAccessStore(prisma)` |
+| Permissions | `AccessStore`, `TemporaryGrantStore`, `DelegationStore` | `sqliteAccessStore()` | `prismaAccessStore(prisma)` |
 
 ```ts
 import { auditPlugin } from '@basaltkit/audit'
@@ -211,7 +211,14 @@ como texto e fazem a ida e volta sem alterações.
 
 `@basaltkit/permissions` segue a mesma forma: `permissionsPlugin({ store })` recebe o
 `AccessStore` durável (atribuições de papel e grants, com scope), pelo que o estado RBAC
-também sobrevive a um restart. `@basaltkit/flags` não precisa de backend — as feature
+também sobrevive a um restart. As mesmas factories devolvem também os stores duráveis
+`temporaryGrants` e `delegations` — passa-os para que as concessões temporárias
+(`grantTemporarily()`) e as delegações (`delegate()`) sobrevivam a restarts e sejam
+partilhadas entre instâncias: `permissionsPlugin({ store: p.store, temporaryGrants:
+p.temporaryGrants, delegations: p.delegations })`. Em Prisma precisam dos modelos
+`PermTemporaryGrant` e `PermDelegation` (`basalt prisma:sync`), procurados no primeiro
+uso — uma app que não os ligue não precisa de nenhum. As linhas expiradas ficam inertes;
+apaga-as com `pruneExpired()` a partir de um job agendado. `@basaltkit/flags` não precisa de backend — as feature
 flags são declaradas em código e avaliadas deterministicamente, sem nada para
 persistir.
 
@@ -228,8 +235,15 @@ auditPlugin({
 ```
 
 Cada entrada fica ligada à anterior da cadeia do seu tenant (`seq`, `prevHash`,
-`hash` = SHA-256 sobre uma serialização canónica), com uma cadeia por tenant mais
-uma cadeia de sistema. `audit.verify({ tenantId, from?, to? })` — ou `basalt
+`hash` = SHA-256, ou HMAC-SHA256 sob uma chave, sobre uma serialização canónica),
+com uma cadeia por tenant mais uma cadeia de sistema. O hash nomeia o seu algoritmo
+e o id da chave (`v2:hmac-sha256:<keyId>:<hex>`), por isso uma chave pode ser
+rodada sem partir o histórico: assina com a nova `key`/`keyId` e mantém a antiga
+em `verifyKeys` — o `verify` escolhe a chave de cada entrada pelo seu id. Hashes
+legados (64 hex simples) escritos por versões anteriores continuam a verificar sob qualquer chave
+configurada. A coluna do hash precisa de até 144 caracteres (cabe no
+`VARCHAR(191)` do preset MySQL).
+`audit.verify({ tenantId, from?, to? })` — ou `basalt
 audit:verify [--tenant=<id> | --all]` — deteta linhas editadas, apagadas,
 reordenadas e forjadas. Ambos os stores têm uma **restrição única em `(chain, seq)`**,
 pelo que réplicas a escrever ao mesmo tempo repetem a tentativa em vez de bifurcar
@@ -242,7 +256,11 @@ não deixa lacuna: passa uma head registada noutro sítio como
 `verify({ expectedHead })` (ou `--expected-head=<seq>:<hash>`) para detetar truncatura.
 O `--all` também verifica tenants que têm linhas mas nenhuma cadeia (as linhas
 escritas depois de a integridade começar falham como `unchained-entry`); o
-`--all=true` é lido como `--all`, e um valor não reconhecido é um erro.
+`--all=true` é lido como `--all`, e um valor não reconhecido é um erro. Uma
+entrada assinada por um id de chave que o verificador não tem falha como
+`unknown-key`, e uma segunda linha no mesmo `seq` falha como `sequence-duplicate`
+onde quer que caia — incluindo a fronteira de página, para um store próprio sem a
+restrição única.
 
 `requestContext: true` adiciona um enricher HTTP (igual em fastify, express e hono)
 e guarda o `ip` e o `userAgent` do cliente. O IP é dado pessoal: com
@@ -606,7 +624,7 @@ configuração continua segura em testes.
 | Audit | `sqliteAuditStore()` | `prismaAuditStore(client)` | `auditPlugin({ store })` |
 | Activity | `sqliteActivityStore()` | `prismaActivityStore(client)` | `activityPlugin({ store })` |
 | Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
-| Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store })` |
+| Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store, temporaryGrants, delegations })` |
 | Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — devolve a própria source, não `{ store }` |
 | Outbox de eventos | `sqliteOutboxStore()` | `prismaOutboxStore(client, { claim? })` | `outboxPlugin({ store })` |
 | Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |

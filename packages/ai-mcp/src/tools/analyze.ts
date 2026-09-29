@@ -1,14 +1,15 @@
 import { analyze, detectProject, type AnalysisReport } from '@basaltkit/ai/analysis'
 import { AnalysisReportSchema, toJsonSchema } from '@basaltkit/ai/schema'
 import type { McpToolDef } from '@basaltkit/mcp-core'
-import { resolveWorkspaceRoot, type Session } from '../session.js'
+import type { Session } from '../session.js'
+import { readRoot } from './errors.js'
 
 const inputSchema: Record<string, unknown> = {
   type: 'object',
   properties: {
     workspaceRoot: {
       type: 'string',
-      description: 'Absolute path to the Basalt project to analyze. Defaults to the server workspace root.',
+      description: 'Path of the Basalt project to analyze — absolute or relative, but inside the server project root (paths outside it are refused). Defaults to the server project root.',
     },
   },
 }
@@ -25,7 +26,9 @@ export function analyzeTool(session: Session): McpToolDef {
     inputSchema,
     outputSchema: toJsonSchema(AnalysisReportSchema),
     async invoke(args) {
-      const root = resolveWorkspaceRoot(session, args['workspaceRoot'])
+      const resolved = readRoot(session, args['workspaceRoot'])
+      if ('refused' in resolved) return resolved.refused
+      const root = resolved.root
       const ctx = detectProject(root, session.reader(root))
       const report: AnalysisReport = analyze(ctx)
       return {

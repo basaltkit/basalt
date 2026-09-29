@@ -263,6 +263,17 @@ unexpected exception is still the neutral 500 with nothing attached, and the
 validation body keeps exactly its `part` + `issues[]` shape. Full rules in the
 [`@basaltkit/http` README](https://github.com/basaltkit/basalt/tree/main/packages/http#structured-error-details).
 
+Data only the operator should see — an upstream reply, the conflicting row, an
+internal job id — goes in `internalDetails` instead
+(`new HttpError(422, 'KYC_FAILED', '…', { details, internalDetails })`): the
+error reporter (the adapters' `onError`) receives it, and it is **never**
+serialised into an HTTP body or an MCP tool result. For defence in depth,
+`toErrorResponse(error, { redactDetails })` filters the public `details` —
+`redactSensitiveDetails` masks the values of keys that name a secret
+(`password`, `token`, `apiKey`, …). The HTTP adapters send `details` as
+sanitised; `@basaltkit/mcp` redacts them by default before a tool result
+reaches the model (see [MCP — what the model sees](/guide/mcp#what-the-model-sees-when-a-tool-fails)).
+
 ### Security meta must be enforced — the boot check
 
 `meta: { auth: true }`, `meta.can`, `meta.teamRole`, `meta.scopes`,

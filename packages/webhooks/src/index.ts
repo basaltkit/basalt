@@ -1,6 +1,7 @@
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
 import { deriveDeliveryId, generateWebhookSecret, MIN_WEBHOOK_SECRET_LENGTH, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
+import { effectivePort, isPortAllowed } from './ssrf.js'
 import { matchesEvent, MemoryWebhookStore, WebhookEndpointIdInUseError, type WebhookEndpoint, type WebhookStore } from './store.js'
 
 export {
@@ -25,6 +26,9 @@ export {
 } from './deliver.js'
 export {
   assertDeliverableUrl,
+  DEFAULT_BLOCKED_PORTS,
+  effectivePort,
+  isPortAllowed,
   resolveAndValidate,
   pinnedLookup,
   isPrivateIp,
@@ -65,24 +69,48 @@ export class WebhookTenantRequiredError extends Error {
 
 /**
  * Thrown by {@link WebhookManager.register} for an endpoint that could never be
- * delivered to: a URL that is not an absolute URL with an allowed scheme, a
- * signing secret shorter than `MIN_WEBHOOK_SECRET_LENGTH`, or an empty event
- * list. Registration fails instead of storing an endpoint whose every delivery
- * would be refused later. (Whether the host is public is still decided at
- * delivery time, where DNS is resolved and the connection pinned.)
+ * delivered to: a URL that is not an absolute URL with an allowed scheme and
+ * port, a signing secret shorter than `MIN_WEBHOOK_SECRET_LENGTH`, or an empty
+ * event list. Registration fails instead of storing an endpoint whose every
+ * delivery would be refused later. (Whether the host is public is still decided
+ * at delivery time, where DNS is resolved and the connection pinned.) Also
+ * thrown by {@link WebhookManager.rotateSecret} for an invalid rotation.
  */
 export class WebhookEndpointInvalidError extends Error {
   readonly code = 'WEBHOOK_ENDPOINT_INVALID'
   readonly status = 400
-  constructor(reason: string) {
-    super(`webhooks.register(): ${reason}.`)
+  constructor(reason: string, operation = 'register') {
+    super(`webhooks.${operation}(): ${reason}.`)
     this.name = 'WebhookEndpointInvalidError'
+  }
+}
+
+/** Thrown by {@link WebhookManager.rotateSecret} when the endpoint does not exist in the caller's scope. */
+export class WebhookEndpointNotFoundError extends Error {
+  readonly code = 'WEBHOOK_ENDPOINT_NOT_FOUND'
+  readonly status = 404
+  constructor(id: string) {
+    super(`@basaltkit/webhooks: endpoint "${id}" was not found.`)
+    this.name = 'WebhookEndpointNotFoundError'
   }
 }
 
 const DEFAULT_SCHEMES: readonly string[] = ['https:', 'http:']
 
-function assertRegistrable(endpoint: Omit<WebhookEndpoint, 'id'>, schemes: readonly string[]): void {
+/** Default rotation grace window: 24 hours. */
+export const DEFAULT_SECRET_ROTATION_GRACE_SECONDS = 86_400
+/** Longest rotation grace window `rotateSecret()` accepts: 30 days. */
+export const MAX_SECRET_ROTATION_GRACE_SECONDS = 30 * 86_400
+/** Default most endpoints one tenant may have subscribed to one event before a dispatch refuses it. */
+export const DEFAULT_MAX_ENDPOINTS_PER_DISPATCH = 100
+/** Default most deliveries one `dispatch()` runs at once. */
+export const DEFAULT_DISPATCH_CONCURRENCY = 16
+
+function assertRegistrable(
+  endpoint: Omit<WebhookEndpoint, 'id'>,
+  schemes: readonly string[],
+  allowsPort: (port: number) => boolean,
+): void {
   const { url, secret, events } = endpoint as { url: unknown; secret?: unknown; events: unknown }
   if (typeof url !== 'string' || url.length === 0) throw new WebhookEndpointInvalidError('url must be a non-empty string')
   let parsed: URL
@@ -94,22 +122,92 @@ function assertRegistrable(endpoint: Omit<WebhookEndpoint, 'id'>, schemes: reado
   if (!schemes.includes(parsed.protocol)) {
     throw new WebhookEndpointInvalidError(`url scheme "${parsed.protocol}" is not allowed (allowed: ${schemes.join(', ')})`)
   }
+  const port = effectivePort(parsed)
+  if (port !== undefined && !allowsPort(port)) {
+    throw new WebhookEndpointInvalidError(`url port ${port} is not allowed (see the ssrf.allowedPorts option)`)
+  }
   if (secret != null && (typeof secret !== 'string' || secret.length < MIN_WEBHOOK_SECRET_LENGTH)) {
     throw new WebhookEndpointInvalidError(
       `secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters (omit it to have one generated)`,
     )
+  }
+  const { previousSecret, previousSecretExpiresAt } = endpoint as { previousSecret?: unknown; previousSecretExpiresAt?: unknown }
+  if (previousSecret != null) {
+    if (typeof previousSecret !== 'string' || previousSecret.length < MIN_WEBHOOK_SECRET_LENGTH) {
+      throw new WebhookEndpointInvalidError(`previousSecret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters`)
+    }
+    if (!(previousSecretExpiresAt instanceof Date) || Number.isNaN(previousSecretExpiresAt.getTime())) {
+      throw new WebhookEndpointInvalidError('previousSecret needs a valid previousSecretExpiresAt date (the grace window must be bounded)')
+    }
   }
   if (!Array.isArray(events) || events.length === 0 || !events.every((e) => typeof e === 'string' && e.length > 0)) {
     throw new WebhookEndpointInvalidError('events must be a non-empty array of non-empty event patterns')
   }
 }
 
-/** An endpoint as returned by {@link WebhookManager.list}: the signing secret is never included. */
-export type WebhookEndpointView = Omit<WebhookEndpoint, 'secret'> & { hasSecret: boolean }
+/**
+ * An endpoint as returned by {@link WebhookManager.list}: signing secrets (the
+ * current one and a rotation's previous one) are never included.
+ */
+export type WebhookEndpointView = Omit<WebhookEndpoint, 'secret' | 'previousSecret'> & { hasSecret: boolean }
 
-const redact = ({ secret, ...rest }: WebhookEndpoint): WebhookEndpointView => ({ ...rest, hasSecret: secret != null })
+const redact = ({ secret, previousSecret: _previous, ...rest }: WebhookEndpoint): WebhookEndpointView => ({
+  ...rest,
+  hasSecret: secret != null,
+})
 
-export interface WebhookManagerOptions {
+/** Reported through `onFanOutExceeded` when a dispatch refuses one scope's endpoints. */
+export interface WebhookFanOutExceeded {
+  event: string
+  /** The tenant whose endpoints were refused; `undefined` for tenant-agnostic endpoints. */
+  tenantId: string | undefined
+  /** How many active endpoints of that scope matched the event. */
+  endpoints: number
+  /** The configured `maxEndpointsPerDispatch`. */
+  limit: number
+}
+
+/** Fan-out bounds for {@link WebhookManager.dispatch}. `webhooksPlugin` forwards them. */
+export interface WebhookFanOutOptions {
+  /**
+   * Most active endpoints ONE scope (a tenant, or the tenant-agnostic set) may
+   * have subscribed to one event. A dispatch that matches more refuses that
+   * scope entirely — none of its endpoints is sent to, each gets a failed
+   * result (`retryable: false`) — rather than silently picking some of them;
+   * other scopes of the same dispatch are unaffected. `false` disables the cap.
+   * Default {@link DEFAULT_MAX_ENDPOINTS_PER_DISPATCH} (100).
+   */
+  maxEndpointsPerDispatch?: number | false
+  /** Most deliveries one dispatch runs at once. Default {@link DEFAULT_DISPATCH_CONCURRENCY} (16). */
+  dispatchConcurrency?: number
+  /**
+   * Called once per refused scope (alerting/metrics). Default: `console.warn`.
+   * Must not throw — an exception is logged and swallowed.
+   */
+  onFanOutExceeded?: (info: WebhookFanOutExceeded) => void
+}
+
+function assertPositiveInteger(name: string, value: unknown): void {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new TypeError(`webhooks: \`${name}\` must be a positive integer (got ${String(value)}).`)
+  }
+}
+
+/** Runs `task` over `items` with at most `limit` in flight; results keep the input order. */
+async function mapPool<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await task(items[index]!)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+export interface WebhookManagerOptions extends WebhookFanOutOptions {
   /**
    * True when the app is multi-tenant. `webhooksPlugin` wires this to the
    * `'tenancy:active'` marker set by `tenancyPlugin`. When true, `register`,
@@ -117,6 +215,25 @@ export interface WebhookManagerOptions {
    * with `{ system: true }`.
    */
   tenancyActive?: () => boolean
+  /** Clock in epoch ms, for the rotation grace window (tests). Default `Date.now`. */
+  now?: () => number
+}
+
+/** Options for {@link WebhookManager.rotateSecret}. */
+export interface WebhookRotateSecretOptions {
+  /** Scope off the request path (ignored when a tenant is in context — anti-widening). */
+  tenantId?: string
+  /** Deliberate unscoped rotation with tenancy active and no tenant. */
+  system?: boolean
+  /** The new secret (min 16 chars). Default: a freshly generated `whsec_…`. */
+  secret?: string
+  /**
+   * How long deliveries keep being signed with the previous secret too, in
+   * seconds. `0` cuts over immediately (the previous secret stops signing now).
+   * Default {@link DEFAULT_SECRET_ROTATION_GRACE_SECONDS} (24 h); at most
+   * {@link MAX_SECRET_ROTATION_GRACE_SECONDS} (30 days).
+   */
+  graceSeconds?: number
 }
 
 /** Explicit scope for {@link WebhookManager.dispatch} off the request path. */
@@ -143,6 +260,10 @@ export interface WebhookDispatchOptions {
 /** Register/list subscriptions and dispatch events to matching endpoints. */
 export class WebhookManager {
   private readonly tenancyActive: () => boolean
+  private readonly now: () => number
+  private readonly maxEndpointsPerDispatch: number
+  private readonly dispatchConcurrency: number
+  private readonly onFanOutExceeded: (info: WebhookFanOutExceeded) => void
 
   constructor(
     private readonly store: WebhookStore,
@@ -150,6 +271,24 @@ export class WebhookManager {
     options: WebhookManagerOptions = {},
   ) {
     this.tenancyActive = options.tenancyActive ?? (() => false)
+    this.now = options.now ?? Date.now
+    const cap = options.maxEndpointsPerDispatch ?? DEFAULT_MAX_ENDPOINTS_PER_DISPATCH
+    if (cap !== false) assertPositiveInteger('maxEndpointsPerDispatch', cap)
+    this.maxEndpointsPerDispatch = cap === false ? Number.POSITIVE_INFINITY : cap
+    this.dispatchConcurrency = options.dispatchConcurrency ?? DEFAULT_DISPATCH_CONCURRENCY
+    assertPositiveInteger('dispatchConcurrency', this.dispatchConcurrency)
+    this.onFanOutExceeded =
+      options.onFanOutExceeded ??
+      ((info) =>
+        console.warn(
+          `[basalt:webhooks] fan-out cap exceeded: ${info.endpoints} endpoints of ${info.tenantId === undefined ? 'the tenant-agnostic scope' : `tenant "${info.tenantId}"`} ` +
+            `match "${info.event}" (limit ${info.limit}); none of them was sent to.`,
+        ))
+  }
+
+  private allowsPort(port: number): boolean {
+    const deliverer = this.deliverer as { allowsPort?: (port: number) => boolean }
+    return typeof deliverer.allowsPort === 'function' ? deliverer.allowsPort(port) : isPortAllowed(port)
   }
 
   private requireScope(operation: string, tenantId: string | undefined, system: boolean | undefined): void {
@@ -157,12 +296,16 @@ export class WebhookManager {
   }
 
   /** Refuses a caller-supplied endpoint id that already exists outside `tenantId`'s scope. */
-  private async assertOwnId(id: string, tenantId: string | undefined): Promise<void> {
-    if (tenantId !== undefined && (await this.store.list(tenantId)).some((e) => e.id === id && e.tenantId === tenantId)) return
+  private async assertOwnId(id: string, tenantId: string | undefined): Promise<WebhookEndpoint | undefined> {
+    if (tenantId !== undefined) {
+      const own = (await this.store.list(tenantId)).find((e) => e.id === id && e.tenantId === tenantId)
+      if (own) return own
+    }
     const existing = (await this.store.list()).find((e) => e.id === id)
     if (existing && (existing.tenantId ?? undefined) !== tenantId) {
       throw new WebhookEndpointIdInUseError(id)
     }
+    return existing
   }
 
   /**
@@ -188,18 +331,90 @@ export class WebhookManager {
   ): Promise<WebhookEndpoint> {
     const tenantId = currentTenantId() ?? asTenantId(endpoint.tenantId)
     this.requireScope('register', tenantId, options.system)
-    assertRegistrable(endpoint, (this.deliverer as { allowedSchemes?: readonly string[] }).allowedSchemes ?? DEFAULT_SCHEMES)
+    assertRegistrable(
+      endpoint,
+      (this.deliverer as { allowedSchemes?: readonly string[] }).allowedSchemes ?? DEFAULT_SCHEMES,
+      (port) => this.allowsPort(port),
+    )
     const { tenantId: _ignored, ...rest } = endpoint
     // A caller-supplied id upserts in every store: never let it replace an
     // endpoint that belongs to a different tenant (or a global one, when scoped).
-    if (endpoint.id !== undefined) await this.assertOwnId(endpoint.id, tenantId)
+    const existing = endpoint.id !== undefined ? await this.assertOwnId(endpoint.id, tenantId) : undefined
     const needsOwnSecret = tenantId !== undefined || !(this.deliverer as { hasDefaultSecret?: boolean }).hasDefaultSecret
     const secret = endpoint.secret ?? (needsOwnSecret ? generateWebhookSecret() : undefined)
+    // Replacing an endpoint that is mid-rotation ends the rotation: re-registering
+    // is how a leaked secret is revoked, so its predecessor must stop signing too.
+    // (Keys set only then, so a store whose schema predates rotation is unaffected.)
+    const endRotation = existing?.previousSecret != null && !('previousSecret' in endpoint)
     return this.store.add({
       ...rest,
       ...(tenantId !== undefined ? { tenantId } : {}),
       ...(secret !== undefined ? { secret } : {}),
+      ...(endRotation ? { previousSecret: undefined, previousSecretExpiresAt: undefined } : {}),
     })
+  }
+
+  /**
+   * Rotates an endpoint's signing secret without breaking its receiver: the new
+   * secret becomes current, and for `graceSeconds` (default 24 h) every delivery
+   * is signed with BOTH — `t=…,v1=<new>,v1=<old>` — which `verifySignature` (and
+   * Stripe-style receivers) accept with either secret. The receiver switches to
+   * the new secret whenever it is ready; after the window only the new one signs.
+   *
+   * Returns the endpoint with its new `secret` (hand it to the customer now —
+   * `list()` never returns secrets); the previous secret is not echoed back.
+   * Scoped like {@link unregister}: an endpoint outside the ambient (or given)
+   * tenant throws {@link WebhookEndpointNotFoundError}. An endpoint that signs
+   * with the plugin-wide default secret has no own secret to rotate — rotate the
+   * default in your configuration, or `register()` the endpoint with its own.
+   * `graceSeconds: 0` is an immediate cut-over (e.g. after a leak).
+   *
+   * Durable stores must persist `previousSecret`/`previousSecretExpiresAt` (the
+   * bundled SQLite and Prisma stores do; the Prisma schema needs the two
+   * columns — see its README).
+   */
+  async rotateSecret(id: string, options: WebhookRotateSecretOptions = {}): Promise<WebhookEndpoint> {
+    const tenantId = currentTenantId() ?? asTenantId(options.tenantId)
+    this.requireScope('rotateSecret', tenantId, options.system)
+    const grace = options.graceSeconds ?? DEFAULT_SECRET_ROTATION_GRACE_SECONDS
+    if (!Number.isSafeInteger(grace) || grace < 0 || grace > MAX_SECRET_ROTATION_GRACE_SECONDS) {
+      throw new WebhookEndpointInvalidError(
+        `graceSeconds must be an integer from 0 to ${MAX_SECRET_ROTATION_GRACE_SECONDS} (got ${String(grace)})`,
+        'rotateSecret',
+      )
+    }
+    // Re-filtered here, like unregister: a store whose `list` ignores the tenant
+    // can't hand one tenant another's endpoint.
+    const existing =
+      tenantId !== undefined
+        ? (await this.store.list(tenantId)).find((e) => e.id === id && e.tenantId === tenantId)
+        : (await this.store.list()).find((e) => e.id === id)
+    if (!existing) throw new WebhookEndpointNotFoundError(id)
+    const current = existing.secret
+    if (current == null) {
+      throw new WebhookEndpointInvalidError(
+        'the endpoint signs with the plugin-wide default secret and has no own secret to rotate',
+        'rotateSecret',
+      )
+    }
+    const next = options.secret ?? generateWebhookSecret()
+    if (typeof next !== 'string' || next.length < MIN_WEBHOOK_SECRET_LENGTH) {
+      throw new WebhookEndpointInvalidError(`secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters`, 'rotateSecret')
+    }
+    if (next === current) throw new WebhookEndpointInvalidError('the new secret must differ from the current one', 'rotateSecret')
+    const { previousSecret: _previous, previousSecretExpiresAt: _expires, tenantId: ownerTenant, ...rest } = existing
+    const owner = asTenantId(ownerTenant)
+    const saved = await this.store.add({
+      ...rest,
+      ...(owner !== undefined ? { tenantId: owner } : {}),
+      secret: next,
+      // Always written (undefined clears), so a rotation also ends an earlier one.
+      ...(grace > 0
+        ? { previousSecret: current, previousSecretExpiresAt: new Date(this.now() + grace * 1000) }
+        : { previousSecret: undefined, previousSecretExpiresAt: undefined }),
+    })
+    const { previousSecret: _omit, ...result } = saved
+    return result
   }
 
   /**
@@ -262,28 +477,50 @@ export class WebhookManager {
     } else {
       endpoints = (await this.store.forEvent(event)).filter((e) => e.tenantId == null)
     }
+    // Fan-out cap, per scope (a tenant, or the tenant-agnostic set): counted over
+    // every matching endpoint — skipped ones included, so a retry sees the same
+    // verdict as the first dispatch. An over-cap scope is refused whole.
+    const perScope = new Map<string | undefined, number>()
+    for (const endpoint of endpoints) {
+      const scopeKey = asTenantId(endpoint.tenantId)
+      perScope.set(scopeKey, (perScope.get(scopeKey) ?? 0) + 1)
+    }
+    const refused = new Set<string | undefined>()
+    for (const [scopeKey, count] of perScope) {
+      if (count <= this.maxEndpointsPerDispatch) continue
+      refused.add(scopeKey)
+      try {
+        this.onFanOutExceeded({ event, tenantId: scopeKey, endpoints: count, limit: this.maxEndpointsPerDispatch })
+      } catch (error) {
+        console.error('[basalt:webhooks] onFanOutExceeded threw:', error)
+      }
+    }
     const skip = new Set(options.skipEndpointIds ?? [])
     const key = options.idempotencyKey
     // One endpoint's failure — even an unexpected throw (a malformed store row,
     // a resolver bug) — must never reject the whole dispatch and starve the rest.
-    return Promise.all(
-      endpoints
-        .filter((endpoint) => !skip.has(endpoint.id))
-        .map(async (endpoint): Promise<DeliveryResult> => {
-          try {
-            return await this.deliverer.deliver(endpoint, event, data, key !== undefined ? { deliveryId: deriveDeliveryId(key, endpoint.id) } : {})
-          } catch (error) {
-            console.error(`[basalt:webhooks] delivery to endpoint "${endpoint.id}" threw:`, error)
-            return { endpointId: endpoint.id, ok: false, attempts: 0, error: 'internal delivery error', retryable: true }
-          }
-        }),
+    return mapPool(
+      endpoints.filter((endpoint) => !skip.has(endpoint.id)),
+      this.dispatchConcurrency,
+      async (endpoint): Promise<DeliveryResult> => {
+        if (refused.has(asTenantId(endpoint.tenantId))) {
+          const error = `fan-out cap exceeded: more than ${this.maxEndpointsPerDispatch} endpoints of this scope subscribe to "${event}"`
+          return { endpointId: endpoint.id, ok: false, attempts: 0, error, retryable: false }
+        }
+        try {
+          return await this.deliverer.deliver(endpoint, event, data, key !== undefined ? { deliveryId: deriveDeliveryId(key, endpoint.id) } : {})
+        } catch (error) {
+          console.error(`[basalt:webhooks] delivery to endpoint "${endpoint.id}" threw:`, error)
+          return { endpointId: endpoint.id, ok: false, attempts: 0, error: 'internal delivery error', retryable: true }
+        }
+      },
     )
   }
 }
 
 export const WEBHOOKS = createToken<WebhookManager>('webhooks')
 
-export interface WebhooksPluginOptions extends WebhookDelivererOptions {
+export interface WebhooksPluginOptions extends WebhookDelivererOptions, WebhookFanOutOptions {
   store?: WebhookStore
   deliverer?: WebhookDeliverer
   /** Domain event patterns to auto-dispatch (requires @basaltkit/events). */
@@ -311,6 +548,9 @@ export function webhooksPlugin(options: WebhooksPluginOptions = {}) {
       const metadata = ensureMetadata(container)
       const manager = new WebhookManager(store, deliverer, {
         tenancyActive: () => metadata.get('tenancy:active').length > 0,
+        ...(options.maxEndpointsPerDispatch !== undefined ? { maxEndpointsPerDispatch: options.maxEndpointsPerDispatch } : {}),
+        ...(options.dispatchConcurrency !== undefined ? { dispatchConcurrency: options.dispatchConcurrency } : {}),
+        ...(options.onFanOutExceeded !== undefined ? { onFanOutExceeded: options.onFanOutExceeded } : {}),
       })
       container.singleton(WEBHOOKS, () => manager)
     },

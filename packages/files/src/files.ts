@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { BasaltError, runWithContext, tryCtx, type DurationInput, type HookBus } from '@basaltkit/core'
-import type { Disk } from '@basaltkit/storage'
+import { StorageContentLengthInvalidError, StorageContentLengthMismatchError, type Disk } from '@basaltkit/storage'
 import {
   MemoryFileStore,
   type FileMetadata,
@@ -176,10 +176,16 @@ export interface UploadInput {
   metadata?: FileMetadata
   /**
    * Exact body size in bytes when the client declared one (an HTTP
-   * `Content-Length`). Only a hint: the real size is always measured while the
-   * bytes arrive, and it is what the record and the quota use. Passing it lets
-   * the upload stream straight into backends that cannot take a body of
-   * unknown length (S3) instead of buffering it.
+   * `Content-Length`). Passing it lets the upload stream straight into
+   * backends that want a known length (S3 `PutObject`).
+   *
+   * A declaration, and held to it: a value that is not a non-negative safe
+   * integer is refused before the body is read (400
+   * `STORAGE_CONTENT_LENGTH_INVALID`), one past `validate.maxSize` is refused
+   * with {@link FileTooLargeError} (413), and a body that carries a different
+   * number of bytes fails with 400 `STORAGE_CONTENT_LENGTH_MISMATCH` — leaving
+   * neither a record nor an object. The record's `size` is always the measured
+   * one.
    */
   contentLength?: number
 }
@@ -329,7 +335,9 @@ export class Files {
    * `validate.sniff` — its type checked on the first 64 KiB.
    *
    * On a disk whose driver implements `putStream` (BK-019) the bytes go
-   * straight to the backend: only the sniff window (64 KiB) is ever held.
+   * straight to the backend: this class holds only the sniff window (64 KiB),
+   * and the driver only what its upload protocol needs (one S3 multipart part
+   * per slot, the Azure SDK's block buffers) — never up to `maxSize`.
    * Otherwise — a driver with no streaming capability, an unbounded
    * `validate.maxSize` with no declared `contentLength`, or a custom
    * `checkQuota`, which needs the size before the write — the accepted bytes
@@ -338,11 +346,20 @@ export class Files {
   async upload(content: UploadContent, input: UploadInput): Promise<FileRecord> {
     const tenantId = this.tenant(input.tenantId)
     const scope = tenantId ?? SINGLE_TENANT_SCOPE
+    const declared = input.contentLength
+    // A declared length is judged before the body is touched. The streaming
+    // path then has the Disk verify it byte for byte; the buffered path
+    // compares it with what it measured.
+    if (declared !== undefined) {
+      if (!(Number.isSafeInteger(declared) && declared >= 0)) throw new StorageContentLengthInvalidError(declared)
+      this.checkSize(declared)
+    }
     if (!(content instanceof Uint8Array) && this.canStream(input)) {
       return this.uploadStreaming(content, input, tenantId, scope)
     }
     const accepted = content instanceof Uint8Array ? this.acceptBuffer(content, input) : await this.acceptStream(content, input)
     const size = accepted.content.length
+    if (declared !== undefined && size !== declared) throw new StorageContentLengthMismatchError(declared, size, size < declared)
 
     const quotaEnforced = this.maxTotalBytes !== undefined || this.checkQuota !== undefined
     const store = async (): Promise<FileRecord> => {

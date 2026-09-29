@@ -28,6 +28,14 @@ export interface HttpErrorOptions extends BasaltErrorOptions {
    * internals, and bounded (see `sanitizeErrorDetails`).
    */
   details?: ErrorDetails
+  /**
+   * Diagnostic data for the OPERATOR — the upstream reply, the row that
+   * conflicted, the id of the internal job. Handed to the error reporter (the
+   * adapters' `onError`, logged as `internalDetails` by the default one), and
+   * never serialised into an HTTP body or an MCP tool result. Put anything you
+   * would not show the caller here instead of in `details`.
+   */
+  internalDetails?: ErrorDetails
 }
 
 /**
@@ -45,7 +53,20 @@ export class HttpError extends BasaltError {
     options?: HttpErrorOptions,
   ) {
     super(code, message, options)
+    if (options?.internalDetails) {
+      // Non-enumerable: a `{ ...error }` or `JSON.stringify(error)` somewhere
+      // downstream must not carry the internal channel along with the rest.
+      Object.defineProperty(this, 'internalDetails', {
+        value: options.internalDetails,
+        enumerable: false,
+        writable: false,
+        configurable: true,
+      })
+    }
   }
+
+  /** Log-only payload from `options.internalDetails` (see {@link HttpErrorOptions}). */
+  declare readonly internalDetails?: ErrorDetails
 }
 
 /**

@@ -8,7 +8,8 @@ import {
 } from '@basaltkit/ai/analysis'
 import { DiagnosticSchema, toJsonSchema } from '@basaltkit/ai/schema'
 import type { McpToolDef } from '@basaltkit/mcp-core'
-import { resolveWorkspaceRoot, type Session } from '../session.js'
+import type { Session } from '../session.js'
+import { readRoot } from './errors.js'
 
 /** A preview of an auto-fix — the files it *would* touch. Never applied at M1. */
 interface FixPreview {
@@ -29,7 +30,7 @@ const inputSchema: Record<string, unknown> = {
   properties: {
     workspaceRoot: {
       type: 'string',
-      description: 'Absolute path to the Basalt project to diagnose. Defaults to the server workspace root.',
+      description: 'Path of the Basalt project to diagnose — inside the server project root (paths outside it are refused). Defaults to the server project root.',
     },
   },
 }
@@ -69,7 +70,9 @@ export function doctorTool(session: Session): McpToolDef {
     inputSchema,
     outputSchema,
     async invoke(args) {
-      const root = resolveWorkspaceRoot(session, args['workspaceRoot'])
+      const resolved = readRoot(session, args['workspaceRoot'])
+      if ('refused' in resolved) return resolved.refused
+      const root = resolved.root
       const reader = session.reader(root)
       const ctx = detectProject(root, reader)
       const diagnostics = runDoctor(ctx)

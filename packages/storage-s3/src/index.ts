@@ -284,30 +284,58 @@ export class S3StorageDriver implements StorageDriver {
    *
    * - `contentLength` is known — the stream goes straight to `PutObject`,
    *   nothing is buffered (this is what `files.upload()` does when the client
-   *   sends a `Content-Length`);
-   * - `maxBytes` is set — the body is buffered up to that cap and sent as one
-   *   object (bounded memory, chosen deliberately);
-   * - neither — multipart upload, when the optional peer
+   *   sends a `Content-Length`). The Disk layer verifies the body carries
+   *   exactly that many bytes;
+   * - it is not — multipart upload, when the optional peer
    *   `@aws-sdk/lib-storage` is installed: the body is uploaded part by part,
-   *   unbounded, holding only `partSizeBytes × queueSize` at a time. Without
-   *   that package the call still fails with
-   *   {@link StorageStreamLengthRequiredError}, which now names it.
+   *   holding at most `partSizeBytes × queueSize` at a time WHATEVER `maxBytes`
+   *   says (a body smaller than one part goes as a single `PutObject` of that
+   *   part). `maxBytes` stays a limit, enforced by the Disk mid-stream; it is
+   *   never a buffer size.
+   *
+   * Without `@aws-sdk/lib-storage` an unknown length can only be sent as one
+   * buffered `PutObject`: with `maxBytes` the body is collected up to that cap
+   * (so up to `maxBytes` in memory — install the peer to avoid it), and with
+   * neither option the call fails with {@link StorageStreamLengthRequiredError},
+   * which names the package.
    */
   async putStream(path: string, source: Readable, options: S3PutStreamOptions): Promise<void> {
-    if (options.contentLength === undefined && options.maxBytes === undefined) {
-      return this.putMultipart(path, source, options)
+    if (options.contentLength !== undefined) {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: path,
+          Body: source,
+          ContentLength: options.contentLength,
+          ...(options.contentType ? { ContentType: options.contentType } : {}),
+          ...sseInput(this.serverSideEncryption),
+        }),
+      )
+      return
     }
-    // With a known length the stream is forwarded as-is; without one it is
-    // collected under the cap the caller accepted.
-    const body = options.contentLength !== undefined ? source : await collect(source)
+    // Validated before anything is loaded or read: a bad part size is a
+    // configuration bug and should say so whatever else is installed.
+    const partSize = options.partSizeBytes === undefined ? this.partSizeBytes : assertPartSize(options.partSizeBytes)
+    const queueSize = options.queueSize === undefined ? this.queueSize : assertQueueSize(options.queueSize)
+    const Upload = await loadMultipartUpload()
+    if (Upload !== null) return this.putMultipart(Upload, path, source, options, partSize, queueSize)
+    if (options.maxBytes === undefined) {
+      source.destroy()
+      throw new StorageStreamLengthRequiredError(
+        this.name,
+        'S3 PutObject cannot send a body of unknown length. Pass contentLength when you know it, or maxBytes to buffer up to a cap; ' +
+          'install the optional peer @aws-sdk/lib-storage to stream bodies of any size (multipart upload).',
+      )
+    }
+    // The last resort: one buffered PutObject, bounded by the cap the caller
+    // accepted (the Disk's limited readable fails past it).
+    const body = await collect(source)
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: path,
         Body: body,
-        ...(options.contentLength !== undefined
-          ? { ContentLength: options.contentLength }
-          : { ContentLength: (body as Buffer).byteLength }),
+        ContentLength: body.byteLength,
         ...(options.contentType ? { ContentType: options.contentType } : {}),
         ...sseInput(this.serverSideEncryption),
       }),
@@ -325,20 +353,14 @@ export class S3StorageDriver implements StorageDriver {
    * mid-stream — aborts the upload so S3 keeps no incomplete parts, which are
    * invisible in listings and billed until removed.
    */
-  private async putMultipart(path: string, source: Readable, options: S3PutStreamOptions): Promise<void> {
-    // Validated before anything is loaded or read: a bad part size is a
-    // configuration bug and should say so whatever else is installed.
-    const partSize = options.partSizeBytes === undefined ? this.partSizeBytes : assertPartSize(options.partSizeBytes)
-    const queueSize = options.queueSize === undefined ? this.queueSize : assertQueueSize(options.queueSize)
-    const Upload = await loadMultipartUpload()
-    if (Upload === null) {
-      source.destroy()
-      throw new StorageStreamLengthRequiredError(
-        this.name,
-        'S3 PutObject cannot send a body of unknown length. Pass contentLength when you know it, or maxBytes to buffer up to a cap; ' +
-          'install the optional peer @aws-sdk/lib-storage to stream bodies of any size (multipart upload).',
-      )
-    }
+  private async putMultipart(
+    Upload: MultipartUploadConstructor,
+    path: string,
+    source: Readable,
+    options: S3PutStreamOptions,
+    partSize: number,
+    queueSize: number,
+  ): Promise<void> {
     const upload = new Upload({
       client: this.client,
       params: {
@@ -538,7 +560,7 @@ export class S3StorageDriver implements StorageDriver {
   }
 }
 
-/** Reads a readable into one Buffer. Only used where S3 needs a known length. */
+/** Reads a readable into one Buffer. Only the no-lib-storage fallback, under `maxBytes`, uses it. */
 async function collect(source: Readable): Promise<Buffer> {
   const chunks: Buffer[] = []
   for await (const chunk of source) chunks.push(Buffer.from(chunk as Uint8Array))

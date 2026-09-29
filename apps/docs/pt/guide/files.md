@@ -111,7 +111,7 @@ hook `file:uploaded`:
 
 ```ts
 import { route, upload, HttpError } from '@basaltkit/http'
-import { FILES } from '@basaltkit/files'
+import { FILES, toPublicFile } from '@basaltkit/files'
 import { ctx } from '@basaltkit/core'
 import { app } from './app.js'
 
@@ -134,7 +134,7 @@ export const uploadFile = route({
         uploadedBy: ctx().user?.id,                       // o tenantId vem de ctx().tenant
         metadata: { source: 'web', title: body.fields['title'] }, // campos de texto enviados antes do ficheiro
       })
-      return reply.code(201).send(record)                 // FileRecord
+      return reply.code(201).send(toPublicFile(record))   // nunca o FileRecord cru
     }
     throw new HttpError(400, 'FILE_REQUIRED', 'Attach a file.')
   },
@@ -146,20 +146,26 @@ os limites são aplicados aos bytes efetivamente recebidos. O
 [guia de adaptadores](/pt/guide/adapters#uploads) lista todas as opções e erros.
 Continuas a poder passar um `Buffer` a `FILES.upload`.
 
-Passa `contentLength: file.declaredLength` quando existir e um backend que
-precisa de um tamanho exato (S3) faz stream em vez de buffer. `declaredLength` é
+Passa `contentLength: file.declaredLength` quando existir e o S3 transmite o
+ficheiro num único `PutObject`. `declaredLength` é
 o cabeçalho `Content-Length` da **própria parte**; o RFC 7578 não o exige e
 nenhum browser o envia, por isso normalmente é `undefined` — e o
 `Content-Length` do pedido (`body.contentLength`) cobre todas as partes mais o
 enquadramento multipart, por isso é um limite superior para um ficheiro, nunca o
-seu tamanho. Sem um tamanho declarado, a escrita é limitada por
-`validate.maxSize`.
+seu tamanho — nunca o passes como `contentLength`. Um tamanho declarado é
+verificado contra os bytes (uma divergência dá
+`400 STORAGE_CONTENT_LENGTH_MISMATCH` e não guarda nada). Sem ele, a escrita é
+limitada por `validate.maxSize`.
 
 O `FileRecord` devolvido é `{ id, tenantId, name, contentType, size, path,
 checksum, uploadedBy?, metadata?, scannedAt?, createdAt }`. O `path` é a chave
 **dentro do disco** (`files/<uuid>`); o disco acrescenta o prefixo do tenant em
 todas as operações, por isso o objeto aterra realmente em
-`tenants/<tenantId>/files/<uuid>`.
+`tenants/<tenantId>/files/<uuid>`. É por isso que uma rota responde com
+`toPublicFile(record)` — `{ id, name, contentType, size, createdAt, scannedAt?,
+scan?: { clean }, metadata? }` — e guarda `path`, `checksum`, `tenantId`,
+`uploadedBy` e o `detail` do scanner no servidor, como faz o `fileRoutes()` (vê
+[Rotas](#rotas)).
 
 ### Uploads em stream
 
@@ -186,18 +192,28 @@ const record = await files.upload(file.stream, { name: file.filename, contentTyp
 ::: info Diretamente para o backend quando o driver consegue transmitir
 Num disco cujo driver implementa `putStream` — `local`, `s3`, `azure`, `gcs`
 (vê [Ficheiros grandes](/pt/guide/storage#ficheiros-grandes)) — os bytes vão
-**diretamente para o armazenamento**: só a janela de sniffing de 64 KiB é
-segurada. Passa `contentLength` quando o cliente declarou um
-(`Content-Length`); o S3 precisa de um tamanho conhecido para transmitir em vez
-de acumular.
+**diretamente para o armazenamento**. Este módulo só segura a janela de
+sniffing de 64 KiB; o driver segura o que o seu protocolo de upload precisa —
+uma parte de cada vez no multipart do S3 (`partSizeBytes × queueSize`, 20 MiB
+por omissão), os buffers de blocos do SDK no Azure — e nunca até `maxSize`.
+Passa `contentLength` quando o cliente declarou o tamanho exato do ficheiro; o
+S3 transmite-o então num único `PutObject`.
 
 ```ts
-await files.upload(part.file, {
-  name: part.filename,
-  contentType: part.mimetype,
-  contentLength: Number(request.headers['content-length']), // pista opcional
+// Um PUT cru cujo corpo É o ficheiro: o seu Content-Length é o tamanho do ficheiro.
+// (Num pedido multipart não é — vê declaredLength acima.)
+const declared = request.headers['content-length']
+await files.upload(request.raw, {
+  name,
+  contentType: request.headers['content-type'] ?? 'application/octet-stream',
+  ...(declared !== undefined ? { contentLength: Number(declared) } : {}),
 })
 ```
+
+Um `contentLength` declarado tem de cumprir o que promete: se não for um
+inteiro não negativo → `400 STORAGE_CONTENT_LENGTH_INVALID` antes de se ler
+seja o que for; acima de `maxSize` → `413 FILE_TOO_LARGE`; um corpo com mais ou
+menos bytes → `400 STORAGE_CONTENT_LENGTH_MISMATCH`, sem objeto nem registo.
 
 O caminho com buffer — no máximo `maxSize` em memória e depois `disk.put` —
 mantém-se como alternativa para um driver sem `putStream`, um
@@ -380,9 +396,9 @@ lançam `FileNotScannedError` (`423 FILE_NOT_SCANNED`) até
 uma análise reportar o ficheiro limpo, e `FileInfectedError`
 (`403 FILE_INFECTED`) depois de uma o reportar não limpo — até nova análise
 limpa. Um instante de análise sem veredicto limpo conta como não analisado
-(fail closed). `GET /files` e `GET /files/:id` continuam a listar o registo, com
-`scannedAt` e `metadata.scan`, para uma UI poder mostrar "a analisar…" ou
-"bloqueado". Os erros trazem o seu status, por isso Fastify, Express e Hono
+(fail closed). `GET /files` e `GET /files/:id` continuam a listar o ficheiro,
+com `scannedAt` e o veredicto como `scan: { clean }` (o `detail` do scanner fica
+no servidor), para uma UI poder mostrar "a analisar…" ou "bloqueado". Os erros trazem o seu status, por isso Fastify, Express e Hono
 respondem igual.
 
 O próprio scanner tem de ler os bytes em quarentena: passa
@@ -474,10 +490,10 @@ servem de forma idêntica em Fastify, Express e Hono. O upload é opcional
 
 | Rota | Corpo | Devolve |
 | --- | --- | --- |
-| `GET /files` | — | `FileRecord[]` que o utilizador pode ler |
-| `GET /files/:id` | — | um `FileRecord`, ou `404 FILE_NOT_FOUND` |
+| `GET /files` | — | os ficheiros que o utilizador pode ler, cada um via `present` |
+| `GET /files/:id` | — | um ficheiro via `present`, ou `404 FILE_NOT_FOUND` |
 | `GET /files/:id/content` | — | os bytes, **em stream**, `Content-Disposition: attachment`; `404`, ou `423`/`403` enquanto em quarentena |
-| `POST /files` *(opcional)* | `multipart/form-data` | `201` com os `FileRecord[]` criados |
+| `POST /files` *(opcional)* | `multipart/form-data` | `201` com os ficheiros criados, via `present` |
 | `POST /files/:id/url` | `{ expiresIn? }` (predefinição `'15m'`, no máximo `maxUrlTtl`) | `{ url }` — assinado, `attachment` |
 | `DELETE /files/:id` | — | `204`, ou `404 FILE_NOT_FOUND` |
 
@@ -489,6 +505,30 @@ barreira de quarentena (423/403) como o 404 fecham **antes do primeiro byte**. U
 driver que não consegue fazer stream (sem `getStream`) continua a servir, com
 buffer. Desliga a rota com `fileRoutes({ download: false })` se a tua instalação
 só distribui URLs assinados.
+
+**Projeção pública.** Nenhuma rota responde com o `FileRecord` cru. Cada registo
+passa por `present`, por omissão `toPublicFile(record)`:
+`{ id, name, contentType, size, createdAt, scannedAt?, scan?: { clean }, metadata? }`.
+Ficam no servidor: `path` (a organização do teu bucket), `checksum`,
+`tenantId`, `uploadedBy` (o id de um utilizador — de outra pessoa, num drive
+partilhado) e o `detail` do scanner (saída do motor: nomes de assinaturas,
+versões, caminhos temporários); `metadata` perde apenas a sua entrada interna
+`scan`. Escolhe a tua própria forma de propósito:
+
+```ts
+fileRoutes({
+  shared: true,
+  // corre depois da autorização, como quem chama
+  present: (file, user) => ({ ...toPublicFile(file), mine: file.uploadedBy === user.id }),
+})
+```
+
+::: warning Atualizar a partir do @basaltkit/files 5.x
+Estas rotas devolviam o registo inteiro. Um cliente que lesse delas `path`,
+`checksum`, `uploadedBy`, `tenantId` ou `metadata.scan.detail` precisa agora de
+um `present` que o volte a acrescentar. `files.get()` / `files.list()` e os
+hooks continuam a entregar o registo completo ao teu código de servidor.
+:::
 
 O `POST /files` só é montado quando passas `upload`. Não tem decisão de
 `authorize` por registo — ainda não há registo — por isso aceita qualquer
@@ -590,6 +630,7 @@ com `new Files({ disk, ... })` quando quiseres o pipeline sem o contentor de DI.
 | `maxUrlTtl` | `DurationInput` | `'1h'` | O `expiresIn` mais longo que um cliente pode pedir a `POST /files/:id/url` |
 | `download` | `boolean` | `true` | Monta `GET /files/:id/content`, o download em stream |
 | `upload` | `{ maxBytes, maxFiles?, allowedTypes? }` | — (desligado) | Monta `POST /files`, o upload em stream. `maxFiles` é `1` por predefinição; `allowedTypes` compara com o tipo **declarado** (`image/png`, `image/*`) |
+| `present` | `(record, user) => unknown` | `toPublicFile` | Dá forma a cada registo com que as rotas respondem. A predefinição guarda `path`, `checksum`, `tenantId`, `uploadedBy` e o `detail` da análise no servidor |
 
 Todas as rotas declaram `meta: { auth: true }` — não há
 escape `auth: false`, ao contrário de `billingRoutes`. Se a autenticação
@@ -627,6 +668,8 @@ a disposição `attachment`.
 | `StorageQuotaExceededError` | `FILE_QUOTA_EXCEEDED` | 402 | `maxTotalBytes` seria excedido por este upload |
 | `FileNotFoundError` | `FILE_NOT_FOUND` | 404 | `download` / `markScanned` / `GET /files/:id` para um id que não é deste tenant |
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | Sem argumento `tenantId` **e** sem `ctx().tenant` — tipicamente um worker de fila ou a CLI |
+| `StorageContentLengthInvalidError` | `STORAGE_CONTENT_LENGTH_INVALID` | 400 | `contentLength` negativo, fracionário, não finito ou acima de `MAX_SAFE_INTEGER` — nada é lido |
+| `StorageContentLengthMismatchError` | `STORAGE_CONTENT_LENGTH_MISMATCH` | 400 | O corpo trouxe mais ou menos bytes do que `contentLength` — sem objeto nem registo |
 | `FileTenantMismatchError` | `FILE_TENANT_MISMATCH` | 403 | Um argumento `tenantId` diferente de `ctx().tenant` — dentro de um contexto de tenant o argumento só pode nomear esse tenant, nunca alargar a outro |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | — | `disk: 'name'` não corresponde a nenhum disco em `storagePlugin({ disks })` |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | — | `temporaryUrl` no driver `local` |

@@ -1,11 +1,15 @@
 import type { Container } from '@basaltkit/core'
 import { ensureMetadata } from '@basaltkit/core'
 import {
+  httpErrorReporter,
   isRouteVisible,
+  redactSensitiveDetails,
   runRoute,
   toErrorResponse,
   zodToJsonSchema,
   type BasaltRoute,
+  type ErrorDetailsRedactor,
+  type HttpErrorReporter,
   type HttpReply,
   type HttpRequest,
   type RequestEnricher,
@@ -105,14 +109,46 @@ export interface McpTool {
   visible(context: Record<string, unknown>): Promise<boolean>
 }
 
-/** `meta.mcp` opt-in: `true`, or an object overriding the name/description. */
-type McpMeta = true | { name?: string; description?: string }
+/**
+ * `meta.mcp` opt-in: `true`, or an object overriding the name/description and,
+ * for this route's tool only, the error-details redactor (see
+ * {@link ToolErrorOptions.redactErrorDetails}).
+ */
+type McpMetaObject = { name?: string; description?: string; redactErrorDetails?: ErrorDetailsRedactor | false }
+type McpMeta = true | McpMetaObject
 
 function mcpMeta(route: BasaltRoute): McpMeta | undefined {
   const value = route.meta?.['mcp']
   if (value === true) return true
-  if (value && typeof value === 'object') return value as { name?: string; description?: string }
+  if (value && typeof value === 'object') return value as McpMetaObject
   return undefined
+}
+
+/**
+ * How a tool call's failure is shaped for the model and reported to the
+ * operator. The trust boundary: a thrown error reaches the MCP client — a
+ * language model, and whoever can read or steer its context — as the same
+ * `{ code, message, details? }` an HTTP client gets, so `details` passes
+ * through {@link redactErrorDetails} on the way out, and `internalDetails`
+ * never leaves: it goes to {@link reportError} only.
+ */
+export interface ToolErrorOptions {
+  /**
+   * Filters an error's public `details` before they enter a tool result.
+   * Default: `redactSensitiveDetails` from `@basaltkit/http` — the value of
+   * every key that names a secret (`password`, `token`, `apiKey`, `secret`,
+   * `sessionId`, …) becomes `'[REDACTED]'`. Pass your own, or `false` to send
+   * the details exactly as an HTTP client receives them. A route can override
+   * it with `meta.mcp: { redactErrorDetails }`.
+   */
+  redactErrorDetails?: ErrorDetailsRedactor | false
+  /**
+   * Receives every error a tool call throws, with the error object untouched
+   * (its log-only `internalDetails` included) — the same contract as the
+   * adapters' `onError`. Default: `httpErrorReporter()` (5xx to
+   * `console.error`, 4xx to `console.warn`). `false` reports nothing.
+   */
+  reportError?: HttpErrorReporter | false
 }
 
 /** `GET /projects/:id` → `get_projects_by_id` — a stable, agent-friendly tool name. */
@@ -268,7 +304,13 @@ const cancelled = (): McpToolResult => ({
 })
 
 /** Build the invoker that runs a route through the shared neutral pipeline. */
-function makeInvoke(route: BasaltRoute, container: Container, allow: ReadonlySet<string>) {
+function makeInvoke(
+  route: BasaltRoute,
+  container: Container,
+  allow: ReadonlySet<string>,
+  redact: ErrorDetailsRedactor | undefined,
+  report: HttpErrorReporter | undefined,
+) {
   const metadata = ensureMetadata(container)
   return async (args: Record<string, unknown>, callCtx?: ToolCallContext): Promise<McpToolResult> => {
     const signal = callCtx?.signal
@@ -326,7 +368,14 @@ function makeInvoke(route: BasaltRoute, container: Container, allow: ReadonlySet
         ...(failed ? { isError: true } : {}),
       }
     } catch (error) {
-      const { body: errorBody } = toErrorResponse(error)
+      const { status, body: errorBody } = toErrorResponse(error, redact ? { redactDetails: redact } : {})
+      if (report) {
+        try {
+          report({ error, status, code: errorBody.error.code, method: route.method, url: request.url })
+        } catch {
+          // A failing reporter must not turn a tool error into a transport one.
+        }
+      }
       return { content: [{ type: 'text', text: JSON.stringify(errorBody.error) }], isError: true }
     }
   }
@@ -340,20 +389,22 @@ function makeInvoke(route: BasaltRoute, container: Container, allow: ReadonlySet
 export function collectTools(
   routes: BasaltRoute[],
   container: Container,
-  options: { filter?: (route: BasaltRoute) => boolean; forwardHeaders?: string[] } = {},
+  options: { filter?: (route: BasaltRoute) => boolean; forwardHeaders?: string[] } & ToolErrorOptions = {},
 ): McpTool[] {
   const allow = new Set([...DEFAULT_FORWARDED_HEADERS, ...(options.forwardHeaders ?? [])].map((h) => h.toLowerCase()))
+  const report = options.reportError === false ? undefined : (options.reportError ?? httpErrorReporter())
   const tools: McpTool[] = []
   for (const route of routes) {
     const meta = mcpMeta(route)
     if (!meta) continue
     if (options.filter && !options.filter(route)) continue
-    const override = meta === true ? {} : meta
+    const override: McpMetaObject = meta === true ? {} : meta
+    const redact = override.redactErrorDetails ?? options.redactErrorDetails ?? redactSensitiveDetails
     tools.push({
       name: override.name ?? defaultToolName(route),
       description: override.description ?? `${route.method} ${route.url}`,
       inputSchema: buildInputSchema(route),
-      invoke: makeInvoke(route, container, allow),
+      invoke: makeInvoke(route, container, allow, redact === false ? undefined : redact, report),
       visible: (context) => isRouteVisible(route, context, container),
     })
   }

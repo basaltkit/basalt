@@ -30,6 +30,14 @@ APIs (`@basaltkit/ai`) and depends solely on `@basaltkit/ai` and the zero-depend
 
 If you want your *application* to expose tools to an agent, you want `@basaltkit/mcp`.
 
+**Enforced at runtime, too.** A workspace test keeps `@basaltkit/ai-mcp` out of every
+package's `dependencies`, and the server itself **refuses to start when
+`NODE_ENV=production`** (`AiMcpProductionError`; the bin prints it and exits `1`) — so a
+deployed app that imported it, or a container that runs the bin, fails loudly instead of
+exposing code-writing tools. Only an explicit `production` refuses: MCP clients launch the
+bin without any `NODE_ENV`, and that stays the normal dev path. Override deliberately
+with `--allow-production` (`allowProduction: true`, or `BASALT_AI_MCP_ALLOW_PRODUCTION=1`).
+
 ## Capabilities
 
 ### Tools
@@ -45,14 +53,17 @@ If you want your *application* to expose tools to an agent, you want `@basaltkit
 Every tool returns `structuredContent` mirroring its text output, with an `outputSchema`
 derived from `@basaltkit/ai`'s exported schemas. `basalt_analyze`, `basalt_doctor`,
 `basalt_plan` and `basalt_make` accept an optional `workspaceRoot` and otherwise default to
-the server's workspace root. The provider-backed tools stream progress and honour
+the server's workspace root. It is **confined to that root** (the `--cwd` / launch directory)
+for every tool: an absolute path elsewhere, `..` traversal, or a symlink that resolves outside
+is refused with a `Refused: …` tool error — a client cannot point the server at `/`,
+`~/.ssh` or another repository. The provider-backed tools stream progress and honour
 cancellation through the MCP tool context.
 
 Tool arguments:
 
 | Tool | Argument | Type | Default | Purpose |
 |---|---|---|---|---|
-| all except `basalt_review` | `workspaceRoot` | `string` | server workspace root | Which project to act on. For `basalt_make` it must stay **inside the launch directory**. |
+| all except `basalt_review` | `workspaceRoot` | `string` | server workspace root | Which project to act on — absolute or relative, but it must stay **inside the server's workspace root** (after symlink resolution). |
 | `basalt_plan` | `request` | `string` (required) | — | What to build, in natural language. |
 | `basalt_plan` | `temperature` | `number` | provider default | `0` for deterministic planning. |
 | `basalt_plan` | `maxTokens` | `integer` | provider default | Hard cap on output tokens. |
@@ -159,6 +170,7 @@ Any client that speaks MCP over stdio: run `basalt-ai-mcp` (from a dev install) 
 | `--allowed-hosts=<a,b>` | loopback names | `--http` only: extra `Host` hostnames accepted when bound off loopback. |
 | `--sessions` | off (stateless) | `--http` only: `Mcp-Session-Id` sessions — `initialize` issues one, later requests must send it (`400` without, `404` unknown/expired/foreign), and a `notifications/cancelled` POSTed separately cancels the call it names. Bound to the bearer token. |
 | `--allow-unconfirmed-apply` | off | Let `basalt_make` apply when the client cannot confirm via elicitation (refused by default). |
+| `--allow-production` | off (`BASALT_AI_MCP_ALLOW_PRODUCTION`) | Start even when `NODE_ENV=production`. The bridge is dev-only and refuses that by default. |
 
 stdio is the default and the recommended local path; it is also the only transport that
 delivers live progress notifications.
@@ -191,22 +203,25 @@ const res = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/l
 
 | Export | Signature | Purpose |
 |---|---|---|
-| `buildAiMcpServer(options?)` | `(AiMcpOptions) => McpServer` | Builds the `@basaltkit/mcp-core` server (tools + resources + prompts) without any transport. |
+| `buildAiMcpServer(options?)` | `(AiMcpOptions) => McpServer` | Builds the `@basaltkit/mcp-core` server (tools + resources + prompts) without any transport. Throws `AiMcpProductionError` under `NODE_ENV=production` unless `allowProduction`. |
 | `createAiMcpServer(options?)` | `(StartOptions) => StdioHandle` | Builds it and serves over stdio. This is what the bin calls. |
-| `createAiMcpHttpServer(options?)` | `(HttpStartOptions) => Promise<HttpHandle>` | Builds it and serves over the opt-in HTTP transport. |
+| `createAiMcpHttpServer(options?)` | `(HttpStartOptions) => Promise<HttpHandle>` | Builds it and serves over the opt-in HTTP transport. Rejects (never throws) on the production guard. |
 | `createSession(options?)` | `(SessionOptions) => Session` | The resolved session (workspace root, env, reader, provider factory). |
-| `resolveWorkspaceRoot(session, arg)` | `(Session, unknown) => string` | Per-call root resolution: an explicit non-empty string argument, else the session default. |
+| `resolveWorkspaceRoot(session, arg)` | `(Session, unknown) => string` | Per-call root resolution: an explicit non-empty string argument (confined to the session root — throws `WorkspaceEscapeError` otherwise), else the session default. |
+| `assertDevOnly(env, allowProduction?)` | `(Record<string, string \| undefined>, boolean?) => void` | The runtime dev-only guard: throws `AiMcpProductionError` when `env.NODE_ENV` is `production` without an override. |
+| `AiMcpProductionError` / `WorkspaceEscapeError` / `ALLOW_PRODUCTION_ENV` | classes / `string` | The guard errors (match with `instanceof`) and the override variable name. |
 | `AI_MCP_VERSION` | `string` | Version reported in `serverInfo`. |
 
 `AiMcpOptions` (= `SessionOptions`):
 
 | Option | Type | Default | Purpose |
 |---|---|---|---|
-| `cwd` | `string` | `process.cwd()` | Workspace root the tools and resources default to, and the confinement root for `basalt_make`. |
-| `env` | `Record<string, string \| undefined>` | `process.env` | Where provider config is read from. Pass a fixture in tests. |
+| `cwd` | `string` | `process.cwd()` | Workspace root the tools and resources default to, and the confinement root for every tool's `workspaceRoot`. |
+| `env` | `Record<string, string \| undefined>` | `process.env` | Where provider config (and `NODE_ENV` for the dev-only guard) is read from. Pass a fixture in tests. |
 | `createReader` | `(root: string) => ProjectReader` | `nodeReader` (filesystem) | Inject an in-memory reader to test without touching disk. |
 | `createProvider` | `() => AIProvider` | built from `env` | Inject a mock provider — no network, no keys. |
 | `allowUnconfirmedApply` | `boolean` | `false` | Let `basalt_make` apply without an elicitation confirmation. Default: refuse (fail closed). |
+| `allowProduction` | `boolean` | `false` | Start even when `NODE_ENV=production`. Default: refuse (`AiMcpProductionError`). |
 
 `StartOptions` adds `input` / `output` (stdio stream injection, defaulting to
 `process.stdin` / `process.stdout`). `HttpStartOptions` adds every `ServeHttpOptions`
@@ -222,7 +237,8 @@ POST cancel a long `basalt_make`/`basalt_plan`. `principal` decides who owns a s
 
 | Error | Code | HTTP | When |
 |---|---|---|---|
-| `WorkspaceEscapeError` | — (`error.name`) | — | An internal guard: `workspaceRoot` or a target path would escape the launch directory (`..`, an absolute path, or a symlink out). Caught by `basalt_make` and returned as a `Refused: …` tool error. |
+| `WorkspaceEscapeError` | — (`error.name`) | — | `workspaceRoot` or a target path would escape the workspace root (`..`, an absolute path elsewhere, or a symlink out). Caught by every tool and returned as a `Refused: …` tool error. |
+| `AiMcpProductionError` | — (`error.name`) | — | The server was built with `NODE_ENV=production` and no `allowProduction` / `--allow-production` / `BASALT_AI_MCP_ALLOW_PRODUCTION=1`. The bin prints it and exits `1`. |
 | *(failed tool result)* | — (`isError: true`) | — | Every user-facing failure: missing/invalid arguments, no AI provider, a clash without `force`, an unconfirmed elicitation, a cancelled call, or any workflow error. The message is in `content`. |
 | *(JSON-RPC)* | `INVALID_PARAMS` (`-32602`) | 200 | Unknown tool/resource/prompt name, or a missing required protocol parameter — raised by `@basaltkit/mcp-core`, not here. |
 | *(JSON-RPC)* | `INTERNAL_ERROR` (`-32603`) | 200 | An exception escaped a handler. Tools convert their own failures to results, so this is rare. |
@@ -233,8 +249,11 @@ Symptoms:
   `basalt_analyze` / `basalt_doctor` still work; they're offline.
 - **`Refusing to overwrite N existing file(s) without force:true`** — review the preview,
   then re-run `mode:"apply"` with `force:true` if the overwrite is intended.
-- **`Refused: workspaceRoot '…' escapes the launch directory`** — relaunch the server with
-  `--cwd` pointing at the project you actually want to write to.
+- **`Refused: workspaceRoot '…' escapes the launch directory`** (`basalt_make`) or
+  **`… is outside the project root`** (read tools) — relaunch the server with `--cwd`
+  pointing at the project you actually want it to work on.
+- **`basalt-ai-mcp: failed to start — … refuses to start with NODE_ENV=production`** — the
+  client's `env` block (or your shell) sets `NODE_ENV=production`. Drop it; this is a dev tool.
 - **`Apply cancelled — not confirmed.`** — the client's elicitation prompt was declined.
 - **`Refusing to apply without confirmation — …`** — the client cannot elicit (or you are on
   `--http`); review the preview and apply it yourself, or start with `--allow-unconfirmed-apply`.

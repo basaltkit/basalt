@@ -17,7 +17,12 @@ corre-o com `npx`). Dois testes impõem isto mecanicamente: o
 `packages/ai-mcp/test/boundary.test.ts` percorre o grafo de imports transitivo e
 falha se alguma vez chegar ao runtime, e o
 `packages/ai-mcp/test/dev-only-guard.test.ts` falha se algum package do workspace
-listar a camada de IA fora das `devDependencies`.
+listar a camada de IA fora das `devDependencies`. Em runtime, o servidor **recusa
+arrancar com `NODE_ENV=production`** (`AiMcpProductionError`; o bin sai com `1`), por
+isso um processo em produção que o tenha puxado falha de forma visível. Só um
+`production` explícito recusa — os clientes MCP lançam o bin sem `NODE_ENV`, o caminho
+normal de desenvolvimento. Contorna-o deliberadamente com `--allow-production`
+(`allowProduction: true`, `BASALT_AI_MCP_ALLOW_PRODUCTION=1`).
 :::
 
 [[toc]]
@@ -140,7 +145,10 @@ possa ler e adaptar-se. Só JSON-RPC malformado produz um código de erro real.
 
 Análise estática e offline. Entrada `{ workspaceRoot? }`; saída um `AnalysisReport`
 (capacidades, packages instalados, base de dados, models, models tenant-scoped vs
-não-scoped, diagnósticos).
+não-scoped, diagnósticos). O `workspaceRoot` — aqui e no `basalt_doctor` /
+`basalt_plan` — fica confinado ao `--cwd` do servidor: um caminho absoluto noutro
+sítio, `..`, ou um symlink que resolve para fora é recusado
+(`Refused: … is outside the project root`).
 
 ### `basalt_doctor`
 
@@ -389,6 +397,7 @@ um projeto em memória), e `createProvider` (para injetar um modelo falso — se
 | `--allowed-hosts=<a,b>` | lista separada por vírgulas | só nomes de loopback | Só HTTP: hostnames `Host` extra a aceitar quando ligado fora do loopback |
 | `--sessions` | boolean | desligado (sem estado) | Só HTTP: liga as sessões `Mcp-Session-Id`, para que um `notifications/cancelled` enviado noutro POST cancele uma chamada em curso (vê `sessions` abaixo) |
 | `--allow-unconfirmed-apply` | boolean | desligado | Deixa o `basalt_make` aplicar quando o cliente não consegue confirmar (sem elicitation). Desligado por omissão: esse apply é recusado |
+| `--allow-production` | boolean | desligado (`BASALT_AI_MCP_ALLOW_PRODUCTION`) | Arranca mesmo com `NODE_ENV=production`. Desligado por omissão: a ponte, só de desenvolvimento, recusa arrancar aí |
 
 ### `buildAiMcpServer(options)` · `createAiMcpServer(options)`
 
@@ -397,11 +406,12 @@ streams de stdio.
 
 | Opção | Tipo | Predefinição | Objetivo |
 | --- | --- | --- | --- |
-| `cwd` | `string` | `process.cwd()` | Raiz de workspace que ferramentas e recursos usam por predefinição; também a raiz de confinamento das escritas |
-| `env` | `Record<string, string \| undefined>` | `process.env` | De onde a configuração do provider é lida — injeta um ambiente fixo em vez do do processo |
+| `cwd` | `string` | `process.cwd()` | Raiz de workspace que ferramentas e recursos usam por predefinição; também a raiz de confinamento do `workspaceRoot` de todas as ferramentas (leituras e escritas) |
+| `env` | `Record<string, string \| undefined>` | `process.env` | De onde a configuração do provider (e o `NODE_ENV`, para a guarda dev-only) é lida — injeta um ambiente fixo em vez do do processo |
 | `createReader` | `(root: string) => ProjectReader` | `nodeReader` | Como os ficheiros do projeto são lidos. Injeta um reader em memória para testar sem disco |
 | `createProvider` | `() => AIProvider` | construído a partir do `env` | Injeta um modelo falso — sem rede, sem chaves |
 | `allowUnconfirmedApply` | `boolean` | `false` | Deixa o `basalt_make` aplicar sem confirmação por elicitation. Por omissão: recusa (falha fechado) |
+| `allowProduction` | `boolean` | `false` | Constrói mesmo com `NODE_ENV=production`. Por omissão: lança `AiMcpProductionError` (o `createAiMcpHttpServer` rejeita com ele) |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Só stdio: ler JSON-RPC de outro stream (testes) |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Só stdio: escrever JSON-RPC para outro destino (testes) |
 
@@ -431,9 +441,9 @@ stdin.
 
 | Ferramenta | Argumento | Tipo | Predefinição | Objetivo |
 | --- | --- | --- | --- | --- |
-| `basalt_analyze` · `basalt_doctor` | `workspaceRoot` | `string` | `cwd` do servidor | Analisar outra raiz de projeto |
+| `basalt_analyze` · `basalt_doctor` | `workspaceRoot` | `string` | `cwd` do servidor | Analisar um subprojeto (absoluto ou relativo). Tem de ficar dentro do `cwd` — imposto, com symlinks resolvidos |
 | `basalt_plan` | `request` | `string` | — (obrigatório) | O que construir, em linguagem natural |
-| `basalt_plan` | `workspaceRoot` | `string` | `cwd` do servidor | Fundamentar o plano noutro projeto |
+| `basalt_plan` | `workspaceRoot` | `string` | `cwd` do servidor | Fundamentar o plano num subprojeto. Tem de ficar dentro do `cwd` — imposto |
 | `basalt_plan` | `temperature` | `number` | `0` | Temperatura de amostragem; `0` mantém os planos reprodutíveis |
 | `basalt_plan` | `maxTokens` | `integer` | `4096` | Aumenta-o para um plano grande, com várias entidades, que fique truncado |
 | `basalt_review` | `plan` / `makeResult` | objeto | — (ambos obrigatórios) | A saída do `basalt_plan` e a saída do `basalt_make` a criticar |
@@ -454,7 +464,8 @@ malformado produz um código de erro de protocolo.
 | `basalt_plan requires a non-empty "request".` | `isError` | `basalt_plan` | O argumento `request` estava em falta ou vazio |
 | `basalt_make requires either a "plan" (from basalt_plan) or a "request" to plan.` | `isError` | `basalt_make` | Nenhum dos pontos de entrada foi fornecido |
 | `basalt_review requires a "plan" object (from basalt_plan).` / `… a "makeResult" object …` | `isError` | `basalt_review` | Faltava um argumento-objeto obrigatório |
-| `Refused: workspaceRoot '<x>' escapes the launch directory (<root>)` | `isError` | `WorkspaceEscapeError` | O `workspaceRoot` resolveu fora do `--cwd` — por design |
+| `Refused: workspaceRoot '<x>' escapes the launch directory (<root>)` | `isError` | `WorkspaceEscapeError` | `basalt_make`: o `workspaceRoot` resolveu fora do `--cwd` — por design |
+| `Refused: workspaceRoot '<x>' is outside the project root (<root>)` | `isError` | `WorkspaceEscapeError` | `basalt_analyze` / `basalt_doctor` / `basalt_plan`: o `workspaceRoot` (ou um symlink nele) resolve para fora do `--cwd` |
 | `Refused: absolute path not allowed: <p>` · `Refused: path escapes workspace: <p>` · `Refused: path resolves outside workspace via symlink: <p>` | `isError` | `assertConfined` | Um ficheiro-alvo cairia fora do workspace |
 | `Refusing to overwrite N existing file(s) without force:true — …` | `isError` | `basalt_make` | Um `apply` esbarrou em `preview.clashes`. Revê os diffs e volta a correr com `force:true` |
 | `Apply cancelled — not confirmed.` | `isError` | `basalt_make` | O prompt de elicitation do cliente foi recusado |
@@ -465,6 +476,7 @@ malformado produz um código de erro de protocolo.
 | `Forbidden: host/origin not allowed` | HTTP `403` | `serveHttp` | O guard HTTP rejeitou um `Host`/`Origin` estranho antes do dispatch |
 | `Unauthorized` | HTTP `401` | `serveHttp` | O `--token` está definido e o bearer token do pedido falta ou está errado |
 | `failed to start HTTP server — serveHttp: refusing to bind non-loopback host …` | arranque | bin | `--host` fora do loopback sem `--token` |
+| `failed to start … refuses to start with NODE_ENV=production` | arranque (sai com `1`) | bin / `AiMcpProductionError` | `NODE_ENV=production` no bloco `env` do cliente ou na shell, sem `--allow-production` |
 | `Bad Request: Mcp-Session-Id header required …` | HTTP `400` | `serveHttp` | O `--sessions` está ligado e o pedido não traz o header de sessão — faz primeiro o `initialize` |
 | `Session not found (expired or unknown) — initialize again` | HTTP `404` | `serveHttp` | O `--sessions` está ligado e o id de sessão é desconhecido, expirou ou foi aberto por outro token |
 

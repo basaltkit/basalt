@@ -60,6 +60,30 @@ Two levels of database integration:
 4. **Open a pull request.** CI runs build, typecheck and tests on the supported
    Node versions; all must pass.
 
+### Testing checklist
+
+Two audit findings (FA-001, FA-002) slipped through suites that were green
+because they only exercised the unusual case. Before calling a change tested:
+
+- [ ] **Test the common handler shape on all three adapters.** Most handlers
+  *return* a value (`handler: () => ({ ok: true })`); `reply.send(...)` is the
+  exception. Anything that touches the request/response path gets a case in the
+  shared suites every adapter runs — the parity matrix
+  `packages/http/tests/adapter-parity.ts` (run by
+  `packages/{fastify,express,hono}/tests/parity.test.ts`) or the cross-adapter
+  conformance suite `packages/testing/tests/conformance.test.ts` — never a
+  Fastify-only test. Cover the return-value shape, and `reply.send` only in
+  addition to it.
+- [ ] **Feed prototype names to every lookup keyed by user input.** Roles,
+  permissions, tenant/plan/feature ids, header or field names, map/record keys:
+  include `constructor`, `__proto__`, `toString` and `hasOwnProperty` as inputs
+  and assert they behave like any unknown key (no match, no crash, no
+  inherited value). Prefer `Map` or `Object.hasOwn` over `obj[key]` in the fix.
+- [ ] **Prove the regression test fails on the old code.** Run the new test
+  against the pre-fix sources (e.g. `git show HEAD:<path>` into a scratch copy,
+  or temporarily revert the fix) and see it go red for the right reason, then
+  green with the fix. Say so in the pull request.
+
 ## Conventions
 
 - **TypeScript, strict.** No `any` at API boundaries; let inference flow from
