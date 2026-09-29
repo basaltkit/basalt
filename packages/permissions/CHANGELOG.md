@@ -1,5 +1,50 @@
 # @basaltkit/permissions
 
+## 4.0.0
+
+### Major Changes
+
+- b7171e5: `hasRole()` answers role membership; `GET /me/access` reports every source a check honours (FRAMEWORK-AUDIT "Melhorias" 3).
+  
+  **Breaking — `gate.hasRole(user, role)` no longer returns `true` for every role to a super admin.** It now answers only whether the user actually holds `role` (in the current scope or globally), like `effectiveRoles()` and the audience guard already did. The `superAdmin` bypass still short-circuits `can()`, `authorize()` and `meta.can` — it is authority, not membership: a super admin used to "hold" `client`, `trainee` and any role name ever typed, so role-based UI and audience-style logic misclassified them.
+  
+  Migration: where `hasRole()` was used as an authorization check, check the permission instead (`gate.can(user, 'billing:refund')`), or ask for the bypass explicitly with the new `gate.isSuperAdmin(user)`:
+  
+  ```ts
+  // before
+  if (await gate.hasRole(user, 'billing-manager')) { … }
+  // after — same answer for super admins as before
+  if ((await gate.isSuperAdmin(user)) || (await gate.hasRole(user, 'billing-manager'))) { … }
+  ```
+  
+  **`GET /me/access` (`accessRoutes()`) no longer hides doors that open.** It used to read the current tenant's standing grants only, so a `@global` grant or role, a temporary grant (`grantTemporarily`), a delegation (`delegate`) or the super-admin bypass passed on the server while the menu hid the control. The response now comes from the new `gate.describeAccess(user)`:
+  
+  - `roles` — roles held in the current scope **or globally** (what `hasRole()` answers `true` for);
+  - `permissions` — every permission that opens a door (current scope + global + legacy global when read, live temporary grants, live delegations narrowed to what the delegator holds, `'*'` for a super admin), sorted and deduplicated; `permitted(permissions, p)` agrees with `gate.can(user, p)`;
+  - `superAdmin` — new boolean;
+  - `grants` — new: each permission with its `source` (`'direct' | 'role' | 'temporary' | 'delegation' | 'super-admin'`), `scope`, and `role` / `id` / `fromUserId` / `expiresAt` where they apply (a delegation's `expiresAt` is the earlier of its own deadline and that of the delegator's temporary grant it rests on).
+  
+  `roles` and `permissions` keep their shape; clients reading them see more (correct) entries. New exports: `gate.describeAccess()`, `gate.isSuperAdmin()`, and the `AccessReport` / `AccessGrant` types.
+
+### Minor Changes
+
+- fdb3f31: Resource-aware `meta.can` (BK-049 / FA-H04): policies now run in the route guard.
+  
+  A plain `meta.can: 'projects:update'` is RBAC — the guard never passed a resource, so a policy registered with `definePolicy` was never consulted and the documented workaround was to call the Gate inside the handler. `meta.can` now also accepts a resource requirement, alone or mixed with permission strings in an array (all-of):
+  
+  ```ts
+  meta: { can: { permission: 'projects:update', resource: ({ params }) => projects.findById(params.id) } }
+  ```
+  
+  The guard answers 401 without a user, checks the plain permissions first, then loads the resource (with the route's parsed `params`/`query`/`body`, the user, tenant, container and request) and calls `gate.authorize(user, permission, resource)`, so the policy decides. A loader returning `null`/`undefined` answers 404 `RESOURCE_NOT_FOUND` (or an audited 403 with `notFound: 'deny'` / plugin option `resourceNotFound: 'deny'`); a throwing loader propagates. The handler reads the loaded resource with `canResource<T>(permission?)` instead of loading it again.
+  
+  A malformed requirement, or one whose `resource:action` no registered policy decides, refuses the boot through `http:meta-validators` (unless `onMissingPolicy: 'rbac'`). Listings (`http:route-visibility`, MCP `tools/list`) never call a loader: a policy-decided requirement stays listed for authenticated callers, plain permissions beside it still filter. New exports: `canResource`, `ResourceNotFoundError`, `CanResourceUnavailableError`, `gate.hasPolicy()`, and the `CanMeta`/`CanRequirement`/`CanResourceLoader`/`CanResourceInput`/`CanResourceNotFound` types. The string and string-array forms are unchanged.
+
+### Patch Changes
+
+- Updated dependencies [b7171e5]
+  - @basaltkit/http@2.7.0
+
 ## 3.0.0
 
 ### Major Changes

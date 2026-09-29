@@ -1,5 +1,14 @@
 # @basaltkit/drives
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [b7171e5]
+- Updated dependencies [b7171e5]
+  - @basaltkit/http@2.7.0
+  - @basaltkit/webhooks@4.0.0
+
 ## 0.3.0
 
 ### Minor Changes

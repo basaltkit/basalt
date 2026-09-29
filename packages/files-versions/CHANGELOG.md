@@ -1,5 +1,12 @@
 # @basaltkit/files-versions
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [b7171e5]
+  - @basaltkit/files@6.0.0
+
 ## 0.1.3
 
 ### Patch Changes
